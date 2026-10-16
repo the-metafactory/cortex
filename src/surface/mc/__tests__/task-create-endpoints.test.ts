@@ -156,6 +156,17 @@ const HAPPY_PR_BODY = JSON.stringify({
   pull_request: { url: "https://api.github.com/repos/.../pulls/45" },
 });
 
+const HAPPY_PR_PULLS_BODY = JSON.stringify({
+  state: "open",
+  merged: false,
+  draft: false,
+  title: "Refactor session manager",
+  html_url: "https://github.com/the-metafactory/grove-v2/pull/45",
+  number: 45,
+  head: { ref: "feat/session-mgr", sha: "abc1234def", repo: { full_name: "the-metafactory/grove-v2" } },
+  base: { ref: "main" },
+});
+
 // ============================================================================
 // POST /api/tasks/preview
 // ============================================================================
@@ -204,7 +215,7 @@ describe("POST /api/tasks/preview", () => {
     expect(body.type).toBe("pr");
   });
 
-  it("returns 409 conflict + deeplink shape when an existing task tracks the same ref", async () => {
+  it("returns 409 conflict + deeplink shape without calling gh when an existing task tracks the same ref", async () => {
     // Seed an existing GitHub-source task with the canonical ref.
     t.db.exec(`
       INSERT INTO tasks (id, title, priority, principal_id, source_system,
@@ -410,20 +421,7 @@ describe("POST /api/tasks", () => {
     t.gh.push({ exitCode: 0, stdout: HAPPY_PR_BODY, stderr: "" });
     // Second gh call: fetchPullRequest (/pulls) → head/base/sha. Pinning that
     // the create path makes exactly this second call, in this order.
-    t.gh.push({
-      exitCode: 0,
-      stdout: JSON.stringify({
-        state: "open",
-        merged: false,
-        draft: false,
-        title: "Refactor session manager",
-        html_url: "https://github.com/the-metafactory/grove-v2/pull/45",
-        number: 45,
-        head: { ref: "feat/session-mgr", sha: "abc1234def", repo: { full_name: "the-metafactory/grove-v2" } },
-        base: { ref: "main" },
-      }),
-      stderr: "",
-    });
+    t.gh.push({ exitCode: 0, stdout: HAPPY_PR_PULLS_BODY, stderr: "" });
 
     const res = await fetch(`${t.baseUrl}/api/tasks`, {
       method: "POST",
@@ -571,15 +569,14 @@ describe("POST /api/tasks/:taskId/abandon", () => {
     expect(row.status).toBe("cancelled");
 
     // Curation event lands on the shadow session.
-    const events = t.db
+    const curationEventsNewestFirst = t.db
       .query(
         "SELECT payload FROM events WHERE session_id = ? AND type = 'principal.curation' ORDER BY id DESC"
       )
       .all(shadowSessionId) as { payload: string }[];
-    // First event was task.imported (from create); this is the abandon.
-    const lastPayload = JSON.parse(events[0]!.payload);
-    expect(lastPayload.kind).toBe("abandon");
-    expect(lastPayload.targetKind).toBe("task");
+    const abandonPayload = JSON.parse(curationEventsNewestFirst[0]!.payload);
+    expect(abandonPayload.kind).toBe("abandon");
+    expect(abandonPayload.targetKind).toBe("task");
   });
 
   it("404s on unknown taskId", async () => {
@@ -592,15 +589,15 @@ describe("POST /api/tasks/:taskId/abandon", () => {
   it("409s when the task is already cancelled", async () => {
     const { taskId } = await createImportedTask();
     // First call succeeds.
-    const r1 = await fetch(`${t.baseUrl}/api/tasks/${taskId}/abandon`, {
+    const firstAbandon = await fetch(`${t.baseUrl}/api/tasks/${taskId}/abandon`, {
       method: "POST",
     });
-    expect(r1.status).toBe(200);
+    expect(firstAbandon.status).toBe(200);
     // Second call hits the already-cancelled guard.
-    const r2 = await fetch(`${t.baseUrl}/api/tasks/${taskId}/abandon`, {
+    const repeatAbandon = await fetch(`${t.baseUrl}/api/tasks/${taskId}/abandon`, {
       method: "POST",
     });
-    expect(r2.status).toBe(409);
+    expect(repeatAbandon.status).toBe(409);
   });
 
   it("captures optional reason in the curation event payload", async () => {
@@ -665,7 +662,7 @@ describe("F-9 working-agent filter", () => {
     await teardown(t);
   });
 
-  it("does not surface mc-shadow-agent in GET /api/working-agents", async () => {
+  it("does not surface mc-shadow-agent in GET /api/working-agents even when its assignment is running", async () => {
     // Create an F-12b task; this seeds the shadow agent + assignment.
     t.gh.push({ exitCode: 0, stdout: HAPPY_ISSUE_BODY, stderr: "" });
     await fetch(`${t.baseUrl}/api/tasks`, {

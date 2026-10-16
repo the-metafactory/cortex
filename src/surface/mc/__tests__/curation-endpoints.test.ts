@@ -40,7 +40,7 @@ import { createSession } from "../db/sessions";
 import { generateId } from "../db/events";
 
 /** `cat` stands in for `claude` — reads stdin, never exits on its own. */
-const fakeCatSpawn: SpawnFn = () =>
+const neverExitingCatSpawn: SpawnFn = () =>
   Bun.spawn(["cat"], {
     stdin: "pipe",
     stdout: "pipe",
@@ -52,18 +52,19 @@ const fakeCatSpawn: SpawnFn = () =>
 // tests exercise HANDLER behavior, not the gate — the gate has its own coverage
 // in mutation-guard-rebinding.test.ts — so inject the loopback principal header
 // on every test-server call here.
-const _realFetch = globalThis.fetch;
-beforeAll(() => {
+const realFetch = globalThis.fetch;
+function installLoopbackPrincipalIdentityOnEveryRequest(): void {
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
     if (!headers.has("Cf-Access-Authenticated-User-Email")) {
       headers.set("Cf-Access-Authenticated-User-Email", "principal@example.com");
     }
-    return _realFetch(input, { ...init, headers });
+    return realFetch(input, { ...init, headers });
   }) as unknown as typeof globalThis.fetch;
-});
+}
+beforeAll(installLoopbackPrincipalIdentityOnEveryRequest);
 afterAll(() => {
-  globalThis.fetch = _realFetch;
+  globalThis.fetch = realFetch;
 });
 
 interface TestContext {
@@ -82,7 +83,7 @@ async function setup(): Promise<TestContext> {
   const ctx = startServer(
     { ...DEFAULT_CONFIG, port: 0 },
     db,
-    { processManager: pm, spawn: fakeCatSpawn }
+    { processManager: pm, spawn: neverExitingCatSpawn }
   );
   const port = ctx.port;
   return { db, ctx, pm, port, baseUrl: `http://localhost:${port}`, tmpDir };
@@ -102,6 +103,12 @@ async function teardown(t: TestContext): Promise<void> {
  * queued→dispatched→running, which is the wrong starting state for several
  * matrix entries.
  */
+function endSessionToFreeUniqueActiveSessionSlot(db: Database, sessionId: string): void {
+  db.query(`UPDATE sessions SET ended_at = datetime('now') WHERE id = ?`).run(
+    sessionId
+  );
+}
+
 function seedAssignment(
   db: Database,
   state: string,
@@ -130,9 +137,7 @@ function seedAssignment(
 
   // Mark observed sessions (the seed helper) ended_at so the spawn-controlled
   // path can run without colliding on the unique-active-session index.
-  db.query(`UPDATE sessions SET ended_at = datetime('now') WHERE id = ?`).run(
-    session.id
-  );
+  endSessionToFreeUniqueActiveSessionSlot(db, session.id);
 
   return { assignmentId, sessionId: session.id, agentId, taskId };
 }
@@ -463,7 +468,7 @@ describe("POST /api/assignments/:id/handoff", () => {
    * cancel — so we POST /api/sessions to spawn one rather than seeding
    * with `local.observed`.
    */
-  async function spawnRunning(): Promise<{
+  async function spawnControlledRunningSession(): Promise<{
     assignmentId: string;
     sessionId: string;
   }> {
@@ -487,7 +492,7 @@ describe("POST /api/assignments/:id/handoff", () => {
 
   it("Decision 6: in-flight hand-off cancels the source assignment and spawns a new one", async () => {
     const { assignmentId: oldId, sessionId: oldSessionId } =
-      await spawnRunning();
+      await spawnControlledRunningSession();
     ensureAgent("agent-b");
 
     const res = await fetch(
@@ -597,7 +602,7 @@ describe("POST /api/assignments/:id/handoff", () => {
   });
 
   it("returns 400 when newAgentId is missing", async () => {
-    const { assignmentId } = await spawnRunning();
+    const { assignmentId } = await spawnControlledRunningSession();
     const res = await fetch(
       `${t.baseUrl}/api/assignments/${assignmentId}/handoff`,
       {
@@ -610,7 +615,7 @@ describe("POST /api/assignments/:id/handoff", () => {
   });
 
   it("returns 400 when newAgentId references an unknown agent", async () => {
-    const { assignmentId } = await spawnRunning();
+    const { assignmentId } = await spawnControlledRunningSession();
     const res = await fetch(
       `${t.baseUrl}/api/assignments/${assignmentId}/handoff`,
       {
@@ -638,9 +643,9 @@ describe("POST /api/assignments/:id/handoff", () => {
   // cancel-and-respawns to the same agent and emits a misleading `handoff`
   // audit event. Return 400 with a clear message instead.
   it("rejects self-handoff (new agent == current agent, 400)", async () => {
-    const { assignmentId } = await spawnRunning();
+    const { assignmentId } = await spawnControlledRunningSession();
     // The POST /api/sessions path assigns the well-known default agent.
-    const row = t.db
+    const { agent_id: defaultAgentId } = t.db
       .query("SELECT agent_id FROM agent_task_assignment WHERE id = ?")
       .get(assignmentId) as { agent_id: string };
     const res = await fetch(
@@ -648,7 +653,7 @@ describe("POST /api/assignments/:id/handoff", () => {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ newAgentId: row.agent_id }),
+        body: JSON.stringify({ newAgentId: defaultAgentId }),
       }
     );
     expect(res.status).toBe(400);
@@ -660,7 +665,7 @@ describe("POST /api/assignments/:id/handoff", () => {
   // rather than silently ignored (the loose `as HandoffRequest` cast used
   // to accept arbitrary payloads).
   it("rejects unknown body keys (400)", async () => {
-    const { assignmentId } = await spawnRunning();
+    const { assignmentId } = await spawnControlledRunningSession();
     ensureAgent("agent-strict");
     const res = await fetch(
       `${t.baseUrl}/api/assignments/${assignmentId}/handoff`,
