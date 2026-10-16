@@ -5,7 +5,7 @@ import { initDatabase } from "../../surface/mc/db/init";
 import { TABLE_NAMES } from "../../surface/mc/db/schema";
 import { getVigilSubject, listVigilEvents } from "../db";
 import { ingestLedgerEnvelope, runHealthKey, stackOfEnvelope } from "../ingest";
-import { ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
+import { DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
 
 describe("Vigil run-health ingest", () => {
   let db: Database;
@@ -22,6 +22,7 @@ describe("Vigil run-health ingest", () => {
       last_seen_at: 100, updated_at: 100, cadence_ms: 93600000,
     });
     expect(listVigilEvents(db, KEY)).toEqual([{
+      ...DELIVERY_DEFAULTS,
       id: expect.any(String), subject_key: KEY, event_kind: "transition",
       severity: "high", attention_id: `att:vigil:${KEY}`,
       route: "text", delivery: "pending",

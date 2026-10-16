@@ -5,7 +5,7 @@ import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilSubject, listVigilEvents } from "../db";
 import { ingestLedgerEnvelope } from "../ingest";
 import { STALE_VALUE, STATE_VOCABULARIES, stateDirection, stateRank, vocabularyOf } from "../state-subject";
-import { ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
+import { DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
 
 describe("state registry", () => {
   test.each([
@@ -83,6 +83,7 @@ describe("Vigil state-subject ingest", () => {
       last_seen_at: 100, updated_at: 100, cadence_ms: 93600000,
     });
     expect(listVigilEvents(db, key)).toEqual([{
+      ...DELIVERY_DEFAULTS,
       id: expect.any(String), subject_key: key, event_kind: "transition",
       severity: "normal", attention_id: `att:vigil:${key}`,
       route: "digest", delivery: "pending",
