@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { gitShow, requireBaseRef } from "./lib/git";
+import { gitShow, resolveBaseRef } from "./lib/git";
 
 export const SDK_BARREL = "src/surface-sdk/index.ts";
 export const SDK_DTS = "src/surface-sdk/generated/surface-sdk.d.ts";
@@ -68,8 +68,7 @@ export function sdkBumpMissing(baseDts: string, headDts: string): boolean {
 }
 
 if (import.meta.main) {
-  const baseRef = process.env.RELEASE_PINS_BASE_REF ?? "origin/main";
-  requireBaseRef(baseRef, "release pins");
+  const baseRef = resolveBaseRef("RELEASE_PINS_BASE_REF", "release pins");
   const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
     dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;

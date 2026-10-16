@@ -11,3 +11,10 @@ export function requireBaseRef(ref: string, tool: string): void {
   console.error(`${tool}: cannot read ${ref}. Fetch it first: git fetch origin main`);
   process.exit(2);
 }
+
+/** The base ref a ratchet compares against: `$envVar`, else origin/main. Exits 2 when it cannot be read. */
+export function resolveBaseRef(envVar: string, tool: string): string {
+  const ref = process.env[envVar] ?? "origin/main";
+  requireBaseRef(ref, tool);
+  return ref;
+}
