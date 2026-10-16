@@ -31,8 +31,8 @@ test("ConfigWatcher reloads when the readiness write and config write share one 
       watcher = new ConfigWatcher(path, loadConfig(path), report);
       watcher.start();
       const ready = watcher.waitForReady();
-      // Model a backend that coalesces the probe and the immediately following
-      // real write: there is only one notification, not one per write.
+      // Model Bun's 1ms same-path duplicate filter: the probe and the
+      // immediately following real write yield one notification, not two.
       notify("change");
       notifications++;
       await ready;

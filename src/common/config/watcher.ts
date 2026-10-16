@@ -286,9 +286,10 @@ export class ConfigWatcher {
     this.watcher = watch(this.configPath, { persistent: false }, (eventType: string) => {
       this.readyProbeSeen?.();
       if (eventType === "change") {
-        // Keep the normal debounce even for the readiness event. The backend
-        // may coalesce the probe and the caller's next write into one event;
-        // consuming it would leave the changed config without a reload.
+        // Keep the normal debounce even for the readiness event. Bun drops a
+        // same-path "change" within 1ms of the last one (path_watcher
+        // `should_emit`), so a write right after the probe reports nothing;
+        // consuming the probe event would leave that write without a reload.
         triggerReload();
       }
     });
@@ -302,8 +303,8 @@ export class ConfigWatcher {
    * grace (node #2576). So this is a handshake: it rewrites the first byte
    * unchanged, backing off, until the watcher reports a write. Unlike a
    * metadata-only touch this exercises the content-change event on Linux too.
-   * Probe events also schedule the normal debounced reload so a coalesced
-   * subsequent config write is not lost. Rejects after
+   * Probe events also schedule the normal debounced reload, so a config write
+   * whose own event Bun suppresses as a duplicate is not lost. Rejects after
    * `timeoutMs`. Tests await it before writing the change they assert on;
    * production does not need it.
    */
