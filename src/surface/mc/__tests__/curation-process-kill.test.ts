@@ -1,21 +1,3 @@
-/**
- * Grove Mission Control v2 — F-12 Decision 11 process-kill observer.
- *
- * The observer is the load-bearing piece of F-12: without it, Abandon /
- * Hand-off / Requeue leave zombie subprocesses (see addendum Decision 11
- * for the full rationale).
- *
- * This file pins the observer policy and the integration with the curation
- * endpoints. Two layers:
- *   1. Pure-policy tests on `shouldCloseSessionOnTransition` — the matrix.
- *   2. End-to-end tests via the HTTP endpoints + a fake `cat` spawn:
- *      - Abandon on running closes the source process.
- *      - Hand-off on running closes the source process AND spawns a new one.
- *      - Requeue from blocked closes the blocked process.
- *      - Requeue from failed does NOT attempt to kill (no managed process
- *        exists anyway — failed terminates via `proc.exited` cleanup).
- */
-
 import {
   describe,
   it,
@@ -96,23 +78,6 @@ async function teardown(t: TestContext): Promise<void> {
   rmSync(t.tmpDir, { recursive: true, force: true });
 }
 
-/**
- * Wait for the Decision 11 observer's fire-and-forget `closeSession()` chain
- * to finish removing a session from the ProcessManager.
- *
- * Why this exists: the abandon / requeue HTTP handlers schedule the kill via
- * `void fireCancelObserver(...)` and return 200 immediately. The close path
- * is `SIGTERM → await proc.exited → drain dispatcher → pm.remove → endSession`.
- * A test that only awaits `proc.proc.exited` and then asserts on
- * `pm.get(sessionId)` is racing two microtask continuations of the same
- * `proc.exited` promise — under full-suite parallelism the test's continuation
- * sometimes fires before the observer's continuation reaches `pm.remove`.
- *
- * Polling here pins the test to the side effect we actually care about
- * (session no longer tracked) instead of the proxy we used to await
- * (process exited). Production observer is unchanged — see Decision 11
- * in docs/design-mc-f12-task-curation.md.
- */
 async function waitForSessionRemoval(
   pm: ProcessManager,
   sessionId: string,
@@ -127,10 +92,6 @@ async function waitForSessionRemoval(
     `Timed out after ${timeoutMs}ms waiting for session ${sessionId} to be removed from ProcessManager`
   );
 }
-
-// ============================================================================
-// Pure-policy: shouldCloseSessionOnTransition
-// ============================================================================
 
 describe("shouldCloseSessionOnTransition (Decision 11 policy)", () => {
   it("returns true when transitioning into cancelled (any source state)", () => {
@@ -176,10 +137,6 @@ describe("shouldCloseSessionOnTransition (Decision 11 policy)", () => {
   });
 });
 
-// ============================================================================
-// observeTransitionForCancel — fake processManager wiring
-// ============================================================================
-
 describe("observeTransitionForCancel (with fake processManager)", () => {
   it("calls closeSession when policy matches AND a live managed process is tracked", async () => {
     const calls: string[] = [];
@@ -224,7 +181,7 @@ describe("observeTransitionForCancel (with fake processManager)", () => {
       },
       "s-1",
       "running",
-      "completed", // happy-path complete
+      "completed",
       "complete"
     );
     expect(result).toBeNull();
@@ -295,14 +252,9 @@ describe("observeTransitionForCancel (with fake processManager)", () => {
       "cancel"
     );
     expect(promise).not.toBeNull();
-    // Must not reject — swallowed via .catch in the observer.
     await expect(promise).resolves.toBeUndefined();
   });
 });
-
-// ============================================================================
-// End-to-end with HTTP + fake cat: Abandon, Hand-off, Requeue close processes
-// ============================================================================
 
 describe("F-12 endpoints close live processes (Decision 11 wiring)", () => {
   let t: TestContext;
@@ -313,7 +265,6 @@ describe("F-12 endpoints close live processes (Decision 11 wiring)", () => {
     await teardown(t);
   });
 
-  /** Spawn a controlled session via POST /api/sessions, return its ids. */
   async function spawnRunning(): Promise<{
     assignmentId: string;
     sessionId: string;
@@ -359,11 +310,6 @@ describe("F-12 endpoints close live processes (Decision 11 wiring)", () => {
     );
     expect(res.status).toBe(200);
 
-    // Wait for the observer's fire-and-forget closeSession chain to land.
-    // See `waitForSessionRemoval` preamble for the race we're avoiding —
-    // `await proc.proc.exited` alone is racy because the test's continuation
-    // and the observer's continuation are both .then() callers on the same
-    // exit promise.
     await waitForSessionRemoval(t.pm, sessionId);
     expect(t.pm.get(sessionId)).toBeUndefined();
   });
@@ -387,21 +333,15 @@ describe("F-12 endpoints close live processes (Decision 11 wiring)", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
 
-    // Source process: dead and removed from the manager. Use the polling
-    // helper for the same reason as the Abandon test — the observer's
-    // post-exit cleanup races the test's `proc.exited` continuation.
     await waitForSessionRemoval(t.pm, sessionId);
     expect(t.pm.get(sessionId)).toBeUndefined();
 
-    // New process: alive and tracked.
     const newProc = t.pm.get(body.newSessionId);
     expect(newProc).toBeDefined();
     expect(newProc!.proc.exitCode).toBeNull();
   });
 
   it("Requeue from running rejects (Decision 3 — disabled), no kill", async () => {
-    // Requeue from running is illegal — addendum Decision 3 disables it.
-    // This pins that the policy matrix isn't bypassed.
     const { assignmentId, sessionId, proc } = await spawnRunning();
 
     const res = await fetch(
@@ -409,7 +349,6 @@ describe("F-12 endpoints close live processes (Decision 11 wiring)", () => {
       { method: "POST" }
     );
     expect(res.status).toBe(409);
-    // Process untouched.
     expect(proc.proc.exitCode).toBeNull();
     expect(t.pm.get(sessionId)).toBeDefined();
   });
@@ -418,7 +357,6 @@ describe("F-12 endpoints close live processes (Decision 11 wiring)", () => {
     const { assignmentId, sessionId, proc } = await spawnRunning();
     blockLiveSessionOnPermissionRequest(assignmentId, sessionId);
 
-    // Sanity: process still alive in the blocked state.
     expect(proc.proc.exitCode).toBeNull();
 
     const res = await fetch(
@@ -427,25 +365,10 @@ describe("F-12 endpoints close live processes (Decision 11 wiring)", () => {
     );
     expect(res.status).toBe(200);
 
-    // Observer kills the live process. Use the polling helper to await the
-    // post-exit pm.remove step, not just proc.exited (see helper preamble).
     await waitForSessionRemoval(t.pm, sessionId);
     expect(t.pm.get(sessionId)).toBeUndefined();
   });
 });
-
-// ============================================================================
-// PR #30 S1 — Hand-off ordering invariant (Decision 6: close OLD before spawn NEW)
-// ============================================================================
-//
-// The prior "Hand-off on running closes the source process AND a new one is
-// spawned" test only asserts "old is dead, new is alive" post-hoc, which is
-// satisfied by either ordering. This suite pins the ORDER via a recording
-// spawn wrapper + a promise on the old process's `.exited`, so an inverted
-// implementation (spawn-first-then-kill) fails here deterministically.
-//
-// Kept in its own describe so the recording-spawn context does not mutate
-// the outer suite's shared fixture.
 
 describe("Hand-off ordering (PR #30 S1)", () => {
   let t: TestContext;
@@ -489,7 +412,6 @@ describe("Hand-off ordering (PR #30 S1)", () => {
   });
 
   it("closes the OLD process BEFORE spawning the NEW one (Decision 6 ordering)", async () => {
-    // Spawn the source session. Records "spawn" #1 via the recording wrapper.
     const created = await fetch(`${t.baseUrl}/api/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -500,9 +422,6 @@ describe("Hand-off ordering (PR #30 S1)", () => {
     const oldProc = t.pm.get(sessionId)!;
     expect(oldProc).toBeDefined();
 
-    // When the OLD process actually exits, record "old-exited" in the
-    // sequence. If close-before-spawn is wired correctly, "old-exited" lands
-    // BEFORE the handoff's internal spawn appends the second "spawn".
     void oldProc.proc.exited.then(() => sequence.push("old-exited"));
 
     t.db

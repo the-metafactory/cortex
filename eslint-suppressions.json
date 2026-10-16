@@ -4211,11 +4211,6 @@
       "count": 7
     }
   },
-  "src/surface/mc/__tests__/curation-process-kill.test.ts": {
-    "cortex/no-comments": {
-      "count": 54
-    }
-  },
   "src/surface/mc/__tests__/cursor-store.test.ts": {
     "cortex/no-comments": {
       "count": 5
@@ -4324,11 +4319,6 @@
   "src/surface/mc/__tests__/ingestor.test.ts": {
     "cortex/no-comments": {
       "count": 88
-    }
-  },
-  "src/surface/mc/__tests__/iteration-import-endpoints.test.ts": {
-    "cortex/no-comments": {
-      "count": 63
     }
   },
   "src/surface/mc/__tests__/iteration-import.test.ts": {
