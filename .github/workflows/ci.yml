@@ -58,6 +58,8 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
+      - run: git fetch --depth=1 origin main
+
       - name: ESLint (errors only — blocking gate)
         run: bun scripts/check.ts lint
 

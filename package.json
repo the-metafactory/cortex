@@ -30,9 +30,9 @@
     "db:migrate:safe": "bun scripts/scan-deploy-surface.ts d1 --advisory && bun --cwd src/surface/mc/worker run db:migrate",
     "check": "bun scripts/check.ts",
     "test": "bun scripts/test.ts",
-    "lint": "eslint .",
-    "lint:errors": "eslint --quiet .",
-    "lint:fix": "eslint --fix .",
+    "lint": "bun eslint/suppressions-guard.ts && bun --bun eslint .",
+    "lint:errors": "bun eslint/suppressions-guard.ts && bun --bun eslint --quiet .",
+    "lint:fix": "bun --bun eslint --fix .",
     "sdk:dts": "bun scripts/gen-surface-sdk-dts.ts",
     "sdk:dts:check": "bun scripts/gen-surface-sdk-dts.ts --check"
   },

@@ -22,19 +22,25 @@
 
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
+import { cortex } from "./eslint/no-comments.ts";
 
 export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   ...tseslint.configs.stylisticTypeChecked,
   {
+    linterOptions: { noInlineConfig: true },
     languageOptions: {
       parserOptions: {
         projectService: true,
         tsconfigRootDir: import.meta.dirname,
       },
     },
+    plugins: { cortex },
     rules: {
+      "cortex/no-comments": "error",
+      "@typescript-eslint/ban-ts-comment": "off",
+
       // ── Strict (error): type-safety bugs we genuinely want to gate on ──
       "@typescript-eslint/no-floating-promises": "error",
       "@typescript-eslint/no-misused-promises": "error",

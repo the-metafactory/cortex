@@ -1,0 +1,5479 @@
+{
+  "src/__tests__/cortex.agent-presence-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 73
+    }
+  },
+  "src/__tests__/cortex.agents-reload.test.ts": {
+    "cortex/no-comments": {
+      "count": 106
+    }
+  },
+  "src/__tests__/cortex.brain-daemon-thread-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 39
+    }
+  },
+  "src/__tests__/cortex.brain-only-stack-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/__tests__/cortex.capability-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 116
+    }
+  },
+  "src/__tests__/cortex.cli-dispatch.test.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/__tests__/cortex.dev-stream-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 38
+    }
+  },
+  "src/__tests__/cortex.federated-peer-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 37
+    }
+  },
+  "src/__tests__/cortex.federation-reconciler-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/__tests__/cortex.lifecycle-stream-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 30
+    }
+  },
+  "src/__tests__/cortex.plugin-signing-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/__tests__/cortex.prompt-filter-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/__tests__/cortex.release-consumer-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/__tests__/cortex.review-consumer-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 147
+    }
+  },
+  "src/__tests__/cortex.review-consumer-stack-verifier.test.ts": {
+    "cortex/no-comments": {
+      "count": 33
+    }
+  },
+  "src/__tests__/cortex.review-consumer.e2e.test.ts": {
+    "@typescript-eslint/no-invalid-void-type": {
+      "count": 5
+    },
+    "cortex/no-comments": {
+      "count": 194
+    }
+  },
+  "src/__tests__/cortex.review-session-opts.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/__tests__/cortex.run-ledger-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/__tests__/cortex.security-posture-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 49
+    }
+  },
+  "src/__tests__/cortex.sovereignty-posture-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/__tests__/cortex.stack-signing-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 35
+    }
+  },
+  "src/__tests__/cortex.test.ts": {
+    "cortex/no-comments": {
+      "count": 315
+    }
+  },
+  "src/__tests__/cortex.vigil-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/__tests__/cortex.yaml-example.test.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/__tests__/exports-map.test.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/__tests__/federated-presence.e2e.test.ts": {
+    "cortex/no-comments": {
+      "count": 103
+    }
+  },
+  "src/__tests__/iaw-phase-b-integration.test.ts": {
+    "cortex/no-comments": {
+      "count": 38
+    }
+  },
+  "src/__tests__/iaw-phase-d-integration.test.ts": {
+    "cortex/no-comments": {
+      "count": 129
+    }
+  },
+  "src/__tests__/o4a2-provision-stack-pending.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/__tests__/principal-identity-consistency.test.ts": {
+    "cortex/no-comments": {
+      "count": 120
+    }
+  },
+  "src/__tests__/review-flavors-catalog.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/__tests__/review-roundtrip.integration.test.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/__tests__/signed-pilot-roundtrip.test.ts": {
+    "cortex/no-comments": {
+      "count": 50
+    }
+  },
+  "src/__tests__/xdg-migration-guard.e2e.test.ts": {
+    "cortex/no-comments": {
+      "count": 119
+    }
+  },
+  "src/adapters/__tests__/dispatch-sink.test.ts": {
+    "cortex/no-comments": {
+      "count": 83
+    }
+  },
+  "src/adapters/__tests__/envelope-renderer.test.ts": {
+    "cortex/no-comments": {
+      "count": 34
+    }
+  },
+  "src/adapters/__tests__/filter-rejection.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/adapters/__tests__/fixtures/adapter-declared-bundle/index.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/adapters/__tests__/fixtures/bad-shape-bundle/index.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/adapters/__tests__/fixtures/cli-tail-bundle/index.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/adapters/__tests__/fixtures/echo-adapter-bundle/index.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/adapters/__tests__/fixtures/failing-import-bundle/index.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/adapters/__tests__/fixtures/getter-bypass-bundle/index.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/adapters/__tests__/fixtures/id-mismatch-bundle/index.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/client.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/context-fetcher.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/discordjs-stub.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/event-formatter.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/event-utils.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/events.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/index.ts": {
+    "cortex/no-comments": {
+      "count": 342
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/jsonl-reader.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/outbound-log.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/plugin.ts": {
+    "cortex/no-comments": {
+      "count": 46
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/response-poster.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/retry.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/schema.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/token-groups.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/wire-format.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/worklog-formatter.ts": {
+    "cortex/no-comments": {
+      "count": 34
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-discord/src/worklog-manager.ts": {
+    "cortex/no-comments": {
+      "count": 75
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-mattermost/src/bot-user.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-mattermost/src/context.ts": {
+    "@typescript-eslint/prefer-nullish-coalescing": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-mattermost/src/envelope-renderer.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-mattermost/src/index.ts": {
+    "cortex/no-comments": {
+      "count": 73
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-mattermost/src/plugin.ts": {
+    "cortex/no-comments": {
+      "count": 31
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-mattermost/src/poller.ts": {
+    "cortex/no-comments": {
+      "count": 38
+    },
+    "no-control-regex": {
+      "count": 1
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-mattermost/src/schema.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-mattermost/src/server.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-slack/src/client.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-slack/src/index.ts": {
+    "cortex/no-comments": {
+      "count": 232
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-slack/src/plugin.ts": {
+    "cortex/no-comments": {
+      "count": 32
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-slack/src/schema.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-web/src/index.ts": {
+    "cortex/no-comments": {
+      "count": 85
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-web/src/plugin.ts": {
+    "cortex/no-comments": {
+      "count": 31
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-web/src/schema.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-adapter-web/src/vendor/surface-sdk.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-renderer-pagerduty/src/pagerduty.ts": {
+    "cortex/no-comments": {
+      "count": 32
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-renderer-pagerduty/src/plugin.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/adapters/__tests__/fixtures/metafactory-cortex-renderer-pagerduty/src/schema.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/adapters/__tests__/fixtures/mutation-bypass-bundle/index.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/adapters/__tests__/fixtures/platform-collision-bundle/index.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/adapters/__tests__/fixtures/renderer-kind-collision-bundle/index.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/adapters/__tests__/fixtures/shadow-discord-bundle/index.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/adapters/__tests__/gate-reply-offer.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/adapters/__tests__/loader.discord-bundle.test.ts": {
+    "cortex/no-comments": {
+      "count": 51
+    }
+  },
+  "src/adapters/__tests__/loader.mattermost-bundle.test.ts": {
+    "cortex/no-comments": {
+      "count": 47
+    }
+  },
+  "src/adapters/__tests__/loader.pagerduty-bundle.test.ts": {
+    "cortex/no-comments": {
+      "count": 37
+    }
+  },
+  "src/adapters/__tests__/loader.signing.test.ts": {
+    "cortex/no-comments": {
+      "count": 48
+    }
+  },
+  "src/adapters/__tests__/loader.slack-bundle.test.ts": {
+    "cortex/no-comments": {
+      "count": 41
+    }
+  },
+  "src/adapters/__tests__/loader.test.ts": {
+    "cortex/no-comments": {
+      "count": 177
+    }
+  },
+  "src/adapters/__tests__/loader.web-bundle.test.ts": {
+    "cortex/no-comments": {
+      "count": 34
+    }
+  },
+  "src/adapters/__tests__/notify-result.test.ts": {
+    "@typescript-eslint/only-throw-error": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/adapters/__tests__/plugin-signing.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/adapters/__tests__/plugin-support.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/adapters/__tests__/registry.test.ts": {
+    "cortex/no-comments": {
+      "count": 88
+    }
+  },
+  "src/adapters/__tests__/review-sink.test.ts": {
+    "cortex/no-comments": {
+      "count": 82
+    }
+  },
+  "src/adapters/__tests__/surface-integration.test.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/adapters/dispatch-sink.ts": {
+    "cortex/no-comments": {
+      "count": 57
+    }
+  },
+  "src/adapters/envelope-renderer.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/adapters/filter-rejection.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/adapters/gate-reply-offer.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/adapters/loader.ts": {
+    "cortex/no-comments": {
+      "count": 230
+    }
+  },
+  "src/adapters/mock.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 13
+    },
+    "cortex/no-comments": {
+      "count": 34
+    }
+  },
+  "src/adapters/plugin-signing.ts": {
+    "cortex/no-comments": {
+      "count": 34
+    }
+  },
+  "src/adapters/plugin-support.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/adapters/registry.ts": {
+    "cortex/no-comments": {
+      "count": 24
+    }
+  },
+  "src/adapters/response-routing-delivery.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/adapters/review-sink.ts": {
+    "cortex/no-comments": {
+      "count": 74
+    }
+  },
+  "src/adapters/types.ts": {
+    "@typescript-eslint/no-invalid-void-type": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 56
+    }
+  },
+  "src/brain/__tests__/attachment-budget.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/brain/__tests__/daemon-brain-host.test.ts": {
+    "cortex/no-comments": {
+      "count": 142
+    }
+  },
+  "src/brain/__tests__/daemon-socket-auth.test.ts": {
+    "cortex/no-comments": {
+      "count": 22
+    }
+  },
+  "src/brain/__tests__/exec-brain-runner.test.ts": {
+    "cortex/no-comments": {
+      "count": 57
+    }
+  },
+  "src/brain/__tests__/fake-daemon-brain.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/brain/__tests__/protocol.test.ts": {
+    "cortex/no-comments": {
+      "count": 79
+    }
+  },
+  "src/brain/attachment-budget.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/brain/daemon-brain-host.ts": {
+    "cortex/no-comments": {
+      "count": 396
+    }
+  },
+  "src/brain/exec-brain-runner.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 2
+    },
+    "cortex/no-comments": {
+      "count": 160
+    }
+  },
+  "src/brain/protocol.ts": {
+    "cortex/no-comments": {
+      "count": 40
+    }
+  },
+  "src/bus/__tests__/access-denied-dedup.test.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/bus/__tests__/admit-offered-dispatch.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/bus/__tests__/brain-consumer.compose.test.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/bus/__tests__/brain-consumer.post-log.test.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/bus/__tests__/brain-consumer.test.ts": {
+    "cortex/no-comments": {
+      "count": 118
+    }
+  },
+  "src/bus/__tests__/brain-consumer.thread-retarget.test.ts": {
+    "cortex/no-comments": {
+      "count": 24
+    }
+  },
+  "src/bus/__tests__/bus-dispatch-listener.test.ts": {
+    "cortex/no-comments": {
+      "count": 69
+    }
+  },
+  "src/bus/__tests__/capability-registry-presence-consistency.test.ts": {
+    "cortex/no-comments": {
+      "count": 22
+    }
+  },
+  "src/bus/__tests__/capability-registry.test.ts": {
+    "cortex/no-comments": {
+      "count": 48
+    }
+  },
+  "src/bus/__tests__/dev-events.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/bus/__tests__/dispatch-events.test.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/bus/__tests__/dispatch-handler.test.ts": {
+    "cortex/no-comments": {
+      "count": 397
+    }
+  },
+  "src/bus/__tests__/dispatch-source-publisher.test.ts": {
+    "cortex/no-comments": {
+      "count": 31
+    }
+  },
+  "src/bus/__tests__/envelope-builder.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/bus/__tests__/envelope-type-no-underscore.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/bus/__tests__/gate-floor.test.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/bus/__tests__/gate-reply-router.test.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/bus/__tests__/github-events.test.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/bus/__tests__/network-resolver.test.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/bus/__tests__/notify-discord.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/bus/__tests__/payload-filter.test.ts": {
+    "cortex/no-comments": {
+      "count": 38
+    }
+  },
+  "src/bus/__tests__/probe-responder.test.ts": {
+    "cortex/no-comments": {
+      "count": 39
+    }
+  },
+  "src/bus/__tests__/process-env.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/bus/__tests__/process-runner.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/bus/__tests__/reflex-activation-listener.test.ts": {
+    "cortex/no-comments": {
+      "count": 52
+    }
+  },
+  "src/bus/__tests__/renamed-envelope-types-roundtrip.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/bus/__tests__/review-consumer.test.ts": {
+    "cortex/no-comments": {
+      "count": 259
+    }
+  },
+  "src/bus/__tests__/review-events.test.ts": {
+    "cortex/no-comments": {
+      "count": 39
+    }
+  },
+  "src/bus/__tests__/run-ledger-funnel.test.ts": {
+    "@typescript-eslint/only-throw-error": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/bus/__tests__/sovereignty-gate.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/bus/__tests__/stack-provisioning.test.ts": {
+    "cortex/no-comments": {
+      "count": 154
+    }
+  },
+  "src/bus/__tests__/surface-principal-gate.test.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/bus/__tests__/surface-router-self-deny.test.ts": {
+    "cortex/no-comments": {
+      "count": 33
+    }
+  },
+  "src/bus/__tests__/surface-router.test.ts": {
+    "cortex/no-comments": {
+      "count": 176
+    }
+  },
+  "src/bus/__tests__/system-events.test.ts": {
+    "cortex/no-comments": {
+      "count": 52
+    }
+  },
+  "src/bus/__tests__/verifier-self-check-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/bus/__tests__/verifier-self-check.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/bus/__tests__/verify-signed-by-chain.test.ts": {
+    "cortex/no-comments": {
+      "count": 146
+    }
+  },
+  "src/bus/access-denied-dedup.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/bus/admission/__tests__/gate.test.ts": {
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/bus/admission/__tests__/provision.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/bus/admission/__tests__/refusal-seam.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/bus/admission/__tests__/state.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/bus/admission/gate.ts": {
+    "cortex/no-comments": {
+      "count": 89
+    }
+  },
+  "src/bus/admission/provision.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/bus/admission/refusal-seam.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/bus/admission/state.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/bus/admit-offered-dispatch.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/bus/agent-network/__tests__/accept-subjects.test.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/bus/agent-network/__tests__/admission-decision.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/bus/agent-network/__tests__/admission-read-states.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/bus/agent-network/__tests__/admission-read.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/bus/agent-network/__tests__/admission-rows-member-provider.test.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/bus/agent-network/__tests__/builders.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/bus/agent-network/__tests__/envelopes.test.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/bus/agent-network/__tests__/federated-membership.test.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/bus/agent-network/__tests__/federated-observability-curation.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/bus/agent-network/__tests__/federated-observability-fold.test.ts": {
+    "cortex/no-comments": {
+      "count": 49
+    }
+  },
+  "src/bus/agent-network/__tests__/federated-presence-receipts.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/bus/agent-network/__tests__/federated-subscriber-self-deny.test.ts": {
+    "cortex/no-comments": {
+      "count": 33
+    }
+  },
+  "src/bus/agent-network/__tests__/federated-subscriber.test.ts": {
+    "cortex/no-comments": {
+      "count": 139
+    }
+  },
+  "src/bus/agent-network/__tests__/federation-reconciler.test.ts": {
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/bus/agent-network/__tests__/fs1-adversarial-probe.test.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/bus/agent-network/__tests__/peer-acceptance.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/bus/agent-network/__tests__/presence-lifecycle-replay.test.ts": {
+    "cortex/no-comments": {
+      "count": 47
+    }
+  },
+  "src/bus/agent-network/__tests__/registry.test.ts": {
+    "cortex/no-comments": {
+      "count": 46
+    }
+  },
+  "src/bus/agent-network/__tests__/roster-authorship.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/bus/agent-network/__tests__/roster-read.test.ts": {
+    "cortex/no-comments": {
+      "count": 36
+    }
+  },
+  "src/bus/agent-network/__tests__/zz-exploit-probe.test.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/bus/agent-network/accept-subjects.ts": {
+    "cortex/no-comments": {
+      "count": 25
+    }
+  },
+  "src/bus/agent-network/admission-decision.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/bus/agent-network/admission-read.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/bus/agent-network/admission-rows-member-provider.ts": {
+    "cortex/no-comments": {
+      "count": 34
+    }
+  },
+  "src/bus/agent-network/builders.ts": {
+    "cortex/no-comments": {
+      "count": 31
+    }
+  },
+  "src/bus/agent-network/envelopes.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/bus/agent-network/federated-membership.ts": {
+    "cortex/no-comments": {
+      "count": 25
+    }
+  },
+  "src/bus/agent-network/federated-observability-fold.ts": {
+    "cortex/no-comments": {
+      "count": 40
+    }
+  },
+  "src/bus/agent-network/federated-presence-receipts.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/bus/agent-network/federated-subscriber.ts": {
+    "cortex/no-comments": {
+      "count": 173
+    }
+  },
+  "src/bus/agent-network/federation-reconciler.ts": {
+    "cortex/no-comments": {
+      "count": 80
+    }
+  },
+  "src/bus/agent-network/peer-acceptance.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/bus/agent-network/registry.ts": {
+    "cortex/no-comments": {
+      "count": 95
+    }
+  },
+  "src/bus/agent-network/roster-authorship.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/bus/agent-network/roster-read.ts": {
+    "cortex/no-comments": {
+      "count": 32
+    }
+  },
+  "src/bus/brain-consumer.ts": {
+    "cortex/no-comments": {
+      "count": 200
+    }
+  },
+  "src/bus/bus-dispatch-listener.ts": {
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/bus/capability-registry.ts": {
+    "@typescript-eslint/no-deprecated": {
+      "count": 2
+    },
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/bus/dev-events.ts": {
+    "cortex/no-comments": {
+      "count": 39
+    }
+  },
+  "src/bus/dispatch-events.ts": {
+    "cortex/no-comments": {
+      "count": 84
+    }
+  },
+  "src/bus/dispatch-handler.ts": {
+    "cortex/no-comments": {
+      "count": 467
+    }
+  },
+  "src/bus/dispatch-source-publisher.ts": {
+    "cortex/no-comments": {
+      "count": 35
+    }
+  },
+  "src/bus/emit-system-access-denied.ts": {
+    "cortex/no-comments": {
+      "count": 21
+    }
+  },
+  "src/bus/envelope-builder.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/bus/gate-floor.ts": {
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/bus/gate-reply-router.ts": {
+    "cortex/no-comments": {
+      "count": 30
+    }
+  },
+  "src/bus/github-events.ts": {
+    "cortex/no-comments": {
+      "count": 25
+    }
+  },
+  "src/bus/index.ts": {
+    "@typescript-eslint/no-deprecated": {
+      "count": 2
+    },
+    "cortex/no-comments": {
+      "count": 57
+    }
+  },
+  "src/bus/jetstream/__tests__/fake-jetstream.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/bus/jetstream/__tests__/provision-shared-account.test.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/bus/jetstream/__tests__/provision.test.ts": {
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/bus/jetstream/__tests__/review-filter-disjoint.test.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/bus/jetstream/__tests__/subject-set.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/bus/jetstream/provision.ts": {
+    "cortex/no-comments": {
+      "count": 87
+    }
+  },
+  "src/bus/jetstream/review-durables.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/bus/jetstream/review-subjects.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/bus/jetstream/subject-set.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/bus/jetstream/types.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/bus/myelin/__tests__/dormant-diagnosis.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/bus/myelin/__tests__/envelope-validator.test.ts": {
+    "cortex/no-comments": {
+      "count": 198
+    }
+  },
+  "src/bus/myelin/__tests__/runtime-linkpool-lifecycle.test.ts": {
+    "cortex/no-comments": {
+      "count": 67
+    },
+    "require-yield": {
+      "count": 1
+    }
+  },
+  "src/bus/myelin/__tests__/runtime-linkpool.test.ts": {
+    "cortex/no-comments": {
+      "count": 86
+    },
+    "require-yield": {
+      "count": 1
+    }
+  },
+  "src/bus/myelin/__tests__/runtime-payload-encryption.test.ts": {
+    "cortex/no-comments": {
+      "count": 21
+    },
+    "require-yield": {
+      "count": 1
+    }
+  },
+  "src/bus/myelin/__tests__/runtime-principal-symmetry.test.ts": {
+    "cortex/no-comments": {
+      "count": 22
+    },
+    "require-yield": {
+      "count": 1
+    }
+  },
+  "src/bus/myelin/__tests__/runtime-source-link.test.ts": {
+    "cortex/no-comments": {
+      "count": 41
+    }
+  },
+  "src/bus/myelin/__tests__/runtime-transport-mtls.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    },
+    "require-yield": {
+      "count": 1
+    }
+  },
+  "src/bus/myelin/__tests__/runtime.test.ts": {
+    "cortex/no-comments": {
+      "count": 171
+    },
+    "require-yield": {
+      "count": 1
+    }
+  },
+  "src/bus/myelin/__tests__/subscriber.pull-mode.test.ts": {
+    "cortex/no-comments": {
+      "count": 87
+    }
+  },
+  "src/bus/myelin/__tests__/subscriber.test.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/bus/myelin/envelope-validator.ts": {
+    "@typescript-eslint/no-deprecated": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 77
+    }
+  },
+  "src/bus/myelin/runtime.ts": {
+    "@typescript-eslint/no-empty-function": {
+      "count": 2
+    },
+    "@typescript-eslint/require-await": {
+      "count": 3
+    },
+    "cortex/no-comments": {
+      "count": 655
+    }
+  },
+  "src/bus/myelin/subscriber.ts": {
+    "@typescript-eslint/no-invalid-void-type": {
+      "count": 3
+    },
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 104
+    },
+    "no-control-regex": {
+      "count": 1
+    }
+  },
+  "src/bus/nats/__tests__/connection.test.ts": {
+    "cortex/no-comments": {
+      "count": 56
+    }
+  },
+  "src/bus/nats/__tests__/subscription.test.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/bus/nats/connection.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 49
+    }
+  },
+  "src/bus/nats/subscription.ts": {
+    "cortex/no-comments": {
+      "count": 59
+    }
+  },
+  "src/bus/network-resolver.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/bus/notify-discord.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/bus/payload-filter.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/bus/probe-responder.ts": {
+    "cortex/no-comments": {
+      "count": 109
+    }
+  },
+  "src/bus/process-env.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/bus/process-runner.ts": {
+    "cortex/no-comments": {
+      "count": 41
+    }
+  },
+  "src/bus/reflex-activation-listener.ts": {
+    "cortex/no-comments": {
+      "count": 96
+    }
+  },
+  "src/bus/review-consumer.ts": {
+    "cortex/no-comments": {
+      "count": 351
+    }
+  },
+  "src/bus/review-events.ts": {
+    "cortex/no-comments": {
+      "count": 76
+    }
+  },
+  "src/bus/sovereignty-gate.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/bus/stack-provisioning.ts": {
+    "cortex/no-comments": {
+      "count": 192
+    }
+  },
+  "src/bus/surface-principal-gate.ts": {
+    "cortex/no-comments": {
+      "count": 51
+    }
+  },
+  "src/bus/surface-router.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 1
+    },
+    "@typescript-eslint/require-await": {
+      "count": 2
+    },
+    "@typescript-eslint/unbound-method": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 326
+    }
+  },
+  "src/bus/system-events.ts": {
+    "cortex/no-comments": {
+      "count": 245
+    }
+  },
+  "src/bus/verifier-self-check.ts": {
+    "cortex/no-comments": {
+      "count": 47
+    }
+  },
+  "src/bus/verify-signed-by-chain.ts": {
+    "cortex/no-comments": {
+      "count": 148
+    }
+  },
+  "src/cli/__tests__/cockpit-refresh.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/cli/cockpit-refresh.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/cli/cortex/commands/__tests__/agents.test.ts": {
+    "cortex/no-comments": {
+      "count": 56
+    }
+  },
+  "src/cli/cortex/commands/__tests__/cli-verb-registration.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/cli/cortex/commands/__tests__/cloud.test.ts": {
+    "cortex/no-comments": {
+      "count": 25
+    }
+  },
+  "src/cli/cortex/commands/__tests__/config-merge.test.ts": {
+    "cortex/no-comments": {
+      "count": 37
+    }
+  },
+  "src/cli/cortex/commands/__tests__/config-validate.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/cli/cortex/commands/__tests__/creds.test.ts": {
+    "cortex/no-comments": {
+      "count": 74
+    }
+  },
+  "src/cli/cortex/commands/__tests__/daemon-locator.test.ts": {
+    "cortex/no-comments": {
+      "count": 30
+    }
+  },
+  "src/cli/cortex/commands/__tests__/default-registry.test.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/cli/cortex/commands/__tests__/e2e-lifecycle/harness.ts": {
+    "cortex/no-comments": {
+      "count": 25
+    }
+  },
+  "src/cli/cortex/commands/__tests__/e2e-lifecycle/lifecycle.test.ts": {
+    "cortex/no-comments": {
+      "count": 120
+    }
+  },
+  "src/cli/cortex/commands/__tests__/github-token.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/cli/cortex/commands/__tests__/migrate-config-policy.test.ts": {
+    "cortex/no-comments": {
+      "count": 58
+    }
+  },
+  "src/cli/cortex/commands/__tests__/migrate-config.test.ts": {
+    "@typescript-eslint/no-unnecessary-type-assertion": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 290
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-adapters.test.ts": {
+    "cortex/no-comments": {
+      "count": 349
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-admit-adapters.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-admit-operator-stamp.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-admit.test.ts": {
+    "cortex/no-comments": {
+      "count": 116
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-authorize-cli.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-authorize-lib.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-bus-safety.test.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-cli.test.ts": {
+    "cortex/no-comments": {
+      "count": 135
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-config-write.test.ts": {
+    "cortex/no-comments": {
+      "count": 22
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-create.test.ts": {
+    "cortex/no-comments": {
+      "count": 21
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-derive.test.ts": {
+    "cortex/no-comments": {
+      "count": 212
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-doctor-adapters.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-doctor-cli.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-doctor-lib.test.ts": {
+    "cortex/no-comments": {
+      "count": 128
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-federation-wiring.test.ts": {
+    "cortex/no-comments": {
+      "count": 94
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-handoff-adapters.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-handoff-cli.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-handoff-lib.test.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-lib.test.ts": {
+    "cortex/no-comments": {
+      "count": 504
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-make-live-cli.test.ts": {
+    "cortex/no-comments": {
+      "count": 54
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-make-live-preflight.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-make-live.test.ts": {
+    "cortex/no-comments": {
+      "count": 135
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-operator-attestation.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-ping-cli.test.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-ping-lib.test.ts": {
+    "cortex/no-comments": {
+      "count": 52
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-ping-signer.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-provision-adapters.test.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-provision-cli.test.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-provision-integration.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-provision-lib.test.ts": {
+    "cortex/no-comments": {
+      "count": 50
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-public-lib.test.ts": {
+    "cortex/no-comments": {
+      "count": 24
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-reject.test.ts": {
+    "cortex/no-comments": {
+      "count": 29
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-scoped-mint-adapter.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-secret-adapters.test.ts": {
+    "cortex/no-comments": {
+      "count": 24
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-secret-cli.test.ts": {
+    "cortex/no-comments": {
+      "count": 82
+    }
+  },
+  "src/cli/cortex/commands/__tests__/network-secret-lib.test.ts": {
+    "cortex/no-comments": {
+      "count": 149
+    }
+  },
+  "src/cli/cortex/commands/__tests__/normalize-config.test.ts": {
+    "cortex/no-comments": {
+      "count": 41
+    }
+  },
+  "src/cli/cortex/commands/__tests__/offer.test.ts": {
+    "cortex/no-comments": {
+      "count": 130
+    }
+  },
+  "src/cli/cortex/commands/__tests__/operator-mode-export.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/cli/cortex/commands/__tests__/operator-provisioning.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/cli/cortex/commands/__tests__/pier-fragment.test.ts": {
+    "cortex/no-comments": {
+      "count": 67
+    }
+  },
+  "src/cli/cortex/commands/__tests__/plugin-cli.test.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/cli/cortex/commands/__tests__/provision-stack.test.ts": {
+    "cortex/no-comments": {
+      "count": 129
+    }
+  },
+  "src/cli/cortex/commands/__tests__/quickstart-lib.test.ts": {
+    "cortex/no-comments": {
+      "count": 82
+    }
+  },
+  "src/cli/cortex/commands/__tests__/quickstart.test.ts": {
+    "cortex/no-comments": {
+      "count": 276
+    }
+  },
+  "src/cli/cortex/commands/__tests__/release.test.ts": {
+    "cortex/no-comments": {
+      "count": 78
+    }
+  },
+  "src/cli/cortex/commands/__tests__/settle-test-helpers.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/cli/cortex/commands/__tests__/stack-cli.test.ts": {
+    "cortex/no-comments": {
+      "count": 88
+    }
+  },
+  "src/cli/cortex/commands/__tests__/stack-delete-cli.test.ts": {
+    "cortex/no-comments": {
+      "count": 31
+    }
+  },
+  "src/cli/cortex/commands/__tests__/stack-lib.test.ts": {
+    "cortex/no-comments": {
+      "count": 65
+    }
+  },
+  "src/cli/cortex/commands/_shared/__tests__/parser.test.ts": {
+    "cortex/no-comments": {
+      "count": 51
+    }
+  },
+  "src/cli/cortex/commands/_shared/arg-error.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/cli/cortex/commands/_shared/assert-exhaustive.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/cli/cortex/commands/_shared/envelope.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/cli/cortex/commands/_shared/exit-result.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/cli/cortex/commands/_shared/parser.ts": {
+    "@typescript-eslint/no-unnecessary-type-assertion": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 70
+    }
+  },
+  "src/cli/cortex/commands/agents.ts": {
+    "cortex/no-comments": {
+      "count": 80
+    }
+  },
+  "src/cli/cortex/commands/cloud.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 91
+    }
+  },
+  "src/cli/cortex/commands/config-merge.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 80
+    }
+  },
+  "src/cli/cortex/commands/config.ts": {
+    "cortex/no-comments": {
+      "count": 49
+    }
+  },
+  "src/cli/cortex/commands/creds.ts": {
+    "@typescript-eslint/no-redundant-type-constituents": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 84
+    }
+  },
+  "src/cli/cortex/commands/daemon-locator.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/cli/cortex/commands/default-registry.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/cli/cortex/commands/github-token.ts": {
+    "cortex/no-comments": {
+      "count": 29
+    }
+  },
+  "src/cli/cortex/commands/migrate-config-lib.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 1
+    },
+    "@typescript-eslint/prefer-nullish-coalescing": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 317
+    }
+  },
+  "src/cli/cortex/commands/migrate-config-policy.ts": {
+    "cortex/no-comments": {
+      "count": 130
+    }
+  },
+  "src/cli/cortex/commands/migrate-config.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/cli/cortex/commands/network-adapters.ts": {
+    "cortex/no-comments": {
+      "count": 418
+    }
+  },
+  "src/cli/cortex/commands/network-admit-adapters.ts": {
+    "cortex/no-comments": {
+      "count": 57
+    }
+  },
+  "src/cli/cortex/commands/network-admit-lib.ts": {
+    "cortex/no-comments": {
+      "count": 54
+    }
+  },
+  "src/cli/cortex/commands/network-admit-ports.ts": {
+    "cortex/no-comments": {
+      "count": 41
+    }
+  },
+  "src/cli/cortex/commands/network-authorize-adapters.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/cli/cortex/commands/network-authorize-lib.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/cli/cortex/commands/network-authorize-ports.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/cli/cortex/commands/network-bus-safety.ts": {
+    "cortex/no-comments": {
+      "count": 46
+    }
+  },
+  "src/cli/cortex/commands/network-config-write.ts": {
+    "cortex/no-comments": {
+      "count": 42
+    }
+  },
+  "src/cli/cortex/commands/network-derive.ts": {
+    "cortex/no-comments": {
+      "count": 111
+    }
+  },
+  "src/cli/cortex/commands/network-doctor-adapters.ts": {
+    "cortex/no-comments": {
+      "count": 32
+    }
+  },
+  "src/cli/cortex/commands/network-doctor-lib.ts": {
+    "cortex/no-comments": {
+      "count": 118
+    }
+  },
+  "src/cli/cortex/commands/network-doctor-ports.ts": {
+    "cortex/no-comments": {
+      "count": 25
+    }
+  },
+  "src/cli/cortex/commands/network-federation-wiring.ts": {
+    "cortex/no-comments": {
+      "count": 34
+    }
+  },
+  "src/cli/cortex/commands/network-handoff-adapters.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/cli/cortex/commands/network-handoff-lib.ts": {
+    "cortex/no-comments": {
+      "count": 21
+    }
+  },
+  "src/cli/cortex/commands/network-handoff-ports.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/cli/cortex/commands/network-lib.ts": {
+    "cortex/no-comments": {
+      "count": 383
+    }
+  },
+  "src/cli/cortex/commands/network-make-live-adapters.ts": {
+    "cortex/no-comments": {
+      "count": 161
+    }
+  },
+  "src/cli/cortex/commands/network-make-live-lib.ts": {
+    "cortex/no-comments": {
+      "count": 191
+    }
+  },
+  "src/cli/cortex/commands/network-make-live-preflight.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/cli/cortex/commands/network-ping-adapters.ts": {
+    "cortex/no-comments": {
+      "count": 38
+    }
+  },
+  "src/cli/cortex/commands/network-ping-lib.ts": {
+    "cortex/no-comments": {
+      "count": 119
+    }
+  },
+  "src/cli/cortex/commands/network-ping-ports.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/cli/cortex/commands/network-ping-signer.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/cli/cortex/commands/network-ports.ts": {
+    "cortex/no-comments": {
+      "count": 57
+    }
+  },
+  "src/cli/cortex/commands/network-provision-adapters.ts": {
+    "cortex/no-comments": {
+      "count": 28
+    }
+  },
+  "src/cli/cortex/commands/network-provision-lib.ts": {
+    "cortex/no-comments": {
+      "count": 142
+    }
+  },
+  "src/cli/cortex/commands/network-public-lib.ts": {
+    "cortex/no-comments": {
+      "count": 30
+    }
+  },
+  "src/cli/cortex/commands/network-public-ports.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/cli/cortex/commands/network-secret-adapters.ts": {
+    "cortex/no-comments": {
+      "count": 124
+    }
+  },
+  "src/cli/cortex/commands/network-secret-lib.ts": {
+    "cortex/no-comments": {
+      "count": 206
+    }
+  },
+  "src/cli/cortex/commands/network-secret-ports.ts": {
+    "cortex/no-comments": {
+      "count": 45
+    }
+  },
+  "src/cli/cortex/commands/network.ts": {
+    "cortex/no-comments": {
+      "count": 878
+    }
+  },
+  "src/cli/cortex/commands/normalize-config.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 60
+    }
+  },
+  "src/cli/cortex/commands/offer.ts": {
+    "cortex/no-comments": {
+      "count": 192
+    }
+  },
+  "src/cli/cortex/commands/operator-mode-export.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/cli/cortex/commands/operator-provisioning.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/cli/cortex/commands/plugin-lib.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/cli/cortex/commands/plugin.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/cli/cortex/commands/provision-stack.ts": {
+    "cortex/no-comments": {
+      "count": 195
+    }
+  },
+  "src/cli/cortex/commands/quickstart-adapters.ts": {
+    "cortex/no-comments": {
+      "count": 85
+    }
+  },
+  "src/cli/cortex/commands/quickstart-lib.ts": {
+    "cortex/no-comments": {
+      "count": 90
+    }
+  },
+  "src/cli/cortex/commands/quickstart-ports.ts": {
+    "cortex/no-comments": {
+      "count": 38
+    }
+  },
+  "src/cli/cortex/commands/quickstart.ts": {
+    "cortex/no-comments": {
+      "count": 249
+    }
+  },
+  "src/cli/cortex/commands/release.ts": {
+    "@typescript-eslint/dot-notation": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 65
+    }
+  },
+  "src/cli/cortex/commands/stack-lib.ts": {
+    "cortex/no-comments": {
+      "count": 117
+    }
+  },
+  "src/cli/cortex/commands/stack.ts": {
+    "cortex/no-comments": {
+      "count": 191
+    },
+    "no-control-regex": {
+      "count": 1
+    }
+  },
+  "src/cli/cortex/commands/stepup.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/cli/cortex/lib/__tests__/discord-roles.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/cli/cortex/lib/discord-roles.ts": {
+    "cortex/no-comments": {
+      "count": 39
+    }
+  },
+  "src/common/__tests__/bootstrap-fresh-state.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/common/__tests__/channel-context.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/common/__tests__/data-path.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/common/__tests__/event-processor.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/common/__tests__/events-path.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/common/__tests__/migrate-data-dir.test.ts": {
+    "cortex/no-comments": {
+      "count": 46
+    }
+  },
+  "src/common/__tests__/migrate-state-dir.test.ts": {
+    "cortex/no-comments": {
+      "count": 51
+    }
+  },
+  "src/common/__tests__/security-posture.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/common/__tests__/stack-id.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/common/__tests__/state-path.test.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/common/__tests__/timeout.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/common/__tests__/xdg.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/common/agents/__tests__/agent-state-scaffold.test.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/common/agents/__tests__/agent-state-scripts.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/common/agents/__tests__/capability-catalog.test.ts": {
+    "cortex/no-comments": {
+      "count": 22
+    }
+  },
+  "src/common/agents/__tests__/dispatch-state-recorder.test.ts": {
+    "cortex/no-comments": {
+      "count": 36
+    }
+  },
+  "src/common/agents/__tests__/persona-frontmatter.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/common/agents/__tests__/presence-binding.test.ts": {
+    "cortex/no-comments": {
+      "count": 62
+    }
+  },
+  "src/common/agents/__tests__/registry.test.ts": {
+    "cortex/no-comments": {
+      "count": 68
+    }
+  },
+  "src/common/agents/__tests__/trust-resolver-operator-verify.test.ts": {
+    "cortex/no-comments": {
+      "count": 42
+    }
+  },
+  "src/common/agents/__tests__/trust-resolver.test.ts": {
+    "cortex/no-comments": {
+      "count": 68
+    }
+  },
+  "src/common/agents/agent-state-scaffold.ts": {
+    "cortex/no-comments": {
+      "count": 91
+    }
+  },
+  "src/common/agents/agent-state-scripts.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/common/agents/agent-state-spawn.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/common/agents/capability-catalog.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/common/agents/dispatch-state-recorder.ts": {
+    "cortex/no-comments": {
+      "count": 57
+    }
+  },
+  "src/common/agents/persona-frontmatter.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/common/agents/presence-binding.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/common/agents/registry.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/common/agents/trust-resolver.ts": {
+    "cortex/no-comments": {
+      "count": 57
+    }
+  },
+  "src/common/auth/__tests__/github-app-token.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/common/auth/cf-access-jwt.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/common/auth/github-app-token.ts": {
+    "@typescript-eslint/no-non-null-assertion": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 38
+    }
+  },
+  "src/common/channel-context.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/common/config/__tests__/account-signing-key.test.ts": {
+    "cortex/no-comments": {
+      "count": 31
+    }
+  },
+  "src/common/config/__tests__/agent-env.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/common/config/__tests__/arc-pack-repos-dir.test.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/common/config/__tests__/composer.test.ts": {
+    "cortex/no-comments": {
+      "count": 34
+    }
+  },
+  "src/common/config/__tests__/config-path.test.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/common/config/__tests__/file-permissions.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/common/config/__tests__/fragment-loader.test.ts": {
+    "cortex/no-comments": {
+      "count": 42
+    }
+  },
+  "src/common/config/__tests__/fragment-watcher.test.ts": {
+    "cortex/no-comments": {
+      "count": 47
+    }
+  },
+  "src/common/config/__tests__/last-good.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/common/config/__tests__/loader.test.ts": {
+    "cortex/no-comments": {
+      "count": 260
+    }
+  },
+  "src/common/config/__tests__/migrate-config-dir.test.ts": {
+    "cortex/no-comments": {
+      "count": 43
+    }
+  },
+  "src/common/config/__tests__/migrate-published-events-value.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/common/config/__tests__/resolve-env-placeholders.test.ts": {
+    "cortex/no-comments": {
+      "count": 111
+    }
+  },
+  "src/common/config/__tests__/stack-signing-key.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/common/config/__tests__/surfaces-layer.test.ts": {
+    "cortex/no-comments": {
+      "count": 100
+    }
+  },
+  "src/common/config/__tests__/surfaces-on-loaded-config.test.ts": {
+    "cortex/no-comments": {
+      "count": 60
+    }
+  },
+  "src/common/config/__tests__/system-layer.test.ts": {
+    "cortex/no-comments": {
+      "count": 98
+    }
+  },
+  "src/common/config/__tests__/transport-mtls.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/common/config/__tests__/validate-on-write.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/common/config/__tests__/watch-handshake.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/common/config/__tests__/watcher-readiness.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/common/config/__tests__/watcher.test.ts": {
+    "cortex/no-comments": {
+      "count": 24
+    }
+  },
+  "src/common/config/account-signing-key.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/common/config/agent-env.ts": {
+    "cortex/no-comments": {
+      "count": 110
+    }
+  },
+  "src/common/config/arc-pack-repos-dir.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/common/config/config-path.ts": {
+    "cortex/no-comments": {
+      "count": 29
+    }
+  },
+  "src/common/config/degraded-state.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/common/config/file-permissions.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/common/config/last-good.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/common/config/loader.ts": {
+    "cortex/no-comments": {
+      "count": 340
+    }
+  },
+  "src/common/config/migrate-config-dir.ts": {
+    "cortex/no-comments": {
+      "count": 63
+    }
+  },
+  "src/common/config/migrate-published-events-value.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/common/config/resolve-env-placeholders.ts": {
+    "cortex/no-comments": {
+      "count": 34
+    }
+  },
+  "src/common/config/stack-signing-key.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/common/config/transport-mtls.ts": {
+    "cortex/no-comments": {
+      "count": 38
+    }
+  },
+  "src/common/config/validate-on-write.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/common/config/watch-handshake.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/common/config/watcher.ts": {
+    "cortex/no-comments": {
+      "count": 92
+    }
+  },
+  "src/common/crypto/__tests__/encrypt-then-sign.e2e.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/common/crypto/__tests__/inbound-payload.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/common/crypto/__tests__/network-encryption-policy.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/common/crypto/__tests__/payload-encryption.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/common/crypto/__tests__/seal-to-principal.test.ts": {
+    "cortex/no-comments": {
+      "count": 22
+    }
+  },
+  "src/common/crypto/inbound-payload.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/common/crypto/network-encryption-policy.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/common/crypto/payload-encryption.ts": {
+    "cortex/no-comments": {
+      "count": 21
+    }
+  },
+  "src/common/crypto/seal-to-principal.ts": {
+    "cortex/no-comments": {
+      "count": 24
+    }
+  },
+  "src/common/data-path.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/common/event-processor.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/common/event-utils.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/common/events-path.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/common/github-events.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/common/inference/__tests__/inference-config.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/common/inference/__tests__/registry.test.ts": {
+    "cortex/no-comments": {
+      "count": 32
+    },
+    "require-yield": {
+      "count": 1
+    }
+  },
+  "src/common/inference/errors.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/common/inference/inference-config-schema.ts": {
+    "cortex/no-comments": {
+      "count": 43
+    }
+  },
+  "src/common/inference/registry.ts": {
+    "cortex/no-comments": {
+      "count": 56
+    }
+  },
+  "src/common/inference/secret-ref.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/common/inference/types.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/common/migrate-data-dir.ts": {
+    "cortex/no-comments": {
+      "count": 43
+    }
+  },
+  "src/common/migrate-state-dir.ts": {
+    "cortex/no-comments": {
+      "count": 85
+    }
+  },
+  "src/common/migration/__tests__/migration-gate.test.ts": {
+    "cortex/no-comments": {
+      "count": 73
+    }
+  },
+  "src/common/migration/migration-gate.ts": {
+    "cortex/no-comments": {
+      "count": 105
+    }
+  },
+  "src/common/nats/__tests__/hub-leaf-authorization.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/common/nats/__tests__/hub-reload-target.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/common/nats/__tests__/leaf-include-wiring.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/common/nats/__tests__/leaf-psk.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/common/nats/__tests__/leaf-remote-renderer.test.ts": {
+    "cortex/no-comments": {
+      "count": 129
+    }
+  },
+  "src/common/nats/__tests__/nats-config-bind-account.test.ts": {
+    "cortex/no-comments": {
+      "count": 28
+    }
+  },
+  "src/common/nats/__tests__/nats-plist-loader.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/common/nats/__tests__/nats-service-manager.test.ts": {
+    "cortex/no-comments": {
+      "count": 31
+    }
+  },
+  "src/common/nats/__tests__/operator-mode-conversion.test.ts": {
+    "cortex/no-comments": {
+      "count": 90
+    }
+  },
+  "src/common/nats/__tests__/systemd-unit-loader.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/common/nats/config-backup.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/common/nats/healthz-probe.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/common/nats/hub-leaf-authorization.ts": {
+    "cortex/no-comments": {
+      "count": 41
+    }
+  },
+  "src/common/nats/hub-reload-target.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/common/nats/jwt.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/common/nats/leaf-psk.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/common/nats/leaf-remote-renderer.ts": {
+    "cortex/no-comments": {
+      "count": 313
+    }
+  },
+  "src/common/nats/nats-plist-loader.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/common/nats/nats-service-manager.ts": {
+    "cortex/no-comments": {
+      "count": 63
+    }
+  },
+  "src/common/nats/restart-with-settle.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/common/nats/systemd-unit-loader.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/common/path-containment.ts": {
+    "cortex/no-comments": {
+      "count": 32
+    }
+  },
+  "src/common/pidfile.ts": {
+    "cortex/no-comments": {
+      "count": 24
+    }
+  },
+  "src/common/policy/__tests__/engine.test.ts": {
+    "cortex/no-comments": {
+      "count": 59
+    }
+  },
+  "src/common/policy/__tests__/factory.test.ts": {
+    "cortex/no-comments": {
+      "count": 61
+    }
+  },
+  "src/common/policy/__tests__/policy-gate.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/common/policy/__tests__/resolve-access.test.ts": {
+    "cortex/no-comments": {
+      "count": 56
+    }
+  },
+  "src/common/policy/__tests__/tool-inventory.test.ts": {
+    "cortex/no-comments": {
+      "count": 49
+    }
+  },
+  "src/common/policy/did.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/common/policy/engine.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/common/policy/factory.ts": {
+    "cortex/no-comments": {
+      "count": 21
+    }
+  },
+  "src/common/policy/policy-gate.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/common/policy/resolve-access.ts": {
+    "cortex/no-comments": {
+      "count": 46
+    }
+  },
+  "src/common/policy/types.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/common/registry/__tests__/admission-state.test.ts": {
+    "cortex/no-comments": {
+      "count": 24
+    }
+  },
+  "src/common/registry/__tests__/canonical-json.test.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/common/registry/__tests__/client.test.ts": {
+    "cortex/no-comments": {
+      "count": 81
+    }
+  },
+  "src/common/registry/__tests__/encoding.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/common/registry/__tests__/fetch-sealed-secret-array.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/common/registry/__tests__/fetch-sealed-secret.test.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/common/registry/__tests__/identity-registry.test.ts": {
+    "cortex/no-comments": {
+      "count": 95
+    }
+  },
+  "src/common/registry/__tests__/network-cache.test.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/common/registry/__tests__/network-client.test.ts": {
+    "cortex/no-comments": {
+      "count": 28
+    }
+  },
+  "src/common/registry/__tests__/pubkey-normalize.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/common/registry/__tests__/resolve-federated-peers-boot.adversarial.test.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/common/registry/__tests__/resolve-federated-peers-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/common/registry/__tests__/resolve-federated-peers.test.ts": {
+    "cortex/no-comments": {
+      "count": 56
+    }
+  },
+  "src/common/registry/__tests__/resolve-pubkey.test.ts": {
+    "cortex/no-comments": {
+      "count": 37
+    }
+  },
+  "src/common/registry/__tests__/sealed-leaf-secret.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/common/registry/admission-state.ts": {
+    "cortex/no-comments": {
+      "count": 30
+    }
+  },
+  "src/common/registry/canonical-json.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/common/registry/client.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 88
+    }
+  },
+  "src/common/registry/encoding.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/common/registry/fetch-sealed-secret.ts": {
+    "cortex/no-comments": {
+      "count": 28
+    }
+  },
+  "src/common/registry/identity-registry.ts": {
+    "cortex/no-comments": {
+      "count": 90
+    }
+  },
+  "src/common/registry/network-cache.ts": {
+    "cortex/no-comments": {
+      "count": 60
+    }
+  },
+  "src/common/registry/network-client.ts": {
+    "cortex/no-comments": {
+      "count": 45
+    }
+  },
+  "src/common/registry/pubkey-normalize.ts": {
+    "cortex/no-comments": {
+      "count": 25
+    }
+  },
+  "src/common/registry/resolve-federated-peers-boot.ts": {
+    "cortex/no-comments": {
+      "count": 21
+    }
+  },
+  "src/common/registry/resolve-federated-peers.ts": {
+    "cortex/no-comments": {
+      "count": 64
+    }
+  },
+  "src/common/registry/resolve-pubkey.ts": {
+    "cortex/no-comments": {
+      "count": 81
+    }
+  },
+  "src/common/registry/sealed-leaf-secret.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/common/registry/signing.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/common/registry/types.ts": {
+    "cortex/no-comments": {
+      "count": 21
+    }
+  },
+  "src/common/registry/verify-assertion.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/common/security-posture.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/common/sideband/__tests__/loopback.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/common/sideband/__tests__/metrics.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/common/sideband/__tests__/proxy-v2.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/common/sideband/__tests__/proxy.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/common/sideband/loopback.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/common/sideband/metrics.ts": {
+    "cortex/no-comments": {
+      "count": 34
+    }
+  },
+  "src/common/sideband/proxy.ts": {
+    "cortex/no-comments": {
+      "count": 31
+    }
+  },
+  "src/common/state-path.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/common/step-up/__tests__/totp.test.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/common/step-up/enrollment.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/common/step-up/totp.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/common/substrates/__tests__/config-home.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/common/substrates/__tests__/types.test.ts": {
+    "cortex/no-comments": {
+      "count": 28
+    }
+  },
+  "src/common/substrates/config-home.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/common/substrates/types.ts": {
+    "cortex/no-comments": {
+      "count": 58
+    }
+  },
+  "src/common/test-fs-watch.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/common/test-fs-watch.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/common/test-utils.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/common/timeout.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/common/types.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/common/types/__tests__/admission.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/common/types/__tests__/capability-window.test.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/common/types/__tests__/capability.test.ts": {
+    "cortex/no-comments": {
+      "count": 94
+    }
+  },
+  "src/common/types/__tests__/cortex-config.test.ts": {
+    "cortex/no-comments": {
+      "count": 318
+    }
+  },
+  "src/common/types/__tests__/id.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/common/types/__tests__/nats-subjects.test.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/common/types/__tests__/offering.test.ts": {
+    "cortex/no-comments": {
+      "count": 62
+    }
+  },
+  "src/common/types/__tests__/persona-format.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/common/types/__tests__/public-offering-backend-gate.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/common/types/__tests__/slack-config-schema.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/common/types/__tests__/stack.test.ts": {
+    "cortex/no-comments": {
+      "count": 78
+    }
+  },
+  "src/common/types/__tests__/uuid.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/common/types/admission.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/common/types/agent-heartbeat.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/common/types/capability-window.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/common/types/capability.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/common/types/config.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 51
+    },
+    "@typescript-eslint/no-unnecessary-type-parameters": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unsafe-return": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 249
+    }
+  },
+  "src/common/types/cortex-config.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 594
+    }
+  },
+  "src/common/types/nats-subjects.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/common/types/object-guards.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/common/types/offering.ts": {
+    "cortex/no-comments": {
+      "count": 62
+    }
+  },
+  "src/common/types/plugin-manifest.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/common/types/public-offering-backend-gate.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/common/types/review-flavors.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/common/types/stack.ts": {
+    "cortex/no-comments": {
+      "count": 39
+    }
+  },
+  "src/common/types/surfaces.ts": {
+    "cortex/no-comments": {
+      "count": 86
+    }
+  },
+  "src/common/types/uuid.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/common/untrusted-fence.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    },
+    "no-control-regex": {
+      "count": 1
+    }
+  },
+  "src/common/usage/monitor.ts": {
+    "cortex/no-comments": {
+      "count": 22
+    }
+  },
+  "src/common/wire/__tests__/identity.property.test.ts": {
+    "cortex/no-comments": {
+      "count": 92
+    }
+  },
+  "src/common/xdg.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/cortex.test.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/cortex.ts": {
+    "@typescript-eslint/no-deprecated": {
+      "count": 1
+    },
+    "@typescript-eslint/no-empty-function": {
+      "count": 3
+    },
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 3
+    },
+    "cortex/no-comments": {
+      "count": 3008
+    }
+  },
+  "src/gateway/__tests__/binding-resolver.test.ts": {
+    "cortex/no-comments": {
+      "count": 48
+    }
+  },
+  "src/gateway/__tests__/bus-inbound-sink.test.ts": {
+    "cortex/no-comments": {
+      "count": 89
+    }
+  },
+  "src/gateway/__tests__/cross-principal-routing.integration.test.ts": {
+    "cortex/no-comments": {
+      "count": 52
+    }
+  },
+  "src/gateway/__tests__/gate-reply-bridge.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/gateway/__tests__/gateway-adapters.test.ts": {
+    "cortex/no-comments": {
+      "count": 55
+    }
+  },
+  "src/gateway/__tests__/gateway-bootstrap.test.ts": {
+    "cortex/no-comments": {
+      "count": 58
+    }
+  },
+  "src/gateway/__tests__/gateway-owned-surface-keys.test.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/gateway/__tests__/gateway-unroutable-emit.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/gateway/__tests__/plugin-runtime.coverage-reload.test.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/gateway/__tests__/plugin-runtime.test.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/gateway/__tests__/start-gateway-test-helper.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/gateway/__tests__/start-gateway.test.ts": {
+    "cortex/no-comments": {
+      "count": 54
+    }
+  },
+  "src/gateway/__tests__/surface-gateway-attach-detach.test.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/gateway/__tests__/surface-gateway.test.ts": {
+    "@typescript-eslint/only-throw-error": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 43
+    }
+  },
+  "src/gateway/__tests__/surface-ownership-plan.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/gateway/__tests__/test-registry-support.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/gateway/__tests__/web-gate-reply.test.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/gateway/binding-resolver.ts": {
+    "cortex/no-comments": {
+      "count": 89
+    }
+  },
+  "src/gateway/bus-inbound-sink.ts": {
+    "cortex/no-comments": {
+      "count": 103
+    }
+  },
+  "src/gateway/gate-reply-bridge.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/gateway/gateway-adapters.ts": {
+    "cortex/no-comments": {
+      "count": 35
+    }
+  },
+  "src/gateway/gateway-bootstrap.ts": {
+    "cortex/no-comments": {
+      "count": 36
+    }
+  },
+  "src/gateway/gateway-unroutable-emit.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/gateway/plugin-control-server.ts": {
+    "@typescript-eslint/no-empty-function": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/gateway/plugin-runtime.ts": {
+    "cortex/no-comments": {
+      "count": 53
+    }
+  },
+  "src/gateway/start-gateway.ts": {
+    "cortex/no-comments": {
+      "count": 87
+    }
+  },
+  "src/gateway/surface-gateway.ts": {
+    "@typescript-eslint/no-non-null-assertion": {
+      "count": 2
+    },
+    "cortex/no-comments": {
+      "count": 75
+    }
+  },
+  "src/gateway/surface-ownership-plan.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/providers/__tests__/contract.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/providers/__tests__/contract.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/providers/__tests__/fake-streaming-server.ts": {
+    "cortex/no-comments": {
+      "count": 28
+    }
+  },
+  "src/providers/anthropic/__tests__/messages-provider.test.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/providers/anthropic/messages-provider.ts": {
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/providers/anthropic/stream-parser.ts": {
+    "cortex/no-comments": {
+      "count": 49
+    }
+  },
+  "src/providers/openai-compatible/__tests__/chat-completions-provider.test.ts": {
+    "cortex/no-comments": {
+      "count": 32
+    }
+  },
+  "src/providers/openai-compatible/chat-completions-provider.ts": {
+    "cortex/no-comments": {
+      "count": 64
+    }
+  },
+  "src/providers/openai-compatible/stream-parser.ts": {
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/renderers/__tests__/coverage.platform-classes.test.ts": {
+    "cortex/no-comments": {
+      "count": 32
+    }
+  },
+  "src/renderers/__tests__/coverage.test.ts": {
+    "cortex/no-comments": {
+      "count": 28
+    }
+  },
+  "src/renderers/__tests__/dashboard.test.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/renderers/__tests__/factory.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/renderers/coverage.ts": {
+    "cortex/no-comments": {
+      "count": 67
+    }
+  },
+  "src/renderers/dashboard.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 1
+    },
+    "@typescript-eslint/require-await": {
+      "count": 2
+    },
+    "cortex/no-comments": {
+      "count": 49
+    }
+  },
+  "src/renderers/index.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/renderers/types.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/runner/__tests__/agent-env-passthrough.test.ts": {
+    "cortex/no-comments": {
+      "count": 41
+    }
+  },
+  "src/runner/__tests__/agent-presence-producer.test.ts": {
+    "cortex/no-comments": {
+      "count": 37
+    }
+  },
+  "src/runner/__tests__/agent-state-dev-session-store.test.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/runner/__tests__/agent-team-parent-session.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/runner/__tests__/agent-team.test.ts": {
+    "cortex/no-comments": {
+      "count": 37
+    }
+  },
+  "src/runner/__tests__/attachments-office-mime.test.ts": {
+    "cortex/no-comments": {
+      "count": 24
+    }
+  },
+  "src/runner/__tests__/attachments-timeout.test.ts": {
+    "cortex/no-comments": {
+      "count": 30
+    }
+  },
+  "src/runner/__tests__/attachments-upload-limit.test.ts": {
+    "cortex/no-comments": {
+      "count": 24
+    }
+  },
+  "src/runner/__tests__/brain-compose.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/runner/__tests__/brain-consumer-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 50
+    }
+  },
+  "src/runner/__tests__/budget-check.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/runner/__tests__/cc-failure-classifier.test.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/runner/__tests__/cc-plugin-dir-pin.integration.test.ts": {
+    "cortex/no-comments": {
+      "count": 51
+    }
+  },
+  "src/runner/__tests__/cc-session-env.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/runner/__tests__/cc-session-isolation.test.ts": {
+    "cortex/no-comments": {
+      "count": 63
+    }
+  },
+  "src/runner/__tests__/cc-session-macos-sandbox-e2e.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/runner/__tests__/cc-session-parent-env.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/runner/__tests__/cc-session-prompt-stdin.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/runner/__tests__/cc-session-spawn-failure.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/runner/__tests__/cc-session.test.ts": {
+    "cortex/no-comments": {
+      "count": 37
+    }
+  },
+  "src/runner/__tests__/chat-capable-agents.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/runner/__tests__/co7-egress-pipeline.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/runner/__tests__/co7-review-hardening.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/runner/__tests__/commit-signing.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/runner/__tests__/curated-settings-path-gate.test.ts": {
+    "cortex/no-comments": {
+      "count": 37
+    }
+  },
+  "src/runner/__tests__/dev-consumer-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 49
+    }
+  },
+  "src/runner/__tests__/dev-consumer.test.ts": {
+    "cortex/no-comments": {
+      "count": 73
+    }
+  },
+  "src/runner/__tests__/dev-session-store.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/runner/__tests__/dev-worktree.test.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/runner/__tests__/dispatch-listener-admission.test.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/runner/__tests__/dispatch-listener.test.ts": {
+    "cortex/no-comments": {
+      "count": 565
+    }
+  },
+  "src/runner/__tests__/dm-trust-chain.test.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/runner/__tests__/egress-check.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/runner/__tests__/egress-proxy.test.ts": {
+    "cortex/no-comments": {
+      "count": 67
+    }
+  },
+  "src/runner/__tests__/heartbeat-ticker.test.ts": {
+    "cortex/no-comments": {
+      "count": 35
+    }
+  },
+  "src/runner/__tests__/hook-registration-parity.test.ts": {
+    "cortex/no-comments": {
+      "count": 36
+    }
+  },
+  "src/runner/__tests__/injection-hardening-preamble.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/runner/__tests__/learning-store.test.ts": {
+    "cortex/no-comments": {
+      "count": 47
+    }
+  },
+  "src/runner/__tests__/orchestrator-command.test.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/runner/__tests__/prompt-builder.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/runner/__tests__/prompt-filter.test.ts": {
+    "cortex/no-comments": {
+      "count": 43
+    }
+  },
+  "src/runner/__tests__/release-consumer-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/runner/__tests__/release-consumer.test.ts": {
+    "cortex/no-comments": {
+      "count": 77
+    }
+  },
+  "src/runner/__tests__/review-consumer-boot.shared-account.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/runner/__tests__/review-consumer-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 29
+    }
+  },
+  "src/runner/__tests__/review-engine.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/runner/__tests__/review-pipeline.test.ts": {
+    "cortex/no-comments": {
+      "count": 58
+    }
+  },
+  "src/runner/__tests__/review-prompt.test.ts": {
+    "cortex/no-comments": {
+      "count": 29
+    }
+  },
+  "src/runner/__tests__/review-session-lockdown.test.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/runner/__tests__/sage-runner.test.ts": {
+    "cortex/no-comments": {
+      "count": 147
+    }
+  },
+  "src/runner/__tests__/security-preamble.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/runner/__tests__/session-manager.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/runner/__tests__/session-sandbox-macos-strict.test.ts": {
+    "cortex/no-comments": {
+      "count": 100
+    }
+  },
+  "src/runner/__tests__/session-sandbox-macos.test.ts": {
+    "cortex/no-comments": {
+      "count": 114
+    }
+  },
+  "src/runner/__tests__/session-sandbox.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/runner/__tests__/session-settings.test.ts": {
+    "cortex/no-comments": {
+      "count": 61
+    }
+  },
+  "src/runner/__tests__/skill-verdict-block.contract.test.ts": {
+    "cortex/no-comments": {
+      "count": 22
+    }
+  },
+  "src/runner/__tests__/surface-adapter-boot.test.ts": {
+    "cortex/no-comments": {
+      "count": 42
+    }
+  },
+  "src/runner/__tests__/task-tracker.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/runner/__tests__/untrusted-content-boundary.test.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/runner/__tests__/verdict-block.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/runner/agent-presence-producer.ts": {
+    "cortex/no-comments": {
+      "count": 42
+    }
+  },
+  "src/runner/agent-state-dev-session-store.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 3
+    },
+    "cortex/no-comments": {
+      "count": 48
+    }
+  },
+  "src/runner/agent-team.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 90
+    }
+  },
+  "src/runner/attachment-types.ts": {
+    "cortex/no-comments": {
+      "count": 42
+    }
+  },
+  "src/runner/attachments.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/runner/brain-compose.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/runner/brain-consumer-boot.ts": {
+    "cortex/no-comments": {
+      "count": 167
+    }
+  },
+  "src/runner/budget-check.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/runner/cc-failure-classifier.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/runner/cc-session.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 2
+    },
+    "cortex/no-comments": {
+      "count": 266
+    }
+  },
+  "src/runner/chat-capable-agents.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/runner/claude-invoker.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/runner/co7-egress-pipeline.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/runner/co7-review-hardening.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/runner/commit-signing.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/runner/db-utils.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/runner/dev-consumer-boot.ts": {
+    "cortex/no-comments": {
+      "count": 180
+    }
+  },
+  "src/runner/dev-consumer.ts": {
+    "cortex/no-comments": {
+      "count": 132
+    }
+  },
+  "src/runner/dev-session-store.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 5
+    },
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/runner/dev-worktree.ts": {
+    "cortex/no-comments": {
+      "count": 35
+    }
+  },
+  "src/runner/dispatch-listener.ts": {
+    "cortex/no-comments": {
+      "count": 606
+    }
+  },
+  "src/runner/egress-check.ts": {
+    "cortex/no-comments": {
+      "count": 33
+    }
+  },
+  "src/runner/egress-proxy.ts": {
+    "@typescript-eslint/no-non-null-assertion": {
+      "count": 2
+    },
+    "cortex/no-comments": {
+      "count": 71
+    }
+  },
+  "src/runner/execution-backend.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/runner/harness-resolver.ts": {
+    "cortex/no-comments": {
+      "count": 37
+    }
+  },
+  "src/runner/heartbeat-ticker.ts": {
+    "cortex/no-comments": {
+      "count": 28
+    }
+  },
+  "src/runner/hooks/__tests__/bash-guard.hook.test.ts": {
+    "cortex/no-comments": {
+      "count": 527
+    }
+  },
+  "src/runner/hooks/__tests__/mcp-guard.hook.test.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/runner/hooks/__tests__/path-guard.hook.test.ts": {
+    "cortex/no-comments": {
+      "count": 124
+    }
+  },
+  "src/runner/hooks/__tests__/skill-guard.hook.test.ts": {
+    "cortex/no-comments": {
+      "count": 48
+    }
+  },
+  "src/runner/hooks/bash-guard.hook.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 442
+    }
+  },
+  "src/runner/hooks/mcp-guard.hook.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/runner/hooks/path-guard.hook.ts": {
+    "cortex/no-comments": {
+      "count": 67
+    }
+  },
+  "src/runner/hooks/skill-guard.hook.ts": {
+    "cortex/no-comments": {
+      "count": 61
+    }
+  },
+  "src/runner/learning-store.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/runner/message-parser.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/runner/orchestrator-command.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/runner/prompt-builder.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/runner/prompt-filter.ts": {
+    "cortex/no-comments": {
+      "count": 22
+    }
+  },
+  "src/runner/release-consumer-boot.ts": {
+    "cortex/no-comments": {
+      "count": 34
+    }
+  },
+  "src/runner/release-consumer.ts": {
+    "cortex/no-comments": {
+      "count": 126
+    }
+  },
+  "src/runner/review-consumer-boot.ts": {
+    "cortex/no-comments": {
+      "count": 271
+    }
+  },
+  "src/runner/review-engine.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/runner/review-pipeline.ts": {
+    "cortex/no-comments": {
+      "count": 113
+    }
+  },
+  "src/runner/review-prompt.ts": {
+    "cortex/no-comments": {
+      "count": 40
+    }
+  },
+  "src/runner/review-session-lockdown.ts": {
+    "cortex/no-comments": {
+      "count": 48
+    }
+  },
+  "src/runner/sage-runner.ts": {
+    "cortex/no-comments": {
+      "count": 127
+    }
+  },
+  "src/runner/security-preamble.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 2
+    },
+    "cortex/no-comments": {
+      "count": 21
+    }
+  },
+  "src/runner/session-manager.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/runner/session-sandbox-macos.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 388
+    }
+  },
+  "src/runner/session-sandbox.ts": {
+    "cortex/no-comments": {
+      "count": 90
+    }
+  },
+  "src/runner/session-settings.ts": {
+    "cortex/no-comments": {
+      "count": 95
+    }
+  },
+  "src/runner/stream-parser.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/runner/surface-adapter-boot.ts": {
+    "cortex/no-comments": {
+      "count": 136
+    }
+  },
+  "src/runner/task-tracker.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/runner/untrusted-content-boundary.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/runner/verdict-block.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/statusline/__tests__/cortex-status-config-path.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/substrates/api-agent/__tests__/error-mapping.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/substrates/api-agent/__tests__/harness.test.ts": {
+    "cortex/no-comments": {
+      "count": 101
+    }
+  },
+  "src/substrates/api-agent/agent-loop.ts": {
+    "cortex/no-comments": {
+      "count": 68
+    }
+  },
+  "src/substrates/api-agent/error-mapping.ts": {
+    "cortex/no-comments": {
+      "count": 37
+    }
+  },
+  "src/substrates/api-agent/harness.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 67
+    }
+  },
+  "src/substrates/api-agent/provider-factories.ts": {
+    "cortex/no-comments": {
+      "count": 29
+    }
+  },
+  "src/substrates/bus-peer/__tests__/harness.test.ts": {
+    "cortex/no-comments": {
+      "count": 89
+    }
+  },
+  "src/substrates/bus-peer/harness.ts": {
+    "cortex/no-comments": {
+      "count": 109
+    }
+  },
+  "src/substrates/claude-code/__tests__/harness.test.ts": {
+    "cortex/no-comments": {
+      "count": 86
+    }
+  },
+  "src/substrates/claude-code/harness.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 120
+    }
+  },
+  "src/surface-sdk/__tests__/boundary-guard.test.ts": {
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/surface-sdk/__tests__/dts-artifact.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/surface-sdk/__tests__/extraction-boundary.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/surface-sdk/__tests__/extraction-boundary.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/surface-sdk/index.ts": {
+    "cortex/no-comments": {
+      "count": 29
+    }
+  },
+  "src/surface/mc/__tests__/1661-observability-family-migration.test.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/surface/mc/__tests__/__fixtures__/signal-health-envelopes.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/surface/mc/__tests__/__fixtures__/signal-transport-envelopes.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/surface/mc/__tests__/agents-ensure-row.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/surface/mc/__tests__/api-agents.test.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/surface/mc/__tests__/api-observability.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/surface/mc/__tests__/api.test.ts": {
+    "cortex/no-comments": {
+      "count": 210
+    }
+  },
+  "src/surface/mc/__tests__/assignments-db.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/surface/mc/__tests__/attention-notify.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/surface/mc/__tests__/attention-publish.test.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/surface/mc/__tests__/attention-queue.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/surface/mc/__tests__/attention-sources-stale-assignment.test.ts": {
+    "cortex/no-comments": {
+      "count": 28
+    }
+  },
+  "src/surface/mc/__tests__/attention-sources.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/surface/mc/__tests__/attention.test.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/surface/mc/__tests__/client-registry.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/surface/mc/__tests__/config.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/surface/mc/__tests__/cost-attribution.test.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/surface/mc/__tests__/curation-endpoints.test.ts": {
+    "cortex/no-comments": {
+      "count": 41
+    }
+  },
+  "src/surface/mc/__tests__/curation-events.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/surface/mc/__tests__/curation-process-kill.test.ts": {
+    "cortex/no-comments": {
+      "count": 54
+    }
+  },
+  "src/surface/mc/__tests__/cursor-store.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/surface/mc/__tests__/d7c-source-system-migration.test.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/surface/mc/__tests__/db-init.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/surface/mc/__tests__/discord-sink.test.ts": {
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/surface/mc/__tests__/dispatch-lifecycle-projection.test.ts": {
+    "cortex/no-comments": {
+      "count": 22
+    }
+  },
+  "src/surface/mc/__tests__/dispatch-lifecycle-renderer.test.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/surface/mc/__tests__/dispatch-usage-projection.test.ts": {
+    "cortex/no-comments": {
+      "count": 40
+    }
+  },
+  "src/surface/mc/__tests__/embed.test.ts": {
+    "cortex/no-comments": {
+      "count": 46
+    }
+  },
+  "src/surface/mc/__tests__/endpoint-resolver.test.ts": {
+    "cortex/no-comments": {
+      "count": 33
+    }
+  },
+  "src/surface/mc/__tests__/events.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/surface/mc/__tests__/failed-dispatch.test.ts": {
+    "cortex/no-comments": {
+      "count": 24
+    }
+  },
+  "src/surface/mc/__tests__/focus-area-ws.test.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/surface/mc/__tests__/git-links.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/surface/mc/__tests__/git-objects.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/surface/mc/__tests__/git-repos.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/surface/mc/__tests__/github-ingest.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/surface/mc/__tests__/github-ref-parser.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/surface/mc/__tests__/github-source-ref.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/surface/mc/__tests__/github-work-items.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/surface/mc/__tests__/governance-denial.test.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/surface/mc/__tests__/governance-verdict.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/surface/mc/__tests__/index.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/surface/mc/__tests__/ingestor.test.ts": {
+    "cortex/no-comments": {
+      "count": 88
+    }
+  },
+  "src/surface/mc/__tests__/iteration-import-endpoints.test.ts": {
+    "cortex/no-comments": {
+      "count": 63
+    }
+  },
+  "src/surface/mc/__tests__/iteration-import.test.ts": {
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/surface/mc/__tests__/iterations.test.ts": {
+    "cortex/no-comments": {
+      "count": 62
+    }
+  },
+  "src/surface/mc/__tests__/jsonl-reader.test.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/surface/mc/__tests__/legacy-entry-guard.test.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/surface/mc/__tests__/local-aggregation-api.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/surface/mc/__tests__/metrics-endpoints.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/surface/mc/__tests__/metrics.test.ts": {
+    "cortex/no-comments": {
+      "count": 53
+    }
+  },
+  "src/surface/mc/__tests__/mutation-guard-rebinding.test.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/surface/mc/__tests__/networks-admission-http.test.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/surface/mc/__tests__/networks-api.test.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/surface/mc/__tests__/networks-flg4-roster-states.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/surface/mc/__tests__/networks-http.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/surface/mc/__tests__/networks-membership.test.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/surface/mc/__tests__/notification-render.test.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/surface/mc/__tests__/observability-db.test.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/surface/mc/__tests__/observability-renderer.test.ts": {
+    "cortex/no-comments": {
+      "count": 40
+    }
+  },
+  "src/surface/mc/__tests__/plan-docs.test.ts": {
+    "cortex/no-comments": {
+      "count": 30
+    }
+  },
+  "src/surface/mc/__tests__/plans-overview.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/surface/mc/__tests__/plans.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/surface/mc/__tests__/poller-retention.test.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/surface/mc/__tests__/poller.test.ts": {
+    "cortex/no-comments": {
+      "count": 25
+    }
+  },
+  "src/surface/mc/__tests__/process-manager.test.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/surface/mc/__tests__/projection-families.test.ts": {
+    "cortex/no-comments": {
+      "count": 33
+    }
+  },
+  "src/surface/mc/__tests__/refresh-loop.test.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/surface/mc/__tests__/refresh.test.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/surface/mc/__tests__/retention-prune.test.ts": {
+    "cortex/no-comments": {
+      "count": 71
+    }
+  },
+  "src/surface/mc/__tests__/schema.test.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/surface/mc/__tests__/server.test.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/surface/mc/__tests__/session-schema-parity.test.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/surface/mc/__tests__/session-tree-shared-fixture.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/surface/mc/__tests__/session-tree.test.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/surface/mc/__tests__/sessions-db.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/surface/mc/__tests__/should-notify.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/surface/mc/__tests__/signal-health-envelopes.test.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/surface/mc/__tests__/signal-transport-envelopes.test.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/surface/mc/__tests__/slice-rollup-projection.test.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/surface/mc/__tests__/source-ref-parity.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/surface/mc/__tests__/source-ref.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/surface/mc/__tests__/st-p0-existing-db-migration.test.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/surface/mc/__tests__/state-machine.test.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/surface/mc/__tests__/stdout-dispatcher.test.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/surface/mc/__tests__/stream-json.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/surface/mc/__tests__/task-create-endpoints.test.ts": {
+    "cortex/no-comments": {
+      "count": 45
+    }
+  },
+  "src/surface/mc/__tests__/task-source-ref.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/surface/mc/__tests__/tasks.test.ts": {
+    "cortex/no-comments": {
+      "count": 53
+    }
+  },
+  "src/surface/mc/__tests__/transitions.test.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/surface/mc/__tests__/types.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/surface/mc/__tests__/u3-3-observability-origin-migration.test.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/surface/mc/__tests__/work-item-detail.test.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/surface/mc/__tests__/work-item-source.test.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/surface/mc/__tests__/work-items.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/surface/mc/__tests__/working-agents.test.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/surface/mc/__tests__/working-aggregation.test.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/surface/mc/__tests__/ws-server.test.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/surface/mc/adapters/github/fetch.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 9
+    },
+    "cortex/no-comments": {
+      "count": 46
+    }
+  },
+  "src/surface/mc/adapters/github/index.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/surface/mc/adapters/github/ingest.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/surface/mc/adapters/github/iteration-webhook.ts": {
+    "cortex/no-comments": {
+      "count": 21
+    }
+  },
+  "src/surface/mc/adapters/github/ref.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/surface/mc/adapters/github/work-items.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/surface/mc/adapters/work-item-source.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/surface/mc/api/__tests__/doctor.test.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/surface/mc/api/__tests__/handoff.test.ts": {
+    "cortex/no-comments": {
+      "count": 21
+    }
+  },
+  "src/surface/mc/api/__tests__/mutation-guard.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/surface/mc/api/__tests__/networks-admission.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/surface/mc/api/__tests__/networks-authorize.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/surface/mc/api/__tests__/working-aggregation-handler.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/surface/mc/api/agents.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/surface/mc/api/attention.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/surface/mc/api/doctor.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/surface/mc/api/git-links.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/surface/mc/api/git-repos.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/surface/mc/api/governance.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/surface/mc/api/handlers.ts": {
+    "@typescript-eslint/prefer-nullish-coalescing": {
+      "count": 5
+    },
+    "@typescript-eslint/require-await": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 599
+    }
+  },
+  "src/surface/mc/api/handoff.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/surface/mc/api/iteration-import.ts": {
+    "cortex/no-comments": {
+      "count": 68
+    }
+  },
+  "src/surface/mc/api/mutation-guard.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/surface/mc/api/networks-admission.ts": {
+    "cortex/no-comments": {
+      "count": 23
+    }
+  },
+  "src/surface/mc/api/networks-authorize.ts": {
+    "cortex/no-comments": {
+      "count": 15
+    }
+  },
+  "src/surface/mc/api/networks-membership.ts": {
+    "cortex/no-comments": {
+      "count": 21
+    }
+  },
+  "src/surface/mc/api/networks.ts": {
+    "cortex/no-comments": {
+      "count": 59
+    }
+  },
+  "src/surface/mc/api/observability-tab.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/surface/mc/api/phase-detail.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/surface/mc/api/plans.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/surface/mc/api/step-up-mfa.ts": {
+    "cortex/no-comments": {
+      "count": 8
+    }
+  },
+  "src/surface/mc/api/types.ts": {
+    "cortex/no-comments": {
+      "count": 88
+    }
+  },
+  "src/surface/mc/api/work-item-detail.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/surface/mc/attention-notify.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/surface/mc/config.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 34
+    }
+  },
+  "src/surface/mc/db/agents.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/surface/mc/db/assignments.ts": {
+    "cortex/no-comments": {
+      "count": 50
+    }
+  },
+  "src/surface/mc/db/attention-sources.ts": {
+    "cortex/no-comments": {
+      "count": 73
+    }
+  },
+  "src/surface/mc/db/attention.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/surface/mc/db/canonical-session.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/surface/mc/db/cost-attribution.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/surface/mc/db/datetime.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/surface/mc/db/events.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/surface/mc/db/git-objects.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/surface/mc/db/governance.ts": {
+    "cortex/no-comments": {
+      "count": 37
+    }
+  },
+  "src/surface/mc/db/init.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/surface/mc/db/iterations.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 2
+    },
+    "cortex/no-comments": {
+      "count": 68
+    }
+  },
+  "src/surface/mc/db/metrics.ts": {
+    "cortex/no-comments": {
+      "count": 85
+    }
+  },
+  "src/surface/mc/db/observability.ts": {
+    "cortex/no-comments": {
+      "count": 12
+    }
+  },
+  "src/surface/mc/db/plans.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/surface/mc/db/retention.ts": {
+    "cortex/no-comments": {
+      "count": 31
+    }
+  },
+  "src/surface/mc/db/schema.ts": {
+    "cortex/no-comments": {
+      "count": 318
+    }
+  },
+  "src/surface/mc/db/session-join.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/surface/mc/db/sessions.ts": {
+    "cortex/no-comments": {
+      "count": 99
+    }
+  },
+  "src/surface/mc/db/tasks.ts": {
+    "cortex/no-comments": {
+      "count": 57
+    }
+  },
+  "src/surface/mc/db/transitions.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/surface/mc/db/work-items.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/surface/mc/db/working-agents.ts": {
+    "cortex/no-comments": {
+      "count": 32
+    }
+  },
+  "src/surface/mc/db/working-aggregation.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/surface/mc/embed.ts": {
+    "@typescript-eslint/prefer-nullish-coalescing": {
+      "count": 1
+    },
+    "@typescript-eslint/require-await": {
+      "count": 2
+    },
+    "cortex/no-comments": {
+      "count": 45
+    }
+  },
+  "src/surface/mc/governance/__tests__/hub-locality-guard.test.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/surface/mc/governance/hub-locality-guard.ts": {
+    "cortex/no-comments": {
+      "count": 25
+    }
+  },
+  "src/surface/mc/hooks/cursor-store.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/surface/mc/hooks/ingestor.ts": {
+    "cortex/no-comments": {
+      "count": 38
+    }
+  },
+  "src/surface/mc/hooks/jsonl-reader.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/surface/mc/hooks/parent-correlation.ts": {
+    "cortex/no-comments": {
+      "count": 17
+    }
+  },
+  "src/surface/mc/hooks/poller.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/surface/mc/hooks/types.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/surface/mc/index.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/surface/mc/ingest/plan-docs.ts": {
+    "cortex/no-comments": {
+      "count": 40
+    }
+  },
+  "src/surface/mc/lib/session-tree.ts": {
+    "cortex/no-comments": {
+      "count": 30
+    }
+  },
+  "src/surface/mc/local-aggregation/__tests__/fixtures.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/surface/mc/local-aggregation/__tests__/nats-sibling-connector.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/surface/mc/local-aggregation/__tests__/sibling-db-reader.test.ts": {
+    "cortex/no-comments": {
+      "count": 62
+    }
+  },
+  "src/surface/mc/local-aggregation/__tests__/sibling-discovery.test.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/surface/mc/local-aggregation/__tests__/sibling-presence-subscriber.test.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/surface/mc/local-aggregation/nats-sibling-connector.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/surface/mc/local-aggregation/sibling-db-reader.ts": {
+    "cortex/no-comments": {
+      "count": 39
+    }
+  },
+  "src/surface/mc/local-aggregation/sibling-discovery.ts": {
+    "cortex/no-comments": {
+      "count": 40
+    }
+  },
+  "src/surface/mc/local-aggregation/sibling-presence-subscriber.ts": {
+    "cortex/no-comments": {
+      "count": 29
+    }
+  },
+  "src/surface/mc/notifications.ts": {
+    "cortex/no-comments": {
+      "count": 20
+    }
+  },
+  "src/surface/mc/notifications/discord-sink.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 104
+    }
+  },
+  "src/surface/mc/notifications/render.ts": {
+    "cortex/no-comments": {
+      "count": 46
+    }
+  },
+  "src/surface/mc/notifications/should-notify.ts": {
+    "cortex/no-comments": {
+      "count": 38
+    }
+  },
+  "src/surface/mc/projection/adapter-lifecycle.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/surface/mc/projection/anchor.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/surface/mc/projection/attention-projection.ts": {
+    "cortex/no-comments": {
+      "count": 27
+    }
+  },
+  "src/surface/mc/projection/dispatch-lifecycle-renderer.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 35
+    }
+  },
+  "src/surface/mc/projection/dispatch-lifecycle.ts": {
+    "cortex/no-comments": {
+      "count": 138
+    }
+  },
+  "src/surface/mc/projection/dispatch-usage.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/surface/mc/projection/failed-dispatch.ts": {
+    "cortex/no-comments": {
+      "count": 35
+    }
+  },
+  "src/surface/mc/projection/governance-denial.ts": {
+    "cortex/no-comments": {
+      "count": 10
+    }
+  },
+  "src/surface/mc/projection/governance-verdict.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/surface/mc/projection/heartbeat.ts": {
+    "cortex/no-comments": {
+      "count": 13
+    }
+  },
+  "src/surface/mc/projection/observability-attention.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/surface/mc/projection/observability-renderer.ts": {
+    "@typescript-eslint/require-await": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/surface/mc/projection/review-verdict.ts": {
+    "cortex/no-comments": {
+      "count": 28
+    }
+  },
+  "src/surface/mc/refresh-loop.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/surface/mc/refresh.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/surface/mc/server.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 2
+    },
+    "cortex/no-comments": {
+      "count": 302
+    }
+  },
+  "src/surface/mc/session/endpoint-resolver.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 66
+    }
+  },
+  "src/surface/mc/session/process-manager.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/surface/mc/session/stdout-dispatcher.ts": {
+    "@typescript-eslint/no-unnecessary-condition": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 25
+    }
+  },
+  "src/surface/mc/session/types.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/surface/mc/state-machine.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/surface/mc/types.ts": {
+    "cortex/no-comments": {
+      "count": 51
+    }
+  },
+  "src/surface/mc/ws/client-registry.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/surface/mc/ws/types.ts": {
+    "cortex/no-comments": {
+      "count": 58
+    }
+  },
+  "src/taps/__tests__/public-offer-translation.test.ts": {
+    "cortex/no-comments": {
+      "count": 28
+    }
+  },
+  "src/taps/cc-events/__tests__/cc-events-parent-session.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/taps/cc-events/__tests__/cc-events.test.ts": {
+    "cortex/no-comments": {
+      "count": 55
+    }
+  },
+  "src/taps/cc-events/__tests__/cloud-publisher.mtls-wire.test.ts": {
+    "cortex/no-comments": {
+      "count": 19
+    }
+  },
+  "src/taps/cc-events/__tests__/cloud-publisher.test.ts": {
+    "cortex/no-comments": {
+      "count": 44
+    }
+  },
+  "src/taps/cc-events/__tests__/hook-compat-symlinks.test.ts": {
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/taps/cc-events/__tests__/integration.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/taps/cc-events/cc-events.ts": {
+    "cortex/no-comments": {
+      "count": 69
+    }
+  },
+  "src/taps/cc-events/cloud-publisher.ts": {
+    "cortex/no-comments": {
+      "count": 37
+    }
+  },
+  "src/taps/cc-events/hooks/EventLogger.hook.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/taps/cc-events/hooks/SurfaceContext.hook.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/taps/cc-events/hooks/__tests__/surface-context.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/taps/cc-events/hooks/event-logger.hook.ts": {
+    "cortex/no-comments": {
+      "count": 77
+    }
+  },
+  "src/taps/cc-events/hooks/lib/__tests__/event-types-env.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/taps/cc-events/hooks/lib/__tests__/event-types-parent-session.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/taps/cc-events/hooks/lib/__tests__/event-types.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/taps/cc-events/hooks/lib/__tests__/principal-env.test.ts": {
+    "cortex/no-comments": {
+      "count": 11
+    }
+  },
+  "src/taps/cc-events/hooks/lib/event-taxonomy.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/taps/cc-events/hooks/lib/event-types.ts": {
+    "cortex/no-comments": {
+      "count": 30
+    }
+  },
+  "src/taps/cc-events/hooks/lib/principal-env.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/taps/cc-events/hooks/lib/surface-env.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/taps/cc-events/hooks/surface-context.hook.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/taps/cc-events/lib/__tests__/event-processor.test.ts": {
+    "cortex/no-comments": {
+      "count": 18
+    }
+  },
+  "src/taps/cc-events/lib/__tests__/jsonl-reader.test.ts": {
+    "cortex/no-comments": {
+      "count": 7
+    }
+  },
+  "src/taps/cc-events/lib/__tests__/policy-engine.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/taps/cc-events/lib/event-processor.ts": {
+    "cortex/no-comments": {
+      "count": 14
+    }
+  },
+  "src/taps/cc-events/lib/file-watcher.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/taps/cc-events/lib/jsonl-reader.ts": {
+    "cortex/no-comments": {
+      "count": 5
+    }
+  },
+  "src/taps/cc-events/lib/policy-engine.ts": {
+    "cortex/no-comments": {
+      "count": 29
+    }
+  },
+  "src/taps/cc-events/lib/policy-loader.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/taps/cc-events/lib/policy-schema.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    },
+    "@typescript-eslint/no-unsafe-argument": {
+      "count": 1
+    },
+    "cortex/no-comments": {
+      "count": 16
+    }
+  },
+  "src/taps/cc-events/relay.ts": {
+    "cortex/no-comments": {
+      "count": 91
+    }
+  },
+  "src/taps/gh-webhook-receiver/__tests__/integration.test.ts": {
+    "cortex/no-comments": {
+      "count": 24
+    }
+  },
+  "src/taps/gh-webhook-receiver/__tests__/server.test.ts": {
+    "cortex/no-comments": {
+      "count": 26
+    }
+  },
+  "src/taps/gh-webhook-receiver/server.ts": {
+    "cortex/no-comments": {
+      "count": 57
+    }
+  },
+  "src/taps/public-offer-translation.ts": {
+    "cortex/no-comments": {
+      "count": 53
+    }
+  },
+  "src/vigil/__tests__/budget.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/vigil/__tests__/config.test.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/vigil/__tests__/fixtures.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/vigil/__tests__/ingest.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/vigil/__tests__/replay.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/vigil/__tests__/staleness.test.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/vigil/__tests__/start.test.ts": {
+    "cortex/no-comments": {
+      "count": 6
+    }
+  },
+  "src/vigil/__tests__/state-subject.test.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/vigil/__tests__/tick.test.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/vigil/budget.ts": {
+    "cortex/no-comments": {
+      "count": 2
+    }
+  },
+  "src/vigil/db.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/vigil/index.ts": {
+    "cortex/no-comments": {
+      "count": 9
+    }
+  },
+  "src/vigil/ingest.ts": {
+    "cortex/no-comments": {
+      "count": 3
+    }
+  },
+  "src/vigil/replay.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  },
+  "src/vigil/staleness.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/vigil/state-subject.ts": {
+    "cortex/no-comments": {
+      "count": 1
+    }
+  },
+  "src/vigil/tick.ts": {
+    "cortex/no-comments": {
+      "count": 4
+    }
+  }
+}
