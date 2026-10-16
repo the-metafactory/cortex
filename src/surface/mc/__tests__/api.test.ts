@@ -32,29 +32,28 @@ import { insertEvent, EVENTS_LIST_MAX_LIMIT } from "../db/events";
 import { _resetDispatchDebounceForTests } from "../api/handlers";
 import * as shouldNotifyModule from "../notifications/should-notify";
 
-/** `cat` stands in for `claude` — reads stdin, never exits on its own. */
-const fakeCatSpawn: SpawnFn = () =>
+const catStandInForClaude: SpawnFn = () =>
   Bun.spawn(["cat"], {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
   });
 
-// FND-6: mutating routes (`/api/sessions`, `/input`, …) now require a CF-Access
-// identity on the loopback bind (mutation-guard identity gate). This file
-// exercises HANDLER behavior across the whole REST surface, not the gate (which
-// has dedicated coverage in mutation-guard-rebinding.test.ts), so inject the
-// loopback principal header on every test-server call. Non-mutating GETs ignore
-// it; guarded POSTs pass Gate 1 through it.
 const _realFetch = globalThis.fetch;
+const LOOPBACK_PRINCIPAL_EMAIL = "principal@example.com";
+function fetchAsLoopbackPrincipalPassingTheMutationGuard(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Cf-Access-Authenticated-User-Email")) {
+    headers.set("Cf-Access-Authenticated-User-Email", LOOPBACK_PRINCIPAL_EMAIL);
+  }
+  return _realFetch(input, { ...init, headers });
+}
 beforeAll(() => {
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const headers = new Headers(init?.headers);
-    if (!headers.has("Cf-Access-Authenticated-User-Email")) {
-      headers.set("Cf-Access-Authenticated-User-Email", "principal@example.com");
-    }
-    return _realFetch(input, { ...init, headers });
-  }) as unknown as typeof globalThis.fetch;
+  globalThis.fetch =
+    fetchAsLoopbackPrincipalPassingTheMutationGuard as unknown as typeof globalThis.fetch;
 });
 afterAll(() => {
   globalThis.fetch = _realFetch;
@@ -82,10 +81,14 @@ async function setup(): Promise<TestContext> {
   const ctx = startServer(
     { ...DEFAULT_CONFIG, port: PORT_BIND_ANY },
     db,
-    { processManager: pm, spawn: fakeCatSpawn }
+    { processManager: pm, spawn: catStandInForClaude }
   );
   const port = ctx.port;
   return { db, ctx, pm, port, baseUrl: `http://localhost:${port}`, tmpDir };
+}
+
+function reopenDatabaseForTeardown(t: TestContext): void {
+  t.db = initDatabase(join(t.tmpDir, "test.db"));
 }
 
 async function teardown(t: TestContext): Promise<void> {
@@ -157,7 +160,7 @@ describe("GET /api/focus-area", () => {
     id: string,
     state: string,
     priority: number,
-    updatedOffsetSec: number,
+    updatedSecondsAgo: number,
     blockReasonJson: string | null = null
   ): void {
     t.db.query(
@@ -169,24 +172,21 @@ describe("GET /api/focus-area", () => {
          VALUES (?, ?, ?, 'op', 'internal')`
       )
       .run(`task-${id}`, `Task ${id}`, priority);
-    // Offset updated_at by N seconds in the past so ordering is deterministic.
     t.db
       .query(
         `INSERT INTO agent_task_assignment
            (id, agent_id, task_id, state, block_reason, updated_at)
          VALUES (?, 'a-1', ?, ?, ?, datetime('now', ? || ' seconds'))`
       )
-      .run(id, `task-${id}`, state, blockReasonJson, -updatedOffsetSec);
+      .run(id, `task-${id}`, state, blockReasonJson, -updatedSecondsAgo);
   }
 
-  it("returns an empty list when nothing is blocked", async () => {
+  it("returns an empty list when nothing is blocked, with the running assignment as mostActiveAgent", async () => {
     seed("ata-running", "running", 0, 0);
     const res = await fetch(`${t.baseUrl}/api/focus-area`);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.items).toEqual([]);
-    // `mostActiveAgent` is present for the empty-state one-liner (design §2.6);
-    // this seed has a running assignment, so it must be populated.
     expect(body.mostActiveAgent).not.toBeNull();
     expect(body.mostActiveAgent.assignmentId).toBe("ata-running");
     expect(body.mostActiveAgent.taskTitle).toBe("Task ata-running");
@@ -594,11 +594,7 @@ describe("POST /api/sessions — F-11 Discord notification hook", () => {
     const pm = new ProcessManager();
     calls = [];
 
-    // Fake notifier — never writes to Discord; just lets the test count
-    // sendDM / sendChannelMessage attempts. With config.enabled=true we
-    // exercise the policy branch end-to-end; with the create-session loop
-    // emitting only Notify=No transitions, both counters must stay at 0.
-    const notifier = {
+    const countingNotifier = {
       async sendDM(_userId: string, _text: string) {
         calls.push({ from: "<sendDM>", to: "<DM>" });
       },
@@ -612,7 +608,7 @@ describe("POST /api/sessions — F-11 Discord notification hook", () => {
       db,
       {
         processManager: pm,
-        spawn: fakeCatSpawn,
+        spawn: catStandInForClaude,
         notify: {
           config: {
             enabled: true,
@@ -620,7 +616,7 @@ describe("POST /api/sessions — F-11 Discord notification hook", () => {
             operatorDiscordId: "OP_DISCORD_ID",
             fallbackChannelId: "CHANNEL_FALLBACK",
           },
-          notifier,
+          notifier: countingNotifier,
         },
       }
     );
@@ -631,17 +627,9 @@ describe("POST /api/sessions — F-11 Discord notification hook", () => {
     await teardown(t);
   });
 
-  it("create-session loop fires no Discord traffic (queued→dispatched + dispatched→running are silent)", async () => {
-    // Spy on the policy hook so the test pins the loop-fires-twice
-    // invariant directly (S1 in PR #23 review). Asserting `calls === 0`
-    // alone proves no outbound Discord traffic but does NOT prove the
-    // policy hook ran — a future regression that hoists the
-    // `maybeNotifyDiscord` call out of the loop would still pass that
-    // weaker check while breaking the addendum's stated invariant
-    // ("the implementer must absorb — call-site is fired twice per
-    // spawn, coalesce in the hook, not in the loop").
-    const spy = spyOn(shouldNotifyModule, "shouldNotify");
-    spy.mockClear();
+  it("create-session loop runs the notify policy once per transition yet sends no Discord traffic (queued→dispatched + dispatched→running are silent)", async () => {
+    const shouldNotifySpy = spyOn(shouldNotifyModule, "shouldNotify");
+    shouldNotifySpy.mockClear();
     try {
       const res = await fetch(`${t.baseUrl}/api/sessions`, {
         method: "POST",
@@ -649,14 +637,10 @@ describe("POST /api/sessions — F-11 Discord notification hook", () => {
         body: JSON.stringify({ title: "Quiet spawn" }),
       });
       expect(res.status).toBe(201);
-      // Decision 1 marks both transitions Notify=No, so the sink sees
-      // zero outbound messages.
       expect(calls).toHaveLength(0);
-      // ...AND the policy hook ran exactly twice — once per transition
-      // emitted by the dispatch+start loop. This is the invariant.
-      expect(spy).toHaveBeenCalledTimes(2);
+      expect(shouldNotifySpy).toHaveBeenCalledTimes(2);
     } finally {
-      spy.mockRestore();
+      shouldNotifySpy.mockRestore();
     }
   });
 });
@@ -804,22 +788,20 @@ describe("POST /api/assignments/:id/input", () => {
   });
 
   it("returns 413 for multi-byte text whose UTF-8 byte length exceeds the cap", async () => {
-    // '€' is 3 bytes in UTF-8; 20000 * 3 = 60000 bytes, well over 51200,
-    // even though the JS string length is only 20000. Proves the cap is
-    // measured in UTF-8 bytes, not characters.
     const create = await fetch(`${t.baseUrl}/api/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title: "Multi-byte over cap" }),
     });
     const { assignmentId } = await create.json();
+    const threeByteEuroSignsOverCapInBytesUnderCapInChars = "€".repeat(20000);
 
     const res = await fetch(
       `${t.baseUrl}/api/assignments/${assignmentId}/input`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: "€".repeat(20000) }),
+        body: JSON.stringify({ text: threeByteEuroSignsOverCapInBytesUnderCapInChars }),
       }
     );
     expect(res.status).toBe(413);
@@ -827,17 +809,12 @@ describe("POST /api/assignments/:id/input", () => {
     expect(body.error).toBe("Principal input exceeds the 50 KB limit.");
   });
 
-  it("returns 413 from the upstream body cap on raw bodies larger than the default JSON-body limit", async () => {
-    // `parseJsonBody` caps the raw request body at 128 KB as defence-in-depth
-    // above per-field caps. Routes that legitimately carry larger bodies
-    // (e.g. `/api/assignments/:id/input` for image paste) override this via
-    // `parseJsonBody(req, { maxBytes })`. This test targets `/api/sessions`,
-    // which keeps the default 128 KB cap.
-    const oversized = JSON.stringify({ title: "a".repeat(200 * 1024) });
+  it("returns 413 from the upstream body cap on /api/sessions raw bodies larger than the default 128 KB JSON-body limit", async () => {
+    const overDefault128KbBodyCap = JSON.stringify({ title: "a".repeat(200 * 1024) });
     const res = await fetch(`${t.baseUrl}/api/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: oversized,
+      body: overDefault128KbBodyCap,
     });
     expect(res.status).toBe(413);
     const body = await res.json();
@@ -846,8 +823,7 @@ describe("POST /api/assignments/:id/input", () => {
 
   // --- Image input coverage (docs/design-mc-image-input.md) ---
 
-  /** 1×1 transparent PNG — under every cap, used as a well-formed-base64 fixture. */
-  const TINY_PNG_B64 =
+  const ONE_PIXEL_TRANSPARENT_PNG_B64 =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
   async function createAssignment(): Promise<string> {
@@ -867,7 +843,7 @@ describe("POST /api/assignments/:id/input", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         text: "look at this",
-        images: [{ media_type: "image/png", data: TINY_PNG_B64 }],
+        images: [{ media_type: "image/png", data: ONE_PIXEL_TRANSPARENT_PNG_B64 }],
       }),
     });
     expect(res.status).toBe(200);
@@ -881,7 +857,7 @@ describe("POST /api/assignments/:id/input", () => {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        images: [{ media_type: "image/png", data: TINY_PNG_B64 }],
+        images: [{ media_type: "image/png", data: ONE_PIXEL_TRANSPARENT_PNG_B64 }],
       }),
     });
     expect(res.status).toBe(200);
@@ -946,7 +922,7 @@ describe("POST /api/assignments/:id/input", () => {
       body: JSON.stringify({
         images: Array.from({ length: 9 }, () => ({
           media_type: "image/png",
-          data: TINY_PNG_B64,
+          data: ONE_PIXEL_TRANSPARENT_PNG_B64,
         })),
       }),
     });
@@ -957,15 +933,12 @@ describe("POST /api/assignments/:id/input", () => {
 
   it("rejects a single image over 5 MB decoded (413) with the per-image message", async () => {
     const id = await createAssignment();
-    // 7 MB raw base64 (~ 5.25 MB decoded) — over the per-image 5 MB cap but
-    // well under the per-endpoint 25 MB upstream cap, so the handler's
-    // per-image check is what fires.
-    const bigB64 = "A".repeat(7 * 1024 * 1024);
+    const overFiveMbDecodedUnderEndpointCap = "A".repeat(7 * 1024 * 1024);
     const res = await fetch(`${t.baseUrl}/api/assignments/${id}/input`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        images: [{ media_type: "image/png", data: bigB64 }],
+        images: [{ media_type: "image/png", data: overFiveMbDecodedUnderEndpointCap }],
       }),
     });
     expect(res.status).toBe(413);
@@ -975,27 +948,20 @@ describe("POST /api/assignments/:id/input", () => {
 
   it("accepts a ~10 MB image-only body on the per-endpoint 25 MB cap (200)", async () => {
     const id = await createAssignment();
-    // ~3.5 MB of decoded bytes (under the 5 MB per-image cap) carried as
-    // ~4.7 MB of base64 inside a ~4.7 MB JSON body — comfortably under the
-    // 25 MB per-endpoint upstream cap but far above the default 128 KB.
-    // This proves the per-endpoint cap override reaches the handler.
-    const mid = "A".repeat(Math.floor(3.5 * 1024 * 1024 * 4 / 3));
+    const underFiveMbDecodedOverDefault128KbBodyCap = "A".repeat(Math.floor(3.5 * 1024 * 1024 * 4 / 3));
     const res = await fetch(`${t.baseUrl}/api/assignments/${id}/input`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        images: [{ media_type: "image/png", data: mid }],
+        images: [{ media_type: "image/png", data: underFiveMbDecodedOverDefault128KbBodyCap }],
       }),
     });
     expect(res.status).toBe(200);
   });
 
-  it("rejects a 40 MB body with the upstream cap message (413)", async () => {
+  it("rejects a 40 MB body with the upstream cap message, not the handler's attachment copy (413)", async () => {
     const id = await createAssignment();
-    // 40 MB of base64 — well over the 25 MB per-endpoint upstream cap.
-    // Must reject with the upstream "Request body exceeds the size limit."
-    // message, not the handler's "Attachments too large…" copy.
-    const huge = "A".repeat(40 * 1024 * 1024);
+    const overTwentyFiveMbEndpointCap = "A".repeat(40 * 1024 * 1024);
     const res = await fetch(`${t.baseUrl}/api/assignments/${id}/input`, {
       method: "POST",
       headers: {
@@ -1003,7 +969,7 @@ describe("POST /api/assignments/:id/input", () => {
         "content-length": String(40 * 1024 * 1024 + 128),
       },
       body: JSON.stringify({
-        images: [{ media_type: "image/png", data: huge }],
+        images: [{ media_type: "image/png", data: overTwentyFiveMbEndpointCap }],
       }),
     });
     expect(res.status).toBe(413);
@@ -1036,7 +1002,7 @@ describe("POST /api/assignments/:id/input", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          images: [{ media_type: "image/png", data: TINY_PNG_B64 }],
+          images: [{ media_type: "image/png", data: ONE_PIXEL_TRANSPARENT_PNG_B64 }],
         }),
       }
     );
@@ -1125,7 +1091,7 @@ describe("GET /api/assignments/:id/events", () => {
     expect(body.sessionId).toBeNull();
   });
 
-  it("returns events ascending by id with hasMore flag", async () => {
+  it("returns the newest page ascending by id with hasMore flag", async () => {
     const { assignmentId, sessionId, eventIds } = seedEvents(5);
     const res = await fetch(
       `${t.baseUrl}/api/assignments/${assignmentId}/events?limit=3`
@@ -1138,7 +1104,6 @@ describe("GET /api/assignments/:id/events", () => {
     };
     expect(body.sessionId).toBe(sessionId);
     expect(body.hasMore).toBe(true);
-    // Ascending — should be the newest 3 events in ascending order.
     expect(body.events.map((e) => e.id)).toEqual(eventIds.slice(2, 5));
   });
 
@@ -1442,8 +1407,7 @@ describe("GET /api/tasks", () => {
     // Batch insert for test speed (501 individual queries = ~500ms on CI).
     t.db.transaction(() => {
       for (let i = 0; i < TOTAL; i++) {
-        // Priorities 0, 1, 2 round-robin.
-        const priority = i % 3;
+        const roundRobinPriority = i % 3;
         t.db
           .query(
             `INSERT INTO tasks
@@ -1452,7 +1416,7 @@ describe("GET /api/tasks", () => {
              VALUES (?, ?, ?, 'op', 'internal', 'open',
                      unixepoch(), unixepoch() - ?)`
           )
-          .run(`t-${i.toString().padStart(4, "0")}`, `Task ${i}`, priority, i);
+          .run(`t-${i.toString().padStart(4, "0")}`, `Task ${i}`, roundRobinPriority, i);
       }
     })();
     const res = await fetch(`${t.baseUrl}/api/tasks`);
@@ -1487,8 +1451,7 @@ describe("GET /api/tasks", () => {
     const body = await res.json();
     expect(typeof body.error).toBe("string");
     expect(body.error).toMatch(/Failed to list tasks/);
-    // Re-open for the afterEach teardown — tests close the DB twice otherwise.
-    t.db = initDatabase(join(t.tmpDir, "test.db"));
+    reopenDatabaseForTeardown(t);
   });
 });
 
@@ -1673,7 +1636,7 @@ describe("GET /api/working-agents", () => {
     expect(res.status).toBe(500);
     const body = await res.json();
     expect(body.error).toMatch(/Failed to list working agents/);
-    t.db = initDatabase(join(t.tmpDir, "test.db"));
+    reopenDatabaseForTeardown(t);
   });
 });
 
@@ -1981,8 +1944,7 @@ describe("PATCH /api/iterations/:id", () => {
     expect(body.iteration.state).toBe("designing");
   });
 
-  it("rejects an illegal state transition with 400 + allowed list", async () => {
-    // inbox → in_flight is not in the matrix.
+  it("rejects an illegal state transition (inbox → in_flight) with 400 + allowed list", async () => {
     seedIter("i-1", "inbox");
     const res = await fetch(`${t.baseUrl}/api/iterations/i-1`, {
       method: "PATCH",
@@ -2228,7 +2190,7 @@ describe("DELETE /api/iterations/:id/tasks/:taskId", () => {
     ).run(id, `T ${id}`, iterationId);
   }
 
-  it("detaches an attached task and returns the iteration without it", async () => {
+  it("detaches an attached task (unlink, not delete) and returns the iteration without it", async () => {
     seedIter("i-1");
     seedTask("t-a", "i-1");
     const res = await fetch(`${t.baseUrl}/api/iterations/i-1/tasks/t-a`, {
@@ -2237,7 +2199,6 @@ describe("DELETE /api/iterations/:id/tasks/:taskId", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.iteration.tasks).toEqual([]);
-    // Confirm task ROW survives — detach is unlink, not delete.
     const row = t.db.query(`SELECT id FROM tasks WHERE id = ?`).get("t-a") as { id: string };
     expect(row.id).toBe("t-a");
   });
