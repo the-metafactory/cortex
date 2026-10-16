@@ -43,6 +43,7 @@
     "@types/react-dom": "^19.2.3",
     "dts-bundle-generator": "^9",
     "eslint": "^10.3.0",
+    "jscpd": "4.0.5",
     "typescript": "^5",
     "typescript-eslint": "^8.59.3"
   },

@@ -31,8 +31,8 @@ function requiredString(payload: Record<string, unknown>, field: string): string
  * (CONTEXT.md §Dispatch ledger funnel). Ledger failures never fail the dispatch.
  */
 export function createRunLedgerFunnel(options: RunLedgerFunnelOptions): SurfaceAdapter {
-  const subjects = Object.keys(TERMINAL).map(type =>
-    `local.${options.principal}.${options.stack}.${type}`);
+  const subjectFor = (type: string): string => `local.${options.principal}.${options.stack}.${type}`;
+  const subjects = Object.keys(TERMINAL).map(subjectFor);
 
   return {
     id: "run-ledger-funnel",
@@ -40,8 +40,7 @@ export function createRunLedgerFunnel(options: RunLedgerFunnelOptions): SurfaceA
     async render(envelope, _signal, subject) {
       if (!Object.hasOwn(TERMINAL, envelope.type)) return;
       const mapping = TERMINAL[envelope.type as keyof typeof TERMINAL];
-      if ((subject ?? deriveNatsSubject(envelope, options.stack)) !==
-        `local.${options.principal}.${options.stack}.${envelope.type}`) return;
+      if ((subject ?? deriveNatsSubject(envelope, options.stack)) !== subjectFor(envelope.type)) return;
 
       try {
         const taskId = requiredString(envelope.payload, "task_id");

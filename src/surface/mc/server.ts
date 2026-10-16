@@ -134,6 +134,8 @@ const SERVER_PING_INTERVAL_MS = 30_000;
 
 export interface ServerContext {
   server: Server<WsData>;
+  /** The bound listen port: `config.port`, or the one Bun assigned when it was 0. */
+  port: number;
   wsRegistry: WsClientRegistry;
   /**
    * Stop the server AND clear the server-initiated ping interval.
@@ -583,7 +585,7 @@ export function startServer(
     void server.stop(closeActive);
   };
 
-  return { server, wsRegistry, stop };
+  return { server, port: server.port ?? config.port, wsRegistry, stop };
 }
 
 // ---------- REST router ----------

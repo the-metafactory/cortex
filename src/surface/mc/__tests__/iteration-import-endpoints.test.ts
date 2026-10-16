@@ -88,17 +88,6 @@ interface TestContext {
   webhookSecret: string;
 }
 
-/**
- * The port the OS bound for a `port: 0` server. A random port in a fixed
- * window collided with other processes on a shared machine (EADDRINUSE,
- * node #2576).
- */
-function boundPort(ctx: ServerContext): number {
-  const port = ctx.server.port;
-  if (port === undefined) throw new Error("server.port unresolved after start");
-  return port;
-}
-
 const WEBHOOK_SECRET = "f17-test-secret-not-prod";
 
 async function setup(): Promise<TestContext> {
@@ -111,7 +100,7 @@ async function setup(): Promise<TestContext> {
     ghSpawn: gh.spawn,
     githubWebhookSecret: WEBHOOK_SECRET,
   });
-  const port = boundPort(ctx);
+  const port = ctx.port;
   return {
     db,
     ctx,
@@ -825,7 +814,7 @@ describe("POST /api/github/webhook — auth + dispatch", () => {
     const ctx = startServer({ ...DEFAULT_CONFIG, port: 0 }, db, {
       processManager: pm,
     });
-    const port = boundPort(ctx);
+    const port = ctx.port;
     try {
       const res = await fetch(`http://localhost:${port}/api/github/webhook`, {
         method: "POST",
@@ -863,7 +852,7 @@ describe("iterationLabel server option", () => {
       githubWebhookSecret: WEBHOOK_SECRET,
       iterationLabel: "epic",
     });
-    const port = boundPort(ctx);
+    const port = ctx.port;
     try {
       // Webhook with a payload labelled `iteration` should NOT trigger
       // import on this server (custom label is `epic`).

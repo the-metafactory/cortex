@@ -61,6 +61,25 @@ jobs:
       - name: ESLint (errors only — blocking gate)
         run: bun run lint:errors
 
+  # Copied code ratchet: a file may not gain jscpd clones past
+  # scripts/duplication-baseline.json, and the baseline may not exceed main's.
+  duplication:
+    name: Duplication ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - run: git fetch --depth=1 origin main
+
+      - name: check-duplication
+        run: bun scripts/check-duplication.ts
+
   # ──────────────────────────────────────────────────────────────────
   # Typecheck — `tsc --noEmit` against the project's tsconfig.json.
   # Pre-cortex#376 there was no CI gate against type errors, so 5

@@ -28,12 +28,6 @@ afterEach(() => {
   for (const c of cleanups.splice(0)) c();
 });
 
-function boundPort(ctx: ServerContext): number {
-  const port = ctx.server.port;
-  if (port === undefined) throw new Error("server.port unresolved");
-  return port;
-}
-
 function seedWorking(
   db: Database,
   opts: { agentId: string; agentName: string },
@@ -88,7 +82,7 @@ function start(opts: {
     rmSync(root, { recursive: true, force: true });
   };
   cleanups.push(cleanup);
-  return { ctx, baseUrl: `http://localhost:${boundPort(ctx)}`, db, cleanup, root } as Harness & {
+  return { ctx, baseUrl: `http://localhost:${ctx.port}`, db, cleanup, root } as Harness & {
     root: string;
   };
 }

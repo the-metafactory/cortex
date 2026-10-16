@@ -21,12 +21,6 @@ import type { Database } from "bun:sqlite";
 
 const PORT_BIND_ANY = 0;
 
-function boundPort(ctx: ServerContext): number {
-  const port = ctx.server.port;
-  if (port === undefined) throw new Error("server.port unresolved after start");
-  return port;
-}
-
 interface Ctx {
   db: Database;
   ctx: ServerContext;
@@ -44,7 +38,7 @@ function startWith(opts: {
     ...(opts.networks ? { networks: opts.networks } : {}),
     ...(opts.agentPresence ? { agentPresence: opts.agentPresence } : {}),
   });
-  return { db, ctx, baseUrl: `http://localhost:${boundPort(ctx)}`, tmpDir };
+  return { db, ctx, baseUrl: `http://localhost:${ctx.port}`, tmpDir };
 }
 
 function teardown(c: Ctx): void {
