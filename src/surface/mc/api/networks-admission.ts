@@ -159,7 +159,7 @@ interface AdmissionDecisionBody {
 }
 // A conservative request-id shape (registry `isValidRequestId` is the authority;
 // this is a cheap client-side pre-check so we never sign an obviously-bad id).
-const REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/;
+const REQUEST_ID_PRECHECK_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/;
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -201,7 +201,7 @@ function parseBody(
   }
   const b = raw as Record<string, unknown>;
 
-  if (typeof b.request_id !== "string" || !REQUEST_ID_RE.test(b.request_id)) {
+  if (typeof b.request_id !== "string" || !REQUEST_ID_PRECHECK_RE.test(b.request_id)) {
     return { ok: false, response: json({ error: "request_id must be a valid admission request id" }, 400) };
   }
   if (typeof b.network_id !== "string" || !NETWORK_ID_RE.test(b.network_id)) {

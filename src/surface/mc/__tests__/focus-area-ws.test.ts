@@ -40,6 +40,7 @@ import { broadcastTransition } from "../notifications";
 import { createSession } from "../db/sessions";
 import { listFocusArea } from "../db/assignments";
 import type { BlockReason } from "../types";
+import { isFocusAreaTransition } from "../dashboard-v2/lib/focus-area-filter";
 
 async function waitUntil(
   predicate: () => boolean,
@@ -233,7 +234,7 @@ describe("F-6 focus-area WS→refetch integration", () => {
     //   `if (msg.from === "blocked" || msg.to === "blocked") scheduleFocusRefetch();`
     // Both transitions satisfy that predicate → two re-renders fire.
     for (const t of transitions) {
-      expect(t.from === "blocked" || t.to === "blocked").toBe(true);
+      expect(isFocusAreaTransition(t)).toBe(true);
     }
 
     client.ws.close();
