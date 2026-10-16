@@ -43,7 +43,7 @@ test("delivery columns migrate without losing rows and retries survive reopening
       fallback: async (batch) => { batches.push(batch.length); },
     });
     expect(batches).toEqual([1]);
-    expect(listVigilEvents(reopened, KEY)[0]).toMatchObject({ delivery: "pending", attempts: 3, transient_failures: 3 });
-    expect(getVigilTextsSpent(reopened, "2026-10-16")).toBe(0);
+    expect(listVigilEvents(reopened, KEY)[0]).toMatchObject({ delivery: "sent", via: "email", attempts: 3, transient_failures: 0 });
+    expect(getVigilTextsSpent(reopened, "2026-10-16")).toBe(1);
   } finally { reopened.close(); }
 });

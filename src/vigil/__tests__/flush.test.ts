@@ -6,7 +6,7 @@ import type { NotifyResult } from "../../adapters/types";
 import { initDatabase } from "../../surface/mc/db/init";
 import { budgetDay } from "../budget";
 import { getVigilTextsSpent, listVigilEvents, recordVigilTextDelivered, writeVigilTransition } from "../db";
-import { flushTexts, type FlushTextsOptions, type VigilFallbackText } from "../flush";
+import { flushTexts, TRANSIENT_FALLBACK_THRESHOLD, type FlushTextsOptions, type VigilFallbackText } from "../flush";
 import { ingestLedgerEnvelope } from "../ingest";
 import { ENDED_AT, ledgerEnvelope } from "./fixtures";
 
@@ -90,49 +90,56 @@ test("transient failures stay pending and the third consecutive failure joins fa
   const send = sender(transient);
   const batches: (readonly VigilFallbackText[])[] = [];
   const fallback = async (batch: readonly VigilFallbackText[]) => { batches.push(batch); };
-  for (let attempts = 1; attempts <= 3; attempts++) {
+  for (let attempts = 1; attempts < TRANSIENT_FALLBACK_THRESHOLD; attempts++) {
     await flush({ send, fallback, readChannelHealth: () => "ok" });
     expect(rows()[0]).toMatchObject({ delivery: "pending", attempts, transient_failures: attempts, last_error: "network", sent_at: null, via: null });
     expect(spent()).toBe(0);
-    expect(batches).toHaveLength(attempts === 3 ? 1 : 0);
+    expect(batches).toHaveLength(0);
   }
-  expect(batches[0]?.[0]?.event).toEqual(rows()[0]);
-  expect(send).toHaveBeenCalledTimes(3);
-  await flush();
-  expect(rows()[0]).toMatchObject({ delivery: "sent", attempts: 4, transient_failures: 0, last_error: null, via: "dm" });
+  await flush({ send, fallback });
+  expect(batches).toHaveLength(1);
+  expect(batches[0]?.[0]?.event).toMatchObject({ attempts: TRANSIENT_FALLBACK_THRESHOLD, transient_failures: TRANSIENT_FALLBACK_THRESHOLD, last_error: "network" });
+  expect(rows()[0]).toMatchObject({ delivery: "sent", attempts: TRANSIENT_FALLBACK_THRESHOLD, transient_failures: 0, last_error: null, via: "email" });
+  await flush({ send, fallback });
+  expect(send).toHaveBeenCalledTimes(TRANSIENT_FALLBACK_THRESHOLD);
+  expect(batches).toHaveLength(1);
   expect(spent()).toBe(1);
 });
 
 test("permanent failures reset the consecutive transient streak", async () => {
   queue();
-  const fallback = mock(async () => {});
-  for (const result of [transient, transient, permanent, transient, transient]) await flush({ send: sender(result), fallback });
+  for (const result of [transient, transient, permanent, transient, transient]) await flush({ send: sender(result) });
   expect(rows()[0]).toMatchObject({ attempts: 5, transient_failures: 2 });
-  expect(fallback).toHaveBeenCalledTimes(1);
   expect(spent()).toBe(0);
 });
 
 test("permanent failures form one ordered fallback batch; unavailable fallback preserves pending events", async () => {
   queue("later", NOW + 1);
   queue("earlier", NOW);
+  await flush({ send: sender(permanent) });
+  expect(rows().every((row) => row.delivery === "pending" && row.last_error === "50007" && row.attempts === 1)).toBe(true);
+  expect(spent()).toBe(0);
   const fallback = mock(async (_batch: readonly VigilFallbackText[]) => {});
   await flush({ send: sender(permanent), fallback, render: async (event) => String(event.occurred_at) });
   expect(fallback).toHaveBeenCalledTimes(1);
   expect(fallback.mock.calls[0]?.[0].map((item) => item.event.run_id)).toEqual(["earlier", "later"]);
   expect(fallback.mock.calls[0]?.[0].map((item) => item.text)).toEqual([String(NOW), String(NOW + 1)]);
   await flush({ send: sender(permanent) });
-  expect(rows().every((row) => row.delivery === "pending" && row.last_error === "50007" && row.attempts === 2)).toBe(true);
-  expect(spent()).toBe(0);
+  expect(rows().every((row) => row.delivery === "sent" && row.via === "email" && row.attempts === 2)).toBe(true);
+  expect(spent()).toBe(2);
 });
 
 test("no adapter is a counted permanent no-adapter failure for every pending text", async () => {
   queue("first");
   queue("second");
+  await flush({ send: null });
+  expect(rows().every((row) => row.delivery === "pending" && row.last_error === "no-adapter" && row.attempts === 1)).toBe(true);
+  expect(spent()).toBe(0);
   const fallback = mock(async (_batch: readonly VigilFallbackText[]) => {});
   await flush({ send: null, fallback });
-  expect(rows().every((row) => row.delivery === "pending" && row.last_error === "no-adapter" && row.attempts === 1)).toBe(true);
-  expect(fallback.mock.calls[0]?.[0]).toHaveLength(2);
-  expect(spent()).toBe(0);
+  expect(fallback.mock.calls[0]?.[0].every(({ event }) => event.last_error === "no-adapter" && event.attempts === 2)).toBe(true);
+  expect(rows().every((row) => row.delivery === "sent" && row.via === "email")).toBe(true);
+  expect(spent()).toBe(2);
 });
 
 test("regressed channel still attempts DM and falls back after the first transient failure", async () => {
@@ -143,7 +150,7 @@ test("regressed channel still attempts DM and falls back after the first transie
   expect(send).toHaveBeenCalledTimes(1);
   expect(fallback).toHaveBeenCalledTimes(1);
   await flush({ readChannelHealth: () => "regressed", fallback });
-  expect(rows()[0]).toMatchObject({ delivery: "sent", via: "dm", attempts: 2 });
+  expect(rows()[0]).toMatchObject({ delivery: "sent", via: "email", attempts: 1 });
   expect(fallback).toHaveBeenCalledTimes(1);
 });
 
@@ -198,4 +205,103 @@ test("sent state and budget commit atomically", async () => {
   await expect(flush()).rejects.toThrow("budget unavailable");
   expect(rows()[0]).toMatchObject({ delivery: "pending", attempts: 1, sent_at: null, via: null });
   expect(spent()).toBe(0);
+});
+
+test("successful fallback settles texts once across later flushes", async () => {
+  queue();
+  const send = sender(permanent);
+  const fallback = mock(async (_batch: readonly VigilFallbackText[]) => {});
+  await flush({ send, fallback });
+  expect(rows()[0]).toMatchObject({ delivery: "sent", sent_at: NOW, via: "email", attempts: 1, last_error: null });
+  expect(spent()).toBe(1);
+  await flush({ send, fallback });
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(fallback).toHaveBeenCalledTimes(1);
+  expect(spent()).toBe(1);
+});
+
+test("fallback batch uses only budget left after successful DMs", async () => {
+  for (let i = 0; i < 5; i++) queue(String(i), NOW + i);
+  const send = mock(async (): Promise<NotifyResult> => send.mock.calls.length === 3 ? success : permanent);
+  const fallback = mock(async (_batch: readonly VigilFallbackText[]) => {});
+  await flush({ send, fallback });
+  expect(fallback.mock.calls[0]?.[0].map(({ event }) => event.run_id)).toEqual(["0", "1"]);
+  expect(rows().map((row) => [row.delivery, row.via])).toEqual([
+    ["sent", "email"], ["sent", "email"], ["sent", "dm"], ["held", null], ["held", null],
+  ]);
+  expect(spent()).toBe(3);
+  await flush({ send, fallback });
+  expect(fallback).toHaveBeenCalledTimes(1);
+  expect(spent()).toBe(3);
+});
+
+test("a later rendering failure still delivers the accumulated fallback batch", async () => {
+  queue("first", NOW);
+  queue("second", NOW + 1);
+  const fallback = mock(async (_batch: readonly VigilFallbackText[]) => {});
+  await expect(flush({
+    send: sender(permanent), fallback,
+    render: async (event) => {
+      if (event.run_id === "second") throw new Error("wording unavailable");
+      return "first text";
+    },
+  })).rejects.toThrow("wording unavailable");
+  expect(fallback.mock.calls[0]?.[0].map(({ event }) => event.run_id)).toEqual(["first"]);
+  expect(rows().map((row) => row.delivery)).toEqual(["sent", "pending"]);
+  expect(spent()).toBe(1);
+});
+
+test("rejected fallback does not hold overflow or spend budget before a successful retry", async () => {
+  for (let i = 0; i < 4; i++) queue(String(i), NOW + i);
+  const send = sender(permanent);
+  await expect(flush({ send, fallback: async () => { throw new Error("email unavailable"); } })).rejects.toThrow("email unavailable");
+  expect(rows().every((row) => row.delivery === "pending" && row.attempts === 1)).toBe(true);
+  expect(spent()).toBe(0);
+  const fallback = mock(async (_batch: readonly VigilFallbackText[]) => {});
+  await flush({ send, fallback });
+  expect(fallback.mock.calls[0]?.[0].map(({ event }) => event.run_id)).toEqual(["0", "1", "2"]);
+  expect(rows().map((row) => row.delivery)).toEqual(["sent", "sent", "sent", "held"]);
+  expect(rows()[3]).toMatchObject({ held_reason: "budget", via: null });
+  expect(spent()).toBe(3);
+});
+
+test("fallback is skipped when DMs consume all remaining budget", async () => {
+  queue("failed", NOW);
+  for (let i = 0; i < 3; i++) queue(String(i), NOW + i + 1);
+  const send = mock(async (): Promise<NotifyResult> => send.mock.calls.length === 1 ? permanent : success);
+  const fallback = mock(async () => {});
+  await flush({ send, fallback });
+  expect(fallback).not.toHaveBeenCalled();
+  expect(rows()[0]).toMatchObject({ delivery: "held", held_reason: "budget", attempts: 1 });
+  expect(spent()).toBe(3);
+});
+
+test("all fallback settlements and budget increments commit atomically", async () => {
+  queue("first");
+  queue("second");
+  db.run("CREATE TRIGGER fail_budget BEFORE UPDATE ON vigil_budget BEGIN SELECT RAISE(ABORT, 'budget unavailable'); END");
+  await expect(flush({ send: sender(permanent), fallback: async () => {} })).rejects.toThrow("budget unavailable");
+  expect(rows().every((row) => row.delivery === "pending" && row.sent_at === null && row.via === null)).toBe(true);
+  expect(spent()).toBe(0);
+});
+
+test("exhausted transient failures remain pending without fallback and recover by DM", async () => {
+  queue();
+  for (let i = 0; i <= TRANSIENT_FALLBACK_THRESHOLD; i++) await flush({ send: sender(transient) });
+  expect(rows()[0]).toMatchObject({ delivery: "pending", attempts: 4, transient_failures: 4, last_error: "network" });
+  expect(spent()).toBe(0);
+  await flush();
+  expect(rows()[0]).toMatchObject({ delivery: "sent", via: "dm", attempts: 5, transient_failures: 0, last_error: null });
+  expect(spent()).toBe(1);
+});
+
+test("a pending text can recover by DM while channel health is regressed", async () => {
+  queue();
+  await flush({ send: sender(transient), readChannelHealth: () => "regressed" });
+  expect(rows()[0]).toMatchObject({ delivery: "pending", attempts: 1 });
+  const fallback = mock(async () => {});
+  await flush({ fallback, readChannelHealth: () => "regressed" });
+  expect(fallback).not.toHaveBeenCalled();
+  expect(rows()[0]).toMatchObject({ delivery: "sent", via: "dm", attempts: 2 });
+  expect(spent()).toBe(1);
 });
