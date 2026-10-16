@@ -85,6 +85,8 @@ export { type ExitResult } from "./_shared/exit-result";
 
 type ProvisionSubcommand = "generate" | "claim" | "register" | "retire";
 
+const EXIT_CODE = { ok: 0, operationalFailure: 1, usageError: 2 } as const;
+
 const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
 // TODO(#2034/flag-day): replace with @the-metafactory/myelin/wire STACK_ID_RE
 // once RFC-0001 lands (blocked-on #1996/#2016/#2020). ./wire is kebab-strict;
@@ -509,75 +511,53 @@ async function runRegister(ctx: HandlerCtx): Promise<ExitResult> {
     admission_request: reg.admission,
   };
 
-  // C-1315 / C-1398 — surface the admission request-id + sealed-delivery state
-  // the admin needs. C-1398 (#1398): the register RESPONSE now ECHOES the
-  // request_id (+ status), so when it is present we read it DIRECTLY off the
-  // register result — no second PoP-signed `/admission-requests/mine`
-  // round-trip. On a fresh register the row is always PENDING with no sealed
-  // secret yet, so the echo carries everything the admin needs (the id to
-  // admit); richer sealed-delivery state is surfaced later by
-  // `cortex network join` / `cortex network status`. The `/mine` probe stays
-  // as the FALLBACK for an older registry that predates the echo.
   const humanLines: string[] = [];
   if (networkRes.networkId !== undefined) {
     data.network_id = networkRes.networkId;
-    if (reg.requestId !== undefined && reg.admissionStatus === "PENDING") {
-      // C-1398 — fast-path: the register response ECHOED the request_id and a
-      // PENDING status, so we surface it WITHOUT the `/mine` round-trip. #1398
-      // is "avoid the round-trip", NOT "change the output contract": we
-      // SYNTHESISE the SAME `OwnAdmissionState` the `/mine` path would have
-      // produced for a just-created PENDING row and reuse the SAME helpers, so
-      // the output is byte-identical — the ONLY behavioural change is no
-      // network call. A fresh PENDING register carries no sealed secret
-      // (`hasSealedSecret: false`), and the peer pubkey is the just-registered
-      // stack's own key — EXACTLY what the `/mine` path derived
-      // (`classifyOwnAdmissionRows(..., material.pubkeyB64)`). Any non-PENDING
-      // echoed status falls through to the `/mine` probe below, which reads the
-      // REAL sealed-delivery state (the echo does not convey it).
-      const s: OwnAdmissionState = {
-        networkId: networkRes.networkId,
-        state: "pending",
-        requestId: reg.requestId,
-        hasSealedSecret: false,
-        peerPubkey: matRes.material.pubkeyB64,
-      };
+    const echoedPending = pendingStateFromRegisterEcho(reg, networkRes.networkId, matRes.material.pubkeyB64);
+    const probe =
+      echoedPending !== undefined
+        ? { ok: true as const, state: echoedPending }
+        : await resolveOwnAdmissionState(
+            { registryUrl: urlRes.value, principalId: ctx.principalId, material: matRes.material },
+            networkRes.networkId,
+          );
+    if (probe.ok) {
+      const s = probe.state;
       data.admission_status = admissionStatusLabel(s.state);
       data.sealed_secret = s.hasSealedSecret ? "present" : "missing";
-      data.request_id = reg.requestId;
-      data.next_for_admin = nextForAdmin(networkRes.networkId, s);
+      if (s.requestId !== undefined) {
+        data.request_id = s.requestId;
+        data.next_for_admin = nextForAdmin(networkRes.networkId, s);
+      }
       humanLines.push(...registerStateLines(networkRes.networkId, s));
     } else {
-      // Fallback: an older registry that does not echo the request_id, OR an
-      // already-decided echoed status whose sealed-delivery state must be read
-      // from `/mine`. PoP-signed `/admission-requests/mine` read to discover
-      // it. Best-effort: a read failure NEVER fails a successful registration —
-      // we note the lookup was unavailable and point at the discovery command.
-      const probe = await resolveOwnAdmissionState(
-        { registryUrl: urlRes.value, principalId: ctx.principalId, material: matRes.material },
-        networkRes.networkId,
+      data.admission_lookup = `unavailable: ${probe.reason}`;
+      humanLines.push(
+        `  admission: could not read the request-id from the registry (${probe.reason}).`,
+        `  Discover it later with (admin): cortex network admit --list-pending --admin-seed <path>.`,
       );
-      if (probe.ok) {
-        const s = probe.state;
-        data.admission_status = admissionStatusLabel(s.state);
-        data.sealed_secret = s.hasSealedSecret ? "present" : "missing";
-        if (s.requestId !== undefined) {
-          data.request_id = s.requestId;
-          data.next_for_admin = nextForAdmin(networkRes.networkId, s);
-        }
-        humanLines.push(...registerStateLines(networkRes.networkId, s));
-      } else {
-        data.admission_lookup = `unavailable: ${probe.reason}`;
-        humanLines.push(
-          `  admission: could not read the request-id from the registry (${probe.reason}).`,
-          `  Discover it later with (admin): cortex network admit --list-pending --admin-seed <path>.`,
-        );
-      }
     }
   }
 
   if (ctx.json) return ok(renderJson(envelopeOk([], data)));
   const base = `cortex provision-stack: ${reg.note}\n  principal: ${ctx.principalId}\n  stack: ${stackIdRes.stackId}\n  fingerprint: ${matRes.material.fingerprint}\n`;
   return ok(humanLines.length > 0 ? `${base}${humanLines.join("\n")}\n` : base);
+}
+
+function pendingStateFromRegisterEcho(
+  reg: Extract<DoRegisterResult, { ok: true }>,
+  networkId: string,
+  justRegisteredPubkey: string,
+): OwnAdmissionState | undefined {
+  if (reg.requestId === undefined || reg.admissionStatus !== "PENDING") return undefined;
+  return {
+    networkId,
+    state: "pending",
+    requestId: reg.requestId,
+    hasSealedSecret: false,
+    peerPubkey: justRegisteredPubkey,
+  };
 }
 
 /** Human label for a C-1315 admission state. */
@@ -1083,21 +1063,21 @@ function readRetiredAt(response: unknown, stackId: string): string | undefined {
 // =============================================================================
 
 function ok(stdout: string): ExitResult {
-  return { exitCode: 0, stdout, stderr: "" };
+  return { exitCode: EXIT_CODE.ok, stdout, stderr: "" };
 }
 
 function usageError(sub: string, reason: string, json: boolean): ExitResult {
   const stderr = json
     ? renderJson(envelopeError(reason, { subcommand: sub }))
     : `cortex provision-stack ${sub}: ${reason}\n${topLevelHelp()}`;
-  return { exitCode: 2, stdout: "", stderr };
+  return { exitCode: EXIT_CODE.usageError, stdout: "", stderr };
 }
 
 function opError(reason: string, json: boolean, context?: Record<string, string>): ExitResult {
   const stderr = json
     ? renderJson(envelopeError(reason, context))
     : `cortex provision-stack: ${reason}\n`;
-  return { exitCode: 1, stdout: "", stderr };
+  return { exitCode: EXIT_CODE.operationalFailure, stdout: "", stderr };
 }
 
 // =============================================================================
@@ -1110,7 +1090,7 @@ export async function dispatchProvisionStack(argv: string[]): Promise<ExitResult
     parsed = parseSubcommandArgs(SPEC, argv);
   } catch (err) {
     if (err instanceof CliArgsError) {
-      return { exitCode: 2, stdout: "", stderr: `cortex provision-stack: ${err.message}\n${topLevelHelp()}` };
+      return { exitCode: EXIT_CODE.usageError, stdout: "", stderr: `cortex provision-stack: ${err.message}\n${topLevelHelp()}` };
     }
     throw err;
   }
@@ -1118,14 +1098,14 @@ export async function dispatchProvisionStack(argv: string[]): Promise<ExitResult
   const json = parsed.flags["--json"] === true;
 
   if (parsed.subcommand === "help" || parsed.help) {
-    return { exitCode: 0, stdout: topLevelHelp(), stderr: "" };
+    return { exitCode: EXIT_CODE.ok, stdout: topLevelHelp(), stderr: "" };
   }
   if (parsed.subcommand === "unknown") {
     const msg =
       parsed.rawSubcommand === ""
         ? "usage error — no subcommand specified."
         : `unknown subcommand "${parsed.rawSubcommand}".`;
-    return { exitCode: 2, stdout: "", stderr: `cortex provision-stack: ${msg}\n${topLevelHelp()}` };
+    return { exitCode: EXIT_CODE.usageError, stdout: "", stderr: `cortex provision-stack: ${msg}\n${topLevelHelp()}` };
   }
 
   const principalId = parsed.positionals["principal-id"] ?? "";
