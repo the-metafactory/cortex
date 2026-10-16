@@ -1,5 +1,54 @@
 # Cortex — Changelog
 
+## 6.16.0 — 2026-10-16 — Vigil core, run-ledger producer, notification delivery results
+
+Vigil lands in Mission Control: it reads the run ledger and tracks the
+health of every run and state subject. cortex now publishes the ledger
+envelopes Vigil consumes.
+
+- **cortex publishes `execution.run.finished`** for each terminal dispatch
+  (#2568). Pins myelin to the release that carries the A5b run ledger.
+- **Vigil core** (#2577, opt-in via `vigil.enabled`). Provisions the
+  limits-retained `LEDGER` stream, consumes it on a durable consumer and
+  records run-health transitions in the Mission Control database.
+- **LEDGER replay** (#2591). When the Vigil subject table is empty or a
+  previous replay did not finish, Vigil rebuilds its state from the whole
+  stream before the live consumer binds.
+- **State subjects** (#2590). A ledger envelope that carries `state`
+  updates a `state:{vocab}:{subject}` row through a fixed registry of three
+  vocabularies: goal, escalation and check.
+- **Staleness tick and text budget** (#2607, #2609). A five-minute tick
+  marks silent job and goal subjects stale. A daily text budget and a
+  Zurich quiet-hour clock are persisted.
+- **myelin v0.12.0** (#2613). Vigil accepts `execution.run.finished` with
+  `result_ref` or `proposal_refs` on a succeeded run instead of logging it
+  invalid. Either field on a failed run is still logged invalid and ACKed.
+- **`notifyPrincipal` reports delivery** (#2611). It takes
+  `NotifyOptions` (`{ buffer?: boolean }`) and may return a `NotifyResult`.
+  `SURFACE_SDK_VERSION` is now 1.2.0 (additive).
+- **Reflex-run processes get fire metadata** (#2573): `serves`, the
+  correlation id and the `PULSE_*` connection variables. Restricted specs,
+  including `env: []`, now receive the Pulse connection variables too; see
+  `docs/process-runner.md`.
+- **Prompt on stdin, not argv** (#2550). Prompts over 131,071 bytes no
+  longer fail `execve` with `E2BIG` on Linux. Gateway-routed dispatches now
+  honour the stack's `claude.timeoutMs` instead of a fixed 120 s.
+- **Strict macOS sandbox sessions** (#2594). A strict spawn exports a
+  per-session `CLAUDE_CODE_TMPDIR` that the profile allows, so Claude Code
+  no longer exits `EPERM` on the shared `/tmp/claude-<uid>`.
+- Test-suite isolation from the host's installed plugin bundles and `$HOME`
+  (#2574, #2594).
+
+### Upgrade notes
+
+- Vigil is off unless `vigil.enabled: true`, and it also needs Mission
+  Control (`mc.enabled`). Enabling it provisions the `LEDGER` stream on the
+  stack's bus. The four `vigil_*` tables are created in the Mission Control
+  database whenever it initialises, whether Vigil is on or not.
+- Out-of-tree surface adapters can pin `SURFACE_SDK_VERSION` 1.2.0 to use
+  the `notifyPrincipal` delivery result. Adapters that return `void` keep
+  working.
+
 ## 6.15.0 — 2026-09-27 — Per-stack NATS account cutover fixes and stack isolation on a shared bus
 
 Five fixes from a live conversion of a two-stack laptop bus from anonymous
