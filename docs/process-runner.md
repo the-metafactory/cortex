@@ -33,7 +33,7 @@ permissions come from the credential provisioned for Pulse.
 
 `USER` and `LOGNAME` are always set, with or without an allow-list: from
 cortex's environment when present, otherwise from the operating-system account
-cortex runs as. launchd starts cortex without them, and keychain-backed CLIs
+cortex runs as (when it resolves). launchd starts cortex without them, and keychain-backed CLIs
 such as `claude -p` report "Not logged in" without `USER`.
 
 The handler also sets `MF_SERVES_GOAL` and `MF_SERVES_NODE` from the fired

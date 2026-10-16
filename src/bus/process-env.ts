@@ -19,7 +19,7 @@ export const PULSE_ENV_KEYS = [
 ] as const;
 
 /**
- * Login identity: always set, from cortex's env or else the OS account. launchd
+ * Login identity: from cortex's env, else the OS account when it resolves. launchd
  * starts cortex without USER, and keychain-backed CLIs such as `claude -p` then
  * report "Not logged in" even with an allow-list naming USER.
  */
@@ -31,6 +31,15 @@ export const MF_CORRELATION_ID = "MF_CORRELATION_ID";
 
 /** Fire metadata keys: set only from the activation, never inherited. */
 const FIRE_ENV_KEYS: ReadonlySet<string> = new Set([MF_SERVES_GOAL, MF_SERVES_NODE, MF_CORRELATION_ID]);
+
+/** `userInfo()` throws for a uid with no passwd entry, as in some containers. */
+function osAccount(): string | undefined {
+  try {
+    return userInfo().username;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Build a fresh child env; fire metadata never inherits from cortex's env. */
 export function buildProcessEnv({ spec, activation, parentEnv, account }: {
@@ -49,7 +58,11 @@ export function buildProcessEnv({ spec, activation, parentEnv, account }: {
       .filter((entry): entry is readonly [string, string] => entry[1] !== undefined),
   );
 
-  for (const key of IDENTITY_ENV_KEYS) env[key] = parentEnv[key] ?? account ?? userInfo().username;
+  const login = account ?? osAccount();
+  for (const key of IDENTITY_ENV_KEYS) {
+    const value = parentEnv[key] ?? login;
+    if (value !== undefined) env[key] = value;
+  }
 
   if (activation.serves?.goal !== undefined) env[MF_SERVES_GOAL] = activation.serves.goal;
   if (activation.serves?.node !== undefined) env[MF_SERVES_NODE] = activation.serves.node;
