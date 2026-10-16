@@ -817,10 +817,15 @@ describeWithSandboxExec("MacosSbplSandbox — denial observation end-to-end (rea
       })();
 
       await logProc.exited;
-      // Grace period AFTER the subject process has exited — the log entry
-      // for a denial that happened right before exit can still be in-flight
-      // through the unified-log pipeline (module doc's observability gap).
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      // Wait AFTER the subject process has exited — the log entry for a
+      // denial that happened right before exit can still be in-flight through
+      // the unified-log pipeline (module doc's observability gap). Bounded
+      // poll, not a fixed grace: a loaded host delivered it after >1.5s
+      // (node #2576).
+      const logDeadline = Date.now() + 10_000;
+      while (observed.length === 0 && Date.now() < logDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       denialAbort.abort();
       await tail;
 
@@ -830,5 +835,5 @@ describeWithSandboxExec("MacosSbplSandbox — denial observation end-to-end (rea
     } finally {
       rmSync(fixtureHome, { recursive: true, force: true });
     }
-  }, 20_000);
+  }, 30_000);
 });

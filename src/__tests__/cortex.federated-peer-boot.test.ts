@@ -18,7 +18,7 @@
  *      gate at boot, so the gate then DENIES that peer as `unknown_network`.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,6 +40,10 @@ import type {
   Policy,
   PolicyFederatedNetwork,
 } from "../common/types/cortex-config";
+
+// Some tests boot startCortex twice; Bun's 5s default timed out at 5.6s on a
+// loaded host (node #2576).
+setDefaultTimeout(30_000);
 
 const PEER_B64 = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
 const PEER_B64_OTHER = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
