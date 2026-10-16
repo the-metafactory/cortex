@@ -18,3 +18,4 @@
 # files do). `setDefaultTimeout` in a preload covers only the first test file.
 [test]
 timeout = 20000
+preload = ["./scripts/test-preload.ts"]

@@ -106,7 +106,7 @@ clobbering an existing `~/.claude/relay/relay-policy.yaml`), marks the entry-poi
 scripts executable, and on macOS renders the launchd plists.
 
 Run the daemon with `cortex start --config <pointer>` (or directly with
-`bun src/cortex.ts start --config <pointer>`). Verify with `bun test` and
+`bun src/cortex.ts start --config <pointer>`). Verify with `bun run test` and
 `bun run lint`.
 
 **Updating a from-source clone:** `cd cortex && git pull && bun install` — a clean

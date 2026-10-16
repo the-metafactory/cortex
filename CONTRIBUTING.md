@@ -51,7 +51,7 @@ bun src/cli/cortex/commands/cortex.ts start \
 ### Local checks
 
 ```bash
-bun test          # run the test suite
+bun run test      # run the test suite under a temp HOME (a bare `bun test` refuses)
 bun run lint      # eslint (see eslint.config.js)
 bun run typecheck # tsc, if your change touches types
 ```

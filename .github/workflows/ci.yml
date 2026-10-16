@@ -158,8 +158,8 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - name: bun test
-        run: bun test
+      - name: bun run test
+        run: bun run test
 
   # ──────────────────────────────────────────────────────────────────
   # Surface-SDK .d.ts drift guard (cortex#1950). The shippable, self-contained
@@ -319,6 +319,7 @@ jobs:
       - name: bun test (systemd-e2e)
         env:
           SYSTEMD_E2E: "1"
+          CORTEX_TEST_HOST_HOME: "1"
         run: |
           set +e
           output=$(bun test --test-name-pattern systemd-e2e 2>&1)
