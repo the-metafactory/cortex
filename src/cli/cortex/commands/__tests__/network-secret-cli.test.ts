@@ -7,8 +7,8 @@
  * no secret leaks into the non-oob output.
  */
 
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync, statSync, existsSync } from "fs";
+import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync, readFileSync, statSync, existsSync, readdirSync, utimesSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createUser } from "nkeys.js";
@@ -768,6 +768,8 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     const installed = join(installDir, "metafactory-leaf.creds");
     mkdirSync(installDir, { recursive: true });
     writeFileSync(installed, FAKE_CREDS, { mode: 0o644 });
+    const past = new Date("2026-01-01T00:00:00Z");
+    utimesSync(installed, past, past);
 
     __setLeafCredsInstallDirForTests(installDir);
     fakeV2Fetcher(FAKE_CREDS);
@@ -776,7 +778,79 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
 
     expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
     expect(statSync(installed).mode & 0o777).toBe(0o600);
+    expect(statSync(installed).mtimeMs).toBe(past.getTime());
   });
+
+  async function stderrOf(fn: () => Promise<unknown>): Promise<string> {
+    let out = "";
+    const spy = spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
+      out += String(chunk);
+      return true;
+    });
+    try {
+      await fn();
+    } finally {
+      spy.mockRestore();
+    }
+    return out;
+  }
+
+  test("a dry-run v2 install, and a dry-run mode tighten, are each announced on stderr", async () => {
+    const installDir = join(tmp, "nats-install-notice");
+    __setLeafCredsInstallDirForTests(installDir);
+    fakeV2Fetcher(FAKE_CREDS);
+
+    const first = await stderrOf(() => dn(joinArgs(writeJoinerSeed("joiner6.seed")), (() => ({})) as never));
+    expect(first).toContain("installed the fetched per-member leaf credential file");
+    expect(first).toContain("even without --apply");
+
+    chmodSync(join(installDir, "metafactory-leaf.creds"), 0o644);
+    const second = await stderrOf(() => dn(joinArgs(writeJoinerSeed("joiner7.seed")), (() => ({})) as never));
+    expect(second).toContain("tightened the mode of the leaf credential file");
+
+    const third = await stderrOf(() => dn(joinArgs(writeJoinerSeed("joiner8.seed")), (() => ({})) as never));
+    expect(third).not.toContain("metafactory-leaf.creds (0600)");
+  });
+
+  test("a stale tmp left by a crashed run is replaced, never reused, and does not survive the install", async () => {
+    const installDir = join(tmp, "nats-install-stale");
+    const installed = join(installDir, "metafactory-leaf.creds");
+    const staleTmp = `${installed}.tmp-${process.pid}`;
+    mkdirSync(installDir, { recursive: true });
+    writeFileSync(staleTmp, "STALE", { mode: 0o644 });
+
+    __setLeafCredsInstallDirForTests(installDir);
+    fakeV2Fetcher(FAKE_CREDS);
+
+    await dn(joinArgs(writeJoinerSeed("joiner9.seed")), (() => ({})) as never);
+
+    expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
+    expect(statSync(installed).mode & 0o777).toBe(0o600);
+    expect(readdirSync(installDir)).toEqual(["metafactory-leaf.creds"]);
+  });
+
+  test.skipIf(process.getuid?.() === 0)(
+    "an unreadable pre-existing credential file is left untouched and the failure is reported, not thrown",
+    async () => {
+      const installDir = join(tmp, "nats-install-eacces");
+      const installed = join(installDir, "metafactory-leaf.creds");
+      mkdirSync(installDir, { recursive: true });
+      writeFileSync(installed, "HAND-PLACED", { mode: 0o600 });
+      chmodSync(installed, 0o000);
+
+      __setLeafCredsInstallDirForTests(installDir);
+      fakeV2Fetcher(FAKE_CREDS);
+
+      const err = await stderrOf(() => dn(joinArgs(writeJoinerSeed("joiner10.seed")), (() => ({})) as never)).finally(() => {
+        chmodSync(installed, 0o600);
+      });
+
+      expect(err).toContain("could not install it");
+      expect(err).not.toContain(FAKE_CREDS);
+      expect(readFileSync(installed, "utf-8")).toBe("HAND-PLACED");
+      expect(readdirSync(installDir)).toEqual(["metafactory-leaf.creds"]);
+    },
+  );
 
   test("an explicit --leaf-secret SUPPRESSES the auto-fetch", async () => {
     const joinerSeed = join(tmp, "joiner2.seed");

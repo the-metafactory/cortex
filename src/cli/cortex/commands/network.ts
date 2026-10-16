@@ -297,13 +297,6 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--dry-run": "bool",
       },
     },
-    // G1d / T1 (cortex#1139, ADR-0013) — one-command sovereign account-topology
-    // setup. Mints the principal's OWN nsc operator + a dedicated federation
-    // account + a per-stack agents account (via arc), wires the local
-    // federated.> export/import, ensures the signing seed, and writes
-    // stack.nats_infra back — leaving the stack ready for `cortex network join`.
-    // DRY-RUN by default (prints the plan); --apply mutates. `cortex network
-    // join` auto-calls this when the stack isn't provisioned yet.
     provision: {
       positionals: ["stack"],
       flags: {
@@ -316,12 +309,6 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--dry-run": "bool",
       },
     },
-    // C-1257 (PR7/#1225, ADR-0013 sovereign model) — the daemon-switch step. Lands a
-    // provisioned stack's daemon onto its own agents account: mints the bus
-    // creds under ANDREAS_<STACK>_AGENTS at nats.credsPath, teaches the local
-    // NATS server the account (resolver_preload), restarts the nats-server +
-    // the cortex daemon. DRY-RUN by default; --apply mutates. Run AFTER
-    // `cortex network provision <stack> --apply`.
     "make-live": {
       positionals: ["stack"],
       flags: {
@@ -330,75 +317,35 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--nats-config": "value",
         "--creds": "value",
         "--force": "bool",
-        // cortex#2533 — move an existing `$G` JetStream store aside (server
-        // stopped, never deleted) on an anonymous → operator-mode conversion.
         "--move-g-store": "bool",
         "--apply": "bool",
         "--dry-run": "bool",
       },
     },
-    // ADR-0018 PR5b (#1240) — leaf-secret tooling. `cortex network secret
-    // <action> <network> <member-pubkey>` where <action> ∈ {add-member,
-    // revoke-member, rotate}. Hub-admin authority (Q5): mints the per-member
-    // leaf PSK, writes the member's hub `authorization` user + reloads, and
-    // seals/delivers (or revokes) the secret. DRY-RUN by default; --apply mutates.
-    // C-1349 Slice 2 — `rotate-key <network>` (NO member positional — network-wide
-    // K rotation) mints K′, re-seals every ADMITTED member, advances the hub K
-    // store. `member` is OPTIONAL so rotate-key parses; the per-member actions
-    // still require it (runSecret enforces).
     secret: {
       positionals: ["action", "network", "member?"],
       flags: {
-        // The HUB-ADMIN seed (mints + seals + signs the registry delivery/revoke).
         "--admin-seed": "value",
         "--registry-url": "value",
-        // The hub nats-server config the per-member authorization user lands in.
         "--hub-config": "value",
-        // C-1349 Slice 1 — the HUB STACK's cortex config (config-split dir sentinel
-        // or legacy monolith). Read-only: sourced for the per-network payload key
-        // K (`policy.federated.networks[<net>].payload_key`) to seal alongside the
-        // PSK. A config LOCATOR only — K is never a flag/second store. Defaults to
-        // the standard `~/.config/cortex` path (like join/create/status).
         "--config": "value",
         "--stack": "value",
-        // add-member: sealed (default, plug-and-play) | oob (trusted bootstrap).
         "--deliver": "value",
-        // Override the hub leaf user (defaults to the member's principal id).
         "--leaf-user": "value",
-        // C-1350 S3 — revoke-member de-admission pairing: `--discord-member`
-        // (+ `--discord-guild/--discord-server/--discord-role`) mirrors admit's
-        // flag block, REMOVING the community-fleet role as a final non-fatal step
-        // after the hub-cut + registry REVOKE. A removal failure NEVER fails the
-        // revoke (transport is already cut, the row already REVOKED).
         "--discord-member": "value",
         "--discord-server": "value",
         "--discord-guild": "value",
         "--discord-role": "value",
         "--apply": "bool",
         "--dry-run": "bool",
-        // cortex#1481 — force the seal-only path (registry seal + hub-owner
-        // artifact, NEVER a local hub write) for add-member/rotate, even when
-        // the auto-detected hub locality would otherwise call the hub local.
         "--seal-only": "bool",
-        // cortex#1481 — the hub's OWN federation account nkey-U, when the admin
-        // already knows it. Rides the hub-owner artifact's `account:` field.
         "--hub-account": "value",
       },
     },
-    // cortex#1485 (epic #1479, join-6) — the guided-join handoff STATE. A join is
-    // a 3-leg handoff across ≤3 people/machines: seal (admin) → hub-authorize
-    // (hub owner) → leaf-up (member). `cortex network handoff status <member>
-    // --network <net>` shows, for that member, each leg's state (done | pending |
-    // blocked), the outstanding next leg, and WHOSE job it is. `action` is the
-    // verb (`status`); `member` is who the report is about. Read-only.
     handoff: {
       positionals: ["action", "member"],
       flags: {
-        // The network whose handoff is being reported (required — a handoff is
-        // always network-scoped).
         "--network": "value",
-        // Mirrors doctor/status: locate the LOCAL stack's config + admission
-        // read + leaf monitor for the seal/leaf-up leg signals.
         "--config": "value",
         "--principal": "value",
         "--stack": "value",
@@ -407,13 +354,6 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
         "--seed-path": "value",
       },
     },
-    // cortex#1498 (epic #1479 follow-up) — the HUB-OWNER's side of the guided-
-    // join handoff's hub-authorize leg. Run AFTER applying the member's leaf
-    // `authorization` entry on the hub's OWN nats-server config (the #1481
-    // hub-owner artifact) to stamp the registry's `hub_authorized_at`, the real
-    // signal `handoff status` / `join --guided` read. Hub-admin authority — the
-    // SAME allowlist `secret add-member`'s sealed delivery uses (ADR-0018 Q5).
-    // Mints nothing; no local fs/nats-config write. Dry-run by DEFAULT.
     authorize: {
       positionals: ["member"],
       flags: {
@@ -427,10 +367,6 @@ const SPEC: SubcommandSpec<NetworkSubcommand> = {
   },
   universal: { "--json": "bool", "--help": "bool", "-h": "bool" },
 };
-
-// =============================================================================
-// Helpers
-// =============================================================================
 
 function requireValueFlag(
   flags: FlagMap,
@@ -450,14 +386,6 @@ function optionalValueFlag(
   return typeof v === "string" ? v : undefined;
 }
 
-/**
- * #753 — build a single-key override fragment for the config-deriver from a
- * value-flag. When the flag is absent (or valueless) the fragment is empty, so
- * the deriver falls through to config / convention. `key` defaults to the
- * camelCase of the flag's tail; pass it explicitly where the names differ.
- * Spreading the result keeps the override object free of `undefined` keys
- * (which would otherwise shadow the config value with `undefined`).
- */
 function readOverride(
   flags: FlagMap,
   flagName: string,
@@ -465,15 +393,10 @@ function readOverride(
 ): Record<string, string> {
   const v = optionalValueFlag(flags, flagName);
   if (v === undefined) return {};
-  // Default key: strip leading `--`, drop hyphens → `principal` from
-  // `--principal`. Callers pass an explicit `key` for the renamed inputs.
   const resolvedKey = key ?? flagName.replace(/^--/, "").replace(/-/g, "");
   return { [resolvedKey]: v };
 }
 
-// readLeafPackageFlag removed — ADR-0015 retired O-4b / --from-package / hub-minted identity.
-
-/** Resolve the stack slug from `--stack` (`{principal}/{slug}`) or default. */
 function resolveStackSlug(
   principalId: string,
   stackFlag: string | undefined,
@@ -493,59 +416,18 @@ function resolveStackSlug(
   return { ok: true, slug };
 }
 
-/**
- * #814 — resolve the cortex config path the `status` read should target for a
- * NAMED stack, layout-aware. A faithful TS mirror of `resolve_stack_config_path`
- * (scripts/lib/plist-render.sh) so the CLI status read and the install-time
- * plist render agree on which file a stack's `policy.federated.networks[]` lives
- * in:
- *
- *   - config-split (migration 0003 / #714): `<base>/<slug>/system/system.yaml`
- *     marker present ⇒ the per-stack sentinel `<base>/<slug>/<slug>.yaml` (the
- *     loader resolves configDir = dirname(<sentinel>) and composes the dir; the
- *     policy block is read from `<base>/<slug>/stacks/<slug>.yaml` by
- *     `stackConfigPath`, which derives it from THIS sentinel — #813).
- *   - legacy monolith: no per-stack dir ⇒ the root monolith — `cortex.yaml` for
- *     the `meta-factory` default-stack slug, `cortex.<slug>.yaml` otherwise.
- *
- * Directory layout takes precedence (same as the shell resolver + #813's
- * discovery). The returned path is fed into `cortexConfigPath` so the post-#813
- * `readNetworks`/`stackConfigPath` read the file the daemon actually loads.
- *
- * #814 review (MAJOR) — default-stack mapping. When `--stack` is omitted,
- * `resolveStackSlug` returns the sentinel slug `"default"`, but the locator
- * system's canonical bare-name default stack is `"meta-factory"`
- * (`config_file_to_slug`: `cortex.yaml` → `meta-factory`; `resolve_stack_config_path`
- * keys off that). So we map `"default"` → the `meta-factory` bare-name default
- * HERE (status-resolver scope only — NOT in `resolveStackSlug`, which would
- * ripple into join/leave) so the common no-`--stack` invocation resolves the
- * REAL default stack: `~/.config/cortex/meta-factory/meta-factory.yaml` under the
- * config-split layout, else the `~/.config/cortex/cortex.yaml` monolith — matching
- * the shell locator exactly. Without this, no-`--stack` resolved the nonexistent
- * `cortex.default.yaml` and falsely reported "no networks joined".
- */
+const BARE_NAME_DEFAULT_STACK_SLUG = "meta-factory";
+
 function resolveStatusConfigPath(slug: string): string {
   const base = resolveConfigDir();
-  // The no-`--stack` sentinel `"default"` IS the `meta-factory` bare-name default
-  // in the locator system (scoped to status; see doc comment above).
-  const locatorSlug = slug === "default" ? "meta-factory" : slug;
+  const locatorSlug = slug === "default" ? BARE_NAME_DEFAULT_STACK_SLUG : slug;
   if (existsSync(join(base, locatorSlug, "system", "system.yaml"))) {
-    // Config-split — point at the per-stack sentinel.
     return join(base, locatorSlug, `${locatorSlug}.yaml`);
   }
-  // Legacy monolith. `meta-factory` is the bare-name default-stack special case.
-  const filename = locatorSlug === "meta-factory" ? "cortex.yaml" : `cortex.${locatorSlug}.yaml`;
+  const filename = locatorSlug === BARE_NAME_DEFAULT_STACK_SLUG ? "cortex.yaml" : `cortex.${locatorSlug}.yaml`;
   return join(base, filename);
 }
 
-/**
- * #830 — resolve the LOCAL stack's config path for a network command, layout-aware:
- * explicit `--config` wins; otherwise the `--stack` flag (full `{principal}/{slug}`
- * or a bare slug) selects the slug and {@link resolveStatusConfigPath} maps it to
- * the split sentinel or the legacy monolith. Shared so `ping` and any future
- * command resolve identically to `status` and can't drift (the gap that made ping
- * read the flat default and report `not-configured` for a config-split peer).
- */
 function resolveLocalStackConfigPath(flags: FlagMap): string {
   const explicitConfig = optionalValueFlag(flags, "--config");
   if (explicitConfig !== undefined) return expandTilde(explicitConfig);
@@ -559,11 +441,6 @@ function resolveLocalStackConfigPath(flags: FlagMap): string {
   return resolveStatusConfigPath(slug);
 }
 
-/**
- * `join`/`leave` mutate the live deployment. The DEFAULT is dry-run (safe);
- * `--apply` opts into real mutation. `--dry-run` is accepted explicitly too.
- * `--apply` and `--dry-run` together is a usage error.
- */
 function resolveApply(
   flags: FlagMap,
 ): { ok: true; apply: boolean } | { ok: false; reason: string } {
@@ -575,22 +452,6 @@ function resolveApply(
   return { ok: true, apply };
 }
 
-// =============================================================================
-// Subcommand handlers
-// =============================================================================
-
-/**
- * ADR-0018 PR5b (#1240) — plug-and-play leaf-secret auto-fetch for `join`.
- *
- * The locked #1240 constraint: the joiner NEVER handles a secret. When no leaf
- * secret is resolved from `--leaf-secret` / `stack.nats_infra.leaf_secret`,
- * `join` AUTO-fetches the sealed blob from the member PoP-read endpoint,
- * decrypts it with the joiner's OWN seed, and renders the leaf — fully
- * automatic. BEST-EFFORT + SOFT-CLOSED: any failure (not yet admitted, no
- * secret delivered, registry down, odd seed) returns `undefined` and the join
- * falls through to its existing behaviour, so this never breaks a join that
- * supplied its secret another way.
- */
 type LeafSecretFetcher = typeof fetchSealedLeafSecret;
 let joinLeafSecretFetcherOverride: LeafSecretFetcher | null = null;
 
@@ -599,12 +460,6 @@ export function __setJoinLeafSecretFetcherForTests(f: LeafSecretFetcher | null):
   joinLeafSecretFetcherOverride = f;
 }
 
-/**
- * #1597 — where a fetched v2 per-member `.creds` file is installed. Deliberately
- * the `-leaf` suffixed name, NOT `defaultCredsPath`'s `<network>.creds`: the
- * derive convention path may carry a hand-placed hub-minted-identity file we must never
- * clobber. Tests inject a tmp dir via {@link __setLeafCredsInstallDirForTests}.
- */
 const LEAF_CREDS_INSTALL_DIR = "~/.config/nats";
 let leafCredsInstallDirOverride: string | null = null;
 
@@ -618,20 +473,6 @@ function leafCredsInstallPath(networkId: string): string {
   return join(dir, `${networkId}-leaf.creds`);
 }
 
-/**
- * #1597 — install the fetched v2 credential file at the conventional path.
- * Written as a NEW same-dir tmp file EXCLUSIVELY created 0600 (flag "wx" — a
- * stale tmp from a crashed run is removed, never silently reused, so
- * `writeFileSync`'s create-only mode semantics always apply), then renamed
- * over the target: a direct overwrite of a looser pre-existing file would
- * expose the fresh credential group-readable until a trailing chmod (Sage
- * #1609). The tmp+rename keeps the text 0600 from creation to install AND
- * makes the replacement atomic. When the content already matches, the write
- * is skipped (re-join idempotency — no content/mtime churn) but a looser
- * pre-existing mode is still tightened to 0600. BOTH mutations — the write
- * and the mode-tighten — are reported to the caller, which surfaces them on
- * stderr (this runs in dry-run too — see the call site).
- */
 function installLeafCreds(
   networkId: string,
   creds: string,
@@ -641,8 +482,6 @@ function installLeafCreds(
   try {
     existing = readFileSync(path, "utf-8");
   } catch (err) {
-    // Only ENOENT means "not installed yet" — surface EACCES/EISDIR/etc. as
-    // the real filesystem problem they are (the caller's catch reports them).
     if ((err as { code?: string }).code !== "ENOENT") throw err;
     existing = undefined;
   }
@@ -650,37 +489,29 @@ function installLeafCreds(
   if (wrote) {
     mkdirSync(dirname(path), { recursive: true });
     const tmp = `${path}.tmp-${process.pid}`;
-    rmSync(tmp, { force: true }); // a stale tmp (crash + PID reuse) may be loose
+    rmSync(tmp, { force: true });
     try {
       writeFileSync(tmp, creds, { mode: 0o600, flag: "wx" });
       renameSync(tmp, path);
     } catch (err) {
-      // Never leave the credential text behind under the tmp name.
-      try {
-        rmSync(tmp, { force: true });
-      } catch (_cleanupErr) {
-        // Best-effort cleanup only — the write/rename failure is the real error.
-      }
+      tryRemove(tmp);
       throw err;
     }
   }
-  // Tighten a looser mode ONLY when needed, and report it: even the
-  // identical-content path is a (metadata) mutation when a pre-existing file
-  // was group-readable. A fresh tmp+rename install is already 0600.
   const tightened = (statSync(path).mode & 0o777) !== 0o600;
   if (tightened) chmodSync(path, 0o600);
   return { path, wrote, tightened };
 }
 
-/**
- * The join-side result of the auto-fetch, discriminated by which leaf-auth
- * shape the sealed envelope delivered (#1597):
- *   - `secret-auth` (v1) — the sovereign-model shared-string pipe; join renders the
- *     URL-userinfo remote.
- *   - `creds-file` (v2)  — a per-member NSC user `.creds` was fetched and is
- *     ALREADY INSTALLED at `credsPath` (0600); join points the stack binding at
- *     it and renders the existing creds-file remote branch.
- */
+function tryRemove(path: string): boolean {
+  try {
+    rmSync(path, { force: true });
+    return true;
+  } catch (_err) {
+    return false;
+  }
+}
+
 type AutoFetchedLeafAuth =
   | { kind: "secret-auth"; leafSecret: string; leafUser: string; payloadKey?: string; payloadKeyKid?: string }
   | { kind: "creds-file"; credsPath: string; leafUser: string; payloadKey?: string; payloadKeyKid?: string };
@@ -688,11 +519,8 @@ type AutoFetchedLeafAuth =
 async function maybeAutoFetchLeafSecret(
   networkId: string,
   inputs: { leafSecret?: string; seedPath: string; registryUrl: string; principal: string },
-  /** #1597 (R7) — the member's OWN identities a v2 credential must be minted for. */
   expectedLeafUsers: readonly string[],
 ): Promise<AutoFetchedLeafAuth | undefined> {
-  // Only when no leaf secret was resolved from flag/config (don't override an
-  // explicit secret-auth join).
   if (inputs.leafSecret !== undefined) return undefined;
 
   const seedExpanded = expandTilde(inputs.seedPath);
@@ -704,9 +532,6 @@ async function maybeAutoFetchLeafSecret(
     const seed = await readFile(seedExpanded, "utf-8");
     material = materialFromSeedString(seed);
   } catch (_err) {
-    // Best-effort: a missing/group-readable/odd seed means we cannot auto-fetch.
-    // The join continues without an auto-secret (it may use creds, or fail later
-    // with a clearer leaf-binding error). Safe to ignore here.
     return undefined;
   }
 
@@ -720,26 +545,11 @@ async function maybeAutoFetchLeafSecret(
   });
   if (!res.ok) return undefined;
 
-  // #1597 — a v2 envelope delivered a per-member `.creds` file (operator-mode
-  // hub). Install it NOW, before the ports split: the #821 existence preflight
-  // is a pure read in BOTH live and dry-run, so the file must exist for either
-  // mode to render a truthful plan (the issue pins this ordering: "the #821
-  // existence preflight passes because the file was just written"). This is a
-  // DELIBERATE carve-out from the "dry-run touches nothing" contract — it
-  // installs only the member's OWN delivered credential at its conventional
-  // 0600 path (the same member-local class as the enforceChmod600 above); the
-  // nats config / plist / registry writes all stay behind --apply. EVERY
-  // mutation this carve-out performs — a content write AND a mode tighten —
-  // is surfaced by the stderr notice below, so dry-run output stays honest.
   if (res.kind === "creds") {
     let install: { path: string; wrote: boolean; tightened: boolean };
     try {
       install = installLeafCreds(networkId, res.creds);
     } catch (err) {
-      // Best-effort like every other auto-fetch failure: fall through to the
-      // existing join behaviour, surfacing why on stderr (never the creds).
-      // On a v2-only hub with nothing at the derive-time creds path this is
-      // NOT silent: the #821 existence preflight then fails the join loudly.
       process.stderr.write(
         `cortex network join: fetched a v2 leaf credential for "${networkId}" but could not ` +
           `install it: ${err instanceof Error ? err.message : String(err)}\n`,
@@ -769,9 +579,6 @@ async function maybeAutoFetchLeafSecret(
     kind: "secret-auth",
     leafSecret: res.leafPsk,
     leafUser: res.leafUser,
-    // C-1349 Slice 1 — carry the sealed payload key K (+ kid) through to the
-    // join so it installs `encryption: enabled` + `payload_key` into the stack
-    // config. Absent on encryption-off networks / old blobs. K never logged.
     ...(res.payloadKey !== undefined && { payloadKey: res.payloadKey }),
     ...(res.payloadKeyKid !== undefined && { payloadKeyKid: res.payloadKeyKid }),
   };
@@ -823,7 +630,7 @@ export function joinBlockerMessage(networkId: string, s: OwnAdmissionState): str
         `Contact them or re-register. A legacy .creds file is NOT the fix.`
       );
     default:
-      return undefined; // unknown status — keep the original error
+      return undefined;
   }
 }
 
@@ -856,13 +663,6 @@ export function shouldReplaceCredsPreflightError(args: {
   );
 }
 
-/**
- * C-1315 — when a join fails the sovereign-model creds preflight (#821) with no resolved
- * leaf secret, probe the joiner's OWN admission row (PoP `/mine` read) and return
- * the actionable state message. Best-effort: any inability to probe (no seed on
- * disk, unreadable seed, registry unreachable) returns `undefined` so the caller
- * keeps the original error rather than inventing a misleading one.
- */
 async function classifyJoinBlocker(
   networkId: string,
   inputs: { seedPath: string; registryUrl: string; principal: string },
@@ -875,14 +675,13 @@ async function classifyJoinBlocker(
     const seed = await readFile(seedExpanded, "utf-8");
     material = materialFromSeedString(seed);
   } catch (_err) {
-    // Can't load the stack identity → can't probe; keep the original error. Safe.
     return undefined;
   }
   const probe = await resolveOwnAdmissionState(
     { registryUrl: inputs.registryUrl, principalId: inputs.principal, material },
     networkId,
   );
-  if (!probe.ok) return undefined; // registry unreachable/not configured → keep original
+  if (!probe.ok) return undefined;
   return joinBlockerMessage(networkId, probe.state);
 }
 
