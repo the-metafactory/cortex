@@ -12,7 +12,7 @@
  */
 
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { createUser } from "nkeys.js";
@@ -698,6 +698,38 @@ describe("leave usage", () => {
     ], EMPTY_READER);
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("not joined");
+  });
+
+  test("leave of a JOINED network without --apply is a dry-run: finds the network via the call-time default config, writes nothing", async () => {
+    const home = mkdtempSync(join(tmpdir(), "leave-dry-default-"));
+    tmpDirs.push(home);
+    const configDir = join(home, ".config", "cortex");
+    mkdirSync(configDir, { recursive: true });
+    const cortexYaml = join(configDir, "cortex.yaml");
+    const cortexYamlBody =
+      `policy:\n  federated:\n    networks:\n      - id: metafactory\n        leaf_node: metafactory\n        max_hop: 1\n        peers: []\n        accept_subjects:\n          - federated.andreas.default.>\n        deny_subjects: []\n        announce_capabilities: []\n`;
+    writeFileSync(cortexYaml, cortexYamlBody, "utf-8");
+    const natsConfig = join(home, "local.conf");
+    const natsBody = `include "./leaf-metafactory.conf"\n`;
+    writeFileSync(natsConfig, natsBody, "utf-8");
+    const plist = join(home, "nats.plist");
+    const plistBody = "<plist><dict></dict></plist>\n";
+    writeFileSync(plist, plistBody, "utf-8");
+
+    const res = await withHome(home, () =>
+      dispatchNetwork([
+        "leave", "metafactory",
+        "--principal", "andreas",
+        "--nats-config", natsConfig,
+        "--plist", plist,
+      ], EMPTY_READER),
+    );
+
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).not.toContain("not joined");
+    expect(readFileSync(cortexYaml, "utf-8")).toBe(cortexYamlBody);
+    expect(readFileSync(natsConfig, "utf-8")).toBe(natsBody);
+    expect(readFileSync(plist, "utf-8")).toBe(plistBody);
   });
 });
 
