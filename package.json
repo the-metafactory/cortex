@@ -28,6 +28,7 @@
     "deploy:dashboard": "bun run build:dashboard && bun scripts/scan-deploy-surface.ts dashboard --advisory && bunx wrangler pages deploy dist/dashboard-v2 --project-name grove-dashboard",
     "deploy:worker": "bun scripts/scan-deploy-surface.ts worker && bun --cwd src/surface/mc/worker run deploy",
     "db:migrate:safe": "bun scripts/scan-deploy-surface.ts d1 --advisory && bun --cwd src/surface/mc/worker run db:migrate",
+    "check": "bun scripts/check.ts",
     "test": "bun scripts/test.ts",
     "lint": "eslint .",
     "lint:errors": "eslint --quiet .",
