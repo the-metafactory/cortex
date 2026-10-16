@@ -8,6 +8,9 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join, resolve } from "path";
 
 import { dispatchNetwork, type PingBusFactory } from "../network";
 import type { LoadedConfig } from "../../../../common/config/loader";
@@ -228,4 +231,61 @@ describe("cortex network ping — help", () => {
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("cortex network ping");
   });
+});
+
+describe("cortex network ping — local config locator matches the shell resolver", () => {
+  const plistRender = resolve(import.meta.dir, "../../../../../scripts/lib/plist-render.sh");
+
+  function shellResolve(base: string, slug: string): string {
+    const r = Bun.spawnSync([
+      "bash",
+      "-c",
+      'source "$1" && resolve_stack_config_path "$2" "$3"',
+      "_",
+      plistRender,
+      base,
+      slug,
+    ]);
+    expect(r.exitCode).toBe(0);
+    return r.stdout.toString();
+  }
+
+  async function cliResolve(base: string, stackArgs: string[]): Promise<string> {
+    let seenPath = "";
+    const reader = (path: string): LoadedConfig => {
+      seenPath = path;
+      return readerWithPeer()();
+    };
+    const prev = process.env.CORTEX_CONFIG_DIR;
+    process.env.CORTEX_CONFIG_DIR = base;
+    try {
+      await dispatchNetwork(["ping", "jc", ...stackArgs], reader, fakeBusFactory((f) => echoReply(f, 1)).factory);
+    } finally {
+      if (prev === undefined) delete process.env.CORTEX_CONFIG_DIR;
+      else process.env.CORTEX_CONFIG_DIR = prev;
+    }
+    return seenPath;
+  }
+
+  const cases: { name: string; split: boolean; stackArgs: string[]; slug: string }[] = [
+    { name: "split, named stack", split: true, stackArgs: ["--stack", "andreas/work"], slug: "work" },
+    { name: "monolith, named stack", split: false, stackArgs: ["--stack", "andreas/halden"], slug: "halden" },
+    { name: "split, no --stack", split: true, stackArgs: [], slug: "meta-factory" },
+    { name: "monolith, no --stack", split: false, stackArgs: [], slug: "meta-factory" },
+  ];
+
+  for (const c of cases) {
+    test(c.name, async () => {
+      const base = mkdtempSync(join(tmpdir(), "ping-locator-"));
+      try {
+        if (c.split) {
+          mkdirSync(join(base, c.slug, "system"), { recursive: true });
+          writeFileSync(join(base, c.slug, "system", "system.yaml"), "{}\n");
+        }
+        expect(await cliResolve(base, c.stackArgs)).toBe(shellResolve(base, c.slug));
+      } finally {
+        rmSync(base, { recursive: true, force: true });
+      }
+    });
+  }
 });
