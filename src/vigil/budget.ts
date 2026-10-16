@@ -14,7 +14,11 @@ const zurichClock = new Intl.DateTimeFormat("en-GB", {
 
 function localParts(now: number | Date): { year: number; month: number; day: number; hour: number } {
   const parts = zurichClock.formatToParts(now);
-  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((p) => p.type === type)!.value);
+  const part = (type: Intl.DateTimeFormatPartTypes): number => {
+    const value = parts.find((p) => p.type === type)?.value;
+    if (value === undefined) throw new Error(`vigil budget clock: Intl omitted the ${type} part`);
+    return Number(value);
+  };
   return { year: part("year"), month: part("month"), day: part("day"), hour: part("hour") };
 }
 
