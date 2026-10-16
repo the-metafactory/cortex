@@ -346,3 +346,12 @@ describe("handleAdmissionDecision — decider wiring", () => {
     }
   });
 });
+
+describe("networks-admission module boundary", () => {
+  it("never imports the bus — cortex.ts injects the signer as an AdmissionDecider", async () => {
+    const source = await Bun.file(new URL("../networks-admission.ts", import.meta.url)).text();
+    const specifiers = [...source.matchAll(/^import[^;]*?from\s+"([^"]+)"/gm)].map((m) => m[1]);
+    expect(specifiers.length).toBeGreaterThan(0);
+    expect(specifiers.filter((s) => /(^|\/)bus(\/|$)/.test(s ?? ""))).toEqual([]);
+  });
+});

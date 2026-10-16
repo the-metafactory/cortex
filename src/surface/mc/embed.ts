@@ -168,7 +168,7 @@ export async function startMissionControl(
   // `||` (not `??`) is intentional: an empty `configPath` must collapse to
   // `undefined` so loadConfig uses its own default-path lookup, not `""`.
   // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
-  const loaded = loadConfig(opts.configPath || undefined);
+  const loaded = loadConfig(opts.configPath === "" ? undefined : opts.configPath);
 
   // cortex owns db + cursor + port; the MC yaml governs hooks/ws/log only.
   const config: Config = {
