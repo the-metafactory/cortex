@@ -1067,7 +1067,7 @@ export type SurfacePlugin = AdapterPlugin | RendererPlugin;
  *   optional `messageId`, or `delivered: false` with `kind: "permanent" |
  *   "transient"`, a `code` and an optional `detail`). No migration required:
  *   a bundle that keeps `notifyPrincipal(text): Promise<void>` still compiles,
- *   and the host treats `void` as delivered. Bundles that feed Vigil SHOULD
+ *   and the Cortex runtime treats `void` as delivered. Bundles that feed Vigil SHOULD
  *   honour `buffer: false` and return a `NotifyResult` so undelivered DMs can
  *   be detected. Minor bump — no `sdkRange` change needed for existing plugins.
  * - **1.1.0** (cortex#2002, C-1853) — ADDITIVE, non-breaking. `PlatformAdapter`
