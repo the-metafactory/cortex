@@ -88,7 +88,7 @@ export async function startVigil(opts: {
     throw err;
   }
   const tick = startVigilTick({
-    run: () => { sweepStale(db, now(), opts.config.vigil.cadence); },
+    run: () => { sweepStale(db, now(), opts.config.vigil.cadence); },  // glossary-ignore: run
     schedule: opts.schedule,
     onError: (err) => { log.warn(`vigil: tick failed: ${err instanceof Error ? err.message : String(err)}`); },
   });

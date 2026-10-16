@@ -73,8 +73,8 @@ describe("Vigil startup and delivery", () => {
   });
 
   test("startup sweeps with configured cadence, ticks every five minutes and cancels on stop", async () => {
-    const jobKey = "run:job:harness-gate";
-    const otherKey = "run:job:daily-check";
+    const jobKey = "run:job:harness-gate";  // glossary-ignore: run
+    const otherKey = "run:job:daily-check";  // glossary-ignore: run
     ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded" }), ENDED_AT);
     ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "daily-check" }, outcome: "succeeded" }), ENDED_AT);
     const cfg = config();
@@ -105,7 +105,7 @@ describe("Vigil startup and delivery", () => {
   });
 
   test("a sweep failure is logged and the next scheduled sweep still runs", async () => {
-    const jobKey = "run:job:harness-gate";
+    const jobKey = "run:job:harness-gate";  // glossary-ignore: run
     ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded" }), ENDED_AT);
     db.run("CREATE TRIGGER fail_sweep BEFORE UPDATE ON vigil_subjects BEGIN SELECT RAISE(ABORT, 'sweep failure'); END");
     const scheduler = fakeTickScheduler();
