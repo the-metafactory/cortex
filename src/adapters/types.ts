@@ -15,6 +15,9 @@ export type NotifyResult =
   | { delivered: true; messageId?: string }
   | { delivered: false; kind: "permanent" | "transient"; code: string; detail?: string };
 
+/** Options for notifying the principal. `buffer` defaults to true. */
+export type NotifyOptions = { buffer?: boolean };
+
 /** Platform-agnostic inbound message */
 export interface InboundMessage {
   /** Platform identifier: "discord", "mattermost", "slack", etc. */
@@ -350,7 +353,7 @@ export interface PlatformAdapter {
    * buffer: false disables adapter-side buffering so callers can handle failure.
    * Legacy adapters may return void instead of reporting delivery.
    */
-  notifyPrincipal(text: string, opts?: { buffer?: boolean }): Promise<NotifyResult | void>;
+  notifyPrincipal(text: string, opts?: NotifyOptions): Promise<NotifyResult | void>;
   /** F-092: Hot-reload adapter config (optional, for adapters that support it) */
   updateConfig?(config: unknown): void;
   /**
