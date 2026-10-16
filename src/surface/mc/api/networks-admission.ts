@@ -38,6 +38,8 @@
  * ADR-0020 global-admin-read scoping and is admit-lane-adjacent).
  */
 
+import { NETWORK_ID_RE } from "../../../common/network-id";
+
 /** admit | reject — selects the registry route + claim decision. */
 export type AdmissionDecisionVerb = "admit" | "reject";
 
@@ -155,8 +157,6 @@ interface AdmissionDecisionBody {
   /** Typed-confirm: must exactly equal `request_id`. */
   confirm: string;
 }
-
-const NETWORK_ID_RE = /^[a-z][a-z0-9-]*$/;
 // A conservative request-id shape (registry `isValidRequestId` is the authority;
 // this is a cheap client-side pre-check so we never sign an obviously-bad id).
 const REQUEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$/;

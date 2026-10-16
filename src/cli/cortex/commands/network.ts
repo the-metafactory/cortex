@@ -205,6 +205,7 @@ import {
 } from "./network-admit-lib";
 import type { AdmitPorts, SecretPortsFactory } from "./network-admit-ports";
 import { buildLiveAdmitPorts } from "./network-admit-adapters";
+import { NETWORK_ID_RE } from "../../../common/network-id";
 
 export { type ExitResult } from "./_shared/exit-result";
 // Re-exported for backward compatibility: `SecretPortsFactory` is homed in
@@ -250,8 +251,6 @@ function defaultCortexConfigPath(): string {
 function cortexConfigPathFromFlags(flags: FlagMap): string {
   return expandTilde(optionalValueFlag(flags, "--config") ?? defaultCortexConfigPath());
 }
-
-const NETWORK_ID_RE = /^[a-z][a-z0-9-]*$/;
 const PRINCIPAL_ID_RE = /^[a-z][a-z0-9-]*$/;
 // S5 — capability id grammar (`<domain>.<entity>`, matches the schema's
 // announce_capabilities[] rule) + principal-id grammar for the allowlist.

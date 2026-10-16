@@ -38,12 +38,6 @@ import type { Database } from "bun:sqlite";
 const PORT_BIND_ANY = 0;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 
-function boundPort(ctx: ServerContext): number {
-  const port = ctx.server.port;
-  if (port === undefined) throw new Error("server.port unresolved after start");
-  return port;
-}
-
 interface Ctx {
   db: Database;
   ctx: ServerContext;
@@ -69,7 +63,7 @@ function startWithDecider(): Ctx {
   const ctx = startServer({ ...DEFAULT_CONFIG, port: PORT_BIND_ANY }, db, {
     admissionDecider: () => decider,
   });
-  return { db, ctx, baseUrl: `http://localhost:${boundPort(ctx)}`, tmpDir, calls };
+  return { db, ctx, baseUrl: `http://localhost:${ctx.port}`, tmpDir, calls };
 }
 
 function teardown(c: Ctx): void {

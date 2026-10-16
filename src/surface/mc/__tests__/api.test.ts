@@ -75,15 +75,6 @@ interface TestContext {
 // 120 tests against a 1000-port window collide with ~50% probability.
 const PORT_BIND_ANY = 0;
 
-// Bun.serve guarantees a numeric port once started. The optional type on
-// Server.port reflects pre-started state; here every caller has a running
-// server, so a missing port is a runtime invariant violation.
-function boundPort(ctx: ServerContext, label: string): number {
-  const port = ctx.server.port;
-  if (port === undefined) throw new Error(`${label}: server.port unresolved after start`);
-  return port;
-}
-
 async function setup(): Promise<TestContext> {
   const tmpDir = join(tmpdir(), `mc-api-test-${Date.now()}-${Math.random()}`);
   const db = initDatabase(join(tmpDir, "test.db"));
@@ -93,7 +84,7 @@ async function setup(): Promise<TestContext> {
     db,
     { processManager: pm, spawn: fakeCatSpawn }
   );
-  const port = boundPort(ctx, "setup");
+  const port = ctx.port;
   return { db, ctx, pm, port, baseUrl: `http://localhost:${port}`, tmpDir };
 }
 
@@ -633,7 +624,7 @@ describe("POST /api/sessions — F-11 Discord notification hook", () => {
         },
       }
     );
-    const port = boundPort(ctx, "F-11 setup");
+    const port = ctx.port;
     t = { db, ctx, pm, port, baseUrl: `http://localhost:${port}`, tmpDir };
   });
   afterEach(async () => {
@@ -1226,7 +1217,7 @@ describe("REST unavailable without ProcessManager", () => {
     const tmpDir = join(tmpdir(), `mc-api-test-noop-${Date.now()}`);
     const db = initDatabase(join(tmpDir, "test.db"));
     const ctx = startServer({ ...DEFAULT_CONFIG, port: PORT_BIND_ANY }, db);
-    const port = boundPort(ctx, "noop setup");
+    const port = ctx.port;
     try {
       const res = await fetch(`http://localhost:${port}/api/sessions`, {
         method: "POST",

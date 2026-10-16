@@ -235,7 +235,7 @@ export async function startMissionControl(
       ...(opts.sidebandUrl ? { sidebandUrl: opts.sidebandUrl } : {}),
       ...(opts.degraded ? { degraded: opts.degraded } : {}),
     });
-    const { server, wsRegistry } = serverCtx;
+    const { port, wsRegistry } = serverCtx;
     hookPoller = new HookStreamPoller(db, config.hooks, wsRegistry);
     hookPoller.start();
 
@@ -248,11 +248,7 @@ export async function startMissionControl(
       db.close();
     };
 
-    // The ACTUAL bound port — when `config.port` is 0, Bun.serve assigns one;
-    // callers (the cockpit refresh loop's baseUrl) need the real listen port.
-    // Bun.serve guarantees a numeric `port` once started; the `?? config.port`
-    // coalesce only satisfies the optional type on `Server.port`.
-    return { db, port: server.port ?? config.port, wsRegistry, stop };
+    return { db, port, wsRegistry, stop };
   } catch (err) {
     // Reverse-order teardown of whatever was constructed before the throw.
     hookPoller?.stop();
