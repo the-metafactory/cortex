@@ -66,24 +66,28 @@ export async function startVigil(opts: {
     await replayLedger({ jsm, runtime: opts.runtime, db, principal: opts.principal, log, now });
   }
   const publish = opts.runtime.publish?.bind(opts.runtime);
-  const publishDelta = async (delta: Parameters<typeof publishReconcileDelta>[0]) => {
-    if (!publish) return;
-    try {
-      await publishReconcileDelta(delta, {
-        source: { principal: opts.principal, agent: "cortex", instance: "local" },
-      }, publish);
-    } catch (err) {
-      log.warn(`vigil: attention notification failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  let notifications = Promise.resolve();
+  const publishDelta = (delta: Parameters<typeof publishReconcileDelta>[0]) => {
+    if (!publish || (delta.opened.length === 0 && delta.resolved.length === 0)) return notifications;
+    notifications = notifications.then(async () => {
+      try {
+        await publishReconcileDelta(delta, {
+          source: { principal: opts.principal, agent: "cortex", instance: "local" },
+        }, publish);
+      } catch (err) {
+        log.warn(`vigil: attention notification failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
+    return notifications;
   };
-  const onEnvelope: EnvelopeHandler = async (envelope) => {
+  const onEnvelope: EnvelopeHandler = (envelope) => {
     const invalid = ledgerEnvelopeError(envelope);
     if (invalid !== null) {
       log.warn(`vigil: envelope ${envelope.id} invalid: ${invalid}`);
       return { kind: "ack" };
     }
     // A throw here reaches onError, and the delivery is NAK'ed for redelivery.
-    await publishDelta(ingestLedgerEnvelope(db, envelope, now(), { stackId: opts.stack }));
+    void publishDelta(ingestLedgerEnvelope(db, envelope, now(), { stackId: opts.stack }));
     return { kind: "ack" };
   };
   const pull = opts.runtime.subscribePull({
@@ -110,6 +114,7 @@ export async function startVigil(opts: {
     stop: () => stopping ??= (async () => {
       await tick.stop();
       await pull.stop();
+      await notifications;
     })(),
   };
 }

@@ -393,7 +393,7 @@ interface AttentionItem {
   stackId: string;
   workItemId: string | null;
   sessionId: string | null;
-  kind: "input_needed" | "permission" | "review" | "failed_dispatch" | "stale" | "blocked";
+  kind: "input_needed" | "permission" | "review" | "failed_dispatch" | "stale" | "blocked" | "state_change";
   severity: "low" | "normal" | "high" | "critical";
   status: "open" | "resolved" | "dismissed";
 }
@@ -462,9 +462,20 @@ Attention queue cuts across plans and phases:
 - stale work
 - PR review requests
 - failing checks requiring triage
+- Vigil state changes
 
 Every attention item should deep-link to the exact plan, phase, work item,
 pull request, or session that needs action.
+
+Vigil `state_change` items are an exception: they watch subjects that may have
+neither a work item nor a session. Both target fields may be null, yielding
+`AttentionLink { kind: "none" }`; the queue renders these items and keeps them
+open until a better transition resolves them or the principal dismisses them.
+This follows the [Vigil contract](https://github.com/the-metafactory/soma/issues/787)
+(Q9, Q10 and [Q38](https://github.com/the-metafactory/soma/issues/787#issuecomment-6126301493))
+and [node #2563](https://github.com/the-metafactory/cortex/issues/2563).
+A deep link to the Vigil watching view is deferred. Other attention producers
+must still resolve or dismiss an open item when deletion clears its last target.
 
 ## 8. Pipeline Rollup
 

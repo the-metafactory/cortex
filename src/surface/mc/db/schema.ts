@@ -15,6 +15,12 @@ function attentionItemsTableSql(tableName: string): string {
   )`;
 }
 
+const ATTENTION_INDEX_SQL = [
+  `CREATE INDEX IF NOT EXISTS idx_attention_status_severity
+     ON attention_items(status, severity)`,
+  `CREATE INDEX IF NOT EXISTS idx_attention_work_item ON attention_items(work_item_id)`,
+];
+
 /**
  * Grove Mission Control v2 — SQLite schema definitions.
  *
@@ -603,16 +609,10 @@ export const SCHEMA_SQL: string[] = [
   // tables): attention is a transient/derived projection, so when its target
   // entity churns the item survives with the link cleared rather than blocking
   // the delete. (stack_id is a plain key — no stacks table in the MC DB yet.)
-  // E.2/E.3 FOLLOW-UP: if SET NULL clears the LAST link of an open item (both
-  // work_item_id + session_id null), the producer/reconciler must auto-resolve
-  // or dismiss it — an open item with no deep-link target violates §7.4. Storage
-  // alone can't decide that; it's a producer responsibility.
   attentionItemsTableSql("attention_items"),
 
   // Queue query: open items first, by severity. Plus work-item lookup.
-  `CREATE INDEX IF NOT EXISTS idx_attention_status_severity
-     ON attention_items(status, severity)`,
-  `CREATE INDEX IF NOT EXISTS idx_attention_work_item ON attention_items(work_item_id)`,
+  ...ATTENTION_INDEX_SQL,
 
   // G-1115 — governance verdicts (governance upgrade Stage 5). Pipeline-level
   // audit records projected from `governance.verdict.{l0,tribunal,gate,resolved}`
@@ -945,8 +945,7 @@ export const REBUILD_MIGRATIONS: RebuildMigration[] = [
        FROM attention_items`,
       `DROP TABLE attention_items`,
       `ALTER TABLE attention_items_new RENAME TO attention_items`,
-      `CREATE INDEX idx_attention_status_severity ON attention_items(status, severity)`,
-      `CREATE INDEX idx_attention_work_item ON attention_items(work_item_id)`,
+      ...ATTENTION_INDEX_SQL,
     ],
   },
 

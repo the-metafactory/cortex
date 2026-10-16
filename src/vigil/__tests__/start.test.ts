@@ -77,6 +77,31 @@ describe("Vigil startup and delivery", () => {
     } finally { await handle!.stop(); }
   });
 
+  test("slow notifications preserve order without delaying acknowledgment and drain on stop", async () => {
+    const h = pullRuntime(createFakeJetStream(), [ledgerEnvelope(), ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:05Z" })]);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const publish = mock(async (_envelope: import("../../bus/myelin/envelope-validator").Envelope) => { await pending; });
+    const scheduler = fakeTickScheduler();
+    const handle = await startVigil({ config: config(), db, runtime: { ...h.runtime, publish }, principal: "jc", stack: "default", schedule: scheduler.schedule });
+    try {
+      await flushTick();
+      expect(h.deliveries.every((delivery) => delivery.ack.mock.calls.length === 1)).toBe(true);
+      expect(publish.mock.calls.map(([envelope]) => envelope.type)).toEqual(["system.attention.opened"]);
+      expect(listVigilEvents(db, KEY).map((event) => event.direction)).toEqual(["worse", "better"]);
+      let stopped = false;
+      const stopping = handle!.stop().then(() => { stopped = true; });
+      await flushTick();
+      expect(stopped).toBe(false);
+      release();
+      await stopping;
+      expect(publish.mock.calls.map(([envelope]) => envelope.type)).toEqual(["system.attention.opened", "system.attention.resolved"]);
+    } finally {
+      release();
+      await handle!.stop();
+    }
+  });
+
   test("notification failure is logged without undoing or redelivering a persisted transition", async () => {
     const h = pullRuntime(createFakeJetStream(), [ledgerEnvelope()]);
     const log = { info: mock((_msg: string) => {}), warn: mock((_msg: string) => {}) };
