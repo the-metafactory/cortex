@@ -67,7 +67,9 @@ describe("check-carveouts vocab ratchet (F18)", () => {
       expect(out).toContain("PASS");
       expect(code).toBe(0);
     },
-    30_000,
+    // The scan takes ~18s on an idle dev machine and ~47s at a 1-minute load
+    // of ~35 on 10 cores (node #2576), past the 30s this used to allow.
+    120_000,
   );
 });
 

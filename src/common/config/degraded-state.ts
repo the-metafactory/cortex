@@ -22,7 +22,7 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { dirname } from "path";
 
-import { pidFileFor } from "../pidfile";
+import { pidFileFor, pidFileForIn } from "../pidfile";
 
 /** Persisted shape of a degraded boot. */
 export interface DegradedInfo {
@@ -37,22 +37,29 @@ export interface DegradedInfo {
 /**
  * Marker path for a `--config` value: the PID file path with `.pid` swapped for
  * `.degraded.json`. Reuses `pidFileFor` so writer (daemon) and reader
- * (`cortex status`) resolve the same file across path spellings.
+ * (`cortex status`) resolve the same file across path spellings. `stateDir`
+ * (tests only) puts the marker in that dir instead of the real state dir;
+ * the daemon and `cortex status` never pass it.
  */
-export function degradedMarkerPath(configPath: string | undefined): string {
-  return pidFileFor(configPath).replace(/\.pid$/, ".degraded.json");
+export function degradedMarkerPath(configPath: string | undefined, stateDir?: string): string {
+  const pidFile = stateDir === undefined ? pidFileFor(configPath) : pidFileForIn(stateDir, configPath);
+  return pidFile.replace(/\.pid$/, ".degraded.json");
 }
 
 /** Persist the degraded-boot marker (0600 — the error text can name config internals). */
-export function writeDegradedMarker(configPath: string | undefined, info: DegradedInfo): void {
-  const path = degradedMarkerPath(configPath);
+export function writeDegradedMarker(
+  configPath: string | undefined,
+  info: DegradedInfo,
+  stateDir?: string,
+): void {
+  const path = degradedMarkerPath(configPath, stateDir);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(info, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
 }
 
 /** Read the degraded-boot marker, or `null` when the daemon booted healthy. */
-export function readDegradedMarker(configPath: string | undefined): DegradedInfo | null {
-  const path = degradedMarkerPath(configPath);
+export function readDegradedMarker(configPath: string | undefined, stateDir?: string): DegradedInfo | null {
+  const path = degradedMarkerPath(configPath, stateDir);
   if (!existsSync(path)) return null;
   try {
     return JSON.parse(readFileSync(path, "utf-8")) as DegradedInfo;
@@ -67,8 +74,8 @@ export function readDegradedMarker(configPath: string | undefined): DegradedInfo
 }
 
 /** Remove the degraded-boot marker (a healthy boot clears any prior degraded state). Best-effort. */
-export function clearDegradedMarker(configPath: string | undefined): void {
-  const path = degradedMarkerPath(configPath);
+export function clearDegradedMarker(configPath: string | undefined, stateDir?: string): void {
+  const path = degradedMarkerPath(configPath, stateDir);
   try {
     if (existsSync(path)) unlinkSync(path);
   } catch (err) {

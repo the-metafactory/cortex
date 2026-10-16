@@ -55,6 +55,17 @@ async function waitUntil(
   }
 }
 
+/**
+ * The port the OS bound for a `port: 0` server. A random port in a fixed
+ * window collided with other processes on a shared machine (EADDRINUSE,
+ * node #2576).
+ */
+function boundPort(ctx: ServerContext): number {
+  const port = ctx.server.port;
+  if (port === undefined) throw new Error("server.port unresolved after start");
+  return port;
+}
+
 function createClient(port: number): Promise<{
   ws: WebSocket;
   messages: unknown[];
@@ -106,11 +117,12 @@ describe("F-6 focus-area WS→refetch integration", () => {
   let db: Database;
   let ctx: ServerContext;
   const tmpDir = join(tmpdir(), `mc-focus-ws-test-${Date.now()}`);
-  const port = 19200 + Math.floor(Math.random() * 500);
+  let port: number;
 
   beforeAll(() => {
     db = initDatabase(join(tmpDir, "test.db"));
-    ctx = startServer({ ...DEFAULT_CONFIG, port }, db);
+    ctx = startServer({ ...DEFAULT_CONFIG, port: 0 }, db);
+    port = boundPort(ctx);
 
     // Seed an assignment in `running` state with a session so we have
     // something to block → unblock.

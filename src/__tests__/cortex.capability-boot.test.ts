@@ -37,6 +37,7 @@ import { tmpdir } from "os";
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import type { Agent, AgentRuntime } from "../common/types/cortex-config";
 import { startCortex } from "../cortex";
+import { hermeticBootPaths } from "../common/test-utils";
 import { CAPABILITY_REGISTERED_EVENT_TYPE } from "../bus";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { EnvelopeHandler, MyelinRuntime } from "../bus/myelin/runtime";
@@ -218,6 +219,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
     ];
 
     const handle = await startCortex(minimalConfig(), {
+      ...hermeticBootPaths(),
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
@@ -279,6 +281,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
     const { result: { result: handle, logs }, stderr } = await withCapturedStderr(() =>
       withCapturedConsoleLog(() =>
         startCortex(minimalConfig(), {
+          ...hermeticBootPaths(),
           disableConfigWatcher: true,
           disableDashboard: true,
           disableOutboundPoller: true,
@@ -342,6 +345,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
 
     const { result: handle, logs } = await withCapturedConsoleLog(() =>
       startCortex(minimalConfig(), {
+        ...hermeticBootPaths(),
         disableConfigWatcher: true,
         disableDashboard: true,
         disableOutboundPoller: true,
@@ -380,6 +384,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
     ];
 
     const handle = await startCortex(minimalConfig(), {
+      ...hermeticBootPaths(),
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
@@ -417,6 +422,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
     const { result: { result: handle, logs }, stderr } = await withCapturedStderr(() =>
       withCapturedConsoleLog(() =>
         startCortex(minimalConfig(), {
+          ...hermeticBootPaths(),
           disableConfigWatcher: true,
           disableDashboard: true,
           disableOutboundPoller: true,
@@ -457,6 +463,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
     ];
 
     const handle = await startCortex(minimalConfig(), {
+      ...hermeticBootPaths(),
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
@@ -489,6 +496,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
     const runtimeA = createRecordingRuntime();
     const tmpAgentsDirA = mkdtempSync(join(tmpdir(), "cortex-capboot-idemp-A-"));
     const handleA = await startCortex(minimalConfig(), {
+      ...hermeticBootPaths(),
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
@@ -505,6 +513,7 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
     const runtimeB = createRecordingRuntime();
     const tmpAgentsDirB = mkdtempSync(join(tmpdir(), "cortex-capboot-idemp-B-"));
     const handleB = await startCortex(minimalConfig(), {
+      ...hermeticBootPaths(),
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,

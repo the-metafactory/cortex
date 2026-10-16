@@ -40,11 +40,9 @@ import {
   resetSandboxCapabilityProbeForTests,
   type SandboxDenialEvent,
 } from "../session-sandbox";
-import { hasClaude, testClaude } from "../../common/test-utils";
+import { describeWithSandboxExec, hasClaude, testClaude } from "../../common/test-utils";
 
-const isDarwin = process.platform === "darwin";
-
-describe.skipIf(!isDarwin || !hasClaude)(
+(hasClaude ? describeWithSandboxExec : describe.skip)(
   "EBH-3a acceptance — real CCSession end-to-end under mode: 'audit' (macos-sbpl)",
   () => {
     beforeEach(async () => {

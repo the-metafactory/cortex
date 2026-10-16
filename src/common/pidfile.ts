@@ -78,13 +78,14 @@ export const DEFAULT_CONFIG = join(
  */
 function customPidComponents(
   configPath: string | undefined,
+  home?: string,
 ): { base: string; canonical: string } | undefined {
   // Preserve the raw default-config short-circuit (cortex#1900 AC): a literal
   // DEFAULT_CONFIG never touches realpath and always maps to PID_FILE.
   if (configPath === undefined || configPath === DEFAULT_CONFIG) {
     return undefined;
   }
-  const canonical = canonicalizeConfigPath(configPath);
+  const canonical = canonicalizeConfigPath(configPath, home);
   if (canonical === DEFAULT_CONFIG) {
     return undefined;
   }
@@ -99,9 +100,11 @@ function customPidComponents(
  * the legacy/default case. `stateDir` is a seam so tests can exercise the real
  * derivation in a temp dir (test-isolation rule: never write into the real
  * `~/.config/grove/state`); production always uses {@link STATE_DIR}.
+ * Optional `home` isolates tilde fixtures too, including on Bun where
+ * `os.homedir()` is cached before tests can change HOME.
  */
-export function pidFileForIn(stateDir: string, configPath: string | undefined): string {
-  const c = customPidComponents(configPath);
+export function pidFileForIn(stateDir: string, configPath: string | undefined, home?: string): string {
+  const c = customPidComponents(configPath, home);
   if (c === undefined) return join(stateDir, "cortex.pid");
   const hash = createHash("sha256").update(c.canonical).digest("hex").slice(0, 8);
   return join(stateDir, `cortex-${c.base}-${hash}.pid`);
@@ -275,12 +278,12 @@ export function migrateLegacyPidFile(
  * preserved. Always strips a single trailing slash so a directory-style spelling
  * of a file path does not skew the basename.
  */
-function canonicalizeConfigPath(configPath: string): string {
+function canonicalizeConfigPath(configPath: string, home = homedir()): string {
   let trimmed = configPath.replace(/\/+$/, "");
   // `~` never reaches realpath (shells expand it, but config values passed
   // programmatically may carry it verbatim).
   if (trimmed === "~" || trimmed.startsWith("~/")) {
-    trimmed = join(homedir(), trimmed.slice(1));
+    trimmed = join(home, trimmed.slice(1));
   }
   try {
     return realpathSync(trimmed);

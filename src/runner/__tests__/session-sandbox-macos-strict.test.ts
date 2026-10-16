@@ -5,8 +5,9 @@
  * Same fixture discipline as `session-sandbox-macos.test.ts` (v1 `guarded`):
  * every test that exercises the sensitive set does so against a FIXTURE
  * `$HOME`/`configHomeDir` override — never the real developer machine's
- * `~/.ssh` etc. macOS-ONLY (`describe.skipIf(!isDarwin)`) for every test
- * that spawns a real `sandbox-exec` — matches the established pattern. One
+ * `~/.ssh` etc. Every test that spawns a real `sandbox-exec` runs under
+ * `describeWithSandboxExec` (skips, with the reason, off macOS or inside an
+ * outer Seatbelt sandbox where `sandbox-exec` cannot apply a profile). One
  * pure-generator test is ALSO gated (`test.skipIf`): it realpaths
  * `/usr/bin/security`, which does not exist on Linux CI.
  *
@@ -34,7 +35,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import type { SandboxProfile } from "../session-sandbox";
@@ -50,7 +51,7 @@ import {
   resetSandboxCapabilityProbeForTests,
   type SandboxDenialEvent,
 } from "../session-sandbox";
-import { hasClaude, testClaude } from "../../common/test-utils";
+import { describeWithSandboxExec, hasClaude, testClaude } from "../../common/test-utils";
 
 const isDarwin = process.platform === "darwin";
 
@@ -130,6 +131,22 @@ describe("generateMacosSbplStrictProfile", () => {
       expect(generated.text).not.toContain(`(allow file-read* file-write* (subpath "${real}"))`);
     } finally {
       rmSync(roDir, { recursive: true, force: true });
+    }
+  });
+
+  test("claudeTmpDir (the session's CLAUDE_CODE_TMPDIR) gets read+write; the shared /tmp/claude-<uid> does not", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "cortex-strict-claude-tmp-"));
+    try {
+      const generated = generateMacosSbplStrictProfile(baseProfile(), {
+        homeDir: fixtureHome,
+        configHomeDir,
+        claudeTmpDir: tmp,
+      });
+      const real = realpathSync(tmp);
+      expect(generated.text).toContain(`(allow file-read* file-write* (subpath "${real}"))`);
+      expect(generated.text).not.toContain("/tmp/claude-");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
 
@@ -276,7 +293,7 @@ describe("classifyHookTarget", () => {
 // enumerated deny rule needed — the whole point of deny-default).
 // -----------------------------------------------------------------------------
 
-describe.skipIf(!isDarwin)("strict — real sandbox-exec, both directions", () => {
+describeWithSandboxExec("strict — real sandbox-exec, both directions", () => {
   let fixtureHome: string;
   let configHomeDir: string;
   let workDir: string;
@@ -457,7 +474,7 @@ describe.skipIf(!isDarwin)("strict — real sandbox-exec, both directions", () =
 // describe block, extended for posture)
 // -----------------------------------------------------------------------------
 
-describe.skipIf(!isDarwin)("MacosSbplSandbox — posture gating (guarded vs strict)", () => {
+describeWithSandboxExec("MacosSbplSandbox — posture gating (guarded vs strict)", () => {
   test("posture 'strict' + mode 'audit': a real session under a strict profile can still read its workDir", async () => {
     const workDir = mkdtempSync(join(tmpdir(), "cortex-strict-spawn-work-"));
     writeFileSync(join(workDir, "f.txt"), "hello");
@@ -485,6 +502,29 @@ describe.skipIf(!isDarwin)("MacosSbplSandbox — posture gating (guarded vs stri
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
+  }, 15_000);
+
+  test("posture 'strict': the child gets the caller's env plus its own CLAUDE_CODE_TMPDIR", async () => {
+    // node #2576 — the strict branch adds CLAUDE_CODE_TMPDIR to opts.env;
+    // every other var the caller scoped (cc-session's session env) must
+    // still reach the child unchanged.
+    const sandbox = new MacosSbplSandbox();
+    const profile = baseProfile({ mode: "audit", posture: "strict", readWrite: [], execAllow: ["env"] });
+    const proc = sandbox.spawn(["/usr/bin/env"], profile, {
+      env: { CORTEX_TEST_MARKER: "kept", HOME: "/nonexistent-home" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout =
+      typeof proc.stdout === "object" && proc.stdout !== null
+        ? await new Response(proc.stdout as ReadableStream<Uint8Array>).text()
+        : "";
+    expect(await proc.exited).toBe(0);
+    const lines = stdout.trim().split("\n");
+    expect(lines).toContain("CORTEX_TEST_MARKER=kept");
+    expect(lines).toContain("HOME=/nonexistent-home");
+    const tmpLine = lines.find((l) => l.startsWith("CLAUDE_CODE_TMPDIR="));
+    expect(tmpLine).toMatch(/cortex-sbpl-[^/]+\/claude-tmp$/);
   }, 15_000);
 
   test("posture 'strict': an out-of-scope read is denied end-to-end via the real class", async () => {
@@ -546,7 +586,7 @@ describe.skipIf(!isDarwin)("MacosSbplSandbox — posture gating (guarded vs stri
 // file's module doc for why that bar differs from v1 guarded's.
 // -----------------------------------------------------------------------------
 
-describe.skipIf(!isDarwin || !hasClaude)(
+(hasClaude ? describeWithSandboxExec : describe.skip)(
   "EBH-2409-part-2 acceptance — real CCSession end-to-end under posture: 'strict' (macos-sbpl)",
   () => {
     let workDir: string;
