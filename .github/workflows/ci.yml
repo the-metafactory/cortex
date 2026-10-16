@@ -205,6 +205,13 @@ jobs:
       - name: regenerate + diff (bun run sdk:dts:check)
         run: bun run sdk:dts:check
 
+      - run: git fetch --depth=1 origin main
+
+      # A changed SDK contract carries a SURFACE_SDK_VERSION bump; git
+      # dependencies pin release tags, not commits (#2611, #2568).
+      - name: release pins
+        run: bun scripts/check-release-pins.ts
+
   # ──────────────────────────────────────────────────────────────────
   # Shippable-config hygiene gate — L2 of the confidentiality program
   # (design doc §4 L2, compass#81/#87). A DETERMINISTIC whole-tree check
