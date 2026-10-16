@@ -4,7 +4,8 @@
  * macOS-ONLY: every test in this file spawns a real `sandbox-exec` (and, for
  * the denial-observation tests, a real `log stream`). CI is `ubuntu-latest`
  * only (no macOS runner — see `.github/workflows/ci.yml`), so the whole file
- * is gated with `describe.skipIf(process.platform !== "darwin")`, matching
+ * is gated with `describeWithSandboxExec` (skips, with the probe's reason, off
+ * Darwin or inside an outer Seatbelt sandbox), matching
  * the established pattern for platform-gated integration coverage in this
  * repo (`cc-plugin-dir-pin.integration.test.ts`'s `test.skipIf(!CLAUDE_BIN)`).
  * On a real macOS dev host (where this was authored and run) every test here
@@ -32,7 +33,7 @@ import {
   runMacosCanarySelfTest,
 } from "../session-sandbox-macos";
 
-const isDarwin = process.platform === "darwin";
+import { describeWithSandboxExec } from "../../common/test-utils";
 
 /** `Subprocess.stdout`'s static type is `number | ReadableStream | undefined`
  *  (the `number` arm covers fd-passthrough opts this file never uses) — a
@@ -333,7 +334,7 @@ describe("parseSandboxDenialLogLine", () => {
 // `log stream`) — macOS only.
 // -----------------------------------------------------------------------------
 
-describe.skipIf(!isDarwin)("DD-9 canary self-test — runMacosCanarySelfTest (real sandbox-exec)", () => {
+describeWithSandboxExec("DD-9 canary self-test — runMacosCanarySelfTest (real sandbox-exec)", () => {
   test("passes on this host: EPERM on the unresolved /tmp alias, deny rule authored against the resolved realpath", async () => {
     const result = await runMacosCanarySelfTest();
     expect(result.passed).toBe(true);
@@ -406,7 +407,7 @@ describe.skipIf(!isDarwin)("DD-9 canary self-test — runMacosCanarySelfTest (re
   }, 15_000);
 });
 
-describe.skipIf(!isDarwin)("The four §5 'stops' — real sandbox-exec, fixture $HOME, forced enforce", () => {
+describeWithSandboxExec("The four §5 'stops' — real sandbox-exec, fixture $HOME, forced enforce", () => {
   let fixtureHome: string;
   let allowedDir: string;
   let otherStackDir: string;
@@ -498,7 +499,7 @@ describe.skipIf(!isDarwin)("The four §5 'stops' — real sandbox-exec, fixture 
   });
 });
 
-describe.skipIf(!isDarwin)(
+describeWithSandboxExec(
   "cortex#2409 — sensitive-set extension, real sandbox-exec against a fixture $HOME",
   () => {
     let fixtureHome: string;
@@ -610,7 +611,7 @@ describe.skipIf(!isDarwin)(
   },
 );
 
-describe.skipIf(!isDarwin)("MacosSbplSandbox — spawn() mode gating", () => {
+describeWithSandboxExec("MacosSbplSandbox — spawn() mode gating", () => {
   test("mode 'off' — byte-identical Bun.spawn pass-through, no .sb profile, no canary", () => {
     const spy = spyOn(Bun, "spawn");
     try {
@@ -750,7 +751,7 @@ describe.skipIf(!isDarwin)("MacosSbplSandbox — spawn() mode gating", () => {
   }, 15_000);
 });
 
-describe.skipIf(!isDarwin)("MacosSbplSandbox — denial observation end-to-end (real sandbox-exec + log stream)", () => {
+describeWithSandboxExec("MacosSbplSandbox — denial observation end-to-end (real sandbox-exec + log stream)", () => {
   test("a real denied read under audit mode is observed via denials()", async () => {
     // realpathSync immediately — same E3-shaped `/var` → `/private/var`
     // rationale as the fixtures above.
@@ -801,7 +802,6 @@ describe.skipIf(!isDarwin)("MacosSbplSandbox — denial observation end-to-end (
         const decoder = new TextDecoder();
         let buffer = "";
         try {
-          // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -817,10 +817,15 @@ describe.skipIf(!isDarwin)("MacosSbplSandbox — denial observation end-to-end (
       })();
 
       await logProc.exited;
-      // Grace period AFTER the subject process has exited — the log entry
-      // for a denial that happened right before exit can still be in-flight
-      // through the unified-log pipeline (module doc's observability gap).
-      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      // Wait AFTER the subject process has exited — the log entry for a
+      // denial that happened right before exit can still be in-flight through
+      // the unified-log pipeline (module doc's observability gap). Bounded
+      // poll, not a fixed grace: a loaded host delivered it after >1.5s
+      // (node #2576).
+      const logDeadline = Date.now() + 10_000;
+      while (observed.length === 0 && Date.now() < logDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       denialAbort.abort();
       await tail;
 
@@ -830,5 +835,5 @@ describe.skipIf(!isDarwin)("MacosSbplSandbox — denial observation end-to-end (
     } finally {
       rmSync(fixtureHome, { recursive: true, force: true });
     }
-  }, 20_000);
+  }, 30_000);
 });

@@ -39,15 +39,18 @@ const FIXED_NOW = "2026-07-10T00:00:00.000Z";
 describe("FS-7 / D-3 — resolveBootConfig last-known-good fallback", () => {
   let dir: string;
   let configPath: string;
+  let stateDir: string;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "fs7-boot-"));
-    // Per-test-unique pointer basename so the STATE_DIR degraded marker (keyed off
-    // the config basename via pidFileFor) never collides across tests.
+    // Per-test-unique pointer basename so the degraded marker (keyed off the
+    // config basename via pidFileForIn) never collides across tests.
     configPath = join(dir, `${basename(dir)}.yaml`);
+    // The marker goes here, not the machine's real state dir.
+    stateDir = join(dir, "state");
   });
   afterEach(() => {
-    clearDegradedMarker(configPath);
+    clearDegradedMarker(configPath, stateDir);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -57,25 +60,25 @@ describe("FS-7 / D-3 — resolveBootConfig last-known-good fallback", () => {
 
   test("good boot returns no degraded, writes the last-good snapshot, clears any marker", () => {
     write(validCortex());
-    const { loaded, degraded } = resolveBootConfig(configPath, { strict: false, now: () => FIXED_NOW });
+    const { loaded, degraded } = resolveBootConfig(configPath, { stateDir, strict: false, now: () => FIXED_NOW });
     expect(degraded).toBeUndefined();
     expect(loaded.inlineAgents).toHaveLength(1);
     // Snapshot persisted; degraded marker absent.
     expect(readLastGoodSnapshotPath(configPath)).not.toBeNull();
-    expect(readDegradedMarker(configPath)).toBeNull();
+    expect(readDegradedMarker(configPath, stateDir)).toBeNull();
   });
 
   test("bad live config WITH a snapshot boots DEGRADED (marker written, snapshot loaded)", () => {
     // 1. Good boot → snapshot exists.
     write(validCortex());
-    resolveBootConfig(configPath, { strict: false, now: () => FIXED_NOW });
+    resolveBootConfig(configPath, { stateDir, strict: false, now: () => FIXED_NOW });
     expect(readLastGoodSnapshotPath(configPath)).not.toBeNull();
 
     // 2. Break the live config, boot again → DEGRADED fallback.
     write(invalidCortex());
     const snapshotPath = readLastGoodSnapshotPath(configPath);
     expect(snapshotPath).not.toBeNull();
-    const { loaded, degraded } = resolveBootConfig(configPath, { strict: false, now: () => FIXED_NOW });
+    const { loaded, degraded } = resolveBootConfig(configPath, { stateDir, strict: false, now: () => FIXED_NOW });
     expect(degraded).toBeDefined();
     expect(degraded!.since).toBe(FIXED_NOW);
     expect(degraded!.snapshotPath).toBe(snapshotPath!);
@@ -83,7 +86,7 @@ describe("FS-7 / D-3 — resolveBootConfig last-known-good fallback", () => {
     // Booted on the (valid) snapshot — the agent is present.
     expect(loaded.inlineAgents).toHaveLength(1);
     // Marker persisted for `cortex status` / MC to read.
-    const marker = readDegradedMarker(configPath);
+    const marker = readDegradedMarker(configPath, stateDir);
     expect(marker).not.toBeNull();
     expect(marker!.snapshotPath).toBe(degraded!.snapshotPath);
   });
@@ -91,22 +94,22 @@ describe("FS-7 / D-3 — resolveBootConfig last-known-good fallback", () => {
   test("bad live config with NO snapshot fails hard (throws)", () => {
     write(invalidCortex());
     expect(readLastGoodSnapshotPath(configPath)).toBeNull();
-    expect(() => resolveBootConfig(configPath, { strict: false, now: () => FIXED_NOW })).toThrow(
+    expect(() => resolveBootConfig(configPath, { stateDir, strict: false, now: () => FIXED_NOW })).toThrow(
       /no last-known-good snapshot/,
     );
     // No degraded marker written on a fail-hard.
-    expect(readDegradedMarker(configPath)).toBeNull();
+    expect(readDegradedMarker(configPath, stateDir)).toBeNull();
   });
 
   test("--strict disables the fallback: fails hard even WITH a snapshot present", () => {
     // Establish a snapshot via a good boot.
     write(validCortex());
-    resolveBootConfig(configPath, { strict: false, now: () => FIXED_NOW });
+    resolveBootConfig(configPath, { stateDir, strict: false, now: () => FIXED_NOW });
     expect(readLastGoodSnapshotPath(configPath)).not.toBeNull();
 
     // Break it and boot --strict → fail hard, no fallback.
     write(invalidCortex());
-    expect(() => resolveBootConfig(configPath, { strict: true, now: () => FIXED_NOW })).toThrow(
+    expect(() => resolveBootConfig(configPath, { stateDir, strict: true, now: () => FIXED_NOW })).toThrow(
       /--strict is set/,
     );
   });
@@ -114,22 +117,22 @@ describe("FS-7 / D-3 — resolveBootConfig last-known-good fallback", () => {
   test("good boot after a degraded boot clears the stale degraded marker", () => {
     // Snapshot + degraded marker.
     write(validCortex());
-    resolveBootConfig(configPath, { strict: false, now: () => FIXED_NOW });
+    resolveBootConfig(configPath, { stateDir, strict: false, now: () => FIXED_NOW });
     write(invalidCortex());
-    resolveBootConfig(configPath, { strict: false, now: () => FIXED_NOW });
-    expect(readDegradedMarker(configPath)).not.toBeNull();
+    resolveBootConfig(configPath, { stateDir, strict: false, now: () => FIXED_NOW });
+    expect(readDegradedMarker(configPath, stateDir)).not.toBeNull();
 
     // Fix the live config → healthy boot clears the marker.
     write(validCortex());
-    const { degraded } = resolveBootConfig(configPath, { strict: false, now: () => FIXED_NOW });
+    const { degraded } = resolveBootConfig(configPath, { stateDir, strict: false, now: () => FIXED_NOW });
     expect(degraded).toBeUndefined();
-    expect(readDegradedMarker(configPath)).toBeNull();
+    expect(readDegradedMarker(configPath, stateDir)).toBeNull();
   });
 
   test("first boot with a bad config and no snapshot is unaffected by the snapshot dir existing empty", () => {
     // Guard against a false-positive: an empty .last-good dir must not look like a snapshot.
     write(invalidCortex());
     expect(existsSync(join(dir, ".last-good"))).toBe(false);
-    expect(() => resolveBootConfig(configPath, { strict: false })).toThrow(/no last-known-good snapshot/);
+    expect(() => resolveBootConfig(configPath, { stateDir, strict: false })).toThrow(/no last-known-good snapshot/);
   });
 });

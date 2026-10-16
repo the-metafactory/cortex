@@ -8,6 +8,9 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { useTemporaryHome } from "../../test-home";
+
+useTemporaryHome();
 
 import {
   loadAgentsDirectory,

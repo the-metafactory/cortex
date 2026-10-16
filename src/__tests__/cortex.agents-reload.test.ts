@@ -28,6 +28,9 @@ import { tmpdir } from "os";
 
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
 import { startCortex, type CortexHandle } from "../cortex";
+import { hermeticBootPaths, hermeticHomeDir } from "../common/test-utils";
+import { describeWithFsWatch } from "../common/test-fs-watch";
+import { replayPending } from "../common/agents/agent-state-scaffold";
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import type {
   EnvelopeHandler,
@@ -142,6 +145,7 @@ async function bootWatcherless(
   } = {},
 ): Promise<CortexHandle> {
   const handle = await startCortex(minimalConfig(), {
+    ...hermeticBootPaths(),
     disableConfigWatcher: true,
     disableDashboard: true,
     disableOutboundPoller: true,
@@ -425,6 +429,7 @@ runtime:
       failed: boolean;
     }[] = [];
     const handle = await startCortex(minimalConfig(), {
+      ...hermeticBootPaths(),
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
@@ -463,13 +468,14 @@ runtime:
 // Tests — live fs.watch path
 // ---------------------------------------------------------------------------
 
-describe("startCortex — agents.d/ fs.watch reconcile (B-0, cortex#1021)", () => {
+describeWithFsWatch("startCortex — agents.d/ fs.watch reconcile (B-0, cortex#1021)", () => {
   test("fs.watch fires the reconcile on a fragment add", async () => {
     const runtime = createRecordingRuntime();
     writeFragment("echo", ["code-review.typescript"]);
     let lastGeneration = -1;
     const reloaded: string[][] = [];
     const handle = await startCortex(minimalConfig(), {
+      ...hermeticBootPaths(),
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
@@ -486,10 +492,12 @@ describe("startCortex — agents.d/ fs.watch reconcile (B-0, cortex#1021)", () =
     });
     handles.push(handle);
 
+    // A fragment written before fs.watch binds is never reported (node #2576).
+    await handle.agentsWatcherReady();
     // Drop a fragment; the fs.watch + debounce should fire the reconcile.
     writeFragment("luna", ["code-review.security"]);
 
-    const deadline = Date.now() + 4000;
+    const deadline = Date.now() + 8000;
     while (Date.now() < deadline && lastGeneration < 1) {
       await new Promise<void>((r) => setTimeout(r, 30));
     }
@@ -500,7 +508,8 @@ describe("startCortex — agents.d/ fs.watch reconcile (B-0, cortex#1021)", () =
       "luna",
     ]);
     expect(reloaded.some((added) => added.includes("luna"))).toBe(true);
-  });
+    // Room for the readiness handshake (up to 8s) plus the 8s event wait.
+  }, 20_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -749,6 +758,7 @@ describe("startCortex — AgentState scaffold-on-activation (cortex#1720 S1)", (
     replay?: NonNullable<Parameters<typeof startCortex>[1]>["replayPendingAgentState"],
   ): Promise<CortexHandle> {
     const handle = await startCortex(minimalConfig(), {
+      ...hermeticBootPaths(),
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,
@@ -758,7 +768,16 @@ describe("startCortex — AgentState scaffold-on-activation (cortex#1720 S1)", (
       injectRuntime: runtime,
       principal: { id: "test-op" },
       scaffoldAgentState: scaffold,
-      ...(replay !== undefined && { replayPendingAgentState: replay }),
+      // Without an explicit replay, the real one runs against a temp home: the
+      // errands script is absent there, so replay soft-skips as it does on CI
+      // instead of spawning the bundle arc installed on this machine.
+      replayPendingAgentState:
+        replay ??
+        ((agent) =>
+          replayPending(agent, {
+            errandsScript: join(hermeticHomeDir(), "agent-state-absent", "errands.ts"),
+            instanceDir: join(hermeticHomeDir(), "agents", agent.id),
+          })),
     });
     handles.push(handle);
     return handle;
@@ -884,6 +903,7 @@ describe("startCortex — AgentState ReplayPending on activation (cortex#1720 S2
     replay: NonNullable<Parameters<typeof startCortex>[1]>["replayPendingAgentState"],
   ): Promise<CortexHandle> {
     const handle = await startCortex(minimalConfig(), {
+      ...hermeticBootPaths(),
       disableConfigWatcher: true,
       disableDashboard: true,
       disableOutboundPoller: true,

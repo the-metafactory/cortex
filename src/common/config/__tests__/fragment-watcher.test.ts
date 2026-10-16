@@ -4,7 +4,7 @@
 // files, assert the handler receives the right events. Debounce overridden
 // to 50ms for test speed.
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
   mkdtempSync,
   writeFileSync,
@@ -16,6 +16,11 @@ import { tmpdir } from "os";
 
 import { AgentsDirectoryWatcher, type AgentsChangeEvent } from "../watcher";
 import { loadAgentsDirectory } from "../loader";
+import { describeWithFsWatch } from "../../test-fs-watch";
+
+// Room for the readiness handshake plus an event wait on a loaded machine.
+// Per file: bunfig.toml's `[test] timeout` is not read by Bun 1.3 (node #2576).
+setDefaultTimeout(20_000);
 
 // 50ms debounce, plus 80ms grace = ~130ms per assertion. Each test awaits a
 // real fs.watch event, so don't tighten this further without measurement.
@@ -27,14 +32,14 @@ const WAIT_AFTER_EVENT = 130;
  * Returns true when satisfied, false on deadline. Replaces fixed-duration
  * sleeps that proved racy under loaded CI runners (cortex#699).
  *
- * Default deadline 4000ms (cortex#771): these tests await a real
- * `node:fs.watch` event plus the 50ms debounce, and the 2000ms default was
- * still occasionally missed under full-suite concurrency. 4000ms stays inside
- * Bun's 5s per-test timeout while absorbing kernel inotify/FSEvents latency.
+ * Default deadline 8000ms: these tests await a real `node:fs.watch` event plus
+ * the 50ms debounce on a loaded machine (cortex#771, node #2576). With
+ * `startWatcher`'s handshake (up to 8s) it stays inside this file's 20s
+ * per-test timeout.
  */
 async function pollUntil(
   condition: () => boolean,
-  timeoutMs = 4000,
+  timeoutMs = 8000,
   intervalMs = 30,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
@@ -80,8 +85,8 @@ async function startWatcher(
     { debounceMs: DEBOUNCE_MS },
   );
   watcher.start();
-  // Echo M4 — wait for fs.watch registration to bind before tests write
-  // fixtures, eliminating the macOS FSEvents subscription race.
+  // Echo M4 — wait until fs.watch reports events before tests write fixtures:
+  // a write that lands before the watch binds is never reported (node #2576).
   await watcher.waitForReady();
 }
 
@@ -110,7 +115,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-describe("AgentsDirectoryWatcher", () => {
+describeWithFsWatch("AgentsDirectoryWatcher", () => {
   describe("file events", () => {
     test("drop a fragment → fires with agentsAdded", async () => {
       await startWatcher();
@@ -229,9 +234,8 @@ describe("AgentsDirectoryWatcher", () => {
     test("triggerReload(cli) emits source: cli", async () => {
       dropFragment("echo");
       await startWatcher();
+      // Sync call — the handler has run by the time triggerReload returns.
       watcher!.triggerReload("cli");
-      // Sync call — no debounce wait needed for explicit triggers.
-      await sleep(20);
       const last = events[events.length - 1]!;
       expect(last.source).toBe("cli");
       expect(last.failed).toBe(false);
@@ -241,7 +245,6 @@ describe("AgentsDirectoryWatcher", () => {
       dropFragment("echo");
       await startWatcher();
       watcher!.triggerReload("sighup");
-      await sleep(20);
       const last = events[events.length - 1]!;
       expect(last.source).toBe("sighup");
     });

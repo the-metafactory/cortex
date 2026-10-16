@@ -498,6 +498,12 @@ export interface MacosSbplStrictProfileOpts {
    * about by name".
    */
   internalReadOnlyPaths?: string[];
+  /**
+   * The session's private claude-code scratch root — the value
+   * `MacosSbplSandbox.spawn` exports as `CLAUDE_CODE_TMPDIR` on the child.
+   * Allowed read+write. See the generator's "claude scratch dir" section.
+   */
+  claudeTmpDir?: string;
 }
 
 export interface MacosSbplStrictProfile {
@@ -695,6 +701,18 @@ export function generateMacosSbplStrictProfile(
     "subpath",
     ["file-read*", "file-write*"],
   );
+
+  // --- claude scratch dir (node #2576 — measured directly on a real host,
+  //     claude 2.1.300): `claude` opens `<CLAUDE_CODE_TMPDIR ?? /tmp>/
+  //     claude-<uid>/` at startup and exits `EPERM` when that is denied.
+  //     The default `/tmp/claude-<uid>` is SHARED by every claude session
+  //     of the uid (per-project task output of the principal's other
+  //     sessions), so it is NOT allow-listed; `MacosSbplSandbox.spawn`
+  //     points `CLAUDE_CODE_TMPDIR` at a per-session dir instead and only
+  //     that dir is allowed here.
+  if (opts.claudeTmpDir !== undefined) {
+    pushAllow(entries, opts.claudeTmpDir, "subpath", ["file-read*", "file-write*"]);
+  }
 
   // --- workspace: readWrite / readOnly / internalReadOnly (session policy) ---
   for (const dir of profile.readWrite) {
@@ -1271,9 +1289,25 @@ export class MacosSbplSandbox implements SessionSandbox {
     // cortex#2409 part 2 — DD-10's TWO postures. `profile.posture` defaults
     // to `"guarded"` (deriveSandboxProfile's HARD HOLD) — only a caller that
     // EXPLICITLY sets `sandboxPosture: "strict"` reaches the new generator.
+    const profileDir = mkdtempSync(join(tmpdir(), "cortex-sbpl-"));
+    const profilePath = join(profileDir, "session.sb");
+
+    // Strict only: a per-session claude scratch root (see the strict
+    // generator's "claude scratch dir" section). Lives under profileDir so
+    // the exit cleanup below removes it with the profile. `opts.env` is
+    // required (SandboxSpawnOpts) and is the caller's deliberately scoped
+    // session env, so it is extended, never replaced by `process.env`.
+    let spawnOpts = opts;
+    let claudeTmpDir: string | undefined;
+    if (profile.posture === "strict") {
+      claudeTmpDir = join(profileDir, "claude-tmp");
+      mkdirSync(claudeTmpDir);
+      spawnOpts = { ...opts, env: { ...opts.env, CLAUDE_CODE_TMPDIR: claudeTmpDir } };
+    }
+
     const generated =
       profile.posture === "strict"
-        ? generateMacosSbplStrictProfile(profile)
+        ? generateMacosSbplStrictProfile(profile, { claudeTmpDir })
         : generateMacosSbplProfile(profile);
     if (generated.unresolved.length > 0) {
       const label = profile.posture === "strict" ? "allow-set" : "sensitive-set";
@@ -1290,11 +1324,9 @@ export class MacosSbplSandbox implements SessionSandbox {
       );
     }
 
-    const profileDir = mkdtempSync(join(tmpdir(), "cortex-sbpl-"));
-    const profilePath = join(profileDir, "session.sb");
     writeFileSync(profilePath, generated.text);
 
-    const proc = Bun.spawn(["sandbox-exec", "-f", profilePath, ...argv], opts);
+    const proc = Bun.spawn(["sandbox-exec", "-f", profilePath, ...argv], spawnOpts);
 
     // Profile file cleanup — needed only until sandbox-exec has read it
     // (it's read once, at exec time), but kept alive until process exit for

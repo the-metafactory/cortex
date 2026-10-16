@@ -24,5 +24,8 @@ describe("purge-supervision shell suite (cortex#2338)", () => {
     if (res.status !== 0) throw new Error(`shell suite failed (exit ${res.status}):\n${out}`);
     expect(res.status).toBe(0);
     expect(out).toContain("0 failed");
-  });
+  // Process startup under full-suite load exceeded Bun's default 5s deadline
+  // on plain macOS (5.06s recorded in node #2576). Keep every shell assertion
+  // and give this subprocess suite its own bounded execution budget.
+  }, 20_000);
 });

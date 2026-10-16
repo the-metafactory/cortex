@@ -518,6 +518,15 @@ export interface CortexHandle {
    */
   reloadAgents(source?: "cli" | "sighup"): Promise<void>;
   /**
+   * Resolves once the agents.d/ fs.watch is delivering events (see
+   * `AgentsDirectoryWatcher.waitForReady`); immediately when the watcher is
+   * disabled or idle. A test awaits it before writing the fragment whose
+   * reload it asserts on.
+   *
+   * @internal — not part of the public API; semver does not apply.
+   */
+  agentsWatcherReady(): Promise<void>;
+  /**
    * IAW Phase D.4.3 — registry-resolved peer pubkey reader. Exposed
    * read-only so D.6 integration tests + future consumers can verify
    * that the federation roster gets populated from the registry.
@@ -6525,6 +6534,9 @@ export async function startCortex(
     reloadAgents(source: "cli" | "sighup" = "cli") {
       return reloadAgentsViaTrigger(source);
     },
+    agentsWatcherReady() {
+      return agentsWatcher?.waitForReady() ?? Promise.resolve();
+    },
     get registryClient() {
       return registryClient;
     },
@@ -6758,7 +6770,8 @@ export interface BootConfigResolution {
  */
 export function resolveBootConfig(
   configPath: string,
-  opts: { strict: boolean; now?: () => string } = { strict: false },
+  // `stateDir` (tests only) relocates the degraded marker; see degraded-state.ts.
+  opts: { strict: boolean; now?: () => string; stateDir?: string } = { strict: false },
 ): BootConfigResolution {
   const nowIso = opts.now ?? (() => new Date().toISOString());
   try {
@@ -6771,7 +6784,7 @@ export function resolveBootConfig(
         `cortex: WARN could not write last-good config snapshot: ${snap.error}\n`,
       );
     }
-    clearDegradedMarker(configPath);
+    clearDegradedMarker(configPath, opts.stateDir);
     return { loaded };
   } catch (err) {
     const preciseError = formatConfigLoadError(err).join("\n");
@@ -6799,7 +6812,7 @@ export function resolveBootConfig(
     );
     const loaded = loadConfigWithAgents(snapshotPath);
     const info: DegradedInfo = { error: preciseError, snapshotPath, since: nowIso() };
-    writeDegradedMarker(configPath, info);
+    writeDegradedMarker(configPath, info, opts.stateDir);
     return { loaded, degraded: info };
   }
 }

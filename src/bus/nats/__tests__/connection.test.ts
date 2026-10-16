@@ -7,11 +7,14 @@
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
-import { homedir, tmpdir } from "os";
+import { tmpdir } from "os";
 import { join } from "path";
 import type { ConnectionOptions, MsgHdrs, NatsConnection } from "nats";
 import { Events } from "nats";
 import { NatsLink } from "../connection";
+import { useTemporaryHome } from "../../../common/test-home";
+
+const testHome = useTemporaryHome();
 
 // Synthetic .creds file content modelled on `nsc generate creds` output.
 // Real value isn't validated by the loader (NATS does that at connect-time);
@@ -513,11 +516,11 @@ describe("NatsLink", () => {
     test("leading ~ in credsPath expands to homedir", async () => {
       // Place a creds file directly under $HOME so the ~-relative path
       // resolves to a real existing file. Cleanup at teardown.
-      const homeCredsFile = join(homedir(), `.natslink-creds-test-${process.pid}.creds`);
+      const homeCredsFile = join(testHome(), `.natslink-creds-test-${process.pid}.creds`);
       writeFileSync(homeCredsFile, FAKE_CREDS_CONTENT, "utf8");
       chmodSync(homeCredsFile, 0o600);
       try {
-        const tildePath = `~/${homeCredsFile.slice(homedir().length + 1)}`;
+        const tildePath = `~/${homeCredsFile.slice(testHome().length + 1)}`;
         const fake = makeFakeConnection();
         const capturedOpts: ConnectionOptions[] = [];
         const link = await NatsLink.connect({
