@@ -1453,11 +1453,7 @@ async function readBodyWithCap(
       if (total > cap) {
         // Cancel the underlying stream so we don't keep pulling bytes
         // we'll never read; release the lock so GC can reclaim.
-        try {
-          await reader.cancel();
-        } catch (_err) {
-          // Cancel is best-effort — the response is already decided.
-        }
+        await reader.cancel().catch(() => undefined);
         return { error: jsonError("webhook body exceeds 1 MB cap", 413) };
       }
       chunks.push(value);
