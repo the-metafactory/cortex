@@ -5,20 +5,27 @@ import type { ConsumerConfig, ConsumerMessages, JsMsg } from "nats";
 import { DeliverPolicy } from "nats";
 import { AgentConfigSchema } from "../../common/types/config";
 import type { MyelinSubscribePullOpts } from "../../bus/myelin/runtime";
+import { deriveNatsSubject, type Envelope } from "../../bus/myelin/envelope-validator";
 import { MyelinSubscriber } from "../../bus/myelin/subscriber";
 import type { NatsLink } from "../../bus/nats/connection";
 import { createFakeJetStream, type FakeJetStream } from "../../bus/jetstream/__tests__/fake-jetstream";
 import { LEDGER_STREAM, provisionLedgerStream } from "../../bus/jetstream/provision";
 import { initDatabase } from "../../surface/mc/db/init";
-import { getVigilSubject, isVigilReplayPending, listVigilEvents } from "../db";
+import { getVigilSubject, getVigilTextsSpent, isVigilReplayPending, listVigilEvents, recordVigilTextDelivered, recordVigilTextReceipt } from "../db";
 import { ingestLedgerEnvelope } from "../ingest";
 import { startVigil } from "../index";
 import { replayLedger } from "../replay";
-import { KEY, SUBJECT, ledgerEnvelope } from "./fixtures";
+import { KEY, ledgerEnvelope } from "./fixtures";
 
 const REPLAY = "cortex-vigil-replay-jc";
 const LIVE = "cortex-vigil-jc";
 const OTHER_KEY = "run:flow:nightly-backup";
+
+function receiptEnvelope(eventId: string, day = "2026-10-16") {
+  return { ...ledgerEnvelope(), type: "system.vigil.text-sent", payload: {
+    event_id: eventId, subject_key: "state:goal:G1", budget_day: day,
+  } };
+}
 
 function config() {
   return AgentConfigSchema.parse({ claude: {}, agent: { name: "ivy", displayName: "Ivy" }, vigil: { enabled: true }, mc: { enabled: true } });
@@ -36,7 +43,7 @@ function quietLog() {
  */
 function ledgerHarness() {
   const fake = createFakeJetStream();
-  const ledger: unknown[] = [];
+  const ledger: { envelope: unknown; subject: string }[] = [];
   const added: Partial<ConsumerConfig>[] = [];
   const calls: { durable: string; liveConsumers: string[] }[] = [];
   const addConsumer = fake.jsm.consumers.add;
@@ -49,8 +56,8 @@ function ledgerHarness() {
     const envelopes = ledger.slice(start);
     let settled = 0;
     const settle = () => { settled += 1; if (settled === envelopes.length) fake.ackAll(LEDGER_STREAM, durable); };
-    const deliveries = envelopes.map((envelope) => ({
-      subject: SUBJECT, data: new TextEncoder().encode(JSON.stringify(envelope)),
+    const deliveries = envelopes.map(({ envelope, subject }) => ({
+      subject, data: new TextEncoder().encode(JSON.stringify(envelope)),
       ack: mock(settle), nak: mock(settle), term: mock(settle),
     }));
     let closed = false;
@@ -73,8 +80,12 @@ function ledgerHarness() {
   return {
     fake, runtime, added, calls,
     async publish(...envelopes: unknown[]) {
-      await provisionLedgerStream({ jsm: fake.jsm, principal: "jc", log: quietLog() });
-      for (const envelope of envelopes) { ledger.push(envelope); fake.publish(SUBJECT); }
+      await provisionLedgerStream({ jsm: fake.jsm, principal: "jc", subjects: ["local.jc.default.system.vigil.>"], log: quietLog() });
+      for (const envelope of envelopes) {
+        const subject = deriveNatsSubject(envelope as Envelope, "default");
+        ledger.push({ envelope, subject });
+        fake.publish(subject);
+      }
     },
     setConsume(fn: (durable: string) => ConsumerMessages) { consume = fn; },
     /** Delivers only the first envelope, then stalls. */
@@ -99,6 +110,82 @@ describe("Vigil LEDGER replay", () => {
   let db: Database;
   beforeEach(() => { db = initDatabase(":memory:"); });
   afterEach(() => db.close());
+
+  test("rebuilds budgets across days, deduplicates event IDs and replaces old counts on every replay", async () => {
+    const h = ledgerHarness();
+    const first = receiptEnvelope("first", "2026-10-15");
+    await h.publish(first, receiptEnvelope("second", "2026-10-15"), receiptEnvelope("third"), first,
+      receiptEnvelope("third"), receiptEnvelope("first", "2026-10-17"), ledgerEnvelope());
+    recordVigilTextDelivered(db, "2026-10-14");
+    recordVigilTextDelivered(db, "2026-10-16");
+    for (let i = 0; i < 2; i++) {
+      expect(await replayLedger({ jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log: quietLog(), pollMs: 1 })).toBe(7);
+      expect(db.query("SELECT * FROM vigil_budget ORDER BY budget_day").all()).toEqual([
+        { budget_day: "2026-10-15", texts_spent: 2 }, { budget_day: "2026-10-16", texts_spent: 1 },
+      ]);
+      expect(db.query("SELECT COUNT(*) AS n FROM vigil_text_receipts").get()).toEqual({ n: 3 });
+      expect(db.query("SELECT COUNT(*) AS n FROM vigil_events").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM attention_items").get()).toEqual({ n: 0 });
+    }
+  });
+
+  test("an interrupted budget replay restarts without counting prior partial deliveries again", async () => {
+    const h = ledgerHarness();
+    await h.publish(receiptEnvelope("first"), receiptEnvelope("second"));
+    h.deliverFirstOnly();
+    expect(await replayLedger({ jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log: quietLog(), pollMs: 1, stallMs: 5 })).toBeNull();
+    expect(getVigilTextsSpent(db, "2026-10-16")).toBe(0);
+    expect(isVigilReplayPending(db)).toBe(true);
+    h.restoreConsume();
+    expect(await replayLedger({ jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log: quietLog(), pollMs: 1 })).toBe(2);
+    expect(getVigilTextsSpent(db, "2026-10-16")).toBe(2);
+    expect(isVigilReplayPending(db)).toBe(false);
+  });
+
+  test("failed replay preserves confirmed spending until a complete replay replaces it with ledger counts", async () => {
+    const h = ledgerHarness();
+    const first = receiptEnvelope("first");
+    recordVigilTextReceipt(db, first.payload);
+    recordVigilTextReceipt(db, receiptEnvelope("second").payload);
+    recordVigilTextReceipt(db, receiptEnvelope("third").payload);
+    await h.publish(first, first);
+    h.deliverFirstOnly();
+    expect(await replayLedger({ jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log: quietLog(), pollMs: 1, stallMs: 5 })).toBeNull();
+    expect(getVigilTextsSpent(db, "2026-10-16")).toBe(3);
+    h.restoreConsume();
+    expect(await replayLedger({ jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log: quietLog(), pollMs: 1 })).toBe(2);
+    expect(getVigilTextsSpent(db, "2026-10-16")).toBe(1);
+  });
+
+  test("invalid text-sent payloads are skipped without spending budget", async () => {
+    const h = ledgerHarness();
+    const receipt = receiptEnvelope("valid");
+    await h.publish({ ...receipt, payload: { ...receipt.payload, presentation: "private wording" } },
+      { ...receipt, payload: { ...receipt.payload, budget_day: "2026-02-30" } }, receipt);
+    const log = quietLog();
+    expect(await replayLedger({ jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log, pollMs: 1 })).toBe(1);
+    expect(log.warn).toHaveBeenCalledTimes(2);
+    expect(getVigilTextsSpent(db, "2026-10-16")).toBe(1);
+    expect(JSON.stringify(db.query("SELECT * FROM vigil_text_receipts").all())).not.toContain("private wording");
+  });
+
+  test("budget replacement failure rolls back receipt replacement and leaves replay pending for retry", async () => {
+    const h = ledgerHarness();
+    const oldReceipt = receiptEnvelope("old", "2026-10-15").payload;
+    recordVigilTextReceipt(db, oldReceipt);
+    await h.publish(receiptEnvelope("new"));
+    db.run("CREATE TRIGGER fail_rebuild BEFORE INSERT ON vigil_budget BEGIN SELECT RAISE(ABORT, 'rebuild unavailable'); END");
+    expect(await replayLedger({ jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log: quietLog(), pollMs: 1 })).toBeNull();
+    expect(isVigilReplayPending(db)).toBe(true);
+    expect(getVigilTextsSpent(db, "2026-10-15")).toBe(1);
+    expect(getVigilTextsSpent(db, "2026-10-16")).toBe(0);
+    expect(db.query("SELECT * FROM vigil_text_receipts").all()).toEqual([oldReceipt]);
+    db.run("DROP TRIGGER fail_rebuild");
+    expect(await replayLedger({ jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log: quietLog(), pollMs: 1 })).toBe(1);
+    expect(getVigilTextsSpent(db, "2026-10-15")).toBe(0);
+    expect(getVigilTextsSpent(db, "2026-10-16")).toBe(1);
+    expect(isVigilReplayPending(db)).toBe(false);
+  });
 
   test("rebuilds the subject row from failed, failed, succeeded and writes no event", async () => {
     const h = ledgerHarness();
@@ -181,7 +268,7 @@ describe("Vigil LEDGER replay", () => {
   test("other types go to their registered replay handler and are ignored otherwise", async () => {
     const h = ledgerHarness();
     const sent = ledgerEnvelope();
-    sent.type = "system.vigil.text-sent";
+    sent.type = "system.vigil.registered";
     const other = ledgerEnvelope();
     other.type = "system.vigil.unregistered";
     await h.publish(sent, other, ledgerEnvelope());
@@ -189,7 +276,7 @@ describe("Vigil LEDGER replay", () => {
     const log = quietLog();
     const applied = await replayLedger({
       jsm: h.fake.jsm, runtime: h.runtime, db, principal: "jc", log, pollMs: 1,
-      handlers: new Map([["system.vigil.text-sent", handler]]),
+      handlers: new Map([["system.vigil.registered", handler]]),
     });
     expect(applied).toBe(2);
     expect(handler).toHaveBeenCalledTimes(1);
@@ -251,6 +338,19 @@ describe("Vigil startup replay", () => {
   let db: Database;
   beforeEach(() => { db = initDatabase(":memory:"); });
   afterEach(() => db.close());
+
+  test("startup reconstructs receipt budgets without publishing any notifications", async () => {
+    const h = ledgerHarness();
+    await h.publish(receiptEnvelope("first"), receiptEnvelope("second", "2026-10-15"), ledgerEnvelope());
+    const publish = mock(async (_envelope: Envelope) => {});
+    const handle = await startVigil({ config: config(), db, runtime: { ...h.runtime, publish }, principal: "jc", stack: "default", log: quietLog() });
+    try {
+      expect(getVigilTextsSpent(db, "2026-10-16")).toBe(1);
+      expect(getVigilTextsSpent(db, "2026-10-15")).toBe(1);
+      expect(publish).not.toHaveBeenCalled();
+      expect(db.query("SELECT COUNT(*) AS n FROM vigil_events").get()).toEqual({ n: 0 });
+    } finally { await handle!.stop(); }
+  });
 
   test("an empty table replays before the live consumer is bound", async () => {
     const h = ledgerHarness();

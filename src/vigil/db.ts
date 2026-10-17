@@ -2,6 +2,7 @@
 import type { Database } from "bun:sqlite";
 import { subjectClass } from "./policy";
 import { routeFor, type VigilRoute } from "./routing";
+import type { VigilTextReceipt } from "./delivery-receipt";
 
 /** An unseen budget day starts at zero; reading never creates a row. */
 export function getVigilTextsSpent(db: Database, budgetDay: string): number {
@@ -18,6 +19,33 @@ export function getVigilTextsSpent(db: Database, budgetDay: string): number {
 export function recordVigilTextDelivered(db: Database, budgetDay: string): void {
   db.query(`INSERT INTO vigil_budget (budget_day, texts_spent) VALUES (?, 1)
     ON CONFLICT(budget_day) DO UPDATE SET texts_spent = texts_spent + 1`).run(budgetDay);
+}
+
+export function recordVigilTextReceipt(db: Database, receipt: VigilTextReceipt): void {
+  db.transaction(() => {
+    if (insertTextReceipt(db, "vigil_text_receipts", receipt)) recordVigilTextDelivered(db, receipt.budget_day);
+  })();
+}
+
+export function stageVigilTextReceipt(db: Database, receipt: VigilTextReceipt): void {
+  insertTextReceipt(db, "vigil_replay_receipts", receipt);
+}
+
+function insertTextReceipt(db: Database, table: "vigil_text_receipts" | "vigil_replay_receipts", receipt: VigilTextReceipt): boolean {
+  return db.query(`INSERT INTO ${table} (event_id, subject_key, budget_day)
+    VALUES (?, ?, ?) ON CONFLICT(event_id) DO NOTHING`)
+    .run(receipt.event_id, receipt.subject_key, receipt.budget_day).changes === 1;
+}
+
+export function rebuildVigilBudget(db: Database): void {
+  db.transaction(() => {
+    db.run("DELETE FROM vigil_text_receipts");
+    db.run(`INSERT INTO vigil_text_receipts (event_id, subject_key, budget_day)
+      SELECT event_id, subject_key, budget_day FROM vigil_replay_receipts`);
+    db.run("DELETE FROM vigil_budget");
+    db.run(`INSERT INTO vigil_budget (budget_day, texts_spent)
+      SELECT budget_day, COUNT(*) FROM vigil_text_receipts GROUP BY budget_day`);
+  })();
 }
 
 export interface VigilSubjectRow {
@@ -111,12 +139,14 @@ export function writeVigilTransition(
   };
 }
 
-export function markVigilTextSent(db: Database, id: string, via: "dm" | "email", now: number, day: string): void {
-  db.transaction(() => {
-    const updated = db.query(`UPDATE vigil_events SET delivery = 'sent', sent_at = ?, via = ?,
+export function markVigilTextSent(db: Database, id: string, via: "dm" | "email", now: number, day: string): boolean {
+  return db.transaction(() => {
+    const event = db.query<{ subject_key: string }, [number, string, string]>(`UPDATE vigil_events SET delivery = 'sent', sent_at = ?, via = ?,
       held_reason = NULL, last_error = NULL, transient_failures = 0
-      WHERE id = ? AND delivery = 'pending' AND route = 'text'`).run(now, via, id);
-    if (updated.changes === 1) recordVigilTextDelivered(db, day);
+      WHERE id = ? AND delivery = 'pending' AND route = 'text' RETURNING subject_key`).get(now, via, id);
+    if (!event) return false;
+    recordVigilTextReceipt(db, { event_id: id, subject_key: event.subject_key, budget_day: day });
+    return true;
   })();
 }
 
@@ -147,7 +177,12 @@ export function isVigilReplayPending(db: Database): boolean {
 }
 
 export function markVigilReplayStarted(db: Database, now: number): void {
-  db.query("INSERT OR REPLACE INTO vigil_replay (id, started_at) VALUES (1, ?)").run(now);
+  db.transaction(() => {
+    db.query("INSERT OR REPLACE INTO vigil_replay (id, started_at) VALUES (1, ?)").run(now);
+    db.run("CREATE TEMP TABLE IF NOT EXISTS vigil_replay_receipts AS SELECT * FROM vigil_text_receipts WHERE 0");
+    db.run("CREATE UNIQUE INDEX IF NOT EXISTS temp.idx_vigil_replay_receipt_event ON vigil_replay_receipts(event_id)");
+    db.run("DELETE FROM vigil_replay_receipts");
+  })();
 }
 
 export function clearVigilReplay(db: Database): void {

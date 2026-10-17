@@ -47,7 +47,10 @@ export async function startVigil(opts: {
     log.warn("vigil: runtime dormant — not started");
     return null;
   }
-  await provisionLedgerStream({ jsm, principal: opts.principal, log });
+  await provisionLedgerStream({
+    jsm, principal: opts.principal, log,
+    subjects: [`local.${opts.principal}.${opts.stack}.system.vigil.>`],
+  });
   const durable = `cortex-vigil-${opts.principal}`;
   const pattern = executionRunFinishedPattern(opts.principal);
   await provisionPullConsumer({

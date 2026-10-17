@@ -204,16 +204,24 @@ export const LEDGER_MAX_AGE_NS = 90 * 24 * 3600 * 1_000_000_000;
 export async function provisionLedgerStream(opts: {
   jsm: ProvisionJsm;
   principal: string;
+  subjects?: readonly string[];
   log?: ProvisionLog;
 }): Promise<ProvisionStreamOutcome> {
-  return provisionStream({
+  const subjects = [executionRunFinishedPattern(opts.principal), ...opts.subjects ?? []];
+  const outcome = await provisionStream({
     jsm: opts.jsm,
     name: LEDGER_STREAM,
-    subjects: [executionRunFinishedPattern(opts.principal)],
+    subjects,
     retention: RetentionPolicy.Limits,
     maxAgeNs: LEDGER_MAX_AGE_NS,
     log: opts.log,
   });
+  const info = await opts.jsm.streams.info(LEDGER_STREAM);
+  const uncovered = subjects.filter((subject) => !info.config.subjects.some((live) => subjectCovers(live, subject)));
+  if (uncovered.length > 0) {
+    throw new Error(`LEDGER required subjects not captured: ${uncovered.join(", ")}; resolve the provisioning overlap or permissions before starting Vigil`);
+  }
+  return outcome;
 }
 const DEFAULT_MAX_DELIVER = 5;
 /**

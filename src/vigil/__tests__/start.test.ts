@@ -131,6 +131,35 @@ describe("Vigil startup and delivery", () => {
     expect(subscribePull).not.toHaveBeenCalled();
   });
 
+  test("adds Vigil receipt subjects to an existing LEDGER without removing its other subjects", async () => {
+    const fake = createFakeJetStream();
+    const { provisionLedgerStream } = await import("../../bus/jetstream/provision");
+    const retained = "local.alice.lab.system.retained.>";
+    await provisionLedgerStream({ jsm: fake.jsm, principal: "alice", subjects: [retained] });
+    const h = pullRuntime(fake);
+    const handle = await startVigil({ config: config(), db, runtime: h.runtime, principal: "alice", stack: "default" });
+    try {
+      expect(fake.streamSubjects(LEDGER_STREAM)).toEqual([
+        "local.alice.*.execution.run.finished", retained, "local.alice.default.system.vigil.>",
+      ]);
+      expect(fake.publish("local.alice.default.system.vigil.text-sent")).toBe(LEDGER_STREAM);
+      expect(fake.publish("local.alice.lab.system.vigil.text-sent")).toBeNull();
+      expect(fake.publish("local.alice.lab.execution.run.finished")).toBe(LEDGER_STREAM);
+    } finally { await handle!.stop(); }
+  });
+
+  test("receipt-subject overlap rejects Vigil startup and preserves both streams", async () => {
+    const fake = createFakeJetStream();
+    const { provisionLedgerStream } = await import("../../bus/jetstream/provision");
+    await provisionLedgerStream({ jsm: fake.jsm, principal: "alice" });
+    await fake.jsm.streams.add({ name: "OTHER", subjects: ["local.alice.default.system.vigil.>"] });
+    const h = pullRuntime(fake);
+    await expect(startVigil({ config: config(), db, runtime: h.runtime, principal: "alice", stack: "default" })).rejects.toThrow("LEDGER required subjects not captured");
+    expect(fake.streamSubjects(LEDGER_STREAM)).toEqual(["local.alice.*.execution.run.finished"]);
+    expect(fake.streamSubjects("OTHER")).toEqual(["local.alice.default.system.vigil.>"]);
+    expect(h.calls).toEqual([]);
+  });
+
   test("startup sweeps with configured cadence, ticks every five minutes and cancels on stop", async () => {
     const jobKey = "run:job:harness-gate";  // glossary-ignore: run
     const otherKey = "run:job:daily-check";  // glossary-ignore: run

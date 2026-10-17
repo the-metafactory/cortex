@@ -7,14 +7,16 @@ import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { EnvelopeHandler, MyelinSubscriber } from "../bus/myelin/subscriber";
 import { LEDGER_STREAM, isNotFoundError, provisionPullConsumer, type ProvisionLog } from "../bus/jetstream/provision";
 import type { ProvisionJsm } from "../bus/jetstream/types";
-import { clearVigilReplay, markVigilReplayStarted } from "./db";
+import { clearVigilReplay, markVigilReplayStarted, rebuildVigilBudget } from "./db";
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, ingestLedgerEnvelope, ledgerEnvelopeError } from "./ingest";
+import { replayTextSentReceipt, textSentReceiptSchema, VIGIL_TEXT_SENT_TYPE } from "./delivery-receipt";
 
 /** Rebuilds Vigil state from one non-`execution.run.finished` ledger envelope. Writes no Vigil event. */
 export type LedgerReplayHandler = (db: Database, envelope: Envelope) => void;
 
-/** Per-type replay handlers, keyed by envelope `type`. A8b registers `system.vigil.text-sent`. */
-export const LEDGER_REPLAY_HANDLERS: ReadonlyMap<string, LedgerReplayHandler> = new Map();
+export const LEDGER_REPLAY_HANDLERS: ReadonlyMap<string, LedgerReplayHandler> = new Map([
+  [VIGIL_TEXT_SENT_TYPE, replayTextSentReceipt],
+]);
 
 export const REPLAY_POLL_MS = 100;
 /** Replay gives up when the consumer's backlog has not shrunk for this long. */
@@ -53,6 +55,10 @@ export async function replayLedger(opts: {
   let applied = 0;
   const onEnvelope: EnvelopeHandler = (envelope) => {
     if (envelope.type !== EXECUTION_RUN_FINISHED_TYPE) {
+      if (envelope.type === VIGIL_TEXT_SENT_TYPE && !textSentReceiptSchema.safeParse(envelope.payload).success) {
+        log.warn(`vigil: replay skipped envelope ${envelope.id} invalid: text-sent payload`);
+        return { kind: "ack" };
+      }
       const handler = handlers.get(envelope.type);
       if (handler) {
         handler(db, envelope);
@@ -92,7 +98,10 @@ export async function replayLedger(opts: {
       await pull.ready;
       await waitDrained(jsm, durable, opts.pollMs ?? REPLAY_POLL_MS, opts.stallMs ?? REPLAY_STALL_MS);
     }
-    clearVigilReplay(db);
+    db.transaction(() => {
+      rebuildVigilBudget(db);
+      clearVigilReplay(db);
+    })();
     log.info(`vigil: rebuilt subject state from ${applied} ledger envelope(s)`);
     return applied;
   } catch (err) {

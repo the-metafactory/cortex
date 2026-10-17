@@ -54,6 +54,7 @@ export const TABLE_NAMES = [
   "vigil_events",
   "vigil_replay",
   "vigil_budget",
+  "vigil_text_receipts",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -102,6 +103,11 @@ export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS vigil_budget (
     budget_day TEXT PRIMARY KEY CHECK(budget_day GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
     texts_spent INTEGER NOT NULL DEFAULT 0 CHECK(texts_spent >= 0)
+  )`,
+  `CREATE TABLE IF NOT EXISTS vigil_text_receipts (
+    event_id TEXT PRIMARY KEY,
+    subject_key TEXT NOT NULL,
+    budget_day TEXT NOT NULL CHECK(budget_day GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')
   )`,
   // --- tasks ---
   // Schema follows design-mission-control.md §3.2: flat three-field sourceRef
