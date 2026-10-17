@@ -33,9 +33,14 @@ test.each([["exit-7", "exit 7"], ["timeout-123ms", "timeout"]])("maps runner fai
   expect(run.mock.calls[0]?.[1]).toEqual({ timeout_ms: 123 });
 });
 
-test("spawn failures are returned to the flush as failures", async () => {
+test("spawn failures return a code without exception text", async () => {
   const fallback = createVigilEmailFallback(config(), { run: async () => { throw new Error("command missing"); } });
-  expect(await fallback?.("subject", "body")).toEqual({ ok: false, error: "command missing" });
+  expect(await fallback?.("subject", "body")).toEqual({ ok: false, error: "exception" });
+});
+
+test.each(["wait:private rendered body", "exit-private rendered body"])("runner reason %s returns only a failure code", async (reason) => {
+  const fallback = createVigilEmailFallback(config(), { run: async () => ({ ok: false, reason }) });
+  expect(await fallback?.("subject", "body")).toEqual({ ok: false, error: "fallback-failed" });
 });
 
 test.each([0, 4])("shared bounded runner handles exit %s without spawning a real process", async (exitCode) => {

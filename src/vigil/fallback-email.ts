@@ -21,10 +21,11 @@ export function createVigilEmailFallback(
         "-s", subject, "-b", body, "--no-markdown",
       ], { timeout_ms: email.timeout_ms });
       if (result.ok) return { ok: true };
-      const error = result.reason.startsWith("timeout-") ? "timeout" : result.reason.replace(/^exit-/, "exit ");
+      const error = result.reason.startsWith("timeout-") ? "timeout"
+        : /^exit-\d+$/.test(result.reason) ? result.reason.replace(/^exit-/, "exit ") : "fallback-failed";
       return { ok: false, error };
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    } catch {
+      return { ok: false, error: "exception" };
     }
   };
 }
