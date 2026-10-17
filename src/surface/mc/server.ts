@@ -65,6 +65,7 @@ import { handleGetPhaseDetail } from "./api/phase-detail";
 import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
 import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil";
+import { handleResult, type ResultRouteOptions } from "./results";
 import {
   MUTATING_METHODS,
   buildAllowedHostnames,
@@ -122,6 +123,7 @@ export interface HealthResponse {
 
 /** The read views and providers Mission Control serves, shared by startServer and startMissionControl. */
 export interface MissionControlViews {
+  results?: ResultRouteOptions;
   vigil?: VigilSubjectsOptions;
   agentPresence?: () => AgentPresenceView | null;
   localAggregation?: LocalAggregationProvider;
@@ -205,6 +207,14 @@ export function startServer(
     async fetch(req, server) {
       const url = new URL(req.url);
 
+      if (url.pathname.startsWith("/results/")) {
+        if (!isLoopback) return new Response("Not Found", { status: 404 });
+        if (req.method !== "GET") return methodNotAllowed(["GET"]);
+        const denial = checkRebindGuard(req, { ...guardBase, listenPort: server.port ?? config.port });
+        if (denial) return denial;
+        return handleResult(db, url.pathname.slice("/results/".length), options.results);
+      }
+
       if (req.method === "GET" && url.pathname === "/ws") {
         if (maxClients > 0 && wsRegistry.size >= maxClients) {
           return new Response("Too many WebSocket clients", { status: 503 });
@@ -257,7 +267,7 @@ export function startServer(
           doctorView,
           stepUpSecretPath,
           authorizer,
-          options.vigil,
+          options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined,
         );
       }
 

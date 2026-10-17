@@ -4900,6 +4900,16 @@ export async function startCortex(
       // independent of headless — a headless stack simply doesn't serve).
       const mcHeadless = !config.mc.server.enabled;
       mcHandle = await startMissionControl({
+        results: {
+          ledger: {
+            principal: principalId,
+            stack: derivedStack.stack,
+            publish: async (envelope, subject) => {
+              if (!runtime.publishOnSubject) throw new Error("Result read ledger publisher unavailable");
+              await runtime.publishOnSubject(envelope, subject);
+            },
+          },
+        },
         vigil: {
           enabled: config.vigil.enabled && derivedStack.stack === "default",
           resolveGoalWording: somaGoalWording(),

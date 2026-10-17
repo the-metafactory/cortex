@@ -142,10 +142,13 @@ describe("Vigil startup and delivery", () => {
     try {
       expect(fake.streamSubjects(LEDGER_STREAM)).toEqual([
         "local.alice.*.execution.run.finished", retained, "local.alice.default.system.vigil.>",
+        "local.alice.*.vigil.attention.resolved",
       ]);
       expect(fake.publish("local.alice.default.system.vigil.text-sent")).toBe(LEDGER_STREAM);
       expect(fake.publish("local.alice.lab.system.vigil.text-sent")).toBeNull();
       expect(fake.publish("local.alice.lab.execution.run.finished")).toBe(LEDGER_STREAM);
+      expect(fake.publish("local.alice.default.vigil.attention.resolved")).toBe(LEDGER_STREAM);
+      expect(fake.publish("local.other.default.vigil.attention.resolved")).toBeNull();
     } finally { await handle!.stop(); }
   });
 

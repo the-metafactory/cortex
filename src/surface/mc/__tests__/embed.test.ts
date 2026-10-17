@@ -108,6 +108,30 @@ describe("startMissionControl (embed)", () => {
     })] });
   });
 
+  it("passes the soma output root and read ledger publisher through to the result route", async () => {
+    mkdirSync(join(tmpDir, "outputs"));
+    writeFileSync(join(tmpDir, "outputs", "example.md"), "# Example result");
+    const receipts: unknown[] = [];
+    handle = await startMissionControl({
+      configPath: writeMcYaml(), dbPath: join(tmpDir, "mc.db"),
+      results: {
+        somaHome: tmpDir,
+        ledger: { principal: "example", stack: "default", publish: async (envelope) => { receipts.push(envelope); } },
+      },
+      vigil: { enabled: true },
+    });
+    const ref = "soma:outputs/example.md";
+    ingestLedgerEnvelope(handle.db, ledgerEnvelope({ outcome: "succeeded", result_ref: ref }), ENDED_AT);
+    const attention = await (await fetch(`http://127.0.0.1:${handle.port}/api/attention`)).json();
+    expect(attention.attention[0].link.label).toBe("Example result");
+    const response = await fetch(`http://127.0.0.1:${handle.port}/results/${encodeURIComponent(ref)}`);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("<h1>Example result</h1>");
+    expect(receipts).toEqual([expect.objectContaining({
+      type: "vigil.attention.resolved", payload: expect.objectContaining({ key: ref, resolution: "read" }),
+    })]);
+  });
+
   it("releases the port on stop()", async () => {
     handle = await startMissionControl({
       configPath: writeMcYaml(), // yaml carries `port: 0` → OS-assigned, no 8767 collision
