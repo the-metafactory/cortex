@@ -1,7 +1,7 @@
 import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { isContainedIn } from "../common/path-containment";
-import { readSomaOutput, somaHome } from "./soma-output";
+import { readSomaOutput, somaFileTitle, somaHome } from "./soma-output";
 import type { GoalWordingResolver } from "./goal-wording";
 import type { VigilResultRow } from "./results";
 
@@ -14,8 +14,7 @@ async function firstBodyLine(root: string, relative: string): Promise<string | n
     const path = await realpath(join(base, relative));
     if (!isContainedIn(base, path)) return null;
     const content = await readFile(path, "utf8");
-    const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
-    return body.split(/\r?\n/).find((line) => line.trim() !== "")?.trim().replace(/^#+\s+/, "") ?? null;
+    return somaFileTitle(content, "") || null;
   } catch {
     process.stderr.write("Vigil: local wording unavailable; using reference\n");
     return null;
@@ -35,8 +34,7 @@ export interface ResultRenderOptions {
 export async function resultPresentation(result: VigilResultRow, options: ResultRenderOptions): Promise<{ label: string; url: string }> {
   const home = options.somaHome ?? somaHome();
   const content = await readSomaOutput(result.result_ref, home);
-  const title = content?.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "")
-    .split(/\r?\n/).find((line) => line.trim() !== "")?.trim().replace(/^#+\s+/, "") ?? result.result_ref;
+  const title = somaFileTitle(content, result.result_ref);
   let goal: string | null = null;
   if (result.goal_id) {
     try {

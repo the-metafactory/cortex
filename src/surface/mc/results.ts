@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { readSomaOutput } from "../../vigil/soma-output";
+import { readSomaFile, type SomaFileDirectory } from "../../vigil/soma-output";
 import { readResult, type ResultReadLedger } from "../../vigil/result-read";
 
 export interface ResultRouteOptions {
@@ -37,18 +37,18 @@ function renderMarkdown(content: string): string {
   }).transform(html);
 }
 
-export async function handleResult(db: Database, encodedRef: string, options: ResultRouteOptions = {}): Promise<Response> {
+export async function handleResult(db: Database, encodedRef: string, options: ResultRouteOptions = {}, directory: SomaFileDirectory = "outputs"): Promise<Response> {
   let ref: string;
   try {
     ref = decodeURIComponent(encodedRef);
   } catch {
     return invalidResultRef();
   }
-  const content = await readSomaOutput(ref, options.somaHome);
+  const content = await readSomaFile(ref, directory, options.somaHome);
   if (content === null) return new Response("Not Found", { status: 404 });
   const html = renderMarkdown(content);
-  await readResult(db, ref, options.ledger);
-  return new Response(`<!doctype html><html><head><meta charset="utf-8"><title>Result</title></head><body><main>${html}</main></body></html>`, {
+  if (directory === "outputs") await readResult(db, ref, options.ledger);
+  return new Response(`<!doctype html><html><head><meta charset="utf-8"><title>${directory === "proposals" ? "Proposal" : "Result"}</title></head><body><main>${html}</main></body></html>`, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Content-Security-Policy": "default-src 'none'; script-src 'none'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
