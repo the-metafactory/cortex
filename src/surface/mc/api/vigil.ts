@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import type { ProposalFilingOptions } from "../../../vigil/file-proposal";
 import type { VigilSubjectRow } from "../../../vigil/db";
 import { idOnlyGoalWording, type GoalWordingResolver } from "../../../vigil/goal-wording";
 import { effectiveCadenceMs, type VigilCadence } from "../../../vigil/staleness";
@@ -23,7 +24,7 @@ export interface VigilSubjectsResponse {
   enabled?: boolean;
 }
 
-export interface VigilSubjectsOptions {
+export interface VigilSubjectsOptions extends ProposalFilingOptions {
   somaHome?: string;
   resultBaseUrl?: string;
   enabled: boolean;

@@ -1,17 +1,5 @@
-/**
- * G-1113.E.3 — attention queue projection + endpoint (design §7.4).
- *
- * Lists the open attention items (severity-ordered by db/attention) and
- * resolves each one's deep-link target so the UI can route to it:
- *   - workItemId → the work item (title) → the work-item-detail surface (D.5).
- *   - sessionId  → its assignment id (sessions.assignment_id) → the drill-down.
- * §7.4 requires every item to deep-link; E.2 already guarantees an open item
- * carries at least one of these targets, so `link.kind` is never "none" for a
- * reconciled item. `work_item_id`/`session_id` are FK columns with ON DELETE
- * SET NULL, so each is either a live row or NULL — never a dangling ref — which
- * is why the label / assignmentId fallbacks below are defensively unreachable.
- */
 import type { Database } from "bun:sqlite";
+import { fileProposal, type ProposalFilingOptions } from "../../../vigil/file-proposal";
 import { proposalPresentation, type VigilProposalRow } from "../../../vigil/proposals";
 import { resultPresentation, type ResultRenderOptions } from "../../../vigil/result-render";
 import { isVigilAttention, resolveVigilAttention } from "../../../vigil/resolution";
@@ -33,7 +21,7 @@ export type AttentionLink =
 
 export interface AttentionEntry {
   item: AttentionItem;
-  /** Resolved deep-link target the UI routes on. */
+  error?: string;
   link: AttentionLink;
 }
 
@@ -53,7 +41,12 @@ function resolveLink(db: Database, item: AttentionItem): AttentionLink {
 
 /** The open attention queue, each item with its resolved deep-link target. */
 export function getAttentionQueue(db: Database): AttentionEntry[] {
-  return listOpenAttention(db).map((item) => ({ item, link: resolveLink(db, item) }));
+  return listOpenAttention(db).map((item) => {
+    const error = item.kind === "proposal" ? db.query<{ filing_error: string | null }, [string]>(
+      "SELECT filing_error FROM vigil_proposals WHERE attention_id = ?",
+    ).get(item.id)?.filing_error : null;
+    return { item, link: resolveLink(db, item), ...(error ? { error } : {}) };
+  });
 }
 
 /** GET /api/attention — open attention items with resolved deep-links. */
@@ -80,21 +73,52 @@ function json(body: unknown, status: number): Response {
   });
 }
 
-/**
- * CK-6a — the attention lifecycle data route (POST resolve/dismiss over
- * `db/attention setStatus`). A REAL db state op, distinct from Approve/Deny
- * (which stays theater until SPX-8). Registered under the FND-6 identity gate
- * in `server.ts`: no unauthenticated mutation joins the surface.
- *
- * @param action `"resolve"` (condition cleared) or `"dismiss"` (principal
- *               cleared it without action). 404 when no open row changed.
- */
-export function handleAttentionLifecycle(
+const filings = new WeakMap<Database, Set<string>>();
+
+export async function handleAttentionLifecycle(
   db: Database,
   id: string,
   action: "resolve" | "dismiss",
-): Response {
+  options: ProposalFilingOptions = {},
+): Promise<Response> {
   const item = getAttentionItem(db, id);
+  if (filings.get(db)?.has(id)) return json({ error: "proposal filing already in progress" }, 409);
+  if (item?.kind === "proposal" && item.status === "open" && action === "resolve") {
+    const pending = filings.get(db) ?? new Set<string>();
+    filings.set(db, pending);
+    pending.add(id);
+    try {
+      const row = db.query<{ proposal_ref: string }, [string]>(
+        "SELECT proposal_ref FROM vigil_proposals WHERE attention_id = ?",
+      ).get(id);
+      const result = row ? await fileProposal(row.proposal_ref, options)
+        : { error: "proposal_ref missing", status: 400 };
+      let error: string;
+      let status: number;
+      if ("filed" in result) {
+        try {
+          const resolved = db.transaction(() => {
+            const changed = resolveVigilAttention(db, id, "approved", { filed: result.filed });
+            if (changed) db.query("UPDATE vigil_proposals SET filing_error = NULL WHERE attention_id = ?").run(id);
+            return changed;
+          })();
+          if (!resolved) {
+            return json({ error: "proposal is no longer open" }, 409);
+          }
+          return json({ status: "resolved", id, filed: result.filed }, 200);
+        } catch {
+          error = "proposal filing returned invalid node or resolution could not be recorded";
+          status = 502;
+        }
+      } else {
+        ({ error, status } = result);
+      }
+      db.query("UPDATE vigil_proposals SET filing_error = ? WHERE attention_id = ?").run(error, id);
+      return json({ error }, status);
+    } finally {
+      pending.delete(id);
+    }
+  }
   const changed =
     isVigilAttention(item)
       ? resolveVigilAttention(db, id, action === "dismiss" ? "dismissed" : item.kind === "result" ? "read" : "approved")
