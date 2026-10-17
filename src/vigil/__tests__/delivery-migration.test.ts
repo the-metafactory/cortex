@@ -37,12 +37,15 @@ test("delivery columns migrate without losing rows and retries survive reopening
   try {
     expect(listVigilEvents(reopened, KEY)).toEqual(attempted);
     expect(reopened.query("SELECT * FROM vigil_subjects").all()).toEqual(subjects);
-    const batches: number[] = [];
+    const batches: string[] = [];
     for (let i = 0; i < 2; i++) await flushTexts({
       db: reopened, now, send: async () => ({ delivered: false, kind: "transient", code: "timeout" }),
-      fallback: async (_subject, body) => { batches.push(body.split("\n").length); return { ok: true }; },
+      fallback: async (_subject, body) => { batches.push(body); return { ok: true }; },
     });
-    expect(batches).toEqual([1]);
+    expect(batches).toEqual([[
+      "Vigil: check vigil:dm-channel — ok → regressed",
+      "Vigil: daily-sweep (serves G1) — failed",
+    ].join("\n")]);
     expect(listVigilEvents(reopened, KEY)[0]).toMatchObject({ delivery: "sent", via: "email", attempts: 3, transient_failures: 0 });
     expect(getVigilTextsSpent(reopened, "2026-10-16")).toBe(1);
   } finally { reopened.close(); }
