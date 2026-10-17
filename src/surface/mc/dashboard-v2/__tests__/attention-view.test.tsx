@@ -7,9 +7,6 @@
  *     `POST /api/attention/:id/{resolve,dismiss}` contract).
  *   - No mutation affordance when `onLifecycle` is omitted (read-only queue —
  *     the legacy tab / a scope with no host handler).
- *   - TRUTH-NOT-THEATER: NO Approve/Deny affordance is EVER rendered. Approve/
- *     Deny is SPX-7/SPX-8 (the runner arbitration channel doesn't exist yet), so
- *     shipping those buttons would be theater. This test is the standing guard.
  *
  * DOM-free, matching the suite convention (`renderToStaticMarkup` + a direct
  * element-tree walk of the pure component — AttentionView uses no hooks).
@@ -112,7 +109,7 @@ describe("AttentionView — CK-6b lifecycle buttons", () => {
     ]);
   });
 
-  it("TRUTH-NOT-THEATER — never renders an Approve/Deny affordance", () => {
+  it("keeps Resolve for non-proposal items", () => {
     // Wired (buttons present) is the worst case for leaking a theater verb.
     const html = renderToStaticMarkup(
       createElement(AttentionView, {
@@ -165,10 +162,25 @@ test("result attention renders a safe title link and escapes private wording", (
   expect(html).not.toContain("<script>");
 });
 
-
 test("a failed proposal renders its recorded error beside the open item", () => {
   const entry = { ...attn("proposal", { kind: "proposal" }), error: "proposal filing timed out" };
   const markup = renderToStaticMarkup(createElement(AttentionView, { entries: [entry], loaded: true }));
   expect(markup).toContain('role="alert"');
   expect(markup).toContain("proposal filing timed out");
+});
+
+test("proposal actions say Approve and Dismiss and invoke the existing lifecycle callback", () => {
+  const calls: Array<[string, "resolve" | "dismiss"]> = [];
+  const props = {
+    entries: [attn("proposal-1", { kind: "proposal" })], loaded: true,
+    onLifecycle: (id: string, action: "resolve" | "dismiss") => calls.push([id, action]),
+  };
+  const html = renderToStaticMarkup(createElement(AttentionView, props));
+  expect(html).toContain(">Approve</button>");
+  expect(html).toContain(">Dismiss</button>");
+  expect(html).not.toContain(">Resolve</button>");
+  const el = tree(props);
+  buttonsByClass(el, "attention-resolve")[0]!.props.onClick?.();
+  buttonsByClass(el, "attention-dismiss")[0]!.props.onClick?.();
+  expect(calls).toEqual([["proposal-1", "resolve"], ["proposal-1", "dismiss"]]);
 });

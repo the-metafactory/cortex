@@ -4,6 +4,7 @@ import { budgetDay, budgetDayStartedToday, VIGIL_DAILY_TEXT_LIMIT } from "./budg
 import { channelValue, recordChannel } from "./channels";
 import { getVigilSubject, getVigilTextsSpent, type VigilEventRow } from "./db";
 import type { FlushTextsOptions } from "./flush";
+import { openProposals, proposalDigestLines } from "./proposals";
 import { pendingResults } from "./results";
 import { renderResult, type ResultRenderOptions } from "./result-render";
 import { createVigilRenderer } from "./render";
@@ -54,10 +55,16 @@ async function prepareDigest(options: BuildDigestOptions) {
     WHERE delivery IN ('held', 'pending') ORDER BY occurred_at, rowid`).all();
   const included = events.filter((event) => digestSection(event) !== null);
   const results = pendingResults(db);
-  if (included.length === 0 && results.length === 0) return null;
+  const proposals = openProposals(db, now);
+  const lastDigest = db.query<{ digest_at: number | null }, []>("SELECT MAX(digest_at) AS digest_at FROM vigil_budget").get()?.digest_at ?? null;
+  const proposalLines = await proposalDigestLines(proposals, now, lastDigest, options);
+  if (included.length === 0 && results.length === 0 && proposalLines.length === 0) return null;
   const render = createVigilRenderer({ resolveGoalWording });
   const lines: { section: Section; text: string }[] = [];
   for (const section of sections) {
+    if (section === "proposals") {
+      for (const text of proposalLines) lines.push({ section, text });
+    }
     if (section === "waiting for you") {
       for (const result of results) lines.push({ section, text: await renderResult(result, options) });
     }
@@ -71,12 +78,13 @@ async function prepareDigest(options: BuildDigestOptions) {
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   const spent = getVigilTextsSpent(db, yesterday.toISOString().slice(0, 10));
   const budget = `Budget: ${spent} of ${VIGIL_DAILY_TEXT_LIMIT} texts yesterday · DM ${channelValue(db, "dm-channel")} · email ${channelValue(db, "email-channel")}`;
+  const totalLines = lines.length;
   let text = renderLines(lines, budget);
   while (text.length > DIGEST_LIMIT) {
     lines.pop();
-    text = renderLines(lines, budget, included.length + results.length - lines.length);
+    text = renderLines(lines, budget, totalLines - lines.length);
   }
-  return { text, events: included, results };
+  return { text, events: included, results, proposals };
 }
 
 export async function buildDigest(options: BuildDigestOptions): Promise<string | null> {
@@ -131,6 +139,10 @@ async function deliverDigest(options: SendDigestOptions): Promise<void> {
     for (const result of digest.results) {
       db.query("UPDATE vigil_results SET digested_version = MAX(digested_version, ?) WHERE result_ref = ?")
         .run(result.version, result.result_ref);
+    }
+    for (const proposal of digest.proposals) {
+      db.query("UPDATE vigil_proposals SET digested_version = MAX(digested_version, ?) WHERE proposal_ref = ?")
+        .run(proposal.version, proposal.proposal_ref);
     }
     markDigestDone(db, day, now);
   })();

@@ -244,3 +244,97 @@ test("does not expose the route on a non-loopback bind", async () => {
   expect((await openRef()).status).toBe(404);
   expect(getAttentionItem(db, attentionId())?.status).toBe("open");
 });
+
+const PROPOSAL = "soma:proposals/first.md";
+function openProposal(ref = PROPOSAL, init?: RequestInit): Promise<Response> {
+  return fetch(`http://127.0.0.1:${ctx.port}/proposals/${encodeURIComponent(ref)}`, init);
+}
+
+function seedProposal(): void {
+  mkdirSync(join(home, "proposals"));
+  writeFileSync(join(home, "proposals", "first.md"), "# Private proposal title\nPrivate **proposal body**\n<script>alert(1)</script>\n[bad](javascript:alert(1))");
+  ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [PROPOSAL] }), ENDED_AT);
+}
+
+test("proposal markdown is sanitized and fresh, opening never resolves or copies content to MC or LEDGER", async () => {
+  seedProposal();
+  const before = db.query("SELECT total_changes() AS changes").get();
+  const response = await openProposal();
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(response.headers.get("content-security-policy")).toContain("script-src 'none'");
+  const html = await response.text();
+  expect(html).toContain("<h1>Private proposal title</h1>");
+  expect(html).toContain("<strong>proposal body</strong>");
+  expect(html).not.toContain("<script>");
+  expect(html).not.toContain('href="javascript:');
+  writeFileSync(join(home, "proposals", "first.md"), "# Revised proposal title\nPrivate revised proposal");
+  expect(await (await openProposal()).text()).toContain("<h1>Revised proposal title</h1>");
+  expect(getAttentionItem(db, `att:vigil:proposal:${PROPOSAL}`)).toMatchObject({ status: "open", resolution: null });
+  expect(db.query("SELECT total_changes() AS changes").get()).toEqual(before);
+  expect(publish).not.toHaveBeenCalled();
+  for (const table of TABLE_NAMES) {
+    const stored = JSON.stringify(db.query(`SELECT * FROM ${table}`).all());
+    for (const text of ["Private proposal title", "proposal body", "Revised proposal title", "Private revised proposal"]) expect(stored).not.toContain(text);
+  }
+});
+
+test.each([
+  "../outside.md", "a/../../outside.md", "%2e%2e/outside.md", "%252e%252e/outside.md", "/etc/passwd",
+  "C:/outside.md", "", "missing.md", "escape.md", "escape-dir/outside.md", "neighbor/outside.md",
+  "folder", "back\\slash.md", "null\0.md",
+])("proposal containment refuses %s", async (relative) => {
+  seedProposal();
+  writeFileSync(join(home, "outside.md"), "Outside secret");
+  mkdirSync(join(home, "proposals-neighbor"));
+  writeFileSync(join(home, "proposals-neighbor", "outside.md"), "Outside secret");
+  symlinkSync(join(home, "outside.md"), join(home, "proposals", "escape.md"));
+  symlinkSync(home, join(home, "proposals", "escape-dir"));
+  symlinkSync(join(home, "proposals-neighbor"), join(home, "proposals", "neighbor"));
+  mkdirSync(join(home, "proposals", "folder"));
+  for (const encoded of ["%2e%2e", "%252e%252e"]) {
+    mkdirSync(join(home, "proposals", encoded));
+    writeFileSync(join(home, "proposals", encoded, "outside.md"), "Encoded traversal file");
+  }
+  const response = await openProposal(`soma:proposals/${relative}`);
+  expect(response.status).toBe(404);
+  expect(await response.text()).not.toContain("Outside secret");
+  expect(getAttentionItem(db, `att:vigil:proposal:${PROPOSAL}`)?.status).toBe("open");
+  expect(publish).not.toHaveBeenCalled();
+});
+
+test("proposal route refuses absolute refs, cross-directory refs and encoded traversal over HTTP", async () => {
+  seedProposal();
+  for (const ref of ["/etc/passwd", "soma:/etc/passwd", REF, "soma:profile/goals/G5.md"]) {
+    expect((await openProposal(ref)).status).toBe(404);
+  }
+  const base = `http://127.0.0.1:${ctx.port}/proposals/`;
+  for (const suffix of ["soma%3Aproposals%2F%2e%2e%2Foutside.md", "soma:proposals/%2e%2e/outside.md", "%", "%FF"]) {
+    expect((await fetch(base + suffix)).status).toBe(404);
+  }
+  expect((await openRef(PROPOSAL)).status).toBe(404);
+});
+
+test("proposal route permits nested files and contained symlinks with no attention item", async () => {
+  seedProposal();
+  mkdirSync(join(home, "proposals", "nested"));
+  writeFileSync(join(home, "proposals", "nested", "allowed.md"), "# Nested proposal");
+  symlinkSync(join(home, "proposals", "nested", "allowed.md"), join(home, "proposals", "link.md"));
+  for (const ref of ["soma:proposals/nested/allowed.md", "soma:proposals/link.md"]) {
+    const response = await openProposal(ref);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("<h1>Nested proposal</h1>");
+  }
+  expect(publish).not.toHaveBeenCalled();
+});
+
+test("proposal route keeps the result route's loopback, method and rebind guards", async () => {
+  seedProposal();
+  expect((await openProposal(PROPOSAL, { method: "POST" })).status).toBe(405);
+  expect((await openProposal(PROPOSAL, { method: "HEAD" })).status).toBe(405);
+  expect((await openProposal(PROPOSAL, { headers: { host: "foreign.example" } })).status).toBe(403);
+  expect((await openProposal(PROPOSAL, { headers: { origin: "https://foreign.example" } })).status).toBe(403);
+  ctx.stop(true);
+  ctx = startServer({ ...DEFAULT_CONFIG, hostname: "0.0.0.0", port: 0 }, db, { results: { somaHome: home } });
+  expect((await openProposal()).status).toBe(404);
+});

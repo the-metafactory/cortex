@@ -13,6 +13,7 @@ import { LEDGER_STREAM } from "../../bus/jetstream/provision";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getAttentionItem } from "../../surface/mc/db/attention";
 import { handleAttentionLifecycle } from "../../surface/mc/api/attention";
+import { budgetDay } from "../budget";
 import { REF_ATTENTION_TTL_MS } from "../ref-attention";
 import { getVigilSubject, listVigilEvents } from "../db";
 import { ingestLedgerEnvelope } from "../ingest";
@@ -71,6 +72,7 @@ describe("Vigil startup and delivery", () => {
     const publish = mock(async (_envelope: import("../../bus/myelin/envelope-validator").Envelope) => {});
     const log = { info: mock((_msg: string) => {}), warn: mock((_msg: string) => {}) };
     let now = ENDED_AT + REF_ATTENTION_TTL_MS;
+    db.query("INSERT INTO vigil_budget (budget_day, digest_at) VALUES (?, ?)").run(budgetDay(now), now);
     const handle = await startVigil({
       config: config(), db, runtime: { ...h.runtime, publish }, principal: "jc", stack: "default",
       now: () => now, schedule: scheduler.schedule, send, log,
