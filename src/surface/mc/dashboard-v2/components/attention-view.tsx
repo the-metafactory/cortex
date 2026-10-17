@@ -13,6 +13,7 @@ const KIND_LABEL: Record<AttentionKind, string> = {
   failed_dispatch: "failed dispatch",
   state_change: "state change",
   proposal: "proposal",
+  result: "result",
   stale: "stale",
   blocked: "blocked",
 };
@@ -64,7 +65,9 @@ export function AttentionView({ entries, loaded, onOpenWorkItem, onOpenAssignmen
               <li key={item.id} className={`attention-item sev-${item.severity}`}>
                 <span className={`badge kind-${item.kind}`}>{KIND_LABEL[item.kind]}</span>
                 <span className={`badge sev-${item.severity}`}>{item.severity}</span>
-                {deepLink ? (
+                {link.kind === "result" ? (
+                  <a className="attention-link" href={link.url}>{link.label}</a>
+                ) : deepLink ? (
                   <button type="button" className="attention-link" onClick={deepLink.onClick}>
                     {deepLink.label}
                   </button>

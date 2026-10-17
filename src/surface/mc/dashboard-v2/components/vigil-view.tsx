@@ -39,6 +39,7 @@ export function VigilView({ subjects, loaded, enabled = true, error }: VigilView
                 <th scope="col">Goal</th>
                 <th scope="col">State</th>
                 <th scope="col">Healthy</th>
+                <th scope="col">Last result</th>
                 <th scope="col">Last run</th>
                 <th scope="col">Last ended</th>
                 <th scope="col">Expected by</th>
@@ -54,6 +55,7 @@ export function VigilView({ subjects, loaded, enabled = true, error }: VigilView
                   <td>{subject.goalId === null ? "" : subject.goalWording ?? subject.goalId}</td>
                   <td>{subject.value}</td>
                   <td>{subject.healthy ? "Yes" : "No"}</td>
+                  <td className="mono">{subject.lastResultRef ?? ""}</td>
                   <td className="mono">{subject.lastRunId}</td>
                   <td><Timestamp value={subject.lastEndedAt} /></td>
                   <td><Timestamp value={subject.expectedBy} /></td>

@@ -5,7 +5,7 @@ function attentionItemsTableSql(tableName: string): string {
     work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
     session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
     kind TEXT NOT NULL
-      CHECK(kind IN ('input_needed','permission','review','failed_dispatch','stale','blocked','state_change','proposal')),
+      CHECK(kind IN ('input_needed','permission','review','failed_dispatch','stale','blocked','state_change','proposal','result')),
     severity TEXT NOT NULL DEFAULT 'normal'
       CHECK(severity IN ('low','normal','high','critical')),
     status TEXT NOT NULL DEFAULT 'open'
@@ -57,9 +57,31 @@ export const TABLE_NAMES = [
   "vigil_replay",
   "vigil_budget",
   "vigil_text_receipts",
+  "vigil_results",
+  "vigil_result_subjects",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
+  `CREATE TABLE IF NOT EXISTS vigil_results (
+    result_ref TEXT PRIMARY KEY,
+    attention_id TEXT NOT NULL UNIQUE,
+    ran_ref TEXT NOT NULL,
+    created_run_id TEXT NOT NULL,
+    created_ended_at INTEGER NOT NULL,
+    goal_id TEXT,
+    last_run_id TEXT NOT NULL,
+    last_ended_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    digested_version INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE TABLE IF NOT EXISTS vigil_result_subjects (
+    subject_key TEXT PRIMARY KEY,
+    result_ref TEXT NOT NULL,
+    last_run_id TEXT NOT NULL,
+    last_ended_at INTEGER NOT NULL
+  )`,
   // Vigil stores goal IDs only. All Vigil timestamps are epoch milliseconds.
   // `stack` is the stack segment of the latest observation's source; the key
   // itself is `run:{kind}:{ref}` per soma#787 Amendment 1 (see src/vigil/ingest.ts).
@@ -753,6 +775,7 @@ export interface ColumnAddMigration {
 }
 
 export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
+  { table: "attention_items", column: "resolution", ddl: "ALTER TABLE attention_items ADD COLUMN resolution TEXT CHECK(resolution IN ('approved','dismissed','expired','superseded','read','archived'))" },
   {
     table: "vigil_events",
     column: "digested_at",
@@ -994,12 +1017,12 @@ export interface RebuildMigration {
 export const REBUILD_MIGRATIONS: RebuildMigration[] = [
   {
     table: "attention_items",
-    detect: (sql) => /CHECK\s*\(\s*kind\s+IN\s*\(/i.test(sql) && !sql.includes("'proposal'"),
+    detect: (sql) => /CHECK\s*\(\s*kind\s+IN\s*\(/i.test(sql) && !sql.includes("'result'"),
     steps: [
       attentionItemsTableSql("attention_items_new"),
       `INSERT INTO attention_items_new
-        (id, stack_id, work_item_id, session_id, kind, severity, status, created_at, updated_at)
-       SELECT id, stack_id, work_item_id, session_id, kind, severity, status, created_at, updated_at
+        (id, stack_id, work_item_id, session_id, kind, severity, status, resolution, created_at, updated_at)
+       SELECT id, stack_id, work_item_id, session_id, kind, severity, status, resolution, created_at, updated_at
        FROM attention_items`,
       `DROP TABLE attention_items`,
       `ALTER TABLE attention_items_new RENAME TO attention_items`,

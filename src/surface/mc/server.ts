@@ -482,7 +482,7 @@ async function handleApi(
     if (req.method !== "GET") {
       return methodNotAllowed(["GET"]);
     }
-    return handleListAttention(db);
+    return handleListAttention(db, vigil);
   }
 
   const attentionLifecycleMatch =

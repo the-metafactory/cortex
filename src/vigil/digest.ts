@@ -4,14 +4,16 @@ import { budgetDay, budgetDayStartedToday, VIGIL_DAILY_TEXT_LIMIT } from "./budg
 import { channelValue, recordChannel } from "./channels";
 import { getVigilSubject, getVigilTextsSpent, type VigilEventRow } from "./db";
 import type { FlushTextsOptions } from "./flush";
+import { pendingResults } from "./results";
+import { renderResult, type ResultRenderOptions } from "./result-render";
 import { createVigilRenderer } from "./render";
 
-type BuildDigestOptions = Pick<FlushTextsOptions, "db" | "now" | "resolveGoalWording">;
+type BuildDigestOptions = Pick<FlushTextsOptions, "db" | "now" | "resolveGoalWording"> & ResultRenderOptions;
 export type SendDigestOptions = BuildDigestOptions & Pick<FlushTextsOptions, "send" | "fallback">;
 
 const DIGEST_LIMIT = 1950;
 const activeDigests = new WeakMap<Database, Promise<void>>();
-const sections = ["Held back", "Worse", "Stale", "Recovered"] as const;
+const sections = ["Held back", "Worse", "Stale", "proposals", "waiting for you", "Recovered"] as const;
 type Section = typeof sections[number];
 
 function digestSection(event: VigilEventRow): Section | null {
@@ -46,14 +48,19 @@ function renderLines(lines: readonly { section: Section; text: string }[], budge
   return output.join("\n");
 }
 
-async function prepareDigest({ db, now, resolveGoalWording }: BuildDigestOptions) {
+async function prepareDigest(options: BuildDigestOptions) {
+  const { db, now, resolveGoalWording } = options;
   const events = db.query<VigilEventRow, []>(`SELECT * FROM vigil_events
     WHERE delivery IN ('held', 'pending') ORDER BY occurred_at, rowid`).all();
   const included = events.filter((event) => digestSection(event) !== null);
-  if (included.length === 0) return null;
+  const results = pendingResults(db);
+  if (included.length === 0 && results.length === 0) return null;
   const render = createVigilRenderer({ resolveGoalWording });
   const lines: { section: Section; text: string }[] = [];
   for (const section of sections) {
+    if (section === "waiting for you") {
+      for (const result of results) lines.push({ section, text: await renderResult(result, options) });
+    }
     for (const event of included.filter((row) => digestSection(row) === section)) {
       const subject = getVigilSubject(db, event.subject_key);
       if (!subject) throw new Error(`Vigil digest has no subject: ${event.subject_key}`);
@@ -67,9 +74,9 @@ async function prepareDigest({ db, now, resolveGoalWording }: BuildDigestOptions
   let text = renderLines(lines, budget);
   while (text.length > DIGEST_LIMIT) {
     lines.pop();
-    text = renderLines(lines, budget, included.length - lines.length);
+    text = renderLines(lines, budget, included.length + results.length - lines.length);
   }
-  return { text, events: included };
+  return { text, events: included, results };
 }
 
 export async function buildDigest(options: BuildDigestOptions): Promise<string | null> {
@@ -120,6 +127,10 @@ async function deliverDigest(options: SendDigestOptions): Promise<void> {
     for (const event of digest.events) {
       db.query(`UPDATE vigil_events SET delivery = 'digested', digested_at = ?, via = ?
         WHERE id = ? AND delivery IN ('held', 'pending')`).run(now, via, event.id);
+    }
+    for (const result of digest.results) {
+      db.query("UPDATE vigil_results SET digested_version = MAX(digested_version, ?) WHERE result_ref = ?")
+        .run(result.version, result.result_ref);
     }
     markDigestDone(db, day, now);
   })();

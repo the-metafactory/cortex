@@ -12,6 +12,8 @@
  * is why the label / assignmentId fallbacks below are defensively unreachable.
  */
 import type { Database } from "bun:sqlite";
+import { resultPresentation, type ResultRenderOptions } from "../../../vigil/result-render";
+import type { VigilResultRow } from "../../../vigil/results";
 import type { AttentionItem } from "../types";
 import {
   listOpenAttention,
@@ -23,6 +25,7 @@ import { getWorkItem } from "../db/work-items";
 export type AttentionLink =
   | { kind: "work-item"; workItemId: string; label: string }
   | { kind: "session"; sessionId: string; assignmentId: string | null }
+  | { kind: "result"; label: string; url: string }
   | { kind: "none" };
 
 export interface AttentionEntry {
@@ -51,10 +54,15 @@ export function getAttentionQueue(db: Database): AttentionEntry[] {
 }
 
 /** GET /api/attention — open attention items with resolved deep-links. */
-export function handleListAttention(db: Database): Response {
-  return new Response(JSON.stringify({ attention: getAttentionQueue(db) }), {
+export async function handleListAttention(db: Database, options: ResultRenderOptions = {}): Promise<Response> {
+  const attention = await Promise.all(getAttentionQueue(db).map(async (entry): Promise<AttentionEntry> => {
+    if (entry.item.kind !== "result") return entry;
+    const result = db.query<VigilResultRow, [string]>("SELECT * FROM vigil_results WHERE attention_id = ?").get(entry.item.id);
+    return result ? { ...entry, link: { kind: "result", ...await resultPresentation(result, options) } } : entry;
+  }));
+  return new Response(JSON.stringify({ attention }), {
     status: 200,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", "Cache-Control": "no-store" },
   });
 }
 

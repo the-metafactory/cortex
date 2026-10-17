@@ -40,17 +40,17 @@ describe("handleListVigilSubjects", () => {
       {
         subjectKey: "run:flow:daily-sweep", kind: "run", vocab: null, ref: "daily-sweep",
         goalId: null, goalWording: null, value: "failed", healthy: false,
-        lastRunId: "run-1", lastEndedAt: ENDED_AT, expectedBy: null,
+        lastResultRef: null, lastRunId: "run-1", lastEndedAt: ENDED_AT, expectedBy: null,
       },
       {
         subjectKey: "state:escalation:example/project#604", kind: "state", vocab: "escalation", ref: "example/project#604",
         goalId: null, goalWording: null, value: "overdue", healthy: false,
-        lastRunId: "run-1", lastEndedAt: ENDED_AT, expectedBy: null,
+        lastResultRef: null, lastRunId: "run-1", lastEndedAt: ENDED_AT, expectedBy: null,
       },
       {
         subjectKey: "state:goal:G1", kind: "state", vocab: "goal", ref: "G1",
         goalId: "G1", goalWording: "Example goal", value: "on-track", healthy: true,
-        lastRunId: "run-1", lastEndedAt: ENDED_AT, expectedBy: ENDED_AT + DEFAULT_CADENCE_MS,
+        lastResultRef: null, lastRunId: "run-1", lastEndedAt: ENDED_AT, expectedBy: ENDED_AT + DEFAULT_CADENCE_MS,
       },
     ] });
   });

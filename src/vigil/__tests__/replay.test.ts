@@ -10,6 +10,9 @@ import { MyelinSubscriber } from "../../bus/myelin/subscriber";
 import type { NatsLink } from "../../bus/nats/connection";
 import { createFakeJetStream, type FakeJetStream } from "../../bus/jetstream/__tests__/fake-jetstream";
 import { LEDGER_STREAM, provisionLedgerStream } from "../../bus/jetstream/provision";
+import { handleAttentionLifecycle } from "../../surface/mc/api/attention";
+import { getAttentionItem } from "../../surface/mc/db/attention";
+import { expireResults, pendingResults, RESULT_TTL_MS } from "../results";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilSubject, getVigilTextsSpent, isVigilReplayPending, listVigilEvents, recordVigilTextDelivered, recordVigilTextReceipt, writeVigilTransition } from "../db";
 import { flushTexts } from "../flush";
@@ -115,6 +118,29 @@ describe("Vigil LEDGER replay", () => {
   let db: Database;
   beforeEach(() => { db = initDatabase(":memory:"); });
   afterEach(() => db.close());
+
+  test("LEDGER replay rebuilds results without delivery and preserves locally recorded resolutions", async () => {
+    const h = ledgerHarness();
+    const first = ledgerEnvelope({ outcome: "succeeded", result_ref: "soma:outputs/first.md" });
+    const next = ledgerEnvelope({ outcome: "succeeded", result_ref: "soma:outputs/next.md", ended_at: "2026-10-12T10:00:06Z" });
+    const read = ledgerEnvelope({ outcome: "succeeded", ran: { kind: "job", ref: "read" }, result_ref: "soma:outputs/read.md" });
+    const dismissed = ledgerEnvelope({ outcome: "succeeded", ran: { kind: "job", ref: "dismissed" }, result_ref: "soma:outputs/dismissed.md" });
+    await h.publish(first, next, read, dismissed);
+    expect(await h.replay(db)).toBe(4);
+    const id = (name: string) => `att:vigil:result:soma:outputs/${name}.md`;
+    expect(getAttentionItem(db, id("first"))).toMatchObject({ status: "resolved", resolution: "superseded" });
+    expect(getAttentionItem(db, id("next"))?.status).toBe("open");
+    handleAttentionLifecycle(db, id("read"), "resolve");
+    handleAttentionLifecycle(db, id("dismissed"), "dismiss");
+    expect(await h.replay(db)).toBe(4);
+    expect(getAttentionItem(db, id("read"))).toMatchObject({ status: "resolved", resolution: "read" });
+    expect(getAttentionItem(db, id("dismissed"))).toMatchObject({ status: "dismissed", resolution: "dismissed" });
+    expireResults(db, Date.parse("2026-10-12T10:00:06Z") + RESULT_TTL_MS);
+    expect(await h.replay(db)).toBe(4);
+    expect(getAttentionItem(db, id("next"))).toMatchObject({ status: "resolved", resolution: "expired" });
+    expect(pendingResults(db)).toEqual([]);
+    expect(db.query("SELECT * FROM vigil_events").all()).toEqual([]);
+  });
 
   test("rebuilds budgets across days, deduplicates event IDs and replaces old counts on every replay", async () => {
     const h = ledgerHarness();

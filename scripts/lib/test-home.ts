@@ -10,7 +10,7 @@ const XDG_BASE_DIRS = ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XD
 export function hermeticTestEnv(host: NodeJS.ProcessEnv, home: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(host)) {
-    if (value === undefined || XDG_BASE_DIRS.includes(key)) continue;
+    if (value === undefined || key === "SOMA_HOME" || XDG_BASE_DIRS.includes(key)) continue;
     if (HOST_INSTRUMENTATION.test(key) && key !== HOST_HOME_OPT_IN_ENV) continue;
     env[key] = value;
   }

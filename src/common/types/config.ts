@@ -558,17 +558,12 @@ export const VigilFallbackEmailSchema = z.object({
 });
 
 export const VigilSchema = z.object({
+  result_base_url: z.url({ protocol: /^https?$/ }).default("http://127.0.0.1:8767"),
   enabled: z.boolean().default(false),
   /** Per-subject cadence in milliseconds; only jobs and goal state can go stale. */
   cadence: z.record(z.string(), z.number().int().positive()).default({}),
   fallback: z.object({ email: VigilFallbackEmailSchema.optional() }).optional(),
-}).default(emptyDefault()).transform((val) => ({
-  /* eslint-disable @typescript-eslint/no-unnecessary-condition */
-  enabled: val.enabled ?? false,
-  cadence: val.cadence ?? {},
-  ...(val.fallback ? { fallback: val.fallback } : {}),
-  /* eslint-enable @typescript-eslint/no-unnecessary-condition */
-}));
+}).prefault({});
 
 /**
  * G-1113 ML.5: Mission Control Cockpit live-refresh schema. SHARED const

@@ -162,7 +162,7 @@ export function markVigilTextSent(db: Database, id: string, via: "dm" | "email",
  * nothing, so the row converges on the same latest observation whatever order
  * the deliveries arrive in.
  */
-export function isNewObservation(prior: VigilSubjectRow | null, runId: string, endedAt: number): boolean {
+export function isNewObservation(prior: Pick<VigilSubjectRow, "last_run_id" | "last_ended_at"> | null, runId: string, endedAt: number): boolean {
   if (!prior) return true;
   if (runId === prior.last_run_id) return false;
   if (endedAt !== prior.last_ended_at) return endedAt > prior.last_ended_at;

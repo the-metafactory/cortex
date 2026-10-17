@@ -387,6 +387,7 @@ export type AttentionKind =
   | "review"
   | "state_change"
   | "proposal"
+  | "result"
   | "failed_dispatch"
   | "stale"
   | "blocked";
