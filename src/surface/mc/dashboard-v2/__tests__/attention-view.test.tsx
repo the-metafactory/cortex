@@ -164,3 +164,11 @@ test("result attention renders a safe title link and escapes private wording", (
   expect(html).toContain("&lt;script&gt;title&lt;/script&gt;");
   expect(html).not.toContain("<script>");
 });
+
+
+test("a failed proposal renders its recorded error beside the open item", () => {
+  const entry = { ...attn("proposal", { kind: "proposal" }), error: "proposal filing timed out" };
+  const markup = renderToStaticMarkup(createElement(AttentionView, { entries: [entry], loaded: true }));
+  expect(markup).toContain('role="alert"');
+  expect(markup).toContain("proposal filing timed out");
+});

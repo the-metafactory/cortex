@@ -65,3 +65,21 @@ test("result link base defaults in both config schemas and retains explicit HTTP
     expect(CortexConfigSchema.safeParse({ ...base, vigil: { result_base_url } }).success).toBe(false);
   }
 });
+
+
+test("proposal filing config is shared, defaults its timeout and retains only the token env name", () => {
+  const vigil = { proposal_token_env: "PRINCIPAL_PROPOSAL_TOKEN", proposal_timeout_ms: 2345 };
+  const parsed = [
+    CortexConfigSchema.parse({ ...base, vigil }),
+    AgentConfigSchema.parse({ claude: {}, agent: { name: "ivy", displayName: "Ivy" }, vigil }),
+  ];
+  for (const config of parsed) expect(config.vigil).toMatchObject(vigil);
+  expect(CortexConfigSchema.parse(base).vigil.proposal_timeout_ms).toBe(30_000);
+  expect(CortexConfigSchema.parse(base).vigil.proposal_token_env).toBeUndefined();
+  for (const proposal_timeout_ms of [0, -1, 1.5, 300_001, "1000", null, Infinity]) {
+    expect(CortexConfigSchema.safeParse({ ...base, vigil: { proposal_timeout_ms } }).success).toBe(false);
+  }
+  for (const proposal_token_env of ["", "not an env", "1TOKEN", "TOKEN=value", null]) {
+    expect(CortexConfigSchema.safeParse({ ...base, vigil: { proposal_token_env } }).success).toBe(false);
+  }
+});

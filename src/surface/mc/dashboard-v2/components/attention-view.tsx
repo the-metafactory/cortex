@@ -54,7 +54,7 @@ export function AttentionView({ entries, loaded, onOpenWorkItem, onOpenAssignmen
         <p className="dim">Nothing needs your attention.</p>
       ) : (
         <ul className="attention-list">
-          {entries.map(({ item, link }) => {
+          {entries.map(({ item, link, error }) => {
             const deepLink =
               link.kind === "work-item" && onOpenWorkItem
                 ? { label: link.label, onClick: () => onOpenWorkItem(link.workItemId) }
@@ -65,6 +65,7 @@ export function AttentionView({ entries, loaded, onOpenWorkItem, onOpenAssignmen
               <li key={item.id} className={`attention-item sev-${item.severity}`}>
                 <span className={`badge kind-${item.kind}`}>{KIND_LABEL[item.kind]}</span>
                 <span className={`badge sev-${item.severity}`}>{item.severity}</span>
+                {error ? <span role="alert" className="attention-error">{error}</span> : null}
                 {link.kind === "result" ? (
                   <a className="attention-link" href={link.url}>{link.label}</a>
                 ) : deepLink ? (

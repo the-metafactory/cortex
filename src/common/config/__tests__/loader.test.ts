@@ -477,10 +477,12 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     // glossary-ignore: run
     cfg.vigil = { enabled: true, cadence: { "run:job:harness-gate": 3_600_000 } };
     expect(loadConfigWithAgents(writeCortexConfig(testDir, cfg)).config.vigil).toEqual({
+      proposal_timeout_ms: 30_000,
       result_base_url: "http://127.0.0.1:8767",
       enabled: true, cadence: { "run:job:harness-gate": 3_600_000 },
     });
     expect(loadConfigWithAgents(writeCortexConfig(testDir, minimalCortex())).config.vigil).toEqual({
+      proposal_timeout_ms: 30_000,
       result_base_url: "http://127.0.0.1:8767",
       enabled: false, cadence: {},
     });

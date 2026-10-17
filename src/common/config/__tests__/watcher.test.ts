@@ -116,7 +116,7 @@ const TEST_CONFIG: AgentConfig = {
     refreshIntervalMs: 300_000,
     attention: { surface: "discord", channel: "" },
   },
-  vigil: { enabled: false, cadence: {}, result_base_url: "http://127.0.0.1:8767" },
+  vigil: { proposal_timeout_ms: 30_000, enabled: false, cadence: {}, result_base_url: "http://127.0.0.1:8767" },
   mc: {
     enabled: false,
     configPath: "",

@@ -93,13 +93,13 @@ test("older or duplicate observations never revert content metadata, resurrect i
   expect(result().version).toBe(1);
 });
 
-test("read and dismiss use resolution column and remain closed when run envelopes replay", () => {
+test("read and dismiss use resolution column and remain closed when run envelopes replay", async () => {
   for (const [action, resolution] of [["resolve", "read"], ["dismiss", "dismissed"]] as const) {
     const ref = `soma:outputs/${action}.md`;
     const { envelope } = report({ result_ref: ref, ran: { kind: "job", ref: action } });
-    expect(handleAttentionLifecycle(db, id(ref), action).status).toBe(200);
+    expect((await handleAttentionLifecycle(db, id(ref), action)).status).toBe(200);
     ingestLedgerEnvelope(db, envelope, ENDED_AT + 5000, { replay: true });
-    expect(handleAttentionLifecycle(db, id(ref), "resolve").status).toBe(404);
+    expect((await handleAttentionLifecycle(db, id(ref), "resolve")).status).toBe(404);
     expect(getAttentionItem(db, id(ref))).toMatchObject({ status: action === "resolve" ? "resolved" : "dismissed", resolution });
   }
 });

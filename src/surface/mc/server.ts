@@ -242,6 +242,9 @@ export function startServer(
       }
 
       if (url.pathname.startsWith("/api/")) {
+        if (req.method === "POST" && /^\/api\/attention\/[^/]+\/resolve$/.test(url.pathname)) {
+          server.timeout(req, 0);
+        }
         const agentPresence = options.agentPresence?.() ?? null;
         const localAggregation = options.localAggregation?.() ?? null;
         const networks = options.networks?.() ?? null;
@@ -505,7 +508,7 @@ async function handleApi(
     if (!captured) return new Response("Not Found", { status: 404 });
     const id = decodeURIComponent(captured);
     const action = attentionLifecycleMatch[2] as "resolve" | "dismiss";
-    return handleAttentionLifecycle(db, id, action);
+    return handleAttentionLifecycle(db, id, action, vigil);
   }
 
   if (pathname === "/api/governance") {

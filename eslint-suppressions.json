@@ -4639,11 +4639,6 @@
       "count": 18
     }
   },
-  "src/surface/mc/api/attention.ts": {
-    "cortex/no-comments": {
-      "count": 2
-    }
-  },
   "src/surface/mc/api/doctor.ts": {
     "cortex/no-comments": {
       "count": 10

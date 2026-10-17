@@ -213,7 +213,7 @@ describe("Vigil startup and delivery", () => {
     const handle = await startVigil({ config: config(), db, runtime: { ...h.runtime, publishOnSubject }, principal: "jc", stack: "default", now: () => ENDED_AT, schedule: scheduler.schedule });
     try {
       await flushTick();
-      expect(handleAttentionLifecycle(db, id, "dismiss").status).toBe(200);
+      expect((await handleAttentionLifecycle(db, id, "dismiss")).status).toBe(200);
       publishOnSubject.mockImplementationOnce(async (envelope) => { published.push(envelope); throw new Error("offline"); });
       scheduler.tick(); await flushTick();
       expect(getAttentionItem(db, id)).toMatchObject({ status: "dismissed", resolution: "dismissed" });

@@ -37,15 +37,15 @@ function refs() {
 test("principal actions and result reads each publish one validated metadata-only resolution", async () => {
   refs();
   const ledger = publisher();
-  expect(handleAttentionLifecycle(db, proposalId, "resolve").status).toBe(200);
-  expect(handleAttentionLifecycle(db, proposalId, "dismiss").status).toBe(404);
+  expect((await handleAttentionLifecycle(db, proposalId, "resolve", { proposal_token_env: "PROPOSAL_TOKEN", env: { PROPOSAL_TOKEN: "secret-value" }, run: async () => ({ ok: true, stdout: JSON.stringify({ ref: "example/repo#12", created: true }) }) })).status).toBe(200);
+  expect((await handleAttentionLifecycle(db, proposalId, "dismiss")).status).toBe(404);
   await Promise.all([readResult(db, result, ledger), readResult(db, result, ledger), flushVigilResolutions(db, ledger)]);
   expect(ledger.publish).toHaveBeenCalledTimes(2);
   expect(getAttentionItem(db, proposalId)).toMatchObject({ status: "resolved", resolution: "approved" });
   for (const envelope of ledger.published) {
     const { id, source, type, timestamp, sovereignty, payload } = envelope;
     expect(validateVigilAttentionResolved({ id, source, type, timestamp, sovereignty, payload }).valid).toBe(true);
-    expect(Object.keys(payload).sort()).toEqual(["key", "kind", "ran_ref", "resolution", "resolved_at"]);
+    expect(Object.keys(payload).sort()).toEqual([...(payload.filed ? ["filed"] : []), "key", "kind", "ran_ref", "resolution", "resolved_at"]);
     expect(JSON.stringify(envelope)).not.toContain("Private proposal text");
     expect(JSON.stringify(envelope)).not.toContain("Private result text");
   }
@@ -56,8 +56,8 @@ test.each(["result", "proposal", "state_change"] as const)("dismiss of Vigil %s 
   refs();
   ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "failed" } }), ENDED_AT);
   const id = kind === "result" ? resultId : kind === "proposal" ? proposalId : "att:vigil:run:job:failed";
-  expect(handleAttentionLifecycle(db, id, "dismiss").status).toBe(200);
-  expect(handleAttentionLifecycle(db, id, "dismiss").status).toBe(404);
+  expect((await handleAttentionLifecycle(db, id, "dismiss")).status).toBe(200);
+  expect((await handleAttentionLifecycle(db, id, "dismiss")).status).toBe(404);
   expect(getAttentionItem(db, id)).toMatchObject({ status: "dismissed", resolution: "dismissed" });
   const ledger = publisher();
   await flushVigilResolutions(db, ledger);
@@ -97,10 +97,10 @@ test("filed is retained for approvals and invalid metadata rolls back before res
   expect(ledger.published[0]?.payload).toEqual({ key: proposal, kind: "proposal", resolution: "approved", ran_ref: "daily-sweep", resolved_at: new Date(ENDED_AT).toISOString(), filed: "example/repo#12" });
 });
 
-test("an outbox write failure rolls back the resolution", () => {
+test("an outbox write failure rolls back the resolution", async () => {
   refs();
   db.run("CREATE TRIGGER fail_receipt BEFORE INSERT ON vigil_attention_resolutions BEGIN SELECT RAISE(ABORT, 'receipt failure'); END");
-  expect(() => handleAttentionLifecycle(db, proposalId, "dismiss")).toThrow("receipt failure");
+  await expect(handleAttentionLifecycle(db, proposalId, "dismiss")).rejects.toThrow("receipt failure");
   expect(getAttentionItem(db, proposalId)).toMatchObject({ status: "open", resolution: null });
   expect(receipts()).toEqual([]);
 });
@@ -212,9 +212,9 @@ test("legacy pending and published read receipts migrate without changing their 
   }
 });
 
-test("Mission Control retains the existing lifecycle for attention not owned by Vigil", () => {
+test("Mission Control retains the existing lifecycle for attention not owned by Vigil", async () => {
   upsertAttentionItem(db, { id: "att:other", kind: "state_change", stackId: "default", sessionId: null, workItemId: null, severity: "normal", status: "open" });
-  expect(handleAttentionLifecycle(db, "att:other", "resolve").status).toBe(200);
+  expect((await handleAttentionLifecycle(db, "att:other", "resolve")).status).toBe(200);
   expect(getAttentionItem(db, "att:other")).toMatchObject({ status: "resolved", resolution: null });
   expect(receipts()).toEqual([]);
   expect(resolveVigilAttention(db, `att:vigil:${KEY}`, "read")).toBe(false);
