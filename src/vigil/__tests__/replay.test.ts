@@ -1,4 +1,4 @@
-// glossary-ignore: subscriber, agent, data
+// glossary-ignore: subscriber, agent, data, run
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import type { ConsumerConfig, ConsumerMessages, JsMsg } from "nats";
@@ -176,6 +176,15 @@ describe("Vigil LEDGER replay", () => {
       handleAttentionLifecycle(live, "att:vigil:run:job:reopen", "dismiss");
       await flushVigilResolutions(live, ledger);
       await report({ ran: { kind: "job", ref: "reopen" }, outcome: "cancelled", ended_at: "2026-10-12T10:00:09Z" });
+      const reopenedId = "att:vigil:run:job:reopen";
+      expect(getAttentionItem(live, reopenedId)?.status).toBe("open");
+      handleAttentionLifecycle(live, reopenedId, "dismiss");
+      await flushVigilResolutions(live, ledger);
+      const dismissals = recorded.filter((envelope) => envelope.type === "vigil.attention.resolved"
+        && envelope.payload.key === "run:job:reopen");
+      expect(dismissals).toHaveLength(2);
+      expect(new Set(dismissals.map((envelope) => envelope.id)).size).toBe(2);
+      expect(getAttentionItem(live, reopenedId)).toMatchObject({ status: "dismissed", resolution: "dismissed" });
       const snapshot = (database: Database) => database.query("SELECT id, kind, status, resolution FROM attention_items ORDER BY id").all();
       const expected = snapshot(live);
       expect(new Set(recorded.filter((envelope) => envelope.type === "vigil.attention.resolved").map((envelope) => envelope.payload.resolution)))

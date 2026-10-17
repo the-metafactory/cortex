@@ -1,3 +1,4 @@
+// glossary-ignore: run
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
@@ -121,6 +122,77 @@ test("pending publications survive reopening the DB and concurrent retries reuse
     expect(ledger.published[0]).toEqual(ledger.published[1]);
     expect(reopened.query("SELECT published FROM vigil_attention_resolutions").all()).toEqual([{ published: 1 }]);
   } finally { reopened.close(); }
+});
+
+test("reopened attention has independent pending receipts and replay deduplicates only the occurrence", async () => {
+  const first = ledgerEnvelope();
+  const second = ledgerEnvelope({ outcome: "cancelled", ended_at: "2026-10-12T10:00:06Z" });
+  const id = `att:vigil:${KEY}`;
+  for (const envelope of [first, second]) {
+    ingestLedgerEnvelope(db, envelope, ENDED_AT);
+    expect(resolveVigilAttention(db, id, "dismissed", { now: ENDED_AT })).toBe(true);
+  }
+  const ledger = publisher();
+  ledger.publish.mockImplementationOnce(async (envelope) => { ledger.published.push(envelope); });
+  ledger.publish.mockImplementationOnce(async (envelope) => { ledger.published.push(envelope); throw new Error("offline"); });
+  await flushVigilResolutions(db, ledger);
+  expect(db.query("SELECT published FROM vigil_attention_resolutions ORDER BY rowid").all())
+    .toEqual([{ published: 1 }, { published: 0 }]);
+  await flushVigilResolutions(db, ledger);
+  const [firstResolution, secondResolution, retry] = ledger.published;
+  expect(secondResolution).toEqual(retry);
+  expect(firstResolution!.id).not.toBe(secondResolution!.id);
+  expect(firstResolution!.payload).toEqual(secondResolution!.payload);
+  const rebuilt = initDatabase(":memory:");
+  try {
+    ingestLedgerEnvelope(rebuilt, first, ENDED_AT, { replay: true });
+    replayVigilResolution(rebuilt, firstResolution!);
+    ingestLedgerEnvelope(rebuilt, second, ENDED_AT, { replay: true });
+    expect(getAttentionItem(rebuilt, id)?.status).toBe("open");
+    replayVigilResolution(rebuilt, firstResolution!);
+    expect(getAttentionItem(rebuilt, id)?.status).toBe("open");
+    replayVigilResolution(rebuilt, secondResolution!);
+    replayVigilResolution(rebuilt, retry!);
+    expect(getAttentionItem(rebuilt, id)).toMatchObject({ status: "dismissed", resolution: "dismissed" });
+    expect(rebuilt.query("SELECT id, published FROM vigil_attention_resolutions ORDER BY rowid").all())
+      .toEqual([{ id: firstResolution!.id, published: 1 }, { id: secondResolution!.id, published: 1 }]);
+  } finally { rebuilt.close(); }
+});
+
+test("composite-key receipts migrate losslessly and allow another occurrence of the same resolution", async () => {
+  using file = temporaryVigilDatabaseFile("resolution-cycle-migration-");
+  const old = initDatabase(file.path);
+  old.run("DROP TABLE vigil_attention_resolutions");
+  old.run(`CREATE TABLE vigil_attention_resolutions (
+    key TEXT NOT NULL, kind TEXT NOT NULL, resolution TEXT NOT NULL,
+    attention_id TEXT NOT NULL, stack_id TEXT NOT NULL, id TEXT NOT NULL UNIQUE,
+    ran_ref TEXT NOT NULL, resolved_at TEXT NOT NULL, filed TEXT,
+    published INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (key, resolution)
+  )`);
+  ingestLedgerEnvelope(old, ledgerEnvelope({ ran: { kind: "job", ref: "proposal-source" }, outcome: "succeeded", proposal_refs: [proposal] }), ENDED_AT);
+  resolveVigilAttention(old, proposalId, "approved", { now: ENDED_AT, filed: "example/repo#12" });
+  ingestLedgerEnvelope(old, ledgerEnvelope(), ENDED_AT);
+  resolveVigilAttention(old, `att:vigil:${KEY}`, "dismissed", { now: ENDED_AT });
+  old.query("UPDATE vigil_attention_resolutions SET published = 1 WHERE attention_id = ?").run(proposalId);
+  const original = old.query("SELECT * FROM vigil_attention_resolutions ORDER BY rowid").all();
+  old.close();
+  for (let n = 0; n < 2; n++) {
+    const migrated = initDatabase(file.path);
+    try {
+      expect(migrated.query("SELECT * FROM vigil_attention_resolutions ORDER BY rowid").all()).toEqual(original);
+      expect(migrated.query("EXPLAIN QUERY PLAN SELECT * FROM vigil_attention_resolutions WHERE published = 0 ORDER BY rowid").all())
+        .toEqual([expect.objectContaining({ detail: expect.stringContaining("idx_vigil_attention_resolutions_published") })]);
+      if (n === 1) {
+        ingestLedgerEnvelope(migrated, ledgerEnvelope({ outcome: "cancelled", ended_at: "2026-10-12T10:00:06Z" }), ENDED_AT);
+        resolveVigilAttention(migrated, `att:vigil:${KEY}`, "dismissed", { now: ENDED_AT });
+        const ledger = publisher();
+        await flushVigilResolutions(migrated, ledger);
+        expect(ledger.published).toHaveLength(2);
+        expect(ledger.published.every((envelope) => envelope.payload.resolution === "dismissed")).toBe(true);
+        expect(new Set(ledger.published.map((envelope) => envelope.id)).size).toBe(2);
+      }
+    } finally { migrated.close(); }
+  }
 });
 
 test("legacy pending and published read receipts migrate without changing their envelope identities", () => {

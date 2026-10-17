@@ -1,3 +1,4 @@
+// glossary-ignore: agent, instance
 import type { Database } from "bun:sqlite";
 import { createVigilAttentionResolved, validateVigilAttentionResolved, type VigilAttentionResolvedPayload } from "@the-metafactory/myelin";
 import { buildBaseEnvelope } from "../bus/envelope-builder";
@@ -66,7 +67,7 @@ export function resolveVigilAttention(
     if (!options.replay) {
       db.query(`INSERT INTO vigil_attention_resolutions
         (key, kind, resolution, attention_id, stack_id, id, ran_ref, resolved_at, filed)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(key, resolution) DO NOTHING`)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(payload.key, payload.kind, resolution, id, item.stackId, crypto.randomUUID(), payload.ran_ref,
           payload.resolved_at, payload.filed ?? null);
     }
@@ -90,7 +91,7 @@ export async function flushVigilResolutions(db: Database, ledger: ResolutionLedg
       envelope.id = row.id;
       envelope.timestamp = row.resolved_at;
       await ledger.publish(envelope, event.subject);
-      db.query("UPDATE vigil_attention_resolutions SET published = 1 WHERE key = ? AND resolution = ?").run(row.key, row.resolution);
+      db.query("UPDATE vigil_attention_resolutions SET published = 1 WHERE id = ?").run(row.id);
     }
   });
   const settled = pending.catch((error: unknown) => {
@@ -108,8 +109,8 @@ export function replayVigilResolution(db: Database, envelope: Envelope): { kind:
   if (!["state_change", "result", "proposal"].includes(receipt.kind)) return { kind: "skip", reason: "attention resolution kind" };
   db.transaction(() => {
     const attentionId = `att:vigil:${receipt.kind === "state_change" ? "" : `${receipt.kind}:`}${receipt.key}`;
-    const priorReceipt = db.query("SELECT 1 FROM vigil_attention_resolutions WHERE key = ? AND resolution = ? AND published = 1")
-      .get(receipt.key, receipt.resolution);
+    const priorReceipt = db.query("SELECT 1 FROM vigil_attention_resolutions WHERE id = ? AND published = 1")
+      .get(id);
     const item = getAttentionItem(db, attentionId);
     if (!priorReceipt || !item) {
       const terminal = { status: receipt.resolution === "dismissed" ? "dismissed" : "resolved", resolution: receipt.resolution } as const;
@@ -121,7 +122,7 @@ export function replayVigilResolution(db: Database, envelope: Envelope): { kind:
     }
     db.query(`INSERT INTO vigil_attention_resolutions
       (key, kind, resolution, attention_id, stack_id, id, ran_ref, resolved_at, filed, published)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1) ON CONFLICT(key, resolution) DO UPDATE SET published = 1`)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1) ON CONFLICT(id) DO UPDATE SET published = 1`)
       .run(receipt.key, receipt.kind, receipt.resolution, attentionId, source.split(".")[1] ?? "default",
         id, receipt.ran_ref, receipt.resolved_at, receipt.filed ?? null);
   })();

@@ -1,3 +1,4 @@
+// glossary-ignore: run
 import { describe, expect, mock, test } from "bun:test";
 import { executionRunFinishedPattern, vigilAttentionResolvedPattern } from "@the-metafactory/myelin";
 import { DeliverPolicy, RetentionPolicy, StorageType } from "nats";

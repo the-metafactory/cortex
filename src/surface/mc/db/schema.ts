@@ -1,3 +1,21 @@
+function vigilResolutionsTableSql(table: string): string {
+  return `CREATE TABLE IF NOT EXISTS ${table} (
+    key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    resolution TEXT NOT NULL CHECK(resolution IN ('approved','dismissed','expired','superseded','read','archived')),
+    attention_id TEXT NOT NULL,
+    stack_id TEXT NOT NULL,
+    id TEXT NOT NULL PRIMARY KEY,
+    ran_ref TEXT NOT NULL,
+    resolved_at TEXT NOT NULL,
+    filed TEXT,
+    published INTEGER NOT NULL DEFAULT 0 CHECK(published IN (0,1))
+  )`;
+}
+
+const VIGIL_RESOLUTIONS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_vigil_attention_resolutions_published
+  ON vigil_attention_resolutions(published)`;
+
 function vigilRefTableSql(table: string, refColumn: string): string {
   return `CREATE TABLE IF NOT EXISTS ${table} (
     ${refColumn} TEXT PRIMARY KEY,
@@ -89,23 +107,12 @@ export const SCHEMA_SQL: string[] = [
     resolved_at TEXT NOT NULL,
     published INTEGER NOT NULL DEFAULT 0 CHECK(published IN (0,1))
   )`,
-  `CREATE TABLE IF NOT EXISTS vigil_attention_resolutions (
-    key TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    resolution TEXT NOT NULL CHECK(resolution IN ('approved','dismissed','expired','superseded','read','archived')),
-    attention_id TEXT NOT NULL,
-    stack_id TEXT NOT NULL,
-    id TEXT NOT NULL UNIQUE,
-    ran_ref TEXT NOT NULL,
-    resolved_at TEXT NOT NULL,
-    filed TEXT,
-    published INTEGER NOT NULL DEFAULT 0 CHECK(published IN (0,1)),
-    PRIMARY KEY (key, resolution)
-  )`,
+  vigilResolutionsTableSql("vigil_attention_resolutions"),
+  VIGIL_RESOLUTIONS_INDEX_SQL,
   `INSERT INTO vigil_attention_resolutions
     (key, kind, resolution, attention_id, stack_id, id, ran_ref, resolved_at, published)
     SELECT result_ref, 'result', 'read', 'att:vigil:result:' || result_ref, 'default', id, ran_ref, resolved_at, published
-    FROM vigil_result_reads WHERE true ON CONFLICT(key, resolution) DO NOTHING`,
+    FROM vigil_result_reads WHERE true ON CONFLICT(id) DO NOTHING`,
   vigilRefTableSql("vigil_results", "result_ref"),
   vigilRefTableSql("vigil_proposals", "proposal_ref"),
   `CREATE TABLE IF NOT EXISTS vigil_result_subjects (
@@ -1047,6 +1054,20 @@ export interface RebuildMigration {
 }
 
 export const REBUILD_MIGRATIONS: RebuildMigration[] = [
+  {
+    table: "vigil_attention_resolutions",
+    detect: (sql) => /PRIMARY KEY\s*\(\s*key\s*,\s*resolution\s*\)/i.test(sql),
+    steps: [
+      vigilResolutionsTableSql("vigil_attention_resolutions_new"),
+      `INSERT INTO vigil_attention_resolutions_new
+        (key, kind, resolution, attention_id, stack_id, id, ran_ref, resolved_at, filed, published)
+       SELECT key, kind, resolution, attention_id, stack_id, id, ran_ref, resolved_at, filed, published
+       FROM vigil_attention_resolutions ORDER BY rowid`,
+      `DROP TABLE vigil_attention_resolutions`,
+      `ALTER TABLE vigil_attention_resolutions_new RENAME TO vigil_attention_resolutions`,
+      VIGIL_RESOLUTIONS_INDEX_SQL,
+    ],
+  },
   {
     table: "attention_items",
     detect: (sql) => /CHECK\s*\(\s*kind\s+IN\s*\(/i.test(sql) && !sql.includes("'result'"),
