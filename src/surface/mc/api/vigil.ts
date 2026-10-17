@@ -24,6 +24,7 @@ export interface VigilSubjectsResponse {
 }
 
 export interface VigilSubjectsOptions {
+  somaHome?: string;
   resultBaseUrl?: string;
   enabled: boolean;
   resolveGoalWording?: GoalWordingResolver;

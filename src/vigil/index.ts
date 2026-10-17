@@ -1,6 +1,6 @@
 // glossary-ignore: subscriber, run
 import type { Database } from "bun:sqlite";
-import { executionRunFinishedPattern } from "@the-metafactory/myelin";
+import { executionRunFinishedPattern, vigilAttentionResolvedPattern } from "@the-metafactory/myelin";
 import { DeliverPolicy } from "nats";
 import type { AgentConfig } from "../common/types/config";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
@@ -73,7 +73,7 @@ export async function startVigil(opts: {
   }
   await provisionLedgerStream({
     jsm, principal: opts.principal, log,
-    subjects: [vigilSystemPattern(opts.principal, opts.stack)],
+    subjects: [vigilSystemPattern(opts.principal, opts.stack), vigilAttentionResolvedPattern(opts.principal)],
   });
   const durable = `cortex-vigil-${opts.principal}`;
   const pattern = executionRunFinishedPattern(opts.principal);

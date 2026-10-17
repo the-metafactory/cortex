@@ -1,12 +1,12 @@
 import { readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { isContainedIn } from "../common/path-containment";
+import { readSomaOutput, somaHome } from "./soma-output";
 import type { GoalWordingResolver } from "./goal-wording";
 import type { VigilResultRow } from "./results";
 
 export const DEFAULT_RESULT_BASE_URL = "http://127.0.0.1:8767";
-export const somaHome = () => process.env.SOMA_HOME ?? join(homedir(), ".soma");
+export { somaHome } from "./soma-output";
 
 async function firstBodyLine(root: string, relative: string): Promise<string | null> {
   try {
@@ -34,8 +34,9 @@ export interface ResultRenderOptions {
 
 export async function resultPresentation(result: VigilResultRow, options: ResultRenderOptions): Promise<{ label: string; url: string }> {
   const home = options.somaHome ?? somaHome();
-  const path = result.result_ref.startsWith("soma:outputs/") ? result.result_ref.slice("soma:outputs/".length) : null;
-  const title = path === null ? result.result_ref : await firstBodyLine(join(home, "outputs"), path) ?? result.result_ref;
+  const content = await readSomaOutput(result.result_ref, home);
+  const title = content?.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "")
+    .split(/\r?\n/).find((line) => line.trim() !== "")?.trim().replace(/^#+\s+/, "") ?? result.result_ref;
   let goal: string | null = null;
   if (result.goal_id) {
     try {
