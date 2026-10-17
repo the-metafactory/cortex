@@ -3,6 +3,7 @@ import { describe } from "bun:test";
 import { mkdtempSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { probeFsWatchChurn } from "../../scripts/probe-fs-watch-churn";
 
 const PROBE_TIMEOUT_MS = 10_000;
 
@@ -59,7 +60,8 @@ async function probeFsWatch(): Promise<{ usable: boolean; reason: string }> {
 
 // Module evaluation is shared by all importers in this test process: measure
 // once, before suite collection, and reuse the result for every gated group.
-export const fsWatchProbe = await probeFsWatch();
+const deliveryProbe = await probeFsWatch();
+export const fsWatchProbe = deliveryProbe.usable ? await probeFsWatchChurn() : deliveryProbe;
 process.stderr.write(`[fs.watch probe] ${fsWatchProbe.reason}\n`);
 
 export function describeWithFsWatch(name: string, fn: () => void): void {
