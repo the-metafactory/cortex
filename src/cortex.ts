@@ -183,7 +183,7 @@ import { refreshCockpit, defaultWorkItemSourceFor } from "./surface/mc/refresh";
 import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/refresh-loop";
 // MC-I1.S1 (ADR-0005) — in-process Mission Control embed (supersedes api.*).
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
-import { startVigil, type VigilHandle } from "./vigil";
+import { createVigilDeliveryPorts, startVigil, type VigilHandle } from "./vigil";
 import type { AgentPresenceView } from "./surface/mc/api/agents";
 import type { NetworksView } from "./surface/mc/api/networks";
 // FLG-1 (docs/plan-mc-future-state.md §4.D) — guided-join handoff banner: the MC
@@ -5914,7 +5914,11 @@ export async function startCortex(
 
   let vigilHandle: VigilHandle | null = null;
   try {
-    vigilHandle = await startVigil({ config, db: mcDb, runtime, principal: principalId, stack: derivedStack.stack });
+    vigilHandle = await startVigil({
+      config, db: mcDb, runtime, principal: principalId, stack: derivedStack.stack,
+      ...(config.vigil.enabled && config.mc.enabled && mcDb && derivedStack.stack === "default"
+        ? createVigilDeliveryPorts({ config: config.vigil, adapters }) : {}),
+    });
   } catch (err) {
     console.error(`cortex: Vigil startup error (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
   }

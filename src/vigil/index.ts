@@ -12,6 +12,11 @@ import { replayLedger } from "./replay";
 import { vigilSystemPattern } from "./delivery-receipt";
 import { sweepStale } from "./staleness";
 import { startVigilTick, type VigilTickOptions } from "./tick";
+import type { PlatformAdapter } from "../adapters/types";
+import { notifyWithResult } from "../adapters/notify-result";
+import { createVigilEmailFallback } from "./fallback-email";
+import { flushTexts, type FlushTextsOptions } from "./flush";
+import { idOnlyGoalWording } from "./goal-wording";
 
 import { publishReconcileDelta } from "../surface/mc/attention-notify";
 
@@ -19,6 +24,22 @@ export { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER };
 
 export interface VigilHandle {
   stop(): Promise<void>;
+}
+
+type VigilDeliveryPorts = Pick<FlushTextsOptions, "send" | "fallback" | "resolveGoalWording">;
+
+export function createVigilDeliveryPorts(opts: {
+  config: AgentConfig["vigil"];
+  adapters: readonly PlatformAdapter[];
+  resolveGoalWording?: FlushTextsOptions["resolveGoalWording"];
+  email?: Parameters<typeof createVigilEmailFallback>[1];
+}): VigilDeliveryPorts {
+  const discord = opts.adapters.find((adapter) => adapter.platform === "discord");
+  return {
+    send: discord ? (text) => notifyWithResult(discord, text) : null,
+    fallback: createVigilEmailFallback(opts.config, opts.email),
+    resolveGoalWording: opts.resolveGoalWording ?? idOnlyGoalWording,
+  };
 }
 
 /** Boot gates live here so callers and tests exercise the same interface. */
@@ -32,7 +53,7 @@ export async function startVigil(opts: {
   onError?: EnvelopeErrorHandler;
   now?: () => number;
   schedule?: VigilTickOptions["schedule"];
-}): Promise<VigilHandle | null> {
+} & Partial<VigilDeliveryPorts>): Promise<VigilHandle | null> {
   if (!opts.config.vigil.enabled) return null;
   const log = opts.log ?? console;
   if (!opts.config.mc.enabled || opts.db === null) {
@@ -109,7 +130,14 @@ export async function startVigil(opts: {
     throw err;
   }
   const tick = startVigilTick({
-    run: async () => { await publishDelta(sweepStale(db, now(), opts.config.vigil.cadence, opts.stack)); },  // glossary-ignore: run
+    run: async () => {
+      const tickNow = now();
+      await publishDelta(sweepStale(db, tickNow, opts.config.vigil.cadence, opts.stack));
+      if (publish) await flushTexts({
+        db, principal: opts.principal, now: tickNow, publish,
+        send: opts.send ?? null, fallback: opts.fallback ?? null, resolveGoalWording: opts.resolveGoalWording,
+      });
+    },
     schedule: opts.schedule,
     onError: (err) => { log.warn(`vigil: tick failed: ${err instanceof Error ? err.message : String(err)}`); },
   });
