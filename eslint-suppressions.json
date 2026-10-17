@@ -3079,7 +3079,7 @@
       "count": 1
     },
     "@typescript-eslint/no-unnecessary-condition": {
-      "count": 51
+      "count": 49
     },
     "@typescript-eslint/no-unnecessary-type-parameters": {
       "count": 1
@@ -3088,7 +3088,7 @@
       "count": 1
     },
     "cortex/no-comments": {
-      "count": 248
+      "count": 246
     }
   },
   "src/common/types/cortex-config.ts": {

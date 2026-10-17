@@ -5,6 +5,7 @@ import { checkTestHome, HERMETIC_HOME_ENV, hermeticTestEnv, HOST_HOME_OPT_IN_ENV
 describe("hermeticTestEnv", () => {
   const host = {
     HOME: "/Users/someone",
+    SOMA_HOME: "/Users/someone/.soma",
     PATH: "/usr/bin",
     XDG_CONFIG_HOME: "/Users/someone/.config",
     XDG_RUNTIME_DIR: "/run/user/501",
@@ -20,6 +21,7 @@ describe("hermeticTestEnv", () => {
   });
 
   test("drops host instrumentation and XDG base dirs, keeps the rest", () => {
+    expect(env.SOMA_HOME).toBeUndefined();
     expect(env.GROVE_AGENT_ID).toBeUndefined();
     expect(env.CORTEX_CHANNEL).toBeUndefined();
     expect(env.XDG_CONFIG_HOME).toBeUndefined();

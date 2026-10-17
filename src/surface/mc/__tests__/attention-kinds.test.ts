@@ -11,6 +11,7 @@ test("attention type, projection kinds and dashboard labels agree", () => {
   const literals = (body: string) => Array.from(body.matchAll(/"([a-z_]+)"/g), (match) => match[1]!).sort();
   const kinds = literals(type);
   expect(kinds).toContain("proposal");
+  expect(kinds).toContain("result");
   expect(literals(projection)).toEqual(kinds);
   expect(Array.from(labels.matchAll(/^\s*([a-z_]+):/gm), (match) => match[1]!).sort()).toEqual(kinds);
   const db = initDatabase(":memory:");

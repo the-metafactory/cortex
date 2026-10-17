@@ -80,7 +80,7 @@ describe("getAttentionQueue (E.3)", () => {
     const db = freshDb();
     upsertPlan(db, plan); upsertPlanPhase(db, phase); upsertWorkItem(db, wi);
     upsertAttentionItem(db, att({ id: "att-wi", workItemId: "wi-1" }));
-    const res = handleListAttention(db);
+    const res = await handleListAttention(db);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("application/json");
     const body = (await res.json()) as { attention: { item: { id: string } }[] };

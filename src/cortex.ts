@@ -184,7 +184,7 @@ import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/r
 // MC-I1.S1 (ADR-0005) — in-process Mission Control embed (supersedes api.*).
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
 import { createVigilDeliveryPorts, startVigil, type VigilHandle } from "./vigil";
-import { idOnlyGoalWording } from "./vigil/goal-wording";
+import { somaGoalWording } from "./vigil/result-render";
 import type { AgentPresenceView } from "./surface/mc/api/agents";
 import type { NetworksView } from "./surface/mc/api/networks";
 // FLG-1 (docs/plan-mc-future-state.md §4.D) — guided-join handoff banner: the MC
@@ -4902,8 +4902,9 @@ export async function startCortex(
       mcHandle = await startMissionControl({
         vigil: {
           enabled: config.vigil.enabled && derivedStack.stack === "default",
-          resolveGoalWording: idOnlyGoalWording,
+          resolveGoalWording: somaGoalWording(),
           cadence: config.vigil.cadence,
+          resultBaseUrl: config.vigil.result_base_url,
         },
         configPath: config.mc.configPath || undefined,
         dbPath,
@@ -5923,7 +5924,7 @@ export async function startCortex(
     vigilHandle = await startVigil({
       config, db: mcDb, runtime, principal: principalId, stack: derivedStack.stack,
       ...(config.vigil.enabled && config.mc.enabled && mcDb && derivedStack.stack === "default"
-        ? createVigilDeliveryPorts({ config: config.vigil, adapters }) : {}),
+        ? createVigilDeliveryPorts({ config: config.vigil, adapters, resolveGoalWording: somaGoalWording() }) : {}),
     });
   } catch (err) {
     console.error(`cortex: Vigil startup error (non-fatal): ${err instanceof Error ? err.message : String(err)}`);

@@ -53,6 +53,7 @@ const ATTENTION_KINDS = new Set<AttentionKind>([
   "review",
   "state_change",
   "proposal",
+  "result",
   "failed_dispatch",
   "stale",
   "blocked",

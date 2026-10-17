@@ -4,6 +4,7 @@ import { validateExecutionRunFinished, type ExecutionRunFinishedPayload } from "
 import type { Envelope } from "../bus/myelin/envelope-validator";
 import { getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition, type VigilEventRow } from "./db";
 import type { AttentionDelta } from "../surface/mc/attention-notify";
+import { ingestResult } from "./results";
 import { applyVigilTransitions } from "./attention";
 import { updateStateSubject, type LedgerObservation } from "./state-subject";
 
@@ -64,6 +65,7 @@ export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: numb
   return db.transaction(() => {
     const events = [updateRunHealthSubject(db, payload, observation, now, opts)];
     if (payload.state) events.push(updateStateSubject(db, payload.state, observation, now, opts));
+    ingestResult(db, payload, opts);
     return applyVigilTransitions(db, events.filter((event) => event !== null), opts.stackId ?? "default");
   }).immediate();
 }

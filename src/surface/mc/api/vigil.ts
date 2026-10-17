@@ -12,6 +12,7 @@ export interface VigilSubjectView {
   goalWording: string | null;
   value: string;
   healthy: boolean;
+  lastResultRef: string | null;
   lastRunId: string;
   lastEndedAt: number;
   expectedBy: number | null;
@@ -23,6 +24,7 @@ export interface VigilSubjectsResponse {
 }
 
 export interface VigilSubjectsOptions {
+  resultBaseUrl?: string;
   enabled: boolean;
   resolveGoalWording?: GoalWordingResolver;
   cadence?: VigilCadence;
@@ -59,6 +61,9 @@ export async function handleListVigilSubjects(
       goalWording: row.goal_id === null ? null : await wordingByGoal.get(row.goal_id) ?? null,
       value: row.value,
       healthy: row.healthy === 1,
+      lastResultRef: db.query<{ result_ref: string }, [string]>(
+        "SELECT result_ref FROM vigil_result_subjects WHERE subject_key = ?",
+      ).get(row.subject_key)?.result_ref ?? null,
       lastRunId: row.last_run_id,
       lastEndedAt: row.last_ended_at,
       expectedBy: cadenceMs === null ? null : row.last_ended_at + cadenceMs,

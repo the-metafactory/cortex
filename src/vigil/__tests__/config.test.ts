@@ -53,3 +53,15 @@ describe("Vigil fallback email config", () => {
     }
   });
 });
+
+
+test("result link base defaults in both config schemas and retains explicit HTTP bases", () => {
+  for (const schemaInput of [
+    () => CortexConfigSchema.parse(base),
+    () => AgentConfigSchema.parse({ claude: {}, agent: { name: "example", displayName: "Example" } }),
+  ]) expect(schemaInput().vigil.result_base_url).toBe("http://127.0.0.1:8767");
+  expect(CortexConfigSchema.parse({ ...base, vigil: { result_base_url: "https://mc.example.test" } }).vigil.result_base_url).toBe("https://mc.example.test");
+  for (const result_base_url of ["invalid", "javascript:alert(1)", "file:///tmp/results"]) {
+    expect(CortexConfigSchema.safeParse({ ...base, vigil: { result_base_url } }).success).toBe(false);
+  }
+});

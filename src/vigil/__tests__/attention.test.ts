@@ -105,7 +105,7 @@ describe("Vigil attention", () => {
     ingestLedgerEnvelope(db, ledgerEnvelope(), ENDED_AT);
     expect(reconcileAttention(db, { stackId: "default" }).resolved).toEqual([]);
     const entries = getAttentionQueue(db);
-    expect(await handleListAttention(db).json()).toEqual({ attention: entries });
+    expect(await (await handleListAttention(db)).json()).toEqual({ attention: entries });
     expect(entries[0]?.link).toEqual({ kind: "none" });
     expect(renderToStaticMarkup(createElement(AttentionView, { entries, loaded: true }))).toContain("state change");
     expect(getAttentionItem(db, id)?.status).toBe("open");

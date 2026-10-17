@@ -11,7 +11,7 @@ test.each([false, true])("old attention CHECK (state_change=%s) widens once, ret
   const { path } = file;
   const old = new Database(path, { create: true });
   for (const sql of SCHEMA_SQL) {
-    const previous = sql.replace(",'proposal'", "")
+    const previous = sql.replace(",'proposal','result'", "")
       .replace(/\s+resolution TEXT\s+CHECK\(resolution IN \([^)]+\)\),/, "");
     old.run(hasStateChange ? previous : previous.replace(",'state_change'", ""));
   }
@@ -123,4 +123,20 @@ test("route and delivery migrate once, preserving historical events without a se
     ingestLedgerEnvelope(reopened, ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000);
     expect(listVigilEvents(reopened, KEY)[1]).toMatchObject({ route: "digest", delivery: "pending" });
   } finally { reopened.close(); }
+});
+
+
+test("result kind migration preserves existing proposal resolutions and timestamps", () => {
+  using file = temporaryVigilDatabaseFile("attention-result-");
+  const old = new Database(file.path, { create: true });
+  for (const sql of SCHEMA_SQL) old.run(sql.replace(",'result'", ""));
+  old.run("INSERT INTO attention_items (id, stack_id, kind, status, resolution, created_at, updated_at) VALUES ('proposal', 'default', 'proposal', 'resolved', 'approved', 123, 456)");
+  const before = old.query("SELECT * FROM attention_items").all();
+  old.close();
+  const migrated = initDatabase(file.path);
+  try {
+    expect(migrated.query("SELECT * FROM attention_items").all()).toEqual(before);
+    expect(() => migrated.run("INSERT INTO attention_items (id, stack_id, kind) VALUES ('result', 'default', 'result')")).not.toThrow();
+    expect(migrated.query("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally { migrated.close(); }
 });

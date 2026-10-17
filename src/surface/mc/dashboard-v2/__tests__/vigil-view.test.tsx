@@ -6,7 +6,7 @@ import type { VigilSubjectView } from "../../api/vigil";
 const subject: VigilSubjectView = {
   subjectKey: "state:goal:G1", kind: "state", vocab: "goal", ref: "G1",
   goalId: "G1", goalWording: "Example goal", value: "on-track", healthy: true,
-  lastRunId: "run-123", lastEndedAt: Date.parse("2026-10-12T10:00:00.000Z"),
+  lastResultRef: "soma:outputs/example.md", lastRunId: "run-123", lastEndedAt: Date.parse("2026-10-12T10:00:00.000Z"),
   expectedBy: Date.parse("2026-10-13T12:00:00.000Z"),
 };
 
@@ -18,10 +18,10 @@ describe("VigilView", () => {
       value: "overdue", healthy: false, expectedBy: null,
     }]} />);
     expect((html.match(/<tr>/g) ?? []).length).toBe(3);
-    for (const label of ["Subject", "Kind", "Vocabulary", "Reference", "Goal", "State", "Healthy", "Last run", "Last ended", "Expected by"]) {
+    for (const label of ["Subject", "Kind", "Vocabulary", "Reference", "Goal", "State", "Healthy", "Last result", "Last run", "Last ended", "Expected by"]) {
       expect(html).toContain(`scope="col">${label}</th>`);
     }
-    for (const value of ["state:goal:G1", ">state<", ">goal<", "Example goal", "on-track", ">Yes<", "run-123", "state:escalation:example/project#604", ">escalation<", "overdue", ">No<"]) {
+    for (const value of ["state:goal:G1", ">state<", ">goal<", "Example goal", "on-track", ">Yes<", "run-123", "soma:outputs/example.md", "state:escalation:example/project#604", ">escalation<", "overdue", ">No<"]) {
       expect(html).toContain(value);
     }
     expect(html).toContain('dateTime="2026-10-12T10:00:00.000Z"');

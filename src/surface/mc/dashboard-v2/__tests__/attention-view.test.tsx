@@ -15,7 +15,7 @@
  * element-tree walk of the pure component — AttentionView uses no hooks).
  */
 
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { AttentionView, type AttentionViewProps } from "../components/attention-view";
@@ -151,4 +151,16 @@ describe("AttentionView — CK-6b lifecycle buttons", () => {
     expect(html).toContain("attention-resolve");
     expect(html).toContain("attention-dismiss");
   });
+});
+
+
+test("result attention renders a safe title link and escapes private wording", () => {
+  const html = renderToStaticMarkup(<AttentionView loaded entries={[{
+    item: { id: "result", stackId: "default", workItemId: null, sessionId: null, kind: "result", severity: "low", status: "open" },
+    link: { kind: "result", label: "Goal — <script>title</script>", url: "http://127.0.0.1:8767/results/soma%3Aoutputs%2Fweekly.md" },
+  }]} />);
+  expect(html).toContain("kind-result");
+  expect(html).toContain('href="http://127.0.0.1:8767/results/soma%3Aoutputs%2Fweekly.md"');
+  expect(html).toContain("&lt;script&gt;title&lt;/script&gt;");
+  expect(html).not.toContain("<script>");
 });

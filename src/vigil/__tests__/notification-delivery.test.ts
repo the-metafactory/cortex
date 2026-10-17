@@ -134,6 +134,41 @@ describe("running Vigil notification delivery", () => {
     expect(JSON.stringify(ledger.published)).not.toContain(PRIVATE_WORDING);
   }
 
+  test("waiting results arrive silently, digest once at 07:00 and expire silently on the tick", async () => {
+    now = Date.parse("2026-10-17T06:50:00+02:00");
+    config.vigil.result_base_url = "https://mc.example.test";
+    await boot();
+    const endedAt = now - 1000;
+    ledger.deliver(ledgerEnvelope({
+      ran: { kind: "flow", ref: "outline" }, outcome: "succeeded", result_ref: "soma:outputs/outline.md",
+      started_at: new Date(now - 2000).toISOString(), ended_at: new Date(endedAt).toISOString(),
+    }));
+    await tick();
+    expect(discord.principalNotifications).toEqual([]);
+    expect(ledger.published).toEqual([]);
+    expect(db.query("SELECT kind, severity, status FROM attention_items").all()).toEqual([
+      { kind: "result", severity: "low", status: "open" },
+    ]);
+    now = Date.parse("2026-10-17T07:00:00+02:00");
+    scheduler.tick();
+    for (let i = 0; i < 100 && discord.principalNotifications.length === 0; i++) await Bun.sleep(1);
+    expect(discord.principalNotifications).toHaveLength(1);
+    expect(discord.principalNotifications[0]).toContain("waiting for you");
+    expect(discord.principalNotifications[0]).toContain("https://mc.example.test/results/soma%3Aoutputs%2Foutline.md");
+    now += 86400000;
+    await tick();
+    expect(discord.principalNotifications).toHaveLength(1);
+    now = endedAt + 7 * 86400000;
+    await tick();
+    expect(db.query("SELECT status, resolution FROM attention_items WHERE kind = 'result'").all()).toEqual([
+      { status: "resolved", resolution: "expired" },
+    ]);
+    expect(discord.principalNotifications).toHaveLength(1);
+    expect(ledger.published).toEqual([]);
+    expect(receipts()).toEqual([]);
+    expect(getVigilTextsSpent(db, budgetDay(now))).toBe(0);
+  });
+
   test("07:00 tick digests overnight held texts after flushing with the same ports and no extra budget", async () => {
     now = Date.parse("2026-10-17T06:50:00+02:00");
     await boot();

@@ -99,17 +99,17 @@ export function setAttentionItemStatus(
   const res = db
     .query(`UPDATE attention_items SET status = ?,
       resolution = CASE WHEN ? THEN ? ELSE resolution END,
-      updated_at = unixepoch() WHERE id = ?`)
+      updated_at = unixepoch() WHERE id = ? AND (kind != 'result' OR status = 'open')`)
     .run(status, resolution !== undefined ? 1 : 0, resolution ?? null, id);
   return res.changes > 0;
 }
 
 /** Mark an item resolved (its underlying condition cleared). */
 export function resolveAttentionItem(db: Database, id: string): boolean {
-  return setAttentionItemStatus(db, id, "resolved");
+  return setAttentionItemStatus(db, id, "resolved", getAttentionItem(db, id)?.kind === "result" ? "read" : undefined);
 }
 
 /** Mark an item dismissed (the principal chose to clear it without action). */
 export function dismissAttentionItem(db: Database, id: string): boolean {
-  return setAttentionItemStatus(db, id, "dismissed");
+  return setAttentionItemStatus(db, id, "dismissed", getAttentionItem(db, id)?.kind === "result" ? "dismissed" : undefined);
 }
