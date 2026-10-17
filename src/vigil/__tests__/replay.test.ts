@@ -1,4 +1,4 @@
-// glossary-ignore: subscriber, agent, data
+// glossary-ignore: subscriber, agent, data, run
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import type { ConsumerConfig, ConsumerMessages, JsMsg } from "nats";
@@ -19,6 +19,7 @@ import { flushTexts } from "../flush";
 import { ingestLedgerEnvelope } from "../ingest";
 import { startVigil } from "../index";
 import { replayLedger } from "../replay";
+import { flushVigilResolutions, resolveVigilAttention } from "../resolution";
 import { vigilSystemPattern } from "../delivery-receipt";
 import { KEY, ledgerEnvelope } from "./fixtures";
 
@@ -140,6 +141,64 @@ describe("Vigil LEDGER replay", () => {
     expect(getAttentionItem(db, id("next"))).toMatchObject({ status: "resolved", resolution: "expired" });
     expect(pendingResults(db)).toEqual([]);
     expect(db.query("SELECT * FROM vigil_events").all()).toEqual([]);
+  });
+
+  test("recorded runs and every resolution rebuild identical attention statuses without republishing", async () => {
+    const h = ledgerHarness();
+    const live = initDatabase(":memory:");
+    const recorded: Envelope[] = [];
+    const ledger = {
+      principal: "jc", stack: "default",
+      publish: async (envelope: Envelope) => { recorded.push(envelope); },
+    };
+    const report = async (overrides: Parameters<typeof ledgerEnvelope>[0]) => {
+      const envelope = ledgerEnvelope(overrides);
+      recorded.push(envelope);
+      ingestLedgerEnvelope(live, envelope, Date.parse(String(envelope.payload.ended_at)));
+      await flushVigilResolutions(live, ledger);
+    };
+    try {
+      await report({ outcome: "succeeded", result_ref: "soma:outputs/old.md" });
+      await report({ outcome: "succeeded", result_ref: "soma:outputs/read.md", ended_at: "2026-10-12T10:00:06Z" });
+      handleAttentionLifecycle(live, "att:vigil:result:soma:outputs/read.md", "resolve");
+      await flushVigilResolutions(live, ledger);
+      const proposals = Array.from({ length: 21 }, (_, n) => `soma:proposals/${String(n).padStart(2, "0")}.md`);
+      await report({ outcome: "succeeded", proposal_refs: proposals, ended_at: "2026-10-12T10:00:07Z" });
+      resolveVigilAttention(live, `att:vigil:proposal:${proposals[1]}`, "approved", { filed: "example/repo#1" });
+      handleAttentionLifecycle(live, `att:vigil:proposal:${proposals[2]}`, "dismiss");
+      expireResults(live, Date.parse("2026-10-20T10:00:00Z"));
+      const { expireRefAttention } = await import("../ref-attention");
+      expireRefAttention(live, Date.parse("2026-10-20T10:00:00Z"));
+      await flushVigilResolutions(live, ledger);
+      await report({ ran: { kind: "job", ref: "recover" } });
+      await report({ ran: { kind: "job", ref: "recover" }, outcome: "succeeded", ended_at: "2026-10-12T10:00:08Z" });
+      await report({ ran: { kind: "job", ref: "reopen" } });
+      handleAttentionLifecycle(live, "att:vigil:run:job:reopen", "dismiss");
+      await flushVigilResolutions(live, ledger);
+      await report({ ran: { kind: "job", ref: "reopen" }, outcome: "cancelled", ended_at: "2026-10-12T10:00:09Z" });
+      const reopenedId = "att:vigil:run:job:reopen";
+      expect(getAttentionItem(live, reopenedId)?.status).toBe("open");
+      handleAttentionLifecycle(live, reopenedId, "dismiss");
+      await flushVigilResolutions(live, ledger);
+      const dismissals = recorded.filter((envelope) => envelope.type === "vigil.attention.resolved"
+        && envelope.payload.key === "run:job:reopen");
+      expect(dismissals).toHaveLength(2);
+      expect(new Set(dismissals.map((envelope) => envelope.id)).size).toBe(2);
+      expect(getAttentionItem(live, reopenedId)).toMatchObject({ status: "dismissed", resolution: "dismissed" });
+      const snapshot = (database: Database) => database.query("SELECT id, kind, status, resolution FROM attention_items ORDER BY id").all();
+      const expected = snapshot(live);
+      expect(new Set(recorded.filter((envelope) => envelope.type === "vigil.attention.resolved").map((envelope) => envelope.payload.resolution)))
+        .toEqual(new Set(["superseded", "read", "archived", "approved", "dismissed", "expired"]));
+      await h.publish(...recorded);
+      expect(await h.replay(db)).toBe(recorded.length);
+      expect(snapshot(db)).toEqual(expected);
+      expect(await h.replay(db)).toBe(recorded.length);
+      expect(snapshot(db)).toEqual(expected);
+      expect(db.query("SELECT * FROM vigil_events").all()).toEqual([]);
+      const publish = mock(async () => {});
+      await flushVigilResolutions(db, { principal: "jc", stack: "default", publish });
+      expect(publish).not.toHaveBeenCalled();
+    } finally { live.close(); }
   });
 
   test("rebuilds budgets across days, deduplicates event IDs and replaces old counts on every replay", async () => {

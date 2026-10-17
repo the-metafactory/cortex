@@ -72,7 +72,7 @@ test("serves fresh markdown and health on the existing loopback listener without
 
 test("renders an existing output even without an attention item", async () => {
   expect((await openRef()).status).toBe(200);
-  expect(db.query("SELECT * FROM vigil_result_reads").all()).toEqual([]);
+  expect(db.query("SELECT * FROM vigil_attention_resolutions").all()).toEqual([]);
   expect(publish).not.toHaveBeenCalled();
 });
 
@@ -94,7 +94,7 @@ test.each([
   expect(response.status).toBe(404);
   expect(await response.text()).toBe("Not Found");
   expect(getAttentionItem(db, attentionId())?.status).toBe("open");
-  expect(db.query("SELECT * FROM vigil_result_reads").all()).toEqual([]);
+  expect(db.query("SELECT * FROM vigil_attention_resolutions").all()).toEqual([]);
   expect(publish).not.toHaveBeenCalled();
 });
 
@@ -173,7 +173,7 @@ test("concurrent opens resolve read and publish exactly one metadata-only ledger
   const { id, source, type, timestamp, sovereignty, payload } = receipt;
   expect(validateVigilAttentionResolved({ id, source, type, timestamp, sovereignty, payload })).toEqual({ valid: true, errors: [] });
   expect(receipt.payload).toEqual({ key: REF, kind: "result", resolution: "read", ran_ref: "daily-sweep", resolved_at: expect.any(String) });
-  expect(db.query("SELECT * FROM vigil_result_reads").all()).toHaveLength(1);
+  expect(db.query("SELECT * FROM vigil_attention_resolutions").all()).toHaveLength(1);
   const before = db.query("SELECT total_changes() AS changes").get();
   expect((await openRef()).status).toBe(200);
   expect(db.query("SELECT total_changes() AS changes").get()).toEqual(before);
@@ -185,7 +185,7 @@ test.each(["dismissed", "expired", "superseded"] as const)("opening a %s item pr
   setAttentionItemStatus(db, attentionId(), resolution === "dismissed" ? "dismissed" : "resolved", resolution);
   expect((await openRef()).status).toBe(200);
   expect(getAttentionItem(db, attentionId())?.resolution).toBe(resolution);
-  expect(db.query("SELECT * FROM vigil_result_reads").all()).toEqual([]);
+  expect(db.query("SELECT * FROM vigil_attention_resolutions").all()).toEqual([]);
   expect(publish).not.toHaveBeenCalled();
 });
 
@@ -199,11 +199,11 @@ test("failed publication keeps a durable read receipt and retries with the same 
   try {
     expect((await openRef()).status).toBe(200);
     expect(getAttentionItem(db, attentionId())?.resolution).toBe("read");
-    expect(db.query("SELECT published FROM vigil_result_reads").get()).toEqual({ published: 0 });
+    expect(db.query("SELECT published FROM vigil_attention_resolutions").get()).toEqual({ published: 0 });
     expect((await openRef()).status).toBe(200);
     expect(published).toHaveLength(2);
     expect(published[0]?.envelope).toEqual(published[1]?.envelope);
-    expect(db.query("SELECT published FROM vigil_result_reads").get()).toEqual({ published: 1 });
+    expect(db.query("SELECT published FROM vigil_attention_resolutions").get()).toEqual({ published: 1 });
     expect(warning).toHaveBeenCalledTimes(1);
   } finally {
     warning.mockRestore();
@@ -220,7 +220,7 @@ test("LEDGER replay restores read state and receipt without re-emitting", async 
     expect(handler(rebuilt, published[0]!.envelope)).toBeUndefined();
     expect(handler(rebuilt, published[0]!.envelope)).toBeUndefined();
     expect(getAttentionItem(rebuilt, attentionId())).toMatchObject({ status: "resolved", resolution: "read" });
-    expect(rebuilt.query("SELECT published FROM vigil_result_reads").all()).toEqual([{ published: 1 }]);
+    expect(rebuilt.query("SELECT published FROM vigil_attention_resolutions").all()).toEqual([{ published: 1 }]);
     expect(publish).toHaveBeenCalledTimes(1);
   } finally {
     rebuilt.close();

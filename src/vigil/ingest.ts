@@ -6,8 +6,9 @@ import { getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransit
 import type { AttentionDelta } from "../surface/mc/attention-notify";
 import { ingestResult } from "./results";
 import { ingestRefAttention } from "./ref-attention";
-import { applyVigilTransitions } from "./attention";
-import { updateStateSubject, type LedgerObservation } from "./state-subject";
+import { applyVigilAttention, applyVigilTransitions } from "./attention";
+import { stateDirection, stateSubjectKey, updateStateSubject, vocabularyOf, type LedgerObservation } from "./state-subject";
+import { getAttentionItem } from "../surface/mc/db/attention";
 
 /**
  * Ledger consumer timing (live and replay), set explicitly so the
@@ -64,11 +65,26 @@ export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: numb
     last_run_id: payload.run_id, last_ended_at: Date.parse(payload.ended_at), last_seen_at: now,
   };
   return db.transaction(() => {
+    const replayKeys = opts.replay ? [runHealthKey(payload), ...(payload.state
+      ? [stateSubjectKey(vocabularyOf(payload.state.value), payload.state.subject)] : [])] : [];
+    const previous = replayKeys.map((key) => getVigilSubject(db, key));
     const events = [updateRunHealthSubject(db, payload, observation, now, opts)];
     if (payload.state) events.push(updateStateSubject(db, payload.state, observation, now, opts));
     ingestResult(db, payload, opts);
     if (payload.outcome === "succeeded") {
       for (const ref of payload.proposal_refs ?? []) ingestRefAttention(db, "proposal", ref, payload, opts);
+    }
+    for (const [index, key] of replayKeys.entries()) {
+      if (!getAttentionItem(db, `att:vigil:${key}`)) continue;
+      const subject = getVigilSubject(db, key);
+      const prior = previous[index];
+      if (subject?.last_run_id !== payload.run_id || !isNewObservation(prior ?? null, payload.run_id, observation.last_ended_at)) continue;
+      const direction = subject.subject_kind === "state"
+        ? stateDirection(vocabularyOf(subject.value), prior?.value ?? null, subject.value)
+        : prior?.value === subject.value ? null : subject.healthy ? "better" : "worse";
+      if (direction) applyVigilAttention(db, {
+        id: "", subject_key: key, to_value: subject.value, direction,
+      }, opts.stackId ?? "default", { replay: true, now: observation.last_ended_at });
     }
     return applyVigilTransitions(db, events.filter((event) => event !== null), opts.stackId ?? "default");
   }).immediate();

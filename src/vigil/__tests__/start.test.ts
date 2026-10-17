@@ -12,6 +12,7 @@ import { createFakeJetStream } from "../../bus/jetstream/__tests__/fake-jetstrea
 import { LEDGER_STREAM } from "../../bus/jetstream/provision";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getAttentionItem } from "../../surface/mc/db/attention";
+import { handleAttentionLifecycle } from "../../surface/mc/api/attention";
 import { REF_ATTENTION_TTL_MS } from "../ref-attention";
 import { getVigilSubject, listVigilEvents } from "../db";
 import { ingestLedgerEnvelope } from "../ingest";
@@ -179,8 +180,7 @@ describe("Vigil startup and delivery", () => {
     const handle = await startVigil({ config: config(), db, runtime: h.runtime, principal: "alice", stack: "default" });
     try {
       expect(fake.streamSubjects(LEDGER_STREAM)).toEqual([
-        "local.alice.*.execution.run.finished", retained, "local.alice.default.system.vigil.>",
-        "local.alice.*.vigil.attention.resolved",
+        "local.alice.*.execution.run.finished", "local.alice.*.vigil.attention.resolved", retained, "local.alice.default.system.vigil.>",
       ]);
       expect(fake.publish("local.alice.default.system.vigil.text-sent")).toBe(LEDGER_STREAM);
       expect(fake.publish("local.alice.lab.system.vigil.text-sent")).toBeNull();
@@ -197,9 +197,33 @@ describe("Vigil startup and delivery", () => {
     await fake.jsm.streams.add({ name: "OTHER", subjects: ["local.alice.default.system.vigil.>"] });
     const h = pullRuntime(fake);
     await expect(startVigil({ config: config(), db, runtime: h.runtime, principal: "alice", stack: "default" })).rejects.toThrow("LEDGER required subjects not captured");
-    expect(fake.streamSubjects(LEDGER_STREAM)).toEqual(["local.alice.*.execution.run.finished"]);
+    expect(fake.streamSubjects(LEDGER_STREAM)).toEqual(["local.alice.*.execution.run.finished", "local.alice.*.vigil.attention.resolved"]);
     expect(fake.streamSubjects("OTHER")).toEqual(["local.alice.default.system.vigil.>"]);
     expect(h.calls).toEqual([]);
+  });
+
+  test("a failed resolution publish stays resolved and retries once on the next tick", async () => {
+    const ref = "soma:proposals/retry.md";
+    const id = `att:vigil:proposal:${ref}`;
+    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [ref] }), ENDED_AT);
+    const scheduler = fakeTickScheduler();
+    const h = pullRuntime(createFakeJetStream());
+    const published: import("../../bus/myelin/envelope-validator").Envelope[] = [];
+    const publishOnSubject = mock(async (envelope: import("../../bus/myelin/envelope-validator").Envelope) => { published.push(envelope); });
+    const handle = await startVigil({ config: config(), db, runtime: { ...h.runtime, publishOnSubject }, principal: "jc", stack: "default", now: () => ENDED_AT, schedule: scheduler.schedule });
+    try {
+      await flushTick();
+      expect(handleAttentionLifecycle(db, id, "dismiss").status).toBe(200);
+      publishOnSubject.mockImplementationOnce(async (envelope) => { published.push(envelope); throw new Error("offline"); });
+      scheduler.tick(); await flushTick();
+      expect(getAttentionItem(db, id)).toMatchObject({ status: "dismissed", resolution: "dismissed" });
+      expect(db.query("SELECT published FROM vigil_attention_resolutions").get()).toEqual({ published: 0 });
+      scheduler.tick(); await flushTick();
+      scheduler.tick(); await flushTick();
+      expect(publishOnSubject).toHaveBeenCalledTimes(2);
+      expect(published[0]).toEqual(published[1]);
+      expect(db.query("SELECT published FROM vigil_attention_resolutions").get()).toEqual({ published: 1 });
+    } finally { await handle!.stop(); }
   });
 
   test("startup sweeps with configured cadence, ticks every five minutes and cancels on stop", async () => {
