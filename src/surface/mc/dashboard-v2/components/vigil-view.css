@@ -1,0 +1,26 @@
+.vigil-table-scroll {
+  overflow-x: auto;
+}
+
+.vigil-view table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.vigil-view caption {
+  text-align: left;
+  padding-bottom: 12px;
+}
+
+.vigil-view th,
+.vigil-view td {
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line, var(--panel-border));
+}
+
+.vigil-view time {
+  white-space: nowrap;
+}

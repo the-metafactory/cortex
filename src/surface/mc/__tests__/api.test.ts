@@ -15,6 +15,7 @@ import { rmSync } from "fs";
 
 import { startServer } from "../server";
 import type { ServerContext } from "../server";
+import type { StartServerOptions } from "../server";
 import { initDatabase } from "../db/init";
 import { DEFAULT_CONFIG } from "../config";
 import { ProcessManager } from "../session/process-manager";
@@ -23,6 +24,8 @@ import { createSession } from "../db/sessions";
 import { insertEvent, EVENTS_LIST_MAX_LIMIT } from "../db/events";
 import { _resetDispatchDebounceForTests } from "../api/handlers";
 import * as shouldNotifyModule from "../notifications/should-notify";
+import { ingestLedgerEnvelope } from "../../../vigil/ingest";
+import { ledgerEnvelope, ENDED_AT } from "../../../vigil/__tests__/fixtures";
 
 const catStandInForClaude: SpawnFn = () =>
   Bun.spawn(["cat"], {
@@ -62,14 +65,14 @@ interface TestContext {
 
 const PORT_BIND_ANY = 0;
 
-async function setup(): Promise<TestContext> {
+async function setup(options: StartServerOptions = {}): Promise<TestContext> {
   const tmpDir = join(tmpdir(), `mc-api-test-${Date.now()}-${Math.random()}`);
   const db = initDatabase(join(tmpDir, "test.db"));
   const pm = new ProcessManager();
   const ctx = startServer(
     { ...DEFAULT_CONFIG, port: PORT_BIND_ANY },
     db,
-    { processManager: pm, spawn: catStandInForClaude }
+    { processManager: pm, spawn: catStandInForClaude, ...options }
   );
   const port = ctx.port;
   return { db, ctx, pm, port, baseUrl: `http://localhost:${port}`, tmpDir };
@@ -85,6 +88,65 @@ async function teardown(t: TestContext): Promise<void> {
   t.db.close();
   rmSync(t.tmpDir, { recursive: true, force: true });
 }
+
+describe("GET /api/vigil/subjects", () => {
+  let t: TestContext;
+  afterEach(async () => { await teardown(t); });
+
+  it("returns only local subjects with request-time wording and configured cadence", async () => {
+    const key = "run:job:harness-gate";
+    t = await setup({ vigil: {
+      enabled: true, resolveGoalWording: () => "Example goal", cadence: { [key]: 3_600_000 },
+    } });
+    ingestLedgerEnvelope(t.db, ledgerEnvelope({
+      ran: { kind: "job", ref: "harness-gate" }, serves: { goal: "G1" },
+    }), ENDED_AT);
+    const before = t.db.query("SELECT total_changes() AS changes").get();
+    const response = await fetch(`${t.baseUrl}/api/vigil/subjects`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ subjects: [expect.objectContaining({
+      subjectKey: key, goalId: "G1", goalWording: "Example goal", expectedBy: ENDED_AT + 3_600_000,
+    })] });
+    expect(t.db.query("SELECT total_changes() AS changes").get()).toEqual(before);
+  });
+
+  it.each([undefined, { enabled: false }])("returns a disabled empty response when Vigil is not enabled (%j)", async (vigil) => {
+    t = await setup({ vigil });
+    ingestLedgerEnvelope(t.db, ledgerEnvelope(), ENDED_AT);
+    const response = await fetch(`${t.baseUrl}/api/vigil/subjects`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ subjects: [], enabled: false });
+  });
+
+  it("does not read sibling subjects when local aggregation is enabled", async () => {
+    const resolved: string[] = [];
+    t = await setup({
+      vigil: { enabled: true, resolveGoalWording: (id) => { resolved.push(id); return "Example goal"; } },
+      localAggregation: () => ({
+        siblings: [{ stack: "work", principal: "example", url: "nats://127.0.0.1:4222", credential: { kind: "noauth" } }],
+        resolve: { configRoot: t.tmpDir, homeShareDir: join(t.tmpDir, "share") },
+      }),
+    });
+    const siblingDb = initDatabase(join(t.tmpDir, "share", "work", "mission-control.db"));
+    try {
+      ingestLedgerEnvelope(siblingDb, ledgerEnvelope({ serves: { goal: "G2" } }), ENDED_AT);
+    } finally {
+      siblingDb.close();
+    }
+    ingestLedgerEnvelope(t.db, ledgerEnvelope({ serves: { goal: "G1" } }), ENDED_AT);
+    const response = await fetch(`${t.baseUrl}/api/vigil/subjects`);
+    expect(response.status).toBe(200);
+    expect((await response.json()).subjects).toHaveLength(1);
+    expect(resolved).toEqual(["G1"]);
+  });
+
+  it.each(["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])("returns methodNotAllowed for %s", async (method) => {
+    t = await setup();
+    const response = await fetch(`${t.baseUrl}/api/vigil/subjects`, { method });
+    expect(response.status).toBe(405);
+    expect(response.headers.get("allow")).toBe("GET");
+  });
+});
 
 describe("GET /api/assignments", () => {
   let t: TestContext;

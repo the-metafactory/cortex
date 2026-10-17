@@ -64,6 +64,7 @@ import { handleListPlans } from "./api/plans";
 import { handleGetPhaseDetail } from "./api/phase-detail";
 import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
+import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil";
 import {
   MUTATING_METHODS,
   buildAllowedHostnames,
@@ -121,6 +122,7 @@ export interface HealthResponse {
 
 /** The read views and providers Mission Control serves, shared by startServer and startMissionControl. */
 export interface MissionControlViews {
+  vigil?: VigilSubjectsOptions;
   agentPresence?: () => AgentPresenceView | null;
   localAggregation?: LocalAggregationProvider;
   networks?: () => NetworksView | null;
@@ -255,6 +257,7 @@ export function startServer(
           doctorView,
           stepUpSecretPath,
           authorizer,
+          options.vigil,
         );
       }
 
@@ -371,6 +374,7 @@ async function handleApi(
   doctorView: DoctorView | null = null,
   stepUpSecretPath: string = expandTilde(defaultStepUpSecretPath()),
   authorizer: Authorizer | null = null,
+  vigil?: VigilSubjectsOptions,
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -403,6 +407,12 @@ async function handleApi(
     }
     const stepUpDenial = enforceStepUp(req, { enrollment });
     if (stepUpDenial) return stepUpDenial;
+  }
+
+  if (pathname === "/api/vigil/subjects") {
+    if (req.method !== "GET") return methodNotAllowed(["GET"]);
+    if (!vigil?.enabled) return Response.json({ subjects: [], enabled: false });
+    return handleListVigilSubjects(db, vigil.resolveGoalWording, vigil.cadence);
   }
 
   if (pathname === "/api/assignments") {

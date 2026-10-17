@@ -184,6 +184,7 @@ import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/r
 // MC-I1.S1 (ADR-0005) — in-process Mission Control embed (supersedes api.*).
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
 import { createVigilDeliveryPorts, startVigil, type VigilHandle } from "./vigil";
+import { idOnlyGoalWording } from "./vigil/goal-wording";
 import type { AgentPresenceView } from "./surface/mc/api/agents";
 import type { NetworksView } from "./surface/mc/api/networks";
 // FLG-1 (docs/plan-mc-future-state.md §4.D) — guided-join handoff banner: the MC
@@ -4899,6 +4900,11 @@ export async function startCortex(
       // independent of headless — a headless stack simply doesn't serve).
       const mcHeadless = !config.mc.server.enabled;
       mcHandle = await startMissionControl({
+        vigil: {
+          enabled: config.vigil.enabled && derivedStack.stack === "default",
+          resolveGoalWording: idOnlyGoalWording,
+          cadence: config.vigil.cadence,
+        },
         configPath: config.mc.configPath || undefined,
         dbPath,
         port: config.mc.port,
