@@ -48,7 +48,7 @@ describe("Vigil attention", () => {
     expect(ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "cancelled", ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000)).toEqual({ opened: [], resolved: [] });
     expect(db.query("SELECT rowid, created_at FROM attention_items WHERE id = ?").get(id)).toEqual(original);
     const better = ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:02:05Z" }), ENDED_AT + 120_000);
-    expect(better.resolved).toEqual([{ ...delta.opened[0]!, status: "resolved" }]);
+    expect(better.resolved).toEqual([{ ...delta.opened[0]!, status: "resolved", resolution: null }]);
     expect(getAttentionItem(db, id)?.status).toBe("resolved");
     expect(listVigilEvents(db, KEY)[2]).toMatchObject({ severity: null, attention_id: id });
     expect(ingestLedgerEnvelope(db, ledgerEnvelope({ ended_at: "2026-10-12T10:03:05Z" }), ENDED_AT + 180_000).opened).toHaveLength(1);

@@ -14,6 +14,7 @@ import {
   listOpenAttention,
   resolveAttentionItem,
   dismissAttentionItem,
+  setAttentionItemStatus,
 } from "../db/attention";
 import type { AttentionItem, Plan, PlanPhase, WorkItem } from "../types";
 
@@ -35,6 +36,7 @@ const att = (over: Partial<AttentionItem> = {}): AttentionItem => ({
   kind: "blocked",
   severity: "normal",
   status: "open",
+  resolution: null,
   ...over,
 });
 
@@ -83,6 +85,7 @@ describe("attention storage (E.1)", () => {
       kind: "review",
       severity: "high",
       status: "resolved",
+      resolution: "read",
     });
     upsertAttentionItem(db, changed);
     expect(getAttentionItem(db, "att-1")).toEqual(changed);
@@ -113,11 +116,27 @@ describe("attention storage (E.1)", () => {
     upsertAttentionItem(db, att({ id: "a-2" }));
     expect(resolveAttentionItem(db, "a-1")).toBe(true);
     expect(getAttentionItem(db, "a-1")?.status).toBe("resolved");
+    expect(getAttentionItem(db, "a-1")?.resolution).toBeNull();
     expect(dismissAttentionItem(db, "a-2")).toBe(true);
     expect(getAttentionItem(db, "a-2")?.status).toBe("dismissed");
+    expect(getAttentionItem(db, "a-2")?.resolution).toBeNull();
     expect(listOpenAttention(db)).toEqual([]);
     // transitioning an unknown id is a no-op (no row changed).
     expect(resolveAttentionItem(db, "ghost")).toBe(false);
+  });
+
+  it("sets status and resolution together and rejects invalid resolutions atomically", () => {
+    const db = freshDb();
+    upsertAttentionItem(db, att({ kind: "proposal", workItemId: null }));
+    expect(() => setAttentionItemStatus(db, "att-1", "resolved", "bogus" as never)).toThrow();
+    expect(getAttentionItem(db, "att-1")).toMatchObject({ status: "open", resolution: null });
+    expect(setAttentionItemStatus(db, "att-1", "resolved", "approved")).toBe(true);
+    expect(getAttentionItem(db, "att-1")).toMatchObject({ status: "resolved", resolution: "approved" });
+    expect(setAttentionItemStatus(db, "ghost", "resolved", "expired")).toBe(false);
+    expect(dismissAttentionItem(db, "att-1")).toBe(true);
+    expect(getAttentionItem(db, "att-1")).toMatchObject({ status: "dismissed", resolution: "approved" });
+    expect(setAttentionItemStatus(db, "att-1", "open", null)).toBe(true);
+    expect(listOpenAttention(db)[0]).toMatchObject({ status: "open", resolution: null });
   });
 
   it("FK SET NULL: deleting the linked work item clears the link, keeps the item", () => {

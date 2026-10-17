@@ -12,6 +12,7 @@ const KIND_LABEL: Record<AttentionKind, string> = {
   review: "review",
   failed_dispatch: "failed dispatch",
   state_change: "state change",
+  proposal: "proposal",
   stale: "stale",
   blocked: "blocked",
 };

@@ -5,11 +5,13 @@ function attentionItemsTableSql(tableName: string): string {
     work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
     session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
     kind TEXT NOT NULL
-      CHECK(kind IN ('input_needed','permission','review','failed_dispatch','stale','blocked','state_change')),
+      CHECK(kind IN ('input_needed','permission','review','failed_dispatch','stale','blocked','state_change','proposal')),
     severity TEXT NOT NULL DEFAULT 'normal'
       CHECK(severity IN ('low','normal','high','critical')),
     status TEXT NOT NULL DEFAULT 'open'
       CHECK(status IN ('open','resolved','dismissed')),
+    resolution TEXT
+      CHECK(resolution IN ('approved','dismissed','expired','superseded','read','archived')),
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`;
@@ -992,7 +994,7 @@ export interface RebuildMigration {
 export const REBUILD_MIGRATIONS: RebuildMigration[] = [
   {
     table: "attention_items",
-    detect: (sql) => /CHECK\s*\(\s*kind\s+IN\s*\(/i.test(sql) && !sql.includes("'state_change'"),
+    detect: (sql) => /CHECK\s*\(\s*kind\s+IN\s*\(/i.test(sql) && !sql.includes("'proposal'"),
     steps: [
       attentionItemsTableSql("attention_items_new"),
       `INSERT INTO attention_items_new
