@@ -10,7 +10,7 @@ import type { ProvisionJsm } from "../bus/jetstream/types";
 import { clearVigilReplay, markVigilReplayStarted, rebuildVigilBudget, stageVigilTextReceipt } from "./db";
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, ingestLedgerEnvelope, ledgerEnvelopeError } from "./ingest";
 import { textSentReceiptSchema, VIGIL_TEXT_SENT_TYPE } from "./delivery-receipt";
-import { replayResultRead } from "./result-read";
+import { replayVigilResolution } from "./resolution";
 
 /** Rebuilds Vigil state from one non-`execution.run.finished` ledger envelope. Writes no Vigil event. */
 export type LedgerReplayHandler = (db: Database, envelope: Envelope) => { kind: "skip"; reason: string } | undefined;
@@ -24,7 +24,7 @@ function replayTextSentReceipt(db: Database, envelope: Envelope): ReturnType<Led
 
 export const LEDGER_REPLAY_HANDLERS: ReadonlyMap<string, LedgerReplayHandler> = new Map([
   [VIGIL_TEXT_SENT_TYPE, replayTextSentReceipt],
-  [VIGIL_ATTENTION_RESOLVED_TYPE, replayResultRead],
+  [VIGIL_ATTENTION_RESOLVED_TYPE, replayVigilResolution],
 ]);
 
 export const REPLAY_POLL_MS = 100;

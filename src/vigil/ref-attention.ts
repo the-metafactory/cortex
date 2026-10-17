@@ -1,7 +1,8 @@
 import type { Database } from "bun:sqlite";
 import type { ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
-import { getAttentionItem, setAttentionItemStatus, upsertAttentionItem } from "../surface/mc/db/attention";
+import { getAttentionItem, upsertAttentionItem } from "../surface/mc/db/attention";
 import { isNewObservation } from "./db";
+import { resolveVigilAttention } from "./resolution";
 
 export const REF_ATTENTION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -58,13 +59,15 @@ export function ingestRefAttention(
     WHERE r.ran_ref = ? AND a.status = 'open'
     ORDER BY r.created_ended_at DESC, r.created_run_id DESC, r.${refColumn} DESC LIMIT -1 OFFSET ?`)
     .all(payload.ran.ref, limit);
-  for (const item of excess) setAttentionItemStatus(db, item.attention_id, "resolved", overflow);
+  for (const item of excess) resolveVigilAttention(db, item.attention_id, overflow, { now: endedAt, replay: opts.replay });
 }
 
 export function expireRefAttention(db: Database, now: number, kind?: RefKind): void {
-  for (const { table } of kind ? [REF_RULES[kind]] : Object.values(REF_RULES)) {
-    db.query(`UPDATE attention_items SET status = 'resolved', resolution = 'expired', updated_at = unixepoch()
-      WHERE status = 'open' AND id IN (SELECT attention_id FROM ${table} WHERE expires_at <= ?)`)
-      .run(now);
-  }
+  db.transaction(() => {
+    for (const { table } of kind ? [REF_RULES[kind]] : Object.values(REF_RULES)) {
+      const expired = db.query<{ attention_id: string }, [number]>(`SELECT r.attention_id FROM ${table} r
+        JOIN attention_items a ON a.id = r.attention_id WHERE a.status = 'open' AND r.expires_at <= ?`).all(now);
+      for (const item of expired) resolveVigilAttention(db, item.attention_id, "expired", { now });
+    }
+  })();
 }

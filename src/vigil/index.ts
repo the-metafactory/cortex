@@ -1,6 +1,6 @@
 // glossary-ignore: subscriber, run
 import type { Database } from "bun:sqlite";
-import { executionRunFinishedPattern, vigilAttentionResolvedPattern } from "@the-metafactory/myelin";
+import { executionRunFinishedPattern } from "@the-metafactory/myelin";
 import { DeliverPolicy } from "nats";
 import type { AgentConfig } from "../common/types/config";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
@@ -19,6 +19,7 @@ import { flushTexts, type FlushTextsOptions } from "./flush";
 import { idOnlyGoalWording } from "./goal-wording";
 import { expireRefAttention } from "./ref-attention";
 import { maybeSendDigest } from "./digest";
+import { flushVigilResolutions } from "./resolution";
 
 import { publishReconcileDelta } from "../surface/mc/attention-notify";
 
@@ -48,7 +49,7 @@ export function createVigilDeliveryPorts(opts: {
 export async function startVigil(opts: {
   config: Pick<AgentConfig, "vigil" | "mc">;
   db: Database | null;
-  runtime: Pick<MyelinRuntime, "jetstreamManager" | "subscribePull"> & Partial<Pick<MyelinRuntime, "publish">>;
+  runtime: Pick<MyelinRuntime, "jetstreamManager" | "subscribePull"> & Partial<Pick<MyelinRuntime, "publish" | "publishOnSubject">>;
   principal: string;
   stack: string;
   log?: ProvisionLog;
@@ -73,7 +74,7 @@ export async function startVigil(opts: {
   }
   await provisionLedgerStream({
     jsm, principal: opts.principal, log,
-    subjects: [vigilSystemPattern(opts.principal, opts.stack), vigilAttentionResolvedPattern(opts.principal)],
+    subjects: [vigilSystemPattern(opts.principal, opts.stack)],
   });
   const durable = `cortex-vigil-${opts.principal}`;
   const pattern = executionRunFinishedPattern(opts.principal);
@@ -93,6 +94,10 @@ export async function startVigil(opts: {
     await replayLedger({ jsm, runtime: opts.runtime, db, principal: opts.principal, log, now });
   }
   const publish = opts.runtime.publish?.bind(opts.runtime);
+  const publishResolution = opts.runtime.publishOnSubject?.bind(opts.runtime);
+  const flushResolutions = () => publishResolution
+    ? flushVigilResolutions(db, { principal: opts.principal, stack: opts.stack, publish: publishResolution })
+    : Promise.resolve();
   let notifications = Promise.resolve();
   const publishDelta = (delta: Parameters<typeof publishReconcileDelta>[0]) => {
     if (!publish || (delta.opened.length === 0 && delta.resolved.length === 0)) return notifications;
@@ -115,6 +120,7 @@ export async function startVigil(opts: {
     }
     // A throw here reaches onError, and the delivery is NAK'ed for redelivery.
     void publishDelta(ingestLedgerEnvelope(db, envelope, now(), { stackId: opts.stack }));
+    void flushResolutions();
     return { kind: "ack" };
   };
   const pull = opts.runtime.subscribePull({
@@ -136,6 +142,7 @@ export async function startVigil(opts: {
       const tickNow = now();
       expireRefAttention(db, tickNow);
       await publishDelta(sweepStale(db, tickNow, opts.config.vigil.cadence, opts.stack));
+      await flushResolutions();
       if (publish) await flushTexts({
         db, principal: opts.principal, now: tickNow, publish,
         send: opts.send ?? null, fallback: opts.fallback ?? null, resolveGoalWording: opts.resolveGoalWording,
@@ -155,6 +162,7 @@ export async function startVigil(opts: {
       await tick.stop();
       await pull.stop();
       await notifications;
+      await flushResolutions();
     })(),
   };
 }

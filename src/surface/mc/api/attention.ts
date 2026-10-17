@@ -13,12 +13,14 @@
  */
 import type { Database } from "bun:sqlite";
 import { resultPresentation, type ResultRenderOptions } from "../../../vigil/result-render";
+import { isVigilAttention, resolveVigilAttention } from "../../../vigil/resolution";
 import type { VigilResultRow } from "../../../vigil/results";
 import type { AttentionItem } from "../types";
 import {
   listOpenAttention,
   resolveAttentionItem,
   dismissAttentionItem,
+  getAttentionItem,
 } from "../db/attention";
 import { getWorkItem } from "../db/work-items";
 
@@ -87,8 +89,11 @@ export function handleAttentionLifecycle(
   id: string,
   action: "resolve" | "dismiss",
 ): Response {
+  const item = getAttentionItem(db, id);
   const changed =
-    action === "resolve"
+    isVigilAttention(item)
+      ? resolveVigilAttention(db, id, action === "dismiss" ? "dismissed" : item.kind === "result" ? "read" : "approved")
+      : action === "resolve"
       ? resolveAttentionItem(db, id)
       : dismissAttentionItem(db, id);
   if (!changed) {

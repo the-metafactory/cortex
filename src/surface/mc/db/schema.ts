@@ -78,6 +78,7 @@ export const TABLE_NAMES = [
   "vigil_proposals",
   "vigil_result_subjects",
   "vigil_result_reads",
+  "vigil_attention_resolutions",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -88,6 +89,23 @@ export const SCHEMA_SQL: string[] = [
     resolved_at TEXT NOT NULL,
     published INTEGER NOT NULL DEFAULT 0 CHECK(published IN (0,1))
   )`,
+  `CREATE TABLE IF NOT EXISTS vigil_attention_resolutions (
+    key TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    resolution TEXT NOT NULL CHECK(resolution IN ('approved','dismissed','expired','superseded','read','archived')),
+    attention_id TEXT NOT NULL,
+    stack_id TEXT NOT NULL,
+    id TEXT NOT NULL UNIQUE,
+    ran_ref TEXT NOT NULL,
+    resolved_at TEXT NOT NULL,
+    filed TEXT,
+    published INTEGER NOT NULL DEFAULT 0 CHECK(published IN (0,1)),
+    PRIMARY KEY (key, resolution)
+  )`,
+  `INSERT INTO vigil_attention_resolutions
+    (key, kind, resolution, attention_id, stack_id, id, ran_ref, resolved_at, published)
+    SELECT result_ref, 'result', 'read', 'att:vigil:result:' || result_ref, 'default', id, ran_ref, resolved_at, published
+    FROM vigil_result_reads WHERE true ON CONFLICT(key, resolution) DO NOTHING`,
   vigilRefTableSql("vigil_results", "result_ref"),
   vigilRefTableSql("vigil_proposals", "proposal_ref"),
   `CREATE TABLE IF NOT EXISTS vigil_result_subjects (

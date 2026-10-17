@@ -45,7 +45,7 @@
 // values keeps the wire-config strings centralised in nats.js rather
 // than duplicating literals here.
 import { AckPolicy, DeliverPolicy, RetentionPolicy, StorageType } from "nats";
-import { executionRunFinishedPattern } from "@the-metafactory/myelin";
+import { executionRunFinishedPattern, vigilAttentionResolvedPattern } from "@the-metafactory/myelin";
 import type { ConsumerConfig, ConsumerInfo, StreamInfo } from "nats";
 
 // Re-exported from the neutral types module so existing callers
@@ -207,7 +207,7 @@ export async function provisionLedgerStream(opts: {
   subjects?: readonly string[];
   log?: ProvisionLog;
 }): Promise<ProvisionStreamOutcome> {
-  const subjects = [executionRunFinishedPattern(opts.principal), ...opts.subjects ?? []];
+  const subjects = [executionRunFinishedPattern(opts.principal), vigilAttentionResolvedPattern(opts.principal), ...opts.subjects ?? []];
   const outcome = await provisionStream({
     jsm: opts.jsm,
     name: LEDGER_STREAM,

@@ -1,14 +1,16 @@
 import type { Database } from "bun:sqlite";
 import type { AttentionDelta } from "../surface/mc/attention-notify";
 import type { AttentionItem } from "../surface/mc/types";
-import { getAttentionItem, resolveAttentionItem, upsertAttentionItem } from "../surface/mc/db/attention";
+import { getAttentionItem, upsertAttentionItem } from "../surface/mc/db/attention";
 import { getVigilSubject, type VigilEventRow } from "./db";
 import { subjectClass, vigilSeverity } from "./policy";
+import { resolveVigilAttention } from "./resolution";
 
 export function applyVigilAttention(
   db: Database,
   event: Pick<VigilEventRow, "id" | "subject_key" | "to_value" | "direction">,
   stackId: string,
+  options: { replay?: boolean; now?: number } = {},
 ): AttentionDelta {
   return db.transaction(() => {
     const delta: AttentionDelta = { opened: [], resolved: [] };
@@ -26,8 +28,8 @@ export function applyVigilAttention(
       upsertAttentionItem(db, item);
       if (prior?.status !== "open") delta.opened.push(item);
     } else if (prior) {
-      resolveAttentionItem(db, id);
-      delta.resolved.push({ ...prior, status: "resolved" });
+      resolveVigilAttention(db, id, "archived", options);
+      delta.resolved.push({ ...prior, status: "resolved", resolution: "archived" });
     }
     db.query("UPDATE vigil_events SET severity = ?, attention_id = ? WHERE id = ?").run(severity, id, event.id);
     return delta;
