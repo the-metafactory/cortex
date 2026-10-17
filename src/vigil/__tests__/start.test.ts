@@ -11,6 +11,8 @@ import type { NatsLink } from "../../bus/nats/connection";
 import { createFakeJetStream } from "../../bus/jetstream/__tests__/fake-jetstream";
 import { LEDGER_STREAM } from "../../bus/jetstream/provision";
 import { initDatabase } from "../../surface/mc/db/init";
+import { getAttentionItem } from "../../surface/mc/db/attention";
+import { REF_ATTENTION_TTL_MS } from "../ref-attention";
 import { getVigilSubject, listVigilEvents } from "../db";
 import { ingestLedgerEnvelope } from "../ingest";
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, startVigil } from "../index";
@@ -55,6 +57,42 @@ describe("Vigil startup and delivery", () => {
   let db: Database;
   beforeEach(() => { db = initDatabase(":memory:"); });
   afterEach(() => db.close());
+
+  test("tick silently expires proposals seven days after their last update", async () => {
+    const ref = "soma:proposals/triage.md";
+    const id = `att:vigil:proposal:${ref}`;
+    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [ref] }), ENDED_AT);
+    const updateAt = ENDED_AT + 1000;
+    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [ref], ended_at: new Date(updateAt).toISOString() }), updateAt);
+    const h = pullRuntime(createFakeJetStream());
+    const scheduler = fakeTickScheduler();
+    const send = mock(async () => ({ delivered: true as const, messageId: "unused" }));
+    const publish = mock(async (_envelope: import("../../bus/myelin/envelope-validator").Envelope) => {});
+    const log = { info: mock((_msg: string) => {}), warn: mock((_msg: string) => {}) };
+    let now = ENDED_AT + REF_ATTENTION_TTL_MS;
+    const handle = await startVigil({
+      config: config(), db, runtime: { ...h.runtime, publish }, principal: "jc", stack: "default",
+      now: () => now, schedule: scheduler.schedule, send, log,
+    });
+    try {
+      await flushTick();
+      expect(getAttentionItem(db, id)?.status).toBe("open");
+      now = updateAt + REF_ATTENTION_TTL_MS - 1;
+      scheduler.tick(); await flushTick();
+      expect(getAttentionItem(db, id)?.status).toBe("open");
+      now += 1;
+      scheduler.tick(); await flushTick();
+      expect(getAttentionItem(db, id)).toMatchObject({ status: "resolved", resolution: "expired" });
+      const snapshot = db.query("SELECT * FROM attention_items WHERE id = ?").get(id);
+      now += 1000;
+      scheduler.tick(); await flushTick();
+      expect(db.query("SELECT * FROM attention_items WHERE id = ?").get(id)).toEqual(snapshot);
+      expect(send).not.toHaveBeenCalled();
+      expect(publish).not.toHaveBeenCalled();
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(db.query("SELECT SUM(texts_spent) AS spent FROM vigil_budget").get()).toEqual({ spent: 0 });
+    } finally { await handle!.stop(); }
+  });
 
   test("live and tick transitions publish MC deltas with the failed-dispatch notify source", async () => {
     const first = ledgerEnvelope();

@@ -17,7 +17,7 @@ import { notifyWithResult } from "../adapters/notify-result";
 import { createVigilEmailFallback } from "./fallback-email";
 import { flushTexts, type FlushTextsOptions } from "./flush";
 import { idOnlyGoalWording } from "./goal-wording";
-import { expireResults } from "./results";
+import { expireRefAttention } from "./ref-attention";
 import { maybeSendDigest } from "./digest";
 
 import { publishReconcileDelta } from "../surface/mc/attention-notify";
@@ -134,7 +134,7 @@ export async function startVigil(opts: {
   const tick = startVigilTick({
     run: async () => {
       const tickNow = now();
-      expireResults(db, tickNow);
+      expireRefAttention(db, tickNow);
       await publishDelta(sweepStale(db, tickNow, opts.config.vigil.cadence, opts.stack));
       if (publish) await flushTexts({
         db, principal: opts.principal, now: tickNow, publish,

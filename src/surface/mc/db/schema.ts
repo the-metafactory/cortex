@@ -1,3 +1,20 @@
+function vigilRefTableSql(table: string, refColumn: string): string {
+  return `CREATE TABLE IF NOT EXISTS ${table} (
+    ${refColumn} TEXT PRIMARY KEY,
+    attention_id TEXT NOT NULL UNIQUE,
+    ran_ref TEXT NOT NULL,
+    created_run_id TEXT NOT NULL,
+    created_ended_at INTEGER NOT NULL,
+    goal_id TEXT,
+    last_run_id TEXT NOT NULL,
+    last_ended_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    digested_version INTEGER NOT NULL DEFAULT 0
+  )`;
+}
+
 function attentionItemsTableSql(tableName: string): string {
   return `CREATE TABLE IF NOT EXISTS ${tableName} (
     id TEXT PRIMARY KEY,
@@ -58,6 +75,7 @@ export const TABLE_NAMES = [
   "vigil_budget",
   "vigil_text_receipts",
   "vigil_results",
+  "vigil_proposals",
   "vigil_result_subjects",
   "vigil_result_reads",
 ] as const;
@@ -70,20 +88,8 @@ export const SCHEMA_SQL: string[] = [
     resolved_at TEXT NOT NULL,
     published INTEGER NOT NULL DEFAULT 0 CHECK(published IN (0,1))
   )`,
-  `CREATE TABLE IF NOT EXISTS vigil_results (
-    result_ref TEXT PRIMARY KEY,
-    attention_id TEXT NOT NULL UNIQUE,
-    ran_ref TEXT NOT NULL,
-    created_run_id TEXT NOT NULL,
-    created_ended_at INTEGER NOT NULL,
-    goal_id TEXT,
-    last_run_id TEXT NOT NULL,
-    last_ended_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1,
-    digested_version INTEGER NOT NULL DEFAULT 0
-  )`,
+  vigilRefTableSql("vigil_results", "result_ref"),
+  vigilRefTableSql("vigil_proposals", "proposal_ref"),
   `CREATE TABLE IF NOT EXISTS vigil_result_subjects (
     subject_key TEXT PRIMARY KEY,
     result_ref TEXT NOT NULL,

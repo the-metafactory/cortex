@@ -9,11 +9,10 @@ import { getAttentionItem, listOpenAttention, setAttentionItemStatus } from "../
 import { handleAttentionLifecycle, handleListAttention } from "../../surface/mc/api/attention";
 import { handleListVigilSubjects } from "../../surface/mc/api/vigil";
 import { buildDigest, sendDigest } from "../digest";
-import { flushTexts } from "../flush";
 import { ingestLedgerEnvelope } from "../ingest";
 import { renderResult, somaGoalWording } from "../result-render";
 import { expireResults, pendingResults, RESULT_TTL_MS, type VigilResultRow } from "../results";
-import { ENDED_AT, ledgerEnvelope } from "./fixtures";
+import { ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope } from "./fixtures";
 
 const REF = "soma:outputs/weekly.md";
 const id = (ref = REF) => `att:vigil:result:${ref}`;
@@ -49,12 +48,7 @@ test("arrival without a goal opens one low result, records creator, dedupes and 
   ingestLedgerEnvelope(db, envelope, ENDED_AT + 1000);
   expect(listOpenAttention(db)).toHaveLength(1);
   expect(result().version).toBe(1);
-  const send = sender();
-  const publish = mock(async () => {});
-  await flushTexts({ db, now: ENDED_AT, principal: "example", send, publish });
-  expect(send).not.toHaveBeenCalled();
-  expect(publish).not.toHaveBeenCalled();
-  expect(db.query("SELECT * FROM vigil_budget").all()).toEqual([]);
+  await expectNoVigilTextDelivery(db);
 });
 
 test("failed or missing result references do not open waiting items", () => {

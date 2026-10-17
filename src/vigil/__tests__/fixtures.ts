@@ -1,10 +1,13 @@
 // glossary-ignore: run
 import { createEnvelope, createExecutionRunFinished, type ExecutionRunFinishedPayloadInput } from "@the-metafactory/myelin";
+import { expect, mock } from "bun:test";
+import type { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initDatabase } from "../../surface/mc/db/init";
 import { ingestLedgerEnvelope } from "../ingest";
+import { flushTexts } from "../flush";
 
 export const SUBJECT = "local.jc.default.execution.run.finished";
 export const KEY = "run:flow:daily-sweep";
@@ -12,6 +15,15 @@ export const ENDED_AT = Date.parse("2026-10-12T10:00:05.000Z");
 export const DELIVERY_DEFAULTS = {
   held_reason: null, sent_at: null, digested_at: null, via: null, attempts: 0, last_error: null, transient_failures: 0,
 } as const;
+
+export async function expectNoVigilTextDelivery(db: Database) {
+  const send = mock(async () => ({ delivered: true as const, messageId: "unused" }));
+  const publish = mock(async () => {});
+  await flushTexts({ db, now: ENDED_AT, principal: "example", send, publish });
+  expect(send).not.toHaveBeenCalled();
+  expect(publish).not.toHaveBeenCalled();
+  expect(db.query("SELECT * FROM vigil_budget").all()).toEqual([]);
+}
 
 export function initVigilGoalDatabase() {
   const db = initDatabase(":memory:");
