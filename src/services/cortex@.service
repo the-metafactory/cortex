@@ -4,6 +4,7 @@ After=network.target nats@%i.service
 Wants=nats@%i.service
 
 [Service]
+Environment=CORTEX_SURFACE_SECRETS=arc
 Environment=PATH=%h/.local/bin:%h/.bun/bin:/usr/local/bin:/usr/bin:/bin
 Type=simple
 # "-" prefix: a missing WorkingDirectory is not fatal (verified: without it,

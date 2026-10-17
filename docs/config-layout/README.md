@@ -112,6 +112,33 @@ The loader validates the block **loudly at load** (CFG.b.3,
 throws a clear error rather than parsing into a silent partial config that would
 double-publish.
 
+## Surface secrets across upgrades
+
+Keep surface credentials as placeholders such as `__SAMPLE_DISCORD_TOKEN__`
+in the stack config or agent fragment, and provision them under the installed
+Cortex package:
+
+```bash
+arc secrets set cortex SAMPLE_DISCORD_TOKEN
+```
+
+Arc-managed launchd and systemd services set `CORTEX_SURFACE_SECRETS=arc`.
+At config load, a nonempty inherited environment variable takes precedence;
+otherwise Cortex reads the named secret from Arc's `secrets/cortex/` directory
+(respecting `ARC_CONFIG_ROOT` and `XDG_CONFIG_HOME`), then the macOS Keychain
+service `ai.meta-factory.cortex.cortex.SAMPLE_DISCORD_TOKEN` if no file exists.
+The file must be mode 0600. The value enters the daemon environment and config
+in memory; rendering never copies it into a plist or unit. Restart the stack
+after provisioning. A manual launch can opt in with
+`CORTEX_SURFACE_SECRETS=arc cortex start --config <path>`.
+
+Rendering requires Python 3 to check existing service environments. An upgrade
+that would discard extra environment keys stops before replacing that service
+and prints the key names only. Migrate surface credentials with the command
+above before removing their hand-added service entries. Keep other custom
+environment settings in the service until their replacement is configured;
+systemd instance drop-ins are left intact by the renderer.
+
 ## Model providers — the `inference` block and the `api-agent` substrate
 
 `system/system.yaml` carries an **`inference`** block: the model providers and

@@ -137,6 +137,7 @@ render_systemd_unit() {
   # to systemd if the render is interrupted mid-write.
   local tmp="${dst}.tmp"
   { printf '%s\n' "${SYSTEMD_UNIT_MARKER}"; cat "${src}"; } > "${tmp}"
+  guard_daemon_environment systemd "${dst}" "${tmp}" || return 1
   if [ -f "${dst}" ] && cmp -s "${tmp}" "${dst}"; then
     rm -f "${tmp}"
     echo "  ⊘ ${name} unchanged"
@@ -286,7 +287,7 @@ render_cortex_systemd_units() {
   SYSTEMD_RENDER_CHANGE_COUNT=0
   local unit
   for unit in nats@.service cortex@.service; do
-    render_systemd_unit "${cortex_dir}/src/services/${unit}" "${unit_dir}/${unit}" || true
+    render_systemd_unit "${cortex_dir}/src/services/${unit}" "${unit_dir}/${unit}" || return 1
   done
 
   if [ "${SYSTEMD_RENDER_CHANGE_COUNT}" -gt 0 ]; then

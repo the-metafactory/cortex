@@ -28,6 +28,8 @@
     <string>__HOME__/.local/state/metafactory/cortex/logs/cortex-__STACK_SLUG__.error.log</string>
     <key>EnvironmentVariables</key>
     <dict>
+        <key>CORTEX_SURFACE_SECRETS</key>
+        <string>arc</string>
         <key>HOME</key>
         <string>__HOME__</string>
         <key>PATH</key>
