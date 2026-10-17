@@ -6,7 +6,7 @@ import type { NotifyResult } from "../../adapters/types";
 import { initDatabase } from "../../surface/mc/db/init";
 import { budgetDay } from "../budget";
 import { channelKey, channelValue, recordChannel } from "../channels";
-import { getVigilTextsSpent, listVigilEvents, recordVigilTextDelivered, writeVigilTransition } from "../db";
+import { getVigilSubject, getVigilTextsSpent, listVigilEvents, recordVigilTextDelivered, writeVigilTransition } from "../db";
 import { flushTexts, TRANSIENT_FALLBACK_THRESHOLD, type FlushTextsOptions } from "../flush";
 import { ingestLedgerEnvelope } from "../ingest";
 import { ENDED_AT, ledgerEnvelope } from "./fixtures";
@@ -206,6 +206,23 @@ test("failed fallback leaves errors and attempts durable and can be retried", as
   expect(spent()).toBe(0);
   await flush();
   expect(rows()[0]).toMatchObject({ delivery: "sent", attempts: 2 });
+});
+
+test.each([null, "ok", "regressed"] as const)("absent fallback preserves email health initially %s across repeated flushes", async (initial) => {
+  if (initial !== null) recordChannel(db, "email-channel", initial, NOW - 1);
+  const key = channelKey("email-channel");
+  const subject = getVigilSubject(db, key);
+  const events = listVigilEvents(db, key);
+  queue();
+  for (const fallback of [undefined, null]) {
+    for (let i = 0; i < 3; i++) {
+      await flush({ send: sender(permanent), fallback, now: NOW + i * 300000 });
+      expect(getVigilSubject(db, key)).toEqual(subject);
+      expect(listVigilEvents(db, key)).toEqual(events);
+    }
+  }
+  expect(rows()[0]).toMatchObject({ delivery: "pending", attempts: 6, last_error: "no-fallback" });
+  expect(spent()).toBe(0);
 });
 
 test("sent state and budget commit atomically", async () => {

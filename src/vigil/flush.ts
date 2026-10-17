@@ -99,7 +99,7 @@ async function flushFallbackBatch(options: FlushTextsOptions, batch: readonly Vi
   } catch {
     result = { ok: false, error: "exception" };
   }
-  recordChannel(db, "email-channel", result.ok ? "ok" : "regressed", now);
+  if (options.fallback) recordChannel(db, "email-channel", result.ok ? "ok" : "regressed", now);
   if (!result.ok) {
     for (const { eventId } of eligible) {
       db.query("UPDATE vigil_events SET last_error = ? WHERE id = ? AND delivery = 'pending'")
