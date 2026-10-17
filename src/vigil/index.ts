@@ -17,6 +17,7 @@ import { notifyWithResult } from "../adapters/notify-result";
 import { createVigilEmailFallback } from "./fallback-email";
 import { flushTexts, type FlushTextsOptions } from "./flush";
 import { idOnlyGoalWording } from "./goal-wording";
+import { maybeSendDigest } from "./digest";
 
 import { publishReconcileDelta } from "../surface/mc/attention-notify";
 
@@ -136,6 +137,10 @@ export async function startVigil(opts: {
       if (publish) await flushTexts({
         db, principal: opts.principal, now: tickNow, publish,
         send: opts.send ?? null, fallback: opts.fallback ?? null, resolveGoalWording: opts.resolveGoalWording,
+      });
+      await maybeSendDigest({
+        db, now: tickNow, send: opts.send ?? null, fallback: opts.fallback ?? null,
+        resolveGoalWording: opts.resolveGoalWording,
       });
     },
     schedule: opts.schedule,

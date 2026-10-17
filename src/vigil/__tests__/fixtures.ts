@@ -3,13 +3,21 @@ import { createEnvelope, createExecutionRunFinished, type ExecutionRunFinishedPa
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { initDatabase } from "../../surface/mc/db/init";
+import { ingestLedgerEnvelope } from "../ingest";
 
 export const SUBJECT = "local.jc.default.execution.run.finished";
 export const KEY = "run:flow:daily-sweep";
 export const ENDED_AT = Date.parse("2026-10-12T10:00:05.000Z");
 export const DELIVERY_DEFAULTS = {
-  held_reason: null, sent_at: null, via: null, attempts: 0, last_error: null, transient_failures: 0,
+  held_reason: null, sent_at: null, digested_at: null, via: null, attempts: 0, last_error: null, transient_failures: 0,
 } as const;
+
+export function initVigilGoalDatabase() {
+  const db = initDatabase(":memory:");
+  ingestLedgerEnvelope(db, ledgerEnvelope({ state: { subject: "G1", value: "on-track" } }), ENDED_AT, { replay: true });
+  return db;
+}
 
 export function temporaryVigilDatabaseFile(prefix: string) {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -37,7 +45,7 @@ export function fakeTickScheduler() {
 }
 
 export const flushTick = async () => {
-  for (let i = 0; i < 8; i += 1) await Promise.resolve();
+  await Bun.sleep(0);
 };
 
 const SOVEREIGNTY = { classification: "local", data_residency: "CH", max_hop: 0, frontier_ok: false, model_class: "any" } as const;

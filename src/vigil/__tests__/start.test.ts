@@ -65,6 +65,7 @@ describe("Vigil startup and delivery", () => {
     const handle = await startVigil({ config: config(), db, runtime: { ...h.runtime, publish }, principal: "jc", stack: "default", now: () => ENDED_AT, schedule: scheduler.schedule });
     try {
       await h.delivered;
+      await flushTick();
       expect(publish.mock.calls.map(([envelope]) => envelope.type)).toEqual(["system.attention.opened", "system.attention.resolved"]);
       expect(publish.mock.calls[0]?.[0]).toMatchObject({ source: "jc.cortex.local", payload: { attention: { id: `att:vigil:${KEY}`, kind: "state_change", severity: "normal", stack_id: "default", session_id: null, work_item_id: null }, deep_link_url: null } });
       ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "old-job" }, outcome: "succeeded", started_at: "2026-10-09T10:00:00Z", ended_at: "2026-10-09T10:00:05Z" }), ENDED_AT);

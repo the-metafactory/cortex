@@ -4,13 +4,11 @@ import { MockAdapter } from "../../adapters/mock";
 import { notifyWithResult } from "../../adapters/notify-result";
 import type { NotifyResult } from "../../adapters/types";
 import { deriveNatsSubject, type Envelope } from "../../bus/myelin/envelope-validator";
-import { initDatabase } from "../../surface/mc/db/init";
 import { budgetDay } from "../budget";
 import { channelKey, channelValue, recordChannel } from "../channels";
 import { getVigilSubject, getVigilTextsSpent, listVigilEvents, recordVigilTextDelivered, writeVigilTransition } from "../db";
 import { flushTexts, TRANSIENT_FALLBACK_THRESHOLD, type FlushTextsOptions } from "../flush";
-import { ingestLedgerEnvelope } from "../ingest";
-import { ENDED_AT, ledgerEnvelope } from "./fixtures";
+import { initVigilGoalDatabase } from "./fixtures";
 
 const NOW = Date.parse("2026-10-16T10:00:00Z");
 const KEY = "state:goal:G1";
@@ -21,8 +19,7 @@ const NOTICE = "Vigil: check vigil:dm-channel — ok → regressed";
 let db: Database;
 
 beforeEach(() => {
-  db = initDatabase(":memory:");
-  ingestLedgerEnvelope(db, ledgerEnvelope({ state: { subject: "G1", value: "on-track" } }), ENDED_AT, { replay: true });
+  db = initVigilGoalDatabase();
 });
 afterEach(() => db.close());
 

@@ -134,6 +134,29 @@ describe("running Vigil notification delivery", () => {
     expect(JSON.stringify(ledger.published)).not.toContain(PRIVATE_WORDING);
   }
 
+  test("07:00 tick digests overnight held texts after flushing with the same ports and no extra budget", async () => {
+    now = Date.parse("2026-10-17T06:50:00+02:00");
+    await boot();
+    observe("G1");
+    await tick();
+    expect(texts()[0]).toMatchObject({ delivery: "held", held_reason: "quiet" });
+    expect(discord.principalNotifications).toEqual([]);
+    now = Date.parse("2026-10-17T07:00:00+02:00");
+    observe("G2");
+    await tick();
+    expect(discord.principalNotifications).toEqual([
+      `Vigil: goal ${PRIVATE_WORDING} G2 — at-risk`,
+      `Held back\nVigil: goal ${PRIVATE_WORDING} G1 — at-risk\nBudget: 0 of 3 texts yesterday · DM ok · email ok`,
+    ]);
+    expect(texts()[0]).toMatchObject({ delivery: "digested", via: "dm", digested_at: now });
+    expect(texts()[1]).toMatchObject({ delivery: "sent", via: "dm" });
+    expect(getVigilTextsSpent(db, budgetDay(now))).toBe(1);
+    await tick();
+    expect(discord.principalNotifications).toHaveLength(2);
+    expect(emailRun).not.toHaveBeenCalled();
+    assertPrivateWordingIsEphemeral();
+  });
+
   test("five-minute ticks deliver the three oldest texts, hold the fourth, and leave digest events untouched", async () => {
     const other = new MockAdapter();
     const secondDiscord = discordAdapter();

@@ -753,6 +753,16 @@ export interface ColumnAddMigration {
 export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
   {
     table: "vigil_events",
+    column: "digested_at",
+    ddl: `ALTER TABLE vigil_events ADD COLUMN digested_at INTEGER`,
+  },
+  {
+    table: "vigil_budget",
+    column: "digest_at",
+    ddl: `ALTER TABLE vigil_budget ADD COLUMN digest_at INTEGER`,
+  },
+  {
+    table: "vigil_events",
     column: "held_reason",
     ddl: `ALTER TABLE vigil_events ADD COLUMN held_reason TEXT CHECK(held_reason IN ('quiet','budget'))`,
   },
