@@ -18,6 +18,16 @@
 #
 # Functions never write outside `${LAUNCH_DIR}`.
 
+guard_daemon_environment() {
+  local kind="$1" dst="$2" tmp="$3"
+  local guard_dir
+  guard_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if ! python3 "${guard_dir}/guard-daemon-environment.py" "${kind}" "${dst}" "${tmp}"; then
+    rm -f "${tmp}"
+    return 1
+  fi
+}
+
 # Resolve bun once with a clear error when missing. Holly cortex#52 round 1
 # nit-2: unguarded `$(which bun)` would silently emit an empty <string></string>
 # into the relay plist's ProgramArguments and crash-loop launchd with no
@@ -389,6 +399,7 @@ render_stack_plist() {
       -e "s|__CONFIG_PATH__|${config_yaml}|g" \
       -e "s|__WORKSPACE_DIR__|${workspace_dir}|g" \
       "${src}" > "${dst}.tmp"
+  guard_daemon_environment plist "${dst}" "${dst}.tmp" || return 1
   mv -f "${dst}.tmp" "${dst}"
   echo "  ✓ ${slug} plist rendered → ${dst} (config=${config_yaml}, workspace=${workspace_dir})"
 }
@@ -428,6 +439,7 @@ render_cortex_plists() {
         -e "s|__BUN_PATH__|${bun_path}|g" \
         -e "s|__HOME__|${HOME}|g" \
         "${relay_src}" > "${relay_dst}.tmp"
+    guard_daemon_environment plist "${relay_dst}" "${relay_dst}.tmp" || return 1
     mv -f "${relay_dst}.tmp" "${relay_dst}"
     echo "  ✓ Relay plist rendered → ${relay_dst}"
   fi
@@ -436,7 +448,7 @@ render_cortex_plists() {
   # Per-stack dirs (<slug>/system/system.yaml) win over root monoliths.
   local rendered_count=0
   while IFS= read -r slug; do
-    render_stack_plist "${cortex_dir}" "${launch_dir}" "${config_dir}" "${slug}" "${bun_path}" || true
+    render_stack_plist "${cortex_dir}" "${launch_dir}" "${config_dir}" "${slug}" "${bun_path}" || return 1
     rendered_count=$((rendered_count + 1))
   done < <(discover_stack_slugs "${config_dir}")
 
