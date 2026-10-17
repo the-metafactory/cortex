@@ -40,6 +40,7 @@ async function flushPendingTexts(options: FlushTextsOptions): Promise<void> {
   const { db, now, send } = options;
   const render = options.render ?? createVigilRenderer({ resolveGoalWording: options.resolveGoalWording });
   const batch: VigilFallbackText[] = [];
+  const settled: VigilEventRow[] = [];
   const events = db.query<VigilEventRow, [string]>(`SELECT * FROM vigil_events
     WHERE route = 'text' AND delivery = 'pending' AND subject_key != ? ORDER BY occurred_at, rowid`)
     .all(channelKey("dm-channel"));
@@ -60,7 +61,7 @@ async function flushPendingTexts(options: FlushTextsOptions): Promise<void> {
       if (result.delivered) {
         recordChannel(db, "dm-channel", "ok", now);
         if (markVigilTextSent(db, event.id, "dm", now, budgetDay(now))) {
-          await publishReceipts(options, [event]);
+          settled.push(event);
         }
         continue;
       }
@@ -73,11 +74,15 @@ async function flushPendingTexts(options: FlushTextsOptions): Promise<void> {
       }
     }
   } finally {
-    await flushFallbackBatch(options, batch);
+    try {
+      await flushFallbackBatch(options, batch, settled);
+    } finally {
+      await publishReceipts(options, settled);
+    }
   }
 }
 
-async function flushFallbackBatch(options: FlushTextsOptions, batch: readonly VigilFallbackText[]): Promise<void> {
+async function flushFallbackBatch(options: FlushTextsOptions, batch: readonly VigilFallbackText[], settled: VigilEventRow[]): Promise<void> {
   if (batch.length === 0) return;
   const { db, now } = options;
   const day = budgetDay(now);
@@ -119,7 +124,7 @@ async function flushFallbackBatch(options: FlushTextsOptions, batch: readonly Vi
     }
     return settled.map(({ event }) => event);
   })();
-  await publishReceipts(options, sent);
+  settled.push(...sent);
 }
 
 async function publishReceipts(options: FlushTextsOptions, events: readonly VigilEventRow[]): Promise<void> {

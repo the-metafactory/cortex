@@ -63,7 +63,7 @@ test("successful DMs publish one ID-only receipt per text on the local stack sub
   expect(spent()).toBe(3);
 });
 
-test("successful email publishes one receipt per eligible text and none for the free channel notice", async () => {
+test("successful email publishes one receipt per eligible text and none for the free dm-channel notice", async () => {
   const events = Array.from({ length: 4 }, (_, i) => queue(String(i), NOW + i));
   const publish = mock(async (_envelope: Envelope) => {});
   const fallback = emailSender();
@@ -91,18 +91,49 @@ test("quiet, failed and unconfirmed deliveries emit no spending receipts", async
 
 test.each(["dm", "email"] as const)("%s publication failure leaves confirmed texts settled without resending", async (via) => {
   queue("first");
-  if (via === "email") queue("second");
+  queue("second");
   const send = sender(via === "dm" ? success : permanent);
   const fallback = emailSender();
   const publish = mock(async (_envelope: Envelope) => { throw new Error("bus unavailable"); });
   await expect(flush({ send, fallback, publish })).rejects.toThrow("Vigil text-sent publication failed after delivery settlement");
-  const count = via === "dm" ? 1 : 2;
+  const count = 2;
   expect(publish).toHaveBeenCalledTimes(count);
   expect(rows().every((row) => row.delivery === "sent" && row.via === via)).toBe(true);
   expect(spent()).toBe(count);
   await flush({ send, fallback, publish });
   expect(publish).toHaveBeenCalledTimes(count);
   expect(send).toHaveBeenCalledTimes(count);
+});
+
+test("publication failure waits for all DMs and the fallback batch to settle", async () => {
+  const events = Array.from({ length: 3 }, (_, i) => queue(String(i), NOW + i));
+  const send = mock(async () => send.mock.calls.length === 1 ? permanent : success);
+  const fallback = emailSender();
+  const publish = mock(async (_envelope: Envelope) => { throw new Error("bus unavailable"); });
+  await expect(flush({ send, fallback, publish })).rejects.toThrow("Vigil text-sent publication failed after delivery settlement");
+  expect(send).toHaveBeenCalledTimes(3);
+  expect(fallback).toHaveBeenCalledTimes(1);
+  expect(rows().map((row) => [row.delivery, row.via])).toEqual([["sent", "email"], ["sent", "dm"], ["sent", "dm"]]);
+  expect(publish.mock.calls.map(([envelope]) => (envelope.payload as { event_id: string }).event_id).sort()).toEqual(events.map((event) => event.id).sort());
+  expect(spent()).toBe(3);
+});
+
+test("confirmed DMs still publish receipts when a later text fails to render", async () => {
+  const first = queue("first");
+  const second = queue("second");
+  const publish = mock(async (_envelope: Envelope) => {});
+  await expect(flush({
+    publish,
+    render: (event) => {
+      if (event.id === second.id) throw new Error("render unavailable");
+      return "text";
+    },
+  })).rejects.toThrow("render unavailable");
+  expect(publish.mock.calls.map(([envelope]) => envelope.payload)).toEqual([
+    { event_id: first.id, subject_key: KEY, budget_day: budgetDay(NOW) },
+  ]);
+  expect(rows().map((row) => row.delivery)).toEqual(["sent", "pending"]);
+  expect(spent()).toBe(1);
 });
 
 test("sends the three oldest texts, holds the fourth and leaves terminal and digest rows alone", async () => {

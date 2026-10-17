@@ -7,12 +7,19 @@ import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { EnvelopeHandler, MyelinSubscriber } from "../bus/myelin/subscriber";
 import { LEDGER_STREAM, isNotFoundError, provisionPullConsumer, type ProvisionLog } from "../bus/jetstream/provision";
 import type { ProvisionJsm } from "../bus/jetstream/types";
-import { clearVigilReplay, markVigilReplayStarted, rebuildVigilBudget } from "./db";
+import { clearVigilReplay, markVigilReplayStarted, rebuildVigilBudget, stageVigilTextReceipt } from "./db";
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, ingestLedgerEnvelope, ledgerEnvelopeError } from "./ingest";
-import { replayTextSentReceipt, textSentReceiptSchema, VIGIL_TEXT_SENT_TYPE } from "./delivery-receipt";
+import { textSentReceiptSchema, VIGIL_TEXT_SENT_TYPE } from "./delivery-receipt";
 
 /** Rebuilds Vigil state from one non-`execution.run.finished` ledger envelope. Writes no Vigil event. */
-export type LedgerReplayHandler = (db: Database, envelope: Envelope) => void;
+export type LedgerReplayHandler = (db: Database, envelope: Envelope) => { kind: "skip"; reason: string } | undefined;
+
+function replayTextSentReceipt(db: Database, envelope: Envelope): ReturnType<LedgerReplayHandler> {
+  const receipt = textSentReceiptSchema.safeParse(envelope.payload);
+  if (!receipt.success) return { kind: "skip", reason: "text-sent payload" };
+  stageVigilTextReceipt(db, receipt.data);
+  return undefined;
+}
 
 export const LEDGER_REPLAY_HANDLERS: ReadonlyMap<string, LedgerReplayHandler> = new Map([
   [VIGIL_TEXT_SENT_TYPE, replayTextSentReceipt],
@@ -55,14 +62,14 @@ export async function replayLedger(opts: {
   let applied = 0;
   const onEnvelope: EnvelopeHandler = (envelope) => {
     if (envelope.type !== EXECUTION_RUN_FINISHED_TYPE) {
-      if (envelope.type === VIGIL_TEXT_SENT_TYPE && !textSentReceiptSchema.safeParse(envelope.payload).success) {
-        log.warn(`vigil: replay skipped envelope ${envelope.id} invalid: text-sent payload`);
-        return { kind: "ack" };
-      }
       const handler = handlers.get(envelope.type);
       if (handler) {
-        handler(db, envelope);
-        applied += 1;
+        const result = handler(db, envelope);
+        if (result?.kind === "skip") {
+          log.warn(`vigil: replay skipped envelope ${envelope.id} invalid: ${result.reason}`);
+        } else {
+          applied += 1;
+        }
       }
       return { kind: "ack" };
     }

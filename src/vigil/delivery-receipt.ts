@@ -1,12 +1,13 @@
-import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { buildBaseEnvelope } from "../bus/envelope-builder";
-import type { Envelope } from "../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import { buildSource, defaultSystemSovereignty } from "../bus/system-events";
-import { stageVigilTextReceipt } from "./db";
 
 export const VIGIL_TEXT_SENT_TYPE = "system.vigil.text-sent";
+
+export function vigilSystemPattern(principal: string, stack: string): string {
+  return `local.${principal}.${stack}.system.vigil.>`;
+}
 
 export const textSentReceiptSchema = z.strictObject({
   event_id: z.string().min(1),
@@ -28,8 +29,4 @@ export async function publishTextSentReceipt(
     sovereignty: defaultSystemSovereignty(source),
     payload: textSentReceiptSchema.parse(receipt),
   }));
-}
-
-export function replayTextSentReceipt(db: Database, envelope: Envelope): void {
-  stageVigilTextReceipt(db, textSentReceiptSchema.parse(envelope.payload));
 }

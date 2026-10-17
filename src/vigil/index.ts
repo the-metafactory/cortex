@@ -9,6 +9,7 @@ import { LEDGER_STREAM, provisionLedgerStream, provisionPullConsumer, type Provi
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, ingestLedgerEnvelope, ledgerEnvelopeError } from "./ingest";
 import { hasVigilSubjects, isVigilReplayPending } from "./db";
 import { replayLedger } from "./replay";
+import { vigilSystemPattern } from "./delivery-receipt";
 import { sweepStale } from "./staleness";
 import { startVigilTick, type VigilTickOptions } from "./tick";
 
@@ -49,7 +50,7 @@ export async function startVigil(opts: {
   }
   await provisionLedgerStream({
     jsm, principal: opts.principal, log,
-    subjects: [`local.${opts.principal}.${opts.stack}.system.vigil.>`],
+    subjects: [vigilSystemPattern(opts.principal, opts.stack)],
   });
   const durable = `cortex-vigil-${opts.principal}`;
   const pattern = executionRunFinishedPattern(opts.principal);

@@ -39,9 +39,9 @@ function insertTextReceipt(db: Database, table: "vigil_text_receipts" | "vigil_r
 
 export function rebuildVigilBudget(db: Database): void {
   db.transaction(() => {
-    db.run("DELETE FROM vigil_text_receipts");
     db.run(`INSERT INTO vigil_text_receipts (event_id, subject_key, budget_day)
-      SELECT event_id, subject_key, budget_day FROM vigil_replay_receipts`);
+      SELECT event_id, subject_key, budget_day FROM vigil_replay_receipts WHERE true
+      ON CONFLICT(event_id) DO NOTHING`);
     db.run("DELETE FROM vigil_budget");
     db.run(`INSERT INTO vigil_budget (budget_day, texts_spent)
       SELECT budget_day, COUNT(*) FROM vigil_text_receipts GROUP BY budget_day`);
