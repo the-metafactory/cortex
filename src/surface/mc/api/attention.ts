@@ -12,6 +12,7 @@
  * is why the label / assignmentId fallbacks below are defensively unreachable.
  */
 import type { Database } from "bun:sqlite";
+import { proposalPresentation, type VigilProposalRow } from "../../../vigil/proposals";
 import { resultPresentation, type ResultRenderOptions } from "../../../vigil/result-render";
 import { isVigilAttention, resolveVigilAttention } from "../../../vigil/resolution";
 import type { VigilResultRow } from "../../../vigil/results";
@@ -27,7 +28,7 @@ import { getWorkItem } from "../db/work-items";
 export type AttentionLink =
   | { kind: "work-item"; workItemId: string; label: string }
   | { kind: "session"; sessionId: string; assignmentId: string | null }
-  | { kind: "result"; label: string; url: string }
+  | { kind: "result" | "proposal"; label: string; url: string }
   | { kind: "none" };
 
 export interface AttentionEntry {
@@ -58,6 +59,10 @@ export function getAttentionQueue(db: Database): AttentionEntry[] {
 /** GET /api/attention — open attention items with resolved deep-links. */
 export async function handleListAttention(db: Database, options: ResultRenderOptions = {}): Promise<Response> {
   const attention = await Promise.all(getAttentionQueue(db).map(async (entry): Promise<AttentionEntry> => {
+    if (entry.item.kind === "proposal") {
+      const proposal = db.query<VigilProposalRow, [string]>("SELECT * FROM vigil_proposals WHERE attention_id = ?").get(entry.item.id);
+      return proposal ? { ...entry, link: { kind: "proposal", ...await proposalPresentation(proposal, options) } } : entry;
+    }
     if (entry.item.kind !== "result") return entry;
     const result = db.query<VigilResultRow, [string]>("SELECT * FROM vigil_results WHERE attention_id = ?").get(entry.item.id);
     return result ? { ...entry, link: { kind: "result", ...await resultPresentation(result, options) } } : entry;

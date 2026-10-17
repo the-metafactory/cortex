@@ -25,20 +25,6 @@ export interface AttentionViewProps {
   onOpenWorkItem?: (workItemId: string) => void;
   /** Open the drill-down for an assignment (E.3 deep-link for session items). */
   onOpenAssignment?: (assignmentId: string) => void;
-  /**
-   * CK-6b — the attention lifecycle affordance. When wired (the cockpit's
-   * own-local ATTENTION lane), each open item renders **Resolve** / **Dismiss**
-   * buttons that drive the CK-6a `POST /api/attention/:id/{resolve,dismiss}`
-   * route through the host (App owns the call + FND-6 identity context, exactly
-   * like the DISPATCH verb). Omitted ⇒ read-only queue (the legacy tab, a
-   * federated-peer scope) — no mutation affordance renders.
-   *
-   * TRUTH-NOT-THEATER: this is the FULL set of lifecycle affordances for the
-   * slice. **Approve/Deny is deliberately absent** — it is SPX-7/SPX-8 (the
-   * runner arbitration channel + escalation envelope don't exist yet), so an
-   * Approve/Deny button here would be theater. Do not add one until that channel
-   * lands. See plan §4.A note under the Track A table.
-   */
   onLifecycle?: (attentionId: string, action: "resolve" | "dismiss") => void;
 }
 
@@ -65,7 +51,7 @@ export function AttentionView({ entries, loaded, onOpenWorkItem, onOpenAssignmen
               <li key={item.id} className={`attention-item sev-${item.severity}`}>
                 <span className={`badge kind-${item.kind}`}>{KIND_LABEL[item.kind]}</span>
                 <span className={`badge sev-${item.severity}`}>{item.severity}</span>
-                {link.kind === "result" ? (
+                {link.kind === "result" || link.kind === "proposal" ? (
                   <a className="attention-link" href={link.url}>{link.label}</a>
                 ) : deepLink ? (
                   <button type="button" className="attention-link" onClick={deepLink.onClick}>
@@ -74,11 +60,6 @@ export function AttentionView({ entries, loaded, onOpenWorkItem, onOpenAssignmen
                 ) : (
                   <span className="dim faint">{link.kind === "work-item" ? link.label : "—"}</span>
                 )}
-                {/*
-                  CK-6b — Resolve / Dismiss ONLY. No Approve/Deny here (theater
-                  until the SPX-7/SPX-8 arbitration channel exists). Optimistic
-                  removal + server reconcile is the host's job (App owns the call).
-                */}
                 {onLifecycle ? (
                   <span className="attention-actions">
                     <button
@@ -86,7 +67,7 @@ export function AttentionView({ entries, loaded, onOpenWorkItem, onOpenAssignmen
                       className="attention-action attention-resolve"
                       onClick={() => onLifecycle(item.id, "resolve")}
                     >
-                      Resolve
+                      {item.kind === "proposal" ? "Approve" : "Resolve"}
                     </button>
                     <button
                       type="button"

@@ -207,12 +207,14 @@ export function startServer(
     async fetch(req, server) {
       const url = new URL(req.url);
 
-      if (url.pathname.startsWith("/results/")) {
+      if (url.pathname.startsWith("/results/") || url.pathname.startsWith("/proposals/")) {
         if (!isLoopback) return new Response("Not Found", { status: 404 });
         if (req.method !== "GET") return methodNotAllowed(["GET"]);
         const denial = checkRebindGuard(req, { ...guardBase, listenPort: server.port ?? config.port });
         if (denial) return denial;
-        return handleResult(db, url.pathname.slice("/results/".length), options.results);
+        const directory = url.pathname.startsWith("/proposals/") ? "proposals" : "outputs";
+        const prefix = directory === "proposals" ? "/proposals/" : "/results/";
+        return handleResult(db, url.pathname.slice(prefix.length), options.results, directory);
       }
 
       if (req.method === "GET" && url.pathname === "/ws") {
