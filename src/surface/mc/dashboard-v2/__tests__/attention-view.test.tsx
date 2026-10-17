@@ -65,6 +65,13 @@ function buttonsByClass(el: ReactElement, cls: string): ReactElement<{ className
 }
 
 describe("AttentionView — CK-6b lifecycle buttons", () => {
+  it("renders the proposal kind label", () => {
+    const html = renderToStaticMarkup(createElement(AttentionView, {
+      entries: [attn("proposal-1", { kind: "proposal" })], loaded: true,
+    }));
+    expect(html).toContain('class="badge kind-proposal">proposal</span>');
+  });
+
   it("renders Resolve + Dismiss for each open item when onLifecycle is wired", () => {
     const html = renderToStaticMarkup(
       createElement(AttentionView, {

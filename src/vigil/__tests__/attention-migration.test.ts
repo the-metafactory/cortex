@@ -6,11 +6,15 @@ import { ingestLedgerEnvelope } from "../ingest";
 import { listVigilEvents, type VigilEventRow } from "../db";
 import { DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
-test("old attention CHECK widens once, retaining rows, timestamps, indexes and foreign keys", () => {
+test.each([false, true])("old attention CHECK (state_change=%s) widens once, retaining rows, timestamps, indexes and foreign keys", (hasStateChange) => {
   using file = temporaryVigilDatabaseFile("vigil-attention-");
   const { path } = file;
   const old = new Database(path, { create: true });
-  for (const sql of SCHEMA_SQL) old.run(sql.replace(",'state_change'", ""));
+  for (const sql of SCHEMA_SQL) {
+    const previous = sql.replace(",'proposal'", "")
+      .replace(/\s+resolution TEXT\s+CHECK\(resolution IN \([^)]+\)\),/, "");
+    old.run(hasStateChange ? previous : previous.replace(",'state_change'", ""));
+  }
   const envelope = ledgerEnvelope();
   ingestLedgerEnvelope(old, envelope, ENDED_AT, { replay: true });
   const event: VigilEventRow = {
@@ -37,41 +41,55 @@ test("old attention CHECK widens once, retaining rows, timestamps, indexes and f
   }
   const before = old.query("SELECT * FROM attention_items ORDER BY id").all();
   const insertKind = (db: Database, kind: string) => db.query("INSERT INTO attention_items (id, stack_id, kind) VALUES (?, 'default', ?)").run(kind, kind);
-  expect(() => insertKind(old, "state_change")).toThrow();
+  expect(() => insertKind(old, "proposal")).toThrow();
+  expect(old.query("PRAGMA table_info(attention_items)").all().map((row) => (row as { name: string }).name)).not.toContain("resolution");
   const migration = REBUILD_MIGRATIONS.find((entry) => entry.table === "attention_items")!;
   const tableSql = (db: Database) => db.query<{ sql: string }, []>("SELECT sql FROM sqlite_master WHERE name = 'attention_items'").get()!.sql;
   expect(migration.detect(tableSql(old))).toBe(true);
   old.close();
 
   const migrated = initDatabase(path);
+  const schemaVersion = migrated.query("PRAGMA schema_version").get();
   try {
-    expect(migrated.query("SELECT * FROM attention_items ORDER BY id").all()).toEqual(before);
+    expect(migrated.query("SELECT * FROM attention_items ORDER BY id").all()).toEqual(before.map((row) => ({ ...row as object, resolution: null })));
     expect(listVigilEvents(migrated, KEY)).toEqual([event]);
     expect(migrated.query("PRAGMA foreign_key_check").all()).toEqual([]);
     expect(migrated.query("PRAGMA foreign_key_list(attention_items)").all()).toHaveLength(2);
     expect(migrated.query("PRAGMA index_list(attention_items)").all().map((row) => (row as { name: string }).name)).toEqual(expect.arrayContaining(["idx_attention_status_severity", "idx_attention_work_item"]));
     expect(migration.detect(tableSql(migrated))).toBe(false);
     expect(() => insertKind(migrated, "state_change")).not.toThrow();
+    expect(() => insertKind(migrated, "proposal")).not.toThrow();
     expect(() => insertKind(migrated, "unknown-kind")).toThrow();
     expect(() => migrated.run("UPDATE attention_items SET severity = 'bogus'")).toThrow();
     expect(() => migrated.run("UPDATE attention_items SET status = 'bogus'")).toThrow();
     expect(() => migrated.run("UPDATE attention_items SET work_item_id = 'missing'")).toThrow();
+    expect(() => migrated.run("INSERT INTO attention_items (id, stack_id, kind, resolution) VALUES ('bad-resolution', 'default', 'proposal', 'bogus')")).toThrow();
+    migrated.run("UPDATE attention_items SET status = 'resolved', resolution = 'approved' WHERE id = 'proposal'");
     expect(migrated.query("PRAGMA table_info(vigil_events)").all().map((row) => (row as { name: string }).name)).toEqual(expect.arrayContaining(["severity", "attention_id"]));
   } finally { migrated.close(); }
 
   const reopened = initDatabase(path);
   try {
-    expect(reopened.query("SELECT * FROM attention_items WHERE id LIKE 'old-%' ORDER BY id").all()).toEqual(before);
+    expect(reopened.query("SELECT * FROM attention_items WHERE id LIKE 'old-%' ORDER BY id").all()).toEqual(before.map((row) => ({ ...row as object, resolution: null })));
+    expect(reopened.query("SELECT status, resolution FROM attention_items WHERE id = 'proposal'").get()).toEqual({ status: "resolved", resolution: "approved" });
     expect(migration.detect(tableSql(reopened))).toBe(false);
+    expect(reopened.query("PRAGMA schema_version").get()).toEqual(schemaVersion);
     expect(reopened.query("PRAGMA foreign_key_check").all()).toEqual([]);
   } finally { reopened.close(); }
 });
 
-test("fresh databases retain the kind CHECK", () => {
-  const db = initDatabase(":memory:");
+test("fresh databases accept proposal and all six resolutions with CHECK constraints", () => {
+  using file = temporaryVigilDatabaseFile("attention-proposal-");
+  const db = initDatabase(file.path);
   try {
     expect(() => db.run("INSERT INTO attention_items (id, stack_id, kind) VALUES ('valid', 'default', 'state_change')")).not.toThrow();
     expect(() => db.run("INSERT INTO attention_items (id, stack_id, kind) VALUES ('invalid', 'default', 'unknown-kind')")).toThrow();
+    const insert = db.query("INSERT INTO attention_items (id, stack_id, kind, status, resolution) VALUES (?, 'default', 'proposal', 'resolved', ?)");
+    for (const resolution of ["approved", "dismissed", "expired", "superseded", "read", "archived"]) {
+      expect(() => insert.run(resolution, resolution)).not.toThrow();
+    }
+    expect(() => insert.run("invalid-resolution", "bogus")).toThrow();
+    expect(db.query("SELECT resolution FROM attention_items WHERE id = 'valid'").get()).toEqual({ resolution: null });
   } finally { db.close(); }
 });
 

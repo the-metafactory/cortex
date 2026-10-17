@@ -51,6 +51,8 @@ const ATTENTION_KINDS = new Set<AttentionKind>([
   "input_needed",
   "permission",
   "review",
+  "state_change",
+  "proposal",
   "failed_dispatch",
   "stale",
   "blocked",

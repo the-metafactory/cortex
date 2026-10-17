@@ -8,7 +8,7 @@
  * routing is E.4. This slice lands the model + storage + lifecycle only.
  */
 import type { Database } from "bun:sqlite";
-import type { AttentionItem, AttentionKind, AttentionSeverity, AttentionStatus } from "../types";
+import type { AttentionItem, AttentionKind, AttentionResolution, AttentionSeverity, AttentionStatus } from "../types";
 
 interface AttentionRow {
   id: string;
@@ -18,6 +18,7 @@ interface AttentionRow {
   kind: string;
   severity: string;
   status: string;
+  resolution: string | null;
 }
 
 function rowToAttentionItem(r: AttentionRow): AttentionItem {
@@ -30,6 +31,7 @@ function rowToAttentionItem(r: AttentionRow): AttentionItem {
     kind: r.kind as AttentionKind,
     severity: r.severity as AttentionSeverity,
     status: r.status as AttentionStatus,
+    resolution: r.resolution as AttentionResolution | null,
   };
 }
 
@@ -37,8 +39,8 @@ function rowToAttentionItem(r: AttentionRow): AttentionItem {
 export function upsertAttentionItem(db: Database, item: AttentionItem): void {
   db.query(
     `INSERT INTO attention_items
-       (id, stack_id, work_item_id, session_id, kind, severity, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+       (id, stack_id, work_item_id, session_id, kind, severity, status, resolution)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
        stack_id = excluded.stack_id,
        work_item_id = excluded.work_item_id,
@@ -46,6 +48,7 @@ export function upsertAttentionItem(db: Database, item: AttentionItem): void {
        kind = excluded.kind,
        severity = excluded.severity,
        status = excluded.status,
+       resolution = excluded.resolution,
        updated_at = unixepoch()`
   ).run(
     item.id,
@@ -54,7 +57,8 @@ export function upsertAttentionItem(db: Database, item: AttentionItem): void {
     item.sessionId,
     item.kind,
     item.severity,
-    item.status
+    item.status,
+    item.resolution ?? null
   );
 }
 
@@ -86,19 +90,26 @@ export function listOpenAttention(db: Database): AttentionItem[] {
 }
 
 /** Lifecycle transition to a terminal state. Returns true if a row changed. */
-function setStatus(db: Database, id: string, status: AttentionStatus): boolean {
+export function setAttentionItemStatus(
+  db: Database,
+  id: string,
+  status: AttentionStatus,
+  resolution?: AttentionResolution | null
+): boolean {
   const res = db
-    .query(`UPDATE attention_items SET status = ?, updated_at = unixepoch() WHERE id = ?`)
-    .run(status, id);
+    .query(`UPDATE attention_items SET status = ?,
+      resolution = CASE WHEN ? THEN ? ELSE resolution END,
+      updated_at = unixepoch() WHERE id = ?`)
+    .run(status, resolution !== undefined ? 1 : 0, resolution ?? null, id);
   return res.changes > 0;
 }
 
 /** Mark an item resolved (its underlying condition cleared). */
 export function resolveAttentionItem(db: Database, id: string): boolean {
-  return setStatus(db, id, "resolved");
+  return setAttentionItemStatus(db, id, "resolved");
 }
 
 /** Mark an item dismissed (the principal chose to clear it without action). */
 export function dismissAttentionItem(db: Database, id: string): boolean {
-  return setStatus(db, id, "dismissed");
+  return setAttentionItemStatus(db, id, "dismissed");
 }

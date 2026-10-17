@@ -386,11 +386,13 @@ export type AttentionKind =
   | "permission"
   | "review"
   | "state_change"
+  | "proposal"
   | "failed_dispatch"
   | "stale"
   | "blocked";
 export type AttentionSeverity = "low" | "normal" | "high" | "critical";
 export type AttentionStatus = "open" | "resolved" | "dismissed";
+export type AttentionResolution = "approved" | "dismissed" | "expired" | "superseded" | "read" | "archived";
 
 /**
  * One item in the cross-cutting attention queue (design §6 / §7.4) — something
@@ -408,6 +410,7 @@ export interface AttentionItem {
   kind: AttentionKind;
   severity: AttentionSeverity;
   status: AttentionStatus;
+  resolution?: AttentionResolution | null;
 }
 
 export interface Task {
