@@ -28,7 +28,7 @@ test("delivery columns migrate without losing rows and retries survive reopening
     for (const update of ["held_reason = 'invalid'", "via = 'invalid'", "attempts = -1", "attempts = NULL", "transient_failures = -1"]) {
       expect(() => migrated.run(`UPDATE vigil_events SET ${update}`)).toThrow();
     }
-    await flushTexts({ db: migrated, now, send: async () => ({ delivered: false, kind: "transient", code: "network" }) });
+    await flushTexts({ db: migrated, principal: "alice", now, publish: async () => {}, send: async () => ({ delivered: false, kind: "transient", code: "network" }) });
     attempted = listVigilEvents(migrated, KEY);
     expect(attempted[0]).toMatchObject({ delivery: "pending", attempts: 1, last_error: "network", transient_failures: 1 });
   } finally { migrated.close(); }
@@ -39,7 +39,7 @@ test("delivery columns migrate without losing rows and retries survive reopening
     expect(reopened.query("SELECT * FROM vigil_subjects").all()).toEqual(subjects);
     const batches: string[] = [];
     for (let i = 0; i < 2; i++) await flushTexts({
-      db: reopened, now, send: async () => ({ delivered: false, kind: "transient", code: "timeout" }),
+      db: reopened, principal: "alice", now, publish: async () => {}, send: async () => ({ delivered: false, kind: "transient", code: "timeout" }),
       fallback: async (_subject, body) => { batches.push(body); return { ok: true }; },
     });
     expect(batches).toEqual([[

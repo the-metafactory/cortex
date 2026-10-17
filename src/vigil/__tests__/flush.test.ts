@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { MockAdapter } from "../../adapters/mock";
 import { notifyWithResult } from "../../adapters/notify-result";
 import type { NotifyResult } from "../../adapters/types";
+import { deriveNatsSubject, type Envelope } from "../../bus/myelin/envelope-validator";
 import { initDatabase } from "../../surface/mc/db/init";
 import { budgetDay } from "../budget";
 import { channelKey, channelValue, recordChannel } from "../channels";
@@ -44,7 +45,96 @@ function emailSender() {
 
 const rows = () => listVigilEvents(db, KEY);
 const spent = (now = NOW) => getVigilTextsSpent(db, budgetDay(now));
-const flush = (options: Partial<Omit<FlushTextsOptions, "db">> = {}) => flushTexts({ db, now: NOW, send: sender(), ...options });
+const flush = (options: Partial<Omit<FlushTextsOptions, "db">> = {}) => flushTexts({ db, principal: "alice", now: NOW, send: sender(), publish: async () => {}, ...options });
+
+test("successful DMs publish one ID-only receipt per text on the local stack subject", async () => {
+  const events = Array.from({ length: 4 }, (_, i) => queue(String(i), NOW + i));
+  const publish = mock(async (_envelope: Envelope) => {});
+  await flush({ publish });
+  await flush({ publish });
+  expect(publish.mock.calls.map(([envelope]) => envelope.payload)).toEqual(events.slice(0, 3).map((event) => ({
+    event_id: event.id, subject_key: KEY, budget_day: budgetDay(NOW),
+  })));
+  for (const [envelope] of publish.mock.calls) {
+    expect(envelope.type).toBe("system.vigil.text-sent");
+    expect(deriveNatsSubject(envelope, "default")).toBe("local.alice.default.system.vigil.text-sent");
+    expect(envelope.sovereignty).toMatchObject({ frontier_ok: false, max_hop: 0 });
+  }
+  expect(spent()).toBe(3);
+});
+
+test("successful email publishes one receipt per eligible text and none for the free dm-channel notice", async () => {
+  const events = Array.from({ length: 4 }, (_, i) => queue(String(i), NOW + i));
+  const publish = mock(async (_envelope: Envelope) => {});
+  const fallback = emailSender();
+  await flush({ send: sender(permanent), fallback, publish });
+  await flush({ send: sender(permanent), fallback, publish });
+  expect(fallback).toHaveBeenCalledTimes(1);
+  expect(publish.mock.calls.map(([envelope]) => envelope.payload)).toEqual(events.slice(0, 3).map((event) => ({
+    event_id: event.id, subject_key: KEY, budget_day: budgetDay(NOW),
+  })));
+  expect(listVigilEvents(db, channelKey("dm-channel"))[0]).toMatchObject({ delivery: "sent", via: "email" });
+  expect(spent()).toBe(3);
+});
+
+test("quiet, failed and unconfirmed deliveries emit no spending receipts", async () => {
+  queue("quiet");
+  const publish = mock(async (_envelope: Envelope) => {});
+  await flush({ now: Date.parse("2026-10-16T21:00:00Z"), publish });
+  queue("failed");
+  await flush({ send: sender(transient), publish });
+  await flush({ send: sender(permanent), fallback: async () => ({ ok: false, error: "timeout" }), publish });
+  expect(publish).not.toHaveBeenCalled();
+  expect(spent()).toBe(0);
+  expect(db.query("SELECT * FROM vigil_text_receipts").all()).toEqual([]);
+});
+
+test.each(["dm", "email"] as const)("%s publication failure leaves confirmed texts settled without resending", async (via) => {
+  queue("first");
+  queue("second");
+  const send = sender(via === "dm" ? success : permanent);
+  const fallback = emailSender();
+  const publish = mock(async (_envelope: Envelope) => { throw new Error("bus unavailable"); });
+  await expect(flush({ send, fallback, publish })).rejects.toThrow("Vigil text-sent publication failed after delivery settlement");
+  const count = 2;
+  expect(publish).toHaveBeenCalledTimes(count);
+  expect(rows().every((row) => row.delivery === "sent" && row.via === via)).toBe(true);
+  expect(spent()).toBe(count);
+  await flush({ send, fallback, publish });
+  expect(publish).toHaveBeenCalledTimes(count);
+  expect(send).toHaveBeenCalledTimes(count);
+});
+
+test("publication failure waits for all DMs and the fallback batch to settle", async () => {
+  const events = Array.from({ length: 3 }, (_, i) => queue(String(i), NOW + i));
+  const send = mock(async () => send.mock.calls.length === 1 ? permanent : success);
+  const fallback = emailSender();
+  const publish = mock(async (_envelope: Envelope) => { throw new Error("bus unavailable"); });
+  await expect(flush({ send, fallback, publish })).rejects.toThrow("Vigil text-sent publication failed after delivery settlement");
+  expect(send).toHaveBeenCalledTimes(3);
+  expect(fallback).toHaveBeenCalledTimes(1);
+  expect(rows().map((row) => [row.delivery, row.via])).toEqual([["sent", "email"], ["sent", "dm"], ["sent", "dm"]]);
+  expect(publish.mock.calls.map(([envelope]) => (envelope.payload as { event_id: string }).event_id).sort()).toEqual(events.map((event) => event.id).sort());
+  expect(spent()).toBe(3);
+});
+
+test("confirmed DMs still publish receipts when a later text fails to render", async () => {
+  const first = queue("first");
+  const second = queue("second");
+  const publish = mock(async (_envelope: Envelope) => {});
+  await expect(flush({
+    publish,
+    render: (event) => {
+      if (event.id === second.id) throw new Error("render unavailable");
+      return "text";
+    },
+  })).rejects.toThrow("render unavailable");
+  expect(publish.mock.calls.map(([envelope]) => envelope.payload)).toEqual([
+    { event_id: first.id, subject_key: KEY, budget_day: budgetDay(NOW) },
+  ]);
+  expect(rows().map((row) => row.delivery)).toEqual(["sent", "pending"]);
+  expect(spent()).toBe(1);
+});
 
 test("sends the three oldest texts, holds the fourth and leaves terminal and digest rows alone", async () => {
   for (const i of [4, 2, 1, 3]) queue(String(i), NOW - (5 - i) * 1000);
@@ -175,26 +265,29 @@ test("never-settling and throwing adapters become retryable timeout and exceptio
   expect(spent()).toBe(0);
 });
 
-test("resolves wording at send time without storing it or emitting delivery receipts", async () => {
+test("resolves wording at send time without storing it in rows or delivery receipts", async () => {
   queue();
   const send = sender();
-  const publish = mock(async () => {});
+  const publish = mock(async (_envelope: Envelope) => {});
   await flush({ send, publish, resolveGoalWording: async () => "Example private goal" });
   expect(send.mock.calls[0]?.[0]).toBe("Vigil: goal Example private goal — on-track → off-track");
   expect(JSON.stringify(db.query("SELECT * FROM vigil_events").all())).not.toContain("Example private goal");
   expect(JSON.stringify(db.query("SELECT * FROM vigil_subjects").all())).not.toContain("Example private goal");
-  expect(publish).not.toHaveBeenCalled();
+  expect(publish).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(publish.mock.calls)).not.toContain("Example private goal");
 });
 
 test("overlapping flushes share one delivery attempt and spend one budget unit", async () => {
   queue();
   const resolvers = Promise.withResolvers<NotifyResult>();
   const send = mock(() => resolvers.promise);
-  const first = flush({ send });
-  const second = flush({ send });
+  const publish = mock(async (_envelope: Envelope) => {});
+  const first = flush({ send, publish });
+  const second = flush({ send, publish });
   resolvers.resolve(success);
   await Promise.all([first, second]);
   expect(send).toHaveBeenCalledTimes(1);
+  expect(publish).toHaveBeenCalledTimes(1);
   expect(rows()[0]).toMatchObject({ delivery: "sent", attempts: 1 });
   expect(spent()).toBe(1);
 });
@@ -310,7 +403,10 @@ test("all fallback settlements and budget increments commit atomically", async (
   queue("first");
   queue("second");
   db.run("CREATE TRIGGER fail_budget BEFORE UPDATE ON vigil_budget BEGIN SELECT RAISE(ABORT, 'budget unavailable'); END");
-  await expect(flush({ send: sender(permanent), fallback: async () => ({ ok: true }) })).rejects.toThrow("budget unavailable");
+  const publish = mock(async (_envelope: Envelope) => {});
+  await expect(flush({ send: sender(permanent), fallback: async () => ({ ok: true }), publish })).rejects.toThrow("budget unavailable");
+  expect(publish).not.toHaveBeenCalled();
+  expect(db.query("SELECT * FROM vigil_text_receipts").all()).toEqual([]);
   expect(rows().every((row) => row.delivery === "pending" && row.sent_at === null && row.via === null)).toBe(true);
   expect(spent()).toBe(0);
 });

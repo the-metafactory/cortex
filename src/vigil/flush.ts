@@ -7,18 +7,20 @@ import { getVigilSubject, getVigilTextsSpent, markVigilTextSent, type VigilEvent
 import type { GoalWordingResolver } from "./goal-wording";
 import type { VigilFallback } from "./fallback-email";
 import { createVigilRenderer } from "./render";
+import { publishTextSentReceipt } from "./delivery-receipt";
 
 interface VigilFallbackText {
-  eventId: string;
+  event: VigilEventRow;
   text: string;
 }
 
 export interface FlushTextsOptions {
   db: Database;
+  principal: string;
   now: number;
   send: ((text: string) => Promise<NotifyResult>) | null;
   resolveGoalWording?: GoalWordingResolver;
-  publish?: MyelinRuntime["publish"];
+  publish: MyelinRuntime["publish"];
   render?: (event: VigilEventRow, subject: VigilSubjectRow) => string | Promise<string>;
   fallback?: VigilFallback | null;
 }
@@ -38,6 +40,7 @@ async function flushPendingTexts(options: FlushTextsOptions): Promise<void> {
   const { db, now, send } = options;
   const render = options.render ?? createVigilRenderer({ resolveGoalWording: options.resolveGoalWording });
   const batch: VigilFallbackText[] = [];
+  const settled: VigilEventRow[] = [];
   const events = db.query<VigilEventRow, [string]>(`SELECT * FROM vigil_events
     WHERE route = 'text' AND delivery = 'pending' AND subject_key != ? ORDER BY occurred_at, rowid`)
     .all(channelKey("dm-channel"));
@@ -57,7 +60,9 @@ async function flushPendingTexts(options: FlushTextsOptions): Promise<void> {
         : await send(text);
       if (result.delivered) {
         recordChannel(db, "dm-channel", "ok", now);
-        markVigilTextSent(db, event.id, "dm", now, budgetDay(now));
+        if (markVigilTextSent(db, event.id, "dm", now, budgetDay(now))) {
+          settled.push(event);
+        }
         continue;
       }
       const transientFailures = result.kind === "transient" ? event.transient_failures + 1 : 0;
@@ -65,23 +70,27 @@ async function flushPendingTexts(options: FlushTextsOptions): Promise<void> {
         .run(result.code, transientFailures, event.id);
       if (result.kind === "permanent" || transientFailures >= TRANSIENT_FALLBACK_THRESHOLD || channelValue(db, "dm-channel") === "regressed") {
         recordChannel(db, "dm-channel", "regressed", now);
-        batch.push({ eventId: event.id, text });
+        batch.push({ event, text });
       }
     }
   } finally {
-    await flushFallbackBatch(options, batch);
+    try {
+      await flushFallbackBatch(options, batch, settled);
+    } finally {
+      await publishReceipts(options, settled);
+    }
   }
 }
 
-async function flushFallbackBatch(options: FlushTextsOptions, batch: readonly VigilFallbackText[]): Promise<void> {
+async function flushFallbackBatch(options: FlushTextsOptions, batch: readonly VigilFallbackText[], settled: VigilEventRow[]): Promise<void> {
   if (batch.length === 0) return;
   const { db, now } = options;
   const day = budgetDay(now);
   const remaining = Math.max(0, VIGIL_DAILY_TEXT_LIMIT - getVigilTextsSpent(db, day));
   const eligible = batch.slice(0, remaining);
-  for (const { eventId } of batch.slice(remaining)) {
+  for (const { event } of batch.slice(remaining)) {
     db.query("UPDATE vigil_events SET delivery = 'held', held_reason = 'budget' WHERE id = ? AND delivery = 'pending'")
-      .run(eventId);
+      .run(event.id);
   }
   if (eligible.length === 0) return;
   const notices = db.query<VigilEventRow, [string]>(`SELECT * FROM vigil_events
@@ -101,17 +110,28 @@ async function flushFallbackBatch(options: FlushTextsOptions, batch: readonly Vi
   }
   if (options.fallback) recordChannel(db, "email-channel", result.ok ? "ok" : "regressed", now);
   if (!result.ok) {
-    for (const { eventId } of eligible) {
+    for (const { event } of eligible) {
       db.query("UPDATE vigil_events SET last_error = ? WHERE id = ? AND delivery = 'pending'")
-        .run(result.error ?? "fallback-failed", eventId);
+        .run(result.error ?? "fallback-failed", event.id);
     }
     return;
   }
-  db.transaction(() => {
-    for (const { eventId } of eligible) markVigilTextSent(db, eventId, "email", now, day);
+  const sent = db.transaction(() => {
+    const settled = eligible.filter(({ event }) => markVigilTextSent(db, event.id, "email", now, day));
     for (const notice of notices) {
       db.query("UPDATE vigil_events SET delivery = 'sent', via = 'email', sent_at = ?, last_error = NULL WHERE id = ? AND delivery = 'pending'")
         .run(now, notice.id);
     }
+    return settled.map(({ event }) => event);
   })();
+  settled.push(...sent);
+}
+
+async function publishReceipts(options: FlushTextsOptions, events: readonly VigilEventRow[]): Promise<void> {
+  const publish = options.publish;
+  const results = await Promise.allSettled(events.map((event) => publishTextSentReceipt({
+    event_id: event.id, subject_key: event.subject_key, budget_day: budgetDay(options.now),
+  }, options.principal, publish)));
+  const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failures.length > 0) throw new AggregateError(failures.map((result): unknown => result.reason), "Vigil text-sent publication failed after delivery settlement");
 }
