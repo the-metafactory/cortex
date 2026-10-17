@@ -47,7 +47,7 @@ describe("Vigil budget storage and eligibility", () => {
     expect(getVigilTextsSpent(db, budgetDay(now()))).toBe(0);
     expect(canSendVigilText(db, now())).toBe(true);
     expect(db.query("SELECT * FROM vigil_budget").all()).toEqual([
-      { budget_day: "2026-10-11", texts_spent: 1 },
+      { budget_day: "2026-10-11", texts_spent: 1, digest_at: null },
     ]);
     expect(TABLE_NAMES).toContain("vigil_budget");
   });

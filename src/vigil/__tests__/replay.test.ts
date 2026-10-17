@@ -126,7 +126,7 @@ describe("Vigil LEDGER replay", () => {
     for (let i = 0; i < 2; i++) {
       expect(await h.replay(db)).toBe(7);
       expect(db.query("SELECT * FROM vigil_budget ORDER BY budget_day").all()).toEqual([
-        { budget_day: "2026-10-15", texts_spent: 2 }, { budget_day: "2026-10-16", texts_spent: 1 },
+        { budget_day: "2026-10-15", texts_spent: 2, digest_at: null }, { budget_day: "2026-10-16", texts_spent: 1, digest_at: null },
       ]);
       expect(db.query("SELECT COUNT(*) AS n FROM vigil_text_receipts").get()).toEqual({ n: 3 });
       expect(db.query("SELECT COUNT(*) AS n FROM vigil_events").get()).toEqual({ n: 0 });

@@ -30,6 +30,10 @@ export function budgetDay(now: number | Date): string {
   return new Date(Date.UTC(year, month - 1, day - (hour < 7 ? 1 : 0))).toISOString().slice(0, 10);
 }
 
+export function budgetDayStartedToday(now: number | Date): boolean {
+  return localParts(now).hour >= 7;
+}
+
 /** Quiet from 22:00 inclusive until 07:00 exclusive, Europe/Zurich. */
 export function inQuietHours(now: number | Date): boolean {
   const { hour } = localParts(now);

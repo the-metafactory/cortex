@@ -42,9 +42,11 @@ export function rebuildVigilBudget(db: Database): void {
     db.run(`INSERT INTO vigil_text_receipts (event_id, subject_key, budget_day)
       SELECT event_id, subject_key, budget_day FROM vigil_replay_receipts WHERE true
       ON CONFLICT(event_id) DO NOTHING`);
-    db.run("DELETE FROM vigil_budget");
+    db.run("DELETE FROM vigil_budget WHERE digest_at IS NULL");
+    db.run("UPDATE vigil_budget SET texts_spent = 0");
     db.run(`INSERT INTO vigil_budget (budget_day, texts_spent)
-      SELECT budget_day, COUNT(*) FROM vigil_text_receipts GROUP BY budget_day`);
+      SELECT budget_day, COUNT(*) FROM vigil_text_receipts GROUP BY budget_day
+      ON CONFLICT(budget_day) DO UPDATE SET texts_spent = excluded.texts_spent`);
   })();
 }
 
@@ -83,6 +85,7 @@ export interface VigilEventRow {
   delivery: "pending" | "sent" | "held" | "digested";
   held_reason: "quiet" | "budget" | null;
   sent_at: number | null;
+  digested_at: number | null;
   via: "dm" | "email" | null;
   attempts: number;
   last_error: string | null;
@@ -135,7 +138,7 @@ export function writeVigilTransition(
   );
   return {
     ...event, id, event_kind: "transition", created_at: now, severity: null, attention_id: null, route, delivery: "pending",
-    held_reason: null, sent_at: null, via: null, attempts: 0, last_error: null, transient_failures: 0,
+    held_reason: null, sent_at: null, digested_at: null, via: null, attempts: 0, last_error: null, transient_failures: 0,
   };
 }
 
