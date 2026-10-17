@@ -26,6 +26,7 @@ import { PlansView } from "./components/plans-view";
 import { PhaseDetailView } from "./components/phase-detail-view";
 import { WorkItemDetailView } from "./components/work-item-detail-view";
 import { AttentionView } from "./components/attention-view";
+import { VigilView } from "./components/vigil-view";
 import { NetworkView } from "./components/network-view";
 import { GovernanceView } from "./components/governance-view";
 import { ObservabilityView } from "./components/observability-view";
@@ -39,6 +40,7 @@ import { useRepositories } from "./hooks/use-repositories";
 import { usePlans } from "./hooks/use-plans";
 import { usePhaseDetail } from "./hooks/use-phase-detail";
 import { useAttention } from "./hooks/use-attention";
+import { useVigilSubjects } from "./hooks/use-vigil-subjects";
 import { useAgents } from "./hooks/use-agents";
 import { useNetworks } from "./hooks/use-networks";
 import { useGovernance } from "./hooks/use-governance";
@@ -68,7 +70,7 @@ import type { Command } from "./components/command-palette";
  * may upgrade to a hash route if deep-linking turns out to be
  * principal-requested; for now the in-memory view is sufficient.
  */
-type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "kanban-detail" | "network" | "governance" | "observability";
+type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "watching" | "kanban-detail" | "network" | "governance" | "observability";
 
 /**
  * CK-3 / D-1(c) — the legacy escape hatch. The cockpit (in the Network view) is
@@ -137,6 +139,7 @@ export function App() {
   const repos = useRepositories(softwareMode && view === "repositories");
   // G-1113.D.3 — Plans overview data (fetched only when on its tab).
   const plans = usePlans(softwareMode && view === "plans");
+  const vigil = useVigilSubjects(softwareMode && view === "watching");
   // G-1113.D.4 — phase-detail data (fetched whenever a phase is selected).
   const phaseDetail = usePhaseDetail(view === "phase-detail" ? selectedPhaseId : null);
   // G-1113.D.5 — work-item-detail data (fetched whenever a work item is selected).
@@ -188,7 +191,8 @@ export function App() {
         view === "plans" ||
         view === "phase-detail" ||
         view === "work-item-detail" ||
-        view === "attention")
+        view === "attention" ||
+        view === "watching")
     ) {
       setView("default");
     }
@@ -460,6 +464,17 @@ export function App() {
             onClick={() => setView("attention")}
           >
             Attention <span className="dim mono" style={{ fontSize: 9 }}>legacy</span>
+          </button>
+        )}
+        {softwareMode && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "watching"}
+            className={`tab${view === "watching" ? " active" : ""}`}
+            onClick={() => setView("watching")}
+          >
+            Watching
           </button>
         )}
       </nav>
@@ -946,6 +961,7 @@ export function App() {
             onOpenAssignment={(assignmentId) => setDrillId(assignmentId)}
           />
         )}
+        {view === "watching" && softwareMode && <VigilView {...vigil} />}
       </main>
 
       <CommandPalette

@@ -5,6 +5,8 @@ import { join, dirname } from "path";
 import { tmpdir } from "os";
 
 import { startMissionControl, type MissionControlHandle } from "../embed";
+import { ingestLedgerEnvelope } from "../../../vigil/ingest";
+import { ledgerEnvelope, ENDED_AT } from "../../../vigil/__tests__/fixtures";
 
 /**
  * MC-I1.S1 (ADR-0005) — in-process Mission Control embed.
@@ -88,6 +90,22 @@ describe("startMissionControl (embed)", () => {
     const wsRegistry = handle.wsRegistry!;
     expect(typeof wsRegistry.broadcast).toBe("function");
     expect(wsRegistry.size).toBe(0);
+  });
+
+  it("passes Vigil wording and cadence options to its local server", async () => {
+    const key = "run:job:harness-gate";
+    handle = await startMissionControl({
+      configPath: writeMcYaml(), dbPath: join(tmpDir, "mc.db"),
+      vigil: { enabled: true, resolveGoalWording: () => "Example goal", cadence: { [key]: 3_600_000 } },
+    });
+    ingestLedgerEnvelope(handle.db, ledgerEnvelope({
+      ran: { kind: "job", ref: "harness-gate" }, serves: { goal: "G1" },
+    }), ENDED_AT);
+    const response = await fetch(`http://127.0.0.1:${handle.port}/api/vigil/subjects`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ subjects: [expect.objectContaining({
+      subjectKey: key, goalWording: "Example goal", expectedBy: ENDED_AT + 3_600_000,
+    })] });
   });
 
   it("releases the port on stop()", async () => {

@@ -72,6 +72,7 @@ export async function startMissionControl(
     const processManager = new ProcessManager();
     serverCtx = startServer(config, db, {
       processManager,
+      ...(opts.vigil ? { vigil: opts.vigil } : {}),
       ...(opts.agentPresence ? { agentPresence: opts.agentPresence } : {}),
       ...(opts.networks ? { networks: opts.networks } : {}),
       ...(opts.admissionDecider ? { admissionDecider: opts.admissionDecider } : {}),
