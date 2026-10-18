@@ -83,6 +83,7 @@
  */
 import { isPlainObject } from "../types/object-guards";
 import type { Surfaces } from "../types/surfaces";
+import { readSurfaceSecret } from "./surface-secret-store";
 
 /**
  * A surface secret field whose VALUE is exactly `__SOME_ENV_VAR__` resolves to
@@ -214,10 +215,12 @@ function resolveScalarSoft(value: unknown): SoftResolve {
   // lint forbids both `as` and `!` here).
   const envVar = ENV_PLACEHOLDER_PATTERN.exec(value)?.[1];
   if (envVar === undefined) return { kind: "passthrough", value }; // inline literal
-  const resolved = process.env[envVar];
+  const inherited = process.env[envVar];
+  const resolved = inherited?.trim() ? inherited : readSurfaceSecret(envVar);
   if (resolved === undefined || resolved.trim() === "") {
     return { kind: "missing", envVar };
   }
+  process.env[envVar] = resolved;
   return { kind: "passthrough", value: resolved };
 }
 
@@ -252,8 +255,13 @@ function emitSurfaceDisabledWarning(w: SurfaceTokenWarning): void {
     `cortex config WARN: ${w.platform} surface for agent "${w.agent}" DISABLED — ` +
       `${w.fieldPath} declares placeholder __${w.envVar}__ but env var ${w.envVar} ` +
       `is unset or empty. This ONE surface will not start; the rest of the stack ` +
-      `boots normally. Fix: \`arc secrets set ${w.agent} ${w.envVar}\` (then reinstall).\n`,
+      `boots normally. Fix: \`${surfaceSecretFixCommand(w.envVar)}\` (then restart this stack; ` +
+      `arc-managed services load stored surface secrets at boot).\n`,
   );
+}
+
+export function surfaceSecretFixCommand(envVar: string): string {
+  return `arc secrets set cortex ${envVar}`;
 }
 
 /**

@@ -41,6 +41,7 @@ import {
   type AgentsChangeEvent,
 } from "./common/config/watcher";
 import { resolveArcPackReposDir } from "./common/config/arc-pack-repos-dir";
+import { surfaceSecretFixCommand } from "./common/config/resolve-env-placeholders";
 import { type AgentConfig } from "./common/types/config";
 import { migrateStackDbOnTouch } from "./common/migrate-data-dir";
 import { migratePublishedEventsDirValue } from "./common/config/migrate-published-events-value";
@@ -1419,7 +1420,7 @@ export async function startCortex(
   ]);
   if (allSurfaceWarnings.length > 0) {
     const lines = allSurfaceWarnings
-      .map((w) => `  • ${w.platform} for agent "${w.agent}" — set ${w.envVar} (\`arc secrets set ${w.agent} ${w.envVar}\`)`)
+      .map((w) => `  • ${w.platform} for agent "${w.agent}" — set ${w.envVar} (\`${surfaceSecretFixCommand(w.envVar)}\`)`)
       .join("\n");
     console.warn(
       `cortex: ${allSurfaceWarnings.length} surface(s) DISABLED due to unresolved secret placeholders ` +
