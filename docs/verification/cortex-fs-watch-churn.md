@@ -86,3 +86,58 @@ unavailable native coverage, never a passing watcher assertion.
 The ranger worker SOP permits one final `bun run check`; three consecutive
 full runs are therefore reserved for supervisor/checkpoint verification.
 No claim of three passing full runs or a passing close checkpoint is made here.
+
+## Plain-host revalidation, 2026-10-18
+
+The assigned branch already contained implementation commit `e8916b02`.
+Revalidation retained that implementation and merged `origin/main` at
+`d907df52` into the assigned branch without rewriting either commit.
+The host still reports Darwin 25.6.0 arm64 and Bun 1.4.2. Bun issue #44385
+remains open and includes the self-contained control/open/close reproduction.
+
+The standalone copy ran outside the repository with plain-host access:
+
+```text
+{"bun":"1.4.2","platform":"darwin","usable":false,"reason":"native fs.watch churn: control 1/1; 1/2 writes delivered during unrelated watcher open/close (0 late); close-1 missing after 1500ms + 2000ms grace; 1000 background watchers, 13659ms elapsed; https://github.com/oven-sh/bun/issues/44385"}
+```
+
+A preceding sandboxed run received no control event and explicitly reported
+`churn not measured`; it is not evidence of the open/close failure.
+
+The focused command was:
+
+```sh
+bun run test scripts/__tests__/fs-watch-churn.test.ts src/common/test-fs-watch.test.ts src/common/config/__tests__/watcher.test.ts src/common/config/__tests__/fragment-watcher.test.ts src/__tests__/cortex.agents-reload.test.ts
+```
+
+It finished with **37 pass, 17 skip, 0 fail**, 106 assertions, in **15.42 s**.
+The shared probe delivered its control, then missed `open-0` after 1,500 ms
+plus 2,000 ms grace, with 12,561 ms total measurement. All four native groups
+printed the measurement and upstream issue when skipping. Probe regression
+tests passed and the affected suite assertions remain unchanged.
+Log: `/tmp/cortex-2604-recheck-focused.log`.
+
+The single final plain-host `bun run check` took **468.48 s** and exited 1.
+Lint, duplication, typecheck, vocabulary, SDK, shippable hygiene, XDG and
+branch freshness passed. The full test run took **323.75 s** and reported
+**12,034 pass, 31 skip, 60 todo, 1 fail**, 91,344 assertions across 700 files.
+The watcher gate delivered its control, then missed `open-0` after 3,500 ms
+(12,630 ms total measurement); no affected watcher test failed.
+Log: `/tmp/cortex-2604-recheck-check.log`.
+
+The sole failure was
+`MacosSbplSandbox — denial observation end-to-end (real sandbox-exec + log stream) > a real denied read under audit mode is observed via denials()`
+at `src/runner/__tests__/session-sandbox-macos.test.ts:832`: the unified-log
+tail observed zero denial records within its existing bound. This test and
+its sandbox implementation are unchanged from `origin/main`. It tests log
+observation, and this failure alone does not establish failed enforcement.
+
+An archived checkout of `origin/main` (`d907df52`), with the same dependencies,
+passed the isolated failing test (1 pass, 2.79 s) and the whole file (48 pass,
+3.68 s). The assigned branch then passed the same whole file (48 pass,
+3.76 s). Logs: `/tmp/cortex-2604-base-denial.log`,
+`/tmp/cortex-2604-base-sandbox.log`, `/tmp/cortex-2604-head-sandbox.log`.
+The full-run failure did not reproduce in these focused comparisons, so a
+failing base full run has **not** been established. No sandbox-test workaround
+or assertion change was made. Supervisor baseline comparison is still needed;
+this revalidation is not a green full check or the three-run close checkpoint.
