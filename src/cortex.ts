@@ -4912,6 +4912,8 @@ export async function startCortex(
           },
         },
         vigil: {
+          proposal_token_env: config.vigil.proposal_token_env,
+          proposal_timeout_ms: config.vigil.proposal_timeout_ms,
           enabled: config.vigil.enabled && derivedStack.stack === "default",
           resolveGoalWording: somaGoalWording(),
           cadence: config.vigil.cadence,

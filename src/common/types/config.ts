@@ -558,6 +558,8 @@ export const VigilFallbackEmailSchema = z.object({
 });
 
 export const VigilSchema = z.object({
+  proposal_token_env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional(),
+  proposal_timeout_ms: z.number().int().positive().max(300_000).default(30_000),
   result_base_url: z.url({ protocol: /^https?$/ }).default("http://127.0.0.1:8767"),
   enabled: z.boolean().default(false),
   /** Per-subject cadence in milliseconds; only jobs and goal state can go stale. */

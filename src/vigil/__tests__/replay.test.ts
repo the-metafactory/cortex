@@ -131,8 +131,8 @@ describe("Vigil LEDGER replay", () => {
     const id = (name: string) => `att:vigil:result:soma:outputs/${name}.md`;
     expect(getAttentionItem(db, id("first"))).toMatchObject({ status: "resolved", resolution: "superseded" });
     expect(getAttentionItem(db, id("next"))?.status).toBe("open");
-    handleAttentionLifecycle(db, id("read"), "resolve");
-    handleAttentionLifecycle(db, id("dismissed"), "dismiss");
+    await handleAttentionLifecycle(db, id("read"), "resolve");
+    await handleAttentionLifecycle(db, id("dismissed"), "dismiss");
     expect(await h.replay(db)).toBe(4);
     expect(getAttentionItem(db, id("read"))).toMatchObject({ status: "resolved", resolution: "read" });
     expect(getAttentionItem(db, id("dismissed"))).toMatchObject({ status: "dismissed", resolution: "dismissed" });
@@ -160,12 +160,12 @@ describe("Vigil LEDGER replay", () => {
     try {
       await report({ outcome: "succeeded", result_ref: "soma:outputs/old.md" });
       await report({ outcome: "succeeded", result_ref: "soma:outputs/read.md", ended_at: "2026-10-12T10:00:06Z" });
-      handleAttentionLifecycle(live, "att:vigil:result:soma:outputs/read.md", "resolve");
+      await handleAttentionLifecycle(live, "att:vigil:result:soma:outputs/read.md", "resolve");
       await flushVigilResolutions(live, ledger);
       const proposals = Array.from({ length: 21 }, (_, n) => `soma:proposals/${String(n).padStart(2, "0")}.md`);
       await report({ outcome: "succeeded", proposal_refs: proposals, ended_at: "2026-10-12T10:00:07Z" });
       resolveVigilAttention(live, `att:vigil:proposal:${proposals[1]}`, "approved", { filed: "example/repo#1" });
-      handleAttentionLifecycle(live, `att:vigil:proposal:${proposals[2]}`, "dismiss");
+      await handleAttentionLifecycle(live, `att:vigil:proposal:${proposals[2]}`, "dismiss");
       expireResults(live, Date.parse("2026-10-20T10:00:00Z"));
       const { expireRefAttention } = await import("../ref-attention");
       expireRefAttention(live, Date.parse("2026-10-20T10:00:00Z"));
@@ -173,12 +173,12 @@ describe("Vigil LEDGER replay", () => {
       await report({ ran: { kind: "job", ref: "recover" } });
       await report({ ran: { kind: "job", ref: "recover" }, outcome: "succeeded", ended_at: "2026-10-12T10:00:08Z" });
       await report({ ran: { kind: "job", ref: "reopen" } });
-      handleAttentionLifecycle(live, "att:vigil:run:job:reopen", "dismiss");
+      await handleAttentionLifecycle(live, "att:vigil:run:job:reopen", "dismiss");
       await flushVigilResolutions(live, ledger);
       await report({ ran: { kind: "job", ref: "reopen" }, outcome: "cancelled", ended_at: "2026-10-12T10:00:09Z" });
       const reopenedId = "att:vigil:run:job:reopen";
       expect(getAttentionItem(live, reopenedId)?.status).toBe("open");
-      handleAttentionLifecycle(live, reopenedId, "dismiss");
+      await handleAttentionLifecycle(live, reopenedId, "dismiss");
       await flushVigilResolutions(live, ledger);
       const dismissals = recorded.filter((envelope) => envelope.type === "vigil.attention.resolved"
         && envelope.payload.key === "run:job:reopen");

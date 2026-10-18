@@ -814,6 +814,11 @@ export interface ColumnAddMigration {
 }
 
 export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
+  {
+    table: "vigil_proposals",
+    column: "filing_error",
+    ddl: `ALTER TABLE vigil_proposals ADD COLUMN filing_error TEXT`,
+  },
   { table: "attention_items", column: "resolution", ddl: "ALTER TABLE attention_items ADD COLUMN resolution TEXT CHECK(resolution IN ('approved','dismissed','expired','superseded','read','archived'))" },
   {
     table: "vigil_events",
