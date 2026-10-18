@@ -1,5 +1,9 @@
 # macOS suite evidence (work-graph node #2576)
 
+The follow-up [native watcher churn evidence](cortex-fs-watch-churn.md) for
+node #2604 records the standalone runtime loss reproduction, the existing Bun
+issue, and the extension of the first-event gate described below.
+
 ## Hand fix pass, 2026-10-16 — status of this PR
 
 **What this PR delivers.** Linux CI is green. The `$HOME` isolation from
