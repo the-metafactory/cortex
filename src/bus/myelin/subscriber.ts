@@ -135,6 +135,7 @@ export interface MyelinPullOptions {
   stream: string;
   /** Durable consumer name. The consumer MUST exist server-side. */
   durable: string;
+  jetstreamDomain?: string;
   /** Max messages outstanding in the consume request. Optional; nats.js default applies. */
   maxMessages?: number;
   /** How long the consume request waits for messages before re-pulling, in ms. */
@@ -469,7 +470,10 @@ class PullBackend implements SubscriberBackend {
     opts: MyelinPullOptions,
     onRaw: (subject: string, data: Uint8Array, msg: JsMsg) => Promise<void>,
   ): Promise<void> {
-    const js = link.raw.jetstream();
+    const js =
+      opts.jetstreamDomain === undefined
+        ? link.raw.jetstream()
+        : link.raw.jetstream({ domain: opts.jetstreamDomain });
     const consumer: Consumer = await js.consumers.get(opts.stream, opts.durable);
 
     // nats.js's `ConsumeOptions` is an intersection of several Partial
