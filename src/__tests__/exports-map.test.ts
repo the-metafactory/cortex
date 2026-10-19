@@ -32,6 +32,7 @@ import {
   getSignedByChain,
   type Envelope,
   type EnvelopeHandler,
+  type EnvelopeHandlerContext,
   type EnvelopeErrorHandler,
   type InvalidEnvelopeHandler,
   type InvalidEnvelopeReason,
@@ -94,6 +95,7 @@ describe("exports map — @the-metafactory/cortex/bus", () => {
     type _Probe = [
       Envelope,
       EnvelopeHandler,
+      EnvelopeHandlerContext,
       EnvelopeErrorHandler,
       InvalidEnvelopeHandler,
       InvalidEnvelopeReason,

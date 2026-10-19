@@ -40,7 +40,7 @@ function notificationLedger() {
     fake, archive, published,
     deliver(envelope: Envelope) {
       capture(envelope);
-      expect(live?.onEnvelope(envelope, deriveNatsSubject(envelope, "default"))).toEqual({ kind: "ack" });
+      expect(live?.onEnvelope(envelope, deriveNatsSubject(envelope, "default"), { working: () => undefined })).toEqual({ kind: "ack" });
       fake.pull(LEDGER_STREAM, live!.durable);
     },
     runtime: {
@@ -50,7 +50,7 @@ function notificationLedger() {
         if (opts.durable.includes("replay")) {
           fake.pull(LEDGER_STREAM, opts.durable);
           for (const envelope of archive) {
-            expect(opts.onEnvelope(envelope, deriveNatsSubject(envelope, "default"))).toEqual({ kind: "ack" });
+            expect(opts.onEnvelope(envelope, deriveNatsSubject(envelope, "default"), { working: () => undefined })).toEqual({ kind: "ack" });
           }
         } else {
           live = opts;

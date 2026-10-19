@@ -35,7 +35,7 @@ describe("cortex Vigil boot/drain wiring", () => {
             // A final in-flight delivery must still be able to commit on drain.
             await opts.onEnvelope(ledgerEnvelope({
               outcome: "succeeded", ended_at: "2026-10-12T10:01:00.000Z",
-            }), SUBJECT);
+            }), SUBJECT, { working: () => undefined });
             stopped.push("vigil");
           }
         } } as unknown as MyelinSubscriber;
@@ -55,7 +55,7 @@ describe("cortex Vigil boot/drain wiring", () => {
         agentsDir, inlineAgents: [], injectRuntime: runtime, principal: { id: "jc" },
       });
       expect(calls.filter((opts) => opts.stream === LEDGER_STREAM)).toHaveLength(1);
-      await handler.onEnvelope(ledgerEnvelope(), SUBJECT);
+      await handler.onEnvelope(ledgerEnvelope(), SUBJECT, { working: () => undefined });
       const read = new Database(dbPath, { readonly: true });
       try { expect(read.query("SELECT value FROM vigil_subjects WHERE subject_key = ?").get(KEY)).toEqual({ value: "failed" }); }
       finally { read.close(); }
