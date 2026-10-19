@@ -353,6 +353,7 @@ export interface MyelinSubscribePullOpts {
  */
 export interface MyelinRuntimeOptions {
   connectImpl?: (opts: ConnectionOptions) => Promise<NatsConnection>;
+  jetstreamDomain?: string;
   /**
    * IAW Phase B.3 (cortex#114) — outbound envelope signer. When set,
    * `publish()` signs every outbound envelope via myelin's
@@ -623,10 +624,32 @@ export function makeSubjectPlaceholderSubstituter(opts: {
     );
 }
 
+export class MyelinRuntimeConfigError extends Error {
+  readonly option: keyof MyelinRuntimeOptions;
+
+  constructor(option: keyof MyelinRuntimeOptions, message: string) {
+    super(message);
+    this.name = "MyelinRuntimeConfigError";
+    this.option = option;
+  }
+}
+
+function requireJetstreamDomain(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new MyelinRuntimeConfigError(
+      "jetstreamDomain",
+      "myelin-runtime: jetstreamDomain must be a non-empty string when set",
+    );
+  }
+  return value;
+}
+
 export async function startMyelinRuntime(
   config: AgentConfig,
   options?: MyelinRuntimeOptions,
 ): Promise<MyelinRuntime> {
+  const jetstreamDomain = requireJetstreamDomain(options?.jetstreamDomain);
   // Fan-out registry — populated regardless of whether NATS itself
   // starts. Callers (like the surface-router) can safely register
   // even when the runtime is a no-op; their handlers simply never
@@ -1893,7 +1916,9 @@ export async function startMyelinRuntime(
       expiresMs?: number;
       thresholdMessages?: number;
       maxConcurrent?: number;
+      jetstreamDomain?: string;
     } = { stream: opts.stream, durable: opts.durable };
+    if (jetstreamDomain !== undefined) pull.jetstreamDomain = jetstreamDomain;
     if (opts.maxMessages !== undefined) pull.maxMessages = opts.maxMessages;
     if (opts.expiresMs !== undefined) pull.expiresMs = opts.expiresMs;
     if (opts.thresholdMessages !== undefined) {
@@ -1967,7 +1992,10 @@ export async function startMyelinRuntime(
     // F-3c (cortex#662): primary is always connected here (a primary failure
     // short-circuits the runtime above) — use the non-null `primaryLink`
     // binding rather than asserting on the now-nullable `primary.link`.
-    primary.jsmCache ??= primaryLink.raw.jetstreamManager();
+    primary.jsmCache ??=
+      jetstreamDomain === undefined
+        ? primaryLink.raw.jetstreamManager()
+        : primaryLink.raw.jetstreamManager({ domain: jetstreamDomain });
     return primary.jsmCache;
   };
 
@@ -1979,7 +2007,11 @@ export async function startMyelinRuntime(
   const kvBucketEnabled = async (
     name: string,
   ): Promise<import("nats").KV> => {
-    return primaryLink.raw.jetstream().views.kv(name, { history: 1 });
+    const js =
+      jetstreamDomain === undefined
+        ? primaryLink.raw.jetstream()
+        : primaryLink.raw.jetstream({ domain: jetstreamDomain });
+    return js.views.kv(name, { history: 1 });
   };
 
   return {
