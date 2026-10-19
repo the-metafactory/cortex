@@ -146,3 +146,11 @@ export {
   type DevImplementPayload,
   type CreateDevImplementRequestEventOpts,
 } from "./dev-events";
+
+export {
+  admitOfferedDispatch,
+  type AdmitOfferedDispatchInput,
+} from "./admit-offered-dispatch";
+export type { GateFloorContext, GateFloorDecision } from "./gate-floor";
+export type { Offering, OfferScope } from "../common/types/offering";
+export type { SigningMode } from "../common/security-posture";
