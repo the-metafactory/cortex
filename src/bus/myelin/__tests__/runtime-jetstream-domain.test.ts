@@ -5,8 +5,9 @@ import type {
   JetStreamClient,
   JetStreamManager,
 } from "@nats-io/jetstream";
-import type { NatsConnection, Status } from "nats";
+import type { NatsConnection } from "nats";
 import type { AgentConfig } from "../../../common/types/config";
+import { makeIdleConnectionParts } from "./idle-nats-connection";
 import { MyelinRuntimeConfigError, startMyelinRuntime } from "../runtime";
 
 const SYNTHETIC_DOMAIN = "synthetic-domain";
@@ -41,26 +42,9 @@ function makeRecordingConn() {
   } as unknown as JetStreamClient;
   const jsm = {} as unknown as JetStreamManager;
 
-  let endStatus: () => void = () => {};
   const nc = {
-    status: () => ({
-      [Symbol.asyncIterator]: () => ({
-        next: () =>
-          new Promise<IteratorResult<Status>>((resolve) => {
-            endStatus = () => {
-              resolve({ done: true, value: undefined });
-            };
-          }),
-      }),
-    }),
-    subscribe: mock(() => {
-      throw new Error("no push subscription expected");
-    }),
+    ...makeIdleConnectionParts(),
     publish: mock(() => {}),
-    drain: mock(async () => {
-      endStatus();
-    }),
-    close: mock(async () => {}),
     jetstream: mock((...args: unknown[]) => {
       jetstreamCalls.push(args);
       return js;

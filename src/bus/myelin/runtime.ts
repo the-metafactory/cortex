@@ -191,6 +191,29 @@ export interface MyelinRuntime {
    */
   publishOnSubject?(envelope: Envelope, subject: string): Promise<void>;
   /**
+   * Sign an envelope and publish it through JetStream on the runtime's
+   * domain, resolving only once `expectedStream` has acknowledged it.
+   *
+   * Unlike {@link publish}, nothing is swallowed and nothing falls back:
+   * a missing signer, a signing error (whatever `signFailureMode` says), a
+   * disabled or stopped runtime, a timeout, a JetStream error, an
+   * unroutable subject and a PubAck from a different stream each reject
+   * with a {@link MyelinDurablePublishError} whose `kind` names the cause.
+   * The envelope is never published unsigned and never over Core NATS.
+   *
+   * `envelope.id` is the JetStream `msgID`, so a retried publish inside the
+   * stream's duplicate window resolves with `duplicate: true` rather than a
+   * second stored message; the flag is returned, not hidden.
+   *
+   * OPTIONAL on the interface for the same additivity reason as
+   * `publishOnSubject`: callers MUST treat an undefined property as "this
+   * runtime cannot publish durably".
+   */
+  publishDurable?(
+    envelope: Envelope,
+    options: MyelinPublishDurableOptions,
+  ): Promise<MyelinDurablePubAck>;
+  /**
    * Bind a JetStream pull-consumer subscription via the runtime's
    * private `NatsLink`. The runtime stays the single owner of the raw
    * connection lifecycle — callers see a `MyelinSubscriber` handle and
@@ -624,6 +647,49 @@ export function makeSubjectPlaceholderSubstituter(opts: {
     );
 }
 
+export interface MyelinPublishDurableOptions {
+  /** JetStream stream that must acknowledge the publish. */
+  expectedStream: string;
+  /** Milliseconds to wait for the PubAck. Defaults to 5000. */
+  timeoutMs?: number;
+}
+
+export interface MyelinDurablePubAck {
+  stream: string;
+  seq: number;
+  duplicate: boolean;
+  domain?: string;
+}
+
+export type MyelinDurablePublishErrorKind =
+  | "disabled"
+  | "stopped"
+  | "no-signer"
+  | "sign-failed"
+  | "unroutable"
+  | "timeout"
+  | "jetstream-error"
+  | "stream-mismatch";
+
+export class MyelinDurablePublishError extends Error {
+  readonly kind: MyelinDurablePublishErrorKind;
+  readonly envelopeId: string;
+
+  constructor(
+    kind: MyelinDurablePublishErrorKind,
+    envelopeId: string,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(`myelin-runtime: publishDurable ${kind} id=${envelopeId}: ${message}`, options);
+    this.name = "MyelinDurablePublishError";
+    this.kind = kind;
+    this.envelopeId = envelopeId;
+  }
+}
+
+const DEFAULT_DURABLE_PUBLISH_TIMEOUT_MS = 5000;
+
 export class MyelinRuntimeConfigError extends Error {
   readonly option: keyof MyelinRuntimeOptions;
 
@@ -673,6 +739,18 @@ export async function startMyelinRuntime(
   // eslint-disable-next-line @typescript-eslint/no-empty-function
   const publishDisabled = async (_envelope: Envelope) => {};
 
+  const publishDurableDisabled = (
+    envelope: Envelope,
+    _options: MyelinPublishDurableOptions,
+  ): Promise<MyelinDurablePubAck> =>
+    Promise.reject(
+      new MyelinDurablePublishError(
+        "disabled",
+        envelope.id,
+        "runtime is disabled (no NATS configured or connect failed)",
+      ),
+    );
+
   // Subscribe-pull no-op for the disabled paths (no NATS configured,
   // connect failed, or subscriber pattern list empty). Returning `null`
   // is the documented signal — capability-side features such as the
@@ -708,6 +786,7 @@ export async function startMyelinRuntime(
       enabled: false,
       onEnvelope,
       publish: publishDisabled,
+      publishDurable: publishDurableDisabled,
       subscribePull: subscribePullDisabled,
       subscribe: subscribePushDisabled,
       jetstreamManager: jetstreamManagerDisabled,
@@ -888,6 +967,7 @@ export async function startMyelinRuntime(
       enabled: false,
       onEnvelope,
       publish: publishDisabled,
+      publishDurable: publishDurableDisabled,
       subscribePull: subscribePullDisabled,
       subscribe: subscribePushDisabled,
       jetstreamManager: jetstreamManagerDisabled,
@@ -1466,6 +1546,7 @@ export async function startMyelinRuntime(
       enabled: false,
       onEnvelope,
       publish: publishDisabled,
+      publishDurable: publishDurableDisabled,
       subscribePull: subscribePullDisabled,
       subscribe: subscribePushDisabled,
       jetstreamManager: jetstreamManagerDisabled,
@@ -1688,6 +1769,28 @@ export async function startMyelinRuntime(
     }
   };
 
+  const signWithConfiguredSigner = (
+    sealed: Envelope,
+    configuredSigner: BusEnvelopeSigner,
+    seedBase64: string,
+  ): Promise<Envelope> => {
+    const priorChain =
+      sealed.signed_by === undefined
+        ? undefined
+        : Array.isArray(sealed.signed_by)
+          ? sealed.signed_by
+          : [sealed.signed_by];
+    const envelopeForSigner = {
+      ...sealed,
+      ...(priorChain !== undefined && { signed_by: priorChain }),
+    };
+    return signEnvelope(
+      envelopeForSigner as Parameters<typeof signEnvelope>[0],
+      seedBase64,
+      configuredSigner.principal,
+    );
+  };
+
   /**
    * Shared sign + wire-publish core. `publishEnabled` derives the
    * subject from `envelope.type` via `deriveNatsSubject`; the
@@ -1762,25 +1865,10 @@ export async function startMyelinRuntime(
     let envelopeToPublish: Envelope = sealed;
     if (signer !== undefined && signerSeedBase64 !== undefined) {
       try {
-        // Normalize signed_by to the array shape myelin's
-        // `signEnvelope` expects (MyelinEnvelope tightens
-        // `signed_by` to `SignedBy[] | undefined` whereas cortex's
-        // back-compat Envelope still allows a single stamp). The
-        // signer appends to the existing chain when present.
-        const priorChain =
-          sealed.signed_by === undefined
-            ? undefined
-            : Array.isArray(sealed.signed_by)
-              ? sealed.signed_by
-              : [sealed.signed_by];
-        const envelopeForSigner = {
-          ...sealed,
-          ...(priorChain !== undefined && { signed_by: priorChain }),
-        };
-        envelopeToPublish = await signEnvelope(
-          envelopeForSigner as Parameters<typeof signEnvelope>[0],
+        envelopeToPublish = await signWithConfiguredSigner(
+          sealed,
+          signer,
           signerSeedBase64,
-          signer.principal,
         );
       } catch (err) {
         // Sign failure handling — see `MyelinRuntimeOptions.signFailureMode`
@@ -1887,6 +1975,102 @@ export async function startMyelinRuntime(
     subject: string,
   ): Promise<void> => {
     await signAndPublishOnSubject(envelope, subject);
+  };
+
+  const primaryJetstreamClient = () =>
+    jetstreamDomain === undefined
+      ? primaryLink.raw.jetstream()
+      : primaryLink.raw.jetstream({ domain: jetstreamDomain });
+
+  const isTimeoutError = (err: unknown): boolean =>
+    err instanceof Error && err.name === "TimeoutError";
+
+  const publishDurableEnabled = async (
+    envelope: Envelope,
+    options: MyelinPublishDurableOptions,
+  ): Promise<MyelinDurablePubAck> => {
+    const fail = (
+      kind: MyelinDurablePublishErrorKind,
+      message: string,
+      cause?: unknown,
+    ) =>
+      new MyelinDurablePublishError(
+        kind,
+        envelope.id,
+        message,
+        cause === undefined ? undefined : { cause },
+      );
+    if (stopped) throw fail("stopped", "runtime is stopped");
+    if (signer === undefined || signerSeedBase64 === undefined) {
+      throw fail("no-signer", "no signer is configured");
+    }
+
+    let subject: string;
+    try {
+      subject = deriveNatsSubject(envelope, stack);
+    } catch (err) {
+      throw fail("unroutable", "no subject derives from the envelope", err);
+    }
+    if (selectLink(subject, envelope.id) !== primary) {
+      throw fail("unroutable", `subject ${subject} does not ride the primary link`);
+    }
+
+    const sealed = await maybeSealOutbound(envelope, subject);
+    let signed: Envelope;
+    try {
+      signed = await signWithConfiguredSigner(sealed, signer, signerSeedBase64);
+    } catch (err) {
+      const reason = err instanceof Error ? err.name : "unknown";
+      throw fail("sign-failed", `signing failed (${reason})`);
+    }
+
+    const timeoutMs = options.timeoutMs ?? DEFAULT_DURABLE_PUBLISH_TIMEOUT_MS;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(fail("timeout", `no PubAck within ${timeoutMs}ms`));
+      }, timeoutMs);
+    });
+    let ack: Awaited<ReturnType<ReturnType<typeof primaryJetstreamClient>["publish"]>>;
+    try {
+      ack = await Promise.race([
+        primaryJetstreamClient().publish(
+          subject,
+          new TextEncoder().encode(JSON.stringify(signed)),
+          {
+            msgID: envelope.id,
+            expect: { streamName: options.expectedStream },
+            timeout: timeoutMs,
+          },
+        ),
+        timedOut,
+      ]);
+    } catch (err) {
+      if (err instanceof MyelinDurablePublishError) throw err;
+      if (isTimeoutError(err)) {
+        throw fail("timeout", `no PubAck within ${timeoutMs}ms`, err);
+      }
+      throw fail(
+        "jetstream-error",
+        err instanceof Error ? err.message : String(err),
+        err,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (ack.stream !== options.expectedStream) {
+      throw fail(
+        "stream-mismatch",
+        `acknowledged by stream ${ack.stream}, expected ${options.expectedStream}`,
+      );
+    }
+    return {
+      stream: ack.stream,
+      seq: ack.seq,
+      duplicate: ack.duplicate,
+      ...(ack.domain !== undefined && { domain: ack.domain }),
+    };
   };
 
   // Subscribe-pull helper for the enabled path — wraps
@@ -2007,11 +2191,7 @@ export async function startMyelinRuntime(
   const kvBucketEnabled = async (
     name: string,
   ): Promise<import("nats").KV> => {
-    const js =
-      jetstreamDomain === undefined
-        ? primaryLink.raw.jetstream()
-        : primaryLink.raw.jetstream({ domain: jetstreamDomain });
-    return js.views.kv(name, { history: 1 });
+    return primaryJetstreamClient().views.kv(name, { history: 1 });
   };
 
   return {
@@ -2019,6 +2199,7 @@ export async function startMyelinRuntime(
     onEnvelope,
     publish: publishEnabled,
     publishOnSubject: publishOnSubjectEnabled,
+    publishDurable: publishDurableEnabled,
     subscribePull: subscribePullEnabled,
     subscribe: subscribePushEnabled,
     jetstreamManager: jetstreamManagerEnabled,
