@@ -1,5 +1,72 @@
 # Cortex — Changelog
 
+## 6.17.0 — 2026-10-20 — Bus SDK for durable private work, Vigil notification delivery and proposals
+
+The public `@the-metafactory/cortex/bus` surface now has what the Ranger
+ci-test bus service needs to consume private work: an explicit JetStream
+domain, signed durable publication confirmed by PubAck, pull-delivery
+progress and `admitOfferedDispatch`. Vigil now delivers notifications
+under a budget and turns proposals and waiting results into Mission
+Control attention items.
+
+- **Bus SDK** (all additive; existing callers and defaults are unchanged):
+  - `admitOfferedDispatch` and its input types are exported from the bus
+    barrel (#2692).
+  - `startMyelinRuntime` takes an explicit `jetstreamDomain`, which binds
+    the runtime's JetStream API and pulls to that domain (#2694).
+  - `publishDurable` publishes a signed envelope to JetStream and resolves
+    with its PubAck. It never falls back: a missing signer, a signing
+    failure, a stopped runtime, a timeout or an unexpected `expectedStream`
+    rejects, with no unsigned or Core NATS publish (#2696).
+  - `publishDurable` also rejects a PubAck from a JetStream domain other
+    than the runtime's (`domain-mismatch`, #2701). A domain selects the
+    API, not where messages flow: connected domains must not have streams
+    that own overlapping subjects. The SDK detects that overlap; it cannot
+    prevent it.
+  - Pull handlers get a third argument, `EnvelopeHandlerContext`, whose
+    `working()` extends AckWait for a long handler (#2698).
+  - A disposable two-domain broker test proves the surface against a real
+    nats-server, and skips with a reason when no binary is on PATH (#2703).
+- **Vigil notification delivery** (#2639, #2642, #2645, #2648, #2650,
+  #2653). Vigil classifies and renders events, flushes DMs within the daily
+  text budget with bounded retries, records channel outages and recovery,
+  batches undelivered texts into an optional email fallback, and emits
+  delivery receipts. The budget is rebuilt on replay.
+- **Daily digest DM** from Vigil's own tick after 07:00 Zurich time (#2656).
+- **Attention items** in Mission Control for Vigil transitions (#2636), and
+  a watching view of every Vigil subject (#2659).
+- **Proposals** (#2662, #2671, #2673, #2675, #2676). Vigil opens, caps and
+  expires proposal items from `proposal_refs`, and publishes
+  `vigil.attention.resolved` for every resolution. Approving a proposal in
+  Mission Control files its node as the principal. Proposals appear in the
+  digest and Mission Control without a text.
+- **Waiting results** (#2665, #2668) appear as result attention items and
+  in a digest section. A sanitized Mission Control route serves them from
+  soma-home and marks them read.
+- **`arc upgrade` keeps stack surface secrets** in re-rendered daemon
+  plists (#2679).
+- **Process specs always get `USER` and `LOGNAME`** (#2605), so a restricted
+  spec that runs `claude -p` under launchd finds its login.
+- CI enforces four recurring mistake classes and bans new comments (#2617);
+  the comment burn-down slices are #2618, #2621–#2626. The test suite runs
+  under a temp HOME through `bun run test`, and a bare `bun test` refuses.
+- `@metafactory/content-filter` v0.2.1 (#2620).
+
+### Upgrade notes
+
+- The Mission Control database gains `vigil_result_reads`,
+  `vigil_result_subjects` and `vigil_text_receipts`, plus the columns
+  `attention_items.resolution`, `vigil_proposals.filing_error`,
+  `vigil_events.digested_at` and `vigil_budget.digest_at`. They are added on
+  start-up; no manual step is needed.
+- New optional `vigil` keys: `fallback.email` (`command`, `account`, `to`,
+  `timeout_ms`), `proposal_token_env`, `proposal_timeout_ms` and
+  `result_base_url` (default `http://127.0.0.1:8767`). Without
+  `fallback.email`, undelivered DMs stay pending and Vigil logs a warning.
+- Out-of-tree consumers of the bus SDK can use `publishDurable`,
+  `jetstreamDomain` and `working()`. Handlers with the old
+  `(envelope, subject)` signature keep working.
+
 ## 6.16.0 — 2026-10-16 — Vigil core, run-ledger producer, notification delivery results
 
 Vigil lands in Mission Control: it reads the run ledger and tracks the
