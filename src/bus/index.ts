@@ -22,6 +22,7 @@ export {
   MyelinSubscriber,
   type MyelinSubscriberOptions,
   type EnvelopeHandler,
+  type EnvelopeHandlerContext,
   type EnvelopeErrorHandler,
   type InvalidEnvelopeHandler,
   type InvalidEnvelopeReason,

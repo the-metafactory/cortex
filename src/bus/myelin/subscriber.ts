@@ -80,10 +80,22 @@ export type AckDecision =
 // function whose return type is `void` without an explicit `: undefined`
 // annotation. Same rationale applies to `applyAckDecision`'s parameter
 // below.
+/**
+ * Delivery context passed as the optional third handler argument.
+ * `working()` sends a JetStream in-progress acknowledgement for the message
+ * being handled, resetting its `ack_wait` so a long job keeps its single
+ * in-flight message. It is a no-op in push mode and once the handler's ack
+ * decision has resolved.
+ */
+export interface EnvelopeHandlerContext {
+  working(): void;
+}
+
 /* eslint-disable @typescript-eslint/no-invalid-void-type */
 export type EnvelopeHandler = (
   envelope: Envelope,
   subject: string,
+  ctx: EnvelopeHandlerContext,
 ) => void | AckDecision | Promise<void | AckDecision>;
 /* eslint-enable @typescript-eslint/no-invalid-void-type */
 
@@ -323,10 +335,13 @@ export class MyelinSubscriber {
       return;
     }
 
+    const delivery = makeDeliveryContext(msg);
     try {
-      const decision = await this.onEnvelope(result.envelope, subject);
+      const decision = await this.onEnvelope(result.envelope, subject, delivery.ctx);
+      delivery.settle();
       if (msg) applyAckDecision(msg, decision);
     } catch (err) {
+      delivery.settle();
       this.onError(
         err instanceof Error ? err : new Error(String(err)),
         subject,
@@ -334,6 +349,26 @@ export class MyelinSubscriber {
       if (msg) safeNak(msg);
     }
   }
+}
+
+const NO_OP_DELIVERY_CONTEXT: EnvelopeHandlerContext = { working: () => undefined };
+
+function makeDeliveryContext(msg: JsMsg | null): {
+  ctx: EnvelopeHandlerContext;
+  settle: () => void;
+} {
+  if (!msg) return { ctx: NO_OP_DELIVERY_CONTEXT, settle: () => undefined };
+  let settled = false;
+  return {
+    ctx: {
+      working: () => {
+        if (!settled) safeWorking(msg);
+      },
+    },
+    settle: () => {
+      settled = true;
+    },
+  };
 }
 
 /**
@@ -590,6 +625,17 @@ function safeAck(m: JsMsg): void {
   } catch (err) {
     console.error(
       "myelin-subscriber: ack failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+function safeWorking(m: JsMsg): void {
+  try {
+    m.working();
+  } catch (err) {
+    console.error(
+      "myelin-subscriber: working failed:",
       err instanceof Error ? err.message : String(err),
     );
   }

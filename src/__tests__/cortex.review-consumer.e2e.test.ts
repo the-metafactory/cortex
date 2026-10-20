@@ -48,7 +48,13 @@ import type {
   MyelinSubscribePullOpts,
 } from "../bus/myelin/runtime";
 import type { MyelinSubscriber } from "../bus/myelin/subscriber";
-import type { AckDecision } from "../bus/myelin/subscriber";
+import type {
+  AckDecision,
+  EnvelopeHandler as SubscriberEnvelopeHandler,
+  EnvelopeHandlerContext,
+} from "../bus/myelin/subscriber";
+
+const NO_WORKING: EnvelopeHandlerContext = { working: () => undefined };
 import {
   ReviewConsumer,
   type ReviewConsumerAgent,
@@ -104,7 +110,7 @@ interface PullSubscription {
   pattern: string;
   stream: string;
   durable: string;
-  handler: EnvelopeHandler;
+  handler: SubscriberEnvelopeHandler;
   /** Stubbed JsMsg instances handed to the handler, in delivery order. */
   msgs: StubJsMsg[];
   /** AckDecision returned by the handler, parallel array to `msgs`. */
@@ -237,7 +243,7 @@ function createBusRuntime(): BusRuntime {
       handlersCalled++;
       const msg = makeStubJsMsg(1);
       sub.msgs.push(msg);
-      const result = await sub.handler(envelope, subject);
+      const result = await sub.handler(envelope, subject, NO_WORKING);
       sub.decisions.push(result);
       decisions.push(result);
       applyDecision(msg, result);
@@ -276,7 +282,7 @@ function createBusRuntime(): BusRuntime {
         // assertions will catch the loop.
         const msg = makeStubJsMsg(1);
         sub.msgs.push(msg);
-        const result = await sub.handler(envelope, subject);
+        const result = await sub.handler(envelope, subject, NO_WORKING);
         sub.decisions.push(result);
         applyDecision(msg, result);
       }
