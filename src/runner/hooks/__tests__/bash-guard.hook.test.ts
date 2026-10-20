@@ -59,9 +59,6 @@ const GROVE_ENV_KEYS = [
   "CORTEX_ENTITY",
   "CORTEX_PRINCIPAL",
   "CORTEX_BASH_GUARD",
-  // Never inherit the parent's path policy into a hook spawn either: a test
-  // that wants one passes it explicitly, and a test that wants NONE must get
-  // none even if an earlier test left something in process.env.
   "CORTEX_PATH_GUARD",
   // legacy grove read-fallbacks (transition window)
   "GROVE_CHANNEL",
@@ -3269,16 +3266,7 @@ describe("bash-guard.hook — EBH-1h: bare numeric short flags (cortex#2384)", (
 });
 
 
-// =============================================================================
-// cortex#2493 — free-text flag values (`gh --title/--body`, `git commit -m`).
-// Round 9 (#2371) put `gh` under path containment and, with it, every value
-// flag's value went through the path character whitelist — which has no
-// space in it. Any human-readable title or commit message was denied as a
-// malformed PATH. The fix separates "value is consumed but is free text"
-// (`shortText`/`longText`: text-checked, then skipped) from "value is a path"
-// (`shortValue`/`longValue`: containment-checked, unchanged). The round-9
-// finding itself — `--body-file <out-of-scope>` — must stay denied.
-// =============================================================================
+// https://github.com/the-metafactory/cortex/issues/2493 — free-text flag values are not paths; the round-9 --body-file finding must stay denied
 
 describe("bash-guard.hook — cortex#2493: free-text flag values are not paths", () => {
   let root: string;
@@ -3300,7 +3288,6 @@ describe("bash-guard.hook — cortex#2493: free-text flag values are not paths",
     rmSync(root, { recursive: true, force: true });
   });
 
-  /** Allowlist wide enough to reach the create/commit forms the floor omits. */
   function env(): Record<string, string> {
     return {
       CORTEX_CHANNEL: "test-channel",
@@ -3321,7 +3308,6 @@ describe("bash-guard.hook — cortex#2493: free-text flag values are not paths",
     };
   }
 
-  // ---- ALLOW: the issue's repro, and the commit path a coding agent needs ----
 
   test('gh issue create --title "A title with spaces" --body-file body.md ⇒ ALLOW (the #2493 repro)', () => {
     const d = decision('gh issue create --title "A title with spaces" --body-file body.md');
@@ -3363,7 +3349,6 @@ describe("bash-guard.hook — cortex#2493: free-text flag values are not paths",
     expect(d.decision).toBe("allow");
   });
 
-  // ---- DENY: what text values may still not carry ----
 
   test('gh issue create --title "$HOME" ⇒ DENY (a double-quoted $VAR would expand and leave the machine as a title)', () => {
     const d = decision('gh issue create --title "$HOME" --body-file body.md');
@@ -3405,7 +3390,6 @@ describe("bash-guard.hook — cortex#2493: free-text flag values are not paths",
     expect(d.reason).toContain("embedded or unbalanced quote");
   });
 
-  // ---- F1: an UNQUOTED text value is subject to brace/glob/tilde expansion ----
 
   test("gh issue create --title {x,-F,<out-of-scope>} ⇒ DENY (unquoted brace would expand into a --body-file read of the secret)", () => {
     const d = decision(`gh issue create --title {x,-F,${join(secretDir, "canary.txt")}} --body-file body.md`);
@@ -3437,7 +3421,6 @@ describe("bash-guard.hook — cortex#2493: free-text flag values are not paths",
     expect(decision("gh issue create --title=v1.2-rc:ok --body-file body.md").decision).toBe("allow");
   });
 
-  // ---- F4: git's text flags are commit-scoped ----
 
   test("git log -m <out-of-scope pathspec> ⇒ the pathspec is NOT swallowed as text (unit: extractCommandPaths denies on the flag, as before this PR)", () => {
     const r = extractCommandPaths(`git log -m ${join(secretDir, "canary.txt")}`, "strict");
@@ -3451,7 +3434,6 @@ describe("bash-guard.hook — cortex#2493: free-text flag values are not paths",
     expect(d.reason).toContain("unrecognised flag");
   });
 
-  // ---- DENY preserved: the round-9 finding and its git twin stay path-checked ----
 
   test("gh issue create --title ok --body-file <out-of-scope> ⇒ DENY (round 9's --body-file is still a PATH)", () => {
     const d = decision(`gh issue create --title ok --body-file ${join(secretDir, "canary.txt")}`);
@@ -3470,7 +3452,6 @@ describe("bash-guard.hook — cortex#2493: free-text flag values are not paths",
     expect(d.decision).toBe("deny");
   });
 
-  // ---- unit: checkTextValue ----
 
   test("checkTextValue — quoted: unwraps one pair, accepts prose and the other quote char, refuses $ / backslash; unquoted: closed character set", () => {
     expect(checkTextValue('"Coaching Hub tiles do not open"')).toBeUndefined();
@@ -3479,12 +3460,12 @@ describe("bash-guard.hook — cortex#2493: free-text flag values are not paths",
     expect(checkTextValue('"fix: handle 100% of cases (#12), really!"')).toBeUndefined();
     expect(checkTextValue('"$HOME"')).toContain("cortex#2493");
     expect(checkTextValue("a\\b")).toContain("cortex#2493");
-    expect(checkTextValue('"it\'s"')).toBeUndefined(); // F3: literal inside double quotes
+    expect(checkTextValue('"it\'s"')).toBeUndefined();
     expect(checkTextValue("'say \"hi\"'")).toBeUndefined();
-    expect(checkTextValue("it's")).toContain("embedded or unbalanced quote"); // unquoted: tokeniser mis-split
-    expect(checkTextValue("{x,-F,/etc/passwd}")).toContain("unquoted free-text flag value"); // F1
+    expect(checkTextValue("it's")).toContain("embedded or unbalanced quote");
+    expect(checkTextValue("{x,-F,/etc/passwd}")).toContain("unquoted free-text flag value");
     expect(checkTextValue("~root")).toContain("unquoted free-text flag value");
     expect(checkTextValue("v1.2-rc:ok")).toBeUndefined();
-    expect(checkTextValue('"{x,-F,/etc/passwd}"')).toBeUndefined(); // quoted braces are literal
+    expect(checkTextValue('"{x,-F,/etc/passwd}"')).toBeUndefined();
   });
 });

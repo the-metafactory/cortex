@@ -3901,7 +3901,7 @@
       "count": 1
     },
     "cortex/no-comments": {
-      "count": 442
+      "count": 440
     }
   },
   "src/runner/hooks/mcp-guard.hook.ts": {
