@@ -294,10 +294,10 @@ whose `kind` is `"domain-mismatch"`. Without `jetstreamDomain`, PubAck domains
 are not checked. Existing signing, stream, timeout and runtime-state failures
 still reject without falling back to unsigned or Core NATS publication.
 
-`jetstreamDomain` selects the JetStream API prefix; it does not restrict message
+`jetstreamDomain` selects the JetStream API prefix; it does not restrict envelope
 flow across connected domains. Isolation requires non-overlapping stream
 subjects across those domains. Rejecting an unexpected PubAck does not undo
-message storage in a stream.
+envelope storage in a stream.
 
 ## Documentation
 

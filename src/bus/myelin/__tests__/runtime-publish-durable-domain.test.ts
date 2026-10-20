@@ -24,9 +24,14 @@ describe("MyelinRuntime.publishDurable PubAck domain", () => {
     }
   });
 
-  test.each(["other-domain", undefined, "", "SYNTHETIC-DOMAIN"])(
+  test.each([
+    ["other-domain", '"other-domain"'],
+    [undefined, "<absent>"],
+    ["", '""'],
+    ["SYNTHETIC-DOMAIN", '"SYNTHETIC-DOMAIN"'],
+  ])(
     "rejects a PubAck domain of %s with a typed domain mismatch",
-    async (domain) => {
+    async (domain, reportedDomain) => {
       const { runtime, fake } = await start(async () => ack(domain === undefined ? {} : { domain }), {
         jetstreamDomain: SYNTHETIC_DOMAIN,
       });
@@ -38,8 +43,9 @@ describe("MyelinRuntime.publishDurable PubAck domain", () => {
 
         expect(err.kind).toBe("domain-mismatch");
         expect(err.envelopeId).toBe(envelope.id);
-        expect(err.message).toContain(SYNTHETIC_DOMAIN);
-        expect(err.message).toContain(domain ?? "<absent>");
+        expect(err.message).toContain(
+          `acknowledged by domain ${reportedDomain}, expected "${SYNTHETIC_DOMAIN}"`,
+        );
         expect(fake.publishCalls).toHaveLength(1);
         expect(fake.coreCalls).toEqual([]);
       } finally {

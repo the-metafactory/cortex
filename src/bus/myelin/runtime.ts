@@ -196,9 +196,8 @@ export interface MyelinRuntime {
    * the PubAck reports that exact domain. A different or absent domain
    * rejects with `kind: "domain-mismatch"`.
    *
-   * Domain selection chooses the JetStream API prefix; it does not restrict
-   * message flow across connected domains. Isolation requires non-overlapping
-   * stream subjects across those domains. Rejection does not undo storage.
+   * See {@link MyelinRuntimeOptions} for domain selection and isolation
+   * requirements. Rejection does not undo storage.
    *
    * Unlike {@link publish}, nothing is swallowed and nothing falls back:
    * a missing signer, a signing error (whatever `signFailureMode` says), a
@@ -379,7 +378,7 @@ export interface MyelinSubscribePullOpts {
  *
  * `jetstreamDomain` selects the JetStream API prefix and requires
  * {@link MyelinRuntime.publishDurable} PubAcks to report that exact domain.
- * It does not restrict message flow across connected domains; isolation
+ * It does not restrict envelope flow across connected domains; isolation
  * requires non-overlapping stream subjects across those domains.
  * When omitted, PubAck domains are not checked.
  *
@@ -2081,7 +2080,7 @@ export async function startMyelinRuntime(
     if (jetstreamDomain !== undefined && ack.domain !== jetstreamDomain) {
       throw fail(
         "domain-mismatch",
-        `acknowledged by domain ${ack.domain ?? "<absent>"}, expected ${jetstreamDomain}`,
+        `acknowledged by domain ${ack.domain === undefined ? "<absent>" : JSON.stringify(ack.domain)}, expected ${JSON.stringify(jetstreamDomain)}`,
       );
     }
     return {
