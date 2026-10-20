@@ -1,6 +1,12 @@
 import { describe, expect, mock, test } from "bun:test";
 import type { Consumer, ConsumerMessages, JsMsg, NatsConnection, Subscription } from "nats";
-import { MyelinSubscriber, type EnvelopeHandler } from "../subscriber";
+import {
+  MyelinSubscriber,
+  type AckDecision,
+  type EnvelopeErrorHandler,
+  type EnvelopeHandler,
+  type EnvelopeHandlerContext,
+} from "../subscriber";
 import { NatsLink } from "../../nats/connection";
 import validEnvelope from "../vendor/__fixtures__/valid-envelope.json" with { type: "json" };
 
@@ -74,12 +80,14 @@ function startPull(
   link: NatsLink,
   onEnvelope: EnvelopeHandler,
   maxConcurrent?: number,
+  onError?: EnvelopeErrorHandler,
 ) {
   return MyelinSubscriber.start(link, {
     pattern: "local.acme.>",
     mode: "pull",
     pull: { stream: "ACME_TASKS", durable: "working-ctx", maxConcurrent },
     onEnvelope,
+    onError,
   });
 }
 
@@ -134,8 +142,23 @@ describe("EnvelopeHandlerContext.working()", () => {
     await link.close();
   });
 
-  test.each([
-    { outcome: "returns", settled: "ack", handler: (): void => undefined },
+  test.each<{
+    outcome: string;
+    settled: "ack" | "nak" | "term";
+    handler: () => ReturnType<EnvelopeHandler>;
+  }>([
+    { outcome: "returns void", settled: "ack", handler: (): void => undefined },
+    { outcome: "returns ack", settled: "ack", handler: (): AckDecision => ({ kind: "ack" }) },
+    {
+      outcome: "returns delayed nak",
+      settled: "nak",
+      handler: async (): Promise<AckDecision> => ({ kind: "nak", delayMs: 100 }),
+    },
+    {
+      outcome: "returns term",
+      settled: "term",
+      handler: async (): Promise<AckDecision> => ({ kind: "term", reason: "finished" }),
+    },
     {
       outcome: "throws",
       settled: "nak",
@@ -143,25 +166,51 @@ describe("EnvelopeHandlerContext.working()", () => {
         throw new Error("boom");
       },
     },
-  ] as const)("pull: working() after the handler $outcome is a no-op", async ({ settled, handler }) => {
+    {
+      outcome: "rejects",
+      settled: "nak",
+      handler: () => Promise.reject(new Error("rejected")),
+    },
+  ])("pull: retained context is inert during a later delivery after the handler $outcome", async ({ settled, handler }) => {
     const { link, deliver } = await makePullLink();
-    const msg = makeFakeJsMsg();
-    let captured: { working(): void } | undefined;
-    const orig = console.error;
-    console.error = mock(() => {});
-    const sub = startPull(link, (_env, _subject, ctx) => {
-      captured = ctx;
-      handler();
-    });
+    const first = makeFakeJsMsg();
+    const second = makeFakeJsMsg();
+    const captured: EnvelopeHandlerContext[] = [];
+    let release: () => void = () => {};
+    let notifySecondStarted: () => void = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const secondStarted = new Promise<void>((resolve) => { notifySecondStarted = resolve; });
+    const sub = startPull(link, async (_env, _subject, ctx) => {
+      captured.push(ctx);
+      if (captured.length === 1) {
+        ctx.working();
+        return handler();
+      }
+      notifySecondStarted();
+      await gate;
+    }, undefined, mock(() => {}));
+    first[settled].mockImplementation(() => captured[0]!.working());
     await sub.ready;
-    deliver(msg);
-    await flush();
-    console.error = orig;
-    expect(msg[settled]).toHaveBeenCalledTimes(1);
-    captured?.working();
-    expect(msg.working).not.toHaveBeenCalled();
-    await sub.stop();
-    await link.close();
+    deliver(first);
+    deliver(second);
+    try {
+      await secondStarted;
+      expect(first[settled]).toHaveBeenCalledTimes(1);
+      expect(first.working).toHaveBeenCalledTimes(1);
+      captured[0]!.working();
+      expect(first.working).toHaveBeenCalledTimes(1);
+      expect(second.working).not.toHaveBeenCalled();
+      captured[1]!.working();
+      expect(second.working).toHaveBeenCalledTimes(1);
+      expect(second.ack).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await sub.stop();
+      await link.close();
+    }
+    captured[1]!.working();
+    expect(second.working).toHaveBeenCalledTimes(1);
+    expect(second.ack).toHaveBeenCalledTimes(1);
   });
 
   test("pull: a throwing JsMsg.working() does not fail the handler", async () => {
