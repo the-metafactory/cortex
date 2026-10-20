@@ -2412,6 +2412,7 @@ describe("bash-guard.hook — round 8: git path-check coverage + `--` end-of-opt
 // =============================================================================
 import {
   checkTextValue,
+  extractCommandPaths,
   checkCommandPaths,
   COMMAND_FLAG_POLICIES,
   DEFAULT_CONFIG,
@@ -3383,10 +3384,65 @@ describe("bash-guard.hook — cortex#2493: free-text flag values are not paths",
     expect(d.reason).toContain("free-text flag value");
   });
 
-  test('gh issue create --title "it\'s" ⇒ DENY (embedded quote — tokeniser cannot tell what the shell passes)', () => {
+  test('gh issue create --title "it\'s" ⇒ ALLOW (F3: an apostrophe inside double quotes is literal to bash)', () => {
     const d = decision('gh issue create --title "it\'s" --body-file body.md');
+    expect(d.decision).toBe("allow");
+  });
+
+  test('git commit -m "don\'t break it" ⇒ ALLOW (F3: the common case in commit messages)', () => {
+    const d = decision('git commit -m "don\'t break it"');
+    expect(d.decision).toBe("allow");
+  });
+
+  test("gh pr comment 1 -b 'say \"hi\"' ⇒ ALLOW (double quotes inside single quotes are literal)", () => {
+    const d = decision("gh pr comment 1 -b 'say \"hi\"'");
+    expect(d.decision).toBe("allow");
+  });
+
+  test("gh issue create --title it's ⇒ DENY (unquoted: the tokeniser cannot tell what the shell passes)", () => {
+    const d = decision("gh issue create --title it's --body-file body.md");
     expect(d.decision).toBe("deny");
     expect(d.reason).toContain("embedded or unbalanced quote");
+  });
+
+  // ---- F1: an UNQUOTED text value is subject to brace/glob/tilde expansion ----
+
+  test("gh issue create --title {x,-F,<out-of-scope>} ⇒ DENY (unquoted brace would expand into a --body-file read of the secret)", () => {
+    const d = decision(`gh issue create --title {x,-F,${join(secretDir, "canary.txt")}} --body-file body.md`);
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("unquoted free-text flag value");
+  });
+
+  test("gh issue create -t {x,-F,<out-of-scope>} ⇒ DENY (short form)", () => {
+    const d = decision(`gh issue create -t {x,-F,${join(secretDir, "canary.txt")}} --body-file body.md`);
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("unquoted free-text flag value");
+  });
+
+  test("gh pr comment 1 --body {x,-F,<out-of-scope>} ⇒ DENY", () => {
+    const d = decision(`gh pr comment 1 --body {x,-F,${join(secretDir, "canary.txt")}}`);
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("unquoted free-text flag value");
+  });
+
+  test("git commit -m {x,--file=<out-of-scope>} ⇒ DENY", () => {
+    const d = decision(`git commit -m {x,--file=${join(secretDir, "canary.txt")}}`);
+    expect(d.decision).toBe("deny");
+    expect(d.reason).toContain("unquoted free-text flag value");
+  });
+
+  test("gh issue create --title=~root ⇒ DENY (tilde), --title=a*b ⇒ DENY (glob); --title=v1.2-rc:ok ⇒ ALLOW (closed set)", () => {
+    expect(decision("gh issue create --title=~root --body-file body.md").decision).toBe("deny");
+    expect(decision("gh issue create --title=a*b --body-file body.md").decision).toBe("deny");
+    expect(decision("gh issue create --title=v1.2-rc:ok --body-file body.md").decision).toBe("allow");
+  });
+
+  // ---- F4: git's text flags are commit-scoped ----
+
+  test("git log -m <out-of-scope pathspec> ⇒ the pathspec is NOT swallowed as text (unit: extractCommandPaths denies on the flag, as before this PR)", () => {
+    const r = extractCommandPaths(`git log -m ${join(secretDir, "canary.txt")}`, "strict");
+    expect(r.paths).toBeNull();
+    expect(r.reason).toContain("unrecognised flag");
   });
 
   test("git commit -mfix ⇒ DENY (glued short text is not modeled — ambiguous with a flag bundle)", () => {
@@ -3416,13 +3472,19 @@ describe("bash-guard.hook — cortex#2493: free-text flag values are not paths",
 
   // ---- unit: checkTextValue ----
 
-  test("checkTextValue — unwraps one quote pair, accepts ordinary prose, refuses $ / backslash / embedded quotes", () => {
+  test("checkTextValue — quoted: unwraps one pair, accepts prose and the other quote char, refuses $ / backslash; unquoted: closed character set", () => {
     expect(checkTextValue('"Coaching Hub tiles do not open"')).toBeUndefined();
     expect(checkTextValue("'is:open label:bug'")).toBeUndefined();
     expect(checkTextValue("plain")).toBeUndefined();
     expect(checkTextValue('"fix: handle 100% of cases (#12), really!"')).toBeUndefined();
     expect(checkTextValue('"$HOME"')).toContain("cortex#2493");
     expect(checkTextValue("a\\b")).toContain("cortex#2493");
-    expect(checkTextValue('"it\'s"')).toContain("embedded or unbalanced quote");
+    expect(checkTextValue('"it\'s"')).toBeUndefined(); // F3: literal inside double quotes
+    expect(checkTextValue("'say \"hi\"'")).toBeUndefined();
+    expect(checkTextValue("it's")).toContain("embedded or unbalanced quote"); // unquoted: tokeniser mis-split
+    expect(checkTextValue("{x,-F,/etc/passwd}")).toContain("unquoted free-text flag value"); // F1
+    expect(checkTextValue("~root")).toContain("unquoted free-text flag value");
+    expect(checkTextValue("v1.2-rc:ok")).toBeUndefined();
+    expect(checkTextValue('"{x,-F,/etc/passwd}"')).toBeUndefined(); // quoted braces are literal
   });
 });

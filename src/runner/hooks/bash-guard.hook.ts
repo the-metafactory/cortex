@@ -821,6 +821,15 @@ interface CommandFlagPolicy {
    * as unrecognised (and denied) as it was before this fix.
    */
   bareNumericCount?: boolean;
+  /**
+   * cortex#2493 (review F4 on #2522) — subcommands for which `shortText` /
+   * `longText` apply. On any other subcommand the text sets are ignored and
+   * the flag is classified as if they were absent (`git log -m <pathspec>`:
+   * `-m` is a boolean there, so the pathspec must stay a containment-checked
+   * argument, not be swallowed as text). The subcommand is the first token
+   * after the head word that does not start with `-`. Unset = every subcommand.
+   */
+  textSubcommands?: ReadonlySet<string>;
 }
 
 export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> = {
@@ -909,6 +918,9 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
     // an unrecognised flag, so a guarded agent could branch, add and push
     // but never commit.
     shortText: new Set(["m"]),
+    // `-m`/`--message` are free text on `commit` ONLY (F4): on `log`/`show`
+    // `-m` is a boolean and must not consume the next token.
+    textSubcommands: new Set(["commit"]),
     // Common read-only long flags for log/diff/status output shaping. None
     // of these read a path as their value.
     longBoolean: new Set(["oneline", "stat", "name-only"]),
@@ -1091,24 +1103,64 @@ type FlagClassification =
 const UNSAFE_TEXT_CHAR_RE = /[$\\]/;
 
 /**
+ * cortex#2493 — characters an UNQUOTED free-text flag value may consist of.
+ * An unquoted token is subject to every shell expansion before the tool
+ * sees it: brace (`{x,-F,/secret/f}` → three argv entries, one of them a
+ * path flag — review finding F1 on #2522), glob, tilde, quote-removal. The
+ * tokeniser cannot model those, so an unquoted text value is held to a
+ * CLOSED set (round-5 discipline: whitelist, never a growing blacklist).
+ * Ordinary one-word titles and messages pass; anything else is written in
+ * quotes, which is how agents write multi-word text anyway.
+ */
+const UNQUOTED_TEXT_RE = /^[A-Za-z0-9._:,/=@+%-]*$/;
+
+/**
  * cortex#2493 — validate one free-text flag value (a title, a body, a
- * commit message). Unwraps ONE matching pair of surrounding quotes, exactly
- * as the candidate-path pipeline does, then refuses embedded quotes (the
- * tokeniser cannot tell what the shell would really pass) and anything in
- * {@link UNSAFE_TEXT_CHAR_RE}. Returns `undefined` when the value is fine,
- * else the deny reason. Exported for unit tests.
+ * commit message). Returns `undefined` when the value is fine, else the
+ * deny reason. Exported for unit tests.
+ *
+ * Two regimes, because bash has two:
+ *   - QUOTED (the tokeniser matched one `"…"` or `'…'` run): the shell
+ *     passes the inside literally, except `$`/backslash inside double quotes
+ *     — refused by {@link UNSAFE_TEXT_CHAR_RE} in both quote styles, one
+ *     rule being simpler than modelling the difference. The OTHER quote
+ *     character is literal inside a quoted run (`"don't"`, `'say "hi"'`)
+ *     and is allowed — review finding F3 on #2522: apostrophes are the
+ *     common case in commit messages, not an edge case.
+ *   - UNQUOTED: every expansion applies, so the value must match
+ *     {@link UNQUOTED_TEXT_RE}; a quote character here means the tokeniser
+ *     mis-split the command, denied.
  */
 export function checkTextValue(rawToken: string): string | undefined {
   let tok = rawToken;
+  let quote: '"' | "'" | undefined;
   if (
     (tok.startsWith('"') && tok.endsWith('"') && tok.length >= 2) ||
     (tok.startsWith("'") && tok.endsWith("'") && tok.length >= 2)
   ) {
+    quote = tok[0] as '"' | "'";
     tok = tok.slice(1, -1);
   }
-  if (tok.includes('"') || tok.includes("'")) {
+  if (quote === undefined) {
+    if (tok.includes('"') || tok.includes("'")) {
+      return (
+        `embedded or unbalanced quote character in free-text flag value "${tok.slice(0, 80)}" — ` +
+        `cannot safely resolve what the shell would actually pass, denying fail-closed`
+      );
+    }
+    if (!UNQUOTED_TEXT_RE.test(tok)) {
+      return (
+        `unquoted free-text flag value "${tok.slice(0, 80)}" contains a character the shell may expand ` +
+        `(brace, glob, tilde, $) into extra arguments — quote the value, denying fail-closed (cortex#2493)`
+      );
+    }
+    return undefined;
+  }
+  if (tok.includes(quote)) {
+    // Unreachable with the `"[^"]*"|'[^']*'` tokeniser; kept so the
+    // function is safe on any caller's input.
     return (
-      `embedded or unbalanced quote character in free-text flag value "${tok.slice(0, 80)}" — ` +
+      `embedded quote character in free-text flag value "${tok.slice(0, 80)}" — ` +
       `cannot safely resolve what the shell would actually pass, denying fail-closed`
     );
   }
@@ -1293,6 +1345,20 @@ export function classifyFlagToken(tok: string, policy: CommandFlagPolicy): FlagC
  *
  * Exported for unit tests.
  */
+/**
+ * cortex#2493 (F4) — the policy to classify a token against, with the
+ * free-text flag sets dropped when the command's subcommand is not one
+ * {@link CommandFlagPolicy.textSubcommands} names. `git -C dir commit` reads
+ * "dir" as the subcommand and so loses the text sets: over-deny, and `-C`
+ * before the subcommand already fails the floor's rule shape.
+ */
+function policyForSubcommand(policy: CommandFlagPolicy, tokens: readonly string[]): CommandFlagPolicy {
+  if (!policy.textSubcommands) return policy;
+  const sub = tokens.slice(1).find((t) => !t.startsWith("-"))?.toLowerCase();
+  if (sub !== undefined && policy.textSubcommands.has(sub)) return policy;
+  return { ...policy, shortText: undefined, longText: undefined };
+}
+
 export function extractCommandPaths(
   command: string,
   mode: "strict" | "lenient" = "strict",
@@ -1370,7 +1436,7 @@ export function extractCommandPaths(
             `known flag policy — denying fail-closed`,
         };
       }
-      const classified = classifyFlagToken(tok, flagPolicy);
+      const classified = classifyFlagToken(tok, policyForSubcommand(flagPolicy, tokens));
       if (classified.kind === "deny") {
         // EBH-1g: deliberately NOT relaxed by `mode === "lenient"`. A
         // COMMAND_FLAG_POLICIES entry exists precisely because one of this
