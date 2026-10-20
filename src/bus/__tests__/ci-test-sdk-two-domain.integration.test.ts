@@ -86,6 +86,10 @@ async function provision(f: Awaited<ReturnType<typeof fixture>>, overlap = false
   }
 }
 
+async function count(manager: Awaited<ReturnType<typeof fixture>>["alpha"]) {
+  return (await manager.streams.info(STREAM)).state.messages;
+}
+
 function publish(runtime: MyelinRuntime, value = envelope(), expectedStream = STREAM) {
   if (!runtime.publishDurable) throw new Error("public runtime.publishDurable missing");
   return runtime.publishDurable(value, { expectedStream, timeoutMs: 2_000 });
@@ -102,8 +106,56 @@ async function subscribe(runtime: MyelinRuntime, onEnvelope: MyelinSubscribePull
   return sub;
 }
 
+async function longHandler(working: boolean) {
+  const f = await fixture();
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  const stop = async () => {
+    release();
+    if (heartbeat) clearInterval(heartbeat);
+    await f.stop();
+  };
+  try {
+    await provision(f);
+    const runtime = await f.start();
+    const first = envelope();
+    const second = envelope();
+    const seen: string[] = [];
+    await publish(runtime, first);
+    await publish(runtime, second);
+    let firstStartedAt = 0;
+    await subscribe(runtime, async (value, _subject, ctx) => {
+      seen.push(value.id);
+      if (seen.length === 1) {
+        firstStartedAt = performance.now();
+        if (working) {
+          ctx.working();
+          heartbeat = setInterval(() => ctx.working(), ACK_WAIT_MS / 6);
+        }
+        await gate;
+        if (heartbeat) clearInterval(heartbeat);
+      }
+    });
+    await waitFor("first handler started", () => seen.length === 1);
+    const config = (await f.beta.consumers.info(STREAM, DURABLE)).config;
+    expect(config.max_ack_pending).toBe(1);
+    expect(config.ack_wait).toBe(nanos(ACK_WAIT_MS));
+    const settle = async () => {
+      release();
+      await waitFor("second message delivered and acknowledged after first settles", async () =>
+        seen.includes(second.id) && (await f.beta.consumers.info(STREAM, DURABLE)).num_ack_pending === 0,
+      );
+    };
+    return { f, first, second, seen, firstStartedAt: () => firstStartedAt, settle, stop };
+  } catch (error) {
+    await stop();
+    throw error;
+  }
+}
+
 suite(`ci-test SDK on two connected disposable JetStream domains${reason}`, () => {
-  test("disjoint subjects isolate signed durable storage and domain-bound pulls", async () => {
+  test("disjoint subjects keep signed storage in beta, and the beta-bound pull drains beta's same-named durable", async () => {
     const f = await fixture();
     try {
       await provision(f);
@@ -130,8 +182,9 @@ suite(`ci-test SDK on two connected disposable JetStream domains${reason}`, () =
       expect(getSignedByChain(parsed.envelope)).toMatchObject([{ method: "ed25519", identity: SIGNER }]);
       expect((await verifyEnvelopeIdentity(parsed.envelope as Parameters<typeof verifyEnvelopeIdentity>[0], f.registry)).status).toBe("verified");
       expect(await publish(runtime, value)).toMatchObject({ stream: STREAM, domain: "beta", seq: ack.seq, duplicate: true });
-      expect((await f.beta.streams.info(STREAM)).state.messages).toBe(1);
-      expect((await f.alpha.streams.info(STREAM)).state.messages).toBe(0);
+      expect(await count(f.beta)).toBe(1);
+      expect(await count(f.alpha)).toBe(0);
+      expect((await f.beta.consumers.info(STREAM, DURABLE)).delivered.consumer_seq).toBe(1);
       expect((await f.alpha.consumers.info(STREAM, DURABLE)).delivered.consumer_seq).toBe(0);
       expect(alphaSeen).toEqual([]);
     } finally { await f.stop(); }
@@ -148,8 +201,7 @@ suite(`ci-test SDK on two connected disposable JetStream domains${reason}`, () =
         message: expect.stringContaining('acknowledged by domain "alpha", expected "beta"'),
       });
       await waitFor("both overlapping streams store despite rejection", async () =>
-        (await f.alpha.streams.info(STREAM)).state.messages === 1 &&
-        (await f.beta.streams.info(STREAM)).state.messages === 1,
+        (await count(f.alpha)) === 1 && (await count(f.beta)) === 1,
       );
       const alpha = await f.alpha.streams.getMessage(STREAM, { seq: 1 });
       const beta = await f.beta.streams.getMessage(STREAM, { seq: 1 });
@@ -157,74 +209,43 @@ suite(`ci-test SDK on two connected disposable JetStream domains${reason}`, () =
     } finally { await f.stop(); }
   }, 20_000);
 
-  test.each([
-    { working: true, scenario: "working() extends a long handler and holds the sole pending slot" },
-    { working: false, scenario: "a long handler without working() is redelivered (control)" },
-  ])("$scenario", async ({ working }) => {
-    const f = await fixture();
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    let heartbeat: ReturnType<typeof setInterval> | undefined;
+  test("working() extends a long handler and holds the sole pending slot", async () => {
+    const run = await longHandler(true);
     try {
-      await provision(f);
-      const runtime = await f.start();
-      const first = envelope();
-      const second = envelope();
-      const seen: string[] = [];
-      await publish(runtime, first);
-      await publish(runtime, second);
-      let firstStartedAt = 0;
-      await subscribe(runtime, async (value, _subject, ctx) => {
-        seen.push(value.id);
-        if (seen.length === 1) {
-          firstStartedAt = performance.now();
-          if (working) {
-            ctx.working();
-            heartbeat = setInterval(() => ctx.working(), ACK_WAIT_MS / 6);
-          }
-          await gate;
-          if (heartbeat) clearInterval(heartbeat);
-        }
-      });
-      await waitFor("first handler started", () => seen.length === 1);
-      const config = (await f.beta.consumers.info(STREAM, DURABLE)).config;
-      expect(config.max_ack_pending).toBe(1);
-      expect(config.ack_wait).toBe(nanos(ACK_WAIT_MS));
-      if (working) {
-        const consumer = await f.nc.jetstream({ domain: "beta" }).consumers.get(STREAM, DURABLE);
-        const competingPull = await consumer.fetch({ max_messages: 1, expires: ACK_WAIT_MS * 4 });
-        const competing: string[] = [];
-        for await (const message of competingPull) {
-          competing.push(message.string());
-          message.ack();
-        }
-        expect(performance.now() - firstStartedAt).toBeGreaterThan(ACK_WAIT_MS * 3);
-        expect(competing).toEqual([]);
-        expect(seen).toEqual([first.id]);
-        const info = await f.beta.consumers.info(STREAM, DURABLE);
-        expect(info.num_ack_pending).toBe(1);
-        expect(info.num_pending).toBe(1);
-        expect(info.delivered.consumer_seq).toBe(1);
-        expect(info.num_redelivered).toBe(0);
-      } else {
-        await waitFor("same envelope redelivered while original handler remains unacknowledged", () =>
-          seen.filter((id) => id === first.id).length >= 2 &&
-          performance.now() - firstStartedAt >= ACK_WAIT_MS * 2,
-        );
-        expect(performance.now() - firstStartedAt).toBeGreaterThanOrEqual(ACK_WAIT_MS);
-        expect(seen.slice(0, 2)).toEqual([first.id, first.id]);
+      const consumer = await run.f.nc.jetstream({ domain: "beta" }).consumers.get(STREAM, DURABLE);
+      const competingPull = await consumer.fetch({ max_messages: 1, expires: ACK_WAIT_MS * 4 });
+      const competing: string[] = [];
+      for await (const message of competingPull) {
+        competing.push(message.string());
+        message.ack();
       }
-      release();
-      await waitFor("second message delivered and acknowledged after first settles", async () =>
-        seen.includes(second.id) && (await f.beta.consumers.info(STREAM, DURABLE)).num_ack_pending === 0,
+      expect(performance.now() - run.firstStartedAt()).toBeGreaterThan(ACK_WAIT_MS * 3);
+      expect(competing).toEqual([]);
+      expect(run.seen).toEqual([run.first.id]);
+      const info = await run.f.beta.consumers.info(STREAM, DURABLE);
+      expect(info.num_ack_pending).toBe(1);
+      expect(info.num_pending).toBe(1);
+      expect(info.delivered.consumer_seq).toBe(1);
+      expect(info.num_redelivered).toBe(0);
+      await run.settle();
+      expect(run.seen.filter((id) => id === run.first.id)).toHaveLength(1);
+      expect(run.seen.filter((id) => id === run.second.id)).toHaveLength(1);
+    } finally { await run.stop(); }
+  }, 20_000);
+
+  test("a long handler without working() is redelivered (control)", async () => {
+    const run = await longHandler(false);
+    try {
+      await waitFor("same envelope redelivered while original handler remains unacknowledged", () =>
+        run.seen.filter((id) => id === run.first.id).length >= 2 &&
+        performance.now() - run.firstStartedAt() >= ACK_WAIT_MS * 2,
       );
-      expect(seen.filter((id) => id === first.id)).toHaveLength(working ? 1 : 2);
-      expect(seen.filter((id) => id === second.id)).toHaveLength(1);
-    } finally {
-      release();
-      if (heartbeat) clearInterval(heartbeat);
-      await f.stop();
-    }
+      expect(performance.now() - run.firstStartedAt()).toBeGreaterThanOrEqual(ACK_WAIT_MS);
+      expect(run.seen.slice(0, 2)).toEqual([run.first.id, run.first.id]);
+      await run.settle();
+      expect(run.seen.filter((id) => id === run.first.id)).toHaveLength(2);
+      expect(run.seen.filter((id) => id === run.second.id)).toHaveLength(1);
+    } finally { await run.stop(); }
   }, 20_000);
 
   test("wrong expectedStream, missing signer and stopped runtime reject without storing", async () => {
@@ -237,8 +258,8 @@ suite(`ci-test SDK on two connected disposable JetStream domains${reason}`, () =
       await expect(publish(unsigned)).rejects.toMatchObject({ kind: "no-signer" });
       await signed.stop();
       await expect(publish(signed)).rejects.toMatchObject({ kind: "stopped" });
-      expect((await f.beta.streams.info(STREAM)).state.messages).toBe(0);
-      expect((await f.alpha.streams.info(STREAM)).state.messages).toBe(0);
+      expect(await count(f.beta)).toBe(0);
+      expect(await count(f.alpha)).toBe(0);
     } finally { await f.stop(); }
   }, 20_000);
 });
