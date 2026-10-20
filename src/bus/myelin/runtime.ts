@@ -191,8 +191,13 @@ export interface MyelinRuntime {
    */
   publishOnSubject?(envelope: Envelope, subject: string): Promise<void>;
   /**
-   * Sign an envelope and publish it through JetStream on the runtime's
-   * domain, resolving only once `expectedStream` has acknowledged it.
+   * Sign an envelope and publish it through JetStream, resolving only once
+   * `expectedStream` has acknowledged it and, when `jetstreamDomain` is set,
+   * the PubAck reports that exact domain. A different or absent domain
+   * rejects with `kind: "domain-mismatch"`.
+   *
+   * See {@link MyelinRuntimeOptions} for domain selection and isolation
+   * requirements. Rejection does not undo storage.
    *
    * Unlike {@link publish}, nothing is swallowed and nothing falls back:
    * a missing signer, a signing error (whatever `signFailureMode` says), a
@@ -370,6 +375,12 @@ export interface MyelinSubscribePullOpts {
  * `nats-server`. The shape mirrors `NatsLink.connect`'s own seam
  * (typed against `ConnectionOptions` from `nats`) so a fake here is a
  * fake there — no `unknown`, no `as never` casts.
+ *
+ * `jetstreamDomain` selects the JetStream API prefix and requires
+ * {@link MyelinRuntime.publishDurable} PubAcks to report that exact domain.
+ * It does not restrict envelope flow across connected domains; isolation
+ * requires non-overlapping stream subjects across those domains.
+ * When omitted, PubAck domains are not checked.
  *
  * @internal — not meant for production use; the constructor signature
  *             may change without semver guarantees.
@@ -669,7 +680,8 @@ export type MyelinDurablePublishErrorKind =
   | "unroutable"
   | "timeout"
   | "jetstream-error"
-  | "stream-mismatch";
+  | "stream-mismatch"
+  | "domain-mismatch";
 
 export class MyelinDurablePublishError extends Error {
   readonly kind: MyelinDurablePublishErrorKind;
@@ -2063,6 +2075,12 @@ export async function startMyelinRuntime(
       throw fail(
         "stream-mismatch",
         `acknowledged by stream ${ack.stream}, expected ${options.expectedStream}`,
+      );
+    }
+    if (jetstreamDomain !== undefined && ack.domain !== jetstreamDomain) {
+      throw fail(
+        "domain-mismatch",
+        `acknowledged by domain ${ack.domain === undefined ? "<absent>" : JSON.stringify(ack.domain)}, expected ${JSON.stringify(jetstreamDomain)}`,
       );
     }
     return {
