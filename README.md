@@ -284,6 +284,21 @@ provenance: cortex is the destination of the `grove-v2` migration
 
 ---
 
+## Bus SDK: durable publication and JetStream domains
+
+The `@the-metafactory/cortex/bus` runtime's `publishDurable(envelope, { expectedStream })`
+signs the envelope and waits for a JetStream PubAck from `expectedStream`.
+When the runtime has `jetstreamDomain` set, the PubAck must also report that exact
+domain. A different or absent domain rejects with `MyelinDurablePublishError`
+whose `kind` is `"domain-mismatch"`. Without `jetstreamDomain`, PubAck domains
+are not checked. Existing signing, stream, timeout and runtime-state failures
+still reject without falling back to unsigned or Core NATS publication.
+
+`jetstreamDomain` selects the JetStream API prefix; it does not restrict message
+flow across connected domains. Isolation requires non-overlapping stream
+subjects across those domains. Rejecting an unexpected PubAck does not undo
+message storage in a stream.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — canonical architecture reference
