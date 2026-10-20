@@ -779,6 +779,9 @@ interface CommandFlagPolicy {
    * (defense in depth, and what lets a bare `--flag` with no `=` pass too).
    */
   longValue: ReadonlySet<string>;
+  // https://github.com/the-metafactory/cortex/issues/2493 — the next token is free text: text-checked, then skipped, never containment-checked
+  shortText?: ReadonlySet<string>;
+  longText?: ReadonlySet<string>;
   /**
    * EBH-1h (cortex#2384) — when true, a BARE NUMERIC short flag (a token
    * matching `^-\d+$`, e.g. `-5`, `-20`) is classified as a numeric COUNT
@@ -798,6 +801,8 @@ interface CommandFlagPolicy {
    * as unrecognised (and denied) as it was before this fix.
    */
   bareNumericCount?: boolean;
+  // https://github.com/the-metafactory/cortex/issues/2493 (review F4) — subcommands on which shortText/longText apply; elsewhere they are ignored
+  textSubcommands?: ReadonlySet<string>;
 }
 
 export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> = {
@@ -873,10 +878,14 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
     // failing DEFAULT_CONFIG's shape rule, since `-C` precedes the
     // subcommand there). A glued form (`-C/outside`) is denied outright,
     // earlier, by `isPathShapedFlagValue` (contains "/").
-    shortValue: new Set(["n", "C"]),
+    // https://github.com/the-metafactory/cortex/issues/2493 — -F/--file read the message from a FILE (a path); -m/--message are free text on commit only
+    shortValue: new Set(["n", "C", "F"]),
+    shortText: new Set(["m"]),
+    textSubcommands: new Set(["commit"]),
     // Common read-only long flags for log/diff/status output shaping. None
     // of these read a path as their value.
     longBoolean: new Set(["oneline", "stat", "name-only"]),
+    longText: new Set(["message"]),
     // "--git-dir"/"--work-tree" relocate git's root the same way `-C`
     // does. Deliberately WHITELISTED (not silently denied by omission) so
     // the value routes through the SAME containment pipeline `-C` uses: a
@@ -887,7 +896,7 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
     // path-shaped flag value, same as every other path-checked command).
     // Either way, an out-of-scope target denies — it can never silently
     // relocate git's root past the containment check.
-    longValue: new Set(["git-dir", "work-tree"]),
+    longValue: new Set(["git-dir", "work-tree", "file"]),
     // "--no-index" is DELIBERATELY ABSENT from every set above — this is
     // the round-8 fix itself (cortex#2365 finding 1). `git diff --no-index`
     // is a pure read-arbitrary-files primitive: a standalone diff utility
@@ -923,11 +932,9 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
     shortBoolean: new Set(["w"]),
     // -R/--repo (repo-pin value — extractGhRepo() enforces the pin
     // separately; routing it through containment too is harmless, since an
-    // `owner/repo` value resolves relative to cwd), -S/--search, -L/--limit
-    // (numeric), -b/--body (free text, not a path, but costs nothing to
-    // route through containment), -F/--body-file (THE round-9 finding — a
-    // real local path, MUST be containment-checked, never boolean-skipped).
-    shortValue: new Set(["R", "S", "L", "b", "F"]),
+    // https://github.com/the-metafactory/cortex/issues/2493 — -F/--body-file is a path (round 9); -t/-b/-S are free text sent to the API verbatim
+    shortValue: new Set(["R", "L", "F"]),
+    shortText: new Set(["t", "b", "S"]),
     // Boolean output/behaviour flags for view/list/diff/checks/comment.
     // None of these read a path as their value.
     longBoolean: new Set([
@@ -942,29 +949,24 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
       "create-if-none",
       "delete-last",
     ]),
-    // Value flags whose value is text/identifiers, not a local path —
-    // EXCEPT `body-file`, which genuinely IS a path and is deliberately
     // included here (not omitted) so its value routes through containment,
     // same discipline as git's `-C`/`--git-dir` at round 8.
     longValue: new Set([
       "repo",
       "json",
       "state",
-      "search",
       "limit",
-      "label",
       "assignee",
       "author",
       "base",
       "head",
-      "title",
-      "body",
       "body-file",
       "color",
       "interval",
       "template",
-      "milestone",
     ]),
+    // https://github.com/the-metafactory/cortex/issues/2493 — prose values are text-checked and skipped; body-file stays a containment-checked path
+    longText: new Set(["title", "body", "search", "label", "milestone"]),
   },
 };
 
@@ -1022,7 +1024,93 @@ export const SUBCOMMAND_SCOPED_FLAG_POLICIES = new Set(["git", "gh"]);
 type FlagClassification =
   | { kind: "safe" }
   | { kind: "value"; value: string }
+  | { kind: "text" }
+  | { kind: "textValue"; value: string }
   | { kind: "deny" };
+
+/**
+ * cortex#2493 — characters a free-text flag value may NOT contain, even
+ * inside quotes. `rejectsChaining()` has already refused command
+ * substitution, backticks, pipes, redirects and newlines for the WHOLE
+ * command, so what remains is what bash still expands inside a
+ * double-quoted literal: `$VAR` (a `--title "$GITHUB_TOKEN"` would post the
+ * secret to GitHub as an issue title — text is never read from disk, but it
+ * can still carry something OUT) and backslash escapes (which change what
+ * the tool receives versus what this guard tokenised). Single-quoted text
+ * would be literal in bash, but one rule for both quote styles is simpler
+ * to reason about than modelling bash's quoting, and `$`-bearing prose is
+ * rare enough that over-denying it is the right trade.
+ */
+export const UNSAFE_TEXT_CHAR_RE = /[$\\]/;
+
+/**
+ * cortex#2493 — characters an UNQUOTED free-text flag value may consist of.
+ * An unquoted token is subject to every shell expansion before the tool
+ * sees it: brace (`{x,-F,/secret/f}` → three argv entries, one of them a
+ * path flag — review finding F1 on #2522), glob, tilde, quote-removal. The
+ * tokeniser cannot model those, so an unquoted text value is held to a
+ * CLOSED set (round-5 discipline: whitelist, never a growing blacklist).
+ * Ordinary one-word titles and messages pass; anything else is written in
+ * quotes, which is how agents write multi-word text anyway.
+ */
+export const UNQUOTED_TEXT_RE = /^[A-Za-z0-9._:,/=@+%-]*$/;
+
+/**
+ * cortex#2493 — validate one free-text flag value (a title, a body, a
+ * commit message). Returns `undefined` when the value is fine, else the
+ * deny reason. Exported for unit tests.
+ *
+ * Two regimes, because bash has two:
+ *   - QUOTED (the tokeniser matched one `"…"` or `'…'` run): the shell
+ *     passes the inside literally, except `$`/backslash inside double quotes
+ *     — refused by {@link UNSAFE_TEXT_CHAR_RE} in both quote styles, one
+ *     rule being simpler than modelling the difference. The OTHER quote
+ *     character is literal inside a quoted run (`"don't"`, `'say "hi"'`)
+ *     and is allowed — review finding F3 on #2522: apostrophes are the
+ *     common case in commit messages, not an edge case.
+ *   - UNQUOTED: every expansion applies, so the value must match
+ *     {@link UNQUOTED_TEXT_RE}; a quote character here means the tokeniser
+ *     mis-split the command, denied.
+ */
+export function checkTextValue(rawToken: string): string | undefined {
+  let tok = rawToken;
+  let quote: '"' | "'" | undefined;
+  if (
+    (tok.startsWith('"') && tok.endsWith('"') && tok.length >= 2) ||
+    (tok.startsWith("'") && tok.endsWith("'") && tok.length >= 2)
+  ) {
+    quote = tok[0] as '"' | "'";
+    tok = tok.slice(1, -1);
+  }
+  if (quote === undefined) {
+    if (tok.includes('"') || tok.includes("'")) {
+      return (
+        `embedded or unbalanced quote character in free-text flag value "${tok.slice(0, 80)}" — ` +
+        `cannot safely resolve what the shell would actually pass, denying fail-closed`
+      );
+    }
+    if (!UNQUOTED_TEXT_RE.test(tok)) {
+      return (
+        `unquoted free-text flag value "${tok.slice(0, 80)}" contains a character the shell may expand ` +
+        `(brace, glob, tilde, $) into extra arguments — quote the value, denying fail-closed (cortex#2493)`
+      );
+    }
+    return undefined;
+  }
+  if (tok.includes(quote)) {
+    return (
+      `embedded quote character in free-text flag value "${tok.slice(0, 80)}" — ` +
+      `cannot safely resolve what the shell would actually pass, denying fail-closed`
+    );
+  }
+  if (UNSAFE_TEXT_CHAR_RE.test(tok)) {
+    return (
+      `shell-expandable character ($ or backslash) in free-text flag value "${tok.slice(0, 80)}" — ` +
+      `a quoted literal could still carry an expanded secret, denying fail-closed (cortex#2493)`
+    );
+  }
+  return undefined;
+}
 
 /**
  * cortex#2384 (EBH-1h) — a token matching exactly one leading `-` followed by
@@ -1059,10 +1147,14 @@ export function classifyFlagToken(tok: string, policy: CommandFlagPolicy): FlagC
     const name = eqIdx === -1 ? body : body.slice(0, eqIdx);
     if (eqIdx === -1) {
       if (policy.longBoolean.has(name) || policy.longValue.has(name)) return { kind: "safe" };
+      if (policy.longText?.has(name)) return { kind: "text" };
       return { kind: "deny" };
     }
     if (policy.longValue.has(name)) {
       return { kind: "value", value: body.slice(eqIdx + 1) };
+    }
+    if (policy.longText?.has(name)) {
+      return { kind: "textValue", value: body.slice(eqIdx + 1) };
     }
     return { kind: "deny" };
   }
@@ -1072,6 +1164,7 @@ export function classifyFlagToken(tok: string, policy: CommandFlagPolicy): FlagC
 
   if (body.length === 1) {
     if (policy.shortBoolean.has(body) || policy.shortValue.has(body)) return { kind: "safe" };
+    if (policy.shortText?.has(body)) return { kind: "text" };
     return { kind: "deny" };
   }
 
@@ -1187,6 +1280,20 @@ export function classifyFlagToken(tok: string, policy: CommandFlagPolicy): FlagC
  *
  * Exported for unit tests.
  */
+/**
+ * cortex#2493 (F4) — the policy to classify a token against, with the
+ * free-text flag sets dropped when the command's subcommand is not one
+ * {@link CommandFlagPolicy.textSubcommands} names. `git -C dir commit` reads
+ * "dir" as the subcommand and so loses the text sets: over-deny, and `-C`
+ * before the subcommand already fails the floor's rule shape.
+ */
+export function policyForSubcommand(policy: CommandFlagPolicy, tokens: readonly string[]): CommandFlagPolicy {
+  if (!policy.textSubcommands) return policy;
+  const sub = tokens.slice(1).find((t) => !t.startsWith("-"))?.toLowerCase();
+  if (sub !== undefined && policy.textSubcommands.has(sub)) return policy;
+  return { ...policy, shortText: undefined, longText: undefined };
+}
+
 export function extractCommandPaths(
   command: string,
   mode: "strict" | "lenient" = "strict",
@@ -1264,7 +1371,7 @@ export function extractCommandPaths(
             `known flag policy — denying fail-closed`,
         };
       }
-      const classified = classifyFlagToken(tok, flagPolicy);
+      const classified = classifyFlagToken(tok, policyForSubcommand(flagPolicy, tokens));
       if (classified.kind === "deny") {
         // EBH-1g: deliberately NOT relaxed by `mode === "lenient"`. A
         // COMMAND_FLAG_POLICIES entry exists precisely because one of this
@@ -1281,6 +1388,23 @@ export function extractCommandPaths(
         };
       }
       if (classified.kind === "safe") continue;
+      // whitelist (that is the regression) and has nothing to contain.
+      if (classified.kind === "textValue") {
+        const textReason = checkTextValue(classified.value);
+        if (textReason !== undefined) return { paths: null, reason: textReason };
+        continue;
+      }
+      if (classified.kind === "text") {
+        const next = tokens[i + 1];
+        // No value, or the "value" is itself a flag: consume nothing and let
+        // the tool reject its own malformed invocation. The next token then
+        // gets classified as the flag it looks like, on the next iteration.
+        if (next === undefined || next.startsWith("-")) continue;
+        const textReason = checkTextValue(next);
+        if (textReason !== undefined) return { paths: null, reason: textReason };
+        i += 1;
+        continue;
+      }
       // "value": a known-safe `--flag=value` long option. Neither of these
       // flags reads a path in the real tool, but the value is still pushed
       // through the SAME candidate-path / containment pipeline as every
