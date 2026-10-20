@@ -227,6 +227,62 @@
  * specifically (see that function and the flag's own doc comment) — never
  * captured as a candidate path, and never generalised to any other
  * path-checked command (`ls -5` / `cat -5` remain denied exactly as before).
+ *
+ * ## Round 10 — free-text value flags misclassified as paths (cortex#2493)
+ *
+ * Round 9's `gh` policy modeled `-t`/`--title`, `-b`/`--body`, `-F`/
+ * `--body-file` all as ordinary `shortValue`/`longValue` (path-pipeline)
+ * flags — the module doc even said so explicitly ("free text, not a path,
+ * but costs nothing to route through containment"). That assumption was
+ * wrong: `classifyFlagToken` only classifies the FLAG token itself as
+ * "safe"; it does not consume the flag's value. For the space-separated
+ * form (`--title "some text"`), the value is a SEPARATE token that the
+ * classifier never sees — it falls through to the generic bareword-argument
+ * handler below, which treats every non-flag token as a path CANDIDATE and
+ * denies it via `reduceTokenToRealPathOrReject` when no such file exists.
+ * For the `=`-glued form (`--title=some text`), the value WAS routed through
+ * the same candidate-path pipeline (`classified.kind === "value"`) and hit
+ * the same fate. Net effect: a guarded agent could not file or comment on a
+ * GitHub issue at all — any human-readable title or body denied the whole
+ * command.
+ *
+ * Fixed by splitting "value is consumed but is free text" from "value is a
+ * path" into its own policy dimension — {@link CommandFlagPolicy.longTextValue}
+ * / {@link CommandFlagPolicy.shortTextValue} — with `title`/`body` (both
+ * flag forms) moved there. A text-value flag never enters the candidate-path
+ * pipeline at all: for the `--flag=value` / glued-short form the value lives
+ * in the SAME token, which the classifier now returns as fully "safe"
+ * (skipped, not path-checked); for the space-separated form, classification
+ * additionally signals the token loop in `extractCommandPaths` to skip the
+ * IMMEDIATELY FOLLOWING token outright — never quote-stripped, character-
+ * whitelisted, or pushed onto `paths`. `-F`/`--body-file` is deliberately
+ * NOT moved — it stays on `shortValue`/`longValue` exactly as round 9 left
+ * it, because it genuinely reads a local file and POSTs its contents to
+ * GitHub (the live remote-exfil finding round 9 closed); weakening its path
+ * containment would reopen that finding. See the round-9 tests
+ * (`gh pr comment 1 --body-file <out-of-scope> ⇒ DENY`) and the new round-10
+ * tests below, which assert both properties together: a prose title/body is
+ * ALLOWED (in both flag forms) while an out-of-scope `--body-file` is still
+ * DENIED.
+ *
+ * Audit for the same class elsewhere (cortex#2493's own suggestion): the
+ * only OTHER path-checked command with a value-taking flag at all is `git`
+ * (`-n`/`-C`/`--git-dir`/`--work-tree`, all genuinely path/ref arguments,
+ * not prose) — no collateral there. `git commit -m` (the issue's suggested
+ * candidate) is not reachable through this bug: `commit` is not one of
+ * `DEFAULT_CONFIG`'s floor-permitted git subcommands
+ * (`log|diff|show|status|branch|fetch|remote|rev-parse`), so a normal guarded
+ * session never reaches `checkCommandPaths` for it — the command-shape
+ * allowlist denies it first, for an unrelated reason. It IS reachable in a
+ * guard-off (G-300) session, but through a DIFFERENT mechanism:
+ * `SUBCOMMAND_SCOPED_FLAG_POLICIES` exempts `git`/`gh` from
+ * `COMMAND_FLAG_POLICIES` entirely in lenient mode, so `-m`'s value falls
+ * through to the same generic bareword handler regardless of any
+ * `longTextValue`/`shortTextValue` entry on `git`'s policy (which lenient
+ * mode never consults for git/gh) — fixing it requires a lenient-mode-
+ * specific mechanism, not this round's one-line policy-set change, so it is
+ * OUT OF SCOPE here and tracked as a follow-up rather than folded into this
+ * fix.
  */
 
 import { appendFileSync, mkdirSync, chmodSync, existsSync } from "fs";
@@ -780,6 +836,31 @@ interface CommandFlagPolicy {
    */
   longValue: ReadonlySet<string>;
   /**
+   * Round 10 (cortex#2493) — long-flag names whose value is CONSUMED (both
+   * `--flag value` space-separated and `--flag=value` glued forms) but is
+   * FREE TEXT, never a path: the value is never checked against the
+   * candidate-path/containment pipeline at all. Distinct from `longValue`
+   * (whose value, though also never a real path for the flags whitelisted
+   * there, is STILL routed through containment as defense-in-depth). A flag
+   * belongs here only when routing its value through containment would
+   * itself be the bug — i.e. when the value is expected to be arbitrary
+   * human prose that will almost never resolve to an existing file
+   * (`gh issue create --title "…"`/`--body "…"`), so containment-checking
+   * it produces a false "no such file" deny instead of any real security
+   * benefit. NEVER add a flag here that reads its value from disk — for
+   * those (e.g. `--body-file`), keep it on `longValue`/`shortValue` so the
+   * value stays containment-checked.
+   */
+  longTextValue: ReadonlySet<string>;
+  /**
+   * Round 10 (cortex#2493) — the short-flag equivalent of `longTextValue`:
+   * single-char flags (`-t`, `-b`) whose value is consumed but is free text,
+   * never a path, and so never enters the candidate-path pipeline. Same
+   * caveat as `longTextValue`: a flag that reads its value from disk (`-F`)
+   * must stay on `shortValue`, never move here.
+   */
+  shortTextValue: ReadonlySet<string>;
+  /**
    * EBH-1h (cortex#2384) — when true, a BARE NUMERIC short flag (a token
    * matching `^-\d+$`, e.g. `-5`, `-20`) is classified as a numeric COUNT
    * flag: safe, and — same as any other classified-safe flag — NOT captured
@@ -804,43 +885,54 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
   cat: {
     shortBoolean: new Set(["n", "b", "s", "v", "e", "t", "A", "E", "T"]),
     shortValue: new Set(),
+    shortTextValue: new Set(),
     longBoolean: new Set(),
     longValue: new Set(),
+    longTextValue: new Set(),
   },
   head: {
     shortBoolean: new Set(["q", "v"]),
     shortValue: new Set(["n", "c"]),
+    shortTextValue: new Set(),
     longBoolean: new Set(),
     longValue: new Set(["lines", "bytes"]),
+    longTextValue: new Set(),
     // EBH-1h (cortex#2384) — `head -5` is POSIX shorthand for `head -n 5`.
     bareNumericCount: true,
   },
   tail: {
     shortBoolean: new Set(["q", "v", "f"]),
     shortValue: new Set(["n", "c"]),
+    shortTextValue: new Set(),
     longBoolean: new Set(["follow"]),
     longValue: new Set(["lines", "bytes"]),
+    longTextValue: new Set(),
     // EBH-1h (cortex#2384) — `tail -3` is POSIX shorthand for `tail -n 3`.
     bareNumericCount: true,
   },
   ls: {
     shortBoolean: new Set(["l", "a", "A", "h", "R", "t", "r", "S", "1", "d", "F", "G"]),
     shortValue: new Set(),
+    shortTextValue: new Set(),
     longBoolean: new Set(),
     // `--color` (bare, or `--color=auto|always|never`) — no path value.
     longValue: new Set(["color"]),
+    longTextValue: new Set(),
   },
   wc: {
     // Deliberately NO longBoolean/longValue entries — `--files0-from` (the
     // live bypass this round closes) is NOT on this list, on purpose.
     shortBoolean: new Set(["l", "w", "c", "m", "L"]),
     shortValue: new Set(),
+    shortTextValue: new Set(),
     longBoolean: new Set(),
     longValue: new Set(),
+    longTextValue: new Set(),
   },
   file: {
     shortBoolean: new Set(["b", "i", "L", "h", "z"]),
     shortValue: new Set(),
+    shortTextValue: new Set(),
     longBoolean: new Set(["mime-type", "mime-encoding"]),
     // `-f`/`--files-from` are deliberately ABSENT — that's the bypass this
     // round closes. `color` is not a real `file` flag, but accepting it as
@@ -848,6 +940,7 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
     // this guard's own pre-existing test matrix for "an `=`-flag with a
     // non-path value must not be denied".
     longValue: new Set(["color"]),
+    longTextValue: new Set(),
   },
   // cortex#2365 (EBH-1d, round 8) — `git` joins PATH_CHECKED_COMMANDS. The
   // whitelisted subcommands (log|diff|show|status|branch|fetch|remote|
@@ -874,6 +967,13 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
     // subcommand there). A glued form (`-C/outside`) is denied outright,
     // earlier, by `isPathShapedFlagValue` (contains "/").
     shortValue: new Set(["n", "C"]),
+    // Round 10 (cortex#2493) audit: no floor-permitted git subcommand
+    // (log|diff|show|status|branch|fetch|remote|rev-parse) has a prose-
+    // valued short flag comparable to `gh`'s `-t`/`-b` — `git commit -m` is
+    // the closest analog, but `commit` isn't in the floor at all (see the
+    // round-10 module-doc note above for why it's a follow-up, not a fix
+    // here).
+    shortTextValue: new Set(),
     // Common read-only long flags for log/diff/status output shaping. None
     // of these read a path as their value.
     longBoolean: new Set(["oneline", "stat", "name-only"]),
@@ -888,6 +988,7 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
     // Either way, an out-of-scope target denies — it can never silently
     // relocate git's root past the containment check.
     longValue: new Set(["git-dir", "work-tree"]),
+    longTextValue: new Set(),
     // "--no-index" is DELIBERATELY ABSENT from every set above — this is
     // the round-8 fix itself (cortex#2365 finding 1). `git diff --no-index`
     // is a pure read-arbitrary-files primitive: a standalone diff utility
@@ -916,6 +1017,15 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
   // in-scope body file still works (containment-checked, not blanket-
   // denied); an out-of-scope one denies via containment, not via a
   // blanket ban on the flag itself.
+  //
+  // Round 10 (cortex#2493) — `-t`/`--title` and `-b`/`--body` moved OFF
+  // `shortValue`/`longValue` and onto `shortTextValue`/`longTextValue`
+  // below. Round 9's comment on `-b` ("free text, not a path, but costs
+  // nothing to route through containment") was the bug: routing genuine
+  // prose through the candidate-path pipeline means `reduceTokenToRealPathOrReject`
+  // rejects it the moment the title/body text doesn't happen to name an
+  // existing file — i.e. always. `-F`/`--body-file` stays exactly where
+  // round 9 put it (a real local path, MUST stay containment-checked).
   gh: {
     // -w (--web) is the only common single-char BOOLEAN flag across the
     // floor's read-only subcommands; every other short flag below takes a
@@ -924,10 +1034,14 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
     // -R/--repo (repo-pin value — extractGhRepo() enforces the pin
     // separately; routing it through containment too is harmless, since an
     // `owner/repo` value resolves relative to cwd), -S/--search, -L/--limit
-    // (numeric), -b/--body (free text, not a path, but costs nothing to
-    // route through containment), -F/--body-file (THE round-9 finding — a
-    // real local path, MUST be containment-checked, never boolean-skipped).
-    shortValue: new Set(["R", "S", "L", "b", "F"]),
+    // (numeric), -F/--body-file (THE round-9 finding — a real local path,
+    // MUST be containment-checked, never boolean-skipped, never moved to
+    // shortTextValue).
+    shortValue: new Set(["R", "S", "L", "F"]),
+    // Round 10 (cortex#2493) — -t/--title, -b/--body: consumed as a value
+    // (both flag forms), but free text, never a path — see longTextValue
+    // below and the round-10 module-doc note for the full rationale.
+    shortTextValue: new Set(["t", "b"]),
     // Boolean output/behaviour flags for view/list/diff/checks/comment.
     // None of these read a path as their value.
     longBoolean: new Set([
@@ -957,14 +1071,23 @@ export const COMMAND_FLAG_POLICIES: Readonly<Record<string, CommandFlagPolicy>> 
       "author",
       "base",
       "head",
-      "title",
-      "body",
       "body-file",
       "color",
       "interval",
       "template",
       "milestone",
     ]),
+    // Round 10 (cortex#2493) — `title`/`body` are consumed as a value (both
+    // `--title value` and `--title=value` forms) but are FREE TEXT: an
+    // issue/PR title or comment body is arbitrary human prose, essentially
+    // never the name of a file that exists relative to cwd, so routing it
+    // through the candidate-path/containment pipeline produced a false
+    // "no such file" deny on every ordinary invocation — the cortex#2493
+    // regression. Neither flag reads from disk in the real `gh` CLI, so
+    // skipping containment on them introduces no file-read/exfil vector;
+    // `body-file` (the genuine round-9 finding) stays on `longValue` above,
+    // unaffected by this change.
+    longTextValue: new Set(["title", "body"]),
   },
 };
 
@@ -1022,6 +1145,7 @@ export const SUBCOMMAND_SCOPED_FLAG_POLICIES = new Set(["git", "gh"]);
 type FlagClassification =
   | { kind: "safe" }
   | { kind: "value"; value: string }
+  | { kind: "text" }
   | { kind: "deny" };
 
 /**
@@ -1038,6 +1162,17 @@ const BARE_NUMERIC_FLAG_RE = /^-\d+$/;
  * has already cleared the token (that check still runs first and keeps its
  * existing deny message/behaviour unchanged — this is an ADDITIONAL,
  * stricter gate, not a replacement).
+ *
+ * Round 10 (cortex#2493) — the `"text"` classification. A flag on
+ * `longTextValue`/`shortTextValue` (no `=`, i.e. the space-separated form)
+ * returns `{ kind: "text" }` rather than `{ kind: "safe" }`: both mean "this
+ * token itself is fine", but `"text"` ADDITIONALLY tells the caller
+ * ({@link extractCommandPaths}) that the very next token is this flag's
+ * value and must be skipped entirely — never quote-stripped, character-
+ * whitelisted, or pushed onto the candidate-path list. A `--flag=value` /
+ * glued-short text flag has no separate token to skip (the value is baked
+ * into THIS token), so that case returns plain `{ kind: "safe" }` instead —
+ * see the `--`/glued branches below.
  *
  * Exported for unit tests.
  */
@@ -1059,11 +1194,21 @@ export function classifyFlagToken(tok: string, policy: CommandFlagPolicy): FlagC
     const name = eqIdx === -1 ? body : body.slice(0, eqIdx);
     if (eqIdx === -1) {
       if (policy.longBoolean.has(name) || policy.longValue.has(name)) return { kind: "safe" };
+      // Round 10 (cortex#2493) — `--title`/`--body` (no `=`): the value is
+      // the NEXT token, space-separated, and must be skipped as free text
+      // rather than captured as a candidate path by the generic fallthrough.
+      if (policy.longTextValue.has(name)) return { kind: "text" };
       return { kind: "deny" };
     }
     if (policy.longValue.has(name)) {
       return { kind: "value", value: body.slice(eqIdx + 1) };
     }
+    // Round 10 (cortex#2493) — `--title=value`/`--body=value`: the value is
+    // glued into THIS token via `=`. There is no separate token to skip, and
+    // (unlike `longValue` above) the glued value must NOT be routed through
+    // the candidate-path pipeline either — it is free text, not a path.
+    // "safe" discards the whole token as-is; nothing more to do.
+    if (policy.longTextValue.has(name)) return { kind: "safe" };
     return { kind: "deny" };
   }
 
@@ -1072,16 +1217,25 @@ export function classifyFlagToken(tok: string, policy: CommandFlagPolicy): FlagC
 
   if (body.length === 1) {
     if (policy.shortBoolean.has(body) || policy.shortValue.has(body)) return { kind: "safe" };
+    // Round 10 (cortex#2493) — `-t value`/`-b value`: same space-separated
+    // free-text consumption as the long form above.
+    if (policy.shortTextValue.has(body)) return { kind: "text" };
     return { kind: "deny" };
   }
 
   // Multi-char short-option token: either a glued numeric value ("-n20": a
-  // shortValue char followed by a purely-numeric remainder), or a bundle of
-  // boolean flags ("-la"). A value flag glued with non-digit chars ("-nl")
-  // is ambiguous and denied — never both interpretations in the same token.
+  // shortValue char followed by a purely-numeric remainder), a glued free-
+  // text value ("-tMyTitle": a shortTextValue char followed by anything —
+  // round 10, cortex#2493), or a bundle of boolean flags ("-la"). A value
+  // flag glued with non-digit chars ("-nl") is ambiguous and denied — never
+  // both interpretations in the same token.
   const first = body[0] ?? "";
   const rest = body.slice(1);
   if (policy.shortValue.has(first) && /^[0-9]+$/.test(rest)) return { kind: "safe" };
+  // Round 10: a glued shortTextValue is entirely consumed by THIS token
+  // (like the `--flag=value` case above) — "safe", no separate token to
+  // skip, and the glued remainder is never candidate-path-checked.
+  if (policy.shortTextValue.has(first) && rest.length > 0) return { kind: "safe" };
 
   for (const ch of body) {
     if (!policy.shortBoolean.has(ch)) return { kind: "deny" };
@@ -1223,9 +1377,23 @@ export function extractCommandPaths(
   // either being denied on principle or (pre-round-7) silently
   // reinterpreted as a flag.
   let endOfOptions = false;
+  // Round 10 (cortex#2493) — when a `longTextValue`/`shortTextValue` flag
+  // classifies as `"text"` below, the IMMEDIATELY FOLLOWING token is that
+  // flag's free-text value (space-separated form, e.g. `--title "…"`). It
+  // must be skipped unconditionally — before the `--`/`-`-prefix checks,
+  // before quote-stripping, before the character whitelist, before ever
+  // being pushed onto `paths` — because it is known-consumed free text, not
+  // a positional path argument at all. This is what makes `gh issue create
+  // --title "A title with spaces" --body-file ./body.md` work: the title
+  // text is skipped here, and `--body-file`'s own value is unaffected.
+  let skipNextAsText = false;
   for (let i = 1; i < tokens.length; i++) {
     let tok = tokens[i];
     if (tok === undefined) continue;
+    if (skipNextAsText) {
+      skipNextAsText = false;
+      continue;
+    }
     if (!endOfOptions && tok === "--") {
       endOfOptions = true;
       continue;
@@ -1281,6 +1449,15 @@ export function extractCommandPaths(
         };
       }
       if (classified.kind === "safe") continue;
+      // Round 10 (cortex#2493) — "text": this flag's value is the NEXT
+      // token (space-separated form), and it is free text, not a path.
+      // Mark it to be skipped unconditionally on the next iteration — see
+      // `skipNextAsText` above — rather than letting it fall through to the
+      // generic bareword-argument candidate-path handling below.
+      if (classified.kind === "text") {
+        skipNextAsText = true;
+        continue;
+      }
       // "value": a known-safe `--flag=value` long option. Neither of these
       // flags reads a path in the real tool, but the value is still pushed
       // through the SAME candidate-path / containment pipeline as every
