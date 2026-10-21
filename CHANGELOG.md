@@ -1,5 +1,28 @@
 # Cortex — Changelog
 
+## 6.17.1 — 2026-10-21 — Bash guard: free-text flag values are not paths
+
+A guarded agent could branch, add and push, but never commit: since round 9
+put `gh` under path containment, every value flag's value went through the
+path character whitelist, which has no space in it, and `git commit -m` was
+never modelled at all. Fixes cortex#2493 (PR #2522, reviewed by JC).
+
+- **Text flags.** `CommandFlagPolicy` gains `shortText` / `longText`. A text
+  flag's value is checked by `checkTextValue` and then skipped, never pushed
+  through the candidate-path pipeline. `git commit -m/--message`,
+  `gh --title/--body/--search/--label/--milestone` and `-t/-b/-S` are text;
+  `--body-file`, `-F` and `--file` stay paths and stay containment-checked.
+- **Quoted vs unquoted.** Inside a quoted run the other quote character is
+  literal (`"don't break it"` passes); `$` and backslash are still refused. An
+  unquoted text value is held to a closed character set, so a brace, glob or
+  tilde can no longer expand into a hidden file read.
+- **Subcommand scope.** `textSubcommands` limits git's text flags to `commit`;
+  `git log -m <pathspec>` classifies as before.
+- 316 bash-guard tests pass; `eslint-suppressions.json` shrinks by two.
+
+Upgrade: `arc upgrade cortex`. The v6.17.0 caveat (cortex#2706, plaintext
+surface tokens in a stack plist) still applies.
+
 ## 6.17.0 — 2026-10-20 — Bus SDK for durable private work, Vigil notification delivery and proposals
 
 The public `@the-metafactory/cortex/bus` surface now has what the Ranger
