@@ -11,7 +11,6 @@ import {
 } from "@the-metafactory/cortex/bus";
 
 const CONFIG = {
-  agent: { name: "synthetic", displayName: "Synthetic" },
   nats: { url: "nats://synthetic.invalid:4222", name: "synthetic", subjects: [] },
 } as unknown as Parameters<typeof startMyelinRuntime>[0];
 
