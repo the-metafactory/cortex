@@ -122,8 +122,6 @@ export const SCHEMA_SQL: string[] = [
     last_ended_at INTEGER NOT NULL
   )`,
   // Vigil stores goal IDs only. All Vigil timestamps are epoch milliseconds.
-  // `stack` is the stack segment of the latest observation's source; the key
-  // itself is `run:{kind}:{ref}` per soma#787 Amendment 1 (see src/vigil/ingest.ts).
   // glossary-ignore: run
   `CREATE TABLE IF NOT EXISTS vigil_subjects (
     subject_key TEXT PRIMARY KEY,
@@ -814,6 +812,16 @@ export interface ColumnAddMigration {
 }
 
 export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
+  {
+    table: "vigil_results",
+    column: "source_stack",
+    ddl: `ALTER TABLE vigil_results ADD COLUMN source_stack TEXT`,
+  },
+  {
+    table: "vigil_proposals",
+    column: "source_stack",
+    ddl: `ALTER TABLE vigil_proposals ADD COLUMN source_stack TEXT`,
+  },
   {
     table: "vigil_proposals",
     column: "filing_error",

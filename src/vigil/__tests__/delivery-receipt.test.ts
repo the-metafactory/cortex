@@ -8,7 +8,7 @@ test("receipt storage upgrades an existing database and deduplication survives r
   const old = initDatabase(file.path);
   old.run("DROP TABLE vigil_text_receipts");
   old.close();
-  const receipt = { event_id: "event", subject_key: "state:goal:G1", budget_day: "2026-10-16" };
+  const receipt = { event_id: "event", subject_key: "state:goal:default:G1", budget_day: "2026-10-16" };
   const migrated = initDatabase(file.path);
   try {
     recordVigilTextReceipt(migrated, receipt);
@@ -27,7 +27,7 @@ test("receipt storage upgrades an existing database and deduplication survives r
 
 test("a failed budget write rolls back the receipt identity so redelivery can retry", () => {
   const db = initDatabase(":memory:");
-  const receipt = { event_id: "event", subject_key: "state:goal:G1", budget_day: "2026-10-16" };
+  const receipt = { event_id: "event", subject_key: "state:goal:default:G1", budget_day: "2026-10-16" };
   try {
     db.run("CREATE TRIGGER fail_budget BEFORE INSERT ON vigil_budget BEGIN SELECT RAISE(ABORT, 'budget unavailable'); END");
     expect(() => recordVigilTextReceipt(db, receipt)).toThrow("budget unavailable");

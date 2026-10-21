@@ -19,6 +19,7 @@ export interface VigilRefRow {
   created_run_id: string;
   created_ended_at: number;
   goal_id: string | null;
+  source_stack: string | null;
   last_run_id: string;
   last_ended_at: number;
   updated_at: number;
@@ -29,18 +30,21 @@ export interface VigilRefRow {
 
 export function ingestRefAttention(
   db: Database, kind: RefKind, ref: string, payload: ExecutionRunFinishedPayload,
-  opts: { replay?: boolean; stackId?: string },
+  opts: { replay?: boolean; stackId?: string; sourceStack?: string },
 ): void {
   const { table, refColumn, limit, overflow } = REF_RULES[kind];
   const endedAt = Date.parse(payload.ended_at);
   const prior = db.query<VigilRefRow, [string]>(`SELECT * FROM ${table} WHERE ${refColumn} = ?`).get(ref);
+  if (prior?.last_run_id === payload.run_id && prior.source_stack === null && opts.sourceStack) {
+    db.query(`UPDATE ${table} SET source_stack = ? WHERE ${refColumn} = ?`).run(opts.sourceStack, ref);
+  }
   if (prior && !isNewObservation(prior, payload.run_id, endedAt)) return;
   if (prior && getAttentionItem(db, prior.attention_id)?.status !== "open") return;
   if (prior) {
     db.query(`UPDATE ${table} SET last_run_id = ?, last_ended_at = ?, updated_at = ?, expires_at = ?,
-      goal_id = ?, version = version + 1,
+      source_stack = ?, goal_id = ?, version = version + 1,
       digested_version = CASE WHEN ? THEN version + 1 ELSE digested_version END WHERE ${refColumn} = ?`)
-      .run(payload.run_id, endedAt, endedAt, endedAt + REF_ATTENTION_TTL_MS, payload.serves?.goal ?? null, opts.replay ? 1 : 0, ref);
+      .run(payload.run_id, endedAt, endedAt, endedAt + REF_ATTENTION_TTL_MS, opts.sourceStack ?? null, payload.serves?.goal ?? null, opts.replay ? 1 : 0, ref);
     db.query("UPDATE attention_items SET updated_at = unixepoch() WHERE id = ?").run(prior.attention_id);
     return;
   }
@@ -50,9 +54,9 @@ export function ingestRefAttention(
     kind, severity: "low", status: "open",
   });
   db.query(`INSERT INTO ${table}
-    (${refColumn}, attention_id, ran_ref, created_run_id, created_ended_at, goal_id, last_run_id, last_ended_at, updated_at, expires_at, digested_version)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(ref, id, payload.ran.ref, payload.run_id, endedAt, payload.serves?.goal ?? null, payload.run_id, endedAt, endedAt,
+    (${refColumn}, attention_id, ran_ref, created_run_id, created_ended_at, source_stack, goal_id, last_run_id, last_ended_at, updated_at, expires_at, digested_version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(ref, id, payload.ran.ref, payload.run_id, endedAt, opts.sourceStack ?? null, payload.serves?.goal ?? null, payload.run_id, endedAt, endedAt,
       endedAt + REF_ATTENTION_TTL_MS, opts.replay ? 1 : 0);
   const excess = db.query<{ attention_id: string }, [string, number]>(`SELECT r.attention_id FROM ${table} r
     JOIN attention_items a ON a.id = r.attention_id

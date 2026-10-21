@@ -55,14 +55,14 @@ test("principal actions and result reads each publish one validated metadata-onl
 test.each(["result", "proposal", "state_change"] as const)("dismiss of Vigil %s uses one durable resolution", async (kind) => {
   refs();
   ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "failed" } }), ENDED_AT);
-  const id = kind === "result" ? resultId : kind === "proposal" ? proposalId : "att:vigil:run:job:failed";
+  const id = kind === "result" ? resultId : kind === "proposal" ? proposalId : "att:vigil:run:job:default:failed";
   expect((await handleAttentionLifecycle(db, id, "dismiss")).status).toBe(200);
   expect((await handleAttentionLifecycle(db, id, "dismiss")).status).toBe(404);
   expect(getAttentionItem(db, id)).toMatchObject({ status: "dismissed", resolution: "dismissed" });
   const ledger = publisher();
   await flushVigilResolutions(db, ledger);
   expect(ledger.published.map((envelope) => envelope.payload)).toEqual([{
-    key: kind === "result" ? result : kind === "proposal" ? proposal : "run:job:failed",
+    key: kind === "result" ? result : kind === "proposal" ? proposal : "run:job:default:failed",
     kind, resolution: "dismissed", ran_ref: kind === "state_change" ? "failed" : "daily-sweep", resolved_at: expect.any(String),
   }]);
 });

@@ -41,17 +41,19 @@ export async function handleListVigilSubjects(
     "SELECT * FROM vigil_subjects ORDER BY healthy, subject_key",
   ).all();
   const wordingByGoal = new Map<string, Promise<string | null>>();
-  async function goalWording(goalId: string): Promise<string | null> {
+  async function goalWording(goalId: string, stack: string): Promise<string | null> {
     try {
-      return await resolver(goalId);
+      return await resolver(goalId, stack);
     } catch {
       process.stderr.write("Vigil Watching: goal wording unavailable; showing goal ID\n");
       return null;
     }
   }
   const subjects = await Promise.all(rows.map(async (row): Promise<VigilSubjectView> => {
-    if (row.goal_id !== null && !wordingByGoal.has(row.goal_id)) {
-      wordingByGoal.set(row.goal_id, goalWording(row.goal_id));
+    const goalId = row.goal_id ?? (row.vocab === "goal" ? row.ref : null);
+    const goalKey = JSON.stringify([row.stack, goalId]);
+    if (goalId !== null && !wordingByGoal.has(goalKey)) {
+      wordingByGoal.set(goalKey, goalWording(goalId, row.stack));
     }
     const cadenceMs = effectiveCadenceMs(row, cadence);
     return {
@@ -59,8 +61,8 @@ export async function handleListVigilSubjects(
       kind: row.subject_kind,
       vocab: row.vocab,
       ref: row.ref,
-      goalId: row.goal_id,
-      goalWording: row.goal_id === null ? null : await wordingByGoal.get(row.goal_id) ?? null,
+      goalId,
+      goalWording: goalId === null ? null : await wordingByGoal.get(goalKey) ?? null,
       value: row.value,
       healthy: row.healthy === 1,
       lastResultRef: db.query<{ result_ref: string }, [string]>(

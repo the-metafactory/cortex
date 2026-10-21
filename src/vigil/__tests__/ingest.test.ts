@@ -98,17 +98,17 @@ describe("Vigil run-health ingest", () => {
     ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
     ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "daily-sweep" } }), 100);
     expect(db.query("SELECT subject_key FROM vigil_subjects ORDER BY subject_key").all()).toEqual([
-      { subject_key: KEY }, { subject_key: "run:job:daily-sweep" },
+      { subject_key: KEY }, { subject_key: "run:job:default:daily-sweep" },
     ]);
   });
 
-  test("key is run:{kind}:{ref} without a stack (soma#787 Q30); the latest stack is recorded", () => {
+  test("run identity includes the source stack", () => {
     const fromSwitch = ledgerEnvelope({ ended_at: "2026-10-12T10:01:00.000Z" }, "switch");
     expect(stackOfEnvelope(fromSwitch)).toBe("switch");
-    expect(runHealthKey(fromSwitch.payload as never)).toBe(KEY);
+    expect(runHealthKey(fromSwitch.payload as never, "switch")).toBe("run:flow:switch:daily-sweep");
     ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
     ingestLedgerEnvelope(db, fromSwitch, 200);
-    expect(db.query("SELECT subject_key, stack FROM vigil_subjects").all()).toEqual([{ subject_key: KEY, stack: "switch" }]);
+    expect(db.query("SELECT subject_key, stack FROM vigil_subjects").all()).toEqual([{ subject_key: KEY, stack: "default" }, { subject_key: "run:flow:switch:daily-sweep", stack: "switch" }]);
     expect(listVigilEvents(db, KEY)).toHaveLength(1);
   });
 

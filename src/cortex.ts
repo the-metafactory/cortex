@@ -4915,7 +4915,7 @@ export async function startCortex(
           proposal_token_env: config.vigil.proposal_token_env,
           proposal_timeout_ms: config.vigil.proposal_timeout_ms,
           enabled: config.vigil.enabled && derivedStack.stack === "default",
-          resolveGoalWording: somaGoalWording(),
+          resolveGoalWording: somaGoalWording(config.vigil.soma_homes),
           cadence: config.vigil.cadence,
           resultBaseUrl: config.vigil.result_base_url,
         },
@@ -5937,7 +5937,7 @@ export async function startCortex(
     vigilHandle = await startVigil({
       config, db: mcDb, runtime, principal: principalId, stack: derivedStack.stack,
       ...(config.vigil.enabled && config.mc.enabled && mcDb && derivedStack.stack === "default"
-        ? createVigilDeliveryPorts({ config: config.vigil, adapters, resolveGoalWording: somaGoalWording() }) : {}),
+        ? createVigilDeliveryPorts({ config: config.vigil, adapters, resolveGoalWording: somaGoalWording(config.vigil.soma_homes) }) : {}),
     });
   } catch (err) {
     console.error(`cortex: Vigil startup error (non-fatal): ${err instanceof Error ? err.message : String(err)}`);

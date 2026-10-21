@@ -122,7 +122,7 @@ describe("running Vigil notification delivery", () => {
   }
 
   const events = () => db.query<VigilEventRow, []>("SELECT * FROM vigil_events ORDER BY occurred_at, rowid").all();
-  const texts = () => events().filter((event) => event.subject_key.startsWith("state:goal:"));
+  const texts = () => events().filter((event) => event.subject_key.startsWith("state:goal:default:"));
   const receipts = () => ledger.published.filter((envelope) => envelope.type === VIGIL_TEXT_SENT_TYPE);
   async function tick() { scheduler.tick(); await Bun.sleep(0); }
 
@@ -335,7 +335,7 @@ describe("running Vigil notification delivery", () => {
   });
 
   test("the same tick flushes a goal sensor made stale by its sweep using ID-only wording by default", async () => {
-    config.vigil.cadence = { "run:job:sensor": 1000 };
+    config.vigil.cadence = { "run:job:default:sensor": 1000 };
     await boot([discord], false);
     ledger.deliver(ledgerEnvelope({
       ran: { kind: "job", ref: "sensor" }, outcome: "succeeded", serves: { goal: "G1" },

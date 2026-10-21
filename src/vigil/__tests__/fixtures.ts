@@ -10,7 +10,7 @@ import { ingestLedgerEnvelope } from "../ingest";
 import { flushTexts } from "../flush";
 
 export const SUBJECT = "local.jc.default.execution.run.finished";
-export const KEY = "run:flow:daily-sweep";
+export const KEY = "run:flow:default:daily-sweep";
 export const ENDED_AT = Date.parse("2026-10-12T10:00:05.000Z");
 export const DELIVERY_DEFAULTS = {
   held_reason: null, sent_at: null, digested_at: null, via: null, attempts: 0, last_error: null, transient_failures: 0,

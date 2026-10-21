@@ -75,7 +75,7 @@ describe("Vigil state-subject ingest", () => {
 
   test("unseen escalation subject: row, worse event, run-health alongside", () => {
     const envelope = report("the-metafactory/soma#781", "needs-principal", { serves: { goal: "M0" } });
-    const key = "state:escalation:the-metafactory/soma#781";
+    const key = "state:escalation:default:the-metafactory/soma#781";
     expect(getVigilSubject(db, key)).toEqual({
       subject_key: key, subject_kind: "state", vocab: "escalation", ref: "the-metafactory/soma#781",
       value: "needs-principal", healthy: 0, goal_id: "M0", producer: "pulse", stack: "default", run_kind: null,
@@ -96,11 +96,11 @@ describe("Vigil state-subject ingest", () => {
 
   test("goal_id is NULL without serves.goal", () => {
     report("G1", "at-risk");
-    expect(getVigilSubject(db, "state:goal:G1")?.goal_id).toBeNull();
+    expect(getVigilSubject(db, "state:goal:default:G1")?.goal_id).toBeNull();
   });
 
   test("escalation needs-principal → overdue → resolved", () => {
-    const key = "state:escalation:the-metafactory/soma#781";
+    const key = "state:escalation:default:the-metafactory/soma#781";
     report("the-metafactory/soma#781", "needs-principal");
     report("the-metafactory/soma#781", "overdue");
     expect(listVigilEvents(db, key)[1]).toMatchObject({ from_value: "needs-principal", to_value: "overdue", direction: "worse" });
@@ -112,7 +112,7 @@ describe("Vigil state-subject ingest", () => {
   });
 
   test("check regressed → ok is better and healthy", () => {
-    const key = "state:check:soma:harness";
+    const key = "state:check:default:soma:harness";
     report("soma:harness", "regressed");
     report("soma:harness", "ok");
     expect(listVigilEvents(db, key)[1]).toMatchObject({ from_value: "regressed", to_value: "ok", direction: "better" });
@@ -120,7 +120,7 @@ describe("Vigil state-subject ingest", () => {
   });
 
   test("goal off-track → at-risk stays unhealthy; → on-track is healthy", () => {
-    const key = "state:goal:G1";
+    const key = "state:goal:default:G1";
     report("G1", "off-track");
     report("G1", "at-risk");
     expect(listVigilEvents(db, key)[1]).toMatchObject({ from_value: "off-track", to_value: "at-risk", direction: "better" });
@@ -134,13 +134,13 @@ describe("Vigil state-subject ingest", () => {
     "healthy first observation %s writes the row and no event",
     (value, vocab) => {
       report("s", value);
-      expect(getVigilSubject(db, `state:${vocab}:s`)).toMatchObject({ value, vocab, healthy: 1 });
-      expect(listVigilEvents(db, `state:${vocab}:s`)).toEqual([]);
+      expect(getVigilSubject(db, `state:${vocab}:default:s`)).toMatchObject({ value, vocab, healthy: 1 });
+      expect(listVigilEvents(db, `state:${vocab}:default:s`)).toEqual([]);
     },
   );
 
   test("a repeated value changes neither value nor events; the observation refreshes", () => {
-    const key = "state:goal:G1";
+    const key = "state:goal:default:G1";
     report("G1", "at-risk");
     const prior = getVigilSubject(db, key);
     const events = listVigilEvents(db, key);
@@ -153,7 +153,7 @@ describe("Vigil state-subject ingest", () => {
   });
 
   test("redelivered run_id and older ended_at leave the state row and events unchanged", () => {
-    const key = "state:goal:G1";
+    const key = "state:goal:default:G1";
     const first = report("G1", "at-risk");
     const prior = getVigilSubject(db, key);
     const events = listVigilEvents(db, key);
@@ -167,7 +167,7 @@ describe("Vigil state-subject ingest", () => {
   // glossary-ignore: run
   // Execution Run identifiers belong to the myelin contract, not Cortex Sessions.
   test("two executions with one ended_at converge on the higher run_id in any arrival order", () => {
-    const key = "state:goal:G1";
+    const key = "state:goal:default:G1";
     const endedAt = new Date(ENDED_AT).toISOString();
     const a = ledgerEnvelope({ run_id: "run-a", ended_at: endedAt, state: { subject: "G1", value: "at-risk" } });
     const b = ledgerEnvelope({ run_id: "run-b", ended_at: endedAt, state: { subject: "G1", value: "on-track" } });
@@ -189,11 +189,11 @@ describe("Vigil state-subject ingest", () => {
   test("state subject dedupes on its own timeline, not the run-health one", () => {
     report("G1", "at-risk", { ran: { kind: "job", ref: "a" } });
     report("G1", "on-track", { ran: { kind: "job", ref: "b" } });
-    expect(getVigilSubject(db, "state:goal:G1")).toMatchObject({ value: "on-track", healthy: 1 });
+    expect(getVigilSubject(db, "state:goal:default:G1")).toMatchObject({ value: "on-track", healthy: 1 });
   });
 
   test("unknown values are stored as given, unhealthy, and every change is worse", () => {
-    const key = "state:unknown:x";
+    const key = "state:unknown:default:x";
     report("x", "green");
     expect(getVigilSubject(db, key)).toMatchObject({ vocab: "unknown", value: "green", healthy: 0 });
     expect(listVigilEvents(db, key)).toEqual([expect.objectContaining({ from_value: null, to_value: "green", direction: "worse" })]);
@@ -202,7 +202,7 @@ describe("Vigil state-subject ingest", () => {
   });
 
   test("a goal row the sweep marked stale recovers with a better event", () => {
-    const key = "state:goal:G1";
+    const key = "state:goal:default:G1";
     report("G1", "on-track");
     db.run("UPDATE vigil_subjects SET value = ?, healthy = 0 WHERE subject_key = ?", [STALE_VALUE, key]);
     report("G1", "at-risk");

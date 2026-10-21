@@ -57,7 +57,7 @@ describe("Vigil attention", () => {
 
   test("escalation severity updates the same row from needs-principal to overdue", () => {
     const subject = "the-metafactory/soma#604";
-    const key = `state:escalation:${subject}`;
+    const key = `state:escalation:default:${subject}`;
     ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", state: { subject, value: "needs-principal" } }), ENDED_AT);
     const before = db.query("SELECT rowid, created_at FROM attention_items WHERE id = ?").get(`att:vigil:${key}`);
     const delta = ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", state: { subject, value: "overdue" }, ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000);

@@ -3,9 +3,9 @@ import { expect, test } from "bun:test";
 import type { VigilSubjectRow } from "../db";
 import { createVigilRenderer } from "../render";
 
-const goal = { subject_kind: "state", vocab: "goal", goal_id: "G1", ref: "G1" } as const;
-const sensor = { subject_kind: "run", vocab: null, goal_id: "G1", ref: "daily-sweep" } as const;
-const escalation = { subject_kind: "state", vocab: "escalation", goal_id: null, ref: "the-metafactory/soma#604" } as const;
+const goal = { subject_kind: "state", vocab: "goal", goal_id: "G1", stack: "default", ref: "G1" } as const;
+const sensor = { subject_kind: "run", vocab: null, goal_id: "G1", stack: "default", ref: "daily-sweep" } as const;
+const escalation = { subject_kind: "state", vocab: "escalation", goal_id: null, stack: "default", ref: "the-metafactory/soma#604" } as const;
 const change = { from_value: "on-track", to_value: "off-track" };
 
 test("renders the approved goal, goal-sensor and escalation formats", async () => {
@@ -61,7 +61,7 @@ test("non-goal subjects do not invoke wording resolution", async () => {
     [{ ...sensor, goal_id: null }, "daily-sweep"],
     [{ ...escalation, vocab: "check", ref: "soma:harness" }, "check soma:harness"],
     [{ ...escalation, vocab: "unknown", ref: "unrecognised" }, "unknown unrecognised"],
-  ] satisfies [Pick<VigilSubjectRow, "subject_kind" | "vocab" | "goal_id" | "ref">, string][]) {
+  ] satisfies [Pick<VigilSubjectRow, "subject_kind" | "vocab" | "goal_id" | "ref" | "stack">, string][]) {
     expect(await render({ from_value: "failed", to_value: "succeeded" }, subject)).toBe(`Vigil: ${label} — failed → succeeded`);
   }
 });

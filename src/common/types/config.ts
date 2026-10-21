@@ -564,6 +564,7 @@ export const VigilSchema = z.object({
   enabled: z.boolean().default(false),
   /** Per-subject cadence in milliseconds; only jobs and goal state can go stale. */
   cadence: z.record(z.string(), z.number().int().positive()).default({}),
+  soma_homes: z.record(z.string().regex(/^[A-Za-z0-9_-]+$/), z.string().min(1)).default({}),
   fallback: z.object({ email: VigilFallbackEmailSchema.optional() }).optional(),
 }).prefault({});
 

@@ -17,6 +17,7 @@ interface VigilFallbackText {
 export interface FlushTextsOptions {
   db: Database;
   principal: string;
+  stack?: string;
   now: number;
   send: ((text: string) => Promise<NotifyResult>) | null;
   resolveGoalWording?: GoalWordingResolver;
@@ -43,7 +44,7 @@ async function flushPendingTexts(options: FlushTextsOptions): Promise<void> {
   const settled: VigilEventRow[] = [];
   const events = db.query<VigilEventRow, [string]>(`SELECT * FROM vigil_events
     WHERE route = 'text' AND delivery = 'pending' AND subject_key != ? ORDER BY occurred_at, rowid`)
-    .all(channelKey("dm-channel"));
+    .all(channelKey("dm-channel", options.stack));
   try {
     for (const event of events) {
       if (!canSendVigilText(db, now)) {
@@ -59,7 +60,7 @@ async function flushPendingTexts(options: FlushTextsOptions): Promise<void> {
         ? { delivered: false, kind: "permanent", code: "no-adapter" }
         : await send(text);
       if (result.delivered) {
-        recordChannel(db, "dm-channel", "ok", now);
+        recordChannel(db, "dm-channel", "ok", now, options.stack);
         if (markVigilTextSent(db, event.id, "dm", now, budgetDay(now))) {
           settled.push(event);
         }
@@ -68,8 +69,8 @@ async function flushPendingTexts(options: FlushTextsOptions): Promise<void> {
       const transientFailures = result.kind === "transient" ? event.transient_failures + 1 : 0;
       db.query("UPDATE vigil_events SET last_error = ?, transient_failures = ? WHERE id = ?")
         .run(result.code, transientFailures, event.id);
-      if (result.kind === "permanent" || transientFailures >= TRANSIENT_FALLBACK_THRESHOLD || channelValue(db, "dm-channel") === "regressed") {
-        recordChannel(db, "dm-channel", "regressed", now);
+      if (result.kind === "permanent" || transientFailures >= TRANSIENT_FALLBACK_THRESHOLD || channelValue(db, "dm-channel", options.stack) === "regressed") {
+        recordChannel(db, "dm-channel", "regressed", now, options.stack);
         batch.push({ event, text });
       }
     }
@@ -95,9 +96,9 @@ async function flushFallbackBatch(options: FlushTextsOptions, batch: readonly Vi
   if (eligible.length === 0) return;
   const notices = db.query<VigilEventRow, [string]>(`SELECT * FROM vigil_events
     WHERE subject_key = ? AND route = 'text' AND to_value = 'regressed' AND delivery = 'pending'
-    ORDER BY occurred_at, rowid`).all(channelKey("dm-channel"));
+    ORDER BY occurred_at, rowid`).all(channelKey("dm-channel", options.stack));
   const renderNotice = createVigilRenderer();
-  const noticeSubject = getVigilSubject(db, channelKey("dm-channel"));
+  const noticeSubject = getVigilSubject(db, channelKey("dm-channel", options.stack));
   const noticeTexts = noticeSubject ? await Promise.all(notices.map((event) => renderNotice(event, noticeSubject))) : [];
   const body = [...noticeTexts, ...eligible.map(({ text }) => text)].join("\n");
   let result: Awaited<ReturnType<VigilFallback>>;
@@ -108,7 +109,7 @@ async function flushFallbackBatch(options: FlushTextsOptions, batch: readonly Vi
   } catch {
     result = { ok: false, error: "exception" };
   }
-  if (options.fallback) recordChannel(db, "email-channel", result.ok ? "ok" : "regressed", now);
+  if (options.fallback) recordChannel(db, "email-channel", result.ok ? "ok" : "regressed", now, options.stack);
   if (!result.ok) {
     for (const { event } of eligible) {
       db.query("UPDATE vigil_events SET last_error = ? WHERE id = ? AND delivery = 'pending'")

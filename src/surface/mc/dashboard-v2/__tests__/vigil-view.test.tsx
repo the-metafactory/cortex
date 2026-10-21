@@ -4,7 +4,7 @@ import { VigilView } from "../components/vigil-view";
 import type { VigilSubjectView } from "../../api/vigil";
 
 const subject: VigilSubjectView = {
-  subjectKey: "state:goal:G1", kind: "state", vocab: "goal", ref: "G1",
+  subjectKey: "state:goal:default:G1", kind: "state", vocab: "goal", ref: "G1",
   goalId: "G1", goalWording: "Example goal", value: "on-track", healthy: true,
   lastResultRef: "soma:outputs/example.md", lastRunId: "run-123", lastEndedAt: Date.parse("2026-10-12T10:00:00.000Z"),
   expectedBy: Date.parse("2026-10-13T12:00:00.000Z"),
@@ -13,7 +13,7 @@ const subject: VigilSubjectView = {
 describe("VigilView", () => {
   it("renders one row per subject, all fields, vocabulary and expected by", () => {
     const html = renderToStaticMarkup(<VigilView loaded subjects={[subject, {
-      ...subject, subjectKey: "state:escalation:example/project#604", vocab: "escalation",
+      ...subject, subjectKey: "state:escalation:default:example/project#604", vocab: "escalation",
       ref: "example/project#604", goalId: null, goalWording: null,
       value: "overdue", healthy: false, expectedBy: null,
     }]} />);
@@ -21,7 +21,7 @@ describe("VigilView", () => {
     for (const label of ["Subject", "Kind", "Vocabulary", "Reference", "Goal", "State", "Healthy", "Last result", "Last run", "Last ended", "Expected by"]) {
       expect(html).toContain(`scope="col">${label}</th>`);
     }
-    for (const value of ["state:goal:G1", ">state<", ">goal<", "Example goal", "on-track", ">Yes<", "run-123", "soma:outputs/example.md", "state:escalation:example/project#604", ">escalation<", "overdue", ">No<"]) {
+    for (const value of ["state:goal:default:G1", ">state<", ">goal<", "Example goal", "on-track", ">Yes<", "run-123", "soma:outputs/example.md", "state:escalation:default:example/project#604", ">escalation<", "overdue", ">No<"]) {
       expect(html).toContain(value);
     }
     expect(html).toContain('dateTime="2026-10-12T10:00:00.000Z"');
@@ -31,7 +31,7 @@ describe("VigilView", () => {
 
   it("falls back to goal ID when wording is unavailable and leaves run vocabulary blank", () => {
     const html = renderToStaticMarkup(<VigilView loaded subjects={[{
-      ...subject, subjectKey: "run:flow:daily-sweep", kind: "run", vocab: null,
+      ...subject, subjectKey: "run:flow:default:daily-sweep", kind: "run", vocab: null,
       goalWording: null, expectedBy: null,
     }]} />);
     expect(html).toContain("<td>G1</td>");

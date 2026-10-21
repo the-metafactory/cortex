@@ -10,7 +10,7 @@ export interface VigilResultRow extends VigilRefRow {
 
 export function ingestResult(
   db: Database, payload: ExecutionRunFinishedPayload,
-  opts: { replay?: boolean; stackId?: string },
+  opts: { replay?: boolean; stackId?: string; sourceStack?: string },
 ): void {
   if (payload.outcome !== "succeeded" || !payload.result_ref) return;
   const ref = payload.result_ref;

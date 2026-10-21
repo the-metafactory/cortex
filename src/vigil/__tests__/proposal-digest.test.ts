@@ -120,7 +120,7 @@ test("failed arrival delivery stays pending and an arrival during delivery waits
 test("proposal overflow trims whole lines without displacing higher priority sections", async () => {
   ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", state: { subject: "G1", value: "on-track" } }), ENDED_AT, { replay: true });
   const event = writeVigilTransition(db, {
-    subject_key: "state:goal:G1", from_value: "on-track", to_value: "off-track", direction: "worse", run_id: "worse", occurred_at: ENDED_AT,
+    subject_key: "state:goal:default:G1", from_value: "on-track", to_value: "off-track", direction: "worse", run_id: "worse", occurred_at: ENDED_AT,
   }, ENDED_AT);
   db.query("UPDATE vigil_events SET route = 'digest' WHERE id = ?").run(event.id);
   const without = (await buildDigest(options()))!;

@@ -11,7 +11,7 @@ import { flushTexts, TRANSIENT_FALLBACK_THRESHOLD, type FlushTextsOptions } from
 import { initVigilGoalDatabase } from "./fixtures";
 
 const NOW = Date.parse("2026-10-16T10:00:00Z");
-const KEY = "state:goal:G1";
+const KEY = "state:goal:default:G1";
 const success: NotifyResult = { delivered: true, messageId: "message" };
 const transient: NotifyResult = { delivered: false, kind: "transient", code: "network" };
 const permanent: NotifyResult = { delivered: false, kind: "permanent", code: "50007" };
@@ -495,7 +495,7 @@ test("channel notice remains pending on email failure and is never emailed alone
 test("channel notice and text settlement roll back together when persistence fails", async () => {
   queue();
   const notice = channelNotice();
-  db.run("CREATE TRIGGER fail_notice BEFORE UPDATE ON vigil_events WHEN NEW.subject_key = 'state:check:vigil:dm-channel' BEGIN SELECT RAISE(ABORT, 'notice unavailable'); END");
+  db.run("CREATE TRIGGER fail_notice BEFORE UPDATE ON vigil_events WHEN NEW.subject_key = 'state:check:default:vigil:dm-channel' BEGIN SELECT RAISE(ABORT, 'notice unavailable'); END");
   await expect(flush({ send: null, fallback: emailSender() })).rejects.toThrow("notice unavailable");
   expect(db.query("SELECT delivery, via, sent_at FROM vigil_events WHERE id = ?").get(notice.eventId)).toEqual({ delivery: "pending", via: null, sent_at: null });
   expect(rows()[0]).toMatchObject({ delivery: "pending", via: null, sent_at: null });

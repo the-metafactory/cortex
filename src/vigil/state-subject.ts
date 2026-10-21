@@ -59,15 +59,15 @@ export function stateDirection(vocab: StateVocab, from: string | null, to: strin
   return stateRank(vocab, to) < stateRank(vocab, from) ? "better" : "worse";
 }
 
-export function stateSubjectKey(vocab: StateVocab, subject: string): string {
-  return `state:${vocab}:${subject}`;
+export function stateSubjectKey(vocab: StateVocab, stack: string, subject: string): string {
+  return `state:${vocab}:${stack}:${subject}`;
 }
 
 /** What every subject an envelope updates shares; see `ingestLedgerEnvelope`. */
 export type LedgerObservation = Pick<VigilObservation, "goal_id" | "producer" | "stack" | "last_run_id" | "last_ended_at" | "last_seen_at">;
 
 /**
- * Update `state:{vocab}:{subject}` inside the caller's transaction. A repeated
+ * Update `state:{vocab}:{stack}:{subject}` inside the caller's transaction. A repeated
  * value refreshes the observation (staleness counts from it) but writes no event.
  * Replay rebuilds the row without emitting transitions.
  */
@@ -76,7 +76,7 @@ export function updateStateSubject(
   opts: { replay?: boolean } = {},
 ): VigilEventRow | null {
   const vocab = vocabularyOf(state.value);
-  const key = stateSubjectKey(vocab, state.subject);
+  const key = stateSubjectKey(vocab, observation.stack, state.subject);
   const prior = getVigilSubject(db, key);
   if (!isNewObservation(prior, observation.last_run_id, observation.last_ended_at)) return null;
   writeVigilSubject(db, {

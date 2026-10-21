@@ -12,9 +12,9 @@ export function createVigilRenderer(options: VigilRendererOptions = {}) {
   const warn = options.warn ?? ((message: string) => { process.stderr.write(`${message}\n`); });
   let warned = false;
 
-  async function goalWording(goalId: string): Promise<string> {
+  async function goalWording(goalId: string, stack: string): Promise<string> {
     try {
-      return await resolve(goalId) ?? goalId;
+      return await resolve(goalId, stack) ?? goalId;
     } catch {
       if (!warned) {
         warned = true;
@@ -26,14 +26,14 @@ export function createVigilRenderer(options: VigilRendererOptions = {}) {
 
   return async (
     event: Pick<VigilEventRow, "from_value" | "to_value">,
-    subject: Pick<VigilSubjectRow, "subject_kind" | "vocab" | "goal_id" | "ref">,
+    subject: Pick<VigilSubjectRow, "subject_kind" | "vocab" | "goal_id" | "ref" | "stack">,
   ): Promise<string> => {
     const classification = subjectClass(subject);
     let label: string;
     if (classification === "goal") {
-      label = `goal ${await goalWording(subject.goal_id ?? subject.ref)}`;
+      label = `goal ${await goalWording(subject.goal_id ?? subject.ref, subject.stack)}`;
     } else if (classification === "goal-sensor" && subject.goal_id !== null) {
-      label = `${subject.ref} (serves ${await goalWording(subject.goal_id)})`;
+      label = `${subject.ref} (serves ${await goalWording(subject.goal_id, subject.stack)})`;
     } else {
       label = subject.subject_kind === "run" ? subject.ref : `${classification} ${subject.ref}`;
     }

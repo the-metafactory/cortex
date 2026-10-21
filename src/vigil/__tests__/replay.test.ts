@@ -25,11 +25,11 @@ import { KEY, ledgerEnvelope } from "./fixtures";
 
 const REPLAY = "cortex-vigil-replay-jc";
 const LIVE = "cortex-vigil-jc";
-const OTHER_KEY = "run:flow:nightly-backup";
+const OTHER_KEY = "run:flow:default:nightly-backup";
 
 function receiptEnvelope(eventId: string, day = "2026-10-16") {
   return { ...ledgerEnvelope(), type: "system.vigil.text-sent", payload: {
-    event_id: eventId, subject_key: "state:goal:G1", budget_day: day,
+    event_id: eventId, subject_key: "state:goal:default:G1", budget_day: day,
   } };
 }
 
@@ -173,15 +173,15 @@ describe("Vigil LEDGER replay", () => {
       await report({ ran: { kind: "job", ref: "recover" } });
       await report({ ran: { kind: "job", ref: "recover" }, outcome: "succeeded", ended_at: "2026-10-12T10:00:08Z" });
       await report({ ran: { kind: "job", ref: "reopen" } });
-      await handleAttentionLifecycle(live, "att:vigil:run:job:reopen", "dismiss");
+      await handleAttentionLifecycle(live, "att:vigil:run:job:default:reopen", "dismiss");
       await flushVigilResolutions(live, ledger);
       await report({ ran: { kind: "job", ref: "reopen" }, outcome: "cancelled", ended_at: "2026-10-12T10:00:09Z" });
-      const reopenedId = "att:vigil:run:job:reopen";
+      const reopenedId = "att:vigil:run:job:default:reopen";
       expect(getAttentionItem(live, reopenedId)?.status).toBe("open");
       await handleAttentionLifecycle(live, reopenedId, "dismiss");
       await flushVigilResolutions(live, ledger);
       const dismissals = recorded.filter((envelope) => envelope.type === "vigil.attention.resolved"
-        && envelope.payload.key === "run:job:reopen");
+        && envelope.payload.key === "run:job:default:reopen");
       expect(dismissals).toHaveLength(2);
       expect(new Set(dismissals.map((envelope) => envelope.id)).size).toBe(2);
       expect(getAttentionItem(live, reopenedId)).toMatchObject({ status: "dismissed", resolution: "dismissed" });
@@ -251,7 +251,7 @@ describe("Vigil LEDGER replay", () => {
     const h = ledgerHarness();
     await h.publish();
     const now = Date.parse("2026-10-16T10:00:00Z");
-    const key = "state:goal:G1";
+    const key = "state:goal:default:G1";
     ingestLedgerEnvelope(db, ledgerEnvelope({ state: { subject: "G1", value: "on-track" } }), now, { replay: true });
     const queue = () => writeVigilTransition(db, {
       subject_key: key, from_value: "on-track", to_value: "off-track", direction: "worse",
@@ -339,7 +339,7 @@ describe("Vigil LEDGER replay", () => {
     { vocab: "unknown", values: ["green", "amber", "red"], healthy: 0, direction: "worse" },
   ])("rebuilds $vocab state without events, then records a live transition", async ({ vocab, values, healthy, direction }) => {
     const h = ledgerHarness();
-    const stateKey = `state:${vocab}:watched`;
+    const stateKey = `state:${vocab}:default:watched`;
     const first = ledgerEnvelope({ state: { subject: "watched", value: values[0] } });
     const second = ledgerEnvelope({
       outcome: "succeeded", ended_at: "2026-10-12T10:01:00.000Z",

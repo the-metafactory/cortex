@@ -10,7 +10,7 @@ import { ingestLedgerEnvelope } from "../ingest";
 import { initVigilGoalDatabase, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 const NOW = Date.parse("2026-10-12T07:00:00+02:00");
-const KEY = "state:goal:G1";
+const KEY = "state:goal:default:G1";
 const success: NotifyResult = { delivered: true, messageId: "digest" };
 const budget = "Budget: 0 of 3 texts yesterday · DM ok · email ok";
 let db: Database;
