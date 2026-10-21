@@ -113,6 +113,11 @@ export {
 // `Authorization Violation` on the operator-mode bus).
 export {
   startMyelinRuntime,
+  MyelinDurablePublishError,
+  MyelinRuntimeConfigError,
+  type MyelinDurablePublishErrorKind,
+  type MyelinPublishDurableOptions,
+  type MyelinDurablePubAck,
   type MyelinRuntime,
   type MyelinRuntimeOptions,
   type MyelinSubscribePullOpts,
