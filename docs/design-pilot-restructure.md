@@ -1041,6 +1041,11 @@ From `@the-metafactory/cortex`, pilot's `bus/` directory imports:
 | `validateEnvelope` | `src/bus/myelin/envelope-validator.ts` | `bus/publish-review-request.ts` |
 | `loadConfigWithAgents` | `src/common/config/loader.ts` | `bus/nats-link.ts` (config bootstrap) |
 | `admitOfferedDispatch` | `src/bus/admit-offered-dispatch.ts` | A private consumer's admission point (the existing evaluator, re-exported by reference; node #2686) |
+| `MyelinDurablePublishError` | `src/bus/myelin/runtime.ts` | Classify `publishDurable` rejections with `instanceof` and `kind` |
+| `MyelinRuntimeConfigError` | `src/bus/myelin/runtime.ts` | Identify invalid runtime options with `instanceof` and `option` |
+| `MyelinDurablePublishErrorKind` (type) | `src/bus/myelin/runtime.ts` | Distinguish durable rejection kinds, including `timeout` and `domain-mismatch` |
+| `MyelinPublishDurableOptions` (type) | `src/bus/myelin/runtime.ts` | Name `publishDurable` options (`expectedStream`, optional `timeoutMs`) |
+| `MyelinDurablePubAck` (type) | `src/bus/myelin/runtime.ts` | Name the confirmed durable publication result (`stream`, `seq`, `duplicate`, optional `domain`) |
 
 Plus the ancillary handler / stamp / classification types the subscribers need at typed wiring sites: `EnvelopeHandler`, `EnvelopeErrorHandler`, `InvalidEnvelopeHandler`, `InvalidEnvelopeReason`, `MyelinSubscriberOptions`, `NatsLinkOptions` (option/handler shapes), `SignedBy`/`SignedByEd25519`/`SignedByHubStamp` (stamp chain typing), `Classification`, `ValidationResult`, `getSignedByChain` (chain helper), and the types `admitOfferedDispatch` callers need: `AdmitOfferedDispatchInput`, `GateFloorDecision`, `GateFloorContext` (from `src/bus/gate-floor.ts`), `Offering`, `OfferScope` (from `src/common/types/offering.ts`) and `SigningMode` (from `src/common/security-posture.ts`). Surfaced via the same `@the-metafactory/cortex/bus` entry — see `src/bus/index.ts` in cortex (post PR-A.0b at cortex#250). Cortex's barrel keeps the surface intentionally narrow — internal symbols (`tryParseEnvelope`, `deriveNatsSubject`, etc.) stay internal.
 
