@@ -1,5 +1,31 @@
 # Cortex — Changelog
 
+## 6.18.0 — 2026-10-22 — Vigil subjects are scoped by source stack
+
+Vigil kept one subject per goal or run ref, so the same ref arriving from two
+stacks landed on one row and the last writer set its stack. Node #2713 (PR
+#2717), settled by soma#1033 D2.
+
+- **Stack-scoped keys.** State subjects are `state:<vocab>:<stack>:<subject>`,
+  run-health subjects `run:<kind>:<stack>:<ref>`; the stack is the second
+  segment of the envelope `source`. An envelope without one is refused. Vigil's
+  own channel checks use its local stack. Attention ids and delivery receipts
+  carry the scoped key.
+- **Goal wording per stack.** New `vigil.soma_homes` maps a stack to its
+  soma-home; wording is read only from that stack's home, and a stack with no
+  home shows the bare goal id.
+- **Migration.** On startup, rows under the old key format are rebuilt by
+  LEDGER replay. A legacy subject whose history is older than LEDGER retention
+  keeps its row under the stack of its last observation, with a warning (and
+  one more when LEDGER is empty). A subject missing inside retention keeps the
+  migration pending and Vigil does not start until a replay succeeds.
+- **Upgrade note:** `vigil.cadence` override keys change format. Insert the
+  source stack: `state:goal:G1` → `state:goal:default:G1`,
+  `run:job:goal-sensor` → `run:job:default:goal-sensor`. Old-format keys are
+  not rejected yet (cortex#2721); they match no subject and fall back to the
+  default cadence.
+  See `docs/vigil-stack-scope.md`.
+
 ## 6.17.2 — 2026-10-22 — Bus SDK: publishDurable errors and types are public
 
 `publishDurable` already rejected every non-durable outcome, but a consumer
