@@ -3,9 +3,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilSubject, listVigilEvents } from "../db";
-import { ingestLedgerEnvelope } from "../ingest";
 import { DEFAULT_CADENCE_MS, effectiveCadenceMs, sweepStale } from "../staleness";
-import { DELIVERY_DEFAULTS, ENDED_AT, ledgerEnvelope } from "./fixtures";
+import { ingestLedgerEnvelope, DELIVERY_DEFAULTS, ENDED_AT, ledgerEnvelope } from "./fixtures";
 
 const JOB_KEY = "run:job:default:harness-gate";
 const GOAL_KEY = "state:goal:default:G1";

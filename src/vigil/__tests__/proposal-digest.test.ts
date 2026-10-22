@@ -8,8 +8,7 @@ import { initDatabase } from "../../surface/mc/db/init";
 import { TABLE_NAMES } from "../../surface/mc/db/schema";
 import { buildDigest, sendDigest } from "../digest";
 import { writeVigilTransition } from "../db";
-import { ingestLedgerEnvelope } from "../ingest";
-import { ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestLedgerEnvelope, ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 const DAY = 86400000;
 const REF = "soma:proposals/first.md";

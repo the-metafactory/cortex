@@ -9,10 +9,9 @@ import { getAttentionItem, listOpenAttention, setAttentionItemStatus } from "../
 import { handleAttentionLifecycle, handleListAttention } from "../../surface/mc/api/attention";
 import { handleListVigilSubjects } from "../../surface/mc/api/vigil";
 import { buildDigest, sendDigest } from "../digest";
-import { ingestLedgerEnvelope } from "../ingest";
 import { renderResult, somaGoalWording } from "../result-render";
 import { expireResults, pendingResults, RESULT_TTL_MS, type VigilResultRow } from "../results";
-import { ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope } from "./fixtures";
+import { ingestLedgerEnvelope, ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope } from "./fixtures";
 
 const REF = "soma:outputs/weekly.md";
 const id = (ref = REF) => `att:vigil:result:${ref}`;

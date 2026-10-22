@@ -9,10 +9,9 @@ import { getAttentionQueue, handleListAttention } from "../../surface/mc/api/att
 import { AttentionView } from "../../surface/mc/dashboard-v2/components/attention-view";
 import { applyVigilAttention } from "../attention";
 import { getVigilSubject, listVigilEvents, writeVigilTransition } from "../db";
-import { ingestLedgerEnvelope } from "../ingest";
 import { subjectClass, vigilSeverity, type SubjectClass } from "../policy";
 import { sweepStale } from "../staleness";
-import { ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
+import { ingestLedgerEnvelope, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
 
 describe("Vigil attention", () => {
   let db: Database;

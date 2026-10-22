@@ -6,11 +6,10 @@ import { getAttentionItem, upsertAttentionItem } from "../../surface/mc/db/atten
 import { handleAttentionLifecycle } from "../../surface/mc/api/attention";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 import { validateVigilAttentionResolved } from "@the-metafactory/myelin";
-import { ingestLedgerEnvelope } from "../ingest";
 import { expireRefAttention, REF_ATTENTION_TTL_MS } from "../ref-attention";
 import { readResult } from "../result-read";
 import { flushVigilResolutions, replayVigilResolution, resolveVigilAttention } from "../resolution";
-import { ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestLedgerEnvelope, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 let db: Database;
 beforeEach(() => { db = initDatabase(":memory:"); });

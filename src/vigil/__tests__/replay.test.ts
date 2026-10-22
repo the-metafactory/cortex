@@ -16,12 +16,11 @@ import { expireResults, pendingResults, RESULT_TTL_MS } from "../results";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilSubject, getVigilTextsSpent, isVigilReplayPending, listVigilEvents, recordVigilTextDelivered, recordVigilTextReceipt, writeVigilTransition } from "../db";
 import { flushTexts } from "../flush";
-import { ingestLedgerEnvelope } from "../ingest";
 import { startVigil } from "../index";
 import { replayLedger } from "../replay";
 import { flushVigilResolutions, resolveVigilAttention } from "../resolution";
 import { vigilSystemPattern } from "../delivery-receipt";
-import { KEY, ledgerEnvelope } from "./fixtures";
+import { ingestLedgerEnvelope, KEY, ledgerEnvelope } from "./fixtures";
 
 const REPLAY = "cortex-vigil-replay-jc";
 const LIVE = "cortex-vigil-jc";

@@ -6,8 +6,7 @@ import { budgetDay } from "../budget";
 import { channelKey, channelValue, recordChannel } from "../channels";
 import { getVigilTextsSpent, listVigilEvents, markVigilReplayStarted, rebuildVigilBudget, recordVigilTextDelivered, writeVigilTransition, type VigilEventRow } from "../db";
 import { buildDigest, maybeSendDigest, sendDigest, type SendDigestOptions } from "../digest";
-import { ingestLedgerEnvelope } from "../ingest";
-import { initVigilGoalDatabase, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestLedgerEnvelope, initVigilGoalDatabase, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 const NOW = Date.parse("2026-10-12T07:00:00+02:00");
 const KEY = "state:goal:default:G1";

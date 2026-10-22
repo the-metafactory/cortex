@@ -24,8 +24,7 @@ import { createSession } from "../db/sessions";
 import { insertEvent, EVENTS_LIST_MAX_LIMIT } from "../db/events";
 import { _resetDispatchDebounceForTests } from "../api/handlers";
 import * as shouldNotifyModule from "../notifications/should-notify";
-import { ingestLedgerEnvelope } from "../../../vigil/ingest";
-import { ledgerEnvelope, ENDED_AT } from "../../../vigil/__tests__/fixtures";
+import { ingestLedgerEnvelope, ledgerEnvelope, ENDED_AT } from "../../../vigil/__tests__/fixtures";
 
 const catStandInForClaude: SpawnFn = () =>
   Bun.spawn(["cat"], {

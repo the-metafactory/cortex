@@ -5,8 +5,7 @@ import { join, dirname } from "path";
 import { tmpdir } from "os";
 
 import { startMissionControl, type MissionControlHandle } from "../embed";
-import { ingestLedgerEnvelope } from "../../../vigil/ingest";
-import { ledgerEnvelope, ENDED_AT } from "../../../vigil/__tests__/fixtures";
+import { ingestLedgerEnvelope, ledgerEnvelope, ENDED_AT } from "../../../vigil/__tests__/fixtures";
 
 /**
  * MC-I1.S1 (ADR-0005) — in-process Mission Control embed.

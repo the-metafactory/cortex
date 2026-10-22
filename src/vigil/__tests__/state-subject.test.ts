@@ -3,9 +3,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilSubject, listVigilEvents } from "../db";
-import { ingestLedgerEnvelope } from "../ingest";
 import { STALE_VALUE, STATE_VOCABULARIES, stateDirection, stateRank, vocabularyOf } from "../state-subject";
-import { DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
+import { ingestLedgerEnvelope, DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
 
 describe("state registry", () => {
   test.each([

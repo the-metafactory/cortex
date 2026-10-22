@@ -1,11 +1,13 @@
-# Vigil source stacks
+# Vigil received-subject stacks
 
 Vigil runs on the default stack and watches each source stack separately
 ([soma decision D2](https://github.com/the-metafactory/soma/issues/1033)).
 State keys are `state:<vocabulary>:<stack>:<subject>`; run-health keys are
-`run:<kind>:<stack>:<ref>`. The stack comes from the second segment of
-`envelope.source`, whose shape is `<principal>.<stack>.<instance>`.
-An absent or empty segment is invalid and writes no subject.
+`run:<kind>:<stack>:<ref>`. The stack comes from the received NATS subject, whose shape is
+`local.<principal>.<stack>.execution.run.finished`. A subject outside that
+pattern is invalid and writes no subject. `envelope.source` does not select
+the stack: mismatches are counted per producer, with one warning per producer
+per process.
 Vigil's channel checks use its local stack, for example
 `state:check:default:vigil:dm-channel`.
 
@@ -43,12 +45,16 @@ legacy single-file examples use the scoped format.
 The inspected default deployment had Vigil enabled with no cadence overrides;
 there were no deployed cadence entries to rewrite for node #2713.
 
-Startup detects populated tables containing legacy subject keys and invokes
+Startup detects populated tables containing subject rows without received-subject
+provenance, including rows already scoped by `source`, and invokes
 the existing LEDGER replay path. Replay rebuilds subjects independently for
 each source stack, reconnects historical events by their run IDs, and removes
 legacy subject rows only when the replay succeeds. Local channel observations
 retain their local stack. Result associations are rebuilt with scoped keys.
-Existing attention status and confirmed daily text spending are retained.
+Attention IDs move with their subjects; open items are reconciled against the
+rebuilt value. Obsolete pending stale events are marked digested when their
+rebuilt subject is current, so they do not appear in the next digest. Confirmed
+daily text spending is retained.
 Historical receipts without a corresponding local event retain their original
 key as delivery evidence; they cannot identify a source stack by themselves.
 
@@ -56,12 +62,12 @@ Replay rebuilds a legacy subject from LEDGER when its observations are still
 retained. Before this change the live stream had contiguous sequences starting
 at 1 and limits retention of 90 days. A legacy subject whose last observation
 predates the oldest retained LEDGER message has aged out: its row is kept under
-its recorded stack, which is the stack of that last observation, its events
+the local stack, its events
 move with it, and the replay logs one warning per key. Staleness checks keep
 running on it. An empty LEDGER retains nothing, so every legacy subject counts
 as aged out; because an empty stream may also have been wiped or recreated, the
 replay logs one extra warning naming the count, since a reference seen from
-several stacks is then merged into the stack of its last observation.
+several stacks is then merged into the local stack.
 
 A legacy subject missing while its last observation is inside the retained
 window is a gap, not an age-out: migration stays pending, the error is logged,

@@ -64,7 +64,7 @@ export async function replayLedger(opts: {
   const handlers = opts.handlers ?? LEDGER_REPLAY_HANDLERS;
   const durable = replayDurable(opts.principal);
   let applied = 0;
-  const onEnvelope: EnvelopeHandler = (envelope) => {
+  const onEnvelope: EnvelopeHandler = (envelope, subject) => {
     if (envelope.type !== EXECUTION_RUN_FINISHED_TYPE) {
       const handler = handlers.get(envelope.type);
       if (handler) {
@@ -77,15 +77,15 @@ export async function replayLedger(opts: {
       }
       return { kind: "ack" };
     }
-    const invalid = ledgerEnvelopeError(envelope);
+    const invalid = ledgerEnvelopeError(envelope, subject);
     if (invalid !== null) {
       log.warn(`vigil: replay skipped envelope ${envelope.id} invalid: ${invalid}`);
       return { kind: "ack" };
     }
     // A throw reaches onError and the delivery is NAK'ed for redelivery.
     db.transaction(() => {
-      ingestLedgerEnvelope(db, envelope, now(), { replay: true });
-      reconnectReplayedEvents(db, envelope.payload as unknown as ExecutionRunFinishedPayload, stackOfEnvelope(envelope));
+      ingestLedgerEnvelope(db, envelope, subject, now(), { replay: true, log });
+      reconnectReplayedEvents(db, envelope.payload as unknown as ExecutionRunFinishedPayload, stackOfEnvelope(subject));
     })();
     applied += 1;
     return { kind: "ack" };

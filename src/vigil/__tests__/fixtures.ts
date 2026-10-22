@@ -6,7 +6,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { initDatabase } from "../../surface/mc/db/init";
-import { ingestLedgerEnvelope } from "../ingest";
+import { ingestLedgerEnvelope as ingestReceivedLedgerEnvelope } from "../ingest";
+import { deriveNatsSubject, type Envelope } from "../../bus/myelin/envelope-validator";
+import { createFakeJetStream } from "../../bus/jetstream/__tests__/fake-jetstream";
+import { LEDGER_STREAM, provisionLedgerStream } from "../../bus/jetstream/provision";
+import type { MyelinSubscribePullOpts } from "../../bus/myelin/runtime";
+import type { MyelinSubscriber } from "../../bus/myelin/subscriber";
 import { flushTexts } from "../flush";
 
 export const SUBJECT = "local.jc.default.execution.run.finished";
@@ -75,4 +80,30 @@ export function ledgerEnvelope(overrides: Partial<ExecutionRunFinishedPayloadInp
     },
   });
   return createEnvelope({ ...event.input, sovereignty: SOVEREIGNTY });
+}
+
+export function ingestLedgerEnvelope(
+  db: Database, envelope: Envelope, now: number, opts: Parameters<typeof ingestReceivedLedgerEnvelope>[4] = {},
+) {
+  return ingestReceivedLedgerEnvelope(db, envelope, deriveNatsSubject(envelope, envelope.source.split(".")[1] ?? "default"), now, opts);
+}
+
+export async function recordedVigilLedger(records: { envelope: Envelope; subject: string }[]) {
+  const log = { info: mock((_line: string) => {}), warn: mock((_line: string) => {}) };
+  const fake = createFakeJetStream();
+  await provisionLedgerStream({ jsm: fake.jsm, principal: "jc", log });
+  for (const { envelope, subject } of records) fake.publish(subject, Date.parse(String(envelope.payload.ended_at)));
+  const calls: MyelinSubscribePullOpts[] = [];
+  const runtime = {
+    jetstreamManager: async () => fake.jsm,
+    subscribePull: (opts: MyelinSubscribePullOpts) => {
+      calls.push(opts);
+      if (opts.durable.includes("replay")) {
+        fake.pull(LEDGER_STREAM, opts.durable);
+        for (const { envelope, subject } of records) opts.onEnvelope(envelope, subject, { working: () => undefined });
+      }
+      return { ready: Promise.resolve(), stop: async () => {} } as unknown as MyelinSubscriber;
+    },
+  };
+  return { jsm: fake.jsm, runtime, principal: "jc", log, pollMs: 1, calls };
 }

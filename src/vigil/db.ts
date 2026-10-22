@@ -190,3 +190,20 @@ export function markVigilReplayStarted(db: Database, now: number): void {
 export function clearVigilReplay(db: Database): void {
   db.query("DELETE FROM vigil_replay WHERE id = 1").run();
 }
+
+export function unverifiedVigilSubjects(db: Database): VigilSubjectRow[] {
+  return db.query<VigilSubjectRow, []>(`SELECT * FROM vigil_subjects
+    WHERE subject_key NOT IN (SELECT subject_key FROM vigil_subject_stack_sources)`).all();
+}
+
+export function confirmSubjectStack(db: Database, key: string): void {
+  db.query("INSERT OR IGNORE INTO vigil_subject_stack_sources (subject_key) VALUES (?)").run(key);
+}
+
+export function resetUnverifiedSubject(db: Database, key: string): boolean {
+  db.query(`INSERT OR IGNORE INTO vigil_subject_stack_moves (old_key, new_key, expected_run_id, expected_ended_at)
+    SELECT subject_key, subject_key, last_run_id, last_ended_at FROM vigil_subjects WHERE subject_key = ?
+    AND subject_key NOT IN (SELECT subject_key FROM vigil_subject_stack_sources)`).run(key);
+  return db.query(`UPDATE vigil_subjects SET last_run_id = '', last_ended_at = -1 WHERE subject_key = ?
+    AND subject_key NOT IN (SELECT subject_key FROM vigil_subject_stack_sources)`).run(key).changes > 0;
+}

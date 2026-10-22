@@ -4,8 +4,8 @@ import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
 import { TABLE_NAMES } from "../../surface/mc/db/schema";
 import { getVigilSubject, listVigilEvents } from "../db";
-import { ingestLedgerEnvelope, runHealthKey, stackOfEnvelope } from "../ingest";
-import { DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
+import { runHealthKey, stackOfEnvelope } from "../ingest";
+import { ingestLedgerEnvelope, DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
 
 describe("Vigil run-health ingest", () => {
   let db: Database;
@@ -102,9 +102,9 @@ describe("Vigil run-health ingest", () => {
     ]);
   });
 
-  test("run identity includes the source stack", () => {
+  test("run identity includes the received subject stack", () => {
     const fromSwitch = ledgerEnvelope({ ended_at: "2026-10-12T10:01:00.000Z" }, "switch");
-    expect(stackOfEnvelope(fromSwitch)).toBe("switch");
+    expect(stackOfEnvelope("local.example.switch.execution.run.finished")).toBe("switch");
     expect(runHealthKey(fromSwitch.payload as never, "switch")).toBe("run:flow:switch:daily-sweep");
     ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
     ingestLedgerEnvelope(db, fromSwitch, 200);

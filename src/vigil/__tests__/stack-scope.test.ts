@@ -3,11 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
-import type { MyelinSubscribePullOpts } from "../../bus/myelin/runtime";
-import type { MyelinSubscriber } from "../../bus/myelin/subscriber";
 import { deriveNatsSubject } from "../../bus/myelin/envelope-validator";
-import { createFakeJetStream } from "../../bus/jetstream/__tests__/fake-jetstream";
-import { LEDGER_STREAM, provisionLedgerStream } from "../../bus/jetstream/provision";
 import { AgentConfigSchema } from "../../common/types/config";
 import { initDatabase } from "../../surface/mc/db/init";
 import { handleListVigilSubjects } from "../../surface/mc/api/vigil";
@@ -17,38 +13,22 @@ import { channelKey, recordChannel } from "../channels";
 import { getVigilSubject, getVigilTextsSpent, isVigilReplayPending, listVigilEvents, recordVigilTextReceipt, writeVigilSubject, type VigilSubjectRow } from "../db";
 import { buildDigest } from "../digest";
 import { flushTexts } from "../flush";
-import { ingestLedgerEnvelope, ledgerEnvelopeError } from "../ingest";
 import { createVigilDeliveryPorts, startVigil } from "../index";
 import { createVigilRenderer } from "../render";
 import { replayLedger } from "../replay";
 import { renderResult, somaGoalWording } from "../result-render";
 import { pendingResults } from "../results";
 import { emptyLedgerWarning, hasLegacyVigilSubjects } from "../stack-scope";
-import { ENDED_AT, fakeTickScheduler, ledgerEnvelope } from "./fixtures";
+import { ingestLedgerEnvelope, ENDED_AT, fakeTickScheduler, ledgerEnvelope, recordedVigilLedger } from "./fixtures";
 
 const goal = (stack: string, value = "off-track") => ledgerEnvelope({
   outcome: "succeeded", serves: { goal: "G1" }, state: { subject: "G1", value },
 }, stack);
-const log = { info: () => {}, warn: () => {} };
-
-const publishedAt = (envelope: ReturnType<typeof ledgerEnvelope>) =>
-  Date.parse((envelope.payload as { ended_at: string }).ended_at);
 
 async function recordedLedger(envelopes: ReturnType<typeof ledgerEnvelope>[]) {
-  const fake = createFakeJetStream();
-  await provisionLedgerStream({ jsm: fake.jsm, principal: "jc", log });
-  for (const envelope of envelopes) fake.publish(deriveNatsSubject(envelope, "default"), publishedAt(envelope));
-  const runtime = {
-    jetstreamManager: async () => fake.jsm,
-    subscribePull: (opts: MyelinSubscribePullOpts) => {
-      if (opts.durable.includes("replay")) {
-        fake.pull(LEDGER_STREAM, opts.durable);
-        for (const envelope of envelopes) opts.onEnvelope(envelope, deriveNatsSubject(envelope, "default"), { working: () => undefined });
-      }
-      return { ready: Promise.resolve(), stop: async () => {} } as unknown as MyelinSubscriber;
-    },
-  };
-  return { jsm: fake.jsm, runtime, principal: "jc", log, pollMs: 1 };
+  return recordedVigilLedger(envelopes.map((envelope) => ({
+    envelope, subject: deriveNatsSubject(envelope, envelope.source.split(".")[1]),
+  })));
 }
 
 function makeLegacy(db: Database) {
@@ -63,7 +43,7 @@ function makeLegacy(db: Database) {
   })();
 }
 
-test("identical goal and run refs remain separate across source stacks and attention IDs", () => {
+test("identical goal and run refs remain separate across received subject stacks and attention IDs", () => {
   using db = initDatabase(":memory:");
   const first = ledgerEnvelope({ outcome: "succeeded", state: { subject: "G1", value: "off-track" } });
   ingestLedgerEnvelope(db, first, ENDED_AT);
@@ -77,14 +57,6 @@ test("identical goal and run refs remain separate across source stacks and atten
   expect(getAttentionItem(db, "att:vigil:state:goal:default:G1")?.status).toBe("open");
   expect(getAttentionItem(db, "att:vigil:state:goal:work:G1")?.status).toBe("open");
   expect(db.query("SELECT count(*) AS n FROM vigil_subjects").get()).toEqual({ n: 4 });
-});
-
-test.each(["jc", "jc.instance", "jc..instance", ".work.instance", "jc.work."])("refuses source without a valid stack: %s", (source) => {
-  using db = initDatabase(":memory:");
-  const envelope = { ...goal("default"), source };
-  expect(ledgerEnvelopeError(envelope)).toContain("source");
-  expect(() => ingestLedgerEnvelope(db, envelope, ENDED_AT)).toThrow("Invalid source");
-  expect(db.query("SELECT * FROM vigil_subjects").all()).toEqual([]);
 });
 
 test("Vigil channel checks use the local stack", () => {
@@ -201,7 +173,7 @@ test("a legacy subject missing inside LEDGER retention refuses migration and lea
   expect(isVigilReplayPending(db)).toBe(true);
 });
 
-test("a legacy subject whose LEDGER history aged out keeps its row under its recorded stack and Vigil starts", async () => {
+test("a legacy subject whose LEDGER history aged out keeps its row under the local stack and Vigil starts", async () => {
   using db = initDatabase(":memory:");
   ingestLedgerEnvelope(db, goal("work"), ENDED_AT);
   makeLegacy(db);
@@ -217,10 +189,10 @@ test("a legacy subject whose LEDGER history aged out keeps its row under its rec
   expect(hasLegacyVigilSubjects(db)).toBe(false);
   expect(isVigilReplayPending(db)).toBe(false);
   expect(getVigilSubject(db, "state:goal:G1")).toBeNull();
-  expect(getVigilSubject(db, "state:goal:work:G1")?.value).toBe("off-track");
-  expect(listVigilEvents(db, "state:goal:work:G1")).toHaveLength(1);
-  expect(getAttentionItem(db, "att:vigil:state:goal:work:G1")?.status).toBe("open");
-  expect(warnings).toContain("vigil: state:goal:work:G1 kept from its legacy row; its LEDGER history has aged out");
+  expect(getVigilSubject(db, "state:goal:default:G1")?.value).toBe("off-track");
+  expect(listVigilEvents(db, "state:goal:default:G1")).toHaveLength(1);
+  expect(getAttentionItem(db, "att:vigil:state:goal:default:G1")?.status).toBe("open");
+  expect(warnings).toContain("vigil: state:goal:default:G1 kept from its legacy row; its LEDGER history has aged out");
   expect(warnings.some((line) => line.startsWith("vigil: LEDGER is empty"))).toBe(false);
 });
 
@@ -232,6 +204,6 @@ test("an empty LEDGER treats every legacy subject as aged out", async () => {
   const ledger = await recordedLedger([]);
   expect(await replayLedger({ ...ledger, db, log: { info: () => {}, warn: (line: string) => { warnings.push(line); } } })).toBe(0);
   expect(hasLegacyVigilSubjects(db)).toBe(false);
-  expect(getVigilSubject(db, "state:goal:work:G1")?.value).toBe("off-track");
+  expect(getVigilSubject(db, "state:goal:default:G1")?.value).toBe("off-track");
   expect(warnings).toContain(emptyLedgerWarning(2));
 });
