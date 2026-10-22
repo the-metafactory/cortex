@@ -9,7 +9,7 @@ import { LEDGER_STREAM, isNotFoundError, provisionPullConsumer, type ProvisionLo
 import type { ProvisionJsm } from "../bus/jetstream/types";
 import { clearVigilReplay, markVigilReplayStarted, rebuildVigilBudget, stageVigilTextReceipt } from "./db";
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, ingestLedgerEnvelope, ledgerEnvelopeError, stackOfEnvelope } from "./ingest";
-import { reconnectReplayedEvents, finishStackScopedReplay } from "./stack-scope";
+import { reconnectReplayedEvents, finishStackScopedReplay, ledgerRetainedSince } from "./stack-scope";
 import type { ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
 import { textSentReceiptSchema, VIGIL_TEXT_SENT_TYPE } from "./delivery-receipt";
 import { replayVigilResolution } from "./resolution";
@@ -96,6 +96,7 @@ export async function replayLedger(opts: {
     markVigilReplayStarted(db, now());
     // A durable left by an interrupted replay sits mid-stream; start over.
     await deleteConsumerIfExists(jsm, durable);
+    const retainedSince = ledgerRetainedSince(await jsm.streams.info(LEDGER_STREAM));
     await provisionPullConsumer({
       jsm, stream: LEDGER_STREAM, durable, deliverPolicy: DeliverPolicy.All,
       ackWaitNs: LEDGER_ACK_WAIT_NS, maxDeliver: LEDGER_MAX_DELIVER, log,
@@ -112,11 +113,15 @@ export async function replayLedger(opts: {
       await pull.ready;
       await waitDrained(jsm, durable, opts.pollMs ?? REPLAY_POLL_MS, opts.stallMs ?? REPLAY_STALL_MS);
     }
-    db.transaction(() => {
+    const carriedOver = db.transaction(() => {
       rebuildVigilBudget(db);
-      finishStackScopedReplay(db);
+      const keys = finishStackScopedReplay(db, retainedSince);
       clearVigilReplay(db);
+      return keys;
     })();
+    for (const key of carriedOver) {
+      log.warn(`vigil: ${key} kept from its legacy row; its LEDGER history has aged out`);
+    }
     log.info(`vigil: rebuilt subject state from ${applied} ledger envelope(s)`);
     return applied;
   } catch (err) {

@@ -25,6 +25,7 @@ import { subjectCovers, subjectsOverlap } from "../subject-set";
 interface StoredMessage {
   seq: number;
   subject: string;
+  ts: number;
 }
 
 interface FakeStream {
@@ -41,6 +42,8 @@ interface FakeConsumer {
   numWaiting: number;
 }
 
+const EMPTY_STREAM_FIRST_TS = "0001-01-01T00:00:00Z";
+
 function apiError(message: string, errCode: number): Error {
   const err = new Error(message);
   (err as unknown as { api_error: { err_code: number } }).api_error = { err_code: errCode };
@@ -49,8 +52,8 @@ function apiError(message: string, errCode: number): Error {
 
 export interface FakeJetStream {
   jsm: ProvisionJsm;
-  /** Store `subject` in the capturing stream. Returns the stream name, or `null` when no stream captures it. */
-  publish(subject: string): string | null;
+  /** Store `subject` in the capturing stream at `ts` (default now). Returns the stream name, or `null` when no stream captures it. */
+  publish(subject: string, ts?: number): string | null;
   /** Hand out every undelivered message matching the durable's filter; acks them unless `ack: false`. */
   pull(stream: string, durable: string, opts?: { ack?: boolean }): string[];
   /** Ack every message pending on a durable. */
@@ -100,8 +103,17 @@ export function createFakeJetStream(): FakeJetStream {
       (m) => m.seq > c.deliveredSeq && (filter === "" || subjectCovers(filter, m.subject)),
     );
   };
-  const streamInfo = (s: FakeStream): StreamInfo =>
-    ({ config: { ...s.config, subjects: [...s.config.subjects] } }) as unknown as StreamInfo;
+  const streamInfo = (s: FakeStream): StreamInfo => {
+    const first = s.messages[0];
+    return {
+      config: { ...s.config, subjects: [...s.config.subjects] },
+      state: {
+        messages: s.messages.length,
+        first_seq: first?.seq ?? s.lastSeq + 1,
+        first_ts: first ? new Date(first.ts).toISOString() : EMPTY_STREAM_FIRST_TS,
+      },
+    } as unknown as StreamInfo;
+  };
   const consumerInfo = (c: FakeConsumer, stream: FakeStream): ConsumerInfo => {
     const numPending = undelivered(c, stream).length;
     return {
@@ -175,11 +187,11 @@ export function createFakeJetStream(): FakeJetStream {
 
   return {
     jsm,
-    publish(subject) {
+    publish(subject, ts = Date.now()) {
       for (const [name, s] of streams) {
         if (s.config.subjects.some((sub) => subjectCovers(sub, subject))) {
           s.lastSeq += 1;
-          s.messages.push({ seq: s.lastSeq, subject });
+          s.messages.push({ seq: s.lastSeq, subject, ts });
           return name;
         }
       }

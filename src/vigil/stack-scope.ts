@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import type { StreamInfo } from "nats";
 import type { ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
 import { getVigilSubject, writeVigilSubject, type VigilSubjectRow } from "./db";
 import { stateSubjectKey, vocabularyOf } from "./state-subject";
@@ -26,17 +27,38 @@ export function reconnectReplayedEvents(db: Database, payload: ExecutionRunFinis
   }
 }
 
-export function finishStackScopedReplay(db: Database): void {
+/**
+ * The earliest observation time LEDGER still holds. An empty stream retains
+ * nothing, so every legacy subject's history counts as aged out.
+ */
+export function ledgerRetainedSince(info: StreamInfo): number {
+  return info.state.messages > 0 ? Date.parse(info.state.first_ts) : Number.POSITIVE_INFINITY;
+}
+
+function isLocalChannelCheck(row: VigilSubjectRow): boolean {
+  return row.producer === "vigil" && row.vocab === "check" && /^vigil:(dm|email)-channel$/.test(row.ref);
+}
+
+/**
+ * Re-keys legacy subjects after a replay. A subject the replay did not rebuild
+ * and whose last observation predates `retainedSince` keeps its row under its
+ * recorded stack; returns those keys. A subject missing inside the retained
+ * window throws, leaving the migration pending.
+ */
+export function finishStackScopedReplay(db: Database, retainedSince: number): string[] {
+  const carriedOver: string[] = [];
   for (const row of legacySubjects(db)) {
     if (row.subject_kind === "state" && row.vocab === null) throw new Error("Vigil state subject requires a vocabulary");
     if (row.subject_kind === "run" && row.run_kind === null) throw new Error("Vigil run subject requires a kind");
     const scopedKey = row.subject_kind === "run"
       ? runHealthKey({ ran: { kind: row.run_kind ?? "unknown", ref: row.ref } }, row.stack)
       : stateSubjectKey(row.vocab ?? "unknown", row.stack, row.ref);
-    if (row.producer === "vigil" && row.vocab === "check" && /^vigil:(dm|email)-channel$/.test(row.ref)) {
+    const historyAgedOut = row.last_ended_at < retainedSince && getVigilSubject(db, scopedKey) === null;
+    if (isLocalChannelCheck(row) || historyAgedOut) {
       writeVigilSubject(db, { ...row, subject_key: scopedKey }, row.updated_at);
       db.query("UPDATE vigil_events SET subject_key = ?, attention_id = CASE WHEN attention_id IS NULL THEN NULL ELSE ? END WHERE subject_key = ?")
         .run(scopedKey, `att:vigil:${scopedKey}`, row.subject_key);
+      if (historyAgedOut) carriedOver.push(scopedKey);
     }
     const rebuilt = getVigilSubject(db, scopedKey);
     if (!rebuilt || rebuilt.last_ended_at < row.last_ended_at
@@ -57,4 +79,5 @@ export function finishStackScopedReplay(db: Database): void {
     db.query("DELETE FROM vigil_result_subjects WHERE subject_key = ?").run(row.subject_key);
     db.query("DELETE FROM vigil_subjects WHERE subject_key = ?").run(row.subject_key);
   }
+  return carriedOver;
 }

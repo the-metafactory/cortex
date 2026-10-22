@@ -31,10 +31,13 @@ const goal = (stack: string, value = "off-track") => ledgerEnvelope({
 }, stack);
 const log = { info: () => {}, warn: () => {} };
 
+const publishedAt = (envelope: ReturnType<typeof ledgerEnvelope>) =>
+  Date.parse((envelope.payload as { ended_at: string }).ended_at);
+
 async function recordedLedger(envelopes: ReturnType<typeof ledgerEnvelope>[]) {
   const fake = createFakeJetStream();
   await provisionLedgerStream({ jsm: fake.jsm, principal: "jc", log });
-  for (const envelope of envelopes) fake.publish(deriveNatsSubject(envelope, "default"));
+  for (const envelope of envelopes) fake.publish(deriveNatsSubject(envelope, "default"), publishedAt(envelope));
   const runtime = {
     jetstreamManager: async () => fake.jsm,
     subscribePull: (opts: MyelinSubscribePullOpts) => {
@@ -183,12 +186,49 @@ test("startup replays populated legacy rows and subsequent starts skip the migra
   expect(db.query("SELECT count(*) AS n FROM vigil_subjects").get()).toEqual({ n: 6 });
 });
 
-test("incomplete LEDGER history refuses migration and leaves old rows for retry", async () => {
+const laterRun = (offsetMs: number) => ledgerEnvelope({
+  outcome: "succeeded", serves: { goal: "G2" }, state: { subject: "G2", value: "on-track" },
+  ended_at: new Date(ENDED_AT + offsetMs).toISOString(),
+}, "default");
+
+test("a legacy subject missing inside LEDGER retention refuses migration and leaves old rows for retry", async () => {
+  using db = initDatabase(":memory:");
+  ingestLedgerEnvelope(db, goal("work"), ENDED_AT);
+  makeLegacy(db);
+  const ledger = await recordedLedger([laterRun(-1000)]);
+  expect(await replayLedger({ ...ledger, db })).toBeNull();
+  expect(hasLegacyVigilSubjects(db)).toBe(true);
+  expect(isVigilReplayPending(db)).toBe(true);
+});
+
+test("a legacy subject whose LEDGER history aged out keeps its row under its recorded stack and Vigil starts", async () => {
+  using db = initDatabase(":memory:");
+  ingestLedgerEnvelope(db, goal("work"), ENDED_AT);
+  makeLegacy(db);
+  const warnings: string[] = [];
+  const ledger = await recordedLedger([laterRun(86_400_000)]);
+  const config = AgentConfigSchema.parse({ claude: {}, agent: { name: "example", displayName: "Example" }, mc: { enabled: true }, vigil: { enabled: true } });
+  const handle = await startVigil({
+    ...ledger, db, config, stack: "default", schedule: fakeTickScheduler().schedule, now: () => ENDED_AT,
+    log: { info: () => {}, warn: (line: string) => { warnings.push(line); } },
+  });
+  expect(handle).not.toBeNull();
+  await handle?.stop();
+  expect(hasLegacyVigilSubjects(db)).toBe(false);
+  expect(isVigilReplayPending(db)).toBe(false);
+  expect(getVigilSubject(db, "state:goal:G1")).toBeNull();
+  expect(getVigilSubject(db, "state:goal:work:G1")?.value).toBe("off-track");
+  expect(listVigilEvents(db, "state:goal:work:G1")).toHaveLength(1);
+  expect(getAttentionItem(db, "att:vigil:state:goal:work:G1")?.status).toBe("open");
+  expect(warnings).toContain("vigil: state:goal:work:G1 kept from its legacy row; its LEDGER history has aged out");
+});
+
+test("an empty LEDGER treats every legacy subject as aged out", async () => {
   using db = initDatabase(":memory:");
   ingestLedgerEnvelope(db, goal("work"), ENDED_AT);
   makeLegacy(db);
   const ledger = await recordedLedger([]);
-  expect(await replayLedger({ ...ledger, db })).toBeNull();
-  expect(hasLegacyVigilSubjects(db)).toBe(true);
-  expect(isVigilReplayPending(db)).toBe(true);
+  expect(await replayLedger({ ...ledger, db })).toBe(0);
+  expect(hasLegacyVigilSubjects(db)).toBe(false);
+  expect(getVigilSubject(db, "state:goal:work:G1")?.value).toBe("off-track");
 });

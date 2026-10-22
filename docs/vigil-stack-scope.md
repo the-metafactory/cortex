@@ -52,9 +52,17 @@ Existing attention status and confirmed daily text spending are retained.
 Historical receipts without a corresponding local event retain their original
 key as delivery evidence; they cannot identify a source stack by themselves.
 
-LEDGER must retain the complete observation history. Before this change the
-live stream had contiguous sequences starting at 1 and limits retention of
-90 days. If replay cannot reconstruct a legacy subject, migration stays pending
-for retry and logs the missing-history error. An interrupted replay also stays
-pending; restarting resumes by replaying from sequence 1. Do not rename legacy
-subject rows to guess the history of a collided reference.
+Replay rebuilds a legacy subject from LEDGER when its observations are still
+retained. Before this change the live stream had contiguous sequences starting
+at 1 and limits retention of 90 days. A legacy subject whose last observation
+predates the oldest retained LEDGER message has aged out: its row is kept under
+its recorded stack, which is the stack of that last observation, its events
+move with it, and the replay logs one warning per key. Staleness checks keep
+running on it. An empty LEDGER retains nothing, so every legacy subject counts
+as aged out.
+
+A legacy subject missing while its last observation is inside the retained
+window is a gap, not an age-out: migration stays pending, the error is logged,
+and Vigil does not start until a replay succeeds. An interrupted replay also
+stays pending; restarting resumes by replaying from sequence 1. Do not rename
+legacy subject rows by hand to guess the history of a collided reference.
