@@ -59,7 +59,9 @@ predates the oldest retained LEDGER message has aged out: its row is kept under
 its recorded stack, which is the stack of that last observation, its events
 move with it, and the replay logs one warning per key. Staleness checks keep
 running on it. An empty LEDGER retains nothing, so every legacy subject counts
-as aged out.
+as aged out; because an empty stream may also have been wiped or recreated, the
+replay logs one extra warning naming the count, since a reference seen from
+several stacks is then merged into the stack of its last observation.
 
 A legacy subject missing while its last observation is inside the retained
 window is a gap, not an age-out: migration stays pending, the error is logged,

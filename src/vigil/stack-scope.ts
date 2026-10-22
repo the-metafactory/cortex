@@ -28,11 +28,28 @@ export function reconnectReplayedEvents(db: Database, payload: ExecutionRunFinis
 }
 
 /**
- * The earliest observation time LEDGER still holds. An empty stream retains
+ * How much observation history LEDGER still holds when a replay starts:
+ * `retainedSince` is the earliest retained observation time (`Infinity` when
+ * the stream is empty); `empty` means the stream held no messages because it
+ * aged out entirely, or was wiped or recreated.
+ */
+export interface LedgerRetention {
+  retainedSince: number;
+  empty: boolean;
+}
+
+/**
+ * Reads LEDGER retention from its stream info. An empty stream retains
  * nothing, so every legacy subject's history counts as aged out.
  */
-export function ledgerRetainedSince(info: StreamInfo): number {
-  return info.state.messages > 0 ? Date.parse(info.state.first_ts) : Number.POSITIVE_INFINITY;
+export function ledgerRetention(info: StreamInfo): LedgerRetention {
+  const empty = info.state.messages === 0;
+  return { empty, retainedSince: empty ? Number.POSITIVE_INFINITY : Date.parse(info.state.first_ts) };
+}
+
+/** The warning a replay logs once when it carried legacy subjects over from an empty LEDGER. */
+export function emptyLedgerWarning(carriedOver: number): string {
+  return `vigil: LEDGER is empty (aged out, wiped or recreated); ${carriedOver} legacy subject(s) kept under the stack of their last observation — history of a reference seen from several stacks is merged into that stack`;
 }
 
 function isLocalChannelCheck(row: VigilSubjectRow): boolean {

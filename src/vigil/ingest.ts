@@ -5,7 +5,7 @@ import type { Envelope } from "../bus/myelin/envelope-validator";
 import { getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition, type VigilEventRow } from "./db";
 import type { AttentionDelta } from "../surface/mc/attention-notify";
 import { ingestResult } from "./results";
-import { ingestRefAttention } from "./ref-attention";
+import { ingestRefAttention, type VigilIngestOpts } from "./ref-attention";
 import { applyVigilAttention, applyVigilTransitions } from "./attention";
 import { stateDirection, stateSubjectKey, updateStateSubject, vocabularyOf, type LedgerObservation } from "./state-subject";
 import { getAttentionItem } from "../surface/mc/db/attention";
@@ -60,7 +60,7 @@ export function ledgerEnvelopeError(envelope: Envelope): string | null {
  * dedupes on its own; all writes commit atomically. `replay` (rebuild from
  * LEDGER, see `replay.ts`) updates both rows the same way and writes no Vigil event.
  */
-export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number, opts: { replay?: boolean; stackId?: string } = {}): AttentionDelta {
+export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number, opts: Omit<VigilIngestOpts, "sourceStack"> = {}): AttentionDelta {
   const payload = envelope.payload as unknown as ExecutionRunFinishedPayload;
   const observation: LedgerObservation = {
     goal_id: payload.serves?.goal ?? null, producer: payload.producer, stack: stackOfEnvelope(envelope),
@@ -86,9 +86,9 @@ export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: numb
         : prior?.value === subject.value ? null : subject.healthy ? "better" : "worse";
       if (direction) applyVigilAttention(db, {
         id: "", subject_key: key, to_value: subject.value, direction,
-      }, opts.stackId ?? "default", { replay: true, now: observation.last_ended_at });
+      }, opts.localStackId ?? "default", { replay: true, now: observation.last_ended_at });
     }
-    return applyVigilTransitions(db, events.filter((event) => event !== null), opts.stackId ?? "default");
+    return applyVigilTransitions(db, events.filter((event) => event !== null), opts.localStackId ?? "default");
   }).immediate();
 }
 

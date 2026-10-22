@@ -124,7 +124,7 @@ export async function startVigil(opts: {
       return { kind: "ack" };
     }
     // A throw here reaches onError, and the delivery is NAK'ed for redelivery.
-    void publishDelta(ingestLedgerEnvelope(db, envelope, now(), { stackId: opts.stack }));
+    void publishDelta(ingestLedgerEnvelope(db, envelope, now(), { localStackId: opts.stack }));
     void flushResolutions();
     return { kind: "ack" };
   };

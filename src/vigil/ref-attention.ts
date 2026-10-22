@@ -28,9 +28,18 @@ export interface VigilRefRow {
   digested_version: number;
 }
 
+/**
+ * Options for one Vigil ingest. `localStackId` is the stack Vigil runs on and
+ * owns its attention items; `sourceStack` is the stack the envelope came from.
+ */
+export interface VigilIngestOpts {
+  replay?: boolean;
+  localStackId?: string;
+  sourceStack?: string;
+}
+
 export function ingestRefAttention(
-  db: Database, kind: RefKind, ref: string, payload: ExecutionRunFinishedPayload,
-  opts: { replay?: boolean; stackId?: string; sourceStack?: string },
+  db: Database, kind: RefKind, ref: string, payload: ExecutionRunFinishedPayload, opts: VigilIngestOpts,
 ): void {
   const { table, refColumn, limit, overflow } = REF_RULES[kind];
   const endedAt = Date.parse(payload.ended_at);
@@ -50,7 +59,7 @@ export function ingestRefAttention(
   }
   const id = `att:vigil:${kind}:${ref}`;
   upsertAttentionItem(db, {
-    id, stackId: opts.stackId ?? "default", workItemId: null, sessionId: null,
+    id, stackId: opts.localStackId ?? "default", workItemId: null, sessionId: null,
     kind, severity: "low", status: "open",
   });
   db.query(`INSERT INTO ${table}

@@ -23,7 +23,7 @@ import { createVigilRenderer } from "../render";
 import { replayLedger } from "../replay";
 import { renderResult, somaGoalWording } from "../result-render";
 import { pendingResults } from "../results";
-import { hasLegacyVigilSubjects } from "../stack-scope";
+import { emptyLedgerWarning, hasLegacyVigilSubjects } from "../stack-scope";
 import { ENDED_AT, fakeTickScheduler, ledgerEnvelope } from "./fixtures";
 
 const goal = (stack: string, value = "off-track") => ledgerEnvelope({
@@ -221,14 +221,17 @@ test("a legacy subject whose LEDGER history aged out keeps its row under its rec
   expect(listVigilEvents(db, "state:goal:work:G1")).toHaveLength(1);
   expect(getAttentionItem(db, "att:vigil:state:goal:work:G1")?.status).toBe("open");
   expect(warnings).toContain("vigil: state:goal:work:G1 kept from its legacy row; its LEDGER history has aged out");
+  expect(warnings.some((line) => line.startsWith("vigil: LEDGER is empty"))).toBe(false);
 });
 
 test("an empty LEDGER treats every legacy subject as aged out", async () => {
   using db = initDatabase(":memory:");
   ingestLedgerEnvelope(db, goal("work"), ENDED_AT);
   makeLegacy(db);
+  const warnings: string[] = [];
   const ledger = await recordedLedger([]);
-  expect(await replayLedger({ ...ledger, db })).toBe(0);
+  expect(await replayLedger({ ...ledger, db, log: { info: () => {}, warn: (line: string) => { warnings.push(line); } } })).toBe(0);
   expect(hasLegacyVigilSubjects(db)).toBe(false);
   expect(getVigilSubject(db, "state:goal:work:G1")?.value).toBe("off-track");
+  expect(warnings).toContain(emptyLedgerWarning(2));
 });

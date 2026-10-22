@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
-import { expireRefAttention, ingestRefAttention, REF_ATTENTION_TTL_MS, type VigilRefRow } from "./ref-attention";
+import { expireRefAttention, ingestRefAttention, REF_ATTENTION_TTL_MS, type VigilIngestOpts, type VigilRefRow } from "./ref-attention";
 
 export const RESULT_TTL_MS = REF_ATTENTION_TTL_MS;
 
@@ -8,10 +8,7 @@ export interface VigilResultRow extends VigilRefRow {
   result_ref: string;
 }
 
-export function ingestResult(
-  db: Database, payload: ExecutionRunFinishedPayload,
-  opts: { replay?: boolean; stackId?: string; sourceStack?: string },
-): void {
+export function ingestResult(db: Database, payload: ExecutionRunFinishedPayload, opts: VigilIngestOpts): void {
   if (payload.outcome !== "succeeded" || !payload.result_ref) return;
   const ref = payload.result_ref;
   const endedAt = Date.parse(payload.ended_at);
