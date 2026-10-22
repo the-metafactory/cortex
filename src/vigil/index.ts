@@ -16,7 +16,8 @@ import type { PlatformAdapter } from "../adapters/types";
 import { notifyWithResult } from "../adapters/notify-result";
 import { createVigilEmailFallback } from "./fallback-email";
 import { flushTexts, type FlushTextsOptions } from "./flush";
-import { idOnlyGoalWording } from "./goal-wording";
+import { somaGoalWording } from "./result-render";
+import { hasLegacyVigilSubjects } from "./stack-scope";
 import { expireRefAttention } from "./ref-attention";
 import { maybeSendDigest } from "./digest";
 import { flushVigilResolutions } from "./resolution";
@@ -41,7 +42,7 @@ export function createVigilDeliveryPorts(opts: {
   return {
     send: discord ? (text) => notifyWithResult(discord, text) : null,
     fallback: createVigilEmailFallback(opts.config, opts.email),
-    resolveGoalWording: opts.resolveGoalWording ?? idOnlyGoalWording,
+    resolveGoalWording: opts.resolveGoalWording ?? somaGoalWording(opts.config.soma_homes),
   };
 }
 
@@ -90,8 +91,12 @@ export async function startVigil(opts: {
   // before replay reads the stream and nothing published meanwhile is lost.
   // Such an envelope reaches both consumers; replay applies it without an
   // event and the order guard makes the live copy a no-op.
-  if (!hasVigilSubjects(db) || isVigilReplayPending(db)) {
+  if (!hasVigilSubjects(db) || isVigilReplayPending(db) || hasLegacyVigilSubjects(db)) {
     await replayLedger({ jsm, runtime: opts.runtime, db, principal: opts.principal, log, now });
+  }
+  if (hasLegacyVigilSubjects(db)) {
+    log.warn("vigil: stack-scoped replay incomplete — not started");
+    return null;
   }
   const publish = opts.runtime.publish?.bind(opts.runtime);
   const publishResolution = opts.runtime.publishOnSubject?.bind(opts.runtime);
@@ -119,7 +124,7 @@ export async function startVigil(opts: {
       return { kind: "ack" };
     }
     // A throw here reaches onError, and the delivery is NAK'ed for redelivery.
-    void publishDelta(ingestLedgerEnvelope(db, envelope, now(), { stackId: opts.stack }));
+    void publishDelta(ingestLedgerEnvelope(db, envelope, now(), { localStackId: opts.stack }));
     void flushResolutions();
     return { kind: "ack" };
   };
@@ -144,12 +149,12 @@ export async function startVigil(opts: {
       await publishDelta(sweepStale(db, tickNow, opts.config.vigil.cadence, opts.stack));
       await flushResolutions();
       if (publish) await flushTexts({
-        db, principal: opts.principal, now: tickNow, publish,
+        db, principal: opts.principal, stack: opts.stack, now: tickNow, publish,
         send: opts.send ?? null, fallback: opts.fallback ?? null, resolveGoalWording: opts.resolveGoalWording,
       });
       await maybeSendDigest({
         resultBaseUrl: opts.config.vigil.result_base_url,
-        db, now: tickNow, send: opts.send ?? null, fallback: opts.fallback ?? null,
+        db, stack: opts.stack, now: tickNow, send: opts.send ?? null, fallback: opts.fallback ?? null,
         resolveGoalWording: opts.resolveGoalWording,
       });
     },

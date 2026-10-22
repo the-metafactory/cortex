@@ -32,7 +32,7 @@ describe("Vigil route classification", () => {
       outcome: "failed", ...(state ? { state } : {}),
       ...(classification === "goal-sensor" ? { serves: { goal: "G1" } } : {}),
     }), ENDED_AT, { replay: true });
-    const key = state ? `state:${classification}:G1` : KEY;
+    const key = state ? `state:${classification}:default:G1` : KEY;
     const event = writeVigilTransition(db, {
       subject_key: key, from_value: null, to_value: to, direction: "worse",
       run_id: "transition", occurred_at: ENDED_AT,
@@ -56,13 +56,13 @@ describe("Vigil route classification", () => {
     observe("off-track", 1);
     observe("at-risk", 2);
     observe("on-track", 3);
-    const events = listVigilEvents(db, "state:goal:G1");
+    const events = listVigilEvents(db, "state:goal:default:G1");
     expect(events.map(({ route, delivery }) => ({ route, delivery }))).toEqual([
       { route: "text", delivery: "pending" },
       { route: "digest", delivery: "pending" },
       { route: "digest", delivery: "pending" },
     ]);
-    const row = getVigilSubject(db, "state:goal:G1")!;
+    const row = getVigilSubject(db, "state:goal:default:G1")!;
     expect(row.value).toBe("on-track");
     const render = createVigilRenderer({ resolveGoalWording: () => "Example goal" });
     expect(await render(events[0]!, row)).toBe("Vigil: goal Example goal — on-track → off-track");
@@ -79,7 +79,7 @@ describe("Vigil route classification", () => {
         outcome: "succeeded", state: { subject: vocab, value },
         ended_at: new Date(ENDED_AT + i * 60_000).toISOString(),
       }), ENDED_AT + i * 60_000));
-      expect(listVigilEvents(db, `state:${vocab}:${vocab}`).map((event) => event.route)).toEqual([...routes]);
+      expect(listVigilEvents(db, `state:${vocab}:default:${vocab}`).map((event) => event.route)).toEqual([...routes]);
     }
   });
 
@@ -94,7 +94,7 @@ describe("Vigil route classification", () => {
       }), ENDED_AT);
     }
     sweepStale(db, ENDED_AT + 52 * 3_600_000 + 1, {});
-    for (const [key, route] of [["run:job:sensor", "text"], ["state:goal:G1", "text"], ["run:job:plain", "digest"]] as const) {
+    for (const [key, route] of [["run:job:default:sensor", "text"], ["state:goal:default:G1", "text"], ["run:job:default:plain", "digest"]] as const) {
       expect(listVigilEvents(db, key)).toEqual([expect.objectContaining({ route, delivery: "pending", to_value: "stale" })]);
     }
   });

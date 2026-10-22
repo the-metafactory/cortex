@@ -5,7 +5,7 @@ import type { Envelope } from "../bus/myelin/envelope-validator";
 import { getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition, type VigilEventRow } from "./db";
 import type { AttentionDelta } from "../surface/mc/attention-notify";
 import { ingestResult } from "./results";
-import { ingestRefAttention } from "./ref-attention";
+import { ingestRefAttention, type VigilIngestOpts } from "./ref-attention";
 import { applyVigilAttention, applyVigilTransitions } from "./attention";
 import { stateDirection, stateSubjectKey, updateStateSubject, vocabularyOf, type LedgerObservation } from "./state-subject";
 import { getAttentionItem } from "../surface/mc/db/attention";
@@ -19,21 +19,18 @@ import { getAttentionItem } from "../surface/mc/db/attention";
 export const LEDGER_ACK_WAIT_NS = 60 * 1_000_000_000;
 export const LEDGER_MAX_DELIVER = 5;
 
-/**
- * Run-health subject key, `run:{kind}:{ref}` (soma#787 Amendment 1, Q30).
- * The key carries no stack: the contract identifies a run by what ran, not
- * where, and the ledger is one per principal. The stack of the latest
- * observation is kept in `vigil_subjects.stack` so a same-ref collision
- * across stacks is visible in the data. Keying by stack would change the
- * contract; that is settled on soma#781, not here.
- */
-export function runHealthKey(payload: Pick<ExecutionRunFinishedPayload, "ran">): string {
-  return `run:${payload.ran.kind}:${payload.ran.ref}`;
+export function runHealthKey(payload: { ran: { kind: string; ref: string } }, stack: string): string {
+  return `run:${payload.ran.kind}:${stack}:${payload.ran.ref}`;
 }
 
 /** `envelope.source` is `{principal}.{stack}.{instance}` (rfc-0003, 3..5 segments). */
 export function stackOfEnvelope(envelope: Pick<Envelope, "source">): string {
-  return envelope.source.split(".")[1] ?? "";
+  const segments = envelope.source.split(".");
+  const stack = segments[1];
+  if (!stack || segments.length < 3 || segments.some((segment) => !/^[A-Za-z0-9_-]+$/.test(segment))) {
+    throw new Error("Invalid source: principal, stack and instance are required");
+  }
+  return stack;
 }
 
 /**
@@ -43,6 +40,11 @@ export function stackOfEnvelope(envelope: Pick<Envelope, "source">): string {
  * from our vendored type, so only the fields it reads are passed.
  */
 export function ledgerEnvelopeError(envelope: Envelope): string | null {
+  try {
+    stackOfEnvelope(envelope);
+  } catch {
+    return "source: principal, stack and instance are required";
+  }
   const { id, source, type, timestamp, sovereignty, payload, economics, correlation_id } = envelope;
   const validation = validateExecutionRunFinished({ id, source, type, timestamp, sovereignty, payload, economics, correlation_id });
   if (validation.valid) return null;
@@ -58,21 +60,21 @@ export function ledgerEnvelopeError(envelope: Envelope): string | null {
  * dedupes on its own; all writes commit atomically. `replay` (rebuild from
  * LEDGER, see `replay.ts`) updates both rows the same way and writes no Vigil event.
  */
-export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number, opts: { replay?: boolean; stackId?: string } = {}): AttentionDelta {
+export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number, opts: Omit<VigilIngestOpts, "sourceStack"> = {}): AttentionDelta {
   const payload = envelope.payload as unknown as ExecutionRunFinishedPayload;
   const observation: LedgerObservation = {
     goal_id: payload.serves?.goal ?? null, producer: payload.producer, stack: stackOfEnvelope(envelope),
     last_run_id: payload.run_id, last_ended_at: Date.parse(payload.ended_at), last_seen_at: now,
   };
   return db.transaction(() => {
-    const replayKeys = opts.replay ? [runHealthKey(payload), ...(payload.state
-      ? [stateSubjectKey(vocabularyOf(payload.state.value), payload.state.subject)] : [])] : [];
+    const replayKeys = opts.replay ? [runHealthKey(payload, observation.stack), ...(payload.state
+      ? [stateSubjectKey(vocabularyOf(payload.state.value), observation.stack, payload.state.subject)] : [])] : [];
     const previous = replayKeys.map((key) => getVigilSubject(db, key));
     const events = [updateRunHealthSubject(db, payload, observation, now, opts)];
     if (payload.state) events.push(updateStateSubject(db, payload.state, observation, now, opts));
-    ingestResult(db, payload, opts);
+    ingestResult(db, payload, { ...opts, sourceStack: observation.stack });
     if (payload.outcome === "succeeded") {
-      for (const ref of payload.proposal_refs ?? []) ingestRefAttention(db, "proposal", ref, payload, opts);
+      for (const ref of payload.proposal_refs ?? []) ingestRefAttention(db, "proposal", ref, payload, { ...opts, sourceStack: observation.stack });
     }
     for (const [index, key] of replayKeys.entries()) {
       if (!getAttentionItem(db, `att:vigil:${key}`)) continue;
@@ -84,9 +86,9 @@ export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: numb
         : prior?.value === subject.value ? null : subject.healthy ? "better" : "worse";
       if (direction) applyVigilAttention(db, {
         id: "", subject_key: key, to_value: subject.value, direction,
-      }, opts.stackId ?? "default", { replay: true, now: observation.last_ended_at });
+      }, opts.localStackId ?? "default", { replay: true, now: observation.last_ended_at });
     }
-    return applyVigilTransitions(db, events.filter((event) => event !== null), opts.stackId ?? "default");
+    return applyVigilTransitions(db, events.filter((event) => event !== null), opts.localStackId ?? "default");
   }).immediate();
 }
 
@@ -94,7 +96,7 @@ function updateRunHealthSubject(
   db: Database, payload: ExecutionRunFinishedPayload, observation: LedgerObservation, now: number,
   opts: { replay?: boolean },
 ): VigilEventRow | null {
-  const key = runHealthKey(payload);
+  const key = runHealthKey(payload, observation.stack);
   const prior = getVigilSubject(db, key);
   if (!isNewObservation(prior, observation.last_run_id, observation.last_ended_at)) return null;
   const healthy = payload.outcome === "succeeded";

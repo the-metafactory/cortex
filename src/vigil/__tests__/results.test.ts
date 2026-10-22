@@ -134,7 +134,7 @@ test("digest reads fresh goal wording and file title only at render time, never 
       expect(stored).not.toContain(privateText);
     }
   }
-  expect(await somaGoalWording(home)("../../outside")).toBeNull();
+  expect(await somaGoalWording({ default: home })("../../outside", "default")).toBeNull();
 });
 
 test("successful digest settles once, updates wait until next day, failed delivery stays pending", async () => {

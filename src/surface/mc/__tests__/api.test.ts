@@ -94,7 +94,7 @@ describe("GET /api/vigil/subjects", () => {
   afterEach(async () => { await teardown(t); });
 
   it("returns only local subjects with request-time wording and configured cadence", async () => {
-    const key = "run:job:harness-gate";
+    const key = "run:job:default:harness-gate";
     t = await setup({ vigil: {
       enabled: true, resolveGoalWording: () => "Example goal", cadence: { [key]: 3_600_000 },
     } });

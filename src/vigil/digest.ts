@@ -9,7 +9,7 @@ import { pendingResults } from "./results";
 import { renderResult, type ResultRenderOptions } from "./result-render";
 import { createVigilRenderer } from "./render";
 
-type BuildDigestOptions = Pick<FlushTextsOptions, "db" | "now" | "resolveGoalWording"> & ResultRenderOptions;
+type BuildDigestOptions = Pick<FlushTextsOptions, "db" | "now" | "resolveGoalWording" | "stack"> & ResultRenderOptions;
 export type SendDigestOptions = BuildDigestOptions & Pick<FlushTextsOptions, "send" | "fallback">;
 
 const DIGEST_LIMIT = 1950;
@@ -77,7 +77,7 @@ async function prepareDigest(options: BuildDigestOptions) {
   const yesterday = new Date(`${budgetDay(now)}T00:00:00Z`);
   yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   const spent = getVigilTextsSpent(db, yesterday.toISOString().slice(0, 10));
-  const budget = `Budget: ${spent} of ${VIGIL_DAILY_TEXT_LIMIT} texts yesterday · DM ${channelValue(db, "dm-channel")} · email ${channelValue(db, "email-channel")}`;
+  const budget = `Budget: ${spent} of ${VIGIL_DAILY_TEXT_LIMIT} texts yesterday · DM ${channelValue(db, "dm-channel", options.stack)} · email ${channelValue(db, "email-channel", options.stack)}`;
   const totalLines = lines.length;
   let text = renderLines(lines, budget);
   while (text.length > DIGEST_LIMIT) {
@@ -116,7 +116,7 @@ async function deliverDigest(options: SendDigestOptions): Promise<void> {
     dmResult = { delivered: false, kind: "transient", code: "exception" };
   }
   if (dmResult.delivered) via = "dm";
-  recordChannel(db, "dm-channel", via === "dm" ? "ok" : "regressed", now);
+  recordChannel(db, "dm-channel", via === "dm" ? "ok" : "regressed", now, options.stack);
   if (via === null && fallback) {
     let result: Awaited<ReturnType<NonNullable<SendDigestOptions["fallback"]>>>;
     try {
@@ -124,7 +124,7 @@ async function deliverDigest(options: SendDigestOptions): Promise<void> {
     } catch {
       result = { ok: false, error: "exception" };
     }
-    recordChannel(db, "email-channel", result.ok ? "ok" : "regressed", now);
+    recordChannel(db, "email-channel", result.ok ? "ok" : "regressed", now, options.stack);
     if (result.ok) via = "email";
   }
   if (via === null) {

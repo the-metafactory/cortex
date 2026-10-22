@@ -24,8 +24,15 @@
 #
 # Optional Vigil ledger of finished executions on the default stack (soma#787);
 # requires mc.enabled: true.
-# vigil:
-#   enabled: true
+vigil:
+  enabled: false
+  soma_homes:
+    default: /path/to/personal-soma
+    work: /path/to/work-soma
+  cadence:
+    "state:goal:default:G1": 93600000
+    "state:goal:work:G1": 93600000
+    "run:job:default:goal-sensor": 3600000
 #
 # Copy this file to one of the locations the cortex CLI scans (default:
 # `~/.config/metafactory/cortex/cortex.yaml`) and replace every `<REPLACE_ME>` marker

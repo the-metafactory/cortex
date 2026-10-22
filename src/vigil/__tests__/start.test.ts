@@ -112,7 +112,7 @@ describe("Vigil startup and delivery", () => {
       ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "old-job" }, outcome: "succeeded", started_at: "2026-10-09T10:00:00Z", ended_at: "2026-10-09T10:00:05Z" }), ENDED_AT);
       scheduler.tick();
       await flushTick();
-      expect(publish.mock.calls[2]?.[0]).toMatchObject({ type: "system.attention.opened", payload: { attention: { id: "att:vigil:run:job:old-job", severity: "normal" } } });
+      expect(publish.mock.calls[2]?.[0]).toMatchObject({ type: "system.attention.opened", payload: { attention: { id: "att:vigil:run:job:default:old-job", severity: "normal" } } });
       scheduler.tick();
       await flushTick();
       expect(publish).toHaveBeenCalledTimes(3);
@@ -229,8 +229,8 @@ describe("Vigil startup and delivery", () => {
   });
 
   test("startup sweeps with configured cadence, ticks every five minutes and cancels on stop", async () => {
-    const jobKey = "run:job:harness-gate";  // glossary-ignore: run
-    const otherKey = "run:job:daily-check";  // glossary-ignore: run
+    const jobKey = "run:job:default:harness-gate";  // glossary-ignore: run
+    const otherKey = "run:job:default:daily-check";  // glossary-ignore: run
     ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded" }), ENDED_AT);
     ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "daily-check" }, outcome: "succeeded" }), ENDED_AT);
     const cfg = config();
@@ -261,7 +261,7 @@ describe("Vigil startup and delivery", () => {
   });
 
   test("a sweep failure is logged and the next scheduled sweep still runs", async () => {
-    const jobKey = "run:job:harness-gate";  // glossary-ignore: run
+    const jobKey = "run:job:default:harness-gate";  // glossary-ignore: run
     ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded" }), ENDED_AT);
     db.run("CREATE TRIGGER fail_sweep BEFORE UPDATE ON vigil_subjects BEGIN SELECT RAISE(ABORT, 'sweep failure'); END");
     const scheduler = fakeTickScheduler();

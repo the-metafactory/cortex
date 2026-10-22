@@ -7,8 +7,8 @@ import { ingestLedgerEnvelope } from "../ingest";
 import { DEFAULT_CADENCE_MS, effectiveCadenceMs, sweepStale } from "../staleness";
 import { DELIVERY_DEFAULTS, ENDED_AT, ledgerEnvelope } from "./fixtures";
 
-const JOB_KEY = "run:job:harness-gate";
-const GOAL_KEY = "state:goal:G1";
+const JOB_KEY = "run:job:default:harness-gate";
+const GOAL_KEY = "state:goal:default:G1";
 const DEADLINE = ENDED_AT + 2 * DEFAULT_CADENCE_MS;
 const job = () => ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded" });
 
@@ -145,7 +145,7 @@ describe("Vigil staleness", () => {
     ingestLedgerEnvelope(db, job(), ENDED_AT);
     ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", state: { subject: "G1", value: "on-track" } }), ENDED_AT);
     db.run(`CREATE TRIGGER reject_stale BEFORE INSERT ON vigil_events
-      WHEN NEW.subject_key = 'state:goal:G1' BEGIN SELECT RAISE(ABORT, 'event failure'); END`);
+      WHEN NEW.subject_key = 'state:goal:default:G1' BEGIN SELECT RAISE(ABORT, 'event failure'); END`);
     expect(() => sweepStale(db, DEADLINE + 1, {})).toThrow("event failure");
     expect(getVigilSubject(db, JOB_KEY)?.value).toBe("succeeded");
     expect(getVigilSubject(db, GOAL_KEY)?.value).toBe("on-track");

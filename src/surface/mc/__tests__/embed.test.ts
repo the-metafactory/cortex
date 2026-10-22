@@ -93,7 +93,7 @@ describe("startMissionControl (embed)", () => {
   });
 
   it("passes Vigil wording and cadence options to its local server", async () => {
-    const key = "run:job:harness-gate";
+    const key = "run:job:default:harness-gate";
     handle = await startMissionControl({
       configPath: writeMcYaml(), dbPath: join(tmpDir, "mc.db"),
       vigil: { enabled: true, resolveGoalWording: () => "Example goal", cadence: { [key]: 3_600_000 } },

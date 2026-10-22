@@ -4828,7 +4828,7 @@
   },
   "src/surface/mc/db/schema.ts": {
     "cortex/no-comments": {
-      "count": 313
+      "count": 311
     }
   },
   "src/surface/mc/db/session-join.ts": {
@@ -5350,11 +5350,6 @@
   "src/vigil/budget.ts": {
     "cortex/no-comments": {
       "count": 2
-    }
-  },
-  "src/vigil/db.ts": {
-    "cortex/no-comments": {
-      "count": 1
     }
   },
   "src/vigil/index.ts": {

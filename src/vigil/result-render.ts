@@ -21,8 +21,11 @@ async function firstBodyLine(root: string, relative: string): Promise<string | n
   }
 }
 
-export function somaGoalWording(home = somaHome()): GoalWordingResolver {
-  return (id) => /^G\d+$/.test(id) ? firstBodyLine(join(home, "profile", "goals"), `${id}.md`) : null;
+export function somaGoalWording(homes: Readonly<Record<string, string>>): GoalWordingResolver {
+  return (id, stack) => {
+    const home = Object.hasOwn(homes, stack) ? homes[stack] : undefined;
+    return home && /^G\d+$/.test(id) ? firstBodyLine(join(home, "profile", "goals"), `${id}.md`) : null;
+  };
 }
 
 export interface ResultRenderOptions {
@@ -38,7 +41,8 @@ export async function resultPresentation(result: VigilResultRow, options: Result
   let goal: string | null = null;
   if (result.goal_id) {
     try {
-      goal = await (options.resolveGoalWording ?? somaGoalWording(home))(result.goal_id) ?? result.goal_id;
+      const resolver = options.resolveGoalWording ?? somaGoalWording(options.somaHome ? { default: options.somaHome } : {});
+      goal = await resolver(result.goal_id, result.source_stack ?? "") ?? result.goal_id;
     } catch {
       process.stderr.write("Vigil: result goal wording unavailable; using goal ID\n");
       goal = result.goal_id;

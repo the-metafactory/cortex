@@ -59,7 +59,6 @@ export interface VigilSubjectRow {
   healthy: 0 | 1;
   goal_id: string | null;
   producer: string;
-  /** Stack segment of the latest observation's `source`; see `runHealthKey`. */
   stack: string;
   run_kind: string | null;
   last_run_id: string;

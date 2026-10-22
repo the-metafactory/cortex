@@ -10,7 +10,7 @@ beforeEach(() => { db = initDatabase(":memory:"); });
 afterEach(() => db.close());
 
 test.each(["dm-channel", "email-channel"] as const)("%s starts healthy without a row or transition", (channel) => {
-  const key = `state:check:vigil:${channel}`;
+  const key = `state:check:default:vigil:${channel}`;
   expect(channelKey(channel)).toBe(key);
   expect(channelValue(db, channel)).toBe("ok");
   expect(getVigilSubject(db, key)).toBeNull();

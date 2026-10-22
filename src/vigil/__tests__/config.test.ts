@@ -4,7 +4,7 @@ import { AgentConfigSchema } from "../../common/types/config";
 import { CortexConfigSchema } from "../../common/types/cortex-config";
 
 const base = { principal: { id: "jc" }, agents: [{ id: "ivy", displayName: "Ivy", persona: "./ivy.md", presence: {} }], claude: {} };
-const key = "run:job:harness-gate";
+const key = "run:job:default:harness-gate";
 
 describe("Vigil cadence config", () => {
   test("both schemas default cadence to an empty map", () => {
@@ -14,7 +14,7 @@ describe("Vigil cadence config", () => {
   });
 
   test("preserves positive integer millisecond overrides by full subject key", () => {
-    const cadence = { [key]: 3_600_000, "state:goal:G1": 1, "run:node:ignored": 1 };
+    const cadence = { [key]: 3_600_000, "state:goal:default:G1": 1, "run:node:default:ignored": 1 };
     expect(CortexConfigSchema.parse({ ...base, vigil: { cadence } }).vigil.cadence).toEqual(cadence);
   });
 

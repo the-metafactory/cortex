@@ -15,7 +15,7 @@ describe("handleListVigilSubjects", () => {
 
   function seed(overrides: Partial<VigilObservation> = {}) {
     writeVigilSubject(db, {
-      subject_key: "run:flow:daily-sweep", subject_kind: "run", vocab: null,
+      subject_key: "run:flow:default:daily-sweep", subject_kind: "run", vocab: null,
       ref: "daily-sweep", value: "failed", healthy: 0, goal_id: null,
       producer: "pulse", stack: "default", run_kind: "flow",
       last_run_id: "run-1", last_ended_at: ENDED_AT, last_seen_at: ENDED_AT,
@@ -31,24 +31,24 @@ describe("handleListVigilSubjects", () => {
   }
 
   it("lists every subject unhealthy first, then by key, with the complete public shape", async () => {
-    seed({ subject_key: "state:goal:G1", subject_kind: "state", vocab: "goal", ref: "G1",
+    seed({ subject_key: "state:goal:default:G1", subject_kind: "state", vocab: "goal", ref: "G1",
       value: "on-track", healthy: 1, goal_id: "G1", run_kind: null });
-    seed({ subject_key: "state:escalation:example/project#604", subject_kind: "state", vocab: "escalation",
+    seed({ subject_key: "state:escalation:default:example/project#604", subject_kind: "state", vocab: "escalation",
       ref: "example/project#604", value: "overdue", run_kind: null });
     seed();
     expect(await list()).toEqual({ subjects: [
       {
-        subjectKey: "run:flow:daily-sweep", kind: "run", vocab: null, ref: "daily-sweep",
+        subjectKey: "run:flow:default:daily-sweep", kind: "run", vocab: null, ref: "daily-sweep",
         goalId: null, goalWording: null, value: "failed", healthy: false,
         lastResultRef: null, lastRunId: "run-1", lastEndedAt: ENDED_AT, expectedBy: null,
       },
       {
-        subjectKey: "state:escalation:example/project#604", kind: "state", vocab: "escalation", ref: "example/project#604",
+        subjectKey: "state:escalation:default:example/project#604", kind: "state", vocab: "escalation", ref: "example/project#604",
         goalId: null, goalWording: null, value: "overdue", healthy: false,
         lastResultRef: null, lastRunId: "run-1", lastEndedAt: ENDED_AT, expectedBy: null,
       },
       {
-        subjectKey: "state:goal:G1", kind: "state", vocab: "goal", ref: "G1",
+        subjectKey: "state:goal:default:G1", kind: "state", vocab: "goal", ref: "G1",
         goalId: "G1", goalWording: "Example goal", value: "on-track", healthy: true,
         lastResultRef: null, lastRunId: "run-1", lastEndedAt: ENDED_AT, expectedBy: ENDED_AT + DEFAULT_CADENCE_MS,
       },
@@ -56,7 +56,7 @@ describe("handleListVigilSubjects", () => {
   });
 
   it.each(["job", "node", "algorithm", "dispatch", "flow"])("uses effective cadence for run:%s only when eligible", async (kind) => {
-    const key = `run:${kind}:harness-gate`;
+    const key = `run:${kind}:default:harness-gate`;
     seed({ subject_key: key, run_kind: kind });
     const expectedBy = kind === "job" ? ENDED_AT + DEFAULT_CADENCE_MS : null;
     expect((await list()).subjects[0]?.expectedBy).toBe(expectedBy);
@@ -65,7 +65,7 @@ describe("handleListVigilSubjects", () => {
   });
 
   it.each(["goal", "escalation", "check", "unknown"] as const)("uses effective cadence for state:%s only when eligible", async (vocab) => {
-    const key = `state:${vocab}:G1`;
+    const key = `state:${vocab}:default:G1`;
     seed({ subject_key: key, subject_kind: "state", vocab, run_kind: null });
     expect((await list()).subjects[0]?.expectedBy).toBe(vocab === "goal" ? ENDED_AT + DEFAULT_CADENCE_MS : null);
     expect((await list(undefined, { [key]: 1_000 })).subjects[0]?.expectedBy).toBe(vocab === "goal" ? ENDED_AT + 1_000 : null);
@@ -73,14 +73,14 @@ describe("handleListVigilSubjects", () => {
 
   it("resolves each goal once per request, fetches fresh wording, and never writes", async () => {
     seed({ goal_id: "G1" });
-    seed({ subject_key: "state:goal:G1", subject_kind: "state", vocab: "goal", goal_id: "G1", run_kind: null });
+    seed({ subject_key: "state:goal:default:G1", subject_kind: "state", vocab: "goal", goal_id: "G1", run_kind: null });
     const before = db.query("SELECT total_changes() AS changes").get();
     const rowsBefore = db.query("SELECT * FROM vigil_subjects ORDER BY subject_key").all();
     let wording = "Example goal";
     const resolver = mock(async (_id: string) => wording);
     expect((await list(resolver)).subjects.map((s) => s.goalWording)).toEqual([wording, wording]);
     expect(resolver).toHaveBeenCalledTimes(1);
-    expect(resolver).toHaveBeenCalledWith("G1");
+    expect(resolver).toHaveBeenCalledWith("G1", "default");
     wording = "Revised goal";
     expect((await list(resolver)).subjects.map((s) => s.goalWording)).toEqual([wording, wording]);
     expect(resolver).toHaveBeenCalledTimes(2);

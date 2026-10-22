@@ -5,23 +5,23 @@ import { STATE_VOCABULARIES, stateDirection, stateHealthy, stateSubjectKey } fro
 export type VigilChannel = "dm-channel" | "email-channel";
 export type VigilChannelValue = typeof STATE_VOCABULARIES.check[number];
 
-export function channelKey(channel: VigilChannel): string {
-  return stateSubjectKey("check", `vigil:${channel}`);
+export function channelKey(channel: VigilChannel, stack = "default"): string {
+  return stateSubjectKey("check", stack, `vigil:${channel}`);
 }
 
-export function channelValue(db: Database, channel: VigilChannel): VigilChannelValue {
-  return getVigilSubject(db, channelKey(channel))?.value === "regressed" ? "regressed" : "ok";
+export function channelValue(db: Database, channel: VigilChannel, stack = "default"): VigilChannelValue {
+  return getVigilSubject(db, channelKey(channel, stack))?.value === "regressed" ? "regressed" : "ok";
 }
 
-export function recordChannel(db: Database, channel: VigilChannel, value: VigilChannelValue, now: number): VigilEventRow | null {
+export function recordChannel(db: Database, channel: VigilChannel, value: VigilChannelValue, now: number, stack = "default"): VigilEventRow | null {
   return db.transaction(() => {
-    const key = channelKey(channel);
-    const from = channelValue(db, channel);
+    const key = channelKey(channel, stack);
+    const from = channelValue(db, channel, stack);
     const runId = crypto.randomUUID();
     writeVigilSubject(db, {
       subject_key: key, subject_kind: "state", vocab: "check", ref: `vigil:${channel}`,
       value, healthy: stateHealthy("check", value) ? 1 : 0, goal_id: null,
-      producer: "vigil", stack: "default", run_kind: null, last_run_id: runId,
+      producer: "vigil", stack, run_kind: null, last_run_id: runId,
       last_ended_at: now, last_seen_at: now,
     }, now);
     const direction = stateDirection("check", from, value);
