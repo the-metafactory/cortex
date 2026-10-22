@@ -3,12 +3,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilSubject, listVigilEvents, writeVigilTransition } from "../db";
-import { ingestLedgerEnvelope } from "../ingest";
 import type { SubjectClass } from "../policy";
 import { createVigilRenderer } from "../render";
 import { routeFor, type VigilRoute } from "../routing";
 import { sweepStale } from "../staleness";
-import { ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
+import { ingestLedgerEnvelope, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
 
 const WORSE_ROUTES: [SubjectClass, string, VigilRoute][] = [
   ["goal", "off-track", "text"],

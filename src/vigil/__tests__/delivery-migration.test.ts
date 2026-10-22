@@ -2,8 +2,7 @@ import { expect, test } from "bun:test";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilTextsSpent, listVigilEvents, type VigilEventRow } from "../db";
 import { flushTexts } from "../flush";
-import { ingestLedgerEnvelope } from "../ingest";
-import { DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestLedgerEnvelope, DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 test("delivery columns migrate without losing rows and retries survive reopening", async () => {
   using file = temporaryVigilDatabaseFile("vigil-delivery-");

@@ -88,6 +88,8 @@ export const TABLE_NAMES = [
   "attention_items",
   "observability_events",
   "vigil_subjects",
+  "vigil_subject_stack_sources",
+  "vigil_subject_stack_moves",
   "vigil_events",
   "vigil_replay",
   "vigil_budget",
@@ -100,6 +102,8 @@ export const TABLE_NAMES = [
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
+  "CREATE TABLE IF NOT EXISTS vigil_subject_stack_sources (subject_key TEXT PRIMARY KEY)",
+  "CREATE TABLE IF NOT EXISTS vigil_subject_stack_moves (old_key TEXT PRIMARY KEY, new_key TEXT NOT NULL, expected_run_id TEXT NOT NULL, expected_ended_at INTEGER NOT NULL)",
   `CREATE TABLE IF NOT EXISTS vigil_result_reads (
     result_ref TEXT PRIMARY KEY,
     id TEXT NOT NULL UNIQUE,

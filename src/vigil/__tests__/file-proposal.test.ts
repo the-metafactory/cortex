@@ -5,10 +5,9 @@ import { getAttentionItem } from "../../surface/mc/db/attention";
 import { handleAttentionLifecycle, handleListAttention } from "../../surface/mc/api/attention";
 import { DEFAULT_CONFIG } from "../../surface/mc/config";
 import { startServer } from "../../surface/mc/server";
-import { ingestLedgerEnvelope } from "../ingest";
 import { flushVigilResolutions } from "../resolution";
 import { runProposalCommand, type ProposalFilingOptions, type ProposalCommandRunner } from "../file-proposal";
-import { ENDED_AT, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestLedgerEnvelope, ENDED_AT, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 const REF = "soma:proposals/proposal.md";
 const ID = `att:vigil:proposal:${REF}`;

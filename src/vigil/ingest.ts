@@ -1,8 +1,8 @@
 // glossary-ignore: run, subscriber, message
 import type { Database } from "bun:sqlite";
-import { validateExecutionRunFinished, type ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
+import { executionRunFinishedSubject, validateExecutionRunFinished, type ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
 import type { Envelope } from "../bus/myelin/envelope-validator";
-import { getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition, type VigilEventRow } from "./db";
+import { confirmSubjectStack, resetUnverifiedSubject, getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition, type VigilEventRow } from "./db";
 import type { AttentionDelta } from "../surface/mc/attention-notify";
 import { ingestResult } from "./results";
 import { ingestRefAttention, type VigilIngestOpts } from "./ref-attention";
@@ -23,14 +23,26 @@ export function runHealthKey(payload: { ran: { kind: string; ref: string } }, st
   return `run:${payload.ran.kind}:${stack}:${payload.ran.ref}`;
 }
 
-/** `envelope.source` is `{principal}.{stack}.{instance}` (rfc-0003, 3..5 segments). */
-export function stackOfEnvelope(envelope: Pick<Envelope, "source">): string {
-  const segments = envelope.source.split(".");
-  const stack = segments[1];
-  if (!stack || segments.length < 3 || segments.some((segment) => !/^[A-Za-z0-9_-]+$/.test(segment))) {
-    throw new Error("Invalid source: principal, stack and instance are required");
+export function stackOfEnvelope(subject: string): string {
+  const [, principal, stack] = subject.split(".");
+  if (!principal || !stack || executionRunFinishedSubject(principal, stack) !== subject) {
+    throw new Error("Invalid subject: local principal, stack and execution.run.finished are required");
   }
   return stack;
+}
+
+const sourceStackMismatches = new Map<string, number>();
+
+export function sourceStackMismatchCount(producer: string): number {
+  return sourceStackMismatches.get(producer) ?? 0;
+}
+
+function countSourceStackMismatch(envelope: Envelope, stack: string, log: Pick<Console, "warn">): void {
+  if (envelope.source.split(".")[1] === stack) return;
+  const producer = String(envelope.payload.producer);
+  const count = sourceStackMismatchCount(producer);
+  sourceStackMismatches.set(producer, count + 1);
+  if (count === 0) log.warn(`vigil: producer ${producer} source stack differs from received subject; using subject stack ${stack}`);
 }
 
 /**
@@ -39,11 +51,11 @@ export function stackOfEnvelope(envelope: Pick<Envelope, "source">): string {
  * already checked the envelope; A5b's newer chain-only signature type differs
  * from our vendored type, so only the fields it reads are passed.
  */
-export function ledgerEnvelopeError(envelope: Envelope): string | null {
+export function ledgerEnvelopeError(envelope: Envelope, subject: string): string | null {
   try {
-    stackOfEnvelope(envelope);
+    stackOfEnvelope(subject);
   } catch {
-    return "source: principal, stack and instance are required";
+    return "subject: local principal, stack and execution.run.finished are required";
   }
   const { id, source, type, timestamp, sovereignty, payload, economics, correlation_id } = envelope;
   const validation = validateExecutionRunFinished({ id, source, type, timestamp, sovereignty, payload, economics, correlation_id });
@@ -60,16 +72,19 @@ export function ledgerEnvelopeError(envelope: Envelope): string | null {
  * dedupes on its own; all writes commit atomically. `replay` (rebuild from
  * LEDGER, see `replay.ts`) updates both rows the same way and writes no Vigil event.
  */
-export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: number, opts: Omit<VigilIngestOpts, "sourceStack"> = {}): AttentionDelta {
+export function ingestLedgerEnvelope(db: Database, envelope: Envelope, subject: string, now: number, opts: Omit<VigilIngestOpts, "sourceStack"> & { log?: Pick<Console, "warn"> } = {}): AttentionDelta {
   const payload = envelope.payload as unknown as ExecutionRunFinishedPayload;
   const observation: LedgerObservation = {
-    goal_id: payload.serves?.goal ?? null, producer: payload.producer, stack: stackOfEnvelope(envelope),
+    goal_id: payload.serves?.goal ?? null, producer: payload.producer, stack: stackOfEnvelope(subject),
     last_run_id: payload.run_id, last_ended_at: Date.parse(payload.ended_at), last_seen_at: now,
   };
+  countSourceStackMismatch(envelope, observation.stack, opts.log ?? console);
   return db.transaction(() => {
-    const replayKeys = opts.replay ? [runHealthKey(payload, observation.stack), ...(payload.state
-      ? [stateSubjectKey(vocabularyOf(payload.state.value), observation.stack, payload.state.subject)] : [])] : [];
-    const previous = replayKeys.map((key) => getVigilSubject(db, key));
+    const subjectKeys = [runHealthKey(payload, observation.stack), ...(payload.state
+      ? [stateSubjectKey(vocabularyOf(payload.state.value), observation.stack, payload.state.subject)] : [])];
+    const resetKeys = new Set(opts.replay ? subjectKeys.filter((key) => resetUnverifiedSubject(db, key)) : []);
+    const replayKeys = opts.replay ? subjectKeys : [];
+    const previous = replayKeys.map((key) => resetKeys.has(key) ? null : getVigilSubject(db, key));
     const events = [updateRunHealthSubject(db, payload, observation, now, opts)];
     if (payload.state) events.push(updateStateSubject(db, payload.state, observation, now, opts));
     ingestResult(db, payload, { ...opts, sourceStack: observation.stack });
@@ -81,13 +96,14 @@ export function ingestLedgerEnvelope(db: Database, envelope: Envelope, now: numb
       const subject = getVigilSubject(db, key);
       const prior = previous[index];
       if (subject?.last_run_id !== payload.run_id || !isNewObservation(prior ?? null, payload.run_id, observation.last_ended_at)) continue;
-      const direction = subject.subject_kind === "state"
+      const direction = resetKeys.has(key) ? subject.healthy ? "better" : "worse" : subject.subject_kind === "state"
         ? stateDirection(vocabularyOf(subject.value), prior?.value ?? null, subject.value)
         : prior?.value === subject.value ? null : subject.healthy ? "better" : "worse";
       if (direction) applyVigilAttention(db, {
         id: "", subject_key: key, to_value: subject.value, direction,
       }, opts.localStackId ?? "default", { replay: true, now: observation.last_ended_at });
     }
+    for (const key of subjectKeys) confirmSubjectStack(db, key);
     return applyVigilTransitions(db, events.filter((event) => event !== null), opts.localStackId ?? "default");
   }).immediate();
 }

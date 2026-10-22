@@ -117,14 +117,14 @@ export async function startVigil(opts: {
     });
     return notifications;
   };
-  const onEnvelope: EnvelopeHandler = (envelope) => {
-    const invalid = ledgerEnvelopeError(envelope);
+  const onEnvelope: EnvelopeHandler = (envelope, subject) => {
+    const invalid = ledgerEnvelopeError(envelope, subject);
     if (invalid !== null) {
       log.warn(`vigil: envelope ${envelope.id} invalid: ${invalid}`);
       return { kind: "ack" };
     }
     // A throw here reaches onError, and the delivery is NAK'ed for redelivery.
-    void publishDelta(ingestLedgerEnvelope(db, envelope, now(), { localStackId: opts.stack }));
+    void publishDelta(ingestLedgerEnvelope(db, envelope, subject, now(), { localStackId: opts.stack, log }));
     void flushResolutions();
     return { kind: "ack" };
   };

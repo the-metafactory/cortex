@@ -2,9 +2,8 @@ import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
 import { SCHEMA_SQL, REBUILD_MIGRATIONS } from "../../surface/mc/db/schema";
-import { ingestLedgerEnvelope } from "../ingest";
 import { listVigilEvents, type VigilEventRow } from "../db";
-import { DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestLedgerEnvelope, DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 test.each([false, true])("old attention CHECK (state_change=%s) widens once, retaining rows, timestamps, indexes and foreign keys", (hasStateChange) => {
   using file = temporaryVigilDatabaseFile("vigil-attention-");

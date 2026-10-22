@@ -5,9 +5,8 @@ import { dirname, join } from "node:path";
 import { initDatabase } from "../../surface/mc/db/init";
 import { TABLE_NAMES } from "../../surface/mc/db/schema";
 import { getAttentionItem, listOpenAttention, setAttentionItemStatus } from "../../surface/mc/db/attention";
-import { ingestLedgerEnvelope } from "../ingest";
 import { REF_ATTENTION_TTL_MS, type VigilRefRow } from "../ref-attention";
-import { ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestLedgerEnvelope, ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 const REF = "soma:proposals/first.md";
 const id = (ref = REF) => `att:vigil:proposal:${ref}`;

@@ -16,9 +16,8 @@ import { handleAttentionLifecycle } from "../../surface/mc/api/attention";
 import { budgetDay } from "../budget";
 import { REF_ATTENTION_TTL_MS } from "../ref-attention";
 import { getVigilSubject, listVigilEvents } from "../db";
-import { ingestLedgerEnvelope } from "../ingest";
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, startVigil } from "../index";
-import { ENDED_AT, KEY, SUBJECT, fakeTickScheduler, flushTick, ledgerEnvelope } from "./fixtures";
+import { ingestLedgerEnvelope, ENDED_AT, KEY, SUBJECT, fakeTickScheduler, flushTick, ledgerEnvelope } from "./fixtures";
 
 function config(vigil = true, mc = true) {
   return AgentConfigSchema.parse({ claude: {}, agent: { name: "ivy", displayName: "Ivy" }, vigil: { enabled: vigil }, mc: { enabled: mc } });

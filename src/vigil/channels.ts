@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { getVigilSubject, writeVigilSubject, writeVigilTransition, type VigilEventRow } from "./db";
+import { confirmSubjectStack, getVigilSubject, writeVigilSubject, writeVigilTransition, type VigilEventRow } from "./db";
 import { STATE_VOCABULARIES, stateDirection, stateHealthy, stateSubjectKey } from "./state-subject";
 
 export type VigilChannel = "dm-channel" | "email-channel";
@@ -24,6 +24,7 @@ export function recordChannel(db: Database, channel: VigilChannel, value: VigilC
       producer: "vigil", stack, run_kind: null, last_run_id: runId,
       last_ended_at: now, last_seen_at: now,
     }, now);
+    confirmSubjectStack(db, key);
     const direction = stateDirection("check", from, value);
     if (direction === null) return null;
     const event = writeVigilTransition(db, {
