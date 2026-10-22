@@ -1,5 +1,19 @@
 # Cortex — Changelog
 
+## 6.17.2 — 2026-10-22 — Bus SDK: publishDurable errors and types are public
+
+`publishDurable` already rejected every non-durable outcome, but a consumer
+importing only from `@the-metafactory/cortex/bus` could not tell a retryable
+`timeout` from a permanent `domain-mismatch` without reaching into internals.
+Fixes cortex#2711 (PR #2714), the gap found when ranger#199 accepted the bus SDK
+at v6.17.1.
+
+- **New public exports** from `./bus`: `MyelinDurablePublishError`,
+  `MyelinRuntimeConfigError`, `type MyelinDurablePublishErrorKind`,
+  `type MyelinPublishDurableOptions` and `type MyelinDurablePubAck`. They are
+  the same classes the runtime throws, so `instanceof` holds.
+- No behaviour change; the barrel widens by exactly these five names.
+
 ## 6.17.1 — 2026-10-21 — Bash guard: free-text flag values are not paths
 
 A guarded agent could branch, add and push, but never commit: since round 9
