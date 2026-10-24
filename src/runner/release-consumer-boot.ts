@@ -46,6 +46,7 @@
  * behaviourally identical to the inline loop's live-binding read.
  */
 
+import type { JetstreamBootRetryOptions } from "../bus/jetstream/boot-retry";
 import {
   ReleaseConsumer,
   type ReleaseConsumerAgent,
@@ -107,7 +108,7 @@ export interface WireReleaseConsumersOpts {
 
 /** The callable `cortex.ts` invokes per agent, inside the preserved `if (releaseCapableAgents.length > 0) { for (…) }` boot block. */
 export interface WiredReleaseConsumers {
-  startForAgent: (agent: ReleaseBootAgent) => Promise<void>;
+  startForAgent: (agent: ReleaseBootAgent, bootRetry?: JetstreamBootRetryOptions) => Promise<void>;
 }
 
 /**
@@ -121,7 +122,7 @@ export interface WiredReleaseConsumers {
 export function wireReleaseConsumers(
   opts: WireReleaseConsumersOpts,
 ): WiredReleaseConsumers {
-  const startForAgent = async (agent: ReleaseBootAgent): Promise<void> => {
+  const startForAgent = async (agent: ReleaseBootAgent, bootRetry?: JetstreamBootRetryOptions): Promise<void> => {
     try {
       const caps = agent.runtime?.capabilities ?? [];
       const consumerAgent: ReleaseConsumerAgent = {
@@ -143,9 +144,11 @@ export function wireReleaseConsumers(
       opts.releaseConsumers.push(consumer);
 
       const durable = `cortex-release-consumer-${opts.principalId}-${agent.id}`;
-      if (opts.releaseJsm !== null) {
+      const provisionDurable = async (durable: string): Promise<void> => {
+        if (opts.releaseJsm === null) return;
         try {
           const outcome = await provisionReviewConsumer({
+            ...(bootRetry !== undefined && { bootRetry }),
             jsm: opts.releaseJsm,
             stream: opts.releaseStream,
             durable,
@@ -166,7 +169,8 @@ export function wireReleaseConsumers(
               `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
           );
         }
-      }
+      };
+      await provisionDurable(durable);
 
       // CO-2 (cortex#941) — bind on the offering-admitted scope prefixes.
       // `releaseOfferingPatterns[0]` is byte-identical to
@@ -175,6 +179,7 @@ export function wireReleaseConsumers(
       const primaryReleasePattern =
         opts.releaseOfferingPatterns[0] ?? opts.releaseSubjectPattern;
       const started = await consumer.start({
+        ...(bootRetry !== undefined && { bootRetry }),
         pattern: primaryReleasePattern,
         stream: opts.releaseStream,
         durable,
@@ -207,31 +212,9 @@ export function wireReleaseConsumers(
         });
         opts.releaseConsumers.push(extraConsumer);
         const extraDurable = `cortex-release-consumer-offer-${scopeToken}-${opts.principalId}-${agent.id}`;
-        if (opts.releaseJsm !== null) {
-          try {
-            const outcome = await provisionReviewConsumer({
-              jsm: opts.releaseJsm,
-              stream: opts.releaseStream,
-              durable: extraDurable,
-              maxDeliver: opts.releaseConsumerMaxDeliver,
-            });
-            if (outcome === "created") {
-              console.log(
-                `cortex: provisioned JetStream durable "${extraDurable}" on stream "${opts.releaseStream}"`,
-              );
-            } else if (outcome === "updated") {
-              console.log(
-                `cortex: reconciled JetStream durable "${extraDurable}" on stream "${opts.releaseStream}"`,
-              );
-            }
-          } catch (provisionErr) {
-            process.stderr.write(
-              `cortex: provisionReviewConsumer failed for "${extraDurable}": ` +
-                `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
-            );
-          }
-        }
+        await provisionDurable(extraDurable);
         const extraStarted = await extraConsumer.start({
+          ...(bootRetry !== undefined && { bootRetry }),
           pattern: extraPattern,
           stream: opts.releaseStream,
           durable: extraDurable,

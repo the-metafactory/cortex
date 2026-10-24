@@ -9,6 +9,8 @@ import { NatsConfigSchema } from "../../common/types/cortex-config";
 import { hermeticBootPaths } from "../../common/test-utils";
 import {
   JetstreamBootTimeoutError,
+  createJetstreamBootRetryOptions,
+  jetstreamClientOptions,
   retryJetstreamBootStep,
   runJetstreamBootStep,
 } from "../jetstream/boot-retry";
@@ -63,11 +65,15 @@ describe("JetStream boot retry", () => {
     }
   });
 
-  test.each(["recovered", "exhausted"])("Cortex boots with a %s Reflex manager timeout", async (state) => {
+  test.each(["recovered", "exhausted", "serial outage"])("Cortex boots with a %s Reflex manager timeout", async (state) => {
     const agentsDir = mkdtempSync(join(tmpdir(), "synthetic-boot-agents-"));
     const jsm = provisioningManager();
+    const clock = retryClock();
     let calls = 0;
-    const bind = mock(() => ({ ready: Promise.resolve(), stop: async () => {} }) as MyelinSubscriber);
+    const bind = mock(() => ({
+      ready: state === "serial outage" ? Promise.reject(timeout()) : Promise.resolve(),
+      stop: async () => {},
+    }) as MyelinSubscriber);
     const runtime: MyelinRuntime = {
       enabled: true,
       publish: async () => {},
@@ -76,10 +82,7 @@ describe("JetStream boot retry", () => {
       subscribePull: bind,
       jetstreamManager: async () => {
         calls++;
-        if (state === "exhausted") {
-          return retryJetstreamBootStep("synthetic manager", async () => { throw timeout(); }, { ...retryClock().options, maxAttempts: 1 });
-        }
-        if (calls === 1) throw timeout();
+        if (state !== "recovered" || calls === 1) throw timeout();
         return jsm;
       },
     };
@@ -87,6 +90,12 @@ describe("JetStream boot retry", () => {
       const config = AgentConfigSchema.parse({ agent: { name: "synthetic", displayName: "Synthetic" }, claude: {} });
       const handle = await startCortex(config, {
         injectRuntime: runtime,
+        jetstreamBootRetry: clock.options,
+        ...(state === "serial outage" && { inlineAgents: [{
+          id: "synthetic-reviewer", displayName: "Synthetic reviewer",
+          persona: join(agentsDir, "synthetic-persona.md"), trust: [], presence: {},
+          runtime: { substrate: "claude-code" as const, mode: "in-process" as const, capabilities: ["code-review.typescript"] },
+        }] }),
         agentsDir,
         ...hermeticBootPaths(),
         principal: { id: "synthetic" },
@@ -96,8 +105,14 @@ describe("JetStream boot retry", () => {
         reflexActivation: { stack: "default", targets: [{ target: "synthetic", capability: "synthetic.run", assistant: "synthetic", prompt: "Synthetic test" }] },
       });
       try {
-        expect(calls).toBe(state === "recovered" ? 2 : 1);
-        expect(bind).toHaveBeenCalledTimes(state === "recovered" ? 1 : 0);
+        expect(calls).toBe(state === "recovered" ? 2 : state === "serial outage" ? 9 : 8);
+        expect(clock.delays).toEqual(state === "recovered" ? [1_000] : [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
+        if (state !== "recovered") {
+          expect(clock.lines.at(-1)).toContain("degraded: reflex activation bridge");
+          expect(clock.lines.at(-1)).toContain(state === "serial outage" ? "after 1 attempt(s)" : "after 8 attempt(s)");
+          expect(clock.lines.filter((line) => line.includes("retry "))).toHaveLength(7);
+        }
+        expect(bind).toHaveBeenCalledTimes(state === "exhausted" ? 0 : 1);
         expect(handle.agentGeneration).toBe(0);
       } finally {
         await handle.stop();
@@ -106,6 +121,47 @@ describe("JetStream boot retry", () => {
     } finally {
       rmSync(agentsDir, { recursive: true, force: true });
     }
+  });
+
+  test("a shared outage budget prevents serial steps from restarting retries", async () => {
+    const clock = retryClock();
+    const options = createJetstreamBootRetryOptions(clock.options);
+    const first = mock(async () => { throw timeout(); });
+    const later = mock(async () => { throw timeout(); });
+    expect(await runJetstreamBootStep("first", first, options)).toBeNull();
+    const delays = [...clock.delays];
+    expect(await runJetstreamBootStep("later", later, options)).toBeNull();
+    expect(first).toHaveBeenCalledTimes(8);
+    expect(later).toHaveBeenCalledTimes(1);
+    expect(clock.delays).toEqual(delays);
+    expect(await runJetstreamBootStep("healthy", async () => "ready", options)).toBe("ready");
+    expect(clock.lines.some((line) => line.includes("continuing boot"))).toBe(false);
+  });
+
+  test("successful steps still share elapsed API time across the boot deadline", async () => {
+    const clock = retryClock();
+    const options = createJetstreamBootRetryOptions({ ...clock.options, maxElapsedMs: 5_000 });
+    await runJetstreamBootStep("slow recovered", async () => {
+      await clock.options.sleep(4_500);
+      return "ready";
+    }, options);
+    const later = mock(async () => { throw timeout(); });
+    expect(await runJetstreamBootStep("later", later, options)).toBeNull();
+    expect(later).toHaveBeenCalledTimes(1);
+    expect(clock.delays).toEqual([4_500]);
+  });
+
+  test("provisioning without boot retry is a single attempt", async () => {
+    const jsm = provisioningManager();
+    const error = timeout();
+    jsm.streams.info = mock(async () => { throw error; });
+    await expect(provisionStream({ jsm, name: "SYNTHETIC", subjects: [] })).rejects.toBe(error);
+    expect(jsm.streams.info).toHaveBeenCalledTimes(1);
+  });
+
+  test("client options share the timeout default and preserve explicit domains", () => {
+    expect(jetstreamClientOptions()).toEqual({ timeout: 10_000 });
+    expect(jetstreamClientOptions(25_000, "SYNTHETIC")).toEqual({ timeout: 25_000, domain: "SYNTHETIC" });
   });
 
   test("retries API timeouts with capped backoff and logs every retry", async () => {
@@ -226,7 +282,7 @@ describe("JetStream boot retry", () => {
         } as MyelinSubscriber;
       },
     };
-    const listener = new ReflexActivationListener({
+    const bridge = new ReflexActivationListener({
       runtime,
       source: { principal: "synthetic", agent: "cortex", instance: "test" },
       reEmitPrincipal: "synthetic",
@@ -237,14 +293,14 @@ describe("JetStream boot retry", () => {
       dedup: inMemoryReflexDedup(),
       log: { info: () => {}, ...clock.options.log },
     });
-    await runJetstreamBootStep("reflex activation listener", () => listener.start(), clock.options);
+    await runJetstreamBootStep("reflex activation bridge", () => bridge.start(), clock.options);
     expect(clock.delays).toEqual([1_000, 2_000]);
     expect(managerCalls).toBe(3);
     expect(bindCalls).toBe(stage === "ready" ? 3 : 1);
     expect(stopped).toBe(stage === "ready" ? 2 : 0);
-    await listener.start();
+    await bridge.start();
     expect(managerCalls).toBe(3);
-    await listener.stop();
+    await bridge.stop();
     expect(stopped).toBe(stage === "ready" ? 3 : 1);
   });
 

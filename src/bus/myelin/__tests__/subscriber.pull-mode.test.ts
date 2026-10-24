@@ -380,6 +380,25 @@ describe("MyelinSubscriber — pull mode", () => {
     await h.cleanup();
   });
 
+  test("pull readiness without boot retry rejects the first API timeout", async () => {
+    const h = await makePullLink();
+    const error = Object.assign(new Error("TIMEOUT"), { code: "TIMEOUT" });
+    h.consumerGet.mockImplementationOnce(async () => { throw error; });
+    const sub = MyelinSubscriber.start(h.link, {
+      pattern: "local.acme.>",
+      mode: "pull",
+      pull: { stream: "ACME_TASKS", durable: "synthetic-single-attempt" },
+      onEnvelope: () => {},
+    });
+    try {
+      await expect(sub.ready).rejects.toBe(error);
+      expect(h.consumerGet).toHaveBeenCalledTimes(1);
+    } finally {
+      await sub.stop();
+      await h.cleanup();
+    }
+  });
+
   test("pull readiness retries a JetStream API timeout before receiving messages", async () => {
     const h = await makePullLink();
     h.consumerGet.mockImplementationOnce(async () => {
@@ -389,7 +408,7 @@ describe("MyelinSubscriber — pull mode", () => {
     const sub = MyelinSubscriber.start(h.link, {
       pattern: "local.acme.>",
       mode: "pull",
-      pull: { stream: "ACME_TASKS", durable: "synthetic-retry" },
+      pull: { stream: "ACME_TASKS", durable: "synthetic-retry", bootRetry: { sleep: async () => {} } },
       onEnvelope: (_envelope, subject) => { received.push(subject); },
     });
     try {

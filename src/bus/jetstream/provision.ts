@@ -103,6 +103,18 @@ export interface ProvisionLog {
   warn: (msg: string) => void;
 }
 
+function withProvisionRetry<T>(
+  step: string,
+  opts: { bootRetry?: JetstreamBootRetryOptions; log?: ProvisionLog },
+  action: () => Promise<T>,
+): Promise<T> {
+  if (!opts.bootRetry) return action();
+  return retryJetstreamBootStep(step, action, {
+    ...opts.bootRetry,
+    log: opts.log ?? opts.bootRetry.log ?? console,
+  });
+}
+
 export interface ProvisionStreamOpts {
   bootRetry?: JetstreamBootRetryOptions;
   jsm: ProvisionJsm;
@@ -249,10 +261,10 @@ export const DEFAULT_ACK_WAIT_NS = 20 * 60 * 1_000_000_000;
 export async function provisionStream(
   opts: ProvisionStreamOpts,
 ): Promise<ProvisionStreamOutcome> {
-  return retryJetstreamBootStep(
+  return withProvisionRetry(
     `provision stream ${opts.name}`,
+    opts,
     () => provisionStreamOnce(opts),
-    { ...opts.bootRetry, log: opts.log ?? console },
   );
 }
 
@@ -462,10 +474,10 @@ export interface StackScopedConsumerResult {
 export async function provisionStackScopedConsumer(
   opts: ProvisionConsumerOpts & { legacyDurable: string },
 ): Promise<StackScopedConsumerResult> {
-  return retryJetstreamBootStep(
+  return withProvisionRetry(
     `provision consumer ${opts.stream}/${opts.durable}`,
+    opts,
     () => provisionStackScopedConsumerOnce(opts),
-    { ...opts.bootRetry, log: opts.log ?? console },
   );
 }
 
@@ -562,10 +574,10 @@ async function provisionStackScopedConsumerOnce(
 export async function provisionPullConsumer(
   opts: ProvisionConsumerOpts,
 ): Promise<ProvisionConsumerOutcome> {
-  return retryJetstreamBootStep(
+  return withProvisionRetry(
     `provision consumer ${opts.stream}/${opts.durable}`,
+    opts,
     () => ensureConsumer(opts, undefined),
-    { ...opts.bootRetry, log: opts.log ?? console },
   );
 }
 

@@ -36,8 +36,9 @@ function makeRecordingConn() {
     }),
   } as unknown as ConsumerMessages;
   const consumer = { consume: mock(async () => idleMessages) } as unknown as Consumer;
+  const consumerGet = mock(async () => consumer);
   const js = {
-    consumers: { get: mock(async () => consumer) },
+    consumers: { get: consumerGet },
     views: { kv: mock(async () => ({})) },
   } as unknown as JetStreamClient;
   const jsm = {} as unknown as JetStreamManager;
@@ -55,7 +56,7 @@ function makeRecordingConn() {
     }),
   } as unknown as NatsConnection;
 
-  return { nc, jetstreamCalls, managerCalls };
+  return { nc, jetstreamCalls, managerCalls, consumerGet };
 }
 
 async function startAndBind(jetstreamDomain?: string) {
@@ -96,6 +97,31 @@ describe("startMyelinRuntime jetstreamDomain", () => {
       await expect(runtime.jetstreamManager!()).resolves.toBe(manager);
       await expect(runtime.jetstreamManager!()).resolves.toBe(manager);
       expect(getManager).toHaveBeenCalledTimes(2);
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  test.each([false, true])("pull retry is opt-in through runtime (enabled=%s)", async (enabled) => {
+    const fake = makeRecordingConn();
+    const error = Object.assign(new Error("TIMEOUT"), { code: "TIMEOUT" });
+    fake.consumerGet.mockImplementationOnce(async () => { throw error; });
+    const runtime = await startMyelinRuntime(makeConfig(), { connectImpl: async () => fake.nc });
+    const delays: number[] = [];
+    try {
+      const sub = runtime.subscribePull!({
+        pattern: "local.>", stream: "SYNTHETIC", durable: "synthetic-retry", onEnvelope: () => {},
+        ...(enabled && { bootRetry: { sleep: async (ms: number) => { delays.push(ms); } } }),
+      });
+      if (enabled) {
+        await sub!.ready;
+        expect(delays).toEqual([1_000]);
+        expect(fake.consumerGet).toHaveBeenCalledTimes(2);
+      } else {
+        await expect(sub!.ready).rejects.toBe(error);
+        expect(delays).toEqual([]);
+        expect(fake.consumerGet).toHaveBeenCalledTimes(1);
+      }
     } finally {
       await runtime.stop();
     }

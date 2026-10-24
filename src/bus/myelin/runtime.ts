@@ -17,7 +17,7 @@ import { ErrorCode, type ConnectionOptions, type NatsConnection } from "nats";
 import type { AgentConfig } from "../../common/types/config";
 import type { PolicyFederatedNetwork } from "../../common/types/cortex-config";
 import { ReconnectBackoff } from "../nats/reconnect-backoff";
-import { DEFAULT_JETSTREAM_API_TIMEOUT_MS } from "../jetstream/boot-retry";
+import { jetstreamClientOptions, DEFAULT_JETSTREAM_API_TIMEOUT_MS, type JetstreamBootRetryOptions } from "../jetstream/boot-retry";
 import { NatsLink } from "../nats/connection";
 import {
   buildNatsTlsOptions,
@@ -341,6 +341,7 @@ export interface MyelinRuntime {
  * resolve-as-ack default.
  */
 export interface MyelinSubscribePullOpts {
+  bootRetry?: JetstreamBootRetryOptions;
   /** Subject pattern, e.g. `local.{principal}.tasks.code-review.>`. */
   pattern: string;
   /** JetStream stream name carrying the bound consumer. */
@@ -734,10 +735,7 @@ export async function startMyelinRuntime(
       "myelin-runtime: jetstreamTimeoutMs must be positive and finite",
     );
   }
-  const jetstreamOptions = {
-    timeout: jetstreamTimeoutMs,
-    ...(jetstreamDomain !== undefined && { domain: jetstreamDomain }),
-  };
+  const jetstreamOptions = jetstreamClientOptions(jetstreamTimeoutMs, jetstreamDomain);
   // Fan-out registry — populated regardless of whether NATS itself
   // starts. Callers (like the surface-router) can safely register
   // even when the runtime is a no-op; their handlers simply never
@@ -2136,7 +2134,9 @@ export async function startMyelinRuntime(
       maxConcurrent?: number;
       jetstreamDomain?: string;
       jetstreamTimeoutMs?: number;
+      bootRetry?: JetstreamBootRetryOptions;
     } = { stream: opts.stream, durable: opts.durable };
+    if (opts.bootRetry !== undefined) pull.bootRetry = opts.bootRetry;
     pull.jetstreamTimeoutMs = jetstreamTimeoutMs;
     if (jetstreamDomain !== undefined) pull.jetstreamDomain = jetstreamDomain;
     if (opts.maxMessages !== undefined) pull.maxMessages = opts.maxMessages;
