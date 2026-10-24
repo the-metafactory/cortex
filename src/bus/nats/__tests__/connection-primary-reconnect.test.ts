@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { connect, type ConnectionOptions, type NatsConnection } from "nats";
+import { connect, ErrorCode, NatsError, type ConnectionOptions, type NatsConnection } from "nats";
 import { natsServerBinary, startServer, waitFor } from "../../__tests__/two-domain-broker";
 import { makeIdleConnectionParts } from "../../myelin/__tests__/idle-nats-connection";
 import { makeConfig, makeEnvelope } from "../../myelin/__tests__/runtime-publish-durable-fixture";
@@ -92,13 +92,18 @@ describe("primary NATS reconnect policy", () => {
     const pending: (() => void)[] = [];
     const waits: number[] = [];
     const publish = mock(() => {});
+    const info = spyOn(console, "info");
+    const error = spyOn(console, "error");
+    const log = spyOn(console, "log");
+    const captured: ConnectionOptions[] = [];
     let attempts = 0;
     let settled = false;
     const started = startMyelinRuntime(makeConfig({
       url: "nats://synthetic.invalid:4222", name: "synthetic-primary", subjects: [],
     }), {
-      connectImpl: async () => {
-        if (++attempts <= 7) throw new Error("synthetic broker unavailable");
+      connectImpl: async (opts) => {
+        captured.push(opts);
+        if (++attempts <= 7) throw NatsError.errorForCode(ErrorCode.ConnectionRefused);
         return { ...makeIdleConnectionParts(), publish } as unknown as NatsConnection;
       },
       reconnectTimer: {
@@ -123,10 +128,98 @@ describe("primary NATS reconnect policy", () => {
       expect(waits).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]);
       expect(runtime.enabled).toBe(true);
       expect(attempts).toBe(8);
+      expect(captured.every((opts) => opts.waitOnFirstConnect === false)).toBe(true);
+      expect(captured.every((opts) => opts.maxReconnectAttempts === -1)).toBe(true);
+      expect(info.mock.calls.filter(([line]) => String(line).includes("connecting (link=primary)"))).toHaveLength(8);
+      expect(error.mock.calls.filter(([line]) => String(line).includes("connecting again in"))).toHaveLength(7);
+      expect(log.mock.calls.some(([line]) => String(line).includes("connected to nats"))).toBe(true);
       await runtime.publish(makeEnvelope());
       expect(publish).toHaveBeenCalledTimes(1);
     } finally {
       await runtime.stop();
+    }
+  });
+
+  test.each([
+    ErrorCode.ConnectionTimeout,
+    ErrorCode.Timeout,
+    ErrorCode.AuthenticationTimeout,
+    ErrorCode.Disconnect,
+    ErrorCode.ConnectionClosed,
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EAI_AGAIN",
+    "ENOTFOUND",
+    "ENETUNREACH",
+    "EHOSTUNREACH",
+    "EPIPE",
+  ])("transient primary connect error recovers: %s", async (code) => {
+    let attempts = 0;
+    const runtime = await startMyelinRuntime(makeConfig({
+      url: "nats://synthetic.invalid:4222", name: "synthetic-primary", subjects: [],
+    }), {
+      reconnectBackoff: { initialMs: 1 },
+      connectImpl: async () => {
+        if (++attempts === 1) throw Object.assign(new Error("synthetic unavailable broker"), { code });
+        return makeIdleConnectionParts() as NatsConnection;
+      },
+    });
+    try {
+      expect(runtime.enabled).toBe(true);
+      expect(attempts).toBe(2);
+    } finally {
+      await runtime.stop();
+    }
+  });
+
+  test.each([
+    new Error("synthetic invalid configuration"),
+    Object.assign(new Error("synthetic inaccessible credentials"), { code: "EACCES" }),
+    NatsError.errorForCode(ErrorCode.BadCreds),
+    NatsError.errorForCode(ErrorCode.BadAuthentication),
+    NatsError.errorForCode(ErrorCode.AuthorizationViolation),
+    NatsError.errorForCode(ErrorCode.Tls),
+    NatsError.errorForCode(ErrorCode.InvalidOption),
+  ])("permanent primary connect error rejects startup: %s", async (error) => {
+    const setTimer = mock(() => ({}));
+    const connectImpl = mock(async () => { throw error; });
+    await expect(Promise.race([
+      startMyelinRuntime(makeConfig({
+        url: "nats://synthetic.invalid:4222", name: "synthetic-primary", subjects: [],
+      }), {
+        connectImpl,
+        reconnectTimer: { setTimer, clearTimer: mock(() => {}) },
+      }),
+      Bun.sleep(100),
+    ])).rejects.toBe(error);
+    expect(connectImpl).toHaveBeenCalledTimes(1);
+    expect(setTimer).not.toHaveBeenCalled();
+  });
+
+  test.each(["missing", "unsafe"])("%s credentials reject startup before dialing", async (mode) => {
+    const root = await mkdtemp(join(tmpdir(), "cortex-primary-creds-"));
+    const credsPath = join(root, "synthetic.creds");
+    const connectImpl = mock(async () => makeIdleConnectionParts() as NatsConnection);
+    const setTimer = mock(() => ({}));
+    try {
+      if (mode === "unsafe") {
+        await writeFile(credsPath, "synthetic credentials");
+        await chmod(credsPath, 0o644);
+      }
+      await expect(Promise.race([
+        startMyelinRuntime(makeConfig({
+          url: "nats://synthetic.invalid:4222", name: "synthetic-primary", subjects: [], credsPath,
+        }), {
+          connectImpl,
+          reconnectTimer: { setTimer, clearTimer: mock(() => {}) },
+        }),
+        Bun.sleep(100),
+      ])).rejects.toThrow(mode === "missing" ? /ENOENT/ : /600/);
+      expect(connectImpl).not.toHaveBeenCalled();
+      expect(setTimer).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
     }
   });
 
@@ -137,6 +230,46 @@ describe("primary NATS reconnect policy", () => {
     expect(connectImpl).not.toHaveBeenCalled();
     await runtime.stop();
   });
+});
+
+test.skipIf(!natsServerBinary)("runtime waits for its primary broker and enables after it starts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cortex-primary-boot-"));
+  let broker: Awaited<ReturnType<typeof startServer>> | undefined;
+  let runtime: Awaited<ReturnType<typeof startMyelinRuntime>> | undefined;
+  let starting: ReturnType<typeof startMyelinRuntime> | undefined;
+  const error = spyOn(console, "error");
+  try {
+    broker = await startServer(root, "synthetic-primary");
+    await broker.stop();
+    let enabled = false;
+    starting = startMyelinRuntime(makeConfig({
+      url: broker.url, name: "synthetic-primary", subjects: [],
+    }), {
+      reconnectBackoff: { initialMs: 25, maxMs: 100 },
+    }).then((connected) => {
+      enabled = connected.enabled;
+      return connected;
+    });
+    await waitFor("runtime retries unavailable primary", () => error.mock.calls.filter(
+      ([line]) => String(line).includes("primary connect failed; connecting again"),
+    ).length >= 3);
+    expect(enabled).toBe(false);
+    broker = await broker.restart();
+    runtime = await starting;
+    expect(runtime.enabled).toBe(true);
+  } finally {
+    try {
+      if (broker && starting && !runtime) {
+        await broker.stop();
+        broker = await broker.restart();
+        runtime = await starting;
+      }
+      await runtime?.stop();
+    } finally {
+      await broker?.stop();
+      await rm(root, { recursive: true, force: true });
+    }
+  }
 });
 
 test.skipIf(!natsServerBinary)("primary waits at boot and restores its subscription after a broker outage longer than 20s", async () => {

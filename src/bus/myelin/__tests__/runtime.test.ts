@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import type { NatsConnection, Subscription, Status } from "nats";
+import { ErrorCode, NatsError, type NatsConnection, type Subscription, type Status } from "nats";
 import type { AgentConfig } from "../../../common/types/config";
 import { startMyelinRuntime } from "../runtime";
 
@@ -245,7 +245,7 @@ describe("MyelinRuntime", () => {
     }), {
       reconnectBackoff: { initialMs: 1 },
       connectImpl: async () => {
-        if (++attempts === 1) throw new Error("connection refused");
+        if (++attempts === 1) throw NatsError.errorForCode(ErrorCode.ConnectionRefused);
         return fake.nc;
       },
     });

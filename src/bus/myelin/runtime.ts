@@ -13,7 +13,7 @@
  * without a NATS server present.
  */
 
-import type { ConnectionOptions, NatsConnection } from "nats";
+import { ErrorCode, type ConnectionOptions, type NatsConnection } from "nats";
 import type { AgentConfig } from "../../common/types/config";
 import type { PolicyFederatedNetwork } from "../../common/types/cortex-config";
 import { ReconnectBackoff } from "../nats/reconnect-backoff";
@@ -939,6 +939,23 @@ export async function startMyelinRuntime(
       clearTimeout(handle as ReturnType<typeof setTimeout>);
     });
 
+  const transientConnectCodes = new Set<string>([
+    ErrorCode.ConnectionRefused,
+    ErrorCode.ConnectionTimeout,
+    ErrorCode.Timeout,
+    ErrorCode.AuthenticationTimeout,
+    ErrorCode.Disconnect,
+    ErrorCode.ConnectionClosed,
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EAI_AGAIN",
+    "ENOTFOUND",
+    "ENETUNREACH",
+    "EHOSTUNREACH",
+    "EPIPE",
+  ]);
+
   for (;;) {
     try {
       console.info("myelin-runtime: connecting (link=primary)");
@@ -950,7 +967,7 @@ export async function startMyelinRuntime(
         // credsPath wins with a warn log.
         ...(nats.credsPath ? { credsPath: nats.credsPath } : {}),
         name: nats.name,
-        initialConnectBackoff: options?.reconnectBackoff,
+        waitOnFirstConnect: false,
         // TC-4d: transport mTLS (undefined ⇒ plaintext, unchanged).
         ...(primaryTls !== undefined ? { tls: primaryTls } : {}),
         ...(options?.connectImpl ? { connectImpl: options.connectImpl } : {}),
@@ -977,6 +994,11 @@ export async function startMyelinRuntime(
       );
       break;
     } catch (err) {
+      if (!(err instanceof Error && "code" in err &&
+        typeof err.code === "string" && transientConnectCodes.has(err.code))) {
+        console.error("myelin-runtime: primary connect failed; startup aborted (link=primary):", err);
+        throw err;
+      }
       const delay = primaryBackoff.nextDelay();
       console.error(
         `myelin-runtime: primary connect failed; connecting again in ${delay}ms (link=primary):`,
