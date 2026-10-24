@@ -17,6 +17,7 @@ import { ErrorCode, type ConnectionOptions, type NatsConnection } from "nats";
 import type { AgentConfig } from "../../common/types/config";
 import type { PolicyFederatedNetwork } from "../../common/types/cortex-config";
 import { ReconnectBackoff } from "../nats/reconnect-backoff";
+import { jetstreamClientOptions, DEFAULT_JETSTREAM_API_TIMEOUT_MS, type JetstreamBootRetryOptions } from "../jetstream/boot-retry";
 import { NatsLink } from "../nats/connection";
 import {
   buildNatsTlsOptions,
@@ -340,6 +341,7 @@ export interface MyelinRuntime {
  * resolve-as-ack default.
  */
 export interface MyelinSubscribePullOpts {
+  bootRetry?: JetstreamBootRetryOptions;
   /** Subject pattern, e.g. `local.{principal}.tasks.code-review.>`. */
   pattern: string;
   /** JetStream stream name carrying the bound consumer. */
@@ -388,6 +390,7 @@ export interface MyelinSubscribePullOpts {
 export interface MyelinRuntimeOptions {
   connectImpl?: (opts: ConnectionOptions) => Promise<NatsConnection>;
   jetstreamDomain?: string;
+  jetstreamTimeoutMs?: number;
   /**
    * IAW Phase B.3 (cortex#114) — outbound envelope signer. When set,
    * `publish()` signs every outbound envelope via myelin's
@@ -724,6 +727,15 @@ export async function startMyelinRuntime(
   options?: MyelinRuntimeOptions,
 ): Promise<MyelinRuntime> {
   const jetstreamDomain = requireJetstreamDomain(options?.jetstreamDomain);
+  const jetstreamTimeoutMs = options?.jetstreamTimeoutMs ??
+    config.nats?.jetstreamTimeoutMs ?? DEFAULT_JETSTREAM_API_TIMEOUT_MS;
+  if (!Number.isFinite(jetstreamTimeoutMs) || jetstreamTimeoutMs <= 0) {
+    throw new MyelinRuntimeConfigError(
+      "jetstreamTimeoutMs",
+      "myelin-runtime: jetstreamTimeoutMs must be positive and finite",
+    );
+  }
+  const jetstreamOptions = jetstreamClientOptions(jetstreamTimeoutMs, jetstreamDomain);
   // Fan-out registry — populated regardless of whether NATS itself
   // starts. Callers (like the surface-router) can safely register
   // even when the runtime is a no-op; their handlers simply never
@@ -1994,9 +2006,7 @@ export async function startMyelinRuntime(
   };
 
   const primaryJetstreamClient = () =>
-    jetstreamDomain === undefined
-      ? primaryLink.raw.jetstream()
-      : primaryLink.raw.jetstream({ domain: jetstreamDomain });
+    primaryLink.raw.jetstream(jetstreamOptions);
 
   const isTimeoutError = (err: unknown): boolean =>
     err instanceof Error && err.name === "TimeoutError";
@@ -2123,7 +2133,11 @@ export async function startMyelinRuntime(
       thresholdMessages?: number;
       maxConcurrent?: number;
       jetstreamDomain?: string;
+      jetstreamTimeoutMs?: number;
+      bootRetry?: JetstreamBootRetryOptions;
     } = { stream: opts.stream, durable: opts.durable };
+    if (opts.bootRetry !== undefined) pull.bootRetry = opts.bootRetry;
+    pull.jetstreamTimeoutMs = jetstreamTimeoutMs;
     if (jetstreamDomain !== undefined) pull.jetstreamDomain = jetstreamDomain;
     if (opts.maxMessages !== undefined) pull.maxMessages = opts.maxMessages;
     if (opts.expiresMs !== undefined) pull.expiresMs = opts.expiresMs;
@@ -2195,10 +2209,11 @@ export async function startMyelinRuntime(
   // (design §3.5 — no per-network JetStream durables in F-3). The cache
   // lives on the primary `PoolLink` (`primary.jsmCache`).
   const jetstreamManagerEnabled = (): Promise<import("nats").JetStreamManager> => {
-    primary.jsmCache ??=
-      jetstreamDomain === undefined
-        ? primaryLink.raw.jetstreamManager()
-        : primaryLink.raw.jetstreamManager({ domain: jetstreamDomain });
+    primary.jsmCache ??= primaryLink.raw.jetstreamManager(jetstreamOptions)
+      .catch((error: unknown) => {
+        primary.jsmCache = null;
+        throw error;
+      });
     return primary.jsmCache;
   };
 

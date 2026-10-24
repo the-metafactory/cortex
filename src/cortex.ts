@@ -120,6 +120,7 @@ import {
   provisionReviewConsumer,
 } from "./bus/jetstream/provision";
 import { reviewScopePatterns, REVIEW_OFFER_TASK_SUFFIX } from "./bus/jetstream/review-subjects";
+import { createJetstreamBootRetryOptions, runJetstreamBootStep, type JetstreamBootRetryOptions } from "./bus/jetstream/boot-retry";
 import { nkeyToBase64Pubkey } from "./bus/verify-signed-by-chain";
 import { bootVerifierSelfCheck } from "./bus/verifier-self-check";
 import { type CCSessionOpts } from "./runner/cc-session";
@@ -552,6 +553,7 @@ export interface CortexHandle {
 
 /** Optional test-only injection points. Production callers omit. */
 export interface StartCortexOptions {
+  jetstreamBootRetry?: JetstreamBootRetryOptions;
   /** Override config-file path. Defaults to no watching. */
   configPath?: string;
   /**
@@ -978,6 +980,7 @@ export async function startCortex(
   config: AgentConfig,
   options: StartCortexOptions = {},
 ): Promise<CortexHandle> {
+  const bootRetry = createJetstreamBootRetryOptions(options.jetstreamBootRetry);
   // cortex#2184 — hard-fail before any other boot work if the prompt-injection
   // scanner failed to load (unless the deliberate opt-out is set). The daemon
   // must never linger half-booted dispatching unscanned prompts — see
@@ -2153,7 +2156,7 @@ export async function startCortex(
   // provisioning-failure contract as the stream-add path. Pre-fix
   // an `await runtime.jetstreamManager()` throw bypassed the inner
   // try/catch and aborted boot (sage review on #338, round 2).
-  const reviewJsm = await resolveReviewProvisioningJsm(runtime, reviewCapableAgents);
+  const reviewJsm = await resolveReviewProvisioningJsm(runtime, reviewCapableAgents, "review", bootRetry);
 
   // cortex#2247 — the BRAIN lane's provisioning JSM, resolved INDEPENDENTLY
   // of review capabilities. The BRAIN_TASKS stream + per-capability brain
@@ -2171,7 +2174,7 @@ export async function startCortex(
   //   - otherwise resolve over `brainAgents` — non-null iff at least one
   //     exec-brain agent is present AND the runtime is not dormant.
   const brainJsm =
-    reviewJsm ?? (await resolveReviewProvisioningJsm(runtime, brainAgents, "brain"));
+    reviewJsm ?? (await resolveReviewProvisioningJsm(runtime, brainAgents, "brain", bootRetry));
 
   // cortex#686 — the CODE_REVIEW stream's subject filter carries BOTH the
   // local and (when federation is configured) the federated code-review
@@ -2298,6 +2301,7 @@ export async function startCortex(
   if (reviewJsm !== null) {
     try {
       const outcome = await provisionReviewStream({
+          bootRetry,
         jsm: reviewJsm,
         name: reviewStream,
         subjects: reviewStreamSubjects,
@@ -2335,6 +2339,7 @@ export async function startCortex(
     // differ. A failure here does NOT abort boot, identical to CODE_REVIEW.
     try {
       const lifecycleOutcome = await provisionReviewStream({
+        bootRetry,
         jsm: reviewJsm,
         name: lifecycleStream,
         subjects: lifecycleStreamSubjects,
@@ -2383,6 +2388,7 @@ export async function startCortex(
     // (Boundary comment kept loud so the expected #851/#874 merge is trivial.)
     try {
       const devOutcome = await provisionReviewStream({
+        bootRetry,
         jsm: reviewJsm,
         name: devImplementStream,
         subjects: devImplementStreamSubjects,
@@ -2424,6 +2430,7 @@ export async function startCortex(
   if (brainJsm !== null) {
     try {
       const brainOutcome = await provisionReviewStream({
+        bootRetry,
         jsm: brainJsm,
         name: brainTasksStream,
         subjects: brainTasksStreamSubjects,
@@ -2719,12 +2726,12 @@ export async function startCortex(
   // Boot: start review consumers for every code-review-capable agent. Same
   // `startForAgent` the hot-reload path calls for a newly-added agent.
   for (const agent of reviewCapableAgents) {
-    await startForAgent(agent);
+    await startForAgent(agent, bootRetry);
   }
   // Boot: start brain consumers for every exec-brain agent (B-1). Same closure
   // the hot-reload path calls for a newly-added exec-brain agent.
   for (const agent of brainAgents) {
-    await startBrainForAgent(agent);
+    await startBrainForAgent(agent, bootRetry);
   }
   if (reviewConsumers.length === 0) {
     // cortex#314 — same first-install-safety promotion as the
@@ -2809,6 +2816,8 @@ export async function startCortex(
     const releaseJsm = await resolveReviewProvisioningJsm(
       runtime,
       releaseCapableAgents,
+      "release",
+      bootRetry,
     );
 
     if (releaseJsm !== null) {
@@ -2818,6 +2827,7 @@ export async function startCortex(
         // default) ⇒ `releaseOfferingPatterns` is `[releaseSubjectPattern]`, so
         // this is byte-identical to today's single-subject filter.
         const outcome = await provisionReviewStream({
+          bootRetry,
           jsm: releaseJsm,
           name: releaseStream,
           subjects: releaseOfferingPatterns,
@@ -2863,7 +2873,7 @@ export async function startCortex(
       releaseSubjectPattern,
     });
     for (const agent of releaseCapableAgents) {
-      await startForAgent(agent);
+      await startForAgent(agent, bootRetry);
     }
   }
 
@@ -2936,6 +2946,7 @@ export async function startCortex(
       if (reviewJsm !== null) {
         try {
           await provisionReviewConsumer({
+            bootRetry,
             jsm: reviewJsm,
             // cortex#1203 review major-1: the config-resolved stream name (NOT a
             // hardcoded "DEV_IMPLEMENT") — must match the stream as provisioned
@@ -2963,6 +2974,7 @@ export async function startCortex(
         }
       }
       const started = await consumer.start({
+        bootRetry,
         pattern,
         // cortex#1203 review major-1 — config-resolved name, matches the durable
         // provisioned just above (not a hardcoded literal).
@@ -3870,8 +3882,9 @@ export async function startCortex(
     const admissionBucket = admissionBucketName(principalId, derivedStack.stack);
     let admissionJsm: import("./bus/jetstream/types").ProvisionJsm | null = null;
     if (runtime.jetstreamManager !== undefined) {
+      const getManager = runtime.jetstreamManager.bind(runtime);
       try {
-        admissionJsm = await runtime.jetstreamManager();
+        admissionJsm = await runJetstreamBootStep("admission JetStream manager", getManager, bootRetry);
       } catch (err) {
         process.stderr.write(
           `cortex: jetstreamManager() resolution failed for admission provisioning — ` +
@@ -3879,10 +3892,13 @@ export async function startCortex(
         );
       }
     }
+    const openKv = runtime.kvBucket?.bind(runtime);
     const provisionedAdmission = await provisionAdmissionKv({
       jsm: admissionJsm,
       openKv: async (bucket) =>
-        runtime.kvBucket !== undefined ? await runtime.kvBucket(bucket) : null,
+        openKv !== undefined
+          ? await runJetstreamBootStep("admission KV open", () => openKv(bucket), bootRetry)
+          : null,
       bucket: admissionBucket,
       log: console,
     });
@@ -4139,10 +4155,16 @@ export async function startCortex(
       handlers,
       dedup: inMemoryReflexDedup(),
     });
-    await reflexActivationListener.start();
-    console.log(
-      `cortex: reflex-activation-listener mounted — ${reflexTargets.length} target(s), ${Object.keys(handlers).length} handler(s)`,
+    const reflexStarted = await runJetstreamBootStep(
+      "reflex activation bridge",
+      reflexActivationListener.start.bind(reflexActivationListener),
+      bootRetry,
     );
+    if (reflexStarted !== null) {
+      console.log(
+        `cortex: reflex-activation-listener mounted — ${reflexTargets.length} target(s), ${Object.keys(handlers).length} handler(s)`,
+      );
+    }
   }
 
   // signal#113 P-11 (#56) — federated echo responder. The ICMP-analog of the
@@ -6632,12 +6654,14 @@ async function resolveReviewProvisioningJsm(
   runtime: MyelinRuntime,
   gatingAgents: readonly Agent[],
   lane = "review",
+  bootRetry?: JetstreamBootRetryOptions,
 ): Promise<import("./bus/jetstream/types").ProvisionJsm | null> {
-  if (gatingAgents.length === 0 || !runtime.jetstreamManager) {
+  const getManager = runtime.jetstreamManager?.bind(runtime);
+  if (gatingAgents.length === 0 || !getManager) {
     return null;
   }
   try {
-    return await runtime.jetstreamManager();
+    return await runJetstreamBootStep(`${lane} JetStream manager`, getManager, bootRetry);
   } catch (err) {
     process.stderr.write(
       `cortex: jetstreamManager() resolution failed — ${lane} provisioning skipped: ` +

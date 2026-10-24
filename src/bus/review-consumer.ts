@@ -64,6 +64,7 @@
  *   - NOT modifying the skill — PR-8 territory.
  */
 
+import type { JetstreamBootRetryOptions } from "./jetstream/boot-retry";
 import type { ConsumerMessages, JsMsg } from "nats";
 import { deriveSubject } from "@the-metafactory/myelin/subjects";
 import type { MyelinRuntime } from "./myelin/runtime";
@@ -384,6 +385,7 @@ export interface FederatedRequester {
  * declare what they want subscribed and the runtime threads the link.
  */
 export interface ReviewConsumerStartOpts {
+  bootRetry?: JetstreamBootRetryOptions;
   /** Subject pattern, e.g. `local.{principal}.tasks.code-review.>`. */
   pattern: string;
   /** JetStream stream name carrying the bound consumer. */
@@ -534,6 +536,7 @@ export class ReviewConsumer {
       );
     }
     const subscribePullOpts: {
+      bootRetry?: JetstreamBootRetryOptions;
       pattern: string;
       stream: string;
       durable: string;
@@ -549,6 +552,7 @@ export class ReviewConsumer {
       onEnvelope: async (envelope, subject) =>
         this.processEnvelope(envelope, subject, null),
     };
+    if (opts.bootRetry !== undefined) subscribePullOpts.bootRetry = opts.bootRetry;
     if (opts.maxMessages !== undefined) {
       subscribePullOpts.maxMessages = opts.maxMessages;
     }

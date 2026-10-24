@@ -61,6 +61,7 @@
  * now-orphaned functions.
  */
 
+import type { JetstreamBootRetryOptions } from "../bus/jetstream/boot-retry";
 import { readFileSync } from "fs";
 import { join } from "path";
 import {
@@ -292,7 +293,7 @@ export interface WireBrainConsumersOpts {
 
 /** The callable `cortex.ts` invokes per agent, at both the boot loop and the `agents.d/` hot-reload sites. */
 export interface WiredBrainConsumers {
-  startForAgent: (agent: BrainBootAgent) => Promise<void>;
+  startForAgent: (agent: BrainBootAgent, bootRetry?: JetstreamBootRetryOptions) => Promise<void>;
 }
 
 /**
@@ -390,7 +391,7 @@ function makeCreatePrivateThreadFn(
 export function wireBrainConsumers(
   opts: WireBrainConsumersOpts,
 ): WiredBrainConsumers {
-  const startForAgent = async (agent: BrainBootAgent): Promise<void> => {
+  const startForAgent = async (agent: BrainBootAgent, bootRetry?: JetstreamBootRetryOptions): Promise<void> => {
     try {
       const brain = agent.runtime?.brain;
       if (brain?.kind !== "exec" || brain.run === undefined) {
@@ -649,6 +650,7 @@ export function wireBrainConsumers(
             const durable = brainDurableFor(capability);
             try {
               await provisionReviewConsumer({
+                ...(bootRetry !== undefined && { bootRetry }),
                 jsm,
                 stream: opts.brainTasksStream,
                 durable,
@@ -668,6 +670,7 @@ export function wireBrainConsumers(
       }
 
       const started = await consumer.start({
+        ...(bootRetry !== undefined && { bootRetry }),
         resolve: (capability) => ({
           pattern: brainPatternFor(capability),
           stream: opts.brainTasksStream,

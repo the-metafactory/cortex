@@ -56,6 +56,11 @@ import type { ConsumerConfig, ConsumerInfo, StreamInfo } from "nats";
 export type { ProvisionJsm } from "./types";
 import type { ProvisionJsm } from "./types";
 import { DEFAULT_STREAM_MAX_BYTES } from "../../common/types/cortex-config";
+import {
+  isJetstreamTimeout,
+  retryJetstreamBootStep,
+  type JetstreamBootRetryOptions,
+} from "./boot-retry";
 import { missingSubjects, subjectCovers } from "./subject-set";
 
 /**
@@ -98,7 +103,20 @@ export interface ProvisionLog {
   warn: (msg: string) => void;
 }
 
+function withProvisionRetry<T>(
+  step: string,
+  opts: { bootRetry?: JetstreamBootRetryOptions; log?: ProvisionLog },
+  action: () => Promise<T>,
+): Promise<T> {
+  if (!opts.bootRetry) return action();
+  return retryJetstreamBootStep(step, action, {
+    ...opts.bootRetry,
+    log: opts.log ?? opts.bootRetry.log ?? console,
+  });
+}
+
 export interface ProvisionStreamOpts {
+  bootRetry?: JetstreamBootRetryOptions;
   jsm: ProvisionJsm;
   /** Stream name. ReviewConsumer always binds to `"CODE_REVIEW"`. */
   name: string;
@@ -146,6 +164,7 @@ export interface ProvisionStreamOpts {
 }
 
 export interface ProvisionConsumerOpts {
+  bootRetry?: JetstreamBootRetryOptions;
   jsm: ProvisionJsm;
   /** Stream the consumer binds to. */
   stream: string;
@@ -242,6 +261,14 @@ export const DEFAULT_ACK_WAIT_NS = 20 * 60 * 1_000_000_000;
 export async function provisionStream(
   opts: ProvisionStreamOpts,
 ): Promise<ProvisionStreamOutcome> {
+  return withProvisionRetry(
+    `provision stream ${opts.name}`,
+    opts,
+    () => provisionStreamOnce(opts),
+  );
+}
+
+async function provisionStreamOnce(opts: ProvisionStreamOpts): Promise<ProvisionStreamOutcome> {
   const log = opts.log ?? console;
   const maxAgeNs = opts.maxAgeNs ?? DEFAULT_MAX_AGE_NS;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -349,6 +376,7 @@ async function extendStreamSubjects(
     try {
       await jsm.streams.update(name, { ...info.config, subjects: [...live, ...missing] });
     } catch (err) {
+      if (isJetstreamTimeout(err)) throw err;
       log.warn(
         `jetstream-provision: could not extend stream "${name}" subjects with [${missing.join(", ")}] (${errMsg(err)}) (cortex#1503)`,
       );
@@ -362,6 +390,7 @@ async function extendStreamSubjects(
     try {
       info = await jsm.streams.info(name);
     } catch (err) {
+      if (isJetstreamTimeout(err)) throw err;
       log.warn(
         `jetstream-provision: could not re-read stream "${name}" after extending its subjects (${errMsg(err)}) — not verified (cortex#1503)`,
       );
@@ -445,6 +474,16 @@ export interface StackScopedConsumerResult {
 export async function provisionStackScopedConsumer(
   opts: ProvisionConsumerOpts & { legacyDurable: string },
 ): Promise<StackScopedConsumerResult> {
+  return withProvisionRetry(
+    `provision consumer ${opts.stream}/${opts.durable}`,
+    opts,
+    () => provisionStackScopedConsumerOnce(opts),
+  );
+}
+
+async function provisionStackScopedConsumerOnce(
+  opts: ProvisionConsumerOpts & { legacyDurable: string },
+): Promise<StackScopedConsumerResult> {
   const log = opts.log ?? console;
   const { legacyDurable } = opts;
   if (legacyDurable === opts.durable) {
@@ -457,6 +496,7 @@ export async function provisionStackScopedConsumer(
     legacy = await consumerInfoOrNull(opts.jsm, opts.stream, legacyDurable);
     scopedExists = (await consumerInfoOrNull(opts.jsm, opts.stream, opts.durable)) !== null;
   } catch (err) {
+    if (isJetstreamTimeout(err)) throw err;
     // Unknown state: never replay, never touch the legacy durable.
     log.warn(
       `jetstream-provision: could not read durables "${legacyDurable}"/"${opts.durable}" on stream "${opts.stream}" (${errMsg(err)}) — "${opts.durable}" starts from New if created; legacy left in place (cortex#1503)`,
@@ -534,7 +574,11 @@ export async function provisionStackScopedConsumer(
 export async function provisionPullConsumer(
   opts: ProvisionConsumerOpts,
 ): Promise<ProvisionConsumerOutcome> {
-  return ensureConsumer(opts, undefined);
+  return withProvisionRetry(
+    `provision consumer ${opts.stream}/${opts.durable}`,
+    opts,
+    () => ensureConsumer(opts, undefined),
+  );
 }
 
 /**

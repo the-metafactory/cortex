@@ -946,6 +946,7 @@ export const AgentConfigSchema = z.object({
    * features (G-1101 pilot errand projection, etc.).
    */
   nats: z.object({
+    jetstreamTimeoutMs: z.number().int().positive().optional(),
     /** NATS server URL — `nats://localhost:4222` for local development. */
     url: z.string().min(1).refine(
       (s) => s.startsWith("nats://") || s.startsWith("tls://"),

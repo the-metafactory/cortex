@@ -74,6 +74,7 @@
  *     is out of scope.
  */
 
+import type { JetstreamBootRetryOptions } from "./jetstream/boot-retry";
 import type { JsMsg } from "nats";
 import type { MyelinRuntime } from "./myelin/runtime";
 import type { Envelope } from "./myelin/envelope-validator";
@@ -307,6 +308,7 @@ export type BrainConsumerOpts =
  * resolver so the boot wiring owns the subject grammar + durable naming.
  */
 export interface BrainConsumerStartOpts {
+  bootRetry?: JetstreamBootRetryOptions;
   /**
    * Resolve the pull-subscription parameters for one capability. Returning
    * `null` skips binding that capability (e.g. a capability with no provisioned
@@ -413,6 +415,7 @@ export class BrainConsumer {
       if (resolved === null) continue;
 
       const subscribePullOpts: {
+        bootRetry?: JetstreamBootRetryOptions;
         pattern: string;
         stream: string;
         durable: string;
@@ -429,6 +432,7 @@ export class BrainConsumer {
         onEnvelope: async (envelope, subject) =>
           this.processEnvelope(envelope, subject, null, capability),
       };
+      if (opts.bootRetry !== undefined) subscribePullOpts.bootRetry = opts.bootRetry;
       if (resolved.maxMessages !== undefined) {
         subscribePullOpts.maxMessages = resolved.maxMessages;
       }
