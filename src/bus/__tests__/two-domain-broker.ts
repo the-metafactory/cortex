@@ -19,12 +19,12 @@ export async function waitFor(
   throw new Error(`Timed out: ${description}`);
 }
 
-async function startServer(root: string, domain: string, remote?: string) {
+export async function startServer(root: string, domain: string, remote?: string, listenPort = -1) {
   if (!natsServerBinary) throw new Error("nats-server binary unavailable on PATH");
   const config = join(root, `${domain}.conf`);
   await writeFile(config, `
 server_name: "synthetic-${domain}"
-listen: "127.0.0.1:-1"
+listen: "127.0.0.1:${listenPort}"
 jetstream {
   domain: "${domain}"
   store_dir: ${JSON.stringify(join(root, domain))}
@@ -56,7 +56,12 @@ leafnodes {
     const port = /Listening for client connections on 127\.0\.0\.1:(\d+)/.exec(logs)?.[1];
     const leafPort = /Listening for leafnode connections on 127\.0\.0\.1:(\d+)/.exec(logs)?.[1];
     if (!port || (!remote && !leafPort)) throw new Error(`Missing broker listeners: ${logs}`);
-    return { url: `nats://127.0.0.1:${port}`, leafUrl: `nats://127.0.0.1:${leafPort}`, stop };
+    return {
+      url: `nats://127.0.0.1:${port}`,
+      leafUrl: `nats://127.0.0.1:${leafPort}`,
+      stop,
+      restart: () => startServer(root, domain, remote, Number(port)),
+    };
   } catch (error) {
     await stop();
     throw new Error(`Could not start ${domain}: ${logs}`, { cause: error });
