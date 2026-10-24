@@ -49,8 +49,8 @@ describe("DORMANT_RUNTIME_DIAGNOSIS", () => {
     expect(DORMANT_RUNTIME_DIAGNOSIS).toMatch(/silent|no log line/i);
   });
 
-  test("names the failed-connect cause", () => {
-    expect(DORMANT_RUNTIME_DIAGNOSIS).toMatch(/connect failed|failed to connect/i);
+  test("does not describe a transient connect failure as permanently dormant", () => {
+    expect(DORMANT_RUNTIME_DIAGNOSIS).not.toMatch(/connect failed|failed to connect/i);
   });
 
   test("names the all-subscribers-failed-to-bind cause", () => {

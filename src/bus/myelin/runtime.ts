@@ -13,9 +13,10 @@
  * without a NATS server present.
  */
 
-import type { ConnectionOptions, NatsConnection } from "nats";
+import { ErrorCode, type ConnectionOptions, type NatsConnection } from "nats";
 import type { AgentConfig } from "../../common/types/config";
 import type { PolicyFederatedNetwork } from "../../common/types/cortex-config";
+import { ReconnectBackoff } from "../nats/reconnect-backoff";
 import { NatsLink } from "../nats/connection";
 import {
   buildNatsTlsOptions,
@@ -95,19 +96,18 @@ export type EnvelopeHandler = (
  * it — four lanes (review, release, brain, dev) previously carried
  * hand-copied variants and only two were pinned by tests.
  *
- * It must stay accurate for ALL THREE disabled paths below:
+ * It must stay accurate for the disabled paths below:
  *   1. `!config.nats?.url`                      — returns SILENTLY, logs nothing
- *   2. primary connect threw                    — logs `myelin-runtime: failed to connect`
- *   3. push subscribers configured, none bound  — logs `myelin-runtime: failed to subscribe`
+ *   2. push subscribers configured, none bound  — logs `myelin-runtime: failed to subscribe`
  *
  * Cause 1 is the common one and emits no log at all, so a hint that sends the
  * principal to a grep would come back empty exactly when they need it most.
  * That is why the config check is named separately from the grep.
  */
 export const DORMANT_RUNTIME_DIAGNOSIS =
-  "Either nats.url is unset in cortex.yaml (silent — no log line), or the " +
-  "broker connect failed / every configured subscriber failed to bind " +
-  '(both logged above with the "myelin-runtime:" prefix)';
+  "Either nats.url is unset in cortex.yaml (silent — no log line), or " +
+  "every configured subscriber failed to bind " +
+  '(logged above with the "myelin-runtime:" prefix)';
 
 /** Lifecycle handle so cortex can clean up on shutdown. */
 export interface MyelinRuntime {
@@ -230,7 +230,7 @@ export interface MyelinRuntime {
    * `onEnvelope()` fan-out and don't go through this helper.
    *
    * **Returns `null` when the runtime is disabled** (no NATS configured
-   * or connect failed). Callers that need a hard "subscribe or fail"
+   * or subscribers failed). Callers that need a hard "subscribe or fail"
    * signal MUST check `runtime.enabled` first or treat the `null` return
    * as a deliberate no-op (boot wiring's contract: capability-side
    * features remain dormant when the bus is absent).
@@ -266,7 +266,7 @@ export interface MyelinRuntime {
    * cross-config invariant entirely.
    *
    * **Returns `null` when the runtime is disabled** (no NATS configured,
-   * connect failed). Callers MUST tolerate the null return — same
+   * subscribers failed). Callers MUST tolerate the null return — same
    * defensive contract as `subscribePull` — so push-mode listeners
    * stay dormant when the bus is absent without aborting boot.
    *
@@ -286,7 +286,7 @@ export interface MyelinRuntime {
   /**
    * Resolve a narrow provisioning capability against the underlying
    * link, or `null` when the runtime is disabled (no NATS configured
-   * or connect failed).
+   * or subscribers failed).
    *
    * Used by the boot path to provision streams + per-agent durables
    * (cortex#338) before `ReviewConsumer.start` binds to them. The
@@ -509,10 +509,6 @@ export interface MyelinRuntimeOptions {
    *   - `initialMs`: 1_000  (first retry after 1s)
    *   - `maxMs`:     30_000 (cap the doubling at 30s)
    *   - `factor`:    2      (exponential)
-   *
-   * **Back-compat:** purely additive. With ZERO leaf links (no per-network
-   * `nats:`), no lifecycle machinery engages and this field is never read —
-   * the runtime is byte-identical to the pre-F-3b single-link path.
    *
    * @internal — tuning surface for tests (inject a tiny `initialMs` so the
    *             reconnect fires deterministically without real wall-clock
@@ -759,12 +755,12 @@ export async function startMyelinRuntime(
       new MyelinDurablePublishError(
         "disabled",
         envelope.id,
-        "runtime is disabled (no NATS configured or connect failed)",
+        "runtime is disabled (no NATS configured or subscribers failed)",
       ),
     );
 
   // Subscribe-pull no-op for the disabled paths (no NATS configured,
-  // connect failed, or subscriber pattern list empty). Returning `null`
+  // or every configured subscriber failed). Returning `null`
   // is the documented signal — capability-side features such as the
   // review consumer treat it as "bus dormant, stay dormant" and skip
   // their pull subscription without aborting boot. See
@@ -925,67 +921,91 @@ export async function startMyelinRuntime(
   // TC-4d (#627 Phase 4) — transport-mTLS posture for the whole pool. `off`
   // (default / omitted) builds no tls block on any link ⇒ plaintext,
   // byte-identical to today. `require` fails closed at connect (a missing/
-  // invalid cert throws below, which for the primary disables the runtime).
+  // invalid cert throws before any connection attempts).
   const mtlsMode: MtlsMode = options?.transportMtls?.mode ?? "off";
   const mtlsPaths: MtlsPaths | undefined = options?.transportMtls?.paths;
   const primaryTls = buildNatsTlsOptions(mtlsMode, mtlsPaths, {
     site: "primary link",
   });
-  try {
-    primaryLink = await NatsLink.connect({
-      url: nats.url,
-      token: nats.token,
-      // cortex#86: operator-mode auth path. NatsLink loader expands ~/
-      // and enforces chmod 600; if both token and credsPath are set,
-      // credsPath wins with a warn log.
-      ...(nats.credsPath ? { credsPath: nats.credsPath } : {}),
-      name: nats.name,
-      // TC-4d: transport mTLS (undefined ⇒ plaintext, unchanged).
-      ...(primaryTls !== undefined ? { tls: primaryTls } : {}),
-      ...(options?.connectImpl ? { connectImpl: options.connectImpl } : {}),
+  const primaryBackoff = new ReconnectBackoff(options?.reconnectBackoff);
+  const reconnectInitialMs = primaryBackoff.initialMs;
+  const reconnectMaxMs = primaryBackoff.maxMs;
+  const reconnectFactor = primaryBackoff.factor;
+  const setReconnectTimer: (cb: () => void, ms: number) => ReconnectTimerHandle =
+    options?.reconnectTimer?.setTimer ?? ((cb, ms) => setTimeout(cb, ms));
+  const clearReconnectTimer: (handle: ReconnectTimerHandle) => void =
+    options?.reconnectTimer?.clearTimer ??
+    ((handle) => {
+      clearTimeout(handle as ReturnType<typeof setTimeout>);
     });
-    primary = {
-      linkId: "primary",
-      link: primaryLink,
-      // F-3c: primary is always connected; its down-state ends the runtime
-      // (the catch below), so it never enters the leaf reconnect lifecycle.
-      status: "connected",
-      connectOpts: null,
-      reconnectHandle: null,
-      backoffMs: 0,
-      subscribers: [],
-      boundByPattern: new Map(),
-      jsmCache: null,
-    };
-    console.log(
-      // "connected to nats" is the canonical bus-ready signal quickstart's
-      // healthy-boot gate greps for (quickstart-lib.ts HEALTHY_BOOT_PATTERNS,
-      // cortex#2240). Keep the literal "nats" here regardless of whether
-      // nats.url carries a scheme — a scheme-less url (host:port, the
-      // quickstart-generated default) otherwise logged "connected to
-      // 127.0.0.1:4222", which the gate never matched → 60s quickstart hang.
-      `myelin-runtime: connected to nats at ${safeUrlOf(nats.url)} as "${nats.name}" (link=primary)`,
-    );
-  } catch (err) {
-    // Primary down ⇒ runtime disabled, exactly as the pre-F-3b single-link
-    // path. The primary link governs `enabled` (design §3.4, OD-F3-2):
-    // per-network leaf degradation is F-3c — F-3b keeps the primary-down
-    // contract identical so the back-compat case is byte-for-byte.
-    console.error(
-      "myelin-runtime: failed to connect — continuing without NATS:",
-      err instanceof Error ? err.message : String(err),
-    );
-    return {
-      enabled: false,
-      onEnvelope,
-      publish: publishDisabled,
-      publishDurable: publishDurableDisabled,
-      subscribePull: subscribePullDisabled,
-      subscribe: subscribePushDisabled,
-      jetstreamManager: jetstreamManagerDisabled,
-      kvBucket: kvBucketDisabled,
-      stop: stopDisabled,
-    };
+
+  const transientConnectCodes = new Set<string>([
+    ErrorCode.ConnectionRefused,
+    ErrorCode.ConnectionTimeout,
+    ErrorCode.Timeout,
+    ErrorCode.AuthenticationTimeout,
+    ErrorCode.Disconnect,
+    ErrorCode.ConnectionClosed,
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "ETIMEDOUT",
+    "EAI_AGAIN",
+    "ENOTFOUND",
+    "ENETUNREACH",
+    "EHOSTUNREACH",
+    "EPIPE",
+  ]);
+
+  for (;;) {
+    try {
+      console.info("myelin-runtime: connecting (link=primary)");
+      primaryLink = await NatsLink.connect({
+        url: nats.url,
+        token: nats.token,
+        // cortex#86: operator-mode auth path. NatsLink loader expands ~/
+        // and enforces chmod 600; if both token and credsPath are set,
+        // credsPath wins with a warn log.
+        ...(nats.credsPath ? { credsPath: nats.credsPath } : {}),
+        name: nats.name,
+        waitOnFirstConnect: false,
+        // TC-4d: transport mTLS (undefined ⇒ plaintext, unchanged).
+        ...(primaryTls !== undefined ? { tls: primaryTls } : {}),
+        ...(options?.connectImpl ? { connectImpl: options.connectImpl } : {}),
+      });
+      primary = {
+        linkId: "primary",
+        link: primaryLink,
+        status: "connected",
+        connectOpts: null,
+        reconnectHandle: null,
+        backoffMs: 0,
+        subscribers: [],
+        boundByPattern: new Map(),
+        jsmCache: null,
+      };
+      console.log(
+        // "connected to nats" is the canonical bus-ready signal quickstart's
+        // healthy-boot gate greps for (quickstart-lib.ts HEALTHY_BOOT_PATTERNS,
+        // cortex#2240). Keep the literal "nats" here regardless of whether
+        // nats.url carries a scheme — a scheme-less url (host:port, the
+        // quickstart-generated default) otherwise logged "connected to
+        // 127.0.0.1:4222", which the gate never matched → 60s quickstart hang.
+        `myelin-runtime: connected to nats at ${safeUrlOf(nats.url)} as "${nats.name}" (link=primary)`,
+      );
+      break;
+    } catch (err) {
+      if (!(err instanceof Error && "code" in err &&
+        typeof err.code === "string" && transientConnectCodes.has(err.code))) {
+        console.error("myelin-runtime: primary connect failed; startup aborted (link=primary):", err);
+        throw err;
+      }
+      const delay = primaryBackoff.nextDelay();
+      console.error(
+        `myelin-runtime: primary connect failed; connecting again in ${delay}ms (link=primary):`,
+        err instanceof Error ? err.message : String(err),
+      );
+      await new Promise<void>((resolve) => setReconnectTimer(resolve, delay));
+    }
   }
 
   // The pool, keyed by `linkId`. `primary` is always present; leaf links
@@ -994,28 +1014,11 @@ export async function startMyelinRuntime(
   const pool = new Map<string, PoolLink>();
   pool.set(primary.linkId, primary);
 
-  // IAW Phase F-3c (cortex#662) — background-reconnect machinery. Resolved
-  // ONCE here; never engaged when zero leaf links exist (the loop below adds
-  // nothing to retry), keeping the zero-network back-compat path untouched.
-  //
   // `stopped` is declared further down (after PASS 2) for the publish/
   // subscribe guards; the reconnect scheduler also checks it so a timer that
   // fires mid-shutdown is a no-op. Hoist a forward-readable flag here so the
   // scheduler closure can see it; the later `let stopped = false` is replaced
   // by this single declaration.
-  const reconnectInitialMs = options?.reconnectBackoff?.initialMs ?? 1_000;
-  const reconnectMaxMs = options?.reconnectBackoff?.maxMs ?? 30_000;
-  const reconnectFactor = options?.reconnectBackoff?.factor ?? 2;
-  // Test seam: deterministic timers. Production uses real setTimeout/
-  // clearTimeout — both Node and Bun return an OBJECT handle from
-  // `setTimeout`, satisfying the non-null `ReconnectTimerHandle`.
-  const setReconnectTimer: (cb: () => void, ms: number) => ReconnectTimerHandle =
-    options?.reconnectTimer?.setTimer ?? ((cb, ms) => setTimeout(cb, ms));
-  const clearReconnectTimer: (handle: ReconnectTimerHandle) => void =
-    options?.reconnectTimer?.clearTimer ??
-    ((handle) => {
-      clearTimeout(handle as ReturnType<typeof setTimeout>);
-    });
 
   let stopped = false;
   // Read `stopped` through a function in async closures so TS doesn't narrow
@@ -1146,6 +1149,7 @@ export async function startMyelinRuntime(
       url: network.nats.url,
       ...(network.nats.credsPath ? { credsPath: network.nats.credsPath } : {}),
       name: network.nats.name,
+      waitOnFirstConnect: false,
       // TC-4d: transport mTLS for this leaf (undefined ⇒ plaintext).
       ...(leafTls !== undefined ? { tls: leafTls } : {}),
       ...(options?.connectImpl ? { connectImpl: options.connectImpl } : {}),
@@ -2191,9 +2195,6 @@ export async function startMyelinRuntime(
   // (design §3.5 — no per-network JetStream durables in F-3). The cache
   // lives on the primary `PoolLink` (`primary.jsmCache`).
   const jetstreamManagerEnabled = (): Promise<import("nats").JetStreamManager> => {
-    // F-3c (cortex#662): primary is always connected here (a primary failure
-    // short-circuits the runtime above) — use the non-null `primaryLink`
-    // binding rather than asserting on the now-nullable `primary.link`.
     primary.jsmCache ??=
       jetstreamDomain === undefined
         ? primaryLink.raw.jetstreamManager()

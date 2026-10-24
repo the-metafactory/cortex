@@ -1248,7 +1248,7 @@
       "count": 3
     },
     "cortex/no-comments": {
-      "count": 653
+      "count": 637
     }
   },
   "src/bus/myelin/subscriber.ts": {
@@ -1280,7 +1280,7 @@
       "count": 1
     },
     "cortex/no-comments": {
-      "count": 49
+      "count": 48
     }
   },
   "src/bus/nats/subscription.ts": {

@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import type { NatsConnection, Subscription, Status } from "nats";
+import { ErrorCode, NatsError, type NatsConnection, type Subscription, type Status } from "nats";
 import type { AgentConfig } from "../../../common/types/config";
 import { startMyelinRuntime } from "../runtime";
 
@@ -235,22 +235,25 @@ describe("MyelinRuntime", () => {
     await runtime.stop();
   });
 
-  test("returns disabled when NATS connect fails (logs error, doesn't throw)", async () => {
-    const config = makeConfig({
+  test("waits for a failed primary connect to recover", async () => {
+    const fake = makeFakeNatsConnection();
+    let attempts = 0;
+    const runtime = await startMyelinRuntime(makeConfig({
       url: "nats://localhost:9999",
       name: "cortex",
       subjects: ["local.test.>"],
-    });
-    const runtime = await startMyelinRuntime(config, {
+    }), {
+      reconnectBackoff: { initialMs: 1 },
       connectImpl: async () => {
-        throw new Error("connection refused");
+        if (++attempts === 1) throw NatsError.errorForCode(ErrorCode.ConnectionRefused);
+        return fake.nc;
       },
     });
-    expect(runtime.enabled).toBe(false);
-    const errored = logs.some(
-      (l) => l.kind === "error" && l.msg.includes("failed to connect"),
-    );
-    expect(errored).toBe(true);
+    expect(runtime.enabled).toBe(true);
+    expect(attempts).toBe(2);
+    expect(fake.subscribePatterns).toEqual(["local.test.>"]);
+    expect(logs.some((l) => l.msg.includes("continuing without NATS"))).toBe(false);
+    await runtime.stop();
   });
 
   test("subjects placeholder {principal} is substituted from options.principal (cortex#429)", async () => {

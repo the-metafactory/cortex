@@ -17,6 +17,7 @@ import { readFile } from "fs/promises";
 import {
   connect as natsConnect,
   credsAuthenticator,
+  DebugEvents,
   Events,
   headers as natsHeaders,
   type ConnectionOptions,
@@ -25,6 +26,7 @@ import {
 } from "nats";
 import { enforceChmod600 } from "../../common/config/file-permissions";
 import { expandTilde } from "../../common/config/loader";
+import { initialConnectDelayHandler, ReconnectBackoff, type ReconnectBackoffOptions } from "./reconnect-backoff";
 
 export interface NatsLinkOptions {
   /** NATS server URL (e.g. nats://localhost:4222). */
@@ -60,6 +62,13 @@ export interface NatsLinkOptions {
    * is the whole contract.
    */
   tls?: TlsOptions;
+  waitOnFirstConnect?: boolean;
+  maxReconnectAttempts?: number;
+  reconnectTimeWait?: number;
+  reconnectJitter?: number;
+  reconnectJitterTLS?: number;
+  timeout?: number;
+  initialConnectBackoff?: ReconnectBackoffOptions;
   /** Override the underlying nats `connect` function (test seam). */
   connectImpl?: (opts: ConnectionOptions) => Promise<NatsConnection>;
 }
@@ -115,8 +124,7 @@ export class NatsLink {
   }
 
   /**
-   * Open a NATS connection. Returns a `NatsLink` ready to use. Throws if the
-   * server is unreachable or auth fails.
+   * Open a NATS connection. Returns a `NatsLink` ready to use.
    */
   static async connect(opts: NatsLinkOptions): Promise<NatsLink> {
     if (!opts.url) {
@@ -125,6 +133,11 @@ export class NatsLink {
 
     const connectImpl = opts.connectImpl ?? natsConnect;
     const name = opts.name ?? "cortex";
+    let connected = false;
+    const initialDelay = initialConnectDelayHandler(new ReconnectBackoff(opts.initialConnectBackoff));
+    const reconnectTimeWait = opts.reconnectTimeWait ?? 2_000;
+    const reconnectJitter = opts.reconnectJitter ?? 100;
+    const reconnectJitterTLS = opts.reconnectJitterTLS ?? 1_000;
 
     // Build base connect options. We branch on auth mode separately so that
     // an operator-mode `.creds` connection never leaks a bearer token into
@@ -133,8 +146,20 @@ export class NatsLink {
     const connectOpts: ConnectionOptions = {
       servers: [opts.url],
       name,
-      // Defer reconnect to the underlying client; we just log status.
       reconnect: true,
+      waitOnFirstConnect: opts.waitOnFirstConnect ?? true,
+      maxReconnectAttempts: opts.maxReconnectAttempts ?? -1,
+      reconnectTimeWait,
+      reconnectJitter,
+      reconnectJitterTLS,
+      timeout: opts.timeout ?? 20_000,
+      reconnectDelayHandler: () => {
+        if (!connected) return initialDelay();
+        const jitter = opts.tls || opts.url.startsWith("tls://")
+          ? reconnectJitterTLS
+          : reconnectJitter;
+        return reconnectTimeWait + Math.floor(Math.random() * jitter);
+      },
       // TC-4d (#627 Phase 4) — transport mTLS. When the caller built a `tls`
       // block (posture `on`/`require` with a loaded client cert), pass it
       // through verbatim so the node transport negotiates mutual TLS. Omitted
@@ -157,7 +182,10 @@ export class NatsLink {
       connectOpts.token = opts.token;
     }
 
+    console.debug(`nats-connection: "${name}" connecting`);
     const raw = await connectImpl(connectOpts);
+    connected = true;
+    console.debug(`nats-connection: "${name}" connected`);
 
     return new NatsLink(raw, name);
   }
@@ -271,6 +299,9 @@ export class NatsLink {
             console.warn(
               `nats-connection: "${this.name}" disconnected from ${stringifyStatusData(status.data)}`,
             );
+            break;
+          case DebugEvents.Reconnecting:
+            console.info(`nats-connection: "${this.name}" reconnecting`);
             break;
           case Events.Reconnect:
             console.info(
