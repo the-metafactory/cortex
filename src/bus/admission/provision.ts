@@ -20,6 +20,7 @@
 
 import type { ProvisionJsm, ProvisionKv } from "../jetstream/types";
 import { isNotFoundError } from "../jetstream/provision";
+import { retryJetstreamBootStep } from "../jetstream/boot-retry";
 
 /**
  * Build the per-(principal, stack) admission bucket name (myelin admission
@@ -74,7 +75,8 @@ export async function provisionAdmissionKv(
   let preExisting: boolean | undefined;
   if (opts.jsm !== null) {
     try {
-      await opts.jsm.streams.info(`KV_${opts.bucket}`);
+      const jsm = opts.jsm;
+      await retryJetstreamBootStep(`admission KV peek ${opts.bucket}`, () => jsm.streams.info(`KV_${opts.bucket}`), { log });
       preExisting = true;
     } catch (err) {
       if (isNotFoundError(err)) {

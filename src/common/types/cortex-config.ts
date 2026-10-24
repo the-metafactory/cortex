@@ -1438,6 +1438,7 @@ export type NatsIdentity = z.infer<typeof NatsIdentitySchema>;
  * grove-v2 plus the new `identity` block.
  */
 export const NatsConfigSchema = z.object({
+  jetstreamTimeoutMs: z.number().int().positive().optional(),
   url: z.string().min(1).refine(
     (s) => s.startsWith("nats://") || s.startsWith("tls://"),
     { message: "nats.url must start with nats:// or tls://" },

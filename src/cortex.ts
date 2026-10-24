@@ -120,6 +120,7 @@ import {
   provisionReviewConsumer,
 } from "./bus/jetstream/provision";
 import { reviewScopePatterns, REVIEW_OFFER_TASK_SUFFIX } from "./bus/jetstream/review-subjects";
+import { runJetstreamBootStep } from "./bus/jetstream/boot-retry";
 import { nkeyToBase64Pubkey } from "./bus/verify-signed-by-chain";
 import { bootVerifierSelfCheck } from "./bus/verifier-self-check";
 import { type CCSessionOpts } from "./runner/cc-session";
@@ -3870,8 +3871,9 @@ export async function startCortex(
     const admissionBucket = admissionBucketName(principalId, derivedStack.stack);
     let admissionJsm: import("./bus/jetstream/types").ProvisionJsm | null = null;
     if (runtime.jetstreamManager !== undefined) {
+      const getManager = runtime.jetstreamManager.bind(runtime);
       try {
-        admissionJsm = await runtime.jetstreamManager();
+        admissionJsm = await runJetstreamBootStep("admission JetStream manager", getManager);
       } catch (err) {
         process.stderr.write(
           `cortex: jetstreamManager() resolution failed for admission provisioning — ` +
@@ -3879,10 +3881,13 @@ export async function startCortex(
         );
       }
     }
+    const openKv = runtime.kvBucket?.bind(runtime);
     const provisionedAdmission = await provisionAdmissionKv({
       jsm: admissionJsm,
       openKv: async (bucket) =>
-        runtime.kvBucket !== undefined ? await runtime.kvBucket(bucket) : null,
+        openKv !== undefined
+          ? await runJetstreamBootStep("admission KV open", () => openKv(bucket))
+          : null,
       bucket: admissionBucket,
       log: console,
     });
@@ -4139,10 +4144,15 @@ export async function startCortex(
       handlers,
       dedup: inMemoryReflexDedup(),
     });
-    await reflexActivationListener.start();
-    console.log(
-      `cortex: reflex-activation-listener mounted — ${reflexTargets.length} target(s), ${Object.keys(handlers).length} handler(s)`,
+    const reflexStarted = await runJetstreamBootStep(
+      "reflex activation listener",
+      reflexActivationListener.start.bind(reflexActivationListener),
     );
+    if (reflexStarted !== null) {
+      console.log(
+        `cortex: reflex-activation-listener mounted — ${reflexTargets.length} target(s), ${Object.keys(handlers).length} handler(s)`,
+      );
+    }
   }
 
   // signal#113 P-11 (#56) — federated echo responder. The ICMP-analog of the
@@ -6633,11 +6643,12 @@ async function resolveReviewProvisioningJsm(
   gatingAgents: readonly Agent[],
   lane = "review",
 ): Promise<import("./bus/jetstream/types").ProvisionJsm | null> {
-  if (gatingAgents.length === 0 || !runtime.jetstreamManager) {
+  const getManager = runtime.jetstreamManager?.bind(runtime);
+  if (gatingAgents.length === 0 || !getManager) {
     return null;
   }
   try {
-    return await runtime.jetstreamManager();
+    return await runJetstreamBootStep(`${lane} JetStream manager`, getManager);
   } catch (err) {
     process.stderr.write(
       `cortex: jetstreamManager() resolution failed — ${lane} provisioning skipped: ` +

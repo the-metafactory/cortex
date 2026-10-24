@@ -380,6 +380,30 @@ describe("MyelinSubscriber — pull mode", () => {
     await h.cleanup();
   });
 
+  test("pull readiness retries a JetStream API timeout before receiving messages", async () => {
+    const h = await makePullLink();
+    h.consumerGet.mockImplementationOnce(async () => {
+      throw Object.assign(new Error("TIMEOUT"), { code: "TIMEOUT" });
+    });
+    const received: string[] = [];
+    const sub = MyelinSubscriber.start(h.link, {
+      pattern: "local.acme.>",
+      mode: "pull",
+      pull: { stream: "ACME_TASKS", durable: "synthetic-retry" },
+      onEnvelope: (_envelope, subject) => { received.push(subject); },
+    });
+    try {
+      await sub.ready;
+      expect(h.consumerGet).toHaveBeenCalledTimes(2);
+      h.deliver("local.acme.deploy", bytes(validEnvelope));
+      await flushMicrotasks();
+      expect(received).toEqual(["local.acme.deploy"]);
+    } finally {
+      await sub.stop();
+      await h.cleanup();
+    }
+  });
+
   test("pull mode passes through ackWaitMs / maxMessages / expiresMs as consume options", async () => {
     const h = await makePullLink();
     const sub = MyelinSubscriber.start(h.link, {
