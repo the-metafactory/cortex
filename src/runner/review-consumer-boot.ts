@@ -48,6 +48,7 @@
  * the inline closure's live-binding read.
  */
 
+import type { JetstreamBootRetryOptions } from "../bus/jetstream/boot-retry";
 import { CCSession, type CCSessionOpts } from "./cc-session";
 import { withCo7EgressGuard } from "./co7-egress-pipeline";
 import {
@@ -172,7 +173,7 @@ export interface WireReviewConsumersOpts {
 
 /** The callable `cortex.ts` invokes per agent, at both the boot loop and the `agents.d/` hot-reload sites. */
 export interface WiredReviewConsumers {
-  startForAgent: (agent: ReviewBootAgent) => Promise<void>;
+  startForAgent: (agent: ReviewBootAgent, bootRetry?: JetstreamBootRetryOptions) => Promise<void>;
 }
 
 /**
@@ -186,7 +187,7 @@ export interface WiredReviewConsumers {
 export function wireReviewConsumers(
   opts: WireReviewConsumersOpts,
 ): WiredReviewConsumers {
-  const startForAgent = async (agent: ReviewBootAgent): Promise<void> => {
+  const startForAgent = async (agent: ReviewBootAgent, bootRetry?: JetstreamBootRetryOptions): Promise<void> => {
     try {
       const caps = agent.runtime?.capabilities ?? [];
       const consumerAgent: ReviewConsumerAgent = {
@@ -423,6 +424,7 @@ export function wireReviewConsumers(
         if (opts.reviewJsm === null) return names.durable;
         try {
           const { durable: bound, outcome } = await provisionStackScopedConsumer({
+            ...(bootRetry !== undefined && { bootRetry }),
             jsm: opts.reviewJsm,
             stream: opts.reviewStream,
             durable: names.durable,
@@ -481,6 +483,7 @@ export function wireReviewConsumers(
       // (`primaryReviewPattern` is hoisted above so it also feeds the durable's
       // `filterSubject` — cortex#1186.)
       const started = await consumer.start({
+        ...(bootRetry !== undefined && { bootRetry }),
         pattern: primaryReviewPattern,
         stream: opts.reviewStream,
         durable,
@@ -550,6 +553,7 @@ export function wireReviewConsumers(
         // local/other-scope durables' traffic (cortex#1186 fan-out).
         const offerDurable = await provisionDurable(durableNames.offer(scopeToken), extraPattern);
         const offerStarted = await offerConsumer.start({
+          ...(bootRetry !== undefined && { bootRetry }),
           pattern: extraPattern,
           stream: opts.reviewStream,
           durable: offerDurable,

@@ -77,6 +77,7 @@
  *     only); cross-principal release-cut is explicitly out of scope for F-4.1.
  */
 
+import type { JetstreamBootRetryOptions } from "../bus/jetstream/boot-retry";
 import type { JsMsg } from "nats";
 import type { MyelinRuntime } from "../bus/myelin/runtime";
 import type { Envelope } from "../bus/myelin/envelope-validator";
@@ -317,6 +318,7 @@ export interface ReleaseConsumerOpts {
  * NOT provision) — same contract as `ReviewConsumerStartOpts`.
  */
 export interface ReleaseConsumerStartOpts {
+  bootRetry?: JetstreamBootRetryOptions;
   /** Subject pattern, e.g. `local.{principal}.{stack}.tasks.release.cut`. */
   pattern: string;
   /** JetStream stream name carrying the bound consumer. */
@@ -398,6 +400,7 @@ export class ReleaseConsumer {
       );
     }
     const subscribePullOpts: {
+      bootRetry?: JetstreamBootRetryOptions;
       pattern: string;
       stream: string;
       durable: string;
@@ -412,6 +415,7 @@ export class ReleaseConsumer {
       onEnvelope: async (envelope, subject) =>
         this.processEnvelope(envelope, subject, null),
     };
+    if (opts.bootRetry !== undefined) subscribePullOpts.bootRetry = opts.bootRetry;
     if (opts.maxMessages !== undefined) subscribePullOpts.maxMessages = opts.maxMessages;
     if (opts.expiresMs !== undefined) subscribePullOpts.expiresMs = opts.expiresMs;
     if (opts.thresholdMessages !== undefined) {

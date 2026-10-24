@@ -65,7 +65,7 @@ describe("MyelinRuntime.publishDurable", () => {
 
     await durable(runtime)(makeEnvelope(), { expectedStream: SYNTHETIC_STREAM });
 
-    expect(fake.jetstreamArgs).toEqual([[{ domain: SYNTHETIC_DOMAIN }]]);
+    expect(fake.jetstreamArgs).toEqual([[{ domain: SYNTHETIC_DOMAIN, timeout: 10_000 }]]);
     await runtime.stop();
   });
 
@@ -74,7 +74,7 @@ describe("MyelinRuntime.publishDurable", () => {
 
     await durable(runtime)(makeEnvelope(), { expectedStream: SYNTHETIC_STREAM });
 
-    expect(fake.jetstreamArgs).toEqual([[]]);
+    expect(fake.jetstreamArgs).toEqual([[{ timeout: 10_000 }]]);
     await runtime.stop();
   });
 

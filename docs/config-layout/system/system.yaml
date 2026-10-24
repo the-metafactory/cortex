@@ -314,6 +314,7 @@ plugins:
 nats:
   url: nats://127.0.0.1:4222
   name: cortex
+  jetstreamTimeoutMs: 10000
 
   # ---------------------------------------------------------------------------
   # nats.subjects — push-mode broad-pattern subscriber list. (THE LANDMINE.)

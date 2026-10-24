@@ -890,8 +890,13 @@ export class ReflexActivationListener {
       this.log.warn("reflex-activation-listener: subscribePull returned null — dormant");
       return;
     }
+    try {
+      await sub.ready;
+    } catch (error) {
+      await sub.stop();
+      throw error;
+    }
     this.subscriber = sub;
-    await sub.ready;
     this.log.info(
       `reflex-activation-listener: bound durable "${this.durable}" on stream "${this.stream}" (filter=${filter})`,
     );

@@ -39,6 +39,7 @@ import type {
 } from "nats";
 import type { NatsLink } from "../nats/connection";
 import { NatsSubscription } from "../nats/subscription";
+import { jetstreamClientOptions, retryJetstreamBootStep, type JetstreamBootRetryOptions } from "../jetstream/boot-retry";
 import { validateEnvelope, type Envelope } from "./envelope-validator";
 
 export type { ErrorObject };
@@ -131,6 +132,8 @@ export type InvalidEnvelopeHandler = (
  * upgrades don't quietly drift.
  */
 export interface MyelinPullOptions {
+  bootRetry?: JetstreamBootRetryOptions;
+  jetstreamTimeoutMs?: number;
   /** JetStream stream name carrying the bound consumer. */
   stream: string;
   /** Durable consumer name. The consumer MUST exist server-side. */
@@ -462,7 +465,10 @@ class PullBackend implements SubscriberBackend {
       requested !== undefined && Number.isFinite(requested) && requested >= 1
         ? Math.floor(requested)
         : 1;
-    this.ready = this.init(link, opts, onRaw);
+    const init = () => this.init(link, opts, onRaw);
+    this.ready = opts.bootRetry
+      ? retryJetstreamBootStep(`pull bind ${opts.stream}/${opts.durable}`, init, opts.bootRetry)
+      : init();
   }
 
   private async init(
@@ -470,10 +476,7 @@ class PullBackend implements SubscriberBackend {
     opts: MyelinPullOptions,
     onRaw: (subject: string, data: Uint8Array, msg: JsMsg) => Promise<void>,
   ): Promise<void> {
-    const js =
-      opts.jetstreamDomain === undefined
-        ? link.raw.jetstream()
-        : link.raw.jetstream({ domain: opts.jetstreamDomain });
+    const js = link.raw.jetstream(jetstreamClientOptions(opts.jetstreamTimeoutMs, opts.jetstreamDomain));
     const consumer: Consumer = await js.consumers.get(opts.stream, opts.durable);
 
     // nats.js's `ConsumeOptions` is an intersection of several Partial
