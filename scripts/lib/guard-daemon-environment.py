@@ -61,14 +61,15 @@ def main():
         if any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) for key in dropped_env):
             raise ValueError("Invalid environment key")
     except Exception:
-        print("cortex render: cannot verify existing daemon configuration; refusing replacement", file=sys.stderr)
+        print("cortex render: cannot verify existing Cortex runtime configuration; refusing replacement", file=sys.stderr)
         return 1
     if dropped_env:
         print("cortex render: refusing to drop environment keys: " + ", ".join(sorted(dropped_env)), file=sys.stderr)
         print("Store surface secrets with `arc secrets set cortex NAME` before removing their old entries.", file=sys.stderr)
     if dropped_configuration:
         names = ", ".join(json.dumps(key, ensure_ascii=True) for key in sorted(dropped_configuration))
-        print("cortex render: refusing to drop daemon configuration keys: " + names, file=sys.stderr)
+        print("cortex render: refusing to drop Cortex runtime configuration keys: " + names, file=sys.stderr)
+        print("Migrate these settings or explicitly remove retired keys from the existing service, then retry.", file=sys.stderr)
     if dropped_env or dropped_configuration:
         print("Keep the existing service until these keys are migrated.", file=sys.stderr)
         return 1
