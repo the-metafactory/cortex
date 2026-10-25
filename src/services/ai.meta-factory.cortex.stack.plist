@@ -4,6 +4,8 @@
 <dict>
     <key>Label</key>
     <string>ai.meta-factory.cortex.__STACK_SLUG__</string>
+    <key>ProcessType</key>
+    <string>Interactive</string>
     <key>ProgramArguments</key>
     <array>
         <string>__HOME__/.local/bin/cortex</string>

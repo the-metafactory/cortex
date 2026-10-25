@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,14 +24,70 @@ function fixture(platform: "Darwin" | "Linux") {
     writeFileSync(join(mockBin, name), `#!/bin/sh\n${body}\n`, { mode: 0o700 });
   }
   const env = { ...process.env, HOME: home, ARC_CONFIG_ROOT: "", XDG_CONFIG_HOME: "", PATH: `${mockBin}:${process.env.PATH}`, SYSTEMD_HOST_MARKER: destination };
-  const path = join(destination, platform === "Darwin" ? "ai.meta-factory.cortex.sample.plist" : "cortex@.service");
+  const serviceFile = join(destination, platform === "Darwin" ? "ai.meta-factory.cortex.sample.plist" : "cortex@.service");
   function render() {
     return spawnSync("bash", ["-c", 'set -e; source "$1/scripts/lib/systemd-render.sh"; if [ "$4" = Darwin ]; then render_cortex_plists "$1" "$2" "$3"; else render_cortex_systemd_units "$1" "$2" "$3"; fi', "--", root, destination, config, platform], { env, encoding: "utf8" });
   }
-  return { home, config, destination, env, path, render };
+  return { home, config, destination, env, serviceFile, render };
 }
 
-describe("daemon surface secrets across service re-render", () => {
+describe("Cortex runtime surface secrets across service re-render", () => {
+  test("stack and relay plists render Interactive ProcessType on repeated renders", () => {
+    const f = fixture("Darwin");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(f.render().status).toBe(0);
+      for (const serviceFile of [f.serviceFile, join(f.destination, "ai.meta-factory.cortex.relay.plist")]) {
+        const probe = spawnSync("python3", ["-c", 'import plistlib, sys; print(plistlib.load(open(sys.argv[1], "rb"))["ProcessType"])', serviceFile], { encoding: "utf8" });
+        expect(probe.status).toBe(0);
+        expect(probe.stdout).toBe("Interactive\n");
+      }
+    }
+  });
+
+  const plistCustomization = {
+    platform: "Darwin",
+    customize: (original: string) => original.replace("<key>Label</key>", `<key>ThrottleInterval</key><integer>42</integer><key>LimitLoadToSessionType</key><string>${secret}</string><key>Label</key>`),
+    expectedKeys: ["ThrottleInterval", "LimitLoadToSessionType"],
+  } as const;
+  const systemdCustomization = {
+    platform: "Linux",
+    customize: (original: string) => original
+      .replace("[Service]", `[Service]\nOOMScoreAdjust=42\nRootDirectory=${secret}`)
+      .replace("[Unit]", `[Unit]\nBefore=${secret}`)
+      .replace("[Install]", `[Install]\nAlias=${secret}`),
+    expectedKeys: ["[Service].OOMScoreAdjust", "[Service].RootDirectory", "[Unit].Before", "[Install].Alias"],
+  } as const;
+  const configurationCases = [
+    { name: "ai.meta-factory.cortex.sample.plist", ...plistCustomization },
+    { name: "ai.meta-factory.cortex.relay.plist", ...plistCustomization },
+    { name: "cortex@.service", ...systemdCustomization },
+    { name: "nats@.service", ...systemdCustomization },
+  ];
+
+  for (const { name, platform, customize, expectedKeys } of configurationCases) {
+    test(`${name}: dropped settings abort replacement until explicitly removed`, () => {
+      const f = fixture(platform);
+      expect(f.render().status).toBe(0);
+      const serviceFile = join(f.destination, name);
+      const original = readFileSync(serviceFile, "utf8");
+      const customized = customize(original);
+      writeFileSync(serviceFile, customized);
+      const rendered = f.render();
+      expect(rendered.status).not.toBe(0);
+      for (const key of expectedKeys) {
+        expect(rendered.stderr).toContain(key);
+      }
+      expect(`${rendered.stdout}${rendered.stderr}`).not.toContain(secret);
+      expect(readFileSync(serviceFile, "utf8")).toBe(customized);
+      expect(existsSync(`${serviceFile}.tmp`)).toBe(false);
+      expect(rendered.stderr).toContain("Migrate these settings or explicitly remove retired keys from the existing service, then retry.");
+      writeFileSync(serviceFile, original);
+      const retried = f.render();
+      expect(retried.status).toBe(0);
+      expect(readFileSync(serviceFile, "utf8")).toBe(original);
+    });
+  }
+
   for (const platform of ["Darwin", "Linux"] as const) {
     test(`${platform}: declared arc secret loads after two renders without entering the service or output`, () => {
       const f = fixture(platform);
@@ -42,7 +98,7 @@ describe("daemon surface secrets across service re-render", () => {
         const rendered = f.render();
         expect(rendered.status).toBe(0);
         expect(`${rendered.stdout}${rendered.stderr}`).not.toContain(secret);
-        const service = readFileSync(f.path, "utf8");
+        const service = readFileSync(f.serviceFile, "utf8");
         expect(service).not.toContain(secret);
         expect(service).toContain("CORTEX_SURFACE_SECRETS");
         const probe = join(f.home, "boot.ts");
@@ -63,7 +119,7 @@ else:
     env = dict(assignment.split("=", 1) for line in text.splitlines() if line.startswith("Environment=") for assignment in shlex.split(line.split("=", 1)[1]))
     env = {key: value.replace("%h", sys.argv[3]) for key, value in env.items()}
 json.dump(env, sys.stdout)
-`, platform, f.path, f.home], { encoding: "utf8" });
+`, platform, f.serviceFile, f.home], { encoding: "utf8" });
         expect(environment.status).toBe(0);
         const serviceEnv: unknown = JSON.parse(environment.stdout);
         if (typeof serviceEnv !== "object" || serviceEnv === null) throw new Error("No service environment");
@@ -77,17 +133,17 @@ json.dump(env, sys.stdout)
     test(`${platform}: hand-added keys abort re-render without exposing values or replacing the old service`, () => {
       const f = fixture(platform);
       expect(f.render().status).toBe(0);
-      const original = readFileSync(f.path, "utf8");
+      const original = readFileSync(f.serviceFile, "utf8");
       const customized = platform === "Darwin"
         ? original.replace("<key>HOME</key>", `<key>SAGE_SUBSTRATE</key><string>${secret}</string><key>SAGE_GITLAB_HOST</key><string>synthetic-host</string><key>HOME</key>`)
         : original.replace("[Service]", `[Service]\nEnvironment="SAGE_SUBSTRATE=${secret}" SAGE_GITLAB_HOST=synthetic-host`);
-      writeFileSync(f.path, customized);
+      writeFileSync(f.serviceFile, customized);
       const rendered = f.render();
       expect(rendered.status).not.toBe(0);
       expect(rendered.stderr).toContain("SAGE_SUBSTRATE");
       expect(rendered.stderr).toContain("SAGE_GITLAB_HOST");
       expect(`${rendered.stdout}${rendered.stderr}`).not.toContain(secret);
-      expect(readFileSync(f.path, "utf8")).toBe(customized);
+      expect(readFileSync(f.serviceFile, "utf8")).toBe(customized);
     });
   }
 });
