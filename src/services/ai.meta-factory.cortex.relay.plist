@@ -4,6 +4,8 @@
 <dict>
     <key>Label</key>
     <string>ai.meta-factory.cortex.relay</string>
+    <key>ProcessType</key>
+    <string>Interactive</string>
     <key>ProgramArguments</key>
     <array>
         <string>__BUN_PATH__</string>

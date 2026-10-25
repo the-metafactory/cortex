@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -32,6 +32,40 @@ function fixture(platform: "Darwin" | "Linux") {
 }
 
 describe("daemon surface secrets across service re-render", () => {
+  test("stack and relay plists render Interactive ProcessType on repeated renders", () => {
+    const f = fixture("Darwin");
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(f.render().status).toBe(0);
+      for (const path of [f.path, join(f.destination, "ai.meta-factory.cortex.relay.plist")]) {
+        const probe = spawnSync("python3", ["-c", 'import plistlib, sys; print(plistlib.load(open(sys.argv[1], "rb"))["ProcessType"])', path], { encoding: "utf8" });
+        expect(probe.status).toBe(0);
+        expect(probe.stdout).toBe("Interactive\n");
+      }
+    }
+  });
+
+  for (const name of ["ai.meta-factory.cortex.sample.plist", "ai.meta-factory.cortex.relay.plist", "cortex@.service", "nats@.service"]) {
+    test(`${name}: dropped daemon settings abort replacement and name every key without values`, () => {
+      const plist = name.endsWith(".plist");
+      const f = fixture(plist ? "Darwin" : "Linux");
+      expect(f.render().status).toBe(0);
+      const path = join(f.destination, name);
+      const original = readFileSync(path, "utf8");
+      const customized = plist
+        ? original.replace("<key>Label</key>", `<key>ThrottleInterval</key><integer>42</integer><key>LimitLoadToSessionType</key><string>${secret}</string><key>Label</key>`)
+        : original.replace("[Service]", `[Service]\nOOMScoreAdjust=42\nRootDirectory=${secret}`).replace("[Unit]", `[Unit]\nBefore=${secret}`).replace("[Install]", `[Install]\nAlias=${secret}`);
+      writeFileSync(path, customized);
+      const rendered = f.render();
+      expect(rendered.status).not.toBe(0);
+      for (const key of plist ? ["ThrottleInterval", "LimitLoadToSessionType"] : ["[Service].OOMScoreAdjust", "[Service].RootDirectory", "[Unit].Before", "[Install].Alias"]) {
+        expect(rendered.stderr).toContain(key);
+      }
+      expect(`${rendered.stdout}${rendered.stderr}`).not.toContain(secret);
+      expect(readFileSync(path, "utf8")).toBe(customized);
+      expect(existsSync(`${path}.tmp`)).toBe(false);
+    });
+  }
+
   for (const platform of ["Darwin", "Linux"] as const) {
     test(`${platform}: declared arc secret loads after two renders without entering the service or output`, () => {
       const f = fixture(platform);
