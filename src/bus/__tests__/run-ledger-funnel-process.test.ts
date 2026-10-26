@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { validateExecutionRunFinished, type MyelinEnvelope } from "@the-metafactory/myelin";
+import { validateExecutionRunFinished } from "@the-metafactory/myelin";
+import { readRunFinished } from "../../../scripts/fixtures/reflex-consumer.mjs";
 import { validateEnvelope } from "../myelin/envelope-validator";
 import { createSystemBusProcessEvent } from "../system-events";
 import { createDispatchTaskCompletedEvent } from "../dispatch-events";
 import { harness } from "./run-ledger-funnel-harness";
-import { createProcessRunner, type Spawn } from "../process-runner";
-import type { MyelinRuntime } from "../myelin/runtime";
-import { createSurfaceRouter } from "../surface-router";
+import { createProcessRunner } from "../process-runner";
+import { modeSpawn, reflexConsumer, routedRuntime, type ProcessMode } from "./process-ledger-harness";
 
 const SUBJECT = "local.jc.default.system.bus.process";
 const CORRELATION = "22222222-2222-4222-8222-222222222222";
@@ -23,20 +23,6 @@ function processEvent(over: Partial<Parameters<typeof createSystemBusProcessEven
     startedAt,
     ...over,
   });
-}
-
-function reflexReleaseFixture(correlationId: string) {
-  const decision = { blueprintId: "process-activation", correlationId };
-  const guardState = { run_lock_holder: correlationId as string | null };
-  return {
-    guardState,
-    consume(envelope: MyelinEnvelope) {
-      if (!validateExecutionRunFinished(envelope).valid) return;
-      const correlation = envelope.payload.correlation_id;
-      if (decision.correlationId !== correlation) return;
-      if (guardState.run_lock_holder === correlation) guardState.run_lock_holder = null;
-    },
-  };
 }
 
 describe("run-ledger funnel: process runs", () => {
@@ -68,27 +54,57 @@ describe("run-ledger funnel: process runs", () => {
     expect(logs).toEqual([]);
   });
 
-  test("Reflex run-outcome/evaluate fixture releases only the lock for the stamped payload correlation", async () => {
+  test("pinned Reflex evaluate releases only the stamped correlation and lets the next impulse fire", async () => {
     const { funnel, published } = harness();
-    const correlation = "activation-correlation-not-a-uuid";
-    const fixture = reflexReleaseFixture(correlation);
+    const fixture = await reflexConsumer();
+    expect(fixture.guardState.runLockHolder).toBe(fixture.correlationId);
+    expect(await fixture.evaluate(1)).toMatchObject({ outcome: "blocked", reason: "run-lock" });
     await funnel.render(processEvent(), undefined, SUBJECT);
-    fixture.consume(published[0]!.envelope);
-    expect(fixture.guardState.run_lock_holder).toBe(correlation);
-    await funnel.render(processEvent({ correlationId: correlation }), undefined, SUBJECT);
-    expect(published[1]!.envelope.correlation_id).toBeUndefined();
-    fixture.consume(published[1]!.envelope);
-    expect(fixture.guardState.run_lock_holder).toBeNull();
+    await fixture.consume(published[0]!.envelope, published[0]!.subject);
+    expect(fixture.guardState.runLockHolder).toBe(fixture.correlationId);
+    expect(fixture.releases).toEqual([]);
+    await funnel.render(processEvent({ correlationId: fixture.correlationId }), undefined, SUBJECT);
+    const finished = published[1]!;
+    delete finished.envelope.correlation_id;
+    await fixture.consume(finished.envelope, finished.subject);
+    expect(fixture.guardState.runLockHolder).toBeNull();
+    expect(fixture.releases).toEqual([{ blueprintId: "process-activation", correlationId: fixture.correlationId }]);
+    expect(await fixture.evaluate(2)).toMatchObject({ outcome: "fired" });
+    const nextHolder = fixture.guardState.runLockHolder;
+    expect(nextHolder).not.toBe(fixture.correlationId);
+    await fixture.consume(finished.envelope, finished.subject);
+    expect(fixture.guardState.runLockHolder).toBe(nextHolder);
+  });
+
+  test("pinned Reflex reader accepts a non-UUID payload correlation without an envelope correlation", async () => {
+    const { funnel, published } = harness();
+    const correlationId = "activation-correlation-not-a-uuid";
+    await funnel.render(processEvent({ correlationId }), undefined, SUBJECT);
+    expect(published[0]!.envelope.correlation_id).toBeUndefined();
+    expect(readRunFinished(published[0]!.envelope)).toEqual({ valid: true, correlationId, outcome: "succeeded" });
+  });
+
+  test.each(["correlation", "duration", "subject"])("pinned Reflex preserves the lock for invalid %s", async (invalid) => {
+    const { funnel, published } = harness();
+    const fixture = await reflexConsumer();
+    await funnel.render(processEvent({ correlationId: fixture.correlationId }), undefined, SUBJECT);
+    const finished = published[0]!;
+    if (invalid === "correlation") finished.envelope.correlation_id = CORRELATION;
+    if (invalid === "duration") delete finished.envelope.economics;
+    if (invalid === "subject") finished.subject = "local.jc.other.execution.run.finished";
+    await fixture.consume(finished.envelope, finished.subject);
+    expect(fixture.guardState.runLockHolder).toBe(fixture.correlationId);
+    expect(fixture.releases).toEqual([]);
   });
 
   test("a failed process publishes one failed run and still releases the lock", async () => {
     const { funnel, published } = harness();
-    await funnel.render(processEvent({ outcome: "failed", reason: "exit-1" }), undefined, SUBJECT);
+    const fixture = await reflexConsumer();
+    await funnel.render(processEvent({ outcome: "failed", reason: "exit-1", correlationId: fixture.correlationId }), undefined, SUBJECT);
     expect(published).toHaveLength(1);
     expect(published[0]!.envelope.payload.outcome).toBe("failed");
-    const fixture = reflexReleaseFixture(CORRELATION);
-    fixture.consume(published[0]!.envelope);
-    expect(fixture.guardState.run_lock_holder).toBeNull();
+    await fixture.consume(published[0]!.envelope, published[0]!.subject);
+    expect(fixture.guardState.runLockHolder).toBeNull();
   });
 
   test.each(["exit-1", "spawn:boom", "timeout-900000ms", "spec:bad", "no-process-name"])(
@@ -180,46 +196,29 @@ describe("run-ledger funnel: process runs", () => {
   });
 
   for (const detach of [false, true]) {
-    test.each(["success", "non-zero", "spawn-error", "watchdog"])(
+    test.each<ProcessMode>(["success", "non-zero", "spawn-error", "watchdog"])(
       `${detach ? "detached" : "synchronous"} runner %s reaches the funnel through the router exactly once`, async (mode) => {
         const { funnel, published, logs } = harness();
-        const router = createSurfaceRouter({} as MyelinRuntime);
-        router.register(funnel);
-        const visibility: MyelinEnvelope[] = [];
-        let terminalDelivered!: () => void;
-        const terminalDelivery = new Promise<void>((resolve) => { terminalDelivered = resolve; });
-        const runtime = {
-          async publish(envelope: MyelinEnvelope) {
-            visibility.push(envelope);
-            await router.dispatch(envelope, SUBJECT);
-            if (envelope.payload.outcome !== "started") terminalDelivered();
-          },
-        } as unknown as MyelinRuntime;
-        const spawn: Spawn = () => {
-          if (mode === "spawn-error") throw new Error("spawn failure");
-          let end!: (code: number) => void;
-          const exited = new Promise<number>((resolve) => { end = resolve; });
-          if (mode !== "watchdog") end(mode === "success" ? 0 : 1);
-          return { exited, kill: () => { end(143); } };
-        };
+        const { runtime, visibility, terminalDelivery, router } = routedRuntime(funnel, SUBJECT);
         const runner = createProcessRunner({
           source,
           runtime,
           processesDir: "/unused",
           loadSpec: () => ({ name: "example-process", cwd: "/unused", argv: ["example"], params: {}, detach, timeout_ms: 5 }),
-          spawn,
+          spawn: modeSpawn(mode),
           log: { info() {}, error() {} },
         });
-        const fixture = reflexReleaseFixture(CORRELATION);
+        const fixture = await reflexConsumer();
+        let threw = false;
         try {
-          await runner({ target: "example-process", payload: {}, decisionId: "decision-1", correlationId: CORRELATION, classification: "local" }, {
+          await runner({ target: "example-process", payload: {}, decisionId: "decision-1", correlationId: fixture.correlationId, classification: "local" }, {
             target: "example-process", capability: "process.run", assistant: "cortex", handler: "process", process: "example-process",
           });
         } catch (error) {
-          expect(detach && mode !== "spawn-error").toBe(false);
-          expect(mode).not.toBe("success");
+          threw = true;
           expect(error).toBeInstanceOf(Error);
         }
+        expect(threw).toBe(mode === "spawn-error" || (!detach && mode !== "success"));
         await terminalDelivery;
         expect(visibility).toHaveLength(2);
         expect(published).toHaveLength(1);
@@ -229,10 +228,10 @@ describe("run-ledger funnel: process runs", () => {
           outcome: mode === "success" ? "succeeded" : "failed",
           started_at: visibility[0]!.payload.started_at,
           ended_at: visibility[1]!.timestamp,
-          correlation_id: CORRELATION,
+          correlation_id: fixture.correlationId,
         });
-        fixture.consume(finished);
-        expect(fixture.guardState.run_lock_holder).toBeNull();
+        await fixture.consume(finished, published[0]!.subject);
+        expect(fixture.guardState.runLockHolder).toBeNull();
         expect(logs).toEqual([]);
         await router.stop();
       },

@@ -45,12 +45,6 @@ function requiredString(payload: Record<string, unknown>, field: string): string
   return value;
 }
 
-function processOutcome(envelope: Envelope): RunOutcome | undefined {
-  if (envelope.type !== PROCESS_TYPE) return undefined;
-  const state = String(envelope.payload.outcome);
-  return Object.hasOwn(PROCESS_OUTCOME, state) ? PROCESS_OUTCOME[state] : undefined;
-}
-
 function optionalString(payload: Record<string, unknown>, field: string): string | undefined {
   const value = payload[field];
   return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -96,29 +90,29 @@ export function createRunLedgerFunnel(options: RunLedgerFunnelOptions): SurfaceA
     };
   };
 
-  const isTerminal = (envelope: Envelope): boolean =>
-    Object.hasOwn(DISPATCH_TERMINAL, envelope.type) || processOutcome(envelope) !== undefined;
-
-  const terminalRun = (envelope: Envelope): TerminalRun => {
-    const outcome = processOutcome(envelope);
-    return outcome === undefined ? dispatchRun(envelope) : processRun(envelope, outcome);
+  const classify = (envelope: Envelope): TerminalRun | undefined => {
+    if (Object.hasOwn(DISPATCH_TERMINAL, envelope.type)) return dispatchRun(envelope);
+    if (envelope.type !== PROCESS_TYPE) return undefined;
+    const state = String(envelope.payload.outcome);
+    const outcome = Object.hasOwn(PROCESS_OUTCOME, state) ? PROCESS_OUTCOME[state] : undefined;
+    return outcome === undefined ? undefined : processRun(envelope, outcome);
   };
 
   return {
     id: "run-ledger-funnel",
     subjects,
     async render(envelope, _signal, subject) {
-      if (!isTerminal(envelope)) return;
       if ((subject ?? deriveNatsSubject(envelope, options.stack)) !== subjectFor(envelope.type)) return;
 
       try {
-        const run = terminalRun(envelope);
+        const execution = classify(envelope);
+        if (!execution) return;
         const event = createExecutionRunFinished({
           principal: options.principal,
           stack: options.stack,
           source: `${options.principal}.${options.stack}.cortex`,
           sovereignty: envelope.sovereignty,
-          payload: { ...run, producer: "cortex" },
+          payload: { ...execution, producer: "cortex" },
         });
         await options.publish(createEnvelope({
           ...event.input,
