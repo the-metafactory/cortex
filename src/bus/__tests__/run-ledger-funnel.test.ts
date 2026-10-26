@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { validateExecutionRunFinished, type MyelinEnvelope } from "@the-metafactory/myelin";
+import { validateExecutionRunFinished } from "@the-metafactory/myelin";
 import { validateEnvelope } from "../myelin/envelope-validator";
 import {
   createDispatchTaskAbortedEvent,
@@ -7,7 +7,7 @@ import {
   createDispatchTaskFailedEvent,
   createDispatchTaskStartedEvent,
 } from "../dispatch-events";
-import { createRunLedgerFunnel } from "../run-ledger-funnel";
+import { harness as runLedgerHarness } from "./run-ledger-funnel-harness";
 
 const common = {
   source: { principal: "jc", agent: "cortex", instance: "default", dataResidency: "CH" },
@@ -21,27 +21,18 @@ const failed = () => createDispatchTaskFailedEvent({ ...common, failedAt: endedA
 const aborted = () => createDispatchTaskAbortedEvent({ ...common, abortedAt: endedAt, reason: "timeout" });
 
 function harness(publishError?: unknown) {
-  const published: { envelope: MyelinEnvelope; subject: string }[] = [];
-  const logs: string[] = [];
-  const funnel = createRunLedgerFunnel({
-    principal: "jc",
-    stack: "default",
-    publish: async (envelope, subject) => {
-      // eslint-disable-next-line @typescript-eslint/only-throw-error -- a test deliberately rejects with a non-Error value to pin the funnel's String(err) log branch
-      if (publishError !== undefined) throw publishError;
-      published.push({ envelope, subject });
-    },
-    log: (line) => logs.push(line),
+  return runLedgerHarness(() => {
+    if (publishError !== undefined) throw publishError;
   });
-  return { funnel, published, logs };
 }
 
 describe("run-ledger funnel", () => {
-  test("declares exactly this stack's three terminal subjects", () => {
+  test("declares exactly this stack's terminal subjects", () => {
     expect(harness().funnel.subjects).toEqual([
       "local.jc.default.dispatch.task.completed",
       "local.jc.default.dispatch.task.failed",
       "local.jc.default.dispatch.task.aborted",
+      "local.jc.default.system.bus.process",
     ]);
   });
 

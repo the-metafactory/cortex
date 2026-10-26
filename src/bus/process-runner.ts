@@ -297,6 +297,7 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
     outcome: "started" | "completed" | "failed",
     process: string,
     activation: FiredActivation,
+    startedAt: Date,
     reason?: string,
   ): void => {
     void opts.runtime
@@ -306,6 +307,7 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
           outcome,
           process,
           decisionId: activation.decisionId,
+          startedAt,
           ...(reason !== undefined && { reason }),
           ...(activation.correlationId !== undefined && {
             correlationId: activation.correlationId,
@@ -318,13 +320,14 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
   };
 
   return async (activation, target) => {
+    const startedAt = new Date();
     const processName = target?.process;
     if (processName === undefined || processName.length === 0) {
       // Misconfig: a `handler: process` target with no `process:` name. The
       // schema forbids this, so this is a belt-and-braces guard — deterministic,
       // re-firing won't fix it.
       log.error(`process-runner: target ${activation.target} has no process name — skipped`);
-      emit("failed", "(none)", activation, "no-process-name");
+      emit("failed", "(none)", activation, startedAt, "no-process-name");
       return;
     }
 
@@ -335,14 +338,14 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
       argv = resolveArgv(spec, activation.payload);
     } catch (err) {
       // Deterministic: a bad spec / param won't fix on re-fire of THIS decision.
-      emit("failed", processName, activation, `spec:${errMsg(err)}`);
+      emit("failed", processName, activation, startedAt, `spec:${errMsg(err)}`);
       return;
     }
 
     // Log the un-substituted spec template (tokens, not values) — a resolved
     // argv could carry a param value that is a secret (esp. a `freeform` slot).
     log.info(`process-runner: running "${processName}" → ${spec.argv.join(" ")} (decision ${activation.decisionId})`);
-    emit("started", processName, activation);
+    emit("started", processName, activation, startedAt);
 
     const childEnv = buildProcessEnv({ spec, activation, parentEnv: process.env });
 
@@ -350,7 +353,7 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
     try {
       proc = spawn(argv, { cwd: spec.cwd, env: childEnv });
     } catch (err) {
-      emit("failed", processName, activation, `spawn:${errMsg(err)}`);
+      emit("failed", processName, activation, startedAt, `spawn:${errMsg(err)}`);
       throw err instanceof Error ? err : new Error(String(err));
     }
 
@@ -359,7 +362,7 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
       // background; report via visibility only (the handler already returned, so
       // a failure can't re-fire — the next scheduled fire re-runs the job).
       void superviseRun(proc, spec.timeout_ms, sigkillGraceMs)
-        .then((r) => { emit(r.ok ? "completed" : "failed", processName, activation, r.ok ? undefined : r.reason); })
+        .then((r) => { emit(r.ok ? "completed" : "failed", processName, activation, startedAt, r.ok ? undefined : r.reason); })
         .catch((err: unknown) => { log.error(`process-runner: detached supervise threw: ${errMsg(err)}`); });
       return;
     }
@@ -368,10 +371,10 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
     // left un-marked (re-fireable).
     const result = await superviseRun(proc, spec.timeout_ms, sigkillGraceMs);
     if (!result.ok) {
-      emit("failed", processName, activation, result.reason);
+      emit("failed", processName, activation, startedAt, result.reason);
       throw new Error(`process "${processName}" failed: ${result.reason} (decision ${activation.decisionId})`);
     }
-    emit("completed", processName, activation);
+    emit("completed", processName, activation, startedAt);
   };
 }
 
