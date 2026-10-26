@@ -203,6 +203,20 @@ describe("createProcessRunner", () => {
     expect(last(published)!.process).toBe("build-journal");
   });
 
+  test("every visibility event of one run carries the same started_at", async () => {
+    const { runtime, published } = fakeRuntime();
+    const sp = fakeSpawn({ exitCode: 1 });
+    const handler = createProcessRunner({ runtime, source: SOURCE, processesDir: "/unused", loadSpec: () => SPEC, spawn: sp.spawn });
+
+    await expect(handler(activation({ days: 7 }), target())).rejects.toThrow();
+    await flush();
+
+    const startedAts = events(published).map((p) => p.started_at);
+    expect(startedAts).toHaveLength(2);
+    expect(typeof startedAts[0]).toBe("string");
+    expect(startedAts[1]).toBe(startedAts[0]);
+  });
+
   // glossary-ignore: path, node
   for (const env of [undefined, ["HOME", "PATH"]]) {
     test(`spawn receives explicit builder env (${env ? "allow-list" : "full env"})`, async () => {

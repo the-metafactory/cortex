@@ -824,6 +824,7 @@ export interface SystemBusProcessOpts {
   reason?: string;
   /** Correlation id carried from the activation. */
   correlationId?: string;
+  startedAt?: Date;
   classification?: Classification;
 }
 
@@ -845,6 +846,7 @@ export function createSystemBusProcessEvent(
       process: opts.process,
       ...(opts.decisionId !== undefined && { decision_id: opts.decisionId }),
       ...(opts.reason !== undefined && { reason: opts.reason }),
+      ...(opts.startedAt !== undefined && { started_at: opts.startedAt.toISOString() }),
       ...(opts.correlationId !== undefined && {
         correlation_id: opts.correlationId,
       }),
