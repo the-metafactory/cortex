@@ -6,6 +6,7 @@ import { dirname, join, resolve as resolvePath } from "path";
 
 import { expandTilde, loadConfigWithAgents } from "../../../common/config/loader";
 import type { LoadedConfig } from "../../../common/config/loader";
+import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
 import { resolveConfigDir, resolveConfigFilePath } from "../../../common/config/config-path";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
 import { NetworkCache } from "../../../common/registry/network-cache";
@@ -682,7 +683,7 @@ function installLeafCreds(
  *     ALREADY INSTALLED at `credsPath` (0600); join points the stack binding at
  *     it and renders the existing creds-file remote branch.
  */
-type AutoFetchedLeafAuth =
+export type AutoFetchedLeafAuth =
   | { kind: "secret-auth"; leafSecret: string; leafUser: string; payloadKey?: string; payloadKeyKid?: string }
   | { kind: "creds-file"; credsPath: string; leafUser: string; payloadKey?: string; payloadKeyKid?: string }
   | { kind: "unavailable"; reason: string };
@@ -860,19 +861,22 @@ export function shouldReplaceCredsPreflightError(args: {
   );
 }
 
-/** cortex#2751 — a network's attested hub mode; `undefined` is unattested. */
-export type JoinHubMode = import("../../../common/types/cortex-config").PolicyFederatedNetwork["hub_mode"];
+/** cortex#2751 — a network's hub mode as join sees it; `undefined` is neither attested nor declared. */
+export type JoinHubMode = PolicyFederatedNetwork["hub_mode"];
 
 /**
- * cortex#2751 — the hub mode a join plans its leaf auth against: the last
- * VERIFIED descriptor's `hub_mode` (the DD-10 cache) wins, else the stack's own
- * `policy.federated.networks[<id>].hub_mode` declaration — the same precedence
- * {@link resolveOperatorAttestation} uses on the admin side. `undefined` means
- * unattested, which join treats as the simple/PSK network it has always assumed.
+ * cortex#2751 — the hub mode a join plans its leaf auth against: the hub mode
+ * attested on the last VERIFIED descriptor (the DD-10 cache) wins, else the
+ * stack's own, unverified `policy.federated.networks[<id>].hub_mode`
+ * declaration — the same precedence {@link resolveOperatorAttestation} uses on
+ * the admin side. The local declaration can only steer this stack's own join
+ * (skip the sealed fetch, keep the #821 error); it grants nothing on the hub.
+ * `undefined` means neither, which join treats as the simple/PSK network it has
+ * always assumed.
  */
 export function resolveJoinHubMode(
   networkId: string,
-  policyNetworks: readonly import("../../../common/types/cortex-config").PolicyFederatedNetwork[],
+  policyNetworks: readonly PolicyFederatedNetwork[],
   cache: NetworkCache = new NetworkCache({ cacheDir: resolveNetworkCacheDir() }),
 ): JoinHubMode {
   return (
@@ -885,7 +889,7 @@ export function resolveJoinHubMode(
  * cortex#2751 — where a federated join gets its leaf credential.
  *   - `configured-secret`: a `--leaf-secret` / `leaf_secret` was given; nothing
  *     is fetched (unchanged).
- *   - `self-managed-creds`: the network attests `hub_mode: operator` (an operator
+ *   - `self-managed-creds`: the hub mode is `operator` (an operator
  *     hub rejects the inline-PSK leaf, ADR-0018) and the stack already holds a
  *     usable creds file it manages itself. Join renders from that file and never
  *     fetches or opens the sealed admission material, so a stale sealed PSK
@@ -927,20 +931,20 @@ export function planJoinLeafAuth(args: {
 export function joinLeafAuthNotice(
   networkId: string,
   plan: JoinLeafAuthPlan,
-  fetched: { kind: string; reason?: string } | undefined,
+  fetched: AutoFetchedLeafAuth | undefined,
   credsPath: string,
 ): string | undefined {
   if (plan.kind === "self-managed-creds") {
     return (
       `cortex network join: "${networkId}" is an operator-mode network; the leaf authenticates with ` +
-      `the creds file at ${plan.credsPath}, so join does not fetch or open a sealed leaf secret (cortex#2751).\n`
+      `the creds file at ${plan.credsPath}, so join does not fetch or open a sealed leaf credential (cortex#2751).\n`
     );
   }
   if (plan.kind === "sealed-fetch" && plan.operatorModeHub && fetched?.kind === "unavailable") {
     return (
-      `cortex network join: WARNING — no usable sealed leaf material for "${networkId}" ` +
-      `(${fetched.reason ?? "unknown"}). "${networkId}" is an operator-mode network, so join continues ` +
-      `on the creds path ${credsPath} instead of refusing over the sealed secret (cortex#2751).\n`
+      `cortex network join: WARNING — no usable sealed leaf credential for "${networkId}" ` +
+      `(${fetched.reason}). "${networkId}" is an operator-mode network, so join does not refuse over it and ` +
+      `falls back to the creds file at ${credsPath}, which must exist (cortex#2751).\n`
     );
   }
   return undefined;
@@ -1264,13 +1268,13 @@ async function runJoin(
   // cortex#1228 — prepend the custom-registry TOFU warning to stderr (when set)
   // so it is surfaced regardless of the flow's success/JSON mode.
   const preamble = (tofuWarning ?? "") + (leafAuthNotice ?? "");
-  const withTofu = preamble !== "" ? { ...flow, stderr: preamble + flow.stderr } : flow;
+  const withPreamble = preamble !== "" ? { ...flow, stderr: preamble + flow.stderr } : flow;
   // cortex#1139 — prepend any auto-provision output so the join transcript shows
   // the substrate setup that ran first (to stdout on success, stderr on failure).
-  if (provPrefix === "") return withTofu;
-  return withTofu.exitCode === 0
-    ? { ...withTofu, stdout: provPrefix + withTofu.stdout }
-    : { ...withTofu, stderr: provPrefix + withTofu.stderr };
+  if (provPrefix === "") return withPreamble;
+  return withPreamble.exitCode === 0
+    ? { ...withPreamble, stdout: provPrefix + withPreamble.stdout }
+    : { ...withPreamble, stderr: provPrefix + withPreamble.stderr };
 }
 
 async function runLeave(

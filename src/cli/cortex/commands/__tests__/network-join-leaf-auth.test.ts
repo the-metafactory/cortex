@@ -55,20 +55,20 @@ describe("planJoinLeafAuth (cortex#2751)", () => {
 });
 
 describe("joinLeafAuthNotice (cortex#2751)", () => {
-  const unopenable = { kind: "unavailable", reason: "could not open the sealed box" };
+  const unopenable = { kind: "unavailable" as const, reason: "could not open the sealed box" };
 
   test("self-managed-creds plan → names the creds file and says the sealed secret is not opened", () => {
     const n = joinLeafAuthNotice("net-a", { kind: "self-managed-creds", credsPath: "/c/net-a.creds" }, undefined, "/c/net-a.creds");
     expect(n).toContain("operator-mode network");
     expect(n).toContain("/c/net-a.creds");
-    expect(n).toContain("does not fetch or open a sealed leaf secret");
+    expect(n).toContain("does not fetch or open a sealed leaf credential");
   });
 
   test("operator network + unopenable sealed secret → WARNING that join continues on the creds path", () => {
     const n = joinLeafAuthNotice("net-a", { kind: "sealed-fetch", operatorModeHub: true }, unopenable, "/c/net-a.creds");
     expect(n).toContain("WARNING");
     expect(n).toContain("could not open the sealed box");
-    expect(n).toContain("continues on the creds path /c/net-a.creds");
+    expect(n).toContain("falls back to the creds file at /c/net-a.creds");
   });
 
   test("PSK network + unopenable sealed secret → no notice (the existing refusal stands)", () => {
@@ -77,7 +77,7 @@ describe("joinLeafAuthNotice (cortex#2751)", () => {
 
   test("operator network + a delivered credential → no notice", () => {
     expect(
-      joinLeafAuthNotice("net-a", { kind: "sealed-fetch", operatorModeHub: true }, { kind: "creds-file" }, "/c"),
+      joinLeafAuthNotice("net-a", { kind: "sealed-fetch", operatorModeHub: true }, { kind: "creds-file", credsPath: "/c", leafUser: "u" }, "/c"),
     ).toBeUndefined();
   });
 });

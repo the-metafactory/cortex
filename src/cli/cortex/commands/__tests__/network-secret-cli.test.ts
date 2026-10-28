@@ -817,7 +817,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     expect(fetcher.called).toBe(true);
     expect(res.stderr).toContain("WARNING");
     expect(res.stderr).toContain("sealed to another key");
-    expect(res.stderr).toContain("continues on the creds path");
+    expect(res.stderr).toContain("falls back to the creds file at");
     expect(res.stderr).not.toContain("could not open it");
   });
 
