@@ -2571,7 +2571,7 @@ describe("#2743 live leaf port: extra leaf remotes", () => {
     expect(existsSync(leafPath)).toBe(false);
     const extrasOnly = readFileSync(extraPath, "utf-8");
     expect(extrasOnly).toContain(`account: ${EXTRA_ACCOUNT}`);
-    expect(extrasOnly).not.toContain(OWN_ACCOUNT + "\n    }");
+    expect(extrasOnly).not.toContain(OWN_ACCOUNT);
     expect(statSync(extraPath).mode & 0o777).toBe(0o600);
     let base = readFileSync(conf, "utf-8");
     expect(base).toContain('include "leafnodes.extra-remotes.conf"');

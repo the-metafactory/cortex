@@ -1233,6 +1233,13 @@ export async function leaveNetwork(
         warnings.push(warn);
         steps.push(`WARN: ${warn}`);
       }
+    } else if (extraLeafRemotes.length > 0) {
+      const warn =
+        `declared extra leaf remotes now load only from the remaining include(s) (${otherIncludes.join(", ")}); ` +
+        `an include rendered before they were declared does not carry them — re-run ` +
+        `\`cortex network join\` for that network to render them (cortex#2743)`;
+      warnings.push(warn);
+      steps.push(`WARN: ${warn}`);
     }
 
     // #801 — DO NOT touch the plist `-c <config>` arg. That config (e.g.

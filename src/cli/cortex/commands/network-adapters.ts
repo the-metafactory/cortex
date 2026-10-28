@@ -872,12 +872,6 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
   };
 }
 
-/**
- * #821 — does the base nats config already carry the `include
- * "leafnodes-<network>.conf"` directive? Thin wrapper over
- * {@link leafIncludeDirectivePresent} so the snapshot records directive PRESENCE
- * (the only base-config state the join changes) rather than the whole file.
- */
 function dropStandaloneExtraRemotes(cfg: LivePortsConfig, dir: string): void {
   const configPath = expandTilde(cfg.natsConfigPath ?? "");
   if (configPath.length > 0 && existsSync(configPath)) {
@@ -891,6 +885,12 @@ function dropStandaloneExtraRemotes(cfg: LivePortsConfig, dir: string): void {
   rmSync(join(dir, EXTRA_REMOTES_INCLUDE_FILE), { force: true });
 }
 
+/**
+ * #821 — does the base nats config already carry the `include
+ * "leafnodes-<network>.conf"` directive? Thin wrapper over
+ * {@link leafIncludeDirectivePresent} so the snapshot records directive PRESENCE
+ * (the only base-config state the join changes) rather than the whole file.
+ */
 function leafIncludeDirectivePresentInBaseConfig(
   baseConfig: string,
   networkId: string,

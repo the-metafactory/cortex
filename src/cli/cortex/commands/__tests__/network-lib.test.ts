@@ -2790,6 +2790,7 @@ describe("#2743 extra leaf remotes", () => {
     expect(res.ok).toBe(true);
     expect(rec.removes).toEqual(["metafactory"]);
     expect(rec.extraOnlyWrites).toEqual([]);
+    expect(res.warnings?.some((w) => w.includes("remaining include(s) (research)"))).toBe(true);
   });
 
   test("leave without extras writes no extras-only file", async () => {

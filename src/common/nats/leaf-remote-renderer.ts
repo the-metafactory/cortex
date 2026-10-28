@@ -467,12 +467,14 @@ export function removeLeafInclude(
   return natsConfigText.replace(global, "");
 }
 
-const EXTRA_REMOTES_DIRECTIVE_REGEX =
-  /^[ \t]*include[ \t]+["']leafnodes\.extra-remotes\.conf["'][ \t]*$/m;
+function extraRemotesDirectiveSource(): string {
+  const file = EXTRA_REMOTES_INCLUDE_FILE.replace(/\./g, "\\.");
+  return `^[ \\t]*include[ \\t]+["']${file}["'][ \\t]*$`;
+}
 
 /** True iff the config includes {@link EXTRA_REMOTES_INCLUDE_FILE} (#2743). */
 export function extraRemotesIncludePresent(natsConfigText: string): boolean {
-  return EXTRA_REMOTES_DIRECTIVE_REGEX.test(natsConfigText);
+  return new RegExp(extraRemotesDirectiveSource(), "m").test(natsConfigText);
 }
 
 /** {@link ensureLeafInclude} for {@link EXTRA_REMOTES_INCLUDE_FILE} (#2743). */
@@ -486,7 +488,7 @@ export function ensureExtraRemotesInclude(natsConfigText: string): string {
 /** {@link removeLeafInclude} for {@link EXTRA_REMOTES_INCLUDE_FILE} (#2743). */
 export function removeExtraRemotesInclude(natsConfigText: string): string {
   if (!extraRemotesIncludePresent(natsConfigText)) return natsConfigText;
-  const global = new RegExp(EXTRA_REMOTES_DIRECTIVE_REGEX.source + "\\n?", "gm");
+  const global = new RegExp(extraRemotesDirectiveSource() + "\\n?", "gm");
   return natsConfigText.replace(global, "");
 }
 
