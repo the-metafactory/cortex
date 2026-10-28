@@ -1785,7 +1785,8 @@ export function validateExtraLeafRemote(
   if (parsed.username.length > 0 || parsed.password.length > 0) {
     throw new Error(`${where}.url must not carry userinfo; authenticate with credentials`);
   }
-  if (parsed.hostname.length === 0 || parsed.port.length === 0) {
+  const hasExplicitPort = /^[a-z]+:\/\/[^/?#]*:\d{1,5}(?:[/?#]|$)/i.test(remote.url.trim());
+  if (parsed.hostname.length === 0 || !hasExplicitPort) {
     throw new Error(`${where}.url must name a host and an explicit port`);
   }
   const credentials = remote.credentials.trim();

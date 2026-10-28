@@ -994,6 +994,9 @@ describe("#2743 extra leaf remotes in the leaf include", () => {
     expect(bad({ url: "http://hub.example.org:7422" })).toThrow("extra_leaf_remotes[1].url");
     expect(bad({ url: "tls://u:p@hub.example.org:7422" })).toThrow("userinfo");
     expect(bad({ url: "tls://hub.example.org" })).toThrow("explicit port");
+    expect(bad({ url: "wss://hub.example.org/leaf" })).toThrow("explicit port");
+    expect(() => renderLeafIncludeFile(DESCRIPTOR, BINDING, [{ ...EXTRA, url: "wss://hub.example.org:443" }])).not.toThrow();
+    expect(() => renderLeafIncludeFile(DESCRIPTOR, BINDING, [{ ...EXTRA, url: "ws://hub.example.org:80/leaf" }])).not.toThrow();
     expect(bad({ credentials: "relative/extra-link.key" })).toThrow("absolute path");
     expect(bad({ credentials: "/srv/a\nb.key" })).toThrow("absolute path");
   });
