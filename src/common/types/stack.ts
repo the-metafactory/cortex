@@ -174,6 +174,16 @@ export const StackNatsInfraSchema = z.object({
     "stack.nats_infra.system_account must be an account-class NKey (A-prefixed, 56 chars total)",
   ).optional(),
   system_account_jwt: z.string().min(1).optional(),
+  extra_leaf_remotes: z.array(
+    z.object({
+      url: z.string().min(1),
+      account: z.string().regex(
+        /^A[A-Z0-9]{55}$/,
+        "stack.nats_infra.extra_leaf_remotes[].account must be an account-class NKey (A-prefixed, 56 chars total)",
+      ),
+      credentials: z.string().min(1),
+    }).strict(),
+  ).optional(),
 }).strict();
 
 export type StackNatsInfra = z.infer<typeof StackNatsInfraSchema>;

@@ -329,6 +329,21 @@ policy:
     networks: []                        # the join writes registry-resolved peers here
 ```
 
+#### Extra leaf remotes (#2743)
+
+nats-server keeps only the last `leafnodes.remotes` list it reads, so a remote added to the base config or by hand to the generated `leafnodes-<network>.conf` is ignored or lost on the next join. To run an additional leaf link (for example a receive-only link from another hub account into a local account), declare it on the stack:
+
+```yaml
+stack:
+  nats_infra:
+    extra_leaf_remotes:
+      - url: tls://<hub-host>:<leaf-port>
+        account: <A…-nkey of the LOCAL account the link binds to>
+        credentials: ~/.config/nats/<link>.creds
+```
+
+`cortex network join` renders each entry after the network's own remote in the same include, in declared order. The join refuses, before touching any file, when an entry's `account` is not defined by the stack's operator-mode nats config, when its `credentials` file is missing, is not a `.creds` file, or has group or world access (`chmod 600` it), or when the `url` is not `nats|tls|ws|wss://host:port` without userinfo. `cortex network leave` removes only the network's remote; when no other network include remains, it writes the declared remotes to `leafnodes.extra-remotes.conf` and includes that file, and the next join folds them back into the network include.
+
 ### B3 — Register + join (the one command)
 
 ```bash

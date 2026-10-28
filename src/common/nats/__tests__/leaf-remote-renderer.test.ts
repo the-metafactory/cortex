@@ -28,6 +28,12 @@ import {
   renderLeafIncludeFile,
   renderLeafRemote,
   renderBaseIsolatedConfig,
+  renderExtraRemotesIncludeFile,
+  ensureExtraRemotesInclude,
+  removeExtraRemotesInclude,
+  extraRemotesIncludePresent,
+  EXTRA_REMOTES_INCLUDE_FILE,
+  type ExtraLeafRemote,
   renderOperatorModeBlocks,
   resolveLeafBindMode,
   parseLoopbackListen,
@@ -940,5 +946,75 @@ describe("parseLoopbackListen — safe loopback host:port for a synthesised base
     expect(parseLoopbackListen(undefined)).toBeUndefined();
     expect(parseLoopbackListen("")).toBeUndefined();
     expect(parseLoopbackListen("nats://")).toBeUndefined();
+  });
+});
+
+
+describe("#2743 extra leaf remotes in the leaf include", () => {
+  const EXTRA: ExtraLeafRemote = {
+    url: "tls://hub.example.org:7422",
+    account: "A" + "X".repeat(55),
+    credentials: "/srv/operator/extra-link.key",
+  };
+
+  test("without extras the include is the network's remote only (unchanged shape)", () => {
+    const plain = renderLeafIncludeFile(DESCRIPTOR, BINDING);
+    expect(renderLeafIncludeFile(DESCRIPTOR, BINDING, [])).toBe(plain);
+    expect(plain).not.toContain("extra_leaf_remotes");
+    expect(plain.match(/url: /g)?.length).toBe(1);
+  });
+
+  test("with extras the include carries the network's remote first, then every extra", () => {
+    const second: ExtraLeafRemote = { ...EXTRA, url: "nats://hub2.example.org:7422" };
+    const out = renderLeafIncludeFile(DESCRIPTOR, BINDING, [EXTRA, second]);
+    expect(out.match(/leafnodes \{/g)?.length).toBe(1);
+    expect(out.match(/url: /g)?.length).toBe(3);
+    const own = out.indexOf('url: "tls://nats.example.com:7422"');
+    const first = out.indexOf(`url: "${EXTRA.url}"`);
+    const last = out.indexOf(`url: "${second.url}"`);
+    expect(own).toBeGreaterThan(-1);
+    expect(first).toBeGreaterThan(own);
+    expect(last).toBeGreaterThan(first);
+    expect(out).toContain(`credentials: "${EXTRA.credentials}"`);
+    expect(out).toContain(`account: ${EXTRA.account}`);
+    expect(out).toContain(`account: ${BINDING.account ?? ""}`);
+  });
+
+  test("re-render with the same inputs is byte-stable", () => {
+    expect(renderLeafIncludeFile(DESCRIPTOR, BINDING, [EXTRA])).toBe(
+      renderLeafIncludeFile(DESCRIPTOR, BINDING, [EXTRA]),
+    );
+  });
+
+  test("a malformed extra refuses the render with the entry named", () => {
+    const bad = (patch: Partial<ExtraLeafRemote>) => () =>
+      renderLeafIncludeFile(DESCRIPTOR, BINDING, [EXTRA, { ...EXTRA, ...patch }]);
+    expect(bad({ account: "UNOTANACCOUNT" })).toThrow("extra_leaf_remotes[1].account");
+    expect(bad({ account: `${EXTRA.account}\n}` })).toThrow("extra_leaf_remotes[1].account");
+    expect(bad({ url: "http://hub.example.org:7422" })).toThrow("extra_leaf_remotes[1].url");
+    expect(bad({ url: "tls://u:p@hub.example.org:7422" })).toThrow("userinfo");
+    expect(bad({ url: "tls://hub.example.org" })).toThrow("explicit port");
+    expect(bad({ credentials: "relative/extra-link.key" })).toThrow("absolute path");
+    expect(bad({ credentials: "/srv/a\nb.key" })).toThrow("absolute path");
+  });
+
+  test("the extras-only file holds the extras in one leafnodes block", () => {
+    const out = renderExtraRemotesIncludeFile([EXTRA]);
+    expect(out.match(/leafnodes \{/g)?.length).toBe(1);
+    expect(out).toContain(`url: "${EXTRA.url}"`);
+    expect(out).toContain(`account: ${EXTRA.account}`);
+    expect(renderExtraRemotesIncludeFile([EXTRA])).toBe(out);
+    expect(() => renderExtraRemotesIncludeFile([])).toThrow();
+    expect(EXTRA_REMOTES_INCLUDE_FILE).not.toMatch(/^leafnodes-[a-z][a-z0-9-]*\.conf$/);
+  });
+
+  test("the extras-only include directive is ensured idempotently and removed exactly", () => {
+    const base = "port: 4222\n";
+    const ensured = ensureExtraRemotesInclude(base);
+    expect(ensured).toBe(`port: 4222\ninclude "${EXTRA_REMOTES_INCLUDE_FILE}"\n`);
+    expect(ensureExtraRemotesInclude(ensured)).toBe(ensured);
+    expect(extraRemotesIncludePresent(ensured)).toBe(true);
+    expect(removeExtraRemotesInclude(ensured)).toBe(base);
+    expect(removeExtraRemotesInclude(base)).toBe(base);
   });
 });

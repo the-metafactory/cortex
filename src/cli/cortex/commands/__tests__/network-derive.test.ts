@@ -28,6 +28,7 @@ import {
   ownFederatedSubjectScopePrefix,
 } from "../../../../common/types/cortex-config";
 import { ownAcceptSubjects } from "../../../../bus/agent-network/accept-subjects";
+import { StackNatsInfraSchema } from "../../../../common/types/stack";
 
 // A minimal LoadedConfig stub — only the fields the deriver reads matter; the
 // `config` AgentConfig is never inspected by the deriver, so a bare cast keeps
@@ -102,6 +103,7 @@ describe("deriveJoinInputs — config-only (the one-liner)", () => {
       announceCapabilities: [],
       // cortex#1485 — FULL declares no networks, so the composed set is empty.
       policyNetworks: [],
+      extraLeafRemotes: [],
     });
   });
 
@@ -284,6 +286,7 @@ describe("deriveJoinInputs — flag overrides win", () => {
       announceCapabilities: [],
       // cortex#1485 — composed networks (none in FULL).
       policyNetworks: [],
+      extraLeafRemotes: [],
     });
   });
 
@@ -485,6 +488,7 @@ describe("deriveLeaveInputs", () => {
       registryUrl: "https://registry.meta-factory.ai",
       registryPubkey: "A".repeat(43) + "=",
       seedPath: "~/.config/nats/cortex.nk",
+      extraLeafRemotes: [],
     });
   });
 
@@ -1300,5 +1304,38 @@ describe("C-1436 — join own-scope principal converges with boot on config.prin
     expect(inputs.bootPrincipal).toBe("andreas");
     expect(inputs.principal).toBe("andreas");
     expect(inputs.bootPrincipal).toBe(deriveStackId(FULL).principal);
+  });
+});
+
+describe("#2743 extra leaf remotes derive from stack.nats_infra.extra_leaf_remotes", () => {
+  const EXTRA = {
+    url: "tls://hub.example.org:7422",
+    account: "A" + "C".repeat(55),
+    credentials: "~/extra-link.key",
+  };
+  const WITH_EXTRA = loaded({
+    ...FULL,
+    stack: {
+      ...FULL.stack!,
+      nats_infra: { ...FULL.stack!.nats_infra, extra_leaf_remotes: [EXTRA] },
+    },
+  });
+  const expected = [{ ...EXTRA, credentials: `${process.env.HOME ?? ""}/extra-link.key` }];
+
+  test("join and leave both carry the declared remotes with credentials tilde-expanded", () => {
+    const join = deriveJoinInputs("metafactory", {}, "/cfg", reader(WITH_EXTRA), "darwin");
+    expect(join.inputs?.extraLeafRemotes).toEqual(expected);
+    const leave = deriveLeaveInputs({}, "/cfg", reader(WITH_EXTRA), "darwin");
+    expect(leave.inputs?.extraLeafRemotes).toEqual(expected);
+  });
+
+  test("the stack schema accepts the declaration and rejects unknown keys or a bad account", () => {
+    expect(StackNatsInfraSchema.safeParse({ extra_leaf_remotes: [EXTRA] }).success).toBe(true);
+    expect(
+      StackNatsInfraSchema.safeParse({ extra_leaf_remotes: [{ ...EXTRA, subject: "x" }] }).success,
+    ).toBe(false);
+    expect(
+      StackNatsInfraSchema.safeParse({ extra_leaf_remotes: [{ ...EXTRA, account: "UBAD" }] }).success,
+    ).toBe(false);
   });
 });

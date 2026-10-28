@@ -40,7 +40,11 @@
 import type { LoadedConfig } from "../../../common/config/loader";
 import type { PolicyFederatedNetwork } from "../../../common/types/cortex-config";
 import type { ServicePlatform } from "../../../common/nats/nats-service-manager";
-import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
+import type {
+  ExtraLeafRemote,
+  OperatorModeLeafPackage,
+} from "../../../common/nats/leaf-remote-renderer";
+import { expandTilde } from "../../../common/config/loader";
 import { deriveStackId } from "../../../common/types/stack";
 import { resolveRegistryAnchor } from "./default-registry";
 // network-leaf-package import removed — ADR-0015 retired O-4b / hub-minted identity.
@@ -178,6 +182,7 @@ export interface DerivedJoinInputs {
    * the daemon loads, without re-reading the file. Empty when none are declared.
    */
   policyNetworks: PolicyFederatedNetwork[];
+  extraLeafRemotes: ExtraLeafRemote[];
 }
 
 /** The leave inputs — a strict subset (no registry / seed / account / creds). */
@@ -203,6 +208,17 @@ export interface DerivedLeaveInputs {
   registryUrl?: string;
   registryPubkey?: string;
   seedPath?: string;
+  extraLeafRemotes: ExtraLeafRemote[];
+}
+
+function deriveExtraLeafRemotes(
+  natsInfra: { extra_leaf_remotes?: ExtraLeafRemote[] | undefined } | undefined,
+): ExtraLeafRemote[] {
+  return (natsInfra?.extra_leaf_remotes ?? []).map((r) => ({
+    url: r.url,
+    account: r.account,
+    credentials: expandTilde(r.credentials),
+  }));
 }
 
 /** Flag overrides — any field present on the CLI wins over config/convention. */
@@ -576,6 +592,7 @@ export function deriveJoinInputs(
       announceCapabilities,
       // cortex#1485 — the composed networks, for the --guided handoff guard.
       policyNetworks: cfg.policy?.federated?.networks ?? [],
+      extraLeafRemotes: deriveExtraLeafRemotes(natsInfra),
     },
   };
 }
@@ -653,6 +670,7 @@ export function deriveLeaveInputs(
       ...(registryUrl !== undefined && registryUrl !== "" && { registryUrl }),
       ...(registryPubkey !== undefined && registryPubkey !== "" && { registryPubkey }),
       ...(seedPath !== undefined && seedPath !== "" && { seedPath }),
+      extraLeafRemotes: deriveExtraLeafRemotes(natsInfra),
     },
   };
 }

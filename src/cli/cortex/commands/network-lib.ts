@@ -52,7 +52,11 @@ import {
   INCONCLUSIVE_HEALTH_NOTICE,
   type ConfigValidationOutcome,
 } from "../../../common/nats/restart-with-settle";
-import type { OperatorModeLeafPackage } from "../../../common/nats/leaf-remote-renderer";
+import {
+  validateExtraLeafRemote,
+  type ExtraLeafRemote,
+  type OperatorModeLeafPackage,
+} from "../../../common/nats/leaf-remote-renderer";
 import { buildRosterPeers } from "../../../bus/agent-network/roster-read";
 import {
   ownAcceptSubjects,
@@ -61,6 +65,7 @@ import {
 
 import {
   brandVerified,
+  type LeafFilePort,
   type NetworkPorts,
   type LeafLinkState,
   type AdmissionStatePort,
@@ -152,6 +157,34 @@ export interface JoiningStack {
    * tracked as G1d (cortex#1117 follow-up).
    */
   agentsAccount?: string;
+  extraLeafRemotes?: readonly ExtraLeafRemote[];
+}
+
+/**
+ * #2743 — why the declared extra leaf remotes cannot be rendered, or
+ * `undefined` when every entry is well formed, names an account the stack's
+ * operator-mode config defines, and points at a creds file with no group or
+ * world access. A READ, identical in live and dry-run.
+ */
+export function extraLeafRemotesProblem(
+  extraRemotes: readonly ExtraLeafRemote[],
+  leafFile: Pick<LeafFilePort, "canBindAccount" | "extraRemoteCredsProblem">,
+): string | undefined {
+  for (const [index, remote] of extraRemotes.entries()) {
+    const where = `stack.nats_infra.extra_leaf_remotes[${index.toString()}]`;
+    try {
+      validateExtraLeafRemote(remote, index);
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    const bind = leafFile.canBindAccount(remote.account);
+    if (!bind.canBind) {
+      return `${where}.account cannot be bound: ${bind.reason ?? "the nats config does not define it"}`;
+    }
+    const creds = leafFile.extraRemoteCredsProblem(remote.credentials);
+    if (creds !== undefined) return `${where}.credentials: ${creds}`;
+  }
+  return undefined;
 }
 
 // =============================================================================
@@ -571,6 +604,16 @@ export async function joinNetwork(
     };
   }
 
+  const extraLeafRemotes = stack.extraLeafRemotes ?? [];
+  const extrasProblem = extraLeafRemotesProblem(extraLeafRemotes, ports.leafFile);
+  if (extrasProblem !== undefined) {
+    return {
+      ok: false,
+      steps,
+      reason: `refusing to render the leaf include — ${extrasProblem} (cortex#2743)`,
+    };
+  }
+
   // (b.7) #821 — SNAPSHOT the prior leaf state BEFORE any mutation, so a failed
   // nats-server restart (step e.1) can be rolled back to the exact pre-join
   // bytes. Captures the per-network include file + the base nats config. A READ.
@@ -597,6 +640,7 @@ export async function joinNetwork(
             ...(stack.credentials !== undefined && { credentials: stack.credentials }),
             ...(leafAccount !== undefined && { account: leafAccount }),
           },
+      ...(extraLeafRemotes.length > 0 && { extraRemotes: extraLeafRemotes }),
     });
   } catch (err) {
     return {
@@ -606,6 +650,11 @@ export async function joinNetwork(
     };
   }
   steps.push(`wrote leaf include for "${networkId}" (hub ${verified.hub_url})`);
+  if (extraLeafRemotes.length > 0) {
+    steps.push(
+      `kept ${extraLeafRemotes.length.toString()} declared extra leaf remote(s) in the include (cortex#2743)`,
+    );
+  }
 
   // The plist + config writes hit the live filesystem in the `--apply` adapter
   // (plist XML splice + stack YAML rewrite). A failure there (permission denied,
@@ -1111,6 +1160,7 @@ export function mergeNetwork(
 export async function leaveNetwork(
   networkId: string,
   ports: NetworkPorts,
+  extraLeafRemotes: readonly ExtraLeafRemote[] = [],
 ): Promise<LeaveResult> {
   const steps: string[] = [];
   const existing = ports.configStore.readNetworks();
@@ -1169,6 +1219,21 @@ export async function leaveNetwork(
     // Delete the leaf include file (idempotent).
     ports.leafFile.remove(networkId);
     steps.push(`deleted leaf include for "${networkId}"`);
+
+    const otherIncludes = ports.leafFile.list().filter((id) => id !== networkId);
+    if (extraLeafRemotes.length > 0 && otherIncludes.length === 0) {
+      const extrasProblem = extraLeafRemotesProblem(extraLeafRemotes, ports.leafFile);
+      if (extrasProblem === undefined) {
+        ports.leafFile.writeExtraRemotesOnly(extraLeafRemotes);
+        steps.push(
+          `kept ${extraLeafRemotes.length.toString()} declared extra leaf remote(s) in leafnodes.extra-remotes.conf (cortex#2743)`,
+        );
+      } else {
+        const warn = `declared extra leaf remotes were not kept — ${extrasProblem} (cortex#2743)`;
+        warnings.push(warn);
+        steps.push(`WARN: ${warn}`);
+      }
+    }
 
     // #801 — DO NOT touch the plist `-c <config>` arg. That config (e.g.
     // local.conf) is the BASE nats-server config; the per-network leaf remotes
