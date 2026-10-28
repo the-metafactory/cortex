@@ -37,8 +37,10 @@
  * said the FED account); the daemon's real publisher account (decoded from the
  * creds' `issuer_account`) was a THIRD account → leaf up, interest visible,
  * publishes never crossing. {@link decodeCredsIssuerAccount} decodes the NATS
- * user JWT embedded in the `.creds` file; {@link checkLeafAccountMatchesCreds}
- * compares it to the account the join would render.
+ * user JWT embedded in the `.creds` file; {@link decideLeafAccountGuard}
+ * compares it to the account the join would render. Since cortex#2760 a leaf
+ * creds file issued by another operator (the hub's) is not compared with the
+ * local account; the guard checks the daemon's own creds instead.
  */
 
 import { hasManagedLeafAuthorizationRegion } from "../../../common/nats/hub-leaf-authorization";
@@ -381,69 +383,110 @@ export function decodeCredsIssuerAccount(credsText: string): string | undefined 
   return typeof iss === "string" && iss.length > 0 ? iss : undefined;
 }
 
-/** The verdict of the leaf-account-vs-creds check. */
-export type LeafAccountCheck =
-  | {
-      /** The rendered leaf `account:` agrees with the creds' issuer_account. */
-      status: "match";
-      account: string;
-    }
-  | {
-      /** The rendered account and the creds' issuer_account DISAGREE — fatal:
-       *  the leaf would bind an account the daemon does not publish on. */
-      status: "mismatch";
-      renderedAccount: string;
-      credsAccount: string;
-    }
-  | {
-      /** Could not determine one side (no creds account decodable, or no
-       *  rendered account) — cannot verify; the caller degrades to a warn. */
-      status: "indeterminate";
-      reason: string;
-    };
+/** Guard 3's decision for one join: refuse with a reason, or proceed (with an
+ *  optional step line for the join log). */
+export type LeafAccountGuardDecision =
+  | { kind: "refuse"; reason: string }
+  | { kind: "proceed"; step?: string };
+
+/** A creds file Guard 3 inspected: its path, the decoded issuer account, and
+ *  whether the local nats config defines that account. */
+export interface InspectedCreds {
+  path: string;
+  account: string | undefined;
+  definedLocally: boolean;
+}
 
 /**
- * Guard 3 — compare the account the join would render into the leaf
- * (`renderedAccount`, from `nats_infra.account`) against the account the daemon
- * actually publishes on (`credsIssuerAccount`, decoded from the creds JWT). A
- * mismatch is FATAL: the leaf comes up, interest is visible, but publishes never
- * cross because the daemon publishes on a DIFFERENT account than the leaf binds.
+ * cortex#2760 — Guard 3's full decision rule. The leaf creds file authenticates
+ * the leaf to the HUB, so its issuer account is an account of the hub's
+ * operator. Two topologies follow:
  *
- * The comparison is exact-string on the account public key (nkey-U `A…`). We do
- * NOT decode-normalise here — both sides are already nkey-U account pubkeys in
- * this path (the config `account:` and the creds `issuer_account`), so a raw
- * inequality is a real divergence.
+ * 1. **Same operator** — the leaf creds' issuer account is defined in the local
+ *    nats config. This is the cortex#1728 case: the leaf binds `rendered` while
+ *    those creds publish on another local account, so publishes never cross.
+ *    Compare and refuse on a mismatch.
+ * 2. **Cross operator** — the issuer account is not defined locally, so it
+ *    belongs to another operator (the hub's). It can never equal the local
+ *    account the remote binds, and comparing them proves nothing. The guard
+ *    checks the DAEMON instead: the account its own creds (`nats.credsPath`)
+ *    publish on must be the leaf's local account, or the declared
+ *    `stack.nats_infra.agents_account` that provision bridges with the
+ *    `federated.>` export/import. Any other locally defined account refuses.
  *
- * `renderedAccount === undefined` (a $G/creds-only bus renders no `account:`
- * line) → `indeterminate` (there is nothing to mismatch; the creds JWT binds the
- * leaf on its own). `credsIssuerAccount === undefined` → `indeterminate` (a
- * secret-auth leaf carries no creds; or the creds JWT was undecodable).
+ * Undecodable creds, a daemon with no separate creds file, or a daemon account
+ * the local config does not define cannot be judged; those proceed with a note.
+ * A refusal never recommends binding the leaf to an account the local config
+ * does not define.
  */
-export function checkLeafAccountMatchesCreds(params: {
-  renderedAccount: string | undefined;
-  credsIssuerAccount: string | undefined;
-}): LeafAccountCheck {
-  const { renderedAccount, credsIssuerAccount } = params;
-  if (renderedAccount === undefined || renderedAccount.trim().length === 0) {
+export function decideLeafAccountGuard(params: {
+  rendered: string;
+  leafCreds: InspectedCreds;
+  daemonCreds: InspectedCreds | undefined;
+  agentsAccount: string | undefined;
+}): LeafAccountGuardDecision {
+  const { rendered, leafCreds, daemonCreds, agentsAccount } = params;
+  const tag = "(cortex#1728 Guard 3)";
+  if (leafCreds.account === undefined) return { kind: "proceed" };
+  if (leafCreds.definedLocally) {
+    if (leafCreds.account === rendered) {
+      return {
+        kind: "proceed",
+        step: `verified leaf account ${rendered} matches the leaf creds' issuer_account ${tag}`,
+      };
+    }
     return {
-      status: "indeterminate",
+      kind: "refuse",
       reason:
-        "no leaf account: line to render (a $G/default or secret-auth bus binds via the creds JWT / URL userinfo) — nothing to compare",
+        `refusing to render a leaf into account ${rendered} — the leaf creds (${leafCreds.path}) ` +
+        `publish on a DIFFERENT local account ${leafCreds.account} (decoded from the creds' ` +
+        `issuer_account). A leaf bound to one account while the creds publish on another comes up ` +
+        `with visible interest, but publishes never cross (out=0). Set stack.nats_infra.account to ` +
+        `${leafCreds.account} (defined in the local nats config), or wire a cross-account ` +
+        `export/import between them. ${tag}`,
     };
   }
-  if (credsIssuerAccount === undefined || credsIssuerAccount.trim().length === 0) {
+  const crossOperator =
+    `the leaf creds' issuer_account ${leafCreds.account} is not defined in the local nats config, ` +
+    `so the hub's operator issued them (a cross-operator leaf); the leaf binds local account ${rendered}`;
+  const daemon = daemonCreds;
+  if (daemon === undefined || daemon.path === leafCreds.path) {
     return {
-      status: "indeterminate",
-      reason:
-        "could not decode issuer_account from the daemon creds (no .creds JWT, a secret-auth leaf, or an undecodable creds file)",
+      kind: "proceed",
+      step: `${crossOperator}; no separate daemon creds (nats.credsPath) to check ${tag}`,
     };
   }
-  if (renderedAccount.trim() === credsIssuerAccount.trim()) {
-    return { status: "match", account: renderedAccount.trim() };
+  if (daemon.account === undefined || !daemon.definedLocally) {
+    return {
+      kind: "proceed",
+      step:
+        `${crossOperator}; could not resolve a local account from the daemon creds ` +
+        `(${daemon.path}) ${tag}`,
+    };
+  }
+  if (daemon.account === rendered) {
+    return {
+      kind: "proceed",
+      step: `${crossOperator}; the daemon publishes on the same account ${tag}`,
+    };
+  }
+  if (agentsAccount !== undefined && daemon.account === agentsAccount) {
+    return {
+      kind: "proceed",
+      step:
+        `${crossOperator}; the daemon publishes on agents_account ${agentsAccount}, which the ` +
+        `federated.> export/import bridges ${tag}`,
+    };
   }
   return {
-    status: "mismatch",
-    renderedAccount: renderedAccount.trim(),
-    credsAccount: credsIssuerAccount.trim(),
+    kind: "refuse",
+    reason:
+      `refusing to render a leaf into account ${rendered} — the daemon creds (${daemon.path}) publish ` +
+      `on a DIFFERENT local account ${daemon.account} (decoded from the creds' issuer_account), and ` +
+      `it is not the declared stack.nats_infra.agents_account. The leaf would come up with visible ` +
+      `interest, but publishes never cross (out=0). Either set stack.nats_infra.account to ` +
+      `${daemon.account}, or declare it as stack.nats_infra.agents_account and wire the federated.> ` +
+      `export/import (cortex network provision). The leaf creds' account ${leafCreds.account} belongs ` +
+      `to another operator and must not be bound locally. ${tag}`,
   };
 }

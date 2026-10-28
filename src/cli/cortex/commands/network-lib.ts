@@ -70,7 +70,7 @@ import {
   type LeafLinkState,
   type AdmissionStatePort,
 } from "./network-ports";
-import { checkLeafAccountMatchesCreds } from "./network-bus-safety";
+import { decideLeafAccountGuard, type InspectedCreds } from "./network-bus-safety";
 
 // =============================================================================
 // Identity of the joining stack — who "me" is on the wire.
@@ -158,6 +158,17 @@ export interface JoiningStack {
    */
   agentsAccount?: string;
   extraLeafRemotes?: readonly ExtraLeafRemote[];
+  /**
+   * cortex#2760 — where the DAEMON publishes from, read only by Guard 3.
+   * {@link JoiningStack.credentials} are the LEAF creds; on a cross-operator
+   * leaf the hub's operator issues them, so Guard 3 checks the daemon's own
+   * creds instead. `credentials` is the config's `nats.credsPath`;
+   * `agentsAccount` is `stack.nats_infra.agents_account`, the account the
+   * provisioned `federated.>` export/import bridges the leaf account to. This
+   * does not change the join's own export/import wiring
+   * ({@link JoiningStack.agentsAccount}).
+   */
+  daemonPublisher?: { credentials?: string; agentsAccount?: string };
 }
 
 /**
@@ -478,46 +489,39 @@ export async function joinNetwork(
     };
   }
 
-  // (b.5.3) cortex#1728 Guard 3 — the leaf's local `account:` MUST match the
-  // account the daemon actually PUBLISHES on (decoded from the creds'
-  // `issuer_account`). On the first live operator-mode join the config's
-  // `nats_infra.account` (the FED account) and the daemon's real publisher
-  // account (from `cortex.creds`) were a THIRD account apart → the leaf came up,
-  // interest was visible, but publishes NEVER crossed (out=0). Rendering a leaf
-  // into an account the daemon doesn't publish on is silently broken, so we
-  // HARD-ERROR on a decodable mismatch rather than render it. Only meaningful on
-  // the operator-mode path (`leafAccount !== undefined`); a $G/creds-only or
-  // secret-auth bus renders no `account:` line, so the check is indeterminate
-  // and skipped. A READ (identical in live + dry-run).
+  // (b.5.3) cortex#1728 Guard 3 — the leaf's local `account:` must match the
+  // account the stack really publishes on. On the first live operator-mode join
+  // the leaf bound the FED account while the creds published on a THIRD
+  // account: the leaf came up, interest was visible, publishes never crossed.
+  // cortex#2760 — the leaf creds authenticate to the HUB. When the local config
+  // does not define their issuer account, the hub's operator issued them and the
+  // comparison is meaningless; the guard then checks the daemon's own creds
+  // (`nats.credsPath`). See {@link decideLeafAccountGuard}. Only meaningful on
+  // the operator-mode path; a $G/creds-only or secret-auth bus renders no
+  // `account:` line. A READ (identical in live + dry-run).
   if (leafAccount !== undefined && hasCreds) {
-    const credsIssuerAccount = ports.leafFile.credsIssuerAccount(
-      stack.credentials ?? "",
-    );
-    const accountCheck = checkLeafAccountMatchesCreds({
-      renderedAccount: leafAccount,
-      credsIssuerAccount,
-    });
-    if (accountCheck.status === "mismatch") {
+    const inspect = (path: string): InspectedCreds => {
+      const account = ports.leafFile.credsIssuerAccount(path);
       return {
-        ok: false,
-        steps,
-        reason:
-          `refusing to render a leaf into account ${accountCheck.renderedAccount} — the daemon creds ` +
-          `(${stack.credentials}) publish on a DIFFERENT account ${accountCheck.credsAccount} ` +
-          `(decoded from the creds' issuer_account). A leaf bound to the config's account while the daemon ` +
-          `publishes on another means the leaf comes up and interest is visible but publishes never cross ` +
-          `(out=0). Set stack.nats_infra.account to ${accountCheck.credsAccount} (the daemon's real ` +
-          `publisher account), or wire a cross-account export/import between them. (cortex#1728 Guard 3)`,
+        path,
+        account,
+        definedLocally:
+          account !== undefined && ports.leafFile.canBindAccount(account).canBind,
       };
+    };
+    const daemonCredsPath = stack.daemonPublisher?.credentials;
+    const decision = decideLeafAccountGuard({
+      rendered: leafAccount,
+      leafCreds: inspect(stack.credentials ?? ""),
+      daemonCreds: daemonCredsPath === undefined ? undefined : inspect(daemonCredsPath),
+      agentsAccount: stack.daemonPublisher?.agentsAccount,
+    });
+    if (decision.kind === "refuse") {
+      return { ok: false, steps, reason: decision.reason };
     }
-    if (accountCheck.status === "match") {
-      steps.push(
-        `verified leaf account ${accountCheck.account} matches the daemon creds' issuer_account (cortex#1728 Guard 3)`,
-      );
-    }
-    // `indeterminate` (undecodable creds JWT) is non-fatal here: the #821
-    // creds-exist preflight below already refuses a genuinely absent/bad creds
-    // file, and a decodable-but-accountless JWT should not block a join.
+    if (decision.step !== undefined) steps.push(decision.step);
+    // Undecodable creds are non-fatal here: the #821 creds-exist preflight
+    // below already refuses a genuinely absent/bad creds file.
   }
 
   // (b.4) G1c (#1117, ADR-0013 sovereign model) — WIRE the local-side `federated.>`

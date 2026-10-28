@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  checkLeafAccountMatchesCreds,
+  decideLeafAccountGuard,
   decodeCredsIssuerAccount,
   parseProgramArguments,
   plistLoadsConfig,
@@ -14,6 +14,8 @@ import {
   scanForLeafnodeAuthorizationBomb,
   textHasLeafnodeAuthorizationUsers,
   type ConfigFileReader,
+  type InspectedCreds,
+  type LeafAccountGuardDecision,
   type ResolvedConfig,
 } from "../network-bus-safety";
 import { upsertHubLeafUser } from "../../../../common/nats/hub-leaf-authorization";
@@ -305,55 +307,70 @@ describe("Guard 3 — decodeCredsIssuerAccount", () => {
   });
 });
 
-describe("Guard 3 — checkLeafAccountMatchesCreds", () => {
-  test("match when rendered account equals creds issuer_account", () => {
-    const res = checkLeafAccountMatchesCreds({
-      renderedAccount: "AREALACCOUNT",
-      credsIssuerAccount: "AREALACCOUNT",
-    });
-    expect(res.status).toBe("match");
+describe("Guard 3 — decideLeafAccountGuard (cortex#1728, cortex#2760)", () => {
+  const FED = "AFEDACCOUNT";
+  const AGENTS = "AAGENTSACCOUNT";
+  const THIRD = "ATHIRDACCOUNT";
+  const HUB = "AHUBMEMBERACCOUNT";
+  const creds = (path: string, account: string | undefined, definedLocally: boolean): InspectedCreds => ({
+    path,
+    account,
+    definedLocally,
+  });
+  const localLeaf = (account: string | undefined) => creds("/tmp/leaf.creds", account, true);
+  const hubLeaf = creds("/tmp/leaf.creds", HUB, false);
+  const daemon = (account: string | undefined, definedLocally = true) =>
+    creds("/tmp/daemon.creds", account, definedLocally);
+  const decide = (leafCreds: InspectedCreds, daemonCreds?: InspectedCreds, agentsAccount?: string) =>
+    decideLeafAccountGuard({ rendered: FED, leafCreds, daemonCreds, agentsAccount });
+  const stepOf = (decision: LeafAccountGuardDecision): string =>
+    decision.kind === "proceed" ? (decision.step ?? "") : `REFUSED: ${decision.reason}`;
+  const reasonOf = (decision: LeafAccountGuardDecision): string =>
+    decision.kind === "refuse" ? decision.reason : "PROCEEDED";
+
+  test("same operator: leaf creds on the rendered account proceed with a match step", () => {
+    expect(stepOf(decide(localLeaf(FED)))).toContain("matches");
   });
 
-  test("MISMATCH when they differ (the third-account bug)", () => {
-    const res = checkLeafAccountMatchesCreds({
-      renderedAccount: "AFEDACCOUNT",
-      credsIssuerAccount: "AREALPUBLISHERACCOUNT",
-    });
-    expect(res.status).toBe("mismatch");
-    if (res.status === "mismatch") {
-      expect(res.renderedAccount).toBe("AFEDACCOUNT");
-      expect(res.credsAccount).toBe("AREALPUBLISHERACCOUNT");
-    }
+  test("same operator: leaf creds on another local account refuse (the #1728 third-account bug)", () => {
+    const reason = reasonOf(decide(localLeaf(THIRD), daemon(FED), THIRD));
+    expect(reason).toContain(`DIFFERENT local account ${THIRD}`);
+    expect(reason).toContain(`Set stack.nats_infra.account to ${THIRD}`);
   });
 
-  test("indeterminate when no rendered account (creds-only/$G or secret-auth bus)", () => {
-    expect(
-      checkLeafAccountMatchesCreds({
-        renderedAccount: undefined,
-        credsIssuerAccount: "AREALACCOUNT",
-      }).status,
-    ).toBe("indeterminate");
+  test("undecodable leaf creds proceed without a step", () => {
+    expect(decide(localLeaf(undefined), daemon(THIRD))).toEqual({ kind: "proceed" });
   });
 
-  test("indeterminate when creds account is undecodable", () => {
-    expect(
-      checkLeafAccountMatchesCreds({
-        renderedAccount: "AFEDACCOUNT",
-        credsIssuerAccount: undefined,
-      }).status,
-    ).toBe("indeterminate");
+  test("cross operator: hub-issued leaf creds are not compared; a daemon on agents_account proceeds", () => {
+    const step = stepOf(decide(hubLeaf, daemon(AGENTS), AGENTS));
+    expect(step).toContain("cross-operator");
+    expect(step).toContain("agents_account");
   });
 
-  test("end-to-end: decode a creds file then compare against a divergent rendered account", () => {
-    const creds = credsFileWith({
-      iss: "AISSUER",
-      nats: { issuer_account: "AREALACCOUNT" },
-    });
-    const credsAccount = decodeCredsIssuerAccount(creds);
-    const res = checkLeafAccountMatchesCreds({
-      renderedAccount: "ACONFIGSAIDFEDACCOUNT",
-      credsIssuerAccount: credsAccount,
-    });
-    expect(res.status).toBe("mismatch");
+  test("cross operator: a daemon on the leaf's own account proceeds", () => {
+    expect(stepOf(decide(hubLeaf, daemon(FED)))).toContain("the daemon publishes on the same account");
+  });
+
+  test("cross operator: a daemon on another local account refuses and never recommends the hub account", () => {
+    const reason = reasonOf(decide(hubLeaf, daemon(THIRD), AGENTS));
+    expect(reason).toContain(`DIFFERENT local account ${THIRD}`);
+    expect(reason).toContain(`set stack.nats_infra.account to ${THIRD}`);
+    expect(reason).not.toContain(`stack.nats_infra.account to ${HUB}`);
+  });
+
+  test("cross operator: no separate daemon creds proceeds with a note", () => {
+    expect(stepOf(decide(hubLeaf))).toContain("no separate daemon creds");
+    expect(stepOf(decide(hubLeaf, hubLeaf))).toContain("no separate daemon creds");
+  });
+
+  test("cross operator: daemon creds without a local account proceed with a note", () => {
+    expect(stepOf(decide(hubLeaf, daemon(undefined)))).toContain("could not resolve a local account");
+    expect(stepOf(decide(hubLeaf, daemon(THIRD, false)))).toContain("could not resolve a local account");
+  });
+
+  test("end-to-end: a decoded creds file on another local account refuses", () => {
+    const text = credsFileWith({ iss: "AISSUER", nats: { issuer_account: THIRD } });
+    expect(decide(localLeaf(decodeCredsIssuerAccount(text))).kind).toBe("refuse");
   });
 });

@@ -124,10 +124,17 @@ export const StackNatsInfraSchema = z.object({
     "stack.nats_infra.agents_account must be an account-class NKey (A-prefixed, 56 chars total)",
   ).optional(),
   /**
-   * Path to the leaf `.creds` file for the network connection. Maps to the
-   * `--creds` flag. OPTIONAL even within the block: when omitted, the join
-   * derives the convention default `~/.config/nats/<network>.creds`
-   * (per-network creds file). Declare here only to override the convention.
+   * Path to the LEAF `.creds` file for the network connection: the credential
+   * the leaf remote presents to the hub. Maps to the `--creds` flag. OPTIONAL
+   * even within the block: when omitted, the join derives the convention default
+   * `~/.config/nats/<network>.creds` (per-network creds file). Declare here only
+   * to override the convention.
+   *
+   * These are not the daemon's creds; the daemon connects with `nats.credsPath`.
+   * On a cross-operator leaf the hub's operator issues this file, so its issuer
+   * account is not a local account. `cortex network join` Guard 3 then checks
+   * the account of `nats.credsPath` against {@link StackNatsInfraSchema.shape.account}
+   * and {@link StackNatsInfraSchema.shape.agents_account} instead (cortex#2760).
    */
   creds_path: z.string().min(1).optional(),
   /**
