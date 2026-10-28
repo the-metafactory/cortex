@@ -163,12 +163,12 @@ export interface JoiningStack {
    * {@link JoiningStack.credentials} are the LEAF creds; on a cross-operator
    * leaf the hub's operator issues them, so Guard 3 checks the daemon's own
    * creds instead. `credentials` is the config's `nats.credsPath`;
-   * `agentsAccount` is `stack.nats_infra.agents_account`, the account the
-   * provisioned `federated.>` export/import bridges the leaf account to. This
-   * does not change the join's own export/import wiring
-   * ({@link JoiningStack.agentsAccount}).
+   * `bridgedAgentsAccount` is `stack.nats_infra.agents_account`, the account
+   * `network provision` bridges the leaf account to. Guard 3 reads it only;
+   * {@link JoiningStack.agentsAccount} drives the join's own wiring, which
+   * `runJoin` leaves unset.
    */
-  daemonPublisher?: { credentials?: string; agentsAccount?: string };
+  daemonPublisher?: { credentials?: string; bridgedAgentsAccount?: string };
 }
 
 /**
@@ -514,7 +514,7 @@ export async function joinNetwork(
       rendered: leafAccount,
       leafCreds: inspect(stack.credentials ?? ""),
       daemonCreds: daemonCredsPath === undefined ? undefined : inspect(daemonCredsPath),
-      agentsAccount: stack.daemonPublisher?.agentsAccount,
+      agentsAccount: stack.daemonPublisher?.bridgedAgentsAccount,
     });
     if (decision.kind === "refuse") {
       return { ok: false, steps, reason: decision.reason };

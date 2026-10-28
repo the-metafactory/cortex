@@ -19,6 +19,7 @@ import {
   type ResolvedConfig,
 } from "../network-bus-safety";
 import { upsertHubLeafUser } from "../../../../common/nats/hub-leaf-authorization";
+import { natsConfigCanBindAccount } from "../../../../common/nats/leaf-remote-renderer";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -369,6 +370,45 @@ describe("Guard 3 — decideLeafAccountGuard (cortex#1728, cortex#2760)", () => 
   test("cross operator: daemon creds without a local account proceed with a note", () => {
     expect(stepOf(decide(hubLeaf, daemon(undefined)))).toContain("could not resolve a local account");
     expect(stepOf(decide(hubLeaf, daemon(THIRD, false)))).toContain("could not resolve a local account");
+  });
+
+  describe("with the real local-account read over an operator-mode config", () => {
+    const key = (c: string) => "A" + c.repeat(55);
+    const [LOCAL_FED, LOCAL_AGENTS, LOCAL_OTHER, HUB_ACCOUNT] = [key("F"), key("G"), key("T"), key("H")];
+    const config = [
+      "operator: eyJoperator",
+      `system_account: ${key("S")}`,
+      "resolver: MEMORY",
+      "resolver_preload: {",
+      `  ${LOCAL_FED}: eyJfed`,
+      `  ${LOCAL_AGENTS}: eyJagents`,
+      `  ${LOCAL_OTHER}: eyJother`,
+      `  ${key("S")}: eyJsys`,
+      "}",
+    ].join("\n");
+    const inspectFile = (path: string, issuerAccount: string): InspectedCreds => {
+      const account = decodeCredsIssuerAccount(credsFileWith({ iss: "AISSUER", nats: { issuer_account: issuerAccount } }));
+      return { path, account, definedLocally: account !== undefined && natsConfigCanBindAccount(config, account).canBind };
+    };
+    const judge = (leafAccount: string, daemonAccount: string) =>
+      decideLeafAccountGuard({
+        rendered: LOCAL_FED,
+        leafCreds: inspectFile("/tmp/leaf.creds", leafAccount),
+        daemonCreds: inspectFile("/tmp/daemon.creds", daemonAccount),
+        agentsAccount: LOCAL_AGENTS,
+      });
+
+    test("hub-issued leaf creds with the daemon on agents_account proceed", () => {
+      expect(stepOf(judge(HUB_ACCOUNT, LOCAL_AGENTS))).toContain("cross-operator");
+    });
+
+    test("hub-issued leaf creds with the daemon on another local account refuse", () => {
+      expect(reasonOf(judge(HUB_ACCOUNT, LOCAL_OTHER))).toContain(`DIFFERENT local account ${LOCAL_OTHER}`);
+    });
+
+    test("leaf creds on another local account still refuse (#1728)", () => {
+      expect(reasonOf(judge(LOCAL_OTHER, LOCAL_FED))).toContain("the leaf creds");
+    });
   });
 
   test("end-to-end: a decoded creds file on another local account refuses", () => {

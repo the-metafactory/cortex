@@ -952,7 +952,7 @@ describe("join", () => {
           });
           const stack: JoiningStack = {
             ...LOCAL,
-            daemonPublisher: { credentials: DAEMON_CREDS, agentsAccount: AGENTS },
+            daemonPublisher: { credentials: DAEMON_CREDS, bridgedAgentsAccount: AGENTS },
           };
           const res = await joinNetwork("metafactory", stack, ports);
           expect(res.ok).toBe(true);
@@ -967,7 +967,7 @@ describe("join", () => {
           });
           const stack: JoiningStack = {
             ...LOCAL,
-            daemonPublisher: { credentials: DAEMON_CREDS, agentsAccount: AGENTS },
+            daemonPublisher: { credentials: DAEMON_CREDS, bridgedAgentsAccount: AGENTS },
           };
           const res = await joinNetwork("metafactory", stack, ports);
           expect(res.ok).toBe(false);

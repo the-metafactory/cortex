@@ -1295,7 +1295,7 @@ async function runJoin(
       ...(inputs.daemonCredsPath !== undefined && {
         credentials: expandTilde(inputs.daemonCredsPath),
       }),
-      ...(inputs.agentsAccount !== undefined && { agentsAccount: inputs.agentsAccount }),
+      ...(inputs.agentsAccount !== undefined && { bridgedAgentsAccount: inputs.agentsAccount }),
     },
   };
 
