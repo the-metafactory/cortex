@@ -34,23 +34,21 @@ async function waitFor(pred: () => boolean, ms: number): Promise<boolean> {
   return pred();
 }
 
+function readLog(logPath: string): string {
+  return existsSync(logPath) ? readFileSync(logPath, "utf-8") : "";
+}
+
 async function start(conf: string): Promise<{ exited: boolean; log: string }> {
   const logPath = `${conf}.log`;
   const proc = Bun.spawn([natsServer!, "-c", conf, "-l", logPath], { stdout: "ignore", stderr: "pipe" });
-  const ready = await waitFor(() => {
-    try {
-      return readFileSync(logPath, "utf-8").includes("Server is ready");
-    } catch {
-      return false;
-    }
-  }, 3000);
+  const ready = await waitFor(() => readLog(logPath).includes("Server is ready"), 3000);
   const exited = !ready && (await Promise.race([proc.exited.then(() => true), Bun.sleep(500).then(() => false)]));
   const stderr = exited ? await new Response(proc.stderr).text() : "";
   if (!exited) {
     proc.kill();
     await proc.exited;
   }
-  return { exited, log: stderr + (existsSync(logPath) ? readFileSync(logPath, "utf-8") : "") };
+  return { exited, log: stderr + readLog(logPath) };
 }
 
 function guardFlags(conf: string): boolean {
@@ -91,13 +89,7 @@ describe.skipIf(natsServer === null)("cortex#2747 — real nats-server in operat
     const logPath = `${conf}.log`;
     const proc = Bun.spawn([natsServer!, "-c", conf, "-l", logPath], { stdout: "ignore", stderr: "ignore" });
     try {
-      const log = () => {
-        try {
-          return readFileSync(logPath, "utf-8");
-        } catch {
-          return "";
-        }
-      };
+      const log = () => readLog(logPath);
       expect(await waitFor(() => log().includes("Server is ready"), 3000)).toBe(true);
       writeFileSync(conf, base + upsertHubLeafUser("leafnodes {\n}\n", "alice", "PSK"));
       proc.kill("SIGHUP");
