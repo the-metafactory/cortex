@@ -786,6 +786,7 @@ export async function joinNetwork(
   }
 
   const entry: PolicyFederatedNetwork = {
+    ...priorEntry,
     id: networkId,
     leaf_node: stack.leafNode ?? networkId,
     peers,

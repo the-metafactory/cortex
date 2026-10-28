@@ -30,7 +30,8 @@ import {
   rmSync,
 } from "fs";
 import { dirname } from "path";
-import { parse as parseYaml, parseDocument } from "yaml";
+import { isDeepStrictEqual } from "util";
+import { isMap, isNode, isScalar, isSeq, parse as parseYaml, parseDocument, type Document, type YAMLMap } from "yaml";
 import { validateConfigLoads } from "../../../common/config/validate-on-write";
 import {
   PolicyFederatedNetworkSchema,
@@ -128,7 +129,7 @@ export function writeNetworksGuarded(
   const enforceWholeConfig =
     opts.validateComposePath !== undefined && validateConfigLoads(opts.validateComposePath).ok;
   const doc = parseDocument(originalText ?? "");
-  doc.setIn(["policy", "federated", "networks"], networks);
+  setNetworksKeepingNodes(doc, networks);
   const nextText = doc.toString();
   mkdirSync(dirname(path), { recursive: true });
 
@@ -199,5 +200,42 @@ export function writeNetworksGuarded(
   // otherwise leave it group/world-readable).
   if (networks.some((n) => n.payload_key !== undefined)) {
     chmodSync(path, 0o600);
+  }
+}
+
+const NETWORKS_PATH = ["policy", "federated", "networks"] as const;
+
+function setNetworksKeepingNodes(doc: Document, networks: readonly PolicyFederatedNetwork[]): void {
+  const current = doc.getIn(NETWORKS_PATH, true);
+  if (!isSeq(current)) {
+    doc.setIn(NETWORKS_PATH, networks);
+    return;
+  }
+  const byId = new Map<string, YAMLMap>();
+  for (const item of current.items) {
+    if (!isMap(item)) continue;
+    const id = item.get("id");
+    if (typeof id === "string" && !byId.has(id)) byId.set(id, item);
+  }
+  current.items = networks.map((next) => {
+    const node = byId.get(next.id);
+    if (node === undefined) return doc.createNode(next);
+    byId.delete(next.id);
+    updateMapInPlace(doc, node, next);
+    return node;
+  });
+}
+
+function updateMapInPlace(doc: Document, node: YAMLMap, next: Readonly<Record<string, unknown>>): void {
+  for (const pair of [...node.items]) {
+    const key: unknown = isScalar(pair.key) ? pair.key.value : pair.key;
+    if (typeof key === "string" && next[key] === undefined) node.delete(key);
+  }
+  for (const [key, value] of Object.entries(next)) {
+    if (value === undefined) continue;
+    const held: unknown = node.get(key, true);
+    const heldValue: unknown = isNode(held) ? held.toJS(doc) : held;
+    if (held !== undefined && isDeepStrictEqual(heldValue, value)) continue;
+    node.set(key, doc.createNode(value));
   }
 }
