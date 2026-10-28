@@ -16,6 +16,7 @@ import {
   type ConfigFileReader,
   type ResolvedConfig,
 } from "../network-bus-safety";
+import { upsertHubLeafUser } from "../../../../common/nats/hub-leaf-authorization";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -164,6 +165,38 @@ describe("Guard 1 — leafnode authorization crash bomb", () => {
       files: [{ path: "/etc/nats/local.conf", text: LEAFNODE_AUTH_BOMB }],
     };
     expect(scanForLeafnodeAuthorizationBomb(resolved)).toHaveLength(0);
+  });
+
+  test.each([
+    ["no listen port", ""],
+    ["a listen port", "  listen: 127.0.0.1:7422\n"],
+    ["only remotes", '  remotes: [ { url: "nats://127.0.0.1:7422" } ]\n'],
+  ])("FAILS on the cortex-managed block with %s", (_label, extra) => {
+    const conf = upsertHubLeafUser(`leafnodes {\n${extra}}\n`, "alice", "PSK");
+    const bombs = scanForLeafnodeAuthorizationBomb({
+      files: [{ path: "/etc/nats/local.conf", text: `${OPERATOR_STANZA}\n${conf}` }],
+    });
+    expect(bombs).toHaveLength(1);
+  });
+
+  test("the fix for a cortex-managed block names the owning tool and how to stop it recurring", () => {
+    const conf = upsertHubLeafUser("leafnodes {\n}\n", "alice", "PSK");
+    const [bomb] = scanForLeafnodeAuthorizationBomb({
+      files: [{ path: "/etc/nats/local.conf", text: `${OPERATOR_STANZA}\n${conf}` }],
+    });
+    expect(bomb?.fix).toContain("cortex network secret add-member");
+    expect(bomb?.fix).toContain("# >>> cortex-managed leaf authorization");
+    expect(bomb?.fix).toContain("hub_mode: operator");
+    expect(bomb?.fix).toContain("whether or not `leafnodes` has a `listen` port");
+    expect(bomb?.fix).not.toContain("pre-#1491");
+  });
+
+  test("the fix for a hand-written block does not blame the secret tooling", () => {
+    const [bomb] = scanForLeafnodeAuthorizationBomb({
+      files: [{ path: "/etc/nats/local.conf", text: `${OPERATOR_STANZA}\n${LEAFNODE_AUTH_BOMB}` }],
+    });
+    expect(bomb?.fix).not.toContain("add-member");
+    expect(bomb?.fix).toContain("hand-written or pre-#1491");
   });
 
   test("is SILENT on a clean operator-mode bus", () => {

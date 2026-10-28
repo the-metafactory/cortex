@@ -393,3 +393,23 @@ describe("buildLiveHubLocalityPort (via buildLiveSecretPorts)", () => {
     expect(resolverCalled).toBe(false);
   });
 });
+
+describe("cortex#2747 — hub isOperatorMode follows includes", () => {
+  const hubPort = () =>
+    buildLiveSecretPorts({ hubConfigPath: hubConf, registryUrl: "http://127.0.0.1:0", material: material() }).hub;
+
+  test("a plain leafnodes hub is not operator-mode", async () => {
+    expect(await hubPort().isOperatorMode()).toBe(false);
+  });
+
+  test("an operator stanza in an included file makes the hub operator-mode", async () => {
+    writeFileSync(join(tmp, "resolver.conf"), 'operator: "<operator-jwt>"\nresolver: MEMORY\n');
+    writeFileSync(hubConf, 'include "resolver.conf"\nleafnodes {\n  listen: 0.0.0.0:7422\n}\n');
+    expect(await hubPort().isOperatorMode()).toBe(true);
+  });
+
+  test("a missing hub config rejects like readConf", async () => {
+    rmSync(hubConf);
+    await expect(hubPort().isOperatorMode()).rejects.toThrow("hub config not found");
+  });
+});

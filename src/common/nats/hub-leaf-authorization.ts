@@ -51,6 +51,15 @@ const MANAGED_START =
   "# >>> cortex-managed leaf authorization (network secret tooling) — do not hand-edit";
 const MANAGED_END = "# <<< cortex-managed leaf authorization";
 
+/**
+ * True iff `conf` carries the cortex-managed leaf authorization region (both
+ * markers, start before end). The join/doctor crash-bomb guard uses it to name
+ * the tool that wrote a block it refuses (cortex#2747).
+ */
+export function hasManagedLeafAuthorizationRegion(conf: string): boolean {
+  return extractManagedRegion(conf) !== undefined;
+}
+
 /** One hub leaf-authorization user entry. */
 export interface HubLeafUser {
   user: string;

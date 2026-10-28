@@ -31,6 +31,7 @@ import type {
 } from "../network-secret-ports";
 import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
 import { listHubLeafUsers } from "../../../../common/nats/hub-leaf-authorization";
+import { isOperatorModeConfig } from "../network-bus-safety";
 
 interface Recorder {
   ports: NetworkSecretPorts;
@@ -87,6 +88,7 @@ function makePorts(opts: {
     hub: {
       confPath: "/fake/hub.conf",
       readConf: async () => hubConf.text,
+      isOperatorMode: async () => isOperatorModeConfig(hubConf.text),
       writeConf: async (text: string) => {
         hubConf.text = text;
         writes.push(text);
@@ -644,6 +646,35 @@ describe("dry-run (default) + guards", () => {
     expect(report.ok).toBe(false);
     expect(r.writes.length).toBe(0);
     expect(r.posted.length).toBe(0);
+  });
+});
+
+describe("cortex#2747 — PSK path refuses an operator-mode local hub", () => {
+  const OPERATOR_HUB = 'operator: "<operator-jwt>"\nresolver: MEMORY\nleafnodes {\n  listen: 0.0.0.0:7422\n}\n';
+
+  for (const action of ["add-member", "rotate"] as const) {
+    for (const apply of [true, false]) {
+      test(`${action} (${apply ? "apply" : "dry-run"}) refuses before any write, reload or delivery`, async () => {
+        const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" }, startConf: OPERATOR_HUB });
+        const report = await runNetworkSecret(inputs({ action, apply }), r.ports);
+        expect(report.ok).toBe(false);
+        expect(report.reason).toContain("operator-mode");
+        expect(report.reason).toContain("hub_mode: operator");
+        expect(r.hubConf.text).toBe(OPERATOR_HUB);
+        expect(r.writes.length).toBe(0);
+        expect(r.reloads).toBe(0);
+        expect(r.posted.length).toBe(0);
+        expect(r.minted.length).toBe(0);
+      });
+    }
+  }
+
+  test("--seal-only (external) never reads the local hub, so it still seals", async () => {
+    const r = makePorts({ admitted: { request_id: "req1", principal_id: "alice" }, startConf: OPERATOR_HUB });
+    const report = await runNetworkSecret(inputs({ sealOnly: true }), r.ports);
+    expect(report.ok).toBe(true);
+    expect(r.writes.length).toBe(0);
+    expect(r.posted.length).toBe(1);
   });
 });
 

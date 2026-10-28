@@ -41,6 +41,7 @@ import type {
   PlistPort,
 } from "../../network-ports";
 import type { PolicyFederatedNetwork } from "../../../../../common/types/cortex-config";
+import { isOperatorModeConfig } from "../../network-bus-safety";
 
 export type { Env };
 
@@ -137,6 +138,9 @@ export function makeRecordingHubPort(initialConf = ""): RecordingHubPort {
     conf: initialConf,
     readConf(): Promise<string> {
       return Promise.resolve(port.conf);
+    },
+    isOperatorMode(): Promise<boolean> {
+      return Promise.resolve(isOperatorModeConfig(port.conf));
     },
     writeConf(text: string): Promise<void> {
       port.conf = text;

@@ -43,6 +43,7 @@ import { hostname as osHostname, networkInterfaces as osNetworkInterfaces } from
 import { lookup as dnsLookup } from "dns/promises";
 
 import { expandTilde } from "../../../common/config/loader";
+import { isOperatorModeConfig, resolveConfigIncludes } from "./network-bus-safety";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
 import { sealToPrincipal } from "../../../common/crypto/seal-to-principal";
 import { mintLeafPsk } from "../../../common/nats/leaf-psk";
@@ -202,13 +203,22 @@ function buildLiveHubAuthPort(cfg: LiveSecretPortsConfig): HubAuthPort {
   const psLister = cfg.psLister ?? bunNatsProcessLister;
   const inspectProcess = cfg.inspect ?? bunNatsProcessInspector;
   const sendSignal = cfg.signal ?? bunSignalSender;
+  const missingConf = (): Promise<never> =>
+    Promise.reject(new Error(`hub config not found at ${confPath} (set --hub-config)`));
   return {
     confPath,
     readConf(): Promise<string> {
-      if (!existsSync(confPath)) {
-        return Promise.reject(new Error(`hub config not found at ${confPath} (set --hub-config)`));
-      }
+      if (!existsSync(confPath)) return missingConf();
       return Promise.resolve(readFileSync(confPath, "utf-8"));
+    },
+    isOperatorMode(): Promise<boolean> {
+      if (!existsSync(confPath)) return missingConf();
+      const resolved = resolveConfigIncludes(confPath, {
+        read: (p) => (existsSync(p) ? readFileSync(p, "utf-8") : undefined),
+        dirname: pathDirname,
+        join: joinPath,
+      });
+      return Promise.resolve(isOperatorModeConfig(resolved.files.map((f) => f.text).join("\n")));
     },
     writeConf(text: string): Promise<void> {
       // The hub config now carries leaf SECRETS, so it is a secret-at-rest.

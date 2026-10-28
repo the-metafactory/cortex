@@ -29,6 +29,7 @@ import type {
 import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
 import type { FetchSealedLeafSecretInput } from "../../../../common/registry/fetch-sealed-secret";
 import { FAKE_CREDS } from "../../../../common/registry/__tests__/fixtures";
+import { isOperatorModeConfig } from "../network-bus-safety";
 
 let tmp: string;
 let seedPath: string;
@@ -97,6 +98,7 @@ function fakeFactory(opts: {
     hub: {
       confPath: "/fake/hub.conf",
       readConf: async () => { calls.reads += 1; return conf.text; },
+      isOperatorMode: async () => isOperatorModeConfig(conf.text),
       writeConf: async (t: string) => { conf.text = t; calls.writes.push(t); },
       reload: async () => { calls.reloads += 1; },
     },
