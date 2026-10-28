@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * Cortex Path Guard — PreToolUse hook for the file tools (Read/Write/Edit/
- * Glob/Grep/NotebookEdit) in cortex sessions (EBH-1, cortex#2343, F1/F6).
+ * Glob/Grep/NotebookEdit) in cortex sessions (EBH-1, cortex#2343, R1-F1/R1-F6).
  *
  * ## Why this exists
  *
@@ -10,7 +10,7 @@
  * `--add-dir` (an ADDITIVE grant, not a deny) plus the natural-language
  * `FILESYSTEM RESTRICTION` / `READ-ONLY RESTRICTION` rules in
  * `security-preamble.ts`, which an injected instruction can simply ask the
- * model to ignore (docs/design-session-sandbox.md §1, F1/F6). This hook is
+ * model to ignore (docs/design-session-sandbox.md §1, R1-F1/R1-F6). This hook is
  * the deterministic Tier-0 guard that design spec commissions for the file
  * tools; `bash-guard.hook.ts`'s new path checks (cortex#2343 step 3) cover
  * the equivalent Bash read-command surface.
@@ -52,7 +52,7 @@
  * RESTRICTION prose even appears); this hook makes that SAME contract real
  * instead of advisory, it does not change WHEN restriction applies. A
  * MALFORMED `CORTEX_PATH_GUARD` is a genuine failure, not "empty" — DENY.
- * "Malformed" is checked at TWO levels (cortex#2359 round 2 finding F2):
+ * "Malformed" is checked at TWO levels (cortex#2341 round 2 finding R2-F2, docs/security/reviews/2026-07-26-nws-round-2.md):
  * present-but-not-parseable-JSON / not-an-object (as before), AND — new —
  * present-but-wrong-shape on a per-field basis: `allowedDirs`/`readOnlyDirs`
  * that ARE PRESENT in the parsed object but are not themselves an array of
@@ -203,7 +203,7 @@ export interface DirsFieldValidation {
 /**
  * Validate ONE `CORTEX_PATH_GUARD` field (`allowedDirs` or `readOnlyDirs`)
  * that is expected to be an array of strings, distinguishing three cases
- * (cortex#2359 round 2 finding F2):
+ * (cortex#2341 round 2 finding R2-F2, docs/security/reviews/2026-07-26-nws-round-2.md):
  *
  *   - ABSENT from the parsed object entirely (`key in obj` is false) — a
  *     LEGITIMATE "nothing configured on this axis" — `ok:true, value:[]`.
@@ -211,7 +211,7 @@ export interface DirsFieldValidation {
  *     only way to be "absent" is to not appear in the object at all.
  *   - PRESENT but not an array, OR an array containing a non-string element
  *     — a config-SHAPE MISTAKE (e.g. a bare string where an array was
- *     required, cortex#2359's exact repro
+ *     required, R2-F2's exact repro
  *     `{"allowedDirs":"/repo","readOnlyDirs":[]}`) — `ok:false`. The OLD
  *     behavior silently coerced this to `[]` (see the module doc's git
  *     history / PR description), which combined with an already-empty
@@ -542,8 +542,8 @@ export interface PathDecision {
  * takes no other state, so it's directly unit-testable against a real
  * temp-dir fixture. Exported for unit tests.
  *
- * `inAllowed` and `inReadOnly` are computed INDEPENDENTLY — cortex#2359
- * round 2 finding F1. The prior `!inAllowed &&` guard on `inReadOnly` made
+ * `inAllowed` and `inReadOnly` are computed INDEPENDENTLY — cortex#2341
+ * round 2 finding R2-F1 (docs/security/reviews/2026-07-26-nws-round-2.md). The prior `!inAllowed &&` guard on `inReadOnly` made
  * read-only membership STRUCTURALLY UNREACHABLE for any path also contained
  * in an `allowedDirs` entry, so a `readOnlyDirs` entry nested inside a
  * broader `allowedDirs` entry (e.g. `allowedDirs:["/repo"],
@@ -575,7 +575,7 @@ export function decidePath(toolName: string, absPath: string, policy: PathGuardP
       allow: false,
       reason:
         `[Cortex Path Guard] Blocked ${toolName} "${absPath}": this path is inside a ` +
-        `READ-ONLY directory — writes are refused (closes F6, docs/security/reviews/` +
+        `READ-ONLY directory — writes are refused (closes R1-F6, docs/security/reviews/` +
         `2026-07-23-nws-security-review.md). Reads remain permitted.`,
     };
   }
