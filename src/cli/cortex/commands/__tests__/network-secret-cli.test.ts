@@ -17,6 +17,7 @@ import {
   __setJoinLeafSecretFetcherForTests,
   __setLeafCredsInstallDirForTests,
   __setDiscordRemoveClientForTests,
+  resolveJoinLeafAuth,
   type SecretPortsFactory,
   type KeyRotationPortsFactory,
   type DiscordRemoveClient,
@@ -29,6 +30,7 @@ import type {
 import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
 import type { FetchSealedLeafSecretInput } from "../../../../common/registry/fetch-sealed-secret";
 import { FAKE_CREDS } from "../../../../common/registry/__tests__/fixtures";
+import { decodeLeafSecretEnvelope } from "../../../../common/registry/sealed-leaf-secret";
 import { isOperatorModeConfig } from "../network-bus-safety";
 
 let tmp: string;
@@ -793,6 +795,18 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     return seen;
   }
 
+  const FAKE_PAYLOAD_KEY = Buffer.alloc(32, 2).toString("base64");
+
+  function writeCredsFile(name: string): string {
+    const p = join(tmp, `${name}.creds`);
+    writeFileSync(p, FAKE_CREDS, { mode: 0o600 });
+    return p;
+  }
+
+  function joinInputs(seed: string): { seedPath: string; registryUrl: string; principal: string } {
+    return { seedPath: seed, registryUrl: "http://127.0.0.1:0", principal: "andreas" };
+  }
+
   async function joinWithCredsFile(name: string, config: never): Promise<{ stderr: string; credsPath: string }> {
     const credsPath = join(tmp, `${name}.creds`);
     writeFileSync(credsPath, FAKE_CREDS, { mode: 0o600 });
@@ -800,14 +814,121 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     return { stderr: res.stderr, credsPath };
   }
 
-  test("operator network + usable creds file → the sealed secret is neither fetched nor opened", async () => {
-    const fetcher = unopenableSealedSecret();
+  test("operator network + usable creds file → the envelope is opened for K only; the leaf credential in it is ignored", async () => {
+    const installDir = join(tmp, "nats-install-2759");
+    __setLeafCredsInstallDirForTests(installDir);
+    let called = false;
+    __setJoinLeafSecretFetcherForTests(async () => {
+      called = true;
+      return { ok: true, kind: "creds", creds: FAKE_CREDS, leafUser: "andreas/default", mintedAt: "2026-07-06T00:00:00Z", payloadKey: FAKE_PAYLOAD_KEY, payloadKeyKid: "metafactory/k1" };
+    });
     const { stderr, credsPath } = await joinWithCredsFile("self-managed-leaf", operatorModeConfig);
 
-    expect(fetcher.called).toBe(false);
+    expect(called).toBe(true);
     expect(stderr).toContain("operator-mode network");
     expect(stderr).toContain(credsPath);
+    expect(stderr).toContain("only for the payload key K");
+    expect(stderr).not.toContain("was not refreshed");
     expect(stderr).not.toContain("could not open it");
+    expect(stderr).not.toContain(FAKE_PAYLOAD_KEY);
+    expect(existsSync(join(installDir, "metafactory-leaf.creds"))).toBe(false);
+  });
+
+  test("resolveJoinLeafAuth on a creds-managed operator network → K from the envelope, leaf from the creds file (cortex#2759)", async () => {
+    __setLeafCredsInstallDirForTests(join(tmp, "nats-install-2759b"));
+    __setJoinLeafSecretFetcherForTests(async () => ({
+      ok: true, kind: "psk", leafPsk: "STALE-PSK", leafUser: "andreas", payloadKey: FAKE_PAYLOAD_KEY, payloadKeyKid: "metafactory/k1",
+    }));
+    const credsPath = writeCredsFile("resolve-k");
+    const res = await withHome(home, () => resolveJoinLeafAuth("metafactory", joinInputs(writeJoinerSeed("resolve-k.seed")), {
+      hubMode: "operator", credsPath, expectedLeafUsers: ["andreas/default", "andreas"],
+    }));
+
+    expect(res.credsPath).toBe(credsPath);
+    expect(res.leafSecret).toBeUndefined();
+    expect(res.payloadKey).toBe(FAKE_PAYLOAD_KEY);
+    expect(res.payloadKeyKid).toBe("metafactory/k1");
+  });
+
+  test("resolveJoinLeafAuth on a creds-managed operator network + unopenable envelope → warns K not refreshed, still resolves the creds leaf", async () => {
+    __setLeafCredsInstallDirForTests(join(tmp, "nats-install-2759c"));
+    const fetcher = unopenableSealedSecret();
+    const credsPath = writeCredsFile("resolve-no-k");
+    const res = await withHome(home, () => resolveJoinLeafAuth("metafactory", joinInputs(writeJoinerSeed("resolve-no-k.seed")), {
+      hubMode: "operator", credsPath, expectedLeafUsers: ["andreas/default"],
+    }));
+
+    expect(fetcher.called).toBe(true);
+    expect(res.credsPath).toBe(credsPath);
+    expect(res.payloadKey).toBeUndefined();
+    expect(res.notice).toContain("WARNING");
+    expect(res.notice).toContain("was not refreshed");
+    expect(res.notice).toContain("sealed to another key");
+  });
+
+  test("resolveJoinLeafAuth on a creds-managed operator network with no stack seed → warns K not refreshed", async () => {
+    __setLeafCredsInstallDirForTests(join(tmp, "nats-install-2759d"));
+    const fetcher = unopenableSealedSecret();
+    const credsPath = writeCredsFile("resolve-no-seed");
+    const res = await withHome(home, () => resolveJoinLeafAuth("metafactory", joinInputs(join(tmp, "missing.seed")), {
+      hubMode: "operator", credsPath, expectedLeafUsers: ["andreas/default"],
+    }));
+
+    expect(fetcher.called).toBe(false);
+    expect(res.credsPath).toBe(credsPath);
+    expect(res.payloadKey).toBeUndefined();
+    expect(res.notice).toContain("was not refreshed");
+  });
+
+  test("rotate-key then re-join → a creds-managed operator member ends up with the new K′ and kid (cortex#2759)", async () => {
+    const memberPubkey = fakePubkey("3");
+    const { factory, calls } = fakeRotationFactory({
+      admitted: [{ request_id: "req-andreas", principal_id: "andreas", peer_pubkey: memberPubkey }],
+      hubUsers: [{ user: "andreas", psk: "PSK-andreas" }],
+      networks: [encNet()],
+    });
+    const rotated = await dn(
+      argv("secret", "rotate-key", "metafactory", "--apply", "--admin-seed", seedPath),
+      undefined, undefined, undefined, undefined, undefined, factory,
+    );
+    expect(rotated.exitCode).toBe(0);
+    expect(calls.posted.length).toBe(1);
+
+    const blob = calls.posted[0]!.blob;
+    const plaintext = blob.slice(blob.indexOf(":") + 1, -1);
+    __setJoinLeafSecretFetcherForTests(async () => {
+      const env = decodeLeafSecretEnvelope(plaintext);
+      return {
+        ok: true, kind: "psk", leafPsk: env.leaf_psk, leafUser: env.leaf_user,
+        ...(env.payload_key !== undefined && { payloadKey: env.payload_key }),
+        ...(env.payload_key_kid !== undefined && { payloadKeyKid: env.payload_key_kid }),
+      };
+    });
+    __setLeafCredsInstallDirForTests(join(tmp, "nats-install-2759e"));
+    const credsPath = writeCredsFile("rotated-member");
+    const res = await withHome(home, () => resolveJoinLeafAuth("metafactory", joinInputs(writeJoinerSeed("rotated.seed")), {
+      hubMode: "operator", credsPath, expectedLeafUsers: ["andreas/default", "andreas"],
+    }));
+
+    expect(res.payloadKey).toBe(K_PRIME_B64);
+    expect(res.payloadKeyKid).toBe("metafactory/k2");
+    expect(res.credsPath).toBe(credsPath);
+    expect(res.leafSecret).toBeUndefined();
+  });
+
+  test("PSK (unattested) network → resolveJoinLeafAuth still takes the leaf secret and K from the envelope", async () => {
+    __setJoinLeafSecretFetcherForTests(async () => ({
+      ok: true, kind: "psk", leafPsk: "ENV-PSK", leafUser: "andreas", payloadKey: FAKE_PAYLOAD_KEY, payloadKeyKid: "metafactory/k1",
+    }));
+    const credsPath = writeCredsFile("psk-resolve");
+    const res = await withHome(home, () => resolveJoinLeafAuth("metafactory", joinInputs(writeJoinerSeed("psk-resolve.seed")), {
+      hubMode: undefined, credsPath, expectedLeafUsers: ["andreas"],
+    }));
+
+    expect(res.leafSecret).toBe("ENV-PSK");
+    expect(res.leafUser).toBe("andreas");
+    expect(res.payloadKey).toBe(FAKE_PAYLOAD_KEY);
+    expect(res.notice).toBeUndefined();
   });
 
   test("operator network + unopenable sealed secret and no self-managed creds → warns and continues, no sealed-secret refusal", async () => {
