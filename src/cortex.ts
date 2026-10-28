@@ -78,6 +78,8 @@ import { BusDispatchListener } from "./bus/bus-dispatch-listener";
 import { DID_RE } from "@the-metafactory/myelin/identity";
 import { createSurfaceRouter, type SurfaceRouter } from "./bus/surface-router";
 import { createRunLedgerFunnel } from "./bus/run-ledger-funnel";
+import { ledgerArchiveDir, startLedgerArchive, type LedgerArchiveHandle } from "./bus/jetstream/ledger-archive";
+import { provisionLedgerStream } from "./bus/jetstream/provision";
 import { createNetworkResolver } from "./bus/network-resolver";
 import type { SystemEventSource } from "./bus/system-events";
 // R26 P1 (cortex#1371) — the substrate admission gate + its loud degrade event.
@@ -338,6 +340,7 @@ import { createProbeResponder, type ProbeResponder } from "./bus/probe-responder
 // `cortex provision-stack register …` work directly (no `bun src/...` prefix).
 // These do NOT boot the daemon — only `start` does.
 import { dispatchNetwork } from "./cli/cortex/commands/network";
+import { registerLedgerCommand } from "./cli/cortex/commands/ledger";
 import { resolveRegistryAnchor } from "./cli/cortex/commands/default-registry";
 import { dispatchOffer } from "./cli/cortex/commands/offer";
 import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
@@ -5954,6 +5957,21 @@ export async function startCortex(
     }
   }
 
+  let ledgerArchive: LedgerArchiveHandle | null = null;
+  if (derivedStack.stack === "default" && runtime.ledgerStream) {
+    try {
+      const jsm = await runtime.jetstreamManager?.();
+      const stream = await runtime.ledgerStream();
+      if (jsm && stream) {
+        await provisionLedgerStream({ jsm, principal: principalId });
+        ledgerArchive = await startLedgerArchive({
+          directory: ledgerArchiveDir(config.ledger.archive_dir), stream, log: console,
+        });
+      }
+    } catch (error) {
+      console.error(`cortex: ledger archive startup failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   let vigilHandle: VigilHandle | null = null;
   try {
     vigilHandle = await startVigil({
@@ -6373,6 +6391,7 @@ export async function startCortex(
       // closes is only released after the last tick settles (no use-after-close).
       await completeAsync("cockpit refresh loop stop", cockpitLoop?.stop());
       await completeAsync("vigil stop", vigilHandle?.stop());
+      await completeAsync("ledger archive stop", ledgerArchive?.stop());
       await completeAsync("mc embed stop", mcHandle?.stop());
       completeSync("github webhook receiver stop", () => githubReceiver?.stop());
       for (let i = 0; i < adapterCleanup.length; i++) {
@@ -6875,6 +6894,8 @@ if (import.meta.main) {
     // remaining argv to the subcommand's own `[args...]` parser.
     .enablePositionalOptions()
     .version(getVersion());
+
+  registerLedgerCommand(program);
 
   program
     .command("start")

@@ -52,6 +52,7 @@ function writeConfigFixture(path: string, yaml: string): void {
 }
 
 const TEST_CONFIG: AgentConfig = {
+  ledger: {},
   agent: {
     name: "test",
     displayName: "Test Bot",

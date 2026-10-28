@@ -63,6 +63,7 @@ function agentFixture(overrides: Partial<Agent> = {}): Agent {
 
 function cortexConfigFixture(agents: Agent[]): CortexConfig {
   return {
+    ledger: {},
     principal: {
       id: "andreas",
       dataResidency: "NZ",
