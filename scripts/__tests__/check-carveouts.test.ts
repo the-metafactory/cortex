@@ -3,7 +3,7 @@
 // compass#98 F18 — proves the widened `[Oo]perator|OPERATOR` recall catches
 // SCREAMING_SNAKE operator forms (OPERATOR_ID, OPERATOR_PUBKEY, HOME_OPERATOR,
 // bare OPERATOR) that the pre-F18 `[Oo]perator` recall was blind to, while the
-// whole tree stays green (carve-outs intact).
+// whole tree stays green (carve-outs intact; the vocab gate in scripts/check.ts runs that scan).
 //
 // SELF-CONFLICT DISCIPLINE (mirrors check-shippable-hygiene.test.ts): the
 // deprecated token this suite asserts on is CONSTRUCTED AT RUNTIME by
@@ -57,20 +57,6 @@ describe("check-carveouts vocab ratchet (F18)", () => {
     expect(code).toBe(0);
     expect(out).toContain("PASS");
   });
-
-  test(
-    "whole-tree scan is green — carve-outs intact",
-    () => {
-      // Same scan the CI 'Vocab carve-out gate' job runs. A widened-recall
-      // regression (a legit all-caps survivor losing its carve-out) fails here.
-      const { code, out } = runGate();
-      expect(out).toContain("PASS");
-      expect(code).toBe(0);
-    },
-    // The scan takes ~18s on an idle dev machine and ~47s at a 1-minute load
-    // of ~35 on 10 cores (node #2576), past the 30s this used to allow.
-    120_000,
-  );
 });
 
 describe("vocab-ratchet manifest (F17)", () => {
