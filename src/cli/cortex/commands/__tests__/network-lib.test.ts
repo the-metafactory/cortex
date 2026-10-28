@@ -922,7 +922,7 @@ describe("join", () => {
         expect(res.ok).toBe(true);
       });
 
-      describe("cortex#2760 — cross-operator leaf creds", () => {
+      describe("cortex#2760 — foreign-operator leaf creds", () => {
         const HUB_ACCOUNT = "A" + "H".repeat(55);
         const AGENTS = "A" + "G".repeat(55);
         const THIRD = "A" + "C".repeat(55);
@@ -940,7 +940,7 @@ describe("join", () => {
           });
           const res = await joinNetwork("metafactory", LOCAL, ports);
           expect(res.ok).toBe(true);
-          expect(res.steps.some((s) => s.includes("cross-operator"))).toBe(true);
+          expect(res.steps.some((s) => s.includes("foreign-operator"))).toBe(true);
           expect(rec.writes[0]!.binding.account).toBe(LOCAL.account);
         });
 

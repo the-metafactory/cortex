@@ -131,8 +131,8 @@ export const StackNatsInfraSchema = z.object({
    * to override the convention.
    *
    * These are not the daemon's creds; the daemon connects with `nats.credsPath`.
-   * On a cross-operator leaf the hub's operator issues this file, so its issuer
-   * account is not a local account. `cortex network join` Guard 3 then checks
+   * On a foreign-operator leaf the hub's operator JWT signs this file's
+   * account, so its issuer account is not a local account. `cortex network join` Guard 3 then checks
    * the account of `nats.credsPath` against {@link StackNatsInfraSchema.shape.account}
    * and {@link StackNatsInfraSchema.shape.agents_account} instead (cortex#2760).
    */
@@ -144,7 +144,7 @@ export const StackNatsInfraSchema = z.object({
    * secret (URL userinfo — the hub's `leafnodes{}` accept block carries the
    * matching `authorization { user, password: <leaf-secret> }`) and binds the
    * link to the principal's OWN local {@link StackNatsInfraSchema.shape.account}
-   * in their own NSC operator — no hub-minted `.creds`, no cross-operator JWT
+   * in their own NSC operator — no hub-minted `.creds`, no foreign-operator JWT
    * trust. OPTIONAL: a stack on the legacy `.creds` path, or one that never
    * federates, omits it.
    *

@@ -99,7 +99,7 @@ export interface JoiningStack {
    * the principal's OWN local {@link JoiningStack.account}, instead of a
    * `.creds`-file leaf. The hub authenticates the remote with the matching
    * `authorization { user, password: <leaf-secret> }`; each side binds locally,
-   * no cross-operator JWT trust. Absent ⇒ the legacy `.creds` path.
+   * no foreign-operator JWT trust. Absent ⇒ the legacy `.creds` path.
    */
   leafSecret?: string;
   /**
@@ -160,8 +160,8 @@ export interface JoiningStack {
   extraLeafRemotes?: readonly ExtraLeafRemote[];
   /**
    * cortex#2760 — where the DAEMON publishes from, read only by Guard 3.
-   * {@link JoiningStack.credentials} are the LEAF creds; on a cross-operator
-   * leaf the hub's operator issues them, so Guard 3 checks the daemon's own
+   * {@link JoiningStack.credentials} are the LEAF creds; on a foreign-operator
+   * leaf the hub's operator JWT signs their account, so Guard 3 checks the daemon's own
    * creds instead. `credentials` is the config's `nats.credsPath`;
    * `bridgedAgentsAccount` is `stack.nats_infra.agents_account`, the account
    * `network provision` bridges the leaf account to. Guard 3 reads it only;
@@ -494,7 +494,7 @@ export async function joinNetwork(
   // the leaf bound the FED account while the creds published on a THIRD
   // account: the leaf came up, interest was visible, publishes never crossed.
   // cortex#2760 — the leaf creds authenticate to the HUB. When the local config
-  // does not define their issuer account, the hub's operator issued them and the
+  // does not define their issuer account, this is a foreign-operator leaf and the
   // comparison is meaningless; the guard then checks the daemon's own creds
   // (`nats.credsPath`). See {@link decideLeafAccountGuard}. Only meaningful on
   // the operator-mode path; a $G/creds-only or secret-auth bus renders no

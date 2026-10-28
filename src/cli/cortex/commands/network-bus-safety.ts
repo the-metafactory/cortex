@@ -38,9 +38,10 @@
  * creds' `issuer_account`) was a THIRD account → leaf up, interest visible,
  * publishes never crossing. {@link decodeCredsIssuerAccount} decodes the NATS
  * user JWT embedded in the `.creds` file; {@link decideLeafAccountGuard}
- * compares it to the account the join would render. Since cortex#2760 a leaf
- * creds file issued by another operator (the hub's) is not compared with the
- * local account; the guard checks the daemon's own creds instead.
+ * compares it to the account the join would render. Since cortex#2760 a
+ * foreign-operator leaf creds file (issued under the hub's operator JWT) is not
+ * compared with the local account; the guard checks the daemon's own creds.
+ * The local accounts are the ones the operator-mode config defines.
  */
 
 import { hasManagedLeafAuthorizationRegion } from "../../../common/nats/hub-leaf-authorization";
@@ -399,15 +400,15 @@ export interface InspectedCreds {
 
 /**
  * cortex#2760 — Guard 3's full decision rule. The leaf creds file authenticates
- * the leaf to the HUB, so its issuer account is an account of the hub's
- * operator. Two topologies follow:
+ * the leaf to the HUB, so its issuer account is an account signed by the hub's
+ * operator JWT. Two topologies follow:
  *
- * 1. **Same operator** — the leaf creds' issuer account is defined in the local
+ * 1. **Local account** — the leaf creds' issuer account is defined in the local
  *    nats config. This is the cortex#1728 case: the leaf binds `rendered` while
  *    those creds publish on another local account, so publishes never cross.
  *    Compare and refuse on a mismatch.
- * 2. **Cross operator** — the issuer account is not defined locally, so it
- *    belongs to another operator (the hub's). It can never equal the local
+ * 2. **A foreign-operator leaf** — the issuer account is not defined locally, so
+ *    the hub's operator JWT signed it. It can never equal the local
  *    account the remote binds, and comparing them proves nothing. The guard
  *    checks the DAEMON instead: the account its own creds (`nats.credsPath`)
  *    publish on must be the leaf's local account, or the declared
@@ -455,23 +456,23 @@ export function decideLeafAccountGuard(params: {
         `cross-account export/import between them.`,
     );
   }
-  const crossOperator =
-    `the leaf creds' issuer_account ${leafAccount} is not defined in the local nats config, so it is ` +
-    `treated as issued by another operator (a cross-operator leaf) and not compared; the leaf binds ` +
+  const foreignLeaf =
+    `the leaf creds' issuer_account ${leafAccount} is not defined in the local nats config, so this is ` +
+    `treated as a foreign-operator leaf and the account is not compared; the leaf binds ` +
     `local account ${rendered}`;
   if (daemon === undefined || daemon.path === leafCreds.path) {
-    return proceed(`${crossOperator}; no separate daemon creds (nats.credsPath) to check`);
+    return proceed(`${foreignLeaf}; no separate daemon creds (nats.credsPath) to check`);
   }
   const daemonAccount = daemon.account;
   if (daemonAccount === undefined || !daemon.definedLocally) {
-    return proceed(`${crossOperator}; could not resolve a local account from the daemon creds (${daemon.path})`);
+    return proceed(`${foreignLeaf}; could not resolve a local account from the daemon creds (${daemon.path})`);
   }
   if (daemonAccount === rendered) {
-    return proceed(`${crossOperator}; the daemon publishes on the same account`);
+    return proceed(`${foreignLeaf}; the daemon publishes on the same account`);
   }
   if (daemonAccount === agentsAccount) {
     return proceed(
-      `${crossOperator}; the daemon publishes on the declared agents_account ${agentsAccount}, which ` +
+      `${foreignLeaf}; the daemon publishes on the declared agents_account ${agentsAccount}, which ` +
         `network provision bridges with the federated.> export/import (the bridge itself is not checked here)`,
     );
   }

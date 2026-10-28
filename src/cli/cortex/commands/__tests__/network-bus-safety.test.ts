@@ -346,7 +346,7 @@ describe("Guard 3 — decideLeafAccountGuard (cortex#1728, cortex#2760)", () => 
 
   test("cross operator: hub-issued leaf creds are not compared; a daemon on agents_account proceeds", () => {
     const step = stepOf(decide(hubLeaf, daemon(AGENTS), AGENTS));
-    expect(step).toContain("cross-operator");
+    expect(step).toContain("foreign-operator");
     expect(step).toContain("agents_account");
   });
 
@@ -399,7 +399,7 @@ describe("Guard 3 — decideLeafAccountGuard (cortex#1728, cortex#2760)", () => 
       });
 
     test("hub-issued leaf creds with the daemon on agents_account proceed", () => {
-      expect(stepOf(judge(HUB_ACCOUNT, LOCAL_AGENTS))).toContain("cross-operator");
+      expect(stepOf(judge(HUB_ACCOUNT, LOCAL_AGENTS))).toContain("foreign-operator");
     });
 
     test("hub-issued leaf creds with the daemon on another local account refuse", () => {
