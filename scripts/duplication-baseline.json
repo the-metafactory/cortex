@@ -160,7 +160,7 @@
   "src/cli/cortex/commands/__tests__/network-reject.test.ts": 2,
   "src/cli/cortex/commands/__tests__/network-scoped-mint-adapter.test.ts": 3,
   "src/cli/cortex/commands/__tests__/network-secret-adapters.test.ts": 8,
-  "src/cli/cortex/commands/__tests__/network-secret-cli.test.ts": 7,
+  "src/cli/cortex/commands/__tests__/network-secret-cli.test.ts": 6,
   "src/cli/cortex/commands/__tests__/normalize-config.test.ts": 2,
   "src/cli/cortex/commands/__tests__/quickstart-lib.test.ts": 2,
   "src/cli/cortex/commands/__tests__/release.test.ts": 18,

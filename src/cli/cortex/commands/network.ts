@@ -1291,6 +1291,12 @@ async function runJoin(
       operatorModePackage: inputs.operatorModePackage,
     }),
     ...(inputs.extraLeafRemotes.length > 0 && { extraLeafRemotes: inputs.extraLeafRemotes }),
+    daemonPublisher: {
+      ...(inputs.daemonCredsPath !== undefined && {
+        credentials: expandTilde(inputs.daemonCredsPath),
+      }),
+      ...(inputs.agentsAccount !== undefined && { bridgedAgentsAccount: inputs.agentsAccount }),
+    },
   };
 
   const cfg = portsConfigFromInputs(networkId, inputs, slugRes.slug, flags);

@@ -92,7 +92,7 @@ export interface StackLeafBinding {
    * block carries the matching `authorization { user, password: <leaf-secret> }`)
    * instead of a `.creds` JWT, and binds the link to a LOCAL NATS account
    * ({@link StackLeafBinding.account}) in the joiner's OWN operator-mode NSC
-   * store. No cross-operator JWT trust.
+   * store. No foreign-operator JWT trust.
    *
    * The secret is presented to nats-server via the dial URL's **userinfo**
    * (`tls://<user>:<secret>@host:port`) — empirically the ONLY remote-side form

@@ -223,6 +223,7 @@ function makeFakes(opts: {
    * `undefined` → indeterminate (no creds JWT to decode), the pre-guard path.
    */
   credsIssuerAccount?: string;
+  credsAccountsByPath?: Record<string, string>;
   /**
    * #821 — model nats-server's post-restart health. `false` = the restart exited
    * 0 but the server then crashed (the community case) → orchestrator rolls back.
@@ -457,11 +458,11 @@ function makeFakes(opts: {
         fix: `remove the leafnodes authorization block from ${path}`,
       }));
     },
-    credsIssuerAccount(_path) {
+    credsIssuerAccount(path) {
       // cortex#1728 Guard 3 — default: undecodable (no creds JWT modelled), so
       // the orchestrator's account check is indeterminate (skipped). A test sets
-      // `credsIssuerAccount` to the daemon's real publisher account.
-      return opts.credsIssuerAccount;
+      // `credsIssuerAccount` (any path) or `credsAccountsByPath` (cortex#2760).
+      return opts.credsAccountsByPath?.[path] ?? opts.credsIssuerAccount;
     },
     snapshotLeafState(networkId) {
       rec.snapshots.push(networkId);
@@ -880,7 +881,7 @@ describe("join", () => {
         });
         const res = await joinNetwork("metafactory", LOCAL, ports);
         expect(res.ok).toBe(false);
-        expect(res.reason).toContain("publish on a DIFFERENT account");
+        expect(res.reason).toContain("publish on a DIFFERENT local account");
         expect(res.reason).toContain("A" + "C".repeat(55));
         expect(res.reason).toContain("cortex#1728 Guard 3");
         // refused before any mutation.
@@ -919,6 +920,63 @@ describe("join", () => {
         });
         const res = await joinNetwork("metafactory-community", G_PEER, ports);
         expect(res.ok).toBe(true);
+      });
+
+      describe("cortex#2760 — foreign-operator leaf creds", () => {
+        const HUB_ACCOUNT = "A" + "H".repeat(55);
+        const AGENTS = "A" + "G".repeat(55);
+        const THIRD = "A" + "C".repeat(55);
+        const DAEMON_CREDS = "/Users/andreas/.config/nats/andreas-bot.creds";
+        const credsAccountsByPath = (daemonAccount: string): Record<string, string> => ({
+          [LOCAL.credentials ?? ""]: HUB_ACCOUNT,
+          [DAEMON_CREDS]: daemonAccount,
+        });
+
+        test("does not compare hub-issued leaf creds with the local account; renders the declared account", async () => {
+          const { ports, rec } = makeFakes({
+            busType: "operator-mode",
+            undefinedAccounts: [HUB_ACCOUNT],
+            credsAccountsByPath: { [LOCAL.credentials ?? ""]: HUB_ACCOUNT },
+          });
+          const res = await joinNetwork("metafactory", LOCAL, ports);
+          expect(res.ok).toBe(true);
+          expect(res.steps.some((s) => s.includes("foreign-operator"))).toBe(true);
+          expect(rec.writes[0]!.binding.account).toBe(LOCAL.account);
+        });
+
+        test("proceeds when the daemon publishes on the declared agents_account", async () => {
+          const { ports, rec } = makeFakes({
+            busType: "operator-mode",
+            undefinedAccounts: [HUB_ACCOUNT],
+            credsAccountsByPath: credsAccountsByPath(AGENTS),
+          });
+          const stack: JoiningStack = {
+            ...LOCAL,
+            daemonPublisher: { credentials: DAEMON_CREDS, bridgedAgentsAccount: AGENTS },
+          };
+          const res = await joinNetwork("metafactory", stack, ports);
+          expect(res.ok).toBe(true);
+          expect(rec.writes[0]!.binding.account).toBe(LOCAL.account);
+        });
+
+        test("still refuses a daemon on another local account, before any write", async () => {
+          const { ports, rec, storeRef } = makeFakes({
+            busType: "operator-mode",
+            undefinedAccounts: [HUB_ACCOUNT],
+            credsAccountsByPath: credsAccountsByPath(THIRD),
+          });
+          const stack: JoiningStack = {
+            ...LOCAL,
+            daemonPublisher: { credentials: DAEMON_CREDS, bridgedAgentsAccount: AGENTS },
+          };
+          const res = await joinNetwork("metafactory", stack, ports);
+          expect(res.ok).toBe(false);
+          expect(res.reason).toContain(`DIFFERENT local account ${THIRD}`);
+          expect(res.reason).toContain("cortex#1728 Guard 3");
+          expect(res.reason).not.toContain(`stack.nats_infra.account to ${HUB_ACCOUNT}`);
+          expect(rec.writes.length).toBe(0);
+          expect(storeRef.networks.length).toBe(0);
+        });
       });
     });
     test("#799 $G/default bus + creds → joins with a NO-ACCOUNT leaf remote", async () => {
