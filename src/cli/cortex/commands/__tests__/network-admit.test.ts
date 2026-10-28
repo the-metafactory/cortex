@@ -529,6 +529,7 @@ function fakeSealFactory(
         if (opts.readThrows) throw new Error("hub config not found at /fake/hub.conf (set --hub-config)");
         return "leafnodes {\n  listen: 0.0.0.0:7422\n}\n";
       },
+      isOperatorMode: async () => false,
       writeConf: async () => { calls.writes += 1; },
       reload: async () => { calls.reloads += 1; },
     },

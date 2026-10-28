@@ -24,6 +24,7 @@ export interface HubAuthPort {
   writeConf(text: string): Promise<void>;
   /** Reload the hub nats-server (SIGHUP) so the auth change takes effect. */
   reload(): Promise<void>;
+  isOperatorMode(): Promise<boolean>;
   /** The hub config path, for plan/report output. */
   readonly confPath: string;
 }

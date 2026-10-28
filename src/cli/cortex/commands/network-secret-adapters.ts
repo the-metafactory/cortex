@@ -43,6 +43,7 @@ import { hostname as osHostname, networkInterfaces as osNetworkInterfaces } from
 import { lookup as dnsLookup } from "dns/promises";
 
 import { expandTilde } from "../../../common/config/loader";
+import { isOperatorModeConfig, resolveConfigIncludes } from "./network-bus-safety";
 import { enforceChmod600 } from "../../../common/config/file-permissions";
 import { sealToPrincipal } from "../../../common/crypto/seal-to-principal";
 import { mintLeafPsk } from "../../../common/nats/leaf-psk";
@@ -209,6 +210,17 @@ function buildLiveHubAuthPort(cfg: LiveSecretPortsConfig): HubAuthPort {
         return Promise.reject(new Error(`hub config not found at ${confPath} (set --hub-config)`));
       }
       return Promise.resolve(readFileSync(confPath, "utf-8"));
+    },
+    isOperatorMode(): Promise<boolean> {
+      if (!existsSync(confPath)) {
+        return Promise.reject(new Error(`hub config not found at ${confPath} (set --hub-config)`));
+      }
+      const resolved = resolveConfigIncludes(confPath, {
+        read: (p) => (existsSync(p) ? readFileSync(p, "utf-8") : undefined),
+        dirname: pathDirname,
+        join: joinPath,
+      });
+      return Promise.resolve(isOperatorModeConfig(resolved.files.map((f) => f.text).join("\n")));
     },
     writeConf(text: string): Promise<void> {
       // The hub config now carries leaf SECRETS, so it is a secret-at-rest.

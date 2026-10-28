@@ -444,6 +444,28 @@ async function addOrRotate(
   );
   data.hub_locality = locality.kind;
 
+  if (locality.kind === "local") {
+    let operatorHub: boolean;
+    try {
+      operatorHub = await ports.hub.isOperatorMode();
+    } catch (err) {
+      return fail(action, inputs, steps, data, `failed to read hub config: ${errText(err)}`);
+    }
+    if (operatorHub) {
+      return fail(
+        action,
+        inputs,
+        steps,
+        data,
+        `refusing to write a leaf authorization user into ${ports.hub.confPath}: that hub config is ` +
+          `operator-mode, where a \`leafnodes { authorization { users … } }\` block stops nats-server ` +
+          `from starting. Network "${inputs.networkId}" is not attested \`hub_mode: operator\`, so ` +
+          `${action} took the PSK path. Set \`hub_mode: operator\` on its \`networks[]\` entry and ` +
+          `re-run; ${action} then seals a scoped .creds credential instead.`,
+      );
+    }
+  }
+
   if (!inputs.apply) {
     if (locality.kind === "local") {
       steps.push(rotate

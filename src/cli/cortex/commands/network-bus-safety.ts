@@ -13,8 +13,14 @@
  * an **operator-mode** server that block is STARTUP-FATAL (`operator mode does
  * not allow specifying users in leafnode config`) — but only at the NEXT
  * restart, and `nats-server -t` PASSES it as valid (the leafnode operator-mode
- * validation doesn't run in `-t`; verified live). A deployment that ever ran
- * pre-#1491 tooling carries a bomb that detonates on its next restart.
+ * validation doesn't run in `-t`; verified live). Pinned on nats-server v2.14.0
+ * (cortex#2747, `network-bus-safety.nats-server.test.ts`): fatal at startup with
+ * or without a `leafnodes` `listen` port, and with only `remotes`; a SIGHUP
+ * reload rejects it and keeps the old config, so a reloaded-only bus looks
+ * healthy until it restarts. A deployment that ran pre-#1491 tooling, or
+ * `secret add-member` on an operator hub whose network was not attested
+ * `hub_mode: operator` (closed by cortex#2747), carries a bomb that detonates
+ * on its next restart.
  * {@link scanForLeafnodeAuthorizationBomb} scans the RESOLVED config (the config
  * file + every file it `include`s) for the block under an operator-mode config.
  *
@@ -35,6 +41,7 @@
  * compares it to the account the join would render.
  */
 
+import { hasManagedLeafAuthorizationRegion } from "../../../common/nats/hub-leaf-authorization";
 import { decodeJwtClaims, extractUserJwt } from "../../../common/nats/jwt";
 
 // =============================================================================
@@ -65,7 +72,7 @@ export function stripConfigComments(natsConfigText: string): string {
  * bare `accounts { … }` block (server-config accounts, NOT NSC operator-mode) as
  * operator-mode: the fatal rule is specifically about OPERATOR mode.
  */
-function isOperatorModeConfig(text: string): boolean {
+export function isOperatorModeConfig(text: string): boolean {
   const stripped = stripConfigComments(text);
   return (
     /^[ \t]*operator[ \t]*[:=]/m.test(stripped) || // NSC operator JWT key
@@ -216,18 +223,38 @@ export function scanForLeafnodeAuthorizationBomb(
   const bombs: LeafnodeAuthorizationBomb[] = [];
   for (const file of resolved.files) {
     if (textHasLeafnodeAuthorizationUsers(file.text)) {
-      bombs.push({
-        path: file.path,
-        fix:
-          `remove the \`leafnodes { authorization { users … } }\` block from ${file.path} — ` +
-          `on an operator-mode bus it is startup-fatal ("operator mode does not allow specifying ` +
-          `users in leafnode config"), and \`nats-server -t\` does NOT catch it. This is a stale ` +
-          `hub-side PSK block written by pre-#1491 \`add-member\` tooling (cortex#1728/#1491); the ` +
-          `leaf authenticates via its own remote block, not this one.`,
-      });
+      bombs.push({ path: file.path, fix: bombFix(file.path, file.text) });
     }
   }
   return bombs;
+}
+
+/**
+ * The removal fix for one offending file. cortex#2747: when the block sits in
+ * the cortex-managed region, the message names the tool that owns it and why
+ * removing the region by hand is safe, instead of only saying "remove it".
+ */
+function bombFix(path: string, text: string): string {
+  const fatal =
+    `On an operator-mode bus nats-server refuses to start with it ("operator mode does not allow ` +
+    `specifying users in leafnode config"), whether or not \`leafnodes\` has a \`listen\` port. ` +
+    `\`nats-server -t\` passes it, and a SIGHUP reload rejects it but keeps the old config running, ` +
+    `so a bus that has only been reloaded looks healthy until its next restart.`;
+  if (hasManagedLeafAuthorizationRegion(text)) {
+    return (
+      `delete the cortex-managed leaf authorization region from ${path}: every line from ` +
+      `"# >>> cortex-managed leaf authorization" through "# <<< cortex-managed leaf authorization", ` +
+      `markers included. \`cortex network secret add-member\` wrote it on the PSK path, which an ` +
+      `operator-mode bus cannot use: its leaves authenticate with \`.creds\`, so no member depends on ` +
+      `these users. To stop add-member writing it again, set \`hub_mode: operator\` on this network's ` +
+      `\`networks[]\` entry. ${fatal} (cortex#2747)`
+    );
+  }
+  return (
+    `remove the \`leafnodes { authorization { users … } }\` block from ${path}; it is a hand-written ` +
+    `or pre-#1491 hub-side PSK block, and the leaf authenticates via its own remote block, not this ` +
+    `one. ${fatal}`
+  );
 }
 
 // =============================================================================

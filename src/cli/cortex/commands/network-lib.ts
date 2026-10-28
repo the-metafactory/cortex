@@ -473,9 +473,8 @@ export async function joinNetwork(
       reason:
         `refusing to join — the resolved nats config carries an operator-mode-FATAL ` +
         `\`leafnodes { authorization { users … } }\` block in ${bombs.map((b) => b.path).join(", ")}. ` +
-        `On an operator-mode bus this crashes nats-server on its next restart ("operator mode does not ` +
-        `allow specifying users in leafnode config"), and \`nats-server -t\` does NOT catch it — so this ` +
-        `join's restart would take the bus DOWN. ${first?.fix ?? ""} (cortex#1728 Guard 1 / #1491)`,
+        `This join restarts nats-server, which would then refuse to start and take the bus DOWN. ` +
+        `Fix: ${first?.fix ?? ""} (cortex#1728 Guard 1)`,
     };
   }
 
