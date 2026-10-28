@@ -180,6 +180,25 @@ jobs:
       - name: bun run test
         run: bun scripts/check.ts test
 
+  # EXPERIMENT (do not merge): the same suite with bun's --parallel workers,
+  # side by side with the serial Test job above on an equivalent runner.
+  test-parallel-experiment:
+    name: Test (parallel experiment)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - run: nproc && bun --version
+
+      - name: bun run test --parallel
+        run: bun scripts/test.ts --parallel
+
   # ──────────────────────────────────────────────────────────────────
   # Surface-SDK .d.ts drift guard (cortex#1950). The shippable, self-contained
   # plugin-SDK type artifact (src/surface-sdk/generated/surface-sdk.d.ts) is
