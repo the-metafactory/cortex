@@ -34,6 +34,7 @@ import type { ResolveOwnAdmissionStateResult } from "../../../common/registry/ad
 import type { NetworkFetchResult } from "../../../common/registry/network-client";
 import type {
   AccountBindCheck,
+  ExtraLeafRemote,
   LeafBindMode,
   OperatorModeConversion,
   OperatorModeLeafPackage,
@@ -154,6 +155,7 @@ export interface RenderLeafInputs {
   descriptor: VerifiedNetworkDescriptor;
   /** The stack's local leaf binding (creds path + nkey-U account). */
   binding: StackLeafBinding;
+  extraRemotes?: readonly ExtraLeafRemote[];
 }
 
 /**
@@ -165,6 +167,8 @@ export interface RenderLeafInputs {
 export interface LeafFilePort {
   /** Render (S3 `renderLeafIncludeFile`) + write the include for the network. */
   write(inputs: RenderLeafInputs): void;
+  writeExtraRemotesOnly(extraRemotes: readonly ExtraLeafRemote[]): void;
+  extraRemoteCredsProblem(path: string): string | undefined;
   /** Delete a network's include file (idempotent — absent file is a no-op). */
   remove(networkId: string): void;
   /**
@@ -300,6 +304,7 @@ export interface LeafStateSnapshot {
   includeFile: string | undefined;
   /** The base nats config's prior contents, or `undefined` if the file was absent. */
   natsConfig: string | undefined;
+  extraRemotes?: { file: string | undefined; directivePresent: boolean };
 }
 
 /**

@@ -39,12 +39,17 @@ import { expandTilde } from "../../../common/config/loader";
 import { resolveConfigDir } from "../../../common/config/config-path";
 import { systemdUserDir } from "../../../common/xdg";
 import {
+  EXTRA_REMOTES_INCLUDE_FILE,
+  ensureExtraRemotesInclude,
   ensureLeafInclude,
+  extraRemotesIncludePresent,
   leafIncludeDirectivePresent,
   leafIncludeFileName,
   natsConfigCanBindAccount,
   natsConfigMonitorUrl,
+  removeExtraRemotesInclude,
   removeLeafInclude,
+  renderExtraRemotesIncludeFile,
   renderLeafIncludeFile,
   renderOperatorModeBlocks,
   resolveLeafBindMode,
@@ -579,7 +584,11 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
   const dir = leafDir(cfg);
   return {
     write(inputs: RenderLeafInputs) {
-      const content = renderLeafIncludeFile(inputs.descriptor, inputs.binding);
+      const content = renderLeafIncludeFile(
+        inputs.descriptor,
+        inputs.binding,
+        inputs.extraRemotes ?? [],
+      );
       if (!mutate) return; // dry-run: render to validate, but do not write.
       mkdirSync(dir, { recursive: true });
       // C-1224 (ADR-0013 sovereign model): for a secret-auth leaf the secret bytes live
@@ -597,6 +606,47 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
       backupConfigFile(leafPath, "join");
       writeFileSync(leafPath, content, { mode: 0o600 });
       chmodSync(leafPath, 0o600);
+      dropStandaloneExtraRemotes(cfg, dir);
+    },
+    writeExtraRemotesOnly(extraRemotes) {
+      const content = renderExtraRemotesIncludeFile(extraRemotes);
+      if (!mutate) return;
+      mkdirSync(dir, { recursive: true });
+      const extraPath = join(dir, EXTRA_REMOTES_INCLUDE_FILE);
+      backupConfigFile(extraPath, "leave");
+      writeFileSync(extraPath, content, { mode: 0o600 });
+      chmodSync(extraPath, 0o600);
+      const configPath = expandTilde(cfg.natsConfigPath ?? "");
+      const current = existsSync(configPath) ? readFileSync(configPath, "utf-8") : "";
+      const next = ensureExtraRemotesInclude(current);
+      if (next === current) return;
+      mkdirSync(dirname(configPath), { recursive: true });
+      backupConfigFile(configPath, "leave");
+      atomicWriteFileSync(configPath, next);
+    },
+    extraRemoteCredsProblem(path) {
+      const expanded = expandTilde(path);
+      let st;
+      try {
+        st = statSync(expanded);
+      } catch (_err) {
+        return `credentials file ${expanded} does not exist`;
+      }
+      if (!st.isFile() || st.size === 0) {
+        return `credentials file ${expanded} is not a non-empty regular file`;
+      }
+      if ((st.mode & 0o077) !== 0) {
+        return `credentials file ${expanded} is readable by group or others (mode ${(st.mode & 0o777).toString(8)}); chmod 600 it`;
+      }
+      let head: string;
+      try {
+        head = readFileSync(expanded, "utf-8").slice(0, 512);
+      } catch (_err) {
+        return `credentials file ${expanded} is not readable`;
+      }
+      return head.includes("-----BEGIN NATS USER JWT-----")
+        ? undefined
+        : `credentials file ${expanded} is not a NATS .creds file`;
     },
     remove(networkId) {
       if (!mutate) return;
@@ -766,6 +816,13 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
           leafIncludeDirectivePresentInBaseConfig(baseConfig, networkId)
             ? "directive-present"
             : undefined,
+        extraRemotes: {
+          file: existsSync(join(dir, EXTRA_REMOTES_INCLUDE_FILE))
+            ? readFileSync(join(dir, EXTRA_REMOTES_INCLUDE_FILE), "utf-8")
+            : undefined,
+          directivePresent:
+            baseConfig !== undefined && extraRemotesIncludePresent(baseConfig),
+        },
       };
     },
     restoreLeafState(snapshot) {
@@ -792,15 +849,40 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
       if (configPath.length === 0 || !existsSync(configPath)) return;
       const current = readFileSync(configPath, "utf-8");
       const directiveWasPresent = snapshot.natsConfig === "directive-present";
-      const next = directiveWasPresent
+      let next = directiveWasPresent
         ? ensureLeafInclude(current, snapshot.networkId) // it was there → keep it
         : removeLeafInclude(current, snapshot.networkId); // join added it → drop it
+      if (snapshot.extraRemotes !== undefined) {
+        const extraPath = join(dir, EXTRA_REMOTES_INCLUDE_FILE);
+        if (snapshot.extraRemotes.file === undefined) {
+          rmSync(extraPath, { force: true });
+        } else {
+          atomicWriteFileSync(extraPath, snapshot.extraRemotes.file);
+          chmodSync(extraPath, 0o600);
+        }
+        next = snapshot.extraRemotes.directivePresent
+          ? ensureExtraRemotesInclude(next)
+          : removeExtraRemotesInclude(next);
+      }
       // Security-review MAJOR (#1058) — ATOMIC write (tmp + rename). The rollback
       // path has the identical non-atomicity hazard: a crash mid-rollback would
       // corrupt the very base config it is trying to restore → bus DOWN.
       if (next !== current) atomicWriteFileSync(configPath, next);
     },
   };
+}
+
+function dropStandaloneExtraRemotes(cfg: LivePortsConfig, dir: string): void {
+  const configPath = expandTilde(cfg.natsConfigPath ?? "");
+  if (configPath.length > 0 && existsSync(configPath)) {
+    const current = readFileSync(configPath, "utf-8");
+    const next = removeExtraRemotesInclude(current);
+    if (next !== current) {
+      backupConfigFile(configPath, "join");
+      atomicWriteFileSync(configPath, next);
+    }
+  }
+  rmSync(join(dir, EXTRA_REMOTES_INCLUDE_FILE), { force: true });
 }
 
 /**

@@ -50,6 +50,7 @@ import type { NetworkFetchResult } from "../../../../common/registry/network-cli
 import type { PolicyFederatedNetwork } from "../../../../common/types/cortex-config";
 import {
   renderLeafIncludeFile,
+  type ExtraLeafRemote,
   type OperatorModeLeafPackage,
 } from "../../../../common/nats/leaf-remote-renderer";
 import { nkeyToBase64Pubkey } from "../../../../common/registry/encoding";
@@ -157,6 +158,7 @@ interface Recorder {
   validateConfigs: number;
   /** O-3 (#1053) — leaf packages the orchestrator asked to convert with. */
   conversions: OperatorModeLeafPackage[];
+  extraOnlyWrites: (readonly ExtraLeafRemote[])[];
 }
 
 function makeFakes(opts: {
@@ -198,6 +200,8 @@ function makeFakes(opts: {
   busType?: "operator-mode" | "default-g" | "anonymous" | "foreign-operator";
   /** #821 — model the leaf creds file as MISSING (pre-flight refuses). */
   credsMissing?: boolean;
+  undefinedAccounts?: string[];
+  extraCredsProblem?: string;
   /**
    * cortex#1728 Guard 1 — model the resolved nats config carrying the
    * operator-mode-fatal `leafnodes.authorization.users` block. When set,
@@ -280,6 +284,7 @@ function makeFakes(opts: {
     healthProbes: 0,
     validateConfigs: 0,
     conversions: [],
+    extraOnlyWrites: [],
   };
   const storeRef = { networks: opts.initialNetworks ?? [] };
   // O-3 (#1053) — the fake's mutable view of the bus type. An "anonymous" bus
@@ -346,6 +351,9 @@ function makeFakes(opts: {
     },
     canBindAccount(account) {
       rec.bindChecks.push(account);
+      if (opts.undefinedAccounts?.includes(account) === true) {
+        return { canBind: false, reason: `config is operator-mode but does not define account ${account}` };
+      }
       // #794 — default: the bus can bind (operator-mode). A test opts into the
       // anonymous-bus crash case via `canBind: false`.
       return opts.canBind === false
@@ -428,6 +436,12 @@ function makeFakes(opts: {
       }
       busType = "operator-mode"; // the conversion stuck — the bus is now operator-mode.
       return { status: "converted", conf: "CONVERTED-OPERATOR-MODE-CONF" };
+    },
+    writeExtraRemotesOnly(extraRemotes) {
+      rec.extraOnlyWrites.push(extraRemotes);
+    },
+    extraRemoteCredsProblem(_path) {
+      return opts.extraCredsProblem;
     },
     credsExist(path) {
       rec.credsChecks.push(path);
@@ -2685,5 +2699,116 @@ describe("C-1224 — secret-auth leaf join (sovereign model)", () => {
     expect(binding.account).toBe(LOCAL_PACKAGE.account);
     expect(binding.leafSecret).toBe("s3cr3t-leaf-pipe");
     expect(binding.credentials).toBeUndefined();
+  });
+});
+
+
+describe("#2743 extra leaf remotes", () => {
+  const EXTRA: ExtraLeafRemote = {
+    url: "tls://hub.example.org:7422",
+    account: "A" + "C".repeat(55),
+    credentials: "/srv/operator/extra-link.key",
+  };
+  const WITH_EXTRA: JoiningStack = { ...LOCAL, extraLeafRemotes: [EXTRA] };
+
+  function joined(id: string): PolicyFederatedNetwork {
+    return {
+      id,
+      leaf_node: id,
+      peers: [],
+      accept_subjects: ["federated.andreas.meta-factory.>"],
+      deny_subjects: [],
+      announce_capabilities: [],
+      max_hop: 1,
+    };
+  }
+
+  test("join without extras passes none to the leaf write", async () => {
+    const { ports, rec } = makeFakes({});
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+    expect(res.ok).toBe(true);
+    expect(rec.writes[0]!.extraRemotes).toBeUndefined();
+  });
+
+  test("join passes the declared extras to the leaf write and leaves the network binding alone", async () => {
+    const { ports, rec } = makeFakes({});
+    const res = await joinNetwork("metafactory", WITH_EXTRA, ports);
+    expect(res.ok).toBe(true);
+    expect(rec.writes[0]!.extraRemotes).toEqual([EXTRA]);
+    expect(rec.writes[0]!.binding.account).toBe(LOCAL.account);
+    expect(rec.bindChecks).toContain(EXTRA.account);
+    expect(res.steps.some((s) => s.includes("declared extra leaf remote"))).toBe(true);
+  });
+
+  test("join refuses before any mutation when an extra names an account the config does not define", async () => {
+    const { ports, rec, storeRef } = makeFakes({ undefinedAccounts: [EXTRA.account] });
+    const res = await joinNetwork("metafactory", WITH_EXTRA, ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("extra_leaf_remotes[0].account");
+    expect(rec.writes.length).toBe(0);
+    expect(rec.snapshots).toEqual([]);
+    expect(rec.natsRestarts).toBe(0);
+    expect(storeRef.networks.length).toBe(0);
+  });
+
+  test("join refuses before any mutation when an extra's creds file is unusable", async () => {
+    const { ports, rec } = makeFakes({ extraCredsProblem: "readable by group or others" });
+    const res = await joinNetwork("metafactory", WITH_EXTRA, ports);
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("extra_leaf_remotes[0].credentials");
+    expect(res.reason).toContain("readable by group or others");
+    expect(rec.writes.length).toBe(0);
+    expect(rec.natsRestarts).toBe(0);
+  });
+
+  test("join refuses a malformed extra before any mutation", async () => {
+    const { ports, rec } = makeFakes({});
+    const res = await joinNetwork(
+      "metafactory",
+      { ...LOCAL, extraLeafRemotes: [{ ...EXTRA, url: "tls://hub.example.org" }] },
+      ports,
+    );
+    expect(res.ok).toBe(false);
+    expect(res.reason).toContain("extra_leaf_remotes[0].url");
+    expect(rec.writes.length).toBe(0);
+  });
+
+  test("leave of the last network removes its include and keeps the extras loading", async () => {
+    const { ports, rec } = makeFakes({ initialNetworks: [joined("metafactory")] });
+    const res = await leaveNetwork("metafactory", ports, [EXTRA]);
+    expect(res.ok).toBe(true);
+    expect(rec.removes).toEqual(["metafactory"]);
+    expect(rec.includesRemoved).toEqual(["metafactory"]);
+    expect(rec.extraOnlyWrites).toEqual([[EXTRA]]);
+  });
+
+  test("leave with another network include remaining writes no extras-only file", async () => {
+    const { ports, rec } = makeFakes({
+      initialNetworks: [joined("metafactory"), joined("research")],
+    });
+    const res = await leaveNetwork("metafactory", ports, [EXTRA]);
+    expect(res.ok).toBe(true);
+    expect(rec.removes).toEqual(["metafactory"]);
+    expect(rec.extraOnlyWrites).toEqual([]);
+    expect(res.warnings?.some((w) => w.includes("remaining include(s) (research)"))).toBe(true);
+  });
+
+  test("leave without extras writes no extras-only file", async () => {
+    const { ports, rec } = makeFakes({ initialNetworks: [joined("metafactory")] });
+    const res = await leaveNetwork("metafactory", ports);
+    expect(res.ok).toBe(true);
+    expect(rec.extraOnlyWrites).toEqual([]);
+  });
+
+  test("leave still completes but warns when the declared extras are invalid", async () => {
+    const { ports, rec } = makeFakes({
+      initialNetworks: [joined("metafactory")],
+      undefinedAccounts: [EXTRA.account],
+    });
+    const res = await leaveNetwork("metafactory", ports, [EXTRA]);
+    expect(res.ok).toBe(true);
+    expect(rec.removes).toEqual(["metafactory"]);
+    expect(rec.extraOnlyWrites).toEqual([]);
+    expect(res.warnings?.some((w) => w.includes("extra_leaf_remotes[0].account"))).toBe(true);
   });
 });

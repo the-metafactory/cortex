@@ -2493,3 +2493,176 @@ describe("#1527 dry-run registerStack gate", () => {
     if (!res.ok) expect(res.reason.toLowerCase()).not.toContain("dry-run");
   });
 });
+
+
+describe("#2743 live leaf port: extra leaf remotes", () => {
+  const OWN_ACCOUNT = "AADPQ7M7LQZTKPNF5CTE7V4XKB2FUYPGKLWZVMW6VXCEEKH62BYKGBHX";
+  const EXTRA_ACCOUNT = "A" + "X".repeat(55);
+
+  function setup(): { dir: string; conf: string; extra: { url: string; account: string; credentials: string } } {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    writeFileSync(
+      conf,
+      `operator: /x/operator.jwt\nresolver_preload: {\n  ${OWN_ACCOUNT}: eyJ...\n  ${EXTRA_ACCOUNT}: eyJ...\n}\n`,
+      "utf-8",
+    );
+    const credentials = join(dir, "extra-link.key");
+    writeFileSync(credentials, "-----BEGIN NATS USER JWT-----\neyJ0...\n", { mode: 0o600 });
+    chmodSync(credentials, 0o600);
+    return {
+      dir,
+      conf,
+      extra: { url: "tls://hub.example.org:7422", account: EXTRA_ACCOUNT, credentials },
+    };
+  }
+
+  function inputs(extra?: { url: string; account: string; credentials: string }): RenderLeafInputs {
+    return {
+      descriptor: brandVerified(descriptorForLeaf("metafactory")),
+      binding: { credentials: "/srv/operator/own-link.key", account: OWN_ACCOUNT },
+      ...(extra !== undefined && { extraRemotes: [extra] }),
+    };
+  }
+
+  test("write renders the network's remote plus the extra, byte-stable on re-render", () => {
+    const { dir, conf, extra } = setup();
+    const ports = buildLivePorts(cfgWithConfig(conf));
+    ports.leafFile.write(inputs(extra));
+    const leafPath = join(dir, "leafnodes-metafactory.conf");
+    const first = readFileSync(leafPath, "utf-8");
+    expect(first).toContain(`account: ${OWN_ACCOUNT}`);
+    expect(first).toContain(`account: ${EXTRA_ACCOUNT}`);
+    expect(first).toContain(`credentials: "${extra.credentials}"`);
+    ports.leafFile.write(inputs(extra));
+    expect(readFileSync(leafPath, "utf-8")).toBe(first);
+  });
+
+  test("extraRemoteCredsProblem accepts a 0600 creds file and refuses group/world access or absence", () => {
+    const { dir, conf, extra } = setup();
+    const ports = buildLivePorts(cfgWithConfig(conf));
+    expect(ports.leafFile.extraRemoteCredsProblem(extra.credentials)).toBeUndefined();
+    chmodSync(extra.credentials, 0o640);
+    expect(ports.leafFile.extraRemoteCredsProblem(extra.credentials)).toContain("group or others");
+    chmodSync(extra.credentials, 0o604);
+    expect(ports.leafFile.extraRemoteCredsProblem(extra.credentials)).toContain("group or others");
+    expect(ports.leafFile.extraRemoteCredsProblem(join(dir, "missing.key"))).toContain("does not exist");
+    const notCreds = join(dir, "plain.key");
+    writeFileSync(notCreds, "not a creds file\n", { mode: 0o600 });
+    chmodSync(notCreds, 0o600);
+    expect(ports.leafFile.extraRemoteCredsProblem(notCreds)).toContain("not a NATS .creds file");
+    expect(ports.leafFile.canBindAccount(EXTRA_ACCOUNT).canBind).toBe(true);
+    expect(ports.leafFile.canBindAccount("A" + "Q".repeat(55)).canBind).toBe(false);
+  });
+
+  test("leave keeps the extras in leafnodes.extra-remotes.conf; the next join folds them back", async () => {
+    const { dir, conf, extra } = setup();
+    const ports = buildLivePorts(cfgWithConfig(conf));
+    const leafPath = join(dir, "leafnodes-metafactory.conf");
+    const extraPath = join(dir, "leafnodes.extra-remotes.conf");
+
+    ports.leafFile.write(inputs(extra));
+    ports.leafFile.ensureInclude("metafactory");
+
+    ports.leafFile.removeInclude("metafactory");
+    ports.leafFile.remove("metafactory");
+    ports.leafFile.writeExtraRemotesOnly([extra]);
+
+    expect(existsSync(leafPath)).toBe(false);
+    const extrasOnly = readFileSync(extraPath, "utf-8");
+    expect(extrasOnly).toContain(`account: ${EXTRA_ACCOUNT}`);
+    expect(extrasOnly).not.toContain(OWN_ACCOUNT);
+    expect(statSync(extraPath).mode & 0o777).toBe(0o600);
+    let base = readFileSync(conf, "utf-8");
+    expect(base).toContain('include "leafnodes.extra-remotes.conf"');
+    expect(base).not.toContain('include "leafnodes-metafactory.conf"');
+    expect(ports.leafFile.list()).toEqual([]);
+
+    ports.leafFile.write(inputs(extra));
+    ports.leafFile.ensureInclude("metafactory");
+    expect(existsSync(extraPath)).toBe(false);
+    base = readFileSync(conf, "utf-8");
+    expect(base).not.toContain("leafnodes.extra-remotes.conf");
+    expect(base).toContain('include "leafnodes-metafactory.conf"');
+    expect(readFileSync(leafPath, "utf-8")).toContain(`account: ${EXTRA_ACCOUNT}`);
+  });
+
+  test("a rolled-back join restores the standalone extras file and its directive", () => {
+    const { dir, conf, extra } = setup();
+    const ports = buildLivePorts(cfgWithConfig(conf));
+    const extraPath = join(dir, "leafnodes.extra-remotes.conf");
+    ports.leafFile.writeExtraRemotesOnly([extra]);
+    const extrasBefore = readFileSync(extraPath, "utf-8");
+    const confBefore = readFileSync(conf, "utf-8");
+
+    const snapshot = ports.leafFile.snapshotLeafState("metafactory");
+    ports.leafFile.write(inputs(extra));
+    ports.leafFile.ensureInclude("metafactory");
+    expect(existsSync(extraPath)).toBe(false);
+
+    ports.leafFile.restoreLeafState(snapshot);
+    expect(readFileSync(extraPath, "utf-8")).toBe(extrasBefore);
+    expect(readFileSync(conf, "utf-8")).toBe(confBefore);
+    expect(existsSync(join(dir, "leafnodes-metafactory.conf"))).toBe(false);
+  });
+
+  test("dry-run renders to validate but writes nothing", () => {
+    const { dir, conf, extra } = setup();
+    const ports = buildDryRunPorts(cfgWithConfig(conf));
+    ports.leafFile.write(inputs(extra));
+    ports.leafFile.writeExtraRemotesOnly([extra]);
+    expect(existsSync(join(dir, "leafnodes-metafactory.conf"))).toBe(false);
+    expect(existsSync(join(dir, "leafnodes.extra-remotes.conf"))).toBe(false);
+    expect(() => ports.leafFile.write(inputs({ ...extra, account: "bad" }))).toThrow();
+  });
+});
+
+
+describe("#2743 leaveNetwork with live ports keeps declared extras", () => {
+  test("leaving the only network leaves an extras-only include that the base config loads", async () => {
+    const dir = freshDir();
+    const conf = join(dir, "local.conf");
+    const account = "A" + "X".repeat(55);
+    writeFileSync(conf, `operator: /x/operator.jwt\nresolver_preload: {\n  ${account}: eyJ...\n}\ninclude "leafnodes-metafactory.conf"\n`, "utf-8");
+    writeFileSync(join(dir, "leafnodes-metafactory.conf"), "leafnodes { remotes: [] }\n", "utf-8");
+    const credentials = join(dir, "extra-link.key");
+    writeFileSync(credentials, "-----BEGIN NATS USER JWT-----\neyJ0...\n", { mode: 0o600 });
+    chmodSync(credentials, 0o600);
+
+    const live = buildLivePorts(cfgWithConfig(conf));
+    const ports = {
+      ...live,
+      configStore: {
+        readNetworks: () => [
+          {
+            id: "metafactory",
+            leaf_node: "metafactory",
+            peers: [],
+            accept_subjects: [],
+            deny_subjects: [],
+            announce_capabilities: [],
+            max_hop: 1,
+          } as PolicyFederatedNetwork,
+        ],
+        writeNetworks: () => {},
+      },
+      registry: {
+        ...live.registry,
+        deregisterFromNetwork: async () => ({ ok: true as const, note: "skipped" }),
+        departFromNetwork: async () => ({ ok: true as const, note: "skipped" }),
+      },
+      daemon: { restart: async () => ({ ok: true as const }) },
+      natsServer: undefined,
+    };
+    const res = await leaveNetwork("metafactory", ports, [
+      { url: "tls://hub.example.org:7422", account, credentials },
+    ]);
+
+    expect(res.steps.some((s) => s.includes("leafnodes.extra-remotes.conf"))).toBe(true);
+    expect(existsSync(join(dir, "leafnodes-metafactory.conf"))).toBe(false);
+    expect(readFileSync(join(dir, "leafnodes.extra-remotes.conf"), "utf-8")).toContain(`account: ${account}`);
+    const base = readFileSync(conf, "utf-8");
+    expect(base).toContain('include "leafnodes.extra-remotes.conf"');
+    expect(base).not.toContain('include "leafnodes-metafactory.conf"');
+  });
+});

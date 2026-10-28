@@ -1086,6 +1086,7 @@ async function runJoin(
     ...(inputs.operatorModePackage !== undefined && {
       operatorModePackage: inputs.operatorModePackage,
     }),
+    ...(inputs.extraLeafRemotes.length > 0 && { extraLeafRemotes: inputs.extraLeafRemotes }),
   };
 
   const cfg = portsConfigFromInputs(networkId, inputs, slugRes.slug, flags);
@@ -1232,7 +1233,7 @@ async function runLeave(
   };
   const ports = applyRes.apply ? buildLivePorts(cfg) : buildDryRunPorts(cfg);
 
-  const res = await leaveNetwork(networkId, ports);
+  const res = await leaveNetwork(networkId, ports, inputs.extraLeafRemotes);
   return renderFlowResult("leave", networkId, res.ok, res.reason, res.steps, applyRes.apply, json, {
     not_joined: res.notJoined === true ? "true" : "false",
     remaining: (res.remaining ?? []).join(","),
