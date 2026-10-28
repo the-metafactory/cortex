@@ -808,8 +808,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
   }
 
   async function joinWithCredsFile(name: string, config: never): Promise<{ stderr: string; credsPath: string }> {
-    const credsPath = join(tmp, `${name}.creds`);
-    writeFileSync(credsPath, FAKE_CREDS, { mode: 0o600 });
+    const credsPath = writeCredsFile(name);
     const res = await dn([...joinArgs(writeJoinerSeed(`${name}.seed`)), "--creds", credsPath], config);
     return { stderr: res.stderr, credsPath };
   }

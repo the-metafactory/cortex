@@ -1246,7 +1246,6 @@ async function runJoin(
     credsPath: expandTilde(inputs.credsPath),
     expectedLeafUsers,
   });
-  const resolvedLeafSecret = leafAuth.leafSecret;
 
   const stack: JoiningStack = {
     // C-1436 — the own-scope federation identity's PRINCIPAL segment MUST derive
@@ -1344,7 +1343,7 @@ async function runJoin(
   if (
     shouldReplaceCredsPreflightError({
       joinOk: res.ok,
-      resolvedLeafSecret,
+      resolvedLeafSecret: leafAuth.leafSecret,
       explicitCredsFlag: optionalValueFlag(flags, "--creds"),
       reason: res.reason,
       operatorModeHub: hubMode === "operator",
