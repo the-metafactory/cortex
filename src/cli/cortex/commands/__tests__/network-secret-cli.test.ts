@@ -35,6 +35,7 @@ import { isOperatorModeConfig } from "../network-bus-safety";
 
 let tmp: string;
 let seedPath: string;
+const emptyConfigReader = (() => ({ config: {} })) as never;
 // A valid 44-char base64 Ed25519 pubkey (32 bytes → 44 b64 chars, one '=' pad).
 const MEMBER = btoa("A".repeat(32));
 
@@ -684,7 +685,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
       "--account", "A" + "B".repeat(55),
       "--nats-config", join(tmp, "local.conf"),
       "--plist", join(tmp, "nats.plist"),
-    ], (() => ({ config: {} })) as never);
+    ], emptyConfigReader);
 
     expect(seen.length).toBe(1);
     expect(seen[0]!.networkId).toBe("metafactory");
@@ -738,7 +739,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     __setLeafCredsInstallDirForTests(installDir);
     fakeV2Fetcher(FAKE_CREDS);
 
-    await dn(joinArgs(writeJoinerSeed("joiner3.seed")), (() => ({ config: {} })) as never);
+    await dn(joinArgs(writeJoinerSeed("joiner3.seed")), emptyConfigReader);
 
     const installed = join(installDir, "metafactory-leaf.creds");
     expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
@@ -759,7 +760,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     __setLeafCredsInstallDirForTests(installDir);
     fakeV2Fetcher(FAKE_CREDS);
 
-    await dn(joinArgs(writeJoinerSeed("joiner4.seed")), (() => ({ config: {} })) as never);
+    await dn(joinArgs(writeJoinerSeed("joiner4.seed")), emptyConfigReader);
 
     expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
     expect(statSync(installed).mode & 0o777).toBe(0o600);
@@ -776,7 +777,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     __setLeafCredsInstallDirForTests(installDir);
     fakeV2Fetcher(FAKE_CREDS);
 
-    await dn(joinArgs(writeJoinerSeed("joiner5.seed")), (() => ({ config: {} })) as never);
+    await dn(joinArgs(writeJoinerSeed("joiner5.seed")), emptyConfigReader);
 
     expect(readFileSync(installed, "utf-8")).toBe(FAKE_CREDS);
     expect(statSync(installed).mode & 0o777).toBe(0o600);
@@ -944,7 +945,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
 
   test("PSK (unattested) network → the sealed secret is still fetched even with a creds file, and no operator-mode notice", async () => {
     const fetcher = unopenableSealedSecret();
-    const { stderr } = await joinWithCredsFile("psk-net", (() => ({ config: {} })) as never);
+    const { stderr } = await joinWithCredsFile("psk-net", emptyConfigReader);
 
     expect(fetcher.called).toBe(true);
     expect(stderr).not.toContain("operator-mode network");
@@ -968,7 +969,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
       "--account", "A" + "B".repeat(55),
       "--nats-config", join(tmp, "local.conf"),
       "--plist", join(tmp, "nats.plist"),
-    ], (() => ({ config: {} })) as never);
+    ], emptyConfigReader);
 
     expect(called).toBe(false);
   });
