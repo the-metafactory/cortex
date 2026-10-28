@@ -736,7 +736,7 @@ export type SealedPayloadKeyRefresh =
   | { ok: true; payloadKey?: string; payloadKeyKid?: string }
   | { ok: false; reason: string };
 
-export async function fetchSealedPayloadKey(
+async function fetchSealedPayloadKey(
   networkId: string,
   inputs: { seedPath: string; registryUrl: string; principal: string },
   expectedLeafUsers: readonly string[],
