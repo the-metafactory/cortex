@@ -104,7 +104,10 @@ import {
   buildLiveKeyRotationPorts,
   hubAdminMaterialFromSeedFile,
 } from "./network-secret-adapters";
-import { fetchSealedLeafSecret } from "../../../common/registry/fetch-sealed-secret";
+import {
+  fetchSealedLeafSecret,
+  type FetchSealedLeafSecretResult,
+} from "../../../common/registry/fetch-sealed-secret";
 import { defaultKeyId } from "../../../common/crypto/network-encryption-policy";
 import {
   resolveOwnAdmissionState,
@@ -688,16 +691,15 @@ export type AutoFetchedLeafAuth =
   | { kind: "creds-file"; credsPath: string; leafUser: string; payloadKey?: string; payloadKeyKid?: string }
   | { kind: "unavailable"; reason: string };
 
-async function maybeAutoFetchLeafSecret(
+/**
+ * Load the stack seed and fetch + open this member's sealed admission envelope.
+ * `undefined` means the seed is missing or unusable, so nothing was fetched.
+ */
+async function fetchOwnSealedEnvelope(
   networkId: string,
-  inputs: { leafSecret?: string; seedPath: string; registryUrl: string; principal: string },
-  /** #1597 (R7) — the member's OWN identities a v2 credential must be minted for. */
+  inputs: { seedPath: string; registryUrl: string; principal: string },
   expectedLeafUsers: readonly string[],
-): Promise<AutoFetchedLeafAuth | undefined> {
-  // Only when no leaf secret was resolved from flag/config (don't override an
-  // explicit secret-auth join).
-  if (inputs.leafSecret !== undefined) return undefined;
-
+): Promise<FetchSealedLeafSecretResult | undefined> {
   const seedExpanded = expandTilde(inputs.seedPath);
   if (!existsSync(seedExpanded)) return undefined;
 
@@ -714,13 +716,53 @@ async function maybeAutoFetchLeafSecret(
   }
 
   const fetcher = joinLeafSecretFetcherOverride ?? fetchSealedLeafSecret;
-  const res = await fetcher({
+  return fetcher({
     registryUrl: inputs.registryUrl,
     networkId,
     principalId: inputs.principal,
     material,
     expectedLeafUsers,
   });
+}
+
+/**
+ * cortex#2759 — on a creds-managed operator network join renders the leaf from
+ * the creds file but still opens the sealed envelope, only for the payload key
+ * K (C-1349), so a `secret rotate-key` reaches the member on re-join. The
+ * envelope's leaf credential (v1 PSK or v2 creds text) is ignored and nothing
+ * is installed from it.
+ */
+export type SealedPayloadKeyRefresh =
+  | { ok: true; payloadKey?: string; payloadKeyKid?: string }
+  | { ok: false; reason: string };
+
+async function fetchSealedPayloadKey(
+  networkId: string,
+  inputs: { seedPath: string; registryUrl: string; principal: string },
+  expectedLeafUsers: readonly string[],
+): Promise<SealedPayloadKeyRefresh> {
+  const res = await fetchOwnSealedEnvelope(networkId, inputs, expectedLeafUsers);
+  if (res === undefined) return { ok: false, reason: `no usable stack seed at ${inputs.seedPath}` };
+  if (!res.ok) return { ok: false, reason: res.reason };
+  return {
+    ok: true,
+    ...(res.payloadKey !== undefined && { payloadKey: res.payloadKey }),
+    ...(res.payloadKeyKid !== undefined && { payloadKeyKid: res.payloadKeyKid }),
+  };
+}
+
+async function maybeAutoFetchLeafSecret(
+  networkId: string,
+  inputs: { leafSecret?: string; seedPath: string; registryUrl: string; principal: string },
+  /** #1597 (R7) — the member's OWN identities a v2 credential must be minted for. */
+  expectedLeafUsers: readonly string[],
+): Promise<AutoFetchedLeafAuth | undefined> {
+  // Only when no leaf secret was resolved from flag/config (don't override an
+  // explicit secret-auth join).
+  if (inputs.leafSecret !== undefined) return undefined;
+
+  const res = await fetchOwnSealedEnvelope(networkId, inputs, expectedLeafUsers);
+  if (res === undefined) return undefined;
   if (!res.ok) return { kind: "unavailable", reason: res.reason };
 
   // #1597 — a v2 envelope delivered a per-member `.creds` file (operator-mode
@@ -927,17 +969,28 @@ export function planJoinLeafAuth(args: {
  * the creds path (the #821 creds preflight still refuses when that file is
  * missing). On a simple/PSK network the sealed secret is the leaf credential,
  * so nothing is printed here and the existing refusal stands.
+ *
+ * cortex#2759 — on the self-managed-creds plan `payloadKeyRefresh` is the
+ * K-only envelope read; when it failed, the notice also warns that K was not
+ * refreshed. The join still completes.
  */
 export function joinLeafAuthNotice(
   networkId: string,
   plan: JoinLeafAuthPlan,
   fetched: AutoFetchedLeafAuth | undefined,
   credsPath: string,
+  payloadKeyRefresh?: SealedPayloadKeyRefresh,
 ): string | undefined {
   if (plan.kind === "self-managed-creds") {
-    return (
+    const source =
       `cortex network join: "${networkId}" is an operator-mode network; the leaf authenticates with ` +
-      `the creds file at ${plan.credsPath}, so join does not fetch or open a sealed leaf credential (cortex#2751).\n`
+      `the creds file at ${plan.credsPath}, so join ignores any sealed leaf credential and opens the sealed ` +
+      `envelope only for the payload key K (cortex#2751, cortex#2759).\n`;
+    if (payloadKeyRefresh === undefined || payloadKeyRefresh.ok) return source;
+    return (
+      source +
+      `cortex network join: WARNING — the payload key K for "${networkId}" was not refreshed ` +
+      `(${payloadKeyRefresh.reason}). The join continues; the stack keeps whatever K it already has (cortex#2759).\n`
     );
   }
   if (plan.kind === "sealed-fetch" && plan.operatorModeHub && fetched?.kind === "unavailable") {
@@ -948,6 +1001,74 @@ export function joinLeafAuthNotice(
     );
   }
   return undefined;
+}
+
+/**
+ * The leaf credential and payload key K a join resolved, plus the stderr
+ * notice about where they came from.
+ */
+export interface ResolvedJoinLeafAuth {
+  notice: string | undefined;
+  credsPath: string;
+  leafSecret?: string;
+  leafUser?: string;
+  payloadKey?: string;
+  payloadKeyKid?: string;
+}
+
+/**
+ * cortex#2751 / cortex#2759 — resolve a federated join's leaf credential and
+ * payload key K from the leaf-auth plan:
+ *   - `sealed-fetch` fetches the envelope and uses its leaf credential and K.
+ *   - `self-managed-creds` renders from the creds file and reads only K from
+ *     the envelope; an unavailable or unopenable envelope is a warning.
+ *   - `configured-secret` fetches nothing.
+ */
+export async function resolveJoinLeafAuth(
+  networkId: string,
+  inputs: { leafSecret?: string; leafUser?: string; seedPath: string; registryUrl: string; principal: string },
+  args: { hubMode: JoinHubMode; credsPath: string; expectedLeafUsers: readonly string[] },
+): Promise<ResolvedJoinLeafAuth> {
+  const plan = planJoinLeafAuth({
+    hubMode: args.hubMode,
+    configuredLeafSecret: inputs.leafSecret,
+    credsPath: args.credsPath,
+    credsUsable: isUsableCredsFile(args.credsPath),
+    sealedCredsInstallPath: leafCredsInstallPath(networkId),
+  });
+
+  if (plan.kind === "self-managed-creds") {
+    const k = await fetchSealedPayloadKey(networkId, inputs, args.expectedLeafUsers);
+    return {
+      notice: joinLeafAuthNotice(networkId, plan, undefined, args.credsPath, k),
+      credsPath: args.credsPath,
+      ...(inputs.leafUser !== undefined && { leafUser: inputs.leafUser }),
+      ...(k.ok && k.payloadKey !== undefined && { payloadKey: k.payloadKey }),
+      ...(k.ok && k.payloadKeyKid !== undefined && { payloadKeyKid: k.payloadKeyKid }),
+    };
+  }
+
+  const fetched =
+    plan.kind === "sealed-fetch" ? await maybeAutoFetchLeafSecret(networkId, inputs, args.expectedLeafUsers) : undefined;
+  const autoAuth = fetched?.kind === "unavailable" ? undefined : fetched;
+  const autoSecret = autoAuth?.kind === "secret-auth" ? autoAuth : undefined;
+  const leafSecret = inputs.leafSecret ?? autoSecret?.leafSecret;
+  const leafUser = inputs.leafUser ?? autoSecret?.leafUser;
+  return {
+    notice: joinLeafAuthNotice(networkId, plan, fetched, args.credsPath),
+    // #1597 — a fetched v2 credential file was installed at its conventional
+    // 0600 path: point the stack binding THERE (instead of the derive-time creds
+    // path) so joinNetwork renders the existing creds-file remote branch. The
+    // #821 existence preflight passes because the file was just written.
+    credsPath: autoAuth?.kind === "creds-file" ? autoAuth.credsPath : args.credsPath,
+    ...(leafSecret !== undefined && { leafSecret }),
+    ...(leafUser !== undefined && { leafUser }),
+    // C-1349 Slice 1 — the sealed envelope's payload key K (+ kid), when the
+    // admin sealed one via `secret add-member`/`rotate`. Rides BOTH envelope
+    // versions (#1597).
+    ...(autoAuth?.payloadKey !== undefined && { payloadKey: autoAuth.payloadKey }),
+    ...(autoAuth?.payloadKeyKid !== undefined && { payloadKeyKid: autoAuth.payloadKeyKid }),
+  };
 }
 
 /**
@@ -1120,36 +1241,11 @@ async function runJoin(
     ]),
   ];
   const hubMode = resolveJoinHubMode(networkId, inputs.policyNetworks);
-  const derivedCredsPath = expandTilde(inputs.credsPath);
-  const leafAuthPlan = planJoinLeafAuth({
+  const leafAuth = await resolveJoinLeafAuth(networkId, inputs, {
     hubMode,
-    configuredLeafSecret: inputs.leafSecret,
-    credsPath: derivedCredsPath,
-    credsUsable: isUsableCredsFile(derivedCredsPath),
-    sealedCredsInstallPath: leafCredsInstallPath(networkId),
+    credsPath: expandTilde(inputs.credsPath),
+    expectedLeafUsers,
   });
-  const fetched =
-    leafAuthPlan.kind === "sealed-fetch"
-      ? await maybeAutoFetchLeafSecret(networkId, inputs, expectedLeafUsers)
-      : undefined;
-  const leafAuthNotice = joinLeafAuthNotice(networkId, leafAuthPlan, fetched, derivedCredsPath);
-  const autoAuth = fetched?.kind === "unavailable" ? undefined : fetched;
-  const autoSecret = autoAuth?.kind === "secret-auth" ? autoAuth : undefined;
-  const resolvedLeafSecret = inputs.leafSecret ?? autoSecret?.leafSecret;
-  const resolvedLeafUser = inputs.leafUser ?? autoSecret?.leafUser;
-  // #1597 — a fetched v2 credential file was installed at its conventional
-  // 0600 path: point the stack binding THERE (instead of the derive-time creds
-  // path) so joinNetwork renders the existing creds-file remote branch — the
-  // exact shape production operator-mode leaves run. The #821 existence
-  // preflight passes because the file was just written.
-  const resolvedCredsPath =
-    autoAuth?.kind === "creds-file" ? autoAuth.credsPath : derivedCredsPath;
-  // C-1349 Slice 1 — the sealed envelope's payload key K (+ kid), when the admin
-  // sealed one via `secret add-member`/`rotate`. Present ⇒ join writes
-  // `encryption: enabled` + `payload_key` (+ kid) into stacks/<slug>.yaml.
-  // Rides BOTH envelope versions (#1597).
-  const resolvedPayloadKey = autoAuth?.payloadKey;
-  const resolvedPayloadKeyKid = autoAuth?.payloadKeyKid;
 
   const stack: JoiningStack = {
     // C-1436 — the own-scope federation identity's PRINCIPAL segment MUST derive
@@ -1176,17 +1272,17 @@ async function runJoin(
     // fail daemon boot (or be falsely refused). Pin the guard to `bootStackSlug`
     // so guard + boot can never split. See cortex#1364.
     stackSlug: inputs.bootStackSlug,
-    credentials: resolvedCredsPath,
+    credentials: leafAuth.credsPath,
     account: inputs.account,
     // C-1224 (ADR-0013 sovereign model) — pass the secret-auth leaf material (when
     // resolved, including PR5b's auto-fetched leaf PSK) so the join renders a
     // secret-auth pipe binding the principal's OWN local account instead of a
     // `.creds`-file leaf.
-    ...(resolvedLeafSecret !== undefined && { leafSecret: resolvedLeafSecret }),
-    ...(resolvedLeafUser !== undefined && { leafUser: resolvedLeafUser }),
+    ...(leafAuth.leafSecret !== undefined && { leafSecret: leafAuth.leafSecret }),
+    ...(leafAuth.leafUser !== undefined && { leafUser: leafAuth.leafUser }),
     // C-1349 Slice 1 — sealed payload key K (+ kid) → join installs encryption.
-    ...(resolvedPayloadKey !== undefined && { payloadKey: resolvedPayloadKey }),
-    ...(resolvedPayloadKeyKid !== undefined && { payloadKeyId: resolvedPayloadKeyKid }),
+    ...(leafAuth.payloadKey !== undefined && { payloadKey: leafAuth.payloadKey }),
+    ...(leafAuth.payloadKeyKid !== undefined && { payloadKeyId: leafAuth.payloadKeyKid }),
     leafNode: optionalValueFlag(flags, "--leaf-node"),
     maxHop,
     // O-3 (cortex#1053) — pass the operator-mode leaf package (when resolved)
@@ -1247,7 +1343,7 @@ async function runJoin(
   if (
     shouldReplaceCredsPreflightError({
       joinOk: res.ok,
-      resolvedLeafSecret,
+      resolvedLeafSecret: leafAuth.leafSecret,
       explicitCredsFlag: optionalValueFlag(flags, "--creds"),
       reason: res.reason,
       operatorModeHub: hubMode === "operator",
@@ -1267,7 +1363,7 @@ async function runJoin(
   });
   // cortex#1228 — prepend the custom-registry TOFU warning to stderr (when set)
   // so it is surfaced regardless of the flow's success/JSON mode.
-  const preamble = (tofuWarning ?? "") + (leafAuthNotice ?? "");
+  const preamble = (tofuWarning ?? "") + (leafAuth.notice ?? "");
   const withPreamble = preamble !== "" ? { ...flow, stderr: preamble + flow.stderr } : flow;
   // cortex#1139 — prepend any auto-provision output so the join transcript shows
   // the substrate setup that ran first (to stdout on success, stderr on failure).

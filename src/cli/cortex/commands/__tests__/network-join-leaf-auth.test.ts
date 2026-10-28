@@ -57,11 +57,24 @@ describe("planJoinLeafAuth (cortex#2751)", () => {
 describe("joinLeafAuthNotice (cortex#2751)", () => {
   const unopenable = { kind: "unavailable" as const, reason: "could not open the sealed box" };
 
-  test("self-managed-creds plan → names the creds file and says the sealed secret is not opened", () => {
-    const n = joinLeafAuthNotice("net-a", { kind: "self-managed-creds", credsPath: "/c/net-a.creds" }, undefined, "/c/net-a.creds");
+  const selfManaged = { kind: "self-managed-creds" as const, credsPath: "/c/net-a.creds" };
+
+  test("self-managed-creds plan → names the creds file and says the envelope is opened only for K", () => {
+    const n = joinLeafAuthNotice("net-a", selfManaged, undefined, "/c/net-a.creds", { ok: true, payloadKey: "K" });
     expect(n).toContain("operator-mode network");
     expect(n).toContain("/c/net-a.creds");
-    expect(n).toContain("does not fetch or open a sealed leaf credential");
+    expect(n).toContain("ignores any sealed leaf credential");
+    expect(n).toContain("only for the payload key K");
+    expect(n).not.toContain("WARNING");
+  });
+
+  test("self-managed-creds plan + unopenable envelope → WARNING that K was not refreshed, join continues (cortex#2759)", () => {
+    const n = joinLeafAuthNotice("net-a", selfManaged, undefined, "/c/net-a.creds", { ok: false, reason: "sealed to another key" });
+    expect(n).toContain("WARNING");
+    expect(n).toContain("payload key K");
+    expect(n).toContain("was not refreshed");
+    expect(n).toContain("sealed to another key");
+    expect(n).toContain("The join continues");
   });
 
   test("operator network + unopenable sealed secret → WARNING that join continues on the creds path", () => {
