@@ -879,7 +879,7 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     expect(res.notice).toContain("was not refreshed");
   });
 
-  test("rotate-key then re-join → a creds-managed operator member resolves the new K′ and kid for the stack (cortex#2759)", async () => {
+  test("rotate-key then re-join → a creds-managed member on an operator-mode network resolves the new K′ and kid for the stack (cortex#2759)", async () => {
     const memberPubkey = fakePubkey("3");
     const { factory, calls } = fakeRotationFactory({
       admitted: [{ request_id: "req-andreas", principal_id: "andreas", peer_pubkey: memberPubkey }],
