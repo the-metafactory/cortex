@@ -425,68 +425,63 @@ export function decideLeafAccountGuard(params: {
   daemonCreds: InspectedCreds | undefined;
   agentsAccount: string | undefined;
 }): LeafAccountGuardDecision {
-  const { rendered, leafCreds, daemonCreds, agentsAccount } = params;
+  const { rendered, leafCreds, daemonCreds: daemon, agentsAccount } = params;
   const tag = "(cortex#1728 Guard 3)";
-  if (leafCreds.account === undefined) return { kind: "proceed" };
-  if (leafCreds.definedLocally) {
-    if (leafCreds.account === rendered) {
-      return {
-        kind: "proceed",
-        step: `verified leaf account ${rendered} matches the leaf creds' issuer_account ${tag}`,
-      };
-    }
-    return {
-      kind: "refuse",
-      reason:
-        `refusing to render a leaf into account ${rendered} — the leaf creds (${leafCreds.path}) ` +
-        `publish on a DIFFERENT local account ${leafCreds.account} (decoded from the creds' ` +
-        `issuer_account). A leaf bound to one account while the creds publish on another comes up ` +
-        `with visible interest, but publishes never cross (out=0). Set stack.nats_infra.account to ` +
-        `${leafCreds.account} (defined in the local nats config), or wire a cross-account ` +
-        `export/import between them. ${tag}`,
-    };
-  }
-  const crossOperator =
-    `the leaf creds' issuer_account ${leafCreds.account} is not defined in the local nats config, ` +
-    `so the hub's operator issued them (a cross-operator leaf); the leaf binds local account ${rendered}`;
-  const daemon = daemonCreds;
-  if (daemon === undefined || daemon.path === leafCreds.path) {
-    return {
-      kind: "proceed",
-      step: `${crossOperator}; no separate daemon creds (nats.credsPath) to check ${tag}`,
-    };
-  }
-  if (daemon.account === undefined || !daemon.definedLocally) {
-    return {
-      kind: "proceed",
-      step:
-        `${crossOperator}; could not resolve a local account from the daemon creds ` +
-        `(${daemon.path}) ${tag}`,
-    };
-  }
-  if (daemon.account === rendered) {
-    return {
-      kind: "proceed",
-      step: `${crossOperator}; the daemon publishes on the same account ${tag}`,
-    };
-  }
-  if (agentsAccount !== undefined && daemon.account === agentsAccount) {
-    return {
-      kind: "proceed",
-      step:
-        `${crossOperator}; the daemon publishes on agents_account ${agentsAccount}, which the ` +
-        `federated.> export/import bridges ${tag}`,
-    };
-  }
-  return {
+  const proceed = (step: string): LeafAccountGuardDecision => ({ kind: "proceed", step: `${step} ${tag}` });
+  const refuseMismatch = (
+    who: "leaf" | "daemon",
+    path: string,
+    account: string,
+    remedy: string,
+  ): LeafAccountGuardDecision => ({
     kind: "refuse",
     reason:
-      `refusing to render a leaf into account ${rendered} — the daemon creds (${daemon.path}) publish ` +
-      `on a DIFFERENT local account ${daemon.account} (decoded from the creds' issuer_account), and ` +
-      `it is not the declared stack.nats_infra.agents_account. The leaf would come up with visible ` +
-      `interest, but publishes never cross (out=0). Either set stack.nats_infra.account to ` +
-      `${daemon.account}, or declare it as stack.nats_infra.agents_account and wire the federated.> ` +
-      `export/import (cortex network provision). The leaf creds' account ${leafCreds.account} belongs ` +
-      `to another operator and must not be bound locally. ${tag}`,
-  };
+      `refusing to render a leaf into account ${rendered} — the ${who} creds (${path}) ` +
+      `publish on a DIFFERENT local account ${account} (decoded from the ` +
+      `creds' issuer_account). A leaf bound to one account while the creds publish on another comes up ` +
+      `with visible interest, but publishes never cross (out=0). ${remedy} ${tag}`,
+  });
+  const leafAccount = leafCreds.account;
+  if (leafAccount === undefined) return { kind: "proceed" };
+  if (leafCreds.definedLocally) {
+    if (leafAccount === rendered) {
+      return proceed(`verified leaf account ${rendered} matches the leaf creds' issuer_account`);
+    }
+    return refuseMismatch(
+      "leaf",
+      leafCreds.path,
+      leafAccount,
+      `Set stack.nats_infra.account to ${leafAccount} (defined in the local nats config), or wire a ` +
+        `cross-account export/import between them.`,
+    );
+  }
+  const crossOperator =
+    `the leaf creds' issuer_account ${leafAccount} is not defined in the local nats config, so it is ` +
+    `treated as issued by another operator (a cross-operator leaf) and not compared; the leaf binds ` +
+    `local account ${rendered}`;
+  if (daemon === undefined || daemon.path === leafCreds.path) {
+    return proceed(`${crossOperator}; no separate daemon creds (nats.credsPath) to check`);
+  }
+  const daemonAccount = daemon.account;
+  if (daemonAccount === undefined || !daemon.definedLocally) {
+    return proceed(`${crossOperator}; could not resolve a local account from the daemon creds (${daemon.path})`);
+  }
+  if (daemonAccount === rendered) {
+    return proceed(`${crossOperator}; the daemon publishes on the same account`);
+  }
+  if (daemonAccount === agentsAccount) {
+    return proceed(
+      `${crossOperator}; the daemon publishes on the declared agents_account ${agentsAccount}, which ` +
+        `network provision bridges with the federated.> export/import (the bridge itself is not checked here)`,
+    );
+  }
+  return refuseMismatch(
+    "daemon",
+    daemon.path,
+    daemonAccount,
+    `It is not the declared stack.nats_infra.agents_account either. Set stack.nats_infra.account to ` +
+      `${daemonAccount}, or declare it as stack.nats_infra.agents_account and wire the federated.> ` +
+      `export/import (cortex network provision). The leaf creds' account ${leafAccount} is not defined ` +
+      `locally and must not be bound.`,
+  );
 }

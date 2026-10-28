@@ -334,6 +334,7 @@ describe("Guard 3 — decideLeafAccountGuard (cortex#1728, cortex#2760)", () => 
 
   test("same operator: leaf creds on another local account refuse (the #1728 third-account bug)", () => {
     const reason = reasonOf(decide(localLeaf(THIRD), daemon(FED), THIRD));
+    expect(reason).toContain(`the leaf creds`);
     expect(reason).toContain(`DIFFERENT local account ${THIRD}`);
     expect(reason).toContain(`Set stack.nats_infra.account to ${THIRD}`);
   });
@@ -355,7 +356,8 @@ describe("Guard 3 — decideLeafAccountGuard (cortex#1728, cortex#2760)", () => 
   test("cross operator: a daemon on another local account refuses and never recommends the hub account", () => {
     const reason = reasonOf(decide(hubLeaf, daemon(THIRD), AGENTS));
     expect(reason).toContain(`DIFFERENT local account ${THIRD}`);
-    expect(reason).toContain(`set stack.nats_infra.account to ${THIRD}`);
+    expect(reason).toContain(`the daemon creds`);
+    expect(reason).toContain(`Set stack.nats_infra.account to ${THIRD}`);
     expect(reason).not.toContain(`stack.nats_infra.account to ${HUB}`);
   });
 
