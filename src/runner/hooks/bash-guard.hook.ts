@@ -1761,7 +1761,14 @@ async function main(): Promise<void> {
         raw += new TextDecoder().decode(value, { stream: true });
       }
     })();
-    await Promise.race([readLoop, new Promise<void>((r) => setTimeout(r, 200))]);
+    let stdinCapTimer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      readLoop,
+      new Promise<void>((r) => {
+        stdinCapTimer = setTimeout(r, 200);
+      }),
+    ]);
+    clearTimeout(stdinCapTimer);
 
     if (!raw.trim()) {
       pass();
