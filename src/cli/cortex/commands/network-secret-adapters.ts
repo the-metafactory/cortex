@@ -203,18 +203,16 @@ function buildLiveHubAuthPort(cfg: LiveSecretPortsConfig): HubAuthPort {
   const psLister = cfg.psLister ?? bunNatsProcessLister;
   const inspectProcess = cfg.inspect ?? bunNatsProcessInspector;
   const sendSignal = cfg.signal ?? bunSignalSender;
+  const missingConf = (): Promise<never> =>
+    Promise.reject(new Error(`hub config not found at ${confPath} (set --hub-config)`));
   return {
     confPath,
     readConf(): Promise<string> {
-      if (!existsSync(confPath)) {
-        return Promise.reject(new Error(`hub config not found at ${confPath} (set --hub-config)`));
-      }
+      if (!existsSync(confPath)) return missingConf();
       return Promise.resolve(readFileSync(confPath, "utf-8"));
     },
     isOperatorMode(): Promise<boolean> {
-      if (!existsSync(confPath)) {
-        return Promise.reject(new Error(`hub config not found at ${confPath} (set --hub-config)`));
-      }
+      if (!existsSync(confPath)) return missingConf();
       const resolved = resolveConfigIncludes(confPath, {
         read: (p) => (existsSync(p) ? readFileSync(p, "utf-8") : undefined),
         dirname: pathDirname,
