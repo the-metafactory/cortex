@@ -60,6 +60,12 @@ import {
   type SettleWindowOptions,
 } from "../../../../common/nats/restart-with-settle";
 import { instantClock } from "./settle-test-helpers";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "fs";
+import { tmpdir } from "os";
+import { join as joinPath } from "path";
+import { planJoinLeafAuth, resolveJoinHubMode } from "../network";
+import { readNetworksFromConfig, writeNetworksGuarded } from "../network-config-write";
+import { NetworkCache } from "../../../../common/registry/network-cache";
 
 // O-3 (cortex#1053) — a public-repo-safe fake leaf package: the operator-mode
 // material `cortex network join` renders to convert an anonymous bus. O-4
@@ -2042,6 +2048,84 @@ describe("#1220 reconcile — join enables + preserves so peer presence is admit
     const net = storeRef.networks.find((n) => n.id === "metafactory")!;
     expect(net.accept_subjects).toEqual(["federated.andreas.meta-factory.>"]);
     expect(net.reconcile!.enabled).toBe(true);
+  });
+});
+
+describe("cortex#2765 join keeps the networks[] fields it does not compute", () => {
+  const operatorEntry = (): PolicyFederatedNetwork => ({
+    ...handPinnedNetwork("metafactory"),
+    hub_mode: "operator",
+    hub_fed_account: "FED_ACCOUNT",
+    resolver_mode: "nats",
+  });
+
+  test("hub_mode, hub_fed_account and resolver_mode survive; join-owned fields are recomputed", async () => {
+    const { ports, storeRef } = makeFakes({ initialNetworks: [operatorEntry()] });
+    const res = await joinNetwork("metafactory", LOCAL, ports);
+
+    expect(res.ok).toBe(true);
+    const net = storeRef.networks.find((n) => n.id === "metafactory")!;
+    expect(net.hub_mode).toBe("operator");
+    expect(net.hub_fed_account).toBe("FED_ACCOUNT");
+    expect(net.resolver_mode).toBe("nats");
+    expect(net.accept_subjects).toEqual(["federated.andreas.meta-factory.>"]);
+    expect(net.reconcile!.enabled).toBe(true);
+  });
+
+  test("re-join on a real config file takes the self-managed-creds path both times", async () => {
+    const dir = mkdtempSync(joinPath(tmpdir(), "rejoin-2765-"));
+    try {
+      const path = joinPath(dir, "stack.yaml");
+      writeFileSync(
+        path,
+        [
+          "policy:",
+          "  federated:",
+          "    networks:",
+          "      - id: metafactory",
+          "        leaf_node: metafactory",
+          "        peers: []",
+          "        accept_subjects: []",
+          "        deny_subjects: []",
+          "        announce_capabilities: []",
+          "        max_hop: 1",
+          "        hub_fed_account: FED_ACCOUNT",
+          "        hub_mode: operator # declared by the hub owner",
+          "",
+        ].join("\n"),
+      );
+      const { ports } = makeFakes({});
+      const filePorts: NetworkPorts = {
+        ...ports,
+        configStore: {
+          readNetworks: () => readNetworksFromConfig(path),
+          writeNetworks: (networks) => writeNetworksGuarded(path, networks, { backupLabel: "join" }),
+        },
+      };
+      const emptyCache = new NetworkCache({ cacheDir: joinPath(dir, "cache") });
+      const plan = () =>
+        planJoinLeafAuth({
+          hubMode: resolveJoinHubMode("metafactory", readNetworksFromConfig(path), emptyCache),
+          configuredLeafSecret: undefined,
+          credsPath: "/stack/nats/network.creds",
+          credsUsable: true,
+          sealedCredsInstallPath: "/stack/nats/network-leaf.creds",
+        });
+
+      for (const _round of [1, 2]) {
+        expect(plan().kind).toBe("self-managed-creds");
+        const res = await joinNetwork("metafactory", LOCAL, filePorts);
+        expect(res.ok).toBe(true);
+      }
+      expect(plan().kind).toBe("self-managed-creds");
+
+      const text = readFileSync(path, "utf-8");
+      expect(text).toContain("hub_mode: operator # declared by the hub owner");
+      expect(text).toContain("hub_fed_account: FED_ACCOUNT");
+      expect(readNetworksFromConfig(path)[0]!.accept_subjects).toEqual(["federated.andreas.meta-factory.>"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
