@@ -962,4 +962,16 @@ describe("shouldReplaceCredsPreflightError (C-1315 #821 guard, #1397)", () => {
       }),
     ).toBe(false);
   });
+
+  test("cortex#2751 — an operator-mode network keeps the creds-not-found error (no sealed-PSK rewrite)", () => {
+    expect(
+      shouldReplaceCredsPreflightError({
+        joinOk: false,
+        resolvedLeafSecret: undefined,
+        explicitCredsFlag: undefined,
+        reason: CREDS_821,
+        operatorModeHub: true,
+      }),
+    ).toBe(false);
+  });
 });

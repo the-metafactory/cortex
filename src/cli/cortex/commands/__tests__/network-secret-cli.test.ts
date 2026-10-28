@@ -780,6 +780,56 @@ describe("cortex network join — plug-and-play leaf-secret auto-fetch", () => {
     expect(statSync(installed).mode & 0o777).toBe(0o600);
   });
 
+  const operatorModeConfig = (() => ({
+    policy: { federated: { networks: [{ id: "metafactory", hub_mode: "operator" }] } },
+  })) as never;
+
+  function unopenableSealedSecret(): { called: boolean } {
+    const seen = { called: false };
+    __setJoinLeafSecretFetcherForTests(async () => {
+      seen.called = true;
+      return { ok: false, reason: "sealed to another key" };
+    });
+    return seen;
+  }
+
+  async function joinWithCredsFile(name: string, config: never): Promise<{ stderr: string; credsPath: string }> {
+    const credsPath = join(tmp, `${name}.creds`);
+    writeFileSync(credsPath, FAKE_CREDS, { mode: 0o600 });
+    const res = await dn([...joinArgs(writeJoinerSeed(`${name}.seed`)), "--creds", credsPath], config);
+    return { stderr: res.stderr, credsPath };
+  }
+
+  test("operator network + usable creds file → the sealed secret is neither fetched nor opened", async () => {
+    const fetcher = unopenableSealedSecret();
+    const { stderr, credsPath } = await joinWithCredsFile("self-managed-leaf", operatorModeConfig);
+
+    expect(fetcher.called).toBe(false);
+    expect(stderr).toContain("operator-mode network");
+    expect(stderr).toContain(credsPath);
+    expect(stderr).not.toContain("could not open it");
+  });
+
+  test("operator network + unopenable sealed secret and no self-managed creds → warns and continues, no sealed-secret refusal", async () => {
+    const fetcher = unopenableSealedSecret();
+    const res = await dn(joinArgs(writeJoinerSeed("joiner2751b.seed")), operatorModeConfig);
+
+    expect(fetcher.called).toBe(true);
+    expect(res.stderr).toContain("WARNING");
+    expect(res.stderr).toContain("sealed to another key");
+    expect(res.stderr).toContain("falls back to the creds file at");
+    expect(res.stderr).not.toContain("could not open it");
+  });
+
+  test("PSK (unattested) network → the sealed secret is still fetched even with a creds file, and no operator-mode notice", async () => {
+    const fetcher = unopenableSealedSecret();
+    const { stderr } = await joinWithCredsFile("psk-net", (() => ({})) as never);
+
+    expect(fetcher.called).toBe(true);
+    expect(stderr).not.toContain("operator-mode network");
+    expect(stderr).not.toContain("cortex#2751");
+  });
+
   test("an explicit --leaf-secret SUPPRESSES the auto-fetch", async () => {
     const joinerSeed = join(tmp, "joiner2.seed");
     writeFileSync(joinerSeed, new TextDecoder().decode(createUser().getSeed()), { mode: 0o600 });

@@ -1813,7 +1813,7 @@
   },
   "src/cli/cortex/commands/network-adapters.ts": {
     "cortex/no-comments": {
-      "count": 418
+      "count": 408
     }
   },
   "src/cli/cortex/commands/network-admit-adapters.ts": {
@@ -1978,7 +1978,7 @@
   },
   "src/cli/cortex/commands/network.ts": {
     "cortex/no-comments": {
-      "count": 726
+      "count": 725
     }
   },
   "src/cli/cortex/commands/normalize-config.ts": {
