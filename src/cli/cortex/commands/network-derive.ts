@@ -183,6 +183,8 @@ export interface DerivedJoinInputs {
    */
   policyNetworks: PolicyFederatedNetwork[];
   extraLeafRemotes: ExtraLeafRemote[];
+  daemonCredsPath?: string;
+  agentsAccount?: string;
 }
 
 /** The leave inputs — a strict subset (no registry / seed / account / creds). */
@@ -560,6 +562,9 @@ export function deriveJoinInputs(
         }
       : undefined;
 
+  const daemonCredsPath = cfg.config.nats?.credsPath;
+  const agentsAccount = natsInfra?.agents_account;
+
   // #762 — announce_capabilities for THIS network, read from the matching
   // policy.federated.networks[] block. The join announces these to the registry
   // with networks:[networkId] so the principal joins the roster. Absent network
@@ -593,6 +598,8 @@ export function deriveJoinInputs(
       // cortex#1485 — the composed networks, for the --guided handoff guard.
       policyNetworks: cfg.policy?.federated?.networks ?? [],
       extraLeafRemotes: deriveExtraLeafRemotes(natsInfra),
+      ...(daemonCredsPath !== undefined && daemonCredsPath !== "" && { daemonCredsPath }),
+      ...(agentsAccount !== undefined && agentsAccount !== "" && { agentsAccount }),
     },
   };
 }

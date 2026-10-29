@@ -145,3 +145,51 @@ describe("writeNetworksGuarded — FS-7 whole-config validation", () => {
     expect(() => writeNetworksGuarded(monolith, [badWhole])).not.toThrow();
   });
 });
+
+describe("writeNetworksGuarded keeps existing YAML nodes (cortex#2765)", () => {
+  const original = [
+    "# header",
+    "policy:",
+    "  federated:",
+    "    networks:",
+    "      - id: metafactory",
+    "        peers: []",
+    "        hub_fed_account: FED_ACCOUNT # hub federation account",
+    "        hub_mode: operator # declared by the hub owner",
+    "        max_hop: 1",
+    "      - id: other",
+    "        peers: []",
+    "",
+  ].join("\n");
+
+  test("an unchanged field keeps its inline comment; a changed field takes the new value", () => {
+    writeFileSync(path, original);
+    const next = { id: "metafactory", peers: [], hub_fed_account: "FED_ACCOUNT", hub_mode: "operator", max_hop: 2 };
+    writeNetworksGuarded(path, [next as unknown as PolicyFederatedNetwork, { id: "other", peers: [] } as unknown as PolicyFederatedNetwork]);
+
+    const text = readFileSync(path, "utf-8");
+    expect(text).toContain("# header");
+    expect(text).toContain("hub_fed_account: FED_ACCOUNT # hub federation account");
+    expect(text).toContain("hub_mode: operator # declared by the hub owner");
+    expect(readNetworksFromConfig(path)[0]!.max_hop).toBe(2);
+  });
+
+  test("a field absent from the next entry is removed and a dropped entry disappears", () => {
+    writeFileSync(path, original);
+    writeNetworksGuarded(path, [{ id: "metafactory", peers: [], max_hop: 1 } as unknown as PolicyFederatedNetwork]);
+
+    const read = readNetworksFromConfig(path);
+    expect(read.map((n) => n.id)).toEqual(["metafactory"]);
+    expect(read[0]!.hub_mode).toBeUndefined();
+    expect(read[0]!.hub_fed_account).toBeUndefined();
+  });
+
+  test("a new entry is appended after the kept ones", () => {
+    writeFileSync(path, original);
+    const read0 = readNetworksFromConfig(path);
+    writeNetworksGuarded(path, [...read0, { id: "third", peers: [] } as unknown as PolicyFederatedNetwork]);
+
+    expect(readNetworksFromConfig(path).map((n) => n.id)).toEqual(["metafactory", "other", "third"]);
+    expect(readFileSync(path, "utf-8")).toContain("hub_mode: operator # declared by the hub owner");
+  });
+});

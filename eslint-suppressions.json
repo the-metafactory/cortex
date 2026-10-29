@@ -1813,7 +1813,7 @@
   },
   "src/cli/cortex/commands/network-adapters.ts": {
     "cortex/no-comments": {
-      "count": 418
+      "count": 408
     }
   },
   "src/cli/cortex/commands/network-admit-adapters.ts": {
@@ -1848,7 +1848,7 @@
   },
   "src/cli/cortex/commands/network-bus-safety.ts": {
     "cortex/no-comments": {
-      "count": 46
+      "count": 43
     }
   },
   "src/cli/cortex/commands/network-config-write.ts": {
@@ -1898,7 +1898,7 @@
   },
   "src/cli/cortex/commands/network-lib.ts": {
     "cortex/no-comments": {
-      "count": 383
+      "count": 382
     }
   },
   "src/cli/cortex/commands/network-make-live-adapters.ts": {
@@ -1978,7 +1978,7 @@
   },
   "src/cli/cortex/commands/network.ts": {
     "cortex/no-comments": {
-      "count": 726
+      "count": 724
     }
   },
   "src/cli/cortex/commands/normalize-config.ts": {

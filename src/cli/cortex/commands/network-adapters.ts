@@ -740,32 +740,7 @@ function buildLeafFilePort(cfg: LivePortsConfig, mutate: boolean): LeafFilePort 
       return result;
     },
     credsExist(path) {
-      // #821 — pure READ (identical in live + dry-run): does the leaf creds file
-      // exist AS A USABLE CREDS FILE? `nats-server -t` never dereferences it, so a
-      // missing/empty/wrong-type creds file passes `-t` yet leaves the leaf
-      // un-authenticatable. NIT-1 — beyond mere existence we require it to be a
-      // regular NON-EMPTY file (a directory or 0-byte file is a dormant trap) and
-      // sniff the `-----BEGIN NATS USER JWT-----` marker a real `.creds` carries.
-      // The path is tilde-expanded to match how nats-server resolves it.
-      const expanded = expandTilde(path);
-      if (expanded.length === 0) return false;
-      let st;
-      try {
-        st = statSync(expanded);
-      } catch (_err) {
-        return false; // ENOENT / unreadable → treat as missing.
-      }
-      if (!st.isFile() || st.size === 0) return false;
-      // Sniff the NATS user-creds marker. A genuine `.creds` from `nsc`/the
-      // provisioner carries the decorated JWT+seed block; reject a file that
-      // does not (e.g. a stray text file at the conventional path).
-      let head: string;
-      try {
-        head = readFileSync(expanded, "utf-8").slice(0, 512);
-      } catch (_err) {
-        return false;
-      }
-      return head.includes("-----BEGIN NATS USER JWT-----");
+      return isUsableCredsFile(path);
     },
     scanLeafnodeAuthorizationBomb() {
       // cortex#1728 Guard 1 — pure READ (identical live + dry-run): resolve the
@@ -883,6 +858,35 @@ function dropStandaloneExtraRemotes(cfg: LivePortsConfig, dir: string): void {
     }
   }
   rmSync(join(dir, EXTRA_REMOTES_INCLUDE_FILE), { force: true });
+}
+
+/**
+ * #821 — pure READ (identical in live + dry-run): does the leaf creds file at
+ * `path` exist AS A USABLE CREDS FILE? `nats-server -t` never dereferences it, so
+ * a missing/empty/wrong-type creds file passes `-t` yet leaves the leaf
+ * un-authenticatable. NIT-1 — beyond mere existence it must be a regular
+ * NON-EMPTY file (a directory or 0-byte file is a dormant trap) carrying the
+ * `-----BEGIN NATS USER JWT-----` marker a real `.creds` has. Tilde-expanded to
+ * match how nats-server resolves it. Exported so `network join` can decide its
+ * leaf-auth source with the SAME test the #821 preflight applies (cortex#2751).
+ */
+export function isUsableCredsFile(path: string): boolean {
+  const expanded = expandTilde(path);
+  if (expanded.length === 0) return false;
+  let st;
+  try {
+    st = statSync(expanded);
+  } catch (_err) {
+    return false; // ENOENT / unreadable → treat as missing.
+  }
+  if (!st.isFile() || st.size === 0) return false;
+  let head: string;
+  try {
+    head = readFileSync(expanded, "utf-8").slice(0, 512);
+  } catch (_err) {
+    return false;
+  }
+  return head.includes("-----BEGIN NATS USER JWT-----");
 }
 
 /**

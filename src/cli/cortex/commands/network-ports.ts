@@ -267,8 +267,8 @@ export interface LeafFilePort {
   scanLeafnodeAuthorizationBomb(): LeafnodeAuthorizationBomb[];
   /**
    * cortex#1728 Guard 3 — decode the `issuer_account` (fallback `iss`) from the
-   * NATS user JWT embedded in the leaf creds file at `credsPath`. This is the
-   * account the daemon actually PUBLISHES on. `undefined` when there is no
+   * NATS user JWT embedded in the creds file at `credsPath` (the leaf creds, or
+   * the daemon's `nats.credsPath` since cortex#2760). `undefined` when there is no
    * decodable creds JWT (a secret-auth leaf, a missing/undecodable file). Reads
    * PUBLIC claim material only — never the seed. A pure READ.
    */

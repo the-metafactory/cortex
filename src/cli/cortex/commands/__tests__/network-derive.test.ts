@@ -1339,3 +1339,28 @@ describe("#2743 extra leaf remotes derive from stack.nats_infra.extra_leaf_remot
     ).toBe(false);
   });
 });
+
+describe("cortex#2760 — join derives the daemon's creds for Guard 3", () => {
+  const AGENTS = "A" + "G".repeat(55);
+
+  test("carries nats.credsPath and stack.nats_infra.agents_account when declared", () => {
+    const cfg = loaded({
+      ...FULL,
+      config: { nats: { credsPath: "~/.config/nats/bot.creds" } } as AgentConfig,
+      stack: {
+        ...FULL.stack!,
+        nats_infra: { ...FULL.stack!.nats_infra, agents_account: AGENTS },
+      },
+    });
+    const join = deriveJoinInputs("metafactory", {}, "/cfg", reader(cfg), "darwin");
+    expect(join.inputs?.daemonCredsPath).toBe("~/.config/nats/bot.creds");
+    expect(join.inputs?.agentsAccount).toBe(AGENTS);
+    expect(join.inputs?.credsPath).toBe("~/.config/nats/mf.creds");
+  });
+
+  test("an existing config without them derives neither field", () => {
+    const join = deriveJoinInputs("metafactory", {}, "/cfg", reader(FULL), "darwin");
+    expect(join.inputs?.daemonCredsPath).toBeUndefined();
+    expect(join.inputs?.agentsAccount).toBeUndefined();
+  });
+});

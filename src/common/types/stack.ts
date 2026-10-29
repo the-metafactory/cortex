@@ -124,10 +124,17 @@ export const StackNatsInfraSchema = z.object({
     "stack.nats_infra.agents_account must be an account-class NKey (A-prefixed, 56 chars total)",
   ).optional(),
   /**
-   * Path to the leaf `.creds` file for the network connection. Maps to the
-   * `--creds` flag. OPTIONAL even within the block: when omitted, the join
-   * derives the convention default `~/.config/nats/<network>.creds`
-   * (per-network creds file). Declare here only to override the convention.
+   * Path to the LEAF `.creds` file for the network connection: the credential
+   * the leaf remote presents to the hub. Maps to the `--creds` flag. OPTIONAL
+   * even within the block: when omitted, the join derives the convention default
+   * `~/.config/nats/<network>.creds` (per-network creds file). Declare here only
+   * to override the convention.
+   *
+   * These are not the daemon's creds; the daemon connects with `nats.credsPath`.
+   * On a foreign-operator leaf the hub's operator JWT signs this file's
+   * account, so its issuer account is not a local account. `cortex network join` Guard 3 then checks
+   * the account of `nats.credsPath` against {@link StackNatsInfraSchema.shape.account}
+   * and {@link StackNatsInfraSchema.shape.agents_account} instead (cortex#2760).
    */
   creds_path: z.string().min(1).optional(),
   /**
@@ -137,7 +144,7 @@ export const StackNatsInfraSchema = z.object({
    * secret (URL userinfo — the hub's `leafnodes{}` accept block carries the
    * matching `authorization { user, password: <leaf-secret> }`) and binds the
    * link to the principal's OWN local {@link StackNatsInfraSchema.shape.account}
-   * in their own NSC operator — no hub-minted `.creds`, no cross-operator JWT
+   * in their own NSC operator — no hub-minted `.creds`, no foreign-operator JWT
    * trust. OPTIONAL: a stack on the legacy `.creds` path, or one that never
    * federates, omits it.
    *

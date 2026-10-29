@@ -1,5 +1,5 @@
 /**
- * IAW Phase D.6 (cortex#116) — cross-operator federation integration tests.
+ * IAW Phase D.6 (cortex#116) — foreign-operator federation integration tests.
  *
  * This file wires two cortex stacks (operator alpha + operator beta) in
  * process with their own `MyelinRuntime` stubs, surface-router (carrying
@@ -11,7 +11,7 @@
  *
  * Each test is a slice of cortex#116 §D.6:
  *
- *   1. **D.6.1 — cross-operator dispatch + reply chain.** Alpha emits a
+ *   1. **D.6.1 — foreign-operator dispatch + reply chain.** Alpha emits a
  *      signed `dispatch.task.received` envelope on
  *      `federated.research-collab.dispatch.task.received`. Beta's
  *      surface-router admits it (D.2 accept-list), beta's
@@ -385,7 +385,7 @@ async function signedDispatchReceived(
 // D.6.1 — Cross-operator dispatch + reply chain
 // =============================================================================
 
-describe("IAW Phase D.6.1 — cross-operator federated dispatch + reply (refs cortex#116)", () => {
+describe("IAW Phase D.6.1 — foreign-operator federated dispatch + reply (refs cortex#116)", () => {
   test(
     "alpha → beta dispatch on research-collab: D.2 gate admits, D.3 engine allows, beta replies with own stamp, alpha verifies chain",
     async () => {
@@ -548,7 +548,7 @@ describe("IAW Phase D.6.1 — cross-operator federated dispatch + reply (refs co
       expect(replyStamps[0]?.identity).toBe(beta.signerPrincipalDid);
 
       // The originating dispatch carried α's stamp — assert that too
-      // so the test docs both halves of the cross-operator audit trail.
+      // so the test docs both halves of the foreign-operator audit trail.
       const dispatchChain = dispatch.signed_by;
       const dispatchStamps = Array.isArray(dispatchChain)
         ? dispatchChain
@@ -565,7 +565,7 @@ describe("IAW Phase D.6.1 — cross-operator federated dispatch + reply (refs co
 // D.6.2 — Registry register + query (cortex-side consumer deferred to D.4.3)
 // =============================================================================
 
-describe("IAW Phase D.6.2 — network-registry register + cross-operator query (refs cortex#116)", () => {
+describe("IAW Phase D.6.2 — network-registry register + foreign-operator query (refs cortex#116)", () => {
   test(
     "alpha registers operator pubkey + capabilities; beta-side query returns registry-signed assertion verifying against the pinned registry pubkey",
     async () => {
