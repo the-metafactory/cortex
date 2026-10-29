@@ -62,32 +62,30 @@ async function syncDirectory(directory: string): Promise<void> {
   try { await handle.sync(); } finally { await handle.close(); }
 }
 
-function committedLength(bytes: Buffer): number {
-  return bytes.lastIndexOf(10) + 1;
+function readCommitted(directory: string, file: string, isNewest: boolean): { bytes: Buffer; completeLength: number } {
+  const bytes = readFileSync(join(directory, file));
+  const completeLength = bytes.lastIndexOf(10) + 1;
+  if (completeLength !== bytes.length && !isNewest) throw new Error(`Incomplete historical LEDGER archive row in ${file}`);
+  return { bytes, completeLength };
 }
 
 export function recoverLedgerArchiveTail(directory: string): void {
-  const files = listDayFiles(directory);
-  for (const file of files) {
-    const path = join(directory, file);
-    const bytes = readFileSync(path);
-    const completeLength = committedLength(bytes);
-    if (completeLength === bytes.length) continue;
-    if (file !== files.at(-1)) throw new Error(`Incomplete historical LEDGER archive row in ${file}`);
-    process.stderr.write(`ledger archive: recovering ${bytes.length - completeLength} uncommitted bytes in ${file}\n`);
-    truncateSync(path, completeLength);
-    syncPath(path);
-    syncPath(directory);
-  }
+  const newest = listDayFiles(directory).at(-1);
+  if (newest === undefined) return;
+  const { bytes, completeLength } = readCommitted(directory, newest, true);
+  if (completeLength === bytes.length) return;
+  process.stderr.write(`ledger archive: recovering ${bytes.length - completeLength} uncommitted bytes in ${newest}\n`);
+  const path = join(directory, newest);
+  truncateSync(path, completeLength);
+  syncPath(path);
+  syncPath(directory);
 }
 
 export function readLedgerArchive(directory: string): Set<number> {
   const files = listDayFiles(directory);
   const sequences = new Set<number>();
   for (const file of files) {
-    const bytes = readFileSync(join(directory, file));
-    const completeLength = committedLength(bytes);
-    if (completeLength !== bytes.length && file !== files.at(-1)) throw new Error(`Incomplete historical LEDGER archive row in ${file}`);
+    const { bytes, completeLength } = readCommitted(directory, file, file === files.at(-1));
     for (const line of bytes.subarray(0, completeLength).toString("utf8").split("\n")) {
       if (line.length === 0) continue;
       const row = archiveRowSchema.parse(JSON.parse(line));
@@ -97,6 +95,12 @@ export function readLedgerArchive(directory: string): Set<number> {
     }
   }
   return sequences;
+}
+
+function maxSequence(sequences: Iterable<number>): number {
+  let max = 0;
+  for (const sequence of sequences) if (sequence > max) max = sequence;
+  return max;
 }
 
 export type StreamHoldsRange = (first: number, last: number) => Promise<boolean>;
@@ -115,7 +119,7 @@ export class LedgerArchiveWriter {
       this.lock.run("BEGIN EXCLUSIVE");
       recoverLedgerArchiveTail(directory);
       this.startupSequences = readLedgerArchive(directory);
-      this.cursor = verifyLedgerArchive(this.startupSequences, []).last ?? 0;
+      this.cursor = maxSequence(this.startupSequences);
       this.lastSequence = this.cursor;
     } catch (error) {
       this.lock.close();
