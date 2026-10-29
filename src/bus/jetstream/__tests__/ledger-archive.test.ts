@@ -17,12 +17,12 @@ function delivery(sequence: number, timestamp = "2026-01-01T23:59:59.000Z"): Led
   return { sequence, timestamp, subject: "local.example.default.execution.run.finished", data: new TextEncoder().encode(`{ "id": "${sequence}" }`), ack: mock(() => {}) };
 }
 
-function finiteStream(deliveries: LedgerDelivery[]) {
+function finiteStream(deliveries: LedgerDelivery[], retained = deliveries.map((item) => item.sequence)) {
   const stop = mock(async () => {});
   const consume = mock(async (_start: number): Promise<LedgerMessages> => ({
     async *[Symbol.asyncIterator]() { yield* deliveries; }, stop,
   }));
-  return { consume, sequences: async () => deliveries.map((item) => item.sequence), stop };
+  return { consume, sequences: async () => retained, stop };
 }
 
 describe("LEDGER archive", () => {
@@ -31,8 +31,8 @@ describe("LEDGER archive", () => {
     const first = delivery(1);
     const second = delivery(2, "2026-01-02T00:00:00.000Z");
     const writer = new LedgerArchiveWriter(directory);
-    writer.append(first);
-    writer.close();
+    await writer.append(first);
+    await writer.close();
     const stream = finiteStream([first, second, second]);
     const archive = await startLedgerArchive({ directory, stream, log: { error: mock(() => {}) } });
     await archive.done;
@@ -100,7 +100,7 @@ describe("LEDGER archive", () => {
     const directory = temporaryArchive();
     const items = [delivery(1), delivery(3), delivery(4)];
     const error = mock((_message: string) => {});
-    const archive = await startLedgerArchive({ directory, stream: finiteStream(items), log: { error } });
+    const archive = await startLedgerArchive({ directory, stream: finiteStream(items, [1, 2, 3, 4]), log: { error } });
     await archive.done;
     expect(items[0]?.ack).toHaveBeenCalledTimes(1);
     expect(items[1]?.ack).not.toHaveBeenCalled();
@@ -109,27 +109,51 @@ describe("LEDGER archive", () => {
     expect(readLedgerArchive(directory)).toEqual(new Set([1]));
   });
 
+  test("resumes past a sequence the stream no longer holds", async () => {
+    const directory = temporaryArchive();
+    const writer = new LedgerArchiveWriter(directory);
+    await writer.append(delivery(1));
+    await writer.close();
+    const items = [delivery(3), delivery(4)];
+    const error = mock((_message: string) => {});
+    const archive = await startLedgerArchive({ directory, stream: finiteStream(items, [3, 4]), log: { error } });
+    await archive.done;
+    expect(error).not.toHaveBeenCalled();
+    expect(items[0]?.ack).toHaveBeenCalledTimes(1);
+    expect(readLedgerArchive(directory)).toEqual(new Set([1, 3, 4]));
+    expect(verifyLedgerArchive(readLedgerArchive(directory), [3, 4]).ok).toBe(true);
+    const restarted = await startLedgerArchive({ directory, stream: finiteStream([delivery(5)], [3, 4, 5]), log: { error } });
+    await restarted.done;
+    expect(readLedgerArchive(directory)).toEqual(new Set([1, 3, 4, 5]));
+    expect(error).not.toHaveBeenCalled();
+  });
+
   test("repairs only an interrupted tail, then replays its sequence exactly once", async () => {
     const directory = temporaryArchive();
     const writer = new LedgerArchiveWriter(directory);
-    writer.append(delivery(1));
-    writer.close();
+    await writer.append(delivery(1));
+    await writer.close();
     const file = join(directory, "2026-01-01.jsonl");
     const committed = readFileSync(file, "utf8");
     appendFileSync(file, '{"sequence":2,"subject":');
-    expect(() => readLedgerArchive(directory)).toThrow("Incomplete");
+    const partial = readFileSync(file, "utf8");
+    expect(readLedgerArchive(directory)).toEqual(new Set([1]));
+    expect(readFileSync(file, "utf8")).toBe(partial);
+    appendFileSync(join(directory, "2026-01-02.jsonl"), "{}\n");
+    expect(() => readLedgerArchive(directory)).toThrow("Incomplete historical");
+    rmSync(join(directory, "2026-01-02.jsonl"));
     const archive = await startLedgerArchive({ directory, stream: finiteStream([delivery(2)]), log: { error: mock(() => {}) } });
     await archive.done;
     expect(readFileSync(file, "utf8").startsWith(committed)).toBe(true);
     expect(readLedgerArchive(directory)).toEqual(new Set([1, 2]));
   });
 
-  test("refuses a second writer, corrupt complete rows, duplicate rows and internal archive gaps", () => {
+  test("refuses a second writer, corrupt complete rows and duplicate rows, and reports retained internal gaps", async () => {
     const directory = temporaryArchive();
     const writer = new LedgerArchiveWriter(directory);
     expect(() => new LedgerArchiveWriter(directory)).toThrow();
-    writer.append(delivery(1));
-    writer.close();
+    await writer.append(delivery(1));
+    await writer.close();
     const file = join(directory, "2026-01-01.jsonl");
     const row = readFileSync(file, "utf8");
     appendFileSync(file, row);
@@ -137,7 +161,10 @@ describe("LEDGER archive", () => {
     writeFileSync(file, `${row}{invalid}\n`);
     expect(() => new LedgerArchiveWriter(directory)).toThrow();
     writeFileSync(file, row + row.replace('"sequence":1', '"sequence":3'));
-    expect(() => new LedgerArchiveWriter(directory)).toThrow("sequence gaps");
+    const error = mock((_message: string) => {});
+    const archive = await startLedgerArchive({ directory, stream: finiteStream([], [1, 2, 3]), log: { error } });
+    await archive.done;
+    expect(error).toHaveBeenCalledWith("ledger archive is missing sequences 2-2 that the stream still holds");
   });
 
   test("starts at retained history when older records have already expired", async () => {

@@ -1,5 +1,5 @@
 import { expect, mock, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { connect } from "nats";
@@ -42,8 +42,11 @@ test.skipIf(!natsServerBinary)("real JetStream archives through the runtime, res
     archive = await startLedgerArchive({ directory, stream, log: { error } });
     await waitFor("two archived deliveries", () => readLedgerArchive(directory).size === 2);
     await archive.stop();
-    const file = join(directory, `${new Date().toISOString().slice(0, 10)}.jsonl`);
-    const firstRows = await readFile(file, "utf8");
+    const readRows = async () => {
+      const files = (await readdir(directory)).filter((name) => name.endsWith(".jsonl")).sort();
+      return (await Promise.all(files.map((name) => readFile(join(directory, name), "utf8")))).join("");
+    };
+    const firstRows = await readRows();
     expect(firstRows.trim().split("\n")).toHaveLength(2);
     const rows = firstRows.trim().split("\n").map((line: string) => JSON.parse(line));
     expect(Buffer.from(rows[1].data, "base64")).toEqual(Buffer.from([0, 255, 10]));
@@ -62,7 +65,7 @@ test.skipIf(!natsServerBinary)("real JetStream archives through the runtime, res
     expect(stderr).not.toContain("ledger archive verify:");
     expect(stdout).toContain("No missing range.");
     await archive.stop();
-    expect(await readFile(file, "utf8")).toStartWith(firstRows);
+    expect(await readRows()).toStartWith(firstRows);
     expect((await jsm.consumers.list(LEDGER_STREAM).next()).length).toBe(0);
     expect(error).not.toHaveBeenCalled();
     await jsm.streams.deleteMessage(LEDGER_STREAM, 2);

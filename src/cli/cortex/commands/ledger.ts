@@ -5,7 +5,7 @@ import { buildNatsTlsOptions } from "../../../common/config/transport-mtls";
 import { NatsLink } from "../../../bus/nats/connection";
 import { jetstreamClientOptions } from "../../../bus/jetstream/boot-retry";
 import { createLedgerStream } from "../../../bus/jetstream/ledger-stream";
-import { ledgerArchiveDir, readLedgerArchive, verifyLedgerArchive } from "../../../bus/jetstream/ledger-archive";
+import { errorMessage, ledgerArchiveDir, readLedgerArchive, verifyLedgerArchive } from "../../../bus/jetstream/ledger-archive";
 import type { ExitResult } from "./_shared/exit-result";
 
 export async function verifyArchiveCommand(configPath: string): Promise<ExitResult> {
@@ -38,7 +38,7 @@ export async function verifyArchiveCommand(configPath: string): Promise<ExitResu
       await link.close();
     }
   } catch (error) {
-    return { exitCode: 1, stdout: "", stderr: `ledger archive verify: ${error instanceof Error ? error.message : String(error)}\n` };
+    return { exitCode: 1, stdout: "", stderr: `ledger archive verify: ${errorMessage(error)}\n` };
   }
 }
 

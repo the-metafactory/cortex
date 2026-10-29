@@ -78,7 +78,7 @@ import { BusDispatchListener } from "./bus/bus-dispatch-listener";
 import { DID_RE } from "@the-metafactory/myelin/identity";
 import { createSurfaceRouter, type SurfaceRouter } from "./bus/surface-router";
 import { createRunLedgerFunnel } from "./bus/run-ledger-funnel";
-import { ledgerArchiveDir, startLedgerArchive, type LedgerArchiveHandle } from "./bus/jetstream/ledger-archive";
+import { errorMessage, ledgerArchiveDir, startLedgerArchive, type LedgerArchiveHandle } from "./bus/jetstream/ledger-archive";
 import { provisionLedgerStream } from "./bus/jetstream/provision";
 import { createNetworkResolver } from "./bus/network-resolver";
 import type { SystemEventSource } from "./bus/system-events";
@@ -5969,7 +5969,7 @@ export async function startCortex(
         });
       }
     } catch (error) {
-      console.error(`cortex: ledger archive startup failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`cortex: ledger archive startup failed: ${errorMessage(error)}`);
     }
   }
   let vigilHandle: VigilHandle | null = null;
