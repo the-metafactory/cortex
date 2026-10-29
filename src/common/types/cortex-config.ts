@@ -59,6 +59,7 @@ import {
   GroveSchema,
   McSchema,
   VigilSchema,
+  LedgerSchema,
   NetworkClaudeSchema,
   NetworkCloudSchema,
   NetworkFileSchema,
@@ -3485,6 +3486,7 @@ export const CortexConfigSchema = z.object({
    */
   mc: McSchema,
   vigil: VigilSchema,
+  ledger: LedgerSchema,
   cockpit: CockpitSchema,
 
   /**

@@ -557,6 +557,10 @@ export const VigilFallbackEmailSchema = z.object({
   timeout_ms: z.number().int().positive().default(10000),
 });
 
+export const LedgerSchema = z.object({
+  archive_dir: z.string().min(1).optional(),
+}).prefault({});
+
 export const VigilSchema = z.object({
   proposal_token_env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional(),
   proposal_timeout_ms: z.number().int().positive().max(300_000).default(30_000),
@@ -883,6 +887,7 @@ export const AgentConfigSchema = z.object({
    */
   mc: McSchema,
   vigil: VigilSchema,
+  ledger: LedgerSchema,
 
   paths: z.object({
     // XDG wave-5 (#1902): the published-events buffer is DATA and moves under the

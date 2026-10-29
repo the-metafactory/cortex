@@ -14,6 +14,8 @@
  */
 
 import { ErrorCode, type ConnectionOptions, type NatsConnection } from "nats";
+import { createLedgerStream } from "../jetstream/ledger-stream";
+import type { LedgerStream } from "../jetstream/ledger-archive";
 import type { AgentConfig } from "../../common/types/config";
 import type { PolicyFederatedNetwork } from "../../common/types/cortex-config";
 import { ReconnectBackoff } from "../nats/reconnect-backoff";
@@ -306,6 +308,7 @@ export interface MyelinRuntime {
    * are cached.
    */
   jetstreamManager?(): Promise<import("../jetstream/types").ProvisionJsm | null>;
+  ledgerStream?(): Promise<LedgerStream | null>;
   /**
    * R26 P1 (cortex#1371) — resolve a narrow NATS-KV capability against the
    * PRIMARY link (same single-link rationale as `jetstreamManager`), or
@@ -2237,6 +2240,7 @@ export async function startMyelinRuntime(
     subscribePull: subscribePullEnabled,
     subscribe: subscribePushEnabled,
     jetstreamManager: jetstreamManagerEnabled,
+    ledgerStream: async () => createLedgerStream(primaryJetstreamClient(), await jetstreamManagerEnabled()),
     kvBucket: kvBucketEnabled,
     stop: async () => {
       if (stopped) return;
