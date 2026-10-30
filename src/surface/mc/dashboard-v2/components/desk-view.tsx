@@ -120,6 +120,19 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
     }
   };
 
+  const itemRow = (item: DeskItem, idx: number) => (
+    <DeskItemRow
+      key={item.key}
+      item={item}
+      rank={idx + 1}
+      area={item.area ? areaById.get(item.area) : undefined}
+      event={item.eventKey ? view.today.find((e) => e.key === item.eventKey) : undefined}
+      onOpen={() => setDetail(item)}
+      onAction={(a) => run(item, a)}
+      onFocusEvent={focusEvent}
+    />
+  );
+
   const focusEvent = (key: string): void => {
     if (view.today.some((e) => e.key === key && e.kind === "agent-stop")) setOpenStopped(true);
     requestAnimationFrame(() => document.querySelector(`[data-event="${CSS.escape(key)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
@@ -205,17 +218,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
                   <button type="button" className="desk-btn" onClick={() => setGroupKind(null)}>Back to what needs you</button>
                 </div>
               </div>
-              {group.items.map((item, idx) => (
-                <DeskItemRow
-                  key={item.key}
-                  item={item}
-                  rank={idx + 1}
-                  area={item.area ? areaById.get(item.area) : undefined}
-                  onOpen={() => setDetail(item)}
-                  onAction={(a) => run(item, a)}
-                  onFocusEvent={focusEvent}
-                />
-              ))}
+              {group.items.map(itemRow)}
             </section>
           ) : (
           <section className="desk-now" aria-label="Needs you">
@@ -231,18 +234,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
                 <p>{nowSubline(view, selection.needsYou.length, selection.rest.length, nextMeeting)}</p>
               </div>
             </div>
-            {selection.needsYou.map((item, idx) => (
-              <DeskItemRow
-                key={item.key}
-                item={item}
-                rank={idx + 1}
-                area={item.area ? areaById.get(item.area) : undefined}
-                event={item.eventKey ? view.today.find((e) => e.key === item.eventKey) : undefined}
-                onOpen={() => setDetail(item)}
-                onAction={(a) => run(item, a)}
-                onFocusEvent={focusEvent}
-              />
-            ))}
+            {selection.needsYou.map(itemRow)}
           </section>
           )}
 
