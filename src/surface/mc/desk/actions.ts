@@ -100,15 +100,26 @@ export class HandledLedger {
   }
 }
 
-/** Ranger's state without the nodes the Desk has already acted on. */
-export function withoutHandled(state: RangerState, ledger: HandledLedger): RangerState {
+/**
+ * Ranger's state without the nodes the Desk has already acted on, and those nodes' item keys,
+ * so no other source brings them back while Ranger catches up.
+ */
+export function withoutHandled(state: RangerState, ledger: HandledLedger): { state: RangerState; hidden: Set<string> } {
+  const hidden = new Set<string>();
+  const keep = (handled: boolean, ref: string): boolean => {
+    if (handled) hidden.add(rangerItemKey(ref));
+    return !handled;
+  };
   return {
-    ...state,
-    needsYou: state.needsYou.filter((n) => {
-      const key = retryKey(n);
-      return key === null || !ledger.has(key);
-    }),
-    maps: state.maps.map((m) => ({ ...m, decisions: m.decisions?.filter((d) => !ledger.has(approveKey(m, d))) })),
+    state: {
+      ...state,
+      needsYou: state.needsYou.filter((n) => {
+        const key = retryKey(n);
+        return keep(key !== null && ledger.has(key), `${n.repo}#${n.nodeId}`);
+      }),
+      maps: state.maps.map((m) => ({ ...m, decisions: m.decisions?.filter((d) => keep(ledger.has(approveKey(m, d)), `${m.repo}#${d.id}`)) })),
+    },
+    hidden,
   };
 }
 

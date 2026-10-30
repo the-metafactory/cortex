@@ -18,6 +18,7 @@ export interface RankInput {
   ranger: RangerState | null;
   areas: AreaRule[];
   rangerActions?: boolean;
+  hidden?: ReadonlySet<string>;
 }
 
 const action = (id: string, label: string, role: DeskAction["role"], wired: boolean): DeskAction => ({ id, label, role, wired });
@@ -93,7 +94,7 @@ export function rankItems(input: RankInput): DeskItem[] {
   const titles: Titles = input.ranger ? rangerTitles(input.ranger) : new Map<string, { title: string; url?: string }>();
   rangerNeedsYouItems(input, add);
   rangerMapItems(input, add);
-  vigilItems(input, titles, (key) => items.has(key), add);
+  vigilItems(input, titles, (key) => items.has(key) || (input.hidden?.has(key) ?? false), add);
   return [...items.values()].sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
 }
 

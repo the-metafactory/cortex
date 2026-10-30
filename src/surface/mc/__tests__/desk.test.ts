@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
 import { handleGetDesk } from "../api/desk";
+import { HandledLedger } from "../desk/actions";
 import { composeDesk, type DeskOptions } from "../desk/compose";
 import { briefing, selectItems } from "../desk/present";
 import type { RangerState } from "../desk/sources/ranger";
@@ -180,7 +181,7 @@ describe("the Desk", () => {
   });
 
   it("answers enabled:false when the Desk is turned off", async () => {
-    const res = await handleGetDesk(db, { ...DESK, enabled: false }, vigil);
+    const res = await handleGetDesk(db, { options: { ...DESK, enabled: false }, ledger: new HandledLedger() }, vigil);
     expect(await res.json()).toEqual({ enabled: false });
   });
 });

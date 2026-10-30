@@ -10,6 +10,13 @@ import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } fr
 import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
 import { withoutHandled, type HandledLedger, type RangerCli } from "./actions";
 
+/** What Mission Control holds for the Desk across requests. */
+export interface DeskRuntime {
+  options?: DeskOptions;
+  ledger: HandledLedger;
+  sourceCache?: SourceCache;
+}
+
 export interface DeskOptions {
   enabled: boolean;
   displayName: string;
@@ -58,7 +65,8 @@ export async function composeDesk(
 
   const subjects: VigilSubjectView[] = vigilSubjects ?? [];
   if (vigilSubjects) sources.push({ id: "vigil", ok: true });
-  const ranger: RangerState | null = rangerResult?.state && deps.handled ? withoutHandled(rangerResult.state, deps.handled) : rangerResult?.state ?? null;
+  const filtered = rangerResult?.state && deps.handled ? withoutHandled(rangerResult.state, deps.handled) : null;
+  const ranger: RangerState | null = filtered?.state ?? rangerResult?.state ?? null;
   if (rangerResult) sources.push(rangerResult.error === null ? { id: "ranger", ok: true } : { id: "ranger", ok: false, error: rangerResult.error });
 
   for (const r of readings) sources.push(r.error === null ? { id: r.id, ok: true } : { id: r.id, ok: false, error: r.error });
@@ -68,7 +76,7 @@ export async function composeDesk(
   const vips = listVips(db);
 
   const items = [
-    ...rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions: Boolean(desk.rangerCli?.bin) }),
+    ...rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions: Boolean(desk.rangerCli?.bin), hidden: filtered?.hidden }),
     ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)) }),
   ].sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
 

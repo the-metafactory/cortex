@@ -10,6 +10,7 @@ import type { RangerState } from "../desk/sources/ranger";
 import { createEnrollment, writeEnrollment } from "../../../common/step-up/enrollment";
 import { DEFAULT_CONFIG } from "../config";
 import { initDatabase } from "../db/init";
+import { writeVigilSubject } from "../../../vigil/db";
 import { startServer } from "../server";
 
 const NOW = Date.parse("2026-10-30T11:16:00.000Z");
@@ -48,13 +49,17 @@ function fakeRunner(result: RangerRunResult = { code: 0, stdout: "", stderr: "" 
   return { calls, run: async (argv: string[]) => { calls.push(argv); return result; } };
 }
 
+interface Deps { ledger: HandledLedger; run: (argv: string[]) => Promise<RangerRunResult>; fetchImpl: () => Promise<Response> }
+const act = (body: unknown, deps: Deps, desk: DeskOptions = DESK): Promise<Response> =>
+  handleDeskAction(post(body), { options: desk, ledger: deps.ledger }, deps);
+
 const post = (body: unknown): Request =>
   new Request("http://localhost/api/desk/action", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
 describe("Desk actions that write to Ranger", () => {
   it("approves a node through Ranger's CLI with arguments from Ranger's own state", async () => {
     const runner = fakeRunner();
-    const res = await handleDeskAction(post({ action: "ranger.approve", key: "ranger:example/app#30" }), DESK, {
+    const res = await act({ action: "ranger.approve", key: "ranger:example/app#30" }, {
       ledger: new HandledLedger(), run: runner.run, fetchImpl: fetchRanger(rangerState()),
     });
     expect(res.status).toBe(200);
@@ -67,7 +72,7 @@ describe("Desk actions that write to Ranger", () => {
 
   it("retries a failed node through resume-node", async () => {
     const runner = fakeRunner();
-    const res = await handleDeskAction(post({ action: "ranger.retry", key: "ranger:example/app#12" }), DESK, {
+    const res = await act({ action: "ranger.retry", key: "ranger:example/app#12" }, {
       ledger: new HandledLedger(), run: runner.run, fetchImpl: fetchRanger(rangerState()),
     });
     expect(res.status).toBe(200);
@@ -78,8 +83,8 @@ describe("Desk actions that write to Ranger", () => {
     const runner = fakeRunner();
     const deps = { ledger: new HandledLedger(), run: runner.run, fetchImpl: fetchRanger(rangerState()) };
     const body = { action: "ranger.approve", key: "ranger:example/app#30" };
-    const [a, b] = await Promise.all([handleDeskAction(post(body), DESK, deps), handleDeskAction(post(body), DESK, deps)]);
-    const again = await handleDeskAction(post(body), DESK, deps);
+    const [a, b] = await Promise.all([act(body, deps), act(body, deps)]);
+    const again = await act(body, deps);
     expect([a.status, b.status].sort()).toEqual([200, 409]);
     expect(again.status).toBe(409);
     expect(runner.calls).toHaveLength(1);
@@ -88,7 +93,7 @@ describe("Desk actions that write to Ranger", () => {
   it("says in one line what failed when Ranger refuses, and keeps the item on the Desk", async () => {
     const runner = fakeRunner({ code: 1, stdout: "", stderr: "warming up\nranger approve-node: node changed since the card was read; refresh before approving\n" });
     const ledger = new HandledLedger();
-    const res = await handleDeskAction(post({ action: "ranger.approve", key: "ranger:example/app#30" }), DESK, {
+    const res = await act({ action: "ranger.approve", key: "ranger:example/app#30" }, {
       ledger, run: runner.run, fetchImpl: fetchRanger(rangerState()),
     });
     expect(res.status).toBe(502);
@@ -102,7 +107,7 @@ describe("Desk actions that write to Ranger", () => {
 
   it("hides an approved item until Ranger's state moves on", async () => {
     const ledger = new HandledLedger();
-    await handleDeskAction(post({ action: "ranger.approve", key: "ranger:example/app#30" }), DESK, {
+    await act({ action: "ranger.approve", key: "ranger:example/app#30" }, {
       ledger, run: fakeRunner().run, fetchImpl: fetchRanger(rangerState()),
     });
     const db = initDatabase(":memory:");
@@ -118,18 +123,32 @@ describe("Desk actions that write to Ranger", () => {
     const runner = fakeRunner();
     const deps = { ledger: new HandledLedger(), run: runner.run, fetchImpl: fetchRanger(state) };
     const body = { action: "ranger.retry", key: "ranger:example/app#12" };
-    expect((await handleDeskAction(post(body), DESK, deps)).status).toBe(200);
-    expect((await handleDeskAction(post(body), DESK, deps)).status).toBe(200);
+    expect((await act(body, deps)).status).toBe(200);
+    expect((await act(body, deps)).status).toBe(200);
     expect(runner.calls).toHaveLength(2);
+  });
+
+  it("does not bring an approved node back as a Vigil escalation while Ranger catches up", async () => {
+    const ledger = new HandledLedger();
+    await act({ action: "ranger.approve", key: "ranger:example/app#30" }, { ledger, run: fakeRunner().run, fetchImpl: fetchRanger(rangerState()) });
+    const db = initDatabase(":memory:");
+    writeVigilSubject(db, {
+      subject_key: "state:escalation:default:example/app#30", subject_kind: "state", vocab: "escalation", ref: "example/app#30",
+      value: "needs-principal", healthy: 0, goal_id: null, producer: "soma", stack: "default", run_kind: null,
+      last_run_id: "run-1", last_ended_at: NOW - 3_600_000, last_seen_at: NOW - 3_600_000,
+    }, NOW - 3_600_000);
+    const view = await composeDesk(db, DESK, { enabled: true }, { now: NOW, fetchImpl: fetchRanger(rangerState()), handled: ledger });
+    db.close();
+    expect(view.items.filter((i) => i.kind === "escalation")).toEqual([]);
   });
 
   it("refuses a node Ranger does not take an approval for, and a stack without the CLI", async () => {
     const runner = fakeRunner();
     const deps = { ledger: new HandledLedger(), run: runner.run, fetchImpl: fetchRanger(rangerState()) };
-    const notApprovable = await handleDeskAction(post({ action: "ranger.approve", key: "ranger:example/app#33" }), DESK, deps);
-    const gone = await handleDeskAction(post({ action: "ranger.approve", key: "ranger:example/app#99" }), DESK, deps);
-    const unset = await handleDeskAction(post({ action: "ranger.approve", key: "ranger:example/app#30" }), { ...DESK, rangerCli: { bin: "", config: "" } }, deps);
-    const park = await handleDeskAction(post({ action: "ranger.park", key: "ranger:example/app#12" }), DESK, deps);
+    const notApprovable = await act({ action: "ranger.approve", key: "ranger:example/app#33" }, deps);
+    const gone = await act({ action: "ranger.approve", key: "ranger:example/app#99" }, deps);
+    const unset = await act({ action: "ranger.approve", key: "ranger:example/app#30" }, deps, { ...DESK, rangerCli: { bin: "", config: "" } });
+    const park = await act({ action: "ranger.park", key: "ranger:example/app#12" }, deps);
     expect([notApprovable.status, gone.status, unset.status, park.status]).toEqual([409, 409, 409, 400]);
     expect(runner.calls).toEqual([]);
   });

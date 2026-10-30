@@ -68,7 +68,7 @@ import { handleGetDesk } from "./api/desk";
 import { handleDeskVips } from "./api/desk-vips";
 import { handleDeskAction } from "./api/desk-action";
 import { HandledLedger } from "./desk/actions";
-import type { DeskOptions } from "./desk/compose";
+import type { DeskOptions, DeskRuntime } from "./desk/compose";
 import { SourceCache } from "./desk/sources/command";
 import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil";
 import { handleResult, type ResultRouteOptions } from "./results";
@@ -282,9 +282,7 @@ export function startServer(
           stepUpSecretPath,
           authorizer,
           options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined,
-          options.desk,
-          deskSourceCache,
-          deskLedger,
+          { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger },
         );
       }
 
@@ -402,9 +400,7 @@ async function handleApi(
   stepUpSecretPath: string = expandTilde(defaultStepUpSecretPath()),
   authorizer: Authorizer | null = null,
   vigil?: VigilSubjectsOptions,
-  desk?: DeskOptions,
-  deskSourceCache?: SourceCache,
-  deskLedger?: HandledLedger,
+  desk?: DeskRuntime,
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -441,13 +437,10 @@ async function handleApi(
 
   if (pathname === "/api/desk") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);
-    return handleGetDesk(db, desk, vigil, deskSourceCache, deskLedger);
+    return handleGetDesk(db, desk, vigil);
   }
 
-  if (pathname === "/api/desk/action") {
-    if (!deskLedger) return Response.json({ ok: false, error: "Ranger actions are not set up on this stack." }, { status: 409 });
-    return handleDeskAction(req, desk, { ledger: deskLedger });
-  }
+  if (pathname === "/api/desk/action") return handleDeskAction(req, desk);
 
   if (pathname === "/api/desk/vips") return handleDeskVips(req, url, db);
 
