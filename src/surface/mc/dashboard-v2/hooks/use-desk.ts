@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getJson } from "../lib/api";
 import type { DeskView } from "../../desk/types";
 
@@ -10,9 +10,11 @@ interface DeskState {
   error: string | null;
 }
 
-/** Loads the Desk and refreshes it every 30 seconds while `active`. */
-export function useDesk(active: boolean): DeskState {
+/** Loads the Desk and refreshes it every 30 seconds while `active`; `reload` fetches it now. */
+export function useDesk(active: boolean): DeskState & { reload: () => void } {
   const [state, setState] = useState<DeskState>({ view: null, enabled: true, error: null });
+  const [nonce, setNonce] = useState(0);
+  const reload = useCallback(() => setNonce((n) => n + 1), []);
 
   useEffect(() => {
     if (!active) return;
@@ -32,7 +34,7 @@ export function useDesk(active: boolean): DeskState {
       controller.abort();
       clearInterval(timer);
     };
-  }, [active]);
+  }, [active, nonce]);
 
-  return state;
+  return { ...state, reload };
 }
