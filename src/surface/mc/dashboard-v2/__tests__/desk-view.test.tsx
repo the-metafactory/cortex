@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DeskBody, DeskView, RestGroups } from "../components/desk-view";
+import { ActionButton, DeskBody, DeskView, RestGroups } from "../components/desk-view";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { openGroup, selectItems } from "../../desk/present";
 
@@ -140,5 +140,24 @@ describe("the folded rest", () => {
     expect(group.items.map((i) => i.title)).toEqual(["Decision 6 waits.", "Decision 7 waits.", "Decision 8 waits."]);
     const after = openGroup(selectItems(withRest, "all", new Set(["ranger:example/app#6"])), "decision");
     expect(after.items).toHaveLength(2);
+  });
+});
+
+describe("ActionButton while an action is in flight", () => {
+  const approve = { id: "ranger.approve", label: "Approve", role: "primary" as const, wired: true };
+  const later = { id: "snooze", label: "Not now", role: "secondary" as const, wired: true };
+
+  it("disables the clicked button and says it is sending", () => {
+    const html = renderToStaticMarkup(<ActionButton action={approve} onRun={() => {}} sending="ranger.approve" />);
+    expect(html).toContain('disabled=""');
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain(">Sending…</button>");
+  });
+
+  it("disables the item's other buttons too, and leaves an idle item alone", () => {
+    expect(renderToStaticMarkup(<ActionButton action={later} onRun={() => {}} sending="ranger.approve" />)).toContain('disabled=""');
+    const idle = renderToStaticMarkup(<ActionButton action={approve} onRun={() => {}} sending={null} />);
+    expect(idle).not.toContain("disabled");
+    expect(idle).toContain(">Approve</button>");
   });
 });
