@@ -26,6 +26,7 @@ import { PlansView } from "./components/plans-view";
 import { PhaseDetailView } from "./components/phase-detail-view";
 import { WorkItemDetailView } from "./components/work-item-detail-view";
 import { AttentionView } from "./components/attention-view";
+import { DeskView } from "./components/desk-view";
 import { VigilView } from "./components/vigil-view";
 import { NetworkView } from "./components/network-view";
 import { GovernanceView } from "./components/governance-view";
@@ -70,7 +71,7 @@ import type { Command } from "./components/command-palette";
  * may upgrade to a hash route if deep-linking turns out to be
  * principal-requested; for now the in-memory view is sufficient.
  */
-type DashboardView = "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "watching" | "kanban-detail" | "network" | "governance" | "observability";
+type DashboardView = "desk" | "default" | "metrics" | "iterations" | "sources" | "repositories" | "plans" | "phase-detail" | "work-item-detail" | "attention" | "watching" | "kanban-detail" | "network" | "governance" | "observability";
 
 /**
  * CK-3 / D-1(c) — the legacy escape hatch. The cockpit (in the Network view) is
@@ -124,7 +125,7 @@ export function App() {
   // = a single iteration's detail surface (entered via card click on
   // the kanban, exited via the detail surface's Close button which
   // returns to `iterations`).
-  const [view, setView] = useState<DashboardView>("default");
+  const [view, setView] = useState<DashboardView>("desk");
   const [selectedIterationId, setSelectedIterationId] = useState<string | null>(null);
   // G-1113.D.4 — selected phase for the phase-detail surface (reached from the
   // Plans overview by clicking a phase; exited back to `plans`).
@@ -305,6 +306,8 @@ export function App() {
     },
   ];
 
+  if (view === "desk") return <DeskView onOpenMissionControl={() => setView("default")} />;
+
   return (
     <div className="scaffold-shell">
       <header className="scaffold-header">
@@ -362,6 +365,15 @@ export function App() {
         F-15 may upgrade to a hash route when detail navigation lands.
       */}
       <nav className="scaffold-tabs" role="tablist" aria-label="Dashboard view">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={false}
+          className="tab"
+          onClick={() => setView("desk")}
+        >
+          ← Desk
+        </button>
         <button
           type="button"
           role="tab"
