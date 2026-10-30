@@ -181,7 +181,7 @@ describe("the Desk action route behind step-up MFA", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("lets one step-up code unlock Desk actions for the window, and never a control verb", async () => {
+  it("lets one step-up code unlock Desk actions in the browser that typed it, and never a control verb", async () => {
     const secretPath = join(tmpDir, "step-up-totp.json");
     const enrollment = createEnrollment("2026-10-16T00:00:00.000Z");
     writeEnrollment(secretPath, enrollment);
@@ -195,17 +195,24 @@ describe("the Desk action route behind step-up MFA", () => {
       { desk: { ...DESK, rangerUrl: `http://127.0.0.1:${ranger.port}`, rangerCli: { bin, config: "" } } },
     );
     const base = `http://localhost:${ctx.server.port}`;
-    const send = (path: string, body: unknown, code?: string) => fetch(`${base}${path}`, {
+    const send = (path: string, body: unknown, extra: Record<string, string> = {}) => fetch(`${base}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", origin: base, "Cf-Access-Authenticated-User-Email": "principal@example.com", ...(code ? { [STEP_UP_HEADER]: code } : {}) },
+      headers: { "content-type": "application/json", origin: base, "Cf-Access-Authenticated-User-Email": "principal@example.com", ...extra },
       body: JSON.stringify(body),
     });
     try {
       const code = hotp(base32Decode(enrollment.secret), totpStep(Date.now()));
-      expect((await send("/api/desk/action", { action: "ranger.approve", key: "ranger:example/app#30" }, code)).status).toBe(200);
-      expect((await send("/api/desk/action", { action: "ranger.retry", key: "ranger:example/app#12" })).status).toBe(200);
+      const first = await send("/api/desk/action", { action: "ranger.approve", key: "ranger:example/app#30" }, { [STEP_UP_HEADER]: code });
+      expect(first.status).toBe(200);
+      const cookie = (first.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
+      expect(first.headers.get("set-cookie")).toContain("HttpOnly; SameSite=Strict");
+
+      const otherBrowser = await send("/api/desk/action", { action: "ranger.retry", key: "ranger:example/app#12" });
+      expect((await otherBrowser.json()).error).toBe("step_up_required");
+
+      expect((await send("/api/desk/action", { action: "ranger.retry", key: "ranger:example/app#12" }, { cookie })).status).toBe(200);
       expect(readFileSync(marker, "utf8").trim().split("\n")).toEqual(["30", "12"]);
-      const control = await send(AUTHORIZE_PATH, { request_id: "req-1", confirm: "req-1" });
+      const control = await send(AUTHORIZE_PATH, { request_id: "req-1", confirm: "req-1" }, { cookie });
       expect((await control.json()).error).toBe("step_up_required");
     } finally {
       ctx.stop(true);

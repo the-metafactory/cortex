@@ -15,20 +15,21 @@ export async function submitDeskAction(
   body: { action: string; key: string },
   stepUpCode: string,
   fetchImpl: FetchLike = fetch,
-): Promise<{ ok: boolean; text: string; needsCode: boolean }> {
+): Promise<{ ok: boolean; text: string; needsCode: boolean; codeAccepted: boolean }> {
+  const code = stepUpCode.trim();
   let res: Response;
   try {
     res = await fetchImpl(DESK_ACTION_PATH, {
       method: "POST",
-      headers: { "content-type": "application/json", ...(stepUpCode.trim() ? { [STEP_UP_HEADER]: stepUpCode.trim() } : {}) },
+      headers: { "content-type": "application/json", ...(code ? { [STEP_UP_HEADER]: code } : {}) },
       body: JSON.stringify(body),
     });
   } catch (err) {
-    return { ok: false, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}`, needsCode: false };
+    return { ok: false, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}`, needsCode: false, codeAccepted: false };
   }
   const parsed = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown; detail?: unknown } | null;
-  if (res.ok) return { ok: true, text: typeof parsed?.message === "string" ? parsed.message : "Done.", needsCode: false };
+  if (res.ok) return { ok: true, text: typeof parsed?.message === "string" ? parsed.message : "Done.", needsCode: false, codeAccepted: code !== "" };
   const error = typeof parsed?.error === "string" ? parsed.error : "";
   const line = STEP_UP_LINES[error] ?? (typeof parsed?.detail === "string" ? parsed.detail : error);
-  return { ok: false, text: line || `The action failed (HTTP ${res.status}).`, needsCode: error === "step_up_required" };
+  return { ok: false, text: line || `The action failed (HTTP ${res.status}).`, needsCode: error === "step_up_required", codeAccepted: code !== "" && !error.startsWith("step_up_") };
 }

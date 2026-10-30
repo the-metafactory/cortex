@@ -68,7 +68,8 @@ import { handleGetDesk } from "./api/desk";
 import { handleDeskVips } from "./api/desk-vips";
 import { handleDeskAction } from "./api/desk-action";
 import { HandledLedger } from "./desk/actions";
-import { DESK_STEP_UP_WINDOW_ROUTES, StepUpWindow } from "./desk/step-up-window";
+import { DESK_STEP_UP_WINDOW_ROUTES } from "./desk/step-up-window";
+import { StepUpWindow, unlockToken } from "./api/desk-unlock";
 import type { DeskOptions, DeskRuntime } from "./desk/compose";
 import { SourceCache } from "./desk/sources/command";
 import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil";
@@ -284,8 +285,7 @@ export function startServer(
           stepUpSecretPath,
           authorizer,
           options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined,
-          { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger },
-          stepUpWindow,
+          { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, stepUpWindow },
         );
       }
 
@@ -404,7 +404,6 @@ async function handleApi(
   authorizer: Authorizer | null = null,
   vigil?: VigilSubjectsOptions,
   desk?: DeskRuntime,
-  stepUpWindow?: StepUpWindow,
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -419,7 +418,8 @@ async function handleApi(
     principal = authResult.principal;
   }
   const windowFor = principal !== null && DESK_STEP_UP_WINDOW_ROUTES.has(pathname) ? principal : null;
-  const unlocked = windowFor !== null && (stepUpWindow?.isOpen(windowFor, Date.now()) ?? false);
+  const unlocked = windowFor !== null && (desk?.stepUpWindow?.isOpen(windowFor, unlockToken(req), Date.now()) ?? false);
+  let unlockCookie: string | null = null;
   if (requiresStepUp(req.method, pathname) && !unlocked) {
     let enrollment: StepUpEnrollment | null;
     try {
@@ -441,7 +441,7 @@ async function handleApi(
     }
     const stepUpDenial = enforceStepUp(req, { enrollment });
     if (stepUpDenial) return stepUpDenial;
-    if (windowFor !== null) stepUpWindow?.open(windowFor, Date.now());
+    if (windowFor !== null) unlockCookie = desk?.stepUpWindow?.open(windowFor, Date.now()) ?? null;
   }
 
   if (pathname === "/api/desk") {
@@ -449,7 +449,11 @@ async function handleApi(
     return handleGetDesk(db, desk, vigil);
   }
 
-  if (pathname === "/api/desk/action") return handleDeskAction(req, desk);
+  if (pathname === "/api/desk/action") {
+    const res = await handleDeskAction(req, desk);
+    if (unlockCookie !== null) res.headers.append("Set-Cookie", unlockCookie);
+    return res;
+  }
 
   if (pathname === "/api/desk/vips") return handleDeskVips(req, url, db);
 

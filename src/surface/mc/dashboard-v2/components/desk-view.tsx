@@ -103,9 +103,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
       setPending({ item, action });
       return;
     }
+    if (result.codeAccepted) setUnlockedUntil(sentAt + DESK_STEP_UP_WINDOW_MS - 30_000);
     setNote(result.text);
     if (!result.ok) return;
-    if (code) setUnlockedUntil(sentAt + DESK_STEP_UP_WINDOW_MS - 30_000);
     setSnoozed((s) => new Set(s).add(item.key));
     setDetail((d) => (d?.key === item.key ? null : d));
     onChanged();
