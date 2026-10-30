@@ -4944,6 +4944,13 @@ export async function startCortex(
           cadence: config.vigil.cadence,
           resultBaseUrl: config.vigil.result_base_url,
         },
+        desk: {
+          enabled: config.mc.desk.enabled,
+          displayName: config.mc.desk.displayName,
+          topN: config.mc.desk.topN,
+          rangerUrl: config.mc.desk.ranger.url,
+          areas: config.mc.desk.areas,
+        },
         configPath: config.mc.configPath || undefined,
         dbPath,
         port: config.mc.port,

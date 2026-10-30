@@ -360,6 +360,25 @@ export type NetworkFile = z.infer<typeof NetworkFileSchema>;
 // Main config schema
 // =============================================================================
 
+const DeskSchema = z.object({
+  enabled: z.boolean().default(true),
+  displayName: z.string().default(""),
+  topN: z.number().int().min(1).max(10).default(5),
+  ranger: z.object({ url: z.string().default("") }).default({ url: "" }),
+  areas: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        label: z.string().min(1),
+        color: z.string().default(""),
+        repos: z.array(z.string()).default([]),
+        goals: z.array(z.string()).default([]),
+      }),
+    )
+    .default([]),
+});
+const DESK_DEFAULTS = DeskSchema.parse({});
+
 /**
  * MC-I1.S1 (ADR-0005): in-process Mission Control embed schema. Extracted as a
  * SHARED const (fix/c-844) so BOTH top-level config schemas reference the same
@@ -404,6 +423,7 @@ export const McSchema = z.object({
    * at the proxy request boundary too.
    */
   sideband: z.string().default(DEFAULT_SIDEBAND_URL),
+  desk: DeskSchema.optional(),
   /**
    * #1044 — headless MC mode (producer/server split). When `mc.enabled`, the
    * embed always runs `initDatabase` + the `HookStreamPoller` INGESTOR (so the
@@ -520,6 +540,11 @@ export const McSchema = z.object({
       });
     }
   }
+  const rangerUrl = val.desk?.ranger.url ?? "";
+  if (rangerUrl !== "") {
+    const check = checkLoopbackSideband(rangerUrl);
+    if (!check.ok) ctx.addIssue({ code: "custom", path: ["desk", "ranger", "url"], message: `mc.desk.ranger.url: ${check.reason}` });
+  }
 }).transform((val) => ({
   // `.default(emptyDefault())` returns `{}` literally rather than re-parsing
   // the inner defaults, so the fields would be undefined. Re-apply the inner
@@ -531,6 +556,7 @@ export const McSchema = z.object({
   dbPath: val.dbPath ?? "",
   port: val.port ?? 0,
   sideband: val.sideband ?? DEFAULT_SIDEBAND_URL,
+  desk: val.desk ?? DESK_DEFAULTS,
   // #1044 — re-apply the nested default ({} from `.default(emptyDefault())`
   // would leave `enabled` undefined on the all-defaults parse path). The `??`
   // chain is load-bearing, same as `aggregateLocalStacks` below.

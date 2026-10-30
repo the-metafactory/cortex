@@ -64,6 +64,8 @@ import { handleListPlans } from "./api/plans";
 import { handleGetPhaseDetail } from "./api/phase-detail";
 import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
+import { handleGetDesk } from "./api/desk";
+import type { DeskOptions } from "./desk/compose";
 import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil";
 import { handleResult, type ResultRouteOptions } from "./results";
 import {
@@ -125,6 +127,7 @@ export interface HealthResponse {
 export interface MissionControlViews {
   results?: ResultRouteOptions;
   vigil?: VigilSubjectsOptions;
+  desk?: DeskOptions;
   agentPresence?: () => AgentPresenceView | null;
   localAggregation?: LocalAggregationProvider;
   networks?: () => NetworksView | null;
@@ -273,6 +276,7 @@ export function startServer(
           stepUpSecretPath,
           authorizer,
           options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined,
+          options.desk,
         );
       }
 
@@ -390,6 +394,7 @@ async function handleApi(
   stepUpSecretPath: string = expandTilde(defaultStepUpSecretPath()),
   authorizer: Authorizer | null = null,
   vigil?: VigilSubjectsOptions,
+  desk?: DeskOptions,
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -422,6 +427,11 @@ async function handleApi(
     }
     const stepUpDenial = enforceStepUp(req, { enrollment });
     if (stepUpDenial) return stepUpDenial;
+  }
+
+  if (pathname === "/api/desk") {
+    if (req.method !== "GET") return methodNotAllowed(["GET"]);
+    return handleGetDesk(db, desk, vigil);
   }
 
   if (pathname === "/api/vigil/subjects") {
