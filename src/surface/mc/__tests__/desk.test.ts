@@ -21,6 +21,7 @@ const DESK: DeskOptions = {
     { id: "work", label: "Work", color: "#2563eb", repos: ["example/app"], goals: ["G1"] },
     { id: "home", label: "Home", color: "#059669", repos: [], goals: ["G2"] },
   ],
+  sources: [],
 };
 
 const WORDING: Record<string, string> = {
@@ -186,7 +187,7 @@ describe("the Desk", () => {
 
 describe("mc.desk config", () => {
   it("defaults to an enabled Desk with no Ranger and no areas", () => {
-    expect(McSchema.parse(undefined).desk).toEqual({ enabled: true, displayName: "", topN: 5, ranger: { url: "" }, areas: [] });
+    expect(McSchema.parse(undefined).desk).toEqual({ enabled: true, displayName: "", topN: 5, ranger: { url: "" }, areas: [], sources: [] });
   });
 
   it("refuses a Ranger URL that is not loopback", () => {

@@ -376,6 +376,17 @@ const DeskSchema = z.object({
       }),
     )
     .default([]),
+  sources: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        command: z.array(z.string().min(1)).min(1),
+        area: z.string().optional(),
+        everySeconds: z.number().int().min(30).max(86_400).default(300),
+        timeoutSeconds: z.number().int().min(1).max(300).default(30),
+      }),
+    )
+    .default([]),
 });
 const DESK_DEFAULTS = DeskSchema.parse({});
 

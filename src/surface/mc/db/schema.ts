@@ -99,9 +99,15 @@ export const TABLE_NAMES = [
   "vigil_result_subjects",
   "vigil_result_reads",
   "vigil_attention_resolutions",
+  "desk_vips",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
+  `CREATE TABLE IF NOT EXISTS desk_vips (
+    address TEXT PRIMARY KEY,
+    label TEXT,
+    added_at INTEGER NOT NULL
+  )`,
   "CREATE TABLE IF NOT EXISTS vigil_subject_stack_sources (subject_key TEXT PRIMARY KEY)",
   "CREATE TABLE IF NOT EXISTS vigil_subject_stack_moves (old_key TEXT PRIMARY KEY, new_key TEXT NOT NULL, expected_run_id TEXT NOT NULL, expected_ended_at INTEGER NOT NULL)",
   `CREATE TABLE IF NOT EXISTS vigil_result_reads (

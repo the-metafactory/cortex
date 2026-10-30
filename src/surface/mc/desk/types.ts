@@ -14,7 +14,8 @@ export type DeskItemKind =
   | "agent-blocked"
   | "decision"
   | "grilling"
-  | "escalation";
+  | "escalation"
+  | "mail";
 
 export interface DeskArea {
   id: string;
@@ -28,6 +29,7 @@ export interface DeskAction {
   role: "primary" | "secondary";
   wired: boolean;
   url?: string;
+  target?: string;
 }
 
 export interface DeskLink {
@@ -52,6 +54,7 @@ export interface DeskItem {
   score: number;
   actions: DeskAction[];
   detail: DeskItemDetail;
+  excerpt?: string;
   eventKey?: string;
 }
 
@@ -69,7 +72,9 @@ export interface DeskEvent {
   title: string;
   note?: string;
   area: string | null;
-  kind: "agent" | "agent-stop" | "meeting" | "block" | "personal";
+  kind: "agent" | "agent-stop" | "meeting" | "all-day";
+  url?: string;
+  online?: boolean;
 }
 
 export interface DeskGoal {
@@ -85,6 +90,8 @@ export interface DeskView {
   areas: DeskArea[];
   items: DeskItem[];
   today: DeskEvent[];
+  ahead: DeskEvent[];
+  vips: { address: string; label: string | null }[];
   agents: { line: string; working: { title: string; note: string; since: number }[]; waiting: number };
   goals: DeskGoal[];
   systems: string[];

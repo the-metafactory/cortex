@@ -4950,6 +4950,7 @@ export async function startCortex(
           topN: config.mc.desk.topN,
           rangerUrl: config.mc.desk.ranger.url,
           areas: config.mc.desk.areas,
+          sources: config.mc.desk.sources,
         },
         configPath: config.mc.configPath || undefined,
         dbPath,
