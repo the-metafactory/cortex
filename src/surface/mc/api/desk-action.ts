@@ -12,8 +12,8 @@ export interface DeskActionDeps {
 }
 
 /**
- * POST {action, key}: runs one Ranger action for a Desk item. Step-up MFA is enforced before this
- * handler (STEP_UP_CONTROL_ROUTES). The call is built from a fresh read of Ranger's state, and an
+ * POST {action, key}: runs one Ranger action for a Desk item. The rebind and identity gates in handleApi
+ * run before this handler; there is no step-up. The call is built from a fresh read of Ranger's state, and an
  * action already sent or still running for the same node version is refused, so Ranger gets it once.
  */
 export async function handleDeskAction(req: Request, runtime: DeskRuntime | undefined, deps: DeskActionDeps = {}): Promise<Response> {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleDeskAction } from "../api/desk-action";
@@ -180,7 +180,7 @@ describe("Desk actions that write to Ranger", () => {
   });
 });
 
-describe("the Desk action route behind step-up MFA", () => {
+describe("the Desk action route through Mission Control", () => {
   let tmpDir: string;
   let db: Database;
   beforeEach(() => {
@@ -193,33 +193,35 @@ describe("the Desk action route behind step-up MFA", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("refuses an action without a step-up code before Ranger is called", async () => {
+  it("runs an action for the principal without a step-up code, and refuses another identity before Ranger is called", async () => {
     const secretPath = join(tmpDir, "step-up-totp.json");
     writeEnrollment(secretPath, createEnrollment("2026-10-16T00:00:00.000Z"));
-    const marker = join(tmpDir, "ranger-ran");
+    const ranger = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json(rangerState()) });
+    const marker = join(tmpDir, "ranger-calls");
     const bin = join(tmpDir, "ranger");
-    writeFileSync(bin, `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 });
+    writeFileSync(bin, `#!/bin/sh\necho "$2" >> ${marker}\n`, { mode: 0o755 });
     const ctx = startServer(
-      {
-        ...DEFAULT_CONFIG,
-        port: 0,
-        governance: { principals: ["principal@example.com"], stepUp: { secretPath } },
-      },
+      { ...DEFAULT_CONFIG, port: 0, governance: { principals: ["principal@example.com"], stepUp: { secretPath } } },
       db,
-      { desk: { ...DESK, rangerCli: { bin, config: "" } } },
+      { desk: { ...DESK, rangerUrl: `http://127.0.0.1:${ranger.port}`, rangerCli: { bin, config: "" } } },
     );
+    const base = `http://localhost:${ctx.server.port}`;
+    const send = (email: string) => fetch(`${base}/api/desk/action`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, "Cf-Access-Authenticated-User-Email": email },
+      body: JSON.stringify({ action: "ranger.approve", key: "ranger:example/app#30" }),
+    });
     try {
-      const base = `http://localhost:${ctx.server.port}`;
-      const res = await fetch(`${base}/api/desk/action`, {
-        method: "POST",
-        headers: { "content-type": "application/json", origin: base, "Cf-Access-Authenticated-User-Email": "principal@example.com" },
-        body: JSON.stringify({ action: "ranger.approve", key: "ranger:example/app#30" }),
-      });
-      expect(res.status).toBe(403);
-      expect((await res.json()).error).toBe("step_up_required");
+      const stranger = await send("unlisted@example.com");
+      expect(stranger.status).toBe(403);
+      expect((await stranger.json()).error).toBe("not_authorized");
       expect(existsSync(marker)).toBe(false);
+
+      expect((await send("principal@example.com")).status).toBe(200);
+      expect(readFileSync(marker, "utf8").trim()).toBe("30");
     } finally {
       ctx.stop(true);
+      void ranger.stop(true);
     }
   });
 });

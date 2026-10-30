@@ -48,7 +48,6 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   const [openAgents, setOpenAgents] = useState(false);
   const [openStopped, setOpenStopped] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const [pending, setPending] = useState<{ item: DeskItem; action: DeskAction } | null>(null);
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
   const group = groupKind ? openGroup(selection, groupKind) : null;
@@ -84,16 +83,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
     if (a.id === "detail") setDetail(item);
     else if (a.id === "snooze") setSnoozed((s) => new Set(s).add(item.key));
     else if (a.id === "vip.add" && a.target) void addVip(a.target, item.title.split(" wrote:")[0] ?? null);
-    else if (a.id.startsWith("ranger.") && a.wired) setPending({ item, action: a });
+    else if (a.id.startsWith("ranger.") && a.wired) void send(item, a);
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
   };
 
-  const confirmPending = async (code: string): Promise<void> => {
-    if (!pending) return;
-    const { item, action } = pending;
-    const result = await submitDeskAction({ action: action.id, key: item.key }, code);
-    setPending(null);
+  const send = async (item: DeskItem, action: DeskAction): Promise<void> => {
+    const result = await submitDeskAction({ action: action.id, key: item.key });
     setNote(result.text);
     if (!result.ok) return;
     setSnoozed((s) => new Set(s).add(item.key));
@@ -308,7 +304,6 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
         {detail && <DetailPanel item={detail} area={detail.area ? areaById.get(detail.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detail, a)} />}
       </aside>
 
-      {pending && <StepUpPrompt item={pending.item} action={pending.action} onConfirm={confirmPending} onCancel={() => setPending(null)} />}
       {note && <div className="desk-note" role="status">{note}</div>}
     </div>
   );
@@ -345,44 +340,6 @@ function DetailPanel({ item, area, onClose, onAction }: { item: DeskItem; area?:
         {item.actions.filter((a) => a.id !== "detail").map((a) => <ActionButton key={a.id} action={a} onRun={onAction} />)}
       </div>
     </>
-  );
-}
-
-/** Asks for the step-up code before a Desk action that writes to Ranger. */
-export function StepUpPrompt({ item, action, onConfirm, onCancel }: { item: DeskItem; action: DeskAction; onConfirm: (code: string) => Promise<void>; onCancel: () => void }) {
-  const [code, setCode] = useState("");
-  const [busy, setBusy] = useState(false);
-  const ready = /^\d{6}$/.test(code) && !busy;
-  return (
-    <form
-      className="desk-stepup"
-      role="dialog"
-      aria-label={`${action.label}: confirm with your step-up code`}
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (!ready) return;
-        setBusy(true);
-        void onConfirm(code).finally(() => setBusy(false));
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") onCancel();
-      }}
-    >
-      <p><b>{action.label}</b> {item.title}</p>
-      <label>
-        Step-up code
-        <input
-          autoFocus
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          maxLength={6}
-          value={code}
-          onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
-        />
-      </label>
-      <button type="submit" className="desk-btn pri" disabled={!ready}>{busy ? "Sending…" : action.label}</button>
-      <button type="button" className="desk-btn ghost" onClick={onCancel}>Cancel</button>
-    </form>
   );
 }
 

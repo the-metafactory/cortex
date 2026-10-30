@@ -197,10 +197,5 @@
 .desk-vip-add input{width:100%;height:32px;padding:0 10px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:13.5px;background:#fff;outline:0}
 .desk-vip-add input:focus{border-color:#bcd3fb;box-shadow:0 0 0 3px rgba(59,130,246,.12)}
 
-/* S3: step-up before a Ranger action */
-.desk-stepup{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:61;display:flex;flex-wrap:wrap;align-items:center;gap:10px;max-width:min(640px,calc(100vw - 32px));background:var(--card);padding:12px 14px;border-radius:12px;box-shadow:0 0 0 1px var(--line),0 12px 32px rgba(0,0,0,.18);animation:desk-in .2s ease-out}
-.desk-stepup p{flex:1 1 100%;margin:0;font-size:14px;color:var(--ink2)}
-.desk-stepup label{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--mute)}
-.desk-stepup input{width:96px;height:34px;padding:0 10px;border:1px solid #e4e4e7;border-radius:9px;font:500 16px/1 Inter,sans-serif;letter-spacing:.12em;font-variant-numeric:tabular-nums;color:var(--ink)}
 .desk-group{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:0;border-radius:6px;color:inherit}
 .desk-group:hover div,.desk-group[aria-pressed="true"] div{color:var(--ink)}
