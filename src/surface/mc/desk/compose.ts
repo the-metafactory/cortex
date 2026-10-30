@@ -9,13 +9,11 @@ import { listVips } from "./vips";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
 import { withoutHandled, type HandledLedger, type RangerCli } from "./actions";
-import type { DeskUnlock } from "./step-up-window";
 
 /** What Mission Control holds for the Desk across requests. */
 export interface DeskRuntime {
   options?: DeskOptions;
   ledger: HandledLedger;
-  stepUpWindow?: DeskUnlock;
   sourceCache?: SourceCache;
 }
 

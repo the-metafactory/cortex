@@ -9,7 +9,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction } from "../lib/desk-action";
-import { DESK_STEP_UP_CLIENT_MARGIN_MS, DESK_STEP_UP_WINDOW_MS } from "../../desk/step-up-window";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
 import { ALL_AREAS, briefing, canSee, clock, openGroup, selectItems, URGENCY_LABEL } from "../../desk/present";
@@ -50,7 +49,6 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   const [openStopped, setOpenStopped] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [pending, setPending] = useState<{ item: DeskItem; action: DeskAction } | null>(null);
-  const [unlockedUntil, setUnlockedUntil] = useState(0);
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
   const group = groupKind ? openGroup(selection, groupKind) : null;
@@ -86,23 +84,16 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
     if (a.id === "detail") setDetail(item);
     else if (a.id === "snooze") setSnoozed((s) => new Set(s).add(item.key));
     else if (a.id === "vip.add" && a.target) void addVip(a.target, item.title.split(" wrote:")[0] ?? null);
-    else if (a.id.startsWith("ranger.") && a.wired) {
-      if (Date.now() < unlockedUntil) void send(item, a, "");
-      else setPending({ item, action: a });
-    }
+    else if (a.id.startsWith("ranger.") && a.wired) setPending({ item, action: a });
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
   };
 
-  const send = async (item: DeskItem, action: DeskAction, code: string): Promise<void> => {
+  const confirmPending = async (code: string): Promise<void> => {
+    if (!pending) return;
+    const { item, action } = pending;
     const result = await submitDeskAction({ action: action.id, key: item.key }, code);
     setPending(null);
-    if (result.needsCode && !code) {
-      setUnlockedUntil(0);
-      setPending({ item, action });
-      return;
-    }
-    if (result.unlockedUntil !== null) setUnlockedUntil(result.unlockedUntil - DESK_STEP_UP_CLIENT_MARGIN_MS);
     setNote(result.text);
     if (!result.ok) return;
     setSnoozed((s) => new Set(s).add(item.key));
@@ -317,7 +308,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
         {detail && <DetailPanel item={detail} area={detail.area ? areaById.get(detail.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detail, a)} />}
       </aside>
 
-      {pending && <StepUpPrompt item={pending.item} action={pending.action} onConfirm={(code) => send(pending.item, pending.action, code)} onCancel={() => setPending(null)} />}
+      {pending && <StepUpPrompt item={pending.item} action={pending.action} onConfirm={confirmPending} onCancel={() => setPending(null)} />}
       {note && <div className="desk-note" role="status">{note}</div>}
     </div>
   );
@@ -378,7 +369,6 @@ export function StepUpPrompt({ item, action, onConfirm, onCancel }: { item: Desk
       }}
     >
       <p><b>{action.label}</b> {item.title}</p>
-      <p className="desk-stepup-hint">One code unlocks Desk actions for {DESK_STEP_UP_WINDOW_MS / 60_000} minutes.</p>
       <label>
         Step-up code
         <input
