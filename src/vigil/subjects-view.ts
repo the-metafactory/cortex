@@ -23,8 +23,8 @@ export async function listVigilSubjects(
   resolver: GoalWordingResolver = idOnlyGoalWording,
   cadence: VigilCadence = {},
 ): Promise<VigilSubjectView[]> {
-  const rows = db.query<VigilSubjectRow, []>(
-    "SELECT * FROM vigil_subjects ORDER BY healthy, subject_key",
+  const rows = db.query<VigilSubjectRow & { result_ref: string | null }, []>(
+    "SELECT s.*, r.result_ref FROM vigil_subjects s LEFT JOIN vigil_result_subjects r USING (subject_key) ORDER BY s.healthy, s.subject_key",
   ).all();
   const wordingByGoal = new Map<string, Promise<string | null>>();
   async function goalWording(goalId: string, stack: string): Promise<string | null> {
@@ -51,9 +51,7 @@ export async function listVigilSubjects(
       goalWording: goalId === null ? null : await wordingByGoal.get(goalKey) ?? null,
       value: row.value,
       healthy: row.healthy === 1,
-      lastResultRef: db.query<{ result_ref: string }, [string]>(
-        "SELECT result_ref FROM vigil_result_subjects WHERE subject_key = ?",
-      ).get(row.subject_key)?.result_ref ?? null,
+      lastResultRef: row.result_ref,
       lastRunId: row.last_run_id,
       lastEndedAt: row.last_ended_at,
       expectedBy: cadenceMs === null ? null : row.last_ended_at + cadenceMs,

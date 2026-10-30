@@ -1,6 +1,7 @@
 import type { VigilSubjectView } from "../../../vigil/subjects-view";
 import type { RangerMap, RangerMapNode, RangerState } from "./sources/ranger";
 import { rangerTitles } from "./sources/ranger";
+import { clock, startOfDay } from "./time";
 import type { DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
 
 export interface AreaRule extends DeskArea {
@@ -31,6 +32,9 @@ export const FOLDED_LABELS: Record<DeskItemKind, string> = {
   escalation: "Older escalations",
 };
 
+/** A goal's own check (sensor, pursuit, review) that went from ok to regressed. */
+export const isRegressedGoalCheck = (s: VigilSubjectView): boolean => s.vocab === "check" && s.goalId !== null && s.value === "regressed";
+
 export function areaFor(areas: AreaRule[], repo: string | null, goalId: string | null): string | null {
   for (const a of areas) {
     if (goalId && a.goals.includes(goalId)) return a.id;
@@ -53,11 +57,9 @@ export function goalShort(wording: string | null): string {
 export function ago(now: number, at: number): string {
   const diff = now - at;
   if (diff < 0) return "soon";
-  const startOfToday = new Date(now);
-  startOfToday.setHours(0, 0, 0, 0);
-  const hhmm = new Date(at).toTimeString().slice(0, 5);
-  if (at >= startOfToday.getTime()) return `today at ${hhmm}`;
-  if (at >= startOfToday.getTime() - DAY_MS) return `yesterday at ${hhmm}`;
+  const today = startOfDay(now);
+  if (at >= today) return `today at ${clock(at)}`;
+  if (at >= today - DAY_MS) return `yesterday at ${clock(at)}`;
   return `${Math.round(diff / DAY_MS)} days ago`;
 }
 
@@ -183,7 +185,7 @@ function vigilItems({ now, subjects, areas }: RankInput, titles: Titles, listed:
   for (const s of subjects) {
     if (s.healthy) continue;
     const refs = [s.subjectKey];
-    if (s.vocab === "check" && s.goalId && s.value === "regressed") {
+    if (isRegressedGoalCheck(s) && s.goalId) {
       const part = s.ref.split(".").pop() ?? "check";
       const wording = goalWording.get(s.goalId) ?? null;
       add({

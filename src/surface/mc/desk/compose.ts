@@ -2,7 +2,8 @@ import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
-import { ago, areaFor, goalShort, parsedOr, rankItems, repoName, type AreaRule } from "./rank";
+import { ago, areaFor, goalShort, isRegressedGoalCheck, parsedOr, rankItems, repoName, type AreaRule } from "./rank";
+import { startOfDay } from "./time";
 import { readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
 
@@ -72,8 +73,6 @@ const isAgentStop = (item: DeskItem): boolean => item.kind === "agent-failed" ||
 
 function buildToday(ranger: RangerState | null, items: DeskItem[], areas: AreaRule[], now: number): DeskEvent[] {
   const today: DeskEvent[] = [];
-  const startOfToday = new Date(now);
-  startOfToday.setHours(0, 0, 0, 0);
   for (const c of ranger?.current ?? []) {
     today.push({
       key: `ranger:run:${c.repo}#${c.nodeId}`,
@@ -87,7 +86,7 @@ function buildToday(ranger: RangerState | null, items: DeskItem[], areas: AreaRu
   for (const item of items.filter(isAgentStop)) {
     const n = ranger?.needsYou.find((x) => item.key === `ranger:${x.repo}#${x.nodeId}`);
     const at = parsedOr(n?.endedAt, NaN);
-    if (!Number.isFinite(at) || at < startOfToday.getTime()) continue;
+    if (!Number.isFinite(at) || at < startOfDay(now)) continue;
     const key = `stop:${item.key}`;
     today.push({ key, at, title: item.kind === "agent-blocked" ? "An agent stopped to wait for your ruling" : "An agent stopped", note: item.title, area: item.area, kind: "agent-stop" });
     item.eventKey = key;
@@ -112,7 +111,7 @@ function buildSystems(db: Database, subjects: VigilSubjectView[], sources: DeskV
   const systems: string[] = [];
   if (sources.length === 0) systems.push("No source is connected, so the Desk cannot see anything yet. Turn on Vigil or set mc.desk.ranger.url.");
   for (const s of subjects) {
-    if (s.vocab === "check" && !s.goalId && s.value === "regressed") systems.push(`The ${s.ref.replace(/[:._-]+/g, " ")} check is failing since ${ago(now, s.lastEndedAt)}.`);
+    if (s.vocab === "check" && s.goalId === null && s.value === "regressed") systems.push(`The ${s.ref.replace(/[:._-]+/g, " ")} check is failing since ${ago(now, s.lastEndedAt)}.`);
   }
   const failedDispatches = db.query<{ n: number }, []>(
     "SELECT COUNT(*) AS n FROM attention_items WHERE status = 'open' AND kind = 'failed_dispatch'",
@@ -122,8 +121,6 @@ function buildSystems(db: Database, subjects: VigilSubjectView[], sources: DeskV
   for (const s of sources) if (!s.ok) systems.push(`The ${s.id} source is unreachable.`);
   return systems;
 }
-
-const isRegressedGoalCheck = (c: VigilSubjectView): boolean => c.vocab === "check" && c.goalId !== null && c.value === "regressed";
 
 function buildGoals(subjects: VigilSubjectView[]): DeskGoal[] {
   const sensorDown = new Set(subjects.filter(isRegressedGoalCheck).map((c) => c.goalId));

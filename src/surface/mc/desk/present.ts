@@ -1,4 +1,5 @@
 import { fold } from "./rank";
+export { clock } from "./time";
 import type { DeskFoldedGroup, DeskItem, DeskView } from "./types";
 
 /** The area filter value that shows every item. */
@@ -49,10 +50,6 @@ export function briefing(view: DeskView, selection: DeskSelection, areaLabel: st
 }
 
 const lowerFirst = (s: string): string => (/^(A|An|The) /.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s);
-
-export function clock(at: number): string {
-  return new Date(at).toTimeString().slice(0, 5);
-}
 
 export const URGENCY_LABEL: Record<DeskItem["urgency"], string> = {
   now: "Now",
