@@ -1,4 +1,5 @@
 import { STEP_UP_HEADER } from "./authorize-lib";
+import { DESK_UNLOCKED_UNTIL_HEADER } from "../../desk/step-up-window";
 
 export const DESK_ACTION_PATH = "/api/desk/action";
 
@@ -10,25 +11,35 @@ const STEP_UP_LINES: Record<string, string> = {
   step_up_not_configured: "Step-up MFA is not set up on this stack. Run `cortex step-up enroll` first.",
 };
 
-/** Sends one Desk action with the step-up code and returns one line for the page. Never throws. */
+export interface DeskActionResult {
+  ok: boolean;
+  text: string;
+  needsCode: boolean;
+  unlockedUntil: number | null;
+}
+
+/** Sends one Desk action, with the step-up code when given, and returns one line for the page. Never throws. */
 export async function submitDeskAction(
   body: { action: string; key: string },
   stepUpCode: string,
   fetchImpl: FetchLike = fetch,
-): Promise<{ ok: boolean; text: string }> {
+): Promise<DeskActionResult> {
+  const code = stepUpCode.trim();
   let res: Response;
   try {
     res = await fetchImpl(DESK_ACTION_PATH, {
       method: "POST",
-      headers: { "content-type": "application/json", [STEP_UP_HEADER]: stepUpCode.trim() },
+      headers: { "content-type": "application/json", ...(code ? { [STEP_UP_HEADER]: code } : {}) },
       body: JSON.stringify(body),
     });
   } catch (err) {
-    return { ok: false, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}` };
+    return { ok: false, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}`, needsCode: false, unlockedUntil: null };
   }
+  const until = Number(res.headers.get(DESK_UNLOCKED_UNTIL_HEADER));
+  const unlockedUntil = Number.isFinite(until) && until > 0 ? until : null;
   const parsed = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown; detail?: unknown } | null;
-  if (res.ok) return { ok: true, text: typeof parsed?.message === "string" ? parsed.message : "Done." };
+  if (res.ok) return { ok: true, text: typeof parsed?.message === "string" ? parsed.message : "Done.", needsCode: false, unlockedUntil };
   const error = typeof parsed?.error === "string" ? parsed.error : "";
   const line = STEP_UP_LINES[error] ?? (typeof parsed?.detail === "string" ? parsed.detail : error);
-  return { ok: false, text: line || `The action failed (HTTP ${res.status}).` };
+  return { ok: false, text: line || `The action failed (HTTP ${res.status}).`, needsCode: error === "step_up_required", unlockedUntil };
 }
