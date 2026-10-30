@@ -130,6 +130,26 @@ describe("the Desk", () => {
     expect(view.today.some((e) => e.title === 'An agent is working on "Add the export button"')).toBe(true);
   });
 
+  it("keeps an escalation on a node an agent is still working on, named by Ranger", async () => {
+    seed({ subject_key: "state:escalation:default:example/app#7", vocab: "escalation", ref: "example/app#7", value: "needs-principal", healthy: 0 });
+    const view = await compose();
+    expect(view.items.filter((i) => i.title.includes("Add the export button")).map((i) => i.title)).toEqual(['"Add the export button" needs you.']);
+  });
+
+  it("ranks an item whose stop time Ranger garbled instead of producing NaN", async () => {
+    const view = await compose(rangerState({ needsYou: [{ key: "k", repo: "example/app", nodeId: "12", title: "Fix the login timeout", status: "failed", endedAt: "not a date" }] }));
+    expect(view.items.every((i) => Number.isFinite(i.score))).toBe(true);
+  });
+
+  it("never shows a goal id when the goal has no wording", async () => {
+    seed({ subject_key: "state:goal:default:G9", ref: "G9", goal_id: "G9", value: "off-track", healthy: 0 });
+    seed({ subject_key: "state:check:default:G9.sensor", vocab: "check", ref: "G9.sensor", goal_id: "G9", value: "regressed", healthy: 0 });
+    const view = await compose();
+    const visible = [...view.items.map((i) => `${i.title} ${i.why}`), ...view.goals.map((g) => g.text)].join(" ");
+    expect(visible).not.toMatch(/\bG\d+\b/);
+    expect(view.items.find((i) => i.kind === "goal")?.detail.refs).toContain("G9");
+  });
+
   it("drops Ranger links that are not http(s)", async () => {
     const view = await compose(rangerState({
       needsYou: [{ key: "k", repo: "example/app", nodeId: "12", title: "Fix the login timeout", status: "parked", reason: { class: "blocked" }, url: "javascript:alert(1)" }],

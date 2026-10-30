@@ -153,43 +153,18 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
                 {selection.rest.length > 0 && <p>{selection.rest.length} more can wait; they are in the margin.</p>}
               </div>
             </div>
-            {selection.needsYou.map((item, idx) => {
-              const a = item.area ? areaById.get(item.area) : undefined;
-              const event = item.eventKey ? view.today.find((e) => e.key === item.eventKey) : undefined;
-              return (
-                <article key={item.key} className="desk-row desk-item">
-                  <span className="desk-rank">{idx + 1}</span>
-                  <span />
-                  <div className="body">
-                    <div className="desk-meta">
-                      {a && <span className="area"><AreaDot area={a} />{a.label}</span>}
-                      <span className={item.urgency === "today" || item.urgency === "now" ? "due" : ""}>{URGENCY_LABEL[item.urgency]}</span>
-                    </div>
-                    <button type="button" className="desk-title" onClick={() => setDetail(item)}>{item.title}</button>
-                    <p className="desk-why">{item.why}</p>
-                    <div className="desk-acts">
-                      {item.actions.map((act) => (
-                        <button
-                          key={act.id}
-                          type="button"
-                          className={`desk-btn${act.role === "primary" ? " pri" : act.id === "snooze" ? " ghost" : ""}`}
-                          disabled={!act.wired}
-                          title={act.wired ? undefined : "Not connected yet"}
-                          onClick={() => run(item, act)}
-                        >
-                          {act.label}
-                        </button>
-                      ))}
-                      {event && (
-                        <button type="button" className="desk-chip" onClick={() => focusEvent(event.key)}>
-                          {clock(event.at)} today ↑
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
+            {selection.needsYou.map((item, idx) => (
+              <DeskItemRow
+                key={item.key}
+                item={item}
+                rank={idx + 1}
+                area={item.area ? areaById.get(item.area) : undefined}
+                event={item.eventKey ? view.today.find((e) => e.key === item.eventKey) : undefined}
+                onOpen={() => setDetail(item)}
+                onAction={(a) => run(item, a)}
+                onFocusEvent={focusEvent}
+              />
+            ))}
           </section>
 
           {later.length > 0 && (
@@ -295,9 +270,7 @@ function DetailPanel({ item, area, onClose, onAction }: { item: DeskItem; area?:
       <div className="desk-sec">References</div>
       <ul className="desk-refs">{item.detail.refs.map((r) => <li key={r}>{r}</li>)}</ul>
       <div className="desk-panel-acts">
-        {item.actions.filter((a) => a.id !== "detail").map((a) => (
-          <button key={a.id} type="button" className={`desk-btn${a.role === "primary" ? " pri" : ""}`} disabled={!a.wired} onClick={() => onAction(a)}>{a.label}</button>
-        ))}
+        {item.actions.filter((a) => a.id !== "detail").map((a) => <ActionButton key={a.id} action={a} onRun={onAction} />)}
       </div>
     </>
   );
@@ -315,4 +288,54 @@ function TimelineRow({ event, className }: { event: DeskEvent; className: string
 
 function AreaDot({ area }: { area: DeskArea }) {
   return <span className="dot" style={{ background: area.color || "#a1a1aa" }} />;
+}
+
+interface DeskItemRowProps {
+  item: DeskItem;
+  rank: number;
+  area?: DeskArea;
+  event?: DeskEvent;
+  onOpen: () => void;
+  onAction: (a: DeskAction) => void;
+  onFocusEvent: (key: string) => void;
+}
+
+function DeskItemRow({ item, rank, area, event, onOpen, onAction, onFocusEvent }: DeskItemRowProps) {
+  return (
+    <article className="desk-row desk-item">
+      <span className="desk-rank">{rank}</span>
+      <span />
+      <div className="body">
+        <div className="desk-meta">
+          {area && <span className="area"><AreaDot area={area} />{area.label}</span>}
+          <span className={item.urgency === "today" || item.urgency === "now" ? "due" : ""}>{URGENCY_LABEL[item.urgency]}</span>
+        </div>
+        <button type="button" className="desk-title" onClick={onOpen}>{item.title}</button>
+        <p className="desk-why">{item.why}</p>
+        <div className="desk-acts">
+          {item.actions.map((a) => <ActionButton key={a.id} action={a} onRun={onAction} />)}
+          {event && (
+            <button type="button" className="desk-chip" onClick={() => onFocusEvent(event.key)}>
+              {clock(event.at)} today ↑
+            </button>
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function ActionButton({ action, onRun }: { action: DeskAction; onRun: (a: DeskAction) => void }) {
+  const style = action.role === "primary" ? " pri" : action.id === "snooze" ? " ghost" : "";
+  return (
+    <button
+      type="button"
+      className={`desk-btn${style}`}
+      disabled={!action.wired}
+      title={action.wired ? undefined : "Not connected yet"}
+      onClick={() => onRun(action)}
+    >
+      {action.label}
+    </button>
+  );
 }

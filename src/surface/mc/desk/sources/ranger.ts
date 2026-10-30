@@ -60,8 +60,8 @@ const withSafeUrl = <T extends { url?: string }>(x: T): T => ({ ...x, url: safeH
 export type RangerFetch = (url: string, init: RequestInit) => Promise<Response>;
 
 /**
- * Reads Ranger's dashboard state over loopback HTTP. Transitional: docs/architecture.md §6.2 wants a bus path
- * between apps, so the Desk's write actions (cortex#2773) must not be built on this channel.
+ * Reads Ranger's dashboard state over loopback HTTP. Transitional per docs/architecture.md §6.2; removal is
+ * tracked in https://github.com/the-metafactory/cortex/issues/2784, and write actions must not use this channel.
  */
 export async function readRangerState(
   baseUrl: string,

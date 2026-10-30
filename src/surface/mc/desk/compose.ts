@@ -1,6 +1,8 @@
 import type { Database } from "bun:sqlite";
-import { listVigilSubjects, type VigilSubjectsOptions, type VigilSubjectView } from "../api/vigil";
-import { ago, areaFor, goalShort, rankItems, type AreaRule } from "./rank";
+import type { GoalWordingResolver } from "../../../vigil/goal-wording";
+import type { VigilCadence } from "../../../vigil/staleness";
+import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
+import { ago, areaFor, goalShort, rankItems, repoName, type AreaRule } from "./rank";
 import { readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskView } from "./types";
 
@@ -10,6 +12,13 @@ export interface DeskOptions {
   topN: number;
   rangerUrl: string;
   areas: AreaRule[];
+}
+
+/** The Vigil side of Mission Control's options that the Desk reads. */
+export interface DeskVigilSource {
+  enabled: boolean;
+  resolveGoalWording?: GoalWordingResolver;
+  cadence?: VigilCadence;
 }
 
 export interface ComposeDeps {
@@ -23,7 +32,7 @@ const GOAL_STATES = new Set<DeskGoal["state"]>(["on-track", "at-risk", "off-trac
 export async function composeDesk(
   db: Database,
   desk: DeskOptions,
-  vigil: VigilSubjectsOptions | undefined,
+  vigil: DeskVigilSource | undefined,
   deps: ComposeDeps = {},
 ): Promise<DeskView> {
   const now = deps.now ?? Date.now();
@@ -53,7 +62,7 @@ export async function composeDesk(
     today.push({
       key: `ranger:run:${c.repo}#${c.nodeId}`,
       at,
-      title: c.title ? `An agent is working on "${c.title}"` : `An agent is working in ${c.repo.split("/").pop() ?? c.repo}`,
+      title: c.title ? `An agent is working on "${c.title}"` : `An agent is working in ${repoName(c.repo)}`,
       note: [c.phase ? `in ${c.phase}` : null, c.reviewRound ? `round ${c.reviewRound}` : null, c.prLabel ?? null].filter(Boolean).join(", "),
       area: areaFor(desk.areas, c.repo, null),
       kind: "agent",
@@ -72,7 +81,7 @@ export async function composeDesk(
 
   const waiting = items.filter((i) => i.kind === "agent-failed" || i.kind === "agent-blocked").length;
   const working = (ranger?.current ?? []).map((c) => ({
-    title: c.title || `An untitled task in ${c.repo.split("/").pop() ?? c.repo}`,
+    title: c.title || `An untitled task in ${repoName(c.repo)}`,
     note: [c.phase, c.prLabel].filter(Boolean).join(" · "),
     since: c.startedAt ? Date.parse(c.startedAt) : now,
   }));
@@ -118,7 +127,7 @@ function buildGoals(subjects: VigilSubjectView[]): DeskGoal[] {
     const wording = reported?.goalWording ?? subjects.find((s) => s.goalId === id)?.goalWording ?? null;
     const value = reported?.value ?? "on-track";
     const state = GOAL_STATES.has(value as DeskGoal["state"]) ? (value as DeskGoal["state"]) : "unknown";
-    return { id, text: goalShort(wording, id), state: state === "on-track" && sensorDown.has(id) ? "at-risk" : state };
+    return { id, text: goalShort(wording), state: state === "on-track" && sensorDown.has(id) ? "at-risk" : state };
   });
   return goals.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 }
