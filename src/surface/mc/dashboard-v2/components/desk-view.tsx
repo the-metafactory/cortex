@@ -48,6 +48,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   const [openAgents, setOpenAgents] = useState(false);
   const [openStopped, setOpenStopped] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map());
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
   const group = groupKind ? openGroup(selection, groupKind) : null;
@@ -89,7 +90,14 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   };
 
   const send = async (item: DeskItem, action: DeskAction): Promise<void> => {
+    if (sending.has(item.key)) return;
+    setSending((m) => new Map(m).set(item.key, action.id));
     const result = await submitDeskAction({ action: action.id, key: item.key });
+    setSending((m) => {
+      const next = new Map(m);
+      next.delete(item.key);
+      return next;
+    });
     setNote(result.text);
     if (!result.ok) return;
     setSnoozed((s) => new Set(s).add(item.key));
@@ -125,6 +133,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
       event={item.eventKey ? view.today.find((e) => e.key === item.eventKey) : undefined}
       onOpen={() => setDetail(item)}
       onAction={(a) => run(item, a)}
+      sending={sending.get(item.key) ?? null}
       onFocusEvent={focusEvent}
     />
   );
@@ -301,7 +310,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
 
       <div className="desk-scrim" onClick={() => setDetail(null)} />
       <aside className="desk-panel" aria-hidden={!detail} aria-label="Details">
-        {detail && <DetailPanel item={detail} area={detail.area ? areaById.get(detail.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detail, a)} />}
+        {detail && <DetailPanel item={detail} area={detail.area ? areaById.get(detail.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detail, a)} sending={sending.get(detail.key) ?? null} />}
       </aside>
 
       {note && <div className="desk-note" role="status">{note}</div>}
@@ -309,7 +318,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   );
 }
 
-function DetailPanel({ item, area, onClose, onAction }: { item: DeskItem; area?: string; onClose: () => void; onAction: (a: DeskAction) => void }) {
+function DetailPanel({ item, area, onClose, onAction, sending }: { item: DeskItem; area?: string; onClose: () => void; onAction: (a: DeskAction) => void; sending: string | null }) {
   return (
     <>
       <div className="desk-panel-top">
@@ -337,7 +346,7 @@ function DetailPanel({ item, area, onClose, onAction }: { item: DeskItem; area?:
       <div className="desk-sec">References</div>
       <ul className="desk-refs">{item.detail.refs.map((r) => <li key={r}>{r}</li>)}</ul>
       <div className="desk-panel-acts">
-        {item.actions.filter((a) => a.id !== "detail").map((a) => <ActionButton key={a.id} action={a} onRun={onAction} />)}
+        {item.actions.filter((a) => a.id !== "detail").map((a) => <ActionButton key={a.id} action={a} onRun={onAction} sending={sending} />)}
       </div>
     </>
   );
@@ -383,10 +392,11 @@ interface DeskItemRowProps {
   event?: DeskEvent;
   onOpen: () => void;
   onAction: (a: DeskAction) => void;
+  sending: string | null;
   onFocusEvent: (key: string) => void;
 }
 
-function DeskItemRow({ item, rank, area, event, onOpen, onAction, onFocusEvent }: DeskItemRowProps) {
+function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFocusEvent }: DeskItemRowProps) {
   return (
     <article className="desk-row desk-item">
       <span className="desk-rank">{rank}</span>
@@ -400,7 +410,7 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, onFocusEvent }
         <p className="desk-why">{item.why}</p>
         {item.excerpt && <blockquote className="desk-excerpt">{item.excerpt}</blockquote>}
         <div className="desk-acts">
-          {item.actions.map((a) => <ActionButton key={a.id} action={a} onRun={onAction} />)}
+          {item.actions.map((a) => <ActionButton key={a.id} action={a} onRun={onAction} sending={sending} />)}
           {event && (
             <button type="button" className="desk-chip" onClick={() => onFocusEvent(event.key)}>
               {clock(event.at)} today ↑
@@ -412,17 +422,20 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, onFocusEvent }
   );
 }
 
-function ActionButton({ action, onRun }: { action: DeskAction; onRun: (a: DeskAction) => void }) {
+/** One item action. While any action on the item is in flight (`sending` names it), every button is disabled and that one says "Sending…". */
+export function ActionButton({ action, onRun, sending }: { action: DeskAction; onRun: (a: DeskAction) => void; sending: string | null }) {
   const style = action.role === "primary" ? " pri" : action.id === "snooze" ? " ghost" : "";
+  const busy = sending === action.id;
   return (
     <button
       type="button"
       className={`desk-btn${style}`}
-      disabled={!action.wired}
+      disabled={!action.wired || sending !== null}
+      aria-busy={busy}
       title={action.wired ? undefined : "Not connected yet"}
       onClick={() => onRun(action)}
     >
-      {action.label}
+      {busy ? "Sending…" : action.label}
     </button>
   );
 }
