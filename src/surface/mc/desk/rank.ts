@@ -167,17 +167,25 @@ const MAP_NODE_RULES: { rule: MapNodeRule; nodes: (m: RangerMap) => RangerMapNod
   },
 ];
 
+/** Why Ranger will not take an approval for a decision, or null when it will. */
+export function approvalBlocked(map: RangerMap, node: RangerMapNode): string | null {
+  if (approvable(map, node)) return null;
+  if (map.walk !== "full" || map.servedOnly === true) return "No agent builds this map; Ranger only shows it.";
+  return "Ranger does not take an approval for it here. Look first to see what it needs.";
+}
+
 function rangerMapItems({ ranger, areas, rangerActions = false }: RankInput, add: Add): void {
   for (const map of ranger?.maps ?? []) {
     for (const { rule, nodes } of MAP_NODE_RULES) {
       for (const node of nodes(map)) {
         const ref = `${map.repo}#${node.id}`;
+        const blocked = rule.kind === "decision" && rangerActions ? approvalBlocked(map, node) : null;
         add({
           key: rangerItemKey(ref), kind: rule.kind, area: areaFor(areas, map.repo, null), urgency: rule.urgency,
           title: rule.title(node.title),
-          why: rule.why(repoName(map.repo)),
+          why: blocked ?? rule.why(repoName(map.repo)),
           score: rule.score,
-          actions: [{ ...rule.primary, wired: rangerActions && rule.wired(map, node) }, LOOK, LATER],
+          actions: blocked ? [{ ...LOOK, role: "primary" }, LATER] : [{ ...rule.primary, wired: rangerActions && rule.wired(map, node) }, LOOK, LATER],
           detail: { summary: node.title, history: [], refs: [ref, map.key], links: issueLinks(node.url) },
         });
       }
