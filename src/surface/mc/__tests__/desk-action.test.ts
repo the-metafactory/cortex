@@ -8,10 +8,6 @@ import { HandledLedger, type RangerRunResult } from "../desk/actions";
 import { composeDesk, type DeskOptions } from "../desk/compose";
 import type { RangerState } from "../desk/sources/ranger";
 import { createEnrollment, writeEnrollment } from "../../../common/step-up/enrollment";
-import { base32Decode, hotp, totpStep } from "../../../common/step-up/totp";
-import { STEP_UP_HEADER } from "../api/step-up-mfa";
-import { DESK_UNLOCKED_UNTIL_HEADER } from "../desk/step-up-window";
-import { AUTHORIZE_PATH } from "../api/networks-authorize";
 import { DEFAULT_CONFIG } from "../config";
 import { initDatabase } from "../db/init";
 import { writeVigilSubject } from "../../../vigil/db";
@@ -184,7 +180,7 @@ describe("Desk actions that write to Ranger", () => {
   });
 });
 
-describe("the Desk action route behind step-up MFA", () => {
+describe("the Desk action route through Mission Control", () => {
   let tmpDir: string;
   let db: Database;
   beforeEach(() => {
@@ -197,10 +193,9 @@ describe("the Desk action route behind step-up MFA", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("lets one step-up code unlock Desk actions in the browser that typed it, and never a control verb", async () => {
+  it("runs an action for the principal without a step-up code, and refuses another identity before Ranger is called", async () => {
     const secretPath = join(tmpDir, "step-up-totp.json");
-    const enrollment = createEnrollment("2026-10-16T00:00:00.000Z");
-    writeEnrollment(secretPath, enrollment);
+    writeEnrollment(secretPath, createEnrollment("2026-10-16T00:00:00.000Z"));
     const ranger = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json(rangerState()) });
     const marker = join(tmpDir, "ranger-calls");
     const bin = join(tmpDir, "ranger");
@@ -211,60 +206,22 @@ describe("the Desk action route behind step-up MFA", () => {
       { desk: { ...DESK, rangerUrl: `http://127.0.0.1:${ranger.port}`, rangerCli: { bin, config: "" } } },
     );
     const base = `http://localhost:${ctx.server.port}`;
-    const send = (path: string, body: unknown, extra: Record<string, string> = {}) => fetch(`${base}${path}`, {
+    const send = (email: string) => fetch(`${base}/api/desk/action`, {
       method: "POST",
-      headers: { "content-type": "application/json", origin: base, "Cf-Access-Authenticated-User-Email": "principal@example.com", ...extra },
-      body: JSON.stringify(body),
+      headers: { "content-type": "application/json", origin: base, "Cf-Access-Authenticated-User-Email": email },
+      body: JSON.stringify({ action: "ranger.approve", key: "ranger:example/app#30" }),
     });
     try {
-      const code = hotp(base32Decode(enrollment.secret), totpStep(Date.now()));
-      const first = await send("/api/desk/action", { action: "ranger.approve", key: "ranger:example/app#30" }, { [STEP_UP_HEADER]: code });
-      expect(first.status).toBe(200);
-      const cookie = (first.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
-      expect(first.headers.get("set-cookie")).toContain("HttpOnly; SameSite=Strict");
-      expect(first.headers.get("set-cookie")).not.toContain("Secure");
-      expect(Number(first.headers.get(DESK_UNLOCKED_UNTIL_HEADER))).toBeGreaterThan(Date.now());
+      const stranger = await send("unlisted@example.com");
+      expect(stranger.status).toBe(403);
+      expect((await stranger.json()).error).toBe("not_authorized");
+      expect(existsSync(marker)).toBe(false);
 
-      const otherBrowser = await send("/api/desk/action", { action: "ranger.retry", key: "ranger:example/app#12" });
-      expect((await otherBrowser.json()).error).toBe("step_up_required");
-
-      expect((await send("/api/desk/action", { action: "ranger.retry", key: "ranger:example/app#12" }, { cookie })).status).toBe(200);
-      expect(readFileSync(marker, "utf8").trim().split("\n")).toEqual(["30", "12"]);
-      const control = await send(AUTHORIZE_PATH, { request_id: "req-1", confirm: "req-1" }, { cookie });
-      expect((await control.json()).error).toBe("step_up_required");
+      expect((await send("principal@example.com")).status).toBe(200);
+      expect(readFileSync(marker, "utf8").trim()).toBe("30");
     } finally {
       ctx.stop(true);
       void ranger.stop(true);
-    }
-  });
-
-  it("refuses an action without a step-up code before Ranger is called", async () => {
-    const secretPath = join(tmpDir, "step-up-totp.json");
-    writeEnrollment(secretPath, createEnrollment("2026-10-16T00:00:00.000Z"));
-    const marker = join(tmpDir, "ranger-ran");
-    const bin = join(tmpDir, "ranger");
-    writeFileSync(bin, `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 });
-    const ctx = startServer(
-      {
-        ...DEFAULT_CONFIG,
-        port: 0,
-        governance: { principals: ["principal@example.com"], stepUp: { secretPath } },
-      },
-      db,
-      { desk: { ...DESK, rangerCli: { bin, config: "" } } },
-    );
-    try {
-      const base = `http://localhost:${ctx.server.port}`;
-      const res = await fetch(`${base}/api/desk/action`, {
-        method: "POST",
-        headers: { "content-type": "application/json", origin: base, "Cf-Access-Authenticated-User-Email": "principal@example.com" },
-        body: JSON.stringify({ action: "ranger.approve", key: "ranger:example/app#30" }),
-      });
-      expect(res.status).toBe(403);
-      expect((await res.json()).error).toBe("step_up_required");
-      expect(existsSync(marker)).toBe(false);
-    } finally {
-      ctx.stop(true);
     }
   });
 });

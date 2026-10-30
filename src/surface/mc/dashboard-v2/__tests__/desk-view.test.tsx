@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DeskBody, DeskView, RestGroups, StepUpPrompt } from "../components/desk-view";
+import { DeskBody, DeskView, RestGroups } from "../components/desk-view";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { openGroup, selectItems } from "../../desk/present";
 
@@ -120,17 +120,6 @@ describe("DeskBody when the next meeting is hours away", () => {
   it("says what needs you once, not twice", () => {
     expect((html.match(/3 things need you, most important first\./g) ?? []).length).toBe(1);
     expect(html).toContain("Concert");
-  });
-});
-
-describe("StepUpPrompt", () => {
-  it("asks for the step-up code and holds the action until six digits are in", () => {
-    const html = renderToStaticMarkup(
-      <StepUpPrompt item={item(1)} action={{ id: "ranger.approve", label: "Approve", role: "primary", wired: true }} onConfirm={async () => {}} onCancel={() => {}} />,
-    );
-    expect(html).toContain("Step-up code");
-    expect(html).toContain("Task 1 needs you.");
-    expect(html).toMatch(/<button type="submit"[^>]*disabled=""[^>]*>Approve<\/button>/);
   });
 });
 

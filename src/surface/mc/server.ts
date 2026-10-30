@@ -68,8 +68,6 @@ import { handleGetDesk } from "./api/desk";
 import { handleDeskVips } from "./api/desk-vips";
 import { handleDeskAction } from "./api/desk-action";
 import { HandledLedger } from "./desk/actions";
-import { DESK_STEP_UP_WINDOW_ROUTE, DESK_UNLOCKED_UNTIL_HEADER } from "./desk/step-up-window";
-import { StepUpWindow, unlockToken } from "./api/desk-unlock";
 import type { DeskOptions, DeskRuntime } from "./desk/compose";
 import { SourceCache } from "./desk/sources/command";
 import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil";
@@ -163,7 +161,6 @@ export function startServer(
   const wsRegistry = new WsClientRegistry();
   const deskSourceCache = new SourceCache();
   const deskLedger = new HandledLedger();
-  const stepUpWindow = new StepUpWindow();
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
@@ -285,7 +282,7 @@ export function startServer(
           stepUpSecretPath,
           authorizer,
           options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined,
-          { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, stepUpWindow },
+          { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger },
         );
       }
 
@@ -388,10 +385,6 @@ export function startServer(
   return { server, port: server.port ?? config.port, wsRegistry, stop };
 }
 
-function arrivedOverHttps(req: Request, url: URL): boolean {
-  return url.protocol === "https:" || req.headers.get("x-forwarded-proto") === "https" || req.headers.has(CF_ACCESS_JWT_HEADER);
-}
-
 async function handleApi(
   req: Request,
   url: URL,
@@ -415,16 +408,11 @@ async function handleApi(
     const rebindDenial = checkRebindGuard(req, guard);
     if (rebindDenial) return rebindDenial;
   }
-  let principal: string | null = null;
   if (isIdentityGatedMutation(req.method, pathname) || requiresStepUp(req.method, pathname)) {
     const authResult = await enforceMutationAuth(req, guard);
     if (authResult instanceof Response) return authResult;
-    principal = authResult.principal;
   }
-  const windowFor = principal !== null && pathname === DESK_STEP_UP_WINDOW_ROUTE ? principal : null;
-  const unlocked = windowFor !== null && (desk?.stepUpWindow?.isOpen(windowFor, unlockToken(req), Date.now()) ?? false);
-  let unlock: { cookie: string; until: number } | null = null;
-  if (requiresStepUp(req.method, pathname) && !unlocked) {
+  if (requiresStepUp(req.method, pathname)) {
     let enrollment: StepUpEnrollment | null;
     try {
       enrollment = loadEnrollment(stepUpSecretPath);
@@ -445,7 +433,6 @@ async function handleApi(
     }
     const stepUpDenial = enforceStepUp(req, { enrollment });
     if (stepUpDenial) return stepUpDenial;
-    if (windowFor !== null) unlock = desk?.stepUpWindow?.open(windowFor, Date.now(), arrivedOverHttps(req, url)) ?? null;
   }
 
   if (pathname === "/api/desk") {
@@ -453,14 +440,7 @@ async function handleApi(
     return handleGetDesk(db, desk, vigil);
   }
 
-  if (pathname === DESK_STEP_UP_WINDOW_ROUTE) {
-    const res = await handleDeskAction(req, desk);
-    if (unlock !== null) {
-      res.headers.append("Set-Cookie", unlock.cookie);
-      res.headers.set(DESK_UNLOCKED_UNTIL_HEADER, String(unlock.until));
-    }
-    return res;
-  }
+  if (pathname === "/api/desk/action") return handleDeskAction(req, desk);
 
   if (pathname === "/api/desk/vips") return handleDeskVips(req, url, db);
 
