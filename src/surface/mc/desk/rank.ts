@@ -1,9 +1,9 @@
 import type { VigilSubjectView } from "../../../vigil/subjects-view";
 import type { SourceEvent, SourceMail } from "./sources/command";
 import type { RangerMap, RangerMapNode, RangerState } from "./sources/ranger";
-import { rangerTitles } from "./sources/ranger";
+import { rangerItemKey, rangerTitles } from "./sources/ranger";
 import { approvable, retryable } from "./actions";
-import { clock, startOfDay } from "./time";
+import { clock, DAY_MS, startOfDay } from "./time";
 import { isVip } from "./vips";
 import type { DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
 
@@ -19,8 +19,6 @@ export interface RankInput {
   areas: AreaRule[];
   rangerActions?: boolean;
 }
-
-const DAY_MS = 86_400_000;
 
 const action = (id: string, label: string, role: DeskAction["role"], wired: boolean): DeskAction => ({ id, label, role, wired });
 const LOOK = action("detail", "Look first", "secondary", true);
@@ -106,7 +104,7 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false }: Rank
     const ageDays = Math.max(0, (now - endedAt) / DAY_MS);
     const failed = n.status === "failed";
     const links = issueLinks(n.url);
-    const base = { key: `ranger:${ref}`, area: areaFor(areas, n.repo, null), urgency: "waiting" as const };
+    const base = { key: rangerItemKey(ref), area: areaFor(areas, n.repo, null), urgency: "waiting" as const };
     const detail = {
       summary: n.reason?.detail ? `${n.reason.class ?? "Stopped"}: ${n.reason.detail}` : `The agent stopped (${n.status}).`,
       history: [`Stopped ${ago(now, endedAt)}`],
@@ -174,7 +172,7 @@ function rangerMapItems({ ranger, areas, rangerActions = false }: RankInput, add
       for (const node of nodes(map)) {
         const ref = `${map.repo}#${node.id}`;
         add({
-          key: `ranger:${ref}`, kind: rule.kind, area: areaFor(areas, map.repo, null), urgency: rule.urgency,
+          key: rangerItemKey(ref), kind: rule.kind, area: areaFor(areas, map.repo, null), urgency: rule.urgency,
           title: rule.title(node.title),
           why: rule.why(repoName(map.repo)),
           score: rule.score,
@@ -216,7 +214,7 @@ function vigilItems({ now, subjects, areas }: RankInput, titles: Titles, listed:
         detail: { summary: s.goalWording ?? "This goal has no description.", history: [`Last report ${ago(now, s.lastEndedAt)}`], refs: [goalId, ...refs], links: [] },
       });
     } else if (s.vocab === "escalation" && (s.value === "needs-principal" || s.value === "overdue")) {
-      if (listed(`ranger:${s.ref}`)) continue;
+      if (listed(rangerItemKey(s.ref))) continue;
       const known = titles.get(s.ref);
       const repo = s.ref.split("#")[0] ?? s.ref;
       add({

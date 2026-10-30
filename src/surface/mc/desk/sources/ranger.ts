@@ -89,6 +89,9 @@ export async function readRangerState(
   };
 }
 
+/** The Desk item key for a Ranger node ref such as `owner/repo#12`. */
+export const rangerItemKey = (ref: string): string => `ranger:${ref}`;
+
 /** Titles for `owner/repo#n` refs, so Vigil escalations can be named in words. */
 export function rangerTitles(state: RangerState): Map<string, { title: string; url?: string }> {
   const titles = new Map<string, { title: string; url?: string }>();

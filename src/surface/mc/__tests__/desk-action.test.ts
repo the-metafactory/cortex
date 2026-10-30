@@ -112,6 +112,17 @@ describe("Desk actions that write to Ranger", () => {
     expect(view.items.map((i) => i.key)).toContain("ranger:example/app#12");
   });
 
+  it("lets a retry through again when Ranger gives no stop time to tell two stops apart", async () => {
+    const state = rangerState();
+    state.needsYou = state.needsYou.map(({ endedAt: _endedAt, ...n }) => n);
+    const runner = fakeRunner();
+    const deps = { ledger: new HandledLedger(), run: runner.run, fetchImpl: fetchRanger(state) };
+    const body = { action: "ranger.retry", key: "ranger:example/app#12" };
+    expect((await handleDeskAction(post(body), DESK, deps)).status).toBe(200);
+    expect((await handleDeskAction(post(body), DESK, deps)).status).toBe(200);
+    expect(runner.calls).toHaveLength(2);
+  });
+
   it("refuses a node Ranger does not take an approval for, and a stack without the CLI", async () => {
     const runner = fakeRunner();
     const deps = { ledger: new HandledLedger(), run: runner.run, fetchImpl: fetchRanger(rangerState()) };

@@ -1,4 +1,5 @@
-import type { RangerMap, RangerMapNode, RangerNeedsYou, RangerState } from "./sources/ranger";
+import { rangerItemKey, type RangerMap, type RangerMapNode, type RangerNeedsYou, type RangerState } from "./sources/ranger";
+import { DAY_MS } from "./time";
 
 /** The Desk actions that write to Ranger. */
 export const RANGER_ACTIONS = ["ranger.approve", "ranger.retry"] as const;
@@ -22,7 +23,8 @@ export type RangerRunner = (argv: string[]) => Promise<RangerRunResult>;
 
 export interface PlannedAction {
   argv: string[];
-  handledKey: string;
+  claimKey: string;
+  handledKey: string | null;
   done: string;
 }
 
@@ -35,7 +37,7 @@ export const approvable = (map: RangerMap, node: RangerMapNode): boolean =>
 export const retryable = (n: RangerNeedsYou): boolean => n.actions?.resume === true;
 
 export const approveKey = (map: RangerMap, node: RangerMapNode): string => `approve:${map.key}/${node.id}@${node.approvalVersion ?? ""}`;
-export const retryKey = (n: RangerNeedsYou): string => `retry:${n.key}/${n.nodeId}@${n.endedAt ?? ""}`;
+export const retryKey = (n: RangerNeedsYou): string | null => (n.endedAt ? `retry:${n.key}/${n.nodeId}@${n.endedAt}` : null);
 
 const config = (cli: RangerCli): string[] => (cli.config ? ["-c", cli.config] : []);
 
@@ -47,28 +49,28 @@ const config = (cli: RangerCli): string[] => (cli.config ? ["-c", cli.config] : 
 export function planRangerAction(state: RangerState, action: RangerActionId, itemKey: string, cli: RangerCli): PlannedAction | string {
   if (action === "ranger.approve") {
     for (const map of state.maps) {
-      const node = map.decisions?.find((d) => `ranger:${map.repo}#${d.id}` === itemKey);
+      const node = map.decisions?.find((d) => rangerItemKey(`${map.repo}#${d.id}`) === itemKey);
       if (!node) continue;
       if (!approvable(map, node) || !NODE_ID.test(node.id) || !MAP_KEY.test(map.key)) return "Ranger does not take an approval for this node.";
       return {
         argv: [cli.bin, "approve-node", node.id, "--map", map.key, "--approval-version", node.approvalVersion ?? "", ...config(cli)],
+        claimKey: approveKey(map, node),
         handledKey: approveKey(map, node),
         done: `Approved "${node.title}". Ranger will start it.`,
       };
     }
     return "Ranger no longer waits for an approval on this node.";
   }
-  const entry = state.needsYou.find((n) => `ranger:${n.repo}#${n.nodeId}` === itemKey);
+  const entry = state.needsYou.find((n) => rangerItemKey(`${n.repo}#${n.nodeId}`) === itemKey);
   if (!entry) return "Ranger no longer lists this node as stopped.";
   if (!retryable(entry) || !NODE_ID.test(entry.nodeId) || !MAP_KEY.test(entry.key)) return "Ranger does not offer a retry for this node.";
   return {
     argv: [cli.bin, "resume-node", entry.nodeId, "--map", entry.key, ...config(cli)],
+    claimKey: `retry:${entry.key}/${entry.nodeId}`,
     handledKey: retryKey(entry),
     done: `Ranger is retrying "${entry.title}".`,
   };
 }
-
-const DAY_MS = 86_400_000;
 
 /**
  * Ranger actions the Desk has sent, keyed by the node's version (approval) or stop time (retry).
@@ -102,7 +104,10 @@ export class HandledLedger {
 export function withoutHandled(state: RangerState, ledger: HandledLedger): RangerState {
   return {
     ...state,
-    needsYou: state.needsYou.filter((n) => !ledger.has(retryKey(n))),
+    needsYou: state.needsYou.filter((n) => {
+      const key = retryKey(n);
+      return key === null || !ledger.has(key);
+    }),
     maps: state.maps.map((m) => ({ ...m, decisions: m.decisions?.filter((d) => !ledger.has(approveKey(m, d))) })),
   };
 }

@@ -404,7 +404,7 @@ async function handleApi(
   vigil?: VigilSubjectsOptions,
   desk?: DeskOptions,
   deskSourceCache?: SourceCache,
-  deskLedger: HandledLedger = new HandledLedger(),
+  deskLedger?: HandledLedger,
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -444,7 +444,10 @@ async function handleApi(
     return handleGetDesk(db, desk, vigil, deskSourceCache, deskLedger);
   }
 
-  if (pathname === "/api/desk/action") return handleDeskAction(req, desk, { ledger: deskLedger });
+  if (pathname === "/api/desk/action") {
+    if (!deskLedger) return Response.json({ ok: false, error: "Ranger actions are not set up on this stack." }, { status: 409 });
+    return handleDeskAction(req, desk, { ledger: deskLedger });
+  }
 
   if (pathname === "/api/desk/vips") return handleDeskVips(req, url, db);
 

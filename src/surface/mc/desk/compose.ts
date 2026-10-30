@@ -3,10 +3,10 @@ import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
 import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoName, type AreaRule } from "./rank";
-import { startOfDay } from "./time";
+import { DAY_MS, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent } from "./sources/command";
 import { listVips } from "./vips";
-import { readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
+import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
 import { withoutHandled, type HandledLedger, type RangerCli } from "./actions";
 
@@ -33,8 +33,6 @@ export interface ComposeDeps {
   sourceCache?: SourceCache;
   handled?: HandledLedger;
 }
-
-const DAY_MS = 86_400_000;
 
 const GOAL_STATES = new Set<DeskGoal["state"]>(["on-track", "at-risk", "off-track", "stale"]);
 
@@ -124,7 +122,7 @@ function buildToday(ranger: RangerState | null, items: DeskItem[], areas: AreaRu
     });
   }
   for (const item of items.filter(isAgentStop)) {
-    const n = ranger?.needsYou.find((x) => item.key === `ranger:${x.repo}#${x.nodeId}`);
+    const n = ranger?.needsYou.find((x) => item.key === rangerItemKey(`${x.repo}#${x.nodeId}`));
     const at = parsedOr(n?.endedAt, NaN);
     if (!Number.isFinite(at) || at < startOfDay(now)) continue;
     const key = `stop:${item.key}`;

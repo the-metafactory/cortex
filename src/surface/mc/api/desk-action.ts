@@ -31,16 +31,16 @@ export async function handleDeskAction(req: Request, desk: DeskOptions | undefin
     return fail(502, `Could not read Ranger: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (typeof plan === "string") return fail(409, plan);
-  if (deps.ledger.has(plan.handledKey)) return fail(409, "This was already sent to Ranger.");
-  if (!deps.ledger.claim(plan.handledKey)) return fail(409, "This is already on its way to Ranger.");
+  if (plan.handledKey !== null && deps.ledger.has(plan.handledKey)) return fail(409, "This was already sent to Ranger.");
+  if (!deps.ledger.claim(plan.claimKey)) return fail(409, "This is already on its way to Ranger.");
   try {
     const result = await (deps.run ?? spawnRanger)(plan.argv);
     if (result.code !== 0) return fail(502, `Ranger refused: ${oneLine(result.stderr || result.stdout, `exit code ${result.code}`)}`);
-    deps.ledger.add(plan.handledKey, (deps.now ?? Date.now)());
+    if (plan.handledKey !== null) deps.ledger.add(plan.handledKey, (deps.now ?? Date.now)());
     return Response.json({ ok: true, message: plan.done }, { headers: noStore });
   } catch (err) {
     return fail(502, `Could not run Ranger: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
-    deps.ledger.release(plan.handledKey);
+    deps.ledger.release(plan.claimKey);
   }
 }
