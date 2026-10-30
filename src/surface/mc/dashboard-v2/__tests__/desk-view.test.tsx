@@ -23,7 +23,7 @@ const item = (n: number, over: Partial<DeskItem> = {}): DeskItem => ({
 
 const view: DeskView = {
   generatedAt: NOW,
-  principal: "Ada",
+  displayName: "Ada",
   topN: 3,
   areas: [{ id: "work", label: "Work", color: "#2563eb" }],
   items: [1, 2, 3, 4, 5].map((n) => item(n)),

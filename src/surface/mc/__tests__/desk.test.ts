@@ -14,7 +14,7 @@ const EARLIER = NOW - 3 * 3_600_000;
 
 const DESK: DeskOptions = {
   enabled: true,
-  principal: "Ada",
+  displayName: "Ada",
   topN: 2,
   rangerUrl: "http://127.0.0.1:7311",
   areas: [
@@ -69,7 +69,7 @@ describe("the Desk", () => {
     expect(first?.kind).toBe("sensor");
     expect(first?.title).toBe('The sensor check for "Ship one release a week" stopped working.');
     expect(second?.title).toBe('"Ship one release a week" is off track.');
-    for (const item of view.items) expect(`${item.title} ${item.why}`).not.toMatch(/state:|#\d|att:/);
+    for (const item of view.items) expect(`${item.title} ${item.why}`).not.toMatch(/state:|#\d|att:|\bG\d+\b/);
     expect(first?.detail.refs).toContain("state:check:default:G1.sensor");
   });
 
@@ -78,7 +78,7 @@ describe("the Desk", () => {
     seed({ subject_key: "state:escalation:default:example/app#12", vocab: "escalation", ref: "example/app#12", value: "overdue", healthy: 0 });
     const view = await compose();
     const titles = view.items.map((i) => i.title);
-    expect(titles).toContain('"Adopt the new date library" needs you.');
+    expect(titles.filter((t) => t.includes("Adopt the new date library"))).toEqual(['"Adopt the new date library" waits for your go-ahead.']);
     expect(titles.filter((t) => t.includes("Fix the login timeout"))).toHaveLength(1);
   });
 
@@ -130,6 +130,28 @@ describe("the Desk", () => {
     expect(view.today.some((e) => e.title === 'An agent is working on "Add the export button"')).toBe(true);
   });
 
+  it("drops Ranger links that are not http(s)", async () => {
+    const view = await compose(rangerState({
+      needsYou: [{ key: "k", repo: "example/app", nodeId: "12", title: "Fix the login timeout", status: "parked", reason: { class: "blocked" }, url: "javascript:alert(1)" }],
+    }));
+    const blocked = view.items.find((i) => i.kind === "agent-blocked");
+    expect(blocked?.detail.links).toEqual([]);
+    expect(blocked?.actions[0]).toMatchObject({ id: "open", wired: false });
+    expect(blocked?.actions[0]?.url).toBeUndefined();
+  });
+
+  it("files a running agent under its repo's area", async () => {
+    const view = await compose();
+    expect(view.today.find((e) => e.kind === "agent" && e.key.startsWith("ranger:run:"))?.area).toBe("work");
+  });
+
+  it("says it cannot see anything when no source is connected, instead of an all-clear", async () => {
+    const view = await composeDesk(db, { ...DESK, rangerUrl: "" }, { enabled: false });
+    expect(view.sources).toEqual([]);
+    expect(view.systems[0]).toMatch(/^No source is connected/);
+    expect(briefing(view, selectItems(view, "all", new Set()), null).lines[0]).toBe("The Desk cannot see anything yet: no source is connected.");
+  });
+
   it("answers enabled:false when the Desk is turned off", async () => {
     const res = await handleGetDesk(db, { ...DESK, enabled: false }, vigil);
     expect(await res.json()).toEqual({ enabled: false });
@@ -138,7 +160,7 @@ describe("the Desk", () => {
 
 describe("mc.desk config", () => {
   it("defaults to an enabled Desk with no Ranger and no areas", () => {
-    expect(McSchema.parse(undefined).desk).toEqual({ enabled: true, principal: "", topN: 5, ranger: { url: "" }, areas: [] });
+    expect(McSchema.parse(undefined).desk).toEqual({ enabled: true, displayName: "", topN: 5, ranger: { url: "" }, areas: [] });
   });
 
   it("refuses a Ranger URL that is not loopback", () => {

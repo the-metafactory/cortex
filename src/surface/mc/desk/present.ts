@@ -17,6 +17,11 @@ export function selectItems(view: DeskView, area: string, snoozed: ReadonlySet<s
   return { needsYou, rest, groups: fold(rest) };
 }
 
+/** True when at least one source answered, so an empty list means "nothing" and not "cannot see". */
+export function canSee(view: DeskView): boolean {
+  return view.sources.some((s) => s.ok);
+}
+
 export function partOfDay(now: number): string {
   const h = new Date(now).getHours();
   if (h < 5) return "Good night";
@@ -29,12 +34,13 @@ const count = (n: number, one: string, many: string): string => `${n === 0 ? "No
 
 /** The written briefing: greeting, what needs you, what agents do, what is left. Follows the area filter. */
 export function briefing(view: DeskView, selection: DeskSelection, areaLabel: string | null): { greeting: string; lines: string[] } {
-  const greeting = `${partOfDay(view.generatedAt)}${view.principal ? `, ${view.principal}` : ""}.`;
+  const greeting = `${partOfDay(view.generatedAt)}${view.displayName ? `, ${view.displayName}` : ""}.`;
   const lines: string[] = [];
   const scope = areaLabel ? ` in ${areaLabel}` : "";
   const top = selection.needsYou[0];
   const today = selection.needsYou.filter((i) => i.urgency === "now" || i.urgency === "today").length;
-  if (!top) lines.push(`Nothing needs you${scope} right now.`);
+  if (!canSee(view)) lines.push("The Desk cannot see anything yet: no source is connected.");
+  else if (!top) lines.push(`Nothing needs you${scope} right now.`);
   else if (today > 0) lines.push(`${count(today, "thing needs", "things need")} you today${scope}. First: ${lowerFirst(top.title)}`);
   else lines.push(`${count(selection.needsYou.length, "thing needs", "things need")} you${scope}, none of it due today. First: ${lowerFirst(top.title)}`);
   if (!areaLabel) lines.push(`${view.agents.line.charAt(0).toUpperCase()}${view.agents.line.slice(1)}.`);

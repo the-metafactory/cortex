@@ -4946,7 +4946,7 @@ export async function startCortex(
         },
         desk: {
           enabled: config.mc.desk.enabled,
-          principal: config.mc.desk.principal,
+          displayName: config.mc.desk.displayName,
           topN: config.mc.desk.topN,
           rangerUrl: config.mc.desk.ranger.url,
           areas: config.mc.desk.areas,

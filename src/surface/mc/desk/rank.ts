@@ -74,6 +74,7 @@ export function rankItems(input: RankInput): DeskItem[] {
     if (!items.has(item.key)) items.set(item.key, item);
   };
   const titles = ranger ? rangerTitles(ranger) : new Map<string, { title: string; url?: string }>();
+  const rangerRefs = new Set(titles.keys());
 
   for (const n of ranger?.needsYou ?? []) {
     const ref = `${n.repo}#${n.nodeId}`;
@@ -121,7 +122,7 @@ export function rankItems(input: RankInput): DeskItem[] {
       add({
         key: `vigil:${s.subjectKey}`, kind: "sensor", area: areaFor(areas, null, s.goalId), urgency: "today",
         title: `The ${part} check for "${short}" stopped working.`,
-        why: `Without it, nobody can tell whether goal ${s.goalId} is on track. It last ran ${ago(now, s.lastEndedAt)}.`,
+        why: `Without it, nobody can tell whether this goal is on track. It last ran ${ago(now, s.lastEndedAt)}.`,
         score: 85,
         actions: [action("check.run", "Run the check now", "primary", false), LOOK, LATER],
         detail: { summary: s.goalWording ?? `Goal ${s.goalId}`, history: [`Last run ${ago(now, s.lastEndedAt)}`], refs, links: [] },
@@ -140,7 +141,7 @@ export function rankItems(input: RankInput): DeskItem[] {
       });
     } else if (s.vocab === "escalation" && (s.value === "needs-principal" || s.value === "overdue")) {
       const known = titles.get(s.ref);
-      if (items.has(`ranger:${s.ref}`)) continue;
+      if (rangerRefs.has(s.ref)) continue;
       const repo = s.ref.split("#")[0] ?? s.ref;
       add({
         key: `vigil:${s.subjectKey}`, kind: "escalation", area: areaFor(areas, repo, null), urgency: "waiting",

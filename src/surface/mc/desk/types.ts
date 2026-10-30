@@ -80,7 +80,7 @@ export interface DeskGoal {
 
 export interface DeskView {
   generatedAt: number;
-  principal: string | null;
+  displayName: string | null;
   topN: number;
   areas: DeskArea[];
   items: DeskItem[];

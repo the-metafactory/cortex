@@ -44,8 +44,25 @@ export interface RangerState {
   maps: RangerMap[];
 }
 
+/** Keeps only http(s) links, so a Ranger value cannot become a script link on the Desk. */
+export function safeHttpUrl(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const { protocol } = new URL(raw);
+    return protocol === "https:" || protocol === "http:" ? raw : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const withSafeUrl = <T extends { url?: string }>(x: T): T => ({ ...x, url: safeHttpUrl(x.url) });
+
 export type RangerFetch = (url: string, init: RequestInit) => Promise<Response>;
 
+/**
+ * Reads Ranger's dashboard state over loopback HTTP. Transitional: docs/architecture.md §6.2 wants a bus path
+ * between apps, so the Desk's write actions (cortex#2773) must not be built on this channel.
+ */
 export async function readRangerState(
   baseUrl: string,
   fetchImpl: RangerFetch = fetch,
@@ -60,8 +77,10 @@ export async function readRangerState(
     generatedAt: body.generatedAt,
     refreshError: body.refreshError ?? null,
     current: Array.isArray(body.current) ? body.current : [],
-    needsYou: Array.isArray(body.needsYou) ? body.needsYou : [],
-    maps: Array.isArray(body.maps) ? body.maps : [],
+    needsYou: Array.isArray(body.needsYou) ? body.needsYou.map(withSafeUrl) : [],
+    maps: Array.isArray(body.maps)
+      ? body.maps.map((m) => ({ ...m, grillings: m.grillings?.map(withSafeUrl), decisions: m.decisions?.map(withSafeUrl) }))
+      : [],
   };
 }
 

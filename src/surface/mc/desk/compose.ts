@@ -1,12 +1,12 @@
 import type { Database } from "bun:sqlite";
 import { listVigilSubjects, type VigilSubjectsOptions, type VigilSubjectView } from "../api/vigil";
-import { ago, goalShort, rankItems, type AreaRule } from "./rank";
+import { ago, areaFor, goalShort, rankItems, type AreaRule } from "./rank";
 import { readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskView } from "./types";
 
 export interface DeskOptions {
   enabled: boolean;
-  principal: string;
+  displayName: string;
   topN: number;
   rangerUrl: string;
   areas: AreaRule[];
@@ -29,21 +29,19 @@ export async function composeDesk(
   const now = deps.now ?? Date.now();
   const sources: DeskView["sources"] = [];
 
-  let subjects: VigilSubjectView[] = [];
-  if (vigil?.enabled) {
-    subjects = await listVigilSubjects(db, vigil.resolveGoalWording, vigil.cadence);
-    sources.push({ id: "vigil", ok: true });
-  }
+  const vigilRead = vigil?.enabled ? listVigilSubjects(db, vigil.resolveGoalWording, vigil.cadence) : Promise.resolve(null);
+  const rangerRead = desk.rangerUrl
+    ? readRangerState(desk.rangerUrl, deps.fetchImpl).then(
+        (state) => ({ state, error: null }),
+        (err: unknown) => ({ state: null, error: err instanceof Error ? err.message : String(err) }),
+      )
+    : Promise.resolve(null);
+  const [vigilSubjects, rangerResult] = await Promise.all([vigilRead, rangerRead]);
 
-  let ranger: RangerState | null = null;
-  if (desk.rangerUrl) {
-    try {
-      ranger = await readRangerState(desk.rangerUrl, deps.fetchImpl);
-      sources.push({ id: "ranger", ok: true });
-    } catch (err) {
-      sources.push({ id: "ranger", ok: false, error: err instanceof Error ? err.message : String(err) });
-    }
-  }
+  const subjects: VigilSubjectView[] = vigilSubjects ?? [];
+  if (vigilSubjects) sources.push({ id: "vigil", ok: true });
+  const ranger: RangerState | null = rangerResult?.state ?? null;
+  if (rangerResult) sources.push(rangerResult.error === null ? { id: "ranger", ok: true } : { id: "ranger", ok: false, error: rangerResult.error });
 
   const items = rankItems({ now, subjects, ranger, areas: desk.areas });
 
@@ -55,9 +53,9 @@ export async function composeDesk(
     today.push({
       key: `ranger:run:${c.repo}#${c.nodeId}`,
       at,
-      title: c.title ? `An agent is working on "${c.title}"` : "An agent is working",
+      title: c.title ? `An agent is working on "${c.title}"` : `An agent is working in ${c.repo.split("/").pop() ?? c.repo}`,
       note: [c.phase ? `in ${c.phase}` : null, c.reviewRound ? `round ${c.reviewRound}` : null, c.prLabel ?? null].filter(Boolean).join(", "),
-      area: items.find((i) => i.key === `ranger:${c.repo}#${c.nodeId}`)?.area ?? null,
+      area: areaFor(desk.areas, c.repo, null),
       kind: "agent",
     });
   }
@@ -74,7 +72,7 @@ export async function composeDesk(
 
   const waiting = items.filter((i) => i.kind === "agent-failed" || i.kind === "agent-blocked").length;
   const working = (ranger?.current ?? []).map((c) => ({
-    title: c.title || `${c.repo}#${c.nodeId}`,
+    title: c.title || `An untitled task in ${c.repo.split("/").pop() ?? c.repo}`,
     note: [c.phase, c.prLabel].filter(Boolean).join(" · "),
     since: c.startedAt ? Date.parse(c.startedAt) : now,
   }));
@@ -82,25 +80,12 @@ export async function composeDesk(
     ? `${working.length === 1 ? "1 agent" : `${working.length} agents`} working, ${waiting} waiting on you`
     : "Agents: not connected";
 
-  const goals: DeskGoal[] = [];
-  for (const s of subjects.filter((x) => x.vocab === "goal")) {
-    const id = s.goalId ?? s.ref;
-    const sensorDown = subjects.some((c) => c.vocab === "check" && c.goalId === id && c.value === "regressed");
-    const state = GOAL_STATES.has(s.value as DeskGoal["state"]) ? (s.value as DeskGoal["state"]) : "unknown";
-    goals.push({ id, text: goalShort(s.goalWording, id), state: state === "on-track" && sensorDown ? "at-risk" : state });
-  }
-  const checkedGoals = subjects.flatMap((c) => (c.vocab === "check" && c.goalId ? [c.goalId] : []));
-  for (const id of new Set(checkedGoals)) {
-    if (goals.some((g) => g.id === id)) continue;
-    const sensorDown = subjects.some((c) => c.vocab === "check" && c.goalId === id && c.value === "regressed");
-    const wording = subjects.find((c) => c.goalId === id)?.goalWording ?? null;
-    goals.push({ id, text: goalShort(wording, id), state: sensorDown ? "at-risk" : "on-track" });
-  }
-  goals.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+  const goals = buildGoals(subjects);
 
   const systems: string[] = [];
+  if (sources.length === 0) systems.push("No source is connected, so the Desk cannot see anything yet. Turn on Vigil or set mc.desk.ranger.url.");
   for (const s of subjects) {
-    if (s.vocab === "check" && !s.goalId && s.value === "regressed") systems.push(`The ${s.ref} check is failing since ${ago(now, s.lastEndedAt)}.`);
+    if (s.vocab === "check" && !s.goalId && s.value === "regressed") systems.push(`The ${s.ref.replace(/[:._-]+/g, " ")} check is failing since ${ago(now, s.lastEndedAt)}.`);
   }
   const failedDispatches = db.query<{ n: number }, []>(
     "SELECT COUNT(*) AS n FROM attention_items WHERE status = 'open' AND kind = 'failed_dispatch'",
@@ -111,7 +96,7 @@ export async function composeDesk(
 
   return {
     generatedAt: now,
-    principal: desk.principal || null,
+    displayName: desk.displayName || null,
     topN: desk.topN,
     areas: desk.areas.map(({ id, label, color }) => ({ id, label, color })),
     items,
@@ -121,4 +106,19 @@ export async function composeDesk(
     systems,
     sources,
   };
+}
+
+const isRegressedGoalCheck = (c: VigilSubjectView): boolean => c.vocab === "check" && c.goalId !== null && c.value === "regressed";
+
+function buildGoals(subjects: VigilSubjectView[]): DeskGoal[] {
+  const sensorDown = new Set(subjects.filter(isRegressedGoalCheck).map((c) => c.goalId));
+  const ids = new Set(subjects.flatMap((s) => (s.vocab === "goal" ? [s.goalId ?? s.ref] : s.vocab === "check" && s.goalId ? [s.goalId] : [])));
+  const goals = [...ids].map((id): DeskGoal => {
+    const reported = subjects.find((s) => s.vocab === "goal" && (s.goalId ?? s.ref) === id);
+    const wording = reported?.goalWording ?? subjects.find((s) => s.goalId === id)?.goalWording ?? null;
+    const value = reported?.value ?? "on-track";
+    const state = GOAL_STATES.has(value as DeskGoal["state"]) ? (value as DeskGoal["state"]) : "unknown";
+    return { id, text: goalShort(wording, id), state: state === "on-track" && sensorDown.has(id) ? "at-risk" : state };
+  });
+  return goals.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 }

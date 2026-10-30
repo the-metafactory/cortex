@@ -360,7 +360,24 @@ export type NetworkFile = z.infer<typeof NetworkFileSchema>;
 // Main config schema
 // =============================================================================
 
-const DESK_DEFAULTS = { enabled: true, principal: "", topN: 5, ranger: { url: "" }, areas: [] };
+const DeskSchema = z.object({
+  enabled: z.boolean().default(true),
+  displayName: z.string().default(""),
+  topN: z.number().int().min(1).max(10).default(5),
+  ranger: z.object({ url: z.string().default("") }).default({ url: "" }),
+  areas: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        label: z.string().min(1),
+        color: z.string().default(""),
+        repos: z.array(z.string()).default([]),
+        goals: z.array(z.string()).default([]),
+      }),
+    )
+    .default([]),
+});
+const DESK_DEFAULTS = DeskSchema.parse({});
 
 /**
  * MC-I1.S1 (ADR-0005): in-process Mission Control embed schema. Extracted as a
@@ -406,25 +423,7 @@ export const McSchema = z.object({
    * at the proxy request boundary too.
    */
   sideband: z.string().default(DEFAULT_SIDEBAND_URL),
-  desk: z
-    .object({
-      enabled: z.boolean().default(true),
-      principal: z.string().default(""),
-      topN: z.number().int().min(1).max(10).default(5),
-      ranger: z.object({ url: z.string().default("") }).default({ url: "" }),
-      areas: z
-        .array(
-          z.object({
-            id: z.string().min(1),
-            label: z.string().min(1),
-            color: z.string().default(""),
-            repos: z.array(z.string()).default([]),
-            goals: z.array(z.string()).default([]),
-          }),
-        )
-        .default([]),
-    })
-    .optional(),
+  desk: DeskSchema.optional(),
   /**
    * #1044 — headless MC mode (producer/server split). When `mc.enabled`, the
    * embed always runs `initDatabase` + the `HookStreamPoller` INGESTOR (so the

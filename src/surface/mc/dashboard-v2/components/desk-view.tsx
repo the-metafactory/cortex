@@ -9,8 +9,8 @@
 import { useEffect, useMemo, useState } from "react";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
-import { ALL_AREAS, briefing, clock, selectItems, URGENCY_LABEL } from "../../desk/present";
-import type { DeskAction, DeskEvent, DeskItem, DeskView as DeskViewModel } from "../../desk/types";
+import { ALL_AREAS, briefing, canSee, clock, selectItems, URGENCY_LABEL } from "../../desk/present";
+import type { DeskAction, DeskArea, DeskEvent, DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 
 interface DeskViewProps {
   onOpenMissionControl: () => void;
@@ -100,7 +100,7 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
               <button type="button" role="tab" aria-selected={area === ALL_AREAS} onClick={() => setArea(ALL_AREAS)}>All</button>
               {view.areas.map((a) => (
                 <button key={a.id} type="button" role="tab" aria-selected={area === a.id} onClick={() => setArea(a.id)}>
-                  <span className="dot" style={{ background: a.color || "#a1a1aa" }} />{a.label}
+                  <AreaDot area={a} />{a.label}
                 </button>
               ))}
             </div>
@@ -140,13 +140,7 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
                   <span className="t">{e.note ?? e.title}</span>
                 </li>
               ))}
-              {past.map((e) => (
-                <li key={e.key} data-event={e.key} className={`desk-ev${e.kind === "agent" ? " agentrow" : ""}`}>
-                  <time>{clock(e.at)}</time>
-                  <span className="desk-pin" />
-                  <span><span className="t">{e.title}</span>{e.note && <span className="m">{e.note}</span>}</span>
-                </li>
-              ))}
+              {past.map((e) => <TimelineRow key={e.key} event={e} className={e.kind === "agent" ? "agentrow" : ""} />)}
             </ol>
           )}
 
@@ -155,7 +149,7 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
           <section className="desk-now" aria-label="Needs you">
             <div className="desk-row desk-nowhead">
               <div className="body">
-                <h2>{selection.needsYou.length === 0 ? "You're clear." : `${selection.needsYou.length === 1 ? "One thing needs" : `${selection.needsYou.length} things need`} you, most important first.`}</h2>
+                <h2>{!canSee(view) ? "The Desk cannot see anything yet." : selection.needsYou.length === 0 ? "You're clear." : `${selection.needsYou.length === 1 ? "One thing needs" : `${selection.needsYou.length} things need`} you, most important first.`}</h2>
                 {selection.rest.length > 0 && <p>{selection.rest.length} more can wait; they are in the margin.</p>}
               </div>
             </div>
@@ -168,7 +162,7 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
                   <span />
                   <div className="body">
                     <div className="desk-meta">
-                      {a && <span className="area"><span className="dot" style={{ background: a.color || "#a1a1aa" }} />{a.label}</span>}
+                      {a && <span className="area"><AreaDot area={a} />{a.label}</span>}
                       <span className={item.urgency === "today" || item.urgency === "now" ? "due" : ""}>{URGENCY_LABEL[item.urgency]}</span>
                     </div>
                     <button type="button" className="desk-title" onClick={() => setDetail(item)}>{item.title}</button>
@@ -200,13 +194,7 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
 
           {later.length > 0 && (
             <ol className="desk-tl desk-later">
-              {later.map((e) => (
-                <li key={e.key} data-event={e.key} className={`desk-ev ${e.kind}`}>
-                  <time>{clock(e.at)}</time>
-                  <span className="desk-pin" />
-                  <span><span className="t">{e.title}</span>{e.note && <span className="m">{e.note}</span>}</span>
-                </li>
-              ))}
+              {later.map((e) => <TimelineRow key={e.key} event={e} className={e.kind} />)}
             </ol>
           )}
         </main>
@@ -257,7 +245,7 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
 
           <section className="desk-msec">
             <h3 className="desk-mh">Systems</h3>
-            {view.systems.length === 0 ? (
+            {view.systems.length === 0 && canSee(view) ? (
               <p className="desk-health ok">Everything runs.</p>
             ) : (
               view.systems.map((s) => <p key={s} className="desk-health"><i />{s}</p>)
@@ -313,4 +301,18 @@ function DetailPanel({ item, area, onClose, onAction }: { item: DeskItem; area?:
       </div>
     </>
   );
+}
+
+function TimelineRow({ event, className }: { event: DeskEvent; className: string }) {
+  return (
+    <li data-event={event.key} className={`desk-ev ${className}`.trim()}>
+      <time>{clock(event.at)}</time>
+      <span className="desk-pin" />
+      <span><span className="t">{event.title}</span>{event.note && <span className="m">{event.note}</span>}</span>
+    </li>
+  );
+}
+
+function AreaDot({ area }: { area: DeskArea }) {
+  return <span className="dot" style={{ background: area.color || "#a1a1aa" }} />;
 }
