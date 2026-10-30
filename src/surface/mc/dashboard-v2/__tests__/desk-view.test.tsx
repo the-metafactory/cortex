@@ -1,7 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DeskBody, DeskView, StepUpPrompt } from "../components/desk-view";
+import { DeskBody, DeskView, RestGroups, StepUpPrompt } from "../components/desk-view";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
+import { openGroup, selectItems } from "../../desk/present";
 
 const NOW = Date.parse("2026-10-30T13:16:00.000Z");
 
@@ -130,5 +131,25 @@ describe("StepUpPrompt", () => {
     expect(html).toContain("Step-up code");
     expect(html).toContain("Task 1 needs you.");
     expect(html).toMatch(/<button type="submit"[^>]*disabled=""[^>]*>Approve<\/button>/);
+  });
+});
+
+describe("the folded rest", () => {
+  const decisions = [6, 7, 8].map((n) => item(n, { key: `ranger:example/app#${n}`, kind: "decision", title: `Decision ${n} waits.`, score: 10 - n }));
+  const withRest: DeskViewModel = { ...view, items: [...view.items, ...decisions] };
+
+  it("offers each folded group as a button that opens it in the main list", () => {
+    const { groups } = selectItems(withRest, "all", new Set());
+    const html = renderToStaticMarkup(<RestGroups groups={groups} active="decision" onOpen={() => {}} />);
+    expect(html).toContain('<button type="button" class="desk-group" aria-pressed="true"><span class="n">3</span><div>Decisions agents are waiting for');
+    expect(html).toContain('<button type="button" class="desk-group" aria-pressed="false"><span class="n">2</span>');
+  });
+
+  it("opens a group with every folded item of its kind, and only those", () => {
+    const group = openGroup(selectItems(withRest, "all", new Set()), "decision");
+    expect(group.label).toBe("Decisions agents are waiting for");
+    expect(group.items.map((i) => i.title)).toEqual(["Decision 6 waits.", "Decision 7 waits.", "Decision 8 waits."]);
+    const after = openGroup(selectItems(withRest, "all", new Set(["ranger:example/app#6"])), "decision");
+    expect(after.items).toHaveLength(2);
   });
 });

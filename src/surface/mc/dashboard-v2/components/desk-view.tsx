@@ -11,8 +11,8 @@ import { getJson, postJson } from "../lib/api";
 import { submitDeskAction } from "../lib/desk-action";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
-import { ALL_AREAS, briefing, canSee, clock, selectItems, URGENCY_LABEL } from "../../desk/present";
-import type { DeskAction, DeskArea, DeskEvent, DeskItem, DeskView as DeskViewModel } from "../../desk/types";
+import { ALL_AREAS, briefing, canSee, clock, openGroup, selectItems, URGENCY_LABEL } from "../../desk/present";
+import type { DeskAction, DeskArea, DeskEvent, DeskFoldedGroup, DeskItem, DeskItemKind, DeskView as DeskViewModel } from "../../desk/types";
 
 interface DeskViewProps {
   onOpenMissionControl: () => void;
@@ -44,12 +44,14 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
   const [detail, setDetail] = useState<DeskItem | null>(null);
   const [openRest, setOpenRest] = useState(false);
+  const [groupKind, setGroupKind] = useState<DeskItemKind | null>(null);
   const [openAgents, setOpenAgents] = useState(false);
   const [openStopped, setOpenStopped] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [pending, setPending] = useState<{ item: DeskItem; action: DeskAction } | null>(null);
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
+  const group = groupKind ? openGroup(selection, groupKind) : null;
   const areaLabel = area === ALL_AREAS ? null : view.areas.find((a) => a.id === area)?.label ?? null;
   const brief = briefing(view, selection, areaLabel);
   const areaById = new Map(view.areas.map((a) => [a.id, a]));
@@ -194,6 +196,28 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
 
           <div className="desk-nowline"><span className="rule" /><span className="pill">Now {clock(view.generatedAt)}</span></div>
 
+          {group ? (
+            <section className="desk-now" aria-label={group.label}>
+              <div className="desk-row desk-nowhead">
+                <div className="body">
+                  <h2>{group.label}</h2>
+                  <p>{group.items.length === 0 ? "Nothing left here." : `${group.items.length} that did not make your top ${view.topN}, most important first.`}</p>
+                  <button type="button" className="desk-btn" onClick={() => setGroupKind(null)}>Back to what needs you</button>
+                </div>
+              </div>
+              {group.items.map((item, idx) => (
+                <DeskItemRow
+                  key={item.key}
+                  item={item}
+                  rank={idx + 1}
+                  area={item.area ? areaById.get(item.area) : undefined}
+                  onOpen={() => setDetail(item)}
+                  onAction={(a) => run(item, a)}
+                  onFocusEvent={focusEvent}
+                />
+              ))}
+            </section>
+          ) : (
           <section className="desk-now" aria-label="Needs you">
             <div className="desk-row desk-nowhead">
               <div className="body">
@@ -220,6 +244,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
               />
             ))}
           </section>
+          )}
 
           {later.length > 0 && (
             <ol className="desk-tl desk-later">
@@ -255,11 +280,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
               <span className={`desk-chev${openRest ? " open" : ""}`}>›</span>
             </button>
             {openRest && (
-              <ul className="desk-sub">
-                {selection.groups.map((g) => (
-                  <li key={g.kind}><span className="n">{g.count}</span><div>{g.label}<small>{g.example}</small></div></li>
-                ))}
-              </ul>
+              <RestGroups groups={selection.groups} active={groupKind} onOpen={setGroupKind} />
             )}
           </section>
 
@@ -370,6 +391,21 @@ export function StepUpPrompt({ item, action, onConfirm, onCancel }: { item: Desk
       <button type="submit" className="desk-btn pri" disabled={!ready}>{busy ? "Sending…" : action.label}</button>
       <button type="button" className="desk-btn ghost" onClick={onCancel}>Cancel</button>
     </form>
+  );
+}
+
+/** The folded rest by kind; each group opens in the main list, and a second click closes it. */
+export function RestGroups({ groups, active, onOpen }: { groups: DeskFoldedGroup[]; active: DeskItemKind | null; onOpen: (kind: DeskItemKind | null) => void }) {
+  return (
+    <ul className="desk-sub">
+      {groups.map((g) => (
+        <li key={g.kind}>
+          <button type="button" className="desk-group" aria-pressed={active === g.kind} onClick={() => onOpen(active === g.kind ? null : g.kind)}>
+            <span className="n">{g.count}</span><div>{g.label}<small>{g.example}</small></div>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }
 
