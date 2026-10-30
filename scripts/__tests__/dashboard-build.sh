@@ -23,7 +23,7 @@ CALLS="${SCRATCH}/calls"
 
 stub() {
   local name="$1" rc="$2"
-  printf '#!/bin/sh\necho "$(pwd) $*" >> "%s"\nexit %s\n' "${CALLS}" "${rc}" > "${SCRATCH}/${name}"
+  printf '#!/bin/sh\necho "$(pwd) $*" >> "%s"\necho "stub build output line"\nexit %s\n' "${CALLS}" "${rc}" > "${SCRATCH}/${name}"
   chmod +x "${SCRATCH}/${name}"
   echo "${SCRATCH}/${name}"
 }
@@ -38,12 +38,14 @@ grep -q "✓ Mission Control dashboard built" <<<"${OUT}" && pass "reports the b
 printf '\n=== bun fails ===\n'
 OUT="$(CORTEX_BUN="$(stub bun-bad 1)" build_mc_dashboard "${CORTEX_DIR}")"; RC=$?
 [ "${RC}" -eq 0 ] && pass "a failed build does not stop the hook" || fail "a failed build does not stop the hook (got ${RC})"
-grep -q "build failed; the previous bundle stays" <<<"${OUT}" && pass "warns and names the manual command" || fail "warns and names the manual command: ${OUT}"
+grep -q "build failed" <<<"${OUT}" && pass "warns that the build failed" || fail "warns that the build failed: ${OUT}"
+grep -q "stub build output line" <<<"${OUT}" && pass "shows the build's own output" || fail "shows the build's own output: ${OUT}"
+grep -q "bun run build:dashboard" <<<"${OUT}" && pass "names the manual command" || fail "names the manual command: ${OUT}"
 
 printf '\n=== bun missing ===\n'
 OUT="$(CORTEX_BUN="${SCRATCH}/no-such-bun" build_mc_dashboard "${CORTEX_DIR}")"; RC=$?
 [ "${RC}" -eq 0 ] && pass "a missing bun does not stop the hook" || fail "a missing bun does not stop the hook (got ${RC})"
-grep -q "bun not found" <<<"${OUT}" && pass "says bun is missing" || fail "says bun is missing: ${OUT}"
+grep -q "bun not found" <<<"${OUT}" && grep -q "may be stale" <<<"${OUT}" && pass "says bun is missing and the dashboard may be stale" || fail "says bun is missing and the dashboard may be stale: ${OUT}"
 
 printf '\n=== both hooks call it ===\n'
 for hook in postinstall postupgrade; do

@@ -4,21 +4,25 @@
 # upgrade keeps serving whatever bundle was last built by hand, and merged
 # dashboard changes (the Desk, cortex#2770) never reach the browser.
 #
-# Non-fatal by design: a failed build leaves the previous bundle in place and
-# prints the manual command, so the daemon restart that follows still runs.
+# Non-fatal by design: on failure it prints the build's last lines and the
+# manual command, and the daemon reload that follows still runs.
 
 build_mc_dashboard() {
   local cortex_dir="$1"
-  local bun_bin="${CORTEX_BUN:-bun}"
+  local bun_bin="${CORTEX_BUN:-$(command -v bun || echo "${HOME}/.bun/bin/bun")}"
   if ! command -v "${bun_bin}" >/dev/null 2>&1; then
-    echo "  ⚠ bun not found; Mission Control dashboard not rebuilt"
+    echo "  ⚠ bun not found (looked on PATH and in ~/.bun/bin); the Mission Control dashboard was NOT rebuilt and may be stale."
+    echo "    Rebuild by hand: (cd ${cortex_dir} && bun run build:dashboard)"
     return 0
   fi
   echo "  Building the Mission Control dashboard..."
-  if (cd "${cortex_dir}" && "${bun_bin}" run build:dashboard >/dev/null 2>&1); then
+  local output
+  if output="$(cd "${cortex_dir}" && "${bun_bin}" run build:dashboard 2>&1)"; then
     echo "  ✓ Mission Control dashboard built"
   else
-    echo "  ⚠ Mission Control dashboard build failed; the previous bundle stays. Rebuild by hand: (cd ${cortex_dir} && bun run build:dashboard)"
+    echo "  ⚠ Mission Control dashboard build failed; the dashboard may be stale or incomplete. Last lines:"
+    printf '%s\n' "${output}" | tail -n 20 | sed 's/^/      /'
+    echo "    Rebuild by hand: (cd ${cortex_dir} && bun run build:dashboard)"
   fi
   return 0
 }
