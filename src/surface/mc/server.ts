@@ -68,6 +68,7 @@ import { handleGetDesk } from "./api/desk";
 import { handleDeskVips } from "./api/desk-vips";
 import { handleDeskAction } from "./api/desk-action";
 import { HandledLedger } from "./desk/actions";
+import { DESK_STEP_UP_WINDOW_ROUTES, StepUpWindow } from "./desk/step-up-window";
 import type { DeskOptions, DeskRuntime } from "./desk/compose";
 import { SourceCache } from "./desk/sources/command";
 import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil";
@@ -161,6 +162,7 @@ export function startServer(
   const wsRegistry = new WsClientRegistry();
   const deskSourceCache = new SourceCache();
   const deskLedger = new HandledLedger();
+  const stepUpWindow = new StepUpWindow();
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
@@ -283,6 +285,7 @@ export function startServer(
           authorizer,
           options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined,
           { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger },
+          stepUpWindow,
         );
       }
 
@@ -401,6 +404,7 @@ async function handleApi(
   authorizer: Authorizer | null = null,
   vigil?: VigilSubjectsOptions,
   desk?: DeskRuntime,
+  stepUpWindow?: StepUpWindow,
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -408,11 +412,15 @@ async function handleApi(
     const rebindDenial = checkRebindGuard(req, guard);
     if (rebindDenial) return rebindDenial;
   }
+  let principal: string | null = null;
   if (isIdentityGatedMutation(req.method, pathname) || requiresStepUp(req.method, pathname)) {
     const authResult = await enforceMutationAuth(req, guard);
     if (authResult instanceof Response) return authResult;
+    principal = authResult.principal;
   }
-  if (requiresStepUp(req.method, pathname)) {
+  const windowFor = principal !== null && DESK_STEP_UP_WINDOW_ROUTES.has(pathname) ? principal : null;
+  const unlocked = windowFor !== null && (stepUpWindow?.isOpen(windowFor, Date.now()) ?? false);
+  if (requiresStepUp(req.method, pathname) && !unlocked) {
     let enrollment: StepUpEnrollment | null;
     try {
       enrollment = loadEnrollment(stepUpSecretPath);
@@ -433,6 +441,7 @@ async function handleApi(
     }
     const stepUpDenial = enforceStepUp(req, { enrollment });
     if (stepUpDenial) return stepUpDenial;
+    if (windowFor !== null) stepUpWindow?.open(windowFor, Date.now());
   }
 
   if (pathname === "/api/desk") {
