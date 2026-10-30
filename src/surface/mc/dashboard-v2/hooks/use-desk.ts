@@ -4,33 +4,35 @@ import type { DeskView } from "../../desk/types";
 
 const REFRESH_MS = 30_000;
 
-export function useDesk(active: boolean) {
-  const [view, setView] = useState<DeskView | null>(null);
-  const [enabled, setEnabled] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+interface DeskState {
+  view: DeskView | null;
+  enabled: boolean;
+  error: string | null;
+}
+
+/** Loads the Desk and refreshes it every 30 seconds while `active`. */
+export function useDesk(active: boolean): DeskState {
+  const [state, setState] = useState<DeskState>({ view: null, enabled: true, error: null });
 
   useEffect(() => {
     if (!active) return;
     const controller = new AbortController();
-    const load = (): void => {
-      void getJson<DeskView | { enabled: false }>("/api/desk", { signal: controller.signal })
-        .then((body) => {
-          if (controller.signal.aborted) return;
-          if ("enabled" in body && body.enabled === false) setEnabled(false);
-          else setView(body as DeskView);
-          setError(null);
-        })
-        .catch(() => {
-          if (!controller.signal.aborted) setError("The Desk could not load. Retrying.");
-        });
+    const load = async (): Promise<void> => {
+      try {
+        const payload = await getJson<DeskView | { enabled: false }>("/api/desk", { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setState((s) => ("enabled" in payload ? { ...s, enabled: false, error: null } : { view: payload, enabled: true, error: null }));
+      } catch {
+        if (!controller.signal.aborted) setState((s) => ({ ...s, error: "The Desk could not load. Retrying." }));
+      }
     };
-    load();
-    const timer = setInterval(load, REFRESH_MS);
+    void load();
+    const timer = setInterval(() => void load(), REFRESH_MS);
     return () => {
       controller.abort();
       clearInterval(timer);
     };
   }, [active]);
 
-  return { view, enabled, error };
+  return state;
 }
