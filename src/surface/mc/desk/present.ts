@@ -1,6 +1,6 @@
-import { fold } from "./rank";
+import { fold, FOLDED_LABELS } from "./rank";
 export { clock } from "./time";
-import type { DeskFoldedGroup, DeskItem, DeskView } from "./types";
+import type { DeskFoldedGroup, DeskItem, DeskItemKind, DeskView } from "./types";
 
 /** The area filter value that shows every item. */
 export const ALL_AREAS = "all";
@@ -16,6 +16,11 @@ export function selectItems(view: DeskView, area: string, snoozed: ReadonlySet<s
   const needsYou = open.slice(0, view.topN);
   const rest = open.slice(view.topN);
   return { needsYou, rest, groups: fold(rest) };
+}
+
+/** One folded group opened in the main list: its label and every item of its kind that did not make the top N. */
+export function openGroup(selection: DeskSelection, kind: DeskItemKind): { label: string; items: DeskItem[] } {
+  return { label: FOLDED_LABELS[kind], items: selection.rest.filter((i) => i.kind === kind) };
 }
 
 /** True when at least one source answered, so an empty list means "nothing" and not "cannot see". */
