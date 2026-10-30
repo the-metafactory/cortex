@@ -31,6 +31,8 @@ const view: DeskViewModel = {
   agents: { line: "1 agent working, 0 waiting on you", working: [{ title: "Add export", note: "review", since: NOW - 3_600_000 }], waiting: 0 },
   goals: [{ id: "G1", text: "Ship one release a week", state: "off-track" }],
   systems: [],
+  ahead: [],
+  vips: [],
   sources: [{ id: "vigil", ok: true }],
 };
 
@@ -69,5 +71,53 @@ describe("DeskView before the Desk has loaded", () => {
     const html = renderToStaticMarkup(<DeskView onOpenMissionControl={() => {}} />);
     expect(html).toContain("Loading your Desk");
     expect(html).toContain("Open Mission Control");
+  });
+});
+
+describe("DeskBody with calendar, mail and VIPs", () => {
+  const mailItem = item(9, {
+    key: "mail:m1", kind: "mail", urgency: "today", title: 'Ada Lovelace wrote: "Budget"', why: "Ada Lovelace is on your VIP list.",
+    excerpt: "Could you look at the budget before Monday?",
+    actions: [{ id: "open", label: "Open in Mail", role: "primary", wired: true, url: "message://%3Cm1%3E" }],
+  });
+  const html = renderToStaticMarkup(
+    <DeskBody
+      view={{
+        ...view,
+        items: [mailItem],
+        today: [{ key: "cal:w:1", at: NOW + 44 * 60_000, end: NOW + 104 * 60_000, title: "DA results", area: "work", kind: "meeting", url: "https://teams.example/j/1", online: true }],
+        ahead: [{ key: "cal:w:2", at: NOW + 3 * 86_400_000, title: "Partner visit", area: "work", kind: "meeting" }],
+        vips: [{ address: "ada@example.org", label: "Ada" }],
+      }}
+      error={null}
+      onOpenMissionControl={() => {}}
+    />,
+  );
+
+  it("leads with the minutes before the next meeting and offers to join it", () => {
+    expect(html).toContain("You have 44 minutes before your");
+    expect(html).toMatch(/<a href="https:\/\/teams\.example\/j\/1"[^>]*>Join<\/a>/);
+  });
+
+  it("shows the mail's first paragraph and the next days", () => {
+    expect(html).toContain("Could you look at the budget before Monday?");
+    expect(html).toContain("Partner visit");
+  });
+
+  it("lists VIPs with a way to remove and add them", () => {
+    expect(html).toContain(">Ada</span>");
+    expect(html).toContain('aria-label="Remove ada@example.org"');
+    expect(html).toContain('placeholder="Add an address or @domain"');
+  });
+});
+
+describe("DeskBody when the next meeting is hours away", () => {
+  const html = renderToStaticMarkup(
+    <DeskBody view={{ ...view, today: [{ key: "cal:p:1", at: NOW + 5 * 3_600_000, title: "Concert", area: null, kind: "meeting" }] }} error={null} onOpenMissionControl={() => {}} />,
+  );
+
+  it("says what needs you once, not twice", () => {
+    expect((html.match(/3 things need you, most important first\./g) ?? []).length).toBe(1);
+    expect(html).toContain("Concert");
   });
 });

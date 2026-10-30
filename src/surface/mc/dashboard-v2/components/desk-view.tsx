@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { getJson, postJson } from "../lib/api";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
 import { ALL_AREAS, briefing, canSee, clock, selectItems, URGENCY_LABEL } from "../../desk/present";
@@ -17,7 +18,7 @@ interface DeskViewProps {
 }
 
 export function DeskView({ onOpenMissionControl }: DeskViewProps) {
-  const { view, enabled, error } = useDesk(true);
+  const { view, enabled, error, reload } = useDesk(true);
   if (!enabled) {
     return (
       <div className="desk desk-off">
@@ -34,10 +35,10 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
       </div>
     );
   }
-  return <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} />;
+  return <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} onChanged={reload} />;
 }
 
-export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskViewModel; error: string | null } & DeskViewProps) {
+export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => {} }: { view: DeskViewModel; error: string | null; onChanged?: () => void } & DeskViewProps) {
   const [area, setArea] = useState(ALL_AREAS);
   const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
   const [detail, setDetail] = useState<DeskItem | null>(null);
@@ -51,10 +52,14 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
   const brief = briefing(view, selection, areaLabel);
   const areaById = new Map(view.areas.map((a) => [a.id, a]));
   const inArea = (e: DeskEvent): boolean => area === ALL_AREAS || e.area === area;
-  const pastAll = view.today.filter((e) => e.at <= view.generatedAt && inArea(e));
+  const allDay = view.today.filter((e) => e.kind === "all-day" && inArea(e));
+  const timed = view.today.filter((e) => e.kind !== "all-day");
+  const pastAll = timed.filter((e) => e.at <= view.generatedAt && inArea(e));
   const stopped = pastAll.filter((e) => e.kind === "agent-stop");
   const past = pastAll.filter((e) => e.kind !== "agent-stop");
-  const later = view.today.filter((e) => e.at > view.generatedAt && inArea(e));
+  const later = timed.filter((e) => e.at > view.generatedAt && inArea(e));
+  const nextMeeting = later.find((e) => e.kind === "meeting");
+  const ahead = view.ahead.filter(inArea);
 
   useEffect(() => {
     if (!detail) return;
@@ -74,8 +79,28 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
   const run = (item: DeskItem, a: DeskAction): void => {
     if (a.id === "detail") setDetail(item);
     else if (a.id === "snooze") setSnoozed((s) => new Set(s).add(item.key));
-    else if (a.url) window.open(a.url, "_blank", "noopener");
+    else if (a.id === "vip.add" && a.target) void addVip(a.target, item.title.split(" wrote:")[0] ?? null);
+    else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet. It arrives with the Ranger actions slice.`);
+  };
+
+  const addVip = async (address: string, label: string | null): Promise<void> => {
+    try {
+      await postJson("/api/desk/vips", { address, label });
+      setNote(`Mail from ${label ?? address} will always show from now on.`);
+      onChanged();
+    } catch {
+      setNote(`Could not add ${address} as a VIP.`);
+    }
+  };
+
+  const removeVip = async (address: string): Promise<void> => {
+    try {
+      await getJson(`/api/desk/vips?address=${encodeURIComponent(address)}`, { method: "DELETE" });
+      onChanged();
+    } catch {
+      setNote(`Could not remove ${address}.`);
+    }
   };
 
   const focusEvent = (key: string): void => {
@@ -124,6 +149,7 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
 
           <div className="desk-h">
             Today <span className="desk-date">{new Date(view.generatedAt).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</span>
+            {allDay.map((e) => <span key={e.key} className="desk-pill">{e.title}</span>)}
           </div>
 
           {(past.length > 0 || stopped.length > 0) && (
@@ -156,8 +182,14 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
           <section className="desk-now" aria-label="Needs you">
             <div className="desk-row desk-nowhead">
               <div className="body">
-                <h2>{!canSee(view) ? "The Desk cannot see anything yet." : selection.needsYou.length === 0 ? "You're clear." : `${selection.needsYou.length === 1 ? "One thing needs" : `${selection.needsYou.length} things need`} you, most important first.`}</h2>
-                {selection.rest.length > 0 && <p>{selection.rest.length} more can wait; they are in the margin.</p>}
+                <h2>{nowHeading(view, selection.needsYou.length, nextMeeting)}</h2>
+                {nextMeeting && (
+                  <p className="desk-next">
+                    <b>{clock(nextMeeting.at)}{nextMeeting.end ? `–${clock(nextMeeting.end)}` : ""}</b> {nextMeeting.title}
+                    {nextMeeting.url && <a href={nextMeeting.url} target="_blank" rel="noopener noreferrer">{nextMeeting.online ? "Join" : "Open"}</a>}
+                  </p>
+                )}
+                <p>{nowSubline(view, selection.needsYou.length, selection.rest.length, nextMeeting)}</p>
               </div>
             </div>
             {selection.needsYou.map((item, idx) => (
@@ -179,6 +211,8 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
               {later.map((e) => <TimelineRow key={e.key} event={e} className={e.kind} />)}
             </ol>
           )}
+
+          {ahead.length > 0 && <AheadStrip events={ahead} />}
         </main>
 
         <aside className="desk-margin" aria-label="At a glance">
@@ -224,6 +258,8 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
               </ul>
             </section>
           )}
+
+          <VipSection vips={view.vips} onAdd={(address) => void addVip(address, null)} onRemove={(address) => void removeVip(address)} />
 
           <section className="desk-msec">
             <h3 className="desk-mh">Systems</h3>
@@ -288,7 +324,11 @@ function TimelineRow({ event, className }: { event: DeskEvent; className: string
     <li data-event={event.key} className={`desk-ev ${className}`.trim()}>
       <time>{clock(event.at)}</time>
       <span className="desk-pin" />
-      <span><span className="t">{event.title}</span>{event.note && <span className="m">{event.note}</span>}</span>
+      <span>
+        <span className="t">{event.title}</span>
+        {event.note && <span className="m">{event.note}</span>}
+        {event.url && event.kind === "meeting" && <a className="desk-join" href={event.url} target="_blank" rel="noopener noreferrer">{event.online ? "Join" : "Open"}</a>}
+      </span>
     </li>
   );
 }
@@ -319,6 +359,7 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, onFocusEvent }
         </div>
         <button type="button" className="desk-title" onClick={onOpen}>{item.title}</button>
         <p className="desk-why">{item.why}</p>
+        {item.excerpt && <blockquote className="desk-excerpt">{item.excerpt}</blockquote>}
         <div className="desk-acts">
           {item.actions.map((a) => <ActionButton key={a.id} action={a} onRun={onAction} />)}
           {event && (
@@ -344,5 +385,84 @@ function ActionButton({ action, onRun }: { action: DeskAction; onRun: (a: DeskAc
     >
       {action.label}
     </button>
+  );
+}
+
+const MEETING_LEAD_MINUTES = 180;
+
+const needsYouLine = (count: number): string => `${count === 1 ? "One thing needs" : `${count} things need`} you, most important first.`;
+
+const minutesUntil = (view: DeskViewModel, next: DeskEvent | undefined): number => (next ? Math.round((next.at - view.generatedAt) / 60_000) : Infinity);
+
+function nowHeading(view: DeskViewModel, count: number, next: DeskEvent | undefined): string {
+  if (!canSee(view)) return "The Desk cannot see anything yet.";
+  const minutes = minutesUntil(view, next);
+  if (next && minutes <= MEETING_LEAD_MINUTES) {
+    return `You have ${minutes < 60 ? `${minutes} minutes` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`} before your ${clock(next.at)}.`;
+  }
+  return count === 0 ? "You're clear." : needsYouLine(count);
+}
+
+function nowSubline(view: DeskViewModel, count: number, rest: number, next: DeskEvent | undefined): string {
+  const lead = minutesUntil(view, next) <= MEETING_LEAD_MINUTES && canSee(view) && count > 0 ? needsYouLine(count) : "";
+  const tail = rest > 0 ? `${rest} more can wait; they are in the margin.` : "";
+  return [lead, tail].filter(Boolean).join(" ");
+}
+
+/** Web links open a tab and message:// hands off to Apple Mail; any other scheme is refused. */
+function openLink(url: string): void {
+  if (/^https?:/i.test(url)) window.open(url, "_blank", "noopener");
+  else if (/^message:/i.test(url)) window.location.assign(url);
+}
+
+function AheadStrip({ events }: { events: DeskEvent[] }) {
+  const days = new Map<string, DeskEvent[]>();
+  for (const e of events) {
+    const day = new Date(e.at).toLocaleDateString("en-GB", { weekday: "short", day: "numeric" });
+    days.set(day, [...(days.get(day) ?? []), e]);
+  }
+  return (
+    <section className="desk-days" aria-label="Next days">
+      {[...days.entries()].slice(0, 4).map(([day, list]) => (
+        <div key={day} className="desk-day">
+          <h3>{day}</h3>
+          <ul>
+            {list.map((e) => (
+              <li key={e.key}>
+                {e.kind === "meeting" && <time>{clock(e.at)}</time>}
+                <span className="ttl">{e.title}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function VipSection({ vips, onAdd, onRemove }: { vips: DeskViewModel["vips"]; onAdd: (address: string) => void; onRemove: (address: string) => void }) {
+  const [draft, setDraft] = useState("");
+  return (
+    <section className="desk-msec">
+      <h3 className="desk-mh">VIPs</h3>
+      <ul className="desk-vips">
+        {vips.map((v) => (
+          <li key={v.address}>
+            <span>{v.label ?? v.address}</span>
+            <button type="button" aria-label={`Remove ${v.address}`} onClick={() => onRemove(v.address)}>×</button>
+          </li>
+        ))}
+      </ul>
+      <form
+        className="desk-vip-add"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (draft.trim()) onAdd(draft.trim());
+          setDraft("");
+        }}
+      >
+        <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add an address or @domain" aria-label="Add a VIP" />
+      </form>
+    </section>
   );
 }

@@ -1,7 +1,9 @@
 import type { VigilSubjectView } from "../../../vigil/subjects-view";
+import type { SourceEvent, SourceMail } from "./sources/command";
 import type { RangerMap, RangerMapNode, RangerState } from "./sources/ranger";
 import { rangerTitles } from "./sources/ranger";
 import { clock, startOfDay } from "./time";
+import { isVip } from "./vips";
 import type { DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
 
 export interface AreaRule extends DeskArea {
@@ -30,6 +32,7 @@ export const FOLDED_LABELS: Record<DeskItemKind, string> = {
   decision: "Decisions agents are waiting for",
   grilling: "Questions agents want to grill you on",
   escalation: "Older escalations",
+  mail: "Mail you may want to read",
 };
 
 /** A goal's own check (sensor, pursuit, review) that went from ok to regressed. */
@@ -63,7 +66,7 @@ export function ago(now: number, at: number): string {
   return `${Math.round(diff / DAY_MS)} days ago`;
 }
 
-/** "jcfischer/seelite" → "seelite". */
+/** "acme/widgets" → "widgets". */
 export const repoName = (repo: string): string => repo.split("/").pop() ?? repo;
 
 type Add = (item: DeskItem) => void;
@@ -231,4 +234,69 @@ export function fold(rest: DeskItem[]): DeskFoldedGroup[] {
     groups.set(item.kind, g);
   }
   return [...groups.values()].sort((a, b) => b.count - a.count);
+}
+
+export interface MailInput {
+  now: number;
+  mail: (SourceMail & { area: string | null })[];
+  events: SourceEvent[];
+  vips: ReadonlySet<string>;
+}
+
+const STOPWORDS = new Set(["meeting", "update", "about", "with", "from", "your", "termin", "sitzung", "einladung", "invitation", "accepted", "re", "fw", "aw", "wg"]);
+const words = (s: string): Set<string> =>
+  new Set(s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4 && !STOPWORDS.has(w)));
+
+/** The soonest meeting in the next three days whose title shares a word with the subject. */
+export function meetingFor(subject: string, events: SourceEvent[], now: number): SourceEvent | undefined {
+  const subjectWords = words(subject);
+  return events
+    .filter((e) => !e.allDay && Date.parse(e.start) > now && Date.parse(e.start) - now < 3 * DAY_MS)
+    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
+    .find((e) => [...words(e.title)].some((w) => subjectWords.has(w)));
+}
+
+const dayName = (at: number, now: number): string => {
+  const days = Math.round((startOfDay(at) - startOfDay(now)) / DAY_MS);
+  if (days === 0) return `today at ${clock(at)}`;
+  if (days === 1) return `tomorrow at ${clock(at)}`;
+  return `${new Date(at).toLocaleDateString("en-GB", { weekday: "long" })} at ${clock(at)}`;
+};
+
+/**
+ * Unread mail as Desk items. Mail from a VIP ranks high; mail that seems to be about a meeting in the
+ * next three days ranks above the rest; other unread mail folds into "Mail you may want to read".
+ */
+export function mailItems({ now, mail, events, vips }: MailInput): DeskItem[] {
+  return mail.filter((m) => m.unread).map((m): DeskItem => {
+    const sender = m.from.name ?? m.from.address;
+    const vip = isVip(vips, m.from.address);
+    const meeting = vip ? undefined : meetingFor(m.subject, events, now);
+    const receivedAt = parsedOr(m.receivedAt, now);
+    const ageDays = Math.max(0, (now - receivedAt) / DAY_MS);
+    const why = vip
+      ? `${sender} is on your VIP list. It arrived ${ago(now, receivedAt)}.`
+      : meeting
+        ? `It may be about "${meeting.title}" ${dayName(Date.parse(meeting.start), now)}.`
+        : `It arrived ${ago(now, receivedAt)}.`;
+    const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", "primary", true), url: m.url }] : [];
+    const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", `Always show mail from ${m.from.name?.split(" ")[0] ?? "this sender"}`, "secondary", true), target: m.from.address }];
+    return {
+      key: `mail:${m.id}`,
+      kind: "mail",
+      area: m.area,
+      urgency: vip || meeting ? "today" : "waiting",
+      title: `${sender} wrote: "${m.subject}"`,
+      why,
+      score: (vip ? 80 : meeting ? 55 : 15) - ageDays * 5,
+      actions: [...open, ...always, LATER].slice(0, 3),
+      detail: {
+        summary: m.firstParagraph ?? m.subject,
+        history: [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`],
+        refs: [m.from.address, m.id],
+        links: m.url ? [{ label: "Open in Mail", url: m.url }] : [],
+      },
+      ...(m.firstParagraph ? { excerpt: m.firstParagraph } : {}),
+    };
+  });
 }

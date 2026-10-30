@@ -2,8 +2,10 @@ import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
-import { ago, areaFor, goalShort, isRegressedGoalCheck, parsedOr, rankItems, repoName, type AreaRule } from "./rank";
+import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoName, type AreaRule } from "./rank";
 import { startOfDay } from "./time";
+import { SourceCache, type DeskSourceConfig, type SourceEvent } from "./sources/command";
+import { listVips } from "./vips";
 import { readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
 
@@ -13,6 +15,7 @@ export interface DeskOptions {
   topN: number;
   rangerUrl: string;
   areas: AreaRule[];
+  sources: DeskSourceConfig[];
 }
 
 /** The Vigil side of Mission Control's options that the Desk reads. */
@@ -25,7 +28,10 @@ export interface DeskVigilSource {
 export interface ComposeDeps {
   now?: number;
   fetchImpl?: RangerFetch;
+  sourceCache?: SourceCache;
 }
+
+const DAY_MS = 86_400_000;
 
 const GOAL_STATES = new Set<DeskGoal["state"]>(["on-track", "at-risk", "off-track", "stale"]);
 
@@ -46,14 +52,24 @@ export async function composeDesk(
         (err: unknown) => ({ state: null, error: err instanceof Error ? err.message : String(err) }),
       )
     : Promise.resolve(null);
-  const [vigilSubjects, rangerResult] = await Promise.all([vigilRead, rangerRead]);
+  const commandRead = (deps.sourceCache ?? new SourceCache()).read(desk.sources, now);
+  const [vigilSubjects, rangerResult, readings] = await Promise.all([vigilRead, rangerRead, commandRead]);
 
   const subjects: VigilSubjectView[] = vigilSubjects ?? [];
   if (vigilSubjects) sources.push({ id: "vigil", ok: true });
   const ranger: RangerState | null = rangerResult?.state ?? null;
   if (rangerResult) sources.push(rangerResult.error === null ? { id: "ranger", ok: true } : { id: "ranger", ok: false, error: rangerResult.error });
 
-  const items = rankItems({ now, subjects, ranger, areas: desk.areas });
+  for (const r of readings) sources.push(r.error === null ? { id: r.id, ok: true } : { id: r.id, ok: false, error: r.error });
+  const unreadable = readings.filter((r) => r.dropped > 0).map((r) => `The ${r.id} source sent ${r.dropped} ${r.dropped === 1 ? "entry" : "entries"} the Desk could not read.`);
+  const events = readings.flatMap((r) => r.events.map((e) => ({ ...e, area: r.area, sourceId: r.id })));
+  const mail = readings.flatMap((r) => r.mail.map((m) => ({ ...m, area: r.area })));
+  const vips = listVips(db);
+
+  const items = [
+    ...rankItems({ now, subjects, ranger, areas: desk.areas }),
+    ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)) }),
+  ].sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
 
   return {
     generatedAt: now,
@@ -61,12 +77,33 @@ export async function composeDesk(
     topN: desk.topN,
     areas: desk.areas.map(({ id, label, color }) => ({ id, label, color })),
     items,
-    today: buildToday(ranger, items, desk.areas, now),
+    today: [...buildToday(ranger, items, desk.areas, now), ...calendarEvents(events, startOfDay(now), startOfDay(now) + DAY_MS)].sort((a, b) => a.at - b.at),
+    ahead: calendarEvents(events, startOfDay(now) + DAY_MS, startOfDay(now) + 5 * DAY_MS),
+    vips: vips.map(({ address, label }) => ({ address, label })),
     agents: buildAgents(ranger, items, now),
     goals: buildGoals(subjects),
-    systems: buildSystems(db, subjects, sources, ranger, now),
+    systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable],
     sources,
   };
+}
+
+type CalendarEvent = SourceEvent & { area: string | null; sourceId: string };
+
+function calendarEvents(events: CalendarEvent[], from: number, to: number): DeskEvent[] {
+  return events
+    .filter((e) => { const at = Date.parse(e.start); return at >= from && at < to; })
+    .map((e): DeskEvent => ({
+      key: `cal:${e.sourceId}:${e.id}`,
+      at: Date.parse(e.start),
+      ...(e.end ? { end: Date.parse(e.end) } : {}),
+      title: e.title,
+      ...(e.location && !e.online ? { note: e.location } : {}),
+      area: e.area,
+      kind: e.allDay ? "all-day" : "meeting",
+      ...(e.url ? { url: e.url } : {}),
+      ...(e.online ? { online: true } : {}),
+    }))
+    .sort((a, b) => a.at - b.at);
 }
 
 const isAgentStop = (item: DeskItem): boolean => item.kind === "agent-failed" || item.kind === "agent-blocked";

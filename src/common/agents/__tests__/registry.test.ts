@@ -156,7 +156,7 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
       transport: { mtls: "off" },
     },
     vigil: { proposal_timeout_ms: 30_000, enabled: false, soma_homes: {}, cadence: {}, result_base_url: "http://127.0.0.1:8767" },
-    mc: { enabled: false, configPath: "", dbPath: "", port: 0, sideband: "http://127.0.0.1:9092", desk: { enabled: true, displayName: "", topN: 5, ranger: { url: "" }, areas: [] }, server: { enabled: true }, aggregateLocalStacks: { enabled: true, dbRead: true, configRoot: "", stacks: [] } },
+    mc: { enabled: false, configPath: "", dbPath: "", port: 0, sideband: "http://127.0.0.1:9092", desk: { enabled: true, displayName: "", topN: 5, ranger: { url: "" }, areas: [], sources: [] }, server: { enabled: true }, aggregateLocalStacks: { enabled: true, dbRead: true, configRoot: "", stacks: [] } },
     cockpit: {
       enabled: false,
       docsDir: "docs",

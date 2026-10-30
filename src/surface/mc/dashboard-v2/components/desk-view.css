@@ -174,3 +174,25 @@
 .desk-mc{margin-top:10px;font-size:14px;color:var(--mute)}
 .desk-btn:disabled{opacity:.45;cursor:not-allowed}
 .desk-note{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:60;background:var(--ink);color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.25);pointer-events:none;animation:desk-in .2s ease-out}
+
+/* S2: calendar, mail and VIPs */
+.desk-pill{font-size:12px;font-weight:500;padding:2px 8px;border-radius:999px;background:var(--ivy-soft);color:var(--ivy-ink);text-transform:none;letter-spacing:0}
+.desk-nowhead .desk-next{display:flex;align-items:baseline;gap:8px;margin:4px 0 2px;font-size:15px;color:var(--ink2)}
+.desk-nowhead .desk-next b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
+.desk-nowhead .desk-next a,.desk-join{font-size:13px;font-weight:500;color:var(--ivy-ink);text-decoration:none;padding:1px 8px;border-radius:999px;background:var(--ivy-soft);margin-left:6px}
+.desk-nowhead .desk-next a:hover,.desk-join:hover{background:#dbeafe}
+.desk-excerpt{margin:8px 0 0;padding:8px 12px;border-left:2px solid var(--line);background:#fafafa;border-radius:0 8px 8px 0;font-size:14.5px;line-height:1.5;color:var(--ink2)}
+.desk-later .desk-ev.meeting .desk-pin{background:var(--ink);border-color:var(--ink)}
+.desk-days{margin-top:14px;background:var(--card);border-radius:14px;box-shadow:0 0 0 1px var(--line);display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}
+.desk-day{padding:12px 16px 14px;min-width:0}
+.desk-day+.desk-day{border-left:1px solid var(--line2)}
+.desk-day h3{margin:0 0 6px;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--mute)}
+.desk-day ul{list-style:none;margin:0;padding:0}
+.desk-day li{padding:4px 0;font-size:14px;line-height:1.35;color:var(--ink2)}
+.desk-day li time{display:block;font-size:12.5px;color:var(--mute);font-variant-numeric:tabular-nums}
+.desk-vips{list-style:none;margin:0 0 6px;padding:0}
+.desk-vips li{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 0;font-size:14px;color:var(--ink2)}
+.desk-vips li button{width:22px;height:22px;border-radius:6px;color:var(--faint);font-size:16px;line-height:1;text-align:center}
+.desk-vips li button:hover{background:#f4f4f5;color:var(--ink)}
+.desk-vip-add input{width:100%;height:32px;padding:0 10px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:13.5px;background:#fff;outline:0}
+.desk-vip-add input:focus{border-color:#bcd3fb;box-shadow:0 0 0 3px rgba(59,130,246,.12)}
