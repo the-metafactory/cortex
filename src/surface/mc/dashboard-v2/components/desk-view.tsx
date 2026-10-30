@@ -26,7 +26,14 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
       </div>
     );
   }
-  if (!view) return <div className="desk desk-loading">{error ?? "Loading your Desk…"}</div>;
+  if (!view) {
+    return (
+      <div className="desk desk-loading">
+        <p>{error ?? "Loading your Desk…"}</p>
+        <button type="button" className="desk-btn" onClick={onOpenMissionControl}>Open Mission Control</button>
+      </div>
+    );
+  }
   return <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} />;
 }
 
@@ -45,8 +52,8 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
   const areaById = new Map(view.areas.map((a) => [a.id, a]));
   const inArea = (e: DeskEvent): boolean => area === ALL_AREAS || e.area === area;
   const pastAll = view.today.filter((e) => e.at <= view.generatedAt && inArea(e));
-  const stopped = pastAll.filter((e) => e.key.startsWith("event:"));
-  const past = pastAll.filter((e) => !e.key.startsWith("event:"));
+  const stopped = pastAll.filter((e) => e.kind === "agent-stop");
+  const past = pastAll.filter((e) => e.kind !== "agent-stop");
   const later = view.today.filter((e) => e.at > view.generatedAt && inArea(e));
 
   useEffect(() => {
@@ -72,7 +79,7 @@ export function DeskBody({ view, error, onOpenMissionControl }: { view: DeskView
   };
 
   const focusEvent = (key: string): void => {
-    if (key.startsWith("event:")) setOpenStopped(true);
+    if (view.today.some((e) => e.key === key && e.kind === "agent-stop")) setOpenStopped(true);
     requestAnimationFrame(() => document.querySelector(`[data-event="${CSS.escape(key)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
   };
 

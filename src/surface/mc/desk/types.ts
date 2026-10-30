@@ -69,7 +69,7 @@ export interface DeskEvent {
   title: string;
   note?: string;
   area: string | null;
-  kind: "agent" | "meeting" | "block" | "personal";
+  kind: "agent" | "agent-stop" | "meeting" | "block" | "personal";
 }
 
 export interface DeskGoal {

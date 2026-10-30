@@ -67,7 +67,8 @@ export const repoName = (repo: string): string => repo.split("/").pop() ?? repo;
 type Add = (item: DeskItem) => void;
 type Titles = Map<string, { title: string; url?: string }>;
 
-const parsedOr = (iso: string | undefined, fallback: number): number => {
+/** Parses an ISO time, or returns the fallback when it is missing or garbled. */
+export const parsedOr = (iso: string | undefined, fallback: number): number => {
   const at = iso ? Date.parse(iso) : NaN;
   return Number.isFinite(at) ? at : fallback;
 };

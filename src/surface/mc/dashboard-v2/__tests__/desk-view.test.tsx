@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DeskBody } from "../components/desk-view";
-import type { DeskItem, DeskView } from "../../desk/types";
+import { DeskBody, DeskView } from "../components/desk-view";
+import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 
 const NOW = Date.parse("2026-10-30T13:16:00.000Z");
 
@@ -21,7 +21,7 @@ const item = (n: number, over: Partial<DeskItem> = {}): DeskItem => ({
   ...over,
 });
 
-const view: DeskView = {
+const view: DeskViewModel = {
   generatedAt: NOW,
   displayName: "Ada",
   topN: 3,
@@ -61,5 +61,13 @@ describe("DeskBody", () => {
 
   it("disables actions that are not connected yet", () => {
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*title="Not connected yet"[^>]*>Let it retry<\/button>/);
+  });
+});
+
+describe("DeskView before the Desk has loaded", () => {
+  it("still offers the way to Mission Control", () => {
+    const html = renderToStaticMarkup(<DeskView onOpenMissionControl={() => {}} />);
+    expect(html).toContain("Loading your Desk");
+    expect(html).toContain("Open Mission Control");
   });
 });

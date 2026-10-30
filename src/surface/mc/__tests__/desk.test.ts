@@ -126,7 +126,7 @@ describe("the Desk", () => {
     expect(view.agents.line).toBe("1 agent working, 1 waiting on you");
     const failed = view.items.find((i) => i.kind === "agent-failed");
     expect(failed?.eventKey).toBeDefined();
-    expect(view.today.map((e) => e.key)).toContain(failed!.eventKey!);
+    expect(view.today.find((e) => e.key === failed?.eventKey)?.kind).toBe("agent-stop");
     expect(view.today.some((e) => e.title === 'An agent is working on "Add the export button"')).toBe(true);
   });
 
@@ -134,6 +134,12 @@ describe("the Desk", () => {
     seed({ subject_key: "state:escalation:default:example/app#7", vocab: "escalation", ref: "example/app#7", value: "needs-principal", healthy: 0 });
     const view = await compose();
     expect(view.items.filter((i) => i.title.includes("Add the export button")).map((i) => i.title)).toEqual(['"Add the export button" needs you.']);
+  });
+
+  it("keeps a running agent with a garbled start time on the timeline", async () => {
+    const view = await compose(rangerState({ current: [{ repo: "example/app", nodeId: "7", title: "Add the export button", status: "running", startedAt: "garbled" }] }));
+    expect(view.today.find((e) => e.kind === "agent")?.at).toBe(NOW);
+    expect(view.agents.working[0]?.since).toBe(NOW);
   });
 
   it("ranks an item whose stop time Ranger garbled instead of producing NaN", async () => {

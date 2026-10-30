@@ -2,9 +2,9 @@ import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
-import { ago, areaFor, goalShort, rankItems, repoName, type AreaRule } from "./rank";
+import { ago, areaFor, goalShort, parsedOr, rankItems, repoName, type AreaRule } from "./rank";
 import { readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
-import type { DeskEvent, DeskGoal, DeskView } from "./types";
+import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
 
 export interface DeskOptions {
   enabled: boolean;
@@ -54,43 +54,61 @@ export async function composeDesk(
 
   const items = rankItems({ now, subjects, ranger, areas: desk.areas });
 
+  return {
+    generatedAt: now,
+    displayName: desk.displayName || null,
+    topN: desk.topN,
+    areas: desk.areas.map(({ id, label, color }) => ({ id, label, color })),
+    items,
+    today: buildToday(ranger, items, desk.areas, now),
+    agents: buildAgents(ranger, items, now),
+    goals: buildGoals(subjects),
+    systems: buildSystems(db, subjects, sources, ranger, now),
+    sources,
+  };
+}
+
+const isAgentStop = (item: DeskItem): boolean => item.kind === "agent-failed" || item.kind === "agent-blocked";
+
+function buildToday(ranger: RangerState | null, items: DeskItem[], areas: AreaRule[], now: number): DeskEvent[] {
   const today: DeskEvent[] = [];
   const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
   for (const c of ranger?.current ?? []) {
-    const at = c.startedAt ? Date.parse(c.startedAt) : now;
     today.push({
       key: `ranger:run:${c.repo}#${c.nodeId}`,
-      at,
+      at: parsedOr(c.startedAt, now),
       title: c.title ? `An agent is working on "${c.title}"` : `An agent is working in ${repoName(c.repo)}`,
       note: [c.phase ? `in ${c.phase}` : null, c.reviewRound ? `round ${c.reviewRound}` : null, c.prLabel ?? null].filter(Boolean).join(", "),
-      area: areaFor(desk.areas, c.repo, null),
+      area: areaFor(areas, c.repo, null),
       kind: "agent",
     });
   }
-  for (const item of items) {
-    if (item.kind !== "agent-failed" && item.kind !== "agent-blocked") continue;
+  for (const item of items.filter(isAgentStop)) {
     const n = ranger?.needsYou.find((x) => item.key === `ranger:${x.repo}#${x.nodeId}`);
-    const at = n?.endedAt ? Date.parse(n.endedAt) : NaN;
+    const at = parsedOr(n?.endedAt, NaN);
     if (!Number.isFinite(at) || at < startOfToday.getTime()) continue;
-    const key = `event:${item.key}`;
-    today.push({ key, at, title: item.kind === "agent-blocked" ? "An agent stopped to wait for your ruling" : "An agent stopped", note: item.title, area: item.area, kind: "agent" });
+    const key = `stop:${item.key}`;
+    today.push({ key, at, title: item.kind === "agent-blocked" ? "An agent stopped to wait for your ruling" : "An agent stopped", note: item.title, area: item.area, kind: "agent-stop" });
     item.eventKey = key;
   }
-  today.sort((a, b) => a.at - b.at);
+  return today.sort((a, b) => a.at - b.at);
+}
 
-  const waiting = items.filter((i) => i.kind === "agent-failed" || i.kind === "agent-blocked").length;
+function buildAgents(ranger: RangerState | null, items: DeskItem[], now: number): DeskView["agents"] {
+  const waiting = items.filter(isAgentStop).length;
   const working = (ranger?.current ?? []).map((c) => ({
     title: c.title || `An untitled task in ${repoName(c.repo)}`,
     note: [c.phase, c.prLabel].filter(Boolean).join(" · "),
-    since: c.startedAt ? Date.parse(c.startedAt) : now,
+    since: parsedOr(c.startedAt, now),
   }));
-  const agentLine = ranger
+  const line = ranger
     ? `${working.length === 1 ? "1 agent" : `${working.length} agents`} working, ${waiting} waiting on you`
     : "Agents: not connected";
+  return { line, working, waiting };
+}
 
-  const goals = buildGoals(subjects);
-
+function buildSystems(db: Database, subjects: VigilSubjectView[], sources: DeskView["sources"], ranger: RangerState | null, now: number): string[] {
   const systems: string[] = [];
   if (sources.length === 0) systems.push("No source is connected, so the Desk cannot see anything yet. Turn on Vigil or set mc.desk.ranger.url.");
   for (const s of subjects) {
@@ -102,19 +120,7 @@ export async function composeDesk(
   if (failedDispatches > 0) systems.push(`${failedDispatches} agent dispatch${failedDispatches === 1 ? "" : "es"} failed to start.`);
   if (ranger?.refreshError) systems.push(`Ranger could not refresh: ${ranger.refreshError}`);
   for (const s of sources) if (!s.ok) systems.push(`The ${s.id} source is unreachable.`);
-
-  return {
-    generatedAt: now,
-    displayName: desk.displayName || null,
-    topN: desk.topN,
-    areas: desk.areas.map(({ id, label, color }) => ({ id, label, color })),
-    items,
-    today,
-    agents: { line: agentLine, working, waiting },
-    goals,
-    systems,
-    sources,
-  };
+  return systems;
 }
 
 const isRegressedGoalCheck = (c: VigilSubjectView): boolean => c.vocab === "check" && c.goalId !== null && c.value === "regressed";
