@@ -15,7 +15,8 @@ export type DeskItemKind =
   | "decision"
   | "grilling"
   | "escalation"
-  | "mail";
+  | "mail"
+  | "reminder";
 
 export interface DeskArea {
   id: string;
@@ -72,7 +73,7 @@ export interface DeskEvent {
   title: string;
   note?: string;
   area: string | null;
-  kind: "agent" | "agent-stop" | "meeting" | "all-day";
+  kind: "agent" | "agent-stop" | "meeting" | "all-day" | "reminder";
   url?: string;
   online?: boolean;
 }
@@ -94,6 +95,8 @@ export interface DeskView {
   vips: { address: string; label: string | null }[];
   agents: { line: string; working: { title: string; note: string; since: number }[]; waiting: number };
   goals: DeskGoal[];
+  notes: { id: number; text: string; createdAt: number }[];
+  ask: { kinds: string[]; maps: { ref: string; label: string }[] };
   systems: string[];
   sources: { id: string; ok: boolean; error?: string }[];
 }

@@ -188,7 +188,7 @@ describe("the Desk", () => {
 
 describe("mc.desk config", () => {
   it("defaults to an enabled Desk with no Ranger and no areas", () => {
-    expect(McSchema.parse(undefined).desk).toEqual({ enabled: true, displayName: "", topN: 5, ranger: { url: "", bin: "", config: "" }, areas: [], sources: [] });
+    expect(McSchema.parse(undefined).desk).toEqual({ enabled: true, displayName: "", topN: 5, ranger: { url: "", bin: "", config: "" }, areas: [], sources: [], ask: { parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] } });
   });
 
   it("refuses a Ranger URL that is not loopback", () => {

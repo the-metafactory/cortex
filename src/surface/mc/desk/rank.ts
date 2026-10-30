@@ -34,6 +34,7 @@ export const FOLDED_LABELS: Record<DeskItemKind, string> = {
   grilling: "Questions agents want to grill you on",
   escalation: "Older escalations",
   mail: "Mail you may want to read",
+  reminder: "Reminders",
 };
 
 /** A goal's own check (sensor, pursuit, review) that went from ok to regressed. */

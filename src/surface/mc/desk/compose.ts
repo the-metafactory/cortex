@@ -9,12 +9,23 @@ import { listVips } from "./vips";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
 import { withoutHandled, type HandledLedger, type RangerCli } from "./actions";
+import type { AskMap } from "./ask";
+import { writableKinds, type DeskWriters, type RecentCalendarWrites } from "./create";
+import { listOpenNotes, type DeskNote } from "./notes";
 
 /** What Mission Control holds for the Desk across requests. */
 export interface DeskRuntime {
   options?: DeskOptions;
   ledger: HandledLedger;
   sourceCache?: SourceCache;
+  recentWrites?: RecentCalendarWrites;
+}
+
+export interface DeskAskOptions {
+  parser: string[];
+  timeoutSeconds: number;
+  writers: DeskWriters;
+  taskMaps: AskMap[];
 }
 
 export interface DeskOptions {
@@ -25,6 +36,7 @@ export interface DeskOptions {
   rangerCli?: RangerCli;
   areas: AreaRule[];
   sources: DeskSourceConfig[];
+  ask?: DeskAskOptions;
 }
 
 /** The Vigil side of Mission Control's options that the Desk reads. */
@@ -39,6 +51,7 @@ export interface ComposeDeps {
   fetchImpl?: RangerFetch;
   sourceCache?: SourceCache;
   handled?: HandledLedger;
+  recentWrites?: RecentCalendarWrites;
 }
 
 const GOAL_STATES = new Set<DeskGoal["state"]>(["on-track", "at-risk", "off-track", "stale"]);
@@ -74,10 +87,23 @@ export async function composeDesk(
   const events = readings.flatMap((r) => r.events.map((e) => ({ ...e, area: r.area, sourceId: r.id })));
   const mail = readings.flatMap((r) => r.mail.map((m) => ({ ...m, area: r.area })));
   const vips = listVips(db);
+  const notes = listOpenNotes(db);
+  const reminders = notes.filter((n) => n.kind === "reminder" && n.dueAt !== null);
+  const written = (deps.recentWrites?.pending(now, events.map((e) => ({ title: e.title, start: Date.parse(e.start) }))) ?? []).map((w, i): CalendarEvent => ({
+    id: `desk-write-${i}-${w.at}`,
+    start: new Date(w.at).toISOString(),
+    ...(w.end !== undefined ? { end: new Date(w.end).toISOString() } : {}),
+    ...(w.allDay ? { allDay: true } : {}),
+    title: w.title,
+    area: null,
+    sourceId: "desk",
+  }));
+  const calendar = [...events, ...written];
 
   const items = [
     ...rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions: Boolean(desk.rangerCli?.bin), hidden: filtered?.hidden }),
     ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)) }),
+    ...reminderItems(reminders, now),
   ].sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
 
   return {
@@ -86,11 +112,20 @@ export async function composeDesk(
     topN: desk.topN,
     areas: desk.areas.map(({ id, label, color }) => ({ id, label, color })),
     items,
-    today: [...buildToday(ranger, items, desk.areas, now), ...calendarEvents(events, startOfDay(now), startOfDay(now) + DAY_MS)].sort((a, b) => a.at - b.at),
-    ahead: calendarEvents(events, startOfDay(now) + DAY_MS, startOfDay(now) + 5 * DAY_MS),
+    today: [
+      ...buildToday(ranger, items, desk.areas, now),
+      ...calendarEvents(calendar, startOfDay(now), startOfDay(now) + DAY_MS),
+      ...reminderEvents(reminders, startOfDay(now), startOfDay(now) + DAY_MS),
+    ].sort((a, b) => a.at - b.at),
+    ahead: [
+      ...calendarEvents(calendar, startOfDay(now) + DAY_MS, startOfDay(now) + 5 * DAY_MS),
+      ...reminderEvents(reminders, startOfDay(now) + DAY_MS, startOfDay(now) + 5 * DAY_MS),
+    ].sort((a, b) => a.at - b.at),
     vips: vips.map(({ address, label }) => ({ address, label })),
     agents: buildAgents(ranger, items, now),
     goals: buildGoals(subjects),
+    notes: notes.filter((n) => n.kind === "note").map(({ id, text, createdAt }) => ({ id, text, createdAt })),
+    ask: { kinds: [...writableKinds(desk.ask?.writers ?? {})], maps: desk.ask?.taskMaps ?? [] },
     systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable],
     sources,
   };
@@ -113,6 +148,30 @@ function calendarEvents(events: CalendarEvent[], from: number, to: number): Desk
       ...(e.online ? { online: true } : {}),
     }))
     .sort((a, b) => a.at - b.at);
+}
+
+function reminderEvents(reminders: DeskNote[], from: number, to: number): DeskEvent[] {
+  return reminders
+    .filter((r) => r.dueAt !== null && r.dueAt >= from && r.dueAt < to)
+    .map((r): DeskEvent => ({ key: `reminder:${r.id}`, at: r.dueAt ?? 0, title: r.text, note: "Reminder", area: null, kind: "reminder" }));
+}
+
+function reminderItems(reminders: DeskNote[], now: number): DeskItem[] {
+  return reminders.filter((r) => r.dueAt !== null && r.dueAt <= now).map((r): DeskItem => ({
+    key: `reminder:${r.id}`,
+    kind: "reminder",
+    area: null,
+    urgency: "now",
+    title: r.text,
+    why: `You asked to be reminded ${ago(now, r.dueAt ?? now)}.`,
+    score: 90,
+    actions: [
+      { id: "reminder.done", label: "Done", role: "primary", wired: true, target: String(r.id) },
+      { id: "snooze", label: "Not now", role: "secondary", wired: true },
+    ],
+    detail: { summary: r.text, history: [`Set ${ago(now, r.createdAt)}`], refs: [`desk note ${r.id}`], links: [] },
+    eventKey: `reminder:${r.id}`,
+  }));
 }
 
 const isAgentStop = (item: DeskItem): boolean => item.kind === "agent-failed" || item.kind === "agent-blocked";
