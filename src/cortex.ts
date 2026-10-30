@@ -4949,6 +4949,10 @@ export async function startCortex(
           displayName: config.mc.desk.displayName,
           topN: config.mc.desk.topN,
           rangerUrl: config.mc.desk.ranger.url,
+          rangerCli: {
+            bin: config.mc.desk.ranger.bin ? expandTilde(config.mc.desk.ranger.bin) : "",
+            config: config.mc.desk.ranger.config ? expandTilde(config.mc.desk.ranger.config) : "",
+          },
           areas: config.mc.desk.areas,
           sources: config.mc.desk.sources,
         },

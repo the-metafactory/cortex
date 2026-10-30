@@ -81,6 +81,7 @@ export const STEP_UP_CONTROL_ROUTES: ReadonlySet<string> = new Set([
   "/api/networks/rotate-key", // FLG-8 — rotate-K from glass
   "/api/networks/revoke", // FLG-9 — revoke from glass
   "/api/networks/escalation-decision", // SPX-8 — escalation approve
+  "/api/desk/action",
 ]);
 
 /** Only POST mutates a control verb; a GET to the same path is not gated here. */

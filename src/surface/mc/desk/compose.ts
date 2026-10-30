@@ -8,12 +8,14 @@ import { SourceCache, type DeskSourceConfig, type SourceEvent } from "./sources/
 import { listVips } from "./vips";
 import { readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
+import { withoutHandled, type HandledLedger, type RangerCli } from "./actions";
 
 export interface DeskOptions {
   enabled: boolean;
   displayName: string;
   topN: number;
   rangerUrl: string;
+  rangerCli?: RangerCli;
   areas: AreaRule[];
   sources: DeskSourceConfig[];
 }
@@ -29,6 +31,7 @@ export interface ComposeDeps {
   now?: number;
   fetchImpl?: RangerFetch;
   sourceCache?: SourceCache;
+  handled?: HandledLedger;
 }
 
 const DAY_MS = 86_400_000;
@@ -57,7 +60,7 @@ export async function composeDesk(
 
   const subjects: VigilSubjectView[] = vigilSubjects ?? [];
   if (vigilSubjects) sources.push({ id: "vigil", ok: true });
-  const ranger: RangerState | null = rangerResult?.state ?? null;
+  const ranger: RangerState | null = rangerResult?.state && deps.handled ? withoutHandled(rangerResult.state, deps.handled) : rangerResult?.state ?? null;
   if (rangerResult) sources.push(rangerResult.error === null ? { id: "ranger", ok: true } : { id: "ranger", ok: false, error: rangerResult.error });
 
   for (const r of readings) sources.push(r.error === null ? { id: r.id, ok: true } : { id: r.id, ok: false, error: r.error });
@@ -67,7 +70,7 @@ export async function composeDesk(
   const vips = listVips(db);
 
   const items = [
-    ...rankItems({ now, subjects, ranger, areas: desk.areas }),
+    ...rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions: Boolean(desk.rangerCli?.bin) }),
     ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)) }),
   ].sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
 

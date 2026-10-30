@@ -66,6 +66,8 @@ import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
 import { handleGetDesk } from "./api/desk";
 import { handleDeskVips } from "./api/desk-vips";
+import { handleDeskAction } from "./api/desk-action";
+import { HandledLedger } from "./desk/actions";
 import type { DeskOptions } from "./desk/compose";
 import { SourceCache } from "./desk/sources/command";
 import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil";
@@ -158,6 +160,7 @@ export function startServer(
 ): ServerContext {
   const wsRegistry = new WsClientRegistry();
   const deskSourceCache = new SourceCache();
+  const deskLedger = new HandledLedger();
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
@@ -281,6 +284,7 @@ export function startServer(
           options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined,
           options.desk,
           deskSourceCache,
+          deskLedger,
         );
       }
 
@@ -400,6 +404,7 @@ async function handleApi(
   vigil?: VigilSubjectsOptions,
   desk?: DeskOptions,
   deskSourceCache?: SourceCache,
+  deskLedger: HandledLedger = new HandledLedger(),
 ): Promise<Response> {
   const { pathname } = url;
 
@@ -436,8 +441,10 @@ async function handleApi(
 
   if (pathname === "/api/desk") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);
-    return handleGetDesk(db, desk, vigil, deskSourceCache);
+    return handleGetDesk(db, desk, vigil, deskSourceCache, deskLedger);
   }
+
+  if (pathname === "/api/desk/action") return handleDeskAction(req, desk, { ledger: deskLedger });
 
   if (pathname === "/api/desk/vips") return handleDeskVips(req, url, db);
 

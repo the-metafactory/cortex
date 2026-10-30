@@ -9,6 +9,7 @@ export interface RangerNeedsYou {
   status: string;
   endedAt?: string;
   reason?: { class?: string; detail?: string };
+  actions?: { resume?: boolean };
 }
 
 export interface RangerCurrent {
@@ -27,11 +28,15 @@ export interface RangerMapNode {
   title: string;
   kind?: string;
   url?: string;
+  approvalVersion?: string;
+  approvable?: boolean;
 }
 
 export interface RangerMap {
   key: string;
   repo: string;
+  walk?: string;
+  servedOnly?: boolean;
   grillings?: RangerMapNode[];
   decisions?: RangerMapNode[];
 }
