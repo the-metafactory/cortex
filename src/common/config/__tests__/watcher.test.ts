@@ -124,6 +124,7 @@ const TEST_CONFIG: AgentConfig = {
     dbPath: "",
     port: 0,
     sideband: "http://127.0.0.1:9092",
+    desk: { enabled: true, principal: "", topN: 5, ranger: { url: "" }, areas: [] },
     server: { enabled: true },
     aggregateLocalStacks: { enabled: true, dbRead: true, configRoot: "", stacks: [] },
   },

@@ -73,6 +73,7 @@ export async function startMissionControl(
     serverCtx = startServer(config, db, {
       processManager,
       ...(opts.vigil ? { vigil: opts.vigil } : {}),
+      ...(opts.desk ? { desk: opts.desk } : {}),
       ...(opts.results ? { results: opts.results } : {}),
       ...(opts.agentPresence ? { agentPresence: opts.agentPresence } : {}),
       ...(opts.networks ? { networks: opts.networks } : {}),

@@ -37,6 +37,17 @@ export async function handleListVigilSubjects(
   resolver: GoalWordingResolver = idOnlyGoalWording,
   cadence: VigilCadence = {},
 ): Promise<Response> {
+  const subjects = await listVigilSubjects(db, resolver, cadence);
+  return Response.json({ subjects } satisfies VigilSubjectsResponse, {
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
+export async function listVigilSubjects(
+  db: Database,
+  resolver: GoalWordingResolver = idOnlyGoalWording,
+  cadence: VigilCadence = {},
+): Promise<VigilSubjectView[]> {
   const rows = db.query<VigilSubjectRow, []>(
     "SELECT * FROM vigil_subjects ORDER BY healthy, subject_key",
   ).all();
@@ -73,7 +84,5 @@ export async function handleListVigilSubjects(
       expectedBy: cadenceMs === null ? null : row.last_ended_at + cadenceMs,
     };
   }));
-  return Response.json({ subjects } satisfies VigilSubjectsResponse, {
-    headers: { "Cache-Control": "no-store" },
-  });
+  return subjects;
 }
