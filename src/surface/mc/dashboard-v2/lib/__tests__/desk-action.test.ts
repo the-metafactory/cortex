@@ -1,30 +1,38 @@
 import { describe, expect, it } from "bun:test";
 import { DESK_ACTION_PATH, submitDeskAction } from "../desk-action";
 import { STEP_UP_HEADER } from "../authorize-lib";
+import { DESK_UNLOCKED_UNTIL_HEADER } from "../../../desk/step-up-window";
 
-const answer = (status: number, body: unknown) => {
+const UNTIL = 1_793_000_000_000;
+
+const answer = (status: number, body: unknown, headers: Record<string, string> = {}) => {
   const seen: { path: string; init: RequestInit }[] = [];
   const fetchImpl = async (path: string, init: RequestInit) => {
     seen.push({ path, init });
-    return Response.json(body, { status });
+    return Response.json(body, { status, headers });
   };
   return { seen, fetchImpl };
 };
 
 describe("submitDeskAction", () => {
-  it("sends the step-up code in its header and returns Ranger's line", async () => {
-    const { seen, fetchImpl } = answer(200, { ok: true, message: 'Approved "Adopt the date library". Ranger will start it.' });
+  it("sends the step-up code in its header and returns Ranger's line and the window the server opened", async () => {
+    const { seen, fetchImpl } = answer(200, { ok: true, message: 'Approved "Adopt the date library". Ranger will start it.' }, { [DESK_UNLOCKED_UNTIL_HEADER]: String(UNTIL) });
     const result = await submitDeskAction({ action: "ranger.approve", key: "ranger:example/app#30" }, " 123456 ", fetchImpl);
-    expect(result).toEqual({ ok: true, text: 'Approved "Adopt the date library". Ranger will start it.', needsCode: false, codeAccepted: true });
+    expect(result).toEqual({ ok: true, text: 'Approved "Adopt the date library". Ranger will start it.', needsCode: false, unlockedUntil: UNTIL });
     expect(seen[0]?.path).toBe(DESK_ACTION_PATH);
     expect((seen[0]?.init.headers as Record<string, string>)[STEP_UP_HEADER]).toBe("123456");
   });
 
-  it("turns a refused step-up into one plain line", async () => {
+  it("turns a refused step-up into one plain line and opens no window", async () => {
     const { fetchImpl } = answer(403, { error: "step_up_invalid", detail: "the code did not verify" });
     expect(await submitDeskAction({ action: "ranger.retry", key: "k" }, "000000", fetchImpl)).toEqual({
-      ok: false, text: "That step-up code did not match. Nothing was sent to Ranger.", needsCode: false, codeAccepted: false,
+      ok: false, text: "That step-up code did not match. Nothing was sent to Ranger.", needsCode: false, unlockedUntil: null,
     });
+  });
+
+  it("opens no window when a gate before step-up refused, even with a code sent", async () => {
+    const { fetchImpl } = answer(403, { error: "not_authorized" });
+    expect((await submitDeskAction({ action: "ranger.retry", key: "k" }, "123456", fetchImpl)).unlockedUntil).toBeNull();
   });
 
   it("sends no header inside the unlock window, and says when the server wants a code again", async () => {
@@ -34,15 +42,15 @@ describe("submitDeskAction", () => {
     expect(result.needsCode).toBe(true);
   });
 
-  it("passes a Ranger failure through as its one line, and still counts the code as accepted", async () => {
-    const { fetchImpl } = answer(502, { ok: false, error: "Ranger refused: node is no longer open and unclaimed" });
+  it("passes a Ranger failure through as its one line, keeping the window the valid code opened", async () => {
+    const { fetchImpl } = answer(502, { ok: false, error: "Ranger refused: node is no longer open and unclaimed" }, { [DESK_UNLOCKED_UNTIL_HEADER]: String(UNTIL) });
     const result = await submitDeskAction({ action: "ranger.approve", key: "k" }, "123456", fetchImpl);
     expect(result.text).toBe("Ranger refused: node is no longer open and unclaimed");
-    expect(result.codeAccepted).toBe(true);
+    expect(result.unlockedUntil).toBe(UNTIL);
   });
 
   it("never throws when Mission Control does not answer", async () => {
     const result = await submitDeskAction({ action: "ranger.approve", key: "k" }, "123456", async () => { throw new Error("offline"); });
-    expect(result).toEqual({ ok: false, text: "Mission Control did not answer: offline", needsCode: false, codeAccepted: false });
+    expect(result).toEqual({ ok: false, text: "Mission Control did not answer: offline", needsCode: false, unlockedUntil: null });
   });
 });

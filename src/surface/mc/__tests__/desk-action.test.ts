@@ -10,6 +10,7 @@ import type { RangerState } from "../desk/sources/ranger";
 import { createEnrollment, writeEnrollment } from "../../../common/step-up/enrollment";
 import { base32Decode, hotp, totpStep } from "../../../common/step-up/totp";
 import { STEP_UP_HEADER } from "../api/step-up-mfa";
+import { DESK_UNLOCKED_UNTIL_HEADER } from "../desk/step-up-window";
 import { AUTHORIZE_PATH } from "../api/networks-authorize";
 import { DEFAULT_CONFIG } from "../config";
 import { initDatabase } from "../db/init";
@@ -206,6 +207,8 @@ describe("the Desk action route behind step-up MFA", () => {
       expect(first.status).toBe(200);
       const cookie = (first.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
       expect(first.headers.get("set-cookie")).toContain("HttpOnly; SameSite=Strict");
+      expect(first.headers.get("set-cookie")).not.toContain("Secure");
+      expect(Number(first.headers.get(DESK_UNLOCKED_UNTIL_HEADER))).toBeGreaterThan(Date.now());
 
       const otherBrowser = await send("/api/desk/action", { action: "ranger.retry", key: "ranger:example/app#12" });
       expect((await otherBrowser.json()).error).toBe("step_up_required");

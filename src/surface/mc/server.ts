@@ -68,7 +68,7 @@ import { handleGetDesk } from "./api/desk";
 import { handleDeskVips } from "./api/desk-vips";
 import { handleDeskAction } from "./api/desk-action";
 import { HandledLedger } from "./desk/actions";
-import { DESK_STEP_UP_WINDOW_ROUTES } from "./desk/step-up-window";
+import { DESK_STEP_UP_WINDOW_ROUTE, DESK_UNLOCKED_UNTIL_HEADER } from "./desk/step-up-window";
 import { StepUpWindow, unlockToken } from "./api/desk-unlock";
 import type { DeskOptions, DeskRuntime } from "./desk/compose";
 import { SourceCache } from "./desk/sources/command";
@@ -388,6 +388,10 @@ export function startServer(
   return { server, port: server.port ?? config.port, wsRegistry, stop };
 }
 
+function arrivedOverHttps(req: Request, url: URL): boolean {
+  return url.protocol === "https:" || req.headers.get("x-forwarded-proto") === "https" || req.headers.has(CF_ACCESS_JWT_HEADER);
+}
+
 async function handleApi(
   req: Request,
   url: URL,
@@ -417,9 +421,9 @@ async function handleApi(
     if (authResult instanceof Response) return authResult;
     principal = authResult.principal;
   }
-  const windowFor = principal !== null && DESK_STEP_UP_WINDOW_ROUTES.has(pathname) ? principal : null;
+  const windowFor = principal !== null && pathname === DESK_STEP_UP_WINDOW_ROUTE ? principal : null;
   const unlocked = windowFor !== null && (desk?.stepUpWindow?.isOpen(windowFor, unlockToken(req), Date.now()) ?? false);
-  let unlockCookie: string | null = null;
+  let unlock: { cookie: string; until: number } | null = null;
   if (requiresStepUp(req.method, pathname) && !unlocked) {
     let enrollment: StepUpEnrollment | null;
     try {
@@ -441,7 +445,7 @@ async function handleApi(
     }
     const stepUpDenial = enforceStepUp(req, { enrollment });
     if (stepUpDenial) return stepUpDenial;
-    if (windowFor !== null) unlockCookie = desk?.stepUpWindow?.open(windowFor, Date.now()) ?? null;
+    if (windowFor !== null) unlock = desk?.stepUpWindow?.open(windowFor, Date.now(), arrivedOverHttps(req, url)) ?? null;
   }
 
   if (pathname === "/api/desk") {
@@ -449,9 +453,12 @@ async function handleApi(
     return handleGetDesk(db, desk, vigil);
   }
 
-  if (pathname === "/api/desk/action") {
+  if (pathname === DESK_STEP_UP_WINDOW_ROUTE) {
     const res = await handleDeskAction(req, desk);
-    if (unlockCookie !== null) res.headers.append("Set-Cookie", unlockCookie);
+    if (unlock !== null) {
+      res.headers.append("Set-Cookie", unlock.cookie);
+      res.headers.set(DESK_UNLOCKED_UNTIL_HEADER, String(unlock.until));
+    }
     return res;
   }
 

@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction } from "../lib/desk-action";
-import { DESK_STEP_UP_WINDOW_MS } from "../../desk/step-up-window";
+import { DESK_STEP_UP_CLIENT_MARGIN_MS, DESK_STEP_UP_WINDOW_MS } from "../../desk/step-up-window";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
 import { ALL_AREAS, briefing, canSee, clock, openGroup, selectItems, URGENCY_LABEL } from "../../desk/present";
@@ -95,7 +95,6 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   };
 
   const send = async (item: DeskItem, action: DeskAction, code: string): Promise<void> => {
-    const sentAt = Date.now();
     const result = await submitDeskAction({ action: action.id, key: item.key }, code);
     setPending(null);
     if (result.needsCode && !code) {
@@ -103,7 +102,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
       setPending({ item, action });
       return;
     }
-    if (result.codeAccepted) setUnlockedUntil(sentAt + DESK_STEP_UP_WINDOW_MS - 30_000);
+    if (result.unlockedUntil !== null) setUnlockedUntil(result.unlockedUntil - DESK_STEP_UP_CLIENT_MARGIN_MS);
     setNote(result.text);
     if (!result.ok) return;
     setSnoozed((s) => new Set(s).add(item.key));
