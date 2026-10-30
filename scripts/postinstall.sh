@@ -29,6 +29,8 @@ source "${SCRIPT_DIR}/lib/plist-render.sh"
 # rendering. Also all function definitions — no source-time side effects.
 # shellcheck source=scripts/lib/systemd-render.sh
 source "${SCRIPT_DIR}/lib/systemd-render.sh"
+# shellcheck source=scripts/lib/dashboard-build.sh
+source "${SCRIPT_DIR}/lib/dashboard-build.sh"
 # XDG wave-4 (cortex#1869): resolve the active config dir (canonical
 # ~/.config/metafactory/cortex once migrated, legacy trees during transition, or
 # $CORTEX_CONFIG_DIR). On a fresh install none exist yet → resolves to the
@@ -92,6 +94,10 @@ if [ ! -f "${CLAUDE_DIR}/relay/relay-policy.yaml" ]; then
 else
   echo "  ⊘ Relay policy exists (~/.claude/relay/relay-policy.yaml — not overwriting)"
 fi
+
+# ─── 3b. Build the Mission Control dashboard (cortex#2770) ────────
+# dist/ is gitignored, so a fresh install has no bundle until it is built.
+build_mc_dashboard "${CORTEX_DIR}"
 
 # ─── 4. Service-unit rendering (launchd on macOS, systemd on Linux) ─
 # Holly cortex#52 round 1 major: the sed-templating block + awk agent-name

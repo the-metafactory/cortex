@@ -25,6 +25,8 @@ source "${SCRIPT_DIR}/lib/plist-render.sh"
 # re-templating + reload.
 # shellcheck source=scripts/lib/systemd-render.sh
 source "${SCRIPT_DIR}/lib/systemd-render.sh"
+# shellcheck source=scripts/lib/dashboard-build.sh
+source "${SCRIPT_DIR}/lib/dashboard-build.sh"
 # XDG wave-4 (cortex#1869): resolve the ACTIVE config dir (canonical
 # ~/.config/metafactory/cortex once migrated, the legacy trees during transition,
 # or $CORTEX_CONFIG_DIR) instead of hardcoding the pre-move `~/.config/cortex` —
@@ -114,6 +116,11 @@ done < <(discover_stack_slugs "${CONFIG_DIR}")
 # federating as another — is surfaced every upgrade instead of shipping
 # silently. Runs before the Darwin guard so Linux/systemd peers see it too.
 warn_stack_identity_drift "${CONFIG_DIR}"
+
+# ─── 2c. Build the Mission Control dashboard (cortex#2770) ────────
+# dist/ is gitignored; without a build here the daemons restart onto the new
+# server code while the browser keeps the last hand-built bundle.
+build_mc_dashboard "${CORTEX_DIR}"
 
 # ─── 3. Re-template launchd plists (shared with postinstall.sh) ──
 if [ "$(uname)" = "Darwin" ]; then
