@@ -159,9 +159,24 @@ describe("Desk actions that write to Ranger", () => {
       const view = await composeDesk(db, desk, undefined, { now: NOW, fetchImpl: fetchRanger(rangerState()) });
       return Object.fromEntries(view.items.map((i) => [i.key, i.actions[0]?.wired]));
     };
-    expect(await wired(DESK)).toMatchObject({ "ranger:example/app#30": true, "ranger:example/app#33": false, "ranger:example/app#12": true });
+    expect(await wired(DESK)).toMatchObject({ "ranger:example/app#30": true, "ranger:example/app#12": true });
     expect(await wired({ ...DESK, rangerCli: undefined })).toMatchObject({ "ranger:example/app#30": false, "ranger:example/app#12": false });
     db.close();
+  });
+
+  it("offers no dead Approve button, and says why, for a decision Ranger will not take an approval for", async () => {
+    const state = rangerState();
+    state.maps.push({ key: "example/notes#1", repo: "example/notes", walk: "none", decisions: [{ id: "40", title: "Plan the next talk", approvable: false, approvalVersion: "v1" }] });
+    const db = initDatabase(":memory:");
+    const view = await composeDesk(db, DESK, undefined, { now: NOW, fetchImpl: fetchRanger(state) });
+    db.close();
+    const item = (key: string) => view.items.find((i) => i.key === key);
+    expect(item("ranger:example/notes#40")?.why).toBe("No agent builds this map; Ranger only shows it.");
+    expect(item("ranger:example/app#33")?.why).toBe("Ranger does not take an approval for it here. Look first to see what it needs.");
+    for (const key of ["ranger:example/notes#40", "ranger:example/app#33"]) {
+      expect(item(key)?.actions.map((a) => [a.id, a.role, a.wired])).toEqual([["detail", "primary", true], ["snooze", "secondary", true]]);
+    }
+    expect(item("ranger:example/app#30")?.actions[0]?.id).toBe("ranger.approve");
   });
 });
 
