@@ -6,7 +6,7 @@
  * the folded rest, goals and systems. Raw identifiers appear only in the detail panel.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction } from "../lib/desk-action";
 import "./desk-view.css";
@@ -49,6 +49,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   const [openStopped, setOpenStopped] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const inFlight = useRef(new Set<string>());
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
   const group = groupKind ? openGroup(selection, groupKind) : null;
@@ -90,14 +91,20 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   };
 
   const send = async (item: DeskItem, action: DeskAction): Promise<void> => {
-    if (sending.has(item.key)) return;
+    if (inFlight.current.has(item.key)) return;
+    inFlight.current.add(item.key);
     setSending((m) => new Map(m).set(item.key, action.id));
-    const result = await submitDeskAction({ action: action.id, key: item.key });
-    setSending((m) => {
-      const next = new Map(m);
-      next.delete(item.key);
-      return next;
-    });
+    let result: { ok: boolean; text: string };
+    try {
+      result = await submitDeskAction({ action: action.id, key: item.key });
+    } finally {
+      inFlight.current.delete(item.key);
+      setSending((m) => {
+        const next = new Map(m);
+        next.delete(item.key);
+        return next;
+      });
+    }
     setNote(result.text);
     if (!result.ok) return;
     setSnoozed((s) => new Set(s).add(item.key));
