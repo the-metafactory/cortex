@@ -9,6 +9,7 @@ export interface RangerNeedsYou {
   status: string;
   endedAt?: string;
   reason?: { class?: string; detail?: string };
+  actions?: { resume?: boolean };
 }
 
 export interface RangerCurrent {
@@ -27,11 +28,15 @@ export interface RangerMapNode {
   title: string;
   kind?: string;
   url?: string;
+  approvalVersion?: string;
+  approvable?: boolean;
 }
 
 export interface RangerMap {
   key: string;
   repo: string;
+  walk?: string;
+  servedOnly?: boolean;
   grillings?: RangerMapNode[];
   decisions?: RangerMapNode[];
 }
@@ -83,6 +88,9 @@ export async function readRangerState(
       : [],
   };
 }
+
+/** The Desk item key for a Ranger node ref such as `owner/repo#12`. */
+export const rangerItemKey = (ref: string): string => `ranger:${ref}`;
 
 /** Titles for `owner/repo#n` refs, so Vigil escalations can be named in words. */
 export function rangerTitles(state: RangerState): Map<string, { title: string; url?: string }> {

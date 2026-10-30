@@ -3,17 +3,26 @@ import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
 import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoName, type AreaRule } from "./rank";
-import { startOfDay } from "./time";
+import { DAY_MS, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent } from "./sources/command";
 import { listVips } from "./vips";
-import { readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
+import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
+import { withoutHandled, type HandledLedger, type RangerCli } from "./actions";
+
+/** What Mission Control holds for the Desk across requests. */
+export interface DeskRuntime {
+  options?: DeskOptions;
+  ledger: HandledLedger;
+  sourceCache?: SourceCache;
+}
 
 export interface DeskOptions {
   enabled: boolean;
   displayName: string;
   topN: number;
   rangerUrl: string;
+  rangerCli?: RangerCli;
   areas: AreaRule[];
   sources: DeskSourceConfig[];
 }
@@ -29,9 +38,8 @@ export interface ComposeDeps {
   now?: number;
   fetchImpl?: RangerFetch;
   sourceCache?: SourceCache;
+  handled?: HandledLedger;
 }
-
-const DAY_MS = 86_400_000;
 
 const GOAL_STATES = new Set<DeskGoal["state"]>(["on-track", "at-risk", "off-track", "stale"]);
 
@@ -57,7 +65,8 @@ export async function composeDesk(
 
   const subjects: VigilSubjectView[] = vigilSubjects ?? [];
   if (vigilSubjects) sources.push({ id: "vigil", ok: true });
-  const ranger: RangerState | null = rangerResult?.state ?? null;
+  const filtered = rangerResult?.state && deps.handled ? withoutHandled(rangerResult.state, deps.handled) : null;
+  const ranger: RangerState | null = filtered?.state ?? rangerResult?.state ?? null;
   if (rangerResult) sources.push(rangerResult.error === null ? { id: "ranger", ok: true } : { id: "ranger", ok: false, error: rangerResult.error });
 
   for (const r of readings) sources.push(r.error === null ? { id: r.id, ok: true } : { id: r.id, ok: false, error: r.error });
@@ -67,7 +76,7 @@ export async function composeDesk(
   const vips = listVips(db);
 
   const items = [
-    ...rankItems({ now, subjects, ranger, areas: desk.areas }),
+    ...rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions: Boolean(desk.rangerCli?.bin), hidden: filtered?.hidden }),
     ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)) }),
   ].sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
 
@@ -121,7 +130,7 @@ function buildToday(ranger: RangerState | null, items: DeskItem[], areas: AreaRu
     });
   }
   for (const item of items.filter(isAgentStop)) {
-    const n = ranger?.needsYou.find((x) => item.key === `ranger:${x.repo}#${x.nodeId}`);
+    const n = ranger?.needsYou.find((x) => item.key === rangerItemKey(`${x.repo}#${x.nodeId}`));
     const at = parsedOr(n?.endedAt, NaN);
     if (!Number.isFinite(at) || at < startOfDay(now)) continue;
     const key = `stop:${item.key}`;

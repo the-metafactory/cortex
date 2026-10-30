@@ -1,8 +1,9 @@
 import type { VigilSubjectView } from "../../../vigil/subjects-view";
 import type { SourceEvent, SourceMail } from "./sources/command";
 import type { RangerMap, RangerMapNode, RangerState } from "./sources/ranger";
-import { rangerTitles } from "./sources/ranger";
-import { clock, startOfDay } from "./time";
+import { rangerItemKey, rangerTitles } from "./sources/ranger";
+import { approvable, retryable } from "./actions";
+import { clock, DAY_MS, startOfDay } from "./time";
 import { isVip } from "./vips";
 import type { DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
 
@@ -16,9 +17,9 @@ export interface RankInput {
   subjects: VigilSubjectView[];
   ranger: RangerState | null;
   areas: AreaRule[];
+  rangerActions?: boolean;
+  hidden?: ReadonlySet<string>;
 }
-
-const DAY_MS = 86_400_000;
 
 const action = (id: string, label: string, role: DeskAction["role"], wired: boolean): DeskAction => ({ id, label, role, wired });
 const LOOK = action("detail", "Look first", "secondary", true);
@@ -93,18 +94,18 @@ export function rankItems(input: RankInput): DeskItem[] {
   const titles: Titles = input.ranger ? rangerTitles(input.ranger) : new Map<string, { title: string; url?: string }>();
   rangerNeedsYouItems(input, add);
   rangerMapItems(input, add);
-  vigilItems(input, titles, (key) => items.has(key), add);
+  vigilItems(input, titles, (key) => items.has(key) || (input.hidden?.has(key) ?? false), add);
   return [...items.values()].sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
 }
 
-function rangerNeedsYouItems({ now, ranger, areas }: RankInput, add: Add): void {
+function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false }: RankInput, add: Add): void {
   for (const n of ranger?.needsYou ?? []) {
     const ref = `${n.repo}#${n.nodeId}`;
     const endedAt = parsedOr(n.endedAt, now);
     const ageDays = Math.max(0, (now - endedAt) / DAY_MS);
     const failed = n.status === "failed";
     const links = issueLinks(n.url);
-    const base = { key: `ranger:${ref}`, area: areaFor(areas, n.repo, null), urgency: "waiting" as const };
+    const base = { key: rangerItemKey(ref), area: areaFor(areas, n.repo, null), urgency: "waiting" as const };
     const detail = {
       summary: n.reason?.detail ? `${n.reason.class ?? "Stopped"}: ${n.reason.detail}` : `The agent stopped (${n.status}).`,
       history: [`Stopped ${ago(now, endedAt)}`],
@@ -126,7 +127,7 @@ function rangerNeedsYouItems({ now, ranger, areas }: RankInput, add: Add): void 
         title: failed ? `An agent failed on "${n.title}".` : `An agent stopped on "${n.title}".`,
         why: `It stopped ${ago(now, endedAt)} in ${repoName(n.repo)}${failed ? ", and nothing moves until it is retried or parked" : ""}.`,
         score: (failed ? 60 : 40) - ageDays * 5,
-        actions: [action("ranger.retry", "Let it retry", "primary", false), LOOK, action("ranger.park", "Park it", "secondary", false)],
+        actions: [action("ranger.retry", "Let it retry", "primary", rangerActions && retryable(n)), LOOK, action("ranger.park", "Park it", "secondary", false)],
         detail,
       });
     }
@@ -140,6 +141,7 @@ interface MapNodeRule {
   title: (title: string) => string;
   why: (repo: string) => string;
   primary: DeskAction;
+  wired: (map: RangerMap, node: RangerMapNode) => boolean;
 }
 
 const MAP_NODE_RULES: { rule: MapNodeRule; nodes: (m: RangerMap) => RangerMapNode[] }[] = [
@@ -150,6 +152,7 @@ const MAP_NODE_RULES: { rule: MapNodeRule; nodes: (m: RangerMap) => RangerMapNod
       title: (t) => `"${t}" waits for your go-ahead.`,
       why: (repo) => `Agents in ${repo} will not start it without you.`,
       primary: action("ranger.approve", "Approve", "primary", false),
+      wired: approvable,
     },
   },
   {
@@ -159,21 +162,22 @@ const MAP_NODE_RULES: { rule: MapNodeRule; nodes: (m: RangerMap) => RangerMapNod
       title: (t) => `An agent wants to settle a question with you: "${t}"`,
       why: (repo) => `It blocks work in ${repo} until you have talked it through.`,
       primary: action("ranger.grill", "Start the grilling", "primary", false),
+      wired: () => false,
     },
   },
 ];
 
-function rangerMapItems({ ranger, areas }: RankInput, add: Add): void {
+function rangerMapItems({ ranger, areas, rangerActions = false }: RankInput, add: Add): void {
   for (const map of ranger?.maps ?? []) {
     for (const { rule, nodes } of MAP_NODE_RULES) {
       for (const node of nodes(map)) {
         const ref = `${map.repo}#${node.id}`;
         add({
-          key: `ranger:${ref}`, kind: rule.kind, area: areaFor(areas, map.repo, null), urgency: rule.urgency,
+          key: rangerItemKey(ref), kind: rule.kind, area: areaFor(areas, map.repo, null), urgency: rule.urgency,
           title: rule.title(node.title),
           why: rule.why(repoName(map.repo)),
           score: rule.score,
-          actions: [rule.primary, LOOK, LATER],
+          actions: [{ ...rule.primary, wired: rangerActions && rule.wired(map, node) }, LOOK, LATER],
           detail: { summary: node.title, history: [], refs: [ref, map.key], links: issueLinks(node.url) },
         });
       }
@@ -211,7 +215,7 @@ function vigilItems({ now, subjects, areas }: RankInput, titles: Titles, listed:
         detail: { summary: s.goalWording ?? "This goal has no description.", history: [`Last report ${ago(now, s.lastEndedAt)}`], refs: [goalId, ...refs], links: [] },
       });
     } else if (s.vocab === "escalation" && (s.value === "needs-principal" || s.value === "overdue")) {
-      if (listed(`ranger:${s.ref}`)) continue;
+      if (listed(rangerItemKey(s.ref))) continue;
       const known = titles.get(s.ref);
       const repo = s.ref.split("#")[0] ?? s.ref;
       add({
