@@ -145,7 +145,7 @@ A `target` names either `thread: <slug>` (file into that thread) or `place: new`
 - `maxActive` and `areas`, each with its `policy`.
 - `active`: active threads, oldest-opened first. The first `maxActive` carry `place` (1 to `maxActive`); the rest carry `overCap: true`.
 - `parked` (oldest-opened first) and `closed` (most recently closed first).
-- `inbox` and `proposals`, oldest first. Proposals carry their effective `policy`.
+- `inbox` and `proposals`, oldest first. Proposals carry their effective `policy`, which also counts the `target.area`.
 - `problems`: one entry per file that could not be read or parsed, with its `path` and a `reason`. A broken file never breaks the response.
 
 Each thread carries its parsed front matter, `question`, `stand`, `notes`, `material`, `log`, `outcomeText` and its effective `policy`.

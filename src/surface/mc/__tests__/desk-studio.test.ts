@@ -210,6 +210,16 @@ describe("buildStudioView", () => {
     expect(view.problems.map((p) => p.path)).toEqual(["threads/broken.md", "inbox/c1.md", "proposals/p1.md"]);
     expect(view.problems[0]?.reason).toContain("front matter");
   });
+
+  it("counts a proposal's target area in its policy", () => {
+    const view = buildStudioView(
+      { threads: [], inbox: [], proposals: [{ path: "proposals/p2.md", text: "---\ntype: topic\nareas: [lab]\nproposed: 2026-10-30T18:20:00Z\ntarget: { place: new, area: work, reason: x }\n---\n## Question\nQ\n" }] },
+      opts,
+      AREAS,
+    );
+    expect(view.proposals[0]?.policy).toBe("local");
+    expect(view.problems).toEqual([]);
+  });
 });
 
 describe("GET /api/desk/studio", () => {

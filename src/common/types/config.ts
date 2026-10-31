@@ -361,6 +361,7 @@ export type NetworkFile = z.infer<typeof NetworkFileSchema>;
 // =============================================================================
 
 export const DESK_TRANSPORTS = ["none", "discord"] as const;
+export const AREA_POLICIES = ["local", "cloud"] as const;
 
 const DeskInterruptionsSchema = z.object({
   transport: z.enum(DESK_TRANSPORTS).default("none"),
@@ -401,7 +402,7 @@ const DeskSchema = z.object({
         color: z.string().default(""),
         repos: z.array(z.string()).default([]),
         goals: z.array(z.string()).default([]),
-        policy: z.enum(["local", "cloud"]).default("cloud"),
+        policy: z.enum(AREA_POLICIES).default("cloud"),
       }),
     )
     .default([]),

@@ -7,30 +7,33 @@ export const STUDIO_MAX_FILE_BYTES = 1_000_000;
 const errCode = (err: unknown): string => (err && typeof err === "object" && "code" in err ? String(err.code) : "");
 const message = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-async function readFolder(dir: string, folder: string, problems: StudioProblem[]): Promise<StudioFile[]> {
+async function readFolder(dir: string, folder: string): Promise<{ files: StudioFile[]; problems: StudioProblem[] }> {
+  const problems: StudioProblem[] = [];
   let names: string[];
   try {
     names = await readdir(join(dir, folder));
   } catch (err) {
-    if (errCode(err) !== "ENOENT") problems.push({ path: `${folder}/`, reason: `could not be listed: ${message(err)}` });
-    return [];
+    return { files: [], problems: errCode(err) === "ENOENT" ? [] : [{ path: `${folder}/`, reason: `could not be listed: ${message(err)}` }] };
   }
-  const files: StudioFile[] = [];
-  for (const name of names.filter((n) => n.endsWith(".md")).sort()) {
+  const read = async (name: string): Promise<StudioFile | StudioProblem | null> => {
     const path = `${folder}/${name}`;
     try {
       const info = await stat(join(dir, path));
-      if (!info.isFile()) continue;
-      if (info.size > STUDIO_MAX_FILE_BYTES) {
-        problems.push({ path, reason: `is larger than ${STUDIO_MAX_FILE_BYTES} bytes` });
-        continue;
-      }
-      files.push({ path, text: await readFile(join(dir, path), "utf8") });
+      if (!info.isFile()) return null;
+      if (info.size > STUDIO_MAX_FILE_BYTES) return { path, reason: `is larger than ${STUDIO_MAX_FILE_BYTES} bytes` };
+      return { path, text: await readFile(join(dir, path), "utf8") };
     } catch (err) {
-      problems.push({ path, reason: `could not be read: ${message(err)}` });
+      return { path, reason: `could not be read: ${message(err)}` };
     }
+  };
+  const results = await Promise.all(names.filter((n) => n.endsWith(".md")).sort().map(read));
+  const files: StudioFile[] = [];
+  for (const r of results) {
+    if (r === null) continue;
+    if ("text" in r) files.push(r);
+    else problems.push(r);
   }
-  return files;
+  return { files, problems };
 }
 
 export async function readStudioFiles(dir: string): Promise<{ files: StudioFiles; problems: StudioProblem[] }> {
@@ -46,10 +49,9 @@ export async function readStudioFiles(dir: string): Promise<{ files: StudioFiles
   } catch {
     problems.push({ path: ".", reason: "desk.studio.dir is not a git working tree; later Studio writes need one" });
   }
-  const [threads, inbox, proposals] = [
-    await readFolder(dir, "threads", problems),
-    await readFolder(dir, "inbox", problems),
-    await readFolder(dir, "proposals", problems),
-  ];
-  return { files: { threads, inbox, proposals }, problems };
+  const [threads, inbox, proposals] = await Promise.all([readFolder(dir, "threads"), readFolder(dir, "inbox"), readFolder(dir, "proposals")]);
+  return {
+    files: { threads: threads.files, inbox: inbox.files, proposals: proposals.files },
+    problems: [...problems, ...threads.problems, ...inbox.problems, ...proposals.problems],
+  };
 }
