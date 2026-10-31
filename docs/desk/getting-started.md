@@ -39,7 +39,7 @@ In the steps below, `<slug>` is the name of your stack, and `~/.config/metafacto
 
 6. Open `http://127.0.0.1:8767/` in a browser.
 
-The Desk opens. It greets you, shows today's timeline with a Now marker, and lists what Cortex knows: goal checks and agent escalations from Vigil, and agents from Ranger if you set `mc.desk.ranger.url`. On a new stack, the list may be empty. The Desk then says that nothing needs you.
+The Desk opens. It greets you, shows today's timeline with a Now marker, and lists what Cortex knows: goal checks and agent escalations from Vigil, and agents from Ranger if you set `mc.desk.ranger.url`. On a new stack without Vigil or Ranger readings, the Desk explains that no source is connected and shows how to connect one.
 
 Type `remind me to stretch in 10 minutes` into the command bar at the bottom and press Enter. The Desk shows a reminder card. Confirm it. The reminder appears on today's timeline. Cortex keeps notes and reminders in its own database, so they work without any adapter.
 
