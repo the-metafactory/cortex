@@ -4,9 +4,20 @@ export type NotifyAnswer = { delivered: true; messageId?: string } | { delivered
 
 const escapeMarkdown = (text: string): string => text.replace(/[\\*_~`|>[\]()]/g, "\\$&");
 
+function safeUrl(raw: string): string | null {
+  if (/[\s<>]/.test(raw)) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 export function pushText(push: DeskPush): string {
   const lines = [`**${escapeMarkdown(push.title)}**`, escapeMarkdown(push.why)];
-  if (push.action) lines.push(`${push.action.label}: <${push.action.url}>`);
+  const url = push.action ? safeUrl(push.action.url) : null;
+  if (push.action && url) lines.push(`${escapeMarkdown(push.action.label)}: <${url}>`);
   return lines.join("\n");
 }
 

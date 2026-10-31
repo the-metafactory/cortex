@@ -360,6 +360,18 @@ export type NetworkFile = z.infer<typeof NetworkFileSchema>;
 // Main config schema
 // =============================================================================
 
+export const DESK_TRANSPORTS = ["none", "discord"] as const;
+
+const DeskInterruptionsSchema = z.object({
+  transport: z.enum(DESK_TRANSPORTS).default("none"),
+  meetingMinutes: z.number().int().min(0).max(120).default(10),
+  mail: z.boolean().default(true),
+  reminders: z.boolean().default(true),
+  maxAgeMinutes: z.number().int().min(1).max(1440).default(60),
+  everySeconds: z.number().int().min(15).max(3600).default(60),
+  chime: z.boolean().default(true),
+});
+
 const DeskSchema = z.object({
   enabled: z.boolean().default(true),
   displayName: z.string().default(""),
@@ -403,17 +415,7 @@ const DeskSchema = z.object({
       taskMaps: z.array(z.object({ ref: z.string().regex(/^[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/), label: z.string().min(1) })).default([]),
     })
     .default({ parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }),
-  interruptions: z
-    .object({
-      transport: z.enum(["none", "discord"]).default("none"),
-      meetingMinutes: z.number().int().min(0).max(120).default(10),
-      mail: z.boolean().default(true),
-      reminders: z.boolean().default(true),
-      maxAgeMinutes: z.number().int().min(1).max(1440).default(60),
-      everySeconds: z.number().int().min(15).max(3600).default(60),
-      chime: z.boolean().default(true),
-    })
-    .default({ transport: "none", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true }),
+  interruptions: DeskInterruptionsSchema.default(DeskInterruptionsSchema.parse({})),
 });
 const DESK_DEFAULTS = DeskSchema.parse({});
 

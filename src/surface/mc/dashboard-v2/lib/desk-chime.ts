@@ -26,7 +26,9 @@ export function rememberChimed(store: ChimeStore, chimed: ReadonlySet<string>, f
   store.setItem(STORE_KEY, JSON.stringify([...chimed, ...fresh].slice(-KEEP)));
 }
 
-export function playChime(ctx: AudioContext): void {
+export type ChimeAudio = Pick<AudioContext, "state" | "resume" | "currentTime" | "createOscillator" | "createGain" | "destination">;
+
+export function playChime(ctx: ChimeAudio): void {
   const t = ctx.currentTime;
   [880, 1318.5].forEach((freq, i) => {
     const osc = ctx.createOscillator();
@@ -41,18 +43,36 @@ export function playChime(ctx: AudioContext): void {
     osc.start(start);
     osc.stop(start + 0.32);
   });
-  setTimeout(() => void ctx.close(), 800);
 }
+
+export interface ChimeDeps {
+  store: ChimeStore;
+  audio: () => ChimeAudio;
+  wait?: number;
+}
+
+export async function chimeIfNew(view: DeskView, deps: ChimeDeps): Promise<boolean> {
+  const chimed = loadChimed(deps.store);
+  const fresh = freshInterrupts(view, chimed);
+  if (fresh.length === 0) return false;
+  const ctx = deps.audio();
+  if (ctx.state !== "running") {
+    const timeout = new Promise<void>((resolve) => setTimeout(resolve, deps.wait ?? 300));
+    await Promise.race([ctx.resume().catch(() => undefined), timeout]);
+  }
+  if (ctx.state !== "running") return false;
+  rememberChimed(deps.store, chimed, fresh);
+  playChime(ctx);
+  return true;
+}
+
+let shared: AudioContext | null = null;
 
 export function chimeForNew(view: DeskView): void {
   if (typeof window === "undefined" || typeof AudioContext === "undefined") return;
-  const chimed = loadChimed(window.localStorage);
-  const fresh = freshInterrupts(view, chimed);
-  if (fresh.length === 0) return;
-  rememberChimed(window.localStorage, chimed, fresh);
-  try {
-    playChime(new AudioContext());
-  } catch {
-    return;
-  }
+  const audio = (): AudioContext => {
+    shared ??= new AudioContext();
+    return shared;
+  };
+  void chimeIfNew(view, { store: window.localStorage, audio }).catch(() => false);
 }

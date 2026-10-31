@@ -1,9 +1,9 @@
 import type { Database } from "bun:sqlite";
 import { clock } from "./time";
 import type { DeskAction, DeskEvent, DeskInterrupt, DeskItem } from "./types";
+import type { DESK_TRANSPORTS } from "../../../common/types/config";
 
-export const TRANSPORTS = ["none", "discord"] as const;
-export type TransportId = (typeof TRANSPORTS)[number];
+export type TransportId = (typeof DESK_TRANSPORTS)[number];
 
 export interface InterruptRules {
   transport: TransportId;
@@ -50,6 +50,8 @@ export interface Delivery {
 
 const MINUTE = 60_000;
 const KEEP_MS = 7 * 86_400_000;
+const STUCK_MS = 5 * MINUTE;
+const STUCK = "The push was interrupted before it finished; it may have arrived.";
 
 export function meetingItems(events: DeskEvent[], now: number, minutes: number): DeskItem[] {
   if (minutes <= 0) return [];
@@ -80,19 +82,28 @@ export function meetingItems(events: DeskEvent[], now: number, minutes: number):
     });
 }
 
+const rankedForToday = (item: DeskItem): boolean => item.urgency !== "waiting";
+
 export function interrupts(item: DeskItem, rules: InterruptRules, now: number): boolean {
   const fresh = item.since !== undefined && now - item.since <= rules.maxAgeMinutes * MINUTE;
   if (item.kind === "meeting") return rules.meetingMinutes > 0;
   if (item.kind === "reminder") return rules.reminders && fresh;
-  if (item.kind === "mail") return rules.mail && item.urgency !== "waiting" && fresh;
+  if (item.kind === "mail") return rules.mail && rankedForToday(item) && fresh;
   return false;
+}
+
+function failure(sent: Delivery | undefined, now: number): string | null {
+  if (sent?.status === "failed") return sent.error ?? "The transport gave no reason.";
+  if (sent?.status === "sending" && now - sent.createdAt > STUCK_MS) return STUCK;
+  return null;
 }
 
 export function markInterrupts(items: DeskItem[], rules: InterruptRules, deliveries: ReadonlyMap<string, Delivery>, now: number): DeskItem[] {
   return items.map((item) => {
     const sent = deliveries.get(item.key);
-    if (sent?.status === "failed") {
-      const interrupt: DeskInterrupt = { delivery: "failed", error: sent.error ?? "The transport gave no reason." };
+    const error = failure(sent, now);
+    if (error !== null) {
+      const interrupt: DeskInterrupt = { delivery: "failed", error };
       return { ...item, urgency: "now", score: Math.max(item.score, 99), interrupt };
     }
     if (!interrupts(item, rules, now)) return item;

@@ -8,7 +8,7 @@ import { addNote } from "../desk/notes";
 import { briefing, selectItems } from "../desk/present";
 import { SourceCache, type CommandRunner } from "../desk/sources/command";
 import type { RangerState } from "../desk/sources/ranger";
-import { freshInterrupts, loadChimed, rememberChimed } from "../dashboard-v2/lib/desk-chime";
+import { chimeIfNew, freshInterrupts, loadChimed, rememberChimed, type ChimeAudio } from "../dashboard-v2/lib/desk-chime";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -162,9 +162,57 @@ describe("Desk interruptions", () => {
     expect(freshInterrupts(view, loadChimed(storage))).toEqual([]);
     expect(freshInterrupts({ ...view, chime: false }, new Set())).toEqual([]);
   });
+
+  it("plays the chime through Web Audio, and keeps the item unchimed while the browser holds audio back", async () => {
+    const { view } = await tick(new FakeTransport(), NOW);
+    const store = new Map<string, string>();
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+    const tones: number[] = [];
+    const audio = (state: AudioContextState): ChimeAudio => {
+      const node = { connect: (next: unknown) => next, gain: { setValueAtTime: () => undefined, exponentialRampToValueAtTime: () => undefined } };
+      return {
+        state,
+        currentTime: 0,
+        destination: {},
+        resume: async () => undefined,
+        createGain: () => node,
+        createOscillator: () => ({ ...node, type: "sine", frequency: { set value(v: number) { tones.push(v); } }, start: () => undefined, stop: () => undefined }),
+      } as unknown as ChimeAudio;
+    };
+    expect(await chimeIfNew(view, { store: storage, audio: () => audio("suspended"), wait: 5 })).toBe(false);
+    expect(store.size).toBe(0);
+    expect(await chimeIfNew(view, { store: storage, audio: () => audio("running") })).toBe(true);
+    expect(tones).toEqual([880, 1318.5]);
+    expect(await chimeIfNew(view, { store: storage, audio: () => audio("running") })).toBe(false);
+    expect(tones).toHaveLength(2);
+  });
+
+  it("pushes mail from a VIP, and not ordinary mail", async () => {
+    db.query("INSERT INTO desk_vips (address, label, added_at) VALUES (?, ?, ?)").run("boss@example.com", "Boss", NOW);
+    const mail = (id: string, address: string) => ({ kind: "mail", id, from: { name: id, address }, subject: `Hello ${id}`, receivedAt: new Date(NOW - 5 * MIN).toISOString(), unread: true });
+    const runner: CommandRunner = async () => JSON.stringify({ items: [mail("vip", "boss@example.com"), mail("plain", "someone@example.com")] });
+    const transport = new FakeTransport();
+    const { pushed } = await tick(transport, NOW, desk(), new SourceCache(runner));
+    expect(pushed).toEqual([{ key: "mail:vip", ok: true }]);
+  });
+
+  it("shows a push that never finished as failed once it is stuck", async () => {
+    const key = `meeting:cal:cal:e1@${NOW + 10 * MIN}`;
+    db.query("INSERT INTO desk_deliveries (item_key, transport, status, title, created_at, updated_at) VALUES (?, 'discord', 'sending', 't', ?, ?)").run(key, NOW - 6 * MIN, NOW - 6 * MIN);
+    const transport = new FakeTransport();
+    const { view, pushed } = await tick(transport, NOW);
+    expect(pushed).toEqual([]);
+    expect(view.items[0]?.interrupt?.delivery).toBe("failed");
+    expect(view.items[0]?.urgency).toBe("now");
+  });
 });
 
 describe("the Discord transport", () => {
+  it("drops an action link that could break out of the autolink", () => {
+    expect(pushText({ key: "k", title: "t", why: "w", action: { label: "Join", url: "https://x.example/a>[evil](https://e)" } })).toBe("**t**\nw");
+    expect(pushText({ key: "k", title: "t", why: "w", action: { label: "Join", url: "javascript:alert(1)" } })).toBe("**t**\nw");
+  });
+
   it("writes the item shape and keeps markdown in titles inert", async () => {
     expect(pushText({ key: "k", title: "**Boss** wrote: \"[x](https://evil)\"", why: "VIP.", action: { label: "Open", url: "https://mail.example/1" } }))
       .toBe("**\\*\\*Boss\\*\\* wrote: \"\\[x\\]\\(https://evil\\)\"**\nVIP.\nOpen: <https://mail.example/1>");
