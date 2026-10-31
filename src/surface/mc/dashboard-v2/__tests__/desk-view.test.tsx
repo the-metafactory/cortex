@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ActionButton, DeskBody, DeskView, DoneForYou, ItemMenu, RankingSection, RestGroups, dismissesMenu } from "../components/desk-view";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
@@ -81,6 +83,41 @@ describe("DeskView before the Desk has loaded", () => {
     const html = renderToStaticMarkup(<DeskView onOpenMissionControl={() => {}} />);
     expect(html).toContain("Loading your Desk");
     expect(html).toContain("Open Mission Control");
+  });
+});
+
+describe("the Desk top bar", () => {
+  const areas = [
+    { id: "switch", label: "SWITCH", color: "#dc2626" },
+    { id: "mf", label: "MetaFactory", color: "#2563eb" },
+    { id: "personal", label: "Personal", color: "#16a34a" },
+  ];
+  const html = renderToStaticMarkup(<DeskBody view={{ ...view, areas }} error={null} onOpenMissionControl={() => {}} />);
+  const top = html.slice(html.indexOf('class="desk-top-in"'), html.indexOf('class="desk-grid"'));
+  const css = readFileSync(join(import.meta.dir, "../components/desk-view.css"), "utf8");
+
+  it("puts the ask bar on the left and the area filter with Settings in their own cell on the right", () => {
+    const left = top.indexOf('class="desk-left"');
+    const right = top.indexOf('class="desk-topr"');
+    expect(left).toBeGreaterThan(-1);
+    expect(right).toBeGreaterThan(left);
+    expect(top.indexOf('aria-label="Ask Ivy"')).toBeLessThan(right);
+    const tabs = [...top.slice(right).matchAll(/role="tab" aria-selected="(true|false)">(?:<span[^>]*><\/span>)?([^<]+)</g)].map((m) => [m[2], m[1]]);
+    expect(tabs).toEqual([["All", "true"], ["SWITCH", "false"], ["MetaFactory", "false"], ["Personal", "false"]]);
+    expect(top.slice(right)).toContain(">Settings</button>");
+  });
+
+  it("sizes the right cell to its content so the ask bar shrinks first, never over the area filter", () => {
+    const rule = (sel: string) => /\{([^}]*)\}/.exec(css.slice(css.indexOf(`\n${sel}{`)))?.[1] ?? "";
+    expect(rule(".desk-top-in")).toContain("grid-template-columns:minmax(0,1fr) minmax(330px,max-content)");
+    expect(rule(".desk-topr>*")).toContain("flex:none");
+    expect(rule(".desk-askwrap")).toContain("min-width:0");
+  });
+
+  it("shows no area filter when the stack defines no areas", () => {
+    const bare = renderToStaticMarkup(<DeskBody view={{ ...view, areas: [] }} error={null} onOpenMissionControl={() => {}} />);
+    expect(bare).not.toContain('role="tablist"');
+    expect(bare).toContain(">Settings</button>");
   });
 });
 

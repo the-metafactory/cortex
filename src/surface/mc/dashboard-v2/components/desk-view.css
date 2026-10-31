@@ -14,7 +14,7 @@
 /* top bar: A's command bar */
 .desk-top{position:sticky;top:0;z-index:30;background:rgba(250,250,249,.88);backdrop-filter:saturate(1.4) blur(14px);-webkit-backdrop-filter:saturate(1.4) blur(14px);border-bottom:1px solid var(--line2)}
 .desk-top-in,.desk-grid{max-width:1320px;margin:0 auto;padding:0 40px;display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:48px}
-.desk-top-in{align-items:center;padding-top:12px;padding-bottom:12px}
+.desk-top-in{grid-template-columns:minmax(0,1fr) minmax(330px,max-content);align-items:center;padding-top:12px;padding-bottom:12px}
 .desk-left{display:flex;align-items:center;gap:22px;min-width:0}
 .desk-brand{display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px;color:var(--ink2);white-space:nowrap}
 .desk-mark{width:18px;height:18px;border-radius:6px;background:linear-gradient(140deg,#60a5fa,#3b82f6 55%,#2563eb);box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
@@ -26,6 +26,7 @@
 .desk-input{flex:1;min-width:0;border:0;outline:0!important;background:transparent;font:400 16.5px/1 Inter,sans-serif;color:var(--ink);letter-spacing:-.01em}
 .desk-input::placeholder{color:var(--faint)}
 .desk-topr{justify-self:end;display:flex;align-items:center;gap:10px}
+.desk-topr>*{flex:none}
 .desk-seg{display:flex;gap:2px;padding:3px;background:#f0f0ef;border-radius:10px}
 .desk-seg button{padding:6px 10px;border-radius:7px;font-size:13px;font-weight:500;color:var(--mute);display:flex;align-items:center;gap:6px;transition:background .15s,color .15s;white-space:nowrap}
 .desk-seg button:hover{color:var(--ink)}
