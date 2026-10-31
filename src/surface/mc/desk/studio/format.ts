@@ -195,7 +195,8 @@ function sectionMap(body: string): Parsed<Map<string, string>> {
   return { ok: true, value: map };
 }
 
-const NOTE_META = /^(trigger|model|kind|status|sample|because|relates):[ \t]*(.*)$/;
+export const NOTE_META_KEYS = ["trigger", "model", "kind", "status", "sample", "because", "relates"] as const;
+const NOTE_META = new RegExp(`^(${NOTE_META_KEYS.join("|")}):[ \\t]*(.*)$`);
 
 function parseNote(heading: string, text: string): Parsed<IvyNote> {
   if (!ISO_TIME.test(heading) || !validDate(heading)) return failed(`has a note headed "${heading}", which is not an ISO time with a zone`);

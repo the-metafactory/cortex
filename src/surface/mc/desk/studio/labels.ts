@@ -7,6 +7,8 @@ export const TYPE_LABEL: Record<ThreadType, string> = { question: "Question", to
 const OUTCOME_LABEL: Record<ThreadOutcome, string> = { decided: "Decided", shipped: "Shipped", dropped: "Dropped" };
 const SAFE_SCHEMES = new Set(["http:", "https:", "mailto:"]);
 
+export const localDate = (at: Date): string => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
+
 export const dayMonth = (isoDate: string): string => `${Number(isoDate.slice(8, 10))} ${MONTHS[Number(isoDate.slice(5, 7)) - 1] ?? ""}`;
 
 export const outcomeLabel = (t: { outcome?: ThreadOutcome }): string => (t.outcome ? OUTCOME_LABEL[t.outcome] : "Closed");

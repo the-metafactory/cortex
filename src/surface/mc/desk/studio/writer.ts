@@ -63,10 +63,10 @@ export async function runStudioAct(input: StudioWriteInput): Promise<ActResult> 
   if (!lock.claim(dir)) return fail(409, "Another Studio change is being written. Try again in a moment.");
   try {
     const problem = await treeProblem(git, dir);
-    if (problem?.startsWith("The Studio directory is not")) return fail(409, problem);
+    if (problem?.kind === "not-git") return fail(409, problem.error);
     const done = await findRequest(git, dir, input.requestId);
     if (done) return { ok: true, message: `Already recorded: ${done.subject}.`, commit: done.sha, replayed: true, studio: await freshView(input) };
-    if (problem) return fail(409, problem);
+    if (problem) return fail(409, problem.error);
 
     const { files, problems } = await readStudioFiles(dir);
     const view = buildStudioView(files, input.options, input.areas, problems);

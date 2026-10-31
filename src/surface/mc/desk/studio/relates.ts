@@ -147,8 +147,10 @@ function keptRelations(thread: StudioThreadView, studio: StudioView): Relation[]
 
 export function relatesTo(thread: StudioThreadView, studio: StudioView, ctx: RelatesContext = NO_CONTEXT): Relations {
   const kept = keptRelations(thread, studio);
+  const keptThreads = kept.filter((k) => k.kind === "thread");
+  const derived = threadRelations(thread, studio).map((d) => (keptThreads.some((k) => k.open === d.open) ? { ...d, why: `${d.why} ${KEPT_WHY}` } : d));
   return {
-    threads: [...threadRelations(thread, studio), ...kept.filter((k) => k.kind === "thread")],
+    threads: [...derived, ...keptThreads.filter((k) => k.open === undefined || !derived.some((d) => d.open === k.open))],
     goals: [...goalRelations(thread, ctx.goals), ...kept.filter((k) => k.kind === "goal")],
     events: eventRelations(thread, ctx),
     people: [...peopleRelations(thread), ...kept.filter((k) => k.kind === "person")],

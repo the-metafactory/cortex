@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { clip, plainQuestion } from "../../desk/studio/board";
 import type { IvyNote } from "../../desk/studio/format";
-import { dayMonth } from "../../desk/studio/labels";
+import { dayMonth, localDate } from "../../desk/studio/labels";
 import type { ThreadPage } from "../../desk/studio/page";
 import { relationCount, type Relation } from "../../desk/studio/relates";
 import type { StudioActs } from "../hooks/use-studio-act";
@@ -322,11 +322,6 @@ function Outcome({ page, acting, today }: { page: ThreadPage; acting: Acting; to
   );
 }
 
-const isoToday = (): string => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
-
 export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack }: {
   page: ThreadPage;
   onBack: () => void;
@@ -361,7 +356,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack }
               <GhostActions keep="Keep it as my stand" note={page.standProposal} acting={acting} />
             </NoteCard>
           )}
-          <Outcome page={page} acting={acting} today={isoToday()} />
+          <Outcome page={page} acting={acting} today={localDate(new Date())} />
         </div>
         <div className="dst-col left">
           <h4 className="dst-h">Material <span className="n">{page.material.length}</span></h4>

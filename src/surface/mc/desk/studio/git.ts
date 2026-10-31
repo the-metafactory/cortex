@@ -10,15 +10,20 @@ export const REQUEST_TRAILER = "Desk-Request";
 
 const firstLine = (r: GitResult): string => (r.stderr || r.stdout).trim().split("\n")[0] ?? `exit code ${r.code}`;
 
-export async function treeProblem(run: GitRunner, dir: string): Promise<string | null> {
+export interface TreeProblem {
+  kind: "not-git" | "status-failed" | "dirty";
+  error: string;
+}
+
+export async function treeProblem(run: GitRunner, dir: string): Promise<TreeProblem | null> {
   const inside = await run(["rev-parse", "--is-inside-work-tree"], dir);
-  if (inside.code !== 0 || inside.stdout.trim() !== "true") return "The Studio directory is not a git working tree, so the Studio cannot record changes. Run git init there first.";
+  if (inside.code !== 0 || inside.stdout.trim() !== "true") return { kind: "not-git", error: "The Studio directory is not a git working tree, so the Studio cannot record changes. Run git init there first." };
   const status = await run(["status", "--porcelain", "--untracked-files=all"], dir);
-  if (status.code !== 0) return `git status failed in the Studio directory: ${firstLine(status)}`;
+  if (status.code !== 0) return { kind: "status-failed", error: `git status failed in the Studio directory: ${firstLine(status)}` };
   const dirty = status.stdout.split("\n").filter((l) => l.trim() !== "");
   if (dirty.length === 0) return null;
   const names = dirty.slice(0, 3).map((l) => l.slice(3).trim());
-  return `The Studio directory has uncommitted changes (${names.join(", ")}${dirty.length > 3 ? ", …" : ""}). Commit or discard them first; nothing was written.`;
+  return { kind: "dirty", error: `The Studio directory has uncommitted changes (${names.join(", ")}${dirty.length > 3 ? ", …" : ""}). Commit or discard them first; nothing was written.` };
 }
 
 export async function findRequest(run: GitRunner, dir: string, requestId: string): Promise<{ sha: string; subject: string } | null> {

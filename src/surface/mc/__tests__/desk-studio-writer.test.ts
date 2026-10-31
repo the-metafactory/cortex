@@ -180,6 +180,19 @@ describe("Studio writer acts", () => {
     expect(parsed("alpha").log.at(-1)?.text).toBe("Kept Ivy's relation to thread: beta");
   });
 
+  it("lists a kept thread relation once when the threads also share a source", async () => {
+    seed();
+    const shared = "\n## Material\n\n- file: Shared brief\n";
+    writeFileSync(join(dir, "threads/alpha.md"), threadFile("active", "2026-10-01", shared));
+    writeFileSync(join(dir, "threads/beta.md"), threadFile("active", "2026-10-02", shared));
+    git("commit", "-q", "-am", "share");
+    const r = await run({ act: "keep", thread: "alpha", note: "2026-10-31T03:30:00+01:00" });
+    if (!r.ok) throw new Error(r.error);
+    const threads = buildThreadPage(r.studio, "alpha")?.relations.threads ?? [];
+    expect(threads.map((x) => x.open)).toEqual(["beta"]);
+    expect(threads[0]?.why).toBe("Shares a source: Shared brief. Ivy proposed it and you kept it.");
+  });
+
   it("refuses to keep a plain note or a note twice", async () => {
     seed();
     const plain = await run({ act: "keep", thread: "alpha", note: "2026-10-31T03:12:00+01:00" });

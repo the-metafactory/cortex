@@ -1,5 +1,6 @@
 import { stringify } from "yaml";
-import { sectionKey } from "./format";
+import { NOTE_META_KEYS, sectionKey } from "./format";
+import { localDate } from "./labels";
 
 export type FrontValue = string | boolean | undefined;
 
@@ -91,7 +92,7 @@ export const appendLog = (text: string, date: string, line: string): string | nu
 export const appendEntry = (text: string, key: string, heading: string, entry: string[]): string | null =>
   writeSection(text, key, heading, (current) => [...current, ...(current.length ? [""] : []), ...entry]);
 
-const META = /^(trigger|model|kind|status|sample|because|relates):/;
+const META = new RegExp(`^(${NOTE_META_KEYS.join("|")}):`);
 
 export function setNoteStatus(text: string, at: string, status: string): string | null {
   const doc = toDoc(text);
@@ -109,8 +110,6 @@ export function setNoteStatus(text: string, at: string, status: string): string 
 }
 
 const pad = (n: number): string => String(n).padStart(2, "0");
-
-export const localDate = (at: Date): string => `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`;
 
 export function localTime(at: Date): string {
   const off = -at.getTimezoneOffset();

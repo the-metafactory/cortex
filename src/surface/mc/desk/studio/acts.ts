@@ -1,8 +1,8 @@
 import { stringify } from "yaml";
 import { z } from "zod";
 import { clip, plainQuestion } from "./board";
-import { appendEntry, appendLog, localDate, localTime, oneLine, safeBody, setFront, setNoteStatus, setSection } from "./edit";
-import { YES_ANSWERS } from "./labels";
+import { appendEntry, appendLog, localTime, oneLine, safeBody, setFront, setNoteStatus, setSection } from "./edit";
+import { localDate, YES_ANSWERS } from "./labels";
 import { AREA_ID, ISO_DATE, STUDIO_SLUG, THREAD_OUTCOMES, validDate, type IvyNote, type StudioCapture, type ThreadType } from "./format";
 import type { StudioFile, StudioFiles, StudioProposalView, StudioThreadView, StudioView } from "./view";
 
