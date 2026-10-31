@@ -80,7 +80,7 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
   }
 }
 
-type RoutineState = { installed: z.infer<typeof RoutineSchema>[]; history: z.infer<typeof RoutineHistorySchema>[] };
+interface RoutineState { installed: z.infer<typeof RoutineSchema>[]; history: z.infer<typeof RoutineHistorySchema>[] }
 
 function reconcileState(options: RoutineOptions, request: RoutineAction, proposal: RoutineProposal | null, state: RoutineState): RoutineResult | null {
   if (request.action === "approve" || request.action === "deny") {
