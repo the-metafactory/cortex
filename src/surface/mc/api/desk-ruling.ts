@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeskRuntime } from "../desk/compose";
-import { oneLine, planRangerAction, rangerActionsReady, spawnRanger, type RangerRunner } from "../desk/actions";
+import { oneLine, planRangerAction, rangerActionsReady, spawnRanger, type RangerRunner, type RangerRunResult } from "../desk/actions";
 import { blockedEntry, MAX_RULING_LENGTH, needsYouEntry, ruleCommand } from "../desk/ruling";
 import { readRangerState, type RangerFetch } from "../desk/sources/ranger";
 
@@ -11,6 +11,7 @@ const fail = (status: number, error: string, extra: Record<string, unknown> = {}
   Response.json({ ok: false, error, ...extra }, { status, headers: noStore });
 const reason = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 const REQUEST_ID = /^[\w-]{8,64}$/;
+const failureLine = (result: RangerRunResult): string => oneLine(result.stderr || result.stdout, `exit code ${result.code}`);
 
 export interface DeskRulingDeps {
   soma?: RangerRunner;
@@ -26,7 +27,7 @@ async function recordRuling(run: RangerRunner, argvFor: (file: string) => string
     const file = join(dir, "ruling.md");
     await writeFile(file, text, { mode: 0o600 });
     const result = await run(argvFor(file));
-    return result.code === 0 ? null : oneLine(result.stderr || result.stdout, `exit code ${result.code}`);
+    return result.code === 0 ? null : failureLine(result);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -90,7 +91,7 @@ export async function handleDeskRuling(req: Request, runtime: DeskRuntime | unde
     if (!runtime.ledger.claim(plan.claimKey)) return notResumed("a resume is already on its way to Ranger.");
     try {
       const result = await (deps.ranger ?? spawnRanger)(plan.argv);
-      if (result.code !== 0) return notResumed(oneLine(result.stderr || result.stdout, `exit code ${result.code}`));
+      if (result.code !== 0) return notResumed(failureLine(result));
       if (plan.handledKey !== null) runtime.ledger.add(plan.handledKey, now());
     } catch (err) {
       return notResumed(reason(err));

@@ -47,7 +47,11 @@ export function somaRepo(repo: string): string | null {
   return null;
 }
 
-/** `soma graph rule` with the ruling in a file, so no part of the ruling becomes an argument; a refusal when Soma cannot address the node. */
+/**
+ * `soma graph rule` with the ruling in a file, so no part of the ruling becomes an argument; a refusal when Soma cannot
+ * address the node. A known CLI coupling per docs/architecture.md §5.1; removal is tracked in
+ * https://github.com/the-metafactory/cortex/issues/2884.
+ */
 export function ruleCommand(somaBin: string, entry: RangerNeedsYou): ((textFile: string) => string[]) | string {
   const repo = somaRepo(entry.repo);
   if (!repo || !NODE_ID.test(entry.nodeId)) return "Soma cannot address this node.";
