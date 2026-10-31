@@ -1,4 +1,5 @@
 import { required } from "./required";
+import { ownValue } from "./record";
 import { type AppState, type CompletionEvent, type ContextDef, type NodeId, type OutlineNode, type SchedHistory, type Settings, type TodayItem, FOCUS_BOOST, MAX_TODAY_CAP, } from "./types";
 import { contextAllows, contextDefMap, sameContext } from "./contexts";
 const EPS = 0.05;
@@ -211,7 +212,7 @@ export function allocateSlots(weights: Map<string, number>, slots: number, defic
         return result;
     const entitlement = new Map<string, number>();
     for (const [key, w] of entries) {
-        entitlement.set(key, (w / total) * slots + (deficits[key] ?? 0));
+        entitlement.set(key, (w / total) * slots + (ownValue(deficits, key) ?? 0));
     }
     for (let s = 0; s < slots; s++) {
         let best: string | null = null;
@@ -260,7 +261,7 @@ function byDueThenId(a: ScoredCandidate, b: ScoredCandidate): number {
     return a.task.id < b.task.id ? -1 : 1;
 }
 function agingOf(taskId: NodeId, history: SchedHistory, today: string): number {
-    const seen = history.lastSurfaced[taskId] ?? history.startDate;
+    const seen = ownValue(history.lastSurfaced, taskId) ?? history.startDate;
     if (!seen)
         return 1;
     return 1 + Math.max(0, daysBetween(seen, today)) / 14;
@@ -432,23 +433,23 @@ export function applyDayToHistory(state: AppState, today: string, confirmedIds: 
             granted.set(area.id, (granted.get(area.id) ?? 0) + 1);
     }
     const liveAreas = new Set(state.outline.children.map((a) => a.id));
-    const deficits: Record<string, number> = {};
+    const deficits = new Map<string, number>();
     for (const [areaId, value] of Object.entries(history.deficits)) {
         if (liveAreas.has(areaId))
-            deficits[areaId] = value;
+            deficits.set(areaId, value);
     }
     for (const [areaId, quota] of quotas) {
-        const carried = history.deficits[areaId] ?? 0;
+        const carried = ownValue(history.deficits, areaId) ?? 0;
         const next = carried + quota - (granted.get(areaId) ?? 0);
-        deficits[areaId] = clamp(next, -3, 3);
+        deficits.set(areaId, clamp(next, -3, 3));
     }
-    const lastSurfaced = { ...history.lastSurfaced };
+    const lastSurfaced = new Map(Object.entries(history.lastSurfaced));
     for (const id of confirmedIds)
-        lastSurfaced[id] = today;
+        lastSurfaced.set(id, today);
     return {
         startDate: history.startDate ?? today,
-        deficits,
-        lastSurfaced,
+        deficits: Object.fromEntries(deficits),
+        lastSurfaced: Object.fromEntries(lastSurfaced),
         lastAppliedDate: today,
     };
 }

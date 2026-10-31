@@ -31,6 +31,24 @@ function fixture(): AppState {
 }
 
 describe("Mission Control balance storage", () => {
+  test("prototype-named IDs and history keys survive a validated round-trip", () => {
+    const db = initDatabase(":memory:");
+    try {
+      const state = fixture();
+      const area = state.outline.children[0];
+      if (!area) throw new Error("Missing area fixture");
+      area.id = "__proto__";
+      state.history = {
+        deficits: Object.fromEntries([["__proto__", 0.3], ["constructor", -0.2]]),
+        lastSurfaced: Object.fromEntries([["__proto__", "2026-10-30"], ["constructor", "2026-10-29"]]),
+      };
+      saveBalanceState(db, state);
+      expect(loadBalanceState(db)).toEqual(state);
+    } finally {
+      db.close();
+    }
+  });
+
   test("full state survives close/reopen and yields the identical schedule without mutation", () => {
     const directory = mkdtempSync(join(tmpdir(), "balance-store-"));
     const path = join(directory, "mc.sqlite");

@@ -2,6 +2,13 @@ import { z } from "zod";
 import type { AppState, OutlineNode } from "../../../balance";
 
 const date = z.iso.date();
+function historyRecord<T>(value: z.ZodType<T>): z.ZodType<Record<string, T>> {
+  return z.preprocess(
+    input => typeof input === "object" && input !== null && !Array.isArray(input)
+      ? Object.entries(input) : undefined,
+    z.array(z.tuple([z.string(), value])).transform(entries => Object.fromEntries(entries)),
+  );
+}
 const recurrence = z.object({
   unit: z.enum(["day", "week", "month"]),
   interval: z.number(),
@@ -57,8 +64,8 @@ export const BalanceStateSchema: z.ZodType<AppState> = z.object({
   }).nullable(),
   history: z.object({
     startDate: date.optional(),
-    deficits: z.record(z.string(), z.number()),
-    lastSurfaced: z.record(z.string(), date),
+    deficits: historyRecord(z.number()),
+    lastSurfaced: historyRecord(date),
     lastAppliedDate: date.optional(),
   }),
   contexts: z.array(z.object({
