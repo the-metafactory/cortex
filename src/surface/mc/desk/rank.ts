@@ -298,7 +298,7 @@ const LINKED_MEETING_SCORE = 55;
 const sentence = (s: string): string => (/[.!?]$/.test(s) ? s : `${s}.`);
 
 interface MailVerdict {
-  meeting?: { title: string; start: string; key?: string };
+  eventKey?: string;
   score: number;
   pressing: boolean;
   why: string | null;
@@ -311,13 +311,13 @@ function verdictFor(m: SourceMail, input: MailInput): MailVerdict {
   if (!c) {
     const meeting = meetingFor(m.subject, events, now);
     if (!meeting) return { score: 15, pressing: false, why: null };
-    return { meeting, score: LINKED_MEETING_SCORE, pressing: true, why: `It may be about "${meeting.title}" ${dayName(Date.parse(meeting.start), now)}.` };
+    return { score: LINKED_MEETING_SCORE, pressing: true, why: `It may be about "${meeting.title}" ${dayName(Date.parse(meeting.start), now)}.` };
   }
   const linked = c.meetingKey && c.category !== "bulk" ? upcomingMeetings(events, now).find((e) => eventKey(e) === c.meetingKey) : undefined;
   const reason = sentence(c.reason);
   if (linked) {
     return {
-      meeting: { title: linked.title, start: linked.start, key: eventKey(linked) },
+      eventKey: eventKey(linked),
       score: LINKED_MEETING_SCORE,
       pressing: true,
       why: `${reason} The meeting is ${dayName(Date.parse(linked.start), now)}.`,
@@ -358,7 +358,7 @@ export function mailItems(input: MailInput): DeskItem[] {
         links: m.url ? [{ label: "Open in Mail", url: m.url }] : [],
       },
       ...(m.firstParagraph ? { excerpt: m.firstParagraph } : {}),
-      ...(verdict.meeting?.key ? { eventKey: verdict.meeting.key } : {}),
+      ...(verdict.eventKey ? { eventKey: verdict.eventKey } : {}),
       since: receivedAt,
     };
   });

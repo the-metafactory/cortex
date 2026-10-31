@@ -9,6 +9,7 @@ import {
   chatClassifier,
   MAX_REASON,
   MailClassifier,
+  MissingKey,
   readClassifications,
   validateAnswer,
   type ClassifierConfig,
@@ -17,6 +18,7 @@ import {
   type MailClassification,
 } from "../desk/classify";
 import { classifierLines } from "../dashboard-v2/components/desk-settings";
+import { McSchema } from "../../../common/types/config";
 
 const NOW = new Date("2026-10-31T09:00:00").getTime();
 const at = (hhmm: string, dayOffset = 0): string => new Date(new Date(`2026-10-31T${hhmm}:00`).getTime() + dayOffset * 86_400_000).toISOString();
@@ -146,6 +148,24 @@ describe("the classification pass", () => {
     expect(rankAt(NOW + 7 * 86_400_000)?.eventKey).toBe("cal:work-calendar:k9");
   });
 
+  it("says once that the key is missing and keeps the mail pending", async () => {
+    let calls = 0;
+    const logged: string[] = [];
+    const c = new MailClassifier(CONFIG, () => { calls += 1; return Promise.reject(new MissingKey("the classifier key was not found")); }, (m) => logged.push(m));
+    await c.kick(db, input([mail("a", "A"), mail("b", "B")]));
+    await c.kick(db, input([mail("a", "A"), mail("b", "B")], NOW + 60_000));
+    expect(calls).toBe(2);
+    expect(logged).toEqual(["desk: mail classifier: the classifier key was not found"]);
+  });
+
+  it("logs the latency per mail", async () => {
+    let t = 0;
+    const logged: string[] = [];
+    const c = new MailClassifier(CONFIG, async () => { t += 700; return { category: "fyi", reason: "News." }; }, (m) => logged.push(m), () => t);
+    await c.kick(db, input([mail("a", "A"), mail("b", "B")]));
+    expect(logged).toEqual(["desk: mail classifier: sorted 2 of 2 mails, 700 ms per mail"]);
+  });
+
   it("classifies at most maxPerPass mails per pass", async () => {
     let calls = 0;
     const c = new MailClassifier({ ...CONFIG, maxPerPass: 2 }, async () => { calls += 1; return { category: "fyi", reason: "News." }; }, quiet);
@@ -233,6 +253,16 @@ describe("the OpenAI-compatible provider", () => {
     await expect(chatClassifier({ ...CONFIG, apiKeyFile: "/nope" }, fake, async () => null)(request, 1000)).rejects.toThrow("the classifier key was not found");
     expect(called).toBe(false);
     await expect(chatClassifier(CONFIG, fake, async () => null)(request, 1000)).rejects.toThrow("HTTP 401");
+  });
+});
+
+describe("the classifier config", () => {
+  const parse = (baseUrl: string) => McSchema.safeParse({ desk: { mail: { classifier: { baseUrl, model: "m" } } } }).success;
+
+  it("needs https unless the endpoint is on loopback", () => {
+    expect(parse("https://api.example/v1")).toBe(true);
+    expect(parse("http://127.0.0.1:11434/v1")).toBe(true);
+    expect(parse("http://llm.example/v1")).toBe(false);
   });
 });
 

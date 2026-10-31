@@ -92,6 +92,8 @@ export function parseModelContent(content: string): unknown {
 
 const needsKey = (c: Pick<ClassifierConfig, "apiKeyEnv" | "apiKeyFile">): boolean => Boolean(c.apiKeyEnv ?? c.apiKeyFile);
 
+export class MissingKey extends Error {}
+
 export type KeyReader = (config: Pick<ClassifierConfig, "apiKeyEnv" | "apiKeyFile">) => Promise<string | null>;
 
 export const readApiKey: KeyReader = async ({ apiKeyEnv, apiKeyFile }) => {
@@ -117,7 +119,7 @@ export function chatClassifier(config: ClassifierConfig, fetchImpl: typeof fetch
   const wantsKey = needsKey(config);
   return async (request, timeoutMs) => {
     const key = await readKey(config);
-    if (wantsKey && !key) throw new Error("the classifier key was not found");
+    if (wantsKey && !key) throw new MissingKey("the classifier key was not found");
     const res = await fetchImpl(url, {
       method: "POST",
       headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
@@ -180,6 +182,7 @@ export interface PassResult {
 
 export class MailClassifier {
   private running: Promise<PassResult> | null = null;
+  private keyMissing = false;
   private readonly retryAt = new Map<string, number>();
 
   constructor(
@@ -232,8 +235,14 @@ export class MailClassifier {
       try {
         answer = validateAnswer(await this.run(request, this.config.timeoutSeconds * 1000), keys);
       } catch (err) {
+        if (err instanceof MissingKey) {
+          if (!this.keyMissing) this.log(`desk: mail classifier: ${err.message}`);
+          this.keyMissing = true;
+          return result;
+        }
         problem = err instanceof Error ? err.message : String(err);
       }
+      this.keyMissing = false;
       result.ms.push(this.clock() - started);
       if (answer) {
         saveClassification(db, m.id, answer, this.config.model, input.now);
@@ -244,6 +253,10 @@ export class MailClassifier {
         result.failed += 1;
         this.log(`desk: mail classifier: ${problem}`);
       }
+    }
+    if (result.ms.length > 0) {
+      const each = Math.round(result.ms.reduce((a, b) => a + b, 0) / result.ms.length);
+      this.log(`desk: mail classifier: sorted ${result.classified} of ${result.ms.length} mails, ${each} ms per mail`);
     }
     return result;
   }
