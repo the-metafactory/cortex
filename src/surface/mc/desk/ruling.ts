@@ -114,8 +114,11 @@ const PATH_TOKEN = /(?<=^|[\s(["'“])(?:~|\.{1,2})?\/[\w.@%+-]+(?:\/[\w.@%+-]+)
 const pathsIn = (text: string): string[] =>
   (text.match(PATH_TOKEN) ?? []).map((path) => path.replace(/[.,;:!?]+$/, "")).filter((path) => path.length > 1);
 
+const nodeKey = (entry: RangerNeedsYou): string => `${entry.repo}#${entry.nodeId}`;
+const reportOf = (entry: RangerNeedsYou): string => entry.reason?.detail ?? "";
+
 function rulingRequest(entry: RangerNeedsYou, nodeBody: string): string {
-  return JSON.stringify({ repo: entry.repo, node: entry.nodeId, title: entry.title, status: entry.status, report: entry.reason?.detail ?? "", body: nodeBody });
+  return JSON.stringify({ repo: entry.repo, node: entry.nodeId, title: entry.title, status: entry.status, report: reportOf(entry), body: nodeBody });
 }
 
 const namesTarget = (text: string, entry: RangerNeedsYou): boolean =>
@@ -129,7 +132,7 @@ function readExplanation(answer: unknown, entry: RangerNeedsYou, nodeBody: strin
   if (!parsed.success || "explain" in parsed.data) return null;
   const { sentence, choices } = parsed.data;
   if (RESUME_ONCE_START.test(sentence) || SHELLISH.test(sentence)) return null;
-  const report = entry.reason?.detail ?? "";
+  const report = reportOf(entry);
   const sentenceSources = [nodeBody, entry.repo, entry.title];
   const factSources = [...sentenceSources, report];
   if (!groundedIn([sentence], sentenceSources) || !groundedIn(choices.flatMap((c) => [c.label, c.consequence, c.ruling]), factSources)) return null;
@@ -209,10 +212,13 @@ export class RulingExplainLoop {
 
   explain(entries: RangerNeedsYou[]): Promise<Map<string, RulingExplanation>> {
     const now = this.clock();
+    const blocked = entries.filter(isBlocked);
+    const live = new Set(blocked.map(nodeKey));
+    for (const key of this.cache.keys()) if (!live.has(key)) this.cache.delete(key);
     const out = new Map<string, RulingExplanation>();
-    for (const entry of entries.filter(isBlocked)) {
+    for (const entry of blocked) {
       const known = this.lookup(entry, now);
-      if (known.explanation) out.set(rangerItemKey(`${entry.repo}#${entry.nodeId}`), known.explanation);
+      if (known.explanation) out.set(rangerItemKey(nodeKey(entry)), known.explanation);
       if (known.refresh) void this.refresh(entry, now);
     }
     return Promise.resolve(out);
@@ -224,17 +230,17 @@ export class RulingExplainLoop {
   }
 
   private lookup(entry: RangerNeedsYou, now: number): { explanation: RulingExplanation | null; refresh: boolean } {
-    const hit = this.cache.get(`${entry.repo}#${entry.nodeId}`);
-    if (hit?.stamp !== (entry.reason?.detail ?? "")) return { explanation: null, refresh: true };
+    const hit = this.cache.get(nodeKey(entry));
+    if (hit?.stamp !== reportOf(entry)) return { explanation: null, refresh: true };
     const age = now - hit.at;
     return { explanation: hit.explanation, refresh: age >= (hit.explanation ? EXPLAIN_REFRESH_MS : EXPLAIN_RETRY_MS) };
   }
 
   private refresh(entry: RangerNeedsYou, at: number): Promise<RulingExplanation | null> {
-    const key = `${entry.repo}#${entry.nodeId}`;
+    const key = nodeKey(entry);
     const running = this.running.get(key);
     if (running) return running;
-    const job = this.compute(entry, key, entry.reason?.detail ?? "", at);
+    const job = this.compute(entry, key, reportOf(entry), at);
     this.running.set(key, job);
     return job;
   }

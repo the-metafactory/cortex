@@ -10,7 +10,6 @@
 .desk-ruling-raw{margin:0 0 10px;font-size:14px}
 .desk-ruling-raw summary{cursor:pointer;color:var(--ink2)}
 .desk-ruling-raw .desk-ruling-ask{font-size:14px;font-weight:500;margin:8px 0 4px}
-.desk-ruling-ask{font-size:15.5px;line-height:1.5;font-weight:600;color:var(--ink);margin:0 0 6px}
 .desk-ruling-link{display:inline-block;margin:6px 0 10px;font-size:14px;color:var(--ink2)}
 .desk-ruling textarea{width:100%;box-sizing:border-box;font:inherit;font-size:15px;border:1px solid #d4d4d8;border-radius:8px;padding:8px 10px;resize:vertical;background:#fff}
 .desk-ruling textarea[readonly]{color:var(--mute)}
