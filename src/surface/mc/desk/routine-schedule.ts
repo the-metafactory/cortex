@@ -19,6 +19,7 @@ export function routineSchedule(text: string): RoutineSchedule | string {
   if (/^(minute|hour)/.test(u)) {
     const max = u.startsWith("minute") ? 59 : 23;
     if (!Number.isInteger(n) || n < 1 || n > max || hour) return "Choose a minute or hour interval within one day.";
+    if ((u.startsWith("minute") ? 60 : 24) % n !== 0) return u.startsWith("minute") ? "Choose 1, 2, 3, 4, 5, 6, 10, 12, 15, 20 or 30 minutes so the interval stays even across hours." : "Choose 1, 2, 3, 4, 6, 8 or 12 hours so the interval stays even across days.";
     const expression = u.startsWith("minute") ? `*/${n} * * * *` : `0 */${n} * * *`;
     return { expression, words: `Every ${n === 1 ? u.replace(/s$/, "") : `${n} ${u.replace(/s$/, "")}s`}`, request };
   }

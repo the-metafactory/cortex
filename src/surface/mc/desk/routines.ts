@@ -63,7 +63,7 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
     const ids = new Set(selected.map((r) => r.id));
     for (const operation of pendingRoutineOperations(db, options)) {
       const proposal = operation.action === "install" ? readRoutineProposal(db, operation.target) : null;
-      const confirmed = await reconcile(reads, operation, proposal, run);
+      const confirmed = reconcileState(options, operation, proposal, { installed, history });
       if (confirmed) finishRoutineOperation(db, operation.requestId, confirmed);
     }
     return {
@@ -80,23 +80,35 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
   }
 }
 
-async function reconcile(options: RoutineOptions, request: RoutineAction, proposal: RoutineProposal | null, run: RoutineRunner): Promise<RoutineResult | null> {
+type RoutineState = { installed: z.infer<typeof RoutineSchema>[]; history: z.infer<typeof RoutineHistorySchema>[] };
+
+function reconcileState(options: RoutineOptions, request: RoutineAction, proposal: RoutineProposal | null, state: RoutineState): RoutineResult | null {
   if (request.action === "approve" || request.action === "deny") {
-    const history = await reflexCommand(options, ["history", "--limit", "200"], z.array(RoutineHistorySchema), run);
-    const resolution = history.find((h) => h.resolutionOf === request.target);
+    const resolution = state.history.find((h) => h.resolutionOf === request.target);
     if (!resolution) return null;
     if (request.action === "deny" && resolution.outcome === "denied") return { ok: true, message: "Routine fire denied." };
     if (request.action === "approve" && resolution.outcome === "fired") return { ok: true, message: "Routine fire approved and dispatched." };
     return { ok: false, error: `This fire ended as ${resolution.outcome}${resolution.reason ? `: ${resolution.reason}` : "."}` };
   }
-  const list = await reflexCommand(options, ["routine", "list"], z.array(RoutineSchema), run);
-  const routine = list.find((r) => r.id === (proposal?.routineId ?? request.target));
+  const routine = state.installed.find((r) => r.id === (proposal?.routineId ?? request.target));
   if (request.action === "remove") return routine ? null : { ok: true, message: "Routine removed." };
   if (routine?.target !== options.target) return null;
   if (request.action === "install") return routine.schedule === proposal?.schedule && routine.timezone === proposal.timezone && routine.policy === "approval"
     ? { ok: true, message: "Routine installed. Each fire will ask you first." } : null;
   if (routine.policy === (request.action === "auto" ? "auto" : "approval")) return { ok: true, message: request.action === "auto" ? "I will handle this routine myself." : "This routine will ask you before each run." };
   return null;
+}
+
+async function reconcile(options: RoutineOptions, request: RoutineAction, proposal: RoutineProposal | null, run: RoutineRunner): Promise<RoutineResult | null> {
+  const state = request.action === "approve" || request.action === "deny"
+    ? { installed: [], history: await reflexCommand(options, ["history", "--limit", "200"], z.array(RoutineHistorySchema), run) }
+    : { installed: await reflexCommand(options, ["routine", "list"], z.array(RoutineSchema), run), history: [] };
+  return reconcileState(options, request, proposal, state);
+}
+
+async function reconcileAndFinish(db: Database, options: RoutineOptions, request: RoutineAction, proposal: RoutineProposal | null, run: RoutineRunner): Promise<RoutineResult | null> {
+  const confirmed = await reconcile(options, request, proposal, run);
+  return confirmed ? finishRoutineOperation(db, request.requestId, confirmed) : null;
 }
 
 export async function actOnRoutine(db: Database, options: RoutineOptions, request: RoutineAction, now: number, run: RoutineRunner = spawnWithStdin, capabilities?: RoutineCapabilities): Promise<RoutineResult> {
@@ -108,8 +120,8 @@ export async function actOnRoutine(db: Database, options: RoutineOptions, reques
     if (prior.binding !== binding) return { ok: false, error: "This request id belongs to a different routine action." };
     if (prior.result) return RoutineResultSchema.parse(JSON.parse(prior.result));
     try {
-      const result = await reconcile(options, request, proposal, run);
-      return result ? finishRoutineOperation(db, request.requestId, result) : { ok: false, error: UNKNOWN, uncertain: true };
+      const result = await reconcileAndFinish(db, options, request, proposal, run);
+      return result ?? { ok: false, error: UNKNOWN, uncertain: true };
     } catch {
       return { ok: false, error: UNKNOWN, uncertain: true };
     }
@@ -144,19 +156,19 @@ export async function actOnRoutine(db: Database, options: RoutineOptions, reques
     else if (request.action === "remove") args = ["routine", "remove", request.target];
     else args = ["routine", "set-policy", request.target, request.action === "auto" ? "auto" : "approve"];
     await reflexCommand(options, args, z.unknown(), run);
-    const confirmed = await reconcile(options, request, proposal, run);
-    if (confirmed) return finishRoutineOperation(db, request.requestId, confirmed);
+    const confirmed = await reconcileAndFinish(db, options, request, proposal, run);
+    if (confirmed) return confirmed;
     return { ok: false, error: UNKNOWN, uncertain: true };
   } catch (error) {
     if (error instanceof RoutineRefusal) {
-      const confirmed = await reconcile({ ...options, timeoutSeconds: options.readTimeoutSeconds }, request, proposal, run).catch(() => null);
-      if (confirmed) return finishRoutineOperation(db, request.requestId, confirmed);
+      const confirmed = await reconcileAndFinish(db, { ...options, timeoutSeconds: options.readTimeoutSeconds }, request, proposal, run).catch(() => null);
+      if (confirmed) return confirmed;
       db.query("DELETE FROM desk_routine_operations WHERE request_id = ? AND result IS NULL").run(request.requestId);
       return { ok: false, error: error.message };
     }
     try {
-      const confirmed = await reconcile(options, request, proposal, run);
-      if (confirmed) return finishRoutineOperation(db, request.requestId, confirmed);
+      const confirmed = await reconcileAndFinish(db, options, request, proposal, run);
+      if (confirmed) return confirmed;
       if (error instanceof RoutineWriteFailure && request.action === "remove") {
         db.query("DELETE FROM desk_routine_operations WHERE request_id = ? AND result IS NULL").run(request.requestId);
         return { ok: false, error: `Reflex could not finish removing this routine. Retry Remove after repairing the cause: ${error.message}` };

@@ -12,7 +12,7 @@ The Desk appends `--request <text> --json` to `routines.composer`. The command p
 
 Built-in agent and tribunal steps require fresh online local capability declarations from Cortex's existing agent-presence registry. Preview, Confirm and promotion check those declarations. Targeted or federated agents, gates and research steps are refused because this presence check cannot establish their execution providers. Sovereignty fields remain unchanged in the stored YAML.
 
-Supported schedules start with `every minute`, `every N minutes`, `every hour`, `every N hours`, or a day phrase with an explicit time. Examples include `every Friday at 17:00, …`, `every weekday at 9am, …` and `every day at 08:30, …`. Minute intervals range from 1 to 59. Hour intervals range from 1 to 23.
+Supported schedules start with `every minute`, `every N minutes`, `every hour`, `every N hours`, or a day phrase with an explicit time. Examples include `every Friday at 17:00, …`, `every weekday at 9am, …` and `every day at 08:30, …`. Minute intervals must divide 60 evenly and stay below 60. Hour intervals must divide 24 evenly and stay below 24. Other intervals show a refusal so a cron boundary cannot shorten the frequency shown on the card.
 
 Confirm sends the server-held proposal to `routines.reflex` through `routine add --flow-file <temporary-path>` with policy `approve` and the configured target. Reflex's JSON policy is `approval`. Composer YAML annotations stay intact. When the composer omits `input`, the Desk appends the original request as `request`, `scenario` and `text` initial fields. An explicit composer input remains unchanged.
 

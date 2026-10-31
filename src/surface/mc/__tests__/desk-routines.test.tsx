@@ -32,6 +32,7 @@ function seam() {
   const pending: PendingRoutine[] = [];
   const history: { decisionId: string; blueprintId: string; outcome: string; reason: string | null; resolutionOf: string | null; at: string }[] = [];
   const mutations: string[][] = [];
+  const reads: string[][] = [];
   let supplied = "";
   let refusal = false;
   let lostReply = false;
@@ -43,6 +44,7 @@ function seam() {
     if (unavailable) throw new Error("transport unavailable");
     const args = argv.slice(1);
     const [kind, verb] = args;
+    if ((kind === "routine" && verb === "list") || kind === "pending" || kind === "history") reads.push(args);
     if (kind === "routine" && verb === "list") return answer(routines);
     if (kind === "pending") return answer(pending);
     if (kind === "history") return answer(history);
@@ -67,7 +69,7 @@ function seam() {
     if (lostReply) { unavailable = true; throw new Error("reply lost after daemon applied mutation"); }
     return answer({ id: "receipt" });
   };
-  return { run, routines, pending, history, mutations, supplied: () => supplied, refuse: (v: boolean) => { refusal = v; }, uncertain: () => { writeUncertain = true; }, lose: () => { lostReply = true; }, recover: () => { unavailable = false; lostReply = false; writeUncertain = false; }, compose: (value: unknown) => { composer = value; } };
+  return { run, routines, pending, history, mutations, reads, supplied: () => supplied, refuse: (v: boolean) => { refusal = v; }, uncertain: () => { writeUncertain = true; }, lose: () => { lostReply = true; }, recover: () => { unavailable = false; lostReply = false; writeUncertain = false; }, compose: (value: unknown) => { composer = value; } };
 }
 
 describe("Desk routines", () => {
@@ -82,6 +84,10 @@ describe("Desk routines", () => {
     expect(routineRequest("every 2 minutes, extract URLs")).toBe(true);
     expect(typeof routineSchedule("every day, extract URLs")).toBe("string");
     expect(typeof routineSchedule("every Friday at 25:00, extract URLs")).toBe("string");
+    expect(typeof routineSchedule("every 59 minutes, read")).toBe("string");
+    expect(typeof routineSchedule("every 23 hours, read")).toBe("string");
+    expect(routineSchedule("every 30 minutes, read")).toMatchObject({ expression: "*/30 * * * *" });
+    expect(routineSchedule("every 12 hours, read")).toMatchObject({ expression: "0 */12 * * *" });
   });
 
   it("stores a real composer preview and preserves annotations through Reflex transient input", async () => {
@@ -161,7 +167,9 @@ describe("Desk routines", () => {
     s.lose();
     expect(await actOnRoutine(db, OPTIONS, request, NOW, s.run)).toMatchObject({ ok: false, uncertain: true });
     s.recover();
+    const readsBefore = s.reads.length;
     const view = await readRoutines(db, OPTIONS, s.run);
+    expect(s.reads.length - readsBefore).toBe(3);
     expect(view.changes).toHaveLength(0);
     expect((await actOnRoutine(db, OPTIONS, request, NOW, s.run)).ok).toBe(true);
     expect(s.mutations).toHaveLength(1);
