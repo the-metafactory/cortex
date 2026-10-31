@@ -1,7 +1,7 @@
 import type { DeskEvent, DeskGoal } from "../types";
 import { clip, normaliseLabel, sameSource } from "./board";
 import type { MaterialLink } from "./format";
-import { outcomeLabel, safeHref } from "./labels";
+import { outcomeLabel, withHref } from "./labels";
 import type { StudioThreadView, StudioView } from "./view";
 
 export const PERSON_KINDS = ["person", "people", "contact"] as const;
@@ -47,11 +47,6 @@ export interface RelatesContext {
 export const NO_CONTEXT: RelatesContext = { now: 0, events: [], goals: [] };
 
 export const relationCount = (r: Relations): number => r.threads.length + r.goals.length + r.events.length + r.people.length + r.decisions.length;
-
-const withHref = (href: string | undefined): { href?: string } => {
-  const safe = safeHref(href);
-  return safe ? { href: safe } : {};
-};
 
 const capitalise = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 

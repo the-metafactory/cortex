@@ -181,6 +181,14 @@ describe("the thread page view-model", () => {
     expect(page?.outcome.open).toBe(true);
   });
 
+  it("marks material shared only by an equal href", () => {
+    const a = thread("a", { material: [mat("file", "The brief", "https://example.org/brief")] });
+    const c = thread("c", { material: [mat("doc", "Brief v2", "https://example.org/brief")] });
+    const shared = buildThreadPage({ ...STUDIO, active: [a, c], parked: [], closed: [] }, "a", CTX);
+    expect(shared?.material.map((m) => [m.href, m.also.map((o) => o.slug)])).toEqual([["https://example.org/brief", ["c"]]]);
+    expect(shared?.relations.threads.map((r) => r.open)).toEqual(["c"]);
+  });
+
   it("carries the relations", () => {
     expect(page?.relations.threads.map((r) => r.open)).toEqual(["post", "shelf"]);
   });

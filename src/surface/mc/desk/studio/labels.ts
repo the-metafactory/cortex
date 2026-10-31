@@ -9,6 +9,11 @@ export const dayMonth = (isoDate: string): string => `${Number(isoDate.slice(8, 
 
 export const outcomeLabel = (t: { outcome?: ThreadOutcome }): string => (t.outcome ? OUTCOME_LABEL[t.outcome] : "Closed");
 
+export const withHref = (href: string | undefined): { href?: string } => {
+  const safe = safeHref(href);
+  return safe ? { href: safe } : {};
+};
+
 export function safeHref(href: string | undefined): string | undefined {
   if (!href) return undefined;
   try {

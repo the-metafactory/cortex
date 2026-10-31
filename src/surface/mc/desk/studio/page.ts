@@ -1,7 +1,7 @@
 import type { AreaPolicy } from "../types";
 import { areaLookup, latestNote, sameSource, type BoardArea } from "./board";
 import type { IvyNote, LogEntry, MaterialLink } from "./format";
-import { dayMonth, outcomeLabel, safeHref, TYPE_LABEL } from "./labels";
+import { dayMonth, outcomeLabel, TYPE_LABEL, withHref } from "./labels";
 import { NO_CONTEXT, relatesTo, type RelatesContext, type Relations } from "./relates";
 import type { StudioThreadView, StudioView } from "./view";
 
@@ -52,15 +52,17 @@ function outcomeOf(t: StudioThreadView): PageOutcome {
   };
 }
 
+const allThreads = (studio: StudioView): StudioThreadView[] => [...studio.active, ...studio.parked, ...studio.closed];
+
 export function findThread(studio: StudioView, slug: string): StudioThreadView | undefined {
-  return [...studio.active, ...studio.parked, ...studio.closed].find((t) => t.slug === slug);
+  return allThreads(studio).find((t) => t.slug === slug);
 }
 
 export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesContext = NO_CONTEXT): ThreadPage | null {
   const thread = findThread(studio, slug);
   if (!thread) return null;
   const area = areaLookup(studio.areas);
-  const others = [...studio.active, ...studio.parked, ...studio.closed].filter((o) => o.slug !== slug);
+  const others = allThreads(studio).filter((o) => o.slug !== slug);
   const notes = [...thread.notes].sort(newestFirst);
   const stands = notes.filter((n) => isGhost(n) && n.kind === "stand");
   return {
@@ -69,11 +71,14 @@ export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesCo
     where: whereLine(thread, studio.maxActive),
     areas: thread.areas.map(area),
     policy: thread.policy,
-    material: thread.material.map(({ href, ...m }) => ({
-      ...m,
-      ...(safeHref(href) ? { href } : {}),
-      also: others.filter((o) => o.material.some((n) => sameSource(m, n))).map((o) => ({ slug: o.slug, question: o.question })),
-    })),
+    material: thread.material.map((link) => {
+      const { href, ...m } = link;
+      return {
+        ...m,
+        ...withHref(href),
+        also: others.filter((o) => o.material.some((n) => sameSource(link, n))).map((o) => ({ slug: o.slug, question: o.question })),
+      };
+    }),
     standProposal: stands[0] ?? null,
     ideas: notes.filter((n) => isGhost(n) && n.kind === "idea"),
     notes: notes.filter((n) => !isGhost(n)),
