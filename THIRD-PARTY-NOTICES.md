@@ -53,3 +53,6 @@ by the project author.
 This file was originally maintained at
 `github.com/the-metafactory/grove-v2/THIRD-PARTY-NOTICES.md` and lifted into
 cortex at MIG-7.12. The grove-v2 repo will be archived at MIG-8.
+## Life Balance concept and Balance engine
+
+The balance concept originates with Life Balance, Llamagraphics, 1996–2016. No proprietary Life Balance source code is incorporated. The deterministic core and tests come from Jens-Christian Fischer’s Balance implementation, commit `7fc44936f99f48fe626de74f932bd8a1f207dc85`. The principal authorised its import under Cortex’s AGPL-3.0-only licence in [cortex#2870](https://github.com/the-metafactory/cortex/issues/2870) on 2026-10-31. See [the module notice](src/balance/README.md#licence-and-credit) and the repository LICENSE for the licence text.
