@@ -1,13 +1,13 @@
 import type { Database } from "bun:sqlite";
 import { FOLDED_LABELS } from "./rank";
-import type { DeskCorrection, DeskCorrectionMode, DeskItem, DeskItemKind } from "./types";
+import { DESK_ITEM_KINDS, type DeskCorrection, type DeskCorrectionMode, type DeskItem, type DeskItemKind } from "./types";
 
 export const CORRECTION_MODES = ["less", "always"] as const satisfies readonly DeskCorrectionMode[];
 
 const SOURCE = /^[\w.:-]{1,64}$/;
 
 export const isCorrectionMode = (v: unknown): v is DeskCorrectionMode => CORRECTION_MODES.includes(v as DeskCorrectionMode);
-export const isItemKind = (v: unknown): v is DeskItemKind => typeof v === "string" && Object.hasOwn(FOLDED_LABELS, v);
+export const isItemKind = (v: unknown): v is DeskItemKind => DESK_ITEM_KINDS.includes(v as DeskItemKind);
 export const isSource = (v: unknown): v is string => typeof v === "string" && SOURCE.test(v);
 
 export const correctionLabel = (kind: DeskItemKind, source: string): string => `${FOLDED_LABELS[kind]}, from ${source}`;
@@ -49,7 +49,7 @@ export function removeCorrection(db: Database, kind: DeskItemKind, source: strin
 
 const TIER: Record<DeskCorrectionMode | "none", number> = { always: 0, none: 1, less: 2 };
 
-export const byRank = (a: DeskItem, b: DeskItem): number =>
+const byRank = (a: DeskItem, b: DeskItem): number =>
   TIER[a.correction ?? "none"] - TIER[b.correction ?? "none"] || b.score - a.score || a.key.localeCompare(b.key);
 
 const HISTORY: Record<DeskCorrectionMode, string> = {

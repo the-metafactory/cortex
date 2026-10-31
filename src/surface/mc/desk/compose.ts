@@ -113,12 +113,13 @@ export async function composeDesk(
 
   const rangerActions = rangerActionsReady(desk);
   const corrections = readCorrections(db);
+  const activeCorrections = corrections.ok ? corrections.corrections : [];
   const items = applyCorrections(markInterrupts([
     ...withAutonomyNotes(rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions, hidden: filtered?.hidden }), done, now),
     ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
-  ], rules, readDeliveries(db), now), corrections.ok ? corrections.corrections : []);
+  ], rules, readDeliveries(db), now), activeCorrections);
 
   return {
     generatedAt: now,
@@ -144,7 +145,7 @@ export async function composeDesk(
     sources,
     chime: rules.chime,
     autonomy: buildAutonomy(db, done, rangerActions),
-    corrections: corrections.ok ? corrections.corrections : [],
+    corrections: activeCorrections,
   };
 }
 

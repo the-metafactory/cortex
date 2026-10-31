@@ -1,16 +1,8 @@
 export type DeskUrgency = "now" | "today" | "this-week" | "waiting";
 
-export type DeskItemKind =
-  | "goal"
-  | "sensor"
-  | "agent-failed"
-  | "agent-blocked"
-  | "decision"
-  | "grilling"
-  | "escalation"
-  | "mail"
-  | "reminder"
-  | "meeting";
+export const DESK_ITEM_KINDS = ["goal", "sensor", "agent-failed", "agent-blocked", "decision", "grilling", "escalation", "mail", "reminder", "meeting"] as const;
+
+export type DeskItemKind = (typeof DESK_ITEM_KINDS)[number];
 
 export interface DeskArea {
   id: string;
