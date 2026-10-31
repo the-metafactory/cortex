@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActionButton, DeskBody, DeskView, DoneForYou, ItemMenu, RankingSection, RestGroups } from "../components/desk-view";
+import { ActionButton, DeskBody, DeskView, DoneForYou, ItemMenu, RankingSection, RestGroups, dismissesMenu } from "../components/desk-view";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
@@ -242,6 +242,16 @@ describe("Done for you", () => {
     expect(html).not.toContain("Undo");
   });
 
+  it("renders the promote and revoke controls as bordered secondary buttons", () => {
+    const button = (on: boolean) => /<button[^>]*>([^<]*)<\/button>/.exec(renderToStaticMarkup(<DoneForYou autonomy={{ types: [{ ...retry, on }], done: [] }} onPromote={() => {}} />));
+    for (const [on, label] of [[false, "Handle this yourself"], [true, "Stop doing this on your own"]] as const) {
+      const m = button(on);
+      expect(m?.[1]).toBe(label);
+      expect(m?.[0]).toContain('class="desk-btn desk-promote"');
+      expect(m?.[0]).not.toContain("ghost");
+    }
+  });
+
   it("offers to promote a type the Desk still asks about, and hides when nothing is promotable", () => {
     expect(renderToStaticMarkup(<DoneForYou autonomy={{ types: [{ ...retry, on: false }], done: [] }} onPromote={() => {}} />)).toContain("Handle this yourself");
     expect(renderToStaticMarkup(<DoneForYou autonomy={{ types: [], done: [] }} onPromote={() => {}} />)).toBe("");
@@ -258,8 +268,31 @@ describe("ranking corrections on the Desk", () => {
     expect(less).not.toContain(">Less like this<");
     expect(less).toContain("Rank by the base rules again");
     const html = renderToStaticMarkup(<DeskBody view={{ ...view, items: [item(1, { correction: "always" }), item(2)] }} error={null} onOpenMissionControl={() => {}} />);
-    expect((html.match(/aria-label="Ranking options"/g) ?? []).length).toBe(2);
+    expect((html.match(/aria-label="Ranking: less like this, always show"/g) ?? []).length).toBe(2);
     expect(html).toContain("Always shown");
+  });
+
+  it("shows the ranking control as a bordered button that says what it does", () => {
+    const html = renderToStaticMarkup(<ItemMenu onCorrect={() => {}} />);
+    const btn = /<button[^>]*>/.exec(html)?.[0] ?? "";
+    expect(btn).toContain('class="desk-btn desk-rank-btn"');
+    expect(btn).not.toContain("ghost");
+    expect(btn).toContain('title="Ranking: less like this, always show"');
+    expect(btn).toContain('aria-label="Ranking: less like this, always show"');
+    expect(btn).toContain('aria-expanded="false"');
+    expect(html).not.toContain('role="menu"');
+  });
+
+  it("closes the menu on Escape and on a click outside it, not on a click inside or another key", () => {
+    const inside = { id: "inside" };
+    const outside = { id: "outside" };
+    const root = { contains: (t: { id: string } | null) => t === inside };
+    expect(dismissesMenu({ type: "keydown", key: "Escape", target: inside }, root)).toBe(true);
+    expect(dismissesMenu({ type: "keydown", key: "Enter", target: inside }, root)).toBe(false);
+    expect(dismissesMenu({ type: "mousedown", target: outside }, root)).toBe(true);
+    expect(dismissesMenu({ type: "mousedown", target: null }, root)).toBe(true);
+    expect(dismissesMenu({ type: "mousedown", target: inside }, root)).toBe(false);
+    expect(dismissesMenu({ type: "mousedown", target: outside }, null)).toBe(false);
   });
 
   it("lists every correction in the margin with an undo button, and hides the section when there is none", () => {
