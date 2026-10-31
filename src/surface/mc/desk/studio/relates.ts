@@ -18,7 +18,7 @@ const GOAL_STATE: Record<DeskGoal["state"], string> = {
   unknown: "without a reading",
 };
 
-export type RelationKind = "thread" | "goal" | "event" | "person" | "decision";
+export type RelationKind = "thread" | "goal" | "event" | "person" | "decision" | "link";
 
 export interface Relation {
   kind: RelationKind;
@@ -36,6 +36,7 @@ export interface Relations {
   events: Relation[];
   people: Relation[];
   decisions: Relation[];
+  links: Relation[];
 }
 
 export interface RelatesContext {
@@ -46,7 +47,7 @@ export interface RelatesContext {
 
 export const NO_CONTEXT: RelatesContext = { now: 0, events: [], goals: [] };
 
-export const relationCount = (r: Relations): number => r.threads.length + r.goals.length + r.events.length + r.people.length + r.decisions.length;
+export const relationCount = (r: Relations): number => r.threads.length + r.goals.length + r.events.length + r.people.length + r.decisions.length + r.links.length;
 
 const capitalise = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -125,12 +126,35 @@ function decisionRelations(thread: StudioThreadView, studio: StudioView): Relati
     });
 }
 
+export const KEPT_WHY = "Ivy proposed it and you kept it.";
+
+function keptRelations(thread: StudioThreadView, studio: StudioView): Relation[] {
+  const known = new Map([...studio.active, ...studio.parked, ...studio.closed].map((t) => [t.slug, t]));
+  return thread.notes.flatMap((n): Relation[] => {
+    const r = n.relates;
+    if (n.kind !== "relation" || n.status !== "kept" || !r) return [];
+    const why = n.text ? `${clip(n.text, 100)} ${KEPT_WHY}` : KEPT_WHY;
+    const kind = r.kind.toLowerCase();
+    if (kind === "thread") {
+      const slug = r.label.trim();
+      const other = known.get(slug);
+      return [{ kind: "thread", key: `kept:${n.at}`, title: other?.question ?? slug, why, ...(other ? { open: slug } : {}) }];
+    }
+    const as: RelationKind = kind === "goal" ? "goal" : (PERSON_KINDS as readonly string[]).includes(kind) ? "person" : "link";
+    return [{ kind: as, key: `kept:${n.at}`, title: r.label, why, ...withHref(r.href) }];
+  });
+}
+
 export function relatesTo(thread: StudioThreadView, studio: StudioView, ctx: RelatesContext = NO_CONTEXT): Relations {
+  const kept = keptRelations(thread, studio);
+  const keptThreads = kept.filter((k) => k.kind === "thread");
+  const derived = threadRelations(thread, studio).map((d) => (keptThreads.some((k) => k.open === d.open) ? { ...d, why: `${d.why} ${KEPT_WHY}` } : d));
   return {
-    threads: threadRelations(thread, studio),
-    goals: goalRelations(thread, ctx.goals),
+    threads: [...derived, ...keptThreads.filter((k) => k.open === undefined || !derived.some((d) => d.open === k.open))],
+    goals: [...goalRelations(thread, ctx.goals), ...kept.filter((k) => k.kind === "goal")],
     events: eventRelations(thread, ctx),
-    people: peopleRelations(thread),
+    people: [...peopleRelations(thread), ...kept.filter((k) => k.kind === "person")],
     decisions: decisionRelations(thread, studio),
+    links: kept.filter((k) => k.kind === "link"),
   };
 }

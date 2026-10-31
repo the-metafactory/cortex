@@ -430,6 +430,7 @@ const DeskSchema = z.object({
     .object({
       dir: z.string().min(1),
       maxActive: z.number().int().min(1).max(20).default(5),
+      yesFilter: z.array(z.string().trim().min(1).max(200)).min(1).max(12).optional(),
     })
     .optional(),
   sources: z

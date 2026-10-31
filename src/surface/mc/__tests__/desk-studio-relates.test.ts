@@ -53,6 +53,7 @@ const STUDIO: StudioView = {
     { id: "home", label: "Home", color: "#ea580c", policy: "cloud" },
   ],
   active: [NETOPS, POST, DESK],
+  yesFilter: { questions: ["Is this mine to do?"], fromConfig: false },
   parked: [SHELF],
   closed: [BALANCE, OLD],
   inbox: [],

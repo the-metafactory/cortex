@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { buildBoard, clip, plainQuestion, type Board, type BoardCapture, type BoardCard, type BoardFree, type BoardLoose, type BoardProposal, type BoardTarget } from "../../desk/studio/board";
 import { dayMonth, outcomeLabel, TYPE_LABEL } from "../../desk/studio/labels";
 import { buildThreadPage } from "../../desk/studio/page";
@@ -6,6 +6,8 @@ import { NO_CONTEXT, type RelatesContext } from "../../desk/studio/relates";
 import type { StudioView } from "../../desk/studio/view";
 import type { DeskView } from "../../desk/types";
 import { startOfDay } from "../../desk/time";
+import { useStudioActs, type StudioActs } from "../hooks/use-studio-act";
+import { OpenSheet, type OpenRequest } from "./desk-studio-acts";
 import { AreaChips, ModelBadge, dayMonthTime, hhmm } from "./desk-studio-parts";
 import { ThreadMissing, ThreadPageView, useThreadZoom } from "./desk-studio-thread";
 import "./desk-studio.css";
@@ -50,7 +52,19 @@ export function DeskModeSwitch({ hasStudio, inStudio, onGo }: { hasStudio: boole
 
 export type StudioDay = Pick<DeskView, "generatedAt" | "today" | "ahead" | "goals">;
 
-export function DeskStudio({ studio, thread, onOpenThread, at, day }: { studio: StudioView; thread: string | null; onOpenThread: (slug: string | null) => void; at?: number; day?: StudioDay }) {
+export function useFreshStudio(studio: StudioView): [StudioView, (view: StudioView) => void] {
+  const [fresh, setFresh] = useState<{ base: StudioView; view: StudioView } | null>(null);
+  const current = useRef(studio);
+  current.current = studio;
+  const take = useCallback((view: StudioView) => setFresh({ base: current.current, view }), []);
+  return [fresh?.base === studio ? fresh.view : studio, take];
+}
+
+export function DeskStudio({ studio: polled, thread, onOpenThread, at, day }: { studio: StudioView; thread: string | null; onOpenThread: (slug: string | null) => void; at?: number; day?: StudioDay }) {
+  const [studio, takeStudio] = useFreshStudio(polled);
+  const acts = useStudioActs(takeStudio);
+  const [sheet, setSheet] = useState<OpenRequest | null>(null);
+  const bringBack = useCallback((slug: string, question: string) => setSheet({ kind: "unpark", slug, question }), []);
   const now = useMemo(() => at ?? Date.now(), [at, studio]);
   const [lastLook] = useState(() => takeLastLook(browserStore(), now));
   const board = useMemo(() => buildBoard(studio, { now, startOfToday: startOfDay(now), lastLook }), [studio, now, lastLook]);
@@ -66,22 +80,24 @@ export function DeskStudio({ studio, thread, onOpenThread, at, day }: { studio: 
           <strong>Studio.</strong> {board.summary}
           {board.shared[0] && <span className="dst-shared">These two threads share a source: {board.shared[0].label}.</span>}
         </p>
+        {acts.note && <p className={acts.note.ok ? "dst-said" : "dst-said desk-unsent"} role="status">{acts.note.text}</p>}
       </section>
       {zoom.shown !== null
         ? page
-          ? <ThreadPageView key={page.thread.slug} page={page} onBack={back} onOpen={onOpenThread} zoom={zoom} />
+          ? <ThreadPageView key={page.thread.slug} page={page} onBack={back} onOpen={onOpenThread} zoom={zoom} acts={acts} onBringBack={bringBack} />
           : <ThreadMissing slug={zoom.shown} onBack={back} zoom={zoom} />
         : (
             <>
-              <StudioBoard board={board} now={now} onOpen={onOpenThread} />
-              <StudioStrip board={board} onOpen={onOpenThread} />
+              <StudioBoard board={board} now={now} onOpen={onOpenThread} onSheet={setSheet} acts={acts} />
+              <StudioStrip board={board} onOpen={onOpenThread} onBringBack={bringBack} acts={acts} />
             </>
           )}
+      {sheet && <OpenSheet request={sheet} studio={studio} acts={acts} onDone={() => setSheet(null)} />}
     </div>
   );
 }
 
-function StudioBoard({ board, now, onOpen }: { board: Board; now: number; onOpen: (slug: string) => void }) {
+function StudioBoard({ board, now, onOpen, onSheet, acts }: { board: Board; now: number; onOpen: (slug: string) => void; onSheet: (r: OpenRequest) => void; acts: StudioActs }) {
   const ref = useRef<HTMLElement>(null);
   const lines = useBoardLines(ref, board);
   const startOfToday = startOfDay(now);
@@ -103,14 +119,14 @@ function StudioBoard({ board, now, onOpen }: { board: Board; now: number; onOpen
       </div>
       <aside className="dst-edge left" aria-label="Inbox">
         <h4 className="dst-h">Inbox <span className="n">{board.inbox.length ? `${board.inbox.length} loose` : "empty"}</span></h4>
-        {board.inbox.length ? board.inbox.map((c) => <Sticky key={c.id} item={c} />) : <p className="dst-none">Nothing loose. Captures that match no thread land here.</p>}
+        {board.inbox.length ? board.inbox.map((c) => <Sticky key={c.id} item={c} onSheet={onSheet} acts={acts} />) : <p className="dst-none">Nothing loose. Captures that match no thread land here.</p>}
       </aside>
       <div className="dst-slots">
         {board.places.map((p) => (p.kind === "thread" ? <Card key={p.place} card={p} startOfToday={startOfToday} onOpen={onOpen} /> : <Free key={p.place} free={p} />))}
       </div>
       <aside className="dst-edge right" aria-label="Ivy proposes">
         <h4 className="dst-h">Ivy proposes</h4>
-        {board.proposals.length ? board.proposals.map((p) => <Proposal key={p.id} item={p} />) : <p className="dst-none">No proposal right now. Ivy proposes a thread when a theme keeps coming back.</p>}
+        {board.proposals.length ? board.proposals.map((p) => <Proposal key={p.id} item={p} onSheet={onSheet} acts={acts} />) : <p className="dst-none">No proposal right now. Ivy proposes a thread when a theme keeps coming back.</p>}
         <div className="dst-legend">
           <span><i />Two threads share a source</span>
           <span><i className="dotted" />Where Ivy would file it (hover for why)</span>
@@ -166,17 +182,21 @@ function LooseSentence({ item }: { item: BoardLoose }) {
   return <span className="dst-sug">{item.sentence}{item.reason && <i> Why: {item.reason}</i>}</span>;
 }
 
-function Sticky({ item }: { item: BoardCapture }) {
+function Sticky({ item, onSheet, acts }: { item: BoardCapture; onSheet: (r: OpenRequest) => void; acts: StudioActs }) {
+  const c = item.capture;
   return (
     <div className="dst-sticky" {...lineAttrs(item, `cap-${item.id}`, "l")}>
-      <span className="via">{viaLabel(item.capture.via)}, {dayMonthTime(new Date(item.capture.at))}</span>
-      {clip(item.capture.text, 140)}
+      <span className="via">{viaLabel(c.via)}, {dayMonthTime(new Date(c.at))}</span>
+      {clip(c.text, 140)}
       <LooseSentence item={item} />
+      <span className="dst-acts">
+        <button type="button" className="desk-btn" disabled={acts.pending} onClick={() => onSheet({ kind: "open", from: "capture", id: c.id, question: c.text, area: c.target?.area ?? null, reason: c.target?.reason ?? null })}>Make it a thread</button>
+      </span>
     </div>
   );
 }
 
-function Proposal({ item }: { item: BoardProposal }) {
+function Proposal({ item, onSheet, acts }: { item: BoardProposal; onSheet: (r: OpenRequest) => void; acts: StudioActs }) {
   const p = item.proposal;
   return (
     <div className="dst-ghostp" {...lineAttrs(item, `prop-${item.id}`, "r")}>
@@ -185,11 +205,14 @@ function Proposal({ item }: { item: BoardProposal }) {
       {p.why && <p>{p.why}</p>}
       <LooseSentence item={item} />
       <span className="dst-meta"><AreaChips areas={item.areas} /><ModelBadge policy={p.policy} /></span>
+      <span className="dst-acts">
+        <button type="button" className="desk-btn pri" disabled={acts.pending} onClick={() => onSheet({ kind: "open", from: "proposal", id: p.id, question: p.question, area: p.target.area ?? p.areas[0] ?? null, reason: p.target.reason })}>Open it</button>
+      </span>
     </div>
   );
 }
 
-function StudioStrip({ board, onOpen }: { board: Board; onOpen: (slug: string) => void }) {
+function StudioStrip({ board, onOpen, onBringBack, acts }: { board: Board; onOpen: (slug: string) => void; onBringBack: (slug: string, question: string) => void; acts: StudioActs }) {
   const [journal, setJournal] = useState(false);
   return (
     <>
@@ -201,7 +224,11 @@ function StudioStrip({ board, onOpen }: { board: Board; onOpen: (slug: string) =
           <span className="lbl">Parked</span>
           {board.parked.length
             ? board.parked.map((t, i) => (
-                <span key={t.slug}>{i > 0 && " · "}<button type="button" className="dst-link" data-open={t.slug} onClick={() => onOpen(t.slug)}>{clip(t.question, 40)}</button></span>
+                <span key={t.slug}>
+                  {i > 0 && " · "}
+                  <button type="button" className="dst-link" data-open={t.slug} onClick={() => onOpen(t.slug)}>{clip(t.question, 40)}</button>{" "}
+                  <button type="button" className="dst-link quiet" disabled={acts.pending} onClick={() => onBringBack(t.slug, t.question)}>Bring back</button>
+                </span>
               ))
             : "The shelf is empty."}
         </div>

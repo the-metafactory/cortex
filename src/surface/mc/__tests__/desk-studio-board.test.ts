@@ -29,6 +29,7 @@ const material = (label: string, href?: string): MaterialLink => ({ kind: "file"
 
 const FIXTURE: StudioView = {
   maxActive: 5,
+  yesFilter: { questions: ["Is this mine to do?"], fromConfig: false },
   areas: [
     { id: "work", label: "Work", color: "#2563eb", policy: "local" },
     { id: "lab", label: "Lab", color: "#7c3aed", policy: "cloud" },

@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { clip, plainQuestion } from "../../desk/studio/board";
 import type { IvyNote } from "../../desk/studio/format";
-import { dayMonth } from "../../desk/studio/labels";
+import { dayMonth, localDate } from "../../desk/studio/labels";
 import type { ThreadPage } from "../../desk/studio/page";
 import { relationCount, type Relation } from "../../desk/studio/relates";
+import type { StudioActs } from "../hooks/use-studio-act";
+import { CloseForm, RespondBox } from "./desk-studio-acts";
 import { AreaChips, ModelBadge, dayMonthTime, weekdayDayTime } from "./desk-studio-parts";
 
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
 const STACKED = "(max-width: 1100px)";
 const GROW = { duration: 340, easing: "cubic-bezier(.2,.85,.25,1)" };
 const SHRINK = { duration: 240, easing: "cubic-bezier(.4,0,.6,1)", fill: "forwards" as const };
-const WRITES_LATER = "Available once the Studio can write to its files.";
+const DISCUSS_LATER = "Discuss arrives with live sessions with Ivy.";
+const NO_WRITES = "The Studio cannot write from here.";
 
 interface DocRect {
   left: number;
@@ -178,22 +181,48 @@ function useWires(ref: RefObject<HTMLElement | null>, page: ThreadPage): Wire[] 
 
 const modelName = (model: string): string => (model === "local" ? "local model" : model === "cloud" ? "cloud model" : model);
 
-function PageHeader({ onBack, children }: { onBack: () => void; children: ReactNode }) {
+function PageHeader({ onBack, children, actions }: { onBack: () => void; children: ReactNode; actions?: ReactNode }) {
   return (
     <div className="dst-zhd">
       <button type="button" className="dst-back" onClick={onBack}>‹ Board</button>
       <span>{children}</span>
+      {actions && <span className="dst-zacts">{actions}</span>}
     </div>
   );
 }
 
-function GhostActions({ keep }: { keep: string }) {
+interface Acting {
+  slug: string;
+  acts?: StudioActs;
+}
+
+function GhostActions({ keep, note, acting, discuss = true }: { keep: string; note: IvyNote; acting: Acting; discuss?: boolean }) {
+  const { acts, slug } = acting;
+  const off = !acts || acts.pending;
+  const send = (act: "keep" | "dismiss") => () => void acts?.send({ act, thread: slug, note: note.at });
   return (
     <span className="dst-acts">
-      <button type="button" className="desk-btn" disabled title={WRITES_LATER}>{keep}</button>
-      <button type="button" className="desk-btn ghost" disabled title={WRITES_LATER}>Discuss</button>
-      <button type="button" className="desk-btn ghost" disabled title={WRITES_LATER}>Dismiss</button>
+      <button type="button" className="desk-btn" disabled={off} title={acts ? undefined : NO_WRITES} onClick={send("keep")}>{keep}</button>
+      {discuss && <button type="button" className="desk-btn ghost" disabled title={DISCUSS_LATER}>Discuss</button>}
+      <button type="button" className="desk-btn ghost" disabled={off} title={acts ? undefined : NO_WRITES} onClick={send("dismiss")}>Dismiss</button>
     </span>
+  );
+}
+
+function ThreadActions({ page, acting, onBringBack }: { page: ThreadPage; acting: Acting; onBringBack?: (slug: string, question: string) => void }) {
+  const { acts, slug } = acting;
+  const t = page.thread;
+  if (t.state === "closed") return null;
+  const off = !acts || acts.pending;
+  return (
+    <>
+      <button type="button" className="desk-btn ghost" aria-pressed={t.thinkTonight} disabled={off} onClick={() => void acts?.send({ act: "think", thread: slug, on: !t.thinkTonight })}>
+        {t.thinkTonight ? "On Ivy's list tonight" : "Think tonight"}
+      </button>
+      {t.state === "active"
+        ? <button type="button" className="desk-btn ghost" disabled={off} onClick={() => void acts?.send({ act: "park", thread: slug })}>Park</button>
+        : <button type="button" className="desk-btn" disabled={off || !onBringBack} onClick={() => onBringBack?.(slug, t.question)}>Bring back</button>}
+    </>
   );
 }
 
@@ -226,7 +255,18 @@ function RelationItem({ r, onOpen }: { r: Relation; onOpen: (slug: string) => vo
   return <div className="dst-relitem" data-rel={r.kind}>{body}</div>;
 }
 
-function RelatesTo({ page, onOpen }: { page: ThreadPage; onOpen: (slug: string) => void }) {
+function ProposedRelation({ note, acting }: { note: IvyNote; acting: Acting }) {
+  const r = note.relates;
+  return (
+    <div className="dst-relitem ghost" data-rel="proposed">
+      <b>{r ? `${r.kind}: ${r.label}` : "A relation"}</b>
+      <span>{note.text || note.trigger}</span>
+      <GhostActions keep="Keep" note={note} acting={acting} discuss={false} />
+    </div>
+  );
+}
+
+function RelatesTo({ page, onOpen, acting }: { page: ThreadPage; onOpen: (slug: string) => void; acting: Acting }) {
   const r = page.relations;
   const groups: [string, Relation[]][] = [
     ["Threads", r.threads],
@@ -234,12 +274,19 @@ function RelatesTo({ page, onOpen }: { page: ThreadPage; onOpen: (slug: string) 
     ["Coming up", r.events],
     ["People", r.people],
     ["Decision journal", r.decisions],
+    ["Also related", r.links],
   ];
   return (
     <section className="dst-rel" aria-label="Relates to">
       <h4 className="dst-h">Relates to <span className="n">derived from the files and your calendar</span></h4>
+      {page.proposedRelations.length > 0 && (
+        <div className="dst-relgrp">
+          <h5>Ivy proposes</h5>
+          {page.proposedRelations.map((n) => <ProposedRelation key={n.at} note={n} acting={acting} />)}
+        </div>
+      )}
       {relationCount(r) === 0
-        ? <p className="dst-none">Nothing relates to this thread yet.</p>
+        ? page.proposedRelations.length === 0 && <p className="dst-none">Nothing relates to this thread yet.</p>
         : groups.filter(([, xs]) => xs.length > 0).map(([head, xs]) => (
             <div key={head} className="dst-relgrp">
               <h5>{head}</h5>
@@ -250,13 +297,16 @@ function RelatesTo({ page, onOpen }: { page: ThreadPage; onOpen: (slug: string) 
   );
 }
 
-function Outcome({ page }: { page: ThreadPage }) {
+function Outcome({ page, acting, today }: { page: ThreadPage; acting: Acting; today: string }) {
   const o = page.outcome;
+  const [closing, setClosing] = useState(false);
+  const { acts } = acting;
   if (o.open) {
     return (
       <div className="dst-outcome">
         <span className="t"><b>Outcome</b>{o.text || "Open. A thread closes as decided, shipped or dropped."}</span>
-        <button type="button" className="desk-btn" disabled title={WRITES_LATER}>Close with an outcome</button>
+        {!closing && <button type="button" className="desk-btn" disabled={!acts} title={acts ? undefined : NO_WRITES} onClick={() => setClosing(true)}>Close with an outcome</button>}
+        {closing && acts && <CloseForm slug={acting.slug} acts={acts} today={today} onCancel={() => setClosing(false)} />}
       </div>
     );
   }
@@ -272,14 +322,22 @@ function Outcome({ page }: { page: ThreadPage }) {
   );
 }
 
-export function ThreadPageView({ page, onBack, onOpen, zoom }: { page: ThreadPage; onBack: () => void; onOpen: (slug: string) => void; zoom?: ThreadZoom }) {
+export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack }: {
+  page: ThreadPage;
+  onBack: () => void;
+  onOpen: (slug: string) => void;
+  zoom?: ThreadZoom;
+  acts?: StudioActs;
+  onBringBack?: (slug: string, question: string) => void;
+}) {
   const ref = useRef<HTMLElement>(null);
   const t = page.thread;
   useZoomMotion(ref, t.slug, zoom);
   const wires = useWires(ref, page);
+  const acting: Acting = { slug: t.slug, ...(acts ? { acts } : {}) };
   return (
     <section className="dst-page" aria-label={`Thread: ${t.question}`} ref={ref} data-thread={t.slug}>
-      <PageHeader onBack={onBack}>{page.typeLabel} · {page.where}</PageHeader>
+      <PageHeader onBack={onBack} actions={<ThreadActions page={page} acting={acting} {...(onBringBack ? { onBringBack } : {})} />}>{page.typeLabel} · {page.where}</PageHeader>
       <div className="dst-canvas">
         <svg className="dst-wires" aria-hidden="true">
           {wires.map((w) => <path key={w.key} d={w.d} className={w.ivy ? "ivy" : ""} />)}
@@ -295,10 +353,10 @@ export function ThreadPageView({ page, onBack, onOpen, zoom }: { page: ThreadPag
           </div>
           {page.standProposal && (
             <NoteCard note={page.standProposal} id="stand" label="Ivy proposes a new stand" className="dst-n ghost" ghost="stand" wire={false}>
-              <GhostActions keep="Keep it as my stand" />
+              <GhostActions keep="Keep it as my stand" note={page.standProposal} acting={acting} />
             </NoteCard>
           )}
-          <Outcome page={page} />
+          <Outcome page={page} acting={acting} today={localDate(new Date())} />
         </div>
         <div className="dst-col left">
           <h4 className="dst-h">Material <span className="n">{page.material.length}</span></h4>
@@ -312,7 +370,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom }: { page: ThreadPag
               ))}
             </div>
           ))}
-          <RelatesTo page={page} onOpen={onOpen} />
+          <RelatesTo page={page} onOpen={onOpen} acting={acting} />
           <details className="dst-logf">
             <summary>Log <span className="n">{page.log.length === 1 ? "1 entry" : `${page.log.length} entries`}</span></summary>
             {page.log.length
@@ -322,13 +380,22 @@ export function ThreadPageView({ page, onBack, onOpen, zoom }: { page: ThreadPag
         </div>
         <div className="dst-col right">
           <h4 className="dst-h">Ivy's notes <span className="n">dated, append-only</span></h4>
-          {page.waitsOnYou && <p className="dst-waits">Ivy waits on you: the latest note has no answer yet.</p>}
+          {page.waitsOnYou && (acts
+            ? <RespondBox slug={t.slug} label={`Ivy waits on you: answer the note from ${page.latest ? dayMonthTime(new Date(page.latest.at)) : "Ivy"}.`} acts={acts} />
+            : <p className="dst-waits">Ivy waits on you: the latest note has no answer yet.</p>)}
           {page.ideas.map((n, i) => (
             <NoteCard key={`i-${i}-${n.at}`} id={`i-${i}-${n.at}`} note={n} label="Ivy's idea" className="dst-n ghost" ghost="idea">
-              <GhostActions keep="Keep" />
+              <GhostActions keep="Keep" note={n} acting={acting} />
             </NoteCard>
           ))}
           {page.notes.map((n, i) => <NoteCard key={`n-${i}-${n.at}`} id={`n-${i}-${n.at}`} note={n} label={noteLabel(n)} className={n.status === "dismissed" ? "dst-n note dismissed" : "dst-n note"} />)}
+          {t.responses.length > 0 && <h4 className="dst-h">Your answers <span className="n">{t.responses.length}</span></h4>}
+          {[...t.responses].reverse().map((r) => (
+            <div key={r.at} className="dst-n note you">
+              <span className="lbl">You answered<span>{dayMonthTime(new Date(r.at))}</span></span>
+              {r.text}
+            </div>
+          ))}
           {page.ideas.length === 0 && page.notes.length === 0 && !page.standProposal && <p className="dst-none">Ivy has not written here yet.</p>}
         </div>
       </div>

@@ -12,6 +12,7 @@ export type AreaPolicy = (typeof AREA_POLICIES)[number];
 export interface StudioOptions {
   dir: string;
   maxActive: number;
+  yesFilter?: string[];
 }
 
 export interface DeskArea {

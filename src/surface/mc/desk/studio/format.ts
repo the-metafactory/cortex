@@ -4,7 +4,7 @@ import { z } from "zod";
 export const THREAD_TYPES = ["question", "topic", "making"] as const;
 export const THREAD_STATES = ["active", "parked", "closed"] as const;
 export const THREAD_OUTCOMES = ["decided", "shipped", "dropped"] as const;
-export const NOTE_KINDS = ["note", "stand", "idea"] as const;
+export const NOTE_KINDS = ["note", "stand", "idea", "relation"] as const;
 export const NOTE_STATUSES = ["open", "kept", "dismissed"] as const;
 
 export type ThreadType = (typeof THREAD_TYPES)[number];
@@ -14,11 +14,11 @@ export type NoteKind = (typeof NOTE_KINDS)[number];
 export type NoteStatus = (typeof NOTE_STATUSES)[number];
 
 export const STUDIO_SLUG = /^[a-z0-9][a-z0-9-]{0,79}$/;
-const AREA_ID = /^[\w.-]{1,64}$/;
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
-const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
+export const AREA_ID = /^[\w.-]{1,64}$/;
+export const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+export const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
-const validDate = (s: string): boolean => !Number.isNaN(Date.parse(s));
+export const validDate = (s: string): boolean => !Number.isNaN(Date.parse(s));
 const isoDate = z.string().regex(ISO_DATE, "must be a date like 2026-10-31").refine(validDate, "is not a real date");
 const isoTime = z.string().regex(ISO_TIME, "must be an ISO time with a zone, like 2026-10-31T03:12:00+01:00").refine(validDate, "is not a real time");
 const areaList = z.array(z.string().regex(AREA_ID, "is not an area id")).min(1, "needs at least one area");
@@ -69,6 +69,13 @@ export interface IvyNote {
   status: NoteStatus;
   sample: boolean;
   because?: string;
+  relates?: MaterialLink;
+  text: string;
+}
+
+export interface StudioResponse {
+  at: string;
+  re?: string;
   text: string;
 }
 
@@ -98,6 +105,7 @@ export interface StudioThread {
   question: string;
   stand: string;
   notes: IvyNote[];
+  responses: StudioResponse[];
   material: MaterialLink[];
   log: LogEntry[];
   outcomeText: string;
@@ -170,13 +178,16 @@ const SECTION_KEYS: Record<string, string> = {
   material: "material",
   log: "log",
   outcome: "outcome",
+  responses: "responses",
   why: "why",
 };
+
+export const sectionKey = (heading: string): string | undefined => SECTION_KEYS[heading.trim().toLowerCase()];
 
 function sectionMap(body: string): Parsed<Map<string, string>> {
   const map = new Map<string, string>();
   for (const { heading, text } of sections(body, "##")) {
-    const key = SECTION_KEYS[heading.toLowerCase()];
+    const key = sectionKey(heading);
     if (!key) continue;
     if (map.has(key)) return failed(`has the section "${heading}" twice`);
     map.set(key, text);
@@ -184,7 +195,8 @@ function sectionMap(body: string): Parsed<Map<string, string>> {
   return { ok: true, value: map };
 }
 
-const NOTE_META = /^(trigger|model|kind|status|sample|because):[ \t]*(.*)$/;
+export const NOTE_META_KEYS = ["trigger", "model", "kind", "status", "sample", "because", "relates"] as const;
+const NOTE_META = new RegExp(`^(${NOTE_META_KEYS.join("|")}):[ \\t]*(.*)$`);
 
 function parseNote(heading: string, text: string): Parsed<IvyNote> {
   if (!ISO_TIME.test(heading) || !validDate(heading)) return failed(`has a note headed "${heading}", which is not an ISO time with a zone`);
@@ -205,6 +217,8 @@ function parseNote(heading: string, text: string): Parsed<IvyNote> {
   const status = meta.get("status") ?? "open";
   if (!(NOTE_STATUSES as readonly string[]).includes(status)) return failed(`has a note at ${heading} with status "${status}"; use ${NOTE_STATUSES.join(", ")}`);
   const because = meta.get("because");
+  const relates = meta.get("relates");
+  if (kind === "relation" && !relates) return failed(`has a relation note at ${heading} without a relates: line`);
   return {
     ok: true,
     value: {
@@ -215,6 +229,7 @@ function parseNote(heading: string, text: string): Parsed<IvyNote> {
       status: status as NoteStatus,
       sample: meta.get("sample") === "true",
       ...(because ? { because } : {}),
+      ...(kind === "relation" && relates ? { relates: parseMaterialItem(relates) } : {}),
       text: lines.slice(i).join("\n").trim(),
     },
   };
@@ -239,14 +254,25 @@ const bullets = (text: string): string[] =>
 const LINK = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
 const KIND_PREFIX = /^([a-z][a-z-]*):[ \t]+(.+)$/;
 
-function parseMaterial(text: string): MaterialLink[] {
-  return bullets(text).map((item) => {
-    const kinded = KIND_PREFIX.exec(item);
-    const kind = kinded?.[1] ?? "link";
-    const rest = kinded?.[2] ?? item;
-    const link = LINK.exec(rest);
-    return link ? { kind, label: link[1] ?? rest, href: link[2] ?? "" } : { kind, label: rest };
-  });
+export function parseMaterialItem(item: string): MaterialLink {
+  const kinded = KIND_PREFIX.exec(item);
+  const kind = kinded?.[1] ?? "link";
+  const rest = kinded?.[2] ?? item;
+  const link = LINK.exec(rest);
+  return link ? { kind, label: link[1] ?? rest, href: link[2] ?? "" } : { kind, label: rest };
+}
+
+const parseMaterial = (text: string): MaterialLink[] => bullets(text).map(parseMaterialItem);
+
+function parseResponses(text: string): Parsed<StudioResponse[]> {
+  const out: StudioResponse[] = [];
+  for (const { heading, text: body } of sections(text, "###")) {
+    if (!ISO_TIME.test(heading) || !validDate(heading)) return failed(`has a response headed "${heading}", which is not an ISO time with a zone`);
+    const lines = body.split("\n");
+    const re = /^re:[ \t]*(\S+)[ \t]*$/.exec(lines[0] ?? "")?.[1];
+    out.push({ at: heading, ...(re ? { re } : {}), text: lines.slice(re ? 1 : 0).join("\n").trim() });
+  }
+  return { ok: true, value: out };
 }
 
 const LOG_DATE = /^(\d{4}-\d{2}-\d{2}(?:T\S+)?):?[ \t]+(.+)$/;
@@ -291,6 +317,8 @@ export function parseThreadFile(path: string, text: string): Parsed<StudioThread
   const { map, question } = body.value;
   const notes = parseNotes(map.get("notes") ?? "");
   if (!notes.ok) return notes;
+  const responses = parseResponses(map.get("responses") ?? "");
+  if (!responses.ok) return responses;
   const f = file.value.front;
   return {
     ok: true,
@@ -309,6 +337,7 @@ export function parseThreadFile(path: string, text: string): Parsed<StudioThread
       question,
       stand: map.get("stand") ?? "",
       notes: notes.value,
+      responses: responses.value,
       material: parseMaterial(map.get("material") ?? ""),
       log: parseLog(map.get("log") ?? ""),
       outcomeText: map.get("outcome") ?? "",

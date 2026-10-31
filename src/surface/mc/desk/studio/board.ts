@@ -98,8 +98,11 @@ export function latestNote(notes: readonly IvyNote[]): IvyNote | null {
   return best;
 }
 
-export function waitsOnYou(thread: StudioThreadView): boolean {
-  return latestNote(thread.notes)?.status === "open";
+export function waitsOnYou(thread: Pick<StudioThreadView, "notes" | "responses">): boolean {
+  const latest = latestNote(thread.notes);
+  if (latest?.status !== "open") return false;
+  const at = time(latest.at);
+  return !thread.responses.some((r) => time(r.at) >= at);
 }
 
 export function normaliseLabel(label: string): string {

@@ -29,8 +29,16 @@ export interface StudioProposalView extends StudioProposal {
   policy: AreaPolicy;
 }
 
+export const DEFAULT_YES_FILTER = ["Is this mine to do?", "Does it fit my capacity?", "What will I stop doing for it?"] as const;
+
+export interface YesFilter {
+  questions: string[];
+  fromConfig: boolean;
+}
+
 export interface StudioView {
   maxActive: number;
+  yesFilter: YesFilter;
   areas: (DeskArea & { policy: AreaPolicy })[];
   active: StudioThreadView[];
   parked: StudioThreadView[];
@@ -93,6 +101,7 @@ export function buildStudioView(files: StudioFiles, options: StudioOptions, area
 
   return {
     maxActive: options.maxActive,
+    yesFilter: options.yesFilter?.length ? { questions: [...options.yesFilter], fromConfig: true } : { questions: [...DEFAULT_YES_FILTER], fromConfig: false },
     areas: areas.map(({ id, label, color, policy }) => ({ id, label, color, policy: policy ?? "cloud" })),
     active,
     parked: threads.filter((t) => t.state === "parked").sort(byOpened),

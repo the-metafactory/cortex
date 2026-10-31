@@ -1,3 +1,6 @@
+import type { StudioAct } from "../../desk/studio/acts";
+import type { StudioView } from "../../desk/studio/view";
+
 export const DESK_ACTION_PATH = "/api/desk/action";
 export const DESK_GOAL_PATH = "/api/desk/goal";
 export const DESK_MAIL_PATH = "/api/desk/mail";
@@ -42,3 +45,24 @@ export const submitMailAction = (body: { action: "trash" | "unimportant"; key: s
  */
 export const submitRuling = (body: { key: string; text: string; requestId: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
   postDesk(DESK_RULING_PATH, body, fetchImpl);
+
+export const DESK_STUDIO_ACT_PATH = "/api/desk/studio/act";
+
+export type StudioActOutcome = Outcome & { studio?: StudioView; needsPark?: boolean };
+
+/**
+ * Sends one Studio act. `uncertain` means no answer came, so the act may be written; the caller retries it with the
+ * same request id, which the server answers without a second commit. Never throws.
+ */
+export async function submitStudioAct(body: StudioAct & { requestId: string }, fetchImpl: FetchLike = fetch): Promise<StudioActOutcome> {
+  let res: Response;
+  try {
+    res = await fetchImpl(DESK_STUDIO_ACT_PATH, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  } catch (err) {
+    return { ok: false, uncertain: true, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  const parsed = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown; studio?: StudioView; needsPark?: unknown } | null;
+  if (res.ok && parsed?.studio) return { ok: true, text: typeof parsed.message === "string" ? parsed.message : "Done.", studio: parsed.studio };
+  const error = typeof parsed?.error === "string" ? parsed.error : `The Studio did not record it (HTTP ${res.status}).`;
+  return { ok: false, text: error, ...(res.status >= 500 ? { uncertain: true } : {}), ...(parsed?.needsPark === true ? { needsPark: true } : {}) };
+}

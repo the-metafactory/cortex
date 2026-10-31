@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DeskModeSwitch, DeskStudio, ortho, takeLastLook } from "../components/desk-studio";
+import { OpenSheet } from "../components/desk-studio-acts";
 import { deskSearch, readDeskLocation } from "../hooks/use-desk-studio";
+import { requestIdFor } from "../hooks/use-studio-act";
 import type { StudioThreadView, StudioView } from "../../desk/studio/view";
 
 const AT = Date.parse("2026-10-31T09:00:00+01:00");
@@ -17,6 +19,7 @@ const thread = (slug: string, place: number, over: Partial<StudioThreadView> = {
   question: `What about ${slug}?`,
   stand: "Not settled.",
   notes: [],
+  responses: [],
   material: [{ kind: "file", label: "Shared brief" }],
   log: [],
   outcomeText: "",
@@ -28,6 +31,7 @@ const thread = (slug: string, place: number, over: Partial<StudioThreadView> = {
 
 const STUDIO: StudioView = {
   maxActive: 3,
+  yesFilter: { questions: ["Is this mine to do?", "Does it fit my capacity?", "What will I stop doing for it?"], fromConfig: false },
   areas: [{ id: "lab", label: "Lab", color: "#7c3aed", policy: "cloud" }],
   active: [
     thread("one", 1, { notes: [{ at: "2026-10-31T03:12:00+01:00", trigger: "Stale thread: unchanged for 6 days", model: "cloud", kind: "note", status: "open", sample: true, text: "t" }] }),
@@ -73,17 +77,87 @@ describe("the Studio board", () => {
     expect(open).toContain("Log <span");
   });
 
-  it("renders Keep, Discuss and Dismiss on Ivy's ghosts but disabled", () => {
+  it("makes Keep, Dismiss and Close live and keeps Discuss disabled", () => {
     const idea = { at: "2026-10-31T04:05:00+01:00", trigger: "Fits the week's post", model: "cloud", kind: "idea" as const, status: "open" as const, sample: true, text: "Draft it?" };
     const studio: StudioView = { ...STUDIO, active: [thread("one", 1, { notes: [idea] }), thread("two", 2)] };
     const open = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} at={AT} />);
-    const buttons = [...open.matchAll(/<button type="button" class="desk-btn[^"]*" disabled="" title="[^"]+">([^<]+)</g)].map((m) => m[1]);
-    expect(buttons).toEqual(["Close with an outcome", "Keep", "Discuss", "Dismiss"]);
+    const disabled = [...open.matchAll(/<button type="button" class="desk-btn[^"]*" disabled="" title="[^"]+">([^<]+)</g)].map((m) => m[1]);
+    expect(disabled).toEqual(["Discuss"]);
+    expect(open).toContain(">Close with an outcome</button>");
+    expect(open).toContain(">Keep</button>");
+    expect(open).toContain(">Dismiss</button>");
+    expect(open).toContain(">Think tonight</button>");
+    expect(open).toContain(">Park</button>");
+  });
+
+  it("asks for a response while Ivy waits, and not after one", () => {
+    const waiting = renderToStaticMarkup(<DeskStudio studio={STUDIO} thread="one" onOpenThread={() => {}} at={AT} />);
+    expect(waiting).toContain("Send my response");
+    const answered: StudioView = { ...STUDIO, active: [thread("one", 1, { notes: STUDIO.active[0]?.notes ?? [], responses: [{ at: "2026-10-31T08:00:00+01:00", text: "Yes." }] }), thread("two", 2)] };
+    const html = renderToStaticMarkup(<DeskStudio studio={answered} thread="one" onOpenThread={() => {}} at={AT} />);
+    expect(html).not.toContain("Send my response");
+    expect(html).toContain("You answered");
+  });
+
+  it("shows Ivy's proposed relation with Keep and Dismiss in Relates to", () => {
+    const rel = { at: "2026-10-31T05:00:00+01:00", trigger: "Shared theme", model: "cloud", kind: "relation" as const, status: "open" as const, sample: false, relates: { kind: "goal", label: "G5: one post a week" }, text: "It feeds the weekly post." };
+    const studio: StudioView = { ...STUDIO, active: [thread("one", 1, { notes: [rel] }), thread("two", 2)] };
+    const html = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} at={AT} />);
+    expect(html).toContain("Ivy proposes</h5>");
+    expect(html).toContain("goal: G5: one post a week");
+    expect(html).toContain("It feeds the weekly post.");
+  });
+
+  it("offers to open a capture and to bring a parked thread back", () => {
+    const html = renderToStaticMarkup(<DeskStudio studio={STUDIO} thread={null} onOpenThread={() => {}} at={AT} />);
+    expect(html).toContain(">Make it a thread</button>");
+    expect(html).toContain(">Bring back</button>");
   });
 
   it("says when the open thread is not in the Studio", () => {
     const open = renderToStaticMarkup(<DeskStudio studio={STUDIO} thread="gone" onOpenThread={() => {}} at={AT} />);
     expect(open).toContain("This thread is not in the Studio.");
+  });
+});
+
+describe("the open sheet", () => {
+  const acts = { pending: false, note: null, send: async () => ({ ok: true, text: "" }) };
+  const capture = { kind: "open" as const, from: "capture" as const, id: "idea", question: "An idea", area: "lab", reason: "It matches no thread." };
+
+  it("prefills the area and reason and shows where the Yes-filter comes from", () => {
+    const html = renderToStaticMarkup(<OpenSheet request={capture} studio={STUDIO} acts={acts} onDone={() => {}} />);
+    expect(html).toContain("Placed under Lab: It matches no thread.");
+    expect(html).toContain("Is this mine to do?");
+    expect(html).toContain("This is the default set.");
+    expect(html).toContain("What will I stop doing for it?</span><input");
+    expect(html).not.toContain("Choose a thread to park");
+    expect(html).toContain(">Open the thread</button>");
+  });
+
+  it("names the config when the filter comes from it", () => {
+    const own: StudioView = { ...STUDIO, yesFilter: { questions: ["Is it a whole Yes?"], fromConfig: true } };
+    const html = renderToStaticMarkup(<OpenSheet request={capture} studio={own} acts={acts} onDone={() => {}} />);
+    expect(html).toContain("Is it a whole Yes?");
+    expect(html).toContain("come from your settings");
+  });
+
+  it("requires a thread to park when every place is in use", () => {
+    const full: StudioView = { ...STUDIO, maxActive: 2 };
+    const html = renderToStaticMarkup(<OpenSheet request={capture} studio={full} acts={acts} onDone={() => {}} />);
+    expect(html).toContain("All 2 places are in use");
+    expect(html).toContain("Pick the thread to park below.");
+    expect(html).toContain('role="radio" aria-checked="false">What about one?');
+    expect(html).toMatch(/disabled="" aria-busy="false">Choose one to park first</);
+  });
+});
+
+describe("the request id", () => {
+  it("reuses the id only for a retry of the same uncertain act", () => {
+    let n = 0;
+    const make = () => `id-${++n}`;
+    expect(requestIdFor({ key: "a", id: "kept-id" }, "a", make)).toBe("kept-id");
+    expect(requestIdFor({ key: "a", id: "kept-id" }, "b", make)).toBe("id-1");
+    expect(requestIdFor(null, "a", make)).toBe("id-2");
   });
 });
 
