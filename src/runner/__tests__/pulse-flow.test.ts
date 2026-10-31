@@ -6,7 +6,7 @@ import { Command } from "commander";
 import { InMemoryAgentTransport } from "pulse";
 import { loadProcessSpec, resolveArgv } from "../../bus/process-runner";
 import { registerPulseFlowCommand } from "../../cli/cortex/commands/pulse-flow";
-import { executeRoutineFlow, readRoutineFlow, requireFlowProviders } from "../pulse-flow";
+import { executeRoutineFlow, readActionInventory, readRoutineFlow, requireFlowProviders } from "../pulse-flow";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -34,7 +34,7 @@ describe("routine flow execution", () => {
   test("the generic process template maps payload flow into exactly one argv slot", async () => {
     const spec = await loadProcessSpec(join(import.meta.dir, "../../../examples/processes"), "pulse-flow");
     const flow = "/configured flows/-value; echo injected.yaml";
-    expect(resolveArgv(spec, { flow })).toEqual(["cortex", "pulse-flow", "--flows-dir", "/absolute/routines/flows", "--flow", flow, "--agent-provider", "myelin"]);
+    expect(resolveArgv(spec, { flow })).toEqual(["cortex", "pulse-flow", "--flows-dir", "/absolute/routines/flows", "--flow", flow, "--catalog-file", "/absolute/routines/action-inventory.json", "--agent-provider", "myelin"]);
     expect(() => resolveArgv(spec, {})).toThrow("required");
     expect(() => resolveArgv(spec, { flow: 3 })).toThrow("string");
   });
@@ -43,6 +43,21 @@ describe("routine flow execution", () => {
     const f = await fixture();
     await executeRoutineFlow(f);
     expect(await readFile(f.sentinel, "utf8")).toBe("selected");
+  });
+
+  test("a trusted inventory file drives execution and missing or invalid files have no fallback", async () => {
+    const f = await fixture();
+    const catalogFile = join(f.root, "catalog.json");
+    await writeFile(catalogFile, JSON.stringify(await f.inventory()));
+    await executeRoutineFlow({ ...f, inventory: () => readActionInventory(catalogFile) });
+    expect(await readFile(f.sentinel, "utf8")).toBe("selected");
+    await rm(f.sentinel);
+    await writeFile(catalogFile, "not JSON");
+    await expect(executeRoutineFlow({ ...f, inventory: () => readActionInventory(catalogFile) })).rejects.toThrow();
+    await rm(catalogFile);
+    await expect(executeRoutineFlow({ ...f, inventory: () => readActionInventory(catalogFile) })).rejects.toThrow();
+    await expect(readActionInventory("relative.json")).rejects.toThrow("absolute");
+    expect(await Bun.file(f.sentinel).exists()).toBe(false);
   });
 
   test("allows canonical root aliases and links to files inside the root", async () => {
@@ -95,6 +110,18 @@ describe("routine flow execution", () => {
     expect(await Bun.file(f.sentinel).exists()).toBe(false);
   });
 
+  test("a missing required input inside a later retry prevents the earlier action from running", async () => {
+    const f = await fixture();
+    const required = join(f.root, "A_NEEDS");
+    await mkdir(required);
+    await writeFile(join(required, "action.json"), JSON.stringify({ name: "A_NEEDS", description: "requires unavailable input", input: { missing: { type: "string", required: true } }, output: {}, requires: [] }));
+    await writeFile(join(required, "action.ts"), "export default { async execute(input) { return input; } };");
+    f.packages.push({ name: "A_NEEDS", type: "action", status: "active", installPath: required });
+    await writeFile(f.flow, f.yaml + "  - retry: # sovereignty: D, residency: CH\n      attempts: 1\n      actions: [A_NEEDS]\n");
+    await expect(executeRoutineFlow(f)).rejects.toThrow("missing");
+    expect(await Bun.file(f.sentinel).exists()).toBe(false);
+  });
+
   test("accepts an explicitly supplied provider without changing sovereignty routing", () => {
     const step = { agent: { name: "judgment", capability: "test.judgment", prompt: "judge", collect: "result", sovereignty: { model_class: "local-only" as const, frontier_ok: false } } };
     const agentProvider = { dispatch: async () => ({ task_id: "test", status: "completed" as const, output: "ok", duration_ms: 0 }) };
@@ -123,7 +150,7 @@ describe("routine flow execution", () => {
         return { publish: transport.publish.bind(transport), subscribe: transport.subscribe.bind(transport), close: async () => { closed = true; } };
       },
     });
-    await command.parseAsync(["node", "cortex", "pulse-flow", "--flows-dir", f.flowsDir, "--flow", f.flow, "--agent-provider", "myelin"]);
+    await command.parseAsync(["node", "cortex", "pulse-flow", "--flows-dir", f.flowsDir, "--flow", f.flow, "--catalog-file", "/configured/catalog.json", "--agent-provider", "myelin"]);
     expect(await readFile(f.sentinel, "utf8")).toBe("selected");
     expect(tasks).toEqual([{ classification: "local", max_hop: 0, model_class: "local-only", frontier_ok: false, data_residency: "CH" }]);
     expect(closed).toBe(true);
@@ -159,7 +186,7 @@ describe("routine flow execution", () => {
     const output: unknown[] = [];
     try {
       process.stderr.write = (chunk) => { output.push(chunk); return true; };
-      await command.parseAsync(["node", "cortex", "pulse-flow", "--flows-dir", "relative", "--flow", "relative"]);
+      await command.parseAsync(["node", "cortex", "pulse-flow", "--flows-dir", "relative", "--flow", "relative", "--catalog-file", "/configured/catalog.json"]);
       expect(process.exitCode).toBe(1);
       expect(output).toEqual(["pulse-flow: flow and flows-dir must be absolute paths\n"]);
     } finally {

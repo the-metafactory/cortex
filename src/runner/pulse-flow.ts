@@ -33,13 +33,9 @@ export async function readRoutineFlow(flowsDir: string, flow: string): Promise<s
   return readFile(path, "utf8");
 }
 
-export async function installedActionInventory(): Promise<unknown> {
-  const child = Bun.spawn(["arc", "list", "--json"], { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
-  ]);
-  if (code !== 0) throw new Error(`Arc inventory failed (${code}): ${stderr.slice(0, 200)}`);
-  return JSON.parse(stdout);
+export async function readActionInventory(file: string): Promise<unknown> {
+  if (!isAbsolute(file)) throw new Error("catalog-file must be an absolute path");
+  return JSON.parse(await readFile(file, "utf8"));
 }
 
 export function requireFlowProviders(steps: PipelineStep[], runtime: Omit<StepRunnerOptions, "actionDirs">, names = new Set<string>()): Set<string> {
@@ -75,7 +71,7 @@ export function requireFlowProviders(steps: PipelineStep[], runtime: Omit<StepRu
 export async function executeRoutineFlow(options: {
   flowsDir: string;
   flow: string;
-  inventory?: () => Promise<unknown>;
+  inventory: () => Promise<unknown>;
   runtime?: Omit<StepRunnerOptions, "actionDirs">;
 }): Promise<void> {
   const yaml = await readRoutineFlow(options.flowsDir, options.flow);
@@ -83,7 +79,7 @@ export async function executeRoutineFlow(options: {
   const actions = validateSteps(document.actions);
   const runtime = options.runtime ?? {};
   const names = requireFlowProviders(actions, runtime);
-  const inventory = inventorySchema.parse(await (options.inventory ?? installedActionInventory)());
+  const inventory = inventorySchema.parse(await options.inventory());
   const projection = await mkdtemp(join(tmpdir(), "cortex-pulse-flow-"));
   try {
     const catalog: z.infer<typeof manifestSchema>[] = [];

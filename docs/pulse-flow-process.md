@@ -4,7 +4,7 @@ The `pulse-flow` process runs the `name` / `actions` YAML emitted by Pulse's sha
 
 ## Register the process
 
-Copy `examples/processes/pulse-flow.yaml` into the configured Cortex processes directory. Replace both `/absolute/routines/flows` values with the absolute directory owned by the routine installer. The process specification is trusted stack configuration: its `--flows-dir` value is the allowed root. Keep that value literal; only `--flow` receives an activation payload parameter.
+Copy `examples/processes/pulse-flow.yaml` into the configured Cortex processes directory. Replace both `/absolute/routines/flows` values with the absolute directory owned by the routine installer, and configure the absolute `--catalog-file` snapshot path. The process specification is trusted stack configuration: its `--flows-dir` value is the allowed root. Keep that value literal; only `--flow` receives an activation payload parameter.
 
 Register this target in the stack's `reflex_activation.targets` configuration, replacing `example` with the principal:
 
@@ -28,13 +28,15 @@ The runner substitutes the path into one argument, without a shell. The command 
 
 ## Validate and execute
 
-`cortex pulse-flow --flows-dir /absolute/routines/flows --flow /absolute/routines/flows/routine.yaml` validates the entire flow before executing an action. Validation uses Pulse's step validator and installed-catalog validator, including nested steps and sovereignty annotations. Optional top-level `input` supplies initial fields; otherwise `scenario` and `text` start empty.
+`cortex pulse-flow --flows-dir /absolute/routines/flows --flow /absolute/routines/flows/routine.yaml --catalog-file /absolute/routines/action-inventory.json` validates the entire flow before executing an action. Validation uses Pulse's step validator and installed-catalog validator, including nested steps and sovereignty annotations. Optional top-level `input` supplies initial fields; otherwise `scenario` and `text` start empty.
 
-One `arc list --json` snapshot selects only active action packages. The validator reads those exact manifests, and execution resolves actions through a temporary directory containing only those selected installations. It never searches the routine's directory, inactive siblings or unrelated package directories. The temporary directory is removed after execution.
+Capture `arc list --json > /absolute/routines/action-inventory.json` during provisioning or routine installation, then configure that trusted snapshot with `--catalog-file`. Refresh it after any action install, upgrade, enable or disable. Execution never invokes Arc and does not follow inventory changes until the snapshot is refreshed. A missing, invalid or relative snapshot path fails before actions.
+
+The snapshot selects only active action packages. The validator reads those exact manifests, and execution resolves actions through a temporary directory containing only those selected installations. It never searches the routine's directory, inactive siblings or unrelated package directories. The temporary directory is removed after execution.
 
 ## Configure agent routing
 
-The template explicitly opts into `--agent-provider myelin`. This uses Pulse's existing Myelin agent provider and the process runner's existing `PULSE_PRINCIPAL`, `PULSE_STACK`, `PULSE_NATS_URL` and `PULSE_NATS_CREDS` environment. The bus connection must succeed before any action executes. The provider forwards each agent step's capability and sovereignty to the configured stack and drains its connection when the run ends. It does not select a model or register agents.
+The template explicitly opts into `--agent-provider myelin`. This uses Pulse's existing Myelin agent provider and the process runner's existing `PULSE_PRINCIPAL`, `PULSE_STACK`, `PULSE_NATS_URL` and `PULSE_NATS_CREDS` environment. The bus connection must succeed before any action executes. The provider forwards each agent step's capability and sovereignty to the configured stack and drains its connection when the run ends. It does not select a model or register agents. If the Cortex service does not export these values, put a trusted `/usr/bin/env` prefix in the process specification argv, for example `PULSE_PRINCIPAL=example`, `PULSE_STACK=default`, `PULSE_NATS_URL=nats://127.0.0.1:4222` and `PULSE_NATS_CREDS=/absolute/stack.creds` before the `cortex` executable. Use the stack's existing credential file; never embed credential contents or URL passwords.
 
 For deterministic flows that do not need agent routing, remove the two `--agent-provider` arguments. Without a configured provider, any agent or tribunal step, including a nested step or an action requiring `agent`, fails before the first action. The unattended CLI has no human gate, research-model or direct LLM-model configuration; flows requiring those providers also fail before actions. It never falls back to stdin or an ambient model.
 

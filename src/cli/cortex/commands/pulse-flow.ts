@@ -1,6 +1,6 @@
 import { Option, type Command } from "commander";
 import { MyelinAgentProvider, NatsAgentTransport, type AgentTransport, type NatsAgentTransportOptions } from "pulse";
-import { executeRoutineFlow, readRoutineFlow } from "../../../runner/pulse-flow";
+import { executeRoutineFlow, readActionInventory, readRoutineFlow } from "../../../runner/pulse-flow";
 
 export function registerPulseFlowCommand(program: Command, dependencies: {
   connect?: (options: NatsAgentTransportOptions) => Promise<AgentTransport & { close: () => Promise<void> }>;
@@ -11,11 +11,13 @@ export function registerPulseFlowCommand(program: Command, dependencies: {
     .description("Execute a validated routine from a configured flow directory")
     .requiredOption("--flows-dir <path>", "Absolute allowed flow directory")
     .requiredOption("--flow <path>", "Absolute routine flow file")
+    .requiredOption("--catalog-file <path>", "Trusted installed-action inventory snapshot captured during provisioning")
     .addOption(new Option("--agent-provider <provider>", "Explicit agent routing provider").choices(["myelin"]))
-    .action(async (options: { flowsDir: string; flow: string; agentProvider?: string }) => {
+    .action(async (options: { flowsDir: string; flow: string; catalogFile: string; agentProvider?: string }) => {
       try {
+        const inventory = dependencies.inventory ?? (() => readActionInventory(options.catalogFile));
         if (!options.agentProvider) {
-          await executeRoutineFlow({ ...options, inventory: dependencies.inventory });
+          await executeRoutineFlow({ ...options, inventory });
           return;
         }
         await readRoutineFlow(options.flowsDir, options.flow);
@@ -27,7 +29,7 @@ export function registerPulseFlowCommand(program: Command, dependencies: {
         });
         try {
           const agentProvider = new MyelinAgentProvider({ transport, principal, stack: env.PULSE_STACK });
-          await executeRoutineFlow({ ...options, inventory: dependencies.inventory, runtime: { agentProvider } });
+          await executeRoutineFlow({ ...options, inventory, runtime: { agentProvider } });
         } finally {
           await transport.close();
         }
