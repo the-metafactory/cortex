@@ -11,6 +11,8 @@ import { proposalTime, type DeskProposal } from "../../desk/ask";
 import { DAY_MS, startOfDay } from "../../desk/time";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
+import { useDeskLocation, useDeskStudio } from "../hooks/use-desk-studio";
+import { DeskStudio } from "./desk-studio";
 import { ALL_AREAS, briefing, canSee, clock, openGroup, selectItems, URGENCY_LABEL } from "../../desk/present";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskView as DeskViewModel } from "../../desk/types";
 
@@ -70,6 +72,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const askInput = useRef<HTMLInputElement>(null);
   const [hint, setHint] = useState(() => wantsHint(view.notifications, browserNotifyEnv()));
   const latest = useRef(view);
+  const [place, go] = useDeskLocation();
+  const { studio } = useDeskStudio(place.mode === "studio");
+  const inStudio = place.mode === "studio" && studio !== null;
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
   const group = groupKind ? openGroup(selection, groupKind) : null;
@@ -284,11 +289,17 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   return (
-    <div className={`desk${detail ? " panel-open" : ""}`}>
+    <div className={`desk${detail ? " panel-open" : ""}${inStudio ? " in-studio" : ""}`}>
       <div className="desk-top">
         <div className="desk-top-in">
           <div className="desk-left">
             <div className="desk-brand"><span className="desk-mark" />Desk</div>
+            {studio && (
+              <div className="desk-seg desk-mode" role="tablist" aria-label="View">
+                <button type="button" role="tab" aria-selected={!inStudio} onClick={() => go({ mode: "day", thread: null })}>Day</button>
+                <button type="button" role="tab" aria-selected={inStudio} onClick={() => go({ mode: "studio", thread: null })}>Studio</button>
+              </div>
+            )}
             <div className="desk-askwrap">
               <form
                 className="desk-ask"
@@ -312,7 +323,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             </div>
           </div>
           <div className="desk-topr">
-            {view.areas.length > 0 && (
+            {!inStudio && view.areas.length > 0 && (
               <div className="desk-seg" role="tablist" aria-label="Area">
                 <button type="button" role="tab" aria-selected={area === ALL_AREAS} onClick={() => setArea(ALL_AREAS)}>All</button>
                 {view.areas.map((a) => (
@@ -327,7 +338,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       </div>
 
-      <div className="desk-grid">
+      {inStudio && studio && <DeskStudio studio={studio} thread={place.thread} onOpenThread={(slug) => go({ mode: "studio", thread: slug })} />}
+      <div className="desk-grid" hidden={inStudio}>
         <main>
           <section className="desk-lead">
             <p><strong>{brief.greeting}</strong> {brief.lines.join(" ")}</p>
