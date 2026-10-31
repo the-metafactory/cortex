@@ -348,6 +348,7 @@ import { createProbeResponder, type ProbeResponder } from "./bus/probe-responder
 import { dispatchNetwork } from "./cli/cortex/commands/network";
 import { registerLedgerCommand } from "./cli/cortex/commands/ledger";
 import { registerDeskCommand } from "./cli/cortex/commands/desk";
+import { registerPulseFlowCommand } from "./cli/cortex/commands/pulse-flow";
 import { resolveRegistryAnchor } from "./cli/cortex/commands/default-registry";
 import { dispatchOffer } from "./cli/cortex/commands/offer";
 import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
@@ -6944,6 +6945,7 @@ if (import.meta.main) {
 
   registerLedgerCommand(program);
   registerDeskCommand(program);
+  registerPulseFlowCommand(program);
 
   program
     .command("start")

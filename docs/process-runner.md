@@ -40,3 +40,5 @@ The handler also sets `MF_SERVES_GOAL` and `MF_SERVES_NODE` from the fired
 envelope's sibling `payload.serves`, and `MF_CORRELATION_ID` from its
 `correlation_id`. Missing fire values remove those keys, including any values
 inherited from cortex. Unset parent variables are omitted.
+
+For the generic routine-file process and its configured path boundary, see [Run routine files through Pulse](pulse-flow-process.md).
