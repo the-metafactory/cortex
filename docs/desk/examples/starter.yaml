@@ -1,0 +1,22 @@
+mc:
+  enabled: true
+  desk:
+    displayName: Sam
+    areas:
+      - id: work
+        label: Work
+        color: "#2563eb"
+      - id: home
+        label: Home
+        color: "#16a34a"
+    sources:
+      - id: calendar
+        command: [/opt/cortex-desk-adapters/bin/desk-ics.ts, /opt/cortex-desk-adapters/examples/calendar.ics]
+        area: work
+        everySeconds: 300
+      - id: sample-mail
+        command: [/bin/cat, /opt/cortex-desk-adapters/examples/mail.json]
+        area: work
+    interruptions:
+      transport: none
+      meetingMinutes: 10

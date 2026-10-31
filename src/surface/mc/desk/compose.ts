@@ -4,7 +4,7 @@ import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
 import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoName, type AreaRule, type GoalActionsInput } from "./rank";
 import { DAY_MS, startOfDay } from "./time";
-import { SourceCache, type DeskSourceConfig, type SourceEvent } from "./sources/command";
+import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceReading } from "./sources/command";
 import { listSenders, listVips } from "./vips";
 import { trashKey, type MailActionsConfig } from "./mail-actions";
 import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
@@ -111,7 +111,7 @@ export async function composeDesk(
   if (rangerResult) sources.push(rangerResult.error === null ? { id: "ranger", ok: true } : { id: "ranger", ok: false, error: rangerResult.error });
 
   for (const r of readings) sources.push(r.error === null ? { id: r.id, ok: true } : { id: r.id, ok: false, error: r.error });
-  const unreadable = readings.filter((r) => r.dropped > 0).map((r) => `The ${r.id} source sent ${r.dropped} ${r.dropped === 1 ? "entry" : "entries"} the Desk could not read.`);
+  const unreadable = readings.filter((r) => r.problems.length > 0).map(unreadableLine);
   const events = readings.flatMap((r) => r.events.map((e) => ({ ...e, area: r.area, sourceId: r.id })));
   const mail = readings.flatMap((r) => r.mail.filter((m) => !(deps.handled?.has(trashKey(m.id)) ?? false)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
@@ -180,6 +180,12 @@ export async function composeDesk(
     corrections: activeCorrections,
     mailClassifier,
   };
+}
+
+function unreadableLine(r: SourceReading): string {
+  const what = r.dropped > 0 ? `${r.dropped} ${r.dropped === 1 ? "entry" : "entries"} the Desk could not read` : "output the Desk could not read";
+  const more = r.problems.length > 1 ? ` (and ${r.problems.length - 1} more)` : "";
+  return `The ${r.id} source sent ${what}: ${r.problems[0] ?? ""}${more}.`;
 }
 
 function mailCorrections(corrections: DeskCorrection[]): ClassifierCorrection[] {

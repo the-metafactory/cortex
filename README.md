@@ -301,6 +301,7 @@ envelope storage in a stream.
 
 ## Documentation
 
+- [The Desk](docs/desk/README.md): setup, configuration, and adapter contracts.
 - [`docs/architecture.md`](docs/architecture.md) — canonical architecture reference
 - [`CONTEXT.md`](CONTEXT.md) — domain glossary (one canonical term per concept)
 - [`README-AGENTS.md`](README-AGENTS.md) — install + configure guide for AI agents (and impatient humans)

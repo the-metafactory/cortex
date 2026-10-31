@@ -3,16 +3,18 @@ import { runCommand } from "../spawn";
 
 /**
  * The Desk source contract (cortex#2772): a source is a command, run without a shell, that prints one
- * JSON object with `events` and/or `items`. Entries that do not match are dropped, not fatal.
+ * JSON object with `events` and/or `items`. Entries that do not match are dropped, not fatal, and each
+ * dropped entry yields a problem that names the field.
  */
 /** Links a source may hand to the Desk: web pages, meetings, and Apple Mail messages. */
 export const SAFE_LINK = /^(https?:|message:)/i;
-const safeLink = z.string().refine((u) => SAFE_LINK.test(u));
+const safeLink = z.string().refine((u) => SAFE_LINK.test(u), "must start with http:, https: or message:");
+const isoDate = z.string().refine((s) => Number.isFinite(Date.parse(s)), "must be an ISO 8601 date and time");
 
 export const SourceEventSchema = z.object({
   id: z.string().min(1),
-  start: z.string().refine((s) => Number.isFinite(Date.parse(s))),
-  end: z.string().refine((s) => Number.isFinite(Date.parse(s))).optional(),
+  start: isoDate,
+  end: isoDate.optional(),
   allDay: z.boolean().optional(),
   title: z.string().min(1),
   location: z.string().optional(),
@@ -25,7 +27,7 @@ export const SourceMailSchema = z.object({
   id: z.string().min(1),
   from: z.object({ name: z.string().optional(), address: z.string().min(3) }),
   subject: z.string(),
-  receivedAt: z.string().refine((s) => Number.isFinite(Date.parse(s))),
+  receivedAt: isoDate,
   unread: z.boolean(),
   firstParagraph: z.string().optional(),
   url: safeLink.optional(),
@@ -51,21 +53,50 @@ export interface SourceReading {
   readAt: number;
   error: string | null;
   dropped: number;
+  problems: string[];
 }
 
-/** Parses a source's stdout; keeps each entry that matches the contract and counts the rest. */
-export function parseSourceOutput(stdout: string): { events: SourceEvent[]; mail: SourceMail[]; dropped: number } {
-  const body = JSON.parse(stdout) as { events?: unknown; items?: unknown };
+export interface ParsedSource {
+  events: SourceEvent[];
+  mail: SourceMail[];
+  dropped: number;
+  problems: string[];
+}
+
+const fieldPath = (root: string, path: readonly PropertyKey[]): string =>
+  path.reduce<string>((at, key) => (typeof key === "number" ? `${at}[${key}]` : `${at}.${String(key)}`), root);
+
+export function entryProblems(root: string, error: z.ZodError): string[] {
+  return error.issues.map((issue) => `${fieldPath(root, issue.path)}: ${issue.message}`);
+}
+
+export function parseSourceOutput(stdout: string): ParsedSource {
+  let body: unknown;
+  try {
+    body = JSON.parse(stdout);
+  } catch {
+    throw new Error("printed no JSON object on stdout");
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) throw new Error("printed JSON that is not an object with events or items");
+  const events = "events" in body ? body.events : undefined;
+  const items = "items" in body ? body.items : undefined;
   let dropped = 0;
-  const keep = <T>(list: unknown, schema: z.ZodType<T>): T[] => {
-    if (!Array.isArray(list)) return [];
-    return list.flatMap((entry) => {
+  const problems: string[] = [];
+  const keep = <T>(name: string, list: unknown, schema: z.ZodType<T>): T[] => {
+    if (list === undefined) return [];
+    if (!Array.isArray(list)) {
+      problems.push(`${name}: must be an array`);
+      return [];
+    }
+    return list.flatMap((entry, i) => {
       const parsed = schema.safeParse(entry);
-      if (!parsed.success) dropped += 1;
-      return parsed.success ? [parsed.data] : [];
+      if (parsed.success) return [parsed.data];
+      dropped += 1;
+      problems.push(...entryProblems(`${name}[${i}]`, parsed.error));
+      return [];
     });
   };
-  return { events: keep(body.events, SourceEventSchema), mail: keep(body.items, SourceMailSchema), dropped };
+  return { events: keep("events", events, SourceEventSchema), mail: keep("items", items, SourceMailSchema), dropped, problems };
 }
 
 export type CommandRunner = (argv: string[], timeoutMs: number) => Promise<string>;
@@ -106,7 +137,7 @@ export class SourceCache {
   private refresh(source: DeskSourceConfig, now: number, cached: SourceReading | undefined): Promise<SourceReading> {
     const next = this.run(source.command, source.timeoutSeconds * 1000)
       .then((stdout) => ({ ...parseSourceOutput(stdout), error: null }))
-      .catch((err: unknown) => ({ events: cached?.events ?? [], mail: cached?.mail ?? [], dropped: 0, error: err instanceof Error ? err.message : String(err) }))
+      .catch((err: unknown) => ({ events: cached?.events ?? [], mail: cached?.mail ?? [], dropped: 0, problems: [], error: err instanceof Error ? err.message : String(err) }))
       .then((r): SourceReading => {
         const reading = { id: source.id, area: source.area ?? null, readAt: now, ...r };
         this.readings.set(source.id, reading);

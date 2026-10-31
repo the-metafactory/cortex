@@ -360,7 +360,7 @@ export type NetworkFile = z.infer<typeof NetworkFileSchema>;
 // Main config schema
 // =============================================================================
 
-export const DESK_TRANSPORTS = ["none", "discord"] as const;
+export const DESK_TRANSPORTS = ["none", "discord", "command"] as const;
 export const AREA_POLICIES = ["local", "cloud"] as const;
 export const VOICE_PROVIDERS = ["browser", "elevenlabs"] as const;
 
@@ -384,6 +384,8 @@ const DeskVoiceSchema = z
 
 const DeskInterruptionsSchema = z.object({
   transport: z.enum(DESK_TRANSPORTS).default("none"),
+  command: z.array(z.string().min(1)).min(1).optional(),
+  timeoutSeconds: z.number().int().min(1).max(120).optional(),
   meetingMinutes: z.number().int().min(0).max(120).default(10),
   mail: z.boolean().default(true),
   reminders: z.boolean().default(true),
@@ -391,7 +393,7 @@ const DeskInterruptionsSchema = z.object({
   everySeconds: z.number().int().min(15).max(3600).default(60),
   chime: z.boolean().default(true),
   notifications: z.boolean().default(true),
-});
+}).refine((v) => v.transport !== "command" || v.command !== undefined, "mc.desk.interruptions.command is required when transport is command");
 
 export const CLASSIFIER_FORM_ERROR = "mc.desk.mail.classifier: set either command, or baseUrl and model";
 

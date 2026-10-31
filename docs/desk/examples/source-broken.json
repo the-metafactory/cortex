@@ -1,0 +1,8 @@
+{
+  "events": [
+    { "id": "e1", "start": "next Tuesday", "title": "Planning" }
+  ],
+  "items": [
+    { "kind": "mail", "id": "m1@example.org", "from": { "address": "ada@example.org" }, "subject": "Hi", "receivedAt": "2026-10-30T09:12:00Z" }
+  ]
+}
