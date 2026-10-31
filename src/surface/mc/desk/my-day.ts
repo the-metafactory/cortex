@@ -1,7 +1,7 @@
 import { DEFAULT_YES_FILTER } from "./yes-filter";
 import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
-import { DEFAULT_SETTINGS, MAX_FOCUS_PER_MONTH, ancestorIndex, applyDayToHistory, applyRecurrence, findNode, rankAll, selectToday, shiftDays, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
+import { DEFAULT_SETTINGS, MAX_FOCUS_PER_MONTH, ancestorIndex, applyDayToHistory, applyRecurrence, collectLeaves, findNode, rankAll, selectToday, shiftDays, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
 import { loadBalanceState, saveBalanceState } from "./balance-store";
 import { MyDayMetaSchema, type MyDayCommand, type MyDayMeta } from "./my-day-schema";
 import type { DeskOptions } from "./compose";
@@ -31,7 +31,8 @@ function stateFor(db: Database, desk: DeskOptions, date: string): AppState {
     if (existing) existing.title = area.label;
     else state.outline.children.push({ id: `area:${area.id}`, title: area.label, weight: 50, ordering: "parallel", children: [] });
   }
-  applyRecurrence(state.outline, date);
+  const completedToday = new Set(state.log.filter(event => event.date === date).map(event => event.taskId));
+  for (const task of collectLeaves(state.outline)) if (!completedToday.has(task.id)) applyRecurrence(task, date);
   return state;
 }
 export interface MyDayView {
@@ -95,6 +96,12 @@ function requiredNode(state: AppState, id: string): OutlineNode {
   const node = findNode(state.outline, id);
   if (!node) throw new Error("That outline item no longer exists.");
   return node;
+}
+function destination(state: AppState, desk: DeskOptions, id: string): OutlineNode {
+  const parent = requiredNode(state, id);
+  if (!findNode(configuredState(state, desk).outline, parent.id) || parent.id === state.outline.id || parent.effort || (parent.done && parent.children.length > 0)) throw new Error("Choose an area or open project as the parent.");
+  delete parent.done;
+  return parent;
 }
 function validateSelection(state: AppState, date: string, ids: string[]): void {
   const allowed = new Set(rankAll(state, date).map(i => i.task.id));
@@ -166,7 +173,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
       case "done": {
         if (state.dayState?.date !== date || state.dayState.closed || !state.dayState.confirmed.includes(command.id)) throw new Error("Choose an item in your active day.");
         const node = requiredNode(state, command.id);
-        if (node.done) break;
+        if (node.done || state.log.some(event => event.taskId === node.id && event.date === date)) break;
         const area = ancestorIndex(state.outline).get(node.id)?.[1];
         if (!area) throw new Error("This task needs an area.");
         node.done = true;
@@ -223,17 +230,13 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         const index = meta.inbox.findIndex(n => n.id === command.id);
         const node = meta.inbox[index];
         if (!node) throw new Error("This Inbox item was already filed.");
-        const parent = requiredNode(state, command.parent);
-        if (!findNode(configuredState(state, desk).outline, parent.id) || parent.id === state.outline.id || parent.effort || (parent.done && parent.children.length > 0)) throw new Error("Choose an area or open project.");
-        delete parent.done;
+        const parent = destination(state, desk, command.parent);
         parent.children.push(node);
         meta.inbox.splice(index, 1);
         break;
       }
       case "add": {
-        const parent = requiredNode(state, command.parent);
-        if (!findNode(configuredState(state, desk).outline, parent.id) || parent.id === state.outline.id || (parent.done && parent.children.length > 0) || (parent.children.length === 0 && parent.effort)) throw new Error("Choose an area or project as the parent.");
-        delete parent.done;
+        const parent = destination(state, desk, command.parent);
         parent.children.push({ id: crypto.randomUUID(), title: command.title, weight: 50, ordering: "parallel", children: [], ...(command.kind === "task" ? { effort: 1 } : { done: true }) });
         break;
       }

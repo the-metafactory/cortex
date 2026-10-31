@@ -2,7 +2,7 @@
 
 My day sits beside Needs you. The Balance engine chooses its proposed list from your outline, weights, due dates, focus projects and scheduling history. Each item includes the engine’s reason and trace. Ivy does not rerank the list. The visible briefing and spoken briefing end with the same proposed list and confirmation choices. After you close the day, both start with your wins.
 
-Use **Swap** to choose from up to three engine alternates. **Just one thing** keeps the first item. **Refresh proposal** asks the engine for a new draft. **Start the day** confirms the current list once. The confirmation and its scheduling history survive reload and restart. Completing a task records one win. **Done for today** closes the contract and shows those wins first.
+Use **Swap** to choose from up to three engine alternates. **Just one thing** keeps the first item. **Refresh proposal** asks the engine for a new draft. **Start the day** confirms the current list once. The confirmation and its scheduling history survive reload and restart. Completing a task records one win per day, including recurring tasks whose next occurrence already falls in their lead window. **Done for today** closes the contract and shows those wins first.
 
 **Not today** defers one task until tomorrow. **Undo** survives reload and removes that deferral alone. It preserves other edits and completions. If someone changes that deferral again, Undo refuses to replace their change. A change from yesterday cannot mutate today’s contract.
 

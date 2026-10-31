@@ -71,6 +71,28 @@ describe("My day lane and day contract", () => {
     expect(html).not.toContain("Start the day");
     expect(() => change({ op: "done", id: "third" })).toThrow("active day");
   });
+  it("a recurring task with lead time records at most one win per day and reopens tomorrow", () => {
+    const state = seed();
+    const task = findNode(state.outline, "constructor");
+    if (!task) throw new Error("Missing recurring task");
+    task.repeat = { unit: "day", interval: 1 };
+    task.leadDays = 1;
+    saveBalanceState(db, state);
+    change({ op: "start", ids: [task.id] });
+    change({ op: "done", id: task.id });
+    readMyDay(db, desk, NOW);
+    change({ op: "done", id: task.id });
+    expect(loadBalanceState(db)?.log).toHaveLength(1);
+    expect(findNode(loadBalanceState(db)?.outline ?? state.outline, task.id)?.repeat?.timesDone).toBe(1);
+    expect(readMyDay(db, desk, NOW).items.map(i => i.task.id)).not.toContain(task.id);
+    const tomorrow = NOW + 86400000;
+    const next = readMyDay(db, desk, tomorrow);
+    expect(next.items.map(i => i.task.id)).toContain(task.id);
+    change({ op: "start", ids: [task.id] }, crypto.randomUUID(), { now: tomorrow, date: localDay(tomorrow) });
+    change({ op: "done", id: task.id }, crypto.randomUUID(), { now: tomorrow, date: localDay(tomorrow) });
+    expect(loadBalanceState(db)?.log).toHaveLength(2);
+    expect(findNode(loadBalanceState(db)?.outline ?? state.outline, task.id)?.repeat?.timesDone).toBe(2);
+  });
   it("semantic Undo survives reload and preserves another writer's title and completion", () => {
     change({ op: "start", ids: ["constructor", "__proto__"] });
     const result = change({ op: "defer", id: "constructor" });

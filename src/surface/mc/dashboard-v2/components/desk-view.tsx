@@ -244,7 +244,16 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     const goal = item.goal ?? "";
     if (a.id === "detail") setDetail(item);
     else if (a.id === "snooze") setSnoozed((s) => new Set(s).add(item.key));
-    else if (a.id === "todo" && view.myDay) void send(item, a, { request: async () => { try { await submitMyDay(view.myDay?.date ?? "", { op: "todo", key: item.key, fingerprint: item.todoFingerprint ?? "" }); return { ok: true, text: "Moved to your outline Inbox." }; } catch (err) { return { ok: false, text: err instanceof Error ? err.message : "Could not move to Inbox." }; } } });
+    else if (a.id === "todo" && view.myDay) void send(item, a, {
+      keepVisible: true,
+      request: async () => {
+        try {
+          await submitMyDay(view.myDay?.date ?? "", { op: "todo", key: item.key, fingerprint: item.todoFingerprint ?? "" });
+          setDetail(d => d?.key === item.key && d.todoFingerprint === item.todoFingerprint ? null : d);
+          return { ok: true, text: "Moved to your outline Inbox." };
+        } catch (err) { return { ok: false, text: err instanceof Error ? err.message : "Could not move to Inbox." }; }
+      },
+    });
     else if (a.id === "vip.add" && a.target) void addVip(a.target, item.title.split(" wrote:")[0] ?? null);
     else if (a.id === "reminder.done" && a.target) {
       setDetail((d) => (d?.key === item.key ? null : d));
