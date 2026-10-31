@@ -16,7 +16,7 @@ const defaultSchedule = (fn: () => void, ms: number): (() => void) => {
 };
 
 /** Start immediately, isolate failures, and drain before shared resources close. */
-export function startVigilTick(opts: VigilTickOptions): { stop(): Promise<void> } {
+export function startVigilTick(opts: VigilTickOptions): { stop(): Promise<void>; waitForTick(): Promise<void> } {
   const onError = opts.onError ?? ((err: unknown) => {
     console.warn(`vigil: tick failed: ${err instanceof Error ? err.message : String(err)}`);
   });
@@ -32,6 +32,7 @@ export function startVigilTick(opts: VigilTickOptions): { stop(): Promise<void> 
   tick();
   const cancel = (opts.schedule ?? defaultSchedule)(tick, opts.intervalMs ?? VIGIL_TICK_MS);
   return {
+    waitForTick: () => inFlight ?? Promise.resolve(),
     stop: async () => {
       if (!stopped) {
         stopped = true;

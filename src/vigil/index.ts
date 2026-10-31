@@ -27,6 +27,7 @@ import { publishReconcileDelta } from "../surface/mc/attention-notify";
 export { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER };
 
 export interface VigilHandle {
+  waitForTick(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -163,6 +164,7 @@ export async function startVigil(opts: {
   });
   let stopping: Promise<void> | undefined;
   return {
+    waitForTick: () => tick.waitForTick(),
     stop: () => stopping ??= (async () => {
       await tick.stop();
       await pull.stop();
