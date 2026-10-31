@@ -1,4 +1,4 @@
-import type { DeskView } from "../../desk/types";
+import type { DeskItem, DeskView } from "../../desk/types";
 import { freshInterrupts, loadSeen, rememberSeen, type SeenStore } from "./desk-seen";
 
 const NOTIFIED_KEY = "desk.notified";
@@ -39,21 +39,18 @@ export function notifyIfNew(view: DeskView, env: NotifyEnv, open: (key: string) 
   const api = env.api;
   if (!api || notifyState(view.notifications, env) !== "granted") return [];
   const seen = loadSeen(env.store, NOTIFIED_KEY);
-  const items = new Map(view.items.map((i) => [i.key, i]));
-  const shown = freshInterrupts(view, seen).filter((key) => {
-    const item = items.get(key);
-    return item !== undefined && show(api, env, key, item.title, item.why, open);
-  });
+  const fresh = new Set(freshInterrupts(view, seen));
+  const shown = view.items.filter((item) => fresh.has(item.key) && show(api, env, item, open)).map((item) => item.key);
   if (shown.length > 0) rememberSeen(env.store, NOTIFIED_KEY, seen, shown);
   return shown;
 }
 
-function show(api: NotifyApi, env: NotifyEnv, key: string, title: string, why: string, open: (key: string) => void): boolean {
+function show(api: NotifyApi, env: NotifyEnv, item: DeskItem, open: (key: string) => void): boolean {
   try {
-    const n = new api(title, { body: why, tag: `desk:${key}` });
+    const n = new api(item.title, { body: item.why, tag: `desk:${item.key}` });
     n.onclick = () => {
       env.focus();
-      open(key);
+      open(item.key);
       n.close();
     };
     return true;
@@ -94,7 +91,12 @@ export function browserNotifyEnv(): NotifyEnv | null {
 
 export function notifyForNew(view: DeskView, open: (key: string) => void): void {
   const env = browserNotifyEnv();
-  if (env) notifyIfNew(view, env, open);
+  if (!env) return;
+  try {
+    notifyIfNew(view, env, open);
+  } catch {
+    return;
+  }
 }
 
 export async function requestNotifications(view: DeskView): Promise<NotifyState | null> {
