@@ -189,6 +189,7 @@ import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/r
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
 import { discordTransport } from "./surface/mc/desk/transports";
 import { expandGoalPaths } from "./surface/mc/desk/goals";
+import { toClassifierConfig } from "./surface/mc/desk/classify";
 import { notifyWithResult } from "./adapters/notify-result";
 import { createVigilDeliveryPorts, startVigil, type VigilHandle } from "./vigil";
 import { somaGoalWording } from "./vigil/result-render";
@@ -4963,11 +4964,11 @@ export async function startCortex(
           goals: expandGoalPaths(config.mc.desk.goals, expandTilde),
           ...(config.mc.desk.mail.classifier
             ? {
-                mailClassifier: {
+                mailClassifier: toClassifierConfig({
                   ...config.mc.desk.mail.classifier,
                   ...(config.mc.desk.mail.classifier.apiKeyFile ? { apiKeyFile: expandTilde(config.mc.desk.mail.classifier.apiKeyFile) } : {}),
                   ...(config.mc.desk.mail.classifier.caFile ? { caFile: expandTilde(config.mc.desk.mail.classifier.caFile) } : {}),
-                },
+                }),
               }
             : {}),
           ...(config.mc.desk.mail.actions ? { mailActions: config.mc.desk.mail.actions } : {}),

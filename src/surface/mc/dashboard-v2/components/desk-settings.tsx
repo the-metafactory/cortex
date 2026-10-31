@@ -72,7 +72,7 @@ export interface SettingsBodyProps {
 export function classifierLines(c: DeskMailClassifier | null): string[] {
   if (!c) return ["The Desk sorts unread mail by the words it shares with your meetings. Set mc.desk.mail.classifier in the stack config to let a model sort it."];
   const key = !c.keyNeeded ? "It needs no API key." : c.keyFound ? "Its API key was found." : "Its API key was not found, so the Desk sorts mail by shared words until it is.";
-  const who = c.command ? `A command sorts your unread mail: ${c.command}.` : `A model sorts your unread mail: ${c.model} at ${c.host}.`;
+  const who = c.kind === "command" ? `A command sorts your unread mail: ${c.command}.` : `A model sorts your unread mail: ${c.model} at ${c.host}.`;
   return [who, key, "Change it in the stack config."];
 }
 

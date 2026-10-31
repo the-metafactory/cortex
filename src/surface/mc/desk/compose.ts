@@ -16,7 +16,7 @@ import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
-import { classifierStatus, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier } from "./classify";
+import { classifierStatus, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier } from "./classify";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
 export interface DeskRuntime {
@@ -173,7 +173,7 @@ export async function composeDesk(
 }
 
 function mailCorrections(corrections: DeskCorrection[]): ClassifierCorrection[] {
-  return corrections.filter((c) => c.kind === "mail").slice(0, MAX_CORRECTIONS).map(({ kind, source, mode, label }) => ({ kind, source, mode, label }));
+  return corrections.filter((c) => c.kind === "mail").map(({ kind, source, mode, label }) => ({ kind, source, mode, label }));
 }
 
 function goalActionsFor(goals: DeskGoalOptions | undefined, subjects: VigilSubjectView[], checks: GoalChecks | undefined, now: number): GoalActionsInput {

@@ -9,8 +9,9 @@ import {
   MailClassifier,
   MAX_SUMMARY,
   readClassifications,
+  toClassifierConfig,
   validateAnswer,
-  type ClassifierConfig,
+  type CommandConfig,
   type ClassifierRequest,
   type CommandRunner,
   type MailClassification,
@@ -21,7 +22,7 @@ import { McSchema } from "../../../common/types/config";
 const NOW = new Date("2026-10-31T09:00:00").getTime();
 const KUNDEN_KEY = "cal:work-calendar:k1";
 const KUNDEN = { id: "k1", title: "Switch-Kundenmeeting 2026", start: new Date(NOW + 2 * 86_400_000).toISOString(), sourceId: "work-calendar" };
-const COMMAND: ClassifierConfig = { command: ["/opt/desk/bin/desk-classify-mail.ts", "--flow", "/opt/desk/flows/desk-mail-triage.yaml"], timeoutSeconds: 75, maxPerPass: 10 };
+const COMMAND: CommandConfig = { command: ["/opt/desk/bin/desk-classify-mail.ts", "--flow", "/opt/desk/flows/desk-mail-triage.yaml"], timeoutSeconds: 75, maxPerPass: 10 };
 const quiet = (): void => undefined;
 
 const mail = (id: string, over: Partial<SourceMail> = {}): SourceMail & { sourceId: string } => ({
@@ -56,6 +57,12 @@ describe("the classifier config", () => {
     expect(parse({})).toBe(false);
   });
 
+  it("narrows the parsed config to one form", () => {
+    expect(toClassifierConfig({ command: ["x"], timeoutSeconds: 75, maxPerPass: 10 })).toEqual({ command: ["x"], timeoutSeconds: 75, maxPerPass: 10 });
+    expect(toClassifierConfig({ baseUrl: "https://a/v1", model: "m", caFile: "/ca", timeoutSeconds: 30, maxPerPass: 10 })).toEqual({ baseUrl: "https://a/v1", model: "m", caFile: "/ca", timeoutSeconds: 30, maxPerPass: 10 });
+    expect(() => toClassifierConfig({ model: "m", timeoutSeconds: 30, maxPerPass: 10 })).toThrow("set either command, or baseUrl and model");
+  });
+
   it("keeps the CA file to the endpoint form", () => {
     expect(parse({ command: ["desk-classify-mail"], caFile: "/ca.pem" })).toBe(false);
     expect(parse({ command: ["desk-classify-mail"], apiKeyFile: "~/.key", timeoutSeconds: 75 })).toBe(true);
@@ -71,9 +78,9 @@ describe("the command form", () => {
       calls.push({ argv, timeoutMs, stdin, ...(env ? { env } : {}) });
       return { code: 0, signal: null, stdout: "{\"category\":\"bulk\",\"reason\":\"A newsletter.\"}\n", stderr: "" };
     };
-    const answer = await commandClassifier({ ...COMMAND, command: COMMAND.command ?? [], apiKeyFile: "/key" }, run, async () => "sk-test")(REQUEST, 75_000);
+    const answer = await commandClassifier({ ...COMMAND, apiKeyFile: "/key" }, run, async () => "sk-test")(REQUEST, 75_000);
     expect(answer).toEqual({ category: "bulk", reason: "A newsletter." });
-    expect(calls[0]?.argv).toEqual(COMMAND.command ?? []);
+    expect(calls[0]?.argv).toEqual(COMMAND.command);
     expect(calls[0]?.timeoutMs).toBe(75_000);
     expect(JSON.parse(calls[0]?.stdin ?? "")).toEqual(REQUEST);
     expect(calls[0]?.env?.[CLASSIFIER_KEY_ENV]).toBe("sk-test");
@@ -82,12 +89,12 @@ describe("the command form", () => {
 
   it("runs without an extra environment when no key is configured", async () => {
     let seen: Record<string, string | undefined> | undefined = { x: "y" };
-    await commandClassifier({ ...COMMAND, command: COMMAND.command ?? [] }, async (_a, _t, _s, env) => { seen = env; return { code: 0, signal: null, stdout: "{}", stderr: "" }; }, async () => null)(REQUEST, 1000);
+    await commandClassifier(COMMAND, async (_a, _t, _s, env) => { seen = env; return { code: 0, signal: null, stdout: "{}", stderr: "" }; }, async () => null)(REQUEST, 1000);
     expect(seen).toBeUndefined();
   });
 
   it("fails with the command's last stderr line, a kill, a timeout or a missing JSON answer", async () => {
-    const cmd = { ...COMMAND, command: COMMAND.command ?? [] };
+    const cmd = COMMAND;
     const noKey = async () => null;
     await expect(commandClassifier(cmd, async () => ({ code: 2, signal: null, stdout: "", stderr: "debug\ndesk-classify-mail: the gateway is unreachable\n" }), noKey)(REQUEST, 1000))
       .rejects.toThrow("the classifier command desk-classify-mail.ts exited 2: desk-classify-mail: the gateway is unreachable");
@@ -110,16 +117,16 @@ describe("the extra answer fields", () => {
   const base: MailClassification = { category: "meeting", meetingKey: KUNDEN_KEY, reason: "It sets the agenda." };
 
   it("keeps a summary, a suggested action and up to five pieces of evidence", () => {
-    expect(validateAnswer({ ...base, summary: "Ada sends the agenda.", suggestedAction: "link-meeting", evidence: EVIDENCE }, keys))
+    expect(validateAnswer({ ...base, summary: "Ada sends the agenda.", suggestedAction: "link-meeting", evidence: EVIDENCE }, keys, true))
       .toEqual({ ...base, summary: "Ada sends the agenda.", suggestedAction: "link-meeting", evidence: EVIDENCE });
   });
 
   it("rejects a long summary, an unknown action and too much or malformed evidence", () => {
-    expect(validateAnswer({ ...base, summary: "x".repeat(MAX_SUMMARY + 1) }, keys)).toBeNull();
-    expect(validateAnswer({ ...base, suggestedAction: "forward" }, keys)).toBeNull();
-    expect(validateAnswer({ ...base, evidence: Array.from({ length: 6 }, () => EVIDENCE[0]) }, keys)).toBeNull();
-    expect(validateAnswer({ ...base, evidence: [{ kind: "web", ref: "x", title: "y" }] }, keys)).toBeNull();
-    expect(validateAnswer({ ...base, evidence: [{ kind: "mail", ref: "x" }] }, keys)).toBeNull();
+    expect(validateAnswer({ ...base, summary: "x".repeat(MAX_SUMMARY + 1) }, keys, true)).toBeNull();
+    expect(validateAnswer({ ...base, suggestedAction: "forward" }, keys, true)).toBeNull();
+    expect(validateAnswer({ ...base, evidence: Array.from({ length: 6 }, () => EVIDENCE[0]) }, keys, true)).toBeNull();
+    expect(validateAnswer({ ...base, evidence: [{ kind: "web", ref: "x", title: "y" }] }, keys, true)).toBeNull();
+    expect(validateAnswer({ ...base, evidence: [{ kind: "mail", ref: "x" }] }, keys, true)).toBeNull();
   });
 });
 
@@ -137,6 +144,12 @@ describe("a pass through the command", () => {
     const expected: MailClassification = { category: "meeting", meetingKey: KUNDEN_KEY, reason: "It sets the agenda.", summary: "Ada sends the agenda.", suggestedAction: "link-meeting", evidence: EVIDENCE };
     expect(readClassifications(db, ["m1"]).get("m1")).toEqual(expected);
     expect(db.query<{ model: string }, []>("SELECT model FROM desk_mail_classes").get()?.model).toBe("desk-classify-mail.ts");
+  });
+
+  it("rejects a command answer whose extra field breaks the rules, so the rules fallback stays", async () => {
+    const c = new MailClassifier(COMMAND, async () => ({ category: "fyi", reason: "News.", suggestedAction: "forward" }), quiet);
+    expect(await c.kick(db, { now: NOW, mail: [mail("m3")], events: [], vips: [] })).toMatchObject({ classified: 0, failed: 1 });
+    expect(readClassifications(db, ["m3"]).size).toBe(0);
   });
 
   it("ignores a stored detail blob it cannot read", () => {

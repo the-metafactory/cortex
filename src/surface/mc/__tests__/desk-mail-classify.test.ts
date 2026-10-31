@@ -59,7 +59,7 @@ describe("the classifier answer", () => {
   const keys = new Set([KUNDEN_KEY]);
 
   it("accepts a valid answer and tolerates extra fields", () => {
-    expect(validateAnswer({ category: "meeting", meetingKey: KUNDEN_KEY, reason: "It sets the agenda.", mood: "later" }, keys))
+    expect(validateAnswer({ category: "meeting", meetingKey: KUNDEN_KEY, reason: "It sets the agenda.", summary: "x".repeat(700), suggestedAction: "forward" }, keys))
       .toEqual({ category: "meeting", meetingKey: KUNDEN_KEY, reason: "It sets the agenda." });
   });
 
@@ -216,7 +216,7 @@ describe("composeDesk with a classifier", () => {
     const deps = { now: NOW, sourceCache: new SourceCache(runner), mailClassifier: c };
     const first = await composeDesk(db, DESK, undefined, deps);
     expect(first.items.find((i) => i.key === "mail:n1")?.why).toMatch(/^It arrived /);
-    expect(first.mailClassifier).toEqual({ host: "llm.example", model: "chat-fast", keyNeeded: true, keyFound: false });
+    expect(first.mailClassifier).toEqual({ kind: "endpoint", host: "llm.example", model: "chat-fast", keyNeeded: true, keyFound: false });
     release({ category: "bulk", reason: "A newsletter from a music school." });
     await c.kick(db, { now: NOW, mail: [], events: [], vips: [] });
     const second = await composeDesk(db, DESK, undefined, deps);
@@ -232,7 +232,7 @@ describe("composeDesk with a classifier", () => {
     const view = await composeDesk(db, { ...DESK, mailClassifier: command }, undefined, { now: NOW, sourceCache: new SourceCache(runner), mailClassifier: c });
     await c.kick(db, { now: NOW, mail: [], events: [], vips: [] });
     expect(seen[0]?.corrections).toEqual([{ kind: "mail", source: "work-mail", mode: "less", label: "Mail you may want to read, from work-mail" }]);
-    expect(view.mailClassifier).toEqual({ host: "", model: "", command: "desk-classify-mail.ts", keyNeeded: false, keyFound: false });
+    expect(view.mailClassifier).toEqual({ kind: "command", command: "desk-classify-mail.ts", keyNeeded: false, keyFound: false });
     expect(classifierLines(view.mailClassifier ?? null)[0]).toBe("A command sorts your unread mail: desk-classify-mail.ts.");
   });
 
@@ -262,7 +262,8 @@ describe("the OpenAI-compatible provider", () => {
     const body = JSON.parse(calls[0]?.init.body as string) as { model: string; messages: { content: string }[] };
     expect(body.model).toBe("chat-fast");
     expect(body.messages).toEqual(buildMessages(request));
-    expect(JSON.parse(body.messages[1]?.content ?? "")).toEqual(request);
+    const { corrections: _corrections, ...endpointRequest } = request;
+    expect(JSON.parse(body.messages[1]?.content ?? "")).toEqual(endpointRequest);
   });
 
   it("trusts the configured CA file for a gateway with a private certificate", async () => {
@@ -305,7 +306,7 @@ describe("the classifier config", () => {
 
 describe("Settings", () => {
   it("shows the provider read-only and whether its key was found", () => {
-    expect(classifierLines({ host: "api.spark.switch.ch", model: "coder", keyNeeded: true, keyFound: false }).join(" "))
+    expect(classifierLines({ kind: "endpoint", host: "api.spark.switch.ch", model: "coder", keyNeeded: true, keyFound: false }).join(" "))
       .toBe("A model sorts your unread mail: coder at api.spark.switch.ch. Its API key was not found, so the Desk sorts mail by shared words until it is. Change it in the stack config.");
     expect(classifierLines(null)[0]).toMatch(/^The Desk sorts unread mail by the words/);
   });
