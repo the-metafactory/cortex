@@ -181,12 +181,14 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id.startsWith("ranger.") && a.wired) void send(item, a);
     else if (a.id === "goal.check" && a.wired && item.goal) void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }), keepVisible: true });
     else if (a.id === "goal.pause" && item.goal) confirmFirst(item, a, () => void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }) }));
-    else if (a.id === "mail.seen") void send(item, a, { request: () => submitMailAction({ action: "trash", key: item.key }) });
-    else if (a.id === "mail.trash") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "trash", key: item.key }) }));
+    else if (a.id === "mail.seen") trash(item, a);
+    else if (a.id === "mail.trash") confirmFirst(item, a, () => trash(item, a));
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }), keepVisible: true });
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
   };
+
+  const trash = (item: DeskItem, a: DeskAction): void => void send(item, a, { request: () => submitMailAction({ action: "trash", key: item.key }) });
 
   const confirmFirst = (item: DeskItem, a: DeskAction, go: () => void): void => {
     if (confirming?.key === item.key && confirming.action === a.id) {
@@ -710,8 +712,6 @@ export function withConfirm(item: DeskItem, actionId: string): DeskItem {
   const label = CONFIRM_LABEL[actionId];
   return label ? { ...item, actions: item.actions.map((a) => (a.id === actionId ? { ...a, label } : a)) } : item;
 }
-
-export const withPauseConfirm = (item: DeskItem): DeskItem => withConfirm(item, "goal.pause");
 
 export function ActionButton({ action, onRun, sending }: { action: DeskAction; onRun: (a: DeskAction) => void; sending: string | null }) {
   const style = action.role === "primary" ? " pri" : action.id === "snooze" ? " ghost" : "";

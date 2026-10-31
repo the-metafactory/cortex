@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActionButton, DeskBody, DeskView, DoneForYou, ItemMenu, RankingSection, RestGroups, dismissesMenu, withConfirm, withPauseConfirm } from "../components/desk-view";
+import { ActionButton, DeskBody, DeskView, DoneForYou, ItemMenu, RankingSection, RestGroups, dismissesMenu, withConfirm } from "../components/desk-view";
 import { submitMailAction } from "../lib/desk-action";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
@@ -355,7 +355,7 @@ describe("a goal item's actions", () => {
   });
 
   it("asks once more before it pauses a goal", () => {
-    expect(withPauseConfirm(goal).actions.map((a) => a.label)).toEqual(["Check again now", "Yes, pause it"]);
+    expect(withConfirm(goal, "goal.pause").actions.map((a) => a.label)).toEqual(["Check again now", "Yes, pause it"]);
     expect(renderToStaticMarkup(<ActionButton action={pause} onRun={() => {}} sending="goal.pause" />)).toContain(">Pausing…</button>");
   });
 });
