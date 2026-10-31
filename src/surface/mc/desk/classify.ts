@@ -17,6 +17,7 @@ export interface ClassifierConfig {
   model: string;
   apiKeyEnv?: string;
   apiKeyFile?: string;
+  caFile?: string;
   timeoutSeconds: number;
   maxPerPass: number;
 }
@@ -120,7 +121,9 @@ export function chatClassifier(config: ClassifierConfig, fetchImpl: typeof fetch
   return async (request, timeoutMs) => {
     const key = await readKey(config);
     if (wantsKey && !key) throw new MissingKey("the classifier key was not found");
+    const ca = config.caFile ? await Bun.file(config.caFile).text() : null;
     const res = await fetchImpl(url, {
+      ...(ca ? { tls: { ca } } : {}),
       method: "POST",
       headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
       body: JSON.stringify({ model: config.model, messages: buildMessages(request), temperature: 0, max_tokens: 600 }),

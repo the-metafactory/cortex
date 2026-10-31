@@ -427,6 +427,7 @@ const DeskSchema = z.object({
           model: z.string().min(1),
           apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
           apiKeyFile: z.string().min(1).optional(),
+          caFile: z.string().min(1).optional(),
           timeoutSeconds: z.number().int().min(1).max(120).default(30),
           maxPerPass: z.number().int().min(1).max(100).default(10),
         })

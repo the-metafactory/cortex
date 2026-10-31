@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
 import { composeDesk, type DeskOptions } from "../desk/compose";
@@ -245,6 +247,24 @@ describe("the OpenAI-compatible provider", () => {
     expect(body.model).toBe("chat-fast");
     expect(body.messages).toEqual(buildMessages(request));
     expect(JSON.parse(body.messages[1]?.content ?? "")).toEqual(request);
+  });
+
+  it("trusts the configured CA file for a gateway with a private certificate", async () => {
+    const ca = join(tmpdir(), `desk-ca-${process.pid}.pem`);
+    await Bun.write(ca, "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n");
+    let tls: unknown;
+    const fake = (async (_url: string, init: RequestInit & { tls?: unknown }) => {
+      tls = init.tls;
+      return Response.json({ choices: [{ message: { content: "{\"category\":\"fyi\",\"reason\":\"News.\"}" } }] });
+    }) as unknown as typeof fetch;
+    try {
+      await chatClassifier({ ...CONFIG, caFile: ca }, fake, async () => null)(request, 1000);
+      expect(tls).toEqual({ ca: "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n" });
+      await chatClassifier(CONFIG, fake, async () => null)(request, 1000);
+      expect(tls).toBeUndefined();
+    } finally {
+      await Bun.file(ca).delete();
+    }
   });
 
   it("refuses to call without a configured key, and reports an HTTP error", async () => {

@@ -4966,6 +4966,7 @@ export async function startCortex(
                 mailClassifier: {
                   ...config.mc.desk.mail.classifier,
                   ...(config.mc.desk.mail.classifier.apiKeyFile ? { apiKeyFile: expandTilde(config.mc.desk.mail.classifier.apiKeyFile) } : {}),
+                  ...(config.mc.desk.mail.classifier.caFile ? { caFile: expandTilde(config.mc.desk.mail.classifier.caFile) } : {}),
                 },
               }
             : {}),
