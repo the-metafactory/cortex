@@ -3,12 +3,13 @@ import { oneLine, planRangerAction, retryable, retryKey, spawnRanger, type Handl
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerNeedsYou, type RangerState } from "./sources/ranger";
 import { DAY_MS } from "./time";
 
-export const PROMOTABLE = ["ranger.retry"] as const;
+export const PROMOTABLE = ["ranger.retry", "studio.capture"] as const;
 export type PromotableAction = (typeof PROMOTABLE)[number];
 
 export const isPromotable = (id: unknown): id is PromotableAction => PROMOTABLE.includes(id as PromotableAction);
 
 export const PROMOTABLE_LABELS: Record<PromotableAction, { label: string; note: string }> = {
+  "studio.capture": { label: "File thoughts in the Studio", note: "Each capture shows its reason and can be undone." },
   "ranger.retry": {
     label: "Retry agent tasks that failed",
     note: "Each task is retried once a day at most. A retry cannot be taken back.",

@@ -408,6 +408,16 @@ const linkTemplate = (name: string) =>
     .refine((t) => !UNSAFE_SCHEMES.test(t), `mc.desk.mail.links.${name} may not use a javascript, data, vbscript or file URL`)
     .refine((t) => t.includes("{ref}"), `mc.desk.mail.links.${name} must contain {ref}`);
 
+const StudioFilerEndpointSchema = z.object({
+  baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), "use https unless loopback"),
+  model: z.string().min(1),
+  apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
+  apiKeyFile: z.string().min(1).optional(),
+  caFile: z.string().min(1).optional(),
+  timeoutSeconds: z.number().int().min(1).max(120).default(30),
+  maxPerPass: z.number().int().min(1).max(100).default(10),
+}).refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "set apiKeyEnv or apiKeyFile, not both");
+
 const DeskSchema = z.object({
   enabled: z.boolean().default(true),
   displayName: z.string().default(""),
@@ -431,6 +441,7 @@ const DeskSchema = z.object({
   studio: z
     .object({
       dir: z.string().min(1),
+      filer: StudioFilerEndpointSchema.safeExtend({ local: StudioFilerEndpointSchema.optional() }).optional(),
       maxActive: z.number().int().min(1).max(20).default(5),
       yesFilter: z.array(z.string().trim().min(1).max(200)).min(1).max(12).optional(),
     })

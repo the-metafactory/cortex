@@ -55,9 +55,10 @@ export async function handleDeskAction(req: Request, runtime: DeskRuntime | unde
 export async function handleDeskAutonomy(req: Request, db: Database, runtime: DeskRuntime | undefined, now: () => number = Date.now): Promise<Response> {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   const desk = runtime?.options;
-  if (!rangerActionsReady(desk)) return fail(409, "Ranger actions are not set up on this stack.");
+  if (!desk?.enabled) return fail(409, "The Desk is turned off on this stack.");
   const body = (await req.json().catch(() => null)) as { action?: unknown; on?: unknown } | null;
   if (!isPromotable(body?.action) || typeof body.on !== "boolean") return fail(400, "A promotable action and on (true or false) are required.");
+  if (body.action === "studio.capture" ? !desk.studio : !rangerActionsReady(desk)) return fail(409, "That action is not set up on this stack.");
   setGrant(db, body.action, body.on, now());
   if (body.on) void runtime?.autonomy?.tick();
   const label = PROMOTABLE_LABELS[body.action].label.toLowerCase();

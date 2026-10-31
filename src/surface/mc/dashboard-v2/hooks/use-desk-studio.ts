@@ -8,7 +8,7 @@ const THREAD_PARAM = "thread";
 
 export type DeskMode = "day" | "studio";
 
-export function useDeskStudio(poll: boolean): StudioView | null {
+export function useDeskStudio(poll: boolean, revision = 0): StudioView | null {
   const [studio, setStudio] = useState<StudioView | null>(null);
   const loaded = useRef(false);
 
@@ -32,7 +32,7 @@ export function useDeskStudio(poll: boolean): StudioView | null {
       controller.abort();
       clearInterval(timer);
     };
-  }, [poll]);
+  }, [poll, revision]);
 
   return studio;
 }

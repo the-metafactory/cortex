@@ -11,8 +11,8 @@ export type WriterKind = (typeof WRITER_KINDS)[number];
 export type DeskWriters = Partial<Record<WriterKind, string[]>>;
 const KEPT_ON_DESK: readonly AskKind[] = ["reminder", "note"];
 
-export function writableKinds(writers: DeskWriters): Set<AskKind> {
-  return new Set<AskKind>([...KEPT_ON_DESK, ...WRITER_KINDS.filter((k) => (writers[k]?.length ?? 0) > 0)]);
+export function writableKinds(writers: DeskWriters, studio = false): Set<AskKind> {
+  return new Set<AskKind>([...KEPT_ON_DESK, ...(studio ? ["capture" as const] : []), ...WRITER_KINDS.filter((k) => (writers[k]?.length ?? 0) > 0)]);
 }
 
 export interface WriterResult {
@@ -66,6 +66,7 @@ function keepOnDesk(card: AskCard, deps: CreateDeps): Created | null {
 }
 
 export async function createFromCard(card: AskCard, deps: CreateDeps): Promise<Created> {
+  if (card.kind === "capture") return { ok: false, error: notSetUp("capture") };
   const argv = deps.writers[card.kind];
   if (!argv?.length) return keepOnDesk(card, deps) ?? { ok: false, error: notSetUp(card.kind) };
   let result: WriterResult;

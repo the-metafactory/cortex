@@ -1,3 +1,4 @@
+import type { EndpointConfig } from "./classify";
 import type { DeskVoice } from "./voice";
 import type { AREA_POLICIES } from "../../../common/types/config";
 
@@ -11,6 +12,7 @@ export type AreaPolicy = (typeof AREA_POLICIES)[number];
 
 export interface StudioOptions {
   dir: string;
+  filer?: EndpointConfig & { local?: EndpointConfig };
   maxActive: number;
   yesFilter?: string[];
 }
@@ -144,5 +146,5 @@ export type DeskMailClassifier =
 
 export interface DeskAutonomy {
   types: { action: string; label: string; note: string; on: boolean }[];
-  done: { key: string; title: string; message: string; at: number; ok: boolean }[];
+  done: { key: string; action?: string; undo?: string; title: string; message: string; at: number; ok: boolean }[];
 }
