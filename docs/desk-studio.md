@@ -149,3 +149,17 @@ A `target` names either `thread: <slug>` (file into that thread) or `place: new`
 - `problems`: one entry per file that could not be read or parsed, with its `path` and a `reason`. A broken file never breaks the response.
 
 Each thread carries its parsed front matter, `question`, `stand`, `notes`, `material`, `log`, `outcomeText` and its effective `policy`.
+
+## Thread page
+
+Opening a thread on the board zooms the card into its thread page; `?desk=studio&thread=<slug>` holds the open thread, so reload and the browser's back button work. With `prefers-reduced-motion`, the page opens and closes without animation. The page is read-only: Keep, Discuss, Dismiss and Close with an outcome are shown but disabled until the Studio can write.
+
+**Relates to** is derived on every render, never stored:
+
+- **Threads**: active or parked threads that share a material item (equal `href`, or equal labels after normalisation). A related thread opens in place.
+- **Goal it serves**: material items of kind `goal`. A label that starts with a goal id (`G5: one post a week`) takes its name and state from the Desk's goals.
+- **Coming up**: upcoming calendar events from the Desk's calendar sources whose title (at least 4 characters) appears as whole words in a material label or in the question. At most five, soonest first.
+- **People**: material items of kind `person`, `people` or `contact`. Free text is never searched for names.
+- **Decision journal**: closed threads that share a material item or an area. A decision opens in place.
+
+Goals, events and people link to their `href` when the material or the event has one.

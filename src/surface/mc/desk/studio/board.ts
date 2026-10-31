@@ -110,7 +110,7 @@ export function normaliseLabel(label: string): string {
     .trim();
 }
 
-function sameSource(a: MaterialLink, b: MaterialLink): boolean {
+export function sameSource(a: MaterialLink, b: MaterialLink): boolean {
   const href = a.href?.trim();
   if (href && href === b.href?.trim()) return true;
   const la = normaliseLabel(a.label);
@@ -128,7 +128,7 @@ export function sharedPairs(threads: readonly StudioThreadView[]): SharedPair[] 
   return pairs;
 }
 
-function areaLookup(areas: readonly BoardArea[]): (id: string) => BoardArea {
+export function areaLookup(areas: readonly BoardArea[]): (id: string) => BoardArea {
   const byId = new Map(areas.map((a) => [a.id, a]));
   return (id) => byId.get(id) ?? { id, label: id, color: UNKNOWN_AREA_COLOR, policy: "local" satisfies AreaPolicy };
 }

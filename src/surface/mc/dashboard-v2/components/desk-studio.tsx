@@ -1,13 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { buildBoard, clip, plainQuestion, type Board, type BoardArea, type BoardCapture, type BoardCard, type BoardFree, type BoardLoose, type BoardProposal, type BoardTarget } from "../../desk/studio/board";
-import type { StudioThreadView, StudioView } from "../../desk/studio/view";
+import { buildBoard, clip, plainQuestion, type Board, type BoardCapture, type BoardCard, type BoardFree, type BoardLoose, type BoardProposal, type BoardTarget } from "../../desk/studio/board";
+import { buildThreadPage, dayMonth, TYPE_LABEL } from "../../desk/studio/page";
+import { NO_CONTEXT, OUTCOME_LABEL, type RelatesContext } from "../../desk/studio/relates";
+import type { StudioView } from "../../desk/studio/view";
+import type { DeskView } from "../../desk/types";
 import { startOfDay } from "../../desk/time";
+import { AreaChips, ModelBadge, dayMonthTime, hhmm } from "./desk-studio-parts";
+import { ThreadMissing, ThreadPageView, useThreadZoom } from "./desk-studio-thread";
 import "./desk-studio.css";
 
 const LAST_LOOK_KEY = "desk.studio.lastLook";
-const TYPE_LABEL = { question: "Question", topic: "Topic", making: "Making" } as const;
-const OUTCOME_LABEL = { decided: "Decided", shipped: "Shipped", dropped: "Dropped" } as const;
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export interface LookStore {
   getItem(key: string): string | null;
@@ -27,14 +29,11 @@ export function takeLastLook(store: LookStore | null, now: number): number | nul
 
 const browserStore = (): LookStore | null => (typeof window === "undefined" ? null : window.localStorage);
 
-const dayMonthTime = (at: Date): string => `${at.getDate()} ${MONTHS[at.getMonth()] ?? ""}, ${at.toTimeString().slice(0, 5)}`;
-
 function wroteWhen(iso: string, startOfToday: number): string {
   const at = new Date(iso);
-  return at.getTime() >= startOfToday ? `today, ${at.toTimeString().slice(0, 5)}` : `on ${dayMonthTime(at)}`;
+  return at.getTime() >= startOfToday ? `today, ${hhmm(at)}` : `on ${dayMonthTime(at)}`;
 }
 
-const dayMonth = (isoDate: string): string => `${Number(isoDate.slice(8, 10))} ${MONTHS[Number(isoDate.slice(5, 7)) - 1] ?? ""}`;
 const viaLabel = (via: string): string => (via === "voice" ? "Voice note" : via === "mail" ? "Forwarded mail" : via.charAt(0).toUpperCase() + via.slice(1));
 const targetKey = (t: BoardTarget | null): string => (t === null ? "" : t.kind === "thread" ? `t:${t.slug}` : `p:${t.place}`);
 
@@ -48,49 +47,37 @@ export function DeskModeSwitch({ hasStudio, inStudio, onGo }: { hasStudio: boole
   );
 }
 
-export function DeskStudio({ studio, thread, onOpenThread, at }: { studio: StudioView; thread: string | null; onOpenThread: (slug: string | null) => void; at?: number }) {
+export type StudioDay = Pick<DeskView, "generatedAt" | "today" | "ahead" | "goals">;
+
+export function DeskStudio({ studio, thread, onOpenThread, at, day }: { studio: StudioView; thread: string | null; onOpenThread: (slug: string | null) => void; at?: number; day?: StudioDay }) {
   const now = useMemo(() => at ?? Date.now(), [at, studio]);
   const [lastLook] = useState(() => takeLastLook(browserStore(), now));
   const board = useMemo(() => buildBoard(studio, { now, startOfToday: startOfDay(now), lastLook }), [studio, now, lastLook]);
-  const open = thread ? [...studio.active, ...studio.parked, ...studio.closed].find((t) => t.slug === thread) : undefined;
+  const root = useRef<HTMLDivElement>(null);
+  const zoom = useThreadZoom(thread, root);
+  const context = useMemo<RelatesContext>(() => (day ? { now: day.generatedAt, events: [...day.today, ...day.ahead], goals: day.goals } : { ...NO_CONTEXT, now }), [day, now]);
+  const page = useMemo(() => (zoom.shown === null ? null : buildThreadPage(studio, zoom.shown, context)), [studio, zoom.shown, context]);
+  const back = (): void => onOpenThread(null);
   return (
-    <div className="dst">
+    <div className="dst" ref={root}>
       <section className="dst-lead">
         <p>
           <strong>Studio.</strong> {board.summary}
           {board.shared[0] && <span className="dst-shared">These two threads share a source: {board.shared[0].label}.</span>}
         </p>
       </section>
-      {thread !== null && <ThreadPlaceholder thread={open} onBack={() => onOpenThread(null)} />}
-      <StudioBoard board={board} now={now} onOpen={onOpenThread} />
-      <StudioStrip board={board} onOpen={onOpenThread} />
+      {zoom.shown !== null
+        ? page
+          ? <ThreadPageView key={page.thread.slug} page={page} onBack={back} onOpen={onOpenThread} zoom={zoom} />
+          : <ThreadMissing onBack={back} />
+        : (
+            <>
+              <StudioBoard board={board} now={now} onOpen={onOpenThread} />
+              <StudioStrip board={board} onOpen={onOpenThread} />
+            </>
+          )}
     </div>
   );
-}
-
-function ThreadPlaceholder({ thread, onBack }: { thread: StudioThreadView | undefined; onBack: () => void }) {
-  return (
-    <section className="dst-open" aria-label="Thread">
-      <button type="button" className="desk-btn ghost" onClick={onBack}>‹ Board</button>
-      <p>{thread ? <><b>{thread.question}</b> The thread page is not built yet; it comes in the next step.</> : "This thread is not in the Studio."}</p>
-    </section>
-  );
-}
-
-function AreaChips({ areas }: { areas: BoardArea[] }) {
-  return (
-    <>
-      {areas.map((a) => (
-        <span key={a.id} className="dst-area"><span className="dot" style={{ background: a.color }} />{a.label}</span>
-      ))}
-    </>
-  );
-}
-
-function ModelBadge({ policy }: { policy: "local" | "cloud" }) {
-  return policy === "local"
-    ? <span className="dst-model local" title="A local area keeps this thread on the local model">Stays local</span>
-    : <span className="dst-model">Cloud model</span>;
 }
 
 function StudioBoard({ board, now, onOpen }: { board: Board; now: number; onOpen: (slug: string) => void }) {
@@ -136,7 +123,7 @@ function Card({ card, startOfToday, onOpen }: { card: BoardCard; startOfToday: n
   const t = card.thread;
   return (
     <div className="dst-slot">
-      <button type="button" className={card.waitsOnYou ? "dst-card waits" : "dst-card"} data-card={t.slug} aria-label={`Open: ${t.question}`} onClick={() => onOpen(t.slug)}>
+      <button type="button" className={card.waitsOnYou ? "dst-card waits" : "dst-card"} data-card={t.slug} data-open={t.slug} aria-label={`Open: ${t.question}`} onClick={() => onOpen(t.slug)}>
         <span className="hd"><span className="dst-type">{TYPE_LABEL[t.type]}</span>{card.waitsOnYou && <span className="dst-badge">Ivy waits on you</span>}</span>
         <span className="dst-q">{t.question}</span>
         {card.stand && <span className="dst-stand"><b>Where I stand</b>{card.stand}</span>}
@@ -213,7 +200,7 @@ function StudioStrip({ board, onOpen }: { board: Board; onOpen: (slug: string) =
           <span className="lbl">Parked</span>
           {board.parked.length
             ? board.parked.map((t, i) => (
-                <span key={t.slug}>{i > 0 && " · "}<button type="button" className="dst-link" onClick={() => onOpen(t.slug)}>{clip(t.question, 40)}</button></span>
+                <span key={t.slug}>{i > 0 && " · "}<button type="button" className="dst-link" data-open={t.slug} onClick={() => onOpen(t.slug)}>{clip(t.question, 40)}</button></span>
               ))
             : "The shelf is empty."}
         </div>
@@ -225,7 +212,7 @@ function StudioStrip({ board, onOpen }: { board: Board; onOpen: (slug: string) =
         <section className="dst-jlist" aria-label="Decision journal">
           {board.closed.length === 0 && <p className="dst-none">No thread is closed yet. Closed threads and what you expected land here.</p>}
           {board.closed.map((t) => (
-            <button type="button" key={t.slug} className="dst-jrow" onClick={() => onOpen(t.slug)}>
+            <button type="button" key={t.slug} className="dst-jrow" data-open={t.slug} onClick={() => onOpen(t.slug)}>
               <b>{t.question}</b>
               <span>{t.outcome ? OUTCOME_LABEL[t.outcome] : "Closed"}{t.closed ? ` ${t.closed}` : ""}{t.expect ? `. Expected: ${t.expect}` : ""}{t.reviewOn ? `. Review on ${t.reviewOn}.` : ""}</span>
             </button>
