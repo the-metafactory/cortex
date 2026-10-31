@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { z } from "zod";
 import type { Database } from "bun:sqlite";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdtemp, chmod, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { initDatabase } from "../db/init";
 import { buildRoutineCard, actOnRoutine, readRoutines } from "../desk/routines";
@@ -38,13 +40,17 @@ function seam() {
   let lostReply = false;
   let unavailable = false;
   let writeUncertain = false;
+  let stallReads = false;
+  let stallAfterWrite = false;
+  const readTimeouts: number[] = [];
   let composer: unknown = { status: "complete", yaml: YAML };
-  const run: RoutineRunner = async (argv) => {
+  const run: RoutineRunner = async (argv, _stdin, timeoutMs) => {
     if (argv[0] === "composer") return answer(composer);
     if (unavailable) throw new Error("transport unavailable");
     const args = argv.slice(1);
     const [kind, verb] = args;
     if ((kind === "routine" && verb === "list") || kind === "pending" || kind === "history") reads.push(args);
+    if (stallReads && ((kind === "routine" && verb === "list") || kind === "history")) { readTimeouts.push(timeoutMs); return new Promise<never>(() => undefined); }
     if (kind === "routine" && verb === "list") return answer(routines);
     if (kind === "pending") return answer(pending);
     if (kind === "history") return answer(history);
@@ -67,9 +73,10 @@ function seam() {
       }
     }
     if (lostReply) { unavailable = true; throw new Error("reply lost after daemon applied mutation"); }
+    if (stallAfterWrite) stallReads = true;
     return answer({ id: "receipt" });
   };
-  return { run, routines, pending, history, mutations, reads, supplied: () => supplied, refuse: (v: boolean) => { refusal = v; }, uncertain: () => { writeUncertain = true; }, lose: () => { lostReply = true; }, recover: () => { unavailable = false; lostReply = false; writeUncertain = false; }, compose: (value: unknown) => { composer = value; } };
+  return { run, routines, pending, history, mutations, reads, readTimeouts, supplied: () => supplied, stallAfterWrite: () => { stallAfterWrite = true; }, refuse: (v: boolean) => { refusal = v; }, uncertain: () => { writeUncertain = true; }, lose: () => { lostReply = true; }, recover: () => { unavailable = false; lostReply = false; writeUncertain = false; stallReads = false; stallAfterWrite = false; }, compose: (value: unknown) => { composer = value; } };
 }
 
 describe("Desk routines", () => {
@@ -78,7 +85,7 @@ describe("Desk routines", () => {
   afterEach(() => { db.close(); });
 
   it("reads recurring schedules in words and refuses ambiguous or invalid times", () => {
-    expect(routineSchedule("every Friday at 17:00, extract URLs")).toEqual({ expression: "0 17 * * 5", words: "Every Friday at 17:00", request: "extract URLs" });
+    expect(routineSchedule("every Friday at 17:00, extract URLs")).toEqual({ clock: "wall", expression: "0 17 * * 5", words: "Every Friday at 17:00", request: "extract URLs" });
     expect(routineSchedule("every 2 minutes, extract URLs")).toMatchObject({ expression: "*/2 * * * *" });
     expect(routineSchedule("every weekday at 9am, extract URLs")).toMatchObject({ expression: "0 9 * * 1-5" });
     expect(routineRequest("every 2 minutes, extract URLs")).toBe(true);
@@ -103,6 +110,16 @@ describe("Desk routines", () => {
     expect(s.mutations[0]?.join(" ")).not.toContain("bash");
     expect(await actOnRoutine(db, OPTIONS, { action: "install", requestId: "install-1", target: id }, NOW, s.run)).toEqual(result);
     expect(s.mutations).toHaveLength(1);
+  });
+
+  it("binds elapsed schedules to UTC and named clock times to the configured local timezone", async () => {
+    const s = seam();
+    const elapsed = await buildRoutineCard(db, "every 12 hours, read", OPTIONS, NOW, s.run);
+    expect(elapsed.fields.schedule).toBe("Every 12 hours");
+    expect(readRoutineProposal(db, String(elapsed.fields.proposalId))?.timezone).toBe("UTC");
+    const clock = await buildRoutineCard(db, "every day at 17:00, read", OPTIONS, NOW, s.run);
+    expect(clock.fields.schedule).toBe("Every day at 17:00 (Europe/Zurich)");
+    expect(readRoutineProposal(db, String(clock.fields.proposalId))?.timezone).toBe("Europe/Zurich");
   });
 
   it("shows missing-capability refusal with no Confirm and never saves a runnable proposal", async () => {
@@ -185,6 +202,45 @@ describe("Desk routines", () => {
     s.recover();
     expect(await actOnRoutine(db, OPTIONS, request, NOW, s.run)).toMatchObject({ ok: false, uncertain: true });
     expect((await readRoutines(db, OPTIONS, s.run)).changes).toHaveLength(1);
+    expect(s.mutations).toHaveLength(1);
+  });
+
+  it("releases a pre-command claim after a real temporary-directory failure and recovers on retry", async () => {
+    const s = seam();
+    const card = await buildRoutineCard(db, "every minute, read", OPTIONS, NOW, s.run);
+    const request = { action: "install", target: String(card.fields.proposalId), requestId: "temporary-failure" } as const;
+    const directory = await mkdtemp(join(tmpdir(), "routine-readonly-"));
+    const previous = process.env.TMPDIR;
+    try {
+      await chmod(directory, 0o500);
+      process.env.TMPDIR = directory;
+      const failed = await actOnRoutine(db, OPTIONS, request, NOW, s.run);
+      expect(failed.ok).toBe(false);
+      if (!failed.ok) expect(failed.uncertain).toBeUndefined();
+      expect(s.mutations).toHaveLength(0);
+      expect(db.query("SELECT * FROM desk_routine_operations WHERE result IS NULL").all()).toHaveLength(0);
+      await chmod(directory, 0o700);
+      if (previous === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previous;
+      expect((await actOnRoutine(db, OPTIONS, request, NOW, s.run)).ok).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = previous;
+      await chmod(directory, 0o700);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("uses short read deadlines after a successful mutation whose reconciliation stalls", async () => {
+    const s = seam();
+    const options = { ...OPTIONS, timeoutSeconds: 1, readTimeoutSeconds: 0.01 };
+    const card = await buildRoutineCard(db, "every minute, read", options, NOW, s.run);
+    const request = { action: "install", target: String(card.fields.proposalId), requestId: "stalled-reconcile" } as const;
+    s.stallAfterWrite();
+    expect(await actOnRoutine(db, options, request, NOW, s.run)).toMatchObject({ ok: false, uncertain: true });
+    expect(s.readTimeouts).toEqual([10, 10]);
+    s.recover();
+    expect((await actOnRoutine(db, options, request, NOW, s.run)).ok).toBe(true);
     expect(s.mutations).toHaveLength(1);
   });
 

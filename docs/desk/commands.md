@@ -14,6 +14,8 @@ Built-in agent and tribunal steps require fresh online local capability declarat
 
 Supported schedules start with `every minute`, `every N minutes`, `every hour`, `every N hours`, or a day phrase with an explicit time. Examples include `every Friday at 17:00, …`, `every weekday at 9am, …` and `every day at 08:30, …`. Minute intervals must divide 60 evenly and stay below 60. Hour intervals must divide 24 evenly and stay below 24. Other intervals show a refusal so a cron boundary cannot shorten the frequency shown on the card.
 
+Elapsed minute/hour intervals use UTC so daylight-saving changes do not change their duration. Named clock times use the configured timezone, which appears on the card. The schedule does not promise a delay from Confirm to its first fire.
+
 Confirm sends the server-held proposal to `routines.reflex` through `routine add --flow-file <temporary-path>` with policy `approve` and the configured target. Reflex's JSON policy is `approval`. Composer YAML annotations stay intact. When the composer omits `input`, the Desk appends the original request as `request`, `scenario` and `text` initial fields. An explicit composer input remains unchanged.
 
 The Desk reads `routine list --json`, `pending --json` and `history --limit 200 --json`. Approve and Deny call `approve <decision-id> --json` and `deny <decision-id> --json`. **Handle this yourself** calls `routine set-policy <id> auto --json`. **Stop** returns the policy to `approve`. **Remove** calls `routine remove <id> --json`; Reflex removes its owned flow too.

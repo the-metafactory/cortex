@@ -1,4 +1,5 @@
 export interface RoutineSchedule {
+  clock: "elapsed" | "wall";
   expression: string;
   words: string;
   request: string;
@@ -21,7 +22,7 @@ export function routineSchedule(text: string): RoutineSchedule | string {
     if (!Number.isInteger(n) || n < 1 || n > max || hour) return "Choose a minute or hour interval within one day.";
     if ((u.startsWith("minute") ? 60 : 24) % n !== 0) return u.startsWith("minute") ? "Choose 1, 2, 3, 4, 5, 6, 10, 12, 15, 20 or 30 minutes so the interval stays even across hours." : "Choose 1, 2, 3, 4, 6, 8 or 12 hours so the interval stays even across days.";
     const expression = u.startsWith("minute") ? `*/${n} * * * *` : `0 */${n} * * *`;
-    return { expression, words: `Every ${n === 1 ? u.replace(/s$/, "") : `${n} ${u.replace(/s$/, "")}s`}`, request };
+    return { clock: "elapsed", expression, words: `Every ${n === 1 ? u.replace(/s$/, "") : `${n} ${u.replace(/s$/, "")}s`}`, request };
   }
   if (count || hour === undefined) return "Include a time, for example ‘every Friday at 17:00, …’.";
   let h = Number(hour);
@@ -33,6 +34,7 @@ export function routineSchedule(text: string): RoutineSchedule | string {
   const day = DAYS.indexOf(u);
   const weekday = u.startsWith("weekday");
   return {
+    clock: "wall",
     expression: `${m} ${h} * * ${day >= 0 ? day : weekday ? "1-5" : "*"}`,
     words: `Every ${day >= 0 ? u.charAt(0).toUpperCase() + u.slice(1) : weekday ? "weekday" : "day"} at ${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`,
     request,

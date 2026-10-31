@@ -39,13 +39,13 @@ export async function buildRoutineCard(db: Database, text: string, options: Rout
     const id = randomUUID();
     const proposal: RoutineProposal = {
       id, routineId: `desk-${id}`, title: schedule.request, request: schedule.request,
-      schedule: schedule.expression, words: schedule.words, timezone: options.timeZone,
+      schedule: schedule.expression, words: schedule.words, timezone: schedule.clock === "elapsed" ? "UTC" : options.timeZone,
       yaml: flow.input ? reply.yaml : `${reply.yaml}\n${stringifyYaml({ input: { request: schedule.request, scenario: schedule.request, text: schedule.request } })}`,
       steps: routineStepLabels(validateSteps(flow.actions)),
       configHash: routineConfigHash(options), createdAt: now,
     };
     saveRoutineProposal(db, proposal);
-    return { kind: "routine", label: "Routine", fields: { proposalId: id, title: proposal.title, schedule: `${proposal.words} (${proposal.timezone})`, steps: proposal.steps }, via: "rules" };
+    return { kind: "routine", label: "Routine", fields: { proposalId: id, title: proposal.title, schedule: schedule.clock === "elapsed" ? proposal.words : `${proposal.words} (${proposal.timezone})`, steps: proposal.steps }, via: "rules" };
   } catch (error) {
     return blocked(`The routine could not be prepared: ${failure(error)}`);
   }
@@ -100,10 +100,50 @@ function reconcileState(options: RoutineOptions, request: RoutineAction, proposa
 }
 
 async function reconcile(options: RoutineOptions, request: RoutineAction, proposal: RoutineProposal | null, run: RoutineRunner): Promise<RoutineResult | null> {
+  const reads = { ...options, timeoutSeconds: options.readTimeoutSeconds };
   const state = request.action === "approve" || request.action === "deny"
-    ? { installed: [], history: await reflexCommand(options, ["history", "--limit", "200"], z.array(RoutineHistorySchema), run) }
-    : { installed: await reflexCommand(options, ["routine", "list"], z.array(RoutineSchema), run), history: [] };
+    ? { installed: [], history: await reflexCommand(reads, ["history", "--limit", "200"], z.array(RoutineHistorySchema), run) }
+    : { installed: await reflexCommand(reads, ["routine", "list"], z.array(RoutineSchema), run), history: [] };
   return reconcileState(options, request, proposal, state);
+}
+
+class RoutinePreparationFailure extends Error {}
+
+async function executeRoutineMutation(options: RoutineOptions, request: RoutineAction, proposal: RoutineProposal | null, run: RoutineRunner): Promise<void> {
+  let temporary: string | undefined;
+  let args: string[];
+  try {
+    if (proposal) {
+      temporary = await mkdtemp(join(tmpdir(), "desk-routine-"));
+      const flow = join(temporary, "flow.yaml");
+      await writeFile(flow, proposal.yaml, { mode: 0o600, flag: "wx" });
+      args = ["routine", "add", "--id", proposal.routineId, "--schedule", proposal.schedule, "--timezone", proposal.timezone, "--target", options.target, "--policy", "approve", "--payload", JSON.stringify({ input: { request: proposal.request, scenario: proposal.request, text: proposal.request } }), "--flow-file", flow];
+    } else if (request.action === "approve" || request.action === "deny") args = [request.action, request.target];
+    else if (request.action === "remove") args = ["routine", "remove", request.target];
+    else args = ["routine", "set-policy", request.target, request.action === "auto" ? "auto" : "approve"];
+  } catch (error) {
+    let cleanup = "";
+    if (temporary) {
+      try { await rm(temporary, { recursive: true, force: true }); }
+      catch (cleanupError) { cleanup = ` Temporary-file cleanup also failed: ${failure(cleanupError)}`; }
+    }
+    throw new RoutinePreparationFailure(`Reflex was not called because the flow input could not be prepared: ${failure(error)}${cleanup}`);
+  }
+  const outcome = await reflexCommand(options, args, z.unknown(), run).then(
+    () => ({ kind: "confirmed" as const }),
+    (error: unknown) => ({ kind: "failed" as const, error }),
+  );
+  if (temporary) {
+    try { await rm(temporary, { recursive: true, force: true }); }
+    catch (cleanupError) {
+      if (outcome.kind === "failed") {
+        process.stderr.write(`${JSON.stringify({ event: "desk.routine.temporary-cleanup-failed", reason: failure(cleanupError) })}\n`);
+        throw outcome.error;
+      }
+      throw cleanupError;
+    }
+  }
+  if (outcome.kind === "failed") throw outcome.error;
 }
 
 async function reconcileAndFinish(db: Database, options: RoutineOptions, request: RoutineAction, proposal: RoutineProposal | null, run: RoutineRunner): Promise<RoutineResult | null> {
@@ -144,22 +184,16 @@ export async function actOnRoutine(db: Database, options: RoutineOptions, reques
   }
   const claimed = db.query("INSERT OR IGNORE INTO desk_routine_operations (request_id, binding, resource) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM desk_routine_operations WHERE resource = ? AND result IS NULL)").run(request.requestId, binding, resource, resource).changes;
   if (!claimed) return { ok: false, error: "Another action for this routine is still awaiting confirmation. Retry that action first.", uncertain: true };
-  let temporary: string | undefined;
   try {
-    let args: string[];
-    if (proposal) {
-      temporary = await mkdtemp(join(tmpdir(), "desk-routine-"));
-      const flow = join(temporary, "flow.yaml");
-      await writeFile(flow, proposal.yaml, { mode: 0o600, flag: "wx" });
-      args = ["routine", "add", "--id", proposal.routineId, "--schedule", proposal.schedule, "--timezone", proposal.timezone, "--target", options.target, "--policy", "approve", "--payload", JSON.stringify({ input: { request: proposal.request, scenario: proposal.request, text: proposal.request } }), "--flow-file", flow];
-    } else if (request.action === "approve" || request.action === "deny") args = [request.action, request.target];
-    else if (request.action === "remove") args = ["routine", "remove", request.target];
-    else args = ["routine", "set-policy", request.target, request.action === "auto" ? "auto" : "approve"];
-    await reflexCommand(options, args, z.unknown(), run);
+    await executeRoutineMutation(options, request, proposal, run);
     const confirmed = await reconcileAndFinish(db, options, request, proposal, run);
     if (confirmed) return confirmed;
     return { ok: false, error: UNKNOWN, uncertain: true };
   } catch (error) {
+    if (error instanceof RoutinePreparationFailure) {
+      db.query("DELETE FROM desk_routine_operations WHERE request_id = ? AND result IS NULL").run(request.requestId);
+      return { ok: false, error: error.message };
+    }
     if (error instanceof RoutineRefusal) {
       const confirmed = await reconcileAndFinish(db, { ...options, timeoutSeconds: options.readTimeoutSeconds }, request, proposal, run).catch(() => null);
       if (confirmed) return confirmed;
@@ -177,7 +211,5 @@ export async function actOnRoutine(db: Database, options: RoutineOptions, reques
       return { ok: false, error: `${UNKNOWN} ${failure(error)}`, uncertain: true };
     }
     return { ok: false, error: `${UNKNOWN} ${failure(error)}`, uncertain: true };
-  } finally {
-    if (temporary) await rm(temporary, { recursive: true, force: true });
   }
 }

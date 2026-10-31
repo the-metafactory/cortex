@@ -12,7 +12,9 @@ function RoutineButton({ action, target, children, onChanged, retryId }: { actio
     setBusy(true);
     setError(null);
     try {
-      await postJson("/api/desk/routines", { requestId: requestId.current, action, target });
+      const result = await postJson<RoutineAction, { ok?: boolean } | null>("/api/desk/routines", { requestId: requestId.current, action, target });
+      if (result?.ok !== true) throw new Error("The routine result was not confirmed. Retry this same action.");
+      if (retryId === undefined) requestId.current = crypto.randomUUID();
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "The routine action did not answer.");
