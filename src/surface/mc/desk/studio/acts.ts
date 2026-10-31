@@ -223,7 +223,7 @@ interface OpenSource {
 
 function fromProposal(p: StudioProposalView, area: string): OpenSource {
   const areas = p.areas.includes(area) ? [area, ...p.areas.filter((a) => a !== area)] : [area];
-  return { path: p.path, type: p.type, areas, question: p.question, material: [], log: "Opened from Ivy's proposal" };
+  return { path: p.path, type: p.type, areas, question: p.question, material: [], log: `Opened from Ivy's proposal ${p.id}` };
 }
 
 function fromCapture(c: StudioCapture, today: string): OpenSource {

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runStudioAct } from "../surface/mc/desk/studio/writer";
 import { runOverseer } from "./studio-overseer";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -102,3 +103,63 @@ test("the committed-file watcher notices a commit made after a dirty-file interv
  }catch(error){child.kill();await child.exited;throw new Error(`${String(error)}; stdout=${await stdout}; stderr=${await stderr}`, { cause: error });}
  finally{child.kill();await child.exited;await Promise.all([stdout,stderr]);}
 }, 20000);
+
+
+for (const disposition of ["accept", "dismiss"] as const) test(`handled captures survive ${disposition}, restart, edits and additions without repeated proposals`, async () => {
+ const r=await rig();
+ const add=async(ids:string[])=>{await mkdir(join(r.dir,"inbox"),{recursive:true});for(const id of ids)await writeFile(join(r.dir,`inbox/${id}.md`),`---\nat: 2026-10-31T12:00:00Z\nvia: fixture\n---\nOrchard planting ${id}\n`);r.git("add",".");r.git("commit","-qm","Capture fixtures");};
+ await add(["one","two","three"]);
+ const first=await runOverseer(r.config);const id=first.proposals[0];if(!id)throw new Error("Missing proposal");
+ if(disposition==="accept"){
+  const result=await runStudioAct({options:{dir:r.dir,maxActive:5},areas:[{id:"lab",label:"Lab",color:"blue",policy:"local"}],requestId:crypto.randomUUID(),act:{act:"open",from:"proposal",id,area:"lab"}});
+  expect(result.ok).toBe(true);if(!result.ok)throw new Error(result.error);
+  expect(result.studio.problems).toEqual([]);
+  expect(result.studio.active.some(thread=>thread.log.some(entry=>entry.text.includes(id)))).toBe(true);
+ }else{await rm(join(r.dir,`proposals/${id}.md`));r.git("add",".");r.git("commit","-qm","Dismiss proposal fixture");}
+ await rm(join(r.dir,".git/studio-overseer.json"));
+ expect((await runOverseer(r.config)).proposals).toEqual([]);
+ await writeFile(join(r.dir,"inbox/one.md"),(await readFile(join(r.dir,"inbox/one.md"),"utf8"))+"Edited by the person.\n");r.git("add",".");r.git("commit","-qm","Manual capture edit");
+ await add(["four"]);expect((await runOverseer(r.config)).proposals).toEqual([]);
+ await add(["five"]);expect((await runOverseer(r.config)).proposals).toEqual([]);
+ await add(["six"]);const fresh=await runOverseer(r.config);expect(fresh.proposals).toHaveLength(1);
+ const text=await readFile(join(r.dir,`proposals/${fresh.proposals[0]}.md`),"utf8");
+ expect(text).toContain("- Inbox capture: four");expect(text).not.toContain("- Inbox capture: one\n");
+ expect((await readFile(join(r.dir,"inbox/one.md"),"utf8"))).toContain("Edited by the person.");
+ expect(r.git("show",`HEAD:.studio-overseer-themes.json`)).toContain(id);
+},20000);
+
+
+test("malformed, unknown or removed theme provenance fails closed", async () => {
+ for(const text of ["not JSON",JSON.stringify({version:2,themes:[]})]){
+  const r=await rig();await writeFile(join(r.dir,".studio-overseer-themes.json"),text);r.git("add",".");r.git("commit","-qm","Invalid provenance fixture");
+  await expect(runOverseer(r.config)).rejects.toThrow();expect(await Bun.file(r.calls).exists()).toBe(false);
+ }
+ const r=await rig();await writeFile(join(r.dir,".studio-overseer-themes.json"),JSON.stringify({version:1,themes:[]}));r.git("add",".");r.git("commit","-qm","Provenance fixture");
+ await rm(join(r.dir,".studio-overseer-themes.json"));r.git("add",".");r.git("commit","-qm","Removed provenance fixture");
+ await expect(runOverseer(r.config)).rejects.toThrow("provenance was removed");
+});
+
+test("a failed proposal commit restores existing provenance and preserves unrelated manual edits", async () => {
+ const r=await rig();await mkdir(join(r.dir,"inbox"));
+ const add=async(ids:string[])=>{for(const id of ids)await writeFile(join(r.dir,`inbox/${id}.md`),`---\nat: 2026-10-31T12:00:00Z\nvia: fixture\n---\nOrchard planting ${id}\n`);r.git("add",".");r.git("commit","-qm","Capture batch");};
+ await add(["one","two","three"]);await runOverseer(r.config);
+ const original=await readFile(join(r.dir,".studio-overseer-themes.json"),"utf8");
+ await add(["four","five","six"]);
+ const hook=join(r.dir,".git/hooks/pre-commit");
+ await writeFile(hook,"#!/bin/sh\nprintf '\\nPerson edited this.\\n' >> inbox/one.md\nexit 1\n",{mode:0o755});
+ await expect(runOverseer(r.config)).rejects.toThrow("original provenance and files restored");
+ expect(await readFile(join(r.dir,".studio-overseer-themes.json"),"utf8")).toBe(original);
+ expect(await readFile(join(r.dir,"inbox/one.md"),"utf8")).toContain("Person edited this.");
+ expect(r.git("status","--porcelain")).toBe("M inbox/one.md");
+});
+
+
+test("existing proposal capture provenance is committed before its file can disappear", async () => {
+ const r=await rig();await mkdir(join(r.dir,"proposals"));
+ const id="theme-0123456789abcdef0123";
+ await writeFile(join(r.dir,`proposals/${id}.md`),`---\ntype: question\nareas: [lab]\nproposed: 2026-10-31T12:00:00Z\ntarget:\n  place: new\n  area: lab\n  reason: Recurring captures\n---\n## Question\nWhat about orchard planting?\n## Why\nThree related captures.\n\n- Inbox capture: one\n- Inbox capture: two\n- Inbox capture: three\n`);
+ r.git("add",".");r.git("commit","-qm","Existing proposal fixture");
+ expect((await runOverseer(r.config)).proposals).toEqual([]);
+ expect(r.git("show","HEAD:.studio-overseer-themes.json")).toContain(id);
+ expect(r.git("status","--porcelain")).toBe("");
+});

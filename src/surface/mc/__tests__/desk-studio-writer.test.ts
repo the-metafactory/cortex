@@ -248,7 +248,7 @@ describe("Studio writer acts", () => {
     expect(r.ok).toBe(true);
     const t = parsed("what-runs-locally");
     expect(t).toMatchObject({ state: "active", areas: ["work", "lab"], question: "What runs locally?", opened: "2026-10-31" });
-    expect(t.log[0]?.text).toBe("Opened from Ivy's proposal. Yes-filter: 1 yes");
+    expect(t.log[0]?.text).toBe("Opened from Ivy's proposal runs-locally. Yes-filter: 1 yes");
     expect(read("threads/what-runs-locally.md")).toContain("## Yes-filter\n\n- Is this mine to do? yes\n- What will I stop doing for it? The Friday review\n");
     expect(read("threads/what-runs-locally.md")).not.toContain("Not a filter question");
     expect(existsSync(join(dir, "proposals/runs-locally.md"))).toBe(false);

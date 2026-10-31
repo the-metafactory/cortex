@@ -82,17 +82,24 @@ failures.
 Recurring themes are conservative word-pair matches across at least three inbox
 captures. They create a proposal containing a reason, capture IDs and a suggested
 area. A unanimous capture area wins, then a matching area label, then the first
-configured area. The person confirms its theme and area. Captures already cited
-by a proposal are excluded. A pass that creates proposals does not enqueue
-thinking. Captures remain in the inbox. The next pass can select unrelated
-threads.
+configured area. The person confirms its theme and area. Handled capture IDs are recorded in
+`.studio-overseer-themes.json` in the
+same git commit as the proposal. The ledger survives acceptance, dismissal,
+proposal-file removal and checkpoint loss. Accepted threads name the proposal
+in their Log, linking back to its capture provenance. Original captures remain
+in the inbox. Editing an existing capture does not make it fresh: three
+previously unhandled capture IDs are required for another proposal. Missing
+previously tracked provenance, malformed JSON and unknown ledger versions
+defer the scan. A pass that creates proposals does not enqueue thinking. The
+next pass can select unrelated threads.
 
 The overseer shares `.git/studio-write.lock` with Cortex and Ranger, verifies a
 clean repository and rereads files before writing. It refuses symlinked proposal
 directories and never overwrites a proposal. Its checkpoint lives in the git
-directory. A failed proposal commit leaves its files for inspection and defers
-later scans until the tree is clean; it never resets the person's files. Only
-successful native enqueue commands advance the per-day enqueue checkpoint.
+directory. A failed proposal commit restores only its unchanged generated files
+and original ledger. Detected concurrent edits are preserved for inspection; the
+overseer never resets the person's unrelated files. Only successful native
+enqueue commands advance the per-day enqueue checkpoint.
 
 The Desk derives one Studio briefing line from today's real notes, naming each
 thread once. Queued work and sample notes do not count as completed thinking.

@@ -1,3 +1,4 @@
+import { existsSync, lstatSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse, stringify } from "yaml";
@@ -6,6 +7,7 @@ import { parseProposalFile } from "../surface/mc/desk/studio/format";
 import { readStudioFiles } from "../surface/mc/desk/studio/read";
 import { buildStudioView } from "../surface/mc/desk/studio/view";
 import { acquireStudioLock } from "../surface/mc/desk/studio/write-lock";
+import { THEME_LEDGER_PATH, proposalProvenance, readThemeLedger, type ThemeLedger, type ThemeLedgerSnapshot } from "../surface/mc/desk/studio/overseer-ledger";
 import { recurringThemes, selectThinking, type ThemeProposal } from "../surface/mc/desk/studio/overseer";
 
 export const OverseerConfig = z.object({
@@ -34,21 +36,49 @@ async function json(url: string): Promise<unknown> {
   return response.json();
 }
 
-async function persistProposals(input: { dir: string; pending: ThemeProposal[]; now: Date; git: (args: string[]) => Promise<string> }): Promise<string[]> {
-  const proposals: string[] = [];
+async function persistProposals(input: { dir: string; pending: ThemeProposal[]; now: Date; git: (args: string[]) => Promise<string>; ledger: ThemeLedgerSnapshot; provenance: ThemeLedger; head: string; unchanged: () => Promise<void> }): Promise<string[]> {
+  const writes = new Map<string, string>();
   for (const theme of input.pending) {
     const text = `---\n${stringify({ type: "question", areas: [theme.area], proposed: input.now.toISOString(), target: { place: "new", area: theme.area, reason: theme.reason } })}---\n\n## Question\n${theme.question}\n\n## Why\n${theme.reason}\n\n${theme.captures.map(id => `- Inbox capture: ${id}`).join("\n")}\n`;
     if (!parseProposalFile(`proposals/${theme.id}.md`, text).ok) throw new Error("Invalid overseer proposal");
+    writes.set(`proposals/${theme.id}.md`, text);
+  }
+  const next: ThemeLedger = { version: 1, themes: [...input.provenance.themes, ...input.pending.map(theme => ({ proposal: theme.id, captures: theme.captures }))] };
+  if (JSON.stringify(next) !== JSON.stringify(input.ledger.value)) writes.set(THEME_LEDGER_PATH, `${JSON.stringify(next, null, 2)}\n`);
+  if (!writes.size) return [];
+  if (input.pending.length) {
     await mkdir(join(input.dir, "proposals"), { recursive: true });
     if (await realpath(join(input.dir, "proposals")) !== join(input.dir, "proposals")) throw new Error("Proposals directory must stay inside Studio");
-    await writeFile(join(input.dir, `proposals/${theme.id}.md`), text, { flag: "wx" });
-    proposals.push(theme.id);
   }
-  if (proposals.length) {
-    await input.git(["add", "--", ...proposals.map(id => `proposals/${id}.md`)]);
-    await input.git(["commit", "-m", "Studio: propose threads from recurring inbox themes", "--", ...proposals.map(id => `proposals/${id}.md`)]);
+  await input.unchanged();
+  const ledgerPath = join(input.dir, THEME_LEDGER_PATH);
+  const present = existsSync(ledgerPath);
+  if (present !== (input.ledger.text !== null) || (present && (!lstatSync(ledgerPath).isFile() || realpathSync(ledgerPath) !== ledgerPath || readFileSync(ledgerPath, "utf8") !== input.ledger.text))) throw new Error("Studio theme provenance changed before writing; deferred");
+  if (input.pending.length && realpathSync(join(input.dir, "proposals")) !== join(input.dir, "proposals")) throw new Error("Proposals directory changed before writing; deferred");
+  const paths = [...writes.keys()];
+  const written = new Map<string, string>();
+  try {
+    for (const [path, text] of writes) {
+      written.set(path, text);
+      writeFileSync(join(input.dir, path), text, { flag: path === THEME_LEDGER_PATH && input.ledger.text !== null ? "w" : "wx" });
+    }
+    await input.git(["add", "--", ...paths]);
+    const currentHead = await input.git(["rev-parse", "HEAD"]);
+    const status = await input.git(["status", "--porcelain", "--untracked-files=all"]);
+    const ownStagedFiles = status.split("\n").filter(Boolean).every(line => writes.has(line.slice(3)) && line[1] === " ");
+    if (currentHead !== input.head || !ownStagedFiles || [...writes].some(([path, text]) => !lstatSync(join(input.dir, path)).isFile() || readFileSync(join(input.dir, path), "utf8") !== text)) throw new Error("Studio changed before the proposal commit; deferred");
+    await input.git(["commit", "-m", "Studio: record recurring-theme provenance and proposals", "--", ...paths]);
+  } catch (error) {
+    const head = await input.git(["rev-parse", "HEAD"]);
+    if (head !== input.head || [...written].some(([path, text]) => !existsSync(join(input.dir, path)) || readFileSync(join(input.dir, path), "utf8") !== text)) throw new Error("Studio proposal commit failed with a concurrent edit; files were preserved for inspection", { cause: error });
+    for (const path of written.keys()) {
+      if (path === THEME_LEDGER_PATH && input.ledger.text !== null) writeFileSync(join(input.dir, path), input.ledger.text);
+      else unlinkSync(join(input.dir, path));
+    }
+    await input.git(["reset", "-q", "HEAD", "--", ...written.keys()]);
+    throw new Error("Studio proposal commit failed; original provenance and files restored", { cause: error });
   }
-  return proposals;
+  return input.pending.map(theme => theme.id);
 }
 
 export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = new Date()): Promise<{ queued: string[]; proposals: string[] }> {
@@ -61,6 +91,8 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
     const head = await git(["rev-parse", "HEAD"]);
     const gitDir = await git(["rev-parse", "--absolute-git-dir"]);
     const statePath = join(gitDir, "studio-overseer.json");
+    const ledger = await readThemeLedger(dir);
+    if (ledger.text === null && await git(["log", "-1", "--format=%H", "--", THEME_LEDGER_PATH])) throw new Error("Studio theme provenance was removed; restore it before scanning");
     let previous: z.infer<typeof State> | null = null;
     try { previous = State.parse(JSON.parse(await readFile(statePath, "utf8"))); }
     catch (error) { if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error; }
@@ -85,19 +117,21 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
       const oldMaterial = z.array(z.unknown()).parse(JSON.parse(before ?? "[]"));
       if (previous && (thread.material.length > oldMaterial.length || thread.material.some(item => !oldMaterial.some(old => JSON.stringify(old) === JSON.stringify(item))))) newMaterial.add(thread.slug);
     }
-    const proposedCaptures = read.files.proposals.map(file => file.text).join("\n");
-    const themes = recurringThemes(studio.inbox.filter(capture => !proposedCaptures.includes(`- Inbox capture: ${capture.id}\n`)), studio.areas);
+    const provenance = proposalProvenance(read.files.proposals, ledger.value);
+    const handledCaptures = new Set(provenance.themes.flatMap(theme => theme.captures));
+    const themes = recurringThemes(studio.inbox.filter(capture => !handledCaptures.has(capture.id)), studio.areas);
     const pending = themes.filter(theme => !studio.proposals.some(proposal => proposal.id === theme.id));
     const today = now.toISOString().slice(0, 10);
     const queued = previous?.queued ?? {};
     const selections = selectThinking({ studio, now: now.getTime(), staleDays: config.staleDays, changedAt, newMaterial, events: [...desk.today, ...desk.ahead] }).filter(selection => queued[selection.thread] !== today);
     const unchanged = async (): Promise<void> => {
       if (await git(["rev-parse", "HEAD"]) !== head || await git(["status", "--porcelain", "--untracked-files=all"])) throw new Error("Studio changed during overseer scan; deferred");
+      if ((await readThemeLedger(dir)).text !== ledger.text) throw new Error("Studio theme provenance changed during scan; deferred");
       const fresh = await readStudioFiles(dir);
       if (JSON.stringify(fresh.files) !== JSON.stringify(read.files)) throw new Error("Studio files changed during overseer scan; deferred");
     };
     await unchanged();
-    const proposals = await persistProposals({ dir, pending, now, git });
+    const proposals = await persistProposals({ dir, pending, now, git, ledger, provenance, head, unchanged });
     const save = async (): Promise<void> => {
       const state = { head: await git(["rev-parse", "HEAD"]), material, queued, pendingMaterial: [...newMaterial], changedAt: Object.fromEntries(changedAt) };
       await writeFile(`${statePath}.tmp`, JSON.stringify(state), { mode: 0o600 });
