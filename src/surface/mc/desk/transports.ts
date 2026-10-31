@@ -1,4 +1,6 @@
 import type { DeskPush, DeskTransport, PushResult } from "./interrupt";
+import { oneLine } from "./actions";
+import { spawnWithStdin, type WriterRunner } from "./create";
 
 export type NotifyAnswer = { delivered: true; messageId?: string } | { delivered: false; code: string; detail?: string };
 
@@ -29,6 +31,23 @@ export function discordTransport(notify: (text: string) => Promise<NotifyAnswer>
       if (answer.delivered) return answer.messageId ? { status: "sent", ref: answer.messageId } : { status: "sent" };
       if (answer.code === "buffered") return { status: "buffered" };
       return { status: "failed", error: `Discord did not take the message (${answer.code}${answer.detail ? `: ${answer.detail}` : ""}).` };
+    },
+  };
+}
+
+export function commandTransport(argv: string[], timeoutMs: number, run: WriterRunner = spawnWithStdin): DeskTransport {
+  return {
+    id: "command",
+    send: async (push): Promise<PushResult> => {
+      const url = push.action ? safeUrl(push.action.url) : null;
+      const stdin = JSON.stringify({ key: push.key, title: push.title, why: push.why, ...(push.action && url ? { action: { label: push.action.label, url } } : {}) });
+      try {
+        const result = await run(argv, stdin, timeoutMs);
+        if (result.code === 0) return { status: "sent" };
+        return { status: "failed", error: oneLine(result.stderr || result.stdout, `The transport command exited with code ${result.code}.`) };
+      } catch (err) {
+        return { status: "failed", error: `The transport command did not finish: ${err instanceof Error ? err.message : String(err)}` };
+      }
     },
   };
 }

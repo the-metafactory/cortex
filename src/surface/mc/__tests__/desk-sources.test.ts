@@ -152,7 +152,7 @@ describe("composeDesk with command sources", () => {
       now: NOW, sourceCache: new SourceCache(async () => JSON.stringify({ events: [{ id: "x" }, { id: "y", start: "never", title: "y" }] })),
     });
     expect(view.sources).toContainEqual({ id: "odd", ok: true });
-    expect(view.systems).toContain("The odd source sent 2 entries the Desk could not read.");
+    expect(view.systems.some((line) => line.startsWith("The odd source sent 2 entries the Desk could not read: events[0].start:"))).toBe(true);
   });
 });
 

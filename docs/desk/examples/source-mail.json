@@ -1,0 +1,15 @@
+{
+  "items": [
+    {
+      "kind": "mail",
+      "id": "budget-2027@example.org",
+      "from": { "name": "Ada Lovelace", "address": "ada@example.org" },
+      "subject": "Budget for next year",
+      "receivedAt": "2026-10-30T09:12:00Z",
+      "unread": true,
+      "firstParagraph": "Could you look at the budget draft before Friday?",
+      "url": "https://mail.example.org/message/budget-2027",
+      "account": "example"
+    }
+  ]
+}

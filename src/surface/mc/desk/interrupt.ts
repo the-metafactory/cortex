@@ -7,6 +7,8 @@ export type TransportId = (typeof DESK_TRANSPORTS)[number];
 
 export interface InterruptRules {
   transport: TransportId;
+  command?: string[];
+  timeoutSeconds?: number;
   meetingMinutes: number;
   mail: boolean;
   reminders: boolean;

@@ -187,7 +187,7 @@ import { refreshCockpit, defaultWorkItemSourceFor } from "./surface/mc/refresh";
 import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/refresh-loop";
 // MC-I1.S1 (ADR-0005) — in-process Mission Control embed (supersedes api.*).
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
-import { discordTransport } from "./surface/mc/desk/transports";
+import { commandTransport, discordTransport } from "./surface/mc/desk/transports";
 import { expandGoalPaths } from "./surface/mc/desk/goals";
 import { toClassifierConfig } from "./surface/mc/desk/classify";
 import { resolveVoice } from "./surface/mc/desk/voice";
@@ -346,6 +346,7 @@ import { createProbeResponder, type ProbeResponder } from "./bus/probe-responder
 // These do NOT boot the daemon — only `start` does.
 import { dispatchNetwork } from "./cli/cortex/commands/network";
 import { registerLedgerCommand } from "./cli/cortex/commands/ledger";
+import { registerDeskCommand } from "./cli/cortex/commands/desk";
 import { resolveRegistryAnchor } from "./cli/cortex/commands/default-registry";
 import { dispatchOffer } from "./cli/cortex/commands/offer";
 import { dispatchProvisionStack } from "./cli/cortex/commands/provision-stack";
@@ -4986,6 +4987,9 @@ export async function startCortex(
               },
             }
           : {}),
+        ...(config.mc.desk.interruptions.transport === "command" && config.mc.desk.interruptions.command
+          ? { deskTransport: ((argv: string[], ms: number) => () => commandTransport(argv, ms))(config.mc.desk.interruptions.command, (config.mc.desk.interruptions.timeoutSeconds ?? 10) * 1000) }
+          : {}),
         configPath: config.mc.configPath || undefined,
         dbPath,
         port: config.mc.port,
@@ -6938,6 +6942,7 @@ if (import.meta.main) {
     .version(getVersion());
 
   registerLedgerCommand(program);
+  registerDeskCommand(program);
 
   program
     .command("start")
