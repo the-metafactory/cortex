@@ -2,6 +2,7 @@ import { lstat, readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { STUDIO_SLUG } from "./format";
+import { STUDIO_MAX_FILE_BYTES } from "./read";
 import type { StudioFile } from "./view";
 
 export const THEME_LEDGER_PATH = ".studio-overseer-themes.json";
@@ -14,7 +15,7 @@ export async function readThemeLedger(dir: string): Promise<ThemeLedgerSnapshot>
  const path=join(dir,THEME_LEDGER_PATH);
  try {
   const info=await lstat(path);
-  if(!info.isFile()||info.size>1_000_000||await realpath(path)!==path)throw new Error("Studio theme provenance must be a regular file inside Studio and at most one megabyte");
+  if(!info.isFile()||info.size>STUDIO_MAX_FILE_BYTES||await realpath(path)!==path)throw new Error("Studio theme provenance must be a regular file inside Studio and at most one megabyte");
   const text=await readFile(path,"utf8");
   return {text,value:Ledger.parse(JSON.parse(text))};
  }catch(error){

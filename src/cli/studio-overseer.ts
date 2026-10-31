@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { parse, stringify } from "yaml";
 import { z } from "zod";
 import { parseProposalFile } from "../surface/mc/desk/studio/format";
-import { readStudioFiles } from "../surface/mc/desk/studio/read";
+import { readStudioFiles, STUDIO_MAX_FILE_BYTES } from "../surface/mc/desk/studio/read";
 import { buildStudioView } from "../surface/mc/desk/studio/view";
 import { acquireStudioLock } from "../surface/mc/desk/studio/write-lock";
 import { THEME_LEDGER_PATH, proposalProvenance, readThemeLedger, type ThemeLedger, type ThemeLedgerSnapshot } from "../surface/mc/desk/studio/overseer-ledger";
@@ -44,7 +44,9 @@ async function persistProposals(input: { dir: string; pending: ThemeProposal[]; 
     writes.set(`proposals/${theme.id}.md`, text);
   }
   const next: ThemeLedger = { version: 1, themes: [...input.provenance.themes, ...input.pending.map(theme => ({ proposal: theme.id, captures: theme.captures }))] };
-  if (JSON.stringify(next) !== JSON.stringify(input.ledger.value)) writes.set(THEME_LEDGER_PATH, `${JSON.stringify(next, null, 2)}\n`);
+  const ledgerText = `${JSON.stringify(next, null, 2)}\n`;
+  if (Buffer.byteLength(ledgerText, "utf8") > STUDIO_MAX_FILE_BYTES) throw new Error("Studio theme provenance exceeds the file limit; nothing was written");
+  if (JSON.stringify(next) !== JSON.stringify(input.ledger.value)) writes.set(THEME_LEDGER_PATH, ledgerText);
   if (!writes.size) return [];
   if (input.pending.length) {
     await mkdir(join(input.dir, "proposals"), { recursive: true });
