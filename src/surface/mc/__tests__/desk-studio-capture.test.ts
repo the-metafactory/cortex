@@ -118,6 +118,57 @@ describe("Studio capture filing", () => {
     expect((await undoStudioCapture({ options, areas: AREAS, db, requestId: rid(), id, now: NOW })).ok).toBe(false);
   });
 
+  it("refuses Undo after an inbox capture was edited and committed", async () => {
+    await file(async () => ({ thread: null, reason: "Unrelated." }));
+    const id = capture();
+    const path = join(dir, `inbox/${id}.md`);
+    writeFileSync(path, `${readFileSync(path, "utf8")}A later addition.\n`);
+    git("commit", "-am", "edit inbox capture");
+    const before = git("rev-parse", "HEAD");
+    expect((await undoStudioCapture({ options, areas: AREAS, db, requestId: rid(), id, now: NOW })).ok).toBe(false);
+    expect(readFileSync(path, "utf8")).toContain("A later addition.");
+    expect(git("rev-parse", "HEAD")).toBe(before);
+  });
+
+  it("refuses Undo after matched material was edited or moved to another thread", async () => {
+    await file();
+    const id = capture();
+    const path = join(dir, "threads/studio.md");
+    const original = readFileSync(path, "utf8");
+    writeFileSync(path, original.replace("Let the board show empty places.", "An edited capture."));
+    git("commit", "-am", "edit capture material");
+    expect((await undoStudioCapture({ options, areas: AREAS, db, requestId: rid(), id, now: NOW })).ok).toBe(false);
+    const material = original.split("\n").find((l) => l.includes(`- capture: [${id}]`)) ?? "";
+    writeFileSync(path, original.split("\n").filter((l) => l !== material).join("\n"));
+    writeFileSync(join(dir, "threads/other.md"), `${thread()}\n## Material\n\n${material}\n`);
+    git("add", "-A");
+    git("commit", "-m", "move material to another thread");
+    expect((await undoStudioCapture({ options, areas: AREAS, db, requestId: rid(), id, now: NOW })).ok).toBe(false);
+    expect(readFileSync(join(dir, "threads/other.md"), "utf8")).toContain(material);
+  });
+
+  it("preserves an external commit made while the model is thinking", async () => {
+    const result = await file(async () => {
+      writeFileSync(join(dir, "threads/studio.md"), thread().replace("Still deciding.", "An outside decision."));
+      git("commit", "-am", "outside update");
+      return { thread: "studio", reason: "Fits." };
+    });
+    expect(result.ok).toBe(false);
+    expect(readFileSync(join(dir, "threads/studio.md"), "utf8")).toContain("An outside decision.");
+    expect(readDone(db, NOW.getTime())).toHaveLength(0);
+    expect(git("log", "-1", "--format=%s")).toBe("outside update");
+  });
+
+  it("preserves uncommitted external edits made while the model is thinking", async () => {
+    const result = await file(async () => {
+      writeFileSync(join(dir, "threads/studio.md"), thread().replace("Still deciding.", "An unsaved decision."));
+      return { thread: "studio", reason: "Fits." };
+    });
+    expect(result.ok).toBe(false);
+    expect(readFileSync(join(dir, "threads/studio.md"), "utf8")).toContain("An unsaved decision.");
+    expect(git("rev-list", "--count", "HEAD")).toBe("1");
+  });
+
   it("refuses a dirty tree before invoking any model", async () => {
     writeFileSync(join(dir, "uncommitted.txt"), "keep me");
     let called = false;

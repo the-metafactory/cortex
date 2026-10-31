@@ -95,6 +95,7 @@ export async function runStudioTransaction(input: Omit<StudioWriteInput, "act">,
     if (done) return { ok: true, message: `Already recorded: ${done.subject}.`, commit: done.sha, replayed: true, studio: (await readView(input)).view };
     if (problem) return fail(409, problem.error);
 
+    const base = await git(["rev-parse", "--verify", "HEAD"], dir);
     const { files, view } = await readView(input);
     const plan = await makePlan({ files, view, now: input.now ?? new Date() });
     if (isRefusal(plan)) return fail(plan.status, plan.error, plan.needsPark ? { needsPark: true } : {});
@@ -103,6 +104,10 @@ export async function runStudioTransaction(input: Omit<StudioWriteInput, "act">,
       if (!parsed.ok) return fail(500, `The change would leave ${w.path} unreadable (${parsed.reason}); nothing was written.`);
     }
 
+    const changed = await treeProblem(git, dir);
+    if (changed) return fail(409, changed.error);
+    const head = await git(["rev-parse", "--verify", "HEAD"], dir);
+    if (head.code !== base.code || head.stdout !== base.stdout) return fail(409, "The Studio changed while the request was being prepared. Try again; nothing was written.");
     const committed = await applyPlan(git, dir, plan, input.requestId);
     if ("error" in committed) return fail(500, committed.error);
     return { ok: true, message: plan.message, commit: committed.sha, replayed: false, studio: (await readView(input)).view };

@@ -6,6 +6,7 @@ import { chatJson, type EndpointConfig } from "../classify";
 import type { StudioOptions } from "../types";
 import type { ActContext, ActPlan, ActRefusal } from "./acts";
 import { appendEntry, appendLog, localTime, oneLine } from "./edit";
+import { spawnGit } from "./git";
 import { STUDIO_SLUG } from "./format";
 import { runStudioTransaction, type ActResult } from "./writer";
 import type { StudioArea } from "./view";
@@ -87,21 +88,38 @@ export async function fileStudioCapture(input: CaptureInput): Promise<ActResult>
   return result;
 }
 
-function undoPlan(ctx: ActContext, id: string): ActPlan | ActRefusal {
-  const inbox = ctx.files.inbox.find((f) => f.path === `inbox/${id}.md`);
-  if (inbox) return { writes: [], removes: [inbox.path], subject: `Undo capture ${id}`, message: "Removed the capture from the Studio inbox." };
-  for (const file of ctx.files.threads) {
-    const lines = file.text.split("\n");
-    if (!lines.some((l) => l.startsWith(marker(id)))) continue;
-    const changed = appendLog(lines.filter((l) => !l.startsWith(marker(id))).join("\n"), localTime(ctx.now), `Undid capture ${id}`);
-    if (!changed) return { status: 409, error: "That thread cannot be edited; nothing was written." };
-    return { writes: [{ path: file.path, text: changed }], removes: [], subject: `Undo capture ${id}`, message: "Removed the capture from its thread. Later changes were kept." };
+async function captureReceipt(dir: string, id: string): Promise<{ path: string; text: string } | null> {
+  const found = await spawnGit(["log", "-1", `--grep=^Studio: File capture ${id} `, "--format=%H"], dir);
+  const sha = found.stdout.trim();
+  if (found.code !== 0 || !/^[a-f0-9]{40,64}$/.test(sha)) return null;
+  const paths = await spawnGit(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", sha], dir);
+  const path = paths.stdout.trim();
+  if (paths.code !== 0 || !/^(?:threads|inbox)\/[a-z0-9][a-z0-9-]{0,79}\.md$/.test(path)) return null;
+  const file = await spawnGit(["show", `${sha}:${path}`], dir);
+  return file.code === 0 ? { path, text: file.stdout } : null;
+}
+
+async function undoPlan(ctx: ActContext, dir: string, id: string): Promise<ActPlan | ActRefusal> {
+  const refuse = (): ActRefusal => ({ status: 409, error: "That capture has moved or changed; nothing was removed." });
+  const original = await captureReceipt(dir, id);
+  if (!original) return refuse();
+  if (original.path.startsWith("inbox/")) {
+    const inbox = ctx.files.inbox.find((f) => f.path === original.path);
+    if (inbox?.text !== original.text) return refuse();
+    return { writes: [], removes: [inbox.path], subject: `Undo capture ${id}`, message: "Removed the capture from the Studio inbox." };
   }
-  return { status: 409, error: "That capture has moved or changed; nothing was removed." };
+  const file = ctx.files.threads.find((f) => f.path === original.path);
+  const expected = original.text.split("\n").find((l) => l.startsWith(marker(id)));
+  const lines = file?.text.split("\n") ?? [];
+  const matching = lines.filter((l) => l.startsWith(marker(id)));
+  if (!file || !expected || matching.length !== 1 || matching[0] !== expected) return refuse();
+  const changed = appendLog(lines.filter((l) => l !== expected).join("\n"), localTime(ctx.now), `Undid capture ${id}`);
+  if (!changed) return { status: 409, error: "That thread cannot be edited; nothing was written." };
+  return { writes: [{ path: file.path, text: changed }], removes: [], subject: `Undo capture ${id}`, message: "Removed the capture from its thread. Later changes were kept." };
 }
 
 export async function undoStudioCapture(input: Omit<CaptureInput, "text" | "model"> & { id: string }): Promise<ActResult> {
-  const result = await runStudioTransaction(input, (ctx) => undoPlan(ctx, input.id));
+  const result = await runStudioTransaction(input, (ctx) => undoPlan(ctx, input.options.dir, input.id));
   if (result.ok) input.db.query("UPDATE desk_done SET action = 'studio.capture.undone', message = ?, updated_at = ? WHERE action = 'studio.capture' AND item_key = ?")
     .run(result.message, (input.now ?? new Date()).getTime(), input.id);
   return result;
