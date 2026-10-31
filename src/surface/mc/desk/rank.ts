@@ -7,11 +7,13 @@ import { clock, DAY_MS, startOfDay } from "./time";
 import { isUnimportant, isVip } from "./vips";
 import { eventKey, UNIMPORTANT_REASON, upcomingMeetings, type ClassifierEvent, type MailCategory, type MailClassification } from "./classify";
 import type { DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
+import type { AreaPolicy } from "./studio/view";
 import { evidenceView, suggestionLine, type EvidenceLinks } from "./mail-triage";
 
 export interface AreaRule extends DeskArea {
   repos: string[];
   goals: string[];
+  policy?: AreaPolicy;
 }
 
 export interface RankInput {

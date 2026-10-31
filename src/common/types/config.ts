@@ -401,9 +401,16 @@ const DeskSchema = z.object({
         color: z.string().default(""),
         repos: z.array(z.string()).default([]),
         goals: z.array(z.string()).default([]),
+        policy: z.enum(["local", "cloud"]).default("cloud"),
       }),
     )
     .default([]),
+  studio: z
+    .object({
+      dir: z.string().min(1),
+      maxActive: z.number().int().min(1).max(20).default(5),
+    })
+    .optional(),
   sources: z
     .array(
       z.object({

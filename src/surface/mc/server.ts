@@ -71,6 +71,7 @@ import { handleDeskCorrections } from "./api/desk-corrections";
 import { handleDeskAction, handleDeskAutonomy } from "./api/desk-action";
 import { handleDeskAsk, handleDeskCreate, handleDeskNoteDone } from "./api/desk-ask";
 import { handleDeskGoal } from "./api/desk-goal";
+import { handleGetDeskStudio } from "./api/desk-studio";
 import { GoalChecks, GoalStatuses } from "./desk/goals";
 import { RecentCalendarWrites } from "./desk/create";
 import { HandledLedger } from "./desk/actions";
@@ -477,6 +478,11 @@ async function handleApi(
   if (pathname === "/api/desk/notes/done") return handleDeskNoteDone(req, db);
 
   if (pathname === "/api/desk/goal") return handleDeskGoal(req, desk);
+
+  if (pathname === "/api/desk/studio") {
+    if (req.method !== "GET") return methodNotAllowed(["GET"]);
+    return handleGetDeskStudio(desk);
+  }
 
   if (pathname === "/api/vigil/subjects") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);

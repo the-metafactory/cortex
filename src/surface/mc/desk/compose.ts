@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
+import type { StudioOptions } from "./studio/view";
 import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoName, type AreaRule, type GoalActionsInput } from "./rank";
 import { DAY_MS, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent } from "./sources/command";
@@ -45,6 +46,7 @@ export interface DeskOptions {
   rangerUrl: string;
   rangerCli?: RangerCli;
   areas: AreaRule[];
+  studio?: StudioOptions;
   sources: DeskSourceConfig[];
   ask?: DeskAskOptions;
   interruptions?: InterruptRules;
