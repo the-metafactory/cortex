@@ -139,7 +139,7 @@ export async function composeDesk(
     .filter((item) => goalListed(goalStatuses, item.goal));
   const items = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: Boolean(desk.mailActions?.trash?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}) }),
+    ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: Boolean(desk.mailActions?.trash?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
   ], rules, readDeliveries(db), now), activeCorrections);

@@ -275,7 +275,7 @@ const parseStored =(raw: string): unknown => {
   }
 };
 
-export function readDetails(raw: string | null): Extras {
+function readDetails(raw: string | null): Extras {
   const stored = raw ? field(StoredSchema, parseStored(raw)) : undefined;
   if (!stored) return {};
   const { summary, suggestedAction, evidence } = stored;

@@ -324,7 +324,7 @@ const ANNA = mail("m1", "Budget numbers", { from: { name: "Anna Muster", address
 
 const itemFor = (stored: MailClassification, input: Partial<MailInput> = {}) => {
   saveClassification(db, "m1", stored, "coder", NOW);
-  const [item] = mailItems({ now: NOW, mail: [ANNA], events: [REVIEW, FAR], vips: new Set(), classified: readClassifications(db, ["m1"]), links: LINKS, ...input });
+  const [item] = mailItems({ now: NOW, mail: [ANNA], events: [REVIEW, FAR], vips: new Set(), classified: readClassifications(db, ["m1"]), links: LINKS, onDesk: new Set([REVIEW_KEY]), ...input });
   if (!item) throw new Error("no mail item");
   return item;
 };
@@ -376,6 +376,12 @@ describe("a mail item from a cached classification", () => {
     expect(item.actions.map((a) => [a.id, a.role])).toEqual([["meeting.show", "primary"], ["open", "secondary"], ["mail.trash", "secondary"]]);
     expect(item.actions[0]?.target).toBe(REVIEW_KEY);
     expect(item.suggestion).toBeUndefined();
+  });
+
+  it("adds no Show on the meeting for a meeting that is not on the Desk", () => {
+    const item = itemFor({ category: "meeting", meetingKey: REVIEW_KEY, reason: "It is about the budget review.", suggestedAction: "link-meeting" }, { onDesk: new Set() });
+    expect(item.actions[0]).toMatchObject({ id: "open", role: "primary" });
+    expect(item.actions.some((a) => a.id === "meeting.show")).toBe(false);
   });
 
   it("keeps Seen, delete primary on an fyi mail that suggests link-meeting", () => {

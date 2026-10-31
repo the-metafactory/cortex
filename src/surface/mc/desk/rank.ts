@@ -279,6 +279,7 @@ export interface MailInput {
   unimportant?: ReadonlySet<string>;
   trash?: boolean;
   links?: EvidenceLinks;
+  onDesk?: ReadonlySet<string>;
 }
 
 const STOPWORDS = new Set(["meeting", "update", "about", "with", "from", "your", "termin", "sitzung", "einladung", "invitation", "accepted", "re", "fw", "aw", "wg"]);
@@ -338,7 +339,7 @@ const SHOW_MEETING = action("meeting.show", "Show on the meeting", "primary", tr
 const UNIMPORTANT_VERDICT: MailVerdict = { score: CATEGORY_SCORE.bulk, pressing: false, why: UNIMPORTANT_REASON, sorted: "bulk" };
 
 export function mailItems(input: MailInput): DeskItem[] {
-  const { now, mail, events, vips, classified, unimportant = new Set<string>(), trash = false, links = {} } = input;
+  const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, links = {}, onDesk = new Set<string>() } = input;
   return mail.filter((m) => m.unread).map((m): DeskItem => {
     const sender = m.from.name ?? m.from.address;
     const vip = isVip(vips, m.from.address);
@@ -346,9 +347,9 @@ export function mailItems(input: MailInput): DeskItem[] {
     const verdict = marked ? UNIMPORTANT_VERDICT : verdictFor(m, input);
     const quiet = trash && (verdict.sorted === "fyi" || verdict.sorted === "bulk");
     const triage = marked ? undefined : classified?.get(m.id);
-    const showMeeting: DeskAction[] = triage?.suggestedAction === "link-meeting" && verdict.eventKey && !quiet ? [{ ...SHOW_MEETING, target: verdict.eventKey }] : [];
+    const showMeeting: DeskAction[] = triage?.suggestedAction === "link-meeting" && verdict.eventKey && onDesk.has(verdict.eventKey) && !quiet ? [{ ...SHOW_MEETING, target: verdict.eventKey }] : [];
     const suggestion = showMeeting.length > 0 ? undefined : suggestionLine(triage?.suggestedAction);
-    const evidence = triage?.evidence ? evidenceView(triage.evidence, events, links, now) : [];
+    const evidence = triage?.evidence ? evidenceView(triage.evidence, onDesk, links) : [];
     const receivedAt = parsedOr(m.receivedAt, now);
     const ageDays = Math.max(0, (now - receivedAt) / DAY_MS);
     const arrived = `It arrived ${ago(now, receivedAt)}.`;
