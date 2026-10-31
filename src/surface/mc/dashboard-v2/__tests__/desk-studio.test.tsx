@@ -62,9 +62,28 @@ describe("the Studio board", () => {
     expect(html).toContain("1 Studio file could not be read.");
   });
 
-  it("says the thread page is still to come when a thread is open", () => {
+  it("shows the thread page in place of the board when a thread is open", () => {
     const open = renderToStaticMarkup(<DeskStudio studio={STUDIO} thread="two" onOpenThread={() => {}} at={AT} />);
-    expect(open).toContain("The thread page is not built yet");
+    expect(open).toContain('data-thread="two"');
+    expect(open).not.toContain('aria-label="Thread board"');
+    expect(open).toContain("Where I stand");
+    expect(open).toContain("Relates to");
+    expect(open).toContain("What about one?");
+    expect(open).toContain("Shares a source: Shared brief.");
+    expect(open).toContain("Log <span");
+  });
+
+  it("renders Keep, Discuss and Dismiss on Ivy's ghosts but disabled", () => {
+    const idea = { at: "2026-10-31T04:05:00+01:00", trigger: "Fits the week's post", model: "cloud", kind: "idea" as const, status: "open" as const, sample: true, text: "Draft it?" };
+    const studio: StudioView = { ...STUDIO, active: [thread("one", 1, { notes: [idea] }), thread("two", 2)] };
+    const open = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} at={AT} />);
+    const buttons = [...open.matchAll(/<button type="button" class="desk-btn[^"]*" disabled="" title="[^"]+">([^<]+)</g)].map((m) => m[1]);
+    expect(buttons).toEqual(["Close with an outcome", "Keep", "Discuss", "Dismiss"]);
+  });
+
+  it("says when the open thread is not in the Studio", () => {
+    const open = renderToStaticMarkup(<DeskStudio studio={STUDIO} thread="gone" onOpenThread={() => {}} at={AT} />);
+    expect(open).toContain("This thread is not in the Studio.");
   });
 });
 

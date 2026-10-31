@@ -362,7 +362,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       </div>
 
-      {inStudio && studio && <DeskStudio studio={studio} thread={place.thread} onOpenThread={(slug) => go({ mode: "studio", thread: slug })} />}
+      {inStudio && studio && <DeskStudio studio={studio} thread={place.thread} day={view} onOpenThread={(slug) => go({ mode: "studio", thread: slug })} />}
       <div className="desk-grid" hidden={inStudio}>
         <main>
           <section className="desk-lead">

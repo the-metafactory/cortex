@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { studioNote, studioThread } from "./__fixtures__/studio";
 import { buildBoard, normaliseLabel, sharedPairs, type BoardCard, type BoardClock, type BoardFree } from "../desk/studio/board";
 import type { IvyNote, MaterialLink, StudioCapture } from "../desk/studio/format";
 import type { StudioProposalView, StudioThreadView, StudioView } from "../desk/studio/view";
@@ -7,26 +8,8 @@ const NOW = Date.parse("2026-10-31T09:00:00+01:00");
 const TODAY = Date.parse("2026-10-31T00:00:00+01:00");
 const CLOCK: BoardClock = { now: NOW, startOfToday: TODAY, lastLook: null };
 
-const note = (at: string, over: Partial<IvyNote> = {}): IvyNote => ({ at, trigger: "Stale thread: unchanged for 6 days", model: "cloud", kind: "note", status: "open", sample: true, text: "A thought.", ...over });
-
-const thread = (slug: string, over: Partial<StudioThreadView> = {}): StudioThreadView => ({
-  slug,
-  path: `threads/${slug}.md`,
-  type: "question",
-  areas: ["lab"],
-  state: "active",
-  opened: "2026-10-20",
-  thinkTonight: false,
-  question: `What about ${slug}?`,
-  stand: "Not settled.",
-  notes: [],
-  material: [],
-  log: [],
-  outcomeText: "",
-  policy: "cloud",
-  overCap: false,
-  ...over,
-});
+const note = studioNote;
+const thread = studioThread;
 
 const capture = (id: string, target?: StudioCapture["target"]): StudioCapture => ({ id, path: `inbox/${id}.md`, at: "2026-10-30T18:20:00+01:00", via: "voice", text: `Capture ${id}`, target });
 
