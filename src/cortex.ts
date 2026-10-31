@@ -187,6 +187,8 @@ import { refreshCockpit, defaultWorkItemSourceFor } from "./surface/mc/refresh";
 import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/refresh-loop";
 // MC-I1.S1 (ADR-0005) — in-process Mission Control embed (supersedes api.*).
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
+import { discordTransport } from "./surface/mc/desk/transports";
+import { notifyWithResult } from "./adapters/notify-result";
 import { createVigilDeliveryPorts, startVigil, type VigilHandle } from "./vigil";
 import { somaGoalWording } from "./vigil/result-render";
 import type { AgentPresenceView } from "./surface/mc/api/agents";
@@ -4956,7 +4958,16 @@ export async function startCortex(
           areas: config.mc.desk.areas,
           sources: config.mc.desk.sources,
           ask: config.mc.desk.ask,
+          interruptions: config.mc.desk.interruptions,
         },
+        ...(config.mc.desk.interruptions.transport === "discord"
+          ? {
+              deskTransport: () => {
+                const discord = adapters.find((adapter) => adapter.platform === "discord");
+                return discord ? discordTransport((text) => notifyWithResult(discord, text, { timeoutMs: 10_000 })) : null;
+              },
+            }
+          : {}),
         configPath: config.mc.configPath || undefined,
         dbPath,
         port: config.mc.port,

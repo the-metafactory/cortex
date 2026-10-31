@@ -9,7 +9,8 @@ export type DeskItemKind =
   | "grilling"
   | "escalation"
   | "mail"
-  | "reminder";
+  | "reminder"
+  | "meeting";
 
 export interface DeskArea {
   id: string;
@@ -50,6 +51,13 @@ export interface DeskItem {
   detail: DeskItemDetail;
   excerpt?: string;
   eventKey?: string;
+  since?: number;
+  interrupt?: DeskInterrupt;
+}
+
+export interface DeskInterrupt {
+  delivery: "off" | "pending" | "sending" | "sent" | "failed";
+  error?: string;
 }
 
 export interface DeskFoldedGroup {
@@ -92,4 +100,5 @@ export interface DeskView {
   ask: { kinds: string[]; maps: { ref: string; label: string }[] };
   systems: string[];
   sources: { id: string; ok: boolean; error?: string }[];
+  chime: boolean;
 }

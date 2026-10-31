@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction } from "../lib/desk-action";
+import { chimeForNew } from "../lib/desk-chime";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
 import { ProposalCard, proposalTitle } from "./desk-proposal";
 import { proposalTime, type DeskProposal } from "../../desk/ask";
@@ -71,6 +72,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   const nextMeeting = laterReal.find((e) => e.kind === "meeting");
   const later = withGhost(laterReal, ghostToday);
   const ahead = withGhost(view.ahead.filter(inArea), !ghostToday);
+
+  useEffect(() => {
+    chimeForNew(view);
+  }, [view]);
 
   useEffect(() => {
     if (!detail) return;
@@ -524,6 +529,7 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
         </div>
         <button type="button" className="desk-title" onClick={onOpen}>{item.title}</button>
         <p className="desk-why">{item.why}</p>
+        {item.interrupt?.delivery === "failed" && <p className="desk-why desk-unsent">Not pushed: {item.interrupt.error}</p>}
         {item.excerpt && <blockquote className="desk-excerpt">{item.excerpt}</blockquote>}
         <div className="desk-acts">
           {item.actions.map((a) => <ActionButton key={a.id} action={a} onRun={onAction} sending={sending} />)}

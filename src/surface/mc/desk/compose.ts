@@ -12,6 +12,7 @@ import { withoutHandled, type HandledLedger, type RangerCli } from "./actions";
 import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriters, type RecentCalendarWrites } from "./create";
 import { listOpenNotes, type DeskNote } from "./notes";
+import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptRules } from "./interrupt";
 
 export interface DeskRuntime {
   options?: DeskOptions;
@@ -36,6 +37,7 @@ export interface DeskOptions {
   areas: AreaRule[];
   sources: DeskSourceConfig[];
   ask?: DeskAskOptions;
+  interruptions?: InterruptRules;
 }
 
 export interface DeskVigilSource {
@@ -96,12 +98,17 @@ export async function composeDesk(
     sourceId: "desk",
   }));
   const calendar = [...events, ...written];
+  const sod = startOfDay(now);
+  const todayCalendar = calendarEvents(calendar, sod, sod + DAY_MS);
+  const aheadCalendar = calendarEvents(calendar, sod + DAY_MS, sod + 5 * DAY_MS);
+  const rules = desk.interruptions ?? NO_INTERRUPTIONS;
 
-  const items = [
+  const items = markInterrupts([
     ...rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions: Boolean(desk.rangerCli?.bin), hidden: filtered?.hidden }),
     ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)) }),
     ...reminderItems(reminders, now),
-  ].sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+    ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
+  ], rules, readDeliveries(db), now).sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
 
   return {
     generatedAt: now,
@@ -111,12 +118,12 @@ export async function composeDesk(
     items,
     today: [
       ...buildToday(ranger, items, desk.areas, now),
-      ...calendarEvents(calendar, startOfDay(now), startOfDay(now) + DAY_MS),
-      ...reminderEvents(reminders, startOfDay(now), startOfDay(now) + DAY_MS),
+      ...todayCalendar,
+      ...reminderEvents(reminders, sod, sod + DAY_MS),
     ].sort((a, b) => a.at - b.at),
     ahead: [
-      ...calendarEvents(calendar, startOfDay(now) + DAY_MS, startOfDay(now) + 5 * DAY_MS),
-      ...reminderEvents(reminders, startOfDay(now) + DAY_MS, startOfDay(now) + 5 * DAY_MS),
+      ...aheadCalendar,
+      ...reminderEvents(reminders, sod + DAY_MS, sod + 5 * DAY_MS),
     ].sort((a, b) => a.at - b.at),
     vips: vips.map(({ address, label }) => ({ address, label })),
     agents: buildAgents(ranger, items, now),
@@ -125,6 +132,7 @@ export async function composeDesk(
     ask: { kinds: [...writableKinds(desk.ask?.writers ?? {})], maps: desk.ask?.taskMaps ?? [] },
     systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable],
     sources,
+    chime: rules.chime,
   };
 }
 
@@ -168,6 +176,7 @@ function reminderItems(reminders: DeskNote[], now: number): DeskItem[] {
     ],
     detail: { summary: r.text, history: [`Set ${ago(now, r.createdAt)}`], refs: [`desk note ${r.id}`], links: [] },
     eventKey: `reminder:${r.id}`,
+    since: r.dueAt ?? now,
   }));
 }
 

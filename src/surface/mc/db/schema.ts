@@ -101,9 +101,20 @@ export const TABLE_NAMES = [
   "vigil_attention_resolutions",
   "desk_vips",
   "desk_notes",
+  "desk_deliveries",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
+  `CREATE TABLE IF NOT EXISTS desk_deliveries (
+    item_key TEXT PRIMARY KEY,
+    transport TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('sending','sent','failed')),
+    title TEXT NOT NULL,
+    error TEXT,
+    ref TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS desk_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL CHECK(kind IN ('reminder','note')),
