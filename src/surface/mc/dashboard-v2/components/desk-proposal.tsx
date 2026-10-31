@@ -7,6 +7,7 @@ type FieldType = "text" | "long" | "time" | "map";
 const FIELDS: Record<AskKind, { key: string; label: string; type: FieldType }[]> = {
   reminder: [{ key: "text", label: "What", type: "text" }, { key: "due", label: "When", type: "time" }],
   note: [{ key: "text", label: "Note", type: "long" }],
+  capture: [{ key: "text", label: "Thought", type: "long" }],
   task: [{ key: "title", label: "Task", type: "text" }, { key: "details", label: "Details", type: "long" }, { key: "map", label: "Map", type: "map" }],
   goal: [{ key: "wording", label: "Goal", type: "long" }],
   calendar: [

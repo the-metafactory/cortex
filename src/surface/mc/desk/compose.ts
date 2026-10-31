@@ -170,13 +170,13 @@ export async function composeDesk(
     agents: buildAgents(ranger, items, now),
     goals: buildGoals(subjects),
     notes: notes.filter((n) => n.kind === "note").map(({ id, text, createdAt }) => ({ id, text, createdAt })),
-    ask: { kinds: [...writableKinds(desk.ask?.writers ?? {})], maps: desk.ask?.taskMaps ?? [] },
+    ask: { kinds: [...writableKinds(desk.ask?.writers ?? {}, Boolean(desk.studio))], maps: desk.ask?.taskMaps ?? [] },
     systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable, ...(corrections.ok ? [] : [CORRECTIONS_UNREADABLE])],
     sources,
     voice: voiceView(desk.voice),
     chime: rules.chime,
     notifications: rules.notifications,
-    autonomy: buildAutonomy(db, done, rangerActions),
+    autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio)),
     corrections: activeCorrections,
     mailClassifier,
   };
@@ -214,11 +214,11 @@ function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): D
   });
 }
 
-function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean): DeskView["autonomy"] {
+function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, studio: boolean): DeskView["autonomy"] {
   const grants = listGrants(db);
   return {
-    types: rangerActions ? PROMOTABLE.map((action) => ({ action, ...PROMOTABLE_LABELS[action], on: grants.has(action) })) : [],
-    done: done.filter((d) => d.status !== "running").slice(0, 10).map((d) => ({ key: d.attemptKey, title: d.title, message: d.message ?? "", at: d.createdAt, ok: d.status === "done" })),
+    types: PROMOTABLE.filter((a) => a === "studio.capture" ? studio : rangerActions).map((action) => ({ action, ...PROMOTABLE_LABELS[action], on: grants.has(action) })),
+    done: done.filter((d) => d.status !== "running").slice(0, 10).map((d) => ({ key: d.attemptKey, ...(d.action.startsWith("studio.capture") ? { action: d.action, ...(d.action === "studio.capture" ? { undo: d.itemKey } : {}) } : {}), title: d.title, message: d.message ?? "", at: d.createdAt, ok: d.status === "done" })),
   };
 }
 

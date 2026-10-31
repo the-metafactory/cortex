@@ -194,10 +194,10 @@ async function readCa(path: string): Promise<string> {
   }
 }
 
-export function chatClassifier(config: EndpointConfig, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): ClassifierRunner {
+export function chatJson(config: EndpointConfig, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): (messages: { role: "system" | "user"; content: string }[], timeoutMs: number) => Promise<unknown> {
   const url = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const wantsKey = needsKey(config);
-  return async (request, timeoutMs) => {
+  return async (messages, timeoutMs) => {
     const key = await readKey(config);
     if (wantsKey && !key) throw new MissingKey("the classifier key was not found");
     const ca = config.caFile ? await readCa(config.caFile) : null;
@@ -205,7 +205,7 @@ export function chatClassifier(config: EndpointConfig, fetchImpl: typeof fetch =
       ...(ca ? { tls: { ca } } : {}),
       method: "POST",
       headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
-      body: JSON.stringify({ model: config.model, messages: buildMessages(request), temperature: 0, max_tokens: 600 }),
+      body: JSON.stringify({ model: config.model, messages, temperature: 0, max_tokens: 600 }),
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) throw new Error(`the classifier answered HTTP ${res.status}`);
@@ -214,6 +214,11 @@ export function chatClassifier(config: EndpointConfig, fetchImpl: typeof fetch =
     if (!content) throw new Error("the classifier sent no answer");
     return parseModelContent(content);
   };
+}
+
+export function chatClassifier(config: EndpointConfig, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): ClassifierRunner {
+  const run = chatJson(config, fetchImpl, readKey);
+  return (request, timeoutMs) => run(buildMessages(request), timeoutMs);
 }
 
 export type CommandRunner = (argv: string[], timeoutMs: number, stdin: string, env?: Record<string, string | undefined>) => Promise<CommandResult>;

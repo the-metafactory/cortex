@@ -18,6 +18,7 @@
 // package.json this slice). The bundle's `plugin.ts` imports it first, so the
 // override still lands before any Discord client connects.
 
+import { resolveStudio } from "./surface/mc/desk/studio/config";
 import { Command } from "commander";
 import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync } from "fs";
 import { join, dirname, isAbsolute } from "path";
@@ -4961,7 +4962,7 @@ export async function startCortex(
           },
           somaBin: config.mc.desk.soma.bin ? expandTilde(config.mc.desk.soma.bin) : "",
           areas: config.mc.desk.areas,
-          ...(config.mc.desk.studio ? { studio: { dir: expandTilde(config.mc.desk.studio.dir), maxActive: config.mc.desk.studio.maxActive, ...(config.mc.desk.studio.yesFilter ? { yesFilter: config.mc.desk.studio.yesFilter } : {}) } } : {}),
+          ...(config.mc.desk.studio ? { studio: resolveStudio(config.mc.desk.studio, expandTilde) } : {}),
           sources: config.mc.desk.sources,
           ask: config.mc.desk.ask,
           interruptions: config.mc.desk.interruptions,

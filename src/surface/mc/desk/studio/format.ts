@@ -258,6 +258,7 @@ export function parseMaterialItem(item: string): MaterialLink {
   const kinded = KIND_PREFIX.exec(item);
   const kind = kinded?.[1] ?? "link";
   const rest = kinded?.[2] ?? item;
+  if (kind === "capture") return { kind, label: rest.replace(/^\[capture-[a-f0-9]{32}\] /, "") };
   const link = LINK.exec(rest);
   return link ? { kind, label: link[1] ?? rest, href: link[2] ?? "" } : { kind, label: rest };
 }

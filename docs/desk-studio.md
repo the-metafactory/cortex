@@ -201,3 +201,28 @@ Rules:
 - Opening or bringing back a thread while `maxActive` threads are active needs `park`, an active thread to park; without it the answer is a 409 with `needsPark: true`.
 - `open` from a proposal keeps the proposal's areas, with the chosen `area` first; an `area` outside them replaces them. A capture becomes a `question` thread in the chosen `area` with the capture as material. Yes-filter `answers` map a question from the filter to an answer of up to 300 characters; the page sends `yes`, `not sure` or `no` for each question but the last, and free text for the last one. Answers to questions the filter does not ask are ignored. They land in a `## Yes-filter` section, and the Log line counts the yes, not sure and no answers.
 - The answer is `{ ok, message, commit, replayed, studio }`, where `studio` is the fresh `GET /api/desk/studio` view, so the page redraws without waiting for its next poll.
+
+## Capture filing
+
+The command bar recognises `capture: <thought>`, `thought: <thought>`, and `studio: <thought>` as a Studio capture. Confirmation files the capture. When File thoughts in the Studio is promoted to Handle this yourself, the command bar files captures immediately. Stop doing this on your own restores confirmation.
+
+The optional `mc.desk.studio.filer` uses an OpenAI-compatible endpoint:
+
+```yaml
+filer:
+  baseUrl: https://models.example.org/v1
+  model: capture-model
+  apiKeyEnv: CAPTURE_MODEL_KEY
+  timeoutSeconds: 30
+  local:
+    baseUrl: http://127.0.0.1:8080/v1
+    model: local-capture-model
+```
+
+The endpoint fields match the mail classifier's endpoint form: `baseUrl`, `model`, optional `apiKeyEnv` or `apiKeyFile`, optional `caFile`, and `timeoutSeconds`. The `local` block accepts the same fields. The filer sends only the capture and each active thread's slug, question, and stand. If any active thread has a local policy, it uses `local` exclusively. A missing local endpoint never falls back to the other endpoint.
+
+The model returns `{ "thread": "slug or null", "match": true, "reason": "one sentence" }`. A clear match appends one Material bullet and a Log entry. No match, an unknown slug, a missing endpoint, or a model failure saves `inbox/capture-<id>.md`. A valid thread suggestion with `match: false` becomes the inbox file's `target`.
+
+Every successful filing appears in Done for you, with the reason and Undo. Undo removes that capture in a new commit and preserves later thread changes. A capture that has moved or changed cannot be undone automatically. Filing and Undo share the Studio's clean-tree checks, request replay, and write lock.
+
+`POST /api/desk/create` accepts `{ "requestId": "...", "kind": "capture", "fields": { "text": "..." } }`. `POST /api/desk/capture/undo` accepts `{ "requestId": "...", "id": "capture-..." }`. Both pass the same identity and rebind gates as other Desk writes.

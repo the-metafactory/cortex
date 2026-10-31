@@ -1,8 +1,8 @@
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { StudioOptions } from "../types";
-import { isRefusal, planAct, type ActPlan, type StudioAct } from "./acts";
-import { parseThreadFile } from "./format";
+import { isRefusal, planAct, type ActContext, type ActRefusal, type ActPlan, type StudioAct } from "./acts";
+import { parseCaptureFile, parseThreadFile } from "./format";
 import { commitPaths, findRequest, REQUEST_TRAILER, restorePaths, spawnGit, treeProblem, type GitRunner } from "./git";
 import { readStudioFiles } from "./read";
 import { buildStudioView, type StudioArea, type StudioFiles, type StudioView } from "./view";
@@ -51,7 +51,7 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function readView(input: StudioWriteInput): Promise<{ files: StudioFiles; view: StudioView }> {
+async function readView(input: Omit<StudioWriteInput, "act">): Promise<{ files: StudioFiles; view: StudioView }> {
   const { files, problems } = await readStudioFiles(input.options.dir);
   return { files, view: buildStudioView(files, input.options, input.areas, problems) };
 }
@@ -83,7 +83,7 @@ async function applyPlan(git: GitRunner, dir: string, plan: ActPlan, requestId: 
   return committed;
 }
 
-export async function runStudioAct(input: StudioWriteInput): Promise<ActResult> {
+export async function runStudioTransaction(input: Omit<StudioWriteInput, "act">, makePlan: (ctx: ActContext) => ActPlan | ActRefusal | Promise<ActPlan | ActRefusal>): Promise<ActResult> {
   const { dir } = input.options;
   const git = input.git ?? spawnGit;
   const lock = input.lock ?? studioWriteLock;
@@ -95,18 +95,27 @@ export async function runStudioAct(input: StudioWriteInput): Promise<ActResult> 
     if (done) return { ok: true, message: `Already recorded: ${done.subject}.`, commit: done.sha, replayed: true, studio: (await readView(input)).view };
     if (problem) return fail(409, problem.error);
 
+    const base = await git(["rev-parse", "--verify", "HEAD"], dir);
     const { files, view } = await readView(input);
-    const plan = planAct({ files, view, now: input.now ?? new Date() }, input.act);
+    const plan = await makePlan({ files, view, now: input.now ?? new Date() });
     if (isRefusal(plan)) return fail(plan.status, plan.error, plan.needsPark ? { needsPark: true } : {});
     for (const w of plan.writes) {
-      const parsed = parseThreadFile(w.path, w.text);
+      const parsed = w.path.startsWith("inbox/") ? parseCaptureFile(w.path, w.text) : parseThreadFile(w.path, w.text);
       if (!parsed.ok) return fail(500, `The change would leave ${w.path} unreadable (${parsed.reason}); nothing was written.`);
     }
 
+    const changed = await treeProblem(git, dir);
+    if (changed) return fail(409, changed.error);
+    const head = await git(["rev-parse", "--verify", "HEAD"], dir);
+    if (head.code !== base.code || head.stdout !== base.stdout) return fail(409, "The Studio changed while the request was being prepared. Try again; nothing was written.");
     const committed = await applyPlan(git, dir, plan, input.requestId);
     if ("error" in committed) return fail(500, committed.error);
     return { ok: true, message: plan.message, commit: committed.sha, replayed: false, studio: (await readView(input)).view };
   } finally {
     lock.release(dir);
   }
+}
+
+export function runStudioAct(input: StudioWriteInput): Promise<ActResult> {
+  return runStudioTransaction(input, (ctx) => planAct(ctx, input.act));
 }

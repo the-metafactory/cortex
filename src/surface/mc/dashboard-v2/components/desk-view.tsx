@@ -87,7 +87,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [hint, setHint] = useState(() => wantsHint(view.notifications, browserNotifyEnv()));
   const latest = useRef(view);
   const [place, go] = useDeskLocation();
-  const studio = useDeskStudio(place.mode === "studio");
+  const [studioRevision, setStudioRevision] = useState(0);
+  const studio = useDeskStudio(place.mode === "studio", studioRevision);
+  const captureChanged = (): void => { setStudioRevision((n) => n + 1); onChanged(); };
   const inStudio = place.mode === "studio" && studio !== null;
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
@@ -150,26 +152,42 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     const text = askText.trim();
     if (!text || asking) return;
     setAsking(true);
-    const result = await askDesk(text);
-    setAsking(false);
-    if (!result.ok) {
-      setNote(result.text);
-      return;
+    try {
+      const result = await askDesk(text);
+      if (!result.ok) {
+        setNote(result.text);
+        return;
+      }
+      await propose(text, result.proposal);
+      setAskText("");
+    } finally {
+      setAsking(false);
     }
-    propose(text, result.proposal);
-    setAskText("");
   };
 
-  const propose = (said: string, p: DeskProposal): void => {
+  const propose = async (said: string, p: DeskProposal): Promise<string | null> => {
+    const requestId = crypto.randomUUID();
     setGroupKind(null);
-    setProposal({ p, said, requestId: crypto.randomUUID(), fields: p.fields });
+    if (p.kind === "capture" && p.automatic && !p.problem) {
+      const filed = await createFromProposal(requestId, p.kind, p.fields);
+      setNote(filed.text);
+      if (filed.ok) {
+        captureChanged();
+        return filed.text;
+      }
+      setProposal({ p, said, requestId, fields: p.fields });
+      return `${filed.text} Your thought is kept in the draft for retry.`;
+    }
+    setProposal({ p, said, requestId, fields: p.fields });
+    return null;
   };
 
   const voice = useDeskVoice(view.voice, {
     answer: async (said) => {
       const result = await askDesk(said);
       if (!result.ok) return result.text;
-      propose(said, result.proposal);
+      const filed = await propose(said, result.proposal);
+      if (filed) return filed;
       return `I drafted this ${result.proposal.label.toLowerCase()}: ${proposalTitle(result.proposal)}. Confirm it on screen.`;
     },
     briefing: () => spokenBriefing(view, selection, areaLabel),
@@ -185,7 +203,18 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     setNote(result.text);
     if (!result.ok && !result.uncertain) return;
     setProposal(null);
-    onChanged();
+    if (proposal.p.kind === "capture") captureChanged();
+    else onChanged();
+  };
+
+  const undoCapture = async (id: string): Promise<void> => {
+    try {
+      const result = await postJson<{ id: string; requestId: string }, { message: string }>("/api/desk/capture/undo", { id, requestId: crypto.randomUUID() });
+      setNote(result.message);
+      captureChanged();
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : "Could not undo that capture.");
+    }
   };
 
   const doneNote = async (id: string, itemKey: string | null): Promise<void> => {
@@ -355,6 +384,21 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     requestAnimationFrame(() => document.querySelector(`[data-event="${CSS.escape(key)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
   };
 
+  const proposalCard = proposal && (
+    <ProposalCard
+      key={proposal.requestId}
+      proposal={{ ...proposal.p, fields: proposal.fields }}
+      said={proposal.said}
+      maps={view.ask.maps}
+      now={view.generatedAt}
+      busy={creating}
+      onConfirm={(fields) => void confirm(fields)}
+      onCancel={() => setProposal(null)}
+      onGoto={() => focusEvent(GHOST_KEY)}
+      onFieldsChange={(fields) => setProposal((cur) => (cur ? { ...cur, fields } : cur))}
+    />
+  );
+
   return (
     <div className={`desk${detail ? " panel-open" : ""}${inStudio ? " in-studio" : ""}`}>
       <div className="desk-top">
@@ -375,7 +419,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                   ref={askInput}
                   className="desk-input"
                   aria-label="Ask Ivy"
-                  placeholder="remind me…, note…, ask an agent to…, schedule…"
+                  placeholder="capture…, remind me…, note…, ask an agent to…, schedule…"
                   value={askText}
                   disabled={asking}
                   onChange={(e) => setAskText(e.target.value)}
@@ -403,6 +447,12 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       </div>
 
       {inStudio && studio && <DeskStudio studio={studio} thread={place.thread} day={view} onOpenThread={(slug) => go({ mode: "studio", thread: slug })} />}
+      {inStudio && (
+        <div className="dst">
+          {proposalCard}
+          <DoneForYou autonomy={view.autonomy} onUndo={(id) => void undoCapture(id)} onPromote={(action, on) => void promote(action, on)} />
+        </div>
+      )}
       <div className="desk-grid" hidden={inStudio}>
         <main>
           <section className="desk-lead">
@@ -479,20 +529,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 <p>{nowSubline(view, selection.needsYou.length, selection.rest.length, nextMeeting)}</p>
               </div>
             </div>
-            {proposal && (
-              <ProposalCard
-                key={proposal.requestId}
-                proposal={proposal.p}
-                said={proposal.said}
-                maps={view.ask.maps}
-                now={view.generatedAt}
-                busy={creating}
-                onConfirm={(fields) => void confirm(fields)}
-                onCancel={() => setProposal(null)}
-                onGoto={() => focusEvent(GHOST_KEY)}
-                onFieldsChange={(fields) => setProposal((cur) => (cur ? { ...cur, fields } : cur))}
-              />
-            )}
+            {!inStudio && proposalCard}
             {selection.needsYou.map(itemRow)}
           </section>
           )}
@@ -524,7 +561,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             )}
           </section>
 
-          <DoneForYou autonomy={view.autonomy} onPromote={(action, on) => void promote(action, on)} />
+          <DoneForYou autonomy={view.autonomy} onUndo={(id) => void undoCapture(id)} onPromote={(action, on) => void promote(action, on)} />
 
           <section className="desk-msec">
             <h3 className="desk-mh">The rest</h3>
@@ -907,7 +944,7 @@ function AheadStrip({ events }: { events: DeskEvent[] }) {
   );
 }
 
-export function DoneForYou({ autonomy, onPromote }: { autonomy: DeskViewModel["autonomy"]; onPromote: (action: string, on: boolean) => void }) {
+export function DoneForYou({ autonomy, onPromote, onUndo }: { autonomy: DeskViewModel["autonomy"]; onPromote: (action: string, on: boolean) => void; onUndo?: (id: string) => void }) {
   if (autonomy.types.length === 0 && autonomy.done.length === 0) return null;
   const anyOn = autonomy.types.some((t) => t.on);
   return (
@@ -916,7 +953,9 @@ export function DoneForYou({ autonomy, onPromote }: { autonomy: DeskViewModel["a
       <ul className="desk-sub desk-done">
         {autonomy.done.map((d) => (
           <li key={d.key} className={d.ok ? undefined : "failed"}>
-            <div>{d.ok ? `Retried "${d.title}"` : `Could not retry "${d.title}"`}<small>{d.ok ? `at ${clock(d.at)}` : d.message}</small></div>
+            <div>{d.action?.startsWith("studio.capture") ? d.title : d.ok ? `Retried "${d.title}"` : `Could not retry "${d.title}"`}<small>{d.action?.startsWith("studio.capture") ? d.message : d.ok ? `at ${clock(d.at)}` : d.message}</small>
+              {d.undo && onUndo && <button type="button" className="desk-btn" onClick={() => onUndo(d.undo ?? "")}>Undo</button>}
+            </div>
           </li>
         ))}
         {autonomy.done.length === 0 && anyOn && <li><div>Nothing yet<small>What the Desk does on its own shows here.</small></div></li>}

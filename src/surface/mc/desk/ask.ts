@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { DAY_MS, startOfDay } from "./time";
 
-export const ASK_KINDS = ["reminder", "note", "task", "goal", "calendar"] as const;
+export const ASK_KINDS = ["reminder", "note", "capture", "task", "goal", "calendar"] as const;
 export type AskKind = (typeof ASK_KINDS)[number];
 
 const iso = z.string().refine((s) => Number.isFinite(Date.parse(s)), "not a date");
@@ -10,6 +10,7 @@ const text = (max: number) => z.string().trim().min(1).max(max);
 export const FIELD_SCHEMAS = {
   reminder: z.object({ text: text(300), due: iso }),
   note: z.object({ text: text(1000) }),
+  capture: z.object({ text: text(1000) }),
   task: z.object({ title: text(200), details: z.string().max(4000).optional(), map: text(200) }),
   goal: z.object({ wording: text(300) }),
   calendar: z.object({
@@ -39,6 +40,7 @@ export function validateCard(kind: unknown, fields: unknown): AskCard | string {
 export const KIND_LABEL: Record<AskKind, string> = {
   reminder: "Reminder",
   note: "Note",
+  capture: "Studio capture",
   task: "Agent task",
   goal: "Goal draft",
   calendar: "Calendar entry",
@@ -49,6 +51,7 @@ export const notSetUp = (kind: AskKind): string => `${KIND_PLURAL[kind]} are not
 const KIND_PLURAL: Record<AskKind, string> = {
   reminder: "Reminders",
   note: "Notes",
+  capture: "Studio captures",
   task: "Agent tasks",
   goal: "Goal drafts",
   calendar: "Calendar entries",
@@ -90,6 +93,10 @@ export function parseByRules(input: string, ctx: RulesContext): RulesResult {
 }
 
 const RULES: { lead: RegExp; build: (body: string, ctx: RulesContext) => RulesResult }[] = [
+  {
+    lead: /^(?:capture|studio|a thought|thought|file this thought)\b[\s:,-]*(?<body>.+)$/i,
+    build: (body) => ({ kind: "capture", fields: { text: capital(tidy(body)) } }),
+  },
   {
     lead: /^remind me\s+(?:to\s+|that\s+|about\s+)?(?<body>.+)$/i,
     build: (body, ctx) => {
@@ -235,6 +242,7 @@ export interface DeskProposal {
   problem?: string;
   unwritable?: true;
   via: "parser" | "rules";
+  automatic?: boolean;
 }
 
 function problemFor(kind: AskKind, fields: Record<string, unknown>, at: number | undefined, writable: ReadonlySet<AskKind>): string | undefined {
