@@ -5,6 +5,7 @@ import { chimeForNew } from "../lib/desk-chime";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
 import { ProposalCard, proposalTitle } from "./desk-proposal";
 import { DeskSettings } from "./desk-settings";
+import { changeVips } from "../lib/desk-settings";
 import { proposalTime, type DeskProposal } from "../../desk/ask";
 import { DAY_MS, startOfDay } from "../../desk/time";
 import "./desk-view.css";
@@ -14,7 +15,6 @@ import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEven
 
 interface DeskViewProps {
   onOpenMissionControl: () => void;
-  onOpenSettings?: () => void;
 }
 
 export function DeskView({ onOpenMissionControl }: DeskViewProps) {
@@ -49,7 +49,7 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
   return <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} onOpenSettings={() => setSettings(true)} onChanged={reload} />;
 }
 
-export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = () => {}, onChanged = () => {} }: { view: DeskViewModel; error: string | null; onChanged?: () => void } & DeskViewProps) {
+export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = () => {}, onChanged = () => {} }: { view: DeskViewModel; error: string | null; onOpenSettings?: () => void; onChanged?: () => void } & DeskViewProps) {
   const [area, setArea] = useState(ALL_AREAS);
   const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
   const [detail, setDetail] = useState<DeskItem | null>(null);
@@ -188,13 +188,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   const addVip = async (address: string, label: string | null): Promise<void> => {
-    try {
-      await postJson("/api/desk/vips", { address, label });
-      setNote(`Mail from ${label ?? address} will always show from now on. You can change this in Settings.`);
-      onChanged();
-    } catch {
-      setNote(`Could not add ${address} as a VIP.`);
+    const r = await changeVips({ op: "add", address, label });
+    if (!r.ok) {
+      setNote(`Could not add ${address} as a VIP: ${r.text}`);
+      return;
     }
+    setNote(`Mail from ${label ?? address} will always show from now on. You can change this in Settings.`);
+    onChanged();
   };
 
   const promote = async (action: string, on: boolean): Promise<void> => {
