@@ -18,6 +18,13 @@ export const suggestionLine = (suggested: SuggestedAction | undefined): string |
 
 const bareMessageId = (ref: string): string => ref.replace(/^<|>$/g, "");
 
+const REPLY_PREFIX = /^(re|aw|antw|sv):/i;
+
+export const replySubject = (subject: string): string => {
+  const s = subject.trim();
+  return REPLY_PREFIX.test(s) ? s : `Re: ${s}`;
+};
+
 export function evidenceUrl(template: string | undefined, kind: "mail" | "note", ref: string): string | undefined {
   if (!template) return undefined;
   return template.replaceAll("{ref}", encodeURIComponent(kind === "mail" ? bareMessageId(ref) : ref));

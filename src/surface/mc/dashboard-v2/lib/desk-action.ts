@@ -32,8 +32,8 @@ export const submitDeskAction = (body: { action: string; key: string }, fetchImp
 export const submitGoalAction = (body: { action: string; goal: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
   postDesk(DESK_GOAL_PATH, body, fetchImpl);
 
-/** Moves one listed mail to Trash, or marks its sender unimportant, and returns one line for the page. Never throws. */
-export const submitMailAction = (body: { action: "trash" | "unimportant"; key: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
+/** Moves one listed mail to Trash, marks its sender unimportant, or saves a reply draft, and returns one line for the page. Never throws. */
+export const submitMailAction = (body: { action: "trash" | "unimportant"; key: string } | { action: "draft"; key: string; body: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
   postDesk(DESK_MAIL_PATH, body, fetchImpl);
 
 /**

@@ -3,21 +3,26 @@ import { oneLine } from "./actions";
 import { saveUnimportant } from "./classify";
 import { CommandTimeout } from "./spawn";
 import type { WriterRunner } from "./create";
+import { replySubject } from "./mail-triage";
 import type { SourceMail, SourceReading } from "./sources/command";
 import { addSender, isVip, listVips } from "./vips";
 
-export const MAIL_ACTIONS = ["trash", "unimportant"] as const;
+export const MAIL_ACTIONS = ["trash", "unimportant", "draft"] as const;
 export type MailActionId = (typeof MAIL_ACTIONS)[number];
 export const isMailAction = (v: unknown): v is MailActionId => MAIL_ACTIONS.includes(v as MailActionId);
 
 export interface MailActionsConfig {
   trash?: string[];
+  draft?: string[];
   timeoutSeconds: number;
 }
 
 export type ListedMail = SourceMail & { sourceId: string };
 
 export const trashKey = (messageId: string): string => `trash:${messageId}`;
+const draftKey = (messageId: string): string => `draft:${messageId}`;
+
+export const MAX_REPLY_CHARS = 20_000;
 
 export type MailActionResult = { ok: true; message: string } | { ok: false; status: number; error: string };
 
@@ -93,4 +98,30 @@ export async function markUnimportant(db: Database, mail: ListedMail, deps: Tras
   const moved = await trashMail(mail, deps);
   if (!moved.ok) return refuse(moved.status, `${marked}, but moving it to Trash failed: ${moved.error}`);
   return { ok: true, message: `${moved.message} ${marked}.` };
+}
+
+/**
+ * Runs the configured draft command for one listed mail: stdin `{ action: "draft", account, messageId, to, subject, body }`.
+ * The command saves a reply in the account's Drafts and never sends it. The item stays on the Desk either way.
+ */
+export async function draftReply(mail: ListedMail, body: string, deps: TrashDeps): Promise<MailActionResult> {
+  const config = deps.config;
+  const argv = config?.draft;
+  if (!config || !argv?.length) return refuse(409, "Drafting replies is not set up on this stack.");
+  if (!mail.account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot draft a reply.");
+  if (body.trim() === "") return refuse(400, "Write the reply first.");
+  if (body.length > MAX_REPLY_CHARS) return refuse(400, `The reply is longer than ${MAX_REPLY_CHARS} characters.`);
+  const key = draftKey(mail.id);
+  if (!deps.ledger.claim(key)) return refuse(409, "A draft for this mail is already being saved.");
+  try {
+    const stdin = JSON.stringify({ action: "draft", account: mail.account, messageId: mail.id, to: mail.from.address, subject: replySubject(mail.subject), body });
+    const result = await deps.run(argv, stdin, config.timeoutSeconds * 1000);
+    if (result.code !== 0) return refuse(502, `The draft was not saved: ${oneLine(result.stderr || result.stdout, `the draft command exited with code ${result.code}.`)}`);
+    return { ok: true, message: `Reply saved in your ${mail.account} Drafts. Nothing was sent.` };
+  } catch (err) {
+    if (err instanceof CommandTimeout) return refuse(504, `The draft command ${err.message}. The draft may be saved; check Drafts.`);
+    return refuse(502, `The draft command did not run: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    deps.ledger.release(key);
+  }
 }

@@ -482,6 +482,7 @@ const DeskSchema = z.object({
       actions: z
         .object({
           trash: z.array(z.string().min(1)).min(1).optional(),
+          draft: z.array(z.string().min(1)).min(1).optional(),
           timeoutSeconds: z.number().int().min(1).max(120).default(30),
         })
         .optional(),

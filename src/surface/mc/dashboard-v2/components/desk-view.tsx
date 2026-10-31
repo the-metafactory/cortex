@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction, submitGoalAction, submitMailAction, submitRuling } from "../lib/desk-action";
 import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
+import { newReplyDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
 import { chimeForNew } from "../lib/desk-chime";
 import { browserNotifyEnv, dismissHint, notifyForNew, requestNotifications, wantsHint } from "../lib/desk-notify";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
@@ -69,6 +70,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const inFlight = useRef(new Set<string>());
   const [confirming, setConfirming] = useState<{ key: string; action: string } | null>(null);
   const [rulings, setRulings] = useState<ReadonlyMap<string, RulingDraft>>(() => new Map());
+  const [replyDraft, setReplyDraft] = useState<ReplyDraft | null>(null);
   const setRuling = (key: string, next: (d: RulingDraft | undefined) => RulingDraft | null): void =>
     setRulings((m) => {
       const draft = next(m.get(key));
@@ -217,6 +219,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "goal.pause" && item.goal) confirmFirst(item, a, () => void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }) }));
     else if (a.id === "mail.seen") trash(item, a);
     else if (a.id === "mail.trash") confirmFirst(item, a, () => trash(item, a));
+    else if (a.id === "mail.draft" && item.reply) openReply(item);
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
     else if (a.url) openLink(a.url);
@@ -234,6 +237,23 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       request: async () => {
         const result = await submitRuling({ key: item.key, text: draft.text, requestId: draft.requestId });
         setRuling(item.key, (r) => (r?.requestId !== draft.requestId ? r ?? null : result.ok ? null : afterFailure(r, result)));
+        return result;
+      },
+    });
+  };
+
+  const openReply = (item: DeskItem): void => {
+    setDetail(item);
+    setReplyDraft((r) => (r?.key === item.key ? r : newReplyDraft(item.key)));
+  };
+
+  const confirmReply = (item: DeskItem, draft: ReplyDraft): void => {
+    const save: DeskAction = { id: "mail.draft", label: "Draft a reply", role: "primary", wired: true };
+    void send(item, save, {
+      keepVisible: true,
+      request: async () => {
+        const result = await submitMailAction({ action: "draft", key: item.key, body: draft.text });
+        setReplyDraft((r) => (r?.key !== item.key ? r : result.ok ? null : { ...r, note: result.text }));
         return result;
       },
     });
@@ -572,6 +592,16 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 onCancel={() => setRuling(detailItem.key, (r) => cancelRuling(r ?? null))}
               />
             )}
+            {replyDraft?.key === detailItem.key && detailItem.reply && (
+              <ReplyDraftBox
+                reply={detailItem.reply}
+                draft={replyDraft}
+                sending={busyWith(detailItem) === "mail.draft"}
+                onChange={(text) => setReplyDraft((r) => (r?.key === detailItem.key ? { ...r, text } : r))}
+                onConfirm={() => confirmReply(detailItem, replyDraft)}
+                onCancel={() => setReplyDraft(null)}
+              />
+            )}
           </DetailPanel>
         )}
       </aside>
@@ -800,7 +830,7 @@ interface SendOptions {
 
 const CHECK_POLL_MS = 3000;
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.unimportant": "Saving…", "ranger.rule": "Recording…" };
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "ranger.rule": "Recording…" };
 
 const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash" };
 

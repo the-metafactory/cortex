@@ -80,6 +80,7 @@ export interface DeskItem {
   goal?: string;
   checking?: boolean;
   question?: { condition: string | null; reason: string };
+  reply?: { to: string; subject: string };
 }
 
 export interface DeskInterrupt {
