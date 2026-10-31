@@ -289,16 +289,7 @@ function selectTodayFull(state: AppState, today: string, opts: SelectOptions = {
         cap = Math.min(cap, 3);
     const shares = effectiveShares(outline, log, today, settings);
     const month = monthOf(today);
-    const ancestors = ancestorIndex(outline);
-    const candidates: ScoredCandidate[] = availableTasks(outline, today, settings.activeContext, state.contexts ?? [], timeNow)
-        .map((c) => {
-        const share = shares.get(c.task.id) ?? 0;
-        const urgency = urgencyOf(c.task, today);
-        const focus = (ancestors.get(c.task.id) ?? []).some((a) => a.focusMonth === month) || c.task.focusMonth === month;
-        const aging = agingOf(c.task.id, history, today);
-        return { ...c, urgency, score: share * urgency * aging, focus };
-    })
-        .filter((c) => (shares.get(c.task.id) ?? 0) > 0);
+    const candidates = scoreCandidates(state, today, timeNow, shares);
     const picked: ScoredCandidate[] = [];
     const pickedIds = new Set<NodeId>();
     const place = (c: ScoredCandidate) => {
@@ -351,20 +342,7 @@ function selectTodayFull(state: AppState, today: string, opts: SelectOptions = {
         ordered = [easiest];
     }
     const areaTargets = targetAreaShares(outline, month);
-    const items = ordered.map((c) => {
-        const reason: TodayItem["reason"] = c.urgency >= MUST_PLACE_URGENCY ? "due" : c.focus ? "focus" : "balance";
-        return {
-            task: c.task,
-            areaId: c.areaId,
-            areaTitle: c.areaTitle,
-            path: c.path,
-            context: c.ctx,
-            score: c.score,
-            urgency: c.urgency,
-            reason,
-            trace: traceFor(c, reason, shares, areaTargets),
-        };
-    });
+    const items = todayItems(ordered, shares, areaTargets);
     const offeredBalanced = items.filter((i) => i.reason !== "due").length;
     return { items, areaWeights, balancedSlots: Math.min(balancedSlots, offeredBalanced) };
 }
@@ -389,26 +367,27 @@ function traceFor(c: ScoredCandidate, reason: TodayItem["reason"], shares: Map<N
         return `${c.areaTitle} has been quiet lately — catching up`;
     return `keeps ${c.areaTitle} moving`;
 }
-export function rankAll(state: AppState, today: string, timeNow?: string): TodayItem[] {
-    const { outline, log, settings, history } = state;
-    const shares = effectiveShares(outline, log, today, settings);
+function scoreCandidates(
+    state: AppState,
+    today: string,
+    timeNow: string | undefined,
+    shares: Map<NodeId, number>,
+    agingLimit = Infinity,
+): ScoredCandidate[] {
+    const { outline, settings, history } = state;
     const month = monthOf(today);
     const ancestors = ancestorIndex(outline);
-    const candidates: ScoredCandidate[] = availableTasks(outline, today, settings.activeContext, state.contexts ?? [], timeNow)
+    return availableTasks(outline, today, settings.activeContext, state.contexts ?? [], timeNow)
         .map((c) => {
-        const share = shares.get(c.task.id) ?? 0;
-        const urgency = urgencyOf(c.task, today);
-        const focus = (ancestors.get(c.task.id) ?? []).some((a) => a.focusMonth === month) ||
-            c.task.focusMonth === month;
-        const aging = Math.min(agingOf(c.task.id, history, today), MAX_RANK_AGING);
-        return { ...c, urgency, score: share * urgency * aging, focus };
-    })
+            const share = shares.get(c.task.id) ?? 0;
+            const urgency = urgencyOf(c.task, today);
+            const focus = (ancestors.get(c.task.id) ?? []).some((a) => a.focusMonth === month) || c.task.focusMonth === month;
+            const aging = Math.min(agingOf(c.task.id, history, today), agingLimit);
+            return { ...c, urgency, score: share * urgency * aging, focus };
+        })
         .filter((c) => (shares.get(c.task.id) ?? 0) > 0);
-    const ordered = [
-        ...candidates.filter((c) => c.urgency >= MUST_PLACE_URGENCY).sort(byDueThenId),
-        ...candidates.filter((c) => c.urgency < MUST_PLACE_URGENCY).sort(byScoreThenId),
-    ];
-    const areaTargets = targetAreaShares(outline, month);
+}
+function todayItems(ordered: ScoredCandidate[], shares: Map<NodeId, number>, areaTargets: Map<NodeId, number>): TodayItem[] {
     return ordered.map((c) => {
         const reason: TodayItem["reason"] = c.urgency >= MUST_PLACE_URGENCY ? "due" : c.focus ? "focus" : "balance";
         return {
@@ -423,6 +402,18 @@ export function rankAll(state: AppState, today: string, timeNow?: string): Today
             trace: traceFor(c, reason, shares, areaTargets),
         };
     });
+}
+export function rankAll(state: AppState, today: string, timeNow?: string): TodayItem[] {
+    const { outline, log, settings } = state;
+    const shares = effectiveShares(outline, log, today, settings);
+    const month = monthOf(today);
+    const candidates = scoreCandidates(state, today, timeNow, shares, MAX_RANK_AGING);
+    const ordered = [
+        ...candidates.filter((c) => c.urgency >= MUST_PLACE_URGENCY).sort(byDueThenId),
+        ...candidates.filter((c) => c.urgency < MUST_PLACE_URGENCY).sort(byScoreThenId),
+    ];
+    const areaTargets = targetAreaShares(outline, month);
+    return todayItems(ordered, shares, areaTargets);
 }
 export function applyDayToHistory(state: AppState, today: string, confirmedIds: NodeId[]): SchedHistory {
     const { history } = state;
