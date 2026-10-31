@@ -15,7 +15,7 @@ export const OverseerConfig = z.object({
   ranger: z.array(z.string().min(1)).min(1),
   staleDays: z.number().int().positive().default(6),
 }).strict();
-const State = z.object({ head: z.string().regex(/^[a-f0-9]{40}$/), material: z.record(z.string(), z.string()), queued: z.record(z.string(), z.string()) });
+const State = z.object({ head: z.string().regex(/^[a-f0-9]{40}$/), material: z.record(z.string(), z.string()), queued: z.record(z.string(), z.string()), pendingMaterial: z.array(z.string()).default([]) });
 const Event = z.object({ key: z.string(), at: z.number(), title: z.string(), area: z.string().nullable(), kind: z.enum(["meeting", "all-day", "reminder", "agent", "agent-stop"]) });
 const Desk = z.object({ today: z.array(Event), ahead: z.array(Event) });
 const Policy = z.object({ directory: z.string(), studio: z.object({ maxActive: z.number(), areas: z.array(z.object({ id: z.string(), label: z.string(), color: z.string(), policy: z.enum(["local", "cloud"]) })) }) });
@@ -56,7 +56,7 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
     if (studio.problems.length) throw new Error("Studio has unreadable files or unknown areas; overseer deferred");
     const changedAt = new Map<string, number>();
     const material: Record<string, string> = {};
-    const newMaterial = new Set<string>();
+    const newMaterial = new Set(previous?.pendingMaterial ?? []);
     for (const thread of [...studio.active, ...studio.parked, ...studio.closed]) {
       const stamp = await git(["log", "-1", "--format=%ct", "--", thread.path]);
       if (stamp) changedAt.set(thread.slug, Number(stamp) * 1000);
@@ -94,9 +94,10 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
     if (!pending.length) for (const selection of selections) {
       await command([...config.ranger, "job", "enqueue", "ivy-think", "--param", `thread=${selection.thread}`, "--param", `trigger=${selection.trigger}`], dir);
       queued[selection.thread] = today;
+      newMaterial.delete(selection.thread);
       enqueued.push(selection.thread);
     }
-    const state = { head: await git(["rev-parse", "HEAD"]), material, queued };
+    const state = { head: await git(["rev-parse", "HEAD"]), material, queued, pendingMaterial: [...newMaterial] };
     await writeFile(`${statePath}.tmp`, JSON.stringify(state), { mode: 0o600 });
     await rename(`${statePath}.tmp`, statePath);
     return { queued: enqueued, proposals };

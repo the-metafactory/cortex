@@ -54,3 +54,16 @@ test("recurring captures commit a proposal instead of enqueuing and are not prop
   expect(r.git("status", "--porcelain")).toBe("");
   expect((await runOverseer(r.config)).proposals).toEqual([]);
 });
+
+
+test("proposal creation preserves a simultaneous committed Material signal for the next pass", async () => {
+  const r = await rig();
+  await runOverseer(r.config);
+  await mkdir(join(r.dir, "inbox"));
+  for (const id of ["one", "two", "three"]) await writeFile(join(r.dir, `inbox/${id}.md`), `---\nat: 2026-10-31T12:00:00Z\nvia: fixture\n---\nOrchard planting ${id}\n`);
+  await writeFile(join(r.dir, "threads/alpha.md"), thread().replace("baseline", "baseline\n- capture: new evidence"));
+  r.git("add", "."); r.git("commit", "-qm", "new Material plus recurring captures");
+  expect((await runOverseer(r.config)).proposals.length).toBe(1);
+  expect((await runOverseer(r.config)).queued).toEqual(["alpha"]);
+  expect(await readFile(r.calls, "utf8")).toContain("New Material committed");
+});

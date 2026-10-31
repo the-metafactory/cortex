@@ -41,7 +41,9 @@ export function recurringThemes(captures: readonly StudioCapture[], areas: Studi
     const terms = words(capture.text).slice(0, 40);
     for (let i = 0; i < terms.length; i++) for (const other of terms.slice(i + 1)) {
       const key = `${terms[i]} ${other}`;
-      groups.set(key, [...(groups.get(key) ?? []), capture]);
+      const group = groups.get(key);
+      if (group) group.push(capture);
+      else groups.set(key, [capture]);
     }
   }
   const used = new Set<string>();
