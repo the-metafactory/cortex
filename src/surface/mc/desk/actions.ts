@@ -104,7 +104,7 @@ export class HandledLedger {
  * Ranger's state without the nodes the Desk has already acted on, and those nodes' item keys,
  * so no other source brings them back while Ranger catches up.
  */
-export function withoutHandled(state: RangerState, ledger: HandledLedger): { state: RangerState; hidden: Set<string> } {
+export function withoutHandled(state: RangerState, ledger: Pick<HandledLedger, "has">): { state: RangerState; hidden: Set<string> } {
   const hidden = new Set<string>();
   const keep = (handled: boolean, ref: string): boolean => {
     if (handled) hidden.add(rangerItemKey(ref));

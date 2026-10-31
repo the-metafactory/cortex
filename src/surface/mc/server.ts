@@ -66,13 +66,13 @@ import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
 import { handleGetDesk } from "./api/desk";
 import { handleDeskVips } from "./api/desk-vips";
-import { handleDeskAction } from "./api/desk-action";
+import { handleDeskAction, handleDeskAutonomy } from "./api/desk-action";
 import { handleDeskAsk, handleDeskCreate, handleDeskNoteDone } from "./api/desk-ask";
 import { RecentCalendarWrites } from "./desk/create";
 import { HandledLedger } from "./desk/actions";
 import type { DeskOptions, DeskRuntime } from "./desk/compose";
 import { SourceCache } from "./desk/sources/command";
-import { startDeskPushes } from "./desk/push";
+import { startDeskAutonomy, startDeskPushes } from "./desk/push";
 import type { DeskTransport } from "./desk/interrupt";
 import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil";
 import { handleResult, type ResultRouteOptions } from "./results";
@@ -386,10 +386,12 @@ export function startServer(
 
   const deskTransport = options.deskTransport ?? ((): DeskTransport | null => null);
   const deskPushes = startDeskPushes(db, deskRuntime, options.vigil, deskTransport);
+  deskRuntime.autonomy = startDeskAutonomy(db, deskRuntime);
 
   const stop = (closeActive = false) => {
     clearInterval(pingInterval);
     deskPushes?.stop();
+    deskRuntime.autonomy?.stop();
     void server.stop(closeActive);
   };
 
@@ -452,6 +454,8 @@ async function handleApi(
   }
 
   if (pathname === "/api/desk/action") return handleDeskAction(req, desk);
+
+  if (pathname === "/api/desk/autonomy") return handleDeskAutonomy(req, db, desk);
 
   if (pathname === "/api/desk/vips") return handleDeskVips(req, url, db);
 

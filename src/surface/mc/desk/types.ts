@@ -101,4 +101,10 @@ export interface DeskView {
   systems: string[];
   sources: { id: string; ok: boolean; error?: string }[];
   chime: boolean;
+  autonomy: DeskAutonomy;
+}
+
+export interface DeskAutonomy {
+  types: { action: string; label: string; note: string; on: boolean }[];
+  done: { key: string; title: string; message: string; at: number; ok: boolean }[];
 }
