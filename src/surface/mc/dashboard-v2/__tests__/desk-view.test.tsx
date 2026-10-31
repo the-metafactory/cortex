@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActionButton, DeskBody, DeskView, RestGroups } from "../components/desk-view";
+import { ActionButton, DeskBody, DeskView, DoneForYou, RestGroups } from "../components/desk-view";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
@@ -41,6 +41,7 @@ const view: DeskViewModel = {
   ask: { kinds: ["reminder", "note"], maps: [] },
   sources: [{ id: "vigil", ok: true }],
   chime: false,
+  autonomy: { types: [], done: [] },
 };
 
 describe("DeskBody", () => {
@@ -207,5 +208,27 @@ describe("the command bar", () => {
     expect(await askDesk("x", answering(422, { ok: false, error: "I could not tell." }))).toEqual({ ok: false, text: "I could not tell." });
     expect(await createFromProposal("req-1", "note", { text: "x" }, answering(200, { ok: true, message: "Noted." }))).toEqual({ ok: true, text: "Noted." });
     expect(await createFromProposal("req-1", "note", { text: "x" }, async () => { throw new Error("offline"); })).toEqual({ ok: false, text: "Mission Control did not answer: offline" });
+  });
+});
+
+describe("Done for you", () => {
+  const retry = { action: "ranger.retry", label: "Retry agent tasks that failed", note: "A retry cannot be taken back.", on: true };
+  const types = [retry];
+
+  it("lists what the Desk did on its own, a refused attempt with its reason, and the way to stop", () => {
+    const html = renderToStaticMarkup(<DoneForYou autonomy={{ types, done: [
+      { key: "a", title: "Fix the login timeout", message: "", at: NOW, ok: true },
+      { key: "b", title: "Add export", message: "Ranger refused: map is paused", at: NOW, ok: false },
+    ] }} onPromote={() => {}} />);
+    expect(html).toContain("Retried &quot;Fix the login timeout&quot;");
+    expect(html).toContain("Could not retry &quot;Add export&quot;");
+    expect(html).toContain("Ranger refused: map is paused");
+    expect(html).toContain("Stop doing this on your own");
+    expect(html).not.toContain("Undo");
+  });
+
+  it("offers to promote a type the Desk still asks about, and hides when nothing is promotable", () => {
+    expect(renderToStaticMarkup(<DoneForYou autonomy={{ types: [{ ...retry, on: false }], done: [] }} onPromote={() => {}} />)).toContain("Handle this yourself");
+    expect(renderToStaticMarkup(<DoneForYou autonomy={{ types: [], done: [] }} onPromote={() => {}} />)).toBe("");
   });
 });

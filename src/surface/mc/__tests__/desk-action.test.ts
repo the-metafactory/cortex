@@ -3,8 +3,9 @@ import type { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleDeskAction } from "../api/desk-action";
+import { handleDeskAction, handleDeskAutonomy } from "../api/desk-action";
 import { HandledLedger, type RangerRunResult } from "../desk/actions";
+import { listGrants, readDone, runAutonomy, setGrant } from "../desk/autonomy";
 import { composeDesk, type DeskOptions } from "../desk/compose";
 import type { RangerState } from "../desk/sources/ranger";
 import { createEnrollment, writeEnrollment } from "../../../common/step-up/enrollment";
@@ -193,35 +194,192 @@ describe("the Desk action route through Mission Control", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("runs an action for the principal without a step-up code, and refuses another identity before Ranger is called", async () => {
+  function startDesk(state: RangerState) {
     const secretPath = join(tmpDir, "step-up-totp.json");
     writeEnrollment(secretPath, createEnrollment("2026-10-16T00:00:00.000Z"));
-    const ranger = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json(rangerState()) });
+    const ranger = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json(state) });
     const marker = join(tmpDir, "ranger-calls");
     const bin = join(tmpDir, "ranger");
-    writeFileSync(bin, `#!/bin/sh\necho "$2" >> ${marker}\n`, { mode: 0o755 });
+    writeFileSync(bin, `#!/bin/sh\necho "$1 $2" >> ${marker}\n`, { mode: 0o755 });
     const ctx = startServer(
       { ...DEFAULT_CONFIG, port: 0, governance: { principals: ["principal@example.com"], stepUp: { secretPath } } },
       db,
       { desk: { ...DESK, rangerUrl: `http://127.0.0.1:${ranger.port}`, rangerCli: { bin, config: "" } } },
     );
     const base = `http://localhost:${ctx.server.port}`;
-    const send = (email: string) => fetch(`${base}/api/desk/action`, {
-      method: "POST",
-      headers: { "content-type": "application/json", origin: base, "Cf-Access-Authenticated-User-Email": email },
-      body: JSON.stringify({ action: "ranger.approve", key: "ranger:example/app#30" }),
-    });
+    return {
+      marker,
+      send: (path: string, email: string, body: unknown) => fetch(`${base}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: base, "Cf-Access-Authenticated-User-Email": email },
+        body: JSON.stringify(body),
+      }),
+      stop: () => {
+        ctx.stop(true);
+        void ranger.stop(true);
+      },
+    };
+  }
+
+  it("runs an action for the principal without a step-up code, and refuses another identity before Ranger is called", async () => {
+    const desk = startDesk(rangerState());
+    const send = (email: string) => desk.send("/api/desk/action", email, { action: "ranger.approve", key: "ranger:example/app#30" });
     try {
       const stranger = await send("unlisted@example.com");
       expect(stranger.status).toBe(403);
       expect((await stranger.json()).error).toBe("not_authorized");
-      expect(existsSync(marker)).toBe(false);
+      expect(existsSync(desk.marker)).toBe(false);
 
       expect((await send("principal@example.com")).status).toBe(200);
-      expect(readFileSync(marker, "utf8").trim()).toBe("30");
+      expect(readFileSync(desk.marker, "utf8").trim()).toBe("approve-node 30");
     } finally {
-      ctx.stop(true);
-      void ranger.stop(true);
+      desk.stop();
     }
+  });
+
+  it("refuses a promotion from another identity, and retries at once for the principal", async () => {
+    const desk = startDesk(rangerState());
+    const send = (email: string) => desk.send("/api/desk/autonomy", email, { action: "ranger.retry", on: true });
+    try {
+      expect((await send("unlisted@example.com")).status).toBe(403);
+      expect(listGrants(db).size).toBe(0);
+
+      expect((await send("principal@example.com")).status).toBe(200);
+      for (let i = 0; i < 50 && !existsSync(desk.marker); i++) await Bun.sleep(20);
+      expect(readFileSync(desk.marker, "utf8").trim()).toBe("resume-node 12");
+    } finally {
+      desk.stop();
+    }
+  });
+});
+
+const MINUTE = 60_000;
+
+function failedNodes(endedAt = "2026-10-30T11:00:00.000Z"): RangerState {
+  return {
+    current: [],
+    needsYou: [
+      { key: "example/app#1", repo: "example/app", nodeId: "12", title: "Fix the login timeout", status: "failed", endedAt, reason: { class: "worker failed" }, actions: { resume: true } },
+      { key: "example/app#1", repo: "example/app", nodeId: "14", title: "Pick a date library", status: "failed", endedAt, reason: { class: "blocked" }, actions: { resume: true } },
+    ],
+    maps: [],
+  };
+}
+
+const postAutonomy = (body: unknown): Request =>
+  new Request("http://localhost/api/desk/autonomy", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+describe("promoting Ranger retry", () => {
+  let db: Database;
+  beforeEach(() => {
+    db = initDatabase(":memory:");
+  });
+  afterEach(() => {
+    db.close();
+  });
+
+  const tick = (state: RangerState = failedNodes(), runner = fakeRunner(), ledger = new HandledLedger(), now = NOW) =>
+    runAutonomy({ db, rangerUrl: DESK.rangerUrl, cli: { bin: "/opt/ranger/bin/ranger", config: "" }, ledger, run: runner.run, fetchImpl: fetchRanger(state), now: () => now });
+
+  const compose = (state: RangerState = failedNodes(), ledger = new HandledLedger(), now = NOW) =>
+    composeDesk(db, DESK, undefined, { now, fetchImpl: fetchRanger(state), handled: ledger });
+
+  it("retries a failed node without asking and lists it under Done for you", async () => {
+    setGrant(db, "ranger.retry", true, NOW);
+    const runner = fakeRunner();
+    const ledger = new HandledLedger();
+    await tick(failedNodes(), runner, ledger);
+    expect(runner.calls).toEqual([["/opt/ranger/bin/ranger", "resume-node", "12", "--map", "example/app#1"]]);
+
+    const view = await compose(failedNodes(), ledger);
+    expect(view.items.map((i) => i.key)).not.toContain("ranger:example/app#12");
+    expect(view.items.map((i) => i.key)).toContain("ranger:example/app#14");
+    expect(view.autonomy.done).toEqual([{ key: "retry:example/app#1/12@2026-10-30T11:00:00.000Z", title: "Fix the login timeout", message: 'Ranger is retrying "Fix the login timeout".', at: NOW, ok: true }]);
+    expect(view.autonomy.types).toEqual([expect.objectContaining({ action: "ranger.retry", on: true })]);
+  });
+
+  it("asks first when retry is not promoted, and again after Stop doing this on your own", async () => {
+    const runner = fakeRunner();
+    await tick(failedNodes(), runner);
+    expect(runner.calls).toEqual([]);
+
+    setGrant(db, "ranger.retry", true, NOW);
+    setGrant(db, "ranger.retry", false, NOW);
+    await tick(failedNodes(), runner);
+    expect(runner.calls).toEqual([]);
+    expect(listGrants(db).size).toBe(0);
+    const view = await compose(failedNodes());
+    expect(view.items.find((i) => i.key === "ranger:example/app#12")?.actions[0]).toMatchObject({ id: "ranger.retry", wired: true });
+    expect(view.autonomy.types[0]?.on).toBe(false);
+  });
+
+  it("shows a retry Ranger refused as an item with the failure, and does not try it again", async () => {
+    setGrant(db, "ranger.retry", true, NOW);
+    const runner = fakeRunner({ code: 1, stdout: "", stderr: "map is paused\n" });
+    await tick(failedNodes(), runner);
+    await tick(failedNodes(), runner, new HandledLedger(), NOW + MINUTE);
+    expect(runner.calls).toHaveLength(1);
+
+    const item = (await compose(failedNodes())).items.find((i) => i.key === "ranger:example/app#12");
+    expect(item?.why).toContain("Ranger refused: map is paused");
+    expect(item?.urgency).toBe("today");
+    expect(readDone(db, NOW)[0]).toMatchObject({ status: "failed", message: "Ranger refused: map is paused" });
+  });
+
+  it("retries a node once a day at most, and shows it when it fails again", async () => {
+    setGrant(db, "ranger.retry", true, NOW);
+    const runner = fakeRunner();
+    await tick(failedNodes(), runner);
+    const again = failedNodes("2026-10-30T11:30:00.000Z");
+    await tick(again, runner, new HandledLedger(), NOW + 20 * MINUTE);
+    expect(runner.calls).toHaveLength(1);
+
+    const item = (await compose(again, new HandledLedger(), NOW + 20 * MINUTE)).items.find((i) => i.key === "ranger:example/app#12");
+    expect(item?.why).toContain("failed again");
+  });
+
+  it("sends no further retry once the person stops it during a tick", async () => {
+    setGrant(db, "ranger.retry", true, NOW);
+    const state = failedNodes();
+    state.needsYou.push({ key: "example/app#1", repo: "example/app", nodeId: "13", title: "Add export", status: "failed", endedAt: "2026-10-30T11:00:00.000Z", actions: { resume: true } });
+    const calls: string[][] = [];
+    const run = async (argv: string[]) => {
+      calls.push(argv);
+      setGrant(db, "ranger.retry", false, NOW);
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    await runAutonomy({ db, rangerUrl: DESK.rangerUrl, cli: { bin: "/opt/ranger/bin/ranger", config: "" }, ledger: new HandledLedger(), run, fetchImpl: fetchRanger(state), now: () => NOW });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("does not send a retry twice after a restart, or one the person already sent", async () => {
+    setGrant(db, "ranger.retry", true, NOW);
+    const runner = fakeRunner();
+    await tick(failedNodes(), runner);
+    await tick(failedNodes(), runner, new HandledLedger());
+    expect(runner.calls).toHaveLength(1);
+    expect((await compose(failedNodes(), new HandledLedger())).items.map((i) => i.key)).not.toContain("ranger:example/app#12");
+
+    db.query("DELETE FROM desk_done").run();
+    const ledger = new HandledLedger();
+    ledger.add("retry:example/app#1/12@2026-10-30T11:00:00.000Z", NOW);
+    await tick(failedNodes(), runner, ledger);
+    expect(runner.calls).toHaveLength(1);
+  });
+
+  it("promotes only Ranger retry, and only where Ranger actions are set up", async () => {
+    const db = initDatabase(":memory:");
+    const runtime = { options: DESK, ledger: new HandledLedger() };
+    expect((await handleDeskAutonomy(postAutonomy({ action: "ranger.approve", on: true }), db, runtime)).status).toBe(400);
+    expect((await handleDeskAutonomy(postAutonomy({ action: "ranger.retry" }), db, runtime)).status).toBe(400);
+    const off = { options: { ...DESK, rangerCli: { bin: "", config: "" } }, ledger: new HandledLedger() };
+    expect((await handleDeskAutonomy(postAutonomy({ action: "ranger.retry", on: true }), db, off)).status).toBe(409);
+    expect(listGrants(db).size).toBe(0);
+
+    const res = await handleDeskAutonomy(postAutonomy({ action: "ranger.retry", on: true }), db, runtime);
+    expect(res.status).toBe(200);
+    expect((await res.json()).message).toContain("Done for you");
+    expect([...listGrants(db)]).toEqual(["ranger.retry"]);
+    db.close();
   });
 });

@@ -184,6 +184,16 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
     }
   };
 
+  const promote = async (action: string, on: boolean): Promise<void> => {
+    try {
+      const r = await postJson<{ action: string; on: boolean }, { message?: string }>("/api/desk/autonomy", { action, on });
+      setNote(r.message ?? "Done.");
+      onChanged();
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : "Could not change that.");
+    }
+  };
+
   const removeVip = async (address: string): Promise<void> => {
     try {
       await getJson(`/api/desk/vips?address=${encodeURIComponent(address)}`, { method: "DELETE" });
@@ -361,6 +371,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
               </ul>
             )}
           </section>
+
+          <DoneForYou autonomy={view.autonomy} onPromote={(action, on) => void promote(action, on)} />
 
           <section className="desk-msec">
             <h3 className="desk-mh">The rest</h3>
@@ -608,6 +620,35 @@ function AheadStrip({ events }: { events: DeskEvent[] }) {
           </ul>
         </div>
       ))}
+    </section>
+  );
+}
+
+export function DoneForYou({ autonomy, onPromote }: { autonomy: DeskViewModel["autonomy"]; onPromote: (action: string, on: boolean) => void }) {
+  if (autonomy.types.length === 0 && autonomy.done.length === 0) return null;
+  const anyOn = autonomy.types.some((t) => t.on);
+  return (
+    <section className="desk-msec" aria-label="Done for you">
+      <h3 className="desk-mh">Done for you</h3>
+      <ul className="desk-sub desk-done">
+        {autonomy.done.map((d) => (
+          <li key={d.key} className={d.ok ? undefined : "failed"}>
+            <div>{d.ok ? `Retried "${d.title}"` : `Could not retry "${d.title}"`}<small>{d.ok ? `at ${clock(d.at)}` : d.message}</small></div>
+          </li>
+        ))}
+        {autonomy.done.length === 0 && anyOn && <li><div>Nothing yet<small>What the Desk does on its own shows here.</small></div></li>}
+        {autonomy.types.map((t) => (
+          <li key={t.action}>
+            <div>
+              {t.label}
+              <small>{t.on ? `The Desk does this on its own. ${t.note}` : "The Desk asks you first."}</small>
+              <button type="button" className="desk-btn ghost" onClick={() => onPromote(t.action, !t.on)}>
+                {t.on ? "Stop doing this on your own" : "Handle this yourself"}
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }

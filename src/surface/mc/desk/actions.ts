@@ -7,6 +7,15 @@ export type RangerActionId = (typeof RANGER_ACTIONS)[number];
 
 export const isRangerAction = (id: unknown): id is RangerActionId => RANGER_ACTIONS.includes(id as RangerActionId);
 
+export interface RangerActionsSetup {
+  enabled: boolean;
+  rangerUrl: string;
+  rangerCli?: RangerCli;
+}
+
+export const rangerActionsReady = <T extends RangerActionsSetup>(desk: T | undefined): desk is T & { rangerCli: RangerCli } =>
+  Boolean(desk?.enabled && desk.rangerUrl && desk.rangerCli?.bin);
+
 /** Where the Ranger CLI lives. An empty `bin` turns Ranger actions off. */
 export interface RangerCli {
   bin: string;
@@ -104,7 +113,7 @@ export class HandledLedger {
  * Ranger's state without the nodes the Desk has already acted on, and those nodes' item keys,
  * so no other source brings them back while Ranger catches up.
  */
-export function withoutHandled(state: RangerState, ledger: HandledLedger): { state: RangerState; hidden: Set<string> } {
+export function withoutHandled(state: RangerState, ledger: Pick<HandledLedger, "has">): { state: RangerState; hidden: Set<string> } {
   const hidden = new Set<string>();
   const keep = (handled: boolean, ref: string): boolean => {
     if (handled) hidden.add(rangerItemKey(ref));

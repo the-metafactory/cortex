@@ -1,5 +1,7 @@
+import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
-import { isRangerAction, oneLine, planRangerAction, spawnRanger, type RangerRunner } from "../desk/actions";
+import { isPromotable, PROMOTABLE_LABELS, setGrant } from "../desk/autonomy";
+import { isRangerAction, oneLine, planRangerAction, rangerActionsReady, spawnRanger, type RangerRunner } from "../desk/actions";
 import { readRangerState, type RangerFetch } from "../desk/sources/ranger";
 
 const noStore = { "Cache-Control": "no-store" };
@@ -44,4 +46,23 @@ export async function handleDeskAction(req: Request, runtime: DeskRuntime | unde
   } finally {
     ledger.release(plan.claimKey);
   }
+}
+
+/**
+ * POST {action, on}: promotes an action type to "handle it yourself", or takes that back. It passes the same
+ * rebind and identity gates as every Desk write. Only types whose effects the Desk can show and stop are promotable.
+ */
+export async function handleDeskAutonomy(req: Request, db: Database, runtime: DeskRuntime | undefined, now: () => number = Date.now): Promise<Response> {
+  if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
+  const desk = runtime?.options;
+  if (!rangerActionsReady(desk)) return fail(409, "Ranger actions are not set up on this stack.");
+  const body = (await req.json().catch(() => null)) as { action?: unknown; on?: unknown } | null;
+  if (!isPromotable(body?.action) || typeof body.on !== "boolean") return fail(400, "A promotable action and on (true or false) are required.");
+  setGrant(db, body.action, body.on, now());
+  if (body.on) void runtime?.autonomy?.tick();
+  const label = PROMOTABLE_LABELS[body.action].label.toLowerCase();
+  return Response.json(
+    { ok: true, message: body.on ? `The Desk will ${label} on its own and list them under "Done for you".` : `The Desk will ask you again before it acts: ${label}.` },
+    { headers: noStore },
+  );
 }

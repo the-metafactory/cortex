@@ -222,3 +222,7 @@
 .desk-day li.ghost{background:var(--ivy-soft);box-shadow:inset 0 0 0 1px #cfe0fd;color:var(--ivy-ink);border-radius:6px}
 .desk-day li.ghost time{color:var(--ivy-ink)}
 .desk-later .desk-ev.reminder .desk-pin{border-color:var(--ivy)}
+.desk-done{margin-top:0}
+.desk-done li:first-child{border-top:0}
+.desk-done li.failed>div{color:#b45309}
+.desk-done .desk-btn{height:28px;margin-top:6px;padding:0 10px!important;font-size:13px}

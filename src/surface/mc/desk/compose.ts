@@ -8,17 +8,19 @@ import { SourceCache, type DeskSourceConfig, type SourceEvent } from "./sources/
 import { listVips } from "./vips";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
-import { withoutHandled, type HandledLedger, type RangerCli } from "./actions";
+import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
 import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriters, type RecentCalendarWrites } from "./create";
 import { listOpenNotes, type DeskNote } from "./notes";
-import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptRules } from "./interrupt";
+import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
+import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 
 export interface DeskRuntime {
   options?: DeskOptions;
   ledger: HandledLedger;
   sourceCache?: SourceCache;
   recentWrites?: RecentCalendarWrites;
+  autonomy?: InterruptLoop | null;
 }
 
 export interface DeskAskOptions {
@@ -77,7 +79,10 @@ export async function composeDesk(
 
   const subjects: VigilSubjectView[] = vigilSubjects ?? [];
   if (vigilSubjects) sources.push({ id: "vigil", ok: true });
-  const filtered = rangerResult?.state && deps.handled ? withoutHandled(rangerResult.state, deps.handled) : null;
+  const done = readDone(db, now);
+  const doneKeys = new Set(done.filter((d) => d.status === "done").map((d) => d.attemptKey));
+  const handled = deps.handled;
+  const filtered = rangerResult?.state ? withoutHandled(rangerResult.state, { has: (k) => doneKeys.has(k) || (handled?.has(k) ?? false) }) : null;
   const ranger: RangerState | null = filtered?.state ?? rangerResult?.state ?? null;
   if (rangerResult) sources.push(rangerResult.error === null ? { id: "ranger", ok: true } : { id: "ranger", ok: false, error: rangerResult.error });
 
@@ -103,8 +108,9 @@ export async function composeDesk(
   const aheadCalendar = calendarEvents(calendar, sod + DAY_MS, sod + 5 * DAY_MS);
   const rules = desk.interruptions ?? NO_INTERRUPTIONS;
 
+  const rangerActions = rangerActionsReady(desk);
   const items = markInterrupts([
-    ...rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions: Boolean(desk.rangerCli?.bin), hidden: filtered?.hidden }),
+    ...withAutonomyNotes(rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions, hidden: filtered?.hidden }), done, now),
     ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
@@ -133,6 +139,27 @@ export async function composeDesk(
     systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable],
     sources,
     chime: rules.chime,
+    autonomy: buildAutonomy(db, done, rangerActions),
+  };
+}
+
+function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): DeskItem[] {
+  return items.map((item) => {
+    if (item.kind !== "agent-failed") return item;
+    const last = done.find((d) => d.itemKey === item.key && d.status !== "running");
+    if (!last) return item;
+    const why = last.status === "failed"
+      ? `The Desk tried to retry it on its own ${ago(now, last.createdAt)}. ${last.message ?? "Ranger gave no reason."}`
+      : `The Desk retried it on its own ${ago(now, last.createdAt)}, and it failed again.`;
+    return { ...item, urgency: "today", why, detail: { ...item.detail, history: [...item.detail.history, why] } };
+  });
+}
+
+function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean): DeskView["autonomy"] {
+  const grants = listGrants(db);
+  return {
+    types: rangerActions ? PROMOTABLE.map((action) => ({ action, ...PROMOTABLE_LABELS[action], on: grants.has(action) })) : [],
+    done: done.filter((d) => d.status !== "running").slice(0, 10).map((d) => ({ key: d.attemptKey, title: d.title, message: d.message ?? "", at: d.createdAt, ok: d.status === "done" })),
   };
 }
 

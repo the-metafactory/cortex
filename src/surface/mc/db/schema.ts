@@ -102,9 +102,25 @@ export const TABLE_NAMES = [
   "desk_vips",
   "desk_notes",
   "desk_deliveries",
+  "desk_grants",
+  "desk_done",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
+  `CREATE TABLE IF NOT EXISTS desk_grants (
+    action TEXT PRIMARY KEY,
+    granted_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS desk_done (
+    attempt_key TEXT PRIMARY KEY,
+    action TEXT NOT NULL,
+    item_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('running','done','failed')),
+    message TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS desk_deliveries (
     item_key TEXT PRIMARY KEY,
     transport TEXT NOT NULL,
