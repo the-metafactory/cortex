@@ -8,7 +8,7 @@ import { clock, DAY_MS, startOfDay } from "./time";
 import { isUnimportant, isVip } from "./vips";
 import { eventKey, UNIMPORTANT_REASON, upcomingMeetings, type ClassifierEvent, type MailCategory, type MailClassification } from "./classify";
 import type { AreaPolicy, DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
-import { evidenceView, suggestionLine, type EvidenceLinks } from "./mail-triage";
+import { evidenceView, replySubject, suggestionLine, type EvidenceLinks } from "./mail-triage";
 
 export interface AreaRule extends DeskArea {
   repos: string[];
@@ -288,6 +288,7 @@ export interface MailInput {
   classified?: ReadonlyMap<string, MailClassification>;
   unimportant?: ReadonlySet<string>;
   trash?: boolean;
+  draft?: boolean;
   links?: EvidenceLinks;
   onDesk?: ReadonlySet<string>;
 }
@@ -346,10 +347,11 @@ const SEEN = action("mail.seen", "Seen, delete", "primary", true);
 const DELETE = action("mail.trash", "Delete", "secondary", true);
 const UNIMPORTANT = action("mail.unimportant", "Unimportant", "secondary", true);
 const SHOW_MEETING = action("meeting.show", "Show on the meeting", "primary", true);
+const DRAFT_LABEL = "Draft a reply";
 const UNIMPORTANT_VERDICT: MailVerdict = { score: CATEGORY_SCORE.bulk, pressing: false, why: UNIMPORTANT_REASON, sorted: "bulk" };
 
 export function mailItems(input: MailInput): DeskItem[] {
-  const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, links = {}, onDesk = new Set<string>() } = input;
+  const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, draft = false, links = {}, onDesk = new Set<string>() } = input;
   return mail.filter((m) => m.unread).map((m): DeskItem => {
     const sender = m.from.name ?? m.from.address;
     const vip = isVip(vips, m.from.address);
@@ -364,9 +366,14 @@ export function mailItems(input: MailInput): DeskItem[] {
     const ageDays = Math.max(0, (now - receivedAt) / DAY_MS);
     const arrived = `It arrived ${ago(now, receivedAt)}.`;
     const why = vip ? `${sender} is on your VIP list. ${verdict.sorted && verdict.why ? verdict.why : arrived}` : verdict.why ?? arrived;
-    const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", quiet || showMeeting.length > 0 ? "secondary" : "primary", true), url: m.url }] : [];
+    const canDraft = draft && Boolean(m.account);
+    const replyFirst = canDraft && triage?.suggestedAction === "reply" && !quiet && showMeeting.length === 0;
+    const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", quiet || showMeeting.length > 0 || replyFirst ? "secondary" : "primary", true), url: m.url }] : [];
     const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", `Always show mail from ${m.from.name?.split(" ")[0] ?? "this sender"}`, "secondary", true), target: m.from.address }];
-    const offered = [...(quiet ? [SEEN] : []), ...showMeeting, ...open, ...(trash && !quiet ? [DELETE] : []), ...(vip || marked ? [] : [UNIMPORTANT]), LATER];
+    const reply = action("mail.draft", DRAFT_LABEL, replyFirst ? "primary" : "secondary", true);
+    const replyLead = replyFirst ? [reply] : [];
+    const replyTail = canDraft && !replyFirst ? [reply] : [];
+    const offered = [...(quiet ? [SEEN] : []), ...showMeeting, ...replyLead, ...open, ...(trash && !quiet ? [DELETE] : []), ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, LATER];
     const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
     if (verdict.sorted) history.push(`The mail classifier sorted it as ${verdict.sorted}.`);
     return {
@@ -390,6 +397,7 @@ export function mailItems(input: MailInput): DeskItem[] {
       ...(m.firstParagraph ? { excerpt: m.firstParagraph } : {}),
       ...(suggestion ? { suggestion } : {}),
       ...(verdict.eventKey ? { eventKey: verdict.eventKey } : {}),
+      ...(canDraft ? { reply: { to: m.from.name ? `${m.from.name} <${m.from.address}>` : m.from.address, subject: replySubject(m.subject) } } : {}),
       since: receivedAt,
     };
   });

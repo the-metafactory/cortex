@@ -160,6 +160,66 @@ describe("the actions on a mail item", () => {
   });
 });
 
+describe("Draft a reply on a mail item", () => {
+  const DRAFT = ["/opt/adapters/bin/desk-mail-draft.ts"];
+  const DRAFTING: DeskOptions = { ...DESK, mailActions: { trash: TRASH, draft: DRAFT, timeoutSeconds: 20 } };
+  const press = (rt: DeskRuntime, run: ReturnType<typeof recorder>["run"], body: unknown = "Thanks, Friday works.") =>
+    handleDeskMail(post({ action: "draft", key: "mail:b1@example.org", body }), db, rt, { run, now: () => NOW });
+
+  it("runs the draft command with the listed account, sender and a Re: subject, and keeps the item on the Desk", async () => {
+    const rt = await deskWith([BOSS], DRAFTING);
+    const r = recorder({ code: 0, stdout: "{\"id\":\"d1@example.org\"}", stderr: "" });
+    const res = await press(rt, r.run);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, message: "Reply saved in your work Drafts." });
+    expect(r.calls).toEqual([{
+      argv: DRAFT,
+      stdin: JSON.stringify({ action: "draft", account: "work", messageId: "b1@example.org", to: "boss@example.org", subject: "Re: Budget", body: "Thanks, Friday works." }),
+      timeoutMs: 20_000,
+    }]);
+    expect(await itemKeys(rt)).toEqual(["mail:b1@example.org"]);
+  });
+
+  it("keeps the item and says what failed in one line when the command refuses", async () => {
+    const rt = await deskWith([BOSS], DRAFTING);
+    const r = recorder({ code: 1, stdout: "", stderr: "The work account has no Drafts mailbox.\n" });
+    const res = await press(rt, r.run);
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ ok: false, error: "The draft was not saved: The work account has no Drafts mailbox." });
+    expect(await itemKeys(rt)).toEqual(["mail:b1@example.org"]);
+  });
+
+  it("refuses an empty reply, a missing body and a stack without a draft command before anything runs", async () => {
+    const r = recorder();
+    const rt = await deskWith([BOSS], DRAFTING);
+    expect((await (await press(rt, r.run, "  \n")).json()).error).toBe("Write the reply first.");
+    expect((await press(rt, r.run, 42)).status).toBe(400);
+    const off = await deskWith([BOSS]);
+    expect((await (await press(off, r.run)).json()).error).toBe("Drafting replies is not set up on this stack.");
+    expect(r.calls).toHaveLength(0);
+  });
+
+  it("does not offer the action without a draft command or an account, and leads with it when the classifier suggests a reply", () => {
+    const item = (m: SourceMail, draft: boolean, suggestedAction?: "reply") => mailItems({
+      now: NOW, mail: [{ ...m, area: null, sourceId: "work-mail" }], events: [], vips: new Set(), trash: true, draft,
+      ...(suggestedAction ? { classified: new Map([[m.id, { category: "reply" as const, reason: "Ada asks for a date.", suggestedAction }]]) } : {}),
+    })[0];
+    const all = (i: ReturnType<typeof item>) => [...(i?.actions ?? []), ...(i?.more ?? [])].map((a) => `${a.id}:${a.role}`);
+    expect(all(item(BOSS, false))).not.toContain("mail.draft:secondary");
+    expect(item(BOSS, false)?.reply).toBeUndefined();
+    const { account: _none, ...bare } = BOSS;
+    expect(all(item(bare, true)).some((a) => a.startsWith("mail.draft"))).toBe(false);
+    expect(all(item(BOSS, true))).toContain("mail.draft:secondary");
+    expect(item(BOSS, true)?.reply).toEqual({ to: "Ada Boss <boss@example.org>", subject: "Re: Budget" });
+    expect(item(BOSS, true, "reply")?.actions.map((a) => `${a.id}:${a.role}`)).toEqual(["mail.draft:primary", "open:secondary", "mail.trash:secondary"]);
+  });
+
+  it("reads mc.desk.mail.actions.draft from the stack config", () => {
+    expect(McSchema.parse({ desk: { mail: { actions: { draft: DRAFT } } } }).desk.mail.actions).toEqual({ draft: DRAFT, timeoutSeconds: 30 });
+    expect(McSchema.safeParse({ desk: { mail: { actions: { draft: [] } } } }).success).toBe(false);
+  });
+});
+
 describe("Unimportant on a mail item", () => {
   const press = (rt: DeskRuntime, run: ReturnType<typeof recorder>["run"]) =>
     handleDeskMail(post({ action: "unimportant", key: "mail:g1@gitlab.example" }), db, rt, { run, now: () => NOW });

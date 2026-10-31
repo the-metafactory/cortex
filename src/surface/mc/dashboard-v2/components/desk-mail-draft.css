@@ -1,0 +1,5 @@
+.desk-reply{margin-top:18px;padding:4px 16px 16px;border:1px solid var(--line);border-radius:12px;background:#fafafa}
+.desk-reply .desk-sec{margin-top:14px}
+.desk-reply-head{font-size:14px;color:var(--ink2);margin:0 0 4px}
+.desk-reply textarea{width:100%;box-sizing:border-box;margin-top:8px;font:inherit;font-size:15px;border:1px solid #d4d4d8;border-radius:8px;padding:8px 10px;resize:vertical;background:#fff}
+.desk-reply-acts{display:flex;gap:8px;margin-top:10px}
