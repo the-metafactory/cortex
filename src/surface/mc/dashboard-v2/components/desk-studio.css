@@ -98,11 +98,12 @@
   .dst-edge.right{order:2}
 }
 @media (max-width:760px){
-  .desk.in-studio .desk-top-in{display:flex;flex-wrap:wrap;gap:10px;padding:10px 14px}
-  .desk.in-studio .desk-left{flex-wrap:wrap;gap:10px;flex:1 1 100%}
-  .desk.in-studio .desk-askwrap{flex:1 1 100%;order:3}
-  .desk.in-studio .desk-kbd{display:none}
-  .desk.in-studio .desk-topr{justify-self:auto;margin-left:auto}
+  .desk .desk-top-in{display:flex;flex-wrap:wrap;gap:10px;padding:10px 14px}
+  .desk .desk-left{flex-wrap:wrap;gap:10px;flex:1 1 100%;min-width:0}
+  .desk .desk-askwrap{flex:1 1 100%;order:3}
+  .desk .desk-kbd{display:none}
+  .desk .desk-topr{justify-self:auto;flex:1 1 100%;min-width:0;flex-wrap:wrap}
+  .desk .desk-topr .desk-seg{max-width:100%;overflow-x:auto}
   .dst{padding:0 14px 60px}
   .dst-lead p{font-size:15.5px}
   .dst-board{display:flex;flex-direction:column;padding:12px;gap:20px;border-radius:16px}
