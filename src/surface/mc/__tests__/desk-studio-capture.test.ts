@@ -56,6 +56,7 @@ describe("Studio capture filing", () => {
     expect(result.ok).toBe(true);
     const parsed = parseThreadFile("threads/studio.md", readFileSync(join(dir, "threads/studio.md"), "utf8"));
     expect(parsed.ok && parsed.value.material.some((m) => m.label.includes("empty places"))).toBe(true);
+    expect(parsed.ok && parsed.value.material.find((m) => m.kind === "capture")?.label).toBe("Let the board show empty places.");
     expect(readDone(db, NOW.getTime())[0]?.message).toContain("This develops");
     expect(git("log", "-1", "--format=%B")).toContain(`Desk-Request: ${requestId}`);
     const head = git("rev-parse", "HEAD");
