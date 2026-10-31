@@ -51,6 +51,7 @@ export interface DeskItem {
   why: string;
   score: number;
   actions: DeskAction[];
+  more?: DeskAction[];
   detail: DeskItemDetail;
   excerpt?: string;
   eventKey?: string;

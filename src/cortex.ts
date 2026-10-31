@@ -4970,6 +4970,7 @@ export async function startCortex(
                 },
               }
             : {}),
+          ...(config.mc.desk.mail.actions ? { mailActions: config.mc.desk.mail.actions } : {}),
         },
         ...(config.mc.desk.interruptions.transport === "discord"
           ? {

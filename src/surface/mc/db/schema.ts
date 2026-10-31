@@ -119,6 +119,7 @@ export const TABLE_NAMES = [
   "desk_done",
   "desk_corrections",
   "desk_mail_classes",
+  "desk_unimportant",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -161,6 +162,11 @@ export const SCHEMA_SQL: string[] = [
     done_at INTEGER
   )`,
   `CREATE TABLE IF NOT EXISTS desk_vips (
+    address TEXT PRIMARY KEY,
+    label TEXT,
+    added_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS desk_unimportant (
     address TEXT PRIMARY KEY,
     label TEXT,
     added_at INTEGER NOT NULL

@@ -2,7 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActionButton, DeskBody, DeskView, DoneForYou, ItemMenu, RankingSection, RestGroups, dismissesMenu, withPauseConfirm } from "../components/desk-view";
+import { ActionButton, DeskBody, DeskView, DoneForYou, ItemMenu, RankingSection, RestGroups, dismissesMenu, withConfirm } from "../components/desk-view";
+import { submitMailAction } from "../lib/desk-action";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
@@ -354,7 +355,36 @@ describe("a goal item's actions", () => {
   });
 
   it("asks once more before it pauses a goal", () => {
-    expect(withPauseConfirm(goal).actions.map((a) => a.label)).toEqual(["Check again now", "Yes, pause it"]);
+    expect(withConfirm(goal, "goal.pause").actions.map((a) => a.label)).toEqual(["Check again now", "Yes, pause it"]);
     expect(renderToStaticMarkup(<ActionButton action={pause} onRun={() => {}} sending="goal.pause" />)).toContain(">Pausing…</button>");
+  });
+});
+
+describe("a mail item's actions", () => {
+  const seen = { id: "mail.seen", label: "Seen, delete", role: "primary" as const, wired: true };
+  const del = { id: "mail.trash", label: "Delete", role: "secondary" as const, wired: true };
+  const always = { id: "vip.add", label: "Always show mail from Grace", role: "secondary" as const, wired: true, target: "grace@example.org" };
+  const mail = item(11, { key: "mail:m3", kind: "mail", title: 'Grace Hopper wrote: "Compilers"', actions: [seen, del], more: [always] });
+
+  it("asks once more before Delete, but not before Seen, delete", () => {
+    expect(withConfirm(mail, "mail.trash").actions.map((a) => a.label)).toEqual(["Seen, delete", "Yes, move it to Trash"]);
+    expect(withConfirm(mail, "mail.seen").actions.map((a) => a.label)).toEqual(["Seen, delete", "Delete"]);
+    expect(renderToStaticMarkup(<ActionButton action={seen} onRun={() => {}} sending="mail.seen" />)).toContain(">Deleting…</button>");
+  });
+
+  it("keeps the extra actions off the card", () => {
+    const page = renderToStaticMarkup(<DeskBody view={{ ...view, items: [mail] }} error={null} onOpenMissionControl={() => {}} />);
+    expect(page).toContain(">Seen, delete</button>");
+    expect(page).not.toContain("Always show mail from Grace");
+  });
+
+  it("posts a mail action to the mail route and returns the server's line", async () => {
+    const calls: { path: string; body: unknown }[] = [];
+    const fake = async (path: string, init: RequestInit) => {
+      calls.push({ path, body: JSON.parse(String(init.body)) });
+      return Response.json({ ok: false, error: "The message is no longer in the work INBOX." }, { status: 502 });
+    };
+    expect(await submitMailAction({ action: "trash", key: "mail:m3" }, fake)).toEqual({ ok: false, text: "The message is no longer in the work INBOX." });
+    expect(calls).toEqual([{ path: "/api/desk/mail", body: { action: "trash", key: "mail:m3" } }]);
   });
 });

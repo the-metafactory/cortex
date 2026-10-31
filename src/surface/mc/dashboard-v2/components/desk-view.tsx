@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getJson, postJson } from "../lib/api";
-import { submitDeskAction, submitGoalAction } from "../lib/desk-action";
+import { submitDeskAction, submitGoalAction, submitMailAction } from "../lib/desk-action";
 import { chimeForNew } from "../lib/desk-chime";
 import { browserNotifyEnv, dismissHint, notifyForNew, requestNotifications, wantsHint } from "../lib/desk-notify";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
@@ -62,7 +62,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [note, setNote] = useState<string | null>(null);
   const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map());
   const inFlight = useRef(new Set<string>());
-  const [confirmPause, setConfirmPause] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<{ key: string; action: string } | null>(null);
   const [askText, setAskText] = useState("");
   const [asking, setAsking] = useState(false);
   const [proposal, setProposal] = useState<{ p: DeskProposal; said: string; requestId: string; fields: Record<string, unknown> } | null>(null);
@@ -180,14 +180,21 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     }
     else if (a.id.startsWith("ranger.") && a.wired) void send(item, a);
     else if (a.id === "goal.check" && a.wired && item.goal) void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }), keepVisible: true });
-    else if (a.id === "goal.pause" && item.goal) {
-      if (confirmPause === item.key) {
-        setConfirmPause(null);
-        void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }) });
-      } else setConfirmPause(item.key);
-    }
+    else if (a.id === "goal.pause" && item.goal) confirmFirst(item, a, () => void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }) }));
+    else if (a.id === "mail.seen") trash(item, a);
+    else if (a.id === "mail.trash") confirmFirst(item, a, () => trash(item, a));
+    else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }), keepVisible: true });
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
+  };
+
+  const trash = (item: DeskItem, a: DeskAction): void => void send(item, a, { request: () => submitMailAction({ action: "trash", key: item.key }) });
+
+  const confirmFirst = (item: DeskItem, a: DeskAction, go: () => void): void => {
+    if (confirming?.key === item.key && confirming.action === a.id) {
+      setConfirming(null);
+      go();
+    } else setConfirming({ key: item.key, action: a.id });
   };
 
   const send = async (item: DeskItem, action: DeskAction, { request, keepVisible = false }: SendOptions = {}): Promise<void> => {
@@ -246,7 +253,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     }
   };
 
-  const shown = (item: DeskItem): DeskItem => (confirmPause === item.key ? withPauseConfirm(item) : item);
+  const shown = (item: DeskItem): DeskItem => (confirming?.key === item.key ? withConfirm(item, confirming.action) : item);
   const busyWith = (item: DeskItem): string | null => sending.get(item.key) ?? (item.checking ? "goal.check" : null);
   const detailItem = detail ? view.items.find((i) => i.key === detail.key) ?? detail : null;
 
@@ -527,7 +534,7 @@ function DetailPanel({ item, area, onClose, onAction, sending }: { item: DeskIte
       <div className="desk-sec">References</div>
       <ul className="desk-refs">{item.detail.refs.map((r) => <li key={r}>{r}</li>)}</ul>
       <div className="desk-panel-acts">
-        {item.actions.filter((a) => a.id !== "detail").map((a) => <ActionButton key={a.id} action={a} onRun={onAction} sending={sending} />)}
+        {[...item.actions, ...(item.more ?? [])].filter((a) => a.id !== "detail").map((a) => <ActionButton key={a.id} action={a} onRun={onAction} sending={sending} />)}
       </div>
     </>
   );
@@ -697,10 +704,13 @@ interface SendOptions {
 
 const CHECK_POLL_MS = 3000;
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…" };
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.unimportant": "Saving…" };
 
-export function withPauseConfirm(item: DeskItem): DeskItem {
-  return { ...item, actions: item.actions.map((a) => (a.id === "goal.pause" ? { ...a, label: "Yes, pause it" } : a)) };
+const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash" };
+
+export function withConfirm(item: DeskItem, actionId: string): DeskItem {
+  const label = CONFIRM_LABEL[actionId];
+  return label ? { ...item, actions: item.actions.map((a) => (a.id === actionId ? { ...a, label } : a)) } : item;
 }
 
 export function ActionButton({ action, onRun, sending }: { action: DeskAction; onRun: (a: DeskAction) => void; sending: string | null }) {

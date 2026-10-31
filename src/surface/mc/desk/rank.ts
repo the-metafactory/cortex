@@ -4,8 +4,8 @@ import type { RangerMap, RangerMapNode, RangerState } from "./sources/ranger";
 import { rangerItemKey, rangerTitles } from "./sources/ranger";
 import { approvable, retryable } from "./actions";
 import { clock, DAY_MS, startOfDay } from "./time";
-import { isVip } from "./vips";
-import { eventKey, upcomingMeetings, type ClassifierEvent, type MailCategory, type MailClassification } from "./classify";
+import { isUnimportant, isVip } from "./vips";
+import { eventKey, UNIMPORTANT_REASON, upcomingMeetings, type ClassifierEvent, type MailCategory, type MailClassification } from "./classify";
 import type { DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
 
 export interface AreaRule extends DeskArea {
@@ -275,6 +275,8 @@ export interface MailInput {
   events: ClassifierEvent[];
   vips: ReadonlySet<string>;
   classified?: ReadonlyMap<string, MailClassification>;
+  unimportant?: ReadonlySet<string>;
+  trash?: boolean;
 }
 
 const STOPWORDS = new Set(["meeting", "update", "about", "with", "from", "your", "termin", "sitzung", "einladung", "invitation", "accepted", "re", "fw", "aw", "wg"]);
@@ -327,18 +329,26 @@ function verdictFor(m: SourceMail, input: MailInput): MailVerdict {
   return { score: CATEGORY_SCORE[c.category], pressing: c.category === "action" || c.category === "reply", why: reason, sorted: c.category };
 }
 
+const SEEN = action("mail.seen", "Seen, delete", "primary", true);
+const DELETE = action("mail.trash", "Delete", "secondary", true);
+const UNIMPORTANT = action("mail.unimportant", "Unimportant", "secondary", true);
+const UNIMPORTANT_VERDICT: MailVerdict = { score: CATEGORY_SCORE.bulk, pressing: false, why: UNIMPORTANT_REASON, sorted: "bulk" };
+
 export function mailItems(input: MailInput): DeskItem[] {
-  const { now, mail, vips } = input;
+  const { now, mail, vips, unimportant = new Set<string>(), trash = false } = input;
   return mail.filter((m) => m.unread).map((m): DeskItem => {
     const sender = m.from.name ?? m.from.address;
     const vip = isVip(vips, m.from.address);
-    const verdict = verdictFor(m, input);
+    const marked = isUnimportant(unimportant, vips, m.from.address);
+    const verdict = marked ? UNIMPORTANT_VERDICT : verdictFor(m, input);
+    const quiet = trash && (verdict.sorted === "fyi" || verdict.sorted === "bulk");
     const receivedAt = parsedOr(m.receivedAt, now);
     const ageDays = Math.max(0, (now - receivedAt) / DAY_MS);
     const arrived = `It arrived ${ago(now, receivedAt)}.`;
     const why = vip ? `${sender} is on your VIP list. ${verdict.sorted && verdict.why ? verdict.why : arrived}` : verdict.why ?? arrived;
-    const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", "primary", true), url: m.url }] : [];
+    const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", quiet ? "secondary" : "primary", true), url: m.url }] : [];
     const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", `Always show mail from ${m.from.name?.split(" ")[0] ?? "this sender"}`, "secondary", true), target: m.from.address }];
+    const offered = [...(quiet ? [SEEN] : []), ...open, ...(trash && !quiet ? [DELETE] : []), ...(vip || marked ? [] : [UNIMPORTANT]), LATER];
     const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
     if (verdict.sorted) history.push(`The mail classifier sorted it as ${verdict.sorted}.`);
     return {
@@ -350,7 +360,8 @@ export function mailItems(input: MailInput): DeskItem[] {
       title: `${sender} wrote: "${m.subject}"`,
       why,
       score: (vip ? 80 : verdict.score) - ageDays * 5,
-      actions: [...open, ...always, LATER].slice(0, 3),
+      actions: offered.slice(0, 3),
+      more: [...always, ...offered.slice(3)],
       detail: {
         summary: m.firstParagraph ?? m.subject,
         history,
