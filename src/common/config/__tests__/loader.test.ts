@@ -278,27 +278,18 @@ describe("networksDir-missing log level (cortex#88 item 7)", () => {
     };
   }
 
-  test("default networksDir absent → info-level only (no warn)", () => {
-    // migrate-config emits `networksDir: ./networks` even when the principal
-    // never created the directory. Make sure that the default-value-absent
-    // case is informational, not a warning.
+  test("default networksDir absent emits an informational diagnostic on stderr", () => {
     const configPath = writeCentralConfig(testDir, {
       agent: { name: "luna", displayName: "Luna" },
       claude: { timeoutMs: 120000 },
       networksDir: "./networks",
     });
     rmSync(join(testDir, "networks"), { recursive: true });
-
-    const cap = captureConsole();
-    try {
-      loadConfig(configPath);
-    } finally {
-      cap.restore();
-    }
-    const warns = cap.logs.filter((l) => l.kind === "warn" && l.msg.includes("networksDir"));
-    expect(warns).toHaveLength(0);
-    const infos = cap.logs.filter((l) => l.kind === "info" && l.msg.includes("networksDir"));
-    expect(infos.length).toBeGreaterThan(0);
+    const writes: string[] = [];
+    const original = process.stderr.write;
+    process.stderr.write = (chunk) => { writes.push(String(chunk)); return true; };
+    try { loadConfig(configPath); } finally { process.stderr.write = original; }
+    expect(writes.join("")).toContain("no networks loaded (this is fine");
   });
 
   test("non-default networksDir absent → keeps console.warn", () => {

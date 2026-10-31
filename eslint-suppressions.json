@@ -2290,7 +2290,7 @@
   },
   "src/common/config/__tests__/loader.test.ts": {
     "cortex/no-comments": {
-      "count": 259
+      "count": 256
     }
   },
   "src/common/config/__tests__/migrate-config-dir.test.ts": {

@@ -353,3 +353,7 @@ patterns and code.
   <a href="https://github.com/mellanon">Andreas Aastroem</a> and
   <a href="https://github.com/jcfischer">Jens-Christian Fischer</a>.</sub>
 </p>
+
+### Discover configured Reflex targets
+
+Run `cortex reflex targets --config /absolute/stack/cortex.yaml --json` to read the configured execution target references. The command uses the same configuration loader and split-config composition as runtime startup. Its stdout is strictly `{"targets":["@principal/process"]}`. Diagnostics go to stderr. It starts no runtime or process and exposes no prompts, credentials, capabilities, or configuration contents. Reflex can use this command as its configured `routine_target_command`.
