@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { changeVips, type DeskVipRow, type VipChange } from "../lib/desk-settings";
 import { browserNotifyEnv, NOTIFY_LINE, notifyState, requestNotifications, type NotifyState } from "../lib/desk-notify";
-import type { DeskView } from "../../desk/types";
+import type { DeskMailClassifier, DeskView } from "../../desk/types";
 import "./desk-view.css";
 
 export function DeskSettings({ view, onBack }: { view: DeskView; onBack: () => void }) {
@@ -41,6 +41,7 @@ export function DeskSettings({ view, onBack }: { view: DeskView; onBack: () => v
       }}
       onAdd={(address) => apply({ op: "add", address })}
       onRemove={(address) => void apply({ op: "remove", address })}
+      classifier={view.mailClassifier ?? null}
     />
   );
 }
@@ -54,9 +55,16 @@ export interface SettingsBodyProps {
   onEnableNotify: () => void;
   onAdd: (address: string) => Promise<boolean>;
   onRemove: (address: string) => void;
+  classifier?: DeskMailClassifier | null;
 }
 
-export function SettingsBody({ vips, note, busy, onBack, notify, onEnableNotify, onAdd, onRemove }: SettingsBodyProps) {
+export function classifierLines(c: DeskMailClassifier | null): string[] {
+  if (!c) return ["The Desk sorts unread mail by the words it shares with your meetings. Set mc.desk.mail.classifier in the stack config to let a model sort it."];
+  const key = !c.keyNeeded ? "It needs no API key." : c.keyFound ? "Its API key was found." : "Its API key was not found, so the Desk sorts mail by shared words until it is.";
+  return [`A model sorts your unread mail: ${c.model} at ${c.host}.`, key, "Change it in the stack config."];
+}
+
+export function SettingsBody({ vips, note, busy, onBack, notify, onEnableNotify, onAdd, onRemove, classifier = null }: SettingsBodyProps) {
   const [draft, setDraft] = useState("");
   return (
     <div className="desk desk-settings">
@@ -119,6 +127,11 @@ export function SettingsBody({ vips, note, busy, onBack, notify, onEnableNotify,
           <h2>Notifications</h2>
           <p className="desk-set-sub">{NOTIFY_LINE[notify]}</p>
           {notify === "default" && <button type="button" className="desk-btn pri" onClick={onEnableNotify}>Turn on notifications</button>}
+        </section>
+
+        <section className="desk-set-card" aria-label="Mail sorting">
+          <h2>Mail sorting</h2>
+          <p className="desk-set-sub">{classifierLines(classifier).join(" ")}</p>
         </section>
       </main>
     </div>

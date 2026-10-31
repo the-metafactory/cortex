@@ -16,6 +16,7 @@ export function startDeskPushes(
   return startInterruptLoop(rules.everySeconds * 1000, async () => {
     const view = await composeDesk(db, options, vigil, {
       handled: runtime.ledger,
+      ...(runtime.mailClassifier ? { mailClassifier: runtime.mailClassifier } : {}),
       ...(runtime.sourceCache ? { sourceCache: runtime.sourceCache } : {}),
       ...(runtime.recentWrites ? { recentWrites: runtime.recentWrites } : {}),
     });

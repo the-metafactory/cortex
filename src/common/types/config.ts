@@ -419,6 +419,21 @@ const DeskSchema = z.object({
     })
     .default({ parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }),
   interruptions: DeskInterruptionsSchema.default(DeskInterruptionsSchema.parse({})),
+  mail: z
+    .object({
+      classifier: z
+        .object({
+          baseUrl: z.url(),
+          model: z.string().min(1),
+          apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
+          apiKeyFile: z.string().min(1).optional(),
+          timeoutSeconds: z.number().int().min(1).max(120).default(30),
+          maxPerPass: z.number().int().min(1).max(100).default(10),
+        })
+        .refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.mail.classifier: set apiKeyEnv or apiKeyFile, not both")
+        .optional(),
+    })
+    .default({}),
   goals: z
     .object({
       somaBin: z.string().default(""),

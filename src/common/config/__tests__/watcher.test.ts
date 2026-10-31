@@ -124,7 +124,7 @@ const TEST_CONFIG: AgentConfig = {
     dbPath: "",
     port: 0,
     sideband: "http://127.0.0.1:9092",
-    desk: { enabled: true, displayName: "", topN: 5, ranger: { url: "", bin: "", config: "" }, areas: [], sources: [], ask: { parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }, interruptions: { transport: "none", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true, notifications: true }, goals: { somaBin: "", check: {} } },
+    desk: { enabled: true, displayName: "", topN: 5, ranger: { url: "", bin: "", config: "" }, areas: [], sources: [], ask: { parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }, interruptions: { transport: "none", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true, notifications: true }, mail: {}, goals: { somaBin: "", check: {} } },
     server: { enabled: true },
     aggregateLocalStacks: { enabled: true, dbRead: true, configRoot: "", stacks: [] },
   },

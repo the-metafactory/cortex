@@ -15,6 +15,7 @@ import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
+import { classifierStatus, readApiKey, readClassifications, type ClassifierConfig, type MailClassifier } from "./classify";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
 export interface DeskRuntime {
@@ -25,6 +26,7 @@ export interface DeskRuntime {
   autonomy?: InterruptLoop | null;
   goalChecks?: GoalChecks;
   goalStatuses?: GoalStatuses;
+  mailClassifier?: MailClassifier;
 }
 
 export interface DeskAskOptions {
@@ -45,6 +47,7 @@ export interface DeskOptions {
   ask?: DeskAskOptions;
   interruptions?: InterruptRules;
   goals?: DeskGoalOptions;
+  mailClassifier?: ClassifierConfig;
 }
 
 export interface DeskVigilSource {
@@ -61,6 +64,7 @@ export interface ComposeDeps {
   recentWrites?: RecentCalendarWrites;
   goalChecks?: GoalChecks;
   goalStatuses?: GoalStatuses;
+  mailClassifier?: MailClassifier;
 }
 
 export const CORRECTIONS_UNREADABLE = "The Desk could not read your ranking corrections, so it ranks by its base rules alone.";
@@ -101,6 +105,10 @@ export async function composeDesk(
   const events = readings.flatMap((r) => r.events.map((e) => ({ ...e, area: r.area, sourceId: r.id })));
   const mail = readings.flatMap((r) => r.mail.map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
+  const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
+  if (classifier) void classifier.kick(db, { now, mail, events, vips: vips.map((v) => v.address) });
+  const classified = classifier ? readClassifications(db, mail.filter((m) => m.unread).map((m) => m.id)) : undefined;
+  const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null) : null;
   const notes = listOpenNotes(db);
   const reminders = notes.filter((n) => n.kind === "reminder" && n.dueAt !== null);
   const written = (deps.recentWrites?.pending(now, events.map((e) => ({ title: e.title, start: Date.parse(e.start) }))) ?? []).map((w, i): CalendarEvent => ({
@@ -126,7 +134,7 @@ export async function composeDesk(
     .filter((item) => goalListed(goalStatuses, item.goal));
   const items = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)) }),
+    ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)), ...(classified ? { classified } : {}) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
   ], rules, readDeliveries(db), now), activeCorrections);
@@ -157,6 +165,7 @@ export async function composeDesk(
     notifications: rules.notifications,
     autonomy: buildAutonomy(db, done, rangerActions),
     corrections: activeCorrections,
+    mailClassifier,
   };
 }
 

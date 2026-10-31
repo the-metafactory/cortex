@@ -111,6 +111,14 @@ export interface DeskView {
   notifications: boolean;
   autonomy: DeskAutonomy;
   corrections: DeskCorrection[];
+  mailClassifier?: DeskMailClassifier | null;
+}
+
+export interface DeskMailClassifier {
+  host: string;
+  model: string;
+  keyNeeded: boolean;
+  keyFound: boolean;
 }
 
 export interface DeskAutonomy {
