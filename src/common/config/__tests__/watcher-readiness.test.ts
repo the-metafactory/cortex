@@ -20,6 +20,7 @@ test("ConfigWatcher reloads when the readiness write and config write share one 
     const { ConfigWatcher } = await import(${JSON.stringify(fileURLToPath(new URL("../watcher.ts", import.meta.url)))});
     const { loadConfig } = await import(${JSON.stringify(fileURLToPath(new URL("../loader.ts", import.meta.url)))});
     const dir = fs.mkdtempSync(join(tmpdir(), "config-watcher-coalesced-"));
+    fs.mkdirSync(join(dir, "networks"));
     const path = join(dir, "bot.yaml");
     const yaml = "agent:\\n  name: test\\n  displayName: Test\\nclaude:\\n  timeoutMs: 120000\\n";
     let watcher;

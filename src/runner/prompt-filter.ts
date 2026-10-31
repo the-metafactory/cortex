@@ -74,7 +74,7 @@ try {
     console.error(`prompt-filter: WARN ${validationError}`);
   } else {
     filterContentString = mod.filterContentString;
-    console.log(
+    console.error(
       "prompt-filter: @metafactory/content-filter loaded — inbound prompts will be scanned",
     );
   }

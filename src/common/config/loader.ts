@@ -926,7 +926,7 @@ function loadCortexShape(
   // the RAW object: after `CortexConfigSchema.parse` the schema default makes
   // an explicit `off` indistinguishable from an unset toggle.
   if (applySeedAwareSigningDefault(normalised)) {
-    console.log(
+    console.error(
       "cortex: stack signing seed configured and security.signing unset — " +
         "defaulting to signing=permissive (secure-by-default, cortex#1000); " +
         "set security.signing: off explicitly to publish unsigned",
@@ -1440,7 +1440,7 @@ function loadNetworkFiles(networksDir: string, explicit: boolean): NetworkFile[]
       // networks/ is optional today — but surface at info-level so
       // a principal who actually expected fragments to load can spot
       // the path mismatch.
-      console.info(`config-loader: default networksDir "${networksDir}" not present — no networks loaded (this is fine if you haven't created any network fragments)`);
+      process.stderr.write(`config-loader: default networksDir "${networksDir}" not present — no networks loaded (this is fine if you haven't created any network fragments)\n`);
     }
     return [];
   }
