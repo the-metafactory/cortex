@@ -12,7 +12,7 @@ import { DAY_MS, startOfDay } from "../../desk/time";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
 import { ALL_AREAS, briefing, canSee, clock, openGroup, selectItems, URGENCY_LABEL } from "../../desk/present";
-import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskFoldedGroup, DeskItem, DeskItemKind, DeskView as DeskViewModel } from "../../desk/types";
+import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskView as DeskViewModel } from "../../desk/types";
 
 interface DeskViewProps {
   onOpenMissionControl: () => void;
@@ -184,6 +184,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.seen") trash(item, a);
     else if (a.id === "mail.trash") confirmFirst(item, a, () => trash(item, a));
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }), keepVisible: true });
+    else if (a.id === "meeting.show" && a.target) showEvent(a.target);
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
   };
@@ -271,6 +272,11 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       onCorrect={(mode) => void correct(item.kind, item.source, mode)}
     />
   );
+
+  const showEvent = (key: string): void => {
+    setDetail(null);
+    focusEvent(key);
+  };
 
   const focusEvent = (key: string): void => {
     if (view.today.some((e) => e.key === key && e.kind === "agent-stop")) setOpenStopped(true);
@@ -498,7 +504,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
       <div className="desk-scrim" onClick={() => setDetail(null)} />
       <aside className="desk-panel" aria-hidden={!detail} aria-label="Details">
-        {detailItem && <DetailPanel item={shown(detailItem)} area={detailItem.area ? areaById.get(detailItem.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detailItem, a)} sending={busyWith(detailItem)} />}
+        {detailItem && <DetailPanel item={shown(detailItem)} area={detailItem.area ? areaById.get(detailItem.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detailItem, a)} onShowEvent={showEvent} sending={busyWith(detailItem)} />}
       </aside>
 
       {note && <div className="desk-note" role="status">{note}</div>}
@@ -506,7 +512,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   );
 }
 
-function DetailPanel({ item, area, onClose, onAction, sending }: { item: DeskItem; area?: string; onClose: () => void; onAction: (a: DeskAction) => void; sending: string | null }) {
+function DetailPanel({ item, area, onClose, onAction, onShowEvent, sending }: { item: DeskItem; area?: string; onClose: () => void; onAction: (a: DeskAction) => void; onShowEvent: (key: string) => void; sending: string | null }) {
   return (
     <>
       <div className="desk-panel-top">
@@ -515,8 +521,15 @@ function DetailPanel({ item, area, onClose, onAction, sending }: { item: DeskIte
       </div>
       <h3>{item.title}</h3>
       <p className="desk-why">{item.why}</p>
+      {item.suggestion && <p className="desk-why desk-suggest">{item.suggestion}</p>}
       <div className="desk-sec">What this is</div>
       <p className="desk-summary">{item.detail.summary}</p>
+      {item.detail.evidence && item.detail.evidence.length > 0 && (
+        <>
+          <div className="desk-sec">Evidence</div>
+          <ul className="desk-evidence">{item.detail.evidence.map((e, i) => <li key={`${e.kind}:${i}`}><EvidenceLink evidence={e} onShowEvent={onShowEvent} /></li>)}</ul>
+        </>
+      )}
       {item.detail.history.length > 0 && (
         <>
           <div className="desk-sec">History</div>
@@ -538,6 +551,16 @@ function DetailPanel({ item, area, onClose, onAction, sending }: { item: DeskIte
       </div>
     </>
   );
+}
+
+const EVIDENCE_KIND: Record<DeskEvidence["kind"], string> = { event: "Meeting", mail: "Mail", note: "Note" };
+
+export function EvidenceLink({ evidence, onShowEvent }: { evidence: DeskEvidence; onShowEvent: (key: string) => void }) {
+  const label = <><span className="k">{EVIDENCE_KIND[evidence.kind]}</span>{evidence.title}</>;
+  const { eventKey, url } = evidence;
+  if (eventKey) return <button type="button" onClick={() => onShowEvent(eventKey)}>{label}<span className="go">↑</span></button>;
+  if (url) return <a href={url} target="_blank" rel="noopener noreferrer">{label}<span className="go">↗</span></a>;
+  return <span>{label}</span>;
 }
 
 export function RestGroups({ groups, active, onOpen }: { groups: DeskFoldedGroup[]; active: DeskItemKind | null; onOpen: (kind: DeskItemKind | null) => void }) {
@@ -613,6 +636,7 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
         </div>
         <button type="button" className="desk-title" onClick={onOpen}>{item.title}</button>
         <p className="desk-why">{item.why}</p>
+        {item.suggestion && <p className="desk-why desk-suggest">{item.suggestion}</p>}
         {item.interrupt?.delivery === "failed" && <p className="desk-why desk-unsent">Not pushed: {item.interrupt.error}</p>}
         {item.interrupt?.delivery === "buffered" && <p className="desk-why desk-waiting">Waiting for Discord</p>}
         {item.excerpt && <blockquote className="desk-excerpt">{item.excerpt}</blockquote>}

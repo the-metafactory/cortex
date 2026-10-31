@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActionButton, DeskBody, DeskView, DoneForYou, ItemMenu, RankingSection, RestGroups, dismissesMenu, withConfirm } from "../components/desk-view";
+import { ActionButton, DeskBody, DeskView, DoneForYou, EvidenceLink, ItemMenu, RankingSection, RestGroups, dismissesMenu, withConfirm } from "../components/desk-view";
 import { submitMailAction } from "../lib/desk-action";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
@@ -386,5 +386,21 @@ describe("a mail item's actions", () => {
     };
     expect(await submitMailAction({ action: "trash", key: "mail:m3" }, fake)).toEqual({ ok: false, text: "The message is no longer in the work INBOX." });
     expect(calls).toEqual([{ path: "/api/desk/mail", body: { action: "trash", key: "mail:m3" } }]);
+  });
+});
+
+describe("mail triage on the Desk", () => {
+  const evidence = (e: Parameters<typeof EvidenceLink>[0]["evidence"]): string => renderToStaticMarkup(<EvidenceLink evidence={e} onShowEvent={() => undefined} />);
+
+  it("shows a meeting as a button, a URL as a link and anything else as plain text", () => {
+    expect(evidence({ kind: "event", title: "Budget review", eventKey: "cal:work:r1" })).toContain("<button");
+    expect(evidence({ kind: "note", title: "Plan", url: "https://notes.example/?nodeid=n1" })).toContain('href="https://notes.example/?nodeid=n1"');
+    expect(evidence({ kind: "mail", title: "Earlier mail" })).not.toMatch(/<a |<button/);
+  });
+
+  it("shows the suggestion as one line under the reason", () => {
+    const suggested = item(1, { kind: "mail", suggestion: "Suggested: reply" });
+    const html = renderToStaticMarkup(<DeskBody view={{ ...view, items: [suggested] }} error={null} onOpenMissionControl={() => {}} />);
+    expect(html).toContain('<p class="desk-why desk-suggest">Suggested: reply</p>');
   });
 });

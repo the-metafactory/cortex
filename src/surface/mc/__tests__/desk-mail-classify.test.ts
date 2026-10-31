@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
 import { composeDesk, type DeskOptions } from "../desk/compose";
-import { mailItems, meetingFor } from "../desk/rank";
+import { mailItems, meetingFor, type MailInput } from "../desk/rank";
 import { SourceCache, type CommandRunner, type SourceEvent, type SourceMail } from "../desk/sources/command";
 import {
   buildMessages,
@@ -13,6 +13,7 @@ import {
   MailClassifier,
   MissingKey,
   readClassifications,
+  saveClassification,
   validateAnswer,
   type EndpointConfig,
   type ClassifierRequest,
@@ -22,6 +23,7 @@ import {
 import { classifierLines } from "../dashboard-v2/components/desk-settings";
 import { setCorrection } from "../desk/corrections";
 import { McSchema } from "../../../common/types/config";
+import type { EvidenceLinks } from "../desk/mail-triage";
 
 const NOW = new Date("2026-10-31T09:00:00").getTime();
 const at = (hhmm: string, dayOffset = 0): string => new Date(new Date(`2026-10-31T${hhmm}:00`).getTime() + dayOffset * 86_400_000).toISOString();
@@ -309,5 +311,125 @@ describe("Settings", () => {
     expect(classifierLines({ kind: "endpoint", host: "api.spark.switch.ch", model: "coder", keyNeeded: true, keyFound: false }).join(" "))
       .toBe("A model sorts your unread mail: coder at api.spark.switch.ch. Its API key was not found, so the Desk sorts mail by shared words until it is. Change it in the stack config.");
     expect(classifierLines(null)[0]).toMatch(/^The Desk sorts unread mail by the words/);
+  });
+});
+
+const REVIEW = event("r1", "Budget review", at("14:00", 1));
+const REVIEW_KEY = "cal:work-calendar:r1";
+const FAR = event("f1", "Offsite", at("10:00", 9));
+const LINKS: EvidenceLinks = { mail: "message://%3C{ref}%3E", note: "https://notes.example/?nodeid={ref}" };
+
+const ANNA = mail("m1", "Budget numbers", { from: { name: "Anna Muster", address: "anna@example.org" }, firstParagraph: "Here are the numbers.", url: "message://%3Cm1%3E" });
+
+
+const itemFor = (stored: MailClassification, input: Partial<MailInput> = {}) => {
+  saveClassification(db, "m1", stored, "coder", NOW);
+  const [item] = mailItems({ now: NOW, mail: [ANNA], events: [REVIEW, FAR], vips: new Set(), classified: readClassifications(db, ["m1"]), links: LINKS, onDesk: new Set([REVIEW_KEY]), ...input });
+  if (!item) throw new Error("no mail item");
+  return item;
+};
+
+const storeRaw = (details: string): void => {
+  db.query("INSERT INTO desk_mail_classes (message_id, category, meeting_key, reason, model, classified_at, details) VALUES (?, ?, ?, ?, ?, ?, ?)").run("m1", "reply", null, "Anna asks for a reply.", "coder", NOW, details);
+};
+
+describe("a mail item from a cached classification", () => {
+  it("renders as before when the entry has no triage fields", () => {
+    const item = itemFor({ category: "reply", reason: "Anna asks for a reply." });
+    expect(item.detail.summary).toBe("Here are the numbers.");
+    expect(item.detail.evidence).toBeUndefined();
+    expect(item.suggestion).toBeUndefined();
+    expect(item.actions.map((a) => [a.id, a.role])).toEqual([["open", "primary"], ["mail.unimportant", "secondary"], ["snooze", "secondary"]]);
+  });
+
+  it("shows the summary, a suggestion line and each evidence entry as a link", () => {
+    const item = itemFor({
+      category: "reply",
+      reason: "Anna asks for a reply.",
+      summary: "Anna sends the Q4 numbers and asks whether they fit the plan.",
+      suggestedAction: "reply",
+      evidence: [
+        { kind: "event", ref: REVIEW_KEY, title: "Budget review" },
+        { kind: "mail", ref: "<prev@example.org>", title: "Q3 numbers" },
+        { kind: "note", ref: "abc 1", title: "Budget plan" },
+        { kind: "event", ref: "cal:work-calendar:f1", title: "Offsite" },
+      ],
+    });
+    expect(item.detail.summary).toBe("Anna sends the Q4 numbers and asks whether they fit the plan.");
+    expect(item.suggestion).toBe("Suggested: reply");
+    expect(item.detail.evidence).toEqual([
+      { kind: "event", title: "Budget review", eventKey: REVIEW_KEY },
+      { kind: "mail", title: "Q3 numbers", url: "message://%3Cprev%40example.org%3E" },
+      { kind: "note", title: "Budget plan", url: "https://notes.example/?nodeid=abc%201" },
+      { kind: "event", title: "Offsite" },
+    ]);
+    expect(item.actions.filter((a) => a.role === "primary").map((a) => a.id)).toEqual(["open"]);
+  });
+
+  it("lists mail and note evidence without a link when no link template is configured", () => {
+    const item = itemFor({ category: "fyi", reason: "News.", evidence: [{ kind: "mail", ref: "x@example.org", title: "Earlier mail" }] }, { links: {} });
+    expect(item.detail.evidence).toEqual([{ kind: "mail", title: "Earlier mail" }]);
+  });
+
+  it("makes showing the meeting the primary action for link-meeting", () => {
+    const item = itemFor({ category: "meeting", meetingKey: REVIEW_KEY, reason: "It is about the budget review.", suggestedAction: "link-meeting" }, { trash: true });
+    expect(item.actions.map((a) => [a.id, a.role])).toEqual([["meeting.show", "primary"], ["open", "secondary"], ["mail.trash", "secondary"]]);
+    expect(item.actions[0]?.target).toBe(REVIEW_KEY);
+    expect(item.suggestion).toBeUndefined();
+  });
+
+  it("adds no Show on the meeting for a meeting that is not on the Desk", () => {
+    const item = itemFor({ category: "meeting", meetingKey: REVIEW_KEY, reason: "It is about the budget review.", suggestedAction: "link-meeting" }, { onDesk: new Set() });
+    expect(item.actions[0]).toMatchObject({ id: "open", role: "primary" });
+    expect(item.actions.some((a) => a.id === "meeting.show")).toBe(false);
+  });
+
+  it("keeps Seen, delete primary on an fyi mail that suggests link-meeting", () => {
+    const item = itemFor({ category: "fyi", meetingKey: REVIEW_KEY, reason: "For the review.", suggestedAction: "link-meeting" }, { trash: true });
+    expect(item.actions[0]).toMatchObject({ id: "mail.seen", role: "primary" });
+    expect(item.actions.some((a) => a.id === "meeting.show")).toBe(false);
+  });
+
+  it("adds no action and no line for link-meeting without a meeting on the Desk", () => {
+    const item = itemFor({ category: "reply", reason: "Anna asks.", suggestedAction: "link-meeting" });
+    expect(item.actions.some((a) => a.id === "meeting.show")).toBe(false);
+    expect(item.suggestion).toBeUndefined();
+  });
+
+  it("drops an unknown suggestion and unknown evidence kinds but keeps the rest", () => {
+    storeRaw(JSON.stringify({
+      summary: "Anna wants an answer.",
+      suggestedAction: "forward",
+      evidence: [{ kind: "chat", ref: "c1", title: "A chat" }, { kind: "note", ref: "n1", title: "Plan" }],
+    }));
+    const [item] = mailItems({ now: NOW, mail: [ANNA], events: [], vips: new Set(), classified: readClassifications(db, ["m1"]), links: LINKS });
+    expect(item?.detail.summary).toBe("Anna wants an answer.");
+    expect(item?.suggestion).toBeUndefined();
+    expect(item?.detail.evidence).toEqual([{ kind: "note", title: "Plan", url: "https://notes.example/?nodeid=n1" }]);
+  });
+
+  it("renders as before when the stored details are not readable", () => {
+    storeRaw("{not json");
+    const [item] = mailItems({ now: NOW, mail: [ANNA], events: [], vips: new Set(), classified: readClassifications(db, ["m1"]) });
+    expect(item?.detail.summary).toBe("Here are the numbers.");
+    expect(item?.why).toBe("Anna asks for a reply.");
+  });
+
+  it("ignores triage fields on a mail from a sender marked unimportant", () => {
+    const item = itemFor({ category: "reply", reason: "Anna asks.", summary: "A summary.", suggestedAction: "reply" }, { unimportant: new Set(["anna@example.org"]) });
+    expect(item.detail.summary).toBe("Here are the numbers.");
+    expect(item.suggestion).toBeUndefined();
+  });
+});
+
+describe("the evidence link config", () => {
+  const parse = (mailTemplate: string) => McSchema.safeParse({ desk: { mail: { links: { mail: mailTemplate } } } }).success;
+
+  it("needs a URL scheme, {ref}, and no script or data URL", () => {
+    expect(parse("message://%3C{ref}%3E")).toBe(true);
+    expect(parse("message://%3C%3E")).toBe(false);
+    expect(parse("javascript:alert('{ref}')")).toBe(false);
+    expect(parse("data:text/html,{ref}")).toBe(false);
+    expect(parse("{ref}")).toBe(false);
   });
 });
