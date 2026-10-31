@@ -230,8 +230,9 @@ export async function parseWithCommand(argv: string[], request: ParserRequest, r
   } catch {
     return request.routing ? invalid() : null;
   }
+  const routed = request.routing !== undefined || (typeof raw === "object" && raw !== null && "routing" in raw);
   const parsed = envelope.safeParse(raw);
-  if (!parsed.success) return request.routing ? invalid() : null;
+  if (!parsed.success) return routed ? invalid() : null;
   const answer = parsed.data;
   let routing: ParserRouting | undefined;
   if (request.routing || answer.routing !== undefined) {

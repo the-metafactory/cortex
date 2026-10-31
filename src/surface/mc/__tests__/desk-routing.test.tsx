@@ -132,6 +132,21 @@ describe("routed command bar", () => {
     }
   });
 
+  it("never restores rules or automatic capture for malformed routed output in legacy mode", async () => {
+    const db = initDatabase(":memory:");
+    try {
+      setGrant(db, "studio.capture", true, Date.now());
+      const desk = runtime();
+      if (desk.options?.ask) delete desk.options.ask.routing;
+      for (const answer of [{ kind: "capture", fields: { text: "Probe" }, reason: 123, routing: selection("codex") }, { fields: { text: "Probe" }, routing: selection("codex") }]) {
+        const res = await handleDeskAsk(request({ text: "capture Probe" }), desk, { runParser: () => Promise.resolve(JSON.stringify(answer)) }, db);
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({ routing: { reason: "invalid-output" } });
+        expect(listOpenNotes(db)).toHaveLength(0);
+      }
+    } finally { db.close(); }
+  });
+
   it("keeps a routed capture explicit even when automatic capture is granted", async () => {
     const db = initDatabase(":memory:");
     try {

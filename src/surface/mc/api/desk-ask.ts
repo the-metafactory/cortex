@@ -47,7 +47,7 @@ export async function handleDeskAsk(req: Request, runtime: DeskRuntime | undefin
   const maps = ask?.taskMaps ?? [];
   const policy = effectivePolicy(body.area ? [body.area] : [], desk.areas);
   if (policy.unknown.length) return fail(400, "Choose an area configured on this Desk.");
-  if ((body.routing || policy.policy === "local") && !ask?.routing) return fail(503, "This request needs provider restrictions. Ask the stack operator to set up routed parsing first.");
+  if ((body.routing || policy.policy === "local") && !ask?.routing) return fail(503, "This request needs provider restrictions. Ask the person who manages this stack to set up routed parsing first.");
   const permitted = ask?.routing?.permitted.filter((p) => (!body.routing || body.routing.permitted.includes(p)) && (policy.policy !== "local" || p === "pi"));
   const routing = permitted ? { permitted } : undefined;
   const writable = writableKinds(ask?.writers ?? {}, Boolean(desk.studio));
@@ -58,7 +58,7 @@ export async function handleDeskAsk(req: Request, runtime: DeskRuntime | undefin
     result = await parseWithCommand(ask.parser, request, deps.runParser ?? parserFrom(spawnWithStdin), ask.timeoutSeconds * 1000);
     if (result) via = "parser";
   }
-  if (routing && !ask?.parser.length) return fail(503, "Routed parsing has no parser command. Ask the stack operator to configure it.");
+  if (routing && !ask?.parser.length) return fail(503, "Routed parsing has no parser command. Ask the person who manages this stack to configure it.");
   result ??= parseByRules(text, { now, maps });
   const selected = "routing" in result ? result.routing : undefined;
   if (result.kind === "none") return Response.json({ ok: false, error: selected?.kind === "unavailable" ? parserRoutingNotice(selected) : selected ? `${parserRoutingNotice(selected)} ${result.reason}` : result.reason, ...(selected ? { routing: selected } : {}) }, { status: selected?.kind === "unavailable" ? 503 : 422, headers: noStore });

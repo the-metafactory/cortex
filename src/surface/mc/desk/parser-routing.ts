@@ -40,10 +40,10 @@ export function parserRoutingNotice(routing: ParserRouting): string {
   for (const fallback of routing.fallbackReasons) reasons.set(fallback.provider, fallback.reason);
   const why = [...reasons].map(([provider, cause]) => `${names[provider]} ${causes[cause] ?? "is unavailable"}`).join("; ");
   if (routing.kind === "selected") return `Answered by ${names[routing.provider]}.${why ? ` ${why}.` : ""}`;
-  if (routing.reason === "no-eligible-substrate") return `No permitted provider is available.${why ? ` ${why}.` : ""} Wait for availability or ask the stack operator to check provider permissions and usage readings.`;
-  if (routing.reason === "invalid-output") return "The parser returned an incomplete or invalid answer. Nothing was created. Try again or ask the stack operator to check the parser connection.";
+  if (routing.reason === "no-eligible-substrate") return `No permitted provider is available.${why ? ` ${why}.` : ""} Wait for availability or ask the person who manages this stack to check provider permissions and usage readings.`;
+  if (routing.reason === "invalid-output") return "The parser returned an incomplete or invalid answer. Nothing was created. Try again or ask the person who manages this stack to check the parser connection.";
   if (/deadline|timeout/i.test(routing.reason)) return "The parser took too long to answer. Nothing was created. Try a shorter request or try again later.";
-  if (/quota|all providers attempted/i.test(routing.reason)) return "The permitted providers reached their usage limits. Nothing was created. Wait for allowance to reset or ask the stack operator to check alternatives.";
-  if (/integration|selector|command|ENOENT|configuration/i.test(routing.reason)) return "The parser connection is unavailable. Nothing was created. Ask the stack operator to check the configured parser and provider connections.";
-  return "The provider could not finish this request. Nothing was created. Try again or ask the stack operator to check provider availability and the parser connection.";
+  if (/quota|all providers attempted/i.test(routing.reason)) return "The permitted providers reached their usage limits. Nothing was created. Wait for allowance to reset or ask the person who manages this stack to check alternatives.";
+  if (/integration|selector|command|ENOENT|configuration/i.test(routing.reason)) return "The parser connection is unavailable. Nothing was created. Ask the person who manages this stack to check the configured parser and provider connections.";
+  return "The provider could not finish this request. Nothing was created. Try again or ask the person who manages this stack to check provider availability and the parser connection.";
 }
