@@ -61,8 +61,6 @@ on:
     # never a public-repo issue.
     - cron: "17 4 * * 1"
 
-# Least privilege at the top; the alert job widens to exactly what the push-alert
-# reusable needs (issues:write to file the SHA-free public bypass issue).
 permissions:
   contents: read
 
@@ -99,23 +97,6 @@ jobs:
       # always run degraded.
       MF_CONFIDENTIALITY_DENYLIST: ${{ secrets.MF_CONFIDENTIALITY_DENYLIST }}
       CONF_DENYLIST_PEPPER: ${{ secrets.CONF_DENYLIST_PEPPER }}
-
-  # Detective control on the merge-bypass path (forced push / direct push /
-  # zero-approval `--admin` merge — the exact route of the incident's 3 PRs).
-  # Push-only. Alerts the private ops channel (with SHA) + files a SHA-FREE
-  # public issue. This is the "push-alert stub" of design doc §6 PR 4.
-  alert:
-    if: ${{ github.event_name == 'push' }}
-    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-push-alert.yml@9b63de2394c32e54d9e4ebd4a90dcb93423bbf55
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: read
-    secrets:
-      # Only the ops webhook — explicit, never inherit. Absent ⇒ the reusable
-      # still files the SHA-free public issue and warns that the private alert
-      # was skipped (fail-soft on the webhook, never fail-open on detection).
-      MF_OPS_DISCORD_WEBHOOK: ${{ secrets.MF_OPS_DISCORD_WEBHOOK }}
 
   # Always-green burn-in signal. Surfaces the gate's OBSERVATIONAL result and the
   # warn-only posture explicitly, so nobody mistakes a burn-in finding for a
