@@ -1,6 +1,6 @@
 import type { BoardArea } from "../../desk/studio/board";
+import { MONTHS } from "../../desk/studio/labels";
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export const hhmm = (at: Date): string => at.toTimeString().slice(0, 5);

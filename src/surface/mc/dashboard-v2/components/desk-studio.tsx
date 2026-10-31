@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { buildBoard, clip, plainQuestion, type Board, type BoardCapture, type BoardCard, type BoardFree, type BoardLoose, type BoardProposal, type BoardTarget } from "../../desk/studio/board";
-import { buildThreadPage, dayMonth, TYPE_LABEL } from "../../desk/studio/page";
-import { NO_CONTEXT, OUTCOME_LABEL, type RelatesContext } from "../../desk/studio/relates";
+import { dayMonth, outcomeLabel, TYPE_LABEL } from "../../desk/studio/labels";
+import { buildThreadPage } from "../../desk/studio/page";
+import { NO_CONTEXT, type RelatesContext } from "../../desk/studio/relates";
 import type { StudioView } from "../../desk/studio/view";
 import type { DeskView } from "../../desk/types";
 import { startOfDay } from "../../desk/time";
@@ -69,7 +70,7 @@ export function DeskStudio({ studio, thread, onOpenThread, at, day }: { studio: 
       {zoom.shown !== null
         ? page
           ? <ThreadPageView key={page.thread.slug} page={page} onBack={back} onOpen={onOpenThread} zoom={zoom} />
-          : <ThreadMissing onBack={back} />
+          : <ThreadMissing slug={zoom.shown} onBack={back} zoom={zoom} />
         : (
             <>
               <StudioBoard board={board} now={now} onOpen={onOpenThread} />
@@ -214,7 +215,7 @@ function StudioStrip({ board, onOpen }: { board: Board; onOpen: (slug: string) =
           {board.closed.map((t) => (
             <button type="button" key={t.slug} className="dst-jrow" data-open={t.slug} onClick={() => onOpen(t.slug)}>
               <b>{t.question}</b>
-              <span>{t.outcome ? OUTCOME_LABEL[t.outcome] : "Closed"}{t.closed ? ` ${t.closed}` : ""}{t.expect ? `. Expected: ${t.expect}` : ""}{t.reviewOn ? `. Review on ${t.reviewOn}.` : ""}</span>
+              <span>{outcomeLabel(t)}{t.closed ? ` ${t.closed}` : ""}{t.expect ? `. Expected: ${t.expect}` : ""}{t.reviewOn ? `. Review on ${t.reviewOn}.` : ""}</span>
             </button>
           ))}
         </section>

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { clip, plainQuestion } from "../../desk/studio/board";
 import type { IvyNote } from "../../desk/studio/format";
-import { dayMonth, type ThreadPage } from "../../desk/studio/page";
+import { dayMonth } from "../../desk/studio/labels";
+import type { ThreadPage } from "../../desk/studio/page";
 import { relationCount, type Relation } from "../../desk/studio/relates";
 import { AreaChips, ModelBadge, dayMonthTime, weekdayDayTime } from "./desk-studio-parts";
 
@@ -77,8 +78,15 @@ export function useThreadZoom(thread: string | null, root: RefObject<HTMLElement
     setShown(null);
   }, []);
   const cardAt = useCallback((slug: string) => cards.current.get(slug) ?? null, []);
-  return { shown, closing, motion, cardAt, closed };
+  return useMemo(() => ({ shown, closing, motion, cardAt, closed }), [shown, closing, cardAt, closed]);
 }
+
+function cardFrame(card: DocRect, to: DOMRect, opacity: number): Keyframe {
+  const s = card.width / to.width;
+  return { transform: `translate(${card.left - window.scrollX - to.left}px,${card.top - window.scrollY - to.top}px) scale(${s})`, borderRadius: `${16 / s}px`, opacity };
+}
+
+const PAGE_FRAME: Keyframe = { transform: "none", borderRadius: "22px", opacity: 1 };
 
 function useZoomMotion(ref: RefObject<HTMLElement | null>, slug: string, zoom: ThreadZoom | undefined): void {
   useLayoutEffect(() => {
@@ -100,11 +108,7 @@ function useZoomMotion(ref: RefObject<HTMLElement | null>, slug: string, zoom: T
       el.animate([{ opacity: 0, transform: "scale(.97)" }, { opacity: 1, transform: "none" }], { duration: 220, easing: GROW.easing });
       return;
     }
-    const s = m.from.width / to.width;
-    el.animate([
-      { transform: `translate(${m.from.left - window.scrollX - to.left}px,${m.from.top - window.scrollY - to.top}px) scale(${s})`, borderRadius: `${16 / s}px`, opacity: 0.5 },
-      { transform: "none", borderRadius: "22px", opacity: 1 },
-    ], GROW);
+    el.animate([cardFrame(m.from, to, 0.5), PAGE_FRAME], GROW);
   }, [ref, slug, zoom]);
 
   const closing = zoom?.closing ?? false;
@@ -117,10 +121,7 @@ function useZoomMotion(ref: RefObject<HTMLElement | null>, slug: string, zoom: T
     }
     const to = el.getBoundingClientRect();
     const card = zoom.cardAt(slug);
-    const s = card ? card.width / to.width : 1;
-    const frames = card
-      ? [{ transform: "none", borderRadius: "22px", opacity: 1 }, { transform: `translate(${card.left - window.scrollX - to.left}px,${card.top - window.scrollY - to.top}px) scale(${s})`, borderRadius: `${16 / s}px`, opacity: 0.3 }]
-      : [{ transform: "none", opacity: 1 }, { transform: "scale(.96)", opacity: 0 }];
+    const frames = card ? [PAGE_FRAME, cardFrame(card, to, 0.3)] : [{ transform: "none", opacity: 1 }, { transform: "scale(.96)", opacity: 0 }];
     const anim = el.animate(frames, SHRINK);
     anim.onfinish = zoom.closed;
     return () => anim.cancel();
@@ -187,15 +188,20 @@ function GhostActions({ keep }: { keep: string }) {
   );
 }
 
-function NoteCard({ note }: { note: IvyNote }) {
-  const status = note.status === "kept" ? "Kept" : note.status === "dismissed" ? "Dismissed" : null;
+function noteLabel(note: IvyNote): string {
   const kind = note.kind === "stand" ? "Proposed stand" : note.kind === "idea" ? "Idea" : "Note";
+  const status = note.status === "kept" ? " · Kept" : note.status === "dismissed" ? " · Dismissed" : "";
+  return `${kind}${status}`;
+}
+
+function NoteCard({ note, label, className, ghost, wire = true, children }: { note: IvyNote; label: string; className: string; ghost?: string; wire?: boolean; children?: ReactNode }) {
   return (
-    <div className={note.status === "dismissed" ? "dst-n note dismissed" : "dst-n note"} data-wire="out" data-key={`n-${note.at}`}>
-      <span className="lbl">{kind}{status && ` · ${status}`}<span>{dayMonthTime(new Date(note.at))} · {modelName(note.model)}</span></span>
+    <div className={className} data-ghost={ghost} data-wire={wire ? "out" : undefined} data-key={wire ? `n-${note.at}` : undefined}>
+      <span className="lbl">{label}<span>{dayMonthTime(new Date(note.at))} · {modelName(note.model)}</span></span>
       <span className="trig">{note.trigger}</span>
       {note.text}
       {note.because && <span className="why">Because: {note.because}</span>}
+      {children}
     </div>
   );
 }
@@ -282,13 +288,9 @@ export function ThreadPageView({ page, onBack, onOpen, zoom }: { page: ThreadPag
             {page.policy === "local" && <div className="dst-modelnote">A local area keeps this thread on the local model.</div>}
           </div>
           {page.standProposal && (
-            <div className="dst-n ghost" data-ghost="stand">
-              <span className="lbl">Ivy proposes a new stand<span>{dayMonthTime(new Date(page.standProposal.at))} · {modelName(page.standProposal.model)}</span></span>
-              <span className="trig">{page.standProposal.trigger}</span>
-              {page.standProposal.text}
-              {page.standProposal.because && <span className="why">Because: {page.standProposal.because}</span>}
+            <NoteCard note={page.standProposal} label="Ivy proposes a new stand" className="dst-n ghost" ghost="stand" wire={false}>
               <GhostActions keep="Keep it as my stand" />
-            </div>
+            </NoteCard>
           )}
           <Outcome page={page} />
         </div>
@@ -316,14 +318,11 @@ export function ThreadPageView({ page, onBack, onOpen, zoom }: { page: ThreadPag
           <h4 className="dst-h">Ivy's notes <span className="n">dated, append-only</span></h4>
           {page.waitsOnYou && <p className="dst-waits">Ivy waits on you: the latest note has no answer yet.</p>}
           {page.ideas.map((n) => (
-            <div key={n.at} className="dst-n ghost" data-ghost="idea" data-wire="out" data-key={`i-${n.at}`}>
-              <span className="lbl">Ivy's idea<span>{dayMonthTime(new Date(n.at))} · {modelName(n.model)}</span></span>
-              <span className="trig">{n.trigger}</span>
-              {n.text}
+            <NoteCard key={n.at} note={n} label="Ivy's idea" className="dst-n ghost" ghost="idea">
               <GhostActions keep="Keep" />
-            </div>
+            </NoteCard>
           ))}
-          {page.notes.map((n) => <NoteCard key={n.at} note={n} />)}
+          {page.notes.map((n) => <NoteCard key={n.at} note={n} label={noteLabel(n)} className={n.status === "dismissed" ? "dst-n note dismissed" : "dst-n note"} />)}
           {page.ideas.length === 0 && page.notes.length === 0 && !page.standProposal && <p className="dst-none">Ivy has not written here yet.</p>}
         </div>
       </div>
@@ -331,9 +330,11 @@ export function ThreadPageView({ page, onBack, onOpen, zoom }: { page: ThreadPag
   );
 }
 
-export function ThreadMissing({ onBack }: { onBack: () => void }) {
+export function ThreadMissing({ slug, onBack, zoom }: { slug: string; onBack: () => void; zoom?: ThreadZoom }) {
+  const ref = useRef<HTMLElement>(null);
+  useZoomMotion(ref, slug, zoom);
   return (
-    <section className="dst-page missing" aria-label="Thread">
+    <section className="dst-page missing" aria-label="Thread" ref={ref}>
       <div className="dst-zhd">
         <button type="button" className="dst-back" onClick={onBack}>‹ Board</button>
         <span>This thread is not in the Studio. Its file may have moved or been renamed.</span>

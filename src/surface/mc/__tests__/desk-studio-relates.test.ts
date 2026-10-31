@@ -120,10 +120,20 @@ describe("relates-to derivation", () => {
     expect(relationCount(r)).toBe(0);
   });
 
-  it("works without calendar context", () => {
-    const r = relatesTo(NETOPS, STUDIO);
-    expect(r.events).toEqual([]);
-    expect(r.goals).toEqual([]);
+  it("works without calendar context: no events, goals named as the material writes them", () => {
+    expect(relatesTo(NETOPS, STUDIO).events).toEqual([]);
+    expect(relatesTo(POST, STUDIO).goals.map((g) => [g.title, g.why])).toEqual([
+      ["One post a week", "The goal this thread serves, named in its material."],
+      ["Learn the cello", "The goal this thread serves, named in its material."],
+    ]);
+  });
+
+  it("drops links whose scheme is not http, https or mailto", () => {
+    const risky = thread("risky", { material: [mat("person", "Mallory", "javascript:alert(1)"), mat("goal", "G5: one post a week", "data:text/html,x")] });
+    const ctx: RelatesContext = { ...CTX, events: [event("bad", "Mallory sync", NOW + HOUR, { url: "javascript:alert(1)" })] };
+    const r = relatesTo({ ...risky, question: "Mallory sync?" }, STUDIO, ctx);
+    expect([...r.people, ...r.goals, ...r.events].map((x) => x.href)).toEqual([undefined, undefined, undefined]);
+    expect(buildThreadPage({ ...STUDIO, active: [risky] }, "risky", CTX)?.material.map((m) => m.href)).toEqual([undefined, undefined]);
   });
 });
 

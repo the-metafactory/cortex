@@ -1,13 +1,9 @@
 import type { AreaPolicy } from "../types";
 import { areaLookup, latestNote, sameSource, type BoardArea } from "./board";
 import type { IvyNote, LogEntry, MaterialLink } from "./format";
-import { NO_CONTEXT, OUTCOME_LABEL, relatesTo, type RelatesContext, type Relations } from "./relates";
+import { dayMonth, outcomeLabel, safeHref, TYPE_LABEL } from "./labels";
+import { NO_CONTEXT, relatesTo, type RelatesContext, type Relations } from "./relates";
 import type { StudioThreadView, StudioView } from "./view";
-
-export const TYPE_LABEL = { question: "Question", topic: "Topic", making: "Making" } as const;
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-export const dayMonth = (isoDate: string): string => `${Number(isoDate.slice(8, 10))} ${MONTHS[Number(isoDate.slice(5, 7)) - 1] ?? ""}`;
 
 export interface PageMaterial extends MaterialLink {
   also: { slug: string; question: string }[];
@@ -48,7 +44,7 @@ function outcomeOf(t: StudioThreadView): PageOutcome {
   if (t.state !== "closed") return { open: true, text: t.outcomeText };
   return {
     open: false,
-    label: t.outcome ? OUTCOME_LABEL[t.outcome] : "Closed",
+    label: outcomeLabel(t),
     closed: t.closed ?? null,
     expect: t.expect ?? null,
     reviewOn: t.reviewOn ?? null,
@@ -73,8 +69,9 @@ export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesCo
     where: whereLine(thread, studio.maxActive),
     areas: thread.areas.map(area),
     policy: thread.policy,
-    material: thread.material.map((m) => ({
+    material: thread.material.map(({ href, ...m }) => ({
       ...m,
+      ...(safeHref(href) ? { href } : {}),
       also: others.filter((o) => o.material.some((n) => sameSource(m, n))).map((o) => ({ slug: o.slug, question: o.question })),
     })),
     standProposal: stands[0] ?? null,

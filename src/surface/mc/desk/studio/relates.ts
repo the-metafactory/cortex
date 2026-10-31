@@ -1,6 +1,7 @@
 import type { DeskEvent, DeskGoal } from "../types";
 import { clip, normaliseLabel, sameSource } from "./board";
 import type { MaterialLink } from "./format";
+import { outcomeLabel, safeHref } from "./labels";
 import type { StudioThreadView, StudioView } from "./view";
 
 export const PERSON_KINDS = ["person", "people", "contact"] as const;
@@ -9,7 +10,6 @@ const GOAL_ID = /^(G[1-9]\d*)\b[\s:.-]*/i;
 const MIN_EVENT_TITLE = 4;
 const MAX_EVENTS = 5;
 const CALENDAR_KINDS: readonly DeskEvent["kind"][] = ["meeting", "all-day", "reminder"];
-export const OUTCOME_LABEL = { decided: "Decided", shipped: "Shipped", dropped: "Dropped" } as const;
 const GOAL_STATE: Record<DeskGoal["state"], string> = {
   "on-track": "on track",
   "at-risk": "at risk",
@@ -48,6 +48,11 @@ export const NO_CONTEXT: RelatesContext = { now: 0, events: [], goals: [] };
 
 export const relationCount = (r: Relations): number => r.threads.length + r.goals.length + r.events.length + r.people.length + r.decisions.length;
 
+const withHref = (href: string | undefined): { href?: string } => {
+  const safe = safeHref(href);
+  return safe ? { href: safe } : {};
+};
+
 const capitalise = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 
 const sharedLink = (a: StudioThreadView, b: StudioThreadView): MaterialLink | undefined => a.material.find((m) => b.material.some((n) => sameSource(m, n)));
@@ -82,7 +87,7 @@ function goalRelations(thread: StudioThreadView, goals: readonly DeskGoal[]): Re
       const goal = id ? byId.get(id) : undefined;
       const rest = m.label.replace(GOAL_ID, "").trim() || m.label;
       const why = goal ? `The goal this thread serves, ${GOAL_STATE[goal.state]}.` : "The goal this thread serves, named in its material.";
-      return { kind: "goal", key: `goal:${id ?? normaliseLabel(m.label)}`, title: goal ? goal.text : capitalise(rest), why, ...(m.href ? { href: m.href } : {}) };
+      return { kind: "goal", key: `goal:${id ?? normaliseLabel(m.label)}`, title: goal ? goal.text : capitalise(rest), why, ...withHref(m.href) };
     });
   return uniqueBy(found, (r) => r.key);
 }
@@ -97,7 +102,7 @@ function eventRelations(thread: StudioThreadView, ctx: RelatesContext): Relation
       if (title.length < MIN_EVENT_TITLE) return [];
       const named = labels.find((l) => containsWords(l.norm, title));
       const why = named ? `Named in the material: ${clip(named.label, 60)}.` : containsWords(question, title) ? "Matches the thread's question." : null;
-      return why ? [{ kind: "event", key: `event:${e.key}`, title: e.title, why, at: e.at, ...(e.url ? { href: e.url } : {}) }] : [];
+      return why ? [{ kind: "event", key: `event:${e.key}`, title: e.title, why, at: e.at, ...withHref(e.url) }] : [];
     })
     .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   return uniqueBy(found, (r) => r.key).slice(0, MAX_EVENTS);
@@ -106,7 +111,7 @@ function eventRelations(thread: StudioThreadView, ctx: RelatesContext): Relation
 function peopleRelations(thread: StudioThreadView): Relation[] {
   const found = thread.material
     .filter((m) => (PERSON_KINDS as readonly string[]).includes(m.kind.toLowerCase()))
-    .map((m): Relation => ({ kind: "person", key: `person:${normaliseLabel(m.label)}`, title: m.label, why: "Named in the thread's material.", ...(m.href ? { href: m.href } : {}) }));
+    .map((m): Relation => ({ kind: "person", key: `person:${normaliseLabel(m.label)}`, title: m.label, why: "Named in the thread's material.", ...withHref(m.href) }));
   return uniqueBy(found, (r) => r.key);
 }
 
@@ -119,7 +124,7 @@ function decisionRelations(thread: StudioThreadView, studio: StudioView): Relati
       const area = hit ? undefined : c.areas.find((a) => thread.areas.includes(a));
       if (!hit && area === undefined) return [];
       const via = hit ? `Shares a source: ${hit.label}.` : `Same area: ${areaLabel.get(area ?? "") ?? area}.`;
-      const head = `${c.outcome ? OUTCOME_LABEL[c.outcome] : "Closed"}${c.closed ? ` ${c.closed}` : ""}.`;
+      const head = `${outcomeLabel(c)}${c.closed ? ` ${c.closed}` : ""}.`;
       const said = c.expect ? ` Expected: ${clip(c.expect, 80)}` : c.outcomeText ? ` ${clip(c.outcomeText, 80)}` : "";
       return [{ kind: "decision", key: `decision:${c.slug}`, title: c.question, why: `${head}${said} ${via}`.replace(/\s+/g, " "), open: c.slug }];
     });
