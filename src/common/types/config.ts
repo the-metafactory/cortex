@@ -389,6 +389,20 @@ const DeskSchema = z.object({
       }),
     )
     .default([]),
+  ask: z
+    .object({
+      parser: z.array(z.string().min(1)).default([]),
+      timeoutSeconds: z.number().int().min(1).max(120).default(30),
+      writers: z
+        .object({
+          calendar: z.array(z.string().min(1)).min(1).optional(),
+          task: z.array(z.string().min(1)).min(1).optional(),
+          goal: z.array(z.string().min(1)).min(1).optional(),
+        })
+        .default({}),
+      taskMaps: z.array(z.object({ ref: z.string().regex(/^[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/), label: z.string().min(1) })).default([]),
+    })
+    .default({ parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }),
 });
 const DESK_DEFAULTS = DeskSchema.parse({});
 

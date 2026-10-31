@@ -4955,6 +4955,7 @@ export async function startCortex(
           },
           areas: config.mc.desk.areas,
           sources: config.mc.desk.sources,
+          ask: config.mc.desk.ask,
         },
         configPath: config.mc.configPath || undefined,
         dbPath,

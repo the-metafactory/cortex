@@ -67,6 +67,8 @@ import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
 import { handleGetDesk } from "./api/desk";
 import { handleDeskVips } from "./api/desk-vips";
 import { handleDeskAction } from "./api/desk-action";
+import { handleDeskAsk, handleDeskCreate, handleDeskNoteDone } from "./api/desk-ask";
+import { RecentCalendarWrites } from "./desk/create";
 import { HandledLedger } from "./desk/actions";
 import type { DeskOptions, DeskRuntime } from "./desk/compose";
 import { SourceCache } from "./desk/sources/command";
@@ -161,6 +163,7 @@ export function startServer(
   const wsRegistry = new WsClientRegistry();
   const deskSourceCache = new SourceCache();
   const deskLedger = new HandledLedger();
+  const deskRecentWrites = new RecentCalendarWrites();
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
@@ -282,7 +285,7 @@ export function startServer(
           stepUpSecretPath,
           authorizer,
           options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined,
-          { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger },
+          { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites },
         );
       }
 
@@ -443,6 +446,12 @@ async function handleApi(
   if (pathname === "/api/desk/action") return handleDeskAction(req, desk);
 
   if (pathname === "/api/desk/vips") return handleDeskVips(req, url, db);
+
+  if (pathname === "/api/desk/ask") return handleDeskAsk(req, desk);
+
+  if (pathname === "/api/desk/create") return handleDeskCreate(req, db, desk);
+
+  if (pathname === "/api/desk/notes/done") return handleDeskNoteDone(req, db);
 
   if (pathname === "/api/vigil/subjects") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);

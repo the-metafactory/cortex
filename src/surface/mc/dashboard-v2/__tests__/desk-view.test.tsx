@@ -2,6 +2,9 @@ import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ActionButton, DeskBody, DeskView, RestGroups } from "../components/desk-view";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
+import { ProposalCard } from "../components/desk-proposal";
+import { askDesk, createFromProposal } from "../lib/desk-ask";
+import type { DeskProposal } from "../../desk/ask";
 import { openGroup, selectItems } from "../../desk/present";
 
 const NOW = Date.parse("2026-10-30T13:16:00.000Z");
@@ -34,6 +37,8 @@ const view: DeskViewModel = {
   systems: [],
   ahead: [],
   vips: [],
+  notes: [],
+  ask: { kinds: ["reminder", "note"], maps: [] },
   sources: [{ id: "vigil", ok: true }],
 };
 
@@ -159,5 +164,47 @@ describe("ActionButton while an action is in flight", () => {
     const idle = renderToStaticMarkup(<ActionButton action={approve} onRun={() => {}} sending={null} />);
     expect(idle).not.toContain("disabled");
     expect(idle).toContain(">Approve</button>");
+  });
+});
+
+describe("the command bar", () => {
+  const card = (p: Partial<DeskProposal>) => renderToStaticMarkup(
+    <ProposalCard proposal={{ kind: "reminder", label: "Reminder", fields: { text: "Call Ada" }, via: "rules", ...p }} said="remind me to call Ada" maps={[]} now={NOW} busy={false}
+      onConfirm={() => {}} onCancel={() => {}} onGoto={() => {}} onFieldsChange={() => {}} />,
+  );
+
+  it("shows a pre-filled card that says nothing happens until confirmed", () => {
+    const html = card({ fields: { text: "Call Ada", due: new Date(NOW + 3_600_000).toISOString() }, at: NOW + 3_600_000 });
+    expect(html).toContain("Nothing happens until you confirm.");
+    expect(html).toContain("Call Ada");
+    expect(html).toContain("Lands on the timeline");
+    expect(html).not.toMatch(/<button[^>]*disabled[^>]*>Confirm/);
+  });
+
+  it("keeps Confirm off until the time is set, and opens the fields to set it", () => {
+    const html = card({ problem: "When should I remind you?" });
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Confirm/);
+    expect(html).toContain("When should I remind you?");
+    expect(html).toContain('type="datetime-local"');
+  });
+
+  it("says a kind this stack cannot write will not be created", () => {
+    const html = card({ kind: "goal", label: "Goal draft", fields: { wording: "Run" }, problem: "Goal drafts are not set up on this stack.", unwritable: true });
+    expect(html).toContain("Goal drafts are not set up on this stack. Nothing will be created.");
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>Confirm/);
+    expect(html).not.toContain(">Edit<");
+  });
+
+  it("shows notes under Keep in mind", () => {
+    const html = renderToStaticMarkup(<DeskBody view={{ ...view, notes: [{ id: 1, text: "Boiler code 4711", createdAt: NOW }] }} error={null} onOpenMissionControl={() => {}} />);
+    expect(html).toContain("Keep in mind");
+    expect(html).toContain("Boiler code 4711");
+  });
+
+  it("turns server answers into one line and never throws", async () => {
+    const answering = (status: number, body: unknown) => async () => new Response(JSON.stringify(body), { status });
+    expect(await askDesk("x", answering(422, { ok: false, error: "I could not tell." }))).toEqual({ ok: false, text: "I could not tell." });
+    expect(await createFromProposal("req-1", "note", { text: "x" }, answering(200, { ok: true, message: "Noted." }))).toEqual({ ok: true, text: "Noted." });
+    expect(await createFromProposal("req-1", "note", { text: "x" }, async () => { throw new Error("offline"); })).toEqual({ ok: false, text: "Mission Control did not answer: offline" });
   });
 });

@@ -1,14 +1,10 @@
-/**
- * The Desk (cortex#2770): Mission Control's landing page for the stack's principal.
- *
- * Layout from the chosen prototype "The Day, clean": a briefing, today's timeline with a Now
- * line, the ranked items that need the principal pinned at Now, and a margin with agents,
- * the folded rest, goals and systems. Raw identifiers appear only in the detail panel.
- */
-
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction } from "../lib/desk-action";
+import { askDesk, createFromProposal } from "../lib/desk-ask";
+import { ProposalCard, proposalTitle } from "./desk-proposal";
+import { proposalTime, type DeskProposal } from "../../desk/ask";
+import { DAY_MS, startOfDay } from "../../desk/time";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
 import { ALL_AREAS, briefing, canSee, clock, openGroup, selectItems, URGENCY_LABEL } from "../../desk/present";
@@ -50,6 +46,11 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   const [note, setNote] = useState<string | null>(null);
   const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map());
   const inFlight = useRef(new Set<string>());
+  const [askText, setAskText] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [proposal, setProposal] = useState<{ p: DeskProposal; said: string; requestId: string; fields: Record<string, unknown> } | null>(null);
+  const [creating, setCreating] = useState(false);
+  const askInput = useRef<HTMLInputElement>(null);
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
   const group = groupKind ? openGroup(selection, groupKind) : null;
@@ -62,9 +63,14 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   const pastAll = timed.filter((e) => e.at <= view.generatedAt && inArea(e));
   const stopped = pastAll.filter((e) => e.kind === "agent-stop");
   const past = pastAll.filter((e) => e.kind !== "agent-stop");
-  const later = timed.filter((e) => e.at > view.generatedAt && inArea(e));
-  const nextMeeting = later.find((e) => e.kind === "meeting");
-  const ahead = view.ahead.filter(inArea);
+  const ghost = proposal ? ghostEvent({ ...proposal.p, fields: proposal.fields }) : null;
+  const upcomingGhost = ghost !== null && ghost.at > view.generatedAt ? ghost : null;
+  const ghostToday = upcomingGhost !== null && upcomingGhost.at < startOfDay(view.generatedAt) + DAY_MS;
+  const withGhost = (list: DeskEvent[], include: boolean): DeskEvent[] => (upcomingGhost && include ? [...list, upcomingGhost].sort((a, b) => a.at - b.at) : list);
+  const laterReal = timed.filter((e) => e.at > view.generatedAt && inArea(e));
+  const nextMeeting = laterReal.find((e) => e.kind === "meeting");
+  const later = withGhost(laterReal, ghostToday);
+  const ahead = withGhost(view.ahead.filter(inArea), !ghostToday);
 
   useEffect(() => {
     if (!detail) return;
@@ -76,6 +82,53 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   }, [detail]);
 
   useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        askInput.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const ask = async (): Promise<void> => {
+    const text = askText.trim();
+    if (!text || asking) return;
+    setAsking(true);
+    const result = await askDesk(text);
+    setAsking(false);
+    if (!result.ok) {
+      setNote(result.text);
+      return;
+    }
+    setGroupKind(null);
+    setProposal({ p: result.proposal, said: text, requestId: crypto.randomUUID(), fields: result.proposal.fields });
+    setAskText("");
+  };
+
+  const confirm = async (fields: Record<string, unknown>): Promise<void> => {
+    if (!proposal || creating) return;
+    setCreating(true);
+    const result = await createFromProposal(proposal.requestId, proposal.p.kind, fields);
+    setCreating(false);
+    setNote(result.text);
+    if (!result.ok && !result.uncertain) return;
+    setProposal(null);
+    onChanged();
+  };
+
+  const doneNote = async (id: string, itemKey: string | null): Promise<void> => {
+    try {
+      await postJson("/api/desk/notes/done", { id: Number(id) });
+      if (itemKey) setSnoozed((s) => new Set(s).add(itemKey));
+      onChanged();
+    } catch {
+      setNote("Could not mark that done.");
+    }
+  };
+
+  useEffect(() => {
     if (!note) return;
     const t = setTimeout(() => setNote(null), 3500);
     return () => clearTimeout(t);
@@ -85,6 +138,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
     if (a.id === "detail") setDetail(item);
     else if (a.id === "snooze") setSnoozed((s) => new Set(s).add(item.key));
     else if (a.id === "vip.add" && a.target) void addVip(a.target, item.title.split(" wrote:")[0] ?? null);
+    else if (a.id === "reminder.done" && a.target) {
+      setDetail((d) => (d?.key === item.key ? null : d));
+      void doneNote(a.target, item.key);
+    }
     else if (a.id.startsWith("ranger.") && a.wired) void send(item, a);
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
@@ -161,11 +218,20 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
                 className="desk-ask"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  setNote("Asking Ivy arrives with the command bar slice.");
+                  void ask();
                 }}
               >
                 <span className="desk-ask-lead">Ivy,</span>
-                <input className="desk-input" aria-label="Ask Ivy" placeholder="remind me…, draft a reply…, what needs me?" />
+                <input
+                  ref={askInput}
+                  className="desk-input"
+                  aria-label="Ask Ivy"
+                  placeholder="remind me…, note…, ask an agent to…, schedule…"
+                  value={askText}
+                  disabled={asking}
+                  onChange={(e) => setAskText(e.target.value)}
+                />
+                {asking ? <span className="desk-ask-busy" role="status">Thinking…</span> : <kbd className="desk-kbd">⌘K</kbd>}
               </form>
             </div>
           </div>
@@ -246,13 +312,27 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
                 <p>{nowSubline(view, selection.needsYou.length, selection.rest.length, nextMeeting)}</p>
               </div>
             </div>
+            {proposal && (
+              <ProposalCard
+                key={proposal.requestId}
+                proposal={proposal.p}
+                said={proposal.said}
+                maps={view.ask.maps}
+                now={view.generatedAt}
+                busy={creating}
+                onConfirm={(fields) => void confirm(fields)}
+                onCancel={() => setProposal(null)}
+                onGoto={() => focusEvent(GHOST_KEY)}
+                onFieldsChange={(fields) => setProposal((cur) => (cur ? { ...cur, fields } : cur))}
+              />
+            )}
             {selection.needsYou.map(itemRow)}
           </section>
           )}
 
           {later.length > 0 && (
             <ol className="desk-tl desk-later">
-              {later.map((e) => <TimelineRow key={e.key} event={e} className={e.kind} />)}
+              {later.map((e) => <TimelineRow key={e.key} event={e} className={e.key === GHOST_KEY ? "ghost" : e.kind} />)}
             </ol>
           )}
 
@@ -294,6 +374,20 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
               <ul className="desk-goals">
                 {view.goals.map((g) => (
                   <li key={g.id}><span>{g.text}</span><span className={`desk-st ${g.state}`}>{g.state.replace("-", " ")}</span></li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {view.notes.length > 0 && (
+            <section className="desk-msec">
+              <h3 className="desk-mh">Keep in mind</h3>
+              <ul className="desk-vips desk-notes">
+                {view.notes.map((n) => (
+                  <li key={n.id}>
+                    <span>{n.text}</span>
+                    <button type="button" aria-label={`Put away "${n.text}"`} title="Put away" onClick={() => void doneNote(String(n.id), null)}>×</button>
+                  </li>
                 ))}
               </ul>
             </section>
@@ -359,7 +453,6 @@ function DetailPanel({ item, area, onClose, onAction, sending }: { item: DeskIte
   );
 }
 
-/** The folded rest by kind; each group opens in the main list, and a second click closes it. */
 export function RestGroups({ groups, active, onOpen }: { groups: DeskFoldedGroup[]; active: DeskItemKind | null; onOpen: (kind: DeskItemKind | null) => void }) {
   return (
     <ul className="desk-sub">
@@ -372,6 +465,22 @@ export function RestGroups({ groups, active, onOpen }: { groups: DeskFoldedGroup
       ))}
     </ul>
   );
+}
+
+const GHOST_KEY = "ghost:proposal";
+
+function ghostEvent(p: DeskProposal): DeskEvent | null {
+  const { at, end } = proposalTime(p.kind, p.fields);
+  if (at === undefined) return null;
+  return {
+    key: GHOST_KEY,
+    at,
+    ...(end !== undefined ? { end } : {}),
+    title: proposalTitle(p),
+    note: `Proposed ${p.label.toLowerCase()}`,
+    area: null,
+    kind: p.kind === "calendar" ? "meeting" : "reminder",
+  };
 }
 
 function TimelineRow({ event, className }: { event: DeskEvent; className: string }) {
@@ -429,7 +538,6 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
   );
 }
 
-/** One item action. While any action on the item is in flight (`sending` names it), every button is disabled and that one says "Sending…". */
 export function ActionButton({ action, onRun, sending }: { action: DeskAction; onRun: (a: DeskAction) => void; sending: string | null }) {
   const style = action.role === "primary" ? " pri" : action.id === "snooze" ? " ghost" : "";
   const busy = sending === action.id;
@@ -468,7 +576,6 @@ function nowSubline(view: DeskViewModel, count: number, rest: number, next: Desk
   return [lead, tail].filter(Boolean).join(" ");
 }
 
-/** Web links open a tab and message:// hands off to Apple Mail; any other scheme is refused. */
 function openLink(url: string): void {
   if (/^https?:/i.test(url)) window.open(url, "_blank", "noopener");
   else if (/^message:/i.test(url)) window.location.assign(url);
@@ -487,8 +594,8 @@ function AheadStrip({ events }: { events: DeskEvent[] }) {
           <h3>{day}</h3>
           <ul>
             {list.map((e) => (
-              <li key={e.key}>
-                {e.kind === "meeting" && <time>{clock(e.at)}</time>}
+              <li key={e.key} data-event={e.key} className={e.key === GHOST_KEY ? "ghost" : undefined}>
+                {(e.kind === "meeting" || e.kind === "reminder") && <time>{clock(e.at)}</time>}
                 <span className="ttl">{e.title}</span>
               </li>
             ))}
