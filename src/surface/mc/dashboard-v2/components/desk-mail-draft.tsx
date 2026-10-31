@@ -26,7 +26,7 @@ export function ReplyDraftBox({ reply, draft, sending, onChange, onConfirm, onCa
         aria-label="Your reply"
         rows={6}
         value={draft.text}
-        placeholder="Your reply. It is saved in Drafts; nothing is sent."
+        placeholder="Your reply. It is saved in Drafts for you to send."
         onChange={(e) => onChange(e.target.value)}
       />
       {draft.note && <p className="desk-why desk-unsent" role="alert">{draft.note}</p>}

@@ -371,7 +371,9 @@ export function mailItems(input: MailInput): DeskItem[] {
     const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", quiet || showMeeting.length > 0 || replyFirst ? "secondary" : "primary", true), url: m.url }] : [];
     const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", `Always show mail from ${m.from.name?.split(" ")[0] ?? "this sender"}`, "secondary", true), target: m.from.address }];
     const reply = action("mail.draft", DRAFT_LABEL, replyFirst ? "primary" : "secondary", true);
-    const offered = [...(quiet ? [SEEN] : []), ...showMeeting, ...(replyFirst ? [reply] : []), ...open, ...(trash && !quiet ? [DELETE] : []), ...(vip || marked ? [] : [UNIMPORTANT]), ...(canDraft && !replyFirst ? [reply] : []), LATER];
+    const replyLead = replyFirst ? [reply] : [];
+    const replyTail = canDraft && !replyFirst ? [reply] : [];
+    const offered = [...(quiet ? [SEEN] : []), ...showMeeting, ...replyLead, ...open, ...(trash && !quiet ? [DELETE] : []), ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, LATER];
     const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
     if (verdict.sorted) history.push(`The mail classifier sorted it as ${verdict.sorted}.`);
     return {

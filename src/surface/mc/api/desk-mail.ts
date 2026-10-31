@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../desk/create";
-import { draftReply, findListedMail, isMailAction, markUnimportant, trashMail } from "../desk/mail-actions";
+import { draftReply, findListedMail, isMailAction, markUnimportant, trashMail, type MailActionId, type MailActionResult } from "../desk/mail-actions";
 
 const noStore = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string): Response => Response.json({ ok: false, error }, { status, headers: noStore });
@@ -26,8 +26,12 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if (!mail) return fail(409, "The Desk no longer lists this mail.");
   const now = (deps.now ?? Date.now)();
   const trash = { config: runtime.options.mailActions, ledger: runtime.ledger, run: deps.run ?? spawnWithStdin, now };
-  const result =
-    body.action === "draft" ? await draftReply(mail, String(body.body), trash) : body.action === "trash" ? await trashMail(mail, trash) : await markUnimportant(db, mail, trash);
+  const act: Record<MailActionId, () => Promise<MailActionResult>> = {
+    draft: () => draftReply(mail, String(body.body), trash),
+    trash: () => trashMail(mail, trash),
+    unimportant: () => markUnimportant(db, mail, trash),
+  };
+  const result = await act[body.action]();
   if (!result.ok) return fail(result.status, result.error);
   return Response.json({ ok: true, message: result.message }, { headers: noStore });
 }

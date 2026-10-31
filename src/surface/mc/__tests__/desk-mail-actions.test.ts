@@ -171,7 +171,7 @@ describe("Draft a reply on a mail item", () => {
     const r = recorder({ code: 0, stdout: "{\"id\":\"d1@example.org\"}", stderr: "" });
     const res = await press(rt, r.run);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, message: "Reply saved in your work Drafts. Nothing was sent." });
+    expect(await res.json()).toEqual({ ok: true, message: "Reply saved in your work Drafts." });
     expect(r.calls).toEqual([{
       argv: DRAFT,
       stdin: JSON.stringify({ action: "draft", account: "work", messageId: "b1@example.org", to: "boss@example.org", subject: "Re: Budget", body: "Thanks, Friday works." }),

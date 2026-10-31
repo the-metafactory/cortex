@@ -27,8 +27,8 @@ it("posts the reply text to the mail route", async () => {
   const calls: { path: string; body: unknown }[] = [];
   const fake = async (path: string, init: RequestInit) => {
     calls.push({ path, body: JSON.parse(String(init.body)) });
-    return Response.json({ ok: true, message: "Reply saved in your work Drafts. Nothing was sent." });
+    return Response.json({ ok: true, message: "Reply saved in your work Drafts." });
   };
-  expect(await submitMailAction({ action: "draft", key: "mail:b1", body: "Friday works." }, fake)).toEqual({ ok: true, text: "Reply saved in your work Drafts. Nothing was sent." });
+  expect(await submitMailAction({ action: "draft", key: "mail:b1", body: "Friday works." }, fake)).toEqual({ ok: true, text: "Reply saved in your work Drafts." });
   expect(calls).toEqual([{ path: DESK_MAIL_PATH, body: { action: "draft", key: "mail:b1", body: "Friday works." } }]);
 });

@@ -117,7 +117,7 @@ export async function draftReply(mail: ListedMail, body: string, deps: TrashDeps
     const stdin = JSON.stringify({ action: "draft", account: mail.account, messageId: mail.id, to: mail.from.address, subject: replySubject(mail.subject), body });
     const result = await deps.run(argv, stdin, config.timeoutSeconds * 1000);
     if (result.code !== 0) return refuse(502, `The draft was not saved: ${oneLine(result.stderr || result.stdout, `the draft command exited with code ${result.code}.`)}`);
-    return { ok: true, message: `Reply saved in your ${mail.account} Drafts. Nothing was sent.` };
+    return { ok: true, message: `Reply saved in your ${mail.account} Drafts.` };
   } catch (err) {
     if (err instanceof CommandTimeout) return refuse(504, `The draft command ${err.message}. The draft may be saved; check Drafts.`);
     return refuse(502, `The draft command did not run: ${err instanceof Error ? err.message : String(err)}`);
