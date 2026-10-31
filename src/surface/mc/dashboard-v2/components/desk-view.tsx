@@ -14,7 +14,9 @@ import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
 import { useDeskLocation, useDeskStudio } from "../hooks/use-desk-studio";
 import { DeskModeSwitch, DeskStudio } from "./desk-studio";
-import { ALL_AREAS, briefing, canSee, clock, openGroup, selectItems, URGENCY_LABEL } from "../../desk/present";
+import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, openGroup, selectItems, spokenBriefing, URGENCY_LABEL } from "../../desk/present";
+import { useDeskVoice } from "../hooks/use-desk-voice";
+import { MicButton, VoicePanel } from "./desk-voice";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskView as DeskViewModel } from "../../desk/types";
 
 interface DeskViewProps {
@@ -152,10 +154,26 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       setNote(result.text);
       return;
     }
-    setGroupKind(null);
-    setProposal({ p: result.proposal, said: text, requestId: crypto.randomUUID(), fields: result.proposal.fields });
+    propose(text, result.proposal);
     setAskText("");
   };
+
+  const propose = (said: string, p: DeskProposal): void => {
+    setGroupKind(null);
+    setProposal({ p, said, requestId: crypto.randomUUID(), fields: p.fields });
+  };
+
+  const voice = useDeskVoice(view.voice, {
+    answer: async (said) => {
+      const result = await askDesk(said);
+      if (!result.ok) return result.text;
+      propose(said, result.proposal);
+      return `I drafted this ${result.proposal.label.toLowerCase()}: ${proposalTitle(result.proposal)}. Confirm it on screen.`;
+    },
+    briefing: () => spokenBriefing(view, selection, areaLabel),
+    isBriefing: isBriefingRequest,
+    typeInstead: () => askInput.current?.focus(),
+  });
 
   const confirm = async (fields: Record<string, unknown>): Promise<void> => {
     if (!proposal || creating) return;
@@ -342,8 +360,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                   disabled={asking}
                   onChange={(e) => setAskText(e.target.value)}
                 />
+                {voice.available && <MicButton phase={voice.state.phase} onStart={voice.start} onStop={voice.stop} />}
                 {asking ? <span className="desk-ask-busy" role="status">Thinking…</span> : <kbd className="desk-kbd">⌘K</kbd>}
               </form>
+              <VoicePanel state={voice.state} onDismiss={voice.dismiss} />
             </div>
           </div>
           <div className="desk-topr">

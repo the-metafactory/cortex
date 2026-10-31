@@ -46,6 +46,7 @@ const view: DeskViewModel = {
   sources: [{ id: "vigil", ok: true }],
   chime: false,
   notifications: false,
+  voice: { enabled: true, input: "browser", output: "browser" },
   autonomy: { types: [], done: [] },
   corrections: [],
 };

@@ -19,6 +19,7 @@ import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type In
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
 import { classifierStatus, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier } from "./classify";
+import { voiceView, type VoiceOptions } from "./voice";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
 export interface DeskRuntime {
@@ -56,6 +57,7 @@ export interface DeskOptions {
   mailClassifier?: ClassifierConfig;
   mailActions?: MailActionsConfig;
   mailLinks?: EvidenceLinks;
+  voice?: VoiceOptions;
 }
 
 export interface DeskVigilSource {
@@ -171,6 +173,7 @@ export async function composeDesk(
     ask: { kinds: [...writableKinds(desk.ask?.writers ?? {})], maps: desk.ask?.taskMaps ?? [] },
     systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable, ...(corrections.ok ? [] : [CORRECTIONS_UNREADABLE])],
     sources,
+    voice: voiceView(desk.voice),
     chime: rules.chime,
     notifications: rules.notifications,
     autonomy: buildAutonomy(db, done, rangerActions),
