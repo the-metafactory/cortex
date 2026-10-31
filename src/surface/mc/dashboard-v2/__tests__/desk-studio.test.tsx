@@ -1,3 +1,4 @@
+import { StudioSessionPanel, type StudioSessionControls } from "../components/desk-studio-session";
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DeskModeSwitch, DeskStudio, ortho, takeLastLook } from "../components/desk-studio";
@@ -218,4 +219,16 @@ describe("board lines", () => {
   it("draws an orthogonal path with rounded corners", () => {
     expect(ortho([[0, 0], [20, 0], [20, 20]])).toBe("M0,0 L10,0 Q20,0 20,10 L20,20");
   });
+});
+
+
+it("a recovered unanswered Studio turn can retry with an empty composer", () => {
+  const controls: StudioSessionControls = {
+    session: { id: "00000000-0000-4000-8000-000000000001", thread: "one", scope: { kind: "thread" }, original: "A paper glider?", stand: "Try it.", policy: "local", phase: { kind: "open" }, turns: [{ id: "00000000-0000-4000-8000-000000000002", text: "Try another fold.", answer: null, model: "local", policy: "local" }] },
+    recoverable: [], chosen: null, retrying: false, resumeId: null, draft: "", reword: "", pending: false, error: null,
+    setDraft: () => {}, setReword: () => {}, start: () => {}, send: async () => {}, end: async () => {}, load: async () => {},
+  };
+  const html = renderToStaticMarkup(<StudioSessionPanel controls={controls} voice={{ enabled: false, input: "browser", output: "browser" }} location="studio:one" />);
+  expect(html).toContain('<button class="desk-btn pri">Retry saved turn</button>');
+  expect(html).toContain("Retry saved turn sends the original saved text.");
 });

@@ -36,6 +36,13 @@ export function useStudioSession(onSaved?: () => void) {
   const id = useRef<string | null>(remembered()?.id ?? null);
   const latest = useRef({ session, draft, reword }); latest.current = { session, draft, reword };
 
+  const clearSession = useCallback((sessionId: string): void => {
+    try { sessionStorage.removeItem(ACTIVE); } catch { setError("The note is saved, but this browser could not remove its draft copy."); }
+    id.current = null; lastTurn.current = null; chosen.current = null;
+    setSession(null); setDraft(""); setReword("");
+    setRecoverable(xs => xs.filter(s => s.id !== sessionId));
+    saved.current?.();
+  }, []);
   const modelProposal = useRef<string | null>(null);
   const accept = useCallback((value: StudioSession): void => {
     setSession(value);
@@ -46,10 +53,10 @@ export function useStudioSession(onSaved?: () => void) {
     try {
       const reply = await post({ action: "read", id: sessionId });
       if (reply.session && reply.session.phase.kind !== "ended") { id.current = sessionId; accept(reply.session); }
-      else if (reply.ok) { sessionStorage.removeItem(ACTIVE); id.current = null; lastTurn.current = null; chosen.current = null; setSession(null); setDraft(""); setReword(""); }
+      else if (reply.ok) clearSession(sessionId);
       else setError(reply.error ?? "The session could not be read.");
     } catch { setError("The saved session could not be read. Retry when Mission Control is available."); }
-  }, [accept]);
+  }, [accept, clearSession]);
   useEffect(() => {
     if (id.current) { busy.current = true; setPending(true); void load(id.current).finally(() => { busy.current = false; setPending(false); }); }
     void post({ action: "recover", id: crypto.randomUUID() }).then(reply => setRecoverable(reply.sessions ?? [])).catch(() => setError("Saved sessions are temporarily unavailable."));
@@ -71,10 +78,11 @@ export function useStudioSession(onSaved?: () => void) {
       .finally(() => { setPending(false); busy.current = false; });
   };
   const send = async (): Promise<void> => {
-    if (!session || busy.current || !draft.trim()) return;
+    if (!session || busy.current) return;
     busy.current = true; setPending(true); setError(null);
     const unanswered = session.turns.find(t => !t.answer);
     const text = unanswered?.text ?? lastTurn.current?.text ?? draft.trim();
+    if (!text) { busy.current = false; setPending(false); return; }
     const turn = unanswered?.id ?? lastTurn.current?.id ?? crypto.randomUUID();
     lastTurn.current = { id: turn, text };
     try {
@@ -93,13 +101,11 @@ export function useStudioSession(onSaved?: () => void) {
       const reply = await post({ action: "end", id: state.session.id, outcome: selected, ...(state.draft.trim() ? { draft: state.draft.trim() } : {}) });
       if (reply.session) accept(reply.session);
       if (reply.ok) {
-        sessionStorage.removeItem(ACTIVE); id.current = null; lastTurn.current = null; chosen.current = null; setSession(null); setDraft(""); setReword("");
-        setRecoverable(xs => xs.filter(s => s.id !== state.session?.id));
-        saved.current?.();
+        clearSession(state.session.id);
       } else { if (reply.session?.phase.kind === "open") chosen.current = null; setError(reply.error ?? "The exchange is retained. Retry saving it."); }
     } catch { setError("The exchange is retained. Mission Control did not confirm its note; retry saving it."); await load(state.session.id); }
     finally { ending.current = false; busy.current = false; setPending(false); }
-  }, [accept, load]);
+  }, [accept, load, clearSession]);
   useEffect(() => {
     const leaving = (): void => {
       const state = latest.current;
@@ -137,9 +143,10 @@ export function StudioSessionPanel({ controls: c, voice, location }: { controls:
     <div className="dst-session-exchange" aria-live="polite">{session.turns.map(t => <div key={t.id}><p><b>You:</b> {t.text}</p><p><b>Ivy:</b> {t.answer?.reply ?? "Your text is saved. No answer received yet."}</p></div>)}</div>
     <form onSubmit={e => { e.preventDefault(); void c.send(); }}>
       <label>Your message<textarea aria-label="Your message" ref={input} value={c.draft} maxLength={4000} onChange={e => c.setDraft(e.target.value)} /></label>
-      <div className="dst-acts">{mic.available && <MicButton phase={mic.state.phase} onStart={mic.start} onStop={mic.stop} />}<button className="desk-btn pri" disabled={c.pending || !c.draft.trim()}>{c.retrying || session.turns.some(t => !t.answer) ? "Retry saved turn" : "Send"}</button></div>
+      <div className="dst-acts">{mic.available && <MicButton phase={mic.state.phase} onStart={mic.start} onStop={mic.stop} />}<button className="desk-btn pri" disabled={c.pending || (!c.draft.trim() && !c.retrying && !session.turns.some(t => !t.answer))}>{c.retrying || session.turns.some(t => !t.answer) ? "Retry saved turn" : "Send"}</button></div>
       {mic.state.fallback && <p role="status">{mic.state.fallback}</p>}
     </form>
+    {(c.retrying || session.turns.some(t => !t.answer)) && <p className="dst-session-policy">Retry saved turn sends the original saved text. Any edited draft stays here for your next message, or you can close and save both.</p>}
     {c.error && <p className="desk-unsent" role="alert">{c.error}</p>}
     <label>{ghost ? "Reworded idea or stand" : "Optional proposed stand"}<textarea aria-label={ghost ? "Reworded idea or stand" : "Optional proposed stand"} value={c.reword} maxLength={4000} onChange={e => c.setReword(e.target.value)} /></label>
     <div className="dst-acts">
