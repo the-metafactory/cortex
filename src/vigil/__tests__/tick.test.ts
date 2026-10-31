@@ -87,3 +87,28 @@ describe("Vigil tick loop", () => {
     expect(onError).toHaveBeenCalledTimes(1);
   });
 });
+
+
+test("waitForTick joins a delayed pass without starting another pass", async () => {
+  const scheduler = fakeTickScheduler();
+  const entered = Promise.withResolvers<undefined>();
+  const gate = Promise.withResolvers<undefined>();
+  const run = mock(async () => { entered.resolve(undefined); await gate.promise; });
+  const loop = startVigilTick({ run, schedule: scheduler.schedule });
+  await entered.promise;
+  let completed = false;
+  const waiting = loop.waitForTick().then(() => { completed = true; });
+  await Promise.resolve();
+  expect(completed).toBe(false);
+  scheduler.tick();
+  expect(run).toHaveBeenCalledTimes(1);
+  gate.resolve(undefined);
+  await waiting;
+  expect(completed).toBe(true);
+  expect(run).toHaveBeenCalledTimes(1);
+  scheduler.tick(); await loop.waitForTick();
+  expect(run).toHaveBeenCalledTimes(2);
+  await loop.stop(); await loop.waitForTick();
+  expect(scheduler.cancellations).toBe(1);
+  expect(run).toHaveBeenCalledTimes(2);
+});

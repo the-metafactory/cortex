@@ -212,19 +212,20 @@ describe("Vigil startup and delivery", () => {
     const published: import("../../bus/myelin/envelope-validator").Envelope[] = [];
     const publishOnSubject = mock(async (envelope: import("../../bus/myelin/envelope-validator").Envelope) => { published.push(envelope); });
     const handle = await startVigil({ config: config(), db, runtime: { ...h.runtime, publishOnSubject }, principal: "jc", stack: "default", now: () => ENDED_AT, schedule: scheduler.schedule });
+    if (!handle) throw new Error("Vigil did not start");
     try {
-      await flushTick();
+      await handle.waitForTick();
       expect((await handleAttentionLifecycle(db, id, "dismiss")).status).toBe(200);
       publishOnSubject.mockImplementationOnce(async (envelope) => { published.push(envelope); throw new Error("offline"); });
-      scheduler.tick(); await flushTick();
+      scheduler.tick(); await handle.waitForTick();
       expect(getAttentionItem(db, id)).toMatchObject({ status: "dismissed", resolution: "dismissed" });
       expect(db.query("SELECT published FROM vigil_attention_resolutions").get()).toEqual({ published: 0 });
-      scheduler.tick(); await flushTick();
-      scheduler.tick(); await flushTick();
+      scheduler.tick(); await handle.waitForTick();
+      scheduler.tick(); await handle.waitForTick();
       expect(publishOnSubject).toHaveBeenCalledTimes(2);
       expect(published[0]).toEqual(published[1]);
       expect(db.query("SELECT published FROM vigil_attention_resolutions").get()).toEqual({ published: 1 });
-    } finally { await handle!.stop(); }
+    } finally { await handle.stop(); }
   });
 
   test("startup sweeps with configured cadence, ticks every five minutes and cancels on stop", async () => {
