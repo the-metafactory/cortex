@@ -34,6 +34,11 @@ export interface DeskPush {
 
 export type PushResult = { status: "sent"; ref?: string } | { status: "buffered" } | { status: "failed"; error: string };
 
+export interface PushOutcome {
+  key: string;
+  status: PushResult["status"];
+}
+
 export interface DeskTransport {
   id: TransportId;
   send(push: DeskPush): Promise<PushResult>;
@@ -146,9 +151,9 @@ export async function pushInterrupts(
   transportId: TransportId,
   transport: DeskTransport | null,
   now: number,
-): Promise<{ key: string; status: PushResult["status"] }[]> {
+): Promise<PushOutcome[]> {
   db.query("DELETE FROM desk_deliveries WHERE created_at < ?").run(now - KEEP_MS);
-  const results: { key: string; status: PushResult["status"] }[] = [];
+  const results: PushOutcome[] = [];
   if (transportId === "none") return results;
   for (const item of items) {
     if (item.interrupt?.delivery !== "pending") continue;
