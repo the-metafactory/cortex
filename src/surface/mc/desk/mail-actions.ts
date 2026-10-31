@@ -72,14 +72,25 @@ export async function trashMail(mail: ListedMail, deps: TrashDeps): Promise<Mail
   }
 }
 
-/** Puts the sender on the unimportant list and sorts this mail as bulk. A VIP is refused: VIP wins. */
-export function markUnimportant(db: Database, mail: ListedMail, now: number): MailActionResult {
+/**
+ * Puts the sender on the unimportant list, sorts this mail as bulk and moves it to Trash like "Seen, delete".
+ * A VIP is refused: VIP wins. A refused move keeps the sender marked and the item listed. Without a trash
+ * command the mail is hidden like a trashed one.
+ */
+export async function markUnimportant(db: Database, mail: ListedMail, deps: TrashDeps): Promise<MailActionResult> {
   const address = mail.from.address.toLowerCase();
   const who = mail.from.name ?? address;
   if (isVip(new Set(listVips(db).map((v) => v.address)), address)) {
     return refuse(409, `${who} is on your VIP list, and VIPs always show. Remove them there first.`);
   }
-  addSender(db, "unimportant", address, mail.from.name ?? null, now);
-  saveUnimportant(db, mail.id, now);
-  return { ok: true, message: `Mail from ${who} counts as bulk from now on. You can change this in Settings.` };
+  addSender(db, "unimportant", address, mail.from.name ?? null, deps.now);
+  saveUnimportant(db, mail.id, deps.now);
+  const marked = `Mail from ${who} will be treated as unimportant`;
+  if (!deps.config?.trash?.length) {
+    deps.ledger.add(trashKey(mail.id), deps.now);
+    return { ok: true, message: `${marked}.` };
+  }
+  const moved = await trashMail(mail, deps);
+  if (!moved.ok) return refuse(moved.status, `${marked}, but moving it to Trash failed: ${moved.error}`);
+  return { ok: true, message: `${moved.message} ${marked}.` };
 }

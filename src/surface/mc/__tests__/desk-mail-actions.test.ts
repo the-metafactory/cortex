@@ -30,6 +30,7 @@ const GITLAB = mail("g1@gitlab.example", "gitlab@gitlab.example");
 const BOSS = mail("b1@example.org", "boss@example.org", { from: { name: "Ada Boss", address: "boss@example.org" }, subject: "Budget" });
 
 const TRASH = ["/opt/adapters/bin/desk-mail-trash.ts"];
+const TRASHED_G1 = [{ argv: TRASH, stdin: JSON.stringify({ action: "trash", account: "work", messageId: "g1@gitlab.example" }), timeoutMs: 20_000 }];
 
 const DESK: DeskOptions = {
   enabled: true, displayName: "Ada", topN: 5, rangerUrl: "", areas: [],
@@ -75,7 +76,7 @@ describe("Delete on a mail item", () => {
     const res = await handleDeskMail(post({ action: "trash", key: "mail:g1@gitlab.example" }), db, rt, { run: r.run, now: () => NOW });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, message: "Moved to Trash." });
-    expect(r.calls).toEqual([{ argv: TRASH, stdin: JSON.stringify({ action: "trash", account: "work", messageId: "g1@gitlab.example" }), timeoutMs: 20_000 }]);
+    expect(r.calls).toEqual(TRASHED_G1);
     expect(await itemKeys(rt)).toEqual(["mail:b1@example.org"]);
   });
 
@@ -160,23 +161,46 @@ describe("the actions on a mail item", () => {
 });
 
 describe("Unimportant on a mail item", () => {
-  it("lists the sender, sorts this mail as bulk and ranks it low", async () => {
+  const press = (rt: DeskRuntime, run: ReturnType<typeof recorder>["run"]) =>
+    handleDeskMail(post({ action: "unimportant", key: "mail:g1@gitlab.example" }), db, rt, { run, now: () => NOW });
+
+  it("marks the sender, moves the mail to Trash like \"Seen, delete\", and the item stays gone on reload", async () => {
     const rt = await deskWith([GITLAB, BOSS]);
-    const before = (await view(rt)).items.find((i) => i.key === "mail:g1@gitlab.example");
-    const res = await handleDeskMail(post({ action: "unimportant", key: "mail:g1@gitlab.example" }), db, rt, { now: () => NOW });
-    expect(await res.json()).toEqual({ ok: true, message: "Mail from GitLab counts as bulk from now on. You can change this in Settings." });
+    const r = recorder();
+    const res = await press(rt, r.run);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, message: "Moved to Trash. Mail from GitLab will be treated as unimportant." });
     expect(listSenders(db, "unimportant").map((s) => [s.address, s.label])).toEqual([["gitlab@gitlab.example", "GitLab"]]);
     expect(storedClass("g1@gitlab.example")).toEqual({ category: "bulk", model: UNIMPORTANT_MODEL });
+    expect(r.calls).toEqual(TRASHED_G1);
+    expect(await itemKeys(rt)).toEqual(["mail:b1@example.org"]);
+  });
+
+  it("keeps the sender marked and the item listed, and says why in one line, when the trash command refuses", async () => {
+    const rt = await deskWith([GITLAB]);
+    const res = await press(rt, recorder({ code: 3, stdout: "", stderr: "The message is no longer in the work INBOX.\n" }).run);
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ ok: false, error: "Mail from GitLab will be treated as unimportant, but moving it to Trash failed: The message is no longer in the work INBOX." });
+    expect(listSenders(db, "unimportant").map((s) => s.address)).toEqual(["gitlab@gitlab.example"]);
     const after = (await view(rt)).items.find((i) => i.key === "mail:g1@gitlab.example");
     expect(after?.why).toBe("You marked mail from this sender unimportant.");
     expect(after?.actions[0]?.id).toBe("mail.seen");
-    expect(after?.actions.some((a) => a.id === "mail.unimportant")).toBe(false);
-    expect(after?.score).toBeLessThanOrEqual(before?.score ?? 0);
+  });
+
+  it("only marks the sender without a trash command, and hides the mail like a trashed one", async () => {
+    const { mailActions: _off, ...plain } = DESK;
+    const rt = await deskWith([GITLAB, BOSS], plain);
+    const r = recorder();
+    const res = await press(rt, r.run);
+    expect(await res.json()).toEqual({ ok: true, message: "Mail from GitLab will be treated as unimportant." });
+    expect(r.calls).toHaveLength(0);
+    expect(storedClass("g1@gitlab.example")).toEqual({ category: "bulk", model: UNIMPORTANT_MODEL });
+    expect(await itemKeys(rt)).toEqual(["mail:b1@example.org"]);
   });
 
   it("lets go of the bulk verdict once the sender is removed in Settings, and the model sorts the mail again", async () => {
     const rt = await deskWith([GITLAB]);
-    await handleDeskMail(post({ action: "unimportant", key: "mail:g1@gitlab.example" }), db, rt, { now: () => NOW });
+    await press(rt, recorder({ code: 1, stdout: "", stderr: "IMAP is down." }).run);
     const del = new Request("http://localhost/api/desk/unimportant?address=gitlab%40gitlab.example", { method: "DELETE" });
     expect((await handleDeskSenders(del, new URL(del.url), db, "unimportant", NOW)).status).toBe(200);
     const after = (await view(rt)).items.find((i) => i.key === "mail:g1@gitlab.example");
@@ -192,8 +216,10 @@ describe("Unimportant on a mail item", () => {
   it("refuses a VIP, because VIP wins", async () => {
     addVip(db, "@example.org", null, NOW);
     const rt = await deskWith([BOSS]);
-    const res = await handleDeskMail(post({ action: "unimportant", key: "mail:b1@example.org" }), db, rt);
+    const r = recorder();
+    const res = await handleDeskMail(post({ action: "unimportant", key: "mail:b1@example.org" }), db, rt, { run: r.run });
     expect(res.status).toBe(409);
+    expect(r.calls).toHaveLength(0);
     expect((await res.json()).error).toBe("Ada Boss is on your VIP list, and VIPs always show. Remove them there first.");
     expect(listSenders(db, "unimportant")).toEqual([]);
   });

@@ -183,7 +183,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "goal.pause" && item.goal) confirmFirst(item, a, () => void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }) }));
     else if (a.id === "mail.seen") trash(item, a);
     else if (a.id === "mail.trash") confirmFirst(item, a, () => trash(item, a));
-    else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }), keepVisible: true });
+    else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);

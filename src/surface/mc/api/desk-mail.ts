@@ -24,9 +24,8 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   const mail = findListedMail(runtime.sourceCache?.cached() ?? [], body.key);
   if (!mail) return fail(409, "The Desk no longer lists this mail.");
   const now = (deps.now ?? Date.now)();
-  const result = body.action === "trash"
-    ? await trashMail(mail, { config: runtime.options.mailActions, ledger: runtime.ledger, run: deps.run ?? spawnWithStdin, now })
-    : markUnimportant(db, mail, now);
+  const trash = { config: runtime.options.mailActions, ledger: runtime.ledger, run: deps.run ?? spawnWithStdin, now };
+  const result = body.action === "trash" ? await trashMail(mail, trash) : await markUnimportant(db, mail, trash);
   if (!result.ok) return fail(result.status, result.error);
   return Response.json({ ok: true, message: result.message }, { headers: noStore });
 }
