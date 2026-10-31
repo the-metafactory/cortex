@@ -154,6 +154,7 @@ export async function composeDesk(
     systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable, ...(corrections.ok ? [] : [CORRECTIONS_UNREADABLE])],
     sources,
     chime: rules.chime,
+    notifications: rules.notifications,
     autonomy: buildAutonomy(db, done, rangerActions),
     corrections: activeCorrections,
   };

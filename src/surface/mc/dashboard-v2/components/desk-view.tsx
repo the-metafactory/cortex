@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction, submitGoalAction } from "../lib/desk-action";
 import { chimeForNew } from "../lib/desk-chime";
+import { browserNotifyEnv, dismissHint, notifyForNew, requestNotifications, wantsHint } from "../lib/desk-notify";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
 import { ProposalCard, proposalTitle } from "./desk-proposal";
 import { DeskSettings } from "./desk-settings";
@@ -39,6 +40,7 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
   if (settings) {
     return (
       <DeskSettings
+        view={view}
         onBack={() => {
           setSettings(false);
           reload();
@@ -66,6 +68,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [proposal, setProposal] = useState<{ p: DeskProposal; said: string; requestId: string; fields: Record<string, unknown> } | null>(null);
   const [creating, setCreating] = useState(false);
   const askInput = useRef<HTMLInputElement>(null);
+  const [hint, setHint] = useState(() => wantsHint(view.notifications, browserNotifyEnv()));
+  const latest = useRef(view);
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
   const group = groupKind ? openGroup(selection, groupKind) : null;
@@ -88,7 +92,12 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const ahead = withGhost(view.ahead.filter(inArea), !ghostToday);
 
   useEffect(() => {
+    latest.current = view;
     chimeForNew(view);
+    notifyForNew(view, (key) => {
+      const found = latest.current.items.find((i) => i.key === key);
+      if (found) setDetail(found);
+    });
   }, [view]);
 
   const checking = view.items.some((i) => i.checking === true);
@@ -311,6 +320,18 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             <p><strong>{brief.greeting}</strong> {brief.lines.join(" ")}</p>
             {error && <p className="desk-stale">{error}</p>}
           </section>
+          {hint && (
+            <NotifyHint
+              onEnable={() => {
+                setHint(false);
+                void requestNotifications(view);
+              }}
+              onDismiss={() => {
+                setHint(false);
+                dismissHint(browserNotifyEnv());
+              }}
+            />
+          )}
 
           <div className="desk-h">
             Today <span className="desk-date">{new Date(view.generatedAt).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</span>
@@ -776,5 +797,15 @@ export function DoneForYou({ autonomy, onPromote }: { autonomy: DeskViewModel["a
         ))}
       </ul>
     </section>
+  );
+}
+
+export function NotifyHint({ onEnable, onDismiss }: { onEnable: () => void; onDismiss: () => void }) {
+  return (
+    <p className="desk-hint" role="note">
+      See interrupting items while this tab is in the background.
+      <button type="button" className="desk-btn ghost" onClick={onEnable}>Turn on notifications</button>
+      <button type="button" className="desk-btn ghost" onClick={onDismiss}>Not now</button>
+    </p>
   );
 }

@@ -1,30 +1,7 @@
 import type { DeskView } from "../../desk/types";
+import { freshInterrupts, loadSeen, rememberSeen, type SeenStore } from "./desk-seen";
 
-const STORE_KEY = "desk.chimed";
-const KEEP = 200;
-
-export function freshInterrupts(view: DeskView, chimed: ReadonlySet<string>): string[] {
-  if (!view.chime) return [];
-  return view.items.filter((i) => i.interrupt !== undefined && !chimed.has(i.key)).map((i) => i.key);
-}
-
-export interface ChimeStore {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-}
-
-export function loadChimed(store: ChimeStore): Set<string> {
-  try {
-    const parsed: unknown = JSON.parse(store.getItem(STORE_KEY) ?? "[]");
-    return new Set(Array.isArray(parsed) ? parsed.filter((k): k is string => typeof k === "string") : []);
-  } catch {
-    return new Set();
-  }
-}
-
-export function rememberChimed(store: ChimeStore, chimed: ReadonlySet<string>, fresh: string[]): void {
-  store.setItem(STORE_KEY, JSON.stringify([...chimed, ...fresh].slice(-KEEP)));
-}
+const CHIME_KEY = "desk.chimed";
 
 export type ChimeAudio = Pick<AudioContext, "state" | "resume" | "currentTime" | "createOscillator" | "createGain" | "destination">;
 
@@ -46,13 +23,14 @@ export function playChime(ctx: ChimeAudio): void {
 }
 
 export interface ChimeDeps {
-  store: ChimeStore;
+  store: SeenStore;
   audio: () => ChimeAudio;
   wait?: number;
 }
 
 export async function chimeIfNew(view: DeskView, deps: ChimeDeps): Promise<boolean> {
-  const chimed = loadChimed(deps.store);
+  if (!view.chime) return false;
+  const chimed = loadSeen(deps.store, CHIME_KEY);
   const fresh = freshInterrupts(view, chimed);
   if (fresh.length === 0) return false;
   const ctx = deps.audio();
@@ -61,7 +39,7 @@ export async function chimeIfNew(view: DeskView, deps: ChimeDeps): Promise<boole
     await Promise.race([ctx.resume().catch(() => undefined), timeout]);
   }
   if (ctx.state !== "running") return false;
-  rememberChimed(deps.store, chimed, fresh);
+  rememberSeen(deps.store, CHIME_KEY, chimed, fresh);
   playChime(ctx);
   return true;
 }

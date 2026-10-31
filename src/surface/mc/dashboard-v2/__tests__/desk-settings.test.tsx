@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SettingsBody } from "../components/desk-settings";
 import { changeVips } from "../lib/desk-settings";
+import { NOTIFY_LINE, type NotifyState } from "../lib/desk-notify";
 
 const noop = (): void => {};
 const added = async (): Promise<boolean> => true;
@@ -9,7 +10,7 @@ const added = async (): Promise<boolean> => true;
 describe("the Desk settings page", () => {
   it("lists the VIPs with a way to remove each and to add one", () => {
     const html = renderToStaticMarkup(
-      <SettingsBody vips={[{ address: "ada@example.org", label: "Ada" }, { address: "@example.ch", label: null }]} note={null} busy={false} onBack={noop} onAdd={added} onRemove={noop} />,
+      <SettingsBody vips={[{ address: "ada@example.org", label: "Ada" }, { address: "@example.ch", label: null }]} note={null} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} onAdd={added} onRemove={noop} />,
     );
     expect(html).toContain("<h1 class=\"desk-set-h\">Settings</h1>");
     expect(html).toContain("<h2>VIPs</h2>");
@@ -22,18 +23,29 @@ describe("the Desk settings page", () => {
   });
 
   it("says how to add the first VIP when there are none", () => {
-    const html = renderToStaticMarkup(<SettingsBody vips={[]} note={null} busy={false} onBack={noop} onAdd={added} onRemove={noop} />);
+    const html = renderToStaticMarkup(<SettingsBody vips={[]} note={null} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} onAdd={added} onRemove={noop} />);
     expect(html).toContain("No VIPs yet.");
     expect(html).not.toContain("Remove ");
   });
 
   it("shows why a change failed", () => {
-    const html = renderToStaticMarkup(<SettingsBody vips={[]} note="address must be an email address" busy={false} onBack={noop} onAdd={added} onRemove={noop} />);
+    const html = renderToStaticMarkup(<SettingsBody vips={[]} note="address must be an email address" busy={false} onBack={noop} notify="granted" onEnableNotify={noop} onAdd={added} onRemove={noop} />);
     expect(html).toContain('role="alert">address must be an email address</p>');
   });
 
+  it("offers to turn notifications on only while the browser has not been asked", () => {
+    const body = (notify: NotifyState): string => renderToStaticMarkup(<SettingsBody vips={[]} note={null} busy={false} onBack={noop} notify={notify} onEnableNotify={noop} onAdd={added} onRemove={noop} />);
+    expect(body("default")).toContain(">Turn on notifications</button>");
+    for (const state of ["granted", "denied", "insecure", "off", "unsupported"] as const) {
+      expect(body(state)).not.toContain(">Turn on notifications</button>");
+      expect(body(state)).toContain(NOTIFY_LINE[state]);
+    }
+    expect(body("insecure")).toContain("plain http");
+    expect(body("denied")).toContain("blocks notifications");
+  });
+
   it("shows the load error in place of the list when the VIPs could not be read", () => {
-    const html = renderToStaticMarkup(<SettingsBody vips={null} note="Mission Control did not answer: offline" busy={false} onBack={noop} onAdd={added} onRemove={noop} />);
+    const html = renderToStaticMarkup(<SettingsBody vips={null} note="Mission Control did not answer: offline" busy={false} onBack={noop} notify="granted" onEnableNotify={noop} onAdd={added} onRemove={noop} />);
     expect(html).toContain("Mission Control did not answer: offline");
     expect(html).not.toContain('aria-label="Add a VIP"');
   });

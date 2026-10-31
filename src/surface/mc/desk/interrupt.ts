@@ -13,6 +13,7 @@ export interface InterruptRules {
   maxAgeMinutes: number;
   everySeconds: number;
   chime: boolean;
+  notifications: boolean;
 }
 
 export const NO_INTERRUPTIONS: InterruptRules = {
@@ -23,6 +24,7 @@ export const NO_INTERRUPTIONS: InterruptRules = {
   maxAgeMinutes: 60,
   everySeconds: 60,
   chime: false,
+  notifications: false,
 };
 
 export interface DeskPush {

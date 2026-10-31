@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { changeVips, type DeskVipRow, type VipChange } from "../lib/desk-settings";
+import { browserNotifyEnv, NOTIFY_LINE, notifyState, requestNotifications, type NotifyState } from "../lib/desk-notify";
+import type { DeskView } from "../../desk/types";
 import "./desk-view.css";
 
-export function DeskSettings({ onBack }: { onBack: () => void }) {
+export function DeskSettings({ view, onBack }: { view: DeskView; onBack: () => void }) {
   const [vips, setVips] = useState<DeskVipRow[] | null>(null);
+  const [notify, setNotify] = useState<NotifyState>(() => notifyState(view.notifications, browserNotifyEnv()));
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -30,6 +33,12 @@ export function DeskSettings({ onBack }: { onBack: () => void }) {
       note={note}
       busy={busy}
       onBack={onBack}
+      notify={notify}
+      onEnableNotify={() => {
+        void requestNotifications(view).then((state) => {
+          if (state) setNotify(state);
+        });
+      }}
       onAdd={(address) => apply({ op: "add", address })}
       onRemove={(address) => void apply({ op: "remove", address })}
     />
@@ -41,11 +50,13 @@ export interface SettingsBodyProps {
   note: string | null;
   busy: boolean;
   onBack: () => void;
+  notify: NotifyState;
+  onEnableNotify: () => void;
   onAdd: (address: string) => Promise<boolean>;
   onRemove: (address: string) => void;
 }
 
-export function SettingsBody({ vips, note, busy, onBack, onAdd, onRemove }: SettingsBodyProps) {
+export function SettingsBody({ vips, note, busy, onBack, notify, onEnableNotify, onAdd, onRemove }: SettingsBodyProps) {
   const [draft, setDraft] = useState("");
   return (
     <div className="desk desk-settings">
@@ -102,6 +113,12 @@ export function SettingsBody({ vips, note, busy, onBack, onAdd, onRemove }: Sett
               {note && <p className="desk-set-err" role="alert">{note}</p>}
             </>
           )}
+        </section>
+
+        <section className="desk-set-card" aria-label="Notifications">
+          <h2>Notifications</h2>
+          <p className="desk-set-sub">{NOTIFY_LINE[notify]}</p>
+          {notify === "default" && <button type="button" className="desk-btn pri" onClick={onEnableNotify}>Turn on notifications</button>}
         </section>
       </main>
     </div>

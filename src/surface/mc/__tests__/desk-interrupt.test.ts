@@ -11,7 +11,8 @@ import { addNote } from "../desk/notes";
 import { briefing, selectItems } from "../desk/present";
 import { SourceCache, type CommandRunner } from "../desk/sources/command";
 import type { RangerState } from "../desk/sources/ranger";
-import { chimeIfNew, freshInterrupts, loadChimed, rememberChimed, type ChimeAudio } from "../dashboard-v2/lib/desk-chime";
+import { chimeIfNew, type ChimeAudio } from "../dashboard-v2/lib/desk-chime";
+import { freshInterrupts, loadSeen, rememberSeen } from "../dashboard-v2/lib/desk-seen";
 import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,7 +20,7 @@ import { join } from "node:path";
 const NOW = Date.parse("2026-10-31T09:00:00.000Z");
 const MIN = 60_000;
 
-const RULES: InterruptRules = { transport: "discord", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true };
+const RULES: InterruptRules = { transport: "discord", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true, notifications: true };
 
 const desk = (rules: InterruptRules = RULES, rangerUrl = ""): DeskOptions => ({
   enabled: true,
@@ -179,11 +180,14 @@ describe("Desk interruptions", () => {
     const { view } = await tick(new FakeTransport(), NOW);
     const store = new Map<string, string>();
     const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
-    const fresh = freshInterrupts(view, loadChimed(storage));
+    const fresh = freshInterrupts(view, loadSeen(storage, "desk.chimed"));
     expect(fresh).toEqual([`meeting:cal:cal:e1@${NOW + 10 * MIN}`]);
-    rememberChimed(storage, loadChimed(storage), fresh);
-    expect(freshInterrupts(view, loadChimed(storage))).toEqual([]);
-    expect(freshInterrupts({ ...view, chime: false }, new Set())).toEqual([]);
+    rememberSeen(storage, "desk.chimed", loadSeen(storage, "desk.chimed"), fresh);
+    expect(freshInterrupts(view, loadSeen(storage, "desk.chimed"))).toEqual([]);
+    const silent = new Map<string, string>();
+    const running = { state: "running" } as unknown as ChimeAudio;
+    expect(await chimeIfNew({ ...view, chime: false }, { store: { getItem: (k) => silent.get(k) ?? null, setItem: (k, v) => void silent.set(k, v) }, audio: () => running })).toBe(false);
+    expect(silent.size).toBe(0);
   });
 
   it("plays the chime through Web Audio, and keeps the item unchimed while the browser holds audio back", async () => {
