@@ -237,20 +237,19 @@ export interface DeskProposal {
   via: "parser" | "rules";
 }
 
+function problemFor(kind: AskKind, fields: Record<string, unknown>, at: number | undefined, writable: ReadonlySet<AskKind>): string | undefined {
+  if (!writable.has(kind)) return notSetUp(kind);
+  const checked = validateCard(kind, fields);
+  if (typeof checked !== "string") return undefined;
+  if (kind === "reminder" && at === undefined) return "When should I remind you?";
+  if (kind === "calendar" && at === undefined) return "When is it?";
+  if (kind === "task" && !fields.map) return "Which map should the task go on? None is set up.";
+  return checked;
+}
+
 export function toProposal(kind: AskKind, fields: Record<string, unknown>, writable: ReadonlySet<AskKind>, via: DeskProposal["via"]): DeskProposal {
   const { at, end } = proposalTime(kind, fields);
-  const checked = validateCard(kind, fields);
-  const problem = !writable.has(kind)
-    ? notSetUp(kind)
-    : typeof checked === "string"
-      ? kind === "reminder" && at === undefined
-        ? "When should I remind you?"
-        : kind === "calendar" && at === undefined
-          ? "When is it?"
-          : kind === "task" && !fields.map
-            ? "Which map should the task go on? None is set up."
-            : checked
-      : undefined;
+  const problem = problemFor(kind, fields, at, writable);
   return {
     kind,
     label: KIND_LABEL[kind],

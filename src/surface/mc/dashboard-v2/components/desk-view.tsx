@@ -4,6 +4,7 @@ import { submitDeskAction } from "../lib/desk-action";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
 import { ProposalCard, proposalTitle } from "./desk-proposal";
 import { proposalTime, type DeskProposal } from "../../desk/ask";
+import { DAY_MS, startOfDay } from "../../desk/time";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
 import { ALL_AREAS, briefing, canSee, clock, openGroup, selectItems, URGENCY_LABEL } from "../../desk/present";
@@ -63,11 +64,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   const stopped = pastAll.filter((e) => e.kind === "agent-stop");
   const past = pastAll.filter((e) => e.kind !== "agent-stop");
   const ghost = proposal ? ghostEvent({ ...proposal.p, fields: proposal.fields }) : null;
-  const ghostToday = ghost !== null && ghost.at < startOfNextDay(view.generatedAt) && ghost.at >= startOfNextDay(view.generatedAt) - 86_400_000;
+  const upcomingGhost = ghost !== null && ghost.at > view.generatedAt ? ghost : null;
+  const ghostToday = upcomingGhost !== null && upcomingGhost.at < startOfDay(view.generatedAt) + DAY_MS;
+  const withGhost = (list: DeskEvent[], include: boolean): DeskEvent[] => (upcomingGhost && include ? [...list, upcomingGhost].sort((a, b) => a.at - b.at) : list);
   const laterReal = timed.filter((e) => e.at > view.generatedAt && inArea(e));
   const nextMeeting = laterReal.find((e) => e.kind === "meeting");
-  const later = ghost && ghostToday && ghost.at > view.generatedAt ? [...laterReal, ghost].sort((a, b) => a.at - b.at) : laterReal;
-  const ahead = ghost && !ghostToday && ghost.at > view.generatedAt ? [...view.ahead.filter(inArea), ghost].sort((a, b) => a.at - b.at) : view.ahead.filter(inArea);
+  const later = withGhost(laterReal, ghostToday);
+  const ahead = withGhost(view.ahead.filter(inArea), !ghostToday);
 
   useEffect(() => {
     if (!detail) return;
@@ -479,12 +482,6 @@ function ghostEvent(p: DeskProposal): DeskEvent | null {
     kind: p.kind === "calendar" ? "meeting" : "reminder",
   };
 }
-
-const startOfNextDay = (now: number): number => {
-  const d = new Date(now);
-  d.setHours(24, 0, 0, 0);
-  return d.getTime();
-};
 
 function TimelineRow({ event, className }: { event: DeskEvent; className: string }) {
   return (
