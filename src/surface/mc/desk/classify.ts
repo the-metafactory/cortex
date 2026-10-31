@@ -1,10 +1,11 @@
 import type { Database } from "bun:sqlite";
 import { basename } from "node:path";
 import { z } from "zod";
+import { CLASSIFIER_FORM_ERROR } from "../../../common/types/config";
 import { oneLine } from "./actions";
 import { CommandTimeout, runCommand, type CommandResult } from "./spawn";
 import type { SourceEvent, SourceMail } from "./sources/command";
-import type { DeskMailClassifier } from "./types";
+import type { DeskCorrection, DeskMailClassifier } from "./types";
 import { DAY_MS } from "./time";
 import { isUnimportant } from "./vips";
 
@@ -55,17 +56,12 @@ export function toClassifierConfig(input: ClassifierConfigInput): ClassifierConf
   const { baseUrl, model, command, caFile, ...common } = input;
   if (command?.length) return { ...common, command };
   if (baseUrl && model) return { ...common, baseUrl, model, ...(caFile ? { caFile } : {}) };
-  throw new Error("mc.desk.mail.classifier: set either command, or baseUrl and model");
+  throw new Error(CLASSIFIER_FORM_ERROR);
 }
 
 const isCommand = (config: ClassifierConfig): config is CommandConfig => "command" in config;
 
-export interface ClassifierCorrection {
-  kind: string;
-  source: string;
-  mode: string;
-  label: string;
-}
+export type ClassifierCorrection = Pick<DeskCorrection, "kind" | "source" | "mode" | "label">;
 
 export interface ClassifierRequest {
   mail: { id: string; from: SourceMail["from"]; subject: string; firstParagraph: string; receivedAt: string; account?: string };

@@ -373,6 +373,11 @@ const DeskInterruptionsSchema = z.object({
   notifications: z.boolean().default(true),
 });
 
+export const CLASSIFIER_FORM_ERROR = "mc.desk.mail.classifier: set either command, or baseUrl and model";
+
+const hasOneClassifierForm = (c: { baseUrl?: string; model?: string; command?: string[] }): boolean =>
+  c.command ? !c.baseUrl && !c.model : Boolean(c.baseUrl && c.model);
+
 const DeskSchema = z.object({
   enabled: z.boolean().default(true),
   displayName: z.string().default(""),
@@ -433,7 +438,7 @@ const DeskSchema = z.object({
           maxPerPass: z.number().int().min(1).max(100).default(10),
         })
         .refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.mail.classifier: set apiKeyEnv or apiKeyFile, not both")
-        .refine((c) => (c.command ? !c.baseUrl && !c.model : Boolean(c.baseUrl && c.model)), "mc.desk.mail.classifier: set either command, or baseUrl and model")
+        .refine(hasOneClassifierForm, CLASSIFIER_FORM_ERROR)
         .refine((c) => !(c.command && c.caFile), "mc.desk.mail.classifier.caFile belongs to the endpoint form; pass a CA to the command in its argv")
         .optional(),
       actions: z

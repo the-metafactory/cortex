@@ -3,6 +3,7 @@ import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
 import type { SourceMail } from "../desk/sources/command";
 import { runCommand } from "../desk/spawn";
+import { listCorrections, setCorrection } from "../desk/corrections";
 import {
   CLASSIFIER_KEY_ENV,
   commandClassifier,
@@ -12,6 +13,7 @@ import {
   toClassifierConfig,
   validateAnswer,
   type CommandConfig,
+  type ClassifierCorrection,
   type ClassifierRequest,
   type CommandRunner,
   type MailClassification,
@@ -137,7 +139,7 @@ describe("a pass through the command", () => {
       seen.push(req);
       return { category: "meeting", meetingKey: KUNDEN_KEY, reason: "It sets the agenda.", summary: "Ada sends the agenda.", suggestedAction: "link-meeting", evidence: EVIDENCE };
     }, quiet);
-    const corrections = [{ kind: "mail", source: "work-mail", mode: "less", label: "Mail, from work-mail" }];
+    const corrections: ClassifierCorrection[] = [{ kind: "mail", source: "work-mail", mode: "less", label: "Mail, from work-mail" }];
     await c.kick(db, { now: NOW, mail: [mail("m1")], events: [KUNDEN], vips: [], corrections });
     expect(seen[0]?.mail.account).toBe("work");
     expect(seen[0]?.corrections).toEqual(corrections);
@@ -150,6 +152,15 @@ describe("a pass through the command", () => {
     const c = new MailClassifier(COMMAND, async () => ({ category: "fyi", reason: "News.", suggestedAction: "forward" }), quiet);
     expect(await c.kick(db, { now: NOW, mail: [mail("m3")], events: [], vips: [] })).toMatchObject({ classified: 0, failed: 1 });
     expect(readClassifications(db, ["m3"]).size).toBe(0);
+  });
+
+  it("sends at most the ten newest mail corrections, newest first", async () => {
+    for (let i = 0; i < 12; i += 1) setCorrection(db, "mail", `mail-${i}`, "less", NOW - (12 - i) * 1000);
+    const seen: ClassifierRequest[] = [];
+    const c = new MailClassifier(COMMAND, async (req) => { seen.push(req); return { category: "fyi", reason: "News." }; }, quiet);
+    const corrections = listCorrections(db).map(({ kind, source, mode, label }) => ({ kind, source, mode, label }));
+    await c.kick(db, { now: NOW, mail: [mail("m4")], events: [], vips: [], corrections });
+    expect(seen[0]?.corrections.map((x) => x.source)).toEqual(Array.from({ length: 10 }, (_, i) => `mail-${11 - i}`));
   });
 
   it("ignores a stored detail blob it cannot read", () => {
