@@ -4957,6 +4957,7 @@ export async function startCortex(
             bin: config.mc.desk.ranger.bin ? expandTilde(config.mc.desk.ranger.bin) : "",
             config: config.mc.desk.ranger.config ? expandTilde(config.mc.desk.ranger.config) : "",
           },
+          somaBin: config.mc.desk.soma.bin ? expandTilde(config.mc.desk.soma.bin) : "",
           areas: config.mc.desk.areas,
           ...(config.mc.desk.studio ? { studio: { dir: expandTilde(config.mc.desk.studio.dir), maxActive: config.mc.desk.studio.maxActive } } : {}),
           sources: config.mc.desk.sources,

@@ -1,8 +1,9 @@
 import type { VigilSubjectView } from "../../../vigil/subjects-view";
 import type { SourceEvent, SourceMail } from "./sources/command";
-import type { RangerMap, RangerMapNode, RangerState } from "./sources/ranger";
+import type { RangerMap, RangerMapNode, RangerNeedsYou, RangerState } from "./sources/ranger";
 import { rangerItemKey, rangerTitles } from "./sources/ranger";
 import { approvable, retryable } from "./actions";
+import { agentQuestion, RULING_ACTION } from "./ruling";
 import { clock, DAY_MS, startOfDay } from "./time";
 import { isUnimportant, isVip } from "./vips";
 import { eventKey, UNIMPORTANT_REASON, upcomingMeetings, type ClassifierEvent, type MailCategory, type MailClassification } from "./classify";
@@ -21,6 +22,7 @@ export interface RankInput {
   ranger: RangerState | null;
   areas: AreaRule[];
   rangerActions?: boolean;
+  rulingActions?: boolean;
   hidden?: ReadonlySet<string>;
   goalActions?: GoalActionsInput;
 }
@@ -110,7 +112,12 @@ export function rankItems(input: RankInput): DeskItem[] {
   return [...items.values()].sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
 }
 
-function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false }: RankInput, add: Add): void {
+function rulingAction(n: RangerNeedsYou, url: string | undefined, rulingActions: boolean): DeskAction {
+  if (rulingActions && retryable(n)) return action(RULING_ACTION, "Give your ruling", "primary", true);
+  return { ...action("open", "Give your ruling", "primary", url !== undefined), ...(url ? { url } : {}) };
+}
+
+function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, rulingActions = false }: RankInput, add: Add): void {
   for (const n of ranger?.needsYou ?? []) {
     const ref = `${n.repo}#${n.nodeId}`;
     const endedAt = parsedOr(n.endedAt, now);
@@ -125,13 +132,15 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false }: Rank
       links,
     };
     if (n.reason?.class === "blocked") {
+      const question = agentQuestion(n.reason.detail);
       add({
         ...base, kind: "agent-blocked",
         title: `"${n.title}" waits for your ruling.`,
         why: `The agent in ${repoName(n.repo)} cannot go on without a decision from you.`,
         score: 65 - ageDays * 2,
-        actions: [{ ...action("open", "Give your ruling", "primary", links.length > 0), ...(n.url ? { url: n.url } : {}) }, LOOK, LATER],
+        actions: [rulingAction(n, n.url, rulingActions), LOOK, LATER],
         detail,
+        ...(question ? { question } : {}),
       });
     } else {
       add({

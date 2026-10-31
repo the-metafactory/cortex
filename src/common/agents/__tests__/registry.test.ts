@@ -156,7 +156,7 @@ function cortexConfigFixture(agents: Agent[]): CortexConfig {
       transport: { mtls: "off" },
     },
     vigil: { proposal_timeout_ms: 30_000, enabled: false, soma_homes: {}, cadence: {}, result_base_url: "http://127.0.0.1:8767" },
-    mc: { enabled: false, configPath: "", dbPath: "", port: 0, sideband: "http://127.0.0.1:9092", desk: { enabled: true, displayName: "", topN: 5, ranger: { url: "", bin: "", config: "" }, areas: [], sources: [], ask: { parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }, interruptions: { transport: "none", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true, notifications: true }, mail: {}, goals: { somaBin: "", check: {} } }, server: { enabled: true }, aggregateLocalStacks: { enabled: true, dbRead: true, configRoot: "", stacks: [] } },
+    mc: { enabled: false, configPath: "", dbPath: "", port: 0, sideband: "http://127.0.0.1:9092", desk: { enabled: true, displayName: "", topN: 5, ranger: { url: "", bin: "", config: "" }, soma: { bin: "" }, areas: [], sources: [], ask: { parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }, interruptions: { transport: "none", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true, notifications: true }, mail: {}, goals: { somaBin: "", check: {} } }, server: { enabled: true }, aggregateLocalStacks: { enabled: true, dbRead: true, configRoot: "", stacks: [] } },
     cockpit: {
       enabled: false,
       docsDir: "docs",

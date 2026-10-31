@@ -11,6 +11,7 @@ import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskCorrection, DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
+import type { RulingLedger } from "./ruling";
 import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriters, type RecentCalendarWrites } from "./create";
 import { listOpenNotes, type DeskNote } from "./notes";
@@ -29,6 +30,7 @@ export interface DeskRuntime {
   goalChecks?: GoalChecks;
   goalStatuses?: GoalStatuses;
   mailClassifier?: MailClassifier;
+  rulings?: RulingLedger;
 }
 
 export interface DeskAskOptions {
@@ -44,6 +46,7 @@ export interface DeskOptions {
   topN: number;
   rangerUrl: string;
   rangerCli?: RangerCli;
+  somaBin?: string;
   areas: AreaRule[];
   studio?: StudioOptions;
   sources: DeskSourceConfig[];
@@ -135,8 +138,9 @@ export async function composeDesk(
   const rules = desk.interruptions ?? NO_INTERRUPTIONS;
 
   const rangerActions = rangerActionsReady(desk);
+  const rulingActions = rangerActions && Boolean(desk.somaBin);
   const goalActions = goalActionsFor(desk.goals, subjects, deps.goalChecks, now);
-  const ranked = rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions, hidden: filtered?.hidden, goalActions })
+  const ranked = rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions })
     .filter((item) => goalListed(goalStatuses, item.goal));
   const items = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),

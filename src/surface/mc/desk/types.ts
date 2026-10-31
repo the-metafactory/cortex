@@ -78,6 +78,7 @@ export interface DeskItem {
   correction?: DeskCorrectionMode;
   goal?: string;
   checking?: boolean;
+  question?: { condition: string | null; reason: string };
 }
 
 export interface DeskInterrupt {
