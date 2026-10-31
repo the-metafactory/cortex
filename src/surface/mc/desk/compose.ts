@@ -30,6 +30,10 @@ import type { RoutineOptions, RoutineRunner } from "./routine-command";
 import type { RoutineReadLoop } from "./routine-read";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
+import { readStudioFiles } from "./studio/read";
+import { buildStudioView } from "./studio/view";
+import { studioBriefing } from "./studio/overseer";
+
 export interface DeskRuntime {
   waitingTasks?: Pick<WaitingTasks, "read">;
   routineRead?: RoutineReadLoop;
@@ -188,10 +192,13 @@ export async function composeDesk(
   const myDay = readMyDay(db, desk, now);
   const moved = movedKeys(db);
   const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => ({ ...i, todoFingerprint: sourceIdentity(i) }));
+  const studioRead = desk.studio ? await readStudioFiles(desk.studio.dir) : null;
+  const studio = studioRead && desk.studio ? buildStudioView(studioRead.files, desk.studio, desk.areas, studioRead.problems) : null;
   return {
     ...(routines ? { routines } : {}),
     myDay,
     calendars: [...calendars.values()],
+    studioBriefing: studio ? studioBriefing([...studio.active, ...studio.parked, ...studio.closed], now) : null,
     generatedAt: now,
     displayName: desk.displayName || null,
     topN: myDay.topN,

@@ -153,6 +153,7 @@ export interface DeskView {
   voice: DeskVoice;
   autonomy: DeskAutonomy;
   corrections: DeskCorrection[];
+  studioBriefing?: string | null;
   mailClassifier?: DeskMailClassifier | null;
 }
 

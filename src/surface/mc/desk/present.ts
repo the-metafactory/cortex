@@ -47,6 +47,7 @@ function reactiveBriefing(view: DeskView, selection: DeskSelection, areaLabel: s
   else lines.push(`${count(selection.needsYou.length, "thing needs", "things need")} you${scope}, none of it due today. First: ${lowerFirst(top.title)}`);
   if (!areaLabel) lines.push(`${view.agents.line.charAt(0).toUpperCase()}${view.agents.line.slice(1)}.`);
   if (selection.rest.length > 0) lines.push(`${selection.rest.length} more can wait.`);
+  if (view.studioBriefing) lines.push(view.studioBriefing);
   return { greeting, lines };
 }
 
