@@ -4,6 +4,8 @@ import { submitDeskAction } from "../lib/desk-action";
 import { chimeForNew } from "../lib/desk-chime";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
 import { ProposalCard, proposalTitle } from "./desk-proposal";
+import { DeskSettings } from "./desk-settings";
+import { changeVips } from "../lib/desk-settings";
 import { proposalTime, type DeskProposal } from "../../desk/ask";
 import { DAY_MS, startOfDay } from "../../desk/time";
 import "./desk-view.css";
@@ -17,6 +19,7 @@ interface DeskViewProps {
 
 export function DeskView({ onOpenMissionControl }: DeskViewProps) {
   const { view, enabled, error, reload } = useDesk(true);
+  const [settings, setSettings] = useState(false);
   if (!enabled) {
     return (
       <div className="desk desk-off">
@@ -33,10 +36,20 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
       </div>
     );
   }
-  return <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} onChanged={reload} />;
+  if (settings) {
+    return (
+      <DeskSettings
+        onBack={() => {
+          setSettings(false);
+          reload();
+        }}
+      />
+    );
+  }
+  return <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} onOpenSettings={() => setSettings(true)} onChanged={reload} />;
 }
 
-export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => {} }: { view: DeskViewModel; error: string | null; onChanged?: () => void } & DeskViewProps) {
+export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = () => {}, onChanged = () => {} }: { view: DeskViewModel; error: string | null; onOpenSettings?: () => void; onChanged?: () => void } & DeskViewProps) {
   const [area, setArea] = useState(ALL_AREAS);
   const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
   const [detail, setDetail] = useState<DeskItem | null>(null);
@@ -175,13 +188,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
   };
 
   const addVip = async (address: string, label: string | null): Promise<void> => {
-    try {
-      await postJson("/api/desk/vips", { address, label });
-      setNote(`Mail from ${label ?? address} will always show from now on.`);
-      onChanged();
-    } catch {
-      setNote(`Could not add ${address} as a VIP.`);
+    const r = await changeVips({ op: "add", address, label });
+    if (!r.ok) {
+      setNote(`Could not add ${address} as a VIP: ${r.text}`);
+      return;
     }
+    setNote(`Mail from ${label ?? address} will always show from now on. You can change this in Settings.`);
+    onChanged();
   };
 
   const promote = async (action: string, on: boolean): Promise<void> => {
@@ -203,15 +216,6 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
       onChanged();
     } catch (err) {
       setNote(err instanceof Error ? err.message : "Could not change the ranking.");
-    }
-  };
-
-  const removeVip = async (address: string): Promise<void> => {
-    try {
-      await getJson(`/api/desk/vips?address=${encodeURIComponent(address)}`, { method: "DELETE" });
-      onChanged();
-    } catch {
-      setNote(`Could not remove ${address}.`);
     }
   };
 
@@ -263,16 +267,19 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
               </form>
             </div>
           </div>
-          {view.areas.length > 0 && (
-            <div className="desk-seg" role="tablist" aria-label="Area">
-              <button type="button" role="tab" aria-selected={area === ALL_AREAS} onClick={() => setArea(ALL_AREAS)}>All</button>
-              {view.areas.map((a) => (
-                <button key={a.id} type="button" role="tab" aria-selected={area === a.id} onClick={() => setArea(a.id)}>
-                  <AreaDot area={a} />{a.label}
-                </button>
-              ))}
-            </div>
-          )}
+          <div className="desk-topr">
+            {view.areas.length > 0 && (
+              <div className="desk-seg" role="tablist" aria-label="Area">
+                <button type="button" role="tab" aria-selected={area === ALL_AREAS} onClick={() => setArea(ALL_AREAS)}>All</button>
+                {view.areas.map((a) => (
+                  <button key={a.id} type="button" role="tab" aria-selected={area === a.id} onClick={() => setArea(a.id)}>
+                    <AreaDot area={a} />{a.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <button type="button" className="desk-btn ghost" onClick={onOpenSettings}>Settings</button>
+          </div>
         </div>
       </div>
 
@@ -424,8 +431,6 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
           )}
 
           <RankingSection corrections={view.corrections} onUndo={(c) => void correct(c.kind, c.source, null)} />
-
-          <VipSection vips={view.vips} onAdd={(address) => void addVip(address, null)} onRemove={(address) => void removeVip(address)} />
 
           <section className="desk-msec">
             <h3 className="desk-mh">Systems</h3>
@@ -712,33 +717,6 @@ export function DoneForYou({ autonomy, onPromote }: { autonomy: DeskViewModel["a
           </li>
         ))}
       </ul>
-    </section>
-  );
-}
-
-function VipSection({ vips, onAdd, onRemove }: { vips: DeskViewModel["vips"]; onAdd: (address: string) => void; onRemove: (address: string) => void }) {
-  const [draft, setDraft] = useState("");
-  return (
-    <section className="desk-msec">
-      <h3 className="desk-mh">VIPs</h3>
-      <ul className="desk-vips">
-        {vips.map((v) => (
-          <li key={v.address}>
-            <span>{v.label ?? v.address}</span>
-            <button type="button" aria-label={`Remove ${v.address}`} onClick={() => onRemove(v.address)}>×</button>
-          </li>
-        ))}
-      </ul>
-      <form
-        className="desk-vip-add"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (draft.trim()) onAdd(draft.trim());
-          setDraft("");
-        }}
-      >
-        <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add an address or @domain" aria-label="Add a VIP" />
-      </form>
     </section>
   );
 }
