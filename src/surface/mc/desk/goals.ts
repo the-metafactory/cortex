@@ -5,7 +5,8 @@ export type GoalActionId = (typeof GOAL_ACTIONS)[number];
 
 export const isGoalAction = (id: unknown): id is GoalActionId => GOAL_ACTIONS.includes(id as GoalActionId);
 
-export const SOMA_GOAL_ID = /^G[1-9]\d*$/;
+const GOAL_ID = String.raw`G[1-9]\d*`;
+export const SOMA_GOAL_ID = new RegExp(`^${GOAL_ID}$`);
 
 export interface GoalCheck {
   command: string[];
@@ -40,7 +41,7 @@ export function expandGoalPaths(goals: DeskGoalOptions, expand: (path: string) =
   return { somaBin: goals.somaBin ? expand(goals.somaBin) : "", check: Object.fromEntries(check) };
 }
 
-export const goalCheckFor =(goals: DeskGoalOptions | undefined, goal: string): GoalCheck | undefined =>
+export const goalCheckFor = (goals: DeskGoalOptions | undefined, goal: string): GoalCheck | undefined =>
   goals && Object.hasOwn(goals.check, goal) ? goals.check[goal] : undefined;
 
 export const CHECK_PENDING_MS = 5 * 60_000;
@@ -76,7 +77,7 @@ export class GoalChecks {
   }
 }
 
-const STATUS_LINE = /^(G[1-9]\d*)\t([a-z]+)\t/;
+const STATUS_LINE = new RegExp(String.raw`^(${GOAL_ID})\t([a-z]+)\t`);
 export const GOAL_STATUS_TTL_MS = 60_000;
 const FIRST_READ_WAIT_MS = 1500;
 

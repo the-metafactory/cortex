@@ -1,11 +1,12 @@
 import type { DeskRuntime } from "../desk/compose";
 import { oneLine } from "../desk/actions";
-import { goalCheckFor, isGoalAction, SOMA_GOAL_ID, spawnGoalCommand, type GoalRunner } from "../desk/goals";
+import { goalCheckFor, isGoalAction, SOMA_GOAL_ID, spawnGoalCommand, type GoalRunner, type GoalRunResult } from "../desk/goals";
 
 const noStore = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string): Response => Response.json({ ok: false, error }, { status, headers: noStore });
 const ok = (message: string): Response => Response.json({ ok: true, message }, { headers: noStore });
 const reason = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+const failure = (result: GoalRunResult): string => oneLine(result.stderr || result.stdout, `exit code ${result.code}`);
 
 export interface DeskGoalDeps {
   run?: GoalRunner;
@@ -36,7 +37,7 @@ export async function handleDeskGoal(req: Request, runtime: DeskRuntime | undefi
       const result = await run(check.command, check.env, check.timeoutSeconds * 1000);
       if (result.code !== 0) {
         checks.cancel(goal);
-        return fail(502, `The check failed: ${oneLine(result.stderr || result.stdout, `exit code ${result.code}`)}`);
+        return fail(502, `The check failed: ${failure(result)}`);
       }
       return ok("The check is running. The Desk shows the new reading when it arrives.");
     } catch (err) {
@@ -50,7 +51,7 @@ export async function handleDeskGoal(req: Request, runtime: DeskRuntime | undefi
   if (!SOMA_GOAL_ID.test(goal)) return fail(400, "Soma cannot pause this goal.");
   try {
     const result = await run([somaBin, "goal", "set-status", goal, "paused"], {}, 30_000);
-    if (result.code !== 0) return fail(502, `Soma did not pause the goal: ${oneLine(result.stderr || result.stdout, `exit code ${result.code}`)}`);
+    if (result.code !== 0) return fail(502, `Soma did not pause the goal: ${failure(result)}`);
   } catch (err) {
     return fail(502, `Could not run Soma: ${reason(err)}`);
   }
