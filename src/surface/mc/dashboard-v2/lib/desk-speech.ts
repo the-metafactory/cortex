@@ -204,13 +204,17 @@ export function elevenLabsInput(env: SpeechEnv): SpeechIn {
 
 export function elevenLabsOutput(env: SpeechEnv): SpeechOut {
   let playing: HTMLAudioElement | null = null;
+  let generation = 0;
   return {
     async speak(text) {
+      const mine = ++generation;
       const res = await post(env, "/api/desk/voice/speak", { headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+      const audioBlob = await res.blob();
+      if (mine !== generation) return;
       const AudioCtor = env.Audio;
       const urls = env.URL;
       if (!AudioCtor || !urls) throw new SpeechFailure(NO_SYNTHESIS);
-      const src = urls.createObjectURL(await res.blob());
+      const src = urls.createObjectURL(audioBlob);
       const audio = new AudioCtor(src);
       playing = audio;
       try {
@@ -226,6 +230,7 @@ export function elevenLabsOutput(env: SpeechEnv): SpeechOut {
       }
     },
     stop() {
+      generation++;
       playing?.pause();
     },
   };

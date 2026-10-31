@@ -112,6 +112,37 @@ describe("ElevenLabs speech output", () => {
     expect((err as SpeechFailure).line).toBe(NO_QUOTA);
   });
 
+  it("drops an answer that arrives after stop()", async () => {
+    let release: (r: Response) => void = () => undefined;
+    const played: string[] = [];
+    class FakeAudio {
+      onended: (() => void) | null = null;
+      onpause: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(readonly src: string) {}
+      async play(): Promise<void> {
+        played.push(this.src);
+        this.onended?.();
+      }
+      pause(): void {}
+    }
+    const env = {
+      fetch: (() => new Promise<Response>((resolve) => (release = resolve))) as unknown as typeof fetch,
+      Audio: FakeAudio,
+      URL: { createObjectURL: () => "blob:answer", revokeObjectURL: () => undefined },
+    } as unknown as SpeechEnv;
+    const out = elevenLabsOutput(env);
+    const speaking = out.speak("stale answer");
+    out.stop();
+    release(new Response(new Uint8Array([1]), { headers: { "content-type": "audio/mpeg" } }));
+    await speaking;
+    expect(played).toEqual([]);
+    const next = out.speak("fresh answer");
+    release(new Response(new Uint8Array([2]), { headers: { "content-type": "audio/mpeg" } }));
+    await next;
+    expect(played).toEqual(["blob:answer"]);
+  });
+
   it("is chosen per direction from the stack config", async () => {
     const env: SpeechEnv = { fetch: (async () => Promise.reject(new Error("down"))) as unknown as typeof fetch };
     const mixed = speechFor({ enabled: true, input: "browser", output: "elevenlabs" }, env);

@@ -22,6 +22,12 @@ export type DeskVoice = Omit<VoiceOptions, "elevenlabs">;
 
 export const voiceView = (v: VoiceOptions | undefined): DeskVoice => ({ enabled: v?.enabled ?? true, input: v?.input ?? "browser", output: v?.output ?? "browser" });
 
+export function resolveVoice(voice: VoiceOptions, expand: (path: string) => string): VoiceOptions {
+  const el = voice.elevenlabs;
+  if (!el?.envFile) return voice;
+  return { ...voice, elevenlabs: { ...el, envFile: expand(el.envFile) } };
+}
+
 export type VoiceResult<T> = { ok: true; value: T } | { ok: false; status: number; line: string };
 
 export type TextReader = (path: string) => Promise<string | null>;

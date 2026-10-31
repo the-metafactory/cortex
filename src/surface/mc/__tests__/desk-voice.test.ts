@@ -5,7 +5,7 @@ import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { HandledLedger } from "../desk/actions";
 import { isBriefingRequest, selectItems, spokenBriefing } from "../desk/present";
 import type { DeskItem, DeskView } from "../desk/types";
-import { envFileValue, KEY_REFUSED, NO_KEY, NO_QUOTA, readVoiceKey, UNREACHABLE, type ElevenLabsOptions } from "../desk/voice";
+import { envFileValue, KEY_REFUSED, resolveVoice, NO_KEY, NO_QUOTA, readVoiceKey, UNREACHABLE, type ElevenLabsOptions } from "../desk/voice";
 
 const ELEVEN: ElevenLabsOptions = { voiceId: "voice12345", apiKeyEnv: "ELEVENLABS_API_KEY", ttsModel: "eleven_turbo_v2_5", sttModel: "scribe_v1", timeoutSeconds: 5 };
 const DESK: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], voice: { enabled: true, input: "elevenlabs", output: "elevenlabs", elevenlabs: ELEVEN } };
@@ -29,6 +29,12 @@ describe("desk voice key", () => {
 });
 
 describe("desk voice config", () => {
+  it("expands the env file path only", () => {
+    const voice = { enabled: true, input: "browser" as const, output: "elevenlabs" as const, elevenlabs: { ...ELEVEN, envFile: "~/.claude/.env" } };
+    expect(resolveVoice(voice, (p) => p.replace("~", "/home/x")).elevenlabs?.envFile).toBe("/home/x/.claude/.env");
+    expect(resolveVoice(DESK.voice ?? voice, (p) => `X${p}`)).toBe(DESK.voice ?? voice);
+  });
+
   it("defaults to browser speech in and out", () => {
     expect(McSchema.parse({}).desk.voice).toEqual({ enabled: true, input: "browser", output: "browser" });
   });
@@ -92,6 +98,20 @@ describe("POST /api/desk/voice/transcribe", () => {
   it("refuses an oversized recording before reading it", async () => {
     const req = new Request("http://mc/api/desk/voice/transcribe", { method: "POST", headers: { "content-length": String(11 * 1024 * 1024) }, body: "x" });
     expect((await handleDeskTranscribe(req, runtime(), { readKey: key })).status).toBe(413);
+  });
+
+  it("stops reading a chunked recording once it passes the cap", async () => {
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled++;
+        controller.enqueue(new Uint8Array(4 * 1024 * 1024));
+        if (pulled > 10) controller.close();
+      },
+    });
+    const req = new Request("http://mc/api/desk/voice/transcribe", { method: "POST", body: stream });
+    expect((await handleDeskTranscribe(req, runtime(), { readKey: key })).status).toBe(413);
+    expect(pulled).toBeLessThanOrEqual(4);
   });
 
   it("refuses an empty recording", async () => {

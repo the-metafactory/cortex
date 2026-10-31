@@ -15,6 +15,31 @@ const elevenLabs = (runtime: DeskRuntime | undefined, direction: "input" | "outp
   return voice.elevenlabs;
 };
 
+const TOO_LONG = Symbol("too long");
+
+async function readCapped(req: Request, max: number): Promise<Blob | null | typeof TOO_LONG> {
+  if (Number(req.headers.get("content-length") ?? 0) > max) return TOO_LONG;
+  if (!req.body) return null;
+  const reader = req.body.getReader();
+  const chunks: BlobPart[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) {
+        await reader.cancel();
+        return TOO_LONG;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return null;
+  }
+  return new Blob(chunks, { type: req.headers.get("content-type") ?? "application/octet-stream" });
+}
+
 export async function handleDeskSpeak(req: Request, runtime: DeskRuntime | undefined, deps: ElevenLabsDeps = {}): Promise<Response> {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   const opts = elevenLabs(runtime, "output");
@@ -32,10 +57,9 @@ export async function handleDeskTranscribe(req: Request, runtime: DeskRuntime | 
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   const opts = elevenLabs(runtime, "input");
   if (opts instanceof Response) return opts;
-  if (Number(req.headers.get("content-length") ?? 0) > MAX_AUDIO_BYTES) return fail(413, "That recording is too long.");
-  const audio = await req.blob().catch(() => null);
+  const audio = await readCapped(req, MAX_AUDIO_BYTES);
+  if (audio === TOO_LONG) return fail(413, "That recording is too long.");
   if (!audio || audio.size === 0) return fail(400, "No audio arrived.");
-  if (audio.size > MAX_AUDIO_BYTES) return fail(413, "That recording is too long.");
   const r = await elevenLabsTranscribe(audio, opts, deps);
   if (!r.ok) return fail(r.status, r.line);
   return Response.json({ ok: true, text: r.value }, { headers: noStore });
