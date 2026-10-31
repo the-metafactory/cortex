@@ -86,6 +86,7 @@ export async function runAutonomy(deps: AutonomyDeps): Promise<DoneEntry[]> {
     const attemptKey = retryKey(n);
     const itemKey = rangerItemKey(`${n.repo}#${n.nodeId}`);
     if (attemptKey === null || ledger.has(attemptKey) || triedToday(done, itemKey, now)) continue;
+    if (!listGrants(db).has("ranger.retry")) break;
     const plan = planRangerAction(state, "ranger.retry", itemKey, cli);
     if (typeof plan === "string" || !ledger.claim(plan.claimKey)) continue;
     try {

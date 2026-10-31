@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { isPromotable, PROMOTABLE_LABELS, setGrant } from "../desk/autonomy";
-import { isRangerAction, oneLine, planRangerAction, spawnRanger, type RangerRunner } from "../desk/actions";
+import { isRangerAction, oneLine, planRangerAction, rangerActionsReady, spawnRanger, type RangerRunner } from "../desk/actions";
 import { readRangerState, type RangerFetch } from "../desk/sources/ranger";
 
 const noStore = { "Cache-Control": "no-store" };
@@ -55,7 +55,7 @@ export async function handleDeskAction(req: Request, runtime: DeskRuntime | unde
 export async function handleDeskAutonomy(req: Request, db: Database, runtime: DeskRuntime | undefined, now: () => number = Date.now): Promise<Response> {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   const desk = runtime?.options;
-  if (!desk?.enabled || !desk.rangerUrl || !desk.rangerCli?.bin) return fail(409, "Ranger actions are not set up on this stack.");
+  if (!rangerActionsReady(desk)) return fail(409, "Ranger actions are not set up on this stack.");
   const body = (await req.json().catch(() => null)) as { action?: unknown; on?: unknown } | null;
   if (!isPromotable(body?.action) || typeof body.on !== "boolean") return fail(400, "A promotable action and on (true or false) are required.");
   setGrant(db, body.action, body.on, now());

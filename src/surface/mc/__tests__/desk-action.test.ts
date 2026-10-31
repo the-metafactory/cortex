@@ -338,6 +338,20 @@ describe("promoting Ranger retry", () => {
     expect(item?.why).toContain("failed again");
   });
 
+  it("sends no further retry once the person stops it during a tick", async () => {
+    setGrant(db, "ranger.retry", true, NOW);
+    const state = failedNodes();
+    state.needsYou.push({ key: "example/app#1", repo: "example/app", nodeId: "13", title: "Add export", status: "failed", endedAt: "2026-10-30T11:00:00.000Z", actions: { resume: true } });
+    const calls: string[][] = [];
+    const run = async (argv: string[]) => {
+      calls.push(argv);
+      setGrant(db, "ranger.retry", false, NOW);
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    await runAutonomy({ db, rangerUrl: DESK.rangerUrl, cli: { bin: "/opt/ranger/bin/ranger", config: "" }, ledger: new HandledLedger(), run, fetchImpl: fetchRanger(state), now: () => NOW });
+    expect(calls).toHaveLength(1);
+  });
+
   it("does not send a retry twice after a restart, or one the person already sent", async () => {
     setGrant(db, "ranger.retry", true, NOW);
     const runner = fakeRunner();

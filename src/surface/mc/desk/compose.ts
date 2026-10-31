@@ -8,7 +8,7 @@ import { SourceCache, type DeskSourceConfig, type SourceEvent } from "./sources/
 import { listVips } from "./vips";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
-import { withoutHandled, type HandledLedger, type RangerCli } from "./actions";
+import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
 import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriters, type RecentCalendarWrites } from "./create";
 import { listOpenNotes, type DeskNote } from "./notes";
@@ -108,7 +108,7 @@ export async function composeDesk(
   const aheadCalendar = calendarEvents(calendar, sod + DAY_MS, sod + 5 * DAY_MS);
   const rules = desk.interruptions ?? NO_INTERRUPTIONS;
 
-  const rangerActions = Boolean(desk.rangerCli?.bin) && Boolean(desk.rangerUrl);
+  const rangerActions = rangerActionsReady(desk);
   const items = markInterrupts([
     ...withAutonomyNotes(rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions, hidden: filtered?.hidden }), done, now),
     ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)) }),
