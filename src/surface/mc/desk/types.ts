@@ -57,6 +57,8 @@ export interface DeskItem {
   since?: number;
   interrupt?: DeskInterrupt;
   correction?: DeskCorrectionMode;
+  goal?: string;
+  checking?: boolean;
 }
 
 export interface DeskInterrupt {

@@ -19,6 +19,14 @@ export interface RankInput {
   areas: AreaRule[];
   rangerActions?: boolean;
   hidden?: ReadonlySet<string>;
+  goalActions?: GoalActionsInput;
+}
+
+export interface GoalActionsInput {
+  check: ReadonlySet<string>;
+  checking: ReadonlySet<string>;
+  pause: boolean;
+  pausable: (goal: string) => boolean;
 }
 
 const action = (id: string, label: string, role: DeskAction["role"], wired: boolean): DeskAction => ({ id, label, role, wired });
@@ -65,6 +73,14 @@ export function ago(now: number, at: number): string {
   if (at >= today) return `today at ${clock(at)}`;
   if (at >= today - DAY_MS) return `yesterday at ${clock(at)}`;
   return `${Math.round(diff / DAY_MS)} days ago`;
+}
+
+export function asOf(now: number, at: number): string {
+  const days = Math.round((startOfDay(now) - startOfDay(at)) / DAY_MS);
+  if (days <= 0) return `as of ${clock(at)} today`;
+  if (days === 1) return `as of ${clock(at)} yesterday`;
+  if (days < 7) return `as of ${new Date(at).toLocaleDateString("en-GB", { weekday: "long" })} at ${clock(at)}`;
+  return `as of ${days} days ago`;
 }
 
 export const repoName = (repo: string): string => repo.split("/").pop() ?? repo;
@@ -185,9 +201,18 @@ function rangerMapItems({ ranger, areas, rangerActions = false }: RankInput, add
   }
 }
 
-function vigilItems({ now, subjects, areas }: RankInput, titles: Titles, listed: (key: string) => boolean, add: Add): void {
+const CHECK_AGAIN = action("goal.check", "Check again now", "primary", true);
+const PAUSE = action("goal.pause", "Pause this goal", "secondary", true);
+
+function goalExtras(goals: GoalActionsInput | undefined, goalId: string): Pick<DeskItem, "goal" | "checking"> {
+  return { goal: goalId, ...(goals?.checking.has(goalId) ? { checking: true } : {}) };
+}
+
+function vigilItems({ now, subjects, areas, goalActions }: RankInput, titles: Titles, listed: (key: string) => boolean, add: Add): void {
   const goalWording = new Map<string, string | null>();
   for (const s of subjects) if (s.goalId) goalWording.set(s.goalId, s.goalWording ?? goalWording.get(s.goalId) ?? null);
+  const canCheck = (goalId: string): boolean => goalActions?.check.has(goalId) ?? false;
+  const canPause = (goalId: string): boolean => (goalActions?.pause ?? false) && (goalActions?.pausable(goalId) ?? false);
 
   for (const s of subjects) {
     if (s.healthy) continue;
@@ -200,19 +225,22 @@ function vigilItems({ now, subjects, areas }: RankInput, titles: Titles, listed:
         title: `The ${part} check for "${goalShort(wording)}" stopped working.`,
         why: `Without it, nobody can tell whether this goal is on track. It last ran ${ago(now, s.lastEndedAt)}.`,
         score: 85,
-        actions: [action("check.run", "Run the check now", "primary", false), LOOK, LATER],
+        actions: [action("goal.check", "Run the check now", "primary", canCheck(s.goalId)), LOOK, LATER],
         detail: { summary: wording ?? "This goal has no description.", history: [`Last run ${ago(now, s.lastEndedAt)}`], refs: [s.goalId, ...refs], links: [] },
+        ...goalExtras(goalActions, s.goalId),
       });
     } else if (s.vocab === "goal" && ["off-track", "at-risk", "stale"].includes(s.value)) {
       const goalId = s.goalId ?? s.ref;
       const state = s.value === "stale" ? "has had no news for too long" : s.value === "at-risk" ? "is at risk" : "is off track";
+      const reading = asOf(now, s.lastEndedAt);
       add({
         key: `vigil:${s.subjectKey}`, kind: "goal", source: "vigil", area: areaFor(areas, null, goalId), urgency: "this-week",
         title: `"${goalShort(s.goalWording)}" ${state}.`,
-        why: s.goalWording ?? "Its description is not available, so open it to see which goal this is.",
+        why: `This reading is ${reading}. ${s.goalWording ?? "Its description is not available, so open it to see which goal this is."}`,
         score: s.value === "off-track" ? 75 : s.value === "at-risk" ? 70 : 55,
-        actions: [action("detail", "Look first", "primary", true), LATER],
+        actions: [canCheck(goalId) ? CHECK_AGAIN : { ...LOOK, role: "primary" }, ...(canPause(goalId) ? [PAUSE] : []), LATER],
         detail: { summary: s.goalWording ?? "This goal has no description.", history: [`Last report ${ago(now, s.lastEndedAt)}`], refs: [goalId, ...refs], links: [] },
+        ...goalExtras(goalActions, goalId),
       });
     } else if (s.vocab === "escalation" && (s.value === "needs-principal" || s.value === "overdue")) {
       if (listed(rangerItemKey(s.ref))) continue;

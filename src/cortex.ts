@@ -188,6 +188,7 @@ import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/r
 // MC-I1.S1 (ADR-0005) — in-process Mission Control embed (supersedes api.*).
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
 import { discordTransport } from "./surface/mc/desk/transports";
+import { expandGoalPaths } from "./surface/mc/desk/goals";
 import { notifyWithResult } from "./adapters/notify-result";
 import { createVigilDeliveryPorts, startVigil, type VigilHandle } from "./vigil";
 import { somaGoalWording } from "./vigil/result-render";
@@ -4959,6 +4960,7 @@ export async function startCortex(
           sources: config.mc.desk.sources,
           ask: config.mc.desk.ask,
           interruptions: config.mc.desk.interruptions,
+          goals: expandGoalPaths(config.mc.desk.goals, expandTilde),
         },
         ...(config.mc.desk.interruptions.transport === "discord"
           ? {

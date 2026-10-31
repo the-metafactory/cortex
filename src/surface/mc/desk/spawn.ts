@@ -7,8 +7,8 @@ export interface CommandResult {
   stderr: string;
 }
 
-export async function runCommand(argv: string[], timeoutMs: number, stdin?: string): Promise<CommandResult> {
-  const proc = Bun.spawn(argv, { stdin: stdin === undefined ? "ignore" : new Blob([stdin]), stdout: "pipe", stderr: "pipe" });
+export async function runCommand(argv: string[], timeoutMs: number, stdin?: string, env?: Record<string, string | undefined>): Promise<CommandResult> {
+  const proc = Bun.spawn(argv, { stdin: stdin === undefined ? "ignore" : new Blob([stdin]), stdout: "pipe", stderr: "pipe", ...(env ? { env } : {}) });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {

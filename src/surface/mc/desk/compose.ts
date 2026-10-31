@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
-import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoName, type AreaRule } from "./rank";
+import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoName, type AreaRule, type GoalActionsInput } from "./rank";
 import { DAY_MS, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent } from "./sources/command";
 import { listVips } from "./vips";
@@ -15,6 +15,7 @@ import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
+import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
 export interface DeskRuntime {
   options?: DeskOptions;
@@ -22,6 +23,8 @@ export interface DeskRuntime {
   sourceCache?: SourceCache;
   recentWrites?: RecentCalendarWrites;
   autonomy?: InterruptLoop | null;
+  goalChecks?: GoalChecks;
+  goalStatuses?: GoalStatuses;
 }
 
 export interface DeskAskOptions {
@@ -41,6 +44,7 @@ export interface DeskOptions {
   sources: DeskSourceConfig[];
   ask?: DeskAskOptions;
   interruptions?: InterruptRules;
+  goals?: DeskGoalOptions;
 }
 
 export interface DeskVigilSource {
@@ -55,6 +59,8 @@ export interface ComposeDeps {
   sourceCache?: SourceCache;
   handled?: HandledLedger;
   recentWrites?: RecentCalendarWrites;
+  goalChecks?: GoalChecks;
+  goalStatuses?: GoalStatuses;
 }
 
 export const CORRECTIONS_UNREADABLE = "The Desk could not read your ranking corrections, so it ranks by its base rules alone.";
@@ -78,7 +84,8 @@ export async function composeDesk(
       )
     : Promise.resolve(null);
   const commandRead = (deps.sourceCache ?? new SourceCache()).read(desk.sources, now);
-  const [vigilSubjects, rangerResult, readings] = await Promise.all([vigilRead, rangerRead, commandRead]);
+  const statusRead = deps.goalStatuses?.read(desk.goals?.somaBin ?? "", now) ?? Promise.resolve(new Map<string, string>());
+  const [vigilSubjects, rangerResult, readings, goalStatuses] = await Promise.all([vigilRead, rangerRead, commandRead, statusRead]);
 
   const subjects: VigilSubjectView[] = vigilSubjects ?? [];
   if (vigilSubjects) sources.push({ id: "vigil", ok: true });
@@ -114,8 +121,11 @@ export async function composeDesk(
   const rangerActions = rangerActionsReady(desk);
   const corrections = readCorrections(db);
   const activeCorrections = corrections.ok ? corrections.corrections : [];
+  const goalActions = goalActionsFor(desk.goals, subjects, deps.goalChecks, now);
+  const ranked = rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions, hidden: filtered?.hidden, goalActions })
+    .filter((item) => goalListed(goalStatuses, item.goal));
   const items = applyCorrections(markInterrupts([
-    ...withAutonomyNotes(rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions, hidden: filtered?.hidden }), done, now),
+    ...withAutonomyNotes(ranked, done, now),
     ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
@@ -147,6 +157,16 @@ export async function composeDesk(
     autonomy: buildAutonomy(db, done, rangerActions),
     corrections: activeCorrections,
   };
+}
+
+function goalActionsFor(goals: DeskGoalOptions | undefined, subjects: VigilSubjectView[], checks: GoalChecks | undefined, now: number): GoalActionsInput {
+  const check = new Set(goals ? Object.keys(goals.check) : []);
+  const checking = new Set<string>();
+  if (checks) {
+    for (const s of subjects) if (s.vocab === "goal") checks.settle(s.goalId ?? s.ref, s.lastEndedAt);
+    for (const goal of check) if (checks.pending(goal, now)) checking.add(goal);
+  }
+  return { check: checks ? check : new Set(), checking, pause: Boolean(goals?.somaBin), pausable: (goal) => SOMA_GOAL_ID.test(goal) };
 }
 
 function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): DeskItem[] {
