@@ -152,25 +152,33 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     const text = askText.trim();
     if (!text || asking) return;
     setAsking(true);
-    const result = await askDesk(text);
-    setAsking(false);
-    if (!result.ok) {
-      setNote(result.text);
-      return;
+    try {
+      const result = await askDesk(text);
+      if (!result.ok) {
+        setNote(result.text);
+        return;
+      }
+      await propose(text, result.proposal);
+      setAskText("");
+    } finally {
+      setAsking(false);
     }
-    await propose(text, result.proposal);
-    setAskText("");
   };
 
   const propose = async (said: string, p: DeskProposal): Promise<string | null> => {
-    if (p.kind === "capture" && p.automatic && !p.problem) {
-      const filed = await createFromProposal(crypto.randomUUID(), p.kind, p.fields);
-      setNote(filed.text);
-      captureChanged();
-      return filed.text;
-    }
+    const requestId = crypto.randomUUID();
     setGroupKind(null);
-    setProposal({ p, said, requestId: crypto.randomUUID(), fields: p.fields });
+    if (p.kind === "capture" && p.automatic && !p.problem) {
+      const filed = await createFromProposal(requestId, p.kind, p.fields);
+      setNote(filed.text);
+      if (filed.ok) {
+        captureChanged();
+        return filed.text;
+      }
+      setProposal({ p, said, requestId, fields: p.fields });
+      return `${filed.text} Your thought is kept in the draft for retry.`;
+    }
+    setProposal({ p, said, requestId, fields: p.fields });
     return null;
   };
 
@@ -379,7 +387,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const proposalCard = proposal && (
     <ProposalCard
       key={proposal.requestId}
-      proposal={proposal.p}
+      proposal={{ ...proposal.p, fields: proposal.fields }}
       said={proposal.said}
       maps={view.ask.maps}
       now={view.generatedAt}
@@ -521,7 +529,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 <p>{nowSubline(view, selection.needsYou.length, selection.rest.length, nextMeeting)}</p>
               </div>
             </div>
-            {proposalCard}
+            {!inStudio && proposalCard}
             {selection.needsYou.map(itemRow)}
           </section>
           )}
