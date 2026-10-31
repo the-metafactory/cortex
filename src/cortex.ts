@@ -4960,7 +4960,7 @@ export async function startCortex(
           },
           somaBin: config.mc.desk.soma.bin ? expandTilde(config.mc.desk.soma.bin) : "",
           areas: config.mc.desk.areas,
-          ...(config.mc.desk.studio ? { studio: { dir: expandTilde(config.mc.desk.studio.dir), maxActive: config.mc.desk.studio.maxActive } } : {}),
+          ...(config.mc.desk.studio ? { studio: { dir: expandTilde(config.mc.desk.studio.dir), maxActive: config.mc.desk.studio.maxActive, ...(config.mc.desk.studio.yesFilter ? { yesFilter: config.mc.desk.studio.yesFilter } : {}) } } : {}),
           sources: config.mc.desk.sources,
           ask: config.mc.desk.ask,
           interruptions: config.mc.desk.interruptions,

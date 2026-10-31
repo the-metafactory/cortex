@@ -10,8 +10,11 @@ Add a `studio` block to `mc.desk` in the stack config, and give each area a mode
 mc:
   desk:
     studio:
-      dir: ~/threads        # a git working tree; later Studio writes commit here
+      dir: ~/threads        # a git working tree; every Studio change is a commit here
       maxActive: 5          # optional; default 5
+      yesFilter:            # optional; the questions asked when you open a thread
+        - Does it keep my autonomy?
+        - Is it a whole Yes?
     areas:
       - id: work
         label: Work
@@ -21,6 +24,8 @@ mc:
 ```
 
 Without `desk.studio`, `GET /api/desk/studio` answers `{ "studio": null }`.
+
+Without `yesFilter`, the Desk asks a default set: "Is this mine to do?", "Does it fit my capacity?" and "What will I stop doing for it?". The open dialog says which set it shows.
 
 A thread's **effective policy** is the strictest policy of its areas: if any area is `local`, the thread stays on the local model. An area id that the config does not list counts as `local` and is reported as a problem.
 
@@ -83,6 +88,13 @@ The threads are the product; the sources are the bonus.
 
 - 2026-10-24: Opened
 
+## Responses
+
+### 2026-10-31T09:40:00+01:00
+re: 2026-10-31T03:12:00+01:00
+
+Lead with the Studio; the demo stack can wait.
+
 ## Outcome
 
 It merges into the Desk.
@@ -95,10 +107,12 @@ Rules:
 - **Ivy's notes** are append-only H3 entries. The heading is an ISO time with a zone. Below it come metadata lines, then a blank line and the note text:
   - `trigger:` (required) names what started the note.
   - `model:` (required) names the model policy or model that wrote it.
-  - `kind:` is `note` (default), `stand` (a proposed change to "Where I stand"; the text is the proposed stand) or `idea`.
+  - `kind:` is `note` (default), `stand` (a proposed change to "Where I stand"; the text is the proposed stand), `idea` or `relation` (a proposed relation; see below).
   - `status:` is `open` (default), `kept` or `dismissed`.
   - `because:` gives the reason for a `stand` proposal.
+  - `relates:` (required for `relation`) names what the thread relates to, in the material item syntax: `thread: <slug>`, `goal: G5: one post a week`, `person: Ana`, or `link: [label](href)`. The note text says why.
   - `sample: true` marks an example note that no model wrote.
+- **Responses** are your answers to Ivy, as H3 entries headed by an ISO time with a zone. An optional first line `re: <time>` names the note answered; the rest is the text. **Ivy waits on you** while Ivy's latest note has `status: open` and no response is dated at or after it.
 - **Material** and **Log** are bullet lists. A material item is `kind: [label](href)` or `kind: label`; without a kind it is a `link`. A log item may start with an ISO date.
 
 ## Inbox file
@@ -152,7 +166,7 @@ Each thread carries its parsed front matter, `question`, `stand`, `notes`, `mate
 
 ## Thread page
 
-Opening a thread on the board zooms the card into its thread page; `?desk=studio&thread=<slug>` holds the open thread, so reload and the browser's back button work. With `prefers-reduced-motion`, the page opens and closes without animation. The page is read-only: Keep, Discuss, Dismiss and Close with an outcome are shown but disabled until the Studio can write.
+Opening a thread on the board zooms the card into its thread page; `?desk=studio&thread=<slug>` holds the open thread, so reload and the browser's back button work. With `prefers-reduced-motion`, the page opens and closes without animation. Keep, Dismiss, Close with an outcome, Park, Bring back, Think tonight and the response box write to the files (see Changes). Discuss stays disabled until live sessions with Ivy arrive.
 
 **Relates to** is derived on every render, never stored:
 
@@ -161,5 +175,29 @@ Opening a thread on the board zooms the card into its thread page; `?desk=studio
 - **Coming up**: upcoming calendar events from the Desk's calendar sources whose title (at least 4 characters) appears as whole words in a material label or in the question. At most five, soonest first.
 - **People**: material items of kind `person`, `people` or `contact`. Free text is never searched for names.
 - **Decision journal**: closed threads that share a material item or an area. A decision opens in place.
+- **Ivy proposes**: open `relation` notes, each with Keep and Dismiss. A kept relation joins its group (`thread`, `goal`, `person`/`people`/`contact`) or **Also related** for any other kind; a dismissed one disappears.
 
 Goals, events and people link to their `href` when the material or the event has one.
+
+## Changes
+
+`POST /api/desk/studio/act` changes the Studio. It passes Mission Control's rebind and identity gates like every Desk write; it needs no step-up code. The body names an `act`, its fields, and a `requestId` (8 to 64 letters, digits, `_` or `-`):
+
+| act | fields | writes |
+| --- | --- | --- |
+| `respond` | `thread`, `text` | a Responses entry; clears "Ivy waits on you" |
+| `keep`, `dismiss` | `thread`, `note` (the note's heading time) | the note's `status:`; keeping a `stand` also replaces "Where I stand" |
+| `park` | `thread` | `state: parked` |
+| `unpark` | `thread`, `park` when every place is in use | `state: active` |
+| `think` | `thread`, `on` | `thinkTonight` |
+| `close` | `thread`, `outcome`, `text`; `expect` and `reviewOn` when decided | `state: closed`, `closed`, `outcome`, the Outcome section |
+| `open` | `from` (`proposal` or `capture`), `id`, `area`, `park` when every place is in use, optional `answers` | a new `threads/<slug>.md`; removes the proposal or capture |
+
+Rules:
+
+- Each act changes the files and makes one commit whose subject names the act (`Studio: Answer Ivy on desk-open-source`) and whose body carries `Desk-Request: <requestId>`. Each changed thread's Log gains one line.
+- A request id that is already in the history is answered with that commit, and nothing is written again, also after a restart.
+- A directory that is not a git working tree, or that has uncommitted changes, is refused with a 409 and a clear error; nothing is written. A failed commit puts the files back.
+- Opening or bringing back a thread while `maxActive` threads are active needs `park`, an active thread to park; without it the answer is a 409 with `needsPark: true`.
+- `open` from a proposal keeps the proposal's areas, with the chosen `area` first; an `area` outside them replaces them. A capture becomes a `question` thread in the chosen `area` with the capture as material. Yes-filter `answers` (`yes`, `not sure` or `no` per question) land in a `## Yes-filter` section and a summary in the Log line.
+- The answer is `{ ok, message, commit, replayed, studio }`, where `studio` is the fresh `GET /api/desk/studio` view, so the page redraws without waiting for its next poll.

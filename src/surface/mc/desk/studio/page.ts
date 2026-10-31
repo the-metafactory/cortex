@@ -1,5 +1,5 @@
 import type { AreaPolicy } from "../types";
-import { areaLookup, latestNote, sameSource, type BoardArea } from "./board";
+import { areaLookup, latestNote, sameSource, waitsOnYou, type BoardArea } from "./board";
 import type { IvyNote, LogEntry, MaterialLink } from "./format";
 import { dayMonth, outcomeLabel, TYPE_LABEL, withHref } from "./labels";
 import { NO_CONTEXT, relatesTo, type RelatesContext, type Relations } from "./relates";
@@ -23,6 +23,8 @@ export interface ThreadPage {
   standProposal: IvyNote | null;
   ideas: IvyNote[];
   notes: IvyNote[];
+  proposedRelations: IvyNote[];
+  latest: IvyNote | null;
   waitsOnYou: boolean;
   log: LogEntry[];
   outcome: PageOutcome;
@@ -81,8 +83,10 @@ export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesCo
     }),
     standProposal: stands[0] ?? null,
     ideas: notes.filter((n) => isGhost(n) && n.kind === "idea"),
-    notes: notes.filter((n) => !isGhost(n)),
-    waitsOnYou: latestNote(thread.notes)?.status === "open",
+    notes: notes.filter((n) => !isGhost(n) && n.kind !== "relation"),
+    proposedRelations: notes.filter((n) => n.kind === "relation" && n.status === "open"),
+    latest: latestNote(thread.notes),
+    waitsOnYou: waitsOnYou(thread),
     log: thread.log,
     outcome: outcomeOf(thread),
     relations: relatesTo(thread, studio, ctx),

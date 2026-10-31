@@ -14,6 +14,7 @@ export const studioThread = (slug: string, over: Partial<StudioThreadView> = {})
   question: `What about ${slug}?`,
   stand: "Not settled.",
   notes: [],
+  responses: [],
   material: [],
   log: [],
   outcomeText: "",
