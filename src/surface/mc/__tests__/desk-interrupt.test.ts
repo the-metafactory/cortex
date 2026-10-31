@@ -145,8 +145,8 @@ describe("Desk interruptions", () => {
 
   it("records the message id of a delivered push", async () => {
     addNote(db, "reminder", "Call Ada", NOW - MIN, NOW - 60 * MIN);
-    await tick(new FakeTransport({ status: "sent", ref: "1300000000000000001" }), NOW, desk(), calendar([]));
-    expect(readDeliveries(db).get("reminder:1")).toMatchObject({ status: "sent", ref: "1300000000000000001", error: null });
+    await tick(new FakeTransport({ status: "sent", ref: "m-42" }), NOW, desk(), calendar([]));
+    expect(readDeliveries(db).get("reminder:1")).toMatchObject({ status: "sent", ref: "m-42", error: null });
   });
 
   it("records a failed delivery when no transport is running", async () => {
