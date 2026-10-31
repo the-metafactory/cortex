@@ -67,3 +67,38 @@ test("proposal creation preserves a simultaneous committed Material signal for t
   expect((await runOverseer(r.config)).queued).toEqual(["alpha"]);
   expect(await readFile(r.calls, "utf8")).toContain("New Material committed");
 });
+
+
+test("a later enqueue failure preserves earlier successful daily checkpoints", async () => {
+ const r = await rig(true);
+ await writeFile(join(r.dir, "threads/beta.md"), thread(true));
+ r.git("add", "."); r.git("commit", "-qm", "second tonight thread");
+ const gate=join(r.dir,".git/fail-beta");
+ await writeFile(gate,"fail");
+ await writeFile(join(r.dir,".git/ranger.ts"), `import { appendFileSync, existsSync } from "node:fs"; const args=process.argv.slice(2); appendFileSync(${JSON.stringify(r.calls)},JSON.stringify(args)+"\\n"); if(args.includes("thread=beta")&&existsSync(${JSON.stringify(gate)}))process.exit(1);`);
+ await expect(runOverseer(r.config)).rejects.toThrow("command failed");
+ await rm(gate);
+ expect((await runOverseer(r.config)).queued).toEqual(["beta"]);
+ const calls=(await readFile(r.calls,"utf8")).trim().split("\n").map(line=>JSON.parse(line));
+ expect(calls.filter(args=>args.includes("thread=alpha")).length).toBe(1);
+});
+
+
+test("the committed-file watcher notices a commit made after a dirty-file interval", async () => {
+ const r=await rig();
+ const config=join(r.dir,".git/overseer-config.json");
+ await writeFile(config,JSON.stringify(r.config));
+ const child=Bun.spawn([process.execPath,join(import.meta.dir,"studio-overseer.ts"),config,"--watch-studio"],{stdout:"pipe",stderr:"pipe"});
+ const stdout=new Response(child.stdout).text();const stderr=new Response(child.stderr).text();
+ const waitFor=async(path:string):Promise<void>=>{const deadline=Date.now()+8000;while(Date.now()<deadline){if(await Bun.file(path).exists())return;await Bun.sleep(50);}throw new Error(`Watcher did not create ${path}`);};
+ try{
+  await waitFor(join(r.dir,".git/studio-overseer.json"));
+  await writeFile(join(r.dir,"threads/alpha.md"),thread().replace("baseline","baseline\n- capture: delayed commit evidence"));
+  await Bun.sleep(2000);
+  expect(await Bun.file(r.calls).exists()).toBe(false);
+  r.git("add",".");r.git("commit","-qm","Material committed after dirty interval");
+  await waitFor(r.calls);
+  expect(await readFile(r.calls,"utf8")).toContain("New Material committed");
+ }catch(error){child.kill();await child.exited;throw new Error(`${String(error)}; stdout=${await stdout}; stderr=${await stderr}`, { cause: error });}
+ finally{child.kill();await child.exited;await Promise.all([stdout,stderr]);}
+}, 20000);

@@ -1,4 +1,3 @@
-import { watch } from "node:fs";
 import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse, stringify } from "yaml";
@@ -7,7 +6,7 @@ import { parseProposalFile } from "../surface/mc/desk/studio/format";
 import { readStudioFiles } from "../surface/mc/desk/studio/read";
 import { buildStudioView } from "../surface/mc/desk/studio/view";
 import { acquireStudioLock } from "../surface/mc/desk/studio/write-lock";
-import { recurringThemes, selectThinking } from "../surface/mc/desk/studio/overseer";
+import { recurringThemes, selectThinking, type ThemeProposal } from "../surface/mc/desk/studio/overseer";
 
 export const OverseerConfig = z.object({
   dir: z.string().min(1),
@@ -15,7 +14,7 @@ export const OverseerConfig = z.object({
   ranger: z.array(z.string().min(1)).min(1),
   staleDays: z.number().int().positive().default(6),
 }).strict();
-const State = z.object({ head: z.string().regex(/^[a-f0-9]{40}$/), material: z.record(z.string(), z.string()), queued: z.record(z.string(), z.string()), pendingMaterial: z.array(z.string()).default([]) });
+const State = z.object({ head: z.string().regex(/^[a-f0-9]{40}$/), material: z.record(z.string(), z.string()), queued: z.record(z.string(), z.string()), pendingMaterial: z.array(z.string()).default([]), changedAt: z.record(z.string(), z.number()).default({}) });
 const Event = z.object({ key: z.string(), at: z.number(), title: z.string(), area: z.string().nullable(), kind: z.enum(["meeting", "all-day", "reminder", "agent", "agent-stop"]) });
 const Desk = z.object({ today: z.array(Event), ahead: z.array(Event) });
 const Policy = z.object({ directory: z.string(), studio: z.object({ maxActive: z.number(), areas: z.array(z.object({ id: z.string(), label: z.string(), color: z.string(), policy: z.enum(["local", "cloud"]) })) }) });
@@ -33,6 +32,23 @@ async function json(url: string): Promise<unknown> {
   const response = await fetch(url, { signal: AbortSignal.timeout(5000), redirect: "error" });
   if (!response.ok) throw new Error(`Desk returned ${response.status}`);
   return response.json();
+}
+
+async function persistProposals(input: { dir: string; pending: ThemeProposal[]; now: Date; git: (args: string[]) => Promise<string> }): Promise<string[]> {
+  const proposals: string[] = [];
+  for (const theme of input.pending) {
+    const text = `---\n${stringify({ type: "question", areas: [theme.area], proposed: input.now.toISOString(), target: { place: "new", area: theme.area, reason: theme.reason } })}---\n\n## Question\n${theme.question}\n\n## Why\n${theme.reason}\n\n${theme.captures.map(id => `- Inbox capture: ${id}`).join("\n")}\n`;
+    if (!parseProposalFile(`proposals/${theme.id}.md`, text).ok) throw new Error("Invalid overseer proposal");
+    await mkdir(join(input.dir, "proposals"), { recursive: true });
+    if (await realpath(join(input.dir, "proposals")) !== join(input.dir, "proposals")) throw new Error("Proposals directory must stay inside Studio");
+    await writeFile(join(input.dir, `proposals/${theme.id}.md`), text, { flag: "wx" });
+    proposals.push(theme.id);
+  }
+  if (proposals.length) {
+    await input.git(["add", "--", ...proposals.map(id => `proposals/${id}.md`)]);
+    await input.git(["commit", "-m", "Studio: propose threads from recurring inbox themes", "--", ...proposals.map(id => `proposals/${id}.md`)]);
+  }
+  return proposals;
 }
 
 export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = new Date()): Promise<{ queued: string[]; proposals: string[] }> {
@@ -58,8 +74,12 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
     const material: Record<string, string> = {};
     const newMaterial = new Set(previous?.pendingMaterial ?? []);
     for (const thread of [...studio.active, ...studio.parked, ...studio.closed]) {
-      const stamp = await git(["log", "-1", "--format=%ct", "--", thread.path]);
-      if (stamp) changedAt.set(thread.slug, Number(stamp) * 1000);
+      if (thread.state === "active") {
+        const cached = previous?.head === head ? previous.changedAt[thread.slug] : undefined;
+        const stamp = cached === undefined ? await git(["log", "-1", "--format=%ct", "--", thread.path]) : null;
+        if (cached !== undefined) changedAt.set(thread.slug, cached);
+        else if (stamp) changedAt.set(thread.slug, Number(stamp) * 1000);
+      }
       material[thread.slug] = JSON.stringify(thread.material);
       const before = previous?.material[thread.slug];
       const oldMaterial = z.array(z.unknown()).parse(JSON.parse(before ?? "[]"));
@@ -67,7 +87,6 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
     }
     const proposedCaptures = read.files.proposals.map(file => file.text).join("\n");
     const themes = recurringThemes(studio.inbox.filter(capture => !proposedCaptures.includes(`- Inbox capture: ${capture.id}\n`)), studio.areas);
-    const proposals: string[] = [];
     const pending = themes.filter(theme => !studio.proposals.some(proposal => proposal.id === theme.id));
     const today = now.toISOString().slice(0, 10);
     const queued = previous?.queued ?? {};
@@ -78,47 +97,46 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
       if (JSON.stringify(fresh.files) !== JSON.stringify(read.files)) throw new Error("Studio files changed during overseer scan; deferred");
     };
     await unchanged();
-    for (const theme of pending) {
-      const text = `---\n${stringify({ type: "question", areas: [theme.area], proposed: now.toISOString(), target: { place: "new", area: theme.area, reason: theme.reason } })}---\n\n## Question\n${theme.question}\n\n## Why\n${theme.reason}\n\n${theme.captures.map(id => `- Inbox capture: ${id}`).join("\n")}\n`;
-      if (!parseProposalFile(`proposals/${theme.id}.md`, text).ok) throw new Error("Invalid overseer proposal");
-      await mkdir(join(dir, "proposals"), { recursive: true });
-      if (await realpath(join(dir, "proposals")) !== join(dir, "proposals")) throw new Error("Proposals directory must stay inside Studio");
-      await writeFile(join(dir, `proposals/${theme.id}.md`), text, { flag: "wx" });
-      proposals.push(theme.id);
-    }
-    if (proposals.length) {
-      await git(["add", "--", ...proposals.map(id => `proposals/${id}.md`)]);
-      await git(["commit", "-m", "Studio: propose threads from recurring inbox themes", "--", ...proposals.map(id => `proposals/${id}.md`)]);
-    }
+    const proposals = await persistProposals({ dir, pending, now, git });
+    const save = async (): Promise<void> => {
+      const state = { head: await git(["rev-parse", "HEAD"]), material, queued, pendingMaterial: [...newMaterial], changedAt: Object.fromEntries(changedAt) };
+      await writeFile(`${statePath}.tmp`, JSON.stringify(state), { mode: 0o600 });
+      await rename(`${statePath}.tmp`, statePath);
+    };
     const enqueued: string[] = [];
     if (!pending.length) for (const selection of selections) {
       await command([...config.ranger, "job", "enqueue", "ivy-think", "--param", `thread=${selection.thread}`, "--param", `trigger=${selection.trigger}`], dir);
       queued[selection.thread] = today;
       newMaterial.delete(selection.thread);
       enqueued.push(selection.thread);
+      await save();
     }
-    const state = { head: await git(["rev-parse", "HEAD"]), material, queued, pendingMaterial: [...newMaterial] };
-    await writeFile(`${statePath}.tmp`, JSON.stringify(state), { mode: 0o600 });
-    await rename(`${statePath}.tmp`, statePath);
+    await save();
     return { queued: enqueued, proposals };
   } finally { await release(); }
 }
 
 if (import.meta.main) {
   const path = process.argv[2];
-  if (!path) throw new Error("Usage: bun studio-overseer.ts <config.yaml> [--watch]");
+  if (!path) throw new Error("Usage: bun studio-overseer.ts <config.yaml> [--watch-studio]");
   const config = OverseerConfig.parse(parse(await readFile(path, "utf8")));
-  const scan = async (): Promise<void> => { try { process.stdout.write(`${JSON.stringify(await runOverseer(config))}\n`); } catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); if (!process.argv.includes("--watch")) process.exitCode = 1; } };
+  const scan = async (): Promise<boolean> => { try { process.stdout.write(`${JSON.stringify(await runOverseer(config))}\n`); return true; } catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); if (!process.argv.includes("--watch-studio")) process.exitCode = 1; return false; } };
   await scan();
-  if (process.argv.includes("--watch")) {
+  if (process.argv.includes("--watch-studio")) {
     let running = false;
-    const check = async (): Promise<void> => { if (running) return; running = true; try { await scan(); } finally { running = false; } };
-    let timer: ReturnType<typeof setTimeout>;
-    watch(config.dir, { recursive: true }, (_event, filename) => {
-      if (!filename?.startsWith("threads/")) return;
-      clearTimeout(timer);
-      timer = setTimeout(() => void check(), 1500);
-    });
+    let polling = false;
+    let seenHead = "";
+    const check = async (): Promise<boolean> => { if (running) return false; running = true; try { return await scan(); } finally { running = false; } };
+    const poll = async (): Promise<void> => {
+      if (polling) return;
+      polling = true;
+      try {
+        const head = await command(["git", "rev-parse", "HEAD"], config.dir);
+        if (head !== seenHead && await check()) seenHead = head;
+      } catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); }
+      finally { polling = false; }
+    };
+    setInterval(() => void poll(), 5000);
     setInterval(() => void check(), 15 * 60_000);
   }
 }

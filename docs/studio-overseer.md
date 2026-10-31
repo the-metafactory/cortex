@@ -15,8 +15,8 @@ staleDays: 6
 ```
 
 Run `bun /path/to/cortex/src/cli/studio-overseer.ts /path/to/config.yaml` once.
-Add `--watch` for committed Material changes. The watcher checks thread-file
-changes after a short debounce and rescans every 15 minutes as a fallback.
+Add `--watch-studio` for committed Material changes. The watcher polls committed git HEAD changes
+every five seconds and rescans every 15 minutes as a fallback.
 A dirty tree defers the whole pass. Supervise the watcher with your operating
 system. The first pass establishes a Material baseline; subsequent passes detect
 added entries in clean, committed files. Notes and stand changes alone do not
