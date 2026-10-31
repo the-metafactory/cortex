@@ -6,12 +6,13 @@ import { oneLine } from "./actions";
 import { clock } from "./time";
 import { CommandTimeout, runCommand } from "./spawn";
 
-export const WRITER_KINDS = ["calendar", "task", "goal"] as const;
+export const WRITER_KINDS = ["calendar", "task", "goal", "note", "reminder"] as const;
 export type WriterKind = (typeof WRITER_KINDS)[number];
 export type DeskWriters = Partial<Record<WriterKind, string[]>>;
+const KEPT_ON_DESK: readonly AskKind[] = ["reminder", "note"];
 
 export function writableKinds(writers: DeskWriters): Set<AskKind> {
-  return new Set<AskKind>(["reminder", "note", ...WRITER_KINDS.filter((k) => (writers[k]?.length ?? 0) > 0)]);
+  return new Set<AskKind>([...KEPT_ON_DESK, ...WRITER_KINDS.filter((k) => (writers[k]?.length ?? 0) > 0)]);
 }
 
 export interface WriterResult {
@@ -51,7 +52,7 @@ const day = (at: number, now: number): string => {
   return sameDay ? "today" : d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 };
 
-export async function createFromCard(card: AskCard, deps: CreateDeps): Promise<Created> {
+function keepOnDesk(card: AskCard, deps: CreateDeps): Created | null {
   if (card.kind === "reminder") {
     const due = Date.parse(card.fields.due);
     addNote(deps.db, "reminder", card.fields.text, due, deps.now);
@@ -61,8 +62,12 @@ export async function createFromCard(card: AskCard, deps: CreateDeps): Promise<C
     addNote(deps.db, "note", card.fields.text, null, deps.now);
     return { ok: true, message: "Noted. It is under Keep in mind." };
   }
+  return null;
+}
+
+export async function createFromCard(card: AskCard, deps: CreateDeps): Promise<Created> {
   const argv = deps.writers[card.kind];
-  if (!argv?.length) return { ok: false, error: notSetUp(card.kind) };
+  if (!argv?.length) return keepOnDesk(card, deps) ?? { ok: false, error: notSetUp(card.kind) };
   let result: WriterResult;
   try {
     result = await deps.run(argv, JSON.stringify({ ...card, requestId: deps.requestId }), deps.timeoutMs);

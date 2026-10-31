@@ -204,6 +204,63 @@ describe("POST /api/desk/create", () => {
   });
 });
 
+describe("notes and reminders with a writer", () => {
+  const WRITTEN = { ...ASK, writers: { ...ASK.writers, note: ["note-writer"], reminder: ["reminder-writer", "--list", "Desk"] } };
+  const WITH_WRITERS: DeskOptions = { ...DESK, ask: WRITTEN };
+  let db: Database;
+  let runtime: DeskRuntime;
+  beforeEach(() => {
+    db = initDatabase(":memory:");
+    runtime = { options: WITH_WRITERS, ledger: new HandledLedger() };
+  });
+
+  const recording = (calls: { argv: string[]; stdin: string }[], answer: unknown): WriterRunner => async (argv, stdin) => {
+    calls.push({ argv, stdin });
+    return { code: 0, stdout: JSON.stringify(answer), stderr: "" };
+  };
+
+  it("hands a note to its writer, stores nothing in desk_notes and shows the writer's message", async () => {
+    const calls: { argv: string[]; stdin: string }[] = [];
+    const runWriter = recording(calls, { id: "T1", message: "Saved to Tana." });
+    const res = await handleDeskCreate(post("/api/desk/create", { requestId: "req-00030", kind: "note", fields: { text: "Code 4711" } }), db, runtime, { now: () => NOW, runWriter });
+    expect(await res.json()).toEqual({ ok: true, message: "Saved to Tana." });
+    expect(calls).toEqual([{ argv: ["note-writer"], stdin: JSON.stringify({ kind: "note", fields: { text: "Code 4711" }, requestId: "req-00030" }) }]);
+    expect(listOpenNotes(db)).toEqual([]);
+  });
+
+  it("hands a reminder to its writer with text and due, and the Desk neither shows nor pushes it", async () => {
+    const calls: { argv: string[]; stdin: string }[] = [];
+    const due = new Date(NOW + 60_000).toISOString();
+    const res = await handleDeskCreate(post("/api/desk/create", { requestId: "req-00031", kind: "reminder", fields: { text: "Stretch", due } }), db, runtime, { now: () => NOW, runWriter: recording(calls, { id: "R1" }) });
+    expect(await res.json()).toEqual({ ok: true, message: "Created the reminder." });
+    expect(calls).toEqual([{ argv: ["reminder-writer", "--list", "Desk"], stdin: JSON.stringify({ kind: "reminder", fields: { text: "Stretch", due }, requestId: "req-00031" }) }]);
+    expect(listOpenNotes(db)).toEqual([]);
+    const later = await composeDesk(db, WITH_WRITERS, undefined, { now: NOW + 120_000, sourceCache: new SourceCache() });
+    expect(later.items.some((i) => i.kind === "reminder")).toBe(false);
+    expect(later.today.some((e) => e.kind === "reminder")).toBe(false);
+  });
+
+  it("treats a note writer's refusal, timeout and unreadable answer like any other writer, and keeps nothing", async () => {
+    const send = (id: string, runWriter: WriterRunner) => handleDeskCreate(post("/api/desk/create", { requestId: id, kind: "note", fields: { text: "Code 4711" } }), db, runtime, { now: () => NOW, runWriter });
+    const refused = await send("req-00032", async () => ({ code: 2, stdout: "", stderr: "trace\nTana is not reachable.\n" }));
+    expect(refused.status).toBe(502);
+    expect(await refused.json()).toEqual({ ok: false, error: "Tana is not reachable." });
+    expect((await send("req-00032", recording([], { id: "T2" }))).status).toBe(200);
+
+    const slow = await send("req-00033", async () => { throw new WriterTimeout("timed out after 5 s"); });
+    expect(await slow.json()).toEqual({ ok: false, uncertain: true, error: "The note writer timed out after 5 s. It may have been created; check before asking again." });
+    expect((await send("req-00033", recording([], { id: "T3" }))).status).toBe(409);
+
+    expect(await (await send("req-00034", async () => ({ code: 0, stdout: "ok", stderr: "" }))).json()).toMatchObject({ uncertain: true });
+    expect(listOpenNotes(db)).toEqual([]);
+  });
+
+  it("offers notes and reminders whether or not a writer is set", () => {
+    expect([...writableKinds({})].sort()).toEqual(["note", "reminder"]);
+    expect([...writableKinds({ note: ["n"], reminder: ["r"] })].sort()).toEqual(["note", "reminder"]);
+  });
+});
+
 describe("reminders and notes on the Desk", () => {
   let db: Database;
   beforeEach(() => { db = initDatabase(":memory:"); });
