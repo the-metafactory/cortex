@@ -8,5 +8,5 @@ export async function handleGetDeskStudio(runtime: DeskRuntime | undefined): Pro
   const desk = runtime?.options;
   if (!desk?.enabled || !desk.studio) return Response.json({ studio: null }, { headers: noStore });
   const { files, problems } = await readStudioFiles(desk.studio.dir);
-  return Response.json({ studio: buildStudioView(files, desk.studio, desk.areas, problems) }, { headers: noStore });
+  return Response.json({ directory: desk.studio.dir, studio: buildStudioView(files, desk.studio, desk.areas, problems) }, { headers: noStore });
 }

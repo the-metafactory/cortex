@@ -1,5 +1,6 @@
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { acquireStudioLock } from "./write-lock";
 import type { StudioOptions } from "../types";
 import { isRefusal, planAct, type ActContext, type ActRefusal, type ActPlan, type StudioAct } from "./acts";
 import { parseCaptureFile, parseThreadFile } from "./format";
@@ -88,7 +89,13 @@ export async function runStudioTransaction(input: Omit<StudioWriteInput, "act">,
   const git = input.git ?? spawnGit;
   const lock = input.lock ?? studioWriteLock;
   if (!lock.claim(dir)) return fail(409, "Another Studio change is being written. Try again in a moment.");
+  let release: (() => Promise<void>) | null = null;
   try {
+    release = await acquireStudioLock(dir);
+    if (!release) {
+      const problem = await treeProblem(git, dir);
+      return fail(409, problem?.kind === "not-git" ? problem.error : "Another Studio process holds the write lock. Inspect .git/studio-write.lock/owner.json if its process stopped.");
+    }
     const problem = await treeProblem(git, dir);
     if (problem?.kind === "not-git") return fail(409, problem.error);
     const done = await findRequest(git, dir, input.requestId);
@@ -112,7 +119,11 @@ export async function runStudioTransaction(input: Omit<StudioWriteInput, "act">,
     if ("error" in committed) return fail(500, committed.error);
     return { ok: true, message: plan.message, commit: committed.sha, replayed: false, studio: (await readView(input)).view };
   } finally {
-    lock.release(dir);
+    try {
+      await release?.();
+    } finally {
+      lock.release(dir);
+    }
   }
 }
 
