@@ -72,6 +72,8 @@ import { RecentCalendarWrites } from "./desk/create";
 import { HandledLedger } from "./desk/actions";
 import type { DeskOptions, DeskRuntime } from "./desk/compose";
 import { SourceCache } from "./desk/sources/command";
+import { startDeskPushes } from "./desk/push";
+import type { DeskTransport } from "./desk/interrupt";
 import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil";
 import { handleResult, type ResultRouteOptions } from "./results";
 import {
@@ -134,6 +136,7 @@ export interface MissionControlViews {
   results?: ResultRouteOptions;
   vigil?: VigilSubjectsOptions;
   desk?: DeskOptions;
+  deskTransport?: () => DeskTransport | null;
   agentPresence?: () => AgentPresenceView | null;
   localAggregation?: LocalAggregationProvider;
   networks?: () => NetworksView | null;
@@ -164,6 +167,7 @@ export function startServer(
   const deskSourceCache = new SourceCache();
   const deskLedger = new HandledLedger();
   const deskRecentWrites = new RecentCalendarWrites();
+  const deskRuntime: DeskRuntime = { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites };
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
@@ -285,7 +289,7 @@ export function startServer(
           stepUpSecretPath,
           authorizer,
           options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined,
-          { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites },
+          deskRuntime,
         );
       }
 
@@ -380,8 +384,12 @@ export function startServer(
     wsRegistry.broadcast({ type: "ping" });
   }, SERVER_PING_INTERVAL_MS);
 
+  const deskTransport = options.deskTransport ?? ((): DeskTransport | null => null);
+  const deskPushes = startDeskPushes(db, deskRuntime, options.vigil, deskTransport);
+
   const stop = (closeActive = false) => {
     clearInterval(pingInterval);
+    deskPushes?.stop();
     void server.stop(closeActive);
   };
 

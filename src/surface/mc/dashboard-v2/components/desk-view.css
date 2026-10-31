@@ -84,6 +84,7 @@
 .desk-title{display:block;font-size:17.5px;line-height:1.35;font-weight:600;letter-spacing:-.015em;color:var(--ink)}
 .desk-title:hover{text-decoration:underline;text-decoration-color:#d4d4d8;text-underline-offset:4px}
 .desk-why{margin:3px 0 0;font-size:15px;line-height:1.5;color:var(--mute)}
+.desk-unsent{color:#b91c1c}
 .desk-acts{display:flex;align-items:center;gap:8px;margin-top:11px;flex-wrap:wrap}
 .desk-btn{height:34px;padding:0 14px!important;border-radius:9px;border:1px solid #e4e4e7!important;background:#fff!important;font-size:14px;font-weight:500;color:var(--ink2)!important;white-space:nowrap;transition:background .15s,border-color .15s,transform .08s}
 .desk-btn:hover{background:#fafafa!important;border-color:#d4d4d8!important}

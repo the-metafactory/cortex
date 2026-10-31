@@ -74,6 +74,7 @@ export async function startMissionControl(
       processManager,
       ...(opts.vigil ? { vigil: opts.vigil } : {}),
       ...(opts.desk ? { desk: opts.desk } : {}),
+      ...(opts.deskTransport ? { deskTransport: opts.deskTransport } : {}),
       ...(opts.results ? { results: opts.results } : {}),
       ...(opts.agentPresence ? { agentPresence: opts.agentPresence } : {}),
       ...(opts.networks ? { networks: opts.networks } : {}),

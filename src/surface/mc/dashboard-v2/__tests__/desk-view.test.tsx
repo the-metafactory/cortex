@@ -40,6 +40,7 @@ const view: DeskViewModel = {
   notes: [],
   ask: { kinds: ["reminder", "note"], maps: [] },
   sources: [{ id: "vigil", ok: true }],
+  chime: false,
 };
 
 describe("DeskBody", () => {

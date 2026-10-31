@@ -35,6 +35,7 @@ export const FOLDED_LABELS: Record<DeskItemKind, string> = {
   escalation: "Older escalations",
   mail: "Mail you may want to read",
   reminder: "Reminders",
+  meeting: "Meetings starting soon",
 };
 
 export const isRegressedGoalCheck = (s: VigilSubjectView): boolean => s.vocab === "check" && s.goalId !== null && s.value === "regressed";
@@ -295,6 +296,7 @@ export function mailItems({ now, mail, events, vips }: MailInput): DeskItem[] {
         links: m.url ? [{ label: "Open in Mail", url: m.url }] : [],
       },
       ...(m.firstParagraph ? { excerpt: m.firstParagraph } : {}),
+      since: receivedAt,
     };
   });
 }
