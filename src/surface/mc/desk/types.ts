@@ -1,3 +1,4 @@
+import type { DeskVoice } from "./voice";
 import type { AREA_POLICIES } from "../../../common/types/config";
 
 export type DeskUrgency = "now" | "today" | "this-week" | "waiting";
@@ -129,6 +130,7 @@ export interface DeskView {
   sources: { id: string; ok: boolean; error?: string }[];
   chime: boolean;
   notifications: boolean;
+  voice: DeskVoice;
   autonomy: DeskAutonomy;
   corrections: DeskCorrection[];
   mailClassifier?: DeskMailClassifier | null;

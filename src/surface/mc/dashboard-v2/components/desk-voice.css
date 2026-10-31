@@ -1,0 +1,10 @@
+.desk-mic{display:grid;place-items:center;width:36px;height:36px;border:0;border-radius:10px;background:transparent;color:var(--faint);cursor:pointer;touch-action:none;user-select:none}
+.desk-mic:hover{background:#f4f4f5;color:var(--ink)}
+.desk-mic.live{background:var(--ivy);color:#fff;box-shadow:0 0 0 4px rgba(59,130,246,.18)}
+.desk-voice{position:absolute;left:0;right:0;top:56px;z-index:30;padding:14px 40px 14px 16px;background:#fff;border:1px solid #e4e4e7;border-radius:13px;box-shadow:0 12px 32px -12px rgba(24,24,27,.22);font-size:14.5px;line-height:1.5}
+.desk-voice-phase{font-size:12.5px;font-weight:600;color:var(--ivy-ink);margin-bottom:4px}
+.desk-voice-said{margin:0;color:var(--faint);font-style:italic}
+.desk-voice-answer{margin:6px 0 0;color:var(--ink)}
+.desk-voice-fallback{margin:6px 0 0;color:#b45309;font-size:13.5px}
+.desk-voice-close{position:absolute;top:8px;right:8px;width:26px;height:26px;border:0;border-radius:7px;background:transparent;color:var(--faint);font-size:18px;cursor:pointer}
+.desk-voice-close:hover{background:#f4f4f5;color:var(--ink)}

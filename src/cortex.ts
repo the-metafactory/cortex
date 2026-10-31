@@ -4975,6 +4975,12 @@ export async function startCortex(
             : {}),
           ...(config.mc.desk.mail.actions ? { mailActions: config.mc.desk.mail.actions } : {}),
           ...(config.mc.desk.mail.links ? { mailLinks: config.mc.desk.mail.links } : {}),
+          voice: {
+            ...config.mc.desk.voice,
+            ...(config.mc.desk.voice.elevenlabs
+              ? { elevenlabs: { ...config.mc.desk.voice.elevenlabs, ...(config.mc.desk.voice.elevenlabs.envFile ? { envFile: expandTilde(config.mc.desk.voice.elevenlabs.envFile) } : {}) } }
+              : {}),
+          },
         },
         ...(config.mc.desk.interruptions.transport === "discord"
           ? {

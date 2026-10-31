@@ -58,3 +58,40 @@ export const URGENCY_LABEL: Record<DeskItem["urgency"], string> = {
   "this-week": "This week",
   waiting: "Waiting on you",
 };
+
+const BRIEFING_ASKS = [
+  /\bwhat (?:needs|wants) (?:me|my attention)\b/,
+  /\bwhat(?:'s| is) (?:up|next|on|new)\b/,
+  /\bbrief(?:ing)?\b/,
+  /\bwhat should i (?:do|look at)\b/,
+  /\banything (?:for me|urgent)\b/,
+];
+
+export function isBriefingRequest(text: string): boolean {
+  const said = text.toLowerCase().replace(/[’`]/g, "'").trim();
+  return BRIEFING_ASKS.some((re) => re.test(said));
+}
+
+const SPOKEN_ITEMS = 3;
+
+const sentence = (s: string): string => {
+  const t = s.trim();
+  return t === "" || /[.!?]$/.test(t) ? t : `${t}.`;
+};
+
+export function spokenBriefing(view: DeskView, selection: DeskSelection, areaLabel: string | null): string {
+  const brief = briefing(view, selection, areaLabel);
+  const rest = brief.lines.slice(1);
+  const top = selection.needsYou.slice(0, SPOKEN_ITEMS);
+  const parts = [brief.greeting];
+  if (top.length === 0) parts.push(...brief.lines.map(sentence));
+  else {
+    const scope = areaLabel ? ` in ${areaLabel}` : "";
+    parts.push(`${count(selection.needsYou.length, "thing needs", "things need")} you${scope}.`);
+    top.forEach((item, i) => parts.push(`${ORDINAL[i] ?? "Next"}: ${sentence(lowerFirst(item.title))} ${sentence(item.why)}`.trim()));
+    parts.push(...rest.map(sentence));
+  }
+  return parts.filter((p) => p !== "").join(" ");
+}
+
+const ORDINAL = ["First", "Second", "Third"];

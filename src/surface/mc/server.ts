@@ -70,6 +70,7 @@ import { handleDeskMail } from "./api/desk-mail";
 import { handleDeskCorrections } from "./api/desk-corrections";
 import { handleDeskAction, handleDeskAutonomy } from "./api/desk-action";
 import { handleDeskAsk, handleDeskCreate, handleDeskNoteDone } from "./api/desk-ask";
+import { handleDeskSpeak, handleDeskTranscribe } from "./api/desk-voice";
 import { handleDeskGoal } from "./api/desk-goal";
 import { handleDeskRuling } from "./api/desk-ruling";
 import { handleGetDeskStudio } from "./api/desk-studio";
@@ -476,6 +477,10 @@ async function handleApi(
   if (pathname === "/api/desk/ask") return handleDeskAsk(req, desk);
 
   if (pathname === "/api/desk/create") return handleDeskCreate(req, db, desk);
+
+  if (pathname === "/api/desk/voice/speak") return handleDeskSpeak(req, desk);
+
+  if (pathname === "/api/desk/voice/transcribe") return handleDeskTranscribe(req, desk);
 
   if (pathname === "/api/desk/notes/done") return handleDeskNoteDone(req, db);
 

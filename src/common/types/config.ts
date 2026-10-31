@@ -362,6 +362,25 @@ export type NetworkFile = z.infer<typeof NetworkFileSchema>;
 
 export const DESK_TRANSPORTS = ["none", "discord"] as const;
 export const AREA_POLICIES = ["local", "cloud"] as const;
+export const VOICE_PROVIDERS = ["browser", "elevenlabs"] as const;
+
+const DeskVoiceSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    input: z.enum(VOICE_PROVIDERS).default("browser"),
+    output: z.enum(VOICE_PROVIDERS).default("browser"),
+    elevenlabs: z
+      .object({
+        voiceId: z.string().regex(/^[A-Za-z0-9]{8,64}$/, "mc.desk.voice.elevenlabs.voiceId must be an ElevenLabs voice id"),
+        apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).default("ELEVENLABS_API_KEY"),
+        envFile: z.string().min(1).optional(),
+        ttsModel: z.string().min(1).default("eleven_turbo_v2_5"),
+        sttModel: z.string().min(1).default("scribe_v1"),
+        timeoutSeconds: z.number().int().min(1).max(120).default(20),
+      })
+      .optional(),
+  })
+  .refine((v) => (v.input !== "elevenlabs" && v.output !== "elevenlabs") || v.elevenlabs !== undefined, "mc.desk.voice.elevenlabs is required when input or output is elevenlabs");
 
 const DeskInterruptionsSchema = z.object({
   transport: z.enum(DESK_TRANSPORTS).default("none"),
@@ -441,6 +460,7 @@ const DeskSchema = z.object({
     })
     .default({ parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }),
   interruptions: DeskInterruptionsSchema.default(DeskInterruptionsSchema.parse({})),
+  voice: DeskVoiceSchema.default(DeskVoiceSchema.parse({})),
   mail: z
     .object({
       classifier: z
