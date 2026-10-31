@@ -262,6 +262,7 @@ describe("the OpenAI-compatible provider", () => {
       expect(tls).toEqual({ ca: "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n" });
       await chatClassifier(CONFIG, fake, async () => null)(request, 1000);
       expect(tls).toBeUndefined();
+      await expect(chatClassifier({ ...CONFIG, caFile: `${ca}.missing` }, fake, async () => null)(request, 1000)).rejects.toThrow(`the classifier CA file could not be read: ${ca}.missing`);
     } finally {
       await Bun.file(ca).delete();
     }

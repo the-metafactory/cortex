@@ -115,13 +115,21 @@ const ChatResponseSchema = z.object({
   choices: z.array(z.object({ message: z.object({ content: z.string().nullish() }) })).min(1),
 });
 
+async function readCa(path: string): Promise<string> {
+  try {
+    return await Bun.file(path).text();
+  } catch {
+    throw new Error(`the classifier CA file could not be read: ${path}`);
+  }
+}
+
 export function chatClassifier(config: ClassifierConfig, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): ClassifierRunner {
   const url = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const wantsKey = needsKey(config);
   return async (request, timeoutMs) => {
     const key = await readKey(config);
     if (wantsKey && !key) throw new MissingKey("the classifier key was not found");
-    const ca = config.caFile ? await Bun.file(config.caFile).text() : null;
+    const ca = config.caFile ? await readCa(config.caFile) : null;
     const res = await fetchImpl(url, {
       ...(ca ? { tls: { ca } } : {}),
       method: "POST",
