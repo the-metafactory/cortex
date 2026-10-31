@@ -8,7 +8,7 @@ import { SourceCache, type DeskSourceConfig, type SourceEvent } from "./sources/
 import { listSenders, listVips } from "./vips";
 import { trashKey, type MailActionsConfig } from "./mail-actions";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
-import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
+import type { DeskCorrection, DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
 import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriters, type RecentCalendarWrites } from "./create";
@@ -16,7 +16,7 @@ import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
-import { classifierStatus, readApiKey, readClassifications, type ClassifierConfig, type MailClassifier } from "./classify";
+import { classifierStatus, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier } from "./classify";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
 export interface DeskRuntime {
@@ -108,8 +108,10 @@ export async function composeDesk(
   const mail = readings.flatMap((r) => r.mail.filter((m) => !(deps.handled?.has(trashKey(m.id)) ?? false)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
   const unimportant = listSenders(db, "unimportant").map((s) => s.address);
+  const corrections = readCorrections(db);
+  const activeCorrections = corrections.ok ? corrections.corrections : [];
   const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
-  if (classifier) void classifier.kick(db, { now, mail, events, vips: vips.map((v) => v.address), unimportant });
+  if (classifier) void classifier.kick(db, { now, mail, events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(activeCorrections) });
   const classified = classifier ? readClassifications(db, mail.filter((m) => m.unread).map((m) => m.id)) : undefined;
   const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null) : null;
   const notes = listOpenNotes(db);
@@ -130,8 +132,6 @@ export async function composeDesk(
   const rules = desk.interruptions ?? NO_INTERRUPTIONS;
 
   const rangerActions = rangerActionsReady(desk);
-  const corrections = readCorrections(db);
-  const activeCorrections = corrections.ok ? corrections.corrections : [];
   const goalActions = goalActionsFor(desk.goals, subjects, deps.goalChecks, now);
   const ranked = rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions, hidden: filtered?.hidden, goalActions })
     .filter((item) => goalListed(goalStatuses, item.goal));
@@ -170,6 +170,10 @@ export async function composeDesk(
     corrections: activeCorrections,
     mailClassifier,
   };
+}
+
+function mailCorrections(corrections: DeskCorrection[]): ClassifierCorrection[] {
+  return corrections.filter((c) => c.kind === "mail").slice(0, MAX_CORRECTIONS).map(({ kind, source, mode, label }) => ({ kind, source, mode, label }));
 }
 
 function goalActionsFor(goals: DeskGoalOptions | undefined, subjects: VigilSubjectView[], checks: GoalChecks | undefined, now: number): GoalActionsInput {

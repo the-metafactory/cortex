@@ -221,7 +221,7 @@ describe("the classifier and unimportant senders", () => {
   });
 
   it("tells the model about the unimportant list", () => {
-    const [system, user] = buildMessages({ mail: { id: "x", from: { address: "a@b.ch" }, subject: "s", firstParagraph: "", receivedAt: "2026-10-31T08:00:00.000Z" }, meetings: [], vips: [], unimportant: ["@gitlab.example"] });
+    const [system, user] = buildMessages({ mail: { id: "x", from: { address: "a@b.ch" }, subject: "s", firstParagraph: "", receivedAt: "2026-10-31T08:00:00.000Z" }, meetings: [], vips: [], unimportant: ["@gitlab.example"], corrections: [] });
     expect(system?.content).toContain("the senders they marked unimportant");
     expect(JSON.parse(user?.content ?? "{}").unimportant).toEqual(["@gitlab.example"]);
   });

@@ -118,6 +118,7 @@ export interface DeskView {
 export interface DeskMailClassifier {
   host: string;
   model: string;
+  command?: string;
   keyNeeded: boolean;
   keyFound: boolean;
 }

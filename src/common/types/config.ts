@@ -423,8 +423,9 @@ const DeskSchema = z.object({
     .object({
       classifier: z
         .object({
-          baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), "mc.desk.mail.classifier.baseUrl must use https unless it is a loopback address"),
-          model: z.string().min(1),
+          baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), "mc.desk.mail.classifier.baseUrl must use https unless it is a loopback address").optional(),
+          model: z.string().min(1).optional(),
+          command: z.array(z.string().min(1)).min(1).optional(),
           apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
           apiKeyFile: z.string().min(1).optional(),
           caFile: z.string().min(1).optional(),
@@ -432,6 +433,8 @@ const DeskSchema = z.object({
           maxPerPass: z.number().int().min(1).max(100).default(10),
         })
         .refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.mail.classifier: set apiKeyEnv or apiKeyFile, not both")
+        .refine((c) => (c.command ? !c.baseUrl && !c.model : Boolean(c.baseUrl && c.model)), "mc.desk.mail.classifier: set either command, or baseUrl and model")
+        .refine((c) => !(c.command && c.caFile), "mc.desk.mail.classifier.caFile belongs to the endpoint form; pass a CA to the command in its argv")
         .optional(),
       actions: z
         .object({
