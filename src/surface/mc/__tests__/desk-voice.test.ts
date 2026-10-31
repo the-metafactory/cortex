@@ -122,7 +122,10 @@ describe("spoken briefing", () => {
   it("knows a briefing request when it hears one", () => {
     expect(isBriefingRequest("What needs me?")).toBe(true);
     expect(isBriefingRequest("brief me")).toBe(true);
+    expect(isBriefingRequest("give me my briefing")).toBe(true);
     expect(isBriefingRequest("remind me to call Daniela at 5")).toBe(false);
+    expect(isBriefingRequest("remind me to send the brief to Anna")).toBe(false);
+    expect(isBriefingRequest("move the briefing to 3")).toBe(false);
   });
 
   it("mentions only the filtered area's items", () => {

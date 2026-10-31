@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { browserInput, elevenLabsOutput, NO_MIC, NO_RECOGNITION, SpeechFailure, speechFor, voiceTurn, type SpeechEnv, type SpeechOut } from "../desk-speech";
+import { browserInput, elevenLabsOutput, NO_ANSWER, NO_MIC, NO_RECOGNITION, SpeechFailure, speechFor, voiceTurn, type SpeechEnv, type SpeechOut } from "../desk-speech";
 import { NO_QUOTA } from "../../../desk/voice";
 import { isBriefingRequest } from "../../../desk/present";
 
@@ -36,6 +36,13 @@ describe("voiceTurn with a fake provider", () => {
     const turn = await voiceTurn("remind me to call Daniela at 5", turnDeps(new FakeOut(), asked));
     expect(asked).toEqual(["remind me to call Daniela at 5"]);
     expect(turn.answer).toContain("call Daniela");
+  });
+
+  it("answers in one line when the ask pipeline throws", async () => {
+    const out = new FakeOut();
+    const turn = await voiceTurn("remind me", { ...turnDeps(out), ask: async () => Promise.reject(new Error("boom")) });
+    expect(turn).toEqual({ answer: NO_ANSWER, fallback: null });
+    expect(out.said).toEqual([]);
   });
 
   it("falls back to text and says why in one line when the provider fails", async () => {

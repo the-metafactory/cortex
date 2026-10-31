@@ -1,4 +1,6 @@
-export type VoiceProviderId = "browser" | "elevenlabs";
+import type { VOICE_PROVIDERS } from "../../../common/types/config";
+
+export type VoiceProviderId = (typeof VOICE_PROVIDERS)[number];
 
 export interface ElevenLabsOptions {
   voiceId: string;
@@ -16,11 +18,7 @@ export interface VoiceOptions {
   elevenlabs?: ElevenLabsOptions;
 }
 
-export interface DeskVoice {
-  enabled: boolean;
-  input: VoiceProviderId;
-  output: VoiceProviderId;
-}
+export type DeskVoice = Omit<VoiceOptions, "elevenlabs">;
 
 export const voiceView = (v: VoiceOptions | undefined): DeskVoice => ({ enabled: v?.enabled ?? true, input: v?.input ?? "browser", output: v?.output ?? "browser" });
 

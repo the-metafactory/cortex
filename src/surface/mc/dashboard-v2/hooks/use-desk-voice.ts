@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DeskVoice } from "../../desk/voice";
-import { SpeechFailure, speechFor, voiceTurn, type Listening, type SpeechEnv, type SpeechProviders } from "../lib/desk-speech";
+import { failureLine, speechFor, voiceTurn, type Listening, type SpeechEnv, type SpeechProviders } from "../lib/desk-speech";
 
 export type VoicePhase = "idle" | "listening" | "thinking" | "speaking";
 
@@ -30,6 +30,7 @@ export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: Spe
   const { enabled, input, output } = voice;
   const providers = useMemo<SpeechProviders | null>(() => (env && enabled ? speechFor({ enabled, input, output }, env) : null), [env, enabled, input, output]);
   const session = useRef<Listening | null>(null);
+  const turnId = useRef(0);
   const latest = useRef(handlers);
   latest.current = handlers;
 
@@ -40,12 +41,13 @@ export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: Spe
 
   const start = useCallback((): void => {
     if (!providers || session.current) return;
+    turnId.current += 1;
     providers.output.stop();
     try {
       session.current = providers.input.listen((transcript) => setState((s) => ({ ...s, transcript })));
       setState({ ...VOICE_IDLE, phase: "listening" });
     } catch (err) {
-      fail(err instanceof SpeechFailure ? err.line : String(err));
+      fail(failureLine(err));
     }
   }, [providers, fail]);
 
@@ -53,14 +55,17 @@ export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: Spe
     const listening = session.current;
     if (!providers || !listening) return;
     session.current = null;
+    const id = turnId.current;
+    const current = (): boolean => turnId.current === id;
     setState((s) => ({ ...s, phase: "thinking" }));
     let said: string;
     try {
       said = (await listening.stop()).trim();
     } catch (err) {
-      fail(err instanceof SpeechFailure ? err.line : String(err));
+      if (current()) fail(failureLine(err));
       return;
     }
+    if (!current()) return;
     if (!said) {
       setState({ ...VOICE_IDLE, fallback: "I did not catch that. Hold Space and try again." });
       return;
@@ -73,16 +78,17 @@ export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: Spe
       ask: answer,
       output: {
         speak: (text) => {
-          setState((s) => ({ ...s, answer: text }));
+          if (current()) setState((s) => ({ ...s, answer: text }));
           return providers.output.speak(text);
         },
         stop: () => providers.output.stop(),
       },
     });
-    setState({ phase: "idle", transcript: said, answer: turn.answer, fallback: turn.fallback });
+    if (current()) setState({ phase: "idle", transcript: said, answer: turn.answer, fallback: turn.fallback });
   }, [providers, fail]);
 
   const dismiss = useCallback((): void => {
+    turnId.current += 1;
     session.current?.cancel();
     session.current = null;
     providers?.output.stop();

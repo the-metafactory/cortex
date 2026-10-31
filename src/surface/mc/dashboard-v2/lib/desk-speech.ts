@@ -6,6 +6,10 @@ export class SpeechFailure extends Error {
   }
 }
 
+export const failureLine = (err: unknown, fallback: string = String(err)): string => (err instanceof SpeechFailure ? err.line : fallback);
+
+export const NO_ANSWER = "The Desk could not answer that.";
+
 export interface Listening {
   stop(): Promise<string>;
   cancel(): void;
@@ -247,11 +251,16 @@ export interface VoiceTurn {
 }
 
 export async function voiceTurn(said: string, deps: VoiceTurnDeps): Promise<VoiceTurn> {
-  const answer = deps.isBriefing(said) ? deps.briefing() : await deps.ask(said);
+  let answer: string;
+  try {
+    answer = deps.isBriefing(said) ? deps.briefing() : await deps.ask(said);
+  } catch {
+    return { answer: NO_ANSWER, fallback: null };
+  }
   try {
     await deps.output.speak(answer);
     return { answer, fallback: null };
   } catch (err) {
-    return { answer, fallback: `${err instanceof SpeechFailure ? err.line : NO_SYNTHESIS} Answering in text.` };
+    return { answer, fallback: `${failureLine(err, NO_SYNTHESIS)} Answering in text.` };
   }
 }

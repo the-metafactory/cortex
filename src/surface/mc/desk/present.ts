@@ -62,7 +62,7 @@ export const URGENCY_LABEL: Record<DeskItem["urgency"], string> = {
 const BRIEFING_ASKS = [
   /\bwhat (?:needs|wants) (?:me|my attention)\b/,
   /\bwhat(?:'s| is) (?:up|next|on|new)\b/,
-  /\bbrief(?:ing)?\b/,
+  /^(?:(?:please )?(?:give me|read me) (?:a |the |my )?)?brief(?:ing| me)\b/,
   /\bwhat should i (?:do|look at)\b/,
   /\banything (?:for me|urgent)\b/,
 ];
