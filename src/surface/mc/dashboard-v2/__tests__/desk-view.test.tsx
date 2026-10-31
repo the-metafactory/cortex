@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActionButton, DeskBody, DeskView, DoneForYou, ItemMenu, RankingSection, RestGroups, dismissesMenu } from "../components/desk-view";
+import { ActionButton, DeskBody, DeskView, DoneForYou, ItemMenu, RankingSection, RestGroups, dismissesMenu, withPauseConfirm } from "../components/desk-view";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
@@ -338,5 +338,22 @@ describe("ranking corrections on the Desk", () => {
     expect(html).toContain("Less like this: Goals that need a look, from vigil");
     expect(html).toContain('aria-label="Undo &quot;Less like this&quot; for Goals that need a look, from vigil"');
     expect(renderToStaticMarkup(<RankingSection corrections={[]} onUndo={() => {}} />)).toBe("");
+  });
+});
+
+describe("a goal item's actions", () => {
+  const check = { id: "goal.check", label: "Check again now", role: "primary" as const, wired: true };
+  const pause = { id: "goal.pause", label: "Pause this goal", role: "secondary" as const, wired: true };
+  const goal = item(9, { kind: "goal", goal: "G6", actions: [check, pause] });
+
+  it("shows a running check as busy, also after a reload while Vigil has not reported", () => {
+    const page = renderToStaticMarkup(<DeskBody view={{ ...view, items: [{ ...goal, checking: true }] }} error={null} onOpenMissionControl={() => {}} />);
+    expect(page).toContain(">Checking…</button>");
+    expect(page).toContain(">Pause this goal</button>");
+  });
+
+  it("asks once more before it pauses a goal", () => {
+    expect(withPauseConfirm(goal).actions.map((a) => a.label)).toEqual(["Check again now", "Yes, pause it"]);
+    expect(renderToStaticMarkup(<ActionButton action={pause} onRun={() => {}} sending="goal.pause" />)).toContain(">Pausing…</button>");
   });
 });

@@ -69,6 +69,8 @@ import { handleDeskVips } from "./api/desk-vips";
 import { handleDeskCorrections } from "./api/desk-corrections";
 import { handleDeskAction, handleDeskAutonomy } from "./api/desk-action";
 import { handleDeskAsk, handleDeskCreate, handleDeskNoteDone } from "./api/desk-ask";
+import { handleDeskGoal } from "./api/desk-goal";
+import { GoalChecks, GoalStatuses } from "./desk/goals";
 import { RecentCalendarWrites } from "./desk/create";
 import { HandledLedger } from "./desk/actions";
 import type { DeskOptions, DeskRuntime } from "./desk/compose";
@@ -168,7 +170,7 @@ export function startServer(
   const deskSourceCache = new SourceCache();
   const deskLedger = new HandledLedger();
   const deskRecentWrites = new RecentCalendarWrites();
-  const deskRuntime: DeskRuntime = { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites };
+  const deskRuntime: DeskRuntime = { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses() };
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
@@ -467,6 +469,8 @@ async function handleApi(
   if (pathname === "/api/desk/create") return handleDeskCreate(req, db, desk);
 
   if (pathname === "/api/desk/notes/done") return handleDeskNoteDone(req, db);
+
+  if (pathname === "/api/desk/goal") return handleDeskGoal(req, desk);
 
   if (pathname === "/api/vigil/subjects") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);

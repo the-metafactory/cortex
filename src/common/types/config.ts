@@ -418,6 +418,21 @@ const DeskSchema = z.object({
     })
     .default({ parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }),
   interruptions: DeskInterruptionsSchema.default(DeskInterruptionsSchema.parse({})),
+  goals: z
+    .object({
+      somaBin: z.string().default(""),
+      check: z
+        .record(
+          z.string().regex(/^[A-Za-z][\w.-]{0,63}$/),
+          z.object({
+            command: z.array(z.string().min(1)).min(1),
+            env: z.record(z.string().regex(/^[A-Za-z_]\w*$/), z.string()).default({}),
+            timeoutSeconds: z.number().int().min(1).max(300).default(60),
+          }),
+        )
+        .default({}),
+    })
+    .default({ somaBin: "", check: {} }),
 });
 const DESK_DEFAULTS = DeskSchema.parse({});
 

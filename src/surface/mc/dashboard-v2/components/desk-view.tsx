@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getJson, postJson } from "../lib/api";
-import { submitDeskAction } from "../lib/desk-action";
+import { submitDeskAction, submitGoalAction } from "../lib/desk-action";
 import { chimeForNew } from "../lib/desk-chime";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
 import { ProposalCard, proposalTitle } from "./desk-proposal";
@@ -60,6 +60,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [note, setNote] = useState<string | null>(null);
   const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map());
   const inFlight = useRef(new Set<string>());
+  const [confirmPause, setConfirmPause] = useState<string | null>(null);
   const [askText, setAskText] = useState("");
   const [asking, setAsking] = useState(false);
   const [proposal, setProposal] = useState<{ p: DeskProposal; said: string; requestId: string; fields: Record<string, unknown> } | null>(null);
@@ -89,6 +90,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   useEffect(() => {
     chimeForNew(view);
   }, [view]);
+
+  const checking = view.items.some((i) => i.checking === true);
+  useEffect(() => {
+    if (!checking) return;
+    const t = setInterval(onChanged, CHECK_POLL_MS);
+    return () => clearInterval(t);
+  }, [checking, onChanged]);
 
   useEffect(() => {
     if (!detail) return;
@@ -153,6 +161,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   }, [note]);
 
   const run = (item: DeskItem, a: DeskAction): void => {
+    const goal = item.goal ?? "";
     if (a.id === "detail") setDetail(item);
     else if (a.id === "snooze") setSnoozed((s) => new Set(s).add(item.key));
     else if (a.id === "vip.add" && a.target) void addVip(a.target, item.title.split(" wrote:")[0] ?? null);
@@ -161,17 +170,24 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       void doneNote(a.target, item.key);
     }
     else if (a.id.startsWith("ranger.") && a.wired) void send(item, a);
+    else if (a.id === "goal.check" && a.wired && item.goal) void send(item, a, () => submitGoalAction({ action: a.id, goal }), false);
+    else if (a.id === "goal.pause" && item.goal) {
+      if (confirmPause === item.key) {
+        setConfirmPause(null);
+        void send(item, a, () => submitGoalAction({ action: a.id, goal }));
+      } else setConfirmPause(item.key);
+    }
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
   };
 
-  const send = async (item: DeskItem, action: DeskAction): Promise<void> => {
+  const send = async (item: DeskItem, action: DeskAction, request?: () => Promise<{ ok: boolean; text: string }>, hide = true): Promise<void> => {
     if (inFlight.current.has(item.key)) return;
     inFlight.current.add(item.key);
     setSending((m) => new Map(m).set(item.key, action.id));
     let result: { ok: boolean; text: string };
     try {
-      result = await submitDeskAction({ action: action.id, key: item.key });
+      result = await (request ? request() : submitDeskAction({ action: action.id, key: item.key }));
     } finally {
       inFlight.current.delete(item.key);
       setSending((m) => {
@@ -182,8 +198,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     }
     setNote(result.text);
     if (!result.ok) return;
-    setSnoozed((s) => new Set(s).add(item.key));
-    setDetail((d) => (d?.key === item.key ? null : d));
+    if (hide) {
+      setSnoozed((s) => new Set(s).add(item.key));
+      setDetail((d) => (d?.key === item.key ? null : d));
+    }
     onChanged();
   };
 
@@ -219,16 +237,20 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     }
   };
 
+  const shown = (item: DeskItem): DeskItem => (confirmPause === item.key ? withPauseConfirm(item) : item);
+  const busyWith = (item: DeskItem): string | null => sending.get(item.key) ?? (item.checking ? "goal.check" : null);
+  const detailItem = detail ? view.items.find((i) => i.key === detail.key) ?? detail : null;
+
   const itemRow = (item: DeskItem, idx: number) => (
     <DeskItemRow
       key={item.key}
-      item={item}
+      item={shown(item)}
       rank={idx + 1}
       area={item.area ? areaById.get(item.area) : undefined}
       event={item.eventKey ? view.today.find((e) => e.key === item.eventKey) : undefined}
       onOpen={() => setDetail(item)}
       onAction={(a) => run(item, a)}
-      sending={sending.get(item.key) ?? null}
+      sending={busyWith(item)}
       onFocusEvent={focusEvent}
       onCorrect={(mode) => void correct(item.kind, item.source, mode)}
     />
@@ -448,7 +470,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
       <div className="desk-scrim" onClick={() => setDetail(null)} />
       <aside className="desk-panel" aria-hidden={!detail} aria-label="Details">
-        {detail && <DetailPanel item={detail} area={detail.area ? areaById.get(detail.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detail, a)} sending={sending.get(detail.key) ?? null} />}
+        {detailItem && <DetailPanel item={shown(detailItem)} area={detailItem.area ? areaById.get(detailItem.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detailItem, a)} sending={busyWith(detailItem)} />}
       </aside>
 
       {note && <div className="desk-note" role="status">{note}</div>}
@@ -647,6 +669,14 @@ export function RankingSection({ corrections, onUndo }: { corrections: DeskCorre
   );
 }
 
+const CHECK_POLL_MS = 3000;
+
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…" };
+
+export function withPauseConfirm(item: DeskItem): DeskItem {
+  return { ...item, actions: item.actions.map((a) => (a.id === "goal.pause" ? { ...a, label: "Yes, pause it" } : a)) };
+}
+
 export function ActionButton({ action, onRun, sending }: { action: DeskAction; onRun: (a: DeskAction) => void; sending: string | null }) {
   const style = action.role === "primary" ? " pri" : action.id === "snooze" ? " ghost" : "";
   const busy = sending === action.id;
@@ -659,7 +689,7 @@ export function ActionButton({ action, onRun, sending }: { action: DeskAction; o
       title={action.wired ? undefined : "Not connected yet"}
       onClick={() => onRun(action)}
     >
-      {busy ? "Sending…" : action.label}
+      {busy ? BUSY_LABEL[action.id] ?? "Sending…" : action.label}
     </button>
   );
 }

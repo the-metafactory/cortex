@@ -1,15 +1,13 @@
 export const DESK_ACTION_PATH = "/api/desk/action";
+export const DESK_GOAL_PATH = "/api/desk/goal";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
+type Outcome = { ok: boolean; text: string };
 
-/** Sends one Desk action and returns one line for the page. Never throws. */
-export async function submitDeskAction(
-  body: { action: string; key: string },
-  fetchImpl: FetchLike = fetch,
-): Promise<{ ok: boolean; text: string }> {
+async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Promise<Outcome> {
   let res: Response;
   try {
-    res = await fetchImpl(DESK_ACTION_PATH, {
+    res = await fetchImpl(path, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -23,3 +21,11 @@ export async function submitDeskAction(
   const line = typeof parsed?.detail === "string" ? parsed.detail : error;
   return { ok: false, text: line || `The action failed (HTTP ${res.status}).` };
 }
+
+/** Sends one Desk action and returns one line for the page. Never throws. */
+export const submitDeskAction = (body: { action: string; key: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
+  postDesk(DESK_ACTION_PATH, body, fetchImpl);
+
+/** Checks or pauses one goal and returns one line for the page. Never throws. */
+export const submitGoalAction = (body: { action: string; goal: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
+  postDesk(DESK_GOAL_PATH, body, fetchImpl);

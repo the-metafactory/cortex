@@ -237,6 +237,35 @@ describe("the Desk action route through Mission Control", () => {
     }
   });
 
+  it("runs a check for the principal without a step-up code, and refuses another identity before anything runs", async () => {
+    const secretPath = join(tmpDir, "step-up-totp.json");
+    writeEnrollment(secretPath, createEnrollment("2026-10-16T00:00:00.000Z"));
+    const marker = join(tmpDir, "check-calls");
+    const bin = join(tmpDir, "check");
+    writeFileSync(bin, `#!/bin/sh\necho "$1 $CHECK_TAG" >> ${marker}\n`, { mode: 0o755 });
+    const ctx = startServer(
+      { ...DEFAULT_CONFIG, port: 0, governance: { principals: ["principal@example.com"], stepUp: { secretPath } } },
+      db,
+      { desk: { ...DESK, rangerUrl: "", goals: { somaBin: "", check: { G6: { command: [bin, "fire"], env: { CHECK_TAG: "g6" }, timeoutSeconds: 10 } } } } },
+    );
+    const base = `http://localhost:${ctx.server.port}`;
+    const send = (email: string) => fetch(`${base}/api/desk/goal`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: base, "Cf-Access-Authenticated-User-Email": email },
+      body: JSON.stringify({ action: "goal.check", goal: "G6" }),
+    });
+    try {
+      const stranger = await send("unlisted@example.com");
+      expect(stranger.status).toBe(403);
+      expect(existsSync(marker)).toBe(false);
+
+      expect((await send("principal@example.com")).status).toBe(200);
+      expect(readFileSync(marker, "utf8").trim()).toBe("fire g6");
+    } finally {
+      ctx.stop(true);
+    }
+  });
+
   it("refuses a promotion from another identity, and retries at once for the principal", async () => {
     const desk = startDesk(rangerState());
     const send = (email: string) => desk.send("/api/desk/autonomy", email, { action: "ranger.retry", on: true });

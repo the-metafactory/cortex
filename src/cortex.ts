@@ -4959,6 +4959,14 @@ export async function startCortex(
           sources: config.mc.desk.sources,
           ask: config.mc.desk.ask,
           interruptions: config.mc.desk.interruptions,
+          goals: {
+            somaBin: config.mc.desk.goals.somaBin ? expandTilde(config.mc.desk.goals.somaBin) : "",
+            check: Object.fromEntries(Object.entries(config.mc.desk.goals.check).map(([goal, c]) => [goal, {
+              command: [expandTilde(c.command[0] ?? ""), ...c.command.slice(1)],
+              env: Object.fromEntries(Object.entries(c.env).map(([k, v]) => [k, expandTilde(v)])),
+              timeoutSeconds: c.timeoutSeconds,
+            }])),
+          },
         },
         ...(config.mc.desk.interruptions.transport === "discord"
           ? {
