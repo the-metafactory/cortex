@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { changeVips, type DeskVipRow, type VipChange } from "../lib/desk-settings";
-import { browserNotifyEnv, enableNotifications, NOTIFY_LINE, notifyState, type NotifyState } from "../lib/desk-notify";
+import { browserNotifyEnv, NOTIFY_LINE, notifyState, requestNotifications, type NotifyState } from "../lib/desk-notify";
 import type { DeskView } from "../../desk/types";
 import "./desk-view.css";
 
@@ -35,8 +35,9 @@ export function DeskSettings({ view, onBack }: { view: DeskView; onBack: () => v
       onBack={onBack}
       notify={notify}
       onEnableNotify={() => {
-        const env = browserNotifyEnv();
-        if (env) void enableNotifications(view, env).then(setNotify, () => undefined);
+        void requestNotifications(view).then((state) => {
+          if (state) setNotify(state);
+        });
       }}
       onAdd={(address) => apply({ op: "add", address })}
       onRemove={(address) => void apply({ op: "remove", address })}

@@ -1,5 +1,5 @@
 import type { DeskView } from "../../desk/types";
-import { freshInterrupts, loadSeen, rememberSeen, type SeenStore } from "./desk-chime";
+import { freshInterrupts, loadSeen, rememberSeen, type SeenStore } from "./desk-seen";
 
 const NOTIFIED_KEY = "desk.notified";
 const HINT_KEY = "desk.notifyHint";
@@ -39,26 +39,33 @@ export function notifyIfNew(view: DeskView, env: NotifyEnv, open: (key: string) 
   const api = env.api;
   if (!api || notifyState(view.notifications, env) !== "granted") return [];
   const seen = loadSeen(env.store, NOTIFIED_KEY);
-  const fresh = freshInterrupts(view, seen);
-  if (fresh.length === 0) return [];
-  rememberSeen(env.store, NOTIFIED_KEY, seen, fresh);
   const items = new Map(view.items.map((i) => [i.key, i]));
-  return fresh.filter((key) => {
+  const shown = freshInterrupts(view, seen).filter((key) => {
     const item = items.get(key);
-    if (!item) return false;
-    const shown = new api(item.title, { body: item.why, tag: `desk:${key}` });
-    shown.onclick = () => {
+    return item !== undefined && show(api, env, key, item.title, item.why, open);
+  });
+  if (shown.length > 0) rememberSeen(env.store, NOTIFIED_KEY, seen, shown);
+  return shown;
+}
+
+function show(api: NotifyApi, env: NotifyEnv, key: string, title: string, why: string, open: (key: string) => void): boolean {
+  try {
+    const n = new api(title, { body: why, tag: `desk:${key}` });
+    n.onclick = () => {
       env.focus();
       open(key);
-      shown.close();
+      n.close();
     };
     return true;
-  });
+  } catch {
+    return false;
+  }
 }
 
 export async function enableNotifications(view: DeskView, env: NotifyEnv): Promise<NotifyState> {
-  env.store.setItem(HINT_KEY, "done");
-  if (!env.api || notifyState(view.notifications, env) !== "default") return notifyState(view.notifications, env);
+  dismissHint(env);
+  const state = notifyState(view.notifications, env);
+  if (!env.api || state !== "default") return state;
   const permission = await env.api.requestPermission();
   if (permission === "granted") {
     const seen = loadSeen(env.store, NOTIFIED_KEY);
@@ -87,10 +94,11 @@ export function browserNotifyEnv(): NotifyEnv | null {
 
 export function notifyForNew(view: DeskView, open: (key: string) => void): void {
   const env = browserNotifyEnv();
-  if (!env) return;
-  try {
-    notifyIfNew(view, env, open);
-  } catch {
-    return;
-  }
+  if (env) notifyIfNew(view, env, open);
+}
+
+export async function requestNotifications(view: DeskView): Promise<NotifyState | null> {
+  const env = browserNotifyEnv();
+  if (!env) return null;
+  return enableNotifications(view, env).catch(() => notifyState(view.notifications, env));
 }

@@ -111,6 +111,23 @@ describe("Desk browser notifications", () => {
     }
   });
 
+  it("keeps an item unseen when the browser refuses to construct the notification", () => {
+    const h = harness("granted");
+    const refusing = Object.assign(
+      class {
+        onclick: Notification["onclick"] = null;
+        close(): void {}
+        constructor() {
+          throw new TypeError("Illegal constructor");
+        }
+      },
+      { permission: "granted" as const, requestPermission: async () => "granted" as const },
+    ) satisfies NotifyApi;
+    expect(notifyIfNew(view([item(1, true)]), { ...h.env, api: refusing }, () => undefined)).toEqual([]);
+    expect(h.store.size).toBe(0);
+    expect(notifyIfNew(view([item(1, true)]), h.env, () => undefined)).toEqual(["reminder:desk:1"]);
+  });
+
   it("names the state Settings explains", () => {
     expect(notifyState(false, harness("granted").env)).toBe("off");
     expect(notifyState(true, harness("granted", false).env)).toBe("insecure");

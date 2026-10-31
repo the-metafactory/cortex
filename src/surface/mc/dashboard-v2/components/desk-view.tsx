@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction, submitGoalAction } from "../lib/desk-action";
 import { chimeForNew } from "../lib/desk-chime";
-import { browserNotifyEnv, dismissHint, enableNotifications, notifyForNew, wantsHint } from "../lib/desk-notify";
+import { browserNotifyEnv, dismissHint, notifyForNew, requestNotifications, wantsHint } from "../lib/desk-notify";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
 import { ProposalCard, proposalTitle } from "./desk-proposal";
 import { DeskSettings } from "./desk-settings";
@@ -324,8 +324,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             <NotifyHint
               onEnable={() => {
                 setHint(false);
-                const env = browserNotifyEnv();
-                if (env) void enableNotifications(view, env).catch(() => undefined);
+                void requestNotifications(view);
               }}
               onDismiss={() => {
                 setHint(false);
