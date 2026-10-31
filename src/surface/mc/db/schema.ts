@@ -16,6 +16,19 @@ function vigilResolutionsTableSql(table: string): string {
 const VIGIL_RESOLUTIONS_INDEX_SQL = `CREATE INDEX IF NOT EXISTS idx_vigil_attention_resolutions_published
   ON vigil_attention_resolutions(published)`;
 
+function deskDeliveriesTableSql(table: string): string {
+  return `CREATE TABLE IF NOT EXISTS ${table} (
+    item_key TEXT PRIMARY KEY,
+    transport TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('sending','sent','buffered','failed')),
+    title TEXT NOT NULL,
+    error TEXT,
+    ref TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`;
+}
+
 function vigilRefTableSql(table: string, refColumn: string): string {
   return `CREATE TABLE IF NOT EXISTS ${table} (
     ${refColumn} TEXT PRIMARY KEY,
@@ -129,16 +142,7 @@ export const SCHEMA_SQL: string[] = [
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`,
-  `CREATE TABLE IF NOT EXISTS desk_deliveries (
-    item_key TEXT PRIMARY KEY,
-    transport TEXT NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('sending','sent','failed')),
-    title TEXT NOT NULL,
-    error TEXT,
-    ref TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  )`,
+  deskDeliveriesTableSql("desk_deliveries"),
   `CREATE TABLE IF NOT EXISTS desk_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT NOT NULL CHECK(kind IN ('reminder','note')),
@@ -1121,6 +1125,17 @@ export interface RebuildMigration {
 }
 
 export const REBUILD_MIGRATIONS: RebuildMigration[] = [
+  {
+    table: "desk_deliveries",
+    detect: (sql) => /CHECK\s*\(\s*status\s+IN\s*\(/i.test(sql) && !sql.includes("'buffered'"),
+    steps: [
+      deskDeliveriesTableSql("desk_deliveries_new"),
+      `INSERT INTO desk_deliveries_new (item_key, transport, status, title, error, ref, created_at, updated_at)
+       SELECT item_key, transport, status, title, error, ref, created_at, updated_at FROM desk_deliveries`,
+      `DROP TABLE desk_deliveries`,
+      `ALTER TABLE desk_deliveries_new RENAME TO desk_deliveries`,
+    ],
+  },
   {
     table: "vigil_attention_resolutions",
     detect: (sql) => /PRIMARY KEY\s*\(\s*key\s*,\s*resolution\s*\)/i.test(sql),

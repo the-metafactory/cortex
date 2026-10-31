@@ -564,6 +564,7 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
         <button type="button" className="desk-title" onClick={onOpen}>{item.title}</button>
         <p className="desk-why">{item.why}</p>
         {item.interrupt?.delivery === "failed" && <p className="desk-why desk-unsent">Not pushed: {item.interrupt.error}</p>}
+        {item.interrupt?.delivery === "buffered" && <p className="desk-why desk-waiting">Waiting for Discord</p>}
         {item.excerpt && <blockquote className="desk-excerpt">{item.excerpt}</blockquote>}
         <div className="desk-acts">
           {item.actions.map((a) => <ActionButton key={a.id} action={a} onRun={onAction} sending={sending} />)}
