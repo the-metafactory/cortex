@@ -240,3 +240,21 @@ The `spar` modes are `think`, `grill`, `other-side`, `red-team`, `first-principl
 The response is `{ ok, message, studio }`. Ranger retains the request id after completion, so a retry uses the original job rather than starting another. Reusing an id with a different thread or mode returns a conflict. The page keeps the request pending until a note carrying that job's `run` UUID appears. Other notes cannot clear it. A failed job shows its failure reason. Queue and note changes arrive through the Studio's 30-second refresh.
 
 Thinking never replaces Where I stand automatically; generated stands remain proposals. Native Ranger execution continues to enforce the model policy and Studio write checks.
+
+## Live discussions
+
+Discuss on an open idea or proposed stand opens a short typed exchange. Keep as is and Keep reworded keep the selected idea. For a proposed stand, those choices also adopt its text as Where I stand. Dismiss marks the proposal dismissed. Each choice records the exchange as a dated note in one Studio commit. A changed proposal or stand refuses a stale choice, while Close and save note can still record the exchange.
+
+Talk it through uses the selected thread's question, stand, notes, responses and Material labels. Material links are context only and are never fetched. End and save summary records the exchange and its latest summary. Save summary and propose stand adds an open stand proposal. It does not adopt that proposal.
+
+Live sessions use the existing `studio.filer` OpenAI-compatible endpoint and its `local` endpoint. The strictest current area policy selects the model before each call. Unknown areas require the local endpoint. A session that has used local context stays local even if an area's policy later changes. An unavailable local endpoint keeps the text and explains the failure without a cloud fallback. Models receive no tools.
+
+The existing push-to-talk provider adds its transcript to the session's message field. Send submits that message to the session. The global command bar microphone is disabled while a session is open.
+
+Mission Control stores turns before calling the model. A failed call retains the turn for retry. Close and save note, navigation away from the thread, and page exit save the exchange and any unsent message without keeping or dismissing the proposal. Page exit uses a best-effort request. If the connection fails, Resume saved exchange offers the durable session next time. Saving the same ending again returns its original commit. A different ending for an already saved session refuses.
+
+`POST /api/desk/studio/session` accepts `start`, `read`, `recover`, `say`, `end` and `save-message`. Sessions and turns use UUIDs. Session state is local to Mission Control's database and bound to the configured Studio directory. End uses the same clean-tree checks and shared Studio write lock as other Studio changes.
+
+Session requests can include a `draft` composer snapshot. Omitting the field preserves retained unsent text. An empty string clears it, and replacement text becomes the current draft. Submitting that same text as a turn consumes the draft while retaining the turn. Recovery uses a browser draft for the same session when present, including an intentionally empty draft. Otherwise it restores retained server text. Once an ending is chosen, the composer is read-only until the save finishes or refuses.
+
+If another tab saves the exchange while this tab still has a newer message, the newer text remains in the panel and its own browser cache. Save remaining message explicitly appends it through the existing response writer for that session's Studio and thread. Retrying returns the same response commit. The original ending stays unchanged. If the thread is closed or unavailable, the draft remains selectable for Copy message and close. A failed clipboard write keeps the panel and text.

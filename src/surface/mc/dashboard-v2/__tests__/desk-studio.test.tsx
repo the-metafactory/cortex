@@ -1,3 +1,4 @@
+import { StudioSessionPanel, type StudioSessionControls } from "../components/desk-studio-session";
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DeskModeSwitch, DeskStudio, ortho, takeLastLook } from "../components/desk-studio";
@@ -79,12 +80,14 @@ describe("the Studio board", () => {
     expect(open).toContain("Log <span");
   });
 
-  it("makes Keep, Dismiss and Close live and keeps Discuss disabled", () => {
+  it("makes Keep, Discuss, Talk it through, Dismiss and Close live", () => {
     const idea = { at: "2026-10-31T04:05:00+01:00", trigger: "Fits the week's post", model: "cloud", kind: "idea" as const, status: "open" as const, sample: true, text: "Draft it?" };
     const studio: StudioView = { ...STUDIO, active: [thread("one", 1, { notes: [idea] }), thread("two", 2)] };
-    const open = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} at={AT} />);
+    const open = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} onDiscuss={() => {}} at={AT} />);
     const disabled = [...open.matchAll(/<button type="button" class="desk-btn[^"]*" disabled="" title="[^"]+">([^<]+)</g)].map((m) => m[1]);
-    expect(disabled).toEqual(["Discuss"]);
+    expect(disabled).toEqual([]);
+    expect(open).toContain(">Discuss</button>");
+    expect(open).toContain(">Talk it through</button>");
     expect(open).toContain(">Close with an outcome</button>");
     expect(open).toContain(">Keep</button>");
     expect(open).toContain(">Dismiss</button>");
@@ -216,4 +219,16 @@ describe("board lines", () => {
   it("draws an orthogonal path with rounded corners", () => {
     expect(ortho([[0, 0], [20, 0], [20, 20]])).toBe("M0,0 L10,0 Q20,0 20,10 L20,20");
   });
+});
+
+
+it("a recovered unanswered Studio turn can retry with an empty composer", () => {
+  const controls: StudioSessionControls = {
+    session: { id: "00000000-0000-4000-8000-000000000001", thread: "one", scope: { kind: "thread" }, original: "A paper glider?", stand: "Try it.", policy: "local", phase: { kind: "open" }, turns: [{ id: "00000000-0000-4000-8000-000000000002", text: "Try another fold.", answer: null, model: "local", policy: "local" }] },
+    recoverable: [], remaining: false, chosen: null, retrying: false, resumeId: null, draft: "", reword: "", pending: false, error: null,
+    setDraft: () => {}, setReword: () => {}, start: () => {}, send: async () => {}, end: async () => {}, load: async () => {}, saveRemaining: async () => {}, copyRemaining: async () => {},
+  };
+  const html = renderToStaticMarkup(<StudioSessionPanel controls={controls} voice={{ enabled: false, input: "browser", output: "browser" }} location="studio:one" />);
+  expect(html).toContain('<button class="desk-btn pri">Retry saved turn</button>');
+  expect(html).toContain("Retry saved turn sends the original saved text.");
 });

@@ -13,7 +13,7 @@ const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
 const STACKED = "(max-width: 1100px)";
 const GROW = { duration: 340, easing: "cubic-bezier(.2,.85,.25,1)" };
 const SHRINK = { duration: 240, easing: "cubic-bezier(.4,0,.6,1)", fill: "forwards" as const };
-const DISCUSS_LATER = "Discuss arrives with live sessions with Ivy.";
+import type { StartDiscussion } from "./desk-studio-session";
 const NO_WRITES = "The Studio cannot write from here.";
 
 interface DocRect {
@@ -195,6 +195,7 @@ function PageHeader({ onBack, children, actions }: { onBack: () => void; childre
 interface Acting {
   slug: string;
   acts?: StudioActs;
+  onDiscuss?: StartDiscussion;
 }
 
 function GhostActions({ keep, note, acting, discuss = true }: { keep: string; note: IvyNote; acting: Acting; discuss?: boolean }) {
@@ -204,7 +205,7 @@ function GhostActions({ keep, note, acting, discuss = true }: { keep: string; no
   return (
     <span className="dst-acts">
       <button type="button" className="desk-btn" disabled={off} title={acts ? undefined : NO_WRITES} onClick={send("keep")}>{keep}</button>
-      {discuss && <button type="button" className="desk-btn ghost" disabled title={DISCUSS_LATER}>Discuss</button>}
+      {discuss && <button type="button" className="desk-btn ghost" disabled={!acting.onDiscuss || off} onClick={() => acting.onDiscuss?.(slug, { kind: "ghost", note: note.at })}>Discuss</button>}
       <button type="button" className="desk-btn ghost" disabled={off} title={acts ? undefined : NO_WRITES} onClick={send("dismiss")}>Dismiss</button>
     </span>
   );
@@ -323,19 +324,20 @@ function Outcome({ page, acting, today }: { page: ThreadPage; acting: Acting; to
   );
 }
 
-export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack }: {
+export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack, onDiscuss }: {
   page: ThreadPage;
   onBack: () => void;
   onOpen: (slug: string) => void;
   zoom?: ThreadZoom;
   acts?: StudioActs;
   onBringBack?: (slug: string, question: string) => void;
+  onDiscuss?: StartDiscussion;
 }) {
   const ref = useRef<HTMLElement>(null);
   const t = page.thread;
   useZoomMotion(ref, t.slug, zoom);
   const wires = useWires(ref, page);
-  const acting: Acting = { slug: t.slug, ...(acts ? { acts } : {}) };
+  const acting: Acting = { ...(onDiscuss ? { onDiscuss } : {}), slug: t.slug, ...(acts ? { acts } : {}) };
   return (
     <section className="dst-page" aria-label={`Thread: ${t.question}`} ref={ref} data-thread={t.slug}>
       <PageHeader onBack={onBack} actions={<ThreadActions page={page} acting={acting} {...(onBringBack ? { onBringBack } : {})} />}>{page.typeLabel} · {page.where}</PageHeader>
@@ -357,6 +359,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack }
               <GhostActions keep="Keep it as my stand" note={page.standProposal} acting={acting} />
             </NoteCard>
           )}
+          {onDiscuss && t.state !== "closed" && <button type="button" className="desk-btn" onClick={() => onDiscuss(t.slug, { kind: "thread" })}>Talk it through</button>}
           <Sparring page={page} {...(acts ? { acts } : {})} />
           <Outcome page={page} acting={acting} today={localDate(new Date())} />
         </div>

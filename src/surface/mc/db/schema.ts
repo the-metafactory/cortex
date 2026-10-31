@@ -121,6 +121,7 @@ export const TABLE_NAMES = [
   "desk_corrections",
   "desk_mail_classes",
   "desk_unimportant",
+  "desk_studio_sessions",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -131,6 +132,7 @@ export const SCHEMA_SQL: string[] = [
     color TEXT NOT NULL,
     PRIMARY KEY (source, name)
   )`,
+  "CREATE TABLE IF NOT EXISTS desk_studio_sessions (id TEXT PRIMARY KEY, directory TEXT NOT NULL, data TEXT NOT NULL)",
   `CREATE TABLE IF NOT EXISTS desk_mail_classes (
     message_id TEXT PRIMARY KEY,
     category TEXT NOT NULL,

@@ -76,6 +76,7 @@ import { handleDeskGoal } from "./api/desk-goal";
 import { handleDeskRuling } from "./api/desk-ruling";
 import { handleGetDeskStudio } from "./api/desk-studio";
 import { handleDeskStudioAct } from "./api/desk-studio-act";
+import { handleDeskStudioSession } from "./api/desk-studio-session";
 import { GoalChecks, GoalStatuses } from "./desk/goals";
 import { RulingLedger } from "./desk/ruling";
 import { RecentCalendarWrites } from "./desk/create";
@@ -500,6 +501,7 @@ async function handleApi(
   }
 
   if (pathname === "/api/desk/studio/act") return handleDeskStudioAct(req, desk);
+  if (pathname === "/api/desk/studio/session") return handleDeskStudioSession(req, db, desk);
 
   if (pathname === "/api/vigil/subjects") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);
