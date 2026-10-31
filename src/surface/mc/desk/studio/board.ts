@@ -3,6 +3,7 @@ import type { IvyNote, MaterialLink, StudioCapture, StudioTarget } from "./forma
 import type { StudioProblem, StudioProposalView, StudioThreadView, StudioView } from "./view";
 
 const DAY_MS = 86_400_000;
+const EVENING_MS = 6 * 3_600_000;
 const UNKNOWN_AREA_COLOR = "#a1a1aa";
 
 export type BoardArea = StudioView["areas"][number];
@@ -82,7 +83,7 @@ export function clip(text: string, max: number): string {
   return `${(atWord.length > max / 2 ? atWord : cut).replace(/[\s,;:.]+$/, "")}…`;
 }
 
-const plainQuestion = (q: string): string => q.trim().replace(/[?.!]+$/, "");
+export const plainQuestion = (q: string): string => q.trim().replace(/[?.!]+$/, "");
 
 const joinAnd = (parts: string[]): string => (parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1) ?? ""}`);
 
@@ -133,9 +134,9 @@ function areaLookup(areas: readonly BoardArea[]): (id: string) => BoardArea {
 }
 
 function lookWindow(clock: BoardClock): { since: number; lead: string } {
-  if (clock.lastLook === null) return { since: clock.now - DAY_MS, lead: "Overnight" };
-  const lastNight = clock.lastLook < clock.startOfToday && clock.lastLook >= clock.startOfToday - DAY_MS;
-  return { since: clock.lastLook, lead: lastNight ? "Overnight" : "Since you last looked," };
+  if (clock.lastLook === null) return { since: clock.now - DAY_MS, lead: "In the last day," };
+  const lastEvening = clock.lastLook < clock.startOfToday && clock.lastLook >= clock.startOfToday - EVENING_MS;
+  return { since: clock.lastLook, lead: lastEvening ? "Overnight" : "Since you last looked," };
 }
 
 function placesSentence(used: number, max: number, waiting: number): string {

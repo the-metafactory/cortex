@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DeskStudio, ortho, takeLastLook } from "../components/desk-studio";
+import { DeskModeSwitch, DeskStudio, ortho, takeLastLook } from "../components/desk-studio";
 import { deskSearch, readDeskLocation } from "../hooks/use-desk-studio";
 import type { StudioThreadView, StudioView } from "../../desk/studio/view";
 
@@ -65,6 +65,17 @@ describe("the Studio board", () => {
   it("says the thread page is still to come when a thread is open", () => {
     const open = renderToStaticMarkup(<DeskStudio studio={STUDIO} thread="two" onOpenThread={() => {}} at={AT} />);
     expect(open).toContain("The thread page is not built yet");
+  });
+});
+
+describe("the Day | Studio switch", () => {
+  it("shows Day and Studio with the current view selected when the stack has a Studio", () => {
+    const html = renderToStaticMarkup(<DeskModeSwitch hasStudio inStudio onGo={() => {}} />);
+    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map((m) => [m[2], m[1]])).toEqual([["Day", "false"], ["Studio", "true"]]);
+  });
+
+  it("renders nothing without a Studio", () => {
+    expect(renderToStaticMarkup(<DeskModeSwitch hasStudio={false} inStudio={false} onGo={() => {}} />)).toBe("");
   });
 });
 

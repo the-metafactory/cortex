@@ -127,7 +127,11 @@ describe("the Studio board view-model", () => {
   });
 
   it("summarises the threads Ivy wrote in since the last look, and the places in use", () => {
-    expect(board.summary).toBe("Overnight I thought about 3 threads: “What about desk-open”, “What about weekly-post” and “What about workshops”. 4 of 5 places are in use, and I wait on you in 3 of them.");
+    expect(board.summary).toBe("In the last day, I thought about 3 threads: “What about desk-open”, “What about weekly-post” and “What about workshops”. 4 of 5 places are in use, and I wait on you in 3 of them.");
+    const evening = buildBoard(FIXTURE, { ...CLOCK, lastLook: Date.parse("2026-10-30T22:00:00+01:00") });
+    expect(evening.summary.startsWith("Overnight I thought about 3 threads:")).toBe(true);
+    const morning = buildBoard(FIXTURE, { ...CLOCK, lastLook: Date.parse("2026-10-30T10:00:00+01:00") });
+    expect(morning.summary.startsWith("Since you last looked, I thought about 3 threads:")).toBe(true);
     const later = buildBoard(FIXTURE, { ...CLOCK, lastLook: Date.parse("2026-10-31T04:30:00+01:00") });
     expect(later.summary).toBe("Since you last looked, I thought about 1 thread: “What about workshops”. 4 of 5 places are in use, and I wait on you in 3 of them.");
   });

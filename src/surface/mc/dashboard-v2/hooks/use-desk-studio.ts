@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getJson } from "../lib/api";
 import type { StudioView } from "../../desk/studio/view";
 
@@ -15,22 +15,27 @@ interface StudioState {
 
 export function useDeskStudio(poll: boolean): StudioState {
   const [state, setState] = useState<StudioState>({ studio: null, error: null });
+  const loaded = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
     const load = async (): Promise<void> => {
       try {
         const payload = await getJson<{ studio: StudioView | null }>("/api/desk/studio", { signal: controller.signal });
-        if (!controller.signal.aborted) setState({ studio: payload.studio ?? null, error: null });
+        if (controller.signal.aborted) return;
+        loaded.current = true;
+        setState({ studio: payload.studio ?? null, error: null });
       } catch {
         if (!controller.signal.aborted) setState((s) => ({ ...s, error: "The Studio could not load. Retrying." }));
       }
     };
     void load();
-    const timer = poll ? setInterval(() => void load(), REFRESH_MS) : undefined;
+    const timer = setInterval(() => {
+      if (poll || !loaded.current) void load();
+    }, REFRESH_MS);
     return () => {
       controller.abort();
-      if (timer) clearInterval(timer);
+      clearInterval(timer);
     };
   }, [poll]);
 

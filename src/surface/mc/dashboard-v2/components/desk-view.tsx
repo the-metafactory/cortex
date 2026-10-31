@@ -12,7 +12,7 @@ import { DAY_MS, startOfDay } from "../../desk/time";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
 import { useDeskLocation, useDeskStudio } from "../hooks/use-desk-studio";
-import { DeskStudio } from "./desk-studio";
+import { DeskModeSwitch, DeskStudio } from "./desk-studio";
 import { ALL_AREAS, briefing, canSee, clock, openGroup, selectItems, URGENCY_LABEL } from "../../desk/present";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskView as DeskViewModel } from "../../desk/types";
 
@@ -294,12 +294,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         <div className="desk-top-in">
           <div className="desk-left">
             <div className="desk-brand"><span className="desk-mark" />Desk</div>
-            {studio && (
-              <div className="desk-seg desk-mode" role="tablist" aria-label="View">
-                <button type="button" role="tab" aria-selected={!inStudio} onClick={() => go({ mode: "day", thread: null })}>Day</button>
-                <button type="button" role="tab" aria-selected={inStudio} onClick={() => go({ mode: "studio", thread: null })}>Studio</button>
-              </div>
-            )}
+            <DeskModeSwitch hasStudio={studio !== null} inStudio={inStudio} onGo={(mode) => go({ mode, thread: null })} />
             <div className="desk-askwrap">
               <form
                 className="desk-ask"

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { buildBoard, clip, type Board, type BoardArea, type BoardCapture, type BoardCard, type BoardFree, type BoardProposal, type BoardTarget } from "../../desk/studio/board";
+import { buildBoard, clip, plainQuestion, type Board, type BoardArea, type BoardCapture, type BoardCard, type BoardFree, type BoardLoose, type BoardProposal, type BoardTarget } from "../../desk/studio/board";
 import type { StudioThreadView, StudioView } from "../../desk/studio/view";
 import { startOfDay } from "../../desk/time";
 import "./desk-studio.css";
@@ -27,17 +27,26 @@ export function takeLastLook(store: LookStore | null, now: number): number | nul
 
 const browserStore = (): LookStore | null => (typeof window === "undefined" ? null : window.localStorage);
 
+const dayMonthTime = (at: Date): string => `${at.getDate()} ${MONTHS[at.getMonth()] ?? ""}, ${at.toTimeString().slice(0, 5)}`;
+
 function wroteWhen(iso: string, startOfToday: number): string {
   const at = new Date(iso);
-  const hhmm = at.toTimeString().slice(0, 5);
-  if (at.getTime() >= startOfToday) return `today, ${hhmm}`;
-  return `on ${at.getDate()} ${MONTHS[at.getMonth()] ?? ""}, ${hhmm}`;
+  return at.getTime() >= startOfToday ? `today, ${at.toTimeString().slice(0, 5)}` : `on ${dayMonthTime(at)}`;
 }
 
 const dayMonth = (isoDate: string): string => `${Number(isoDate.slice(8, 10))} ${MONTHS[Number(isoDate.slice(5, 7)) - 1] ?? ""}`;
-const viaLabel =(via: string): string => (via === "voice" ? "Voice note" : via === "mail" ? "Forwarded mail" : via.charAt(0).toUpperCase() + via.slice(1));
+const viaLabel = (via: string): string => (via === "voice" ? "Voice note" : via === "mail" ? "Forwarded mail" : via.charAt(0).toUpperCase() + via.slice(1));
 const targetKey = (t: BoardTarget | null): string => (t === null ? "" : t.kind === "thread" ? `t:${t.slug}` : `p:${t.place}`);
-const plainQ = (q: string): string => q.trim().replace(/[?.!]+$/, "");
+
+export function DeskModeSwitch({ hasStudio, inStudio, onGo }: { hasStudio: boolean; inStudio: boolean; onGo: (mode: "day" | "studio") => void }) {
+  if (!hasStudio) return null;
+  return (
+    <div className="desk-seg desk-mode" role="tablist" aria-label="View">
+      <button type="button" role="tab" aria-selected={!inStudio} onClick={() => onGo("day")}>Day</button>
+      <button type="button" role="tab" aria-selected={inStudio} onClick={() => onGo("studio")}>Studio</button>
+    </div>
+  );
+}
 
 export function DeskStudio({ studio, thread, onOpenThread, at }: { studio: StudioView; thread: string | null; onOpenThread: (slug: string | null) => void; at?: number }) {
   const now = useMemo(() => at ?? Date.now(), [at, studio]);
@@ -132,7 +141,7 @@ function Card({ card, startOfToday, onOpen }: { card: BoardCard; startOfToday: n
         <span className="dst-q">{t.question}</span>
         {card.stand && <span className="dst-stand"><b>Where I stand</b>{card.stand}</span>}
         {card.shared.map((s) => (
-          <span key={s.slug} className="dst-sharedtxt">Shares a source with “{clip(plainQ(s.question), 40)}”: {s.label}.</span>
+          <span key={s.slug} className="dst-sharedtxt">Shares a source with “{clip(plainQuestion(s.question), 40)}”: {s.label}.</span>
         ))}
         <span className="dst-act">
           <b className="k">Ivy's latest</b>
@@ -158,27 +167,35 @@ function Free({ free }: { free: BoardFree }) {
   );
 }
 
+const lineAttrs = (item: BoardLoose, key: string, side: "l" | "r") => ({
+  "data-line": key,
+  "data-target": targetKey(item.target),
+  "data-side": side,
+  "data-why": item.reason ? `${item.sentence} Why: ${item.reason}` : item.sentence,
+});
+
+function LooseSentence({ item }: { item: BoardLoose }) {
+  return <span className="dst-sug">{item.sentence}{item.reason && <i> Why: {item.reason}</i>}</span>;
+}
+
 function Sticky({ item }: { item: BoardCapture }) {
-  const at = new Date(item.capture.at);
-  const why = item.reason ? `${item.sentence} Why: ${item.reason}` : item.sentence;
   return (
-    <div className="dst-sticky" data-line={`cap-${item.id}`} data-target={targetKey(item.target)} data-side="l" data-why={why}>
-      <span className="via">{viaLabel(item.capture.via)}, {at.getDate()} {MONTHS[at.getMonth()]}, {at.toTimeString().slice(0, 5)}</span>
+    <div className="dst-sticky" {...lineAttrs(item, `cap-${item.id}`, "l")}>
+      <span className="via">{viaLabel(item.capture.via)}, {dayMonthTime(new Date(item.capture.at))}</span>
       {clip(item.capture.text, 140)}
-      <span className="dst-sug">{item.sentence}{item.reason && <i> Why: {item.reason}</i>}</span>
+      <LooseSentence item={item} />
     </div>
   );
 }
 
 function Proposal({ item }: { item: BoardProposal }) {
   const p = item.proposal;
-  const why = item.reason ? `${item.sentence} Why: ${item.reason}` : item.sentence;
   return (
-    <div className="dst-ghostp" data-line={`prop-${item.id}`} data-target={targetKey(item.target)} data-side="r" data-why={why}>
+    <div className="dst-ghostp" {...lineAttrs(item, `prop-${item.id}`, "r")}>
       <span className="who">A new thread, waiting outside the board</span>
       <h4>{p.question}</h4>
       {p.why && <p>{p.why}</p>}
-      <span className="dst-sug">{item.sentence}{item.reason && <i> Why: {item.reason}</i>}</span>
+      <LooseSentence item={item} />
       <span className="dst-meta"><AreaChips areas={item.areas} /><ModelBadge policy={p.policy} /></span>
     </div>
   );
