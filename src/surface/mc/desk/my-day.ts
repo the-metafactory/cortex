@@ -87,7 +87,9 @@ export function readMyDay(db: Database, desk: DeskOptions, now: number): MyDayVi
   }).immediate();
 }
 export function sourceIdentity(item: DeskItem): string {
-  return createHash("sha256").update(JSON.stringify([item.key, item.kind, item.title, item.detail.summary, item.detail.refs, item.dueAt ?? null, item.sourceRevision ?? null])).digest("hex");
+  const sourceFacts = [item.key, item.kind, item.source, item.sourceRevision ?? null, item.dueAt ?? null, item.detail.refs];
+  const identity = item.kind === "mail" ? sourceFacts : [...sourceFacts, item.title, item.detail.summary];
+  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
 }
 export function movedKeys(db: Database): Set<string> {
   return new Set(loadMeta(db).sources.map(s => s.fingerprint));

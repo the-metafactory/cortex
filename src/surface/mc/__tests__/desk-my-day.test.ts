@@ -1,3 +1,5 @@
+import { addNote, listOpenNotes } from "../desk/notes";
+import { mailItems } from "../desk/rank";
 import { briefing, selectItems, spokenBriefing } from "../desk/present";
 import { startServer } from "../server";
 import { DEFAULT_CONFIG } from "../config";
@@ -140,6 +142,16 @@ describe("My day lane and day contract", () => {
     expect(readMyDay(db, desk, NOW).inbox).toHaveLength(0);
     expect(findNode(loadBalanceState(db)?.outline ?? seed().outline, task.id)?.dueDate).toBe(task.dueDate);
   });
+  it("a Desk reminder todo carries its reported due date and preserves the source note", async () => {
+    const note = addNote(db, "reminder", "An owned reminder", NOW - 60000, NOW - 120000);
+    const item = (await composeDesk(db, desk, undefined, { now: NOW })).items.find(i => i.key === `reminder:${note.id}`);
+    if (!item) throw new Error("Missing reminder source");
+    const intake = change({ op: "todo", key: item.key, fingerprint: sourceIdentity(item) }, crypto.randomUUID(), { source: item }).view.inbox[0];
+    expect(intake?.dueDate).toBe(DATE);
+    expect(intake?.note).toContain(item.key);
+    expect(listOpenNotes(db).some(n => n.id === note.id)).toBe(true);
+    expect((await composeDesk(db, desk, undefined, { now: NOW })).items.some(i => i.key === item.key)).toBe(false);
+  });
   it("does not invent a deadline or call an external source action", () => {
     const item = source("mail"); delete item.dueAt;
     const result = change({ op: "todo", key: item.key, fingerprint: sourceIdentity(item) }, crypto.randomUUID(), { source: item });
@@ -179,6 +191,18 @@ describe("My day lane and day contract", () => {
     const newer = { ...seen, title: "A new decision on the same node" };
     expect(() => change({ op: "todo", key: seen.key, fingerprint: sourceIdentity(seen) }, crypto.randomUUID(), { source: newer })).toThrow("source changed");
     expect(readMyDay(db, desk, NOW).inbox).toHaveLength(0);
+  });
+  it("mail classification cannot resurrect or duplicate a moved source message", () => {
+    const mail = { kind: "mail" as const, id: "classification-fixture", from: { address: "person@example.test" }, subject: "A source request", firstParagraph: "The original excerpt", receivedAt: new Date(NOW).toISOString(), unread: true, sourceId: "inbox", area: null };
+    const input = { now: NOW, mail: [mail], events: [], vips: new Set<string>() };
+    const before = mailItems(input)[0];
+    const after = mailItems({ ...input, classified: new Map([[mail.id, { category: "action" as const, reason: "A next step is waiting", summary: "A classifier-generated summary" }]]) })[0];
+    if (!before || !after) throw new Error("Missing mail producer output");
+    expect(after.detail.summary).not.toBe(before.detail.summary);
+    change({ op: "todo", key: before.key, fingerprint: sourceIdentity(before) }, crypto.randomUUID(), { source: before });
+    expect(movedKeys(db).has(sourceIdentity(after))).toBe(true);
+    change({ op: "todo", key: after.key, fingerprint: sourceIdentity(after) }, crypto.randomUUID(), { source: after });
+    expect(readMyDay(db, desk, NOW).inbox).toHaveLength(1);
   });
   it("does not treat an asynchronously reworded question as a new source episode", () => {
     const item = source("agent-blocked");

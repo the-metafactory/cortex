@@ -291,14 +291,15 @@ function reminderEvents(reminders: DeskNote[], from: number, to: number): DeskEv
 }
 
 function reminderItems(reminders: DeskNote[], now: number): DeskItem[] {
-  return reminders.filter((r) => r.dueAt !== null && r.dueAt <= now).map((r): DeskItem => ({
+  return reminders.filter((r): r is DeskNote & { dueAt: number } => r.dueAt !== null && r.dueAt <= now).map((r): DeskItem => ({
     key: `reminder:${r.id}`,
+    dueAt: new Date(r.dueAt).toISOString(),
     kind: "reminder",
     source: "desk",
     area: null,
     urgency: "now",
     title: r.text,
-    why: `You asked to be reminded ${ago(now, r.dueAt ?? now)}.`,
+    why: `You asked to be reminded ${ago(now, r.dueAt)}.`,
     score: 90,
     actions: [
       { id: "reminder.done", label: "Done", role: "primary", wired: true, target: String(r.id) },
@@ -306,7 +307,7 @@ function reminderItems(reminders: DeskNote[], now: number): DeskItem[] {
     ],
     detail: { summary: r.text, history: [`Set ${ago(now, r.createdAt)}`], refs: [`desk note ${r.id}`], links: [] },
     eventKey: `reminder:${r.id}`,
-    since: r.dueAt ?? now,
+    since: r.dueAt,
   }));
 }
 

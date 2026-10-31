@@ -8,7 +8,7 @@ Use **Swap** to choose from up to three engine alternates. **Just one thing** ke
 
 ## Turn a request into a task
 
-Open an item’s menu or detail panel and choose **→ todo**. The Desk creates an Inbox task with the source link and any reported deadline. It hides that source episode from the Day without changing the original mail or Ranger node. Repeating the move does not duplicate the task. The move is bound to the episode you saw. If the source changes before your click arrives, the Desk asks you to refresh. A new stopped episode on the same Ranger node can appear again.
+Open an item’s menu or detail panel and choose **→ todo**. The Desk creates an Inbox task with the source link and any reported deadline. It hides that source episode from the Day without changing the original mail or Ranger node. Repeating the move does not duplicate the task. The move is bound to the episode you saw. If the source changes before your click arrives, the Desk asks you to refresh. Mail classification can change its wording without creating a new source episode. A new stopped episode on the same Ranger node can appear again.
 
 Open **Edit outline** to find Inbox. Choose **File into…** and select an area or project. The task then becomes eligible for the engine’s next proposal. Intake is separate from configured areas. Removing an area from configuration preserves its tasks but excludes it from scheduling and refuses new edits or filing into it until the area returns.
 
