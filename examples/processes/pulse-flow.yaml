@@ -1,0 +1,18 @@
+name: pulse-flow
+cwd: /absolute/routines/flows
+argv:
+  - cortex
+  - pulse-flow
+  - --flows-dir
+  - /absolute/routines/flows
+  - --flow
+  - "{flow}"
+  - --agent-provider
+  - myelin
+timeout_ms: 900000
+detach: true
+env: [HOME, PATH, XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_STATE_HOME]
+params:
+  flow:
+    type: string
+    freeform: true
