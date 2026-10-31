@@ -24,7 +24,7 @@ test("prototype names never supply inherited deficit or surfacing history", () =
     expect(Number.isFinite(items[0]?.score)).toBe(true);
     const next = applyDayToHistory(state, "2026-10-31", ["constructor"]);
     expect(Object.hasOwn(next.deficits, id === "constructor" ? "area" : id)).toBe(true);
-    expect(next.lastSurfaced.constructor).toBe("2026-10-31");
+    expect(Object.entries(next.lastSurfaced).find(([key]) => key === "constructor")?.[1]).toBe("2026-10-31");
   }
 });
 
