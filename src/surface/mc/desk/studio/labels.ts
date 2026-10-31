@@ -14,7 +14,7 @@ export const withHref = (href: string | undefined): { href?: string } => {
   return safe ? { href: safe } : {};
 };
 
-export function safeHref(href: string | undefined): string | undefined {
+function safeHref(href: string | undefined): string | undefined {
   if (!href) return undefined;
   try {
     return SAFE_SCHEMES.has(new URL(href).protocol) ? href : undefined;

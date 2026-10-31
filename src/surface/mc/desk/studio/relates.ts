@@ -4,7 +4,7 @@ import type { MaterialLink } from "./format";
 import { outcomeLabel, withHref } from "./labels";
 import type { StudioThreadView, StudioView } from "./view";
 
-export const PERSON_KINDS = ["person", "people", "contact"] as const;
+const PERSON_KINDS = ["person", "people", "contact"] as const;
 
 const GOAL_ID = /^(G[1-9]\d*)\b[\s:.-]*/i;
 const MIN_EVENT_TITLE = 4;

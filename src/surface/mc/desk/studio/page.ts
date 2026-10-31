@@ -54,7 +54,7 @@ function outcomeOf(t: StudioThreadView): PageOutcome {
 
 const allThreads = (studio: StudioView): StudioThreadView[] => [...studio.active, ...studio.parked, ...studio.closed];
 
-export function findThread(studio: StudioView, slug: string): StudioThreadView | undefined {
+function findThread(studio: StudioView, slug: string): StudioThreadView | undefined {
   return allThreads(studio).find((t) => t.slug === slug);
 }
 

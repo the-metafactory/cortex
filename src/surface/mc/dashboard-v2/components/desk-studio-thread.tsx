@@ -178,6 +178,15 @@ function useWires(ref: RefObject<HTMLElement | null>, page: ThreadPage): Wire[] 
 
 const modelName = (model: string): string => (model === "local" ? "local model" : model === "cloud" ? "cloud model" : model);
 
+function PageHeader({ onBack, children }: { onBack: () => void; children: ReactNode }) {
+  return (
+    <div className="dst-zhd">
+      <button type="button" className="dst-back" onClick={onBack}>‹ Board</button>
+      <span>{children}</span>
+    </div>
+  );
+}
+
 function GhostActions({ keep }: { keep: string }) {
   return (
     <span className="dst-acts">
@@ -194,9 +203,9 @@ function noteLabel(note: IvyNote): string {
   return `${kind}${status}`;
 }
 
-function NoteCard({ note, label, className, ghost, wire = true, children }: { note: IvyNote; label: string; className: string; ghost?: string; wire?: boolean; children?: ReactNode }) {
+function NoteCard({ note, id, label, className, ghost, wire = true, children }: { note: IvyNote; id: string; label: string; className: string; ghost?: string; wire?: boolean; children?: ReactNode }) {
   return (
-    <div className={className} data-ghost={ghost} data-wire={wire ? "out" : undefined} data-key={wire ? `n-${note.at}` : undefined}>
+    <div className={className} data-ghost={ghost} data-wire={wire ? "out" : undefined} data-key={wire ? id : undefined}>
       <span className="lbl">{label}<span>{dayMonthTime(new Date(note.at))} · {modelName(note.model)}</span></span>
       <span className="trig">{note.trigger}</span>
       {note.text}
@@ -270,10 +279,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom }: { page: ThreadPag
   const wires = useWires(ref, page);
   return (
     <section className="dst-page" aria-label={`Thread: ${t.question}`} ref={ref} data-thread={t.slug}>
-      <div className="dst-zhd">
-        <button type="button" className="dst-back" onClick={onBack}>‹ Board</button>
-        <span>{page.typeLabel} · {page.where}</span>
-      </div>
+      <PageHeader onBack={onBack}>{page.typeLabel} · {page.where}</PageHeader>
       <div className="dst-canvas">
         <svg className="dst-wires" aria-hidden="true">
           {wires.map((w) => <path key={w.key} d={w.d} className={w.ivy ? "ivy" : ""} />)}
@@ -288,7 +294,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom }: { page: ThreadPag
             {page.policy === "local" && <div className="dst-modelnote">A local area keeps this thread on the local model.</div>}
           </div>
           {page.standProposal && (
-            <NoteCard note={page.standProposal} label="Ivy proposes a new stand" className="dst-n ghost" ghost="stand" wire={false}>
+            <NoteCard note={page.standProposal} id="stand" label="Ivy proposes a new stand" className="dst-n ghost" ghost="stand" wire={false}>
               <GhostActions keep="Keep it as my stand" />
             </NoteCard>
           )}
@@ -317,12 +323,12 @@ export function ThreadPageView({ page, onBack, onOpen, zoom }: { page: ThreadPag
         <div className="dst-col right">
           <h4 className="dst-h">Ivy's notes <span className="n">dated, append-only</span></h4>
           {page.waitsOnYou && <p className="dst-waits">Ivy waits on you: the latest note has no answer yet.</p>}
-          {page.ideas.map((n) => (
-            <NoteCard key={n.at} note={n} label="Ivy's idea" className="dst-n ghost" ghost="idea">
+          {page.ideas.map((n, i) => (
+            <NoteCard key={`i-${i}-${n.at}`} id={`i-${i}-${n.at}`} note={n} label="Ivy's idea" className="dst-n ghost" ghost="idea">
               <GhostActions keep="Keep" />
             </NoteCard>
           ))}
-          {page.notes.map((n) => <NoteCard key={n.at} note={n} label={noteLabel(n)} className={n.status === "dismissed" ? "dst-n note dismissed" : "dst-n note"} />)}
+          {page.notes.map((n, i) => <NoteCard key={`n-${i}-${n.at}`} id={`n-${i}-${n.at}`} note={n} label={noteLabel(n)} className={n.status === "dismissed" ? "dst-n note dismissed" : "dst-n note"} />)}
           {page.ideas.length === 0 && page.notes.length === 0 && !page.standProposal && <p className="dst-none">Ivy has not written here yet.</p>}
         </div>
       </div>
@@ -335,10 +341,7 @@ export function ThreadMissing({ slug, onBack, zoom }: { slug: string; onBack: ()
   useZoomMotion(ref, slug, zoom);
   return (
     <section className="dst-page missing" aria-label="Thread" ref={ref}>
-      <div className="dst-zhd">
-        <button type="button" className="dst-back" onClick={onBack}>‹ Board</button>
-        <span>This thread is not in the Studio. Its file may have moved or been renamed.</span>
-      </div>
+      <PageHeader onBack={onBack}>This thread is not in the Studio. Its file may have moved or been renamed.</PageHeader>
     </section>
   );
 }
