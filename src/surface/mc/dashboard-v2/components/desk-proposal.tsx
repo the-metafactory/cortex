@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AskKind, AskMap, DeskProposal } from "../../desk/ask";
+import { proposalTime, type AskKind, type AskMap, type DeskProposal } from "../../desk/ask";
 import { clock } from "../../desk/time";
 
 type FieldType = "text" | "long" | "time" | "map";
@@ -36,13 +36,6 @@ export function proposalTitle(p: DeskProposal): string {
   return String(f.text ?? f.title ?? f.wording ?? p.label);
 }
 
-export function proposalTime(kind: AskKind, fields: Record<string, unknown>): { at?: number; end?: number } {
-  const t = (v: unknown): number | undefined => (typeof v === "string" && Number.isFinite(Date.parse(v)) ? Date.parse(v) : undefined);
-  if (kind === "reminder") return { at: t(fields.due) };
-  if (kind === "calendar") return { at: t(fields.start), end: t(fields.end) };
-  return {};
-}
-
 interface ProposalCardProps {
   proposal: DeskProposal;
   said: string;
@@ -58,7 +51,7 @@ interface ProposalCardProps {
 export function ProposalCard({ proposal, said, maps, now, busy, onConfirm, onCancel, onGoto, onFieldsChange }: ProposalCardProps) {
   const [fields, setFields] = useState<Record<string, unknown>>(proposal.fields);
   useEffect(() => onFieldsChange(fields), [fields]);
-  const unwritable = proposal.problem?.endsWith("not set up on this stack.") ?? false;
+  const unwritable = proposal.unwritable === true;
   const [editing, setEditing] = useState(Boolean(proposal.problem) && !unwritable);
   const allDay = fields.allDay === true;
   const missing = FIELDS[proposal.kind].some((f) => f.type === "time" && f.key !== "end" && !fields[f.key]) || (proposal.kind === "task" && !fields.map);

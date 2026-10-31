@@ -5,7 +5,7 @@ import { handleDeskAsk, handleDeskCreate, handleDeskNoteDone } from "../api/desk
 import { findWhen, parseByRules, parseWithCommand, toProposal, type ParserRequest } from "../desk/ask";
 import { HandledLedger } from "../desk/actions";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
-import { RecentCalendarWrites, spawnWithStdin, writableKinds, type WriterRunner } from "../desk/create";
+import { RecentCalendarWrites, spawnWithStdin, writableKinds, WriterTimeout, type WriterRunner } from "../desk/create";
 import { SourceCache } from "../desk/sources/command";
 import { listOpenNotes } from "../desk/notes";
 
@@ -40,6 +40,18 @@ describe("the rules parser", () => {
 });
 
 describe("time phrases", () => {
+  it("keeps tomorrow on the next calendar day across the autumn clock change", () => {
+    const zone = process.env.TZ;
+    process.env.TZ = "Europe/Zurich";
+    try {
+      const changeDay = Date.parse("2026-10-25T10:00:00Z");
+      expect(new Date(findWhen("tomorrow at 9", changeDay)?.at ?? 0).toISOString()).toBe("2026-10-26T08:00:00.000Z");
+    } finally {
+      if (zone === undefined) delete process.env.TZ;
+      else process.env.TZ = zone;
+    }
+  });
+
   it("reads relative times, a bare hour as the next one, weekdays and dates", () => {
     expect(findWhen("in 20 minutes", NOW)?.at).toBe(NOW + 20 * 60_000);
     expect(findWhen("at 9", NOW)?.at).toBe(local("2026-10-31T09:00:00"));
@@ -80,7 +92,8 @@ describe("proposals", () => {
 
   it("says what stops a card: a missing time, or a kind with no writer", () => {
     expect(toProposal("reminder", { text: "Call" }, all, "rules").problem).toBe("When should I remind you?");
-    expect(toProposal("goal", { wording: "Run" }, writableKinds({}), "rules").problem).toBe("Goal drafts are not set up on this stack.");
+    expect(toProposal("goal", { wording: "Run" }, writableKinds({}), "rules")).toMatchObject({ problem: "Goal drafts are not set up on this stack.", unwritable: true });
+    expect(toProposal("calendar", { title: "x", start: "2026-11-03T13:00:00.000Z" }, writableKinds({}), "rules").problem).toBe("Calendar entries are not set up on this stack.");
   });
 });
 
@@ -159,6 +172,28 @@ describe("POST /api/desk/create", () => {
     expect(res.status).toBe(502);
     expect(await res.json()).toEqual({ ok: false, error: "Calendar access is not granted." });
     expect(runtime.recentWrites?.pending(NOW, [])).toEqual([]);
+  });
+
+  it("refuses a task when no map is set up at all", async () => {
+    const noMaps: DeskRuntime = { ...runtime, options: { ...DESK, ask: { ...ASK, taskMaps: [] } } };
+    const res = await handleDeskCreate(post("/api/desk/create", { requestId: "req-00020", kind: "task", fields: { title: "Look", map: "any/repo#1" } }), db, noMaps, { runWriter: async () => ({ code: 0, stdout: "{\"id\":\"x\"}", stderr: "" }) });
+    expect(res.status).toBe(400);
+  });
+
+  it("spends the request id when a writer times out or answers unreadably, since it may have created the item", async () => {
+    const fields = { title: "Look", map: MAP.ref };
+    let runs = 0;
+    const slow: WriterRunner = async () => {
+      runs += 1;
+      throw new WriterTimeout("timed out after 5 s");
+    };
+    const first = await handleDeskCreate(post("/api/desk/create", { requestId: "req-00021", kind: "task", fields }), db, runtime, { runWriter: slow });
+    expect(first.status).toBe(502);
+    expect(await first.json()).toMatchObject({ uncertain: true, error: "The agent task writer timed out after 5 s. It may have been created; check before asking again." });
+    expect((await handleDeskCreate(post("/api/desk/create", { requestId: "req-00021", kind: "task", fields }), db, runtime, { runWriter: slow })).status).toBe(409);
+    expect(runs).toBe(1);
+    const garbled: WriterRunner = async () => ({ code: 0, stdout: "not json", stderr: "" });
+    expect(await (await handleDeskCreate(post("/api/desk/create", { requestId: "req-00022", kind: "task", fields }), db, runtime, { runWriter: garbled })).json()).toMatchObject({ uncertain: true });
   });
 
   it("refuses a kind with no writer, a map not set up, and fields that do not validate", async () => {

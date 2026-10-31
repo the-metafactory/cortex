@@ -189,7 +189,7 @@ describe("the command bar", () => {
   });
 
   it("says a kind this stack cannot write will not be created", () => {
-    const html = card({ kind: "goal", label: "Goal draft", fields: { wording: "Run" }, problem: "Goal drafts are not set up on this stack." });
+    const html = card({ kind: "goal", label: "Goal draft", fields: { wording: "Run" }, problem: "Goal drafts are not set up on this stack.", unwritable: true });
     expect(html).toContain("Goal drafts are not set up on this stack. Nothing will be created.");
     expect(html).toMatch(/<button[^>]*disabled[^>]*>Confirm/);
     expect(html).not.toContain(">Edit<");

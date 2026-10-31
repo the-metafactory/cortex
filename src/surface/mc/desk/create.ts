@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
-import { KIND_LABEL, type AskCard, type AskKind } from "./ask";
+import { KIND_LABEL, notSetUp, type AskCard, type AskKind } from "./ask";
 import { addNote } from "./notes";
 import { oneLine } from "./actions";
 import { clock } from "./time";
@@ -29,7 +29,11 @@ const WriterAnswer = z.object({
 
 export type Created =
   | { ok: true; message: string; url?: string; event?: { at: number; end?: number; title: string; allDay?: boolean } }
-  | { ok: false; error: string };
+  | { ok: false; error: string; uncertain?: true };
+
+export class WriterTimeout extends Error {}
+
+const MAYBE_CREATED = "It may have been created; check before asking again.";
 
 export interface CreateDeps {
   requestId: string;
@@ -57,11 +61,12 @@ export async function createFromCard(card: AskCard, deps: CreateDeps): Promise<C
     return { ok: true, message: "Noted. It is under Keep in mind." };
   }
   const argv = deps.writers[card.kind];
-  if (!argv?.length) return { ok: false, error: `${KIND_LABEL[card.kind]}s are not set up on this stack.` };
+  if (!argv?.length) return { ok: false, error: notSetUp(card.kind) };
   let result: WriterResult;
   try {
     result = await deps.run(argv, JSON.stringify({ ...card, requestId: deps.requestId }), deps.timeoutMs);
   } catch (err) {
+    if (err instanceof WriterTimeout) return { ok: false, error: `The ${KIND_LABEL[card.kind].toLowerCase()} writer ${err.message}. ${MAYBE_CREATED}`, uncertain: true };
     return { ok: false, error: `The ${KIND_LABEL[card.kind].toLowerCase()} writer did not run: ${err instanceof Error ? err.message : String(err)}` };
   }
   if (result.code !== 0) return { ok: false, error: oneLine(result.stderr || result.stdout, `The ${KIND_LABEL[card.kind].toLowerCase()} writer exited with code ${result.code}.`) };
@@ -69,7 +74,7 @@ export async function createFromCard(card: AskCard, deps: CreateDeps): Promise<C
   try {
     answer = WriterAnswer.parse(JSON.parse(result.stdout));
   } catch {
-    return { ok: false, error: `The ${KIND_LABEL[card.kind].toLowerCase()} writer answered in a form the Desk cannot read. Check whether it was created.` };
+    return { ok: false, error: `The ${KIND_LABEL[card.kind].toLowerCase()} writer answered in a form the Desk cannot read. ${MAYBE_CREATED}`, uncertain: true };
   }
   const message = answer.message ?? `Created the ${KIND_LABEL[card.kind].toLowerCase()}.`;
   if (card.kind !== "calendar") return { ok: true, message, ...(answer.url ? { url: answer.url } : {}) };
@@ -89,7 +94,7 @@ export const spawnWithStdin: WriterRunner = async (argv, stdin, timeoutMs) => {
   const timedOut = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       proc.kill("SIGKILL");
-      reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)} s`));
+      reject(new WriterTimeout(`timed out after ${Math.round(timeoutMs / 1000)} s`));
     }, timeoutMs);
   });
   const finished = (async () => {

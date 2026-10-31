@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
-import { ASK_KINDS, KIND_LABEL, parseByRules, parseWithCommand, toProposal, validateCard, type ParserRunner } from "../desk/ask";
+import { ASK_KINDS, notSetUp, parseByRules, parseWithCommand, taskMapAllowed, toProposal, validateCard, type ParserRunner } from "../desk/ask";
 import { createFromCard, spawnWithStdin, writableKinds, type WriterRunner } from "../desk/create";
 import { closeNote } from "../desk/notes";
 
@@ -55,10 +55,10 @@ export async function handleDeskCreate(req: Request, db: Database, runtime: Desk
   if (!requestId) return fail(400, "A request id is required.");
   const card = validateCard(body?.kind, body?.fields);
   if (typeof card === "string") return fail(400, card);
-  if (card.kind === "task" && (desk.ask?.taskMaps.length ?? 0) > 0 && !desk.ask?.taskMaps.some((m) => m.ref === card.fields.map)) {
+  if (!taskMapAllowed(card, desk.ask?.taskMaps ?? [])) {
     return fail(400, "Tasks can only go on the maps set up for the Desk.");
   }
-  if (!writableKinds(desk.ask?.writers ?? {}).has(card.kind)) return fail(409, `${KIND_LABEL[card.kind]}s are not set up on this stack.`);
+  if (!writableKinds(desk.ask?.writers ?? {}).has(card.kind)) return fail(409, notSetUp(card.kind));
 
   const key = `ask:${requestId}`;
   if (runtime.ledger.has(key)) return fail(409, "This was already created.");
@@ -73,7 +73,10 @@ export async function handleDeskCreate(req: Request, db: Database, runtime: Desk
       now,
       timeoutMs: (desk.ask?.timeoutSeconds ?? 30) * 1000,
     });
-    if (!created.ok) return fail(502, created.error);
+    if (!created.ok) {
+      if (created.uncertain) runtime.ledger.add(key, now);
+      return Response.json({ ok: false, error: created.error, ...(created.uncertain ? { uncertain: true } : {}) }, { status: 502, headers: noStore });
+    }
     runtime.ledger.add(key, now);
     if (created.event) runtime.recentWrites?.add(created.event, now);
     return Response.json({ ok: true, message: created.message, ...(created.url ? { url: created.url } : {}) }, { headers: noStore });

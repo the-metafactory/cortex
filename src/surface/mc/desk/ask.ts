@@ -44,6 +44,27 @@ export const KIND_LABEL: Record<AskKind, string> = {
   calendar: "Calendar entry",
 };
 
+export const notSetUp = (kind: AskKind): string => `${KIND_PLURAL[kind]} are not set up on this stack.`;
+
+const KIND_PLURAL: Record<AskKind, string> = {
+  reminder: "Reminders",
+  note: "Notes",
+  task: "Agent tasks",
+  goal: "Goal drafts",
+  calendar: "Calendar entries",
+};
+
+export function taskMapAllowed(card: AskCard, maps: readonly AskMap[]): boolean {
+  return card.kind !== "task" || maps.some((m) => m.ref === card.fields.map);
+}
+
+export function proposalTime(kind: AskKind, fields: Record<string, unknown>): { at?: number; end?: number } {
+  const t = (v: unknown): number | undefined => (typeof v === "string" && Number.isFinite(Date.parse(v)) ? Date.parse(v) : undefined);
+  if (kind === "reminder") return { at: t(fields.due) };
+  if (kind === "calendar") return { at: t(fields.start), end: t(fields.end) };
+  return {};
+}
+
 export interface AskMap {
   ref: string;
   label: string;
@@ -168,7 +189,7 @@ function dayFrom(g: Record<string, string | undefined>, now: number): number {
   const today = startOfDay(now);
   const word = g.word?.toLowerCase();
   if (word === "today" || word === "tonight") return today;
-  if (word === "tomorrow") return today + DAY_MS;
+  if (word === "tomorrow") return startOfDay(today + DAY_MS + DAY_MS / 2);
   if (word) {
     const target = WEEKDAYS.indexOf(word.replace(/^(on|next) /, ""));
     const ahead = (target - new Date(now).getDay() + 7) % 7 || 7;
@@ -201,7 +222,7 @@ export async function parseWithCommand(argv: string[], request: ParserRequest, r
   if (!answer || !request.kinds.includes(answer.kind as AskKind)) return null;
   const card = validateCard(answer.kind, answer.fields);
   if (typeof card === "string") return null;
-  if (card.kind === "task" && request.maps.length > 0 && !request.maps.some((m) => m.ref === card.fields.map)) return null;
+  if (!taskMapAllowed(card, request.maps)) return null;
   return card;
 }
 
@@ -212,16 +233,15 @@ export interface DeskProposal {
   at?: number;
   end?: number;
   problem?: string;
+  unwritable?: true;
   via: "parser" | "rules";
 }
 
 export function toProposal(kind: AskKind, fields: Record<string, unknown>, writable: ReadonlySet<AskKind>, via: DeskProposal["via"]): DeskProposal {
-  const time = (v: unknown): number | undefined => (typeof v === "string" && Number.isFinite(Date.parse(v)) ? Date.parse(v) : undefined);
-  const at = kind === "reminder" ? time(fields.due) : kind === "calendar" ? time(fields.start) : undefined;
-  const end = kind === "calendar" ? time(fields.end) : undefined;
+  const { at, end } = proposalTime(kind, fields);
   const checked = validateCard(kind, fields);
   const problem = !writable.has(kind)
-    ? `${KIND_LABEL[kind]}s are not set up on this stack.`
+    ? notSetUp(kind)
     : typeof checked === "string"
       ? kind === "reminder" && at === undefined
         ? "When should I remind you?"
@@ -238,6 +258,7 @@ export function toProposal(kind: AskKind, fields: Record<string, unknown>, writa
     ...(at !== undefined ? { at } : {}),
     ...(end !== undefined ? { end } : {}),
     ...(problem ? { problem } : {}),
+    ...(writable.has(kind) ? {} : { unwritable: true as const }),
     via,
   };
 }
