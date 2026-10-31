@@ -76,6 +76,7 @@ import { HandledLedger } from "./desk/actions";
 import type { DeskOptions, DeskRuntime } from "./desk/compose";
 import { SourceCache } from "./desk/sources/command";
 import { startDeskAutonomy, startDeskPushes } from "./desk/push";
+import { MailClassifier } from "./desk/classify";
 import type { DeskTransport } from "./desk/interrupt";
 import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil";
 import { handleResult, type ResultRouteOptions } from "./results";
@@ -170,7 +171,7 @@ export function startServer(
   const deskSourceCache = new SourceCache();
   const deskLedger = new HandledLedger();
   const deskRecentWrites = new RecentCalendarWrites();
-  const deskRuntime: DeskRuntime = { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses() };
+  const deskRuntime: DeskRuntime = { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier) } : {}) };
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);

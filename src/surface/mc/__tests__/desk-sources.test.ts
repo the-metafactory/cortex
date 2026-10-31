@@ -16,7 +16,7 @@ const mail = (over: Partial<SourceMail> = {}): SourceMail & { area: string | nul
   url: "message://%3Cm1%40x%3E", account: "work", area: "switch", sourceId: "work-mail", ...over,
 });
 
-const meeting = (title: string, hhmm: string, dayOffset = 0): SourceEvent => ({ id: title, start: at(hhmm, dayOffset), title });
+const meeting = (title: string, hhmm: string, dayOffset = 0): SourceEvent & { sourceId: string } => ({ id: title, start: at(hhmm, dayOffset), title, sourceId: "work-calendar" });
 
 describe("the source contract", () => {
   it("keeps valid events and mail and counts the entries it drops", () => {

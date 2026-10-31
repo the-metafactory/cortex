@@ -15,7 +15,7 @@ import { NatsSubjectsSchema } from "./nats-subjects";
 // would be an eval-order cycle) so both top-level config shapes can carry an
 // `inference` block. `cortex-config.ts` re-exports the same symbol.
 import { InferenceConfigSchema } from "../inference/inference-config-schema";
-import { checkLoopbackSideband, DEFAULT_SIDEBAND_URL } from "../sideband/loopback";
+import { checkLoopbackSideband, DEFAULT_SIDEBAND_URL, isLoopbackSideband } from "../sideband/loopback";
 
 // =============================================================================
 // Helper: typed empty default for nested Zod object schemas.
@@ -419,6 +419,21 @@ const DeskSchema = z.object({
     })
     .default({ parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }),
   interruptions: DeskInterruptionsSchema.default(DeskInterruptionsSchema.parse({})),
+  mail: z
+    .object({
+      classifier: z
+        .object({
+          baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), "mc.desk.mail.classifier.baseUrl must use https unless it is a loopback address"),
+          model: z.string().min(1),
+          apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
+          apiKeyFile: z.string().min(1).optional(),
+          timeoutSeconds: z.number().int().min(1).max(120).default(30),
+          maxPerPass: z.number().int().min(1).max(100).default(10),
+        })
+        .refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.mail.classifier: set apiKeyEnv or apiKeyFile, not both")
+        .optional(),
+    })
+    .default({}),
   goals: z
     .object({
       somaBin: z.string().default(""),

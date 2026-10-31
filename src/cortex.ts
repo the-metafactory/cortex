@@ -4961,6 +4961,14 @@ export async function startCortex(
           ask: config.mc.desk.ask,
           interruptions: config.mc.desk.interruptions,
           goals: expandGoalPaths(config.mc.desk.goals, expandTilde),
+          ...(config.mc.desk.mail.classifier
+            ? {
+                mailClassifier: {
+                  ...config.mc.desk.mail.classifier,
+                  ...(config.mc.desk.mail.classifier.apiKeyFile ? { apiKeyFile: expandTilde(config.mc.desk.mail.classifier.apiKeyFile) } : {}),
+                },
+              }
+            : {}),
         },
         ...(config.mc.desk.interruptions.transport === "discord"
           ? {

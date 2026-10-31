@@ -5,6 +5,7 @@ import { rangerItemKey, rangerTitles } from "./sources/ranger";
 import { approvable, retryable } from "./actions";
 import { clock, DAY_MS, startOfDay } from "./time";
 import { isVip } from "./vips";
+import { eventKey, upcomingMeetings, type ClassifierEvent, type MailCategory, type MailClassification } from "./classify";
 import type { DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
 
 export interface AreaRule extends DeskArea {
@@ -271,20 +272,18 @@ export function fold(rest: DeskItem[]): DeskFoldedGroup[] {
 export interface MailInput {
   now: number;
   mail: (SourceMail & { area: string | null; sourceId: string })[];
-  events: SourceEvent[];
+  events: ClassifierEvent[];
   vips: ReadonlySet<string>;
+  classified?: ReadonlyMap<string, MailClassification>;
 }
 
 const STOPWORDS = new Set(["meeting", "update", "about", "with", "from", "your", "termin", "sitzung", "einladung", "invitation", "accepted", "re", "fw", "aw", "wg"]);
 const words = (s: string): Set<string> =>
-  new Set(s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4 && !STOPWORDS.has(w)));
+  new Set(s.toLowerCase().split(/[^\p{L}]+/u).filter((w) => w.length >= 4 && !STOPWORDS.has(w)));
 
 export function meetingFor(subject: string, events: SourceEvent[], now: number): SourceEvent | undefined {
   const subjectWords = words(subject);
-  return events
-    .filter((e) => !e.allDay && Date.parse(e.start) > now && Date.parse(e.start) - now < 3 * DAY_MS)
-    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
-    .find((e) => [...words(e.title)].some((w) => subjectWords.has(w)));
+  return upcomingMeetings(events, now).find((e) => [...words(e.title)].some((w) => subjectWords.has(w)));
 }
 
 const dayName = (at: number, now: number): string => {
@@ -294,37 +293,72 @@ const dayName = (at: number, now: number): string => {
   return `${new Date(at).toLocaleDateString("en-GB", { weekday: "long" })} at ${clock(at)}`;
 };
 
-export function mailItems({ now, mail, events, vips }: MailInput): DeskItem[] {
+const CATEGORY_SCORE: Record<MailCategory, number> = { meeting: 25, action: 50, reply: 45, fyi: 25, bulk: 15 };
+const LINKED_MEETING_SCORE = 55;
+const sentence = (s: string): string => (/[.!?]$/.test(s) ? s : `${s}.`);
+
+interface MailVerdict {
+  eventKey?: string;
+  score: number;
+  pressing: boolean;
+  why: string | null;
+  sorted?: MailCategory;
+}
+
+function verdictFor(m: SourceMail, input: MailInput): MailVerdict {
+  const { now, events, classified } = input;
+  const c = classified?.get(m.id);
+  if (!c) {
+    const meeting = meetingFor(m.subject, events, now);
+    if (!meeting) return { score: 15, pressing: false, why: null };
+    return { score: LINKED_MEETING_SCORE, pressing: true, why: `It may be about "${meeting.title}" ${dayName(Date.parse(meeting.start), now)}.` };
+  }
+  const linked = c.meetingKey && c.category !== "bulk" ? upcomingMeetings(events, now).find((e) => eventKey(e) === c.meetingKey) : undefined;
+  const reason = sentence(c.reason);
+  if (linked) {
+    return {
+      eventKey: eventKey(linked),
+      score: LINKED_MEETING_SCORE,
+      pressing: true,
+      why: `${reason} The meeting is ${dayName(Date.parse(linked.start), now)}.`,
+      sorted: c.category,
+    };
+  }
+  return { score: CATEGORY_SCORE[c.category], pressing: c.category === "action" || c.category === "reply", why: reason, sorted: c.category };
+}
+
+export function mailItems(input: MailInput): DeskItem[] {
+  const { now, mail, vips } = input;
   return mail.filter((m) => m.unread).map((m): DeskItem => {
     const sender = m.from.name ?? m.from.address;
     const vip = isVip(vips, m.from.address);
-    const meeting = vip ? undefined : meetingFor(m.subject, events, now);
+    const verdict = verdictFor(m, input);
     const receivedAt = parsedOr(m.receivedAt, now);
     const ageDays = Math.max(0, (now - receivedAt) / DAY_MS);
-    const why = vip
-      ? `${sender} is on your VIP list. It arrived ${ago(now, receivedAt)}.`
-      : meeting
-        ? `It may be about "${meeting.title}" ${dayName(Date.parse(meeting.start), now)}.`
-        : `It arrived ${ago(now, receivedAt)}.`;
+    const arrived = `It arrived ${ago(now, receivedAt)}.`;
+    const why = vip ? `${sender} is on your VIP list. ${verdict.sorted && verdict.why ? verdict.why : arrived}` : verdict.why ?? arrived;
     const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", "primary", true), url: m.url }] : [];
     const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", `Always show mail from ${m.from.name?.split(" ")[0] ?? "this sender"}`, "secondary", true), target: m.from.address }];
+    const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
+    if (verdict.sorted) history.push(`The mail classifier sorted it as ${verdict.sorted}.`);
     return {
       key: `mail:${m.id}`,
       kind: "mail",
       source: m.sourceId,
       area: m.area,
-      urgency: vip || meeting ? "today" : "waiting",
+      urgency: vip || verdict.pressing ? "today" : "waiting",
       title: `${sender} wrote: "${m.subject}"`,
       why,
-      score: (vip ? 80 : meeting ? 55 : 15) - ageDays * 5,
+      score: (vip ? 80 : verdict.score) - ageDays * 5,
       actions: [...open, ...always, LATER].slice(0, 3),
       detail: {
         summary: m.firstParagraph ?? m.subject,
-        history: [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`],
+        history,
         refs: [m.from.address, m.id],
         links: m.url ? [{ label: "Open in Mail", url: m.url }] : [],
       },
       ...(m.firstParagraph ? { excerpt: m.firstParagraph } : {}),
+      ...(verdict.eventKey ? { eventKey: verdict.eventKey } : {}),
       since: receivedAt,
     };
   });
