@@ -122,9 +122,11 @@ export const TABLE_NAMES = [
   "desk_mail_classes",
   "desk_unimportant",
   "desk_studio_sessions",
+  "desk_balance",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
+  "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   `CREATE TABLE IF NOT EXISTS desk_calendars (
     source TEXT NOT NULL,
     name TEXT NOT NULL,

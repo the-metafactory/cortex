@@ -8,6 +8,7 @@
   "license": "AGPL-3.0-only",
   "private": true,
   "exports": {
+    "./balance": "./src/balance/index.ts",
     "./surface-sdk": {
       "types": "./src/surface-sdk/generated/surface-sdk.d.ts",
       "default": "./src/surface-sdk/index.ts"

@@ -1,5 +1,7 @@
 # Desk Studio: thread files
 
+The deterministic [Balance engine](../src/balance/README.md) supplies the scheduling core. The balance concept originates with **Life Balance, Llamagraphics, 1996–2016**. Cortex distributes this implementation under AGPL-3.0-only. The core has its own entry point and no Cortex dependencies; Mission Control stores validated state in its stack database. The engine slice adds storage and scheduling, with UI in a later slice.
+
 The Desk Studio is a directory of Markdown files that holds the threads you think through with Ivy. Mission Control reads the directory on every request to `GET /api/desk/studio` and caches nothing. The files are the source of truth, so any tool that writes Markdown can read and append to them.
 
 ## Configuration
