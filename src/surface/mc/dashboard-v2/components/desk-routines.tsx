@@ -43,7 +43,7 @@ export function RoutinesSection({ view, onChanged }: { view: RoutineView | undef
           {r.title}<small>{r.words}. {r.policy === "auto" ? "Handled automatically." : "Asks you before each fire."}</small>
           {r.lastDecision && <small>Last fire: {r.lastDecision.outcome}{r.lastDecision.reason ? ` — ${r.lastDecision.reason}` : ""}.</small>}
           <div className="desk-acts">
-            <RoutineButton action={r.policy === "auto" ? "stop" : "auto"} target={r.id} onChanged={onChanged}>{r.policy === "auto" ? "Stop" : "Handle this yourself"}</RoutineButton>
+            <RoutineButton key={`${r.id}:${r.policy}`} action={r.policy === "auto" ? "stop" : "auto"} target={r.id} onChanged={onChanged}>{r.policy === "auto" ? "Stop" : "Handle this yourself"}</RoutineButton>
             <RoutineButton action="remove" target={r.id} onChanged={onChanged}>Remove</RoutineButton>
           </div>
         </div></li>)}
