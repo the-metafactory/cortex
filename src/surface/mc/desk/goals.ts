@@ -31,7 +31,16 @@ export const spawnGoalCommand: GoalRunner = async (argv, env, timeoutMs) => {
   return { code, stdout, stderr };
 };
 
-export const goalCheckFor = (goals: DeskGoalOptions | undefined, goal: string): GoalCheck | undefined =>
+export function expandGoalPaths(goals: DeskGoalOptions, expand: (path: string) => string): DeskGoalOptions {
+  const check = Object.entries(goals.check).map(([goal, c]): [string, GoalCheck] => [goal, {
+    command: c.command.map((arg, i) => (i === 0 ? expand(arg) : arg)),
+    env: Object.fromEntries(Object.entries(c.env).map(([k, v]) => [k, expand(v)])),
+    timeoutSeconds: c.timeoutSeconds,
+  }]);
+  return { somaBin: goals.somaBin ? expand(goals.somaBin) : "", check: Object.fromEntries(check) };
+}
+
+export const goalCheckFor =(goals: DeskGoalOptions | undefined, goal: string): GoalCheck | undefined =>
   goals && Object.hasOwn(goals.check, goal) ? goals.check[goal] : undefined;
 
 export const CHECK_PENDING_MS = 5 * 60_000;
@@ -69,6 +78,7 @@ export class GoalChecks {
 
 const STATUS_LINE = /^(G[1-9]\d*)\t([a-z]+)\t/;
 export const GOAL_STATUS_TTL_MS = 60_000;
+const FIRST_READ_WAIT_MS = 1500;
 
 export function parseGoalList(stdout: string): Map<string, string> {
   const statuses = new Map<string, string>();
@@ -97,7 +107,7 @@ export class GoalStatuses {
     if (now - this.readAt < GOAL_STATUS_TTL_MS) return this.known;
     const first = this.readAt === Number.NEGATIVE_INFINITY;
     this.running ??= this.refresh(somaBin, now);
-    if (first) await this.running;
+    if (first) await Promise.race([this.running, Bun.sleep(FIRST_READ_WAIT_MS)]);
     return this.known;
   }
 

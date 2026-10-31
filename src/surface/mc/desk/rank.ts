@@ -83,7 +83,7 @@ export function asOf(now: number, at: number): string {
   return `as of ${days} days ago`;
 }
 
-export const repoName =(repo: string): string => repo.split("/").pop() ?? repo;
+export const repoName = (repo: string): string => repo.split("/").pop() ?? repo;
 
 type Add = (item: DeskItem) => void;
 type Titles = Map<string, { title: string; url?: string }>;

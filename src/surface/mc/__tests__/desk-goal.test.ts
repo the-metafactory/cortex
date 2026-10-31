@@ -154,4 +154,11 @@ describe("goal readings and statuses", () => {
     await statuses.read("/bin/soma", 120_000);
     expect((await statuses.read("/bin/soma", 120_001)).get("G6")).toBe("active");
   });
+
+  it("does not hold the Desk for a Soma that hangs on the first read", async () => {
+    const hung = new GoalStatuses(() => new Promise<GoalRunResult>(() => {}));
+    const started = Date.now();
+    expect((await hung.read("/bin/soma", 0)).size).toBe(0);
+    expect(Date.now() - started).toBeLessThan(3000);
+  });
 });

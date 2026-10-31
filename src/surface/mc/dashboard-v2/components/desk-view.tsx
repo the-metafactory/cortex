@@ -170,18 +170,18 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       void doneNote(a.target, item.key);
     }
     else if (a.id.startsWith("ranger.") && a.wired) void send(item, a);
-    else if (a.id === "goal.check" && a.wired && item.goal) void send(item, a, () => submitGoalAction({ action: a.id, goal }), false);
+    else if (a.id === "goal.check" && a.wired && item.goal) void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }), keepVisible: true });
     else if (a.id === "goal.pause" && item.goal) {
       if (confirmPause === item.key) {
         setConfirmPause(null);
-        void send(item, a, () => submitGoalAction({ action: a.id, goal }));
+        void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }) });
       } else setConfirmPause(item.key);
     }
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
   };
 
-  const send = async (item: DeskItem, action: DeskAction, request?: () => Promise<{ ok: boolean; text: string }>, hide = true): Promise<void> => {
+  const send = async (item: DeskItem, action: DeskAction, { request, keepVisible = false }: SendOptions = {}): Promise<void> => {
     if (inFlight.current.has(item.key)) return;
     inFlight.current.add(item.key);
     setSending((m) => new Map(m).set(item.key, action.id));
@@ -198,7 +198,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     }
     setNote(result.text);
     if (!result.ok) return;
-    if (hide) {
+    if (!keepVisible) {
       setSnoozed((s) => new Set(s).add(item.key));
       setDetail((d) => (d?.key === item.key ? null : d));
     }
@@ -667,6 +667,11 @@ export function RankingSection({ corrections, onUndo }: { corrections: DeskCorre
       </ul>
     </section>
   );
+}
+
+interface SendOptions {
+  request?: () => Promise<{ ok: boolean; text: string }>;
+  keepVisible?: boolean;
 }
 
 const CHECK_POLL_MS = 3000;
