@@ -410,6 +410,8 @@ const DeskSchema = z.object({
           calendar: z.array(z.string().min(1)).min(1).optional(),
           task: z.array(z.string().min(1)).min(1).optional(),
           goal: z.array(z.string().min(1)).min(1).optional(),
+          note: z.array(z.string().min(1)).min(1).optional(),
+          reminder: z.array(z.string().min(1)).min(1).optional(),
         })
         .default({}),
       taskMaps: z.array(z.object({ ref: z.string().regex(/^[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/), label: z.string().min(1) })).default([]),
