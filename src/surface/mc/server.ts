@@ -1,6 +1,7 @@
 import { handleDeskCalendars } from "./api/desk-calendars";
 import { handleDeskRoutines } from "./api/desk-routines";
 import { RoutineReadLoop } from "./desk/routine-read";
+import { localRoutineCapabilities } from "./desk/routine-providers";
 import type { Server, ServerWebSocket } from "bun";
 import type { Database } from "bun:sqlite";
 import type { Config } from "./types";
@@ -482,12 +483,12 @@ async function handleApi(
 
   if (pathname === "/api/desk/corrections") return handleDeskCorrections(req, url, db);
 
-  if (pathname === "/api/desk/ask") return handleDeskAsk(req, desk, {}, db);
+  if (pathname === "/api/desk/ask") return handleDeskAsk(req, desk, { routineCapabilities: () => localRoutineCapabilities(agentPresence) }, db);
 
   if (pathname === "/api/desk/capture/undo") return handleDeskCaptureUndo(req, db, desk);
 
-  if (pathname === "/api/desk/create") return handleDeskCreate(req, db, desk);
-  if (pathname === "/api/desk/routines") return handleDeskRoutines(req, db, desk);
+  if (pathname === "/api/desk/create") return handleDeskCreate(req, db, desk, { routineCapabilities: () => localRoutineCapabilities(agentPresence) });
+  if (pathname === "/api/desk/routines") return handleDeskRoutines(req, db, desk, undefined, () => localRoutineCapabilities(agentPresence));
 
   if (pathname === "/api/desk/voice/speak") return handleDeskSpeak(req, desk);
 

@@ -8,6 +8,10 @@ The config reference lists [timeouts and command locations](configuration.md). C
 
 The Desk appends `--request <text> --json` to `routines.composer`. The command prints Pulse's typed compose result: `status: complete` with `yaml`, `status: no-match` with `message`, or `status: invalid` with `findings`. A complete result exits 0. Missing capabilities produce a refusal card without Confirm. The preview shows the actual composed steps and the schedule in the configured timezone.
 
+`scripts/desk-compose.ts` wraps the shared Pulse composer with `--catalog-file`, `--model-url`, `--model` and `--api-key-env`. It reads exact active action paths from the trusted snapshot. It excludes LLM actions without a configured runtime model and action-level agent calls whose capabilities the Desk cannot inspect. It never queries Arc at runtime.
+
+Built-in agent and tribunal steps require fresh online local capability declarations from Cortex's existing agent-presence registry. Preview, Confirm and promotion check those declarations. Targeted or federated agents, gates and research steps are refused because this presence check cannot establish their execution providers. Sovereignty fields remain unchanged in the stored YAML.
+
 Supported schedules start with `every minute`, `every N minutes`, `every hour`, `every N hours`, or a day phrase with an explicit time. Examples include `every Friday at 17:00, …`, `every weekday at 9am, …` and `every day at 08:30, …`. Minute intervals range from 1 to 59. Hour intervals range from 1 to 23.
 
 Confirm sends the server-held proposal to `routines.reflex` through `routine add --flow-file <temporary-path>` with policy `approve` and the configured target. Reflex's JSON policy is `approval`. Composer YAML annotations stay intact. When the composer omits `input`, the Desk appends the original request as `request`, `scenario` and `text` initial fields. An explicit composer input remains unchanged.

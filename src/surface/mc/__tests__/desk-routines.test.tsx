@@ -16,6 +16,9 @@ import { RoutinesSection, RoutineDone } from "../dashboard-v2/components/desk-ro
 import { RoutineReadLoop } from "../desk/routine-read";
 import { startServer } from "../server";
 import { DEFAULT_CONFIG } from "../config";
+import { requireRoutineCapabilities, localRoutineCapabilities } from "../desk/routine-providers";
+import { validateSteps } from "pulse";
+import type { AgentPresenceSnapshotRecord } from "../api/agents";
 
 const OPTIONS: RoutineOptions = { composer: ["composer"], reflex: ["reflex"], target: "@example/pulse-flow", timeZone: "Europe/Zurich", timeoutSeconds: 10, readTimeoutSeconds: 1 };
 const YAML = "name: F_READ\nactions:\n  - A_EXTRACT_URLS # sovereignty: D, residency: CH\n";
@@ -182,7 +185,9 @@ describe("Desk routines", () => {
     await actOnRoutine(db, OPTIONS, { action: "install", target: String(card.fields.proposalId), requestId: "install-removal" }, NOW, s.run);
     const request = { action: "remove", target: s.routines[0]?.id ?? "", requestId: "partial-remove" } as const;
     s.uncertain();
-    expect(await actOnRoutine(db, OPTIONS, request, NOW, s.run)).toMatchObject({ ok: false, error: expect.stringContaining("Retry Remove") });
+    const result = await actOnRoutine(db, OPTIONS, request, NOW, s.run);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("Retry Remove");
     s.recover();
     expect((await actOnRoutine(db, OPTIONS, request, NOW, s.run)).ok).toBe(true);
     expect(s.routines).toHaveLength(0);
@@ -234,5 +239,32 @@ describe("Desk routines", () => {
     } finally {
       ctx.stop(true);
     }
+  });
+
+  it("refuses a composed agent capability with no fresh local worker and checks again at Confirm", async () => {
+    const s = seam();
+    const yaml = "name: F_AGENT\nactions:\n  - agent: # sovereignty: A, residency: CH\n      name: derive\n      capability: compose.judgment\n      prompt: '{text}'\n      collect: result\n";
+    s.compose({ status: "complete", yaml });
+    const refused = await buildRoutineCard(db, "every minute, derive a result", OPTIONS, NOW, s.run);
+    expect(refused.problem).toContain("No fresh online local agent provides compose.judgment");
+    expect(refused.unwritable).toBe(true);
+    const card = await buildRoutineCard(db, "every minute, derive a result", OPTIONS, NOW, s.run, () => new Set(["compose.judgment"]));
+    expect(card.problem).toBeUndefined();
+    const request = { action: "install", target: String(card.fields.proposalId), requestId: "worker-disappeared" } as const;
+    const result = await actOnRoutine(db, OPTIONS, request, NOW, s.run);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("compose.judgment");
+    expect(s.mutations).toHaveLength(0);
+  });
+
+  it("recurses into composed flows and accepts only fresh online stack-local capability declarations", () => {
+    const base: AgentPresenceSnapshotRecord = { key: "test", origin: "local", agentId: "test", nkeyPublicKey: "public", assistantName: "Test", principal: "example", stack: "default", capabilities: ["compose.judgment"], state: "online", lastSeenAt: NOW };
+    expect([...localRoutineCapabilities({ getAgents: () => [base] }, NOW)]).toEqual(["compose.judgment"]);
+    for (const change of [{ state: "offline" }, { lastSeenAt: NOW - 90_001 }, { origin: { kind: "foreign", principal: "other", stack: "default" } }] satisfies Partial<AgentPresenceSnapshotRecord>[]) {
+      expect(localRoutineCapabilities({ getAgents: () => [{ ...base, ...change }] }, NOW).size).toBe(0);
+    }
+    const nested = validateSteps([{ retry: { attempts: 1, actions: [{ agent: { name: "derive", capability: "compose.judgment", prompt: "read" } }] } }]);
+    expect(() => requireRoutineCapabilities(nested)).toThrow("compose.judgment");
+    expect(requireRoutineCapabilities(nested, () => new Set(["compose.judgment"]))).toEqual(["compose.judgment"]);
   });
 });

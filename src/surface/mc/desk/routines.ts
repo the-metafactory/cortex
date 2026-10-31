@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { DeskProposal } from "./ask";
 import { spawnWithStdin } from "./create";
 import { routineSchedule } from "./routine-schedule";
+import { requireRoutineCapabilities, type RoutineCapabilities } from "./routine-providers";
 import { PendingRoutineSchema, RoutineHistorySchema, RoutineSchema, RoutineRefusal, RoutineWriteFailure, reflexCommand, runRoutineCommand, type RoutineOptions, type RoutineRunner, type RoutineView } from "./routine-command";
 import { RoutineResultSchema, finishRoutineOperation, pendingRoutineOperations, readRoutineOperation, readRoutineProposal, routineConfigHash, saveRoutineProposal, type RoutineAction, type RoutineProposal, type RoutineResult } from "./routine-store";
 
@@ -21,7 +22,7 @@ const FlowDocument = z.object({ name: z.string().min(1), actions: z.array(z.unkn
 const UNKNOWN = "Reflex has not confirmed the result. Refresh the Desk and retry this same action; it will not be sent twice.";
 const failure = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
-export async function buildRoutineCard(db: Database, text: string, options: RoutineOptions | undefined, now: number, run: RoutineRunner = spawnWithStdin): Promise<DeskProposal> {
+export async function buildRoutineCard(db: Database, text: string, options: RoutineOptions | undefined, now: number, run: RoutineRunner = spawnWithStdin, capabilities?: RoutineCapabilities): Promise<DeskProposal> {
   const blocked = (problem: string): DeskProposal => ({ kind: "routine", label: "Routine", fields: { title: text }, problem, unwritable: true, via: "rules" });
   if (!options) return blocked("Routines are not set up on this stack.");
   const schedule = routineSchedule(text);
@@ -33,7 +34,7 @@ export async function buildRoutineCard(db: Database, text: string, options: Rout
     if (reply.status === "invalid") return blocked(reply.findings.map((f) => f.message).join("; ") || "The composer could not produce a valid flow.");
     if (result.code !== 0) return blocked("The composer did not complete successfully.");
     const flow = FlowDocument.parse(parseYaml(reply.yaml));
-    validateSteps(flow.actions);
+    requireRoutineCapabilities(validateSteps(flow.actions), capabilities);
     const id = randomUUID();
     const proposal: RoutineProposal = {
       id, routineId: `desk-${id}`, title: schedule.request, request: schedule.request,
@@ -97,7 +98,7 @@ async function reconcile(options: RoutineOptions, request: RoutineAction, propos
   return null;
 }
 
-export async function actOnRoutine(db: Database, options: RoutineOptions, request: RoutineAction, now: number, run: RoutineRunner = spawnWithStdin): Promise<RoutineResult> {
+export async function actOnRoutine(db: Database, options: RoutineOptions, request: RoutineAction, now: number, run: RoutineRunner = spawnWithStdin, capabilities?: RoutineCapabilities): Promise<RoutineResult> {
   const proposal = request.action === "install" ? readRoutineProposal(db, request.target) : null;
   if (request.action === "install" && (proposal?.configHash !== routineConfigHash(options))) return { ok: false, error: "Prepare this routine again before confirming it." };
   const binding = JSON.stringify({ action: request.action, target: request.target, configHash: routineConfigHash(options) });
@@ -111,6 +112,12 @@ export async function actOnRoutine(db: Database, options: RoutineOptions, reques
     } catch {
       return { ok: false, error: UNKNOWN, uncertain: true };
     }
+  }
+  const execution = proposal ?? (request.action === "auto" ? readRoutineProposal(db, request.target, "routine_id") : null);
+  if (request.action === "auto" && !execution) return { ok: false, error: "The Desk cannot verify the execution capabilities of a routine authored elsewhere. Stop and Remove remain available." };
+  if (execution) {
+    try { requireRoutineCapabilities(validateSteps(FlowDocument.parse(parseYaml(execution.yaml)).actions), capabilities); }
+    catch (error) { return { ok: false, error: failure(error) }; }
   }
   if (proposal && now - proposal.createdAt > 86_400_000) return { ok: false, error: "This proposal has expired. Prepare the routine again." };
   const view = await readRoutines(db, options, run);

@@ -25,4 +25,9 @@ export class RoutineReadLoop {
     this.inFlight ??= readRoutines(db, options, run).then((view) => { this.snapshot = view; this.at = now; }).finally(() => { this.inFlight = null; });
     return this.inFlight;
   }
+
+  async afterWrite(db: Database, options: RoutineOptions): Promise<void> {
+    await this.inFlight;
+    await this.refresh(db, options);
+  }
 }
