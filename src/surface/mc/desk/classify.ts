@@ -31,35 +31,55 @@ export interface MailClassification {
   evidence?: MailEvidence[];
 }
 
-interface ClassifierCommon {
+interface ModelAccess {
   apiKeyEnv?: string;
   apiKeyFile?: string;
   timeoutSeconds: number;
-  maxPerPass: number;
 }
 
-export interface EndpointConfig extends ClassifierCommon {
+export interface EndpointAccess extends ModelAccess {
   baseUrl: string;
   model: string;
   caFile?: string;
 }
 
-export interface CommandConfig extends ClassifierCommon {
+export interface CommandAccess extends ModelAccess {
   command: string[];
 }
 
+export interface EndpointConfig extends EndpointAccess {
+  maxPerPass: number;
+}
+
+export interface CommandConfig extends CommandAccess {
+  maxPerPass: number;
+}
+
 export type ClassifierConfig = EndpointConfig | CommandConfig;
+export type ModelConfig = EndpointAccess | CommandAccess;
 
-export type ClassifierConfigInput = ClassifierCommon & { baseUrl?: string; model?: string; command?: string[]; caFile?: string };
+export interface ModelConfigInput extends ModelAccess {
+  baseUrl?: string;
+  model?: string;
+  command?: string[];
+  caFile?: string;
+}
 
-export function toClassifierConfig(input: ClassifierConfigInput): ClassifierConfig {
+export type ClassifierConfigInput = ModelConfigInput & { maxPerPass: number };
+
+export function toModelConfig(input: ModelConfigInput, formError: string): ModelConfig {
   const { baseUrl, model, command, caFile, ...common } = input;
   if (command?.length) return { ...common, command };
   if (baseUrl && model) return { ...common, baseUrl, model, ...(caFile ? { caFile } : {}) };
-  throw new Error(CLASSIFIER_FORM_ERROR);
+  throw new Error(formError);
 }
 
-const isCommand = (config: ClassifierConfig): config is CommandConfig => "command" in config;
+export function toClassifierConfig(input: ClassifierConfigInput): ClassifierConfig {
+  const { maxPerPass, ...model } = input;
+  return { ...toModelConfig(model, CLASSIFIER_FORM_ERROR), maxPerPass };
+}
+
+export const isCommand = (config: ModelConfig): config is CommandAccess => "command" in config;
 
 export type ClassifierCorrection = Pick<DeskCorrection, "kind" | "source" | "mode" | "label">;
 
@@ -162,11 +182,11 @@ export function parseModelContent(content: string): unknown {
   return JSON.parse(content.slice(start, end + 1));
 }
 
-const needsKey = (c: Pick<ClassifierConfig, "apiKeyEnv" | "apiKeyFile">): boolean => Boolean(c.apiKeyEnv ?? c.apiKeyFile);
+const needsKey = (c: Pick<ModelAccess, "apiKeyEnv" | "apiKeyFile">): boolean => Boolean(c.apiKeyEnv ?? c.apiKeyFile);
 
 export class MissingKey extends Error {}
 
-export type KeyReader = (config: Pick<ClassifierConfig, "apiKeyEnv" | "apiKeyFile">) => Promise<string | null>;
+export type KeyReader = (config: Pick<ModelAccess, "apiKeyEnv" | "apiKeyFile">) => Promise<string | null>;
 
 export const readApiKey: KeyReader = async ({ apiKeyEnv, apiKeyFile }) => {
   if (apiKeyEnv) {
@@ -186,32 +206,32 @@ const ChatResponseSchema = z.object({
   choices: z.array(z.object({ message: z.object({ content: z.string().nullish() }) })).min(1),
 });
 
-async function readCa(path: string): Promise<string> {
+async function readCa(path: string, label: string): Promise<string> {
   try {
     return await Bun.file(path).text();
   } catch {
-    throw new Error(`the classifier CA file could not be read: ${path}`);
+    throw new Error(`the ${label} CA file could not be read: ${path}`);
   }
 }
 
-export function chatJson(config: EndpointConfig, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): (messages: { role: "system" | "user"; content: string }[], timeoutMs: number) => Promise<unknown> {
+export function chatJson(config: EndpointAccess, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey, label = "classifier", maxTokens = 600): (messages: { role: "system" | "user"; content: string }[], timeoutMs: number) => Promise<unknown> {
   const url = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const wantsKey = needsKey(config);
   return async (messages, timeoutMs) => {
     const key = await readKey(config);
-    if (wantsKey && !key) throw new MissingKey("the classifier key was not found");
-    const ca = config.caFile ? await readCa(config.caFile) : null;
+    if (wantsKey && !key) throw new MissingKey(`the ${label} key was not found`);
+    const ca = config.caFile ? await readCa(config.caFile, label) : null;
     const res = await fetchImpl(url, {
       ...(ca ? { tls: { ca } } : {}),
       method: "POST",
       headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
-      body: JSON.stringify({ model: config.model, messages, temperature: 0, max_tokens: 600 }),
+      body: JSON.stringify({ model: config.model, messages, temperature: 0, max_tokens: maxTokens }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) throw new Error(`the classifier answered HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`the ${label} answered HTTP ${res.status}`);
     const body = ChatResponseSchema.safeParse(await res.json());
     const content = body.success ? body.data.choices[0]?.message.content : null;
-    if (!content) throw new Error("the classifier sent no answer");
+    if (!content) throw new Error(`the ${label} sent no answer`);
     return parseModelContent(content);
   };
 }
@@ -223,27 +243,32 @@ export function chatClassifier(config: EndpointConfig, fetchImpl: typeof fetch =
 
 export type CommandRunner = (argv: string[], timeoutMs: number, stdin: string, env?: Record<string, string | undefined>) => Promise<CommandResult>;
 
-export function commandClassifier(config: CommandConfig, run: CommandRunner = runCommand, readKey: KeyReader = readApiKey): ClassifierRunner {
+export function commandJson(config: CommandAccess, run: CommandRunner = runCommand, readKey: KeyReader = readApiKey, label = "classifier"): (prompt: string, timeoutMs: number) => Promise<unknown> {
   const wantsKey = needsKey(config);
   const name = basename(config.command[0] ?? "");
-  return async (request, timeoutMs) => {
+  return async (prompt, timeoutMs) => {
     const key = await readKey(config);
-    if (wantsKey && !key) throw new MissingKey("the classifier key was not found");
+    if (wantsKey && !key) throw new MissingKey(`the ${label} key was not found`);
     let result: CommandResult;
     try {
-      result = await run(config.command, timeoutMs, JSON.stringify(request), key ? { ...process.env, [CLASSIFIER_KEY_ENV]: key } : undefined);
+      result = await run(config.command, timeoutMs, prompt, key ? { ...process.env, [CLASSIFIER_KEY_ENV]: key } : undefined);
     } catch (err) {
-      if (err instanceof CommandTimeout) throw new Error(`the classifier command ${name} ${err.message}`, { cause: err });
-      throw new Error(`the classifier command ${name} did not run: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+      if (err instanceof CommandTimeout) throw new Error(`the ${label} command ${name} ${err.message}`, { cause: err });
+      throw new Error(`the ${label} command ${name} did not run: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
     }
-    if (result.signal) throw new Error(`the classifier command ${name} was killed by ${result.signal}`);
-    if (result.code !== 0) throw new Error(`the classifier command ${name} exited ${result.code}: ${oneLine(result.stderr, "no message")}`);
+    if (result.signal) throw new Error(`the ${label} command ${name} was killed by ${result.signal}`);
+    if (result.code !== 0) throw new Error(`the ${label} command ${name} exited ${result.code}: ${oneLine(result.stderr, "no message")}`);
     try {
       return JSON.parse(result.stdout) as unknown;
     } catch {
-      throw new Error(`the classifier command ${name} printed no JSON answer`);
+      throw new Error(`the ${label} command ${name} printed no JSON answer`);
     }
   };
+}
+
+export function commandClassifier(config: CommandConfig, run: CommandRunner = runCommand, readKey: KeyReader = readApiKey): ClassifierRunner {
+  const runJson = commandJson(config, run, readKey);
+  return (request, timeoutMs) => runJson(JSON.stringify(request), timeoutMs);
 }
 
 export const classifierRunner = (config: ClassifierConfig): ClassifierRunner => (isCommand(config) ? commandClassifier(config) : chatClassifier(config));

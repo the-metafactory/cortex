@@ -12,7 +12,7 @@ import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskCorrection, DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
-import type { RulingLedger } from "./ruling";
+import type { RulingExplainLoop, RulingLedger } from "./ruling";
 import type { ParserPermissions } from "../../../common/types/desk-parser";
 import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriters, type RecentCalendarWrites } from "./create";
@@ -20,7 +20,7 @@ import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
-import { classifierStatus, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier } from "./classify";
+import { classifierStatus, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier, type ModelConfig } from "./classify";
 import { voiceView, type VoiceOptions } from "./voice";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
@@ -33,6 +33,7 @@ export interface DeskRuntime {
   goalChecks?: GoalChecks;
   goalStatuses?: GoalStatuses;
   mailClassifier?: MailClassifier;
+  rulingExplain?: RulingExplainLoop;
   rulings?: RulingLedger;
 }
 
@@ -58,6 +59,7 @@ export interface DeskOptions {
   interruptions?: InterruptRules;
   goals?: DeskGoalOptions;
   mailClassifier?: ClassifierConfig;
+  rulingExplainer?: ModelConfig;
   mailActions?: MailActionsConfig;
   mailLinks?: EvidenceLinks;
   voice?: VoiceOptions;
@@ -78,6 +80,7 @@ export interface ComposeDeps {
   goalChecks?: GoalChecks;
   goalStatuses?: GoalStatuses;
   mailClassifier?: MailClassifier;
+  rulingExplain?: RulingExplainLoop;
 }
 
 export const CORRECTIONS_UNREADABLE = "The Desk could not read your ranking corrections, so it ranks by its base rules alone.";
@@ -150,7 +153,8 @@ export async function composeDesk(
   const rangerActions = rangerActionsReady(desk);
   const rulingActions = rangerActions && Boolean(desk.somaBin);
   const goalActions = goalActionsFor(desk.goals, subjects, deps.goalChecks, now);
-  const ranked = rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions })
+  const explanations = ranger && deps.rulingExplain ? await deps.rulingExplain.explain(ranger.needsYou) : undefined;
+  const ranked = rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
     .filter((item) => goalListed(goalStatuses, item.goal));
   const items = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),

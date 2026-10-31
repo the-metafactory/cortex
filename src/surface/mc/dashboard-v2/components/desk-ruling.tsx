@@ -1,4 +1,5 @@
 import type { DeskItem } from "../../desk/types";
+import { RULING_FALLBACK } from "../../desk/ruling";
 import "./desk-ruling.css";
 
 export interface RulingDraft {
@@ -35,11 +36,38 @@ export function RulingBox({ item, draft, sending, onChange, onConfirm, onCancel 
 }) {
   const question = item.question;
   const issue = item.detail.links[0];
+  const explanation = item.explanation;
+  const report = question?.reason ?? item.detail.summary;
   return (
     <section className="desk-ruling" aria-label="Your ruling">
-      <div className="desk-sec">The agent asks</div>
-      {question?.condition && <p className="desk-ruling-ask">Resume once: {question.condition}</p>}
-      <p className="desk-why">{question?.reason ?? item.detail.summary}</p>
+      <div className="desk-sec">What you are deciding</div>
+      {explanation ? (
+        <>
+          <p className="desk-ruling-sentence">{explanation.sentence}</p>
+          <div className="desk-ruling-choices" role="group" aria-label="Choices">
+            {explanation.choices.map((choice) => (
+              <button
+                key={choice.label}
+                type="button"
+                className="desk-ruling-choice"
+                aria-pressed={draft.text.trim() === choice.ruling.trim()}
+                disabled={draft.locked || sending}
+                onClick={() => onChange(choice.ruling)}
+              >
+                <span className="desk-ruling-choice-label">{choice.label}</span>
+                <span className="desk-ruling-choice-why">{choice.consequence}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <p className="desk-why">{RULING_FALLBACK}</p>
+      )}
+      <details className="desk-ruling-raw">
+        <summary>Ranger's report</summary>
+        {question?.condition && <p className="desk-ruling-ask">Resume once: {question.condition}</p>}
+        <p className="desk-why">{report}</p>
+      </details>
       {issue && <a className="desk-ruling-link" href={issue.url} target="_blank" rel="noopener noreferrer">Open the issue ↗</a>}
       <textarea
         aria-label="Your ruling"

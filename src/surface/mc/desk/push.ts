@@ -19,6 +19,7 @@ export function startDeskPushes(
       ...(runtime.mailClassifier ? { mailClassifier: runtime.mailClassifier } : {}),
       ...(runtime.sourceCache ? { sourceCache: runtime.sourceCache } : {}),
       ...(runtime.recentWrites ? { recentWrites: runtime.recentWrites } : {}),
+      ...(runtime.rulingExplain ? { rulingExplain: runtime.rulingExplain } : {}),
     });
     await pushInterrupts(db, view.items, rules.transport, transport(), view.generatedAt);
   });
