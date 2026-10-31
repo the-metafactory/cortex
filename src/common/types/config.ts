@@ -378,6 +378,14 @@ export const CLASSIFIER_FORM_ERROR = "mc.desk.mail.classifier: set either comman
 const hasOneClassifierForm = (c: { baseUrl?: string; model?: string; command?: string[] }): boolean =>
   c.command ? !c.baseUrl && !c.model : Boolean(c.baseUrl && c.model);
 
+const UNSAFE_SCHEMES = /^(?:javascript|data|vbscript|file):/i;
+const linkTemplate = (name: string) =>
+  z
+    .string()
+    .regex(/^[a-z][a-z0-9+.-]*:/i, `mc.desk.mail.links.${name} must start with a URL scheme`)
+    .refine((t) => !UNSAFE_SCHEMES.test(t), `mc.desk.mail.links.${name} may not use a javascript, data, vbscript or file URL`)
+    .refine((t) => t.includes("{ref}"), `mc.desk.mail.links.${name} must contain {ref}`);
+
 const DeskSchema = z.object({
   enabled: z.boolean().default(true),
   displayName: z.string().default(""),
@@ -441,6 +449,7 @@ const DeskSchema = z.object({
         .refine(hasOneClassifierForm, CLASSIFIER_FORM_ERROR)
         .refine((c) => !(c.command && c.caFile), "mc.desk.mail.classifier.caFile belongs to the endpoint form; pass a CA to the command in its argv")
         .optional(),
+      links: z.object({ mail: linkTemplate("mail").optional(), note: linkTemplate("note").optional() }).optional(),
       actions: z
         .object({
           trash: z.array(z.string().min(1)).min(1).optional(),

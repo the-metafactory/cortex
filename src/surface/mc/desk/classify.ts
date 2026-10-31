@@ -100,13 +100,14 @@ const BaseAnswerSchema = z.object({
   reason: z.string().trim().min(1).max(MAX_REASON),
 });
 
+const SummarySchema = z.string().trim().max(MAX_SUMMARY);
+const SuggestedSchema = z.enum(SUGGESTED_ACTIONS);
+const EvidenceSchema = z.object({ kind: z.enum(EVIDENCE_KINDS), ref: z.string().trim().min(1).max(300), title: z.string().trim().min(1).max(200) });
+
 const DetailsSchema = z.object({
-  summary: z.string().trim().max(MAX_SUMMARY).nullish(),
-  suggestedAction: z.enum(SUGGESTED_ACTIONS).nullish(),
-  evidence: z
-    .array(z.object({ kind: z.enum(EVIDENCE_KINDS), ref: z.string().trim().min(1).max(300), title: z.string().trim().min(1).max(200) }))
-    .max(MAX_EVIDENCE)
-    .nullish(),
+  summary: SummarySchema.nullish(),
+  suggestedAction: SuggestedSchema.nullish(),
+  evidence: z.array(EvidenceSchema).max(MAX_EVIDENCE).nullish(),
 });
 
 type Extras = Pick<MailClassification, "summary" | "suggestedAction" | "evidence">;
@@ -259,14 +260,27 @@ interface Row {
   details: string | null;
 }
 
-function readDetails(raw: string | null): Extras {
-  if (!raw) return {};
+const field = <T>(schema: z.ZodType<T>, value: unknown): T | undefined => {
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+};
+
+const StoredSchema = z.record(z.string(), z.unknown());
+
+const parseStored =(raw: string): unknown => {
   try {
-    const parsed = DetailsSchema.safeParse(JSON.parse(raw));
-    return parsed.success ? extras(parsed.data) : {};
+    return JSON.parse(raw);
   } catch {
-    return {};
+    return null;
   }
+};
+
+export function readDetails(raw: string | null): Extras {
+  const stored = raw ? field(StoredSchema, parseStored(raw)) : undefined;
+  if (!stored) return {};
+  const { summary, suggestedAction, evidence } = stored;
+  const items = Array.isArray(evidence) ? evidence.flatMap((e) => field(EvidenceSchema, e) ?? []).slice(0, MAX_EVIDENCE) : [];
+  return extras({ summary: field(SummarySchema, summary), suggestedAction: field(SuggestedSchema, suggestedAction), evidence: items });
 }
 
 const isCategory = (v: string): v is MailCategory => MAIL_CATEGORIES.includes(v as MailCategory);

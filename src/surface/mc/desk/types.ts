@@ -24,11 +24,19 @@ export interface DeskLink {
   url: string;
 }
 
+export interface DeskEvidence {
+  kind: "mail" | "event" | "note";
+  title: string;
+  url?: string;
+  eventKey?: string;
+}
+
 export interface DeskItemDetail {
   summary: string;
   history: string[];
   refs: string[];
   links: DeskLink[];
+  evidence?: DeskEvidence[];
 }
 
 export type DeskCorrectionMode = "less" | "always";
@@ -54,6 +62,7 @@ export interface DeskItem {
   more?: DeskAction[];
   detail: DeskItemDetail;
   excerpt?: string;
+  suggestion?: string;
   eventKey?: string;
   since?: number;
   interrupt?: DeskInterrupt;

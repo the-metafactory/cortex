@@ -7,6 +7,7 @@ import { DAY_MS, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent } from "./sources/command";
 import { listSenders, listVips } from "./vips";
 import { trashKey, type MailActionsConfig } from "./mail-actions";
+import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskCorrection, DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
@@ -50,6 +51,7 @@ export interface DeskOptions {
   goals?: DeskGoalOptions;
   mailClassifier?: ClassifierConfig;
   mailActions?: MailActionsConfig;
+  mailLinks?: EvidenceLinks;
 }
 
 export interface DeskVigilSource {
@@ -128,7 +130,7 @@ export async function composeDesk(
   const calendar = [...events, ...written];
   const sod = startOfDay(now);
   const todayCalendar = calendarEvents(calendar, sod, sod + DAY_MS);
-  const aheadCalendar = calendarEvents(calendar, sod + DAY_MS, sod + 5 * DAY_MS);
+  const aheadCalendar = calendarEvents(calendar, sod + DAY_MS, sod + TIMELINE_DAYS * DAY_MS);
   const rules = desk.interruptions ?? NO_INTERRUPTIONS;
 
   const rangerActions = rangerActionsReady(desk);
@@ -137,7 +139,7 @@ export async function composeDesk(
     .filter((item) => goalListed(goalStatuses, item.goal));
   const items = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: Boolean(desk.mailActions?.trash?.length), ...(classified ? { classified } : {}) }),
+    ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: Boolean(desk.mailActions?.trash?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
   ], rules, readDeliveries(db), now), activeCorrections);
@@ -155,7 +157,7 @@ export async function composeDesk(
     ].sort((a, b) => a.at - b.at),
     ahead: [
       ...aheadCalendar,
-      ...reminderEvents(reminders, sod + DAY_MS, sod + 5 * DAY_MS),
+      ...reminderEvents(reminders, sod + DAY_MS, sod + TIMELINE_DAYS * DAY_MS),
     ].sort((a, b) => a.at - b.at),
     vips: vips.map(({ address, label }) => ({ address, label })),
     agents: buildAgents(ranger, items, now),

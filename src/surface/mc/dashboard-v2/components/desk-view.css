@@ -167,6 +167,13 @@
 .desk-links a{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:10px;color:var(--ink2);text-decoration:none;font-size:14.5px;font-weight:500}
 .desk-links a:hover{background:#fafafa;border-color:#d4d4d8}
 .desk-links a span{color:var(--mute)}
+.desk-suggest{color:var(--ink2);font-weight:500}
+.desk-evidence{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.desk-evidence a,.desk-evidence button,.desk-evidence>li>span{display:flex;align-items:baseline;gap:8px;width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:none;color:var(--ink2);text-decoration:none;font:inherit;font-size:14.5px;text-align:left}
+.desk-evidence a,.desk-evidence button{cursor:pointer}
+.desk-evidence a:hover,.desk-evidence button:hover{background:#fafafa;border-color:#d4d4d8}
+.desk-evidence .k{flex:none;font-size:12px;font-weight:600;color:var(--mute)}
+.desk-evidence .go{margin-left:auto;color:var(--mute)}
 .desk-refs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
 .desk-refs li{font:400 12px/1.5 "JetBrains Mono",ui-monospace,monospace;color:var(--mute)}
 .desk-panel-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:30px;padding-top:20px;border-top:1px solid var(--line2)}
