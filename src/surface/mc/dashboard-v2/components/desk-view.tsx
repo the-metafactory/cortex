@@ -9,7 +9,7 @@ import { DAY_MS, startOfDay } from "../../desk/time";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
 import { ALL_AREAS, briefing, canSee, clock, openGroup, selectItems, URGENCY_LABEL } from "../../desk/present";
-import type { DeskAction, DeskArea, DeskEvent, DeskFoldedGroup, DeskItem, DeskItemKind, DeskView as DeskViewModel } from "../../desk/types";
+import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskFoldedGroup, DeskItem, DeskItemKind, DeskView as DeskViewModel } from "../../desk/types";
 
 interface DeskViewProps {
   onOpenMissionControl: () => void;
@@ -194,6 +194,18 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
     }
   };
 
+  const correct = async (kind: DeskItemKind, source: string, mode: DeskCorrectionMode | null): Promise<void> => {
+    try {
+      const r = mode
+        ? await postJson<{ kind: string; source: string; mode: DeskCorrectionMode }, { message?: string }>("/api/desk/corrections", { kind, source, mode })
+        : await getJson<{ message?: string }>(`/api/desk/corrections?kind=${encodeURIComponent(kind)}&source=${encodeURIComponent(source)}`, { method: "DELETE" });
+      setNote(r.message ?? "Done.");
+      onChanged();
+    } catch (err) {
+      setNote(err instanceof Error ? err.message : "Could not change the ranking.");
+    }
+  };
+
   const removeVip = async (address: string): Promise<void> => {
     try {
       await getJson(`/api/desk/vips?address=${encodeURIComponent(address)}`, { method: "DELETE" });
@@ -214,6 +226,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
       onAction={(a) => run(item, a)}
       sending={sending.get(item.key) ?? null}
       onFocusEvent={focusEvent}
+      onCorrect={(mode) => void correct(item.kind, item.source, mode)}
     />
   );
 
@@ -410,6 +423,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onChanged = () => 
             </section>
           )}
 
+          <RankingSection corrections={view.corrections} onUndo={(c) => void correct(c.kind, c.source, null)} />
+
           <VipSection vips={view.vips} onAdd={(address) => void addVip(address, null)} onRemove={(address) => void removeVip(address)} />
 
           <section className="desk-msec">
@@ -527,9 +542,10 @@ interface DeskItemRowProps {
   onAction: (a: DeskAction) => void;
   sending: string | null;
   onFocusEvent: (key: string) => void;
+  onCorrect: (mode: DeskCorrectionMode | null) => void;
 }
 
-function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFocusEvent }: DeskItemRowProps) {
+function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFocusEvent, onCorrect }: DeskItemRowProps) {
   return (
     <article className="desk-row desk-item">
       <span className="desk-rank">{rank}</span>
@@ -538,6 +554,7 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
         <div className="desk-meta">
           {area && <span className="area"><AreaDot area={area} />{area.label}</span>}
           <span className={item.urgency === "today" || item.urgency === "now" ? "due" : ""}>{URGENCY_LABEL[item.urgency]}</span>
+          {item.correction && <span className="desk-corr">{CORRECTION_TAG[item.correction]}</span>}
         </div>
         <button type="button" className="desk-title" onClick={onOpen}>{item.title}</button>
         <p className="desk-why">{item.why}</p>
@@ -550,9 +567,55 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
               {clock(event.at)} today ↑
             </button>
           )}
+          <ItemMenu current={item.correction} onCorrect={onCorrect} />
         </div>
       </div>
     </article>
+  );
+}
+
+const CORRECTION_TAG: Record<DeskCorrectionMode, string> = { less: "Less like this", always: "Always shown" };
+
+const MENU: { mode: DeskCorrectionMode; label: string }[] = [
+  { mode: "less", label: "Less like this" },
+  { mode: "always", label: "Always show this" },
+];
+
+export function ItemMenu({ current, onCorrect, open: startOpen = false }: { current?: DeskCorrectionMode; onCorrect: (mode: DeskCorrectionMode | null) => void; open?: boolean }) {
+  const [open, setOpen] = useState(startOpen);
+  const pick = (mode: DeskCorrectionMode | null): void => {
+    setOpen(false);
+    onCorrect(mode);
+  };
+  return (
+    <span className="desk-more">
+      <button type="button" className="desk-btn ghost" aria-label="Ranking options" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>⋯</button>
+      {open && (
+        <span className="desk-menu" role="menu">
+          {MENU.filter((m) => m.mode !== current).map((m) => (
+            <button key={m.mode} type="button" role="menuitem" onClick={() => pick(m.mode)}>{m.label}</button>
+          ))}
+          {current && <button type="button" role="menuitem" onClick={() => pick(null)}>Rank by the base rules again</button>}
+        </span>
+      )}
+    </span>
+  );
+}
+
+export function RankingSection({ corrections, onUndo }: { corrections: DeskCorrection[]; onUndo: (c: DeskCorrection) => void }) {
+  if (corrections.length === 0) return null;
+  return (
+    <section className="desk-msec" aria-label="Ranking">
+      <h3 className="desk-mh">Ranking</h3>
+      <ul className="desk-vips">
+        {corrections.map((c) => (
+          <li key={`${c.kind}:${c.source}`}>
+            <span>{CORRECTION_TAG[c.mode]}: {c.label}</span>
+            <button type="button" aria-label={`Undo "${CORRECTION_TAG[c.mode]}" for ${c.label}`} title="Undo" onClick={() => onUndo(c)}>×</button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

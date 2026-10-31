@@ -14,6 +14,7 @@ import { writableKinds, type DeskWriters, type RecentCalendarWrites } from "./cr
 import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
+import { applyCorrections, readCorrections } from "./corrections";
 
 export interface DeskRuntime {
   options?: DeskOptions;
@@ -56,6 +57,8 @@ export interface ComposeDeps {
   recentWrites?: RecentCalendarWrites;
 }
 
+export const CORRECTIONS_UNREADABLE = "The Desk could not read your ranking corrections, so it ranks by its base rules alone.";
+
 const GOAL_STATES = new Set<DeskGoal["state"]>(["on-track", "at-risk", "off-track", "stale"]);
 
 export async function composeDesk(
@@ -89,7 +92,7 @@ export async function composeDesk(
   for (const r of readings) sources.push(r.error === null ? { id: r.id, ok: true } : { id: r.id, ok: false, error: r.error });
   const unreadable = readings.filter((r) => r.dropped > 0).map((r) => `The ${r.id} source sent ${r.dropped} ${r.dropped === 1 ? "entry" : "entries"} the Desk could not read.`);
   const events = readings.flatMap((r) => r.events.map((e) => ({ ...e, area: r.area, sourceId: r.id })));
-  const mail = readings.flatMap((r) => r.mail.map((m) => ({ ...m, area: r.area })));
+  const mail = readings.flatMap((r) => r.mail.map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
   const notes = listOpenNotes(db);
   const reminders = notes.filter((n) => n.kind === "reminder" && n.dueAt !== null);
@@ -109,12 +112,14 @@ export async function composeDesk(
   const rules = desk.interruptions ?? NO_INTERRUPTIONS;
 
   const rangerActions = rangerActionsReady(desk);
-  const items = markInterrupts([
+  const corrections = readCorrections(db);
+  const activeCorrections = corrections.ok ? corrections.corrections : [];
+  const items = applyCorrections(markInterrupts([
     ...withAutonomyNotes(rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions, hidden: filtered?.hidden }), done, now),
     ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
-  ], rules, readDeliveries(db), now).sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+  ], rules, readDeliveries(db), now), activeCorrections);
 
   return {
     generatedAt: now,
@@ -136,10 +141,11 @@ export async function composeDesk(
     goals: buildGoals(subjects),
     notes: notes.filter((n) => n.kind === "note").map(({ id, text, createdAt }) => ({ id, text, createdAt })),
     ask: { kinds: [...writableKinds(desk.ask?.writers ?? {})], maps: desk.ask?.taskMaps ?? [] },
-    systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable],
+    systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable, ...(corrections.ok ? [] : [CORRECTIONS_UNREADABLE])],
     sources,
     chime: rules.chime,
     autonomy: buildAutonomy(db, done, rangerActions),
+    corrections: activeCorrections,
   };
 }
 
@@ -176,6 +182,7 @@ function calendarEvents(events: CalendarEvent[], from: number, to: number): Desk
       ...(e.location && !e.online ? { note: e.location } : {}),
       area: e.area,
       kind: e.allDay ? "all-day" : "meeting",
+      source: e.sourceId,
       ...(e.url ? { url: e.url } : {}),
       ...(e.online ? { online: true } : {}),
     }))
@@ -192,6 +199,7 @@ function reminderItems(reminders: DeskNote[], now: number): DeskItem[] {
   return reminders.filter((r) => r.dueAt !== null && r.dueAt <= now).map((r): DeskItem => ({
     key: `reminder:${r.id}`,
     kind: "reminder",
+    source: "desk",
     area: null,
     urgency: "now",
     title: r.text,

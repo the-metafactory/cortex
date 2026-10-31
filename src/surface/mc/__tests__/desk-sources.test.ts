@@ -10,10 +10,10 @@ import { addVip, isVip, listVips, normalizeVip } from "../desk/vips";
 const NOW = new Date("2026-10-30T12:16:00").getTime();
 const at = (hhmm: string, dayOffset = 0): string => new Date(new Date(`2026-10-30T${hhmm}:00`).getTime() + dayOffset * 86_400_000).toISOString();
 
-const mail = (over: Partial<SourceMail> = {}): SourceMail & { area: string | null } => ({
+const mail = (over: Partial<SourceMail> = {}): SourceMail & { area: string | null; sourceId: string } => ({
   kind: "mail", id: "m1@x", from: { name: "Ada Lovelace", address: "ada@example.org" },
   subject: "Budget", receivedAt: at("11:42"), unread: true, firstParagraph: "Could you look at the budget?",
-  url: "message://%3Cm1%40x%3E", account: "work", area: "switch", ...over,
+  url: "message://%3Cm1%40x%3E", account: "work", area: "switch", sourceId: "work-mail", ...over,
 });
 
 const meeting = (title: string, hhmm: string, dayOffset = 0): SourceEvent => ({ id: title, start: at(hhmm, dayOffset), title });

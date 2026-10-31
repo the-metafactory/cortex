@@ -66,6 +66,7 @@ import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
 import { handleGetDesk } from "./api/desk";
 import { handleDeskVips } from "./api/desk-vips";
+import { handleDeskCorrections } from "./api/desk-corrections";
 import { handleDeskAction, handleDeskAutonomy } from "./api/desk-action";
 import { handleDeskAsk, handleDeskCreate, handleDeskNoteDone } from "./api/desk-ask";
 import { RecentCalendarWrites } from "./desk/create";
@@ -458,6 +459,8 @@ async function handleApi(
   if (pathname === "/api/desk/autonomy") return handleDeskAutonomy(req, db, desk);
 
   if (pathname === "/api/desk/vips") return handleDeskVips(req, url, db);
+
+  if (pathname === "/api/desk/corrections") return handleDeskCorrections(req, url, db);
 
   if (pathname === "/api/desk/ask") return handleDeskAsk(req, desk);
 
