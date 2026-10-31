@@ -3,6 +3,7 @@ import type { EndpointConfig } from "./classify";
 import type { RulingExplanation } from "./ruling";
 import type { DeskVoice } from "./voice";
 import type { AREA_POLICIES } from "../../../common/types/config";
+import type { RoutineView } from "./routine-command";
 
 export type DeskUrgency = "now" | "today" | "this-week" | "waiting";
 
@@ -124,6 +125,7 @@ export interface DeskGoal {
 }
 
 export interface DeskView {
+  routines?: RoutineView;
   calendars?: DeskCalendar[];
   generatedAt: number;
   displayName: string | null;

@@ -109,6 +109,26 @@ A configured key reaches a command as `DESK_CLASSIFIER_KEY`. A classifier failur
 
 VIP senders, unimportant senders, and ranking corrections are managed on the Desk and stored in its database. They are not YAML fields.
 
+## Routines
+
+`routines` is optional. Without it, recurring requests show a setup message.
+
+```yaml
+mc:
+  desk:
+    routines:
+      composer: [/opt/desk/compose-installed-flow]
+      reflex: [/opt/desk/reflex-personal]
+      target: "@example/pulse-flow"
+      timeZone: Europe/Zurich
+      timeoutSeconds: 120
+      readTimeoutSeconds: 3
+```
+
+`composer` and `reflex` are nonempty argument arrays. `target` names the configured principal's `pulse-flow` process. `timeZone` is an IANA timezone. `timeoutSeconds` accepts integers from 1 to 300 and bounds composition and writes. `readTimeoutSeconds` accepts numbers from 0.01 to 5 and bounds state reads separately. The Desk refreshes routine state in the background.
+
+The composer command uses the installed Pulse composer with an explicitly configured model and trusted installed-action catalog. Reflex owns activation files and flow files. The Desk stores the reviewed proposal and supplies a private temporary flow input to Reflex. See the [routine command contract](commands.md#routines).
+
 ## Goal actions
 
 `goals.somaBin` defaults to `""`. Setting it enables goal status reads and pausing through Soma. It is separate from `soma.bin`, which records rulings.

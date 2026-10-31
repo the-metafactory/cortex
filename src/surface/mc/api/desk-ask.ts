@@ -10,6 +10,9 @@ import { listGrants } from "../desk/autonomy";
 import { fileStudioCapture, undoStudioCapture, type CaptureModel } from "../desk/studio/capture";
 import { STUDIO_REQUEST_ID } from "../desk/studio/writer";
 import { closeNote } from "../desk/notes";
+import { buildRoutineCard, actOnRoutine } from "../desk/routines";
+import { routineRequest } from "../desk/routine-schedule";
+import type { RoutineRunner } from "../desk/routine-command";
 
 const noStore = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string): Response => Response.json({ ok: false, error }, { status, headers: noStore });
@@ -18,6 +21,7 @@ const AskInputSchema = z.object({ text: z.string(), area: z.string().min(1).opti
 const CaptureUndoSchema = z.object({ id: z.string().regex(/^capture-[a-f0-9]{32}$/), requestId: z.string().regex(STUDIO_REQUEST_ID) });
 
 export interface DeskAskDeps {
+  runRoutine?: RoutineRunner;
   runParser?: ParserRunner;
   runWriter?: WriterRunner;
   captureModel?: CaptureModel;
@@ -47,6 +51,12 @@ export async function handleDeskAsk(req: Request, runtime: DeskRuntime | undefin
   const maps = ask?.taskMaps ?? [];
   const policy = effectivePolicy(body.area ? [body.area] : [], desk.areas);
   if (policy.unknown.length) return fail(400, "Choose an area configured on this Desk.");
+  if (routineRequest(text)) {
+    if (body.routing || policy.policy === "local") return fail(409, "The routine composer cannot enforce this request's provider restriction.");
+    if (!db) return fail(503, "Routine proposal storage is unavailable.");
+    const proposal = await buildRoutineCard(db, text, desk.routines, now, deps.runRoutine);
+    return Response.json({ ok: true, proposal }, { headers: noStore });
+  }
   if ((body.routing || policy.policy === "local") && !ask?.routing) return fail(503, "This request needs provider restrictions. Ask the person who manages this stack to set up routed parsing first.");
   const permitted = ask?.routing?.permitted.filter((p) => (!body.routing || body.routing.permitted.includes(p)) && (policy.policy !== "local" || p === "pi"));
   const routing = permitted ? { permitted } : undefined;
@@ -79,6 +89,12 @@ export async function handleDeskCreate(req: Request, db: Database, runtime: Desk
   if (typeof card === "string") return fail(400, card);
   if (!taskMapAllowed(card, desk.ask?.taskMaps ?? [])) {
     return fail(400, "Tasks can only go on the maps set up for the Desk.");
+  }
+  if (card.kind === "routine") {
+    if (!desk.routines) return fail(409, notSetUp(card.kind));
+    const result = await actOnRoutine(db, desk.routines, { requestId, action: "install", target: card.fields.proposalId }, (deps.now ?? Date.now)(), deps.runRoutine);
+    await runtime.routineRead?.refresh(db, desk.routines);
+    return Response.json(result, { status: result.ok ? 200 : 409, headers: noStore });
   }
   if (!writableKinds(desk.ask?.writers ?? {}, Boolean(desk.studio)).has(card.kind)) return fail(409, notSetUp(card.kind));
 

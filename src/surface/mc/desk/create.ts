@@ -66,6 +66,7 @@ function keepOnDesk(card: AskCard, deps: CreateDeps): Created | null {
 }
 
 export async function createFromCard(card: AskCard, deps: CreateDeps): Promise<Created> {
+  if (card.kind === "routine") return { ok: false, error: "Confirm routines through their stored proposal." };
   if (card.kind === "capture") return { ok: false, error: notSetUp("capture") };
   const argv = deps.writers[card.kind];
   if (!argv?.length) return keepOnDesk(card, deps) ?? { ok: false, error: notSetUp(card.kind) };

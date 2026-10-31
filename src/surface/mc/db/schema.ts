@@ -115,6 +115,8 @@ export const TABLE_NAMES = [
   "desk_vips",
   "desk_calendars",
   "desk_notes",
+  "desk_routine_proposals",
+  "desk_routine_operations",
   "desk_deliveries",
   "desk_grants",
   "desk_done",
@@ -127,6 +129,17 @@ export const TABLE_NAMES = [
 
 export const SCHEMA_SQL: string[] = [
   "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
+  `CREATE TABLE IF NOT EXISTS desk_routine_proposals (
+    id TEXT PRIMARY KEY,
+    routine_id TEXT NOT NULL UNIQUE,
+    document TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS desk_routine_operations (
+    request_id TEXT PRIMARY KEY,
+    binding TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    result TEXT
+  )`,
   `CREATE TABLE IF NOT EXISTS desk_calendars (
     source TEXT NOT NULL,
     name TEXT NOT NULL,

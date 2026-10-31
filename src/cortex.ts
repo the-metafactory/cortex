@@ -4967,6 +4967,7 @@ export async function startCortex(
           ...(config.mc.desk.studio ? { studio: resolveStudio(config.mc.desk.studio, expandTilde) } : {}),
           sources: config.mc.desk.sources,
           ask: config.mc.desk.ask,
+          ...(config.mc.desk.routines ? { routines: config.mc.desk.routines } : {}),
           interruptions: config.mc.desk.interruptions,
           goals: expandGoalPaths(config.mc.desk.goals, expandTilde),
           ...(config.mc.desk.mail.classifier
