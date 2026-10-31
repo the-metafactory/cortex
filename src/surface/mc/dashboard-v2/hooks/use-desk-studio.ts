@@ -8,13 +8,8 @@ const THREAD_PARAM = "thread";
 
 export type DeskMode = "day" | "studio";
 
-interface StudioState {
-  studio: StudioView | null;
-  error: string | null;
-}
-
-export function useDeskStudio(poll: boolean): StudioState {
-  const [state, setState] = useState<StudioState>({ studio: null, error: null });
+export function useDeskStudio(poll: boolean): StudioView | null {
+  const [studio, setStudio] = useState<StudioView | null>(null);
   const loaded = useRef(false);
 
   useEffect(() => {
@@ -24,9 +19,9 @@ export function useDeskStudio(poll: boolean): StudioState {
         const payload = await getJson<{ studio: StudioView | null }>("/api/desk/studio", { signal: controller.signal });
         if (controller.signal.aborted) return;
         loaded.current = true;
-        setState({ studio: payload.studio ?? null, error: null });
+        setStudio(payload.studio ?? null);
       } catch {
-        if (!controller.signal.aborted) setState((s) => ({ ...s, error: "The Studio could not load. Retrying." }));
+        return;
       }
     };
     void load();
@@ -39,7 +34,7 @@ export function useDeskStudio(poll: boolean): StudioState {
     };
   }, [poll]);
 
-  return state;
+  return studio;
 }
 
 export interface DeskLocation {

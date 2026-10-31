@@ -73,7 +73,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [hint, setHint] = useState(() => wantsHint(view.notifications, browserNotifyEnv()));
   const latest = useRef(view);
   const [place, go] = useDeskLocation();
-  const { studio } = useDeskStudio(place.mode === "studio");
+  const studio = useDeskStudio(place.mode === "studio");
   const inStudio = place.mode === "studio" && studio !== null;
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
