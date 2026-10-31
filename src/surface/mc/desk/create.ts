@@ -4,6 +4,7 @@ import { KIND_LABEL, notSetUp, type AskCard, type AskKind } from "./ask";
 import { addNote } from "./notes";
 import { oneLine } from "./actions";
 import { clock } from "./time";
+import { CommandTimeout, runCommand } from "./spawn";
 
 export const WRITER_KINDS = ["calendar", "task", "goal"] as const;
 export type WriterKind = (typeof WRITER_KINDS)[number];
@@ -31,7 +32,7 @@ export type Created =
   | { ok: true; message: string; url?: string; event?: { at: number; end?: number; title: string; allDay?: boolean } }
   | { ok: false; error: string; uncertain?: true };
 
-export class WriterTimeout extends Error {}
+export { CommandTimeout as WriterTimeout } from "./spawn";
 
 const MAYBE_CREATED = "It may have been created; check before asking again.";
 
@@ -66,7 +67,7 @@ export async function createFromCard(card: AskCard, deps: CreateDeps): Promise<C
   try {
     result = await deps.run(argv, JSON.stringify({ ...card, requestId: deps.requestId }), deps.timeoutMs);
   } catch (err) {
-    if (err instanceof WriterTimeout) return { ok: false, error: `The ${KIND_LABEL[card.kind].toLowerCase()} writer ${err.message}. ${MAYBE_CREATED}`, uncertain: true };
+    if (err instanceof CommandTimeout) return { ok: false, error: `The ${KIND_LABEL[card.kind].toLowerCase()} writer ${err.message}. ${MAYBE_CREATED}`, uncertain: true };
     return { ok: false, error: `The ${KIND_LABEL[card.kind].toLowerCase()} writer did not run: ${err instanceof Error ? err.message : String(err)}` };
   }
   if (result.code !== 0) return { ok: false, error: oneLine(result.stderr || result.stdout, `The ${KIND_LABEL[card.kind].toLowerCase()} writer exited with code ${result.code}.`) };
@@ -89,23 +90,8 @@ export async function createFromCard(card: AskCard, deps: CreateDeps): Promise<C
 }
 
 export const spawnWithStdin: WriterRunner = async (argv, stdin, timeoutMs) => {
-  const proc = Bun.spawn(argv, { stdin: new Blob([stdin]), stdout: "pipe", stderr: "pipe" });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      reject(new WriterTimeout(`timed out after ${Math.round(timeoutMs / 1000)} s`));
-    }, timeoutMs);
-  });
-  const finished = (async () => {
-    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    return { code, stdout, stderr };
-  })();
-  try {
-    return await Promise.race([finished, timedOut]);
-  } finally {
-    clearTimeout(timer);
-  }
+  const { code, stdout, stderr } = await runCommand(argv, timeoutMs, stdin);
+  return { code, stdout, stderr };
 };
 
 export class RecentCalendarWrites {

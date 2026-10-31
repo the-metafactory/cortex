@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { runCommand } from "../spawn";
 
 /**
  * The Desk source contract (cortex#2772): a source is a command, run without a shell, that prints one
@@ -69,30 +70,11 @@ export function parseSourceOutput(stdout: string): { events: SourceEvent[]; mail
 
 export type CommandRunner = (argv: string[], timeoutMs: number) => Promise<string>;
 
-/**
- * Runs argv and returns stdout. The timeout races the whole read, so an adapter whose child keeps the
- * pipe open after the parent is killed still releases the Desk on time.
- */
 export const spawnCommand: CommandRunner = async (argv, timeoutMs) => {
-  const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)} s`));
-    }, timeoutMs);
-  });
-  const finished = (async () => {
-    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    if (proc.signalCode) throw new Error(`killed by ${proc.signalCode}`);
-    if (code !== 0) throw new Error(`exited ${code}${stderr.trim() ? `: ${stderr.trim().split("\n").pop()}` : ""}`);
-    return stdout;
-  })();
-  try {
-    return await Promise.race([finished, timedOut]);
-  } finally {
-    clearTimeout(timer);
-  }
+  const { code, signal, stdout, stderr } = await runCommand(argv, timeoutMs);
+  if (signal) throw new Error(`killed by ${signal}`);
+  if (code !== 0) throw new Error(`exited ${code}${stderr.trim() ? `: ${stderr.trim().split("\n").pop()}` : ""}`);
+  return stdout;
 };
 
 /**
