@@ -586,15 +586,37 @@ const MENU: { mode: DeskCorrectionMode; label: string }[] = [
   { mode: "always", label: "Always show this" },
 ];
 
+const RANKING_LABEL = "Ranking: less like this, always show";
+
+export function dismissesMenu<T>(e: { type: string; key?: string; target: T }, root: { contains: (t: T) => boolean } | null): boolean {
+  if (e.type === "keydown") return e.key === "Escape";
+  return e.type === "mousedown" && root !== null && !root.contains(e.target);
+}
+
 export function ItemMenu({ current, onCorrect, open: startOpen = false }: { current?: DeskCorrectionMode; onCorrect: (mode: DeskCorrectionMode | null) => void; open?: boolean }) {
   const [open, setOpen] = useState(startOpen);
+  const root = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onEvent = (e: Event): void => {
+      const target = e.target instanceof Node ? e.target : null;
+      const key = e instanceof KeyboardEvent ? e.key : undefined;
+      if (dismissesMenu({ type: e.type, key, target }, root.current)) setOpen(false);
+    };
+    window.addEventListener("keydown", onEvent);
+    window.addEventListener("mousedown", onEvent);
+    return () => {
+      window.removeEventListener("keydown", onEvent);
+      window.removeEventListener("mousedown", onEvent);
+    };
+  }, [open]);
   const pick = (mode: DeskCorrectionMode | null): void => {
     setOpen(false);
     onCorrect(mode);
   };
   return (
-    <span className="desk-more">
-      <button type="button" className="desk-btn ghost" aria-label="Ranking options" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>⋯</button>
+    <span className="desk-more" ref={root}>
+      <button type="button" className="desk-btn desk-rank-btn" aria-label={RANKING_LABEL} title={RANKING_LABEL} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>⋯</button>
       {open && (
         <span className="desk-menu" role="menu">
           {MENU.filter((m) => m.mode !== current).map((m) => (
@@ -710,7 +732,7 @@ export function DoneForYou({ autonomy, onPromote }: { autonomy: DeskViewModel["a
             <div>
               {t.label}
               <small>{t.on ? `The Desk does this on its own. ${t.note}` : "The Desk asks you first."}</small>
-              <button type="button" className="desk-btn ghost" onClick={() => onPromote(t.action, !t.on)}>
+              <button type="button" className="desk-btn desk-promote" onClick={() => onPromote(t.action, !t.on)}>
                 {t.on ? "Stop doing this on your own" : "Handle this yourself"}
               </button>
             </div>
