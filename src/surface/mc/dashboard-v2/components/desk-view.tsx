@@ -1,4 +1,5 @@
 import { StudioSessionPanel, useStudioSession } from "./desk-studio-session";
+import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction, submitGoalAction, submitMailAction, submitRuling } from "../lib/desk-action";
@@ -455,7 +456,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       {inStudio && (
         <div className="dst">
           {proposalCard}
-          <DoneForYou autonomy={view.autonomy} onUndo={(id) => void undoCapture(id)} onPromote={(action, on) => void promote(action, on)} />
+          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={(id) => void undoCapture(id)} onPromote={(action, on) => void promote(action, on)} />
         </div>
       )}
       <div className="desk-grid" hidden={inStudio}>
@@ -549,6 +550,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </main>
 
         <aside className="desk-margin" aria-label="At a glance">
+          <RoutinesSection view={view.routines} onChanged={onChanged} />
           <section className="desk-msec">
             <h3 className="desk-mh">Agents</h3>
             <button type="button" className="desk-mline" onClick={() => setOpenAgents((o) => !o)} aria-expanded={openAgents}>
@@ -566,7 +568,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             )}
           </section>
 
-          <DoneForYou autonomy={view.autonomy} onUndo={(id) => void undoCapture(id)} onPromote={(action, on) => void promote(action, on)} />
+          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={(id) => void undoCapture(id)} onPromote={(action, on) => void promote(action, on)} />
 
           <section className="desk-msec">
             <h3 className="desk-mh">The rest</h3>
@@ -949,13 +951,14 @@ export function AheadStrip({ events }: { events: DeskEvent[] }) {
   );
 }
 
-export function DoneForYou({ autonomy, onPromote, onUndo }: { autonomy: DeskViewModel["autonomy"]; onPromote: (action: string, on: boolean) => void; onUndo?: (id: string) => void }) {
-  if (autonomy.types.length === 0 && autonomy.done.length === 0) return null;
+export function DoneForYou({ autonomy, onPromote, onUndo, routines, onChanged = () => {} }: { autonomy: DeskViewModel["autonomy"]; onPromote: (action: string, on: boolean) => void; onUndo?: (id: string) => void; routines?: DeskViewModel["routines"]; onChanged?: () => void }) {
+  if (autonomy.types.length === 0 && autonomy.done.length === 0 && !routines?.done.length) return null;
   const anyOn = autonomy.types.some((t) => t.on);
   return (
     <section className="desk-msec" aria-label="Done for you">
       <h3 className="desk-mh">Done for you</h3>
       <ul className="desk-sub desk-done">
+        <RoutineDone view={routines} onChanged={onChanged} />
         {autonomy.done.map((d) => (
           <li key={d.key} className={d.ok ? undefined : "failed"}>
             <div>{d.action?.startsWith("studio.capture") ? d.title : d.ok ? `Retried "${d.title}"` : `Could not retry "${d.title}"`}<small>{d.action?.startsWith("studio.capture") ? d.message : d.ok ? `at ${clock(d.at)}` : d.message}</small>

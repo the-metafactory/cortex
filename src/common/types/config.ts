@@ -1,4 +1,5 @@
 import { ParserPermissionsSchema } from "./desk-parser";
+import { RoutineOptionsSchema } from "./desk-routines";
 /**
  * F-007: Bot Configuration Types
  *
@@ -430,6 +431,7 @@ const StudioFilerEndpointSchema = z.object({
 }).refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "set apiKeyEnv or apiKeyFile, not both");
 
 const DeskSchema = z.object({
+  routines: RoutineOptionsSchema.optional(),
   enabled: z.boolean().default(true),
   displayName: z.string().default(""),
   topN: z.number().int().min(1).max(10).default(5),

@@ -1,4 +1,7 @@
 import { handleDeskCalendars } from "./api/desk-calendars";
+import { handleDeskRoutines } from "./api/desk-routines";
+import { RoutineReadLoop } from "./desk/routine-read";
+import { localRoutineCapabilities } from "./desk/routine-providers";
 import type { Server, ServerWebSocket } from "bun";
 import type { Database } from "bun:sqlite";
 import type { Config } from "./types";
@@ -179,7 +182,7 @@ export function startServer(
   const deskSourceCache = new SourceCache();
   const deskLedger = new HandledLedger();
   const deskRecentWrites = new RecentCalendarWrites();
-  const deskRuntime: DeskRuntime = { options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}) };
+  const deskRuntime: DeskRuntime = { routineRead: new RoutineReadLoop(), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}) };
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
@@ -272,6 +275,7 @@ export function startServer(
       }
 
       if (url.pathname.startsWith("/api/")) {
+        if (req.method === "POST" && ["/api/desk/ask", "/api/desk/create", "/api/desk/routines"].includes(url.pathname)) server.timeout(req, 0);
         if (req.method === "POST" && /^\/api\/attention\/[^/]+\/resolve$/.test(url.pathname)) {
           server.timeout(req, 0);
         }
@@ -479,11 +483,12 @@ async function handleApi(
 
   if (pathname === "/api/desk/corrections") return handleDeskCorrections(req, url, db);
 
-  if (pathname === "/api/desk/ask") return handleDeskAsk(req, desk, {}, db);
+  if (pathname === "/api/desk/ask") return handleDeskAsk(req, desk, { routineCapabilities: () => localRoutineCapabilities(agentPresence) }, db);
 
   if (pathname === "/api/desk/capture/undo") return handleDeskCaptureUndo(req, db, desk);
 
-  if (pathname === "/api/desk/create") return handleDeskCreate(req, db, desk);
+  if (pathname === "/api/desk/create") return handleDeskCreate(req, db, desk, { routineCapabilities: () => localRoutineCapabilities(agentPresence) });
+  if (pathname === "/api/desk/routines") return handleDeskRoutines(req, db, desk, undefined, () => localRoutineCapabilities(agentPresence));
 
   if (pathname === "/api/desk/voice/speak") return handleDeskSpeak(req, desk);
 

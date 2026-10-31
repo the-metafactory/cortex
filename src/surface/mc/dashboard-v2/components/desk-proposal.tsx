@@ -6,6 +6,7 @@ import { clock } from "../../desk/time";
 type FieldType = "text" | "long" | "time" | "map";
 
 const FIELDS: Record<AskKind, { key: string; label: string; type: FieldType }[]> = {
+  routine: [],
   reminder: [{ key: "text", label: "What", type: "text" }, { key: "due", label: "When", type: "time" }],
   note: [{ key: "text", label: "Note", type: "long" }],
   capture: [{ key: "text", label: "Thought", type: "long" }],
@@ -50,7 +51,29 @@ interface ProposalCardProps {
   onFieldsChange: (fields: Record<string, unknown>) => void;
 }
 
-export function ProposalCard({ proposal, said, maps, now, busy, onConfirm, onCancel, onGoto, onFieldsChange }: ProposalCardProps) {
+export function ProposalCard(props: ProposalCardProps) {
+  if (props.proposal.kind === "routine") return <RoutineProposal {...props} />;
+  return <StandardProposalCard {...props} />;
+}
+
+function RoutineProposal({ proposal, busy, onConfirm, onCancel }: ProposalCardProps) {
+  const steps = Array.isArray(proposal.fields.steps) ? proposal.fields.steps.filter((s): s is string => typeof s === "string") : [];
+  return <div className="desk-row desk-propwrap"><span /><span /><div className="body">
+    <article className="desk-prop" aria-label="Proposed routine">
+      <div className="desk-prop-head"><span className="desk-prop-kind">Routine</span><span className="desk-prop-note">Nothing happens until you confirm.</span></div>
+      <h3>{String(proposal.fields.title ?? "Routine")}</h3>
+      <p>{String(proposal.fields.schedule ?? "")}</p>
+      {steps.length > 0 && <ol>{steps.map((step, i) => <li key={i}>{step}</li>)}</ol>}
+      {proposal.problem ? <p role="alert">{proposal.problem}</p> : <p className="desk-prop-note">Each fire will ask you first.</p>}
+      <div className="desk-acts">
+        {!proposal.problem && !proposal.unwritable && <button type="button" className="desk-btn pri" disabled={busy} onClick={() => onConfirm({ proposalId: proposal.fields.proposalId })}>{busy ? "Installing…" : "Confirm"}</button>}
+        <button type="button" className="desk-btn ghost" disabled={busy} onClick={onCancel}>Cancel</button>
+      </div>
+    </article>
+  </div></div>;
+}
+
+function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCancel, onGoto, onFieldsChange }: ProposalCardProps) {
   const [fields, setFields] = useState<Record<string, unknown>>(proposal.fields);
   useEffect(() => onFieldsChange(fields), [fields]);
   const unwritable = proposal.unwritable === true;

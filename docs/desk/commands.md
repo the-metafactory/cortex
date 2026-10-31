@@ -1,8 +1,26 @@
 # Desk command contracts
 
-Cortex runs Desk commands as argument arrays without a shell. Sources print one JSON object on stdout. Other commands receive one JSON object on stdin, followed by EOF. Diagnostic messages belong on stderr.
+Cortex runs Desk commands as argument arrays without a shell. Sources print one JSON object on stdout. Other commands receive one JSON object on stdin, followed by EOF, except the routine commands described below. Diagnostic messages belong on stderr.
 
 The config reference lists [timeouts and command locations](configuration.md). Commands must be available to the daemon's user and environment. The example implementations are in [cortex-desk-adapters](https://github.com/the-metafactory/cortex-desk-adapters/blob/main/EXAMPLES.md).
+
+## Routines
+
+The Desk appends `--request <text> --json` to `routines.composer`. The command prints Pulse's typed compose result: `status: complete` with `yaml`, `status: no-match` with `message`, or `status: invalid` with `findings`. A complete result exits 0. Missing capabilities produce a refusal card without Confirm. The preview shows the actual composed steps and the schedule in the configured timezone.
+
+`scripts/desk-compose.ts` wraps the shared Pulse composer with `--catalog-file`, `--model-url`, `--model` and `--api-key-env`. It reads exact active action paths from the trusted snapshot. It excludes LLM actions without a configured runtime model and action-level agent calls whose capabilities the Desk cannot inspect. It never queries Arc at runtime.
+
+Built-in agent and tribunal steps require fresh online local capability declarations from Cortex's existing agent-presence registry. Preview, Confirm and promotion check those declarations. Targeted or federated agents, gates and research steps are refused because this presence check cannot establish their execution providers. Sovereignty fields remain unchanged in the stored YAML.
+
+Supported schedules start with `every minute`, `every N minutes`, `every hour`, `every N hours`, or a day phrase with an explicit time. Examples include `every Friday at 17:00, …`, `every weekday at 9am, …` and `every day at 08:30, …`. Minute intervals must divide 60 evenly and stay below 60. Hour intervals must divide 24 evenly and stay below 24. Other intervals show a refusal so a cron boundary cannot shorten the frequency shown on the card.
+
+Elapsed minute/hour intervals use UTC so daylight-saving changes do not change their duration. Named clock times use the configured timezone, which appears on the card. The schedule does not promise a delay from Confirm to its first fire.
+
+Confirm sends the server-held proposal to `routines.reflex` through `routine add --flow-file <temporary-path>` with policy `approve` and the configured target. Reflex's JSON policy is `approval`. Composer YAML annotations stay intact. When the composer omits `input`, the Desk appends the original request as `request`, `scenario` and `text` initial fields. An explicit composer input remains unchanged.
+
+The Desk reads `routine list --json`, `pending --json` and `history --limit 200 --json`. Approve and Deny call `approve <decision-id> --json` and `deny <decision-id> --json`. **Handle this yourself** calls `routine set-policy <id> auto --json`. **Stop** returns the policy to `approve`. **Remove** calls `routine remove <id> --json`; Reflex removes its owned flow too.
+
+Confirm and routine controls keep durable request receipts. A definite daemon refusal permits retry after the cause is repaired. A lost reply triggers state reconciliation without resending the write. **Check pending change** retries that reconciliation. A dispatch receipt means Reflex dispatched the flow; execution outcomes appear separately in Mission Control.
 
 ## Source output
 

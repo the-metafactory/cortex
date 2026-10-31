@@ -3,13 +3,14 @@ import { ParserPermissionsSchema, type ParserPermissions } from "../../../common
 import { ParserRoutingSchema, parserUnavailable, type ParserRouting } from "./parser-routing";
 import { DAY_MS, startOfDay } from "./time";
 
-export const ASK_KINDS = ["reminder", "note", "capture", "task", "goal", "calendar"] as const;
+export const ASK_KINDS = ["reminder", "note", "capture", "task", "goal", "calendar", "routine"] as const;
 export type AskKind = (typeof ASK_KINDS)[number];
 
 const iso = z.string().refine((s) => Number.isFinite(Date.parse(s)), "not a date");
 const text = (max: number) => z.string().trim().min(1).max(max);
 
 export const FIELD_SCHEMAS = {
+  routine: z.object({ proposalId: z.uuid() }),
   reminder: z.object({ text: text(300), due: iso }),
   note: z.object({ text: text(1000) }),
   capture: z.object({ text: text(1000) }),
@@ -40,6 +41,7 @@ export function validateCard(kind: unknown, fields: unknown): AskCard | string {
 }
 
 export const KIND_LABEL: Record<AskKind, string> = {
+  routine: "Routine",
   reminder: "Reminder",
   note: "Note",
   capture: "Studio capture",
@@ -51,6 +53,7 @@ export const KIND_LABEL: Record<AskKind, string> = {
 export const notSetUp = (kind: AskKind): string => `${KIND_PLURAL[kind]} are not set up on this stack.`;
 
 const KIND_PLURAL: Record<AskKind, string> = {
+  routine: "Routines",
   reminder: "Reminders",
   note: "Notes",
   capture: "Studio captures",

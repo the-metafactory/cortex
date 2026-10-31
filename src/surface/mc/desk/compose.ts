@@ -22,9 +22,13 @@ import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } f
 import { applyCorrections, readCorrections } from "./corrections";
 import { classifierStatus, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier, type ModelConfig } from "./classify";
 import { voiceView, type VoiceOptions } from "./voice";
+import { readRoutines } from "./routines";
+import type { RoutineOptions, RoutineRunner } from "./routine-command";
+import type { RoutineReadLoop } from "./routine-read";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
 export interface DeskRuntime {
+  routineRead?: RoutineReadLoop;
   options?: DeskOptions;
   ledger: HandledLedger;
   sourceCache?: SourceCache;
@@ -46,6 +50,7 @@ export interface DeskAskOptions {
 }
 
 export interface DeskOptions {
+  routines?: RoutineOptions;
   enabled: boolean;
   displayName: string;
   topN: number;
@@ -72,6 +77,8 @@ export interface DeskVigilSource {
 }
 
 export interface ComposeDeps {
+  routineRead?: RoutineReadLoop;
+  runRoutine?: RoutineRunner;
   now?: number;
   fetchImpl?: RangerFetch;
   sourceCache?: SourceCache;
@@ -94,6 +101,7 @@ export async function composeDesk(
   deps: ComposeDeps = {},
 ): Promise<DeskView> {
   const now = deps.now ?? Date.now();
+  const routineRead = desk.routines ? deps.routineRead ? Promise.resolve(deps.routineRead.read(db, desk.routines, now)) : readRoutines(db, desk.routines, deps.runRoutine) : Promise.resolve(undefined);
   const sources: DeskView["sources"] = [];
 
   const vigilRead = vigil?.enabled ? listVigilSubjects(db, vigil.resolveGoalWording, vigil.cadence) : Promise.resolve(null);
@@ -105,7 +113,7 @@ export async function composeDesk(
     : Promise.resolve(null);
   const commandRead = (deps.sourceCache ?? new SourceCache()).read(desk.sources, now);
   const statusRead = deps.goalStatuses?.read(desk.goals?.somaBin ?? "", now) ?? Promise.resolve(new Map<string, string>());
-  const [vigilSubjects, rangerResult, readings, goalStatuses] = await Promise.all([vigilRead, rangerRead, commandRead, statusRead]);
+  const [vigilSubjects, rangerResult, readings, goalStatuses, routines] = await Promise.all([vigilRead, rangerRead, commandRead, statusRead, routineRead]);
 
   const subjects: VigilSubjectView[] = vigilSubjects ?? [];
   if (vigilSubjects) sources.push({ id: "vigil", ok: true });
@@ -164,6 +172,7 @@ export async function composeDesk(
   ], rules, readDeliveries(db), now), activeCorrections);
 
   return {
+    ...(routines ? { routines } : {}),
     calendars: [...calendars.values()],
     generatedAt: now,
     displayName: desk.displayName || null,
@@ -183,7 +192,7 @@ export async function composeDesk(
     agents: buildAgents(ranger, items, now),
     goals: buildGoals(subjects),
     notes: notes.filter((n) => n.kind === "note").map(({ id, text, createdAt }) => ({ id, text, createdAt })),
-    ask: { kinds: [...writableKinds(desk.ask?.writers ?? {}, Boolean(desk.studio))], maps: desk.ask?.taskMaps ?? [] },
+    ask: { kinds: [...writableKinds(desk.ask?.writers ?? {}, Boolean(desk.studio)), ...(desk.routines ? ["routine"] : [])], maps: desk.ask?.taskMaps ?? [] },
     systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable, ...(corrections.ok ? [] : [CORRECTIONS_UNREADABLE])],
     sources,
     voice: voiceView(desk.voice),
