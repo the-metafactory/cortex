@@ -409,6 +409,16 @@ const linkTemplate = (name: string) =>
     .refine((t) => !UNSAFE_SCHEMES.test(t), `mc.desk.mail.links.${name} may not use a javascript, data, vbscript or file URL`)
     .refine((t) => t.includes("{ref}"), `mc.desk.mail.links.${name} must contain {ref}`);
 
+const modelFields = (path: string) => ({
+  baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), `${path}.baseUrl must use https unless it is a loopback address`).optional(),
+  model: z.string().min(1).optional(),
+  command: z.array(z.string().min(1)).min(1).optional(),
+  apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
+  apiKeyFile: z.string().min(1).optional(),
+  caFile: z.string().min(1).optional(),
+  timeoutSeconds: z.number().int().min(1).max(120).default(30),
+});
+
 const StudioFilerEndpointSchema = z.object({
   baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), "use https unless loopback"),
   model: z.string().min(1),
@@ -481,16 +491,7 @@ const DeskSchema = z.object({
   mail: z
     .object({
       classifier: z
-        .object({
-          baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), "mc.desk.mail.classifier.baseUrl must use https unless it is a loopback address").optional(),
-          model: z.string().min(1).optional(),
-          command: z.array(z.string().min(1)).min(1).optional(),
-          apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
-          apiKeyFile: z.string().min(1).optional(),
-          caFile: z.string().min(1).optional(),
-          timeoutSeconds: z.number().int().min(1).max(120).default(30),
-          maxPerPass: z.number().int().min(1).max(100).default(10),
-        })
+        .object({ ...modelFields("mc.desk.mail.classifier"), maxPerPass: z.number().int().min(1).max(100).default(10) })
         .refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.mail.classifier: set apiKeyEnv or apiKeyFile, not both")
         .refine(hasOneClassifierForm, CLASSIFIER_FORM_ERROR)
         .refine((c) => !(c.command && c.caFile), "mc.desk.mail.classifier.caFile belongs to the endpoint form; pass a CA to the command in its argv")
@@ -505,6 +506,16 @@ const DeskSchema = z.object({
         .optional(),
     })
     .default({}),
+  ruling: z
+    .object({
+      explainer: z
+        .object(modelFields("mc.desk.ruling.explainer"))
+        .refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.ruling.explainer: set apiKeyEnv or apiKeyFile, not both")
+        .refine(hasOneClassifierForm, "mc.desk.ruling.explainer: set either command, or baseUrl and model")
+        .refine((c) => !(c.command && c.caFile), "mc.desk.ruling.explainer.caFile belongs to the endpoint form; pass a CA to the command in its argv")
+        .optional(),
+    })
+    .optional(),
   goals: z
     .object({
       somaBin: z.string().default(""),

@@ -1,5 +1,6 @@
 import type { DeskCalendar } from "./calendars";
 import type { EndpointConfig } from "./classify";
+import type { RulingExplanation } from "./ruling";
 import type { DeskVoice } from "./voice";
 import type { AREA_POLICIES } from "../../../common/types/config";
 
@@ -85,6 +86,7 @@ export interface DeskItem {
   goal?: string;
   checking?: boolean;
   question?: { condition: string | null; reason: string };
+  explanation?: RulingExplanation;
   reply?: { to: string; subject: string };
 }
 

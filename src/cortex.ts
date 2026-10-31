@@ -190,7 +190,7 @@ import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/r
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
 import { commandTransport, discordTransport } from "./surface/mc/desk/transports";
 import { expandGoalPaths } from "./surface/mc/desk/goals";
-import { toClassifierConfig } from "./surface/mc/desk/classify";
+import { toClassifierConfig, toModelConfig } from "./surface/mc/desk/classify";
 import { resolveVoice } from "./surface/mc/desk/voice";
 import { notifyWithResult } from "./adapters/notify-result";
 import { createVigilDeliveryPorts, startVigil, type VigilHandle } from "./vigil";
@@ -4978,6 +4978,18 @@ export async function startCortex(
             : {}),
           ...(config.mc.desk.mail.actions ? { mailActions: config.mc.desk.mail.actions } : {}),
           ...(config.mc.desk.mail.links ? { mailLinks: config.mc.desk.mail.links } : {}),
+          ...(config.mc.desk.ruling?.explainer
+            ? {
+                rulingExplainer: toModelConfig(
+                  {
+                    ...config.mc.desk.ruling.explainer,
+                    ...(config.mc.desk.ruling.explainer.apiKeyFile ? { apiKeyFile: expandTilde(config.mc.desk.ruling.explainer.apiKeyFile) } : {}),
+                    ...(config.mc.desk.ruling.explainer.caFile ? { caFile: expandTilde(config.mc.desk.ruling.explainer.caFile) } : {}),
+                  },
+                  "mc.desk.ruling.explainer",
+                ),
+              }
+            : {}),
           voice: resolveVoice(config.mc.desk.voice, expandTilde),
         },
         ...(config.mc.desk.interruptions.transport === "discord"

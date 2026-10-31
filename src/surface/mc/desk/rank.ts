@@ -3,7 +3,7 @@ import type { SourceEvent, SourceMail } from "./sources/command";
 import type { RangerMap, RangerMapNode, RangerNeedsYou, RangerState } from "./sources/ranger";
 import { rangerItemKey, rangerTitles } from "./sources/ranger";
 import { approvable, retryable } from "./actions";
-import { agentQuestion, RULING_ACTION } from "./ruling";
+import { agentQuestion, RULING_ACTION, type RulingExplanation } from "./ruling";
 import { clock, DAY_MS, startOfDay } from "./time";
 import { isUnimportant, isVip } from "./vips";
 import { eventKey, UNIMPORTANT_REASON, upcomingMeetings, type ClassifierEvent, type MailCategory, type MailClassification } from "./classify";
@@ -25,6 +25,7 @@ export interface RankInput {
   rulingActions?: boolean;
   hidden?: ReadonlySet<string>;
   goalActions?: GoalActionsInput;
+  explanations?: ReadonlyMap<string, RulingExplanation>;
 }
 
 export interface GoalActionsInput {
@@ -117,7 +118,7 @@ function rulingAction(n: RangerNeedsYou, url: string | undefined, rulingActions:
   return { ...action("open", "Give your ruling", "primary", url !== undefined), ...(url ? { url } : {}) };
 }
 
-function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, rulingActions = false }: RankInput, add: Add): void {
+function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, rulingActions = false, explanations }: RankInput, add: Add): void {
   for (const n of ranger?.needsYou ?? []) {
     const ref = `${n.repo}#${n.nodeId}`;
     const endedAt = parsedOr(n.endedAt, now);
@@ -133,6 +134,7 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, ruling
     };
     if (n.reason?.class === "blocked") {
       const question = agentQuestion(n.reason.detail);
+      const explanation = explanations?.get(rangerItemKey(ref));
       add({
         ...base, kind: "agent-blocked",
         title: `"${n.title}" waits for your ruling.`,
@@ -141,6 +143,7 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, ruling
         actions: [rulingAction(n, n.url, rulingActions), LOOK, LATER],
         detail,
         ...(question ? { question } : {}),
+        ...(explanation ? { explanation } : {}),
       });
     } else {
       add({
