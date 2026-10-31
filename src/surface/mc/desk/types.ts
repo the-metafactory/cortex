@@ -1,8 +1,17 @@
+import type { AREA_POLICIES } from "../../../common/types/config";
+
 export type DeskUrgency = "now" | "today" | "this-week" | "waiting";
 
 export const DESK_ITEM_KINDS = ["goal", "sensor", "agent-failed", "agent-blocked", "decision", "grilling", "escalation", "mail", "reminder", "meeting"] as const;
 
 export type DeskItemKind = (typeof DESK_ITEM_KINDS)[number];
+
+export type AreaPolicy = (typeof AREA_POLICIES)[number];
+
+export interface StudioOptions {
+  dir: string;
+  maxActive: number;
+}
 
 export interface DeskArea {
   id: string;

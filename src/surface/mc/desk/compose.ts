@@ -9,7 +9,7 @@ import { listSenders, listVips } from "./vips";
 import { trashKey, type MailActionsConfig } from "./mail-actions";
 import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
-import type { DeskCorrection, DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
+import type { DeskCorrection, DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
 import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriters, type RecentCalendarWrites } from "./create";
@@ -45,6 +45,7 @@ export interface DeskOptions {
   rangerUrl: string;
   rangerCli?: RangerCli;
   areas: AreaRule[];
+  studio?: StudioOptions;
   sources: DeskSourceConfig[];
   ask?: DeskAskOptions;
   interruptions?: InterruptRules;
