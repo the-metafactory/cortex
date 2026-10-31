@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
-import { submitDeskAction, submitGoalAction, submitMailAction } from "../lib/desk-action";
+import { submitDeskAction, submitGoalAction, submitMailAction, submitRuling } from "../lib/desk-action";
+import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
 import { chimeForNew } from "../lib/desk-chime";
 import { browserNotifyEnv, dismissHint, notifyForNew, requestNotifications, wantsHint } from "../lib/desk-notify";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
@@ -65,6 +66,15 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map());
   const inFlight = useRef(new Set<string>());
   const [confirming, setConfirming] = useState<{ key: string; action: string } | null>(null);
+  const [rulings, setRulings] = useState<ReadonlyMap<string, RulingDraft>>(() => new Map());
+  const setRuling = (key: string, next: (d: RulingDraft | undefined) => RulingDraft | null): void =>
+    setRulings((m) => {
+      const draft = next(m.get(key));
+      const copy = new Map(m);
+      if (draft) copy.set(key, draft);
+      else copy.delete(key);
+      return copy;
+    });
   const [askText, setAskText] = useState("");
   const [asking, setAsking] = useState(false);
   const [proposal, setProposal] = useState<{ p: DeskProposal; said: string; requestId: string; fields: Record<string, unknown> } | null>(null);
@@ -183,6 +193,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       setDetail((d) => (d?.key === item.key ? null : d));
       void doneNote(a.target, item.key);
     }
+    else if (a.id === "ranger.rule" && a.wired) openRuling(item);
     else if (a.id.startsWith("ranger.") && a.wired) void send(item, a);
     else if (a.id === "goal.check" && a.wired && item.goal) void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }), keepVisible: true });
     else if (a.id === "goal.pause" && item.goal) confirmFirst(item, a, () => void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }) }));
@@ -192,6 +203,22 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
+  };
+
+  const openRuling = (item: DeskItem): void => {
+    setDetail(item);
+    setRuling(item.key, (r) => (r ? { ...r, open: true } : newRuling(item.key, crypto.randomUUID())));
+  };
+
+  const confirmRuling = (item: DeskItem, draft: RulingDraft): void => {
+    const rule: DeskAction = { id: "ranger.rule", label: "Give your ruling", role: "primary", wired: true };
+    void send(item, rule, {
+      request: async () => {
+        const result = await submitRuling({ key: item.key, text: draft.text, requestId: draft.requestId });
+        setRuling(item.key, (r) => (r?.requestId !== draft.requestId ? r ?? null : result.ok ? null : afterFailure(r, result)));
+        return result;
+      },
+    });
   };
 
   const trash = (item: DeskItem, a: DeskAction): void => void send(item, a, { request: () => submitMailAction({ action: "trash", key: item.key }) });
@@ -262,6 +289,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const shown = (item: DeskItem): DeskItem => (confirming?.key === item.key ? withConfirm(item, confirming.action) : item);
   const busyWith = (item: DeskItem): string | null => sending.get(item.key) ?? (item.checking ? "goal.check" : null);
   const detailItem = detail ? view.items.find((i) => i.key === detail.key) ?? detail : null;
+  const detailRuling = detailItem ? rulings.get(detailItem.key) : undefined;
 
   const itemRow = (item: DeskItem, idx: number) => (
     <DeskItemRow
@@ -275,6 +303,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       sending={busyWith(item)}
       onFocusEvent={focusEvent}
       onCorrect={(mode) => void correct(item.kind, item.source, mode)}
+      rulingNote={rulings.get(item.key)?.note ?? null}
     />
   );
 
@@ -511,7 +540,20 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
       <div className="desk-scrim" onClick={() => setDetail(null)} />
       <aside className="desk-panel" aria-hidden={!detail} aria-label="Details">
-        {detailItem && <DetailPanel item={shown(detailItem)} area={detailItem.area ? areaById.get(detailItem.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detailItem, a)} onShowEvent={showEvent} sending={busyWith(detailItem)} />}
+        {detailItem && (
+          <DetailPanel item={shown(detailItem)} area={detailItem.area ? areaById.get(detailItem.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detailItem, a)} onShowEvent={showEvent} sending={busyWith(detailItem)}>
+            {detailRuling?.open && (
+              <RulingBox
+                item={detailItem}
+                draft={detailRuling}
+                sending={busyWith(detailItem) === "ranger.rule"}
+                onChange={(text) => setRuling(detailItem.key, (r) => (r ? { ...r, text } : null))}
+                onConfirm={() => confirmRuling(detailItem, detailRuling)}
+                onCancel={() => setRuling(detailItem.key, (r) => cancelRuling(r ?? null))}
+              />
+            )}
+          </DetailPanel>
+        )}
       </aside>
 
       {note && <div className="desk-note" role="status">{note}</div>}
@@ -519,7 +561,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   );
 }
 
-function DetailPanel({ item, area, onClose, onAction, onShowEvent, sending }: { item: DeskItem; area?: string; onClose: () => void; onAction: (a: DeskAction) => void; onShowEvent: (key: string) => void; sending: string | null }) {
+function DetailPanel({ item, area, onClose, onAction, onShowEvent, sending, children }: { item: DeskItem; area?: string; onClose: () => void; onAction: (a: DeskAction) => void; onShowEvent: (key: string) => void; sending: string | null; children?: ReactNode }) {
   return (
     <>
       <div className="desk-panel-top">
@@ -529,6 +571,7 @@ function DetailPanel({ item, area, onClose, onAction, onShowEvent, sending }: { 
       <h3>{item.title}</h3>
       <p className="desk-why">{item.why}</p>
       {item.suggestion && <p className="desk-why desk-suggest">{item.suggestion}</p>}
+      {children}
       <div className="desk-sec">What this is</div>
       <p className="desk-summary">{item.detail.summary}</p>
       {item.detail.evidence && item.detail.evidence.length > 0 && (
@@ -628,9 +671,10 @@ interface DeskItemRowProps {
   sending: string | null;
   onFocusEvent: (key: string) => void;
   onCorrect: (mode: DeskCorrectionMode | null) => void;
+  rulingNote?: string | null;
 }
 
-function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFocusEvent, onCorrect }: DeskItemRowProps) {
+function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFocusEvent, onCorrect, rulingNote }: DeskItemRowProps) {
   return (
     <article className="desk-row desk-item">
       <span className="desk-rank">{rank}</span>
@@ -646,6 +690,7 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
         {item.suggestion && <p className="desk-why desk-suggest">{item.suggestion}</p>}
         {item.interrupt?.delivery === "failed" && <p className="desk-why desk-unsent">Not pushed: {item.interrupt.error}</p>}
         {item.interrupt?.delivery === "buffered" && <p className="desk-why desk-waiting">Waiting for Discord</p>}
+        {rulingNote && <p className="desk-why desk-unsent">{rulingNote}</p>}
         {item.excerpt && <blockquote className="desk-excerpt">{item.excerpt}</blockquote>}
         <div className="desk-acts">
           {item.actions.map((a) => <ActionButton key={a.id} action={a} onRun={onAction} sending={sending} />)}
@@ -735,7 +780,7 @@ interface SendOptions {
 
 const CHECK_POLL_MS = 3000;
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.unimportant": "Saving…" };
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.unimportant": "Saving…", "ranger.rule": "Recording…" };
 
 const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash" };
 

@@ -394,6 +394,7 @@ const DeskSchema = z.object({
   ranger: z
     .object({ url: z.string().default(""), bin: z.string().default(""), config: z.string().default("") })
     .default({ url: "", bin: "", config: "" }),
+  soma: z.object({ bin: z.string().default("") }).default({ bin: "" }),
   areas: z
     .array(
       z.object({

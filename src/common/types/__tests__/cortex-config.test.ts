@@ -806,7 +806,7 @@ describe("AgentConfigSchema.mc (MC-I1.S1)", () => {
       port: 0,
       // P-14 U0.1 — sideband defaults to the contract loopback bind.
       sideband: "http://127.0.0.1:9092",
-      desk: { enabled: true, displayName: "", topN: 5, ranger: { url: "", bin: "", config: "" }, areas: [], sources: [], ask: { parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }, interruptions: { transport: "none", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true, notifications: true }, mail: {}, goals: { somaBin: "", check: {} } },
+      desk: { enabled: true, displayName: "", topN: 5, ranger: { url: "", bin: "", config: "" }, soma: { bin: "" }, areas: [], sources: [], ask: { parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }, interruptions: { transport: "none", meetingMinutes: 10, mail: true, reminders: true, maxAgeMinutes: 60, everySeconds: 60, chime: true, notifications: true }, mail: {}, goals: { somaBin: "", check: {} } },
       // #1044 — the HTTP server defaults ON (full MC); headless sets it false.
       server: { enabled: true },
       // #989 — local-stack aggregation defaults ON; discovery is a no-op on a

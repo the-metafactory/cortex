@@ -201,10 +201,12 @@ describe("the Desk action route through Mission Control", () => {
     const marker = join(tmpDir, "ranger-calls");
     const bin = join(tmpDir, "ranger");
     writeFileSync(bin, `#!/bin/sh\necho "$1 $2" >> ${marker}\n`, { mode: 0o755 });
+    const soma = join(tmpDir, "soma");
+    writeFileSync(soma, `#!/bin/sh\necho "soma $1 $2 $3" >> ${marker}\n`, { mode: 0o755 });
     const ctx = startServer(
       { ...DEFAULT_CONFIG, port: 0, governance: { principals: ["principal@example.com"], stepUp: { secretPath } } },
       db,
-      { desk: { ...DESK, rangerUrl: `http://127.0.0.1:${ranger.port}`, rangerCli: { bin, config: "" } } },
+      { desk: { ...DESK, rangerUrl: `http://127.0.0.1:${ranger.port}`, rangerCli: { bin, config: "" }, somaBin: soma } },
     );
     const base = `http://localhost:${ctx.server.port}`;
     return {
@@ -232,6 +234,25 @@ describe("the Desk action route through Mission Control", () => {
 
       expect((await send("principal@example.com")).status).toBe(200);
       expect(readFileSync(desk.marker, "utf8").trim()).toBe("approve-node 30");
+    } finally {
+      desk.stop();
+    }
+  });
+
+  it("records a ruling and resumes for the principal without a step-up code, and refuses another identity before anything runs", async () => {
+    const state = rangerState();
+    state.needsYou.push({
+      key: "example/app#1", repo: "example/app", nodeId: "14", title: "Pick the export format", status: "parked",
+      endedAt: "2026-10-30T09:00:00.000Z", reason: { class: "blocked", detail: "resume once: a format is picked — two are named" }, actions: { resume: true },
+    });
+    const desk = startDesk(state);
+    const send = (email: string) => desk.send("/api/desk/ruling", email, { key: "ranger:example/app#14", text: "Use JSON.", requestId: "req-00000001" });
+    try {
+      expect((await send("unlisted@example.com")).status).toBe(403);
+      expect(existsSync(desk.marker)).toBe(false);
+
+      expect((await send("principal@example.com")).status).toBe(200);
+      expect(readFileSync(desk.marker, "utf8").trim().split("\n")).toEqual(["soma graph rule 14", "resume-node 14"]);
     } finally {
       desk.stop();
     }

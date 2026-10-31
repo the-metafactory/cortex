@@ -1,0 +1,7 @@
+.desk-ruling{margin-top:18px;padding:4px 16px 16px;border:1px solid var(--line);border-radius:12px;background:#fafafa}
+.desk-ruling .desk-sec{margin-top:14px}
+.desk-ruling-ask{font-size:15.5px;line-height:1.5;font-weight:600;color:var(--ink);margin:0 0 6px}
+.desk-ruling-link{display:inline-block;margin:6px 0 10px;font-size:14px;color:var(--ink2)}
+.desk-ruling textarea{width:100%;box-sizing:border-box;font:inherit;font-size:15px;border:1px solid #d4d4d8;border-radius:8px;padding:8px 10px;resize:vertical;background:#fff}
+.desk-ruling textarea[readonly]{color:var(--mute)}
+.desk-ruling-acts{display:flex;gap:8px;margin-top:10px}
