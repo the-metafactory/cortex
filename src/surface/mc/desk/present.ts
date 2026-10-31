@@ -59,17 +59,12 @@ export const URGENCY_LABEL: Record<DeskItem["urgency"], string> = {
   waiting: "Waiting on you",
 };
 
-const BRIEFING_ASKS = [
-  /\bwhat (?:needs|wants) (?:me|my attention)\b/,
-  /\bwhat(?:'s| is) (?:up|next|on|new)\b/,
-  /^(?:(?:please )?(?:give me|read me) (?:a |the |my )?)?brief(?:ing| me)\b/,
-  /\bwhat should i (?:do|look at)\b/,
-  /\banything (?:for me|urgent)\b/,
-];
+const BRIEFING_ASK =
+  /^(?:(?:hey |ok |so )?ivy,? )?(?:(?:what (?:needs|wants) (?:me|my attention))|(?:what(?:'s| is) (?:up|next)(?: for me)?(?: today)?)|(?:(?:please )?(?:give me |read me )?(?:a |the |my )?brief(?:ing| me))|(?:anything (?:for me|urgent)))(?: (?:now|today|right now))?[?.!]*$/;
 
 export function isBriefingRequest(text: string): boolean {
   const said = text.toLowerCase().replace(/[’`]/g, "'").trim();
-  return BRIEFING_ASKS.some((re) => re.test(said));
+  return BRIEFING_ASK.test(said);
 }
 
 const SPOKEN_ITEMS = 3;

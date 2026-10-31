@@ -56,7 +56,7 @@ export const UNREACHABLE = "Voice is off: ElevenLabs is unreachable.";
 export const NO_QUOTA = "Voice is off: ElevenLabs has no quota left.";
 export const KEY_REFUSED = "Voice is off: ElevenLabs refused the key.";
 
-export async function failureLine(res: Response): Promise<string> {
+export async function providerFailureLine(res: Response): Promise<string> {
   const body = (await res.json().catch(() => null)) as { detail?: { status?: unknown } | string } | null;
   const status = typeof body?.detail === "object" && typeof body.detail.status === "string" ? body.detail.status : "";
   if (status === "quota_exceeded" || res.status === 402 || res.status === 429) return NO_QUOTA;
@@ -84,7 +84,7 @@ async function call(opts: ElevenLabsOptions, path: string, init: RequestInit, de
   } catch {
     return { ok: false, status: 502, line: UNREACHABLE };
   }
-  if (!res.ok) return { ok: false, status: 502, line: await failureLine(res) };
+  if (!res.ok) return { ok: false, status: 502, line: await providerFailureLine(res) };
   return { ok: true, value: res };
 }
 

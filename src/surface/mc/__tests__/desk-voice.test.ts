@@ -89,6 +89,11 @@ describe("POST /api/desk/voice/transcribe", () => {
     expect(await res.json()).toEqual({ ok: true, text: "what needs me" });
   });
 
+  it("refuses an oversized recording before reading it", async () => {
+    const req = new Request("http://mc/api/desk/voice/transcribe", { method: "POST", headers: { "content-length": String(11 * 1024 * 1024) }, body: "x" });
+    expect((await handleDeskTranscribe(req, runtime(), { readKey: key })).status).toBe(413);
+  });
+
   it("refuses an empty recording", async () => {
     const req = new Request("http://mc/api/desk/voice/transcribe", { method: "POST", body: "" });
     expect((await handleDeskTranscribe(req, runtime(), { readKey: key })).status).toBe(400);
@@ -126,6 +131,10 @@ describe("spoken briefing", () => {
     expect(isBriefingRequest("remind me to call Daniela at 5")).toBe(false);
     expect(isBriefingRequest("remind me to send the brief to Anna")).toBe(false);
     expect(isBriefingRequest("move the briefing to 3")).toBe(false);
+    expect(isBriefingRequest("Ivy, what's up today?")).toBe(true);
+    expect(isBriefingRequest("what's on Anna's agenda")).toBe(false);
+    expect(isBriefingRequest("what is new in the release")).toBe(false);
+    expect(isBriefingRequest("what should I do about the leak")).toBe(false);
   });
 
   it("mentions only the filtered area's items", () => {

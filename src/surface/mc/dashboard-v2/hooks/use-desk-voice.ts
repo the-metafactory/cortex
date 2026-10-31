@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DeskVoice } from "../../desk/voice";
-import { failureLine, speechFor, voiceTurn, type Listening, type SpeechEnv, type SpeechProviders } from "../lib/desk-speech";
+import { speechFailureLine, speechFor, voiceTurn, type Listening, type SpeechEnv, type SpeechProviders } from "../lib/desk-speech";
 
 export type VoicePhase = "idle" | "listening" | "thinking" | "speaking";
 
@@ -20,9 +20,12 @@ export interface VoiceHandlers {
   typeInstead: () => void;
 }
 
-export const isTyping = (target: EventTarget | null): boolean => {
-  const el = target as { tagName?: string; isContentEditable?: boolean } | null;
-  return el?.isContentEditable === true || ["INPUT", "TEXTAREA", "SELECT"].includes(el?.tagName ?? "");
+const CONTROLS = new Set(["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A", "SUMMARY"]);
+
+export const ownsSpace = (target: EventTarget | null): boolean => {
+  const el = target as { tagName?: string; isContentEditable?: boolean; getAttribute?: (name: string) => string | null; classList?: { contains(c: string): boolean } } | null;
+  if (el?.classList?.contains("desk-mic")) return false;
+  return el?.isContentEditable === true || CONTROLS.has(el?.tagName ?? "") || Boolean(el?.getAttribute?.("role"));
 };
 
 export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: SpeechEnv | undefined = typeof window === "undefined" ? undefined : (window as unknown as SpeechEnv)) {
@@ -47,7 +50,7 @@ export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: Spe
       session.current = providers.input.listen((transcript) => setState((s) => ({ ...s, transcript })));
       setState({ ...VOICE_IDLE, phase: "listening" });
     } catch (err) {
-      fail(failureLine(err));
+      fail(speechFailureLine(err));
     }
   }, [providers, fail]);
 
@@ -62,7 +65,7 @@ export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: Spe
     try {
       said = (await listening.stop()).trim();
     } catch (err) {
-      if (current()) fail(failureLine(err));
+      if (current()) fail(speechFailureLine(err));
       return;
     }
     if (!current()) return;
@@ -78,7 +81,8 @@ export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: Spe
       ask: answer,
       output: {
         speak: (text) => {
-          if (current()) setState((s) => ({ ...s, answer: text }));
+          if (!current()) return Promise.resolve();
+          setState((s) => ({ ...s, answer: text }));
           return providers.output.speak(text);
         },
         stop: () => providers.output.stop(),
@@ -98,7 +102,7 @@ export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: Spe
   useEffect(() => {
     if (!providers) return;
     const down = (e: KeyboardEvent): void => {
-      if (e.code !== "Space" || e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
+      if (e.code !== "Space" || e.metaKey || e.ctrlKey || e.altKey || ownsSpace(e.target)) return;
       e.preventDefault();
       if (!e.repeat) start();
     };

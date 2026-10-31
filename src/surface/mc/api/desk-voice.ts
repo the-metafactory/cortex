@@ -32,6 +32,7 @@ export async function handleDeskTranscribe(req: Request, runtime: DeskRuntime | 
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   const opts = elevenLabs(runtime, "input");
   if (opts instanceof Response) return opts;
+  if (Number(req.headers.get("content-length") ?? 0) > MAX_AUDIO_BYTES) return fail(413, "That recording is too long.");
   const audio = await req.blob().catch(() => null);
   if (!audio || audio.size === 0) return fail(400, "No audio arrived.");
   if (audio.size > MAX_AUDIO_BYTES) return fail(413, "That recording is too long.");

@@ -6,7 +6,7 @@ export class SpeechFailure extends Error {
   }
 }
 
-export const failureLine = (err: unknown, fallback: string = String(err)): string => (err instanceof SpeechFailure ? err.line : fallback);
+export const speechFailureLine = (err: unknown, fallback: string = String(err)): string => (err instanceof SpeechFailure ? err.line : fallback);
 
 export const NO_ANSWER = "The Desk could not answer that.";
 
@@ -261,6 +261,6 @@ export async function voiceTurn(said: string, deps: VoiceTurnDeps): Promise<Voic
     await deps.output.speak(answer);
     return { answer, fallback: null };
   } catch (err) {
-    return { answer, fallback: `${failureLine(err, NO_SYNTHESIS)} Answering in text.` };
+    return { answer, fallback: `${speechFailureLine(err, NO_SYNTHESIS)} Answering in text.` };
   }
 }
