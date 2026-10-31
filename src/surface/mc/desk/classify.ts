@@ -17,6 +17,7 @@ export interface ClassifierConfig {
   model: string;
   apiKeyEnv?: string;
   apiKeyFile?: string;
+  caFile?: string;
   timeoutSeconds: number;
   maxPerPass: number;
 }
@@ -114,13 +115,23 @@ const ChatResponseSchema = z.object({
   choices: z.array(z.object({ message: z.object({ content: z.string().nullish() }) })).min(1),
 });
 
+async function readCa(path: string): Promise<string> {
+  try {
+    return await Bun.file(path).text();
+  } catch {
+    throw new Error(`the classifier CA file could not be read: ${path}`);
+  }
+}
+
 export function chatClassifier(config: ClassifierConfig, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): ClassifierRunner {
   const url = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const wantsKey = needsKey(config);
   return async (request, timeoutMs) => {
     const key = await readKey(config);
     if (wantsKey && !key) throw new MissingKey("the classifier key was not found");
+    const ca = config.caFile ? await readCa(config.caFile) : null;
     const res = await fetchImpl(url, {
+      ...(ca ? { tls: { ca } } : {}),
       method: "POST",
       headers: { "content-type": "application/json", ...(key ? { authorization: `Bearer ${key}` } : {}) },
       body: JSON.stringify({ model: config.model, messages: buildMessages(request), temperature: 0, max_tokens: 600 }),
