@@ -26,8 +26,9 @@ export function discordTransport(notify: (text: string) => Promise<NotifyAnswer>
     id: "discord",
     send: async (push): Promise<PushResult> => {
       const answer = await notify(pushText(push));
-      if (answer.delivered) return answer.messageId ? { ok: true, ref: answer.messageId } : { ok: true };
-      return { ok: false, error: `Discord did not take the message (${answer.code}${answer.detail ? `: ${answer.detail}` : ""}).` };
+      if (answer.delivered) return answer.messageId ? { status: "sent", ref: answer.messageId } : { status: "sent" };
+      if (answer.code === "buffered") return { status: "buffered" };
+      return { status: "failed", error: `Discord did not take the message (${answer.code}${answer.detail ? `: ${answer.detail}` : ""}).` };
     },
   };
 }

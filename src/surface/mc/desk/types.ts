@@ -60,7 +60,7 @@ export interface DeskItem {
 }
 
 export interface DeskInterrupt {
-  delivery: "off" | "pending" | "sending" | "sent" | "failed";
+  delivery: "off" | "pending" | "sending" | "sent" | "buffered" | "failed";
   error?: string;
 }
 

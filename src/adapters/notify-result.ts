@@ -6,7 +6,7 @@ const warnedAdapters = new WeakSet<PlatformAdapter>();
 export async function notifyWithResult(
   adapter: PlatformAdapter,
   text: string,
-  { timeoutMs = 2000 }: { timeoutMs?: number } = {},
+  { timeoutMs = 2000, buffer = false }: { timeoutMs?: number; buffer?: boolean } = {},
 ): Promise<NotifyResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -15,7 +15,7 @@ export async function notifyWithResult(
         resolve({ delivered: false, kind: "transient", code: "timeout" });
       }, timeoutMs);
     });
-    const result = await Promise.race([adapter.notifyPrincipal(text, { buffer: false }), timeout]);
+    const result = await Promise.race([adapter.notifyPrincipal(text, { buffer }), timeout]);
     if (result !== undefined) return result;
 
     if (!warnedAdapters.has(adapter)) {

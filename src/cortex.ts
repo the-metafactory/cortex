@@ -4964,7 +4964,7 @@ export async function startCortex(
           ? {
               deskTransport: () => {
                 const discord = adapters.find((adapter) => adapter.platform === "discord");
-                return discord ? discordTransport((text) => notifyWithResult(discord, text, { timeoutMs: 10_000 })) : null;
+                return discord ? discordTransport((text) => notifyWithResult(discord, text, { timeoutMs: 10_000, buffer: true })) : null;
               },
             }
           : {}),

@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import type { Database } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
 import { composeDesk, type DeskOptions } from "../desk/compose";
 import { pushInterrupts, readDeliveries, startInterruptLoop, type DeskPush, type DeskTransport, type InterruptRules, type PushResult } from "../desk/interrupt";
 import { discordTransport, pushText } from "../desk/transports";
+import { notifyWithResult } from "../../../adapters/notify-result";
+import { MockAdapter } from "../../../adapters/mock";
+import type { PlatformAdapter } from "../../../adapters/types";
 import { addNote } from "../desk/notes";
 import { briefing, selectItems } from "../desk/present";
 import { SourceCache, type CommandRunner } from "../desk/sources/command";
@@ -36,7 +39,7 @@ const calendar = (events: unknown[]): SourceCache => {
 class FakeTransport implements DeskTransport {
   readonly id = "discord" as const;
   readonly sent: DeskPush[] = [];
-  constructor(private readonly answer: PushResult = { ok: true, ref: "m-1" }) {}
+  constructor(private readonly answer: PushResult = { status: "sent", ref: "m-1" }) {}
   async send(push: DeskPush): Promise<PushResult> {
     this.sent.push(push);
     return this.answer;
@@ -59,7 +62,7 @@ describe("Desk interruptions", () => {
     const transport = new FakeTransport();
     const cache = calendar([standup]);
     const first = await tick(transport, NOW, desk(), cache);
-    expect(first.pushed).toEqual([{ key: `meeting:cal:cal:e1@${NOW + 10 * MIN}`, ok: true }]);
+    expect(first.pushed).toEqual([{ key: `meeting:cal:cal:e1@${NOW + 10 * MIN}`, status: "sent" }]);
     expect(transport.sent).toEqual([{
       key: `meeting:cal:cal:e1@${NOW + 10 * MIN}`,
       title: `"Stand-up" starts at ${new Date(NOW + 10 * MIN).toTimeString().slice(0, 5)}.`,
@@ -113,10 +116,10 @@ describe("Desk interruptions", () => {
 
   it("shows the item as urgent and records the failed delivery when the transport fails, without retrying", async () => {
     addNote(db, "reminder", "Call Ada", NOW - 30 * MIN, NOW - 60 * MIN);
-    const transport = new FakeTransport({ ok: false, error: "Discord did not take the message (timeout)." });
+    const transport = new FakeTransport({ status: "failed", error: "Discord did not take the message (timeout)." });
     const cache = calendar([]);
     const first = await tick(transport, NOW, desk(), cache);
-    expect(first.pushed).toEqual([{ key: "reminder:1", ok: false }]);
+    expect(first.pushed).toEqual([{ key: "reminder:1", status: "failed" }]);
     const view = (await tick(transport, NOW + MIN, desk(), cache)).view;
     const reminder = view.items.find((i) => i.key === "reminder:1");
     expect(reminder?.urgency).toBe("now");
@@ -124,6 +127,26 @@ describe("Desk interruptions", () => {
     expect(reminder?.interrupt).toEqual({ delivery: "failed", error: "Discord did not take the message (timeout)." });
     expect(readDeliveries(db).get("reminder:1")?.status).toBe("failed");
     expect(transport.sent).toHaveLength(1);
+  });
+
+  it("records a buffered push and shows it as waiting, not urgent, without pushing again", async () => {
+    addNote(db, "reminder", "Call Ada", NOW - MIN, NOW - 60 * MIN);
+    const transport = new FakeTransport({ status: "buffered" });
+    const cache = calendar([]);
+    expect((await tick(transport, NOW, desk(), cache)).pushed).toEqual([{ key: "reminder:1", status: "buffered" }]);
+    const second = await tick(transport, NOW + MIN, desk(), cache);
+    expect(second.pushed).toEqual([]);
+    const reminder = second.view.items.find((i) => i.key === "reminder:1");
+    expect(reminder?.interrupt).toEqual({ delivery: "buffered" });
+    expect(reminder?.score).toBeLessThan(99);
+    expect(readDeliveries(db).get("reminder:1")).toMatchObject({ status: "buffered", error: null, ref: null });
+    expect(transport.sent).toHaveLength(1);
+  });
+
+  it("records the message id of a delivered push", async () => {
+    addNote(db, "reminder", "Call Ada", NOW - MIN, NOW - 60 * MIN);
+    await tick(new FakeTransport({ status: "sent", ref: "m-42" }), NOW, desk(), calendar([]));
+    expect(readDeliveries(db).get("reminder:1")).toMatchObject({ status: "sent", ref: "m-42", error: null });
   });
 
   it("records a failed delivery when no transport is running", async () => {
@@ -138,7 +161,7 @@ describe("Desk interruptions", () => {
     const transport = new FakeTransport();
     const cache = calendar([]);
     expect((await tick(transport, NOW, desk(), cache)).pushed).toEqual([]);
-    expect((await tick(transport, NOW + 2 * MIN, desk(), cache)).pushed).toEqual([{ key: "reminder:1", ok: true }]);
+    expect((await tick(transport, NOW + 2 * MIN, desk(), cache)).pushed).toEqual([{ key: "reminder:1", status: "sent" }]);
     expect((await tick(transport, NOW + 3 * MIN, desk(), cache)).pushed).toEqual([]);
     expect(transport.sent.map((p) => p.title)).toEqual(["Call Ada"]);
   });
@@ -193,7 +216,7 @@ describe("Desk interruptions", () => {
     const runner: CommandRunner = async () => JSON.stringify({ items: [mail("vip", "boss@example.com"), mail("plain", "someone@example.com")] });
     const transport = new FakeTransport();
     const { pushed } = await tick(transport, NOW, desk(), new SourceCache(runner));
-    expect(pushed).toEqual([{ key: "mail:vip", ok: true }]);
+    expect(pushed).toEqual([{ key: "mail:vip", status: "sent" }]);
   });
 
   it("shows a push that never finished as failed once it is stuck", async () => {
@@ -218,10 +241,31 @@ describe("the Discord transport", () => {
       .toBe("**\\*\\*Boss\\*\\* wrote: \"\\[x\\]\\(https://evil\\)\"**\nVIP.\nOpen: <https://mail.example/1>");
   });
 
-  it("reports the message id, or why Discord did not take it", async () => {
-    expect(await discordTransport(async () => ({ delivered: true, messageId: "9" })).send({ key: "k", title: "t", why: "w" })).toEqual({ ok: true, ref: "9" });
-    expect(await discordTransport(async () => ({ delivered: false, code: "no_dm_target" })).send({ key: "k", title: "t", why: "w" }))
-      .toEqual({ ok: false, error: "Discord did not take the message (no_dm_target)." });
+  it("reports the message id, a buffered push, or why Discord did not take it", async () => {
+    const push = { key: "k", title: "t", why: "w" };
+    expect(await discordTransport(async () => ({ delivered: true, messageId: "9" })).send(push)).toEqual({ status: "sent", ref: "9" });
+    expect(await discordTransport(async () => ({ delivered: false, code: "buffered" })).send(push)).toEqual({ status: "buffered" });
+    expect(await discordTransport(async () => ({ delivered: false, code: "no_dm_target" })).send(push))
+      .toEqual({ status: "failed", error: "Discord did not take the message (no_dm_target)." });
+    expect(await discordTransport(async () => ({ delivered: false, code: "50007", detail: "Cannot send messages to this user" })).send(push))
+      .toEqual({ status: "failed", error: "Discord did not take the message (50007: Cannot send messages to this user)." });
+  });
+
+  it("asks the adapter to buffer, and treats an adapter that returns nothing as sent with no id", async () => {
+    const adapter = new MockAdapter();
+    adapter.notifyPrincipalResult = { delivered: false, kind: "transient", code: "buffered" };
+    const push = { key: "k", title: "t", why: "w" };
+    expect(await discordTransport((text) => notifyWithResult(adapter, text, { buffer: true })).send(push)).toEqual({ status: "buffered" });
+    expect(adapter.principalNotificationCalls.at(-1)?.opts).toEqual({ buffer: true });
+    const warn = console.warn;
+    console.warn = () => undefined;
+    try {
+      const legacy: PlatformAdapter = new MockAdapter();
+      legacy.notifyPrincipal = async () => undefined;
+      expect(await discordTransport((text) => notifyWithResult(legacy, text, { buffer: true })).send(push)).toEqual({ status: "sent" });
+    } finally {
+      console.warn = warn;
+    }
   });
 });
 
@@ -238,5 +282,41 @@ describe("the interruption loop", () => {
     loop.stop();
     expect(calls).toBe(2);
     expect(logged).toEqual(["desk: interruption tick failed: ranger down", "desk: interruption tick failed: ranger down"]);
+  });
+});
+
+describe("the desk_deliveries table", () => {
+  it("widens an existing table to accept buffered and keeps its rows", () => {
+    const path = join(tmpdir(), `desk-deliveries-${crypto.randomUUID()}.db`);
+    try {
+      initDatabase(path).close();
+      const old = new Database(path);
+      old.run("DROP TABLE desk_deliveries");
+      old.run(`CREATE TABLE desk_deliveries (
+        item_key TEXT PRIMARY KEY,
+        transport TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('sending','sent','failed')),
+        title TEXT NOT NULL,
+        error TEXT,
+        ref TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`);
+      old.run("INSERT INTO desk_deliveries VALUES ('reminder:1', 'discord', 'sent', 'Call Ada', NULL, 'm-1', 1, 2)");
+      old.close();
+      const db = initDatabase(path);
+      try {
+        db.query("INSERT INTO desk_deliveries VALUES ('reminder:2', 'discord', 'buffered', 'Call Bo', NULL, NULL, 3, 4)").run();
+        expect([...readDeliveries(db).values()].map((d) => [d.key, d.status, d.ref])).toEqual([
+          ["reminder:1", "sent", "m-1"],
+          ["reminder:2", "buffered", null],
+        ]);
+        expect(() => db.query("INSERT INTO desk_deliveries VALUES ('reminder:3', 'discord', 'lost', 't', NULL, NULL, 5, 6)").run()).toThrow();
+      } finally {
+        db.close();
+      }
+    } finally {
+      for (const suffix of ["", "-wal", "-shm"]) rmSync(path + suffix, { force: true });
+    }
   });
 });

@@ -32,7 +32,12 @@ export interface DeskPush {
   action?: { label: string; url: string };
 }
 
-export type PushResult = { ok: true; ref?: string } | { ok: false; error: string };
+export type PushResult = { status: "sent"; ref?: string } | { status: "buffered" } | { status: "failed"; error: string };
+
+export interface PushOutcome {
+  key: string;
+  status: PushResult["status"];
+}
 
 export interface DeskTransport {
   id: TransportId;
@@ -42,7 +47,7 @@ export interface DeskTransport {
 export interface Delivery {
   key: string;
   transport: string;
-  status: "sending" | "sent" | "failed";
+  status: "sending" | "sent" | "buffered" | "failed";
   error: string | null;
   ref: string | null;
   createdAt: number;
@@ -136,7 +141,7 @@ async function sendSafely(transport: DeskTransport, push: DeskPush): Promise<Pus
   try {
     return await transport.send(push);
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    return { status: "failed", error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -146,9 +151,9 @@ export async function pushInterrupts(
   transportId: TransportId,
   transport: DeskTransport | null,
   now: number,
-): Promise<{ key: string; ok: boolean }[]> {
+): Promise<PushOutcome[]> {
   db.query("DELETE FROM desk_deliveries WHERE created_at < ?").run(now - KEEP_MS);
-  const results: { key: string; ok: boolean }[] = [];
+  const results: PushOutcome[] = [];
   if (transportId === "none") return results;
   for (const item of items) {
     if (item.interrupt?.delivery !== "pending") continue;
@@ -156,15 +161,15 @@ export async function pushInterrupts(
       .query("INSERT INTO desk_deliveries (item_key, transport, status, title, created_at, updated_at) VALUES (?, ?, 'sending', ?, ?, ?) ON CONFLICT(item_key) DO NOTHING")
       .run(item.key, transportId, item.title, now, now).changes > 0;
     if (!claimed) continue;
-    const result = transport ? await sendSafely(transport, toPush(item)) : { ok: false as const, error: `No ${transportId} transport is running on this stack.` };
+    const result: PushResult = transport ? await sendSafely(transport, toPush(item)) : { status: "failed", error: `No ${transportId} transport is running on this stack.` };
     db.query("UPDATE desk_deliveries SET status = ?, error = ?, ref = ?, updated_at = ? WHERE item_key = ?").run(
-      result.ok ? "sent" : "failed",
-      result.ok ? null : result.error,
-      result.ok ? result.ref ?? null : null,
+      result.status,
+      result.status === "failed" ? result.error : null,
+      result.status === "sent" ? result.ref ?? null : null,
       Date.now(),
       item.key,
     );
-    results.push({ key: item.key, ok: result.ok });
+    results.push({ key: item.key, status: result.status });
   }
   return results;
 }
