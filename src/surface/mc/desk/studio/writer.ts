@@ -1,7 +1,7 @@
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { StudioOptions } from "../types";
-import { isRefusal, planAct, type StudioAct } from "./acts";
+import { isRefusal, planAct, type ActPlan, type StudioAct } from "./acts";
 import { parseThreadFile } from "./format";
 import { commitPaths, findRequest, REQUEST_TRAILER, restorePaths, spawnGit, treeProblem, type GitRunner } from "./git";
 import { readStudioFiles } from "./read";
@@ -56,6 +56,33 @@ async function freshView(input: StudioWriteInput): Promise<StudioView> {
   return buildStudioView(files, input.options, input.areas, problems);
 }
 
+async function applyPlan(git: GitRunner, dir: string, plan: ActPlan, requestId: string): Promise<{ sha: string } | { error: string }> {
+  const all = [...plan.writes.map((w) => w.path), ...plan.removes];
+  const tracked: string[] = [];
+  for (const path of all) if (await exists(join(dir, path))) tracked.push(path);
+  const created = all.filter((p) => !tracked.includes(p));
+  const undo = async (): Promise<void> => {
+    await restorePaths(git, dir, all, tracked);
+    await Promise.all(created.map((p) => rm(join(dir, p), { force: true })));
+  };
+  try {
+    for (const w of plan.writes) {
+      await mkdir(dirname(join(dir, w.path)), { recursive: true });
+      await writeFile(join(dir, w.path), w.text, "utf8");
+    }
+    for (const path of plan.removes) await rm(join(dir, path), { force: true });
+  } catch (err) {
+    await undo();
+    return { error: `Could not write the Studio files: ${reason(err)}. Nothing was committed.` };
+  }
+  const committed = await commitPaths(git, dir, all, `Studio: ${plan.subject}\n\n${REQUEST_TRAILER}: ${requestId}\n`);
+  if ("error" in committed) {
+    await undo();
+    return { error: `${committed.error}. The files are back as they were.` };
+  }
+  return committed;
+}
+
 export async function runStudioAct(input: StudioWriteInput): Promise<ActResult> {
   const { dir } = input.options;
   const git = input.git ?? spawnGit;
@@ -77,29 +104,8 @@ export async function runStudioAct(input: StudioWriteInput): Promise<ActResult> 
       if (!parsed.ok) return fail(500, `The change would leave ${w.path} unreadable (${parsed.reason}); nothing was written.`);
     }
 
-    const all = [...plan.writes.map((w) => w.path), ...plan.removes];
-    const tracked: string[] = [];
-    for (const path of all) if (await exists(join(dir, path))) tracked.push(path);
-    const created = all.filter((p) => !tracked.includes(p));
-    const undo = async (): Promise<void> => {
-      await restorePaths(git, dir, all, tracked);
-      await Promise.all(created.map((p) => rm(join(dir, p), { force: true })));
-    };
-    try {
-      for (const w of plan.writes) {
-        await mkdir(dirname(join(dir, w.path)), { recursive: true });
-        await writeFile(join(dir, w.path), w.text, "utf8");
-      }
-      for (const path of plan.removes) await rm(join(dir, path), { force: true });
-    } catch (err) {
-      await undo();
-      return fail(500, `Could not write the Studio files: ${reason(err)}. Nothing was committed.`);
-    }
-    const committed = await commitPaths(git, dir, all, `Studio: ${plan.subject}\n\n${REQUEST_TRAILER}: ${input.requestId}\n`);
-    if ("error" in committed) {
-      await undo();
-      return fail(500, `${committed.error}. The files are back as they were.`);
-    }
+    const committed = await applyPlan(git, dir, plan, input.requestId);
+    if ("error" in committed) return fail(500, committed.error);
     return { ok: true, message: plan.message, commit: committed.sha, replayed: false, studio: await freshView(input) };
   } finally {
     lock.release(dir);

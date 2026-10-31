@@ -135,29 +135,41 @@ function keepOrDismiss(ctx: Ctx, act: Extract<StudioAct, { act: "keep" | "dismis
   return plan([edited(thread.path, chain(text, ...steps))], `${keep ? "Keep" : "Dismiss"} ${what} on ${thread.slug}`, message);
 }
 
-function parkStep(ctx: Ctx, park: string | undefined, forWhat: string): { write: StudioFile | ActRefusal; question: string } | ActRefusal | null {
-  if (ctx.view.active.length < ctx.view.maxActive) return null;
+const parkEdit = (text: string, today: string, line: string): string | null =>
+  chain(text, (t) => setFront(t, "state", "parked"), (t) => appendLog(t, today, line));
+
+interface ParkTail {
+  writes: (StudioFile | ActRefusal)[];
+  subject: string;
+  message: string;
+}
+
+const NO_PARK: ParkTail = { writes: [], subject: "", message: "" };
+
+function parkStep(ctx: Ctx, park: string | undefined, forWhat: string): ParkTail | ActRefusal {
+  if (ctx.view.active.length < ctx.view.maxActive) return NO_PARK;
   if (!park) return refuse(409, `All ${ctx.view.maxActive} places are in use. Choose a thread to park first.`, { needsPark: true });
   const target = ctx.view.active.find((t) => t.slug === park);
   const text = target ? source(ctx, target.path) : undefined;
   if (!target || text === undefined) return refuse(409, `${park} is not an active thread, so it cannot be parked.`, { needsPark: true });
-  const out = chain(text, (t) => setFront(t, "state", "parked"), (t) => appendLog(t, ctx.today, `Parked to make room for ${forWhat}`));
-  return { write: edited(target.path, out), question: target.question };
+  return {
+    writes: [edited(target.path, parkEdit(text, ctx.today, `Parked to make room for ${forWhat}`))],
+    subject: `, park ${target.slug}`,
+    message: ` and parked ${quoted(target.question)}`,
+  };
 }
 
 function park(ctx: Ctx, act: Extract<StudioAct, { act: "park" }>, { thread, text }: Found): ActPlan | ActRefusal {
   if (thread.state !== "active") return refuse(409, `${quoted(thread.question)} is not active.`);
-  const out = chain(text, (t) => setFront(t, "state", "parked"), (t) => appendLog(t, ctx.today, "Parked"));
-  return plan([edited(thread.path, out)], `Park ${thread.slug}`, `Parked ${quoted(thread.question)}. Its notes stay with it.`);
+  return plan([edited(thread.path, parkEdit(text, ctx.today, "Parked"))], `Park ${thread.slug}`, `Parked ${quoted(thread.question)}. Its notes stay with it.`);
 }
 
 function unpark(ctx: Ctx, act: Extract<StudioAct, { act: "unpark" }>, { thread, text }: Found): ActPlan | ActRefusal {
   if (thread.state !== "parked") return refuse(409, `${quoted(thread.question)} is not parked.`);
   const parked = parkStep(ctx, act.park, quoted(thread.question));
-  if (parked && isRefusal(parked)) return parked;
+  if (isRefusal(parked)) return parked;
   const out = chain(text, (t) => setFront(t, "state", "active"), (t) => appendLog(t, ctx.today, "Brought back"));
-  const message = parked ? `Brought back ${quoted(thread.question)} and parked ${quoted(parked.question)}.` : `Brought back ${quoted(thread.question)}.`;
-  return plan([edited(thread.path, out), ...(parked ? [parked.write] : [])], `Bring back ${thread.slug}${parked ? `, park ${act.park ?? ""}` : ""}`, message);
+  return plan([edited(thread.path, out), ...parked.writes], `Bring back ${thread.slug}${parked.subject}`, `Brought back ${quoted(thread.question)}${parked.message}.`);
 }
 
 function think(ctx: Ctx, act: Extract<StudioAct, { act: "think" }>, { thread, text }: Found): ActPlan | ActRefusal {
@@ -237,7 +249,7 @@ function open(ctx: Ctx, act: Extract<StudioAct, { act: "open" }>): ActPlan | Act
   const areas = src.areas.length ? src.areas : [act.area];
   const name = slugFor(src.question, new Set([...allThreads(ctx.view).map((t) => t.slug), ...ctx.files.threads.map((f) => (f.path.split("/").pop() ?? "").replace(/\.md$/, ""))]));
   const parked = parkStep(ctx, act.park, quoted(src.question));
-  if (parked && isRefusal(parked)) return parked;
+  if (isRefusal(parked)) return parked;
   const yes = yesSection(ctx, act.answers);
   const front = stringify({ type: src.type, areas, state: "active", opened: ctx.today }, { flowCollectionPadding: false }).trimEnd();
   const body = [
@@ -259,8 +271,7 @@ function open(ctx: Ctx, act: Extract<StudioAct, { act: "open" }>): ActPlan | Act
     "",
   ].join("\n");
   const path = `threads/${name}.md`;
-  const message = parked ? `Opened ${quoted(src.question)} and parked ${quoted(parked.question)}.` : `Opened ${quoted(src.question)}.`;
-  return plan([{ path, text: body }, ...(parked ? [parked.write] : [])], `Open ${name} from ${act.from} ${act.id}${parked ? `, park ${act.park ?? ""}` : ""}`, message, [src.path]);
+  return plan([{ path, text: body }, ...parked.writes], `Open ${name} from ${act.from} ${act.id}${parked.subject}`, `Opened ${quoted(src.question)}${parked.message}.`, [src.path]);
 }
 
 const NEEDS_OPEN_THREAD = new Set<StudioAct["act"]>(["respond", "think", "close"]);
