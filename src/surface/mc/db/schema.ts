@@ -129,7 +129,8 @@ export const SCHEMA_SQL: string[] = [
     meeting_key TEXT,
     reason TEXT NOT NULL,
     model TEXT NOT NULL,
-    classified_at INTEGER NOT NULL
+    classified_at INTEGER NOT NULL,
+    details TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS desk_corrections (
     kind TEXT NOT NULL,
@@ -1109,6 +1110,7 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
       `CREATE INDEX IF NOT EXISTS idx_observability_origin ON observability_events(origin_kind, origin_peer)`,
     ],
   },
+  { table: "desk_mail_classes", column: "details", ddl: "ALTER TABLE desk_mail_classes ADD COLUMN details TEXT" },
 ];
 
 /**

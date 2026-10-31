@@ -14,12 +14,13 @@ import {
   MissingKey,
   readClassifications,
   validateAnswer,
-  type ClassifierConfig,
+  type EndpointConfig,
   type ClassifierRequest,
   type ClassifierRunner,
   type MailClassification,
 } from "../desk/classify";
 import { classifierLines } from "../dashboard-v2/components/desk-settings";
+import { setCorrection } from "../desk/corrections";
 import { McSchema } from "../../../common/types/config";
 
 const NOW = new Date("2026-10-31T09:00:00").getTime();
@@ -34,7 +35,7 @@ const mail = (id: string, subject: string, over: Partial<SourceMail> = {}): Sour
 });
 const NEWSLETTER = mail("n1", "Newsletter November 2026", { from: { name: "Christina Grimm Music", address: "news@grimm.example" } });
 
-const CONFIG: ClassifierConfig = { baseUrl: "https://llm.example/v1", model: "chat-fast", timeoutSeconds: 5, maxPerPass: 10 };
+const CONFIG: EndpointConfig = { baseUrl: "https://llm.example/v1", model: "chat-fast", timeoutSeconds: 5, maxPerPass: 10 };
 const quiet = (): void => undefined;
 
 let db: Database;
@@ -58,7 +59,7 @@ describe("the classifier answer", () => {
   const keys = new Set([KUNDEN_KEY]);
 
   it("accepts a valid answer and tolerates extra fields", () => {
-    expect(validateAnswer({ category: "meeting", meetingKey: KUNDEN_KEY, reason: "It sets the agenda.", summary: "later" }, keys))
+    expect(validateAnswer({ category: "meeting", meetingKey: KUNDEN_KEY, reason: "It sets the agenda.", summary: "x".repeat(700), suggestedAction: "forward" }, keys))
       .toEqual({ category: "meeting", meetingKey: KUNDEN_KEY, reason: "It sets the agenda." });
   });
 
@@ -135,6 +136,7 @@ describe("the classification pass", () => {
       meetings: [{ key: KUNDEN_KEY, title: KUNDEN.title, start: KUNDEN.start }],
       vips: ["boss@example.org"],
       unimportant: [],
+      corrections: [],
     });
     expect(readClassifications(db, ["n1", "r1"])).toEqual(new Map([["n1", { category: "bulk", reason: "A newsletter." }]]));
   });
@@ -214,11 +216,24 @@ describe("composeDesk with a classifier", () => {
     const deps = { now: NOW, sourceCache: new SourceCache(runner), mailClassifier: c };
     const first = await composeDesk(db, DESK, undefined, deps);
     expect(first.items.find((i) => i.key === "mail:n1")?.why).toMatch(/^It arrived /);
-    expect(first.mailClassifier).toEqual({ host: "llm.example", model: "chat-fast", keyNeeded: true, keyFound: false });
+    expect(first.mailClassifier).toEqual({ kind: "endpoint", host: "llm.example", model: "chat-fast", keyNeeded: true, keyFound: false });
     release({ category: "bulk", reason: "A newsletter from a music school." });
     await c.kick(db, { now: NOW, mail: [], events: [], vips: [] });
     const second = await composeDesk(db, DESK, undefined, deps);
     expect(second.items.find((i) => i.key === "mail:n1")?.why).toBe("A newsletter from a music school.");
+  });
+
+  it("hands the command the latest mail corrections only and shows it in Settings", async () => {
+    setCorrection(db, "mail", "work-mail", "less", NOW - 1000);
+    setCorrection(db, "goal", "vigil", "always", NOW);
+    const command = { command: ["/opt/desk/bin/desk-classify-mail.ts"], timeoutSeconds: 75, maxPerPass: 10 };
+    const seen: ClassifierRequest[] = [];
+    const c = new MailClassifier(command, async (req) => { seen.push(req); return { category: "fyi", reason: "News." }; }, quiet);
+    const view = await composeDesk(db, { ...DESK, mailClassifier: command }, undefined, { now: NOW, sourceCache: new SourceCache(runner), mailClassifier: c });
+    await c.kick(db, { now: NOW, mail: [], events: [], vips: [] });
+    expect(seen[0]?.corrections).toEqual([{ kind: "mail", source: "work-mail", mode: "less", label: "Mail you may want to read, from work-mail" }]);
+    expect(view.mailClassifier).toEqual({ kind: "command", command: "desk-classify-mail.ts", keyNeeded: false, keyFound: false });
+    expect(classifierLines(view.mailClassifier ?? null)[0]).toBe("A command sorts your unread mail: desk-classify-mail.ts.");
   });
 
   it("ignores cached classifications when no classifier is configured", async () => {
@@ -232,7 +247,7 @@ describe("composeDesk with a classifier", () => {
 });
 
 describe("the OpenAI-compatible provider", () => {
-  const request: ClassifierRequest = { mail: { id: "n1", from: NEWSLETTER.from, subject: NEWSLETTER.subject, firstParagraph: "", receivedAt: NEWSLETTER.receivedAt }, meetings: [], vips: [], unimportant: [] };
+  const request: ClassifierRequest = { mail: { id: "n1", from: NEWSLETTER.from, subject: NEWSLETTER.subject, firstParagraph: "", receivedAt: NEWSLETTER.receivedAt }, meetings: [], vips: [], unimportant: [], corrections: [] };
 
   it("posts the request as JSON with the key from the named env var and parses a fenced answer", async () => {
     const calls: { url: string; init: RequestInit }[] = [];
@@ -247,7 +262,8 @@ describe("the OpenAI-compatible provider", () => {
     const body = JSON.parse(calls[0]?.init.body as string) as { model: string; messages: { content: string }[] };
     expect(body.model).toBe("chat-fast");
     expect(body.messages).toEqual(buildMessages(request));
-    expect(JSON.parse(body.messages[1]?.content ?? "")).toEqual(request);
+    const { corrections: _corrections, ...endpointRequest } = request;
+    expect(JSON.parse(body.messages[1]?.content ?? "")).toEqual(endpointRequest);
   });
 
   it("trusts the configured CA file for a gateway with a private certificate", async () => {
@@ -290,7 +306,7 @@ describe("the classifier config", () => {
 
 describe("Settings", () => {
   it("shows the provider read-only and whether its key was found", () => {
-    expect(classifierLines({ host: "api.spark.switch.ch", model: "coder", keyNeeded: true, keyFound: false }).join(" "))
+    expect(classifierLines({ kind: "endpoint", host: "api.spark.switch.ch", model: "coder", keyNeeded: true, keyFound: false }).join(" "))
       .toBe("A model sorts your unread mail: coder at api.spark.switch.ch. Its API key was not found, so the Desk sorts mail by shared words until it is. Change it in the stack config.");
     expect(classifierLines(null)[0]).toMatch(/^The Desk sorts unread mail by the words/);
   });

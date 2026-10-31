@@ -115,12 +115,9 @@ export interface DeskView {
   mailClassifier?: DeskMailClassifier | null;
 }
 
-export interface DeskMailClassifier {
-  host: string;
-  model: string;
-  keyNeeded: boolean;
-  keyFound: boolean;
-}
+export type DeskMailClassifier =
+  | { kind: "endpoint"; host: string; model: string; keyNeeded: boolean; keyFound: boolean }
+  | { kind: "command"; command: string; keyNeeded: boolean; keyFound: boolean };
 
 export interface DeskAutonomy {
   types: { action: string; label: string; note: string; on: boolean }[];
