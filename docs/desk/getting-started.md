@@ -92,6 +92,12 @@ A source is a command that prints the Desk's JSON. We use `desk-ics`, an example
 
 To use your own calendar, point `desk-ics` at an exported `.ics` file or at the https address your calendar app publishes. The adapter's README lists what it reads and what it skips.
 
+## Choose calendars and colours
+
+Open **Settings** and find **Calendars**. Each calendar reported by a source has a visibility switch and a colour control. Changes are stored in Mission Control's database. Hidden calendars disappear from the timeline and next-days strip, and do not trigger meeting pushes. The chosen colour marks the calendar's events in both views.
+
+Sources report calendar names on events. A source without calendar names appears as one calendar named after the source. A calendar remains listed when its current event window is empty, so you can turn it back on later.
+
 ## Add mail
 
 The simplest source is a file that already holds the Desk's JSON. We use the example mail file with `cat`:

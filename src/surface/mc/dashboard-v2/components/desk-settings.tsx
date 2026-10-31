@@ -1,3 +1,5 @@
+import { CalendarSettings } from "./desk-calendar-settings";
+import type { DeskCalendar } from "../../desk/calendars";
 import { useEffect, useState } from "react";
 import { changeSenders, type SenderChange, type SenderListId, type SenderRow } from "../lib/desk-settings";
 import { browserNotifyEnv, NOTIFY_LINE, notifyState, requestNotifications, type NotifyState } from "../lib/desk-notify";
@@ -47,6 +49,7 @@ export function DeskSettings({ view, onBack }: { view: DeskView; onBack: () => v
           if (state) setNotify(state);
         });
       }}
+      calendars={view.calendars ?? []}
       classifier={view.mailClassifier ?? null}
     />
   );
@@ -67,6 +70,7 @@ export interface SettingsBodyProps {
   notify: NotifyState;
   onEnableNotify: () => void;
   classifier?: DeskMailClassifier | null;
+  calendars?: DeskCalendar[];
 }
 
 export function classifierLines(c: DeskMailClassifier | null): string[] {
@@ -143,7 +147,7 @@ function SenderCard({ text, list, busy }: { text: SenderCardText; list: SenderLi
   );
 }
 
-export function SettingsBody({ vips, unimportant, busy, onBack, notify, onEnableNotify, classifier = null }: SettingsBodyProps) {
+export function SettingsBody({ vips, unimportant, busy, onBack, notify, onEnableNotify, classifier = null, calendars = [] }: SettingsBodyProps) {
   return (
     <div className="desk desk-settings">
       <div className="desk-top">
@@ -159,6 +163,8 @@ export function SettingsBody({ vips, unimportant, busy, onBack, notify, onEnable
 
       <main className="desk-set-main">
         <h1 className="desk-set-h">Settings</h1>
+
+        <CalendarSettings initial={calendars} />
 
         <SenderCard text={VIP_TEXT} list={vips} busy={busy} />
 

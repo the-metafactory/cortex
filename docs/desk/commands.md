@@ -41,6 +41,7 @@ Event fields:
 | `id` | yes | Nonempty string, stable across reads. Keep it unique within the source. Recurring instances need distinct ids. |
 | `start` | yes | Date and time string. Use ISO 8601 with a timezone. |
 | `title` | yes | Nonempty string. |
+| `calendar` | no | Nonempty calendar name, at most 200 characters. Settings scope visibility and colour by source id and this name. Without it, the source is treated as one calendar. |
 | `end` | no | Date and time string, in the same format as `start`. |
 | `allDay` | no | Boolean. |
 | `location` | no | String. |

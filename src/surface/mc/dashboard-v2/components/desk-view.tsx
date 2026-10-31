@@ -474,7 +474,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
           <div className="desk-h">
             Today <span className="desk-date">{new Date(view.generatedAt).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}</span>
-            {allDay.map((e) => <span key={e.key} className="desk-pill">{e.title}</span>)}
+            {allDay.map((e) => <span key={e.key} className="desk-pill" style={e.color ? { borderLeft: `3px solid ${e.color}` } : undefined}>{e.title}</span>)}
           </div>
 
           {(past.length > 0 || stopped.length > 0) && (
@@ -730,11 +730,11 @@ function ghostEvent(p: DeskProposal): DeskEvent | null {
   };
 }
 
-function TimelineRow({ event, className }: { event: DeskEvent; className: string }) {
+export function TimelineRow({ event, className }: { event: DeskEvent; className: string }) {
   return (
     <li data-event={event.key} className={`desk-ev ${className}`.trim()}>
       <time>{clock(event.at)}</time>
-      <span className="desk-pin" />
+      <span className="desk-pin" style={event.color ? { background: event.color, borderColor: event.color } : undefined} />
       <span>
         <span className="t">{event.title}</span>
         {event.note && <span className="m">{event.note}</span>}
@@ -919,7 +919,7 @@ function openLink(url: string): void {
   else if (/^message:/i.test(url)) window.location.assign(url);
 }
 
-function AheadStrip({ events }: { events: DeskEvent[] }) {
+export function AheadStrip({ events }: { events: DeskEvent[] }) {
   const days = new Map<string, DeskEvent[]>();
   for (const e of events) {
     const day = new Date(e.at).toLocaleDateString("en-GB", { weekday: "short", day: "numeric" });
@@ -932,7 +932,7 @@ function AheadStrip({ events }: { events: DeskEvent[] }) {
           <h3>{day}</h3>
           <ul>
             {list.map((e) => (
-              <li key={e.key} data-event={e.key} className={e.key === GHOST_KEY ? "ghost" : undefined}>
+              <li key={e.key} data-event={e.key} className={e.key === GHOST_KEY ? "ghost" : undefined} style={e.color ? { borderLeft: `3px solid ${e.color}`, paddingLeft: 6 } : undefined}>
                 {(e.kind === "meeting" || e.kind === "reminder") && <time>{clock(e.at)}</time>}
                 <span className="ttl">{e.title}</span>
               </li>

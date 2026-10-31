@@ -113,6 +113,7 @@ export const TABLE_NAMES = [
   "vigil_result_reads",
   "vigil_attention_resolutions",
   "desk_vips",
+  "desk_calendars",
   "desk_notes",
   "desk_deliveries",
   "desk_grants",
@@ -123,6 +124,13 @@ export const TABLE_NAMES = [
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
+  `CREATE TABLE IF NOT EXISTS desk_calendars (
+    source TEXT NOT NULL,
+    name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+    color TEXT NOT NULL,
+    PRIMARY KEY (source, name)
+  )`,
   `CREATE TABLE IF NOT EXISTS desk_mail_classes (
     message_id TEXT PRIMARY KEY,
     category TEXT NOT NULL,

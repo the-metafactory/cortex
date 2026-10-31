@@ -255,3 +255,7 @@
 .desk-set-add input{flex:1;min-width:0;height:34px;padding:0 10px;border:1px solid var(--line);border-radius:9px;font:inherit;font-size:14px;background:#fff;outline:0}
 .desk-set-add input:focus{border-color:#bcd3fb;box-shadow:0 0 0 3px rgba(59,130,246,.12)}
 .desk-set-err{margin:10px 0 0;font-size:14px;color:var(--now)}
+
+.desk-calendar-toggle{display:flex;align-items:center;gap:12px;cursor:pointer}
+.desk-calendar-toggle input{width:18px;height:18px;accent-color:var(--ivy)}
+.desk-set-list input[type="color"]{width:42px;height:32px;padding:2px;border:1px solid var(--line);border-radius:6px;background:transparent;cursor:pointer}
