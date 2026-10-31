@@ -277,6 +277,24 @@ describe("Studio writer acts", () => {
 });
 
 describe("Studio writer safety", () => {
+  it("refuses another process holding the shared repository lock", async () => {
+    seed();
+    mkdirSync(join(dir, ".git", "studio-write.lock"));
+    writeFileSync(join(dir, ".git", "studio-write.lock", "owner.json"), JSON.stringify({ pid: 4242, at: NOW.toISOString() }));
+    const before = readFileSync(join(dir, "threads/alpha.md"), "utf8");
+    const result = await run({ act: "park", thread: "alpha" });
+    expect(result).toMatchObject({ ok: false, status: 409 });
+    expect(readFileSync(join(dir, "threads/alpha.md"), "utf8")).toBe(before);
+    expect(existsSync(join(dir, ".git", "studio-write.lock", "owner.json"))).toBe(true);
+  });
+
+  it("reads Ranger note mode without putting it in the note body", () => {
+    const text = threadFile("active", "2026-10-01").replace("model: cloud", "model: local / pi\nmode: red-team");
+    const parsed = parseThreadFile("threads/alpha.md", text);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.value.notes[0]).toMatchObject({ model: "local / pi", mode: "red-team", text: "Three angles." });
+  });
+
   it("refuses a dirty tree and writes nothing", async () => {
     seed();
     writeFileSync(join(dir, "scratch.txt"), "half a thought");

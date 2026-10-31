@@ -235,7 +235,7 @@ function noteLabel(note: IvyNote): string {
 function NoteCard({ note, id, label, className, ghost, wire = true, children }: { note: IvyNote; id: string; label: string; className: string; ghost?: string; wire?: boolean; children?: ReactNode }) {
   return (
     <div className={className} data-ghost={ghost} data-wire={wire ? "out" : undefined} data-key={wire ? id : undefined}>
-      <span className="lbl">{label}<span>{dayMonthTime(new Date(note.at))} · {modelName(note.model)}</span></span>
+      <span className="lbl">{label}<span>{dayMonthTime(new Date(note.at))} · {modelName(note.model)}{note.mode ? ` · ${note.mode.replaceAll("-", " ")}` : ""}</span></span>
       <span className="trig">{note.trigger}</span>
       {note.text}
       {note.because && <span className="why">Because: {note.because}</span>}
