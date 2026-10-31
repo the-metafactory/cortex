@@ -1,3 +1,4 @@
+import { draftWasRecorded } from "../desk/studio/session-draft";
 import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -181,4 +182,44 @@ test("replaying an answered turn can retain a separate edited next draft without
   expect((await r.post({ action: "say", turn, text, draft: "A separate edited next thought." })).status).toBe(200);
   const saved = readStudioSession(r.db, r.dir, r.id); expect(saved?.turns).toHaveLength(1); expect(saved?.turns[0]?.text).toBe(text); expect(saved?.draft).toBe("A separate edited next thought.");
   expect((await r.post({ action: "end", outcome: { kind: "leave" } })).status).toBe(200); expect(r.file()).toContain("A separate edited next thought.");
+});
+
+
+test("recorded text means an exact person-owned saved turn or draft, never Ivy's reply or summary", async () => {
+  const r = rig(); await r.start(); await r.say(); await r.post({ action: "end", outcome: { kind: "leave" }, draft: "A saved unsent thought." });
+  const session = readStudioSession(r.db, r.dir, r.id); if (!session) throw new Error("missing session");
+  for (const text of ["", "Can you reword it around a narrow fold?", "A saved unsent thought."]) expect(draftWasRecorded(session, text)).toBe(true);
+  for (const text of [result.reply, result.summary, "narrow fold", "My newer remaining thought."]) expect(draftWasRecorded(session, text)).toBe(false);
+});
+
+test("remaining message saves use the existing bound-thread writer and replay without changing the frozen ending", async () => {
+  const r = rig(); await r.start();
+  expect((await r.post({ action: "save-message", text: "Not ended yet." })).status).toBe(409);
+  await r.post({ action: "end", outcome: { kind: "leave" } });
+  const frozen = JSON.stringify(readStudioSession(r.db, r.dir, r.id));
+  writeFileSync(join(r.dir, "scratch.txt"), "external dirty edit");
+  const request = { action: "save-message", text: "My newer remaining message." };
+  expect((await r.post(request)).status).toBe(409); rmSync(join(r.dir, "scratch.txt"));
+  const first = await r.post(request, async () => { throw new Error("no model may run"); }); expect(first.status).toBe(200);
+  const receipt = await first.json(); const head = r.git("rev-parse", "HEAD");
+  const replay = await r.post(request); expect(replay.status).toBe(200); expect((await replay.json()).commit).toBe(receipt.commit);
+  expect(r.git("rev-parse", "HEAD")).toBe(head); expect(r.thread().responses.map(x => x.text)).toEqual([request.text]);
+  expect(JSON.stringify(readStudioSession(r.db, r.dir, r.id))).toBe(frozen);
+});
+
+test("closed or missing threads refuse remaining messages without changing the frozen exchange", async () => {
+  const r = rig(); await r.start(); await r.post({ action: "end", outcome: { kind: "leave" } });
+  const frozen = JSON.stringify(readStudioSession(r.db, r.dir, r.id));
+  writeFileSync(join(r.dir, "threads/alpha.md"), r.file().replace("state: active", "state: closed\noutcome: dropped\nclosed: 2026-10-31")); r.git("add", "."); r.git("commit", "-qm", "close thread");
+  const request = { action: "save-message", text: "Keep my remaining draft." };
+  expect((await r.post(request)).status).toBe(409); expect(r.thread().responses).toHaveLength(0);
+  rmSync(join(r.dir, "threads/alpha.md")); r.git("add", "."); r.git("commit", "-qm", "remove thread");
+  expect((await r.post(request)).status).toBe(404); expect(JSON.stringify(readStudioSession(r.db, r.dir, r.id))).toBe(frozen);
+});
+
+test("changing the configured Studio directory cannot redirect a remaining message into another matching slug", async () => {
+  const r = rig(); const other = rig(); await r.start(); await r.post({ action: "end", outcome: { kind: "leave" } });
+  const expected = other.file(); r.options.studio.dir = other.dir;
+  expect((await r.post({ action: "save-message", text: "Bound to the original Studio." })).status).toBe(404);
+  expect(other.file()).toBe(expected); expect(other.thread().responses).toHaveLength(0);
 });

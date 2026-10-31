@@ -19,6 +19,7 @@ export const SessionRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("start"), id: z.uuid(), thread: z.string().regex(STUDIO_SLUG), scope: SessionScopeSchema }),
   z.object({ action: z.literal("read"), id: z.uuid() }),
   z.object({ action: z.literal("recover"), id: z.uuid() }),
+  z.object({ action: z.literal("save-message"), id: z.uuid(), text: words(4000) }),
   z.object({ action: z.literal("say"), id: z.uuid(), turn: z.uuid(), text: words(4000), draft: z.string().trim().max(4000).optional() }),
   z.object({ action: z.literal("end"), id: z.uuid(), outcome: SessionEndSchema, draft: z.string().trim().max(4000).optional() }),
 ]);

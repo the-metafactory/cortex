@@ -1,9 +1,10 @@
 import { SessionAnswerSchema, SessionRequestSchema, StudioSessionSchema, type StudioSession } from "../desk/studio/session-schema";
 import type { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
 import type { DeskRuntime } from "../desk/compose";
 import { readStudioFiles } from "../desk/studio/read";
 import { buildStudioView } from "../desk/studio/view";
-import { runStudioTransaction } from "../desk/studio/writer";
+import { runStudioAct, runStudioTransaction } from "../desk/studio/writer";
 import { composerDraft, planSessionEnd, sessionEndpoint, sessionModel, sessionPrompt, sessionSubject, sessionThread, type SessionModel } from "../desk/studio/session";
 
 const queues = new WeakMap<Database, Map<string, Promise<void>>>();
@@ -59,6 +60,13 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     }
     if (!session) return fail(404, "That session was not found in this Studio.");
     if (request.action === "start" || request.action === "read") return answer(200, { ok: true, session });
+    if (request.action === "save-message") {
+      if (session.phase.kind !== "ended") return fail(409, "Save the exchange before adding a remaining message.", session);
+      const hash = createHash("sha256").update(JSON.stringify([session.id, session.thread, request.text])).digest("hex").slice(0, 56);
+      const result = await runStudioAct({ options, areas: desk.areas, requestId: `late-${hash}`, act: { act: "respond", thread: session.thread, text: request.text }, ...(deps.now ? { now: deps.now() } : {}) });
+      if (!result.ok) return fail(result.status, result.error, session);
+      return answer(200, { ok: true, session, commit: result.commit, message: result.message });
+    }
     if (request.action === "end") {
       if (session.phase.kind !== "open" && JSON.stringify(session.phase.outcome) !== JSON.stringify(request.outcome)) return fail(409, "This session already has a different ending. Reload its saved outcome.", session);
       if (session.phase.kind === "ended") return answer(200, { ok: true, session });

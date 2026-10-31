@@ -225,8 +225,8 @@ describe("board lines", () => {
 it("a recovered unanswered Studio turn can retry with an empty composer", () => {
   const controls: StudioSessionControls = {
     session: { id: "00000000-0000-4000-8000-000000000001", thread: "one", scope: { kind: "thread" }, original: "A paper glider?", stand: "Try it.", policy: "local", phase: { kind: "open" }, turns: [{ id: "00000000-0000-4000-8000-000000000002", text: "Try another fold.", answer: null, model: "local", policy: "local" }] },
-    recoverable: [], chosen: null, retrying: false, resumeId: null, draft: "", reword: "", pending: false, error: null,
-    setDraft: () => {}, setReword: () => {}, start: () => {}, send: async () => {}, end: async () => {}, load: async () => {},
+    recoverable: [], remaining: false, chosen: null, retrying: false, resumeId: null, draft: "", reword: "", pending: false, error: null,
+    setDraft: () => {}, setReword: () => {}, start: () => {}, send: async () => {}, end: async () => {}, load: async () => {}, saveRemaining: async () => {}, copyRemaining: async () => {},
   };
   const html = renderToStaticMarkup(<StudioSessionPanel controls={controls} voice={{ enabled: false, input: "browser", output: "browser" }} location="studio:one" />);
   expect(html).toContain('<button class="desk-btn pri">Retry saved turn</button>');
