@@ -1,3 +1,4 @@
+import { parserRoutingNotice } from "../../desk/parser-routing";
 import { useEffect, useState } from "react";
 import { proposalTime, type AskKind, type AskMap, type DeskProposal } from "../../desk/ask";
 import { clock } from "../../desk/time";
@@ -100,6 +101,7 @@ export function ProposalCard({ proposal, said, maps, now, busy, onConfirm, onCan
             <span className="desk-prop-kind">{proposal.label}</span>
             <span className="desk-prop-note">From “{said}”. Nothing happens until you confirm.</span>
           </div>
+          {proposal.routing && <p className="desk-prop-note" role="status">{parserRoutingNotice(proposal.routing)}</p>}
           <dl className="desk-fields">
             {FIELDS[proposal.kind].map((f) => (editing || display(f.key, f.type)) ? (
               <div key={f.key} className="desk-field">

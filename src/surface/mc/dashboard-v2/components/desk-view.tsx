@@ -153,7 +153,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     if (!text || asking) return;
     setAsking(true);
     try {
-      const result = await askDesk(text);
+      const result = await askDesk(text, fetch, area === ALL_AREAS ? undefined : area);
       if (!result.ok) {
         setNote(result.text);
         return;
@@ -184,7 +184,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
   const voice = useDeskVoice(view.voice, {
     answer: async (said) => {
-      const result = await askDesk(said);
+      const result = await askDesk(said, fetch, area === ALL_AREAS ? undefined : area);
       if (!result.ok) return result.text;
       const filed = await propose(said, result.proposal);
       if (filed) return filed;

@@ -45,10 +45,11 @@ The first Desk request waits for the first read. Later requests use the cached r
 |---|---|---|
 | `parser` | `[]` | Argument array for an optional text parser. Empty uses the built-in rules. |
 | `timeoutSeconds` | `30` | Integer from 1 to 120. Timeout for the parser and writers. |
+| `routing` | absent | Optional `{ permitted: [claude, codex, pi] }`. Enables required version 1 routing metadata. Request and area restrictions narrow this list before selection. |
 | `writers` | `{}` | Optional commands keyed by `calendar`, `task`, `goal`, `note`, or `reminder`. Each is a nonempty argument array. |
 | `taskMaps` | `[]` | Allowed task destinations, each with `ref` and `label`. A ref has the form `owner/repo#123`. |
 
-Notes and reminders stay in the Mission Control database when no writer is configured for their kind. A configured writer replaces that local storage. Calendar entries, tasks, and goal drafts need writers. Parser failure falls back to the built-in rules. See [Parsers and writers](commands.md#parsers-and-writers).
+Notes and reminders stay in the Mission Control database when no writer is configured for their kind. A configured writer replaces that local storage. Calendar entries, tasks, and goal drafts need writers. Legacy parser failure falls back to the built-in rules. Routed parser failure returns an unavailable explanation. See [Parsers and writers](commands.md#parsers-and-writers).
 
 ## Interruptions
 

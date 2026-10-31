@@ -13,6 +13,7 @@ import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } fr
 import type { DeskCorrection, DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
 import type { RulingLedger } from "./ruling";
+import type { ParserPermissions } from "../../../common/types/desk-parser";
 import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriters, type RecentCalendarWrites } from "./create";
 import { listOpenNotes, type DeskNote } from "./notes";
@@ -37,6 +38,7 @@ export interface DeskRuntime {
 
 export interface DeskAskOptions {
   parser: string[];
+  routing?: ParserPermissions;
   timeoutSeconds: number;
   writers: DeskWriters;
   taskMaps: AskMap[];
