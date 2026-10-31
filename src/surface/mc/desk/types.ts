@@ -1,3 +1,4 @@
+import type { MyDayView } from "./my-day";
 import type { DeskCalendar } from "./calendars";
 import type { EndpointConfig } from "./classify";
 import type { RulingExplanation } from "./ruling";
@@ -67,6 +68,9 @@ export interface DeskCorrection {
 }
 
 export interface DeskItem {
+  dueAt?: string;
+  sourceRevision?: string;
+  todoFingerprint?: string;
   key: string;
   kind: DeskItemKind;
   source: string;
@@ -128,6 +132,7 @@ export interface DeskGoal {
 
 export interface DeskView {
   routines?: RoutineView;
+  myDay?: MyDayView;
   calendars?: DeskCalendar[];
   generatedAt: number;
   displayName: string | null;

@@ -1,5 +1,6 @@
 import { withoutClosedTasks, type WaitingTask, type WaitingTasks } from "./sources/waiting";
 import { mailYesFilter, readMailDecision } from "./mail-yes-filter";
+import { movedKeys, readMyDay, sourceIdentity } from "./my-day";
 import { calendarKey, calendarName, discoverCalendars } from "./calendars";
 import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
@@ -57,6 +58,7 @@ export interface DeskOptions {
   enabled: boolean;
   displayName: string;
   topN: number;
+  myDay?: { cap: number };
   rangerUrl: string;
   rangerCli?: RangerCli;
   somaBin?: string;
@@ -183,16 +185,20 @@ export async function composeDesk(
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
   ], rules, readDeliveries(db), now), activeCorrections).map(item => item.kind === "mail" ? { ...item, mailDecision: readMailDecision(db, item.source, item.key.slice("mail:".length)) } : item);
 
+  const myDay = readMyDay(db, desk, now);
+  const moved = movedKeys(db);
+  const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => ({ ...i, todoFingerprint: sourceIdentity(i) }));
   return {
     ...(routines ? { routines } : {}),
+    myDay,
     calendars: [...calendars.values()],
     generatedAt: now,
     displayName: desk.displayName || null,
-    topN: desk.topN,
+    topN: myDay.topN,
     areas: desk.areas.map(({ id, label, color }) => ({ id, label, color })),
-    items,
+    items: dayItems,
     today: [
-      ...buildToday(ranger, items, desk.areas, now),
+      ...buildToday(ranger, dayItems, desk.areas, now),
       ...todayCalendar,
       ...reminderEvents(reminders, sod, sod + DAY_MS),
     ].sort((a, b) => a.at - b.at),

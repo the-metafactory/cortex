@@ -142,7 +142,7 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false, ruling
     const ageDays = Math.max(0, (now - endedAt) / DAY_MS);
     const failed = n.status === "failed";
     const links = issueLinks(n.url);
-    const base = { key: rangerItemKey(ref), source: "ranger", area: areaFor(areas, n.repo, null), urgency: "waiting" as const };
+    const base = { ...(n.endedAt ? { sourceRevision: n.endedAt } : {}), ...(n.dueAt && Number.isFinite(Date.parse(n.dueAt)) ? { dueAt: n.dueAt } : {}), key: rangerItemKey(ref), source: "ranger", area: areaFor(areas, n.repo, null), urgency: "waiting" as const };
     const detail = {
       summary: n.reason?.detail ? `${n.reason.class ?? "Stopped"}: ${n.reason.detail}` : `The agent stopped (${n.status}).`,
       history: [`Stopped ${ago(now, endedAt)}`],
@@ -406,6 +406,8 @@ export function mailItems(input: MailInput): DeskItem[] {
     if (triage && (!triage.commitment || triage.commitment === "unknown")) history.push("Whether this mail asks for a new commitment has not been established.");
     return {
       key: `mail:${m.id}`,
+      sourceRevision: m.receivedAt,
+      ...(m.dueAt ? { dueAt: m.dueAt } : {}),
       kind: "mail",
       source: m.sourceId,
       area: m.area,

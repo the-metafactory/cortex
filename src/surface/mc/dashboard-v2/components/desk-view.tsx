@@ -1,4 +1,5 @@
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
+import { MyDayLane, submitMyDay } from "./desk-my-day";
 import { StudioSessionPanel, useStudioSession } from "./desk-studio-session";
 import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -243,6 +244,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     const goal = item.goal ?? "";
     if (a.id === "detail") setDetail(item);
     else if (a.id === "snooze") setSnoozed((s) => new Set(s).add(item.key));
+    else if (a.id === "todo" && view.myDay) void send(item, a, { request: async () => { try { await submitMyDay(view.myDay?.date ?? "", { op: "todo", key: item.key, fingerprint: item.todoFingerprint ?? "" }); return { ok: true, text: "Moved to your outline Inbox." }; } catch (err) { return { ok: false, text: err instanceof Error ? err.message : "Could not move to Inbox." }; } } });
     else if (a.id === "vip.add" && a.target) void addVip(a.target, item.title.split(" wrote:")[0] ?? null);
     else if (a.id === "reminder.done" && a.target) {
       setDetail((d) => (d?.key === item.key ? null : d));
@@ -361,13 +363,14 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
   const shown = (item: DeskItem): DeskItem => (confirming?.key === item.key ? withConfirm(item, confirming.action) : item);
   const busyWith = (item: DeskItem): string | null => sending.get(item.key) ?? (item.checking ? "goal.check" : null);
-  const detailItem = detail ? view.items.find((i) => i.key === detail.key) ?? detail : null;
+  const originalDetail = detail ? view.items.find((i) => i.key === detail.key) ?? detail : null;
+  const detailItem = originalDetail ? { ...originalDetail, more: [...(originalDetail.more ?? []), { id: "todo", label: "→ todo", role: "secondary" as const, wired: true }] } : null;
   const detailRuling = detailItem ? rulings.get(detailItem.key) : undefined;
 
   const itemRow = (item: DeskItem, idx: number) => (
     <DeskItemRow
       key={item.key}
-      item={shown(item)}
+      item={shown({ ...item, more: [...(item.more ?? []), { id: "todo", label: "→ todo", role: "secondary", wired: true }] })}
       rank={idx + 1}
       area={item.area ? areaById.get(item.area) : undefined}
       event={item.eventKey ? view.today.find((e) => e.key === item.eventKey) : undefined}
@@ -511,6 +514,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
           <div className="desk-nowline"><span className="rule" /><span className="pill">Now {clock(view.generatedAt)}</span></div>
 
+          <div className="desk-day-lanes">
           {group ? (
             <section className="desk-now" aria-label={group.label}>
               <div className="desk-row desk-nowhead">
@@ -540,6 +544,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             {selection.needsYou.map(itemRow)}
           </section>
           )}
+
+          {view.myDay && <MyDayLane day={view.myDay} onChanged={onChanged} />}
+          </div>
 
           {later.length > 0 && (
             <ol className="desk-tl desk-later">
@@ -796,7 +803,7 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
               {clock(event.at)} today ↑
             </button>
           )}
-          <ItemMenu current={item.correction} onCorrect={onCorrect} />
+          <ItemMenu current={item.correction} onCorrect={onCorrect} onTodo={() => onAction({ id: "todo", label: "→ todo", role: "secondary", wired: true })} />
         </div>
       </div>
     </article>
@@ -817,7 +824,7 @@ export function dismissesMenu<T>(e: { type: string; key?: string; target: T }, r
   return e.type === "mousedown" && root !== null && !root.contains(e.target);
 }
 
-export function ItemMenu({ current, onCorrect, open: startOpen = false }: { current?: DeskCorrectionMode; onCorrect: (mode: DeskCorrectionMode | null) => void; open?: boolean }) {
+export function ItemMenu({ current, onCorrect, onTodo, open: startOpen = false }: { current?: DeskCorrectionMode; onCorrect: (mode: DeskCorrectionMode | null) => void; onTodo?: () => void; open?: boolean }) {
   const [open, setOpen] = useState(startOpen);
   const root = useRef<HTMLSpanElement>(null);
   useEffect(() => {
@@ -843,6 +850,7 @@ export function ItemMenu({ current, onCorrect, open: startOpen = false }: { curr
       <button type="button" className="desk-btn desk-rank-btn" aria-label={RANKING_LABEL} title={RANKING_LABEL} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>⋯</button>
       {open && (
         <span className="desk-menu" role="menu">
+          {onTodo && <button type="button" role="menuitem" onClick={() => { setOpen(false); onTodo(); }}>→ todo</button>}
           {MENU.filter((m) => m.mode !== current).map((m) => (
             <button key={m.mode} type="button" role="menuitem" onClick={() => pick(m.mode)}>{m.label}</button>
           ))}

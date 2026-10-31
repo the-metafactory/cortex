@@ -35,7 +35,7 @@ export function partOfDay(now: number): string {
 
 const count = (n: number, one: string, many: string): string => `${n === 0 ? "No" : n} ${n === 1 ? one : many}`;
 
-export function briefing(view: DeskView, selection: DeskSelection, areaLabel: string | null): { greeting: string; lines: string[] } {
+function reactiveBriefing(view: DeskView, selection: DeskSelection, areaLabel: string | null): { greeting: string; lines: string[] } {
   const greeting = `${partOfDay(view.generatedAt)}${view.displayName ? `, ${view.displayName}` : ""}.`;
   const lines: string[] = [];
   const scope = areaLabel ? ` in ${areaLabel}` : "";
@@ -48,6 +48,21 @@ export function briefing(view: DeskView, selection: DeskSelection, areaLabel: st
   if (!areaLabel) lines.push(`${view.agents.line.charAt(0).toUpperCase()}${view.agents.line.slice(1)}.`);
   if (selection.rest.length > 0) lines.push(`${selection.rest.length} more can wait.`);
   return { greeting, lines };
+}
+
+function myDayBriefing(view: DeskView): string[] {
+  const day = view.myDay;
+  if (!day) return [];
+  if (day.phase === "closed") return [day.wins.length ? `Wins today: ${day.wins.map(w => w.title).join("; ")}. Your day is done.` : "Your day is done. You made room for what matters."];
+  const titles = day.items.map(i => i.task.title).join("; ");
+  if (day.phase === "proposed") return [titles ? `Your proposed My day: ${titles}. Choose Start the day to confirm, Swap for an alternate, or Just one thing.` : "Your proposed My day is clear. Add a task to your outline, or choose Start the day to keep that space."];
+  return [titles ? `Your My day: ${titles}.` : "Your My day list is complete."];
+}
+
+export function briefing(view: DeskView, selection: DeskSelection, areaLabel: string | null): { greeting: string; lines: string[] } {
+  const brief = reactiveBriefing(view, selection, areaLabel);
+  const intention = myDayBriefing(view);
+  return { greeting: brief.greeting, lines: view.myDay?.phase === "closed" ? [...intention, ...brief.lines] : [...brief.lines, ...intention] };
 }
 
 const lowerFirst = (s: string): string => (/^(A|An|The) /.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s);
@@ -75,7 +90,7 @@ const sentence = (s: string): string => {
 };
 
 export function spokenBriefing(view: DeskView, selection: DeskSelection, areaLabel: string | null): string {
-  const brief = briefing(view, selection, areaLabel);
+  const brief = reactiveBriefing(view, selection, areaLabel);
   const rest = brief.lines.slice(1);
   const top = selection.needsYou.slice(0, SPOKEN_ITEMS);
   const parts = [brief.greeting];
@@ -86,6 +101,9 @@ export function spokenBriefing(view: DeskView, selection: DeskSelection, areaLab
     top.forEach((item, i) => parts.push(`${ORDINAL[i] ?? "Next"}: ${sentence(lowerFirst(item.title))} ${sentence(item.why)}`.trim()));
     parts.push(...rest.map(sentence));
   }
+  const intention = myDayBriefing(view).map(sentence);
+  if (view.myDay?.phase === "closed") parts.splice(1, 0, ...intention);
+  else parts.push(...intention);
   return parts.filter((p) => p !== "").join(" ");
 }
 

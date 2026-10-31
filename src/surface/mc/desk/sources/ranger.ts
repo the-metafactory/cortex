@@ -8,6 +8,7 @@ export interface RangerNeedsYou {
   url?: string;
   status: string;
   endedAt?: string;
+  dueAt?: string;
   reason?: { class?: string; detail?: string };
   actions?: { resume?: boolean };
 }

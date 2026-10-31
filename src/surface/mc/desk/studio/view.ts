@@ -1,3 +1,4 @@
+import { DEFAULT_YES_FILTER } from "../yes-filter";
 import type { StudioThinking } from "./thinking";
 import type { AreaPolicy, DeskArea, StudioOptions } from "../types";
 import { parseCaptureFile, parseProposalFile, parseThreadFile, type Parsed, type StudioCapture, type StudioProposal, type StudioTarget, type StudioThread } from "./format";
@@ -30,7 +31,7 @@ export interface StudioProposalView extends StudioProposal {
   policy: AreaPolicy;
 }
 
-export const DEFAULT_YES_FILTER = ["Is this mine to do?", "Does it fit my capacity?", "What will I stop doing for it?"] as const;
+export { DEFAULT_YES_FILTER } from "../yes-filter";
 
 export interface YesFilter {
   questions: string[];
