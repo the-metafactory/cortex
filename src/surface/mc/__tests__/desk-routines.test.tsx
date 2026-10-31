@@ -19,6 +19,7 @@ import { DEFAULT_CONFIG } from "../config";
 import { requireRoutineCapabilities, localRoutineCapabilities } from "../desk/routine-providers";
 import { validateSteps } from "pulse";
 import type { AgentPresenceSnapshotRecord } from "../api/agents";
+import { routineStepLabels } from "../desk/routine-steps";
 
 const OPTIONS: RoutineOptions = { composer: ["composer"], reflex: ["reflex"], target: "@example/pulse-flow", timeZone: "Europe/Zurich", timeoutSeconds: 10, readTimeoutSeconds: 1 };
 const YAML = "name: F_READ\nactions:\n  - A_EXTRACT_URLS # sovereignty: D, residency: CH\n";
@@ -250,6 +251,11 @@ describe("Desk routines", () => {
     expect(refused.unwritable).toBe(true);
     const card = await buildRoutineCard(db, "every minute, derive a result", OPTIONS, NOW, s.run, () => new Set(["compose.judgment"]));
     expect(card.problem).toBeUndefined();
+    expect(card.fields.steps).toEqual(["Ask an agent to derive"]);
+    const html = renderToStaticMarkup(<ProposalCard proposal={card} said="request" maps={[]} now={NOW} busy={false} onConfirm={() => undefined} onCancel={() => undefined} onGoto={() => undefined} onFieldsChange={() => undefined} />);
+    expect(html).toContain("Ask an agent to derive");
+    expect(html).not.toContain("sovereignty");
+    expect(html).not.toContain("compose.judgment");
     const request = { action: "install", target: String(card.fields.proposalId), requestId: "worker-disappeared" } as const;
     const result = await actOnRoutine(db, OPTIONS, request, NOW, s.run);
     expect(result.ok).toBe(false);
@@ -266,5 +272,6 @@ describe("Desk routines", () => {
     const nested = validateSteps([{ retry: { attempts: 1, actions: [{ agent: { name: "derive", capability: "compose.judgment", prompt: "read" } }] } }]);
     expect(() => requireRoutineCapabilities(nested)).toThrow("compose.judgment");
     expect(requireRoutineCapabilities(nested, () => new Set(["compose.judgment"]))).toEqual(["compose.judgment"]);
+    expect(routineStepLabels(nested)).toEqual(["Try up to 1 times: Ask an agent to derive"]);
   });
 });

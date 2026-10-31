@@ -10,6 +10,7 @@ import type { DeskProposal } from "./ask";
 import { spawnWithStdin } from "./create";
 import { routineSchedule } from "./routine-schedule";
 import { requireRoutineCapabilities, type RoutineCapabilities } from "./routine-providers";
+import { routineStepLabels } from "./routine-steps";
 import { PendingRoutineSchema, RoutineHistorySchema, RoutineSchema, RoutineRefusal, RoutineWriteFailure, reflexCommand, runRoutineCommand, type RoutineOptions, type RoutineRunner, type RoutineView } from "./routine-command";
 import { RoutineResultSchema, finishRoutineOperation, pendingRoutineOperations, readRoutineOperation, readRoutineProposal, routineConfigHash, saveRoutineProposal, type RoutineAction, type RoutineProposal, type RoutineResult } from "./routine-store";
 
@@ -40,7 +41,7 @@ export async function buildRoutineCard(db: Database, text: string, options: Rout
       id, routineId: `desk-${id}`, title: schedule.request, request: schedule.request,
       schedule: schedule.expression, words: schedule.words, timezone: options.timeZone,
       yaml: flow.input ? reply.yaml : `${reply.yaml}\n${stringifyYaml({ input: { request: schedule.request, scenario: schedule.request, text: schedule.request } })}`,
-      steps: flow.actions.map((a) => typeof a === "string" ? a.replace(/^A_/, "").replaceAll("_", " ").toLowerCase() : stringifyYaml(a).trim()),
+      steps: routineStepLabels(validateSteps(flow.actions)),
       configHash: routineConfigHash(options), createdAt: now,
     };
     saveRoutineProposal(db, proposal);

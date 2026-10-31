@@ -63,7 +63,7 @@ function RoutineProposal({ proposal, busy, onConfirm, onCancel }: ProposalCardPr
       <div className="desk-prop-head"><span className="desk-prop-kind">Routine</span><span className="desk-prop-note">Nothing happens until you confirm.</span></div>
       <h3>{String(proposal.fields.title ?? "Routine")}</h3>
       <p>{String(proposal.fields.schedule ?? "")}</p>
-      {steps.length > 0 && <ol>{steps.map((step, i) => <li key={i}><pre style={{ whiteSpace: "pre-wrap" }}>{step}</pre></li>)}</ol>}
+      {steps.length > 0 && <ol>{steps.map((step, i) => <li key={i}>{step}</li>)}</ol>}
       {proposal.problem ? <p role="alert">{proposal.problem}</p> : <p className="desk-prop-note">Each fire will ask you first.</p>}
       <div className="desk-acts">
         {!proposal.problem && !proposal.unwritable && <button type="button" className="desk-btn pri" disabled={busy} onClick={() => onConfirm({ proposalId: proposal.fields.proposalId })}>{busy ? "Installing…" : "Confirm"}</button>}
