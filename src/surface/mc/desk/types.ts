@@ -1,10 +1,3 @@
-/**
- * The Desk's view model: what one principal sees on Mission Control's landing page.
- *
- * Every item reaching the principal is a plain sentence, a reason why it matters now,
- * and at most three actions. Raw identifiers live only in `detail.refs`.
- */
-
 export type DeskUrgency = "now" | "today" | "this-week" | "waiting";
 
 export type DeskItemKind =

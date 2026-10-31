@@ -1,11 +1,3 @@
-/**
- * The Desk (cortex#2770): Mission Control's landing page for the stack's principal.
- *
- * Layout from the chosen prototype "The Day, clean": a briefing, today's timeline with a Now
- * line, the ranked items that need the principal pinned at Now, and a margin with agents,
- * the folded rest, goals and systems. Raw identifiers appear only in the detail panel.
- */
-
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction } from "../lib/desk-action";
@@ -458,7 +450,6 @@ function DetailPanel({ item, area, onClose, onAction, sending }: { item: DeskIte
   );
 }
 
-/** The folded rest by kind; each group opens in the main list, and a second click closes it. */
 export function RestGroups({ groups, active, onOpen }: { groups: DeskFoldedGroup[]; active: DeskItemKind | null; onOpen: (kind: DeskItemKind | null) => void }) {
   return (
     <ul className="desk-sub">
@@ -550,7 +541,6 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
   );
 }
 
-/** One item action. While any action on the item is in flight (`sending` names it), every button is disabled and that one says "Sending…". */
 export function ActionButton({ action, onRun, sending }: { action: DeskAction; onRun: (a: DeskAction) => void; sending: string | null }) {
   const style = action.role === "primary" ? " pri" : action.id === "snooze" ? " ghost" : "";
   const busy = sending === action.id;
@@ -589,7 +579,6 @@ function nowSubline(view: DeskViewModel, count: number, rest: number, next: Desk
   return [lead, tail].filter(Boolean).join(" ");
 }
 
-/** Web links open a tab and message:// hands off to Apple Mail; any other scheme is refused. */
 function openLink(url: string): void {
   if (/^https?:/i.test(url)) window.open(url, "_blank", "noopener");
   else if (/^message:/i.test(url)) window.location.assign(url);

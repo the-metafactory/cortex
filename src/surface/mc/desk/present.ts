@@ -2,7 +2,6 @@ import { fold, FOLDED_LABELS } from "./rank";
 export { clock } from "./time";
 import type { DeskFoldedGroup, DeskItem, DeskItemKind, DeskView } from "./types";
 
-/** The area filter value that shows every item. */
 export const ALL_AREAS = "all";
 
 export interface DeskSelection {
@@ -18,12 +17,10 @@ export function selectItems(view: DeskView, area: string, snoozed: ReadonlySet<s
   return { needsYou, rest, groups: fold(rest) };
 }
 
-/** One folded group opened in the main list: its label and every item of its kind that did not make the top N. */
 export function openGroup(selection: DeskSelection, kind: DeskItemKind): { label: string; items: DeskItem[] } {
   return { label: FOLDED_LABELS[kind], items: selection.rest.filter((i) => i.kind === kind) };
 }
 
-/** True when at least one source answered, so an empty list means "nothing" and not "cannot see". */
 export function canSee(view: DeskView): boolean {
   return view.sources.some((s) => s.ok);
 }
@@ -38,7 +35,6 @@ export function partOfDay(now: number): string {
 
 const count = (n: number, one: string, many: string): string => `${n === 0 ? "No" : n} ${n === 1 ? one : many}`;
 
-/** The written briefing: greeting, what needs you, what agents do, what is left. Follows the area filter. */
 export function briefing(view: DeskView, selection: DeskSelection, areaLabel: string | null): { greeting: string; lines: string[] } {
   const greeting = `${partOfDay(view.generatedAt)}${view.displayName ? `, ${view.displayName}` : ""}.`;
   const lines: string[] = [];

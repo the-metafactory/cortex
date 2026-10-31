@@ -13,7 +13,6 @@ import type { AskMap } from "./ask";
 import { writableKinds, type DeskWriters, type RecentCalendarWrites } from "./create";
 import { listOpenNotes, type DeskNote } from "./notes";
 
-/** What Mission Control holds for the Desk across requests. */
 export interface DeskRuntime {
   options?: DeskOptions;
   ledger: HandledLedger;
@@ -39,7 +38,6 @@ export interface DeskOptions {
   ask?: DeskAskOptions;
 }
 
-/** The Vigil side of Mission Control's options that the Desk reads. */
 export interface DeskVigilSource {
   enabled: boolean;
   resolveGoalWording?: GoalWordingResolver;
@@ -56,7 +54,6 @@ export interface ComposeDeps {
 
 const GOAL_STATES = new Set<DeskGoal["state"]>(["on-track", "at-risk", "off-track", "stale"]);
 
-/** Composes the Desk view from Cortex-native sources: Vigil (MC db) and, when configured, Ranger. */
 export async function composeDesk(
   db: Database,
   desk: DeskOptions,

@@ -37,7 +37,6 @@ export const FOLDED_LABELS: Record<DeskItemKind, string> = {
   reminder: "Reminders",
 };
 
-/** A goal's own check (sensor, pursuit, review) that went from ok to regressed. */
 export const isRegressedGoalCheck = (s: VigilSubjectView): boolean => s.vocab === "check" && s.goalId !== null && s.value === "regressed";
 
 export function areaFor(areas: AreaRule[], repo: string | null, goalId: string | null): string | null {
@@ -48,7 +47,6 @@ export function areaFor(areas: AreaRule[], repo: string | null, goalId: string |
   return null;
 }
 
-/** "Make my know-how visible: publish…" → "Make my know-how visible". */
 export function goalShort(wording: string | null): string {
   if (!wording) return "A goal without a description";
   const head = (wording.split(/[:.;]/)[0] ?? wording).trim();
@@ -68,13 +66,11 @@ export function ago(now: number, at: number): string {
   return `${Math.round(diff / DAY_MS)} days ago`;
 }
 
-/** "acme/widgets" → "widgets". */
 export const repoName = (repo: string): string => repo.split("/").pop() ?? repo;
 
 type Add = (item: DeskItem) => void;
 type Titles = Map<string, { title: string; url?: string }>;
 
-/** Parses an ISO time, or returns the fallback when it is missing or garbled. */
 export const parsedOr = (iso: string | undefined, fallback: number): number => {
   const at = iso ? Date.parse(iso) : NaN;
   return Number.isFinite(at) ? at : fallback;
@@ -82,11 +78,6 @@ export const parsedOr = (iso: string | undefined, fallback: number): number => {
 
 const issueLinks = (url: string | undefined) => (url ? [{ label: "Issue", url }] : []);
 
-/**
- * Rule-based ranking: turns Ranger state and Vigil subjects into Desk items, best first.
- * Each rule names the item in plain words, gives one reason why it matters now, and scores it.
- * Ranger items come first, so a Vigil escalation for a node Ranger already lists is not repeated.
- */
 export function rankItems(input: RankInput): DeskItem[] {
   const items = new Map<string, DeskItem>();
   const add: Add = (item) => {
@@ -168,7 +159,6 @@ const MAP_NODE_RULES: { rule: MapNodeRule; nodes: (m: RangerMap) => RangerMapNod
   },
 ];
 
-/** Why Ranger will not take an approval for a decision, or null when it will. */
 export function approvalBlocked(map: RangerMap, node: RangerMapNode): string | null {
   if (approvable(map, node)) return null;
   if (map.walk !== "full" || map.servedOnly === true) return "No agent builds this map; Ranger only shows it.";
@@ -260,7 +250,6 @@ const STOPWORDS = new Set(["meeting", "update", "about", "with", "from", "your",
 const words = (s: string): Set<string> =>
   new Set(s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 4 && !STOPWORDS.has(w)));
 
-/** The soonest meeting in the next three days whose title shares a word with the subject. */
 export function meetingFor(subject: string, events: SourceEvent[], now: number): SourceEvent | undefined {
   const subjectWords = words(subject);
   return events
@@ -276,10 +265,6 @@ const dayName = (at: number, now: number): string => {
   return `${new Date(at).toLocaleDateString("en-GB", { weekday: "long" })} at ${clock(at)}`;
 };
 
-/**
- * Unread mail as Desk items. Mail from a VIP ranks high; mail that seems to be about a meeting in the
- * next three days ranks above the rest; other unread mail folds into "Mail you may want to read".
- */
 export function mailItems({ now, mail, events, vips }: MailInput): DeskItem[] {
   return mail.filter((m) => m.unread).map((m): DeskItem => {
     const sender = m.from.name ?? m.from.address;
