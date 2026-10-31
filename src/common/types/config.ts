@@ -370,6 +370,7 @@ const DeskInterruptionsSchema = z.object({
   maxAgeMinutes: z.number().int().min(1).max(1440).default(60),
   everySeconds: z.number().int().min(15).max(3600).default(60),
   chime: z.boolean().default(true),
+  notifications: z.boolean().default(true),
 });
 
 const DeskSchema = z.object({

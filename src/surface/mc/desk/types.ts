@@ -108,6 +108,7 @@ export interface DeskView {
   systems: string[];
   sources: { id: string; ok: boolean; error?: string }[];
   chime: boolean;
+  notifications: boolean;
   autonomy: DeskAutonomy;
   corrections: DeskCorrection[];
 }

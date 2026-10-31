@@ -44,6 +44,7 @@ const view: DeskViewModel = {
   ask: { kinds: ["reminder", "note"], maps: [] },
   sources: [{ id: "vigil", ok: true }],
   chime: false,
+  notifications: false,
   autonomy: { types: [], done: [] },
   corrections: [],
 };
