@@ -72,7 +72,7 @@ async function persistProposals(input: { dir: string; pending: ThemeProposal[]; 
     await input.git(["commit", "-m", "Studio: record recurring-theme provenance and proposals", "--", ...paths]);
   } catch (error) {
     const head = await input.git(["rev-parse", "HEAD"]);
-    if (head !== input.head || [...written].some(([path, text]) => !existsSync(join(input.dir, path)) || readFileSync(join(input.dir, path), "utf8") !== text)) throw new Error("Studio proposal commit failed with a concurrent edit; files were preserved for inspection", { cause: error });
+    if (head !== input.head || [...written].some(([path, text]) => !existsSync(join(input.dir, path)) || !lstatSync(join(input.dir, path)).isFile() || realpathSync(join(input.dir, path)) !== join(input.dir, path) || readFileSync(join(input.dir, path), "utf8") !== text)) throw new Error("Studio proposal commit failed with a concurrent edit; files were preserved for inspection", { cause: error });
     for (const path of written.keys()) {
       if (path === THEME_LEDGER_PATH && input.ledger.text !== null) writeFileSync(join(input.dir, path), input.ledger.text);
       else unlinkSync(join(input.dir, path));

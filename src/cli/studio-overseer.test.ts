@@ -163,3 +163,14 @@ test("existing proposal capture provenance is committed before its file can disa
  expect(r.git("show","HEAD:.studio-overseer-themes.json")).toContain(id);
  expect(r.git("status","--porcelain")).toBe("");
 });
+
+
+test("rollback preserves a provenance file replaced by a manual symlink", async () => {
+ const r=await rig();await mkdir(join(r.dir,"inbox"));
+ for(const id of ["one","two","three"])await writeFile(join(r.dir,`inbox/${id}.md`),`---\nat: 2026-10-31T12:00:00Z\nvia: fixture\n---\nOrchard planting ${id}\n`);
+ r.git("add",".");r.git("commit","-qm","Captures");
+ await writeFile(join(r.dir,".git/hooks/pre-commit"),"#!/bin/sh\ncp .studio-overseer-themes.json .git/manual-ledger.json\nrm .studio-overseer-themes.json\nln -s .git/manual-ledger.json .studio-overseer-themes.json\nexit 1\n",{mode:0o755});
+ await expect(runOverseer(r.config)).rejects.toThrow("concurrent edit");
+ expect(await readFile(join(r.dir,".git/manual-ledger.json"),"utf8")).toContain("one");
+ expect(r.git("status","--porcelain")).not.toBe("");
+});
