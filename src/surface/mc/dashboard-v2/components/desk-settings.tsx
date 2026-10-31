@@ -1,36 +1,38 @@
 import { useEffect, useState } from "react";
-import { changeVips, type DeskVipRow, type VipChange } from "../lib/desk-settings";
+import { changeSenders, type DeskVipRow, type SenderListId, type VipChange } from "../lib/desk-settings";
 import { browserNotifyEnv, NOTIFY_LINE, notifyState, requestNotifications, type NotifyState } from "../lib/desk-notify";
 import type { DeskMailClassifier, DeskView } from "../../desk/types";
 import "./desk-view.css";
 
+interface ListState {
+  rows: DeskVipRow[] | null;
+  note: string | null;
+}
+
+const EMPTY: ListState = { rows: null, note: null };
+
 export function DeskSettings({ view, onBack }: { view: DeskView; onBack: () => void }) {
-  const [vips, setVips] = useState<DeskVipRow[] | null>(null);
+  const [lists, setLists] = useState<Record<SenderListId, ListState>>({ vips: EMPTY, unimportant: EMPTY });
   const [notify, setNotify] = useState<NotifyState>(() => notifyState(view.notifications, browserNotifyEnv()));
-  const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const apply = async (change: VipChange): Promise<boolean> => {
+  const apply = async (list: SenderListId, change: VipChange): Promise<boolean> => {
     setBusy(true);
-    const r = await changeVips(change);
+    const r = await changeSenders(list, change);
     setBusy(false);
-    if (!r.ok) {
-      setNote(r.text);
-      return false;
-    }
-    setVips(r.vips);
-    setNote(null);
-    return true;
+    setLists((all) => ({ ...all, [list]: r.ok ? { rows: r.vips, note: null } : { ...all[list], note: r.text } }));
+    return r.ok;
   };
 
   useEffect(() => {
-    void apply({ op: "list" });
+    void apply("vips", { op: "list" });
+    void apply("unimportant", { op: "list" });
   }, []);
 
   return (
     <SettingsBody
-      vips={vips}
-      note={note}
+      vips={lists.vips.rows}
+      note={lists.vips.note}
       busy={busy}
       onBack={onBack}
       notify={notify}
@@ -39,11 +41,24 @@ export function DeskSettings({ view, onBack }: { view: DeskView; onBack: () => v
           if (state) setNotify(state);
         });
       }}
-      onAdd={(address) => apply({ op: "add", address })}
-      onRemove={(address) => void apply({ op: "remove", address })}
+      onAdd={(address) => apply("vips", { op: "add", address })}
+      onRemove={(address) => void apply("vips", { op: "remove", address })}
+      unimportant={{
+        rows: lists.unimportant.rows,
+        note: lists.unimportant.note,
+        onAdd: (address) => apply("unimportant", { op: "add", address }),
+        onRemove: (address) => void apply("unimportant", { op: "remove", address }),
+      }}
       classifier={view.mailClassifier ?? null}
     />
   );
+}
+
+export interface SenderListProps {
+  rows: DeskVipRow[] | null;
+  note: string | null;
+  onAdd: (address: string) => Promise<boolean>;
+  onRemove: (address: string) => void;
 }
 
 export interface SettingsBodyProps {
@@ -55,6 +70,7 @@ export interface SettingsBodyProps {
   onEnableNotify: () => void;
   onAdd: (address: string) => Promise<boolean>;
   onRemove: (address: string) => void;
+  unimportant?: SenderListProps;
   classifier?: DeskMailClassifier | null;
 }
 
@@ -64,8 +80,74 @@ export function classifierLines(c: DeskMailClassifier | null): string[] {
   return [`A model sorts your unread mail: ${c.model} at ${c.host}.`, key, "Change it in the stack config."];
 }
 
-export function SettingsBody({ vips, note, busy, onBack, notify, onEnableNotify, onAdd, onRemove, classifier = null }: SettingsBodyProps) {
+interface SenderCardText {
+  title: string;
+  sub: string;
+  empty: string;
+  addLabel: string;
+}
+
+const VIP_TEXT: SenderCardText = {
+  title: "VIPs",
+  sub: "Mail from these senders always shows on your Desk and ranks high. Add a full address or a whole domain such as @example.ch.",
+  empty: "No VIPs yet. Add one here, or use \"Always show mail from …\" on a mail item.",
+  addLabel: "Add a VIP",
+};
+
+const UNIMPORTANT_TEXT: SenderCardText = {
+  title: "Unimportant senders",
+  sub: "Mail from these senders counts as bulk and is sorted without asking the model. A VIP always wins. Add a full address or a whole domain such as @example.ch.",
+  empty: "No unimportant senders yet. Add one here, or use \"Unimportant\" on a mail item.",
+  addLabel: "Add an unimportant sender",
+};
+
+function SenderCard({ text, list, busy }: { text: SenderCardText; list: SenderListProps; busy: boolean }) {
   const [draft, setDraft] = useState("");
+  return (
+    <section className="desk-set-card" aria-label={text.title}>
+      <h2>{text.title}</h2>
+      <p className="desk-set-sub">{text.sub}</p>
+      {list.rows === null ? (
+        <p className="desk-set-empty">{list.note ?? "Loading…"}</p>
+      ) : (
+        <>
+          {list.rows.length === 0 ? (
+            <p className="desk-set-empty">{text.empty}</p>
+          ) : (
+            <ul className="desk-set-list">
+              {list.rows.map((v) => (
+                <li key={v.address}>
+                  <span>
+                    {v.label ?? v.address}
+                    {v.label && <small>{v.address}</small>}
+                  </span>
+                  <button type="button" className="desk-btn ghost" aria-label={`Remove ${v.address}`} disabled={busy} onClick={() => list.onRemove(v.address)}>Remove</button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <form
+            className="desk-set-add"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const address = draft.trim();
+              if (!address) return;
+              void list.onAdd(address).then((ok) => {
+                if (ok) setDraft("");
+              });
+            }}
+          >
+            <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="ada@example.org or @example.org" aria-label={text.addLabel} disabled={busy} />
+            <button type="submit" className="desk-btn pri" disabled={busy || !draft.trim()}>Add</button>
+          </form>
+          {list.note && <p className="desk-set-err" role="alert">{list.note}</p>}
+        </>
+      )}
+    </section>
+  );
+}
+
+export function SettingsBody({ vips, note, busy, onBack, notify, onEnableNotify, onAdd, onRemove, unimportant, classifier = null }: SettingsBodyProps) {
   return (
     <div className="desk desk-settings">
       <div className="desk-top">
@@ -82,46 +164,9 @@ export function SettingsBody({ vips, note, busy, onBack, notify, onEnableNotify,
       <main className="desk-set-main">
         <h1 className="desk-set-h">Settings</h1>
 
-        <section className="desk-set-card" aria-label="VIPs">
-          <h2>VIPs</h2>
-          <p className="desk-set-sub">Mail from these senders always shows on your Desk and ranks high. Add a full address or a whole domain such as @example.ch.</p>
-          {vips === null ? (
-            <p className="desk-set-empty">{note ?? "Loading…"}</p>
-          ) : (
-            <>
-              {vips.length === 0 ? (
-                <p className="desk-set-empty">No VIPs yet. Add one here, or use "Always show mail from …" on a mail item.</p>
-              ) : (
-                <ul className="desk-set-list">
-                  {vips.map((v) => (
-                    <li key={v.address}>
-                      <span>
-                        {v.label ?? v.address}
-                        {v.label && <small>{v.address}</small>}
-                      </span>
-                      <button type="button" className="desk-btn ghost" aria-label={`Remove ${v.address}`} disabled={busy} onClick={() => onRemove(v.address)}>Remove</button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <form
-                className="desk-set-add"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const address = draft.trim();
-                  if (!address) return;
-                  void onAdd(address).then((ok) => {
-                    if (ok) setDraft("");
-                  });
-                }}
-              >
-                <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="ada@example.org or @example.org" aria-label="Add a VIP" disabled={busy} />
-                <button type="submit" className="desk-btn pri" disabled={busy || !draft.trim()}>Add</button>
-              </form>
-              {note && <p className="desk-set-err" role="alert">{note}</p>}
-            </>
-          )}
-        </section>
+        <SenderCard text={VIP_TEXT} list={{ rows: vips, note, onAdd, onRemove }} busy={busy} />
+
+        {unimportant && <SenderCard text={UNIMPORTANT_TEXT} list={unimportant} busy={busy} />}
 
         <section className="desk-set-card" aria-label="Notifications">
           <h2>Notifications</h2>

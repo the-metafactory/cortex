@@ -134,6 +134,7 @@ describe("the classification pass", () => {
       mail: { id: "n1", from: NEWSLETTER.from, subject: NEWSLETTER.subject, firstParagraph: "Hello.", receivedAt: NEWSLETTER.receivedAt },
       meetings: [{ key: KUNDEN_KEY, title: KUNDEN.title, start: KUNDEN.start }],
       vips: ["boss@example.org"],
+      unimportant: [],
     });
     expect(readClassifications(db, ["n1", "r1"])).toEqual(new Map([["n1", { category: "bulk", reason: "A newsletter." }]]));
   });
@@ -231,7 +232,7 @@ describe("composeDesk with a classifier", () => {
 });
 
 describe("the OpenAI-compatible provider", () => {
-  const request: ClassifierRequest = { mail: { id: "n1", from: NEWSLETTER.from, subject: NEWSLETTER.subject, firstParagraph: "", receivedAt: NEWSLETTER.receivedAt }, meetings: [], vips: [] };
+  const request: ClassifierRequest = { mail: { id: "n1", from: NEWSLETTER.from, subject: NEWSLETTER.subject, firstParagraph: "", receivedAt: NEWSLETTER.receivedAt }, meetings: [], vips: [], unimportant: [] };
 
   it("posts the request as JSON with the key from the named env var and parses a fenced answer", async () => {
     const calls: { url: string; init: RequestInit }[] = [];

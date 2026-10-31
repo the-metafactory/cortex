@@ -433,6 +433,12 @@ const DeskSchema = z.object({
         })
         .refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.mail.classifier: set apiKeyEnv or apiKeyFile, not both")
         .optional(),
+      actions: z
+        .object({
+          trash: z.array(z.string().min(1)).min(1).optional(),
+          timeoutSeconds: z.number().int().min(1).max(120).default(30),
+        })
+        .optional(),
     })
     .default({}),
   goals: z

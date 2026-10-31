@@ -5,7 +5,8 @@ import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subject
 import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoName, type AreaRule, type GoalActionsInput } from "./rank";
 import { DAY_MS, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent } from "./sources/command";
-import { listVips } from "./vips";
+import { listSenders, listVips } from "./vips";
+import { trashKey, type MailActionsConfig } from "./mail-actions";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
@@ -48,6 +49,7 @@ export interface DeskOptions {
   interruptions?: InterruptRules;
   goals?: DeskGoalOptions;
   mailClassifier?: ClassifierConfig;
+  mailActions?: MailActionsConfig;
 }
 
 export interface DeskVigilSource {
@@ -103,10 +105,11 @@ export async function composeDesk(
   for (const r of readings) sources.push(r.error === null ? { id: r.id, ok: true } : { id: r.id, ok: false, error: r.error });
   const unreadable = readings.filter((r) => r.dropped > 0).map((r) => `The ${r.id} source sent ${r.dropped} ${r.dropped === 1 ? "entry" : "entries"} the Desk could not read.`);
   const events = readings.flatMap((r) => r.events.map((e) => ({ ...e, area: r.area, sourceId: r.id })));
-  const mail = readings.flatMap((r) => r.mail.map((m) => ({ ...m, area: r.area, sourceId: r.id })));
+  const mail = readings.flatMap((r) => r.mail.filter((m) => !(deps.handled?.has(trashKey(m.id)) ?? false)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
+  const unimportant = listSenders(db, "unimportant").map((s) => s.address);
   const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
-  if (classifier) void classifier.kick(db, { now, mail, events, vips: vips.map((v) => v.address) });
+  if (classifier) void classifier.kick(db, { now, mail, events, vips: vips.map((v) => v.address), unimportant });
   const classified = classifier ? readClassifications(db, mail.filter((m) => m.unread).map((m) => m.id)) : undefined;
   const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null) : null;
   const notes = listOpenNotes(db);
@@ -134,7 +137,7 @@ export async function composeDesk(
     .filter((item) => goalListed(goalStatuses, item.goal));
   const items = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)), ...(classified ? { classified } : {}) }),
+    ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: Boolean(desk.mailActions?.trash?.length), ...(classified ? { classified } : {}) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
   ], rules, readDeliveries(db), now), activeCorrections);

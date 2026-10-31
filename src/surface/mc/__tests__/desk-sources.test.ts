@@ -107,7 +107,7 @@ describe("mail on the Desk", () => {
     expect(meetingFor("Agenda for Monday's CISO visit", events, NOW)?.title).toBe("CISO Forum agenda");
     const [item] = mailItems({ now: NOW, mail: [mail({ from: { address: "coord@example.com" }, subject: "CISO forum: agenda" })], events, vips: new Set() });
     expect(item?.why).toBe('It may be about "CISO Forum agenda" tomorrow at 09:00.');
-    expect(item?.actions.find((a) => a.id === "vip.add")).toMatchObject({ target: "coord@example.com", wired: true });
+    expect(item?.more?.find((a) => a.id === "vip.add")).toMatchObject({ target: "coord@example.com", wired: true });
   });
 
   it("leaves read mail off the Desk and ranks other unread mail low", () => {

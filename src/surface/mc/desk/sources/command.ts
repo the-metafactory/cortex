@@ -88,6 +88,10 @@ export class SourceCache {
 
   constructor(private readonly run: CommandRunner = spawnCommand) {}
 
+  cached(): SourceReading[] {
+    return [...this.readings.values()];
+  }
+
   async read(sources: DeskSourceConfig[], now: number): Promise<SourceReading[]> {
     return Promise.all(sources.map((s) => this.readOne(s, now)));
   }

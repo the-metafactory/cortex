@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SettingsBody } from "../components/desk-settings";
-import { changeVips } from "../lib/desk-settings";
+import { changeSenders, changeVips } from "../lib/desk-settings";
 import { NOTIFY_LINE, type NotifyState } from "../lib/desk-notify";
 
 const noop = (): void => {};
@@ -48,6 +48,30 @@ describe("the Desk settings page", () => {
     const html = renderToStaticMarkup(<SettingsBody vips={null} note="Mission Control did not answer: offline" busy={false} onBack={noop} notify="granted" onEnableNotify={noop} onAdd={added} onRemove={noop} />);
     expect(html).toContain("Mission Control did not answer: offline");
     expect(html).not.toContain('aria-label="Add a VIP"');
+  });
+});
+
+describe("the unimportant senders on the settings page", () => {
+  it("lists them with a way to remove each and to add one, next to the VIPs", () => {
+    const html = renderToStaticMarkup(
+      <SettingsBody vips={[]} note={null} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} onAdd={added} onRemove={noop}
+        unimportant={{ rows: [{ address: "gitlab@gitlab.example", label: "GitLab" }], note: null, onAdd: added, onRemove: noop }} />,
+    );
+    expect(html).toContain("<h2>Unimportant senders</h2>");
+    expect(html).toContain("GitLab<small>gitlab@gitlab.example</small>");
+    expect(html).toContain('aria-label="Remove gitlab@gitlab.example"');
+    expect(html).toContain('aria-label="Add an unimportant sender"');
+    expect(html).toContain("No VIPs yet.");
+  });
+
+  it("changes the list through its own route", async () => {
+    const seen: string[] = [];
+    const fake = async (path: string, init: RequestInit) => {
+      seen.push(`${init.method} ${path}`);
+      return Response.json({ unimportant: [] });
+    };
+    expect(await changeSenders("unimportant", { op: "remove", address: "@gitlab.example" }, fake)).toEqual({ ok: true, vips: [] });
+    expect(seen).toEqual(["DELETE /api/desk/unimportant?address=%40gitlab.example"]);
   });
 });
 

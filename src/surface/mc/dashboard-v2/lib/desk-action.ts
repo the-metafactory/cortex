@@ -1,5 +1,6 @@
 export const DESK_ACTION_PATH = "/api/desk/action";
 export const DESK_GOAL_PATH = "/api/desk/goal";
+export const DESK_MAIL_PATH = "/api/desk/mail";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 type Outcome = { ok: boolean; text: string };
@@ -29,3 +30,7 @@ export const submitDeskAction = (body: { action: string; key: string }, fetchImp
 /** Checks or pauses one goal and returns one line for the page. Never throws. */
 export const submitGoalAction = (body: { action: string; goal: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
   postDesk(DESK_GOAL_PATH, body, fetchImpl);
+
+/** Moves one listed mail to Trash, or marks its sender unimportant, and returns one line for the page. Never throws. */
+export const submitMailAction = (body: { action: "trash" | "unimportant"; key: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
+  postDesk(DESK_MAIL_PATH, body, fetchImpl);

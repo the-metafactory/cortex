@@ -65,7 +65,8 @@ import { handleGetPhaseDetail } from "./api/phase-detail";
 import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
 import { handleGetDesk } from "./api/desk";
-import { handleDeskVips } from "./api/desk-vips";
+import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
+import { handleDeskMail } from "./api/desk-mail";
 import { handleDeskCorrections } from "./api/desk-corrections";
 import { handleDeskAction, handleDeskAutonomy } from "./api/desk-action";
 import { handleDeskAsk, handleDeskCreate, handleDeskNoteDone } from "./api/desk-ask";
@@ -462,6 +463,10 @@ async function handleApi(
   if (pathname === "/api/desk/autonomy") return handleDeskAutonomy(req, db, desk);
 
   if (pathname === "/api/desk/vips") return handleDeskVips(req, url, db);
+
+  if (pathname === "/api/desk/unimportant") return handleDeskSenders(req, url, db, "unimportant");
+
+  if (pathname === "/api/desk/mail") return handleDeskMail(req, db, desk);
 
   if (pathname === "/api/desk/corrections") return handleDeskCorrections(req, url, db);
 
