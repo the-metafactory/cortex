@@ -1,6 +1,6 @@
 import { stringify } from "yaml";
 import { z } from "zod";
-import { clip, plainQuestion } from "./board";
+import { clip, latestNote, plainQuestion } from "./board";
 import { appendEntry, appendLog, localTime, oneLine, safeBody, setFront, setNoteStatus, setSection } from "./edit";
 import { localDate, YES_ANSWERS } from "./labels";
 import { AREA_ID, ISO_DATE, STUDIO_SLUG, THREAD_OUTCOMES, validDate, type IvyNote, type StudioCapture, type ThreadType } from "./format";
@@ -107,7 +107,7 @@ function plan(writes: (StudioFile | ActRefusal)[], subject: string, message: str
 }
 
 function respond(ctx: Ctx, act: Extract<StudioAct, { act: "respond" }>, { thread, text }: Found): ActPlan | ActRefusal {
-  const latest = [...thread.notes].sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+  const latest = latestNote(thread.notes);
   const entry = [`### ${localTime(ctx.now)}`, ...(latest ? [`re: ${latest.at}`] : []), "", ...safeBody(act.text)];
   const out = chain(text, (t) => appendEntry(t, "responses", "Responses", entry), (t) => appendLog(t, ctx.today, "Answered Ivy"));
   return plan([edited(thread.path, out)], `Answer Ivy on ${thread.slug}`, `Your answer is in ${quoted(thread.question)}.`);

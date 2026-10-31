@@ -5,7 +5,7 @@ import { isRefusal, planAct, type ActPlan, type StudioAct } from "./acts";
 import { parseThreadFile } from "./format";
 import { commitPaths, findRequest, REQUEST_TRAILER, restorePaths, spawnGit, treeProblem, type GitRunner } from "./git";
 import { readStudioFiles } from "./read";
-import { buildStudioView, type StudioArea, type StudioView } from "./view";
+import { buildStudioView, type StudioArea, type StudioFiles, type StudioView } from "./view";
 
 export const STUDIO_REQUEST_ID = /^[\w-]{8,64}$/;
 
@@ -51,9 +51,9 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-async function freshView(input: StudioWriteInput): Promise<StudioView> {
+async function readView(input: StudioWriteInput): Promise<{ files: StudioFiles; view: StudioView }> {
   const { files, problems } = await readStudioFiles(input.options.dir);
-  return buildStudioView(files, input.options, input.areas, problems);
+  return { files, view: buildStudioView(files, input.options, input.areas, problems) };
 }
 
 async function applyPlan(git: GitRunner, dir: string, plan: ActPlan, requestId: string): Promise<{ sha: string } | { error: string }> {
@@ -92,11 +92,10 @@ export async function runStudioAct(input: StudioWriteInput): Promise<ActResult> 
     const problem = await treeProblem(git, dir);
     if (problem?.kind === "not-git") return fail(409, problem.error);
     const done = await findRequest(git, dir, input.requestId);
-    if (done) return { ok: true, message: `Already recorded: ${done.subject}.`, commit: done.sha, replayed: true, studio: await freshView(input) };
+    if (done) return { ok: true, message: `Already recorded: ${done.subject}.`, commit: done.sha, replayed: true, studio: (await readView(input)).view };
     if (problem) return fail(409, problem.error);
 
-    const { files, problems } = await readStudioFiles(dir);
-    const view = buildStudioView(files, input.options, input.areas, problems);
+    const { files, view } = await readView(input);
     const plan = planAct({ files, view, now: input.now ?? new Date() }, input.act);
     if (isRefusal(plan)) return fail(plan.status, plan.error, plan.needsPark ? { needsPark: true } : {});
     for (const w of plan.writes) {
@@ -106,7 +105,7 @@ export async function runStudioAct(input: StudioWriteInput): Promise<ActResult> 
 
     const committed = await applyPlan(git, dir, plan, input.requestId);
     if ("error" in committed) return fail(500, committed.error);
-    return { ok: true, message: plan.message, commit: committed.sha, replayed: false, studio: await freshView(input) };
+    return { ok: true, message: plan.message, commit: committed.sha, replayed: false, studio: (await readView(input)).view };
   } finally {
     lock.release(dir);
   }
