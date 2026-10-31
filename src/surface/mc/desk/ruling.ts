@@ -109,10 +109,16 @@ const AnswerSchema = z.union([
 
 const RESUME_ONCE_START = /^\s*resume once\b/i;
 const SHELLISH = /`|\s--[a-z][\w-]*/i;
-const PATH_TOKEN = /(?<=^|[\s(["'“])(?:~|\.{1,2})?\/[\w.@%+-]+(?:\/[\w.@%+-]+)*/g;
+const ABSOLUTE_PATH = /(?<=^|[\s(["'“])(?:~|\.{1,2})?\/[\w.@%+-]+(?:\/[\w.@%+-]+)*/g;
+const RELATIVE_PATH = /(?<=^|[\s(["'“])[\w@%+-][\w.@%+-]*(?:\/[\w.@%+-]+)*\/[\w@%+-]+\.[A-Za-z][\w-]*/g;
+const NAMED_FILE = /(?<=^|[\s(["'“])[\w@%+-][\w.@%+-]*\.(?:tsx?|jsx?|mjs|cjs|json|mdx?|css|scss|ya?ml|toml|sh|py|sql|lock|txt|csv|xml|plist|service|patch|diff)\b/g;
+
+const PATH_PATTERNS = [ABSOLUTE_PATH, RELATIVE_PATH, NAMED_FILE];
 
 const pathsIn = (text: string): string[] =>
-  (text.match(PATH_TOKEN) ?? []).map((path) => path.replace(/[.,;:!?]+$/, "")).filter((path) => path.length > 1);
+  PATH_PATTERNS.flatMap((pattern) => text.match(pattern) ?? [])
+    .map((path) => path.replace(/[.,;:!?]+$/, ""))
+    .filter((path) => path.length > 1);
 
 const nodeKey = (entry: RangerNeedsYou): string => `${entry.repo}#${entry.nodeId}`;
 const reportOf = (entry: RangerNeedsYou): string => entry.reason?.detail ?? "";

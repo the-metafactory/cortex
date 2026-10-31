@@ -240,7 +240,34 @@ const EXPLAINED = {
   ],
 };
 
+const RELATIVE_BODY = "## Deliverable\nEdit README.md only.\n";
+
+const RELATIVE_EXPLAINED = {
+  sentence: "The agent wants to edit README.md in the-metafactory/soma, but it may only commit on its own node branch.",
+  choices: [
+    {
+      label: "Allow the edit",
+      consequence: "The agent may edit README.md, and the node is resumed.",
+      ruling: "Allow the edit to README.md in the-metafactory/soma; resume the node.",
+    },
+    {
+      label: "Keep it parked",
+      consequence: "Nothing is granted, and the node stays parked with the work undone.",
+      ruling: "Do not grant the lane; keep the node parked in the-metafactory/soma.",
+    },
+  ],
+};
+
 describe("explaining a blocked node", () => {
+  it("reads a repository-relative path and a bare file name, and refuses one the inputs do not carry", async () => {
+    expect(await explainRuling(BLOCKED, RELATIVE_BODY, async () => RELATIVE_EXPLAINED)).toEqual({ kind: "explained", explanation: RELATIVE_EXPLAINED });
+    const inventedSentence = { ...RELATIVE_EXPLAINED, sentence: "The agent wants to edit src/billing.ts in the-metafactory/soma, but it may only commit on its own node branch." };
+    const inventedRuling = { ...RELATIVE_EXPLAINED, choices: [RELATIVE_EXPLAINED.choices[0], { ...RELATIVE_EXPLAINED.choices[1], ruling: "Allow the edit to src/billing.ts; keep the node parked in the-metafactory/soma." }] };
+    for (const answer of [inventedSentence, inventedRuling]) {
+      expect(await explainRuling(BLOCKED, RELATIVE_BODY, async () => answer)).toEqual({ kind: "unexplained", line: RULING_FALLBACK });
+    }
+  });
+
   it("turns a well-formed answer into the sentence and the choices that fill the ruling box", async () => {
     expect(await explainRuling(BLOCKED, BODY, async () => EXPLAINED)).toEqual({ kind: "explained", explanation: EXPLAINED });
     const ended = { ...EXPLAINED, sentence: "The agent wants to edit ~/.soma/skills/retro/SKILL.md." };

@@ -92,6 +92,13 @@ describe("the ruling box", () => {
     expect(html).toMatch(/>Try again<\/button>/);
   });
 
+  it("locks the choices with the text once a ruling may be recorded, so the box cannot show words the node does not hold", () => {
+    const draft = afterFailure({ ...newRuling(blocked.key, "req-1"), text: "Use JSON." }, { text: "lane held", recorded: true });
+    const html = box(blocked, draft);
+    expect(html).toMatch(/class="desk-ruling-choice"[^>]*disabled=""/);
+    expect(box()).not.toMatch(/class="desk-ruling-choice"[^>]*disabled/);
+  });
+
   it("keeps a ruling that may be recorded across Cancel, and drops one that cannot be", () => {
     const recorded = afterFailure({ ...newRuling(blocked.key, "req-1"), text: "Use JSON." }, { text: "lane held", recorded: true });
     expect(cancelRuling(recorded)).toEqual({ ...recorded, open: false });

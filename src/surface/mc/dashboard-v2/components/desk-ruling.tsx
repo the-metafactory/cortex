@@ -51,6 +51,7 @@ export function RulingBox({ item, draft, sending, onChange, onConfirm, onCancel 
                 type="button"
                 className="desk-ruling-choice"
                 aria-pressed={draft.text.trim() === choice.ruling.trim()}
+                disabled={draft.locked || sending}
                 onClick={() => onChange(choice.ruling)}
               >
                 <span className="desk-ruling-choice-label">{choice.label}</span>
