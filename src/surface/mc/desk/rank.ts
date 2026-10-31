@@ -98,7 +98,7 @@ function rangerNeedsYouItems({ now, ranger, areas, rangerActions = false }: Rank
     const ageDays = Math.max(0, (now - endedAt) / DAY_MS);
     const failed = n.status === "failed";
     const links = issueLinks(n.url);
-    const base = { key: rangerItemKey(ref), area: areaFor(areas, n.repo, null), urgency: "waiting" as const };
+    const base = { key: rangerItemKey(ref), source: "ranger", area: areaFor(areas, n.repo, null), urgency: "waiting" as const };
     const detail = {
       summary: n.reason?.detail ? `${n.reason.class ?? "Stopped"}: ${n.reason.detail}` : `The agent stopped (${n.status}).`,
       history: [`Stopped ${ago(now, endedAt)}`],
@@ -173,7 +173,7 @@ function rangerMapItems({ ranger, areas, rangerActions = false }: RankInput, add
         const ref = `${map.repo}#${node.id}`;
         const blocked = rule.kind === "decision" && rangerActions ? approvalBlocked(map, node) : null;
         add({
-          key: rangerItemKey(ref), kind: rule.kind, area: areaFor(areas, map.repo, null), urgency: rule.urgency,
+          key: rangerItemKey(ref), kind: rule.kind, source: "ranger", area: areaFor(areas, map.repo, null), urgency: rule.urgency,
           title: rule.title(node.title),
           why: blocked ?? rule.why(repoName(map.repo)),
           score: rule.score,
@@ -196,7 +196,7 @@ function vigilItems({ now, subjects, areas }: RankInput, titles: Titles, listed:
       const part = s.ref.split(".").pop() ?? "check";
       const wording = goalWording.get(s.goalId) ?? null;
       add({
-        key: `vigil:${s.subjectKey}`, kind: "sensor", area: areaFor(areas, null, s.goalId), urgency: "today",
+        key: `vigil:${s.subjectKey}`, kind: "sensor", source: "vigil", area: areaFor(areas, null, s.goalId), urgency: "today",
         title: `The ${part} check for "${goalShort(wording)}" stopped working.`,
         why: `Without it, nobody can tell whether this goal is on track. It last ran ${ago(now, s.lastEndedAt)}.`,
         score: 85,
@@ -207,7 +207,7 @@ function vigilItems({ now, subjects, areas }: RankInput, titles: Titles, listed:
       const goalId = s.goalId ?? s.ref;
       const state = s.value === "stale" ? "has had no news for too long" : s.value === "at-risk" ? "is at risk" : "is off track";
       add({
-        key: `vigil:${s.subjectKey}`, kind: "goal", area: areaFor(areas, null, goalId), urgency: "this-week",
+        key: `vigil:${s.subjectKey}`, kind: "goal", source: "vigil", area: areaFor(areas, null, goalId), urgency: "this-week",
         title: `"${goalShort(s.goalWording)}" ${state}.`,
         why: s.goalWording ?? "Its description is not available, so open it to see which goal this is.",
         score: s.value === "off-track" ? 75 : s.value === "at-risk" ? 70 : 55,
@@ -219,7 +219,7 @@ function vigilItems({ now, subjects, areas }: RankInput, titles: Titles, listed:
       const known = titles.get(s.ref);
       const repo = s.ref.split("#")[0] ?? s.ref;
       add({
-        key: `vigil:${s.subjectKey}`, kind: "escalation", area: areaFor(areas, repo, null), urgency: "waiting",
+        key: `vigil:${s.subjectKey}`, kind: "escalation", source: "vigil", area: areaFor(areas, repo, null), urgency: "waiting",
         title: known ? `"${known.title}" needs you.` : `A task in ${repoName(repo)} needs you.`,
         why: s.value === "overdue" ? `It has waited past its deadline, since ${ago(now, s.lastEndedAt)}.` : `An agent asked for you ${ago(now, s.lastEndedAt)}.`,
         score: s.value === "needs-principal" ? 50 : 35,
@@ -242,7 +242,7 @@ export function fold(rest: DeskItem[]): DeskFoldedGroup[] {
 
 export interface MailInput {
   now: number;
-  mail: (SourceMail & { area: string | null })[];
+  mail: (SourceMail & { area: string | null; sourceId: string })[];
   events: SourceEvent[];
   vips: ReadonlySet<string>;
 }
@@ -283,6 +283,7 @@ export function mailItems({ now, mail, events, vips }: MailInput): DeskItem[] {
     return {
       key: `mail:${m.id}`,
       kind: "mail",
+      source: m.sourceId,
       area: m.area,
       urgency: vip || meeting ? "today" : "waiting",
       title: `${sender} wrote: "${m.subject}"`,

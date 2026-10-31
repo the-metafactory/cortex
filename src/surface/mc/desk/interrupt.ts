@@ -64,6 +64,7 @@ export function meetingItems(events: DeskEvent[], now: number, minutes: number):
       return {
         key: `meeting:${e.key}@${e.at}`,
         kind: "meeting",
+        source: e.source ?? "calendar",
         area: e.area,
         urgency: "now",
         title: `"${e.title}" starts at ${clock(e.at)}.`,

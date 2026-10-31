@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActionButton, DeskBody, DeskView, DoneForYou, RestGroups } from "../components/desk-view";
+import { ActionButton, DeskBody, DeskView, DoneForYou, ItemMenu, RankingSection, RestGroups } from "../components/desk-view";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
@@ -12,6 +12,7 @@ const NOW = Date.parse("2026-10-30T13:16:00.000Z");
 const item = (n: number, over: Partial<DeskItem> = {}): DeskItem => ({
   key: `vigil:state:escalation:default:example/app#${n}`,
   kind: "escalation",
+  source: "vigil",
   area: "work",
   urgency: "waiting",
   title: `Task ${n} needs you.`,
@@ -42,6 +43,7 @@ const view: DeskViewModel = {
   sources: [{ id: "vigil", ok: true }],
   chime: false,
   autonomy: { types: [], done: [] },
+  corrections: [],
 };
 
 describe("DeskBody", () => {
@@ -230,5 +232,28 @@ describe("Done for you", () => {
   it("offers to promote a type the Desk still asks about, and hides when nothing is promotable", () => {
     expect(renderToStaticMarkup(<DoneForYou autonomy={{ types: [{ ...retry, on: false }], done: [] }} onPromote={() => {}} />)).toContain("Handle this yourself");
     expect(renderToStaticMarkup(<DoneForYou autonomy={{ types: [], done: [] }} onPromote={() => {}} />)).toBe("");
+  });
+});
+
+describe("ranking corrections on the Desk", () => {
+  it("offers less like this and always show this on every item, and the way back on a corrected one", () => {
+    const plain = renderToStaticMarkup(<ItemMenu onCorrect={() => {}} open />);
+    expect(plain).toContain("Less like this");
+    expect(plain).toContain("Always show this");
+    expect(plain).not.toContain("Rank by the base rules again");
+    const less = renderToStaticMarkup(<ItemMenu current="less" onCorrect={() => {}} open />);
+    expect(less).not.toContain(">Less like this<");
+    expect(less).toContain("Rank by the base rules again");
+    const html = renderToStaticMarkup(<DeskBody view={{ ...view, items: [item(1, { correction: "always" }), item(2)] }} error={null} onOpenMissionControl={() => {}} />);
+    expect((html.match(/aria-label="Ranking options"/g) ?? []).length).toBe(2);
+    expect(html).toContain("Always shown");
+  });
+
+  it("lists every correction in the margin with an undo button, and hides the section when there is none", () => {
+    const corrections = [{ kind: "goal" as const, source: "vigil", mode: "less" as const, label: "Goals that need a look, from vigil", createdAt: NOW }];
+    const html = renderToStaticMarkup(<RankingSection corrections={corrections} onUndo={() => {}} />);
+    expect(html).toContain("Less like this: Goals that need a look, from vigil");
+    expect(html).toContain('aria-label="Undo &quot;Less like this&quot; for Goals that need a look, from vigil"');
+    expect(renderToStaticMarkup(<RankingSection corrections={[]} onUndo={() => {}} />)).toBe("");
   });
 });

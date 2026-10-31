@@ -39,9 +39,20 @@ export interface DeskItemDetail {
   links: DeskLink[];
 }
 
+export type DeskCorrectionMode = "less" | "always";
+
+export interface DeskCorrection {
+  kind: DeskItemKind;
+  source: string;
+  mode: DeskCorrectionMode;
+  label: string;
+  createdAt: number;
+}
+
 export interface DeskItem {
   key: string;
   kind: DeskItemKind;
+  source: string;
   area: string | null;
   urgency: DeskUrgency;
   title: string;
@@ -53,6 +64,7 @@ export interface DeskItem {
   eventKey?: string;
   since?: number;
   interrupt?: DeskInterrupt;
+  correction?: DeskCorrectionMode;
 }
 
 export interface DeskInterrupt {
@@ -77,6 +89,7 @@ export interface DeskEvent {
   kind: "agent" | "agent-stop" | "meeting" | "all-day" | "reminder";
   url?: string;
   online?: boolean;
+  source?: string;
 }
 
 export interface DeskGoal {
@@ -102,6 +115,7 @@ export interface DeskView {
   sources: { id: string; ok: boolean; error?: string }[];
   chime: boolean;
   autonomy: DeskAutonomy;
+  corrections: DeskCorrection[];
 }
 
 export interface DeskAutonomy {

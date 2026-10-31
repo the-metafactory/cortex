@@ -226,3 +226,9 @@
 .desk-done li:first-child{border-top:0}
 .desk-done li.failed>div{color:#b45309}
 .desk-done .desk-btn{height:28px;margin-top:6px;padding:0 10px!important;font-size:13px}
+.desk-more{position:relative;margin-left:auto}
+.desk-more>.desk-btn{padding:0 10px!important}
+.desk-menu{position:absolute;right:0;top:38px;z-index:20;display:flex;flex-direction:column;min-width:220px;padding:4px;border:1px solid #e4e4e7;border-radius:10px;background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.08)}
+.desk-menu button{text-align:left;padding:8px 10px;border-radius:7px;font-size:14px;color:var(--ink2)}
+.desk-menu button:hover{background:#f4f4f5;color:var(--ink)}
+.desk-corr{color:var(--mute)}
