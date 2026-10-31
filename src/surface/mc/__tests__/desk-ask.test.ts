@@ -70,6 +70,7 @@ describe("the parser command", () => {
   it("accepts a valid card and a reasoned none", async () => {
     expect(await parseWithCommand(["p"], request, answering({ kind: "note", fields: { text: "Hi" } }), 1000)).toEqual({ kind: "note", fields: { text: "Hi" } });
     expect(await parseWithCommand(["p"], request, answering({ kind: "none", reason: "That is a question." }), 1000)).toEqual({ kind: "none", reason: "That is a question." });
+    expect(await parseWithCommand(["p"], request, answering({ kind: "none", reason: "   " }), 1000)).toMatchObject({ reason: expect.stringContaining("I could not tell") });
   });
 
   it("returns null for anything off-contract, so the rules answer instead", async () => {

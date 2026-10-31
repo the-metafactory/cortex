@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { ParserPermissionsSchema, type ParserPermissions } from "../../../common/types/desk-parser";
+import { ParserRoutingSchema, parserUnavailable, type ParserRouting } from "./parser-routing";
 import { DAY_MS, startOfDay } from "./time";
 
 export const ASK_KINDS = ["reminder", "note", "capture", "task", "goal", "calendar"] as const;
@@ -25,7 +27,7 @@ export const FIELD_SCHEMAS = {
 
 export type AskFields = { [K in AskKind]: z.infer<(typeof FIELD_SCHEMAS)[K]> };
 export type AskCard = { [K in AskKind]: { kind: K; fields: AskFields[K] } }[AskKind];
-export type ParseResult = AskCard | { kind: "none"; reason: string };
+export type ParseResult = (AskCard | { kind: "none"; reason: string }) & { routing?: ParserRouting };
 export type RulesResult = { kind: AskKind; fields: Record<string, unknown> } | { kind: "none"; reason: string };
 
 export const isAskKind = (k: unknown): k is AskKind => ASK_KINDS.includes(k as AskKind);
@@ -214,23 +216,37 @@ export interface ParserRequest {
   timeZone: string;
   kinds: AskKind[];
   maps: AskMap[];
+  routing?: ParserPermissions;
 }
 
 export type ParserRunner = (argv: string[], stdin: string, timeoutMs: number) => Promise<string>;
 
 export async function parseWithCommand(argv: string[], request: ParserRequest, run: ParserRunner, timeoutMs: number): Promise<ParseResult | null> {
-  let answer: { kind?: unknown; fields?: unknown; reason?: unknown } | null;
+  const invalid = (): ParseResult => ({ kind: "none", reason: "The parser returned an invalid answer.", routing: parserUnavailable("invalid-output") });
+  const envelope = z.object({ kind: z.string(), fields: z.unknown().optional(), reason: z.string().optional(), routing: z.unknown().optional() });
+  let raw: unknown;
   try {
-    answer = JSON.parse(await run(argv, JSON.stringify(request), timeoutMs)) as typeof answer;
+    raw = JSON.parse(await run(argv, JSON.stringify(request), timeoutMs));
   } catch {
-    return null;
+    return request.routing ? invalid() : null;
   }
-  if (answer?.kind === "none") return { kind: "none", reason: typeof answer.reason === "string" && answer.reason.trim() ? answer.reason.trim().slice(0, 200) : NO_MATCH };
-  if (!answer || !request.kinds.includes(answer.kind as AskKind)) return null;
+  const parsed = envelope.safeParse(raw);
+  if (!parsed.success) return request.routing ? invalid() : null;
+  const answer = parsed.data;
+  let routing: ParserRouting | undefined;
+  if (request.routing || answer.routing !== undefined) {
+    const checked = ParserRoutingSchema.safeParse(answer.routing);
+    if (!checked.success) return invalid();
+    routing = checked.data;
+    if (routing.kind === "unavailable" && answer.kind !== "none") return invalid();
+    if (routing.kind === "selected" && request.routing && (!ParserPermissionsSchema.safeParse(request.routing).success || !request.routing.permitted.includes(routing.provider))) return invalid();
+  }
+  if (routing && answer.kind === "none" && !answer.reason?.trim()) return invalid();
+  if (answer.kind === "none") return { kind: "none", reason: answer.reason?.trim().length ? answer.reason.trim().slice(0, 200) : NO_MATCH, ...(routing ? { routing } : {}) };
+  if (!isAskKind(answer.kind) || !request.kinds.includes(answer.kind)) return routing || request.routing ? invalid() : null;
   const card = validateCard(answer.kind, answer.fields);
-  if (typeof card === "string") return null;
-  if (!taskMapAllowed(card, request.maps)) return null;
-  return card;
+  if (typeof card === "string" || !taskMapAllowed(card, request.maps)) return routing || request.routing ? invalid() : null;
+  return { ...card, ...(routing ? { routing } : {}) };
 }
 
 export interface DeskProposal {
@@ -243,6 +259,7 @@ export interface DeskProposal {
   unwritable?: true;
   via: "parser" | "rules";
   automatic?: boolean;
+  routing?: Extract<ParserRouting, { kind: "selected" }>;
 }
 
 function problemFor(kind: AskKind, fields: Record<string, unknown>, at: number | undefined, writable: ReadonlySet<AskKind>): string | undefined {

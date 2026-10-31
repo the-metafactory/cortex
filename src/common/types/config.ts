@@ -1,3 +1,4 @@
+import { ParserPermissionsSchema } from "./desk-parser";
 /**
  * F-007: Bot Configuration Types
  *
@@ -461,6 +462,7 @@ const DeskSchema = z.object({
   ask: z
     .object({
       parser: z.array(z.string().min(1)).default([]),
+      routing: ParserPermissionsSchema.optional(),
       timeoutSeconds: z.number().int().min(1).max(120).default(30),
       writers: z
         .object({
