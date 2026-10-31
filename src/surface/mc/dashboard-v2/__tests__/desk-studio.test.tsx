@@ -79,12 +79,14 @@ describe("the Studio board", () => {
     expect(open).toContain("Log <span");
   });
 
-  it("makes Keep, Dismiss and Close live and keeps Discuss disabled", () => {
+  it("makes Keep, Discuss, Talk it through, Dismiss and Close live", () => {
     const idea = { at: "2026-10-31T04:05:00+01:00", trigger: "Fits the week's post", model: "cloud", kind: "idea" as const, status: "open" as const, sample: true, text: "Draft it?" };
     const studio: StudioView = { ...STUDIO, active: [thread("one", 1, { notes: [idea] }), thread("two", 2)] };
-    const open = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} at={AT} />);
+    const open = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} onDiscuss={() => {}} at={AT} />);
     const disabled = [...open.matchAll(/<button type="button" class="desk-btn[^"]*" disabled="" title="[^"]+">([^<]+)</g)].map((m) => m[1]);
-    expect(disabled).toEqual(["Discuss"]);
+    expect(disabled).toEqual([]);
+    expect(open).toContain(">Discuss</button>");
+    expect(open).toContain(">Talk it through</button>");
     expect(open).toContain(">Close with an outcome</button>");
     expect(open).toContain(">Keep</button>");
     expect(open).toContain(">Dismiss</button>");

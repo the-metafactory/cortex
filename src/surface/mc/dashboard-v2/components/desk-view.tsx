@@ -1,3 +1,4 @@
+import { StudioSessionPanel, useStudioSession } from "./desk-studio-session";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction, submitGoalAction, submitMailAction, submitRuling } from "../lib/desk-action";
@@ -182,7 +183,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     return null;
   };
 
-  const voice = useDeskVoice(view.voice, {
+  const discussion = useStudioSession(captureChanged);
+  const voice = useDeskVoice({ ...view.voice, enabled: view.voice.enabled && !discussion.session }, {
     answer: async (said) => {
       const result = await askDesk(said, fetch, area === ALL_AREAS ? undefined : area);
       if (!result.ok) return result.text;
@@ -194,6 +196,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     isBriefing: isBriefingRequest,
     typeInstead: () => askInput.current?.focus(),
   });
+
+  useEffect(() => { if (discussion.session) voice.dismiss(); }, [discussion.session?.id, voice.dismiss]);
 
   const confirm = async (fields: Record<string, unknown>): Promise<void> => {
     if (!proposal || creating) return;
@@ -446,7 +450,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       </div>
 
-      {inStudio && studio && <DeskStudio studio={studio} thread={place.thread} day={view} onOpenThread={(slug) => go({ mode: "studio", thread: slug })} />}
+      <StudioSessionPanel controls={discussion} voice={view.voice} location={`${place.mode}:${place.thread ?? ""}`} />
+      {inStudio && studio && <DeskStudio studio={studio} thread={place.thread} day={view} onDiscuss={discussion.start} onOpenThread={(slug) => go({ mode: "studio", thread: slug })} />}
       {inStudio && (
         <div className="dst">
           {proposalCard}

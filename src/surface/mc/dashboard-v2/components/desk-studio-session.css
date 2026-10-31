@@ -1,0 +1,10 @@
+.dst-session { position: fixed; z-index: 80; right: 20px; bottom: 20px; width: min(520px, calc(100vw - 40px)); max-height: calc(100vh - 40px); overflow: auto; padding: 24px; border: 1px solid #cdd4cd; border-radius: 16px; background: #fbfcf8; box-shadow: 0 16px 70px #25322b30; color: #26322b; }
+.dst-session header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.dst-session h2 { margin: 0; font-size: 21px; }
+.dst-session p { white-space: pre-wrap; line-height: 1.55; }
+.dst-session-policy { color: #667267; font-size: 12px; }
+.dst-session label { display: grid; gap: 6px; margin: 16px 0 10px; font-size: 13px; }
+.dst-session textarea { width: 100%; min-height: 70px; box-sizing: border-box; padding: 10px; border: 1px solid #cdd4cd; border-radius: 8px; font: inherit; background: white; color: inherit; }
+.dst-session-exchange { border-block: 1px solid #e0e5dd; margin: 18px 0; }
+.dst-session-recovery { position: fixed; z-index: 79; right: 20px; bottom: 20px; padding: 12px; max-width: 440px; background: #fbfcf8; border: 1px solid #cdd4cd; border-radius: 12px; }
+.dst-session-recovery button { display: block; margin: 6px 0; }

@@ -1,3 +1,4 @@
+import type { StartDiscussion } from "./desk-studio-session";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { buildBoard, clip, plainQuestion, type Board, type BoardCapture, type BoardCard, type BoardFree, type BoardLoose, type BoardProposal, type BoardTarget } from "../../desk/studio/board";
 import { dayMonth, outcomeLabel, TYPE_LABEL } from "../../desk/studio/labels";
@@ -60,7 +61,7 @@ export function useFreshStudio(studio: StudioView): [StudioView, (view: StudioVi
   return [fresh?.base === studio ? fresh.view : studio, take];
 }
 
-export function DeskStudio({ studio: polled, thread, onOpenThread, at, day }: { studio: StudioView; thread: string | null; onOpenThread: (slug: string | null) => void; at?: number; day?: StudioDay }) {
+export function DeskStudio({ studio: polled, thread, onOpenThread, at, day, onDiscuss }: { studio: StudioView; thread: string | null; onOpenThread: (slug: string | null) => void; at?: number; day?: StudioDay; onDiscuss?: StartDiscussion }) {
   const [studio, takeStudio] = useFreshStudio(polled);
   const acts = useStudioActs(takeStudio);
   const [sheet, setSheet] = useState<OpenRequest | null>(null);
@@ -84,7 +85,7 @@ export function DeskStudio({ studio: polled, thread, onOpenThread, at, day }: { 
       </section>
       {zoom.shown !== null
         ? page
-          ? <ThreadPageView key={page.thread.slug} page={page} onBack={back} onOpen={onOpenThread} zoom={zoom} acts={acts} onBringBack={bringBack} />
+          ? <ThreadPageView key={page.thread.slug} page={page} onBack={back} onOpen={onOpenThread} zoom={zoom} acts={acts} onBringBack={bringBack} {...(onDiscuss ? { onDiscuss } : {})} />
           : <ThreadMissing slug={zoom.shown} onBack={back} zoom={zoom} />
         : (
             <>

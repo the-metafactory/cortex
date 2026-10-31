@@ -94,16 +94,21 @@ export const appendEntry = (text: string, key: string, heading: string, entry: s
 
 const META = new RegExp(`^(${NOTE_META_KEYS.join("|")}):`);
 
-export function setNoteStatus(text: string, at: string, status: string): string | null {
+function noteDoc(text: string, at: string): { doc: Doc; head: number; end: number } | null {
   const doc = toDoc(text);
-  if (!doc) return null;
-  const notes = findSection(doc, "notes");
-  if (!notes) return null;
+  const notes = doc ? findSection(doc, "notes") : null;
+  if (!doc || !notes) return null;
   const head = doc.lines.findIndex((l, i) => i > notes.head && i < notes.end && l.startsWith("### ") && l.slice(4).trim() === at);
-  if (head < 0) return null;
+  return head < 0 ? null : { doc, head, end: notes.end };
+}
+
+export function setNoteStatus(text: string, at: string, status: string): string | null {
+  const found = noteDoc(text, at);
+  if (!found) return null;
+  const { doc, head, end } = found;
   let i = head + 1;
   let statusAt = -1;
-  for (; i < notes.end && META.test(doc.lines[i] ?? ""); i++) if ((doc.lines[i] ?? "").startsWith("status:")) statusAt = i;
+  for (; i < end && META.test(doc.lines[i] ?? ""); i++) if ((doc.lines[i] ?? "").startsWith("status:")) statusAt = i;
   if (statusAt >= 0) doc.lines[statusAt] = `status: ${status}`;
   else doc.lines.splice(i, 0, `status: ${status}`);
   return fromDoc(doc);
@@ -116,4 +121,16 @@ export function localTime(at: Date): string {
   const sign = off >= 0 ? "+" : "-";
   const abs = Math.abs(off);
   return `${localDate(at)}T${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+
+export function setNoteText(text: string, at: string, body: string): string | null {
+  const found = noteDoc(text, at);
+  if (!found) return null;
+  const { doc, head, end: limit } = found;
+  let start = head + 1;
+  while (start < limit && META.test(doc.lines[start] ?? "")) start++;
+  let end = start;
+  while (end < limit && !(doc.lines[end] ?? "").startsWith("### ")) end++;
+  doc.lines.splice(start, end - start, "", ...safeBody(body), "");
+  return fromDoc(doc);
 }
