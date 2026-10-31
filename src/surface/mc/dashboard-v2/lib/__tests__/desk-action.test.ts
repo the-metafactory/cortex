@@ -31,6 +31,6 @@ describe("submitDeskAction", () => {
 
   it("never throws when Mission Control does not answer", async () => {
     const result = await submitDeskAction({ action: "ranger.approve", key: "k" }, async () => { throw new Error("offline"); });
-    expect(result).toEqual({ ok: false, text: "Mission Control did not answer: offline" });
+    expect(result).toEqual({ ok: false, uncertain: true, text: "Mission Control did not answer: offline" });
   });
 });

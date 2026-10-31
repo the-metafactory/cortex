@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction, submitGoalAction, submitMailAction, submitRuling } from "../lib/desk-action";
-import { afterFailure, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
+import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
 import { chimeForNew } from "../lib/desk-chime";
 import { browserNotifyEnv, dismissHint, notifyForNew, requestNotifications, wantsHint } from "../lib/desk-notify";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
@@ -66,7 +66,15 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map());
   const inFlight = useRef(new Set<string>());
   const [confirming, setConfirming] = useState<{ key: string; action: string } | null>(null);
-  const [ruling, setRuling] = useState<RulingDraft | null>(null);
+  const [rulings, setRulings] = useState<ReadonlyMap<string, RulingDraft>>(() => new Map());
+  const setRuling = (key: string, next: (d: RulingDraft | undefined) => RulingDraft | null): void =>
+    setRulings((m) => {
+      const draft = next(m.get(key));
+      const copy = new Map(m);
+      if (draft) copy.set(key, draft);
+      else copy.delete(key);
+      return copy;
+    });
   const [askText, setAskText] = useState("");
   const [asking, setAsking] = useState(false);
   const [proposal, setProposal] = useState<{ p: DeskProposal; said: string; requestId: string; fields: Record<string, unknown> } | null>(null);
@@ -199,7 +207,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
   const openRuling = (item: DeskItem): void => {
     setDetail(item);
-    setRuling((r) => (r?.key === item.key ? r : newRuling(item.key, crypto.randomUUID())));
+    setRuling(item.key, (r) => (r ? { ...r, open: true } : newRuling(item.key, crypto.randomUUID())));
   };
 
   const confirmRuling = (item: DeskItem, draft: RulingDraft): void => {
@@ -207,7 +215,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     void send(item, rule, {
       request: async () => {
         const result = await submitRuling({ key: item.key, text: draft.text, requestId: draft.requestId });
-        setRuling((r) => (r?.requestId !== draft.requestId ? r : result.ok ? null : afterFailure(r, result)));
+        setRuling(item.key, (r) => (r?.requestId !== draft.requestId ? r ?? null : result.ok ? null : afterFailure(r, result)));
         return result;
       },
     });
@@ -281,6 +289,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const shown = (item: DeskItem): DeskItem => (confirming?.key === item.key ? withConfirm(item, confirming.action) : item);
   const busyWith = (item: DeskItem): string | null => sending.get(item.key) ?? (item.checking ? "goal.check" : null);
   const detailItem = detail ? view.items.find((i) => i.key === detail.key) ?? detail : null;
+  const detailRuling = detailItem ? rulings.get(detailItem.key) : undefined;
 
   const itemRow = (item: DeskItem, idx: number) => (
     <DeskItemRow
@@ -294,7 +303,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       sending={busyWith(item)}
       onFocusEvent={focusEvent}
       onCorrect={(mode) => void correct(item.kind, item.source, mode)}
-      rulingNote={ruling?.key === item.key ? ruling.note : null}
+      rulingNote={rulings.get(item.key)?.note ?? null}
     />
   );
 
@@ -533,14 +542,14 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       <aside className="desk-panel" aria-hidden={!detail} aria-label="Details">
         {detailItem && (
           <DetailPanel item={shown(detailItem)} area={detailItem.area ? areaById.get(detailItem.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detailItem, a)} onShowEvent={showEvent} sending={busyWith(detailItem)}>
-            {ruling?.key === detailItem.key && (
+            {detailRuling?.open && (
               <RulingBox
                 item={detailItem}
-                draft={ruling}
+                draft={detailRuling}
                 sending={busyWith(detailItem) === "ranger.rule"}
-                onChange={(text) => setRuling((r) => (r ? { ...r, text } : r))}
-                onConfirm={() => confirmRuling(detailItem, ruling)}
-                onCancel={() => setRuling(null)}
+                onChange={(text) => setRuling(detailItem.key, (r) => (r ? { ...r, text } : null))}
+                onConfirm={() => confirmRuling(detailItem, detailRuling)}
+                onCancel={() => setRuling(detailItem.key, (r) => cancelRuling(r ?? null))}
               />
             )}
           </DetailPanel>

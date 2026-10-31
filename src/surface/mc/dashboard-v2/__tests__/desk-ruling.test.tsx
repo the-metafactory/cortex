@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterFailure, newRuling, RulingBox } from "../components/desk-ruling";
+import { afterFailure, cancelRuling, newRuling, RulingBox } from "../components/desk-ruling";
 import { DESK_RULING_PATH, submitRuling } from "../lib/desk-action";
 import type { DeskItem } from "../../desk/types";
 
@@ -42,6 +42,20 @@ describe("the ruling box", () => {
     expect(html).toMatch(/<textarea[^>]*readOnly=""/);
     expect(html).toMatch(/>Resume again<\/button>/);
     expect(afterFailure(draft, { text: "Mission Control did not answer: offline" }).recorded).toBe(true);
+  });
+  it("locks the text when no answer came, so a retry cannot record other words under the same request id", () => {
+    const draft = afterFailure({ ...newRuling(blocked.key, "req-1"), text: "Use JSON." }, { text: "Mission Control did not answer: offline", uncertain: true });
+    expect([draft.recorded, draft.locked]).toEqual([false, true]);
+    const html = box(draft);
+    expect(html).toMatch(/<textarea[^>]*readOnly=""/);
+    expect(html).toMatch(/>Try again<\/button>/);
+  });
+
+  it("keeps a ruling that may be recorded across Cancel, and drops one that cannot be", () => {
+    const recorded = afterFailure({ ...newRuling(blocked.key, "req-1"), text: "Use JSON." }, { text: "lane held", recorded: true });
+    expect(cancelRuling(recorded)).toEqual({ ...recorded, open: false });
+    const refused = afterFailure({ ...newRuling(blocked.key, "req-2"), text: "Use JSON." }, { text: "Your ruling was not recorded: closed" });
+    expect(cancelRuling(refused)).toBeNull();
   });
 });
 

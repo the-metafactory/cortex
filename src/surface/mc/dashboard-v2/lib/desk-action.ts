@@ -4,7 +4,7 @@ export const DESK_MAIL_PATH = "/api/desk/mail";
 export const DESK_RULING_PATH = "/api/desk/ruling";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
-type Outcome = { ok: boolean; text: string; recorded?: boolean };
+type Outcome = { ok: boolean; text: string; recorded?: boolean; uncertain?: boolean };
 
 async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Promise<Outcome> {
   let res: Response;
@@ -15,7 +15,7 @@ async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Prom
       body: JSON.stringify(body),
     });
   } catch (err) {
-    return { ok: false, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}` };
+    return { ok: false, uncertain: true, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}` };
   }
   const parsed = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown; detail?: unknown; recorded?: unknown } | null;
   if (res.ok) return { ok: true, text: typeof parsed?.message === "string" ? parsed.message : "Done." };
@@ -36,6 +36,9 @@ export const submitGoalAction = (body: { action: string; goal: string }, fetchIm
 export const submitMailAction = (body: { action: "trash" | "unimportant"; key: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
   postDesk(DESK_MAIL_PATH, body, fetchImpl);
 
-/** Records a ruling and resumes its node. `recorded` on a failure means the ruling is in the node and only the resume failed. Never throws. */
+/**
+ * Records a ruling and resumes its node. On a failure, `recorded` means the ruling is in the node and only the resume
+ * failed; `uncertain` means no answer came, so the ruling may be recorded. Never throws.
+ */
 export const submitRuling = (body: { key: string; text: string; requestId: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
   postDesk(DESK_RULING_PATH, body, fetchImpl);

@@ -24,9 +24,12 @@ export function agentQuestion(detail: string | undefined): AgentQuestion | null 
 
 export const isBlocked = (n: RangerNeedsYou): boolean => n.reason?.class === "blocked";
 
+export const needsYouEntry = (state: RangerState, itemKey: string): RangerNeedsYou | undefined =>
+  state.needsYou.find((n) => rangerItemKey(`${n.repo}#${n.nodeId}`) === itemKey);
+
 /** The blocked Ranger entry a Desk item key names, or a one-line refusal. */
 export function blockedEntry(state: RangerState, itemKey: string): RangerNeedsYou | string {
-  const entry = state.needsYou.find((n) => rangerItemKey(`${n.repo}#${n.nodeId}`) === itemKey);
+  const entry = needsYouEntry(state, itemKey);
   if (!entry) return "Ranger no longer lists this node as waiting for you.";
   if (!isBlocked(entry)) return "Ranger no longer waits for a ruling on this node.";
   if (!retryable(entry)) return "Ranger does not offer a resume for this node.";
@@ -44,11 +47,11 @@ export function somaRepo(repo: string): string | null {
   return null;
 }
 
-/** `soma graph rule` with the ruling in a file, so no part of the ruling becomes an argument. */
-export function ruleArgv(somaBin: string, entry: RangerNeedsYou, textFile: string): string[] | string {
+/** `soma graph rule` with the ruling in a file, so no part of the ruling becomes an argument; a refusal when Soma cannot address the node. */
+export function ruleCommand(somaBin: string, entry: RangerNeedsYou): ((textFile: string) => string[]) | string {
   const repo = somaRepo(entry.repo);
   if (!repo || !NODE_ID.test(entry.nodeId)) return "Soma cannot address this node.";
-  return [somaBin, "graph", "rule", entry.nodeId, "--text-file", textFile, "--repo", repo, "--json"];
+  return (textFile) => [somaBin, "graph", "rule", entry.nodeId, "--text-file", textFile, "--repo", repo, "--json"];
 }
 
 /**

@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DeskRuntime } from "../desk/compose";
 import { oneLine, planRangerAction, rangerActionsReady, spawnRanger, type RangerRunner } from "../desk/actions";
-import { blockedEntry, MAX_RULING_LENGTH, ruleArgv } from "../desk/ruling";
-import { rangerItemKey, readRangerState, type RangerFetch } from "../desk/sources/ranger";
+import { blockedEntry, MAX_RULING_LENGTH, needsYouEntry, ruleCommand } from "../desk/ruling";
+import { readRangerState, type RangerFetch } from "../desk/sources/ranger";
 
 const noStore = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string, extra: Record<string, unknown> = {}): Response =>
@@ -20,14 +20,12 @@ export interface DeskRulingDeps {
   tmpDir?: string;
 }
 
-async function recordRuling(run: RangerRunner, argvFor: (file: string) => string[] | string, text: string, base: string): Promise<string | null> {
+async function recordRuling(run: RangerRunner, argvFor: (file: string) => string[], text: string, base: string): Promise<string | null> {
   const dir = await mkdtemp(join(base, "desk-ruling-"));
   try {
     const file = join(dir, "ruling.md");
     await writeFile(file, text, { mode: 0o600 });
-    const argv = argvFor(file);
-    if (typeof argv === "string") return argv;
-    const result = await run(argv);
+    const result = await run(argvFor(file));
     return result.code === 0 ? null : oneLine(result.stderr || result.stdout, `exit code ${result.code}`);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -66,10 +64,11 @@ export async function handleDeskRuling(req: Request, runtime: DeskRuntime | unde
         return fail(502, `Could not read Ranger: ${reason(err)}`);
       }
       if (typeof entry === "string") return fail(409, entry);
-      const blocked = entry;
+      const command = ruleCommand(somaBin, entry);
+      if (typeof command === "string") return fail(409, command);
       let refused: string | null;
       try {
-        refused = await recordRuling(deps.soma ?? spawnRanger, (file) => ruleArgv(somaBin, blocked, file), text, deps.tmpDir ?? tmpdir());
+        refused = await recordRuling(deps.soma ?? spawnRanger, command, text, deps.tmpDir ?? tmpdir());
       } catch (err) {
         refused = reason(err);
       }
@@ -98,7 +97,7 @@ export async function handleDeskRuling(req: Request, runtime: DeskRuntime | unde
     } finally {
       runtime.ledger.release(plan.claimKey);
     }
-    const title = state.needsYou.find((n) => rangerItemKey(`${n.repo}#${n.nodeId}`) === key)?.title ?? "the node";
+    const title = needsYouEntry(state, key)?.title ?? "the node";
     return Response.json({ ok: true, message: `Recorded your ruling and resumed "${title}".` }, { headers: noStore });
   } finally {
     rulings.release(requestId);
