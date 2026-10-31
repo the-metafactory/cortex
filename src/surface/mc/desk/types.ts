@@ -1,3 +1,4 @@
+import type { DeskCalendar } from "./calendars";
 import type { EndpointConfig } from "./classify";
 import type { DeskVoice } from "./voice";
 import type { AREA_POLICIES } from "../../../common/types/config";
@@ -100,6 +101,8 @@ export interface DeskFoldedGroup {
 }
 
 export interface DeskEvent {
+  color?: string;
+  calendar?: string;
   key: string;
   at: number;
   end?: number;
@@ -119,6 +122,7 @@ export interface DeskGoal {
 }
 
 export interface DeskView {
+  calendars?: DeskCalendar[];
   generatedAt: number;
   displayName: string | null;
   topN: number;

@@ -1,3 +1,4 @@
+import { handleDeskCalendars } from "./api/desk-calendars";
 import type { Server, ServerWebSocket } from "bun";
 import type { Database } from "bun:sqlite";
 import type { Config } from "./types";
@@ -466,6 +467,8 @@ async function handleApi(
   if (pathname === "/api/desk/action") return handleDeskAction(req, desk);
 
   if (pathname === "/api/desk/autonomy") return handleDeskAutonomy(req, db, desk);
+
+  if (pathname === "/api/desk/calendars") return handleDeskCalendars(req, db);
 
   if (pathname === "/api/desk/vips") return handleDeskVips(req, url, db);
 

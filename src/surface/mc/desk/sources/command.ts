@@ -17,6 +17,7 @@ export const SourceEventSchema = z.object({
   end: isoDate.optional(),
   allDay: z.boolean().optional(),
   title: z.string().min(1),
+  calendar: z.string().trim().min(1).max(200).optional(),
   location: z.string().optional(),
   online: z.boolean().optional(),
   url: safeLink.optional(),

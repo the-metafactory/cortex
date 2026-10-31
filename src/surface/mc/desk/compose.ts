@@ -1,3 +1,4 @@
+import { calendarKey, calendarName, discoverCalendars } from "./calendars";
 import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
@@ -112,7 +113,12 @@ export async function composeDesk(
 
   for (const r of readings) sources.push(r.error === null ? { id: r.id, ok: true } : { id: r.id, ok: false, error: r.error });
   const unreadable = readings.filter((r) => r.problems.length > 0).map(unreadableLine);
-  const events = readings.flatMap((r) => r.events.map((e) => ({ ...e, area: r.area, sourceId: r.id })));
+  const reportedEvents = readings.flatMap((r) => r.events.map((e) => ({ ...e, area: r.area, sourceId: r.id })));
+  const calendars = discoverCalendars(db, reportedEvents);
+  const events = reportedEvents.flatMap((e) => {
+    const setting = calendars.get(calendarKey(e.sourceId, calendarName(e)));
+    return setting?.enabled ? [{ ...e, calendar: setting.name, color: setting.color }] : [];
+  });
   const mail = readings.flatMap((r) => r.mail.filter((m) => !(deps.handled?.has(trashKey(m.id)) ?? false)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
   const unimportant = listSenders(db, "unimportant").map((s) => s.address);
@@ -152,6 +158,7 @@ export async function composeDesk(
   ], rules, readDeliveries(db), now), activeCorrections);
 
   return {
+    calendars: [...calendars.values()],
     generatedAt: now,
     displayName: desk.displayName || null,
     topN: desk.topN,
@@ -222,7 +229,7 @@ function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, 
   };
 }
 
-type CalendarEvent = SourceEvent & { area: string | null; sourceId: string };
+type CalendarEvent = SourceEvent & { area: string | null; sourceId: string; color?: string };
 
 function calendarEvents(events: CalendarEvent[], from: number, to: number): DeskEvent[] {
   return events
@@ -236,6 +243,8 @@ function calendarEvents(events: CalendarEvent[], from: number, to: number): Desk
       area: e.area,
       kind: e.allDay ? "all-day" : "meeting",
       source: e.sourceId,
+      ...(e.calendar ? { calendar: e.calendar } : {}),
+      ...(e.color ? { color: e.color } : {}),
       ...(e.url ? { url: e.url } : {}),
       ...(e.online ? { online: true } : {}),
     }))
