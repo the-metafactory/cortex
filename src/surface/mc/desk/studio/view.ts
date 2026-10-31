@@ -1,12 +1,7 @@
-import type { AreaPolicy, StudioOptions } from "../types";
+import type { AreaPolicy, DeskArea, StudioOptions } from "../types";
 import { parseCaptureFile, parseProposalFile, parseThreadFile, type Parsed, type StudioCapture, type StudioProposal, type StudioTarget, type StudioThread } from "./format";
 
-export interface StudioArea {
-  id: string;
-  label: string;
-  color: string;
-  policy?: AreaPolicy;
-}
+export type StudioArea = DeskArea & { policy?: AreaPolicy };
 
 export interface StudioFile {
   path: string;
@@ -36,7 +31,7 @@ export interface StudioProposalView extends StudioProposal {
 
 export interface StudioView {
   maxActive: number;
-  areas: { id: string; label: string; color: string; policy: AreaPolicy }[];
+  areas: (DeskArea & { policy: AreaPolicy })[];
   active: StudioThreadView[];
   parked: StudioThreadView[];
   closed: StudioThreadView[];
