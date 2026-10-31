@@ -114,10 +114,23 @@ describe("DeskBody with calendar, mail and VIPs", () => {
     expect(html).toContain("Partner visit");
   });
 
-  it("lists VIPs with a way to remove and add them", () => {
-    expect(html).toContain(">Ada</span>");
-    expect(html).toContain('aria-label="Remove ada@example.org"');
-    expect(html).toContain('placeholder="Add an address or @domain"');
+  it("keeps the VIP list off the margin and offers Settings in the top bar", () => {
+    expect(html).not.toContain('aria-label="Remove ada@example.org"');
+    expect(html).not.toContain('aria-label="Add a VIP"');
+    expect(html).not.toMatch(/<h3 class="desk-mh">VIPs<\/h3>/);
+    expect(html).toMatch(/<div class="desk-topr">.*<button type="button" class="desk-btn ghost">Settings<\/button><\/div>/);
+  });
+
+  it("still offers \"Always show mail from …\" on a mail item", () => {
+    const other = item(10, {
+      key: "mail:m2", kind: "mail", urgency: "today", title: 'Grace Hopper wrote: "Compilers"', why: "It arrived an hour ago.",
+      actions: [
+        { id: "open", label: "Open in Mail", role: "primary", wired: true, url: "message://%3Cm2%3E" },
+        { id: "vip.add", label: "Always show mail from Grace", role: "secondary", wired: true, target: "grace@example.org" },
+      ],
+    });
+    const page = renderToStaticMarkup(<DeskBody view={{ ...view, items: [other] }} error={null} onOpenMissionControl={() => {}} />);
+    expect(page).toContain("Always show mail from Grace");
   });
 });
 
