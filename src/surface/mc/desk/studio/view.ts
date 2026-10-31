@@ -1,3 +1,4 @@
+import type { StudioThinking } from "./thinking";
 import type { AreaPolicy, DeskArea, StudioOptions } from "../types";
 import { parseCaptureFile, parseProposalFile, parseThreadFile, type Parsed, type StudioCapture, type StudioProposal, type StudioTarget, type StudioThread } from "./format";
 
@@ -37,6 +38,8 @@ export interface YesFilter {
 }
 
 export interface StudioView {
+  personas?: string[];
+  thinking?: StudioThinking;
   maxActive: number;
   yesFilter: YesFilter;
   areas: (DeskArea & { policy: AreaPolicy })[];
@@ -100,6 +103,7 @@ export function buildStudioView(files: StudioFiles, options: StudioOptions, area
     .map((p) => withPolicy(p, p.target.area ? [p.target.area] : []));
 
   return {
+    personas: options.personas ?? [],
     maxActive: options.maxActive,
     yesFilter: options.yesFilter?.length ? { questions: [...options.yesFilter], fromConfig: true } : { questions: [...DEFAULT_YES_FILTER], fromConfig: false },
     areas: areas.map(({ id, label, color, policy }) => ({ id, label, color, policy: policy ?? "cloud" })),

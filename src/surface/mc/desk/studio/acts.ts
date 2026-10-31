@@ -13,6 +13,7 @@ const slug = z.string().regex(STUDIO_SLUG, "is not a thread slug");
 const words = (max: number) => z.string().trim().min(1, "is empty").max(max, `is longer than ${max} characters`);
 
 export const StudioActSchema = z.discriminatedUnion("act", [
+  z.object({ act: z.literal("spar"), thread: slug, mode: z.string().regex(/^(think|grill|other-side|red-team|first-principles|persona:[^\r\n]{1,100})$/) }),
   z.object({ act: z.literal("respond"), thread: slug, text: words(MAX_RESPONSE) }),
   z.object({ act: z.literal("keep"), thread: slug, note: z.string().min(1).max(64) }),
   z.object({ act: z.literal("dismiss"), thread: slug, note: z.string().min(1).max(64) }),
@@ -278,6 +279,8 @@ const NEEDS_OPEN_THREAD = new Set<StudioAct["act"]>(["respond", "think", "close"
 
 function threadAct(ctx: Ctx, act: Exclude<StudioAct, { act: "open" }>, found: Found): ActPlan | ActRefusal {
   switch (act.act) {
+    case "spar":
+      return refuse(400, "Sparring requires the native ivy-think queue.");
     case "respond":
       return respond(ctx, act, found);
     case "keep":

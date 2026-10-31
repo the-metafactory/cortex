@@ -66,6 +66,7 @@ export interface IvyNote {
   trigger: string;
   model: string;
   mode?: string;
+  run?: string;
   kind: NoteKind;
   status: NoteStatus;
   sample: boolean;
@@ -196,7 +197,7 @@ function sectionMap(body: string): Parsed<Map<string, string>> {
   return { ok: true, value: map };
 }
 
-export const NOTE_META_KEYS = ["trigger", "model", "mode", "kind", "status", "sample", "because", "relates"] as const;
+export const NOTE_META_KEYS = ["trigger", "model", "mode", "run", "kind", "status", "sample", "because", "relates"] as const;
 const NOTE_META = new RegExp(`^(${NOTE_META_KEYS.join("|")}):[ \\t]*(.*)$`);
 
 function parseNote(heading: string, text: string): Parsed<IvyNote> {
@@ -227,6 +228,7 @@ function parseNote(heading: string, text: string): Parsed<IvyNote> {
       trigger,
       model,
       ...(meta.get("mode") ? { mode: meta.get("mode") } : {}),
+      ...(meta.get("run") ? { run: meta.get("run") } : {}),
       kind: kind as NoteKind,
       status: status as NoteStatus,
       sample: meta.get("sample") === "true",

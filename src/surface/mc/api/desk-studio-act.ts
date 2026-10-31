@@ -1,3 +1,7 @@
+import type { RangerRunner } from "../desk/actions";
+import { readStudioFiles } from "../desk/studio/read";
+import { buildStudioView } from "../desk/studio/view";
+import { enqueueSparring, withThinking } from "../desk/studio/thinking";
 import type { DeskRuntime } from "../desk/compose";
 import { StudioActSchema } from "../desk/studio/acts";
 import type { GitRunner } from "../desk/studio/git";
@@ -7,6 +11,7 @@ const answer = (status: number, body: Record<string, unknown>): Response => Resp
 const fail = (status: number, error: string, extra: Record<string, unknown> = {}): Response => answer(status, { ok: false, error, ...extra });
 
 export interface DeskStudioActDeps {
+  run?: RangerRunner;
   git?: GitRunner;
   lock?: StudioWriteLock;
   now?: () => Date;
@@ -23,6 +28,13 @@ export async function handleDeskStudioAct(req: Request, runtime: DeskRuntime | u
     const issue = parsed.error.issues[0];
     return fail(400, issue ? `${issue.path.join(".") || "The request"} ${issue.message}` : "The request is not a Studio act.");
   }
+  if (parsed.data.act === "spar") {
+    const { files, problems } = await readStudioFiles(desk.studio.dir);
+    const studio = buildStudioView(files, desk.studio, desk.areas, problems);
+    const result = await enqueueSparring({ studio, dir: desk.studio.dir, cli: desk.rangerCli, act: parsed.data, requestId: body.requestId, ...(deps.run ? { run: deps.run } : {}) });
+    if (!result.ok) return fail(result.status, result.error);
+    return answer(200, { ...result, studio: await withThinking(studio, desk.studio.dir, desk.rangerCli, deps.run) });
+  }
   const result = await runStudioAct({
     options: desk.studio,
     areas: desk.areas,
@@ -33,5 +45,5 @@ export async function handleDeskStudioAct(req: Request, runtime: DeskRuntime | u
     ...(deps.lock ? { lock: deps.lock } : {}),
   });
   if (!result.ok) return fail(result.status, result.error, result.needsPark ? { needsPark: true } : {});
-  return answer(200, result);
+  return answer(200, { ...result, studio: await withThinking(result.studio, desk.studio.dir, desk.rangerCli, deps.run) });
 }

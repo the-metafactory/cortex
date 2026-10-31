@@ -30,6 +30,8 @@ const thread = (slug: string, place: number, over: Partial<StudioThreadView> = {
 });
 
 const STUDIO: StudioView = {
+  personas: ["A skeptic"],
+  thinking: { kind: "ready", dailyRuns: { local: 5, cloud: 5 }, runs: [] },
   maxActive: 3,
   yesFilter: { questions: ["Is this mine to do?", "Does it fit my capacity?", "What will I stop doing for it?"], fromConfig: false },
   areas: [{ id: "lab", label: "Lab", color: "#7c3aed", policy: "cloud" }],
@@ -88,6 +90,16 @@ describe("the Studio board", () => {
     expect(open).toContain(">Dismiss</button>");
     expect(open).toContain(">Think tonight</button>");
     expect(open).toContain(">Park</button>");
+  });
+
+  it("explains a spent budget on every thinking button and retains queued deferrals", () => {
+    const studio: StudioView = { ...STUDIO, thinking: { kind: "ready", dailyRuns: { local: 0, cloud: 0 }, runs: [{ runUuid: "run-1", params: { thread: "one", mode: "red-team", requestId: "request-1" }, status: "queued", reason: "Deferred until tomorrow: the cloud daily run budget is spent", startedAt: null, policy: null }] } };
+    const html = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} at={AT} />);
+    expect(html).toContain("Red team · budget spent");
+    expect(html).toContain("Think now · budget spent");
+    expect(html).toContain("Pending: red team");
+    expect(html).toContain("Deferred until tomorrow");
+    expect(html).toContain("What would A skeptic say?");
   });
 
   it("asks for a response while Ivy waits, and not after one", () => {

@@ -1,3 +1,4 @@
+import { threadThinking, type ThreadThinking } from "./thinking-view";
 import type { AreaPolicy } from "../types";
 import { areaLookup, latestNote, sameSource, waitsOnYou, type BoardArea } from "./board";
 import type { IvyNote, LogEntry, MaterialLink } from "./format";
@@ -15,6 +16,8 @@ export type PageOutcome =
 
 export interface ThreadPage {
   thread: StudioThreadView;
+  personas: string[];
+  thinking: ThreadThinking;
   typeLabel: string;
   where: string;
   areas: BoardArea[];
@@ -69,6 +72,8 @@ export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesCo
   const stands = notes.filter((n) => isGhost(n) && n.kind === "stand");
   return {
     thread,
+    personas: studio.personas ?? [],
+    thinking: threadThinking(studio, thread),
     typeLabel: TYPE_LABEL[thread.type],
     where: whereLine(thread, studio.maxActive),
     areas: thread.areas.map(area),
