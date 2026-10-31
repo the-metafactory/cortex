@@ -15,6 +15,7 @@ export interface StudioOptions {
   filer?: EndpointConfig & { local?: EndpointConfig };
   maxActive: number;
   yesFilter?: string[];
+  personas?: string[];
 }
 
 export interface DeskArea {

@@ -5,6 +5,7 @@ import { dayMonth, localDate } from "../../desk/studio/labels";
 import type { ThreadPage } from "../../desk/studio/page";
 import { relationCount, type Relation } from "../../desk/studio/relates";
 import type { StudioActs } from "../hooks/use-studio-act";
+import { Sparring } from "./desk-studio-sparring";
 import { CloseForm, RespondBox } from "./desk-studio-acts";
 import { AreaChips, ModelBadge, dayMonthTime, weekdayDayTime } from "./desk-studio-parts";
 
@@ -356,6 +357,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack }
               <GhostActions keep="Keep it as my stand" note={page.standProposal} acting={acting} />
             </NoteCard>
           )}
+          <Sparring page={page} {...(acts ? { acts } : {})} />
           <Outcome page={page} acting={acting} today={localDate(new Date())} />
         </div>
         <div className="dst-col left">

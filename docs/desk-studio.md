@@ -12,6 +12,7 @@ mc:
     studio:
       dir: ~/threads        # a git working tree; every Studio change is a commit here
       maxActive: 5          # optional; default 5
+      personas: [A skeptic, A first-time visitor]
       yesFilter:            # optional; the questions asked when you open a thread
         - Does it keep my autonomy?
         - Is it a whole Yes?
@@ -107,6 +108,7 @@ Rules:
 - **Ivy's notes** are append-only H3 entries. The heading is an ISO time with a zone. Below it come metadata lines, then a blank line and the note text:
   - `trigger:` (required) names what started the note.
   - `model:` (required) names the model policy or model that wrote it.
+  - `mode:` names the thinking mode; `run:` identifies the native Ranger job that wrote the note. Both are optional for older or manually written notes.
   - `kind:` is `note` (default), `stand` (a proposed change to "Where I stand"; the text is the proposed stand), `idea` or `relation` (a proposed relation; see below).
   - `status:` is `open` (default), `kept` or `dismissed`.
   - `because:` gives the reason for a `stand` proposal.
@@ -185,6 +187,7 @@ Goals, events and people link to their `href` when the material or the event has
 
 | act | fields | writes |
 | --- | --- | --- |
+| `spar` | `thread`, `mode` | enqueues native `ivy-think`; its eventual note is a separate git commit |
 | `respond` | `thread`, `text` | a Responses entry; clears "Ivy waits on you" |
 | `keep`, `dismiss` | `thread`, `note` (the note's heading time) | the note's `status:`; keeping a `stand` also replaces "Where I stand" |
 | `park` | `thread` | `state: parked` |
@@ -195,12 +198,12 @@ Goals, events and people link to their `href` when the material or the event has
 
 Rules:
 
-- Each act changes the files and makes one commit whose subject names the act (`Studio: Answer Ivy on desk-open-source`) and whose body carries `Desk-Request: <requestId>`. Each changed thread's Log gains one line.
+- Each file-writing act changes the files and makes one commit whose subject names the act (`Studio: Answer Ivy on desk-open-source`) and whose body carries `Desk-Request: <requestId>`. Each changed thread's Log gains one line.
 - A request id that is already in the history is answered with that commit, and nothing is written again, also after a restart.
 - A directory that is not a git working tree, or that has uncommitted changes, is refused with a 409 and a clear error; nothing is written. A failed commit puts the files back.
 - Opening or bringing back a thread while `maxActive` threads are active needs `park`, an active thread to park; without it the answer is a 409 with `needsPark: true`.
 - `open` from a proposal keeps the proposal's areas, with the chosen `area` first; an `area` outside them replaces them. A capture becomes a `question` thread in the chosen `area` with the capture as material. Yes-filter `answers` map a question from the filter to an answer of up to 300 characters; the page sends `yes`, `not sure` or `no` for each question but the last, and free text for the last one. Answers to questions the filter does not ask are ignored. They land in a `## Yes-filter` section, and the Log line counts the yes, not sure and no answers.
-- The answer is `{ ok, message, commit, replayed, studio }`, where `studio` is the fresh `GET /api/desk/studio` view, so the page redraws without waiting for its next poll.
+- File-writing acts answer `{ ok, message, commit, replayed, studio }`, where `studio` is the fresh `GET /api/desk/studio` view, so the page redraws without waiting for its next poll.
 
 ## Capture filing
 
@@ -226,3 +229,14 @@ The model returns `{ "thread": "slug or null", "match": true, "reason": "one sen
 Every successful filing appears in Done for you, with the reason and Undo. Undo removes that capture in a new commit and preserves later thread changes. A capture that has moved or changed cannot be undone automatically. Filing and Undo share the Studio's clean-tree checks, request replay, and write lock.
 
 `POST /api/desk/create` accepts `{ "requestId": "...", "kind": "capture", "fields": { "text": "..." } }`. `POST /api/desk/capture/undo` accepts `{ "requestId": "...", "id": "capture-..." }`. Both pass the same identity and rebind gates as other Desk writes.
+
+
+## Sparring and Think now
+
+On an open thread, Think now, Grill me, Argue the other side, Red team and First principles enqueue Ranger's configured `ivy-think` job. Each name in `mc.desk.studio.personas` adds a “What would X say?” button. Personas are optional, with at most 20 names of up to 100 characters. The Desk uses the existing `mc.desk.ranger.bin` and optional `config` settings. Ranger's Studio directory must match this Studio.
+
+The `spar` modes are `think`, `grill`, `other-side`, `red-team`, `first-principles` and `persona:<configured name>`. Every request carries its explicit mode and the trigger `You asked: <mode>`. An explicit mode bypasses the automatic once-per-thread daily limit. It still consumes the native daily budget for the thread's strictest model policy; started failed attempts also count. Budgets reset at midnight UTC. When the budget is spent, buttons explain why they are disabled. A request already queued remains queued with Ranger's deferral reason.
+
+The response is `{ ok, message, studio }`. Ranger retains the request id after completion, so a retry uses the original job rather than starting another. Reusing an id with a different thread or mode returns a conflict. The page keeps the request pending until a note carrying that job's `run` UUID appears. Other notes cannot clear it. A failed job shows its failure reason. Queue and note changes arrive through the Studio's 30-second refresh.
+
+Thinking never replaces Where I stand automatically; generated stands remain proposals. Native Ranger execution continues to enforce the model policy and Studio write checks.

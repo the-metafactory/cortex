@@ -443,6 +443,7 @@ const DeskSchema = z.object({
       dir: z.string().min(1),
       filer: StudioFilerEndpointSchema.safeExtend({ local: StudioFilerEndpointSchema.optional() }).optional(),
       maxActive: z.number().int().min(1).max(20).default(5),
+      personas: z.array(z.string().trim().min(1).max(100).regex(/^[^\r\n]+$/)).max(20).optional(),
       yesFilter: z.array(z.string().trim().min(1).max(200)).min(1).max(12).optional(),
     })
     .optional(),
