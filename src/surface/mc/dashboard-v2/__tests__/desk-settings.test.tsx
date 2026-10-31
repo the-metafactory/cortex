@@ -1,16 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SettingsBody } from "../components/desk-settings";
-import { changeSenders, changeVips } from "../lib/desk-settings";
+import { changeSenders, changeVips, type SenderRow } from "../lib/desk-settings";
 import { NOTIFY_LINE, type NotifyState } from "../lib/desk-notify";
 
 const noop = (): void => {};
 const added = async (): Promise<boolean> => true;
+const list = (rows: SenderRow[] | null, note: string | null = null) => ({ rows, note, onAdd: added, onRemove: noop });
+const none = list([]);
 
 describe("the Desk settings page", () => {
   it("lists the VIPs with a way to remove each and to add one", () => {
     const html = renderToStaticMarkup(
-      <SettingsBody vips={[{ address: "ada@example.org", label: "Ada" }, { address: "@example.ch", label: null }]} note={null} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} onAdd={added} onRemove={noop} />,
+      <SettingsBody vips={list([{ address: "ada@example.org", label: "Ada" }, { address: "@example.ch", label: null }])} unimportant={none} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} />,
     );
     expect(html).toContain("<h1 class=\"desk-set-h\">Settings</h1>");
     expect(html).toContain("<h2>VIPs</h2>");
@@ -23,18 +25,18 @@ describe("the Desk settings page", () => {
   });
 
   it("says how to add the first VIP when there are none", () => {
-    const html = renderToStaticMarkup(<SettingsBody vips={[]} note={null} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} onAdd={added} onRemove={noop} />);
+    const html = renderToStaticMarkup(<SettingsBody vips={list([])} unimportant={none} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} />);
     expect(html).toContain("No VIPs yet.");
     expect(html).not.toContain("Remove ");
   });
 
   it("shows why a change failed", () => {
-    const html = renderToStaticMarkup(<SettingsBody vips={[]} note="address must be an email address" busy={false} onBack={noop} notify="granted" onEnableNotify={noop} onAdd={added} onRemove={noop} />);
+    const html = renderToStaticMarkup(<SettingsBody vips={list([], "address must be an email address")} unimportant={none} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} />);
     expect(html).toContain('role="alert">address must be an email address</p>');
   });
 
   it("offers to turn notifications on only while the browser has not been asked", () => {
-    const body = (notify: NotifyState): string => renderToStaticMarkup(<SettingsBody vips={[]} note={null} busy={false} onBack={noop} notify={notify} onEnableNotify={noop} onAdd={added} onRemove={noop} />);
+    const body = (notify: NotifyState): string => renderToStaticMarkup(<SettingsBody vips={list([])} unimportant={none} busy={false} onBack={noop} notify={notify} onEnableNotify={noop} />);
     expect(body("default")).toContain(">Turn on notifications</button>");
     for (const state of ["granted", "denied", "insecure", "off", "unsupported"] as const) {
       expect(body(state)).not.toContain(">Turn on notifications</button>");
@@ -45,7 +47,7 @@ describe("the Desk settings page", () => {
   });
 
   it("shows the load error in place of the list when the VIPs could not be read", () => {
-    const html = renderToStaticMarkup(<SettingsBody vips={null} note="Mission Control did not answer: offline" busy={false} onBack={noop} notify="granted" onEnableNotify={noop} onAdd={added} onRemove={noop} />);
+    const html = renderToStaticMarkup(<SettingsBody vips={list(null, "Mission Control did not answer: offline")} unimportant={none} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} />);
     expect(html).toContain("Mission Control did not answer: offline");
     expect(html).not.toContain('aria-label="Add a VIP"');
   });
@@ -54,8 +56,7 @@ describe("the Desk settings page", () => {
 describe("the unimportant senders on the settings page", () => {
   it("lists them with a way to remove each and to add one, next to the VIPs", () => {
     const html = renderToStaticMarkup(
-      <SettingsBody vips={[]} note={null} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} onAdd={added} onRemove={noop}
-        unimportant={{ rows: [{ address: "gitlab@gitlab.example", label: "GitLab" }], note: null, onAdd: added, onRemove: noop }} />,
+      <SettingsBody vips={none} unimportant={list([{ address: "gitlab@gitlab.example", label: "GitLab" }])} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} />,
     );
     expect(html).toContain("<h2>Unimportant senders</h2>");
     expect(html).toContain("GitLab<small>gitlab@gitlab.example</small>");
@@ -70,7 +71,7 @@ describe("the unimportant senders on the settings page", () => {
       seen.push(`${init.method} ${path}`);
       return Response.json({ unimportant: [] });
     };
-    expect(await changeSenders("unimportant", { op: "remove", address: "@gitlab.example" }, fake)).toEqual({ ok: true, vips: [] });
+    expect(await changeSenders("unimportant", { op: "remove", address: "@gitlab.example" }, fake)).toEqual({ ok: true, rows: [] });
     expect(seen).toEqual(["DELETE /api/desk/unimportant?address=%40gitlab.example"]);
   });
 });
@@ -85,9 +86,9 @@ describe("changeVips", () => {
   it("adds, removes and lists through the VIP API and returns the stored list", async () => {
     seen.length = 0;
     const list = { vips: [{ address: "ada@example.org", label: null }] };
-    expect(await changeVips({ op: "add", address: "Ada@example.org" }, answering(200, list))).toEqual({ ok: true, vips: list.vips });
-    expect(await changeVips({ op: "remove", address: "@example.ch" }, answering(200, { vips: [] }))).toEqual({ ok: true, vips: [] });
-    expect(await changeVips({ op: "list" }, answering(200, list))).toEqual({ ok: true, vips: list.vips });
+    expect(await changeVips({ op: "add", address: "Ada@example.org" }, answering(200, list))).toEqual({ ok: true, rows: list.vips });
+    expect(await changeVips({ op: "remove", address: "@example.ch" }, answering(200, { vips: [] }))).toEqual({ ok: true, rows: [] });
+    expect(await changeVips({ op: "list" }, answering(200, list))).toEqual({ ok: true, rows: list.vips });
     expect(seen).toEqual([
       { path: "/api/desk/vips", method: "POST", body: { address: "Ada@example.org", label: null } },
       { path: "/api/desk/vips?address=%40example.ch", method: "DELETE", body: null },

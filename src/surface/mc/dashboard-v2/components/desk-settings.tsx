@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { changeSenders, type DeskVipRow, type SenderListId, type VipChange } from "../lib/desk-settings";
+import { changeSenders, type SenderChange, type SenderListId, type SenderRow } from "../lib/desk-settings";
 import { browserNotifyEnv, NOTIFY_LINE, notifyState, requestNotifications, type NotifyState } from "../lib/desk-notify";
 import type { DeskMailClassifier, DeskView } from "../../desk/types";
 import "./desk-view.css";
 
 interface ListState {
-  rows: DeskVipRow[] | null;
+  rows: SenderRow[] | null;
   note: string | null;
 }
 
@@ -16,11 +16,11 @@ export function DeskSettings({ view, onBack }: { view: DeskView; onBack: () => v
   const [notify, setNotify] = useState<NotifyState>(() => notifyState(view.notifications, browserNotifyEnv()));
   const [busy, setBusy] = useState(false);
 
-  const apply = async (list: SenderListId, change: VipChange): Promise<boolean> => {
+  const apply = async (list: SenderListId, change: SenderChange): Promise<boolean> => {
     setBusy(true);
     const r = await changeSenders(list, change);
     setBusy(false);
-    setLists((all) => ({ ...all, [list]: r.ok ? { rows: r.vips, note: null } : { ...all[list], note: r.text } }));
+    setLists((all) => ({ ...all, [list]: r.ok ? { rows: r.rows, note: null } : { ...all[list], note: r.text } }));
     return r.ok;
   };
 
@@ -29,10 +29,16 @@ export function DeskSettings({ view, onBack }: { view: DeskView; onBack: () => v
     void apply("unimportant", { op: "list" });
   }, []);
 
+  const listProps = (list: SenderListId): SenderListProps => ({
+    ...lists[list],
+    onAdd: (address) => apply(list, { op: "add", address }),
+    onRemove: (address) => void apply(list, { op: "remove", address }),
+  });
+
   return (
     <SettingsBody
-      vips={lists.vips.rows}
-      note={lists.vips.note}
+      vips={listProps("vips")}
+      unimportant={listProps("unimportant")}
       busy={busy}
       onBack={onBack}
       notify={notify}
@@ -41,36 +47,25 @@ export function DeskSettings({ view, onBack }: { view: DeskView; onBack: () => v
           if (state) setNotify(state);
         });
       }}
-      onAdd={(address) => apply("vips", { op: "add", address })}
-      onRemove={(address) => void apply("vips", { op: "remove", address })}
-      unimportant={{
-        rows: lists.unimportant.rows,
-        note: lists.unimportant.note,
-        onAdd: (address) => apply("unimportant", { op: "add", address }),
-        onRemove: (address) => void apply("unimportant", { op: "remove", address }),
-      }}
       classifier={view.mailClassifier ?? null}
     />
   );
 }
 
 export interface SenderListProps {
-  rows: DeskVipRow[] | null;
+  rows: SenderRow[] | null;
   note: string | null;
   onAdd: (address: string) => Promise<boolean>;
   onRemove: (address: string) => void;
 }
 
 export interface SettingsBodyProps {
-  vips: DeskVipRow[] | null;
-  note: string | null;
+  vips: SenderListProps;
+  unimportant: SenderListProps;
   busy: boolean;
   onBack: () => void;
   notify: NotifyState;
   onEnableNotify: () => void;
-  onAdd: (address: string) => Promise<boolean>;
-  onRemove: (address: string) => void;
-  unimportant?: SenderListProps;
   classifier?: DeskMailClassifier | null;
 }
 
@@ -147,7 +142,7 @@ function SenderCard({ text, list, busy }: { text: SenderCardText; list: SenderLi
   );
 }
 
-export function SettingsBody({ vips, note, busy, onBack, notify, onEnableNotify, onAdd, onRemove, unimportant, classifier = null }: SettingsBodyProps) {
+export function SettingsBody({ vips, unimportant, busy, onBack, notify, onEnableNotify, classifier = null }: SettingsBodyProps) {
   return (
     <div className="desk desk-settings">
       <div className="desk-top">
@@ -164,9 +159,9 @@ export function SettingsBody({ vips, note, busy, onBack, notify, onEnableNotify,
       <main className="desk-set-main">
         <h1 className="desk-set-h">Settings</h1>
 
-        <SenderCard text={VIP_TEXT} list={{ rows: vips, note, onAdd, onRemove }} busy={busy} />
+        <SenderCard text={VIP_TEXT} list={vips} busy={busy} />
 
-        {unimportant && <SenderCard text={UNIMPORTANT_TEXT} list={unimportant} busy={busy} />}
+        <SenderCard text={UNIMPORTANT_TEXT} list={unimportant} busy={busy} />
 
         <section className="desk-set-card" aria-label="Notifications">
           <h2>Notifications</h2>

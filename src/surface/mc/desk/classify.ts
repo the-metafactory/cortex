@@ -162,12 +162,15 @@ interface Row {
 
 const isCategory = (v: string): v is MailCategory => MAIL_CATEGORIES.includes(v as MailCategory);
 
+export const UNIMPORTANT_MODEL = "desk:unimportant";
+export const UNIMPORTANT_REASON = "You marked mail from this sender unimportant.";
+
 export function readClassifications(db: Database, ids: string[]): Map<string, MailClassification> {
   const out = new Map<string, MailClassification>();
   if (ids.length === 0) return out;
   const rows = db
-    .query<Row, [string]>("SELECT message_id, category, meeting_key, reason FROM desk_mail_classes WHERE message_id IN (SELECT value FROM json_each(?))")
-    .all(JSON.stringify(ids));
+    .query<Row, [string, string]>("SELECT message_id, category, meeting_key, reason FROM desk_mail_classes WHERE message_id IN (SELECT value FROM json_each(?)) AND model != ?")
+    .all(JSON.stringify(ids), UNIMPORTANT_MODEL);
   for (const r of rows) {
     if (!isCategory(r.category)) continue;
     out.set(r.message_id, { category: r.category, ...(r.meeting_key ? { meetingKey: r.meeting_key } : {}), reason: r.reason });
@@ -181,6 +184,11 @@ export function saveClassification(db: Database, id: string, c: MailClassificati
   ).run(id, c.category, c.meetingKey ?? null, c.reason, model, now);
 }
 
+/** Sorts one mail as bulk because its sender is unimportant. The row counts only while the sender stays listed. */
+export function saveUnimportant(db: Database, id: string, now: number): void {
+  saveClassification(db, id, { category: "bulk", reason: UNIMPORTANT_REASON }, UNIMPORTANT_MODEL, now);
+}
+
 export interface ClassifyInput {
   now: number;
   mail: ClassifierMail[];
@@ -188,9 +196,6 @@ export interface ClassifyInput {
   vips: string[];
   unimportant?: string[];
 }
-
-export const UNIMPORTANT_MODEL = "desk:unimportant";
-export const UNIMPORTANT_REASON = "You marked mail from this sender unimportant.";
 
 export interface PassResult {
   classified: number;
@@ -226,21 +231,10 @@ export class MailClassifier {
     return this.running;
   }
 
-  private markUnimportant(db: Database, input: ClassifyInput, unimportant: string[]): void {
-    if (unimportant.length === 0) return;
-    const listed = new Set(unimportant);
-    const vips = new Set(input.vips);
-    const unread = input.mail.filter((m) => m.unread && isUnimportant(listed, vips, m.from.address));
-    const known = readClassifications(db, unread.map((m) => m.id));
-    for (const m of unread) {
-      if (known.get(m.id)?.category === "bulk") continue;
-      saveClassification(db, m.id, { category: "bulk", reason: UNIMPORTANT_REASON }, UNIMPORTANT_MODEL, input.now);
-      this.retryAt.delete(m.id);
-    }
-  }
-
   private pending(db: Database, input: ClassifyInput): ClassifierMail[] {
-    const unread = input.mail.filter((m) => m.unread);
+    const listed = new Set(input.unimportant ?? []);
+    const vips = new Set(input.vips);
+    const unread = input.mail.filter((m) => m.unread && !isUnimportant(listed, vips, m.from.address));
     const known = readClassifications(db, unread.map((m) => m.id));
     return unread
       .filter((m) => !known.has(m.id) && (this.retryAt.get(m.id) ?? 0) <= input.now)
@@ -253,7 +247,6 @@ export class MailClassifier {
     for (const [id, at] of this.retryAt) if (at <= input.now) this.retryAt.delete(id);
     db.query("DELETE FROM desk_mail_classes WHERE classified_at < ?").run(input.now - KEEP_MS);
     const unimportant = input.unimportant ?? [];
-    this.markUnimportant(db, input, unimportant);
     const meetings = upcomingMeetings(input.events, input.now, CLASSIFY_WINDOW_MS).map((e) => ({ key: eventKey(e), title: e.title, start: e.start }));
     const keys = new Set(meetings.map((m) => m.key));
     for (const m of this.pending(db, input)) {

@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { oneLine } from "./actions";
-import { saveClassification, UNIMPORTANT_MODEL, UNIMPORTANT_REASON } from "./classify";
+import { saveUnimportant } from "./classify";
 import { CommandTimeout } from "./spawn";
 import type { WriterRunner } from "./create";
 import type { SourceMail, SourceReading } from "./sources/command";
@@ -80,6 +80,6 @@ export function markUnimportant(db: Database, mail: ListedMail, now: number): Ma
     return refuse(409, `${who} is on your VIP list, and VIPs always show. Remove them there first.`);
   }
   addSender(db, "unimportant", address, mail.from.name ?? null, now);
-  saveClassification(db, mail.id, { category: "bulk", reason: UNIMPORTANT_REASON }, UNIMPORTANT_MODEL, now);
+  saveUnimportant(db, mail.id, now);
   return { ok: true, message: `Mail from ${who} counts as bulk from now on. You can change this in Settings.` };
 }

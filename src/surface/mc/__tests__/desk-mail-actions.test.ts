@@ -55,6 +55,7 @@ const post = (body: unknown): Request =>
   new Request("http://localhost/api/desk/mail", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
 let db: Database;
+const storedClass = (id: string) => db.query<{ category: string; model: string }, [string]>("SELECT category, model FROM desk_mail_classes WHERE message_id = ?").get(id);
 beforeEach(() => { db = initDatabase(":memory:"); });
 afterEach(() => { db.close(); });
 
@@ -165,12 +166,27 @@ describe("Unimportant on a mail item", () => {
     const res = await handleDeskMail(post({ action: "unimportant", key: "mail:g1@gitlab.example" }), db, rt, { now: () => NOW });
     expect(await res.json()).toEqual({ ok: true, message: "Mail from GitLab counts as bulk from now on. You can change this in Settings." });
     expect(listSenders(db, "unimportant").map((s) => [s.address, s.label])).toEqual([["gitlab@gitlab.example", "GitLab"]]);
-    expect(readClassifications(db, ["g1@gitlab.example"]).get("g1@gitlab.example")?.category).toBe("bulk");
+    expect(storedClass("g1@gitlab.example")).toEqual({ category: "bulk", model: UNIMPORTANT_MODEL });
     const after = (await view(rt)).items.find((i) => i.key === "mail:g1@gitlab.example");
     expect(after?.why).toBe("You marked mail from this sender unimportant.");
     expect(after?.actions[0]?.id).toBe("mail.seen");
     expect(after?.actions.some((a) => a.id === "mail.unimportant")).toBe(false);
     expect(after?.score).toBeLessThanOrEqual(before?.score ?? 0);
+  });
+
+  it("lets go of the bulk verdict once the sender is removed in Settings, and the model sorts the mail again", async () => {
+    const rt = await deskWith([GITLAB]);
+    await handleDeskMail(post({ action: "unimportant", key: "mail:g1@gitlab.example" }), db, rt, { now: () => NOW });
+    const del = new Request("http://localhost/api/desk/unimportant?address=gitlab%40gitlab.example", { method: "DELETE" });
+    expect((await handleDeskSenders(del, new URL(del.url), db, "unimportant", NOW)).status).toBe(200);
+    const after = (await view(rt)).items.find((i) => i.key === "mail:g1@gitlab.example");
+    expect(after?.why).not.toContain("unimportant");
+    expect(after?.actions.some((a) => a.id === "mail.unimportant")).toBe(true);
+    const seen: string[] = [];
+    const c = new MailClassifier({ baseUrl: "https://llm.example/v1", model: "chat-fast", timeoutSeconds: 5, maxPerPass: 10 }, async (req) => { seen.push(req.mail.id); return { category: "action", reason: "Asks for a fix." }; }, () => undefined);
+    await c.kick(db, { now: NOW, mail: [{ ...GITLAB, sourceId: "work-mail" }], events: [], vips: [], unimportant: [] });
+    expect(seen).toEqual(["g1@gitlab.example"]);
+    expect(storedClass("g1@gitlab.example")).toEqual({ category: "action", model: "chat-fast" });
   });
 
   it("refuses a VIP, because VIP wins", async () => {
@@ -187,7 +203,7 @@ describe("the classifier and unimportant senders", () => {
   const CONFIG = { baseUrl: "https://llm.example/v1", model: "chat-fast", timeoutSeconds: 5, maxPerPass: 10 };
   const listed = (m: SourceMail) => ({ ...m, sourceId: "work-mail" });
 
-  it("sorts later mail from an unimportant sender as bulk without calling the model, but asks about a VIP on the same domain", async () => {
+  it("never sends later mail from an unimportant sender to the model and ranks it bulk, but asks about a VIP on the same domain", async () => {
     const seen: ClassifierRequest[] = [];
     const c = new MailClassifier(CONFIG, async (req) => { seen.push(req); return { category: "action", reason: "Asks for a budget." }; }, () => undefined);
     const next = mail("g2@gitlab.example", "gitlab@gitlab.example");
@@ -195,11 +211,13 @@ describe("the classifier and unimportant senders", () => {
     await c.kick(db, { now: NOW, mail: [listed(next), listed(vip)], events: [], vips: ["lead@gitlab.example"], unimportant: ["@gitlab.example"] });
     expect(seen.map((r) => r.mail.id)).toEqual(["v1@gitlab.example"]);
     expect(seen[0]?.unimportant).toEqual(["@gitlab.example"]);
-    const sorted = readClassifications(db, ["g2@gitlab.example", "v1@gitlab.example"]);
-    expect(sorted.get("g2@gitlab.example")).toEqual({ category: "bulk", reason: "You marked mail from this sender unimportant." });
-    expect(sorted.get("v1@gitlab.example")?.category).toBe("action");
-    const model = db.query<{ model: string }, [string]>("SELECT model FROM desk_mail_classes WHERE message_id = ?").get("g2@gitlab.example")?.model;
-    expect(model).toBe(UNIMPORTANT_MODEL);
+    const classified = readClassifications(db, ["g2@gitlab.example", "v1@gitlab.example"]);
+    expect(classified.get("v1@gitlab.example")?.category).toBe("action");
+    const items = mailItems({ now: NOW, mail: [next, vip].map((m) => ({ ...m, area: null, sourceId: "work-mail" })), events: [], vips: new Set(["lead@gitlab.example"]), unimportant: new Set(["@gitlab.example"]), classified, trash: true });
+    expect(items.map((i) => [i.key, i.why, i.actions[0]?.id])).toEqual([
+      ["mail:g2@gitlab.example", "You marked mail from this sender unimportant.", "mail.seen"],
+      ["mail:v1@gitlab.example", "GitLab is on your VIP list. Asks for a budget.", "open"],
+    ]);
   });
 
   it("tells the model about the unimportant list", () => {

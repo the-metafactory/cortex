@@ -1,18 +1,16 @@
 import type { DeskView } from "../../desk/types";
 
-export const DESK_VIPS_PATH = "/api/desk/vips";
-
 export type SenderListId = "vips" | "unimportant";
 
-export type DeskVipRow = DeskView["vips"][number];
+export type SenderRow = DeskView["vips"][number];
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
-export type VipChange = { op: "list" } | { op: "add"; address: string; label?: string | null } | { op: "remove"; address: string };
+export type SenderChange = { op: "list" } | { op: "add"; address: string; label?: string | null } | { op: "remove"; address: string };
 
-export type VipResult = { ok: true; vips: DeskVipRow[] } | { ok: false; text: string };
+export type SenderResult = { ok: true; rows: SenderRow[] } | { ok: false; text: string };
 
-function request(list: SenderListId, change: VipChange): [string, RequestInit] {
+function request(list: SenderListId, change: SenderChange): [string, RequestInit] {
   const path = `/api/desk/${list}`;
   if (change.op === "add") {
     return [path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ address: change.address, label: change.label ?? null }) }];
@@ -21,13 +19,13 @@ function request(list: SenderListId, change: VipChange): [string, RequestInit] {
   return [path, { method: "GET" }];
 }
 
-function isVipRow(v: unknown): v is { address: string; label?: string | null } {
+function isSenderRow(v: unknown): v is { address: string; label?: string | null } {
   if (typeof v !== "object" || v === null) return false;
   const r = v as { address?: unknown; label?: unknown };
   return typeof r.address === "string" && (r.label === null || r.label === undefined || typeof r.label === "string");
 }
 
-export async function changeSenders(list: SenderListId, change: VipChange, fetchImpl: FetchLike = fetch): Promise<VipResult> {
+export async function changeSenders(list: SenderListId, change: SenderChange, fetchImpl: FetchLike = fetch): Promise<SenderResult> {
   const [path, init] = request(list, change);
   let res: Response;
   try {
@@ -38,10 +36,10 @@ export async function changeSenders(list: SenderListId, change: VipChange, fetch
   const parsed = (await res.json().catch(() => null)) as Record<string, unknown> | null;
   const rows = parsed?.[list];
   if (res.ok && Array.isArray(rows)) {
-    return { ok: true, vips: rows.filter(isVipRow).map((v) => ({ address: v.address, label: v.label ?? null })) };
+    return { ok: true, rows: rows.filter(isSenderRow).map((v) => ({ address: v.address, label: v.label ?? null })) };
   }
   const error = typeof parsed?.error === "string" ? parsed.error : "";
   return { ok: false, text: error || `Mission Control answered HTTP ${res.status}.` };
 }
 
-export const changeVips = (change: VipChange, fetchImpl: FetchLike = fetch): Promise<VipResult> => changeSenders("vips", change, fetchImpl);
+export const changeVips = (change: SenderChange, fetchImpl: FetchLike = fetch): Promise<SenderResult> => changeSenders("vips", change, fetchImpl);
