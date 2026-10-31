@@ -4,7 +4,7 @@ import type { DeskRuntime } from "../desk/compose";
 import { readStudioFiles } from "../desk/studio/read";
 import { buildStudioView } from "../desk/studio/view";
 import { runStudioTransaction } from "../desk/studio/writer";
-import { planSessionEnd, sessionEndpoint, sessionModel, sessionPrompt, sessionSubject, sessionThread, type SessionModel } from "../desk/studio/session";
+import { composerDraft, planSessionEnd, sessionEndpoint, sessionModel, sessionPrompt, sessionSubject, sessionThread, type SessionModel } from "../desk/studio/session";
 
 const queues = new WeakMap<Database, Map<string, Promise<void>>>();
 const answer = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -62,7 +62,7 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     if (request.action === "end") {
       if (session.phase.kind !== "open" && JSON.stringify(session.phase.outcome) !== JSON.stringify(request.outcome)) return fail(409, "This session already has a different ending. Reload its saved outcome.", session);
       if (session.phase.kind === "ended") return answer(200, { ok: true, session });
-      if (session.phase.kind === "open" && request.draft && session.turns.at(-1)?.text !== request.draft) session.draft = request.draft;
+      if (session.phase.kind === "open") session.draft = composerDraft(session.draft, request.draft, session.turns.at(-1)?.text);
       session.phase = { kind: "ending", outcome: request.outcome };
       save(db, dir, session);
       const ending = session;
@@ -78,9 +78,10 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     if (session.phase.kind !== "open") return fail(409, "This session has ended. Its exchange is retained.", session);
     const prior = session.turns.find(t => t.id === request.turn);
     if (prior && prior.text !== request.text) return fail(409, "That turn id already has different text.", session);
-    if (prior?.answer) return answer(200, { ok: true, session });
+    if (prior?.answer) { session.draft = composerDraft(session.draft, request.draft, request.text); save(db, dir, session); return answer(200, { ok: true, session }); }
     if (session.turns.some(t => !t.answer && t.id !== request.turn)) return fail(409, "Retry the unanswered turn or close and save the exchange first.", session);
     if (!prior && session.turns.length >= 30) return fail(409, "This short session is full. Save its note before starting another.", session);
+    session.draft = composerDraft(session.draft, request.draft, request.text);
     const thread = sessionThread(await context(), session.thread);
     if (!thread || thread.state === "closed") return fail(409, "The thread is unavailable. Your exchange is retained.", session);
     if (thread.policy === "local") session.policy = "local";

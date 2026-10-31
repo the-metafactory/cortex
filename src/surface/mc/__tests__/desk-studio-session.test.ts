@@ -142,3 +142,43 @@ test("dirty-tree end refusal retains the exchange for recovery and a clean retry
   expect(r.file()).not.toContain(result.reply); r.git("add", "."); r.git("commit", "-qm", "human addition");
   expect((await r.post({ action: "end", outcome: { kind: "leave" } })).status).toBe(200); expect(readFileSync(join(r.dir, "human.txt"), "utf8")).toBe("A human edit.");
 });
+
+
+test("clearing a draft after a refused ending excludes it from the eventual note", async () => {
+  const r = rig(); await r.start(); writeFileSync(join(r.dir, "scratch.txt"), "temporary dirty edit");
+  expect((await r.post({ action: "end", outcome: { kind: "leave" }, draft: "Obsolete unsent text." })).status).toBe(409);
+  rmSync(join(r.dir, "scratch.txt"));
+  expect((await r.post({ action: "end", outcome: { kind: "leave" }, draft: "" })).status).toBe(200);
+  expect(r.file()).not.toContain("Obsolete unsent text.");
+});
+
+test("sending a replacement retires a draft retained by an earlier refused ending", async () => {
+  const r = rig(); await r.start(); writeFileSync(join(r.dir, "scratch.txt"), "temporary dirty edit");
+  expect((await r.post({ action: "end", outcome: { kind: "leave" }, draft: "Discarded draft." })).status).toBe(409);
+  rmSync(join(r.dir, "scratch.txt")); await r.post({ action: "say", turn: crypto.randomUUID(), text: "Can you reword it around a narrow fold?", draft: "Can you reword it around a narrow fold?" });
+  expect((await r.post({ action: "end", outcome: { kind: "leave" } })).status).toBe(200);
+  expect(r.file()).not.toContain("Discarded draft."); expect(r.file()).toContain("Can you reword it around a narrow fold?");
+});
+
+
+test("composer snapshots distinguish absent, cleared and replacement drafts without changing saved turns", async () => {
+  const cases = [{ snapshot: undefined, expected: "Retained original draft." }, { snapshot: "", expected: null }, { snapshot: "Replacement draft.", expected: "Replacement draft." }];
+  for (const c of cases) {
+    const r = rig(); await r.start(); await r.say(); writeFileSync(join(r.dir, "scratch.txt"), "dirty");
+    expect((await r.post({ action: "end", outcome: { kind: "leave" }, draft: "Retained original draft." })).status).toBe(409);
+    rmSync(join(r.dir, "scratch.txt"));
+    expect((await r.post({ action: "end", outcome: { kind: "leave" }, ...(c.snapshot !== undefined ? { draft: c.snapshot } : {}) })).status).toBe(200);
+    expect(r.file()).toContain("You: Can you reword it around a narrow fold?");
+    if (c.expected) expect(r.file()).toContain(`You (unsent draft): ${c.expected}`);
+    else expect(r.file()).not.toContain("You (unsent draft)");
+    if (c.snapshot !== undefined) expect(r.file()).not.toContain("Retained original draft.");
+  }
+});
+
+test("replaying an answered turn can retain a separate edited next draft without changing that turn", async () => {
+  const r = rig(); await r.start(); const turn = crypto.randomUUID(); await r.say(undefined, turn);
+  const text = "Can you reword it around a narrow fold?";
+  expect((await r.post({ action: "say", turn, text, draft: "A separate edited next thought." })).status).toBe(200);
+  const saved = readStudioSession(r.db, r.dir, r.id); expect(saved?.turns).toHaveLength(1); expect(saved?.turns[0]?.text).toBe(text); expect(saved?.draft).toBe("A separate edited next thought.");
+  expect((await r.post({ action: "end", outcome: { kind: "leave" } })).status).toBe(200); expect(r.file()).toContain("A separate edited next thought.");
+});

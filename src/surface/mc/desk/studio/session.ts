@@ -68,3 +68,8 @@ export function planSessionEnd(ctx: ActContext, session: StudioSession, outcome:
     writes: [{ path: file.path, text }], removes: [], subject: `Record Studio session ${session.id}`, message: "The exchange is saved as a note in the thread.",
   };
 }
+
+export function composerDraft(saved: string | undefined, snapshot: string | undefined, submitted?: string): string | undefined {
+  const current = snapshot ?? saved;
+  return current === "" || current === submitted ? undefined : current;
+}
