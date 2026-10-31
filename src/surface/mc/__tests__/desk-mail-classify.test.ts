@@ -58,6 +58,10 @@ describe("the classifier answer", () => {
       .toEqual({ category: "meeting", meetingKey: KUNDEN_KEY, reason: "It sets the agenda." });
   });
 
+  it("treats an empty meeting key as none", () => {
+    expect(validateAnswer({ category: "fyi", meetingKey: "", reason: "News." }, keys)).toEqual({ category: "fyi", reason: "News." });
+  });
+
   it("drops a meeting key on bulk mail", () => {
     expect(validateAnswer({ category: "bulk", meetingKey: KUNDEN_KEY, reason: "A newsletter." }, keys)).toEqual({ category: "bulk", reason: "A newsletter." });
   });
@@ -128,6 +132,18 @@ describe("the classification pass", () => {
       vips: ["boss@example.org"],
     });
     expect(readClassifications(db, ["n1", "r1"])).toEqual(new Map([["n1", { category: "bulk", reason: "A newsletter." }]]));
+  });
+
+  it("offers meetings two weeks ahead and links one only once it is within three days", async () => {
+    const later = event("k9", "Board retreat", at("10:00", 9));
+    const seen: ClassifierRequest[] = [];
+    const c = new MailClassifier(CONFIG, async (req) => { seen.push(req); return { category: "meeting", meetingKey: "cal:work-calendar:k9", reason: "Retreat agenda." }; }, quiet);
+    await c.kick(db, { now: NOW, mail: [{ ...mail("r9", "Retreat agenda"), sourceId: "work-mail" }], events: [KUNDEN, later], vips: [] });
+    expect(seen[0]?.meetings.map((m) => m.key)).toEqual([KUNDEN_KEY, "cal:work-calendar:k9"]);
+    const classified = readClassifications(db, ["r9"]);
+    const rankAt = (now: number) => mailItems({ now, mail: [mail("r9", "Retreat agenda", { receivedAt: new Date(now).toISOString() })], events: [later], vips: new Set(), classified })[0];
+    expect(rankAt(NOW)?.eventKey).toBeUndefined();
+    expect(rankAt(NOW + 7 * 86_400_000)?.eventKey).toBe("cal:work-calendar:k9");
   });
 
   it("classifies at most maxPerPass mails per pass", async () => {

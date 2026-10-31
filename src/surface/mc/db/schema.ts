@@ -124,7 +124,7 @@ export const TABLE_NAMES = [
 export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS desk_mail_classes (
     message_id TEXT PRIMARY KEY,
-    category TEXT NOT NULL CHECK(category IN ('action','reply','meeting','fyi','bulk')),
+    category TEXT NOT NULL,
     meeting_key TEXT,
     reason TEXT NOT NULL,
     model TEXT NOT NULL,
