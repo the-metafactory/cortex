@@ -1,3 +1,4 @@
+import { HOST_NAME_RE } from "../../../../common/host-name";
 import { z } from "zod";
 import { runCommand } from "../spawn";
 
@@ -36,6 +37,16 @@ function printable(v: string): string {
 const headerText = (max: number) => z.string().transform(printable).pipe(z.string().min(1).max(max)).optional().catch(undefined);
 const verdict = z.preprocess((v) => (typeof v === "string" ? v.trim().toLowerCase() : v), z.enum(AUTH_VERDICTS)).optional().catch(undefined);
 
+const lenientList = <T>(item: z.ZodType<T>, keep: number) =>
+  z
+    .array(z.unknown())
+    .transform((list): T[] => list.flatMap((d) => { const p = item.safeParse(d); return p.success ? [p.data] : []; }).slice(0, keep))
+    .optional()
+    .catch(undefined);
+
+const hostName = z.string().trim().toLowerCase().max(253).regex(HOST_NAME_RE);
+const hostList = lenientList(hostName, 10);
+
 function present<T extends object>(record: T): Partial<T> | undefined {
   const kept = Object.fromEntries(Object.entries(record).filter(([, v]) => v !== undefined));
   return Object.keys(kept).length > 0 ? (kept as Partial<T>) : undefined;
@@ -47,7 +58,7 @@ export const MailHeadersSchema = z
     listId: headerText(300),
     listUnsubscribe: headerText(2000),
     listUnsubscribePost: headerText(200),
-    authResults: z.object({ spf: verdict, dkim: verdict, dmarc: verdict }).optional().catch(undefined),
+    authResults: z.object({ spf: verdict, dkim: verdict, dmarc: verdict, dkimDomains: hostList, spfDomain: hostName.optional().catch(undefined) }).optional().catch(undefined),
     replyTo: headerText(300),
     inReplyTo: headerText(1000),
   })
@@ -59,10 +70,23 @@ export interface MailHeaders {
   listId?: string;
   listUnsubscribe?: string;
   listUnsubscribePost?: string;
-  authResults?: Partial<Record<"spf" | "dkim" | "dmarc", (typeof AUTH_VERDICTS)[number]>>;
+  authResults?: Partial<Record<"spf" | "dkim" | "dmarc", (typeof AUTH_VERDICTS)[number]>> & { dkimDomains?: string[]; spfDomain?: string };
   replyTo?: string;
   inReplyTo?: string;
 }
+
+const MAX_LINKS = 20;
+const MailLinkSchema = z.object({
+  text: z.string().transform(printable).pipe(z.string().min(1).max(200)),
+  href: z.string().max(2000).refine((u) => /^https?:\/\//i.test(u) && URL.canParse(u)),
+});
+
+export interface MailLink {
+  text: string;
+  href: string;
+}
+
+const MailLinksSchema = lenientList<MailLink>(MailLinkSchema, MAX_LINKS);
 
 export const SourceMailSchema = z.object({
   kind: z.literal("mail"),
@@ -76,6 +100,7 @@ export const SourceMailSchema = z.object({
   url: safeLink.optional(),
   account: z.string().optional(),
   headers: MailHeadersSchema,
+  links: MailLinksSchema,
 });
 
 export type SourceEvent = z.infer<typeof SourceEventSchema>;

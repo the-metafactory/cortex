@@ -56,6 +56,7 @@ export interface MailClassification {
   predictedAction?: PredictedAction;
   evidence?: MailEvidence[];
   precedents?: MailPrecedents;
+  suspicious?: boolean;
 }
 
 interface ModelAccess {
@@ -215,7 +216,7 @@ const DetailsSchema = z.object({
   evidence: z.array(EvidenceSchema).max(MAX_EVIDENCE).nullish(),
 });
 
-type Extras = Pick<MailClassification, "summary" | "suggestedAction" | "evidence" | "predictedAction" | "precedents">;
+type Extras = Pick<MailClassification, "summary" | "suggestedAction" | "evidence" | "predictedAction" | "precedents" | "suspicious">;
 
 interface ExtrasInput {
   summary?: string | null;
@@ -223,15 +224,17 @@ interface ExtrasInput {
   evidence?: MailEvidence[] | null;
   predictedAction?: PredictedAction | null;
   precedents?: MailPrecedents | null;
+  suspicious?: boolean | null;
 }
 
-function extras({ summary, suggestedAction, evidence, predictedAction, precedents }: ExtrasInput): Extras {
+function extras({ summary, suggestedAction, evidence, predictedAction, precedents, suspicious }: ExtrasInput): Extras {
   return {
     ...(summary ? { summary } : {}),
     ...(suggestedAction ? { suggestedAction } : {}),
     ...(evidence?.length ? { evidence } : {}),
     ...(predictedAction ? { predictedAction } : {}),
     ...(precedents ? { precedents } : {}),
+    ...(suspicious === true ? { suspicious } : {}),
   };
 }
 
@@ -242,7 +245,8 @@ export function validateAnswer(answer: unknown, meetingKeys: ReadonlySet<string>
   const { category, commitment, meetingKey, reason } = parsed.data;
   if (meetingKey && !meetingKeys.has(meetingKey)) return null;
   const predictedAction = field(PredictedSchema, (answer as { predictedAction?: unknown }).predictedAction);
-  const more = { ...(details?.success ? extras(details.data) : {}), ...(commitment ? { commitment } : {}), ...(predictedAction ? { predictedAction } : {}) };
+  const suspicious = (answer as { suspicious?: unknown }).suspicious === true;
+  const more = { ...(details?.success ? extras(details.data) : {}), ...(commitment ? { commitment } : {}), ...(predictedAction ? { predictedAction } : {}), ...(suspicious ? { suspicious } : {}) };
   if (category === "bulk" || !meetingKey) return { category, reason, ...more };
   return { category, meetingKey, reason, ...more };
 }
@@ -263,7 +267,8 @@ export const SYSTEM_PROMPT = [
   "Mail from a sender on the unimportant list (an address, or a whole domain written as @domain) is bulk, unless the sender is also a VIP.",
   "examples are past mails like this one and what the person did with each (action), most similar first; weight 2 marks a correction the person made, which outweighs an ordinary decision. corrections lists the person's latest corrections of the Desk's suggestions.",
   `Predict what the person will do with this mail as predictedAction, one of ${PREDICTED_ACTIONS.join(", ")}. Follow the examples when they agree with each other and fit the mail; otherwise judge the mail on its own.`,
-  `Answer with one JSON object and nothing else: {"category": "...", "commitment": "request" | "invitation" | "none" | "unknown", "meetingKey": "..." (only for a meeting), "predictedAction": "...", "reason": "one plain sentence under ${MAX_REASON} characters"}.`,
+  "Set suspicious to true only when the mail looks like phishing or fraud: it pushes for credentials, payment, a gift card or an urgent click, or pretends to be someone it is not. Otherwise set it to false.",
+  `Answer with one JSON object and nothing else: {"category": "...", "commitment": "request" | "invitation" | "none" | "unknown", "meetingKey": "..." (only for a meeting), "predictedAction": "...", "suspicious": true | false, "reason": "one plain sentence under ${MAX_REASON} characters"}.`,
 ].join("\n");
 
 export function buildMessages({ mail, meetings, vips, unimportant, corrections, examples }: ClassifierRequest): { role: "system" | "user"; content: string }[] {
@@ -413,10 +418,10 @@ const parseStored =(raw: string): unknown => {
 function readDetails(raw: string | null): Extras & Pick<MailClassification, "commitment"> {
   const stored = raw ? field(StoredSchema, parseStored(raw)) : undefined;
   if (!stored) return {};
-  const { summary, suggestedAction, evidence, predictedAction, precedents } = stored;
+  const { summary, suggestedAction, evidence, predictedAction, precedents, suspicious } = stored;
   const items = Array.isArray(evidence) ? evidence.flatMap((e) => field(EvidenceSchema, e) ?? []).slice(0, MAX_EVIDENCE) : [];
   const commitment = stored.contractVersion === MAIL_CLASSIFIER_CONTRACT ? field(z.enum(MAIL_COMMITMENTS), stored.commitment) : undefined;
-  const learned = { predictedAction: field(PredictedSchema, predictedAction), precedents: field(PrecedentsSchema, precedents) };
+  const learned = { predictedAction: field(PredictedSchema, predictedAction), precedents: field(PrecedentsSchema, precedents), suspicious: suspicious === true };
   return { ...extras({ summary: field(SummarySchema, summary), suggestedAction: field(SuggestedSchema, suggestedAction), evidence: items, ...learned }), ...(commitment ? { commitment } : {}) };
 }
 

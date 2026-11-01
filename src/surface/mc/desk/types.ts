@@ -56,6 +56,7 @@ export interface DeskItemDetail {
   links: DeskLink[];
   evidence?: DeskEvidence[];
   precedents?: DeskPrecedent[];
+  suspicion?: string[];
 }
 
 export interface DeskPrecedent {
@@ -103,6 +104,7 @@ export interface DeskItem {
   mailDecision?: import("./mail-yes-filter").MailDecisionSummary;
   yesFilter?: import("./mail-yes-filter").MailYesFilter;
   reply?: { to: string; subject: string };
+  suspicious?: boolean;
 }
 
 export interface DeskInterrupt {

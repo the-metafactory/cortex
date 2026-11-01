@@ -146,7 +146,7 @@ describe("rule passes", () => {
     const { q, deps } = passDeps([moved("n1")]);
     await runMailRules([reading([mail("b1", "boss@corp.example"), mail("n1", "news@corp.example")])], deps);
     expect(q.calls.map((c) => (c.stdin as { messageId: string }).messageId)).toEqual(["n1"]);
-    expect(pendingRuleMail(db, [mail("b1", "boss@corp.example")], new Set(["boss@corp.example"]))).toEqual(new Set());
+    expect(pendingRuleMail(db, [mail("b1", "boss@corp.example")])).toEqual(new Set());
   });
 
   it("pauses and asks when one pass would move more than the cap, and Handle all runs it once", async () => {
@@ -170,7 +170,7 @@ describe("rule passes", () => {
     setRuleOn(db, "rule-reports@dmarc.example", true, NOW);
     setGrant(db, "mail.rules", false, NOW);
     expect((await runMailRules([reading([mail("m1", "reports@dmarc.example")])], deps)).handled).toBe(0);
-    expect(pendingRuleMail(db, [mail("m1", "reports@dmarc.example")], new Set())).toEqual(new Set());
+    expect(pendingRuleMail(db, [mail("m1", "reports@dmarc.example")])).toEqual(new Set());
     expect(q.calls).toEqual([]);
   });
 
@@ -258,9 +258,9 @@ describe("the Desk view and the rules API", () => {
 
   it("keeps mail a rule will handle away from the model, but not a paused rule's mail", async () => {
     approve("reports@dmarc.example");
-    expect(pendingRuleMail(db, [mail("m1", "reports@dmarc.example"), mail("m2", "ada@other.example")], new Set())).toEqual(new Set(["m1"]));
+    expect(pendingRuleMail(db, [mail("m1", "reports@dmarc.example"), mail("m2", "ada@other.example")])).toEqual(new Set(["m1"]));
     db.query("UPDATE desk_mail_rules SET held = 30").run();
-    expect(pendingRuleMail(db, [mail("m1", "reports@dmarc.example")], new Set())).toEqual(new Set());
+    expect(pendingRuleMail(db, [mail("m1", "reports@dmarc.example")])).toEqual(new Set());
   });
 
   it("logs a failed pass instead of dropping it", async () => {

@@ -1,3 +1,4 @@
+import { HOST_NAME_RE } from "../host-name";
 import { ParserPermissionsSchema } from "./desk-parser";
 import { RoutineOptionsSchema } from "./desk-routines";
 /**
@@ -538,11 +539,23 @@ export const DeskSchema = z.object({
       dmarc: z
         .object({
           command: z.array(z.string().min(1)).min(1),
-          domains: z.array(z.string().trim().toLowerCase().regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/, "mc.desk.mail.dmarc.domains holds domain names such as example.org")).min(1, "mc.desk.mail.dmarc.domains needs the domains you own: without them no report can fail").max(100),
+          domains: z.array(z.string().trim().toLowerCase().regex(HOST_NAME_RE, "mc.desk.mail.dmarc.domains holds domain names such as example.org")).min(1, "mc.desk.mail.dmarc.domains needs the domains you own: without them no report can fail").max(100),
           failOn: z.enum(DMARC_FAIL_ON).default("dmarc"),
           after: z.enum(DMARC_AFTER).default("archive"),
           timeoutSeconds: z.number().int().min(1).max(120).default(30),
           maxPerPass: z.number().int().min(1).max(200).default(20),
+        })
+        .optional(),
+      report: z
+        .object({
+          command: z.array(z.string().min(1)).min(1),
+          to: z.email("mc.desk.mail.report.to must be one email address").optional(),
+          timeoutSeconds: z.number().int().min(1).max(120).default(30),
+        })
+        .optional(),
+      suspicion: z
+        .object({
+          ownDomains: z.array(z.string().trim().toLowerCase().regex(HOST_NAME_RE, "mc.desk.mail.suspicion.ownDomains holds domain names such as example.org")).max(100),
         })
         .optional(),
     })

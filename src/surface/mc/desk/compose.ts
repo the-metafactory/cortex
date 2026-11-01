@@ -13,7 +13,8 @@ import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, ran
 import { DAY_MS, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceReading } from "./sources/command";
 import { listSenders, listVips } from "./vips";
-import type { MailActionsConfig } from "./mail-actions";
+import type { MailActionsConfig, MailReportConfig } from "./mail-actions";
+import { suspicionContext } from "./mail-suspicion";
 import { movedTarget } from "./mail-move";
 import { historySentence, mailLogFor, queryMailLog, type MailLogEntry } from "./mail-log";
 import { DEFAULT_MAIL_RULES, digestedIds, heldItems, listRules, pendingRuleMail, proposalItems, proposeRules, ruleViews, rulesOfRuns, type MailRuleLoop, type MailRulesConfig } from "./mail-rules";
@@ -89,6 +90,8 @@ export interface DeskOptions {
   mailEmbedder?: EmbedderConfig;
   mailRules?: MailRulesConfig;
   mailDmarc?: DmarcConfig;
+  mailReport?: MailReportConfig;
+  mailOwnDomains?: string[];
   mailLinks?: EvidenceLinks;
   voice?: VoiceOptions;
 }
@@ -167,7 +170,8 @@ export async function composeDesk(
   const mail = readings.flatMap((r) => r.mail.filter((m) => !digested.has(m.id) && (!deps.handled || movedTarget(deps.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
   const vipSet = new Set(vips.map((v) => v.address));
-  const ruleBound = pendingRuleMail(db, mail, vipSet);
+  const suspicion = suspicionContext(db, desk.mailOwnDomains);
+  const ruleBound = pendingRuleMail(db, mail, suspicion);
   const unimportant = listSenders(db, "unimportant").map((s) => s.address);
   const corrections = readCorrections(db);
   const activeCorrections = corrections.ok ? corrections.corrections : [];
@@ -208,7 +212,7 @@ export async function composeDesk(
   const dmarcCards = desk.mailDmarc ? dmarcItems(db, now, desk.mailDmarc, (id) => readings.find((r) => r.id === id)?.area ?? null) : [];
   const corrected = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)) }),
+    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
     ...ruleCards,
