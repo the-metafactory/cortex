@@ -14,6 +14,12 @@ const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 const waitForCrash = () => new Promise<void>(() => undefined);
 const emit = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+async function packageVersion(entryPoint: string) {
+  const metadata: unknown = await Bun.file(new URL("../package.json", import.meta.resolve(entryPoint))).json();
+  assert(metadata !== null && typeof metadata === "object" && "version" in metadata && typeof metadata.version === "string");
+  assert.equal(metadata.version, "1.4.0");
+  return metadata.version;
+}
 async function until(check: () => Promise<boolean> | boolean, label: string) {
   const started = Date.now();
   while (!(await check())) {
@@ -91,11 +97,14 @@ async function writer(store: string, phase: string) {
 async function reopen(store: string, phase: string) {
   const { harness, root, faux } = await open(store, phase, true);
   faux.setResponses([fauxAssistantMessage("Recovered from committed transcript")]);
+  harness.resume();
+  await root.waitForIdle(context);
   const duplicate = await root.submit({ type: "input", content: "Create sample", requestId: "input-1" }, context);
   const conflict = await root.submit({ type: "input", content: "CONFLICTING replacement payload", requestId: "input-1" }, context);
   assert.equal(duplicate.id, conflict.id);
   const settled = await duplicate.wait(context);
   const entries = await records(root);
+  assert.equal(entries.filter(entry => entry.kind === "pi.user").length, 1, "Reconnect dedup must not append another input");
   for (const kind of ["app.attachment", "app.decision", "app.provenance-fixture", "pi.user", "pi.assistant"]) assert(entries.some(entry => entry.kind === kind), kind);
   assert(!JSON.stringify(entries).includes("CONFLICTING replacement payload"));
   const ownerEffects = await exists(`${store}.owner`) ? (await readFile(`${store}.owner`, "utf8")).trim().split("\n") : [];
@@ -107,6 +116,8 @@ async function reopen(store: string, phase: string) {
     assert.equal(ownerEffects.length, 1);
     assert(JSON.stringify(toolResults).includes("scratch-object-1"));
     assert(entries.some(entry => entry.kind === "app.created" && JSON.stringify(entry.data).includes("owner-request-1")), "Successful owner result has correlated provenance");
+  } else if (phase === "during-model") {
+    assert.equal(ownerEffects.length, 0);
   }
   emit({ probe: "reopen", phase, settled, duplicateId: duplicate.id, conflictingId: conflict.id, conflictBehavior: "original wins silently; payload mismatch not rejected", ownerEffects, toolResults, entries });
   await harness.close(context);
@@ -235,7 +246,7 @@ if (mode && store) {
   else throw new Error(`Unknown mode ${mode}`);
 } else {
   scratchRoot = await mkdtemp(join(tmpdir(), "ivy-durable-qualification-"));
-  emit({ probe: "versions", executable: process.execPath, bun: Bun.version, nodeCompatibility: process.versions.node, sqlite: process.versions.sqlite, durable: "1.4.0", piAi: "1.4.0", chordStorageAdapter: "1.4.0", platform: process.platform, architecture: process.arch, scratch: "$SCRATCH", network: "fetch rejects; only faux provider registered" });
+  emit({ probe: "versions", executable: process.execPath, bun: Bun.version, nodeCompatibility: process.versions.node, sqlite: process.versions.sqlite, durable: await packageVersion("@earendil-works/pi-durable"), piAi: await packageVersion("@earendil-works/pi-ai/models"), chordStorageAdapter: await packageVersion("@earendil-works/chord"), platform: process.platform, architecture: process.arch, scratch: "$SCRATCH", network: "fetch rejects; only faux provider registered" });
   try {
     for (const checkpoint of ["normal", "during-model", "before-owner", "after-owner", "after-result"]) {
       const path = join(scratchRoot, `${checkpoint}.sqlite`);
