@@ -540,6 +540,16 @@ describe("a move the Desk cannot record", () => {
     expect(await itemKeys(rt)).toEqual([]);
   });
 
+  it("shows a restored mail again even when the Desk cannot record the Undo", async () => {
+    const rt = await deskWith([GITLAB], MOVING);
+    const r = queue([printed("Archiv", "Moved to Archiv."), printed("INBOX", "Moved back to INBOX from Archiv.")]);
+    const { undo } = await (await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "archive" }, r.run)).json();
+    db.exec("CREATE TRIGGER no_undo BEFORE UPDATE ON desk_mail_moves BEGIN SELECT RAISE(ABORT, 'disk full'); END");
+    const res = await send(rt, { action: "undo", move: undo }, r.run);
+    expect(res.status).toBe(500);
+    expect(await itemKeys(rt)).toEqual(["mail:g1@gitlab.example"]);
+  });
+
   it("refuses to block a sender address without a domain", async () => {
     const rt = await deskWith([mail("odd@x", "odd@", { from: { address: "odd@" } })], MOVING);
     const moved = await (await send(rt, { action: "move", key: "mail:odd@x", target: "junk" }, queue().run)).json();

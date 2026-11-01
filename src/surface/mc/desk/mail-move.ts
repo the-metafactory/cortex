@@ -37,7 +37,7 @@ export interface MoveDeps {
 
 export type MoveResult = { ok: true; message: string; undo?: string; block?: string; restored?: string } | { ok: false; status: number; error: string };
 
-const refuse = (status: number, error: string): { ok: false; status: number; error: string } => ({ ok: false, status, error });
+export const refuse = (status: number, error: string): { ok: false; status: number; error: string } => ({ ok: false, status, error });
 
 interface Printed {
   message: string;
@@ -147,11 +147,11 @@ export async function undoMove(id: string, deps: MoveDeps): Promise<MoveResult> 
   const claimed: Claimed = { key: claimKey(row.message_id), argv, request, command: "move", failed: (line) => `The mail was not moved back: ${line}`, timedOut: "The mail may be back; check INBOX." };
   return runClaimed(deps, config.timeoutSeconds, claimed, (stdout) => {
     const { message } = printed(stdout, "Moved back to INBOX.");
+    deps.ledger.forget(movedKey(row.target, row.message_id));
     deps.db.transaction(() => {
       deps.db.query("UPDATE desk_mail_moves SET undone_at = ? WHERE id = ?").run(deps.now, id);
       deps.db.query("UPDATE desk_done SET action = 'mail.move.undone', message = ?, updated_at = ? WHERE attempt_key = ?").run(message, deps.now, `mail-move:${id}`);
     })();
-    deps.ledger.forget(movedKey(row.target, row.message_id));
     return { ok: true, message, restored: `mail:${row.message_id}` };
   });
 }

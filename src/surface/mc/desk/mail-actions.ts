@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { oneLine } from "./actions";
 import { saveUnimportant } from "./classify";
-import { movedKey, moveMail, type MoveDeps, type MoveResult } from "./mail-move";
+import { movedKey, moveMail, refuse, type MoveDeps, type MoveResult } from "./mail-move";
 import { CommandTimeout } from "./spawn";
 import { replySubject } from "./mail-triage";
 import type { SourceMail, SourceReading } from "./sources/command";
@@ -24,9 +24,7 @@ const draftKey = (messageId: string): string => `draft:${messageId}`;
 
 export const MAX_REPLY_CHARS = 20_000;
 
-export type MailActionResult = { ok: true; message: string } | { ok: false; status: number; error: string };
-
-const refuse = (status: number, error: string): MailActionResult => ({ ok: false, status, error });
+export type MailActionResult = MoveResult;
 
 /** The mail behind a Desk item key, from the sources' last reading, never from the page. */
 export function findListedMail(readings: SourceReading[], itemKey: string): ListedMail | null {
