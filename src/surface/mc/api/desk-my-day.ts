@@ -12,7 +12,7 @@ export async function handleDeskMyDay(req: Request, db: Database, runtime: DeskR
   if (!parsed.success) return Response.json({ error: "Provide a valid My day change, date and request id." }, { status: 400 });
   const input = parsed.data;
   const key = input.command.op === "todo" ? input.command.key : null;
-  const source = key ? (await composeDesk(db, desk, vigil, { handled: runtime.ledger, sourceCache: runtime.sourceCache, now })).items.find(i => i.key === key) : undefined;
+  const source = key ? (await composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, handled: runtime.ledger, sourceCache: runtime.sourceCache, now })).items.find(i => i.key === key) : undefined;
   try {
     return Response.json(changeMyDay({ db, desk, now, ...input, ...(source ? { source } : {}) }), { headers: { "Cache-Control": "no-store" } });
   } catch (err) {

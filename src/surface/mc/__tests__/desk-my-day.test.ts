@@ -14,6 +14,9 @@ import { changeMyDay, readMyDay, movedKeys, sourceIdentity, localDay } from "../
 import { MyDayLane } from "../dashboard-v2/components/desk-my-day";
 import { MyDayRequestSchema, type MyDayCommand } from "../desk/my-day-schema";
 import { composeDesk, type DeskOptions } from "../desk/compose";
+import { z } from "zod";
+import { handleGetDesk } from "../api/desk";
+import type { WaitingTask } from "../desk/sources/waiting";
 import { handleDeskMyDay } from "../api/desk-my-day";
 import { SourceCache } from "../desk/sources/command";
 import { HandledLedger } from "../desk/actions";
@@ -263,6 +266,23 @@ describe("My day lane and day contract", () => {
       expect(view.inbox[0]?.dueDate).toBe("2026-11-04");
       expect(view.sources[0]?.url).toBe(`https://example.test/${kind}`);
       expect((await composeDesk(db, options, undefined, { now: NOW, sourceCache: cache })).items).toHaveLength(0);
+    } finally { await remote.stop(true); }
+  });
+  it("moves the displayed waiting-task snapshot through the actual GET and POST handlers", async () => {
+    const endedAt = new Date().toISOString();
+    const remote = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({ current: [], maps: [], needsYou: [{ key: "fixture", repo: "example/app", nodeId: "12", title: "Old Ranger title", status: "failed", endedAt, url: "https://example.test/12" }] }) });
+    const waiting = new Map<string, WaitingTask>([["example/app#12", { kind: "open", title: "Current waiting-task title", question: "Which path should we take?", url: "https://example.test/12" }]]);
+    const runtime = { options: { ...desk, rangerUrl: `http://127.0.0.1:${remote.port}` }, ledger: new HandledLedger(), waitingTasks: { read: async () => waiting } };
+    try {
+      const response = await handleGetDesk(db, runtime, undefined);
+      const view = z.object({ items: z.array(z.object({ key: z.string(), title: z.string(), todoFingerprint: z.string() })) }).parse(await response.json());
+      const seen = view.items.find(item => item.key === "ranger:example/app#12");
+      if (!seen) throw new Error("Missing displayed waiting task");
+      expect(seen.title).toContain("Current waiting-task title");
+      const request = new Request("http://localhost/api/desk/my-day", { method: "POST", body: JSON.stringify({ date: localDay(Date.now()), requestId: crypto.randomUUID(), command: { op: "todo", key: seen.key, fingerprint: seen.todoFingerprint } }) });
+      expect((await handleDeskMyDay(request, db, runtime)).status).toBe(200);
+      expect(readMyDay(db, runtime.options, Date.now()).inbox).toHaveLength(1);
+      expect(readMyDay(db, runtime.options, Date.now()).inbox[0]?.title).toBe(seen.title);
     } finally { await remote.stop(true); }
   });
   const mutationFixture = (authorized: boolean) => startServer({ ...DEFAULT_CONFIG, port: 0, governance: { principals: ["allowed@example.test"], localPrincipal: authorized ? "allowed@example.test" : "other@example.test" } }, db, { desk });
