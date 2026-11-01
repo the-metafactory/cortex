@@ -94,6 +94,7 @@ import { handleDeskRuling } from "./api/desk-ruling";
 import { handleGetDeskStudio } from "./api/desk-studio";
 import { handleDeskStudioAct } from "./api/desk-studio-act";
 import { handleDeskStudioSession } from "./api/desk-studio-session";
+import { handleConversations, type ConversationAccess } from "./api/conversations";
 import { GoalChecks, GoalStatuses } from "./desk/goals";
 import { RulingExplainLoop, RulingLedger, rulingExplainer } from "./desk/ruling";
 import { MailSimilarity } from "./desk/mail-similar";
@@ -177,6 +178,7 @@ export interface MissionControlViews {
   handoffView?: () => HandoffView | null;
   doctorView?: () => DoctorView | null;
   sidebandUrl?: string;
+  conversations?: ConversationAccess;
 }
 
 export interface StartServerOptions extends MissionControlViews {
@@ -333,6 +335,7 @@ export function startServer(
           authorizer,
           options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined,
           deskRuntime,
+          options.conversations,
         );
       }
 
@@ -457,8 +460,10 @@ async function handleApi(
   authorizer: Authorizer | null = null,
   vigil?: VigilSubjectsOptions,
   desk?: DeskRuntime,
+  conversations?: ConversationAccess,
 ): Promise<Response> {
   const { pathname } = url;
+  if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations);
 
   if (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname)) {
     const rebindDenial = checkRebindGuard(req, guard);

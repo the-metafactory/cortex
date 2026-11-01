@@ -19,6 +19,8 @@
 // override still lands before any Discord client connects.
 
 import { resolveStudio } from "./surface/mc/desk/studio/config";
+import { openConversationHost, type HostStatus } from "./conversations/host";
+import { cortexStateDir } from "./common/state-path";
 import { Command } from "commander";
 import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync } from "fs";
 import { join, dirname, isAbsolute } from "path";
@@ -4824,6 +4826,7 @@ export async function startCortex(
   // boot) and its schema block was dropped in #882, so there is no longer an
   // `api.enabled` to nudge off — `mc:` is the only embedded-dashboard path.
   let mcHandle: MissionControlHandle | null = null;
+  let conversationStatus: HostStatus | null = null;
   let mcDb: BunDatabase | null = null;
   // G-1114.B.4 — mutable holder threaded into the MC server as a lazy getter so
   // `GET /api/agents` can read the stack-local agent-presence registry. The
@@ -4935,7 +4938,22 @@ export async function startCortex(
       // (`siblingResolveOpts` is computed below under the same `aggCfg` gate,
       // independent of headless — a headless stack simply doesn't serve).
       const mcHeadless = !config.mc.server.enabled;
+      if (!mcHeadless) {
+        const filer = config.mc.desk.studio ? resolveStudio(config.mc.desk.studio, expandTilde).filer : undefined;
+        conversationStatus = await openConversationHost({
+          dir: join(cortexStateDir(), "stacks", derivedStack.stack, "conversations"),
+          stack: derivedStack.stack,
+          label: process.env.XPC_SERVICE_NAME ?? "",
+          expectedLabel: `ai.meta-factory.cortex.${derivedStack.stack}`,
+          endpoints: { ...(filer ? { cloud: filer } : {}), ...(filer?.local ? { local: filer.local } : {}) },
+        });
+        console.log(conversationStatus.state === "ready"
+          ? `cortex: conversation host ready (${conversationStatus.resumed.length} resumed, ${conversationStatus.reconciled.length} reconciled${conversationStatus.tookOver ? `, took over lock of dead pid ${conversationStatus.tookOver.pid}` : ""})`
+          : `cortex: ${conversationStatus.reason}`);
+      }
+      const conversationAccess = (): HostStatus | null => conversationStatus;
       mcHandle = await startMissionControl({
+        conversations: conversationAccess,
         results: {
           ledger: {
             principal: principalId,
@@ -6336,6 +6354,7 @@ export async function startCortex(
       "cockpit refresh loop stop",
       "vigil stop",
       "mc embed stop",
+      "conversation host close",
       "github webhook receiver stop",
       ...adapterCleanup.map((_, i) => `outbound poller stop[${i}]`),
       ...reviewConsumers.map((c, i) => `review-consumer stop[${i}] (agent=${c.agent.id})`),
@@ -6465,6 +6484,7 @@ export async function startCortex(
       await completeAsync("vigil stop", vigilHandle?.stop());
       await completeAsync("ledger archive stop", ledgerArchive?.stop());
       await completeAsync("mc embed stop", mcHandle?.stop());
+      await completeAsync("conversation host close", conversationStatus?.state === "ready" ? conversationStatus.host.close() : undefined);
       completeSync("github webhook receiver stop", () => githubReceiver?.stop());
       for (let i = 0; i < adapterCleanup.length; i++) {
         const cleanup = adapterCleanup[i];
