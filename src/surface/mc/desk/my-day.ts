@@ -1,8 +1,9 @@
 import { projectStudio, studioLinks, studioOwned, type StudioProjection } from "./studio-outline";
 import { DEFAULT_YES_FILTER } from "./yes-filter";
+import { applyBalanceCommand, completeOutlineLeaf, fileBalanceInbox, outlineDestination, setOutlineFocus } from "./balance-outline";
 import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
-import { DEFAULT_SETTINGS, MAX_FOCUS_PER_MONTH, ancestorIndex, applyDayToHistory, applyRecurrence, collectLeaves, findNode, rankAll, selectToday, shiftDays, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
+import { DEFAULT_SETTINGS, applyDayToHistory, applyRecurrence, collectLeaves, findNode, rankAll, selectToday, shiftDays, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
 import { loadBalanceState, saveBalanceState } from "./balance-store";
 import { MyDayMetaSchema, type MyDayCommand, type MyDayMeta } from "./my-day-schema";
 import type { DeskOptions } from "./compose";
@@ -27,6 +28,7 @@ function initial(desk: DeskOptions): AppState {
 }
 function stateFor(db: Database, desk: DeskOptions, date: string, meta: MyDayMeta, studio?: StudioProjection): AppState {
   const state = loadBalanceState(db) ?? initial(desk);
+  const before = JSON.stringify([state.outline, state.log, meta.studio]);
   for (const area of desk.areas) {
     const existing = findNode(state.outline, `area:${area.id}`);
     if (existing) existing.title = area.label;
@@ -35,11 +37,13 @@ function stateFor(db: Database, desk: DeskOptions, date: string, meta: MyDayMeta
   if (studio) projectStudio(state, meta, studio);
   const completedToday = new Set(state.log.filter(event => event.date === date).map(event => event.taskId));
   for (const task of collectLeaves(state.outline)) if (!completedToday.has(task.id)) applyRecurrence(task, date);
+  if (JSON.stringify([state.outline, state.log, meta.studio]) !== before) meta.revision += 1;
   return state;
 }
 export interface MyDayView {
   studioStatus: "synced" | "unavailable" | "disabled";
   studioTasks: { id: string; slug: string }[];
+  studioProjects: { id: string; slug: string }[];
   revision: number;
   configuredCaps: { cap: number; topN: number };
   capsOverridden: boolean;
@@ -73,6 +77,7 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
   return {
     studioStatus: !desk.studio ? "disabled" : studio ? "synced" : "unavailable",
     studioTasks: studioLinks(meta),
+    studioProjects: meta.studio.map(project => ({ id: project.projectId, slug: project.slug })),
     configuredCaps: { cap: desk.myDay?.cap ?? 5, topN: desk.topN }, capsOverridden: meta.caps !== null,
     revision: meta.revision, inbox: meta.inbox,
     date, phase: day ? day.closed ? "closed" : "started" : "proposed", cap: state.settings.todayCap, topN: meta.caps?.topN ?? desk.topN,
@@ -108,12 +113,6 @@ function requiredNode(state: AppState, id: string): OutlineNode {
   if (!node) throw new Error("That outline item no longer exists.");
   return node;
 }
-function destination(state: AppState, desk: DeskOptions, id: string): OutlineNode {
-  const parent = requiredNode(state, id);
-  if (!findNode(configuredState(state, desk).outline, parent.id) || parent.id === state.outline.id || parent.effort || (parent.done && parent.children.length > 0)) throw new Error("Choose an area or open project as the parent.");
-  delete parent.done;
-  return parent;
-}
 function validateSelection(state: AppState, date: string, ids: string[]): void {
   const allowed = new Set(rankAll(state, date).map(i => i.task.id));
   if (new Set(ids).size !== ids.length || ids.length > state.settings.todayCap || ids.some(id => !allowed.has(id))) throw new Error("Choose available items within the My day cap.");
@@ -132,24 +131,13 @@ function edit(state: AppState, command: Extract<MyDayCommand, { op: "edit" }>, d
   const node = requiredNode(state, command.id);
   if (node.id === state.outline.id) throw new Error("Choose an area, project or task.");
   if (node.title !== command.before.title || node.weight !== command.before.weight || (node.dueDate ?? "") !== command.before.dueDate || node.focusMonth !== command.before.focusMonth) throw new Error("This outline item changed in another window. Refresh before saving your draft.");
-  const month = date.slice(0, 7);
-  const isNewFocus = command.focus && node.focusMonth !== month;
-  if (isNewFocus) {
-    if (node.children.length === 0 || (ancestorIndex(state.outline).get(node.id)?.length ?? 0) < 2) throw new Error("Focus belongs to a project with tasks.");
-    if (!command.yes) throw new Error("Answer the Yes-filter before choosing a new focus project.");
-    if (rankFocus(state.outline, month) >= MAX_FOCUS_PER_MONTH) throw new Error("At most three projects can be in focus this month.");
-  }
+  setOutlineFocus(state, node, command.focus, command.yes, date);
   node.title = command.title;
   node.weight = command.weight;
   if (command.dueDate) node.dueDate = command.dueDate;
   else delete node.dueDate;
-  if (command.focus) node.focusMonth = month;
-  else delete node.focusMonth;
 }
-function rankFocus(node: OutlineNode, month: string): number {
-  return Number(node.focusMonth === month) + node.children.reduce((n, child) => n + rankFocus(child, month), 0);
-}
-export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number; date: string; requestId: string; command: MyDayCommand; source?: DeskItem; studio?: StudioProjection }): { view: MyDayView; undo?: string } {
+export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number; date: string; requestId: string; command: MyDayCommand; source?: DeskItem; studio?: StudioProjection }): { view: MyDayView; undo?: string; notice?: string; outlineId?: string } {
   const { db, desk, now, date, requestId, command, source, studio } = args;
   return db.transaction(() => {
     const meta = loadMeta(db);
@@ -161,12 +149,26 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
       if (receipt.payload !== payload) throw new Error("This request id was already used for another change.");
       saveBalanceState(db, state);
       saveMeta(db, meta);
-      return { view: viewOf(state, meta, desk, localDay(now), studio), ...(receipt.undo ? { undo: receipt.undo } : {}) };
+      return { view: viewOf(state, meta, desk, localDay(now), studio), ...(receipt.undo ? { undo: receipt.undo } : {}), ...(receipt.outlineId ? { outlineId: receipt.outlineId } : {}), ...(receipt.notice ? { notice: receipt.notice } : {}) };
     }
     if (date !== localDay(now)) throw new Error("The date changed. Refresh the Desk before changing your day.");
     state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
     let undo: string | undefined;
+    let outlineBefore: TodayItem[] | undefined;
+    let outlineId: string | undefined;
     switch (command.op) {
+      case "outline-add":
+      case "outline-edit":
+      case "outline-move":
+      case "outline-file":
+      case "outline-complete":
+      case "outline-reopen":
+      case "outline-remove": {
+        if (state.dayState?.date !== date && meta.draft?.date !== date) meta.draft = engineDraft(state, desk, date, studio);
+        outlineBefore = viewOf(state, meta, desk, date, studio).items;
+        outlineId = applyBalanceCommand(state, meta, desk, date, command);
+        break;
+      }
       case "draft":
       case "start": {
         if (state.dayState?.date === date) throw new Error("Your day is already started.");
@@ -188,12 +190,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         if (state.dayState?.date !== date || state.dayState.closed || !state.dayState.confirmed.includes(command.id)) throw new Error("Choose an item in your active day.");
         const node = requiredNode(state, command.id);
         if (node.done || state.log.some(event => event.taskId === node.id && event.date === date)) break;
-        const area = ancestorIndex(state.outline).get(node.id)?.[1];
-        if (!area) throw new Error("This task needs an area.");
-        node.done = true;
-        node.completedAt = date;
-        if (node.repeat) node.repeat.timesDone = (node.repeat.timesDone ?? 0) + 1;
-        state.log.push({ taskId: node.id, areaId: area.id, effort: node.effort ?? 1, date, title: node.title });
+        completeOutlineLeaf(state, node, date);
         break;
       }
       case "defer": {
@@ -241,16 +238,11 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         meta.caps = { cap: meta.caps?.cap ?? desk.myDay?.cap ?? 5, topN: command.topN };
         break;
       case "file": {
-        const index = meta.inbox.findIndex(n => n.id === command.id);
-        const node = meta.inbox[index];
-        if (!node) throw new Error("This Inbox item was already filed.");
-        const parent = destination(state, desk, command.parent);
-        parent.children.push(node);
-        meta.inbox.splice(index, 1);
+        fileBalanceInbox(state, meta, desk, command.id, command.parent);
         break;
       }
       case "add": {
-        const parent = destination(state, desk, command.parent);
+        const parent = outlineDestination(state, desk, command.parent);
         parent.children.push({ id: crypto.randomUUID(), title: command.title, weight: 50, ordering: "parallel", children: [], ...(command.kind === "task" ? { effort: 1 } : { done: true }) });
         break;
       }
@@ -262,9 +254,12 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
     }
     if ((command.op === "add" || command.op === "file") && !meta.draft?.ids.length && state.dayState?.date !== date) meta.draft = engineDraft(state, desk, date, studio);
     meta.revision += 1;
-    meta.receipts.push({ id: requestId, payload, ...(undo ? { undo } : {}) });
+    const view = viewOf(state, meta, desk, date, studio);
+    const unavailable = outlineBefore?.filter(item => !view.items.some(current => current.task.id === item.task.id)).map(item => item.task.title) ?? [];
+    const notice = unavailable.length ? `${unavailable.join(", ")} ${unavailable.length === 1 ? "is" : "are"} no longer actionable in today's list. The remaining choices keep their order; no replacement was added.` : undefined;
+    meta.receipts.push({ id: requestId, payload, ...(undo ? { undo } : {}), ...(outlineId ? { outlineId } : {}), ...(notice ? { notice } : {}) });
     saveBalanceState(db, state);
     saveMeta(db, meta);
-    return { view: viewOf(state, meta, desk, date, studio), ...(undo ? { undo } : {}) };
+    return { view, ...(undo ? { undo } : {}), ...(outlineId ? { outlineId } : {}), ...(notice ? { notice } : {}) };
   }).immediate();
 }

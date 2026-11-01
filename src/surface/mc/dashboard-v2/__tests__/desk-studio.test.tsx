@@ -178,14 +178,14 @@ describe("the request id", () => {
 });
 
 describe("the Desk view switch", () => {
-  it("shows Day Studio and Weekly mirror with the current view selected", () => {
+  it("shows Day Balance and Studio with the current view selected", () => {
     const html = renderToStaticMarkup(<DeskModeSwitch hasStudio inStudio onGo={() => {}} />);
-    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map((m) => [m[2], m[1]])).toEqual([["Day", "false"], ["Studio", "true"], ["Weekly mirror", "false"]]);
+    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map((m) => [m[2], m[1]])).toEqual([["Day", "false"], ["Balance", "false"], ["Studio", "true"]]);
   });
 
-  it("keeps Day and Weekly mirror reachable without a Studio", () => {
-    const html = renderToStaticMarkup(<DeskModeSwitch hasStudio={false} inStudio={false} inMirror onGo={() => undefined} />);
-    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map(m => [m[2], m[1]])).toEqual([["Day", "false"], ["Weekly mirror", "true"]]);
+  it("keeps Day and Balance reachable without a Studio", () => {
+    const html = renderToStaticMarkup(<DeskModeSwitch hasStudio={false} inStudio={false} inBalance onGo={() => undefined} />);
+    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map(m => [m[2], m[1]])).toEqual([["Day", "false"], ["Balance", "true"]]);
     expect(html).not.toContain(">Studio</button>");
   });
 });

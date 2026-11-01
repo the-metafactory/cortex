@@ -115,8 +115,9 @@ describe("weekly mirror over authoritative evidence", () => {
     } finally { db.close(); }
   });
   test("URL routes survive reload/back and the React surface puts real wins first", () => {
-    const search = deskSearch("?unrelated=kept&desk=studio&thread=one", { mode: "mirror", thread: null });
-    expect(readDeskLocation(search)).toEqual({ mode: "mirror", thread: null });
+    const search = deskSearch("?unrelated=kept&desk=studio&thread=one", { mode: "balance", thread: null });
+    expect(readDeskLocation(search)).toEqual({ mode: "balance", thread: null });
+    expect(readDeskLocation("?desk=mirror")).toEqual({ mode: "balance", thread: null });
     expect(search).toContain("unrelated=kept");
     expect(readDeskLocation(deskSearch(search, { mode: "day", thread: null })).mode).toBe("day");
     const html = renderToStaticMarkup(createElement(DeskMirror, { mirror: mirror(), areas: desk.areas, foreground: { kind: "unavailable", reason: "Not measured" }, onThread: () => undefined }));
