@@ -21,7 +21,7 @@ const controller = new DeskWake(options, {
       document.body.dataset.microphones = String(streams.length);
       return stream;
     },
-  } as MediaDevices,
+  },
   worker: () => fakeWorker(false),
   transcribe: () => { throw new Error("Ownership probe must not upload audio"); },
   answer: () => Promise.resolve(),

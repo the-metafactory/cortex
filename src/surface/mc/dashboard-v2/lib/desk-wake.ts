@@ -17,7 +17,7 @@ export interface WakeDependencies {
   answer(text: string): Promise<void>;
   cancelAnswer?: () => void;
   acquire?: (signal: AbortSignal) => Promise<() => void>;
-  media?: MediaDevices;
+  media?: Pick<MediaDevices, "getUserMedia">;
   context?: () => AudioContext;
   worker?: () => Worker;
   recorder?: (stream: MediaStream) => MediaRecorder;
@@ -62,8 +62,9 @@ export class DeskWake {
     try {
       const error = wakeConfigurationError(this.options);
       if (error) throw new Error(error);
-      this.release = await (this.deps.acquire ?? ownMicrophone)(signal);
-      signal.throwIfAborted();
+      const release = await (this.deps.acquire ?? ownMicrophone)(signal);
+      if (signal.aborted) { release(); return; }
+      this.release = release;
       const stream = await (this.deps.media ?? navigator.mediaDevices).getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
       if (signal.aborted) { stream.getTracks().forEach(track => track.stop()); return; }
       this.stream = stream;

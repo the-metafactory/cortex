@@ -39,7 +39,7 @@ async function run(): Promise<unknown> {
   let processedMessages = 0;
   const wake = new DeskWake(options, {
     state: state => { states.push(state); document.body.dataset.state = JSON.stringify(states); },
-    media: { getUserMedia: mic } as MediaDevices,
+    media: { getUserMedia: mic },
     worker: () => { const worker = fakeWorker(true); worker.addEventListener("message", () => { processedMessages++; }); return worker; },
     transcribe: async (blob, signal) => {
       uploads++;
@@ -62,7 +62,7 @@ async function run(): Promise<unknown> {
   await generator.close();
 
   let denied = "";
-  const refusal = new DeskWake(options, { state: state => { if (state.phase === "unavailable") denied = state.line; }, media: { getUserMedia: () => Promise.reject(new DOMException("Permission denied", "NotAllowedError")) } as MediaDevices, transcribe: () => { throw new Error("Denied permission must not upload"); }, answer: () => Promise.resolve() });
+  const refusal = new DeskWake(options, { state: state => { if (state.phase === "unavailable") denied = state.line; }, media: { getUserMedia: () => Promise.reject(new DOMException("Permission denied", "NotAllowedError")) }, transcribe: () => { throw new Error("Denied permission must not upload"); }, answer: () => Promise.resolve() });
   await refusal.enable();
   assert(denied.includes("Permission denied"), "Permission denial was hidden");
   refusal.disable();
@@ -71,7 +71,7 @@ async function run(): Promise<unknown> {
   const lateStream = lateStreamContext.createMediaStreamDestination().stream;
   const permissionResolvers: ((stream: MediaStream) => void)[] = [];
   const earlyExitStates: WakeState[] = [];
-  const earlyExit = new DeskWake(options, { state: state => earlyExitStates.push(state), media: { getUserMedia: () => new Promise<MediaStream>(resolve => permissionResolvers.push(resolve)) } as MediaDevices, transcribe: () => { throw new Error("Exited page must not upload"); }, answer: () => Promise.resolve() });
+  const earlyExit = new DeskWake(options, { state: state => earlyExitStates.push(state), media: { getUserMedia: () => new Promise<MediaStream>(resolve => permissionResolvers.push(resolve)) }, transcribe: () => { throw new Error("Exited page must not upload"); }, answer: () => Promise.resolve() });
   const starting = earlyExit.enable();
   await until(() => permissionResolvers.length > 0);
   window.dispatchEvent(new Event("pagehide"));
@@ -80,9 +80,20 @@ async function run(): Promise<unknown> {
   assert(earlyExitStates.at(-1)?.phase === "off" && lateStream.getTracks().every(track => track.readyState === "ended"), "Navigation during permission left a late microphone active");
   earlyExit.disable(); await lateStreamContext.close();
 
+  let lateLeaseReleased = 0;
+  const leaseResolvers: ((release: () => void) => void)[] = [];
+  const lateLease = new DeskWake(options, { state: () => {}, acquire: () => new Promise<() => void>(resolve => leaseResolvers.push(resolve)), media: { getUserMedia: () => { throw new Error("Cancelled acquisition must not open a microphone"); } }, transcribe: () => { throw new Error("Cancelled acquisition must not upload"); }, answer: () => Promise.resolve() });
+  const acquiring = lateLease.enable();
+  await until(() => leaseResolvers.length > 0);
+  window.dispatchEvent(new Event("pagehide"));
+  leaseResolvers[0]?.(() => { lateLeaseReleased++; });
+  await acquiring;
+  assert(lateLeaseReleased === 1, "Navigation left a late microphone ownership lease held");
+  lateLease.disable();
+
   const silentContext = new AudioContext();
   const silentStates: WakeState[] = [];
-  const silent = new DeskWake(options, { state: state => { silentStates.push(state); }, media: { getUserMedia: async () => { await silentContext.resume(); return silentContext.createMediaStreamDestination().stream; } } as MediaDevices, worker: () => fakeWorker(false), transcribe: () => { throw new Error("Non-wake audio uploaded"); }, answer: () => Promise.resolve() });
+  const silent = new DeskWake(options, { state: state => { silentStates.push(state); }, media: { getUserMedia: async () => { await silentContext.resume(); return silentContext.createMediaStreamDestination().stream; } }, worker: () => fakeWorker(false), transcribe: () => { throw new Error("Non-wake audio uploaded"); }, answer: () => Promise.resolve() });
   await silent.enable();
   await until(() => silentStates.at(-1)?.phase === "listening");
   await wait(600);
@@ -98,7 +109,7 @@ async function run(): Promise<unknown> {
     const listener = new DeskWake(options, {
       state: state => seen.push(state),
       context: () => { const ctx = new AudioContext(); contexts.push(ctx); return ctx; },
-      media: { getUserMedia: async () => { await input.resume(); const stream = input.createMediaStreamDestination().stream; streams.push(stream); return stream; } } as MediaDevices,
+      media: { getUserMedia: async () => { await input.resume(); const stream = input.createMediaStreamDestination().stream; streams.push(stream); return stream; } },
       worker: () => kind === "stale" ? fakeWorker(false, false) : fakeWorker(kind === "capture-cancel"),
       transcribe: () => { throw new Error("Cancelled or broken capture uploaded audio"); },
       answer: () => Promise.resolve(),
@@ -131,7 +142,7 @@ async function run(): Promise<unknown> {
   const realStates: WakeState[] = [];
   const real = new DeskWake(DeskWakeSchema.parse({ ...options, phrase: "EARLY NIGHTFALL", tokens: ["▁E", "AR", "LY", "▁", "N", "IGHT", "F", "AL", "L"], maxCommandMs: 15000 }), {
     state: state => { realStates.push(state); if (state.phase === "listening" && !sourceStarted) { sourceStarted = true; referenceSource.start(realInput.currentTime + 0.1); } },
-    media: { getUserMedia: () => Promise.resolve(destination.stream) } as MediaDevices,
+    media: { getUserMedia: () => Promise.resolve(destination.stream) },
     transcribe: async (clip, signal) => {
       realClipBytes = clip.size;
       const decoded = await realInput.decodeAudioData(await clip.arrayBuffer());
