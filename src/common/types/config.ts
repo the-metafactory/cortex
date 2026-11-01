@@ -509,6 +509,7 @@ export const DeskSchema = z.object({
           timeoutSeconds: z.number().int().min(1).max(120).default(30),
         })
         .optional(),
+      log: z.object({ retentionDays: z.number().int().min(1).max(3650).default(180) }).optional(),
     })
     .default({}),
   ruling: z

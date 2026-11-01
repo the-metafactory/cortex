@@ -87,10 +87,12 @@ import { handleDeskStudioAct } from "./api/desk-studio-act";
 import { handleDeskStudioSession } from "./api/desk-studio-session";
 import { GoalChecks, GoalStatuses } from "./desk/goals";
 import { RulingExplainLoop, RulingLedger, rulingExplainer } from "./desk/ruling";
-import { RecentCalendarWrites } from "./desk/create";
+import { RecentCalendarWrites, spawnWithStdin } from "./desk/create";
 import { HandledLedger } from "./desk/actions";
 import type { DeskOptions, DeskRuntime } from "./desk/compose";
-import { SourceCache } from "./desk/sources/command";
+import { SourceCache, spawnCommand } from "./desk/sources/command";
+import { ClientMailLog } from "./desk/mail-client-log";
+import { DEFAULT_MAIL_LOG_RETENTION_DAYS } from "./desk/mail-log";
 import { startDeskAutonomy, startDeskPushes } from "./desk/push";
 import { MailClassifier } from "./desk/classify";
 import type { DeskTransport } from "./desk/interrupt";
@@ -184,8 +186,9 @@ export function startServer(
   options: StartServerOptions = {}
 ): ServerContext {
   const wsRegistry = new WsClientRegistry();
-  const deskSourceCache = new SourceCache();
   const deskLedger = new HandledLedger();
+  const deskClientMail = options.desk ? new ClientMailLog({ db, config: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, retentionDays: options.desk.mailLog?.retentionDays ?? DEFAULT_MAIL_LOG_RETENTION_DAYS }) : undefined;
+  const deskSourceCache = new SourceCache(spawnCommand, deskClientMail ? (prev, next) => deskClientMail.observe(prev, next) : undefined);
   const deskRecentWrites = new RecentCalendarWrites();
   const deskRuntime: DeskRuntime = { waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}) };
   const maxClients = config.ws.maxClients;

@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { oneLine } from "./actions";
 import { saveUnimportant } from "./classify";
+import { logMailDecision, mailFeatures } from "./mail-log";
 import { movedKey, moveMail, refuse, type MoveDeps, type MoveResult } from "./mail-move";
 import { CommandTimeout } from "./spawn";
 import { replySubject } from "./mail-triage";
@@ -54,14 +55,16 @@ export async function markUnimportant(db: Database, mail: ListedMail, deps: Move
   if (isVip(new Set(listVips(db).map((v) => v.address)), address)) {
     return refuse(409, `${who} is on your VIP list, and VIPs always show. Remove them there first.`);
   }
+  const features = mailFeatures(db, mail);
   addSender(db, "unimportant", address, mail.from.name ?? null, deps.now);
   saveUnimportant(db, mail.id, deps.now);
   const marked = `Mail from ${who} will be treated as unimportant`;
   if (!deps.config?.trash?.length && !deps.config?.move?.length) {
     deps.ledger.add(movedKey("trash", mail.id), deps.now);
+    logMailDecision(db, features, "unimportant", "desk", deps.now);
     return { ok: true, message: `${marked}.` };
   }
-  const moved = await moveMail(mail, "trash", deps);
+  const moved = await moveMail(mail, "trash", deps, "unimportant", features);
   if (!moved.ok) return refuse(moved.status, `${marked}, but moving it to Trash failed: ${moved.error}`);
   return { ...moved, message: `${moved.message} ${marked}.` };
 }

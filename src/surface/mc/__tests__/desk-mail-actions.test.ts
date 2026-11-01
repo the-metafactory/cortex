@@ -18,6 +18,7 @@ import { createEnrollment, writeEnrollment } from "../../../common/step-up/enrol
 import { McSchema } from "../../../common/types/config";
 import { DEFAULT_CONFIG } from "../config";
 import { initDatabase } from "../db/init";
+import { mailDesk, queue } from "./desk-mail-fixtures";
 import { startServer } from "../server";
 
 const NOW = Date.parse("2026-10-31T09:00:00.000Z");
@@ -33,11 +34,7 @@ const BOSS = mail("b1@example.org", "boss@example.org", { from: { name: "Ada Bos
 const TRASH = ["/opt/adapters/bin/desk-mail-trash.ts"];
 const TRASHED_G1 = [{ argv: TRASH, stdin: JSON.stringify({ action: "trash", account: "work", messageId: "g1@gitlab.example" }), timeoutMs: 20_000 }];
 
-const DESK: DeskOptions = {
-  enabled: true, displayName: "Ada", topN: 5, rangerUrl: "", areas: [],
-  sources: [{ id: "work-mail", command: ["desk-mail"], everySeconds: 300, timeoutSeconds: 30 }],
-  mailActions: { trash: TRASH, timeoutSeconds: 20 },
-};
+const DESK: DeskOptions = mailDesk({ trash: TRASH, timeoutSeconds: 20 });
 
 const sourceCache = (mails: SourceMail[]) => new SourceCache(async () => JSON.stringify({ items: mails }));
 
@@ -381,18 +378,6 @@ const MOVE = ["/opt/adapters/bin/desk-mail-move.ts"];
 const MOVING: DeskOptions = { ...DESK, mailActions: { move: MOVE, timeoutSeconds: 20 } };
 const printed = (folder: string, message: string): WriterResult => ({ code: 0, stdout: `${JSON.stringify({ id: "g1@gitlab.example", folder, message })}\n`, stderr: "" });
 
-function queue(results: (WriterResult | Error)[] = []) {
-  const calls: { argv: string[]; stdin: unknown }[] = [];
-  return {
-    calls,
-    run: async (argv: string[], stdin: string): Promise<WriterResult> => {
-      calls.push({ argv, stdin: JSON.parse(stdin) });
-      const next = results.shift() ?? { code: 0, stdout: "", stderr: "" };
-      if (next instanceof Error) throw next;
-      return next;
-    },
-  };
-}
 
 let moves = 0;
 const send = (rt: DeskRuntime, body: unknown, run: ReturnType<typeof queue>["run"], now = NOW) =>
