@@ -1,6 +1,7 @@
+import { SETTINGS_GROUPS, type SettingsGroup } from "../hooks/use-settings-location";
 import { CalendarSettings } from "./desk-calendar-settings";
 import type { DeskCalendar } from "../../desk/calendars";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { changeSenders, type SenderChange, type SenderListId, type SenderRow } from "../lib/desk-settings";
 import { browserNotifyEnv, NOTIFY_LINE, notifyState, requestNotifications, type NotifyState } from "../lib/desk-notify";
 import type { DeskMailClassifier, DeskView } from "../../desk/types";
@@ -13,7 +14,7 @@ interface ListState {
 
 const EMPTY: ListState = { rows: null, note: null };
 
-export function DeskSettings({ view, onBack }: { view: DeskView; onBack: () => void }) {
+export function DeskSettings({ view, onBack, group, onGroup }: { view: DeskView; onBack: () => void; group: SettingsGroup; onGroup: (group: SettingsGroup) => void }) {
   const [lists, setLists] = useState<Record<SenderListId, ListState>>({ vips: EMPTY, unimportant: EMPTY });
   const [notify, setNotify] = useState<NotifyState>(() => notifyState(view.notifications, browserNotifyEnv()));
   const [busy, setBusy] = useState(false);
@@ -39,6 +40,8 @@ export function DeskSettings({ view, onBack }: { view: DeskView; onBack: () => v
 
   return (
     <SettingsBody
+      group={group}
+      onGroup={onGroup}
       vips={listProps("vips")}
       unimportant={listProps("unimportant")}
       busy={busy}
@@ -63,6 +66,8 @@ export interface SenderListProps {
 }
 
 export interface SettingsBodyProps {
+  group?: SettingsGroup;
+  onGroup?: (group: SettingsGroup) => void;
   vips: SenderListProps;
   unimportant: SenderListProps;
   busy: boolean;
@@ -147,7 +152,10 @@ function SenderCard({ text, list, busy }: { text: SenderCardText; list: SenderLi
   );
 }
 
-export function SettingsBody({ vips, unimportant, busy, onBack, notify, onEnableNotify, classifier = null, calendars = [] }: SettingsBodyProps) {
+export function SettingsBody({ group = "calendars", onGroup, vips, unimportant, busy, onBack, notify, onEnableNotify, classifier = null, calendars = [] }: SettingsBodyProps) {
+  const panel = (id: SettingsGroup, content: ReactNode): ReactNode => (
+    <div key={id} id={`settings-panel-${id}`} role="tabpanel" aria-labelledby={`settings-tab-${id}`} hidden={group !== id} tabIndex={0}>{content}</div>
+  );
   return (
     <div className="desk desk-settings">
       <div className="desk-top">
@@ -164,22 +172,44 @@ export function SettingsBody({ vips, unimportant, busy, onBack, notify, onEnable
       <main className="desk-set-main">
         <h1 className="desk-set-h">Settings</h1>
 
-        <CalendarSettings initial={calendars} />
-
-        <SenderCard text={VIP_TEXT} list={vips} busy={busy} />
-
-        <SenderCard text={UNIMPORTANT_TEXT} list={unimportant} busy={busy} />
-
-        <section className="desk-set-card" aria-label="Notifications">
-          <h2>Notifications</h2>
-          <p className="desk-set-sub">{NOTIFY_LINE[notify]}</p>
-          {notify === "default" && <button type="button" className="desk-btn pri" onClick={onEnableNotify}>Turn on notifications</button>}
-        </section>
-
-        <section className="desk-set-card" aria-label="Mail sorting">
-          <h2>Mail sorting</h2>
-          <p className="desk-set-sub">{classifierLines(classifier).join(" ")}</p>
-        </section>
+        <div className="desk-set-layout">
+          <div className="desk-set-tabs" role="tablist" aria-label="Settings groups" aria-orientation="vertical">
+            {SETTINGS_GROUPS.map((item, index) => (
+              <button
+                key={item.id}
+                id={`settings-tab-${item.id}`}
+                type="button"
+                role="tab"
+                aria-selected={group === item.id}
+                aria-controls={`settings-panel-${item.id}`}
+                tabIndex={group === item.id ? 0 : -1}
+                onClick={() => onGroup?.(item.id)}
+                onKeyDown={(event) => {
+                  const offset = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+                  const target = event.key === "Home" ? SETTINGS_GROUPS[0] : event.key === "End" ? SETTINGS_GROUPS.at(-1) : offset ? SETTINGS_GROUPS[(index + offset + SETTINGS_GROUPS.length) % SETTINGS_GROUPS.length] : undefined;
+                  if (!target) return;
+                  event.preventDefault();
+                  onGroup?.(target.id);
+                  document.getElementById(`settings-tab-${target.id}`)?.focus();
+                }}
+              >{item.label}</button>
+            ))}
+          </div>
+          <div className="desk-set-pages">
+            {panel("calendars", <CalendarSettings initial={calendars} />)}
+            {panel("vips", <SenderCard text={VIP_TEXT} list={vips} busy={busy} />)}
+            {panel("unimportant", <SenderCard text={UNIMPORTANT_TEXT} list={unimportant} busy={busy} />)}
+            {panel("notifications", <section className="desk-set-card" aria-label="Notifications">
+              <h2>Notifications</h2>
+              <p className="desk-set-sub">{NOTIFY_LINE[notify]}</p>
+              {notify === "default" && <button type="button" className="desk-btn pri" onClick={onEnableNotify}>Turn on notifications</button>}
+            </section>)}
+            {panel("mail-sorting", <section className="desk-set-card" aria-label="Mail sorting">
+              <h2>Mail sorting</h2>
+              <p className="desk-set-sub">{classifierLines(classifier).join(" ")}</p>
+            </section>)}
+          </div>
+        </div>
       </main>
     </div>
   );
