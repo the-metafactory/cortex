@@ -5,7 +5,7 @@ import { HandledLedger } from "../desk/actions";
 import { saveClassification } from "../desk/classify";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
 import type { WriterResult } from "../desk/create";
-import { recordClientDecisions, type ClientLogDeps } from "../desk/mail-client-log";
+import { ClientMailLog, LOCATE_ATTEMPTS, recordClientDecisions, type ClientLogDeps } from "../desk/mail-client-log";
 import { departures, historySentence, logMailDecision, mailFeatures, purgeMailLog, queryMailLog, type MailLogEntry } from "../desk/mail-log";
 import { movedKey } from "../desk/mail-move";
 import { parseSourceOutput, SourceCache, type SourceMail, type SourceReading } from "../desk/sources/command";
@@ -24,7 +24,6 @@ const mail = (id: string, over: Partial<SourceMail> = {}): SourceMail => ({
 
 const reading = (mails: SourceMail[], over: Partial<SourceReading> = {}): SourceReading => ({ id: "work-mail", area: null, events: [], mail: mails, readAt: NOW, error: null, dropped: 0, problems: [], ...over });
 
-const runner = queue;
 
 const ok = (body: unknown): WriterResult => ({ code: 0, stdout: JSON.stringify(body), stderr: "" });
 const refused = (line: string): WriterResult => ({ code: 1, stdout: "", stderr: `${line}\n` });
@@ -47,11 +46,11 @@ describe("Desk decisions", () => {
   it("logs a move with the mail's features only after the move command succeeded", async () => {
     saveClassification(db, "m1@stats", { category: "bulk", reason: "A newsletter.", summary: "Weekly statistics for October." }, "test", NOW);
     const rt = await deskWith([mail("m1@stats")]);
-    const failing = runner([refused("The work account has no Archive mailbox, so nothing was moved.")]);
+    const failing = queue([refused("The work account has no Archive mailbox, so nothing was moved.")]);
     expect((await handleDeskMail(post({ action: "move", key: "mail:m1@stats", target: "archive" }), db, rt, { run: failing.run, now: () => NOW })).status).toBe(502);
     expect(rows()).toEqual([]);
 
-    const moving = runner([ok({ id: "m1@stats", folder: "Archiv", message: "Moved to Archiv." })]);
+    const moving = queue([ok({ id: "m1@stats", folder: "Archiv", message: "Moved to Archiv." })]);
     expect((await handleDeskMail(post({ action: "move", key: "mail:m1@stats", target: "archive" }), db, rt, { run: moving.run, now: () => NOW })).status).toBe(200);
     expect(queryMailLog(db)).toEqual([{
       id: expect.any(Number), messageId: "m1@stats", account: "work", sourceId: "work-mail", sender: "reports@stats.example.org", senderDomain: "stats.example.org",
@@ -61,17 +60,17 @@ describe("Desk decisions", () => {
 
   it("logs Undo as restore, Unimportant as one decision, and a draft only once it is saved", async () => {
     const rt = await deskWith([mail("m1@stats"), mail("m2@stats", { from: { address: "news@other.example" } }), mail("m3@stats")]);
-    const r = runner([ok({ id: "m1@stats", folder: "Junk", message: "Moved to Junk." }), ok({ id: "m1@stats", folder: "INBOX", message: "Moved back." })]);
+    const r = queue([ok({ id: "m1@stats", folder: "Junk", message: "Moved to Junk." }), ok({ id: "m1@stats", folder: "INBOX", message: "Moved back." })]);
     const moved = await (await handleDeskMail(post({ action: "move", key: "mail:m1@stats", target: "junk" }), db, rt, { run: r.run, now: () => NOW, newId: () => "mv1" })).json();
     expect(moved.undo).toBe("mv1");
     expect((await handleDeskMail(post({ action: "undo", move: "mv1" }), db, rt, { run: r.run, now: () => NOW + 1000 })).status).toBe(200);
 
-    const trash = runner([ok({ id: "m2@stats", folder: "Trash", message: "Moved to Trash." })]);
+    const trash = queue([ok({ id: "m2@stats", folder: "Trash", message: "Moved to Trash." })]);
     expect((await handleDeskMail(post({ action: "unimportant", key: "mail:m2@stats" }), db, rt, { run: trash.run, now: () => NOW })).status).toBe(200);
 
-    const draftFails = runner([refused("The draft was not saved.")]);
+    const draftFails = queue([refused("The draft was not saved.")]);
     expect((await handleDeskMail(post({ action: "draft", key: "mail:m3@stats", body: "Thanks!" }), db, rt, { run: draftFails.run, now: () => NOW })).status).toBe(502);
-    const draft = runner([ok({ id: "d1" })]);
+    const draft = queue([ok({ id: "d1" })]);
     expect((await handleDeskMail(post({ action: "draft", key: "mail:m3@stats", body: "Thanks!" }), db, rt, { run: draft.run, now: () => NOW })).status).toBe(200);
 
     expect(rows()).toEqual([
@@ -105,12 +104,13 @@ describe("Client decisions from two source readings", () => {
     expect(departures(prev, next).map((d) => [d.mail.id, d.read])).toEqual([["b", true], ["d", false]]);
     expect(departures(undefined, next)).toEqual([]);
     expect(departures(prev, reading(prev.mail, { error: "exited 1" }))).toEqual([]);
+    expect(departures(reading(prev.mail, { error: "exited 1" }), next).map((d) => d.mail.id)).toEqual(["b", "d"]);
   });
 
-  it("records where each mail went: archive, junk, trash, read-and-kept, and gone when it cannot be found", async () => {
+  it("records where each mail went: archive, junk, trash, read-and-kept, gone when not found, and nothing when the lookup fails", async () => {
     const prev = reading(["arch", "junk", "trash", "kept", "inbox-unread", "gone", "broken", "read"].map((id) => mail(id)));
     const next = reading([mail("read", { unread: false })]);
-    const r = runner([
+    const r = queue([
       ok({ id: "arch", place: "archive", folder: "Archiv", unread: false }),
       ok({ id: "junk", place: "junk", folder: "Junk", unread: true }),
       ok({ id: "trash", place: "trash", folder: "Deleted Items", unread: false }),
@@ -119,7 +119,8 @@ describe("Client decisions from two source readings", () => {
       ok({ id: "gone", place: "gone" }),
       refused("The work mail server did not accept the connection."),
     ]);
-    expect(await recordClientDecisions(prev, next, deps(r.run))).toBe(7);
+    const pass = await recordClientDecisions(prev, next, deps(r.run));
+    expect([pass.logged, pass.failed.map((d) => d.mail.id)]).toEqual([6, ["broken"]]);
     expect(r.calls.map((c) => c.stdin)).toEqual(["arch", "junk", "trash", "kept", "inbox-unread", "gone", "broken"].map((id) => ({ action: "locate", account: "work", messageId: id })));
     expect(rows()).toEqual([
       { messageId: "arch", action: "archive", where: "client", folder: "Archiv" },
@@ -127,7 +128,6 @@ describe("Client decisions from two source readings", () => {
       { messageId: "trash", action: "trash", where: "client", folder: "Deleted Items" },
       { messageId: "kept", action: "kept", where: "client", folder: "INBOX" },
       { messageId: "gone", action: "gone", where: "client", folder: null },
-      { messageId: "broken", action: "gone", where: "client", folder: null },
       { messageId: "read", action: "kept", where: "client", folder: null },
     ]);
   });
@@ -136,16 +136,29 @@ describe("Client decisions from two source readings", () => {
     const ledger = new HandledLedger();
     ledger.add(movedKey("archive", "desk-moved"), NOW);
     logMailDecision(db, mailFeatures(db, mail("desk-trashed")), "trash", "desk", NOW - 1000, "Trash");
-    const r = runner([]);
+    const r = queue([]);
     const prev = reading([mail("desk-moved"), mail("desk-trashed"), mail("no-command")]);
-    expect(await recordClientDecisions(prev, reading([]), deps(r.run, ledger, { timeoutSeconds: 20 }))).toBe(1);
+    expect((await recordClientDecisions(prev, reading([]), deps(r.run, ledger, { timeoutSeconds: 20 }))).logged).toBe(1);
     expect(r.calls).toEqual([]);
     expect(rows().filter((e) => e.where === "client")).toEqual([{ messageId: "no-command", action: "gone", where: "client", folder: null }]);
   });
 
+  it("tries a failed lookup again with the next readings, then gives up without logging a guess", async () => {
+    const r = queue([refused("connection refused"), ok({ id: "x", place: "junk", folder: "Junk" }), refused("down"), refused("down"), refused("down"), refused("down")]);
+    const log = new ClientMailLog(deps(r.run));
+    await log.observe(reading([mail("x")]), reading([]));
+    expect(rows()).toEqual([]);
+    await log.observe(reading([]), reading([]));
+    expect(rows()).toEqual([{ messageId: "x", action: "junk", where: "client", folder: "Junk" }]);
+    await log.observe(reading([mail("y")]), reading([]));
+    for (let i = 0; i < LOCATE_ATTEMPTS + 1; i += 1) await log.observe(reading([]), reading([]));
+    expect(r.calls.filter((c) => (c.stdin as { messageId: string }).messageId === "y")).toHaveLength(LOCATE_ATTEMPTS);
+    expect(rows().map((e) => e.messageId)).toEqual(["x"]);
+  });
+
   it("runs the pass from the source cache whenever a source is read again", async () => {
     let listed = [mail("x")];
-    const r = runner([ok({ id: "x", place: "archive", folder: "Archive" })]);
+    const r = queue([ok({ id: "x", place: "archive", folder: "Archive" })]);
     const passes: Promise<unknown>[] = [];
     const cache = new SourceCache(async () => JSON.stringify({ items: listed }), (prev, next) => passes.push(recordClientDecisions(prev, next, deps(r.run))));
     const source = { id: "work-mail", command: ["desk-mail"], everySeconds: 1, timeoutSeconds: 5 };

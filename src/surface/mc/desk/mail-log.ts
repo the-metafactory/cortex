@@ -3,7 +3,7 @@ import { readClassifications } from "./classify";
 import { ago } from "./rank";
 import type { SourceMail, SourceReading } from "./sources/command";
 import { DAY_MS } from "./time";
-import { DEFAULT_MAIL_LOG_RETENTION_DAYS, type MailLogAction, type MailLogWhere } from "./mail-log-schema";
+import { DEFAULT_MAIL_LOG_RETENTION_DAYS, MAIL_LOG_ACTIONS, MAIL_LOG_WHERE, type MailLogAction, type MailLogWhere } from "./mail-log-schema";
 
 export { DEFAULT_MAIL_LOG_RETENTION_DAYS, MAIL_LOG_ACTIONS, MAIL_LOG_WHERE, type MailLogAction, type MailLogWhere } from "./mail-log-schema";
 
@@ -95,16 +95,22 @@ export function mailFeatures(db: Database, mail: SourceMail & { sourceId?: strin
   };
 }
 
+/** The newest decision on one message, or null. */
+export function lastMailDecision(db: Database, messageId: string): MailLogEntry | null {
+  const row = db.query<Row, [string]>(`SELECT ${COLUMNS} FROM desk_mail_log WHERE message_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`).get(messageId);
+  return row ? entry(row) : null;
+}
+
 /** The features the log last recorded for a message, for a decision on a mail the Desk no longer lists (Undo). */
 export function loggedFeatures(db: Database, messageId: string): MailFeatures | null {
-  const row = db.query<Row, [string]>(`SELECT ${COLUMNS} FROM desk_mail_log WHERE message_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`).get(messageId);
-  if (!row) return null;
-  const e = entry(row);
+  const e = lastMailDecision(db, messageId);
+  if (!e) return null;
   return { messageId: e.messageId, account: e.account, sourceId: e.sourceId, sender: e.sender, senderDomain: e.senderDomain, listId: e.listId, category: e.category, subject: e.subject, summary: e.summary };
 }
 
 /** Appends one decision. Callers write it only after the action it records has succeeded. */
 export function logMailDecision(db: Database, features: MailFeatures, action: MailLogAction, where: MailLogWhere, at: number, folder: string | null = null): number {
+  if (!MAIL_LOG_ACTIONS.includes(action) || !MAIL_LOG_WHERE.includes(where)) throw new Error(`The mail log has no action "${action}" in "${where}".`);
   const result = db
     .query("INSERT INTO desk_mail_log (message_id, account, source_id, sender, sender_domain, list_id, category, subject, summary, action, place, folder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
     .run(features.messageId, features.account, features.sourceId, features.sender, features.senderDomain, features.listId, features.category, features.subject, features.summary, action, where, capped(folder, 200), at);
@@ -214,11 +220,11 @@ export interface Departure {
 }
 
 /**
- * The unread mails of the previous reading that the next reading lists as read, or no longer lists. A reading that
- * failed carries the old list and yields nothing.
+ * The unread mails of the previous reading that the next reading lists as read, or no longer lists. A failed reading
+ * carries the last good list: as `next` it yields nothing, as `prev` it is diffed like the list it carries.
  */
 export function departures(prev: SourceReading | undefined, next: SourceReading): Departure[] {
-  if (!prev || next.error !== null || prev.error !== null) return [];
+  if (!prev || next.error !== null) return [];
   const now = new Map(next.mail.map((m) => [m.id, m]));
   return prev.mail.flatMap((m): Departure[] => {
     if (!m.unread) return [];

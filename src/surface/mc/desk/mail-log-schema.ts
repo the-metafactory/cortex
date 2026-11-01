@@ -18,8 +18,8 @@ export const MAIL_LOG_SQL = [
     category TEXT,
     subject TEXT,
     summary TEXT,
-    action TEXT NOT NULL CHECK(action IN (${MAIL_LOG_ACTIONS.map((a) => `'${a}'`).join(",")})),
-    place TEXT NOT NULL CHECK(place IN ('desk','client')),
+    action TEXT NOT NULL,
+    place TEXT NOT NULL,
     folder TEXT,
     created_at INTEGER NOT NULL
   )`,
