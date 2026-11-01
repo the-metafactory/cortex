@@ -49,4 +49,12 @@ bun scripts/desk-wake/probe-provider.ts http://127.0.0.1:8767/desk
 
 This records the synthesized speech fixture through MediaRecorder, submits it once for transcription, and plays a fixed test sentence through the configured speech output. It does not request microphone access. It uses the providers already configured on that Desk.
 
+To verify the real Sherpa keyword timestamp against captured speech and configured transcription, pass the Desk URL to the full browser probe:
+
+```sh
+bun scripts/desk-wake/probe-browser.ts http://127.0.0.1:8767/desk
+```
+
+This uses the public reference fixture for a real activation and checks that transcription retains the matched phrase and following speech. Without the URL, the probe labels phrase-preservation verification **SKIPPED** because the test adapter returns canned text. Recording, lifecycle, ownership, and engine-fixture checks still run in that mode.
+
 See [Local wake detection](configuration.md#local-wake-detection) for settings and lifecycle limits.

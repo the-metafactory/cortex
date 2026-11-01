@@ -14,6 +14,9 @@ const until = async (claim: () => boolean, timeout = 15000): Promise<void> => {
 };
 
 async function run(): Promise<unknown> {
+  const mode: unknown = await (await fetch("/__probe_mode")).json();
+  if (!mode || typeof mode !== "object" || !("configuredProvider" in mode) || typeof mode.configuredProvider !== "boolean") throw new Error("Probe provider mode is missing");
+  const configuredProvider = mode.configuredProvider;
   const states: WakeState[] = [];
   const captures: MediaStream[] = [];
   const generator = new AudioContext();
@@ -124,7 +127,7 @@ async function run(): Promise<unknown> {
       const body: unknown = await response.json();
       if (!response.ok || !body || typeof body !== "object" || !("text" in body) || typeof body.text !== "string") throw new Error("Real-engine browser clip transcription failed");
       realTranscript = body.text;
-      if (!/\bearly nightfall\b/i.test(realTranscript) || !/yellow lamps/i.test(realTranscript)) throw new Error(`Keyword timestamp did not preserve the matched phrase and following speech: ${realTranscript}`);
+      if (configuredProvider && (!/\bearly nightfall\b/i.test(realTranscript) || !/yellow lamps/i.test(realTranscript))) throw new Error(`Keyword timestamp did not preserve the matched phrase and following speech: ${realTranscript}`);
       return realTranscript;
     },
     answer: text => { realAnswer = text; return Promise.resolve(); },
@@ -134,7 +137,7 @@ async function run(): Promise<unknown> {
     await until(() => { const state = realStates.at(-1); if (state?.phase === "unavailable") throw new Error(state.line); return realAnswer.length > 0 && state?.phase === "listening"; }, 60000);
     assert(realClipBytes > 0 && realClipDuration > 1, "Real-engine capture lost the command stream");
   } finally { real.disable(); await realInput.close(); }
-  return { uploads, said, decodedDuration, preRollPeak, phases: states.map(state => state.phase), denied, teardown: "tracks ended", nonWake: "no upload", playback: "no detector frames", manual: "wake-to-manual lock handoff passed", lifecycle, engine, realEngineCapture: { realTranscript, realAnswer, realClipBytes, realClipDuration, phases: realStates.map(state => state.phase) } };
+  return { uploads, said, decodedDuration, preRollPeak, phases: states.map(state => state.phase), denied, teardown: "tracks ended", nonWake: "no upload", playback: "no detector frames", manual: "wake-to-manual lock handoff passed", lifecycle, engine, realEngineCapture: { transcriptVerification: configuredProvider ? "configured provider verified phrase and following speech" : "SKIPPED: test adapter cannot verify phrase preservation", realTranscript, realAnswer, realClipBytes, realClipDuration, phases: realStates.map(state => state.phase) } };
 }
 
 run().then(result => { document.body.dataset.result = JSON.stringify({ ok: true, result }); document.body.textContent = JSON.stringify(result, null, 2); }).catch((error: unknown) => { document.body.dataset.result = JSON.stringify({ ok: false, error: String(error) }); document.body.textContent = String(error); });

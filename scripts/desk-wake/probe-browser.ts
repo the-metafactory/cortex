@@ -20,6 +20,7 @@ const server = Bun.serve({
     const path = new URL(req.url).pathname;
     if (path.startsWith("/wake/")) return wakeAssetResponse(path, join(root, "dist/dashboard-v2"), new URL(req.url).searchParams.get("sha256"));
     if (path === "/probe.js") return new Response(bundle.outputs[0]);
+    if (path === "/__probe_mode") return Response.json({ configuredProvider: Boolean(providerBase) });
     if (path === "/ownership.js") return new Response(ownershipBundle.outputs[0]);
     if (path === "/ownership") return new Response('<!doctype html><html><body><button id="enable">Enable</button><button id="disable">Disable</button><script src="/ownership.js"></script></body></html>', { headers: { "content-type": "text/html" } });
     if (["/fixtures/public-speech.wav", "/fixtures/hey-ivy.wav", "/fixtures/non-wake.wav"].includes(path)) return new Response(Bun.file(join(import.meta.dir, path.slice(1))));
@@ -37,7 +38,7 @@ const server = Bun.serve({
         if (!(file instanceof Blob)) throw new Error("No actual browser recording reached the adapter");
         if (path === "/__engine_transcribe") engineCalls++;
         else { receivedBytes = file.size; adapterCalls++; }
-        return Response.json({ text: path === "/__engine_transcribe" ? "EARLY NIGHTFALL the yellow lamps" : "Hey Ivy what needs me" });
+        return Response.json({ text: path === "/__engine_transcribe" ? "Stub transcript; phrase preservation is not checked." : "Hey Ivy what needs me" });
       },
     });
     return new Response(`<!doctype html><html><body>${path === "/blank" ? "" : '<script src="/probe.js"></script>'}</body></html>`, { headers: { "content-type": "text/html" } });
