@@ -510,7 +510,7 @@ export const DeskSchema = z.object({
         .refine((c) => !(c.command && c.caFile), "mc.desk.mail.classifier.caFile belongs to the endpoint form; pass a CA to the command in its argv")
         .optional(),
       embedder: EmbedderEndpointSchema.safeExtend({
-        local: EmbedderEndpointSchema.optional(),
+        local: EmbedderEndpointSchema.refine((c) => isLoopbackSideband(c.baseUrl), "mc.desk.mail.embedder.local.baseUrl must be a loopback address").optional(),
         threshold: z.number().min(0).max(1).default(0.65),
         neighbours: z.number().int().min(5).max(10).default(8),
         windowDays: z.number().int().min(1).max(3650).default(90),

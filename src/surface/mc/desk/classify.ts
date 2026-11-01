@@ -370,6 +370,10 @@ export function commandClassifier(config: CommandConfig, run: CommandRunner = ru
   return (request, timeoutMs) => runJson(JSON.stringify(request), timeoutMs);
 }
 
+/** Whether a classifier may see a past decision from this source: a local-policy area's mail goes only to a loopback classifier. */
+export const shareableWith = (classifierLocal: boolean, localSources: ReadonlySet<string> = new Set()) => (sourceId: string | null): boolean =>
+  classifierLocal || sourceId === null || !localSources.has(sourceId);
+
 export const classifierIsLocal = (config: ModelConfig): boolean => !isCommand(config) && isLoopbackSideband(config.baseUrl);
 
 export const classifierRunner = (config: ClassifierConfig): ClassifierRunner => (isCommand(config) ? commandClassifier(config) : chatClassifier(config));
@@ -540,7 +544,7 @@ export class MailClassifier {
         vips: input.vips,
         unimportant,
         corrections,
-        examples: similar ? classifierExamples(similar, (sourceId) => this.local || sourceId === null || !(input.localSources?.has(sourceId) ?? false)) : [],
+        examples: similar ? classifierExamples(similar, shareableWith(this.local, input.localSources)) : [],
         examplesBasis: similar?.basis ?? "sender",
       };
       const started = this.clock();

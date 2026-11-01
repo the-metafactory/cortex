@@ -29,9 +29,9 @@ import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
-import { classifierStatus, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier, type ModelConfig } from "./classify";
+import { classifierStatus, MAX_CORRECTIONS, readApiKey, shareableWith, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier, type ModelConfig } from "./classify";
 import { voiceView, type VoiceOptions } from "./voice";
-import { learnedAction, type EmbedderConfig } from "./mail-similar";
+import { learnedAction, WOULD, type EmbedderConfig } from "./mail-similar";
 import { readRoutines } from "./routines";
 import type { RoutineOptions, RoutineRunner } from "./routine-command";
 import type { RoutineReadLoop } from "./routine-read";
@@ -171,7 +171,7 @@ export async function composeDesk(
   const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
   const localAreas = new Set(desk.areas.filter((a) => a.policy === "local").map((a) => a.id));
   const localSources = new Set(readings.filter((r) => r.area !== null && localAreas.has(r.area)).map((r) => r.id));
-  if (classifier) void classifier.kick(db, { now, mail: mail.filter((m) => !ruleBound.has(m.id)), events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(db, (sourceId) => classifier.local || sourceId === null || !localSources.has(sourceId)), localSources });
+  if (classifier) void classifier.kick(db, { now, mail: mail.filter((m) => !ruleBound.has(m.id)), events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(db, shareableWith(classifier.local, localSources)), localSources });
   const classified = classifier ? readClassifications(db, mail.filter((m) => m.unread).map((m) => m.id)) : undefined;
   const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null) : null;
   const yesFilter = await mailYesFilter(db, desk, now);
@@ -261,8 +261,8 @@ const CORRECTED_SAYING: Partial<Record<string, string>> = { "not bulk": "; it is
 
 function mailCorrections(db: Database, shareable: (sourceId: string | null) => boolean): ClassifierCorrection[] {
   return queryMailLog(db, { where: "correction", limit: MAX_CORRECTIONS }).filter((e) => shareable(e.sourceId)).map((e) => {
-    const action = learnedAction(e.action) ?? e.action;
-    return { kind: "mail", source: e.sender, mode: action, label: `“${e.subject ?? "(no subject)"}” from ${e.sender}: the person would ${action} it${CORRECTED_SAYING[e.category ?? ""] ?? ""}` };
+    const action = learnedAction(e.action);
+    return { kind: "mail", source: e.sender, mode: action ?? e.action, label: `“${e.subject ?? "(no subject)"}” from ${e.sender}: the person ${action ? WOULD[action] : `chose ${e.action}`}${CORRECTED_SAYING[e.category ?? ""] ?? ""}` };
   });
 }
 

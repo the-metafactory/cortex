@@ -207,7 +207,7 @@ const isLocal = (access: EmbedderAccess): boolean => isLoopbackSideband(access.b
 /** The endpoint that may read a mail: a local-policy area only ever goes to a local endpoint. */
 export function embedderFor(config: EmbedderConfig, local: boolean): EmbedderAccess | null {
   if (!local) return config;
-  if (config.local) return config.local;
+  if (config.local && isLocal(config.local)) return config.local;
   return isLocal(config) ? config : null;
 }
 
@@ -276,7 +276,7 @@ export class MailSimilarity {
     const ready = async (access: EmbedderAccess): Promise<boolean> => {
       if (now < this.downUntil) return false;
       try {
-        const local = isLocal(access) || access === config.local;
+        const local = isLocal(access);
         await vectorsFor(access, entries.filter((e) => local || !isLocalSource(e.sourceId)).map(mailText), config.maxPerPass);
         return true;
       } catch (err) {
@@ -319,16 +319,6 @@ export class MailSimilarity {
 
 const others = (entries: readonly MailLogEntry[], mail: MailText): MailLogEntry[] => entries.filter((e) => e.messageId !== mail.messageId || e.where === "correction");
 
-const PAST: Record<PredictedAction, string> = {
-  archive: "Archived",
-  junk: "Moved to Spam",
-  trash: "Deleted",
-  reply: "Answered",
-  plan: "Planned",
-  todo: "Made a to-do",
-  keep: "Kept in the inbox",
-};
-
 export const ACTION_LABEL: Record<PredictedAction, string> = {
   archive: "archived",
   junk: "moved to Spam",
@@ -345,12 +335,24 @@ const names = (senders: string[]): string => {
   return `${unique.slice(0, 2).join(", ")} and ${unique.length - 2} others`;
 };
 
+const past = (action: PredictedAction): string => `${ACTION_LABEL[action].charAt(0).toUpperCase()}${ACTION_LABEL[action].slice(1)}`;
+
+export const WOULD: Record<PredictedAction, string> = {
+  archive: "would archive it",
+  junk: "would mark it as spam",
+  trash: "would delete it",
+  reply: "would reply to it",
+  plan: "would plan it",
+  todo: "would make it a to-do",
+  keep: "would keep it in the inbox",
+};
+
 /** One plain sentence naming the precedents of a predicted action, or null when none agree with it. */
 export function precedentLine(action: PredictedAction, precedents: Pick<MailPrecedents, "basis" | "note"> & { items: readonly Pick<MailPrecedent, "action" | "sender">[] }): string | null {
   const agreeing = precedents.items.filter((n) => n.action === action);
   if (agreeing.length === 0) return null;
   const n = agreeing.length;
   const mails = n === 1 ? "mail" : "mails";
-  if (precedents.basis === "sender") return `${PAST[action]} like the last ${n === 1 ? "" : `${n} `}${mails} from this sender (${precedents.note ?? "matched by sender and mailing list"}).`;
-  return `${PAST[action]} like ${n} similar ${mails} from ${names(agreeing.map((a) => a.sender))}.`;
+  if (precedents.basis === "sender") return `${past(action)} like the last ${n === 1 ? "" : `${n} `}${mails} from this sender (${precedents.note ?? "matched by sender and mailing list"}).`;
+  return `${past(action)} like ${n} similar ${mails} from ${names(agreeing.map((a) => a.sender))}.`;
 }

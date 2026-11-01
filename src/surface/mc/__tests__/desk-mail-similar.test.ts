@@ -183,6 +183,10 @@ describe("the embeddings endpoint", () => {
     expect(parse("http://localhost:11434/v1").success).toBe(true);
     expect(parse("https://api.example/v1").success).toBe(true);
     expect(parse("http://embed.example/v1").success).toBe(false);
+    const local = (baseUrl: string) => McSchema.safeParse({ desk: { mail: { embedder: { baseUrl: "https://api.example/v1", model: "m", local: { baseUrl, model: "bge-m3" } } } } }).success;
+    expect(local("http://127.0.0.1:11434/v1")).toBe(true);
+    expect(local("https://embed.example/v1")).toBe(false);
+    expect(embedderFor({ ...EMBEDDER, baseUrl: "https://api.example/v1", local: { baseUrl: "https://embed.example/v1", model: "m", timeoutSeconds: 5 } }, true)).toBeNull();
     expect(McSchema.parse({ desk: { mail: { embedder: { baseUrl: "http://localhost:11434/v1", model: "bge-m3" } } } }).desk.mail.embedder).toMatchObject({ threshold: 0.65, neighbours: 8, timeoutSeconds: 10 });
   });
 });
