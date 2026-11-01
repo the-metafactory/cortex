@@ -20,7 +20,7 @@ If another window changes the item you are editing, Save refuses the stale edit 
 
 ## Choose your caps
 
-`desk.myDay.cap` sets the My day baseline, from 1 to 7. `desk.topN` sets the Needs you baseline, from 1 to 10. The proposed defaults are 5 and 5, pending the principal’s review for cortex#2871.
+`desk.myDay.cap` sets the My day baseline, from 1 to 7. `desk.topN` sets the Needs you baseline, from 1 to 10. Both default to 5, ratified by the principal in cortex#2871.
 
 The two on-screen dials save an explicit per-stack override. The Desk labels those saved caps. They survive reload and restart, including later YAML changes. **Reset** removes the override and immediately uses the current YAML values. Without an override, YAML changes take effect when the running stack reloads them. Changing a cap preserves the started day. A smaller cap trims an unconfirmed draft; **Refresh proposal** fills a new draft using the effective cap.
 

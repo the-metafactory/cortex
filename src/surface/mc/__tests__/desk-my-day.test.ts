@@ -40,6 +40,7 @@ describe("My day lane and day contract", () => {
   it("shows exactly the engine list with reasons, bounded alternates and proposed contract", () => {
     const view = readMyDay(db, desk, NOW);
     expect(view.items.map(i => i.task.id)).toEqual(selectToday(seed(), DATE).map(i => i.task.id));
+    expect(view).toMatchObject({ cap: 5, topN: 5, configuredCaps: { cap: 5, topN: 5 }, capsOverridden: false });
     expect(view.items.every(i => i.trace.length > 0)).toBe(true);
     expect(view.alternates.length).toBeLessThanOrEqual(3);
     const html = renderToStaticMarkup(createElement(MyDayLane, { day: view, onChanged: () => {} }));
