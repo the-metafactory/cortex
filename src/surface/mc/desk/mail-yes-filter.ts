@@ -48,14 +48,18 @@ export async function mailYesFilter(db: Database, desk: DeskOptions, now: number
   return { questions: desk.studio?.yesFilter?.length ? [...desk.studio.yesFilter] : [...DEFAULT_YES_FILTER], commitments, problems };
 }
 
+function receiptStatus(prior: { status: string; result: string | null }): MailActionResult | null {
+  if (prior.status === "saved") return { ok: true, message: prior.result ?? "The reply draft is already saved." };
+  if (prior.status !== "failed") return { ok: false, status: 409, error: "This draft may already be saved. Check Drafts before starting another." };
+  return null;
+}
+
 export function decisionReceipt(db: Database, key: string, body: string, decision: MailDecision): MailActionResult | null {
   const prior = db.query<{ binding: string; status: string; result: string | null }, [string]>("SELECT binding, status, result FROM desk_mail_decisions WHERE id = ?").get(decision.requestId);
   if (!prior) return null;
   const stored = z.object({ messageId: z.string(), body: z.string(), decision: MailDecisionSchema }).parse(JSON.parse(prior.binding));
   if (`mail:${stored.messageId}` !== key || stored.body !== body || JSON.stringify(stored.decision) !== JSON.stringify(decision)) return { ok: false, status: 409, error: "This draft changed. Start a new draft before saving it." };
-  if (prior.status === "saved") return { ok: true, message: prior.result ?? "The reply draft is already saved." };
-  if (prior.status !== "failed") return { ok: false, status: 409, error: "This draft may already be saved. Check Drafts before starting another." };
-  return null;
+  return receiptStatus(prior);
 }
 
 export async function saveDecisionDraft(input: { db: Database; desk: DeskOptions; mail: ListedMail; body: string; decision: MailDecision; now: number; save: () => Promise<MailActionResult> }): Promise<MailActionResult> {
@@ -69,10 +73,10 @@ export async function saveDecisionDraft(input: { db: Database; desk: DeskOptions
   const acquired = db.transaction((): MailActionResult | null => {
     const prior = db.query<{ binding: string; status: string; result: string | null }, [string]>("SELECT binding, status, result FROM desk_mail_decisions WHERE id = ?").get(decision.requestId);
     if (prior) {
-    if (prior.binding !== binding) return { ok: false, status: 409, error: "This draft changed. Start a new draft before saving it." };
-    if (prior.status === "saved") return { ok: true, message: prior.result ?? "The reply draft is already saved." };
-    if (prior.status !== "failed") return { ok: false, status: 409, error: "This draft may already be saved. Check Drafts before starting another." };
-  }
+      if (prior.binding !== binding) return { ok: false, status: 409, error: "This draft changed. Start a new draft before saving it." };
+      const receipt = receiptStatus(prior);
+      if (receipt) return receipt;
+    }
     db.query("INSERT INTO desk_mail_decisions (id, binding, status, result, created_at) VALUES (?, ?, 'pending', NULL, ?) ON CONFLICT(id) DO UPDATE SET status = 'pending', result = NULL").run(decision.requestId, binding, now);
     return null;
   })();

@@ -340,7 +340,7 @@ export function readClassifications(db: Database, ids: string[]): Map<string, Ma
 }
 
 export function saveClassification(db: Database, id: string, c: MailClassification, model: string, now: number): void {
-  const more = { ...extras(c), contractVersion: MAIL_CLASSIFIER_CONTRACT, ...(c.commitment ? { commitment: c.commitment } : {}) };
+  const more = { ...extras(c), ...(c.commitment ? { commitment: c.commitment, contractVersion: MAIL_CLASSIFIER_CONTRACT } : {}) };
   const details = Object.keys(more).length > 0 ? JSON.stringify(more) : null;
   db.query(
     "INSERT INTO desk_mail_classes (message_id, category, meeting_key, reason, model, classified_at, details) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(message_id) DO UPDATE SET category = excluded.category, meeting_key = excluded.meeting_key, reason = excluded.reason, model = excluded.model, classified_at = excluded.classified_at, details = excluded.details",
@@ -439,7 +439,8 @@ export class MailClassifier {
       result.ms.push(this.clock() - started);
       if (answer) {
         saveClassification(db, m.id, answer, this.model, input.now);
-        this.retryAt.delete(m.id);
+        if (answer.commitment) this.retryAt.delete(m.id);
+        else this.retryAt.set(m.id, input.now + RETRY_AFTER_MS);
         result.classified += 1;
       } else {
         this.retryAt.set(m.id, input.now + RETRY_AFTER_MS);

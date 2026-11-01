@@ -152,3 +152,14 @@ test("mail route returns the saved immutable receipt after reclassification and 
   expect((await handleDeskMail(request(), db, { ...runtime, sourceCache: new SourceCache(async () => "{}") }, deps)).status).toBe(200);
   expect(calls).toBe(1);
 });
+
+
+test("a fresh answer without the commitment marker remains eligible for refresh after cooldown", async () => {
+  let calls = 0;
+  const c = new MailClassifier({ command: ["owned-classifier"], timeoutSeconds: 1, maxPerPass: 1 }, async () => { calls++; return calls === 1 ? { category: "reply", reason: "Legacy answer" } : { category: "reply", commitment: "request", reason: "Explicit new request" }; }, () => {});
+  await c.kick(db, { now, mail: [mail], events: [], vips: [] });
+  expect(readClassifications(db, [mail.id]).get(mail.id)?.commitment).toBeUndefined();
+  await c.kick(db, { now: now + 11 * 60_000, mail: [mail], events: [], vips: [] });
+  expect(calls).toBe(2);
+  expect(readClassifications(db, [mail.id]).get(mail.id)?.commitment).toBe("request");
+});
