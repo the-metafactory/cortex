@@ -265,15 +265,46 @@ describe("My day lane and day contract", () => {
       expect((await composeDesk(db, options, undefined, { now: NOW, sourceCache: cache })).items).toHaveLength(0);
     } finally { await remote.stop(true); }
   });
-  it("real server refuses hostile Host, Origin and an unauthorized identity before any My day write", async () => {
-    const ctx = startServer({ ...DEFAULT_CONFIG, port: 0, governance: { principals: ["allowed@example.test"], localPrincipal: "other@example.test" } }, db, { desk });
-    const url = `http://127.0.0.1:${ctx.port}/api/desk/my-day`;
-    const payload = JSON.stringify({ date: DATE, requestId: crypto.randomUUID(), command: { op: "cap", cap: 1 } });
+  const mutationFixture = (authorized: boolean) => startServer({ ...DEFAULT_CONFIG, port: 0, governance: { principals: ["allowed@example.test"], localPrincipal: authorized ? "allowed@example.test" : "other@example.test" } }, db, { desk });
+  const postCap = (port: number, headers: Record<string, string> = {}) => fetch(`http://127.0.0.1:${port}/api/desk/my-day`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: `http://127.0.0.1:${port}`, ...headers },
+    body: JSON.stringify({ date: localDay(Date.now()), requestId: crypto.randomUUID(), command: { op: "cap", cap: 1 } }),
+  });
+  it("rejects hostile Host independently of identity", async () => {
+    const ctx = mutationFixture(true);
     try {
-      expect((await fetch(url, { method: "POST", headers: { Host: "evil.example" }, body: payload })).status).toBe(403);
-      expect((await fetch(url, { method: "POST", headers: { Origin: "https://evil.example" }, body: payload })).status).toBe(403);
-      expect((await fetch(url, { method: "POST", body: payload })).status).toBe(403);
-      expect(readMyDay(db, desk, NOW).capsOverridden).toBe(false);
+      const response = await postCap(ctx.port, { Host: "evil.example" });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ error: "forbidden_host" });
+      expect(readMyDay(db, desk, Date.now()).capsOverridden).toBe(false);
+    } finally { ctx.stop(true); }
+  });
+  it("rejects hostile Origin independently of identity", async () => {
+    const ctx = mutationFixture(true);
+    try {
+      const response = await postCap(ctx.port, { Origin: "https://evil.example" });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ error: "forbidden_origin" });
+      expect(readMyDay(db, desk, Date.now()).capsOverridden).toBe(false);
+    } finally { ctx.stop(true); }
+  });
+  it("accepts a valid authorized mutation control", async () => {
+    const ctx = mutationFixture(true);
+    try {
+      const response = await postCap(ctx.port);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ view: { cap: 1, capsOverridden: true } });
+      expect(readMyDay(db, desk, Date.now()).cap).toBe(1);
+    } finally { ctx.stop(true); }
+  });
+  it("rejects unauthorized identity with valid Host and Origin", async () => {
+    const ctx = mutationFixture(false);
+    try {
+      const response = await postCap(ctx.port);
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ error: "not_authorized" });
+      expect(readMyDay(db, desk, Date.now()).capsOverridden).toBe(false);
     } finally { ctx.stop(true); }
   });
   it("compose omits moved Ranger items without changing Ranger's source state", async () => {
