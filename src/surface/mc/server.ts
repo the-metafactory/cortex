@@ -1,3 +1,4 @@
+import { handleDeskRoutineEvidence } from "./api/desk-routine-evidence";
 import { WaitingTasks } from "./desk/sources/waiting";
 import { handleDeskMyDay } from "./api/desk-my-day";
 import { handleDeskCalendars } from "./api/desk-calendars";
@@ -495,6 +496,8 @@ async function handleApi(
 
   if (pathname === "/api/desk/create") return handleDeskCreate(req, db, desk, { routineCapabilities: () => localRoutineCapabilities(agentPresence) });
   if (pathname === "/api/desk/routines") return handleDeskRoutines(req, db, desk, undefined, () => localRoutineCapabilities(agentPresence));
+  if (pathname === "/api/desk/routine-history") return handleDeskRoutineEvidence(req, db, desk);
+  if (pathname === "/api/desk/routine-log") return handleDeskRoutineEvidence(req, db, desk, true);
   if (pathname === "/api/desk/routine-occurrences") return handleDeskRoutineOccurrences(req, desk);
   if (pathname === "/api/desk/routine-editor") return handleDeskRoutineEditor(req, desk);
 
