@@ -12,7 +12,8 @@ import { routineSchedule } from "./routine-schedule";
 import { requireRoutineCapabilities, type RoutineCapabilities } from "./routine-providers";
 import { routineStepLabels } from "./routine-steps";
 import { PendingRoutineSchema, RoutineHistorySchema, RoutineSchema, RoutineRefusal, RoutineWriteFailure, reflexCommand, runRoutineCommand, type RoutineOptions, type RoutineRunner, type RoutineView } from "./routine-command";
-import { RoutineResultSchema, finishRoutineOperation, pendingRoutineOperations, readRoutineOperation, readRoutineProposal, routineConfigHash, saveRoutineProposal, type RoutineAction, type RoutineProposal, type RoutineResult } from "./routine-store";
+import { checkRoutineOperation, claimRoutineOperation, finishRoutineOperation, pendingRoutineOperations, readRoutineOperation, readRoutineProposal, routineConfigHash, routineOperationBinding, saveRoutineProposal, type RoutineAction, type LegacyRoutineAction, type RoutineProposal, type RoutineResult } from "./routine-store";
+import { actOnRoutineSchedule, reconcileSchedule } from "./routine-schedule-editor";
 
 const ComposerReply = z.discriminatedUnion("status", [
   z.object({ status: z.literal("complete"), yaml: z.string().min(1).max(262144), summary: z.string().optional() }),
@@ -62,6 +63,11 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
     const selected = installed.filter((r) => r.target === options.target);
     const ids = new Set(selected.map((r) => r.id));
     for (const operation of pendingRoutineOperations(db, options)) {
+      if (operation.action === "schedule") {
+        const confirmed = await reconcileSchedule(options, operation, run);
+        if (confirmed) finishRoutineOperation(db, operation.requestId, confirmed);
+        continue;
+      }
       const proposal = operation.action === "install" ? readRoutineProposal(db, operation.target) : null;
       const confirmed = reconcileState(options, operation, proposal, { installed, history });
       if (confirmed) finishRoutineOperation(db, operation.requestId, confirmed);
@@ -82,7 +88,7 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
 
 interface RoutineState { installed: z.infer<typeof RoutineSchema>[]; history: z.infer<typeof RoutineHistorySchema>[] }
 
-function reconcileState(options: RoutineOptions, request: RoutineAction, proposal: RoutineProposal | null, state: RoutineState): RoutineResult | null {
+function reconcileState(options: RoutineOptions, request: LegacyRoutineAction, proposal: RoutineProposal | null, state: RoutineState): RoutineResult | null {
   if (request.action === "approve" || request.action === "deny") {
     const resolution = state.history.find((h) => h.resolutionOf === request.target);
     if (!resolution) return null;
@@ -99,7 +105,7 @@ function reconcileState(options: RoutineOptions, request: RoutineAction, proposa
   return null;
 }
 
-async function reconcile(options: RoutineOptions, request: RoutineAction, proposal: RoutineProposal | null, run: RoutineRunner): Promise<RoutineResult | null> {
+async function reconcile(options: RoutineOptions, request: LegacyRoutineAction, proposal: RoutineProposal | null, run: RoutineRunner): Promise<RoutineResult | null> {
   const reads = { ...options, timeoutSeconds: options.readTimeoutSeconds };
   const state = request.action === "approve" || request.action === "deny"
     ? { installed: [], history: await reflexCommand(reads, ["history", "--limit", "200"], z.array(RoutineHistorySchema), run) }
@@ -109,7 +115,7 @@ async function reconcile(options: RoutineOptions, request: RoutineAction, propos
 
 class RoutinePreparationFailure extends Error {}
 
-async function executeRoutineMutation(options: RoutineOptions, request: RoutineAction, proposal: RoutineProposal | null, run: RoutineRunner): Promise<void> {
+async function executeRoutineMutation(options: RoutineOptions, request: LegacyRoutineAction, proposal: RoutineProposal | null, run: RoutineRunner): Promise<void> {
   let temporary: string | undefined;
   let args: string[];
   try {
@@ -146,26 +152,18 @@ async function executeRoutineMutation(options: RoutineOptions, request: RoutineA
   if (outcome.kind === "failed") throw outcome.error;
 }
 
-async function reconcileAndFinish(db: Database, options: RoutineOptions, request: RoutineAction, proposal: RoutineProposal | null, run: RoutineRunner): Promise<RoutineResult | null> {
+async function reconcileAndFinish(db: Database, options: RoutineOptions, request: LegacyRoutineAction, proposal: RoutineProposal | null, run: RoutineRunner): Promise<RoutineResult | null> {
   const confirmed = await reconcile(options, request, proposal, run);
   return confirmed ? finishRoutineOperation(db, request.requestId, confirmed) : null;
 }
 
 export async function actOnRoutine(db: Database, options: RoutineOptions, request: RoutineAction, now: number, run: RoutineRunner = spawnWithStdin, capabilities?: RoutineCapabilities): Promise<RoutineResult> {
+  if (request.action === "schedule") return actOnRoutineSchedule(db, options, request, run);
   const proposal = request.action === "install" ? readRoutineProposal(db, request.target) : null;
   if (request.action === "install" && (proposal?.configHash !== routineConfigHash(options))) return { ok: false, error: "Prepare this routine again before confirming it." };
-  const binding = JSON.stringify({ action: request.action, target: request.target, configHash: routineConfigHash(options) });
+  const binding = routineOperationBinding(options, request);
   const prior = readRoutineOperation(db, request.requestId);
-  if (prior) {
-    if (prior.binding !== binding) return { ok: false, error: "This request id belongs to a different routine action." };
-    if (prior.result) return RoutineResultSchema.parse(JSON.parse(prior.result));
-    try {
-      const result = await reconcileAndFinish(db, options, request, proposal, run);
-      return result ?? { ok: false, error: UNKNOWN, uncertain: true };
-    } catch {
-      return { ok: false, error: UNKNOWN, uncertain: true };
-    }
-  }
+  if (prior) return checkRoutineOperation(db, request.requestId, binding, prior, () => reconcile(options, request, proposal, run), UNKNOWN);
   const execution = proposal ?? (request.action === "auto" ? readRoutineProposal(db, request.target, "routine_id") : null);
   if (request.action === "auto" && !execution) return { ok: false, error: "The Desk cannot verify the execution capabilities of a routine authored elsewhere. Stop and Remove remain available." };
   if (execution) {
@@ -182,7 +180,7 @@ export async function actOnRoutine(db: Database, options: RoutineOptions, reques
   } else if (view.installed.some((r) => r.id === resource)) {
     return { ok: false, error: "This proposal is already installed." };
   }
-  const claimed = db.query("INSERT OR IGNORE INTO desk_routine_operations (request_id, binding, resource) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM desk_routine_operations WHERE resource = ? AND result IS NULL)").run(request.requestId, binding, resource, resource).changes;
+  const claimed = claimRoutineOperation(db, request.requestId, binding, resource);
   if (!claimed) return { ok: false, error: "Another action for this routine is still awaiting confirmation. Retry that action first.", uncertain: true };
   try {
     await executeRoutineMutation(options, request, proposal, run);

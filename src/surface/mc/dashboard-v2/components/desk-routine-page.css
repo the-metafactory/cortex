@@ -92,3 +92,16 @@
 
 .routine-range-button{height:34px;padding:0 14px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--mute);font:inherit;font-size:14px}
 .routine-library-button{border:0;background:transparent;padding:0;text-align:left;font:inherit;font-size:13px;color:var(--ink)}
+.routine-schedule-dialog { width: min(680px, calc(100vw - 32px)); max-height: 90vh; overflow: auto; border: 1px solid #dfe3e9; border-radius: 14px; padding: 24px; color: #253141; background: #fff; }
+.routine-schedule-dialog::backdrop { background: rgb(20 30 45 / 25%); }
+.routine-schedule-fields { border: 0; padding: 0; display: grid; gap: 16px; margin-bottom: 20px; }
+.routine-schedule-fields > label { display: grid; gap: 6px; }
+.routine-schedule-fields > label:has(input[type=checkbox]) { display: flex; align-items: center; gap: 8px; }
+.routine-schedule-fields input:not([type=checkbox]), .routine-schedule-fields select { min-width: 0; width: 100%; padding: 9px; border: 1px solid #dfe3e9; border-radius: 7px; box-sizing: border-box; }
+.routine-schedule-days { border: 1px solid #e6e9ed; border-radius: 8px; display: flex; gap: 12px; flex-wrap: wrap; padding: 10px; }
+.routine-schedule-days label { display: flex; align-items: center; gap: 5px; }
+.routine-schedule-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 16px 0; }
+.routine-schedule-comparison > div { border: 1px solid #e6e9ed; border-radius: 8px; padding: 14px; overflow-wrap: anywhere; }
+.routine-schedule-comparison code { white-space: pre-wrap; }
+.routine-schedule-comparison ol { padding-left: 18px; }
+@media (max-width: 500px) { .routine-schedule-comparison { grid-template-columns: 1fr; } .routine-schedule-dialog { padding: 16px; } }

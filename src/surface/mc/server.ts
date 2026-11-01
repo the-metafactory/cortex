@@ -5,6 +5,7 @@ import { handleDeskCalendars } from "./api/desk-calendars";
 import { handleDeskRoutines } from "./api/desk-routines";
 import { handleDeskRoutineOccurrences } from "./api/desk-routine-occurrences";
 import { handleDeskRoutineEditor } from "./api/desk-routine-editor";
+import { handleDeskRoutineSchedule } from "./api/desk-routine-schedule";
 import { RoutineReadLoop } from "./desk/routine-read";
 import { localRoutineCapabilities } from "./desk/routine-providers";
 import type { Server, ServerWebSocket } from "bun";
@@ -502,7 +503,8 @@ async function handleApi(
   if (pathname === "/api/desk/routine-history") return handleDeskRoutineEvidence(req, db, desk);
   if (pathname === "/api/desk/routine-log") return handleDeskRoutineEvidence(req, db, desk, true);
   if (pathname === "/api/desk/routine-occurrences") return handleDeskRoutineOccurrences(req, desk);
-  if (pathname === "/api/desk/routine-editor") return handleDeskRoutineEditor(req, desk);
+  if (pathname === "/api/desk/routine-editor") return handleDeskRoutineEditor(req, desk, undefined, db);
+  if (pathname === "/api/desk/routine-schedule") return handleDeskRoutineSchedule(req, desk);
 
   if (pathname === "/api/desk/voice/speak") return handleDeskSpeak(req, desk);
 

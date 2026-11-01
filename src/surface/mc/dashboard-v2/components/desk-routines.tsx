@@ -1,10 +1,12 @@
 import { useRef, useState } from "react";
 import { postJson } from "../lib/api";
-import type { RoutineAction } from "../../desk/routine-store";
+import type { RoutineAction, LegacyRoutineAction } from "../../desk/routine-store";
 import type { RoutineView } from "../../desk/routine-command";
 
-export function RoutineButton({ action, target, children, onChanged, retryId }: { action: RoutineAction["action"]; target: string; children: string; onChanged: () => void; retryId?: string }) {
-  const requestId = useRef(retryId ?? crypto.randomUUID());
+type RoutineButtonProps = { children: string; onChanged: () => void; retryId?: string } & ({ request: RoutineAction; action?: never; target?: never } | { request?: never; action: LegacyRoutineAction["action"]; target: string });
+export function RoutineButton(props: RoutineButtonProps) {
+  const { children, onChanged, retryId } = props;
+  const requestId = useRef(retryId ?? props.request?.requestId ?? crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const act = async (): Promise<void> => {
@@ -12,7 +14,8 @@ export function RoutineButton({ action, target, children, onChanged, retryId }: 
     setBusy(true);
     setError(null);
     try {
-      const result = await postJson<RoutineAction, { ok?: boolean } | null>("/api/desk/routines", { requestId: requestId.current, action, target });
+      const request: RoutineAction = props.request ? { ...props.request, requestId: requestId.current } : { requestId: requestId.current, action: props.action, target: props.target };
+      const result = await postJson<RoutineAction, { ok?: boolean } | null>("/api/desk/routines", request);
       if (result?.ok !== true) throw new Error("The routine result was not confirmed. Retry this same action.");
       if (retryId === undefined) requestId.current = crypto.randomUUID();
       onChanged();
@@ -25,13 +28,17 @@ export function RoutineButton({ action, target, children, onChanged, retryId }: 
   return <><button className="desk-btn" type="button" disabled={busy} onClick={() => void act()}>{busy ? "Checking…" : children}</button>{error && <p role="alert">{error}</p>}</>;
 }
 
+export function PendingRoutineChanges({ changes, onChanged }: { changes: RoutineAction[]; onChanged: () => void }) {
+  return <>{changes.map((change) => <p key={change.requestId}>A routine change is awaiting confirmation. <RoutineButton request={change} retryId={change.requestId} onChanged={onChanged}>Check pending change</RoutineButton></p>)}</>;
+}
+
 export function RoutinesSection({ view, onChanged }: { view: RoutineView | undefined; onChanged: () => void }) {
   if (!view) return null;
   return (
     <section className="desk-msec" aria-label="Routines">
       <h3 className="desk-mh">Routines</h3>
       {view.error && <p role="alert">{view.error}</p>}
-      {view.changes.map((change) => <p key={change.requestId}>A routine change is awaiting confirmation. <RoutineButton action={change.action} target={change.target} retryId={change.requestId} onChanged={onChanged}>Check pending change</RoutineButton></p>)}
+      <PendingRoutineChanges changes={view.changes} onChanged={onChanged} />
       {!view.error && view.installed.length === 0 && <p className="soft">Ask for something to happen every day, week or minute.</p>}
       <ul className="desk-sub">
         {view.pending.map((p) => <li key={p.decisionId}><div>
