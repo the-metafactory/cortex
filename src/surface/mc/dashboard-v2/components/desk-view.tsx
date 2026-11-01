@@ -1,9 +1,10 @@
 import { CatchupPreview, DeskCatchUp } from "./desk-catch-up";
 import { catchupSearch } from "../hooks/use-catchup-location";
+import { scrollBelowDesk } from "../lib/desk-scroll";
 import { DeskBalance } from "./desk-balance";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
-import { MyDayLane, submitMyDay } from "./desk-my-day";
+import { MyDayLane } from "./desk-my-day";
 import { StudioSessionPanel, useStudioSession } from "./desk-studio-session";
 import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
@@ -26,7 +27,7 @@ import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
 import { useDeskLocation, useDeskStudio } from "../hooks/use-desk-studio";
 import { DeskModeSwitch, DeskStudio } from "./desk-studio";
-import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, openGroup, selectItems, spokenBriefing, URGENCY_LABEL } from "../../desk/present";
+import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, selectItems, spokenBriefing, URGENCY_LABEL } from "../../desk/present";
 import { useDeskVoice } from "../hooks/use-desk-voice";
 import { MicButton, VoicePanel } from "./desk-voice";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskView as DeskViewModel } from "../../desk/types";
@@ -35,6 +36,8 @@ import type { MoveTarget } from "../../desk/mail-move";
 interface DeskViewProps {
   onOpenMissionControl: () => void;
 }
+
+type DayTarget = { kind: "event"; key: string } | { kind: "proposal" };
 
 export function DeskView({ onOpenMissionControl }: DeskViewProps) {
   const { view, enabled, error, reload } = useDesk(true);
@@ -71,9 +74,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
   const catchupView = { ...view, items: view.items.filter(i => !snoozed.has(i.key)) };
   const [detail, setDetail] = useState<DeskItem | null>(null);
-  const [groupKind, setGroupKind] = useState<DeskItemKind | null>(null);
   const [openAgents, setOpenAgents] = useState(false);
   const [openStopped, setOpenStopped] = useState(false);
+  const [pendingDayTarget, setPendingDayTarget] = useState<DayTarget | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map());
@@ -108,6 +111,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     window.history.pushState(null, "", `${window.location.pathname}${search}${window.location.hash}`);
     window.dispatchEvent(new PopStateEvent("popstate"));
   };
+  const revealDay = (target: DayTarget): void => {
+    setPendingDayTarget(target);
+    if (place.mode !== "day") go({ mode: "day", thread: null });
+  };
   const foreground = useStudioForeground(inStudio, view.mirror?.week.timeZone);
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
@@ -128,6 +135,19 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const nextMeeting = laterReal.find((e) => e.kind === "meeting");
   const later = withGhost(laterReal, ghostToday);
   const ahead = withGhost(view.ahead.filter(inArea), !ghostToday);
+
+  useEffect(() => {
+    if (place.mode !== "day" || !pendingDayTarget) return;
+    const selector = pendingDayTarget.kind === "event"
+      ? `[data-event="${CSS.escape(pendingDayTarget.key)}"]`
+      : ".desk-grid .desk-prop";
+    const target = document.querySelector<HTMLElement>(selector);
+    if (target) scrollBelowDesk(target);
+    else setNote(pendingDayTarget.kind === "event"
+      ? "That calendar item is no longer on the Desk. Refresh and try again."
+      : "That proposal is no longer available. Try the command again.");
+    setPendingDayTarget(null);
+  }, [place.mode, pendingDayTarget, area, openStopped]);
 
   useEffect(() => {
     latest.current = view;
@@ -182,9 +202,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     }
   };
 
+  const presentProposal = (said: string, p: DeskProposal, requestId: string): void => {
+    setProposal({ p, said, requestId, fields: p.fields });
+    revealDay({ kind: "proposal" });
+  };
+
   const propose = async (said: string, p: DeskProposal): Promise<string | null> => {
     const requestId = crypto.randomUUID();
-    setGroupKind(null);
     if (p.kind === "capture" && p.automatic && !p.problem) {
       const filed = await createFromProposal(requestId, p.kind, p.fields);
       setNote(filed.text);
@@ -192,10 +216,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         captureChanged();
         return filed.text;
       }
-      setProposal({ p, said, requestId, fields: p.fields });
+      presentProposal(said, p, requestId);
       return `${filed.text} Your thought is kept in the draft for retry.`;
     }
-    setProposal({ p, said, requestId, fields: p.fields });
+    presentProposal(said, p, requestId);
     return null;
   };
 
@@ -457,8 +481,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   const focusEvent = (key: string): void => {
-    if (view.today.some((e) => e.key === key && e.kind === "agent-stop")) setOpenStopped(true);
-    requestAnimationFrame(() => document.querySelector(`[data-event="${CSS.escape(key)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
+    const event = [...view.today, ...view.ahead].find((e) => e.key === key);
+    if (event && area !== ALL_AREAS && event.area !== area) setArea(ALL_AREAS);
+    if (event?.kind === "agent-stop") setOpenStopped(true);
+    revealDay({ kind: "event", key });
   };
 
   const proposalCard = proposal && (
@@ -532,7 +558,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       )}
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
-      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} />
+      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} />
       <div className="desk-grid" hidden={inStudio || inBalance || inCatchup}>
         <main>
           <section className="desk-lead">
@@ -572,7 +598,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 </li>
               )}
               {openStopped && stopped.map((e) => (
-                <li key={e.key} data-event={e.key} className="desk-ev did">
+                <li key={e.key} data-event={e.key} className="desk-ev did" tabIndex={-1}>
                   <time>{clock(e.at)}</time>
                   <span className="desk-pin" />
                   <span className="t">{e.note ?? e.title}</span>
@@ -782,7 +808,7 @@ function ghostEvent(p: DeskProposal): DeskEvent | null {
 
 export function TimelineRow({ event, className }: { event: DeskEvent; className: string }) {
   return (
-    <li data-event={event.key} className={`desk-ev ${className}`.trim()}>
+    <li data-event={event.key} className={`desk-ev ${className}`.trim()} tabIndex={-1}>
       <time>{clock(event.at)}</time>
       <span className="desk-pin" style={event.color ? { background: event.color, borderColor: event.color } : undefined} />
       <span>
@@ -1002,7 +1028,7 @@ export function AheadStrip({ events }: { events: DeskEvent[] }) {
           <h3>{day}</h3>
           <ul>
             {list.map((e) => (
-              <li key={e.key} data-event={e.key} className={e.key === GHOST_KEY ? "ghost" : undefined} style={e.color ? { borderLeft: `3px solid ${e.color}`, paddingLeft: 6 } : undefined}>
+              <li key={e.key} data-event={e.key} className={e.key === GHOST_KEY ? "ghost" : undefined} tabIndex={-1} style={e.color ? { borderLeft: `3px solid ${e.color}`, paddingLeft: 6 } : undefined}>
                 {(e.kind === "meeting" || e.kind === "reminder") && <time>{clock(e.at)}</time>}
                 <span className="ttl">{e.title}</span>
               </li>
