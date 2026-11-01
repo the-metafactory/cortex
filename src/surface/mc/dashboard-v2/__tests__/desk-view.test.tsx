@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActionButton, DeskBody, DeskView, DoneForYou, EvidenceLink, ItemMenu, MailReceipt, RankingSection, RestGroups, dismissesMenu, withConfirm } from "../components/desk-view";
+import { ActionButton, DeskBody, DeskItemRow, DeskView, DoneForYou, EvidenceLink, ItemMenu, MailReceipt, RankingSection, RestGroups, dismissesMenu, withConfirm } from "../components/desk-view";
 import { submitMailAction } from "../lib/desk-action";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
@@ -51,6 +51,8 @@ const view: DeskViewModel = {
   corrections: [],
 };
 
+const renderCards = (items: DeskItem[], sending: string | null = null): string => renderToStaticMarkup(items.map((entry, index) => <DeskItemRow key={entry.key} item={entry} rank={index + 1} sending={sending} onOpen={() => {}} onAction={() => {}} onFocusEvent={() => {}} onCorrect={() => {}} />));
+
 describe("DeskBody", () => {
   const html = renderToStaticMarkup(<DeskBody view={view} error={null} onOpenMissionControl={() => {}} />);
 
@@ -59,8 +61,8 @@ describe("DeskBody", () => {
     expect((preview.match(/<li>/g) ?? []).length).toBe(3);
     expect(preview).not.toContain("Task 4 needs you.");
     expect(html).toContain('class="catchup" hidden=""');
-    expect((html.match(/class="desk-row desk-item"/g) ?? []).length).toBe(5);
-    expect(html).toContain("It waited since this morning (1).");
+    expect((html.match(/class="desk-row desk-item"/g) ?? []).length).toBe(0);
+    expect(html).not.toContain("It waited since this morning (1).");
   });
 
   it("keeps raw identifiers out of the visible text until the detail panel opens", () => {
@@ -78,7 +80,7 @@ describe("DeskBody", () => {
   });
 
   it("disables actions that are not connected yet", () => {
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*title="Not connected yet"[^>]*>Let it retry<\/button>/);
+    expect(renderCards(view.items)).toMatch(/<button[^>]*disabled=""[^>]*title="Not connected yet"[^>]*>Let it retry<\/button>/);
   });
 });
 
@@ -154,7 +156,7 @@ describe("DeskBody with calendar, mail and VIPs", () => {
   });
 
   it("shows the mail's first paragraph and the next days", () => {
-    expect(html).toContain("Could you look at the budget before Monday?");
+    expect(renderCards([mailItem])).toContain("Could you look at the budget before Monday?");
     expect(html).toContain("Partner visit");
   });
 
@@ -173,7 +175,7 @@ describe("DeskBody with calendar, mail and VIPs", () => {
         { id: "vip.add", label: "Always show mail from Grace", role: "secondary", wired: true, target: "grace@example.org" },
       ],
     });
-    const page = renderToStaticMarkup(<DeskBody view={{ ...view, items: [other] }} error={null} onOpenMissionControl={() => {}} />);
+    const page = renderCards([other]);
     expect(page).toContain("Always show mail from Grace");
   });
 });
@@ -322,7 +324,7 @@ describe("ranking corrections on the Desk", () => {
     const less = renderToStaticMarkup(<ItemMenu current="less" onCorrect={() => {}} open />);
     expect(less).not.toContain(">Less like this<");
     expect(less).toContain("Rank by the base rules again");
-    const html = renderToStaticMarkup(<DeskBody view={{ ...view, items: [item(1, { correction: "always" }), item(2)] }} error={null} onOpenMissionControl={() => {}} />);
+    const html = renderCards([item(1, { correction: "always" }), item(2)]);
     expect((html.match(/aria-label="Ranking: less like this, always show"/g) ?? []).length).toBe(2);
     expect(html).toContain("Always shown");
   });
@@ -364,8 +366,8 @@ describe("a goal item's actions", () => {
   const pause = { id: "goal.pause", label: "Pause this goal", role: "secondary" as const, wired: true };
   const goal = item(9, { kind: "goal", goal: "G6", actions: [check, pause] });
 
-  it("shows a running check as busy, also after a reload while Vigil has not reported", () => {
-    const page = renderToStaticMarkup(<DeskBody view={{ ...view, items: [{ ...goal, checking: true }] }} error={null} onOpenMissionControl={() => {}} />);
+  it("shows a card with a running check as busy", () => {
+    const page = renderCards([goal], "goal.check");
     expect(page).toContain(">Checking…</button>");
     expect(page).toContain(">Pause this goal</button>");
   });
@@ -389,7 +391,7 @@ describe("a mail item's actions", () => {
   });
 
   it("keeps the extra actions off the card", () => {
-    const page = renderToStaticMarkup(<DeskBody view={{ ...view, items: [mail] }} error={null} onOpenMissionControl={() => {}} />);
+    const page = renderCards([mail]);
     expect(page).toContain(">Seen, delete</button>");
     expect(page).not.toContain("Always show mail from Grace");
   });
@@ -432,7 +434,7 @@ describe("mail triage on the Desk", () => {
 
   it("shows the suggestion as one line under the reason", () => {
     const suggested = item(1, { kind: "mail", suggestion: "Suggested: reply" });
-    const html = renderToStaticMarkup(<DeskBody view={{ ...view, items: [suggested] }} error={null} onOpenMissionControl={() => {}} />);
+    const html = renderCards([suggested]);
     expect(html).toContain('<p class="desk-why desk-suggest">Suggested: reply</p>');
   });
 });

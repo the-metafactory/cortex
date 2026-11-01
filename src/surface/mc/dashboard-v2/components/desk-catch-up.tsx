@@ -382,7 +382,7 @@ export function DeskCatchUp({
         </p>
       )}
       <div className="catchup-stream">
-        {shown.map((item, index) => (
+        {active && shown.map((item, index) => (
           <article
             key={item.key}
             data-catchup-card={item.key}
