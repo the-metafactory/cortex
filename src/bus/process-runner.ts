@@ -236,14 +236,7 @@ export async function loadProcessSpec(dir: string, name: string): Promise<Proces
   return spec;
 }
 
-/**
- * Resolve argv for a run: fill each declared param from the activation payload
- * (or its default), validate the value against the param type, then substitute
- * `{token}` occurrences. Throws on a missing required param or a type/enum
- * violation — DATA, not instructions, so a bad value fails the run rather than
- * altering the command shape.
- */
-export function resolveArgv(spec: ProcessSpec, payload: Record<string, unknown>): string[] {
+function resolveParameters(spec: ProcessSpec, payload: Record<string, unknown>): Record<string, string> {
   const values: Record<string, string> = {};
   for (const [name, param] of Object.entries(spec.params)) {
     const provided = payload[name];
@@ -266,7 +259,20 @@ export function resolveArgv(spec: ProcessSpec, payload: Record<string, unknown>)
       values[name] = value;
     }
   }
+  return values;
+}
+function interpolateArgv(spec: ProcessSpec, values: Record<string, string>): string[] {
   return spec.argv.map((el) => el.replace(TOKEN_RE, (_m, k: string) => values[k] ?? `{${k}}`));
+}
+/**
+ * Resolve argv for a run: fill each declared param from the activation payload
+ * (or its default), validate the value against the param type, then substitute
+ * `{token}` occurrences. Throws on a missing required param or a type/enum
+ * violation — DATA, not instructions, so a bad value fails the run rather than
+ * altering the command shape.
+ */
+export function resolveArgv(spec: ProcessSpec, payload: Record<string, unknown>): string[] {
+  return interpolateArgv(spec, resolveParameters(spec, payload));
 }
 
 export interface ProcessRunnerOpts {
@@ -339,12 +345,13 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
     let cleanup = (): Promise<void> => Promise.resolve();
     try {
       spec = await loadSpec(processName);
-      const inputs = await (opts.snapshotInputs ?? snapshotProcessInputs)(spec.snapshot_inputs, activation.payload);
+      const parameters = resolveParameters(spec, activation.payload);
+      const inputs = await (opts.snapshotInputs ?? snapshotProcessInputs)(spec.snapshot_inputs, parameters);
       cleanup = async () => {
         try { await inputs.cleanup(); }
         catch (error) { log.error(JSON.stringify({ event: "process.input-snapshot-cleanup-failed", process: processName, decisionId: activation.decisionId, reason: errMsg(error) })); }
       };
-      argv = resolveArgv(spec, inputs.payload);
+      argv = interpolateArgv(spec, inputs.payload);
     } catch (err) {
       // Deterministic: a bad spec / param won't fix on re-fire of THIS decision.
       await cleanup();

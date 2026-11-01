@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { lstat, mkdtemp, open, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-export async function snapshotProcessInputs(inputs: Record<string, string> | undefined, payload: Record<string, unknown>) {
+export async function snapshotProcessInputs(inputs: Record<string, string> | undefined, payload: Record<string, string>) {
   const snapshots: string[] = [];
   const cleanup = async (): Promise<void> => {
     await Promise.all(snapshots.map(async (path) => {

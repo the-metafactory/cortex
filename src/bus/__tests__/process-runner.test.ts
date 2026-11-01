@@ -203,11 +203,11 @@ describe("createProcessRunner", () => {
     expect(last(published)!.process).toBe("build-journal");
   });
 
-  test("snapshots declared execution inputs before started and retains them until terminal after source deletion", async () => {
+  test.each([false, true])("snapshots enum-constrained execution inputs before started and retains them after deletion; default=%s", async (useDefault) => {
     const root = mkdtempSync(join(tmpdir(), "process-snapshot-"));
     const file = join(root, "routine.yaml"); writeFileSync(file, "owned definition");
     const { runtime, published } = fakeRuntime(); let snapshot: string | undefined;
-    const spec: ProcessSpec = { ...SPEC, cwd: root, argv: ["bun", "-e", "await Bun.sleep(50); if (await Bun.file(process.argv[1]).text() !== 'owned definition') process.exit(1)", "{flow}"], params: { flow: { type: "string", freeform: true } }, snapshot_inputs: { flow: root } };
+    const spec: ProcessSpec = { ...SPEC, cwd: root, argv: ["bun", "-e", "await Bun.sleep(50); if (await Bun.file(process.argv[1]).text() !== 'owned definition') process.exit(1)", "{flow}"], params: { flow: { type: "string", enum: [file], ...(useDefault ? { default: file } : {}) } }, snapshot_inputs: { flow: root } };
     const spawn: Spawn = (cmd, options) => {
       snapshot = cmd.at(-1);
       expect(snapshot).not.toBe(file); expect(snapshot && readFileSync(snapshot, "utf8")).toBe("owned definition");
@@ -216,10 +216,20 @@ describe("createProcessRunner", () => {
       return { exited: child.exited, kill: () => { child.kill(); } };
     };
     try {
-      await createProcessRunner({ runtime, source: SOURCE, processesDir: root, loadSpec: () => spec, spawn })(activation({ flow: file }), target());
+      await createProcessRunner({ runtime, source: SOURCE, processesDir: root, loadSpec: () => spec, spawn })(activation(useDefault ? {} : { flow: file }), target());
       await flush(); expect(outcomes(published)).toEqual(["started", "completed"]);
       expect(readdirSync(root)).toEqual([]);
     } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("validates original source enums and all parameters before snapshot access", async () => {
+    const { runtime, published } = fakeRuntime(); const sp = fakeSpawn(); let captures = 0;
+    const handler = createProcessRunner({ runtime, source: SOURCE, processesDir: "/unused", loadSpec: () => ({ ...SPEC, snapshot_inputs: { flow: "/allowed" }, params: { flow: { type: "string", enum: ["/allowed/source.yaml"] }, days: { type: "int" } } }), spawn: sp.spawn,
+      snapshotInputs: (_inputs, payload) => { captures++; return Promise.resolve({ payload, cleanup: () => Promise.resolve() }); },
+    });
+    await handler(activation({ flow: "/not-allowed/source.yaml", days: 1 }), target());
+    await handler(activation({ flow: "/allowed/source.yaml", days: "wrong" }), target());
+    await flush(); expect(captures).toBe(0); expect(sp.calls).toEqual([]); expect(outcomes(published)).toEqual(["failed", "failed"]);
   });
 
   test("refuses missing execution snapshots before started or spawn", async () => {
