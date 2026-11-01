@@ -36,6 +36,7 @@ export type StudioTarget = z.infer<typeof TargetSchema>;
 
 const ThreadFrontSchema = z
   .object({
+    studioId: z.uuid().optional(),
     type: z.enum(THREAD_TYPES),
     areas: areaList,
     state: z.enum(THREAD_STATES),
@@ -93,6 +94,7 @@ export interface LogEntry {
 }
 
 export interface StudioThread {
+  id?: string;
   slug: string;
   path: string;
   type: ThreadType;
@@ -328,6 +330,7 @@ export function parseThreadFile(path: string, text: string): Parsed<StudioThread
   return {
     ok: true,
     value: {
+      ...(f.studioId ? { id: f.studioId } : {}),
       slug: file.value.id,
       path,
       type: f.type,

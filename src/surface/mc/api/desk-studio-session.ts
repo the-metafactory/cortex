@@ -1,3 +1,4 @@
+import { readStudioMyDay } from "../desk/studio-my-day";
 import { SessionAnswerSchema, SessionRequestSchema, StudioSessionSchema, type StudioSession } from "../desk/studio/session-schema";
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
@@ -63,8 +64,12 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     if (request.action === "save-message") {
       if (session.phase.kind !== "ended") return fail(409, "Save the exchange before adding a remaining message.", session);
       const hash = createHash("sha256").update(JSON.stringify([session.id, session.thread, request.text])).digest("hex").slice(0, 56);
+      try { await readStudioMyDay(db, desk, deps.now?.().getTime() ?? Date.now(), true); }
+      catch { return fail(409, "Studio is busy or unreadable. Nothing was written; retry when its files are ready.", session); }
       const result = await runStudioAct({ options, areas: desk.areas, requestId: `late-${hash}`, act: { act: "respond", thread: session.thread, text: request.text }, ...(deps.now ? { now: deps.now() } : {}) });
       if (!result.ok) return fail(result.status, result.error, session);
+      try { await readStudioMyDay(db, desk, deps.now?.().getTime() ?? Date.now()); }
+      catch { return answer(200, { ok: true, session, commit: result.commit, message: result.message, projection: "pending" }); }
       return answer(200, { ok: true, session, commit: result.commit, message: result.message });
     }
     if (request.action === "end") {

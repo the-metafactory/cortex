@@ -1,3 +1,4 @@
+import { projectStudio, studioLinks, studioOwned, type StudioProjection } from "./studio-outline";
 import { DEFAULT_YES_FILTER } from "./yes-filter";
 import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
@@ -24,18 +25,21 @@ function initial(desk: DeskOptions): AppState {
     ...desk.areas.map(a => ({ id: `area:${a.id}`, title: a.label, weight: 50, ordering: "parallel" as const, children: [] })),
   ] }, log: [], settings: { ...DEFAULT_SETTINGS, todayCap: desk.myDay?.cap ?? 5 }, dayState: null, history: { deficits: {}, lastSurfaced: {} } };
 }
-function stateFor(db: Database, desk: DeskOptions, date: string): AppState {
+function stateFor(db: Database, desk: DeskOptions, date: string, meta: MyDayMeta, studio?: StudioProjection): AppState {
   const state = loadBalanceState(db) ?? initial(desk);
   for (const area of desk.areas) {
     const existing = findNode(state.outline, `area:${area.id}`);
     if (existing) existing.title = area.label;
     else state.outline.children.push({ id: `area:${area.id}`, title: area.label, weight: 50, ordering: "parallel", children: [] });
   }
+  if (studio) projectStudio(state, meta, studio);
   const completedToday = new Set(state.log.filter(event => event.date === date).map(event => event.taskId));
   for (const task of collectLeaves(state.outline)) if (!completedToday.has(task.id)) applyRecurrence(task, date);
   return state;
 }
 export interface MyDayView {
+  studioStatus: "synced" | "unavailable" | "disabled";
+  studioTasks: { id: string; slug: string }[];
   revision: number;
   configuredCaps: { cap: number; topN: number };
   capsOverridden: boolean;
@@ -56,7 +60,7 @@ function configuredState(state: AppState, desk: DeskOptions): AppState {
   const ids = new Set(desk.areas.map(a => `area:${a.id}`));
   return { ...state, outline: { ...state.outline, children: state.outline.children.filter(n => ids.has(n.id)) } };
 }
-function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date: string): MyDayView {
+function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, studio?: StudioProjection): MyDayView {
   const state = configuredState(storedState, desk);
   const day = state.dayState?.date === date ? state.dayState : null;
   const all = rankAll(state, date);
@@ -64,6 +68,8 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
   const visibleIds = day ? ids : ids.slice(0, state.settings.todayCap);
   const byId = new Map(all.map(i => [i.task.id, i]));
   return {
+    studioStatus: !desk.studio ? "disabled" : studio ? "synced" : "unavailable",
+    studioTasks: studioLinks(meta),
     configuredCaps: { cap: desk.myDay?.cap ?? 5, topN: desk.topN }, capsOverridden: meta.caps !== null,
     revision: meta.revision, inbox: meta.inbox,
     date, phase: day ? day.closed ? "closed" : "started" : "proposed", cap: state.settings.todayCap, topN: meta.caps?.topN ?? desk.topN,
@@ -74,16 +80,16 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
     outline: state.outline, sources: meta.sources, yesFilter: desk.studio?.yesFilter?.length ? [...desk.studio.yesFilter] : [...DEFAULT_YES_FILTER],
   };
 }
-export function readMyDay(db: Database, desk: DeskOptions, now: number): MyDayView {
+export function readMyDay(db: Database, desk: DeskOptions, now: number, studio?: StudioProjection): MyDayView {
   return db.transaction(() => {
     const date = localDay(now);
-    const state = stateFor(db, desk, date);
     const meta = loadMeta(db);
+    const state = stateFor(db, desk, date, meta, studio);
     state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
-    if (meta.draft?.date !== date && state.dayState?.date !== date) meta.draft = { date, ids: selectToday(configuredState(state, desk), date).map(i => i.task.id) };
+    if (state.dayState?.date !== date && (meta.draft?.date !== date || (studio && !meta.draft.ids.length))) meta.draft = { date, ids: selectToday(configuredState(state, desk), date).map(i => i.task.id) };
     saveMeta(db, meta);
     saveBalanceState(db, state);
-    return viewOf(state, meta, desk, date);
+    return viewOf(state, meta, desk, date, studio);
   }).immediate();
 }
 export function sourceIdentity(item: DeskItem): string {
@@ -140,17 +146,19 @@ function edit(state: AppState, command: Extract<MyDayCommand, { op: "edit" }>, d
 function rankFocus(node: OutlineNode, month: string): number {
   return Number(node.focusMonth === month) + node.children.reduce((n, child) => n + rankFocus(child, month), 0);
 }
-export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number; date: string; requestId: string; command: MyDayCommand; source?: DeskItem }): { view: MyDayView; undo?: string } {
-  const { db, desk, now, date, requestId, command, source } = args;
+export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number; date: string; requestId: string; command: MyDayCommand; source?: DeskItem; studio?: StudioProjection }): { view: MyDayView; undo?: string } {
+  const { db, desk, now, date, requestId, command, source, studio } = args;
   return db.transaction(() => {
-    const state = stateFor(db, desk, localDay(now));
     const meta = loadMeta(db);
+    const state = stateFor(db, desk, localDay(now), meta, studio);
     state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
     const payload = JSON.stringify({ date, command });
     const receipt = meta.receipts.find(r => r.id === requestId);
     if (receipt) {
       if (receipt.payload !== payload) throw new Error("This request id was already used for another change.");
-      return { view: viewOf(state, meta, desk, localDay(now)), ...(receipt.undo ? { undo: receipt.undo } : {}) };
+      saveBalanceState(db, state);
+      saveMeta(db, meta);
+      return { view: viewOf(state, meta, desk, localDay(now), studio), ...(receipt.undo ? { undo: receipt.undo } : {}) };
     }
     if (date !== localDay(now)) throw new Error("The date changed. Refresh the Desk before changing your day.");
     state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
@@ -173,6 +181,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         break;
       }
       case "done": {
+        if (studioOwned(meta, command.id)) throw new Error("Respond in the Studio to complete this task.");
         if (state.dayState?.date !== date || state.dayState.closed || !state.dayState.confirmed.includes(command.id)) throw new Error("Choose an item in your active day.");
         const node = requiredNode(state, command.id);
         if (node.done || state.log.some(event => event.taskId === node.id && event.date === date)) break;
@@ -185,7 +194,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         break;
       }
       case "defer": {
-        const current = viewOf(state, meta, desk, date);
+        const current = viewOf(state, meta, desk, date, studio);
         if (current.phase === "closed" || !current.items.some(i => i.task.id === command.id)) throw new Error("Choose an item in My day.");
         const node = requiredNode(state, command.id);
         const after = shiftDays(date, 1);
@@ -243,6 +252,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         break;
       }
       case "edit":
+        if (studioOwned(meta, command.id) && requiredNode(state, command.id).title !== command.title) throw new Error("Edit this title in its Studio thread file.");
         if (!findNode(configuredState(state, desk).outline, command.id)) throw new Error("That area is no longer configured.");
         edit(state, command, date);
         break;
@@ -252,6 +262,6 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
     meta.receipts.push({ id: requestId, payload, ...(undo ? { undo } : {}) });
     saveBalanceState(db, state);
     saveMeta(db, meta);
-    return { view: viewOf(state, meta, desk, date), ...(undo ? { undo } : {}) };
+    return { view: viewOf(state, meta, desk, date, studio), ...(undo ? { undo } : {}) };
   }).immediate();
 }

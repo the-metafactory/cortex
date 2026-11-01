@@ -1,6 +1,7 @@
 import { withoutClosedTasks, type WaitingTask, type WaitingTasks } from "./sources/waiting";
 import { mailYesFilter, readMailDecision } from "./mail-yes-filter";
-import { movedKeys, readMyDay, sourceIdentity } from "./my-day";
+import { readStudioMyDay } from "./studio-my-day";
+import { movedKeys, sourceIdentity } from "./my-day";
 import { calendarKey, calendarName, discoverCalendars } from "./calendars";
 import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
@@ -189,7 +190,7 @@ export async function composeDesk(
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
   ], rules, readDeliveries(db), now), activeCorrections).map(item => item.kind === "mail" ? { ...item, mailDecision: readMailDecision(db, item.source, item.key.slice("mail:".length)) } : item);
 
-  const myDay = readMyDay(db, desk, now);
+  const myDay = await readStudioMyDay(db, desk, now);
   const moved = movedKeys(db);
   const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => ({ ...i, todoFingerprint: sourceIdentity(i) }));
   const studioRead = desk.studio ? await readStudioFiles(desk.studio.dir) : null;

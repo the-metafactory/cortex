@@ -252,7 +252,7 @@ function open(ctx: Ctx, act: Extract<StudioAct, { act: "open" }>): ActPlan | Act
   const parked = parkStep(ctx, act.park, quoted(src.question));
   if (isRefusal(parked)) return parked;
   const yes = yesSection(ctx, act.answers);
-  const front = stringify({ type: src.type, areas, state: "active", opened: ctx.today }, { flowCollectionPadding: false }).trimEnd();
+  const front = stringify({ studioId: crypto.randomUUID(), type: src.type, areas, state: "active", opened: ctx.today }, { flowCollectionPadding: false }).trimEnd();
   const body = [
     "---",
     front,
