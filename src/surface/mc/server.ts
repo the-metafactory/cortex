@@ -197,7 +197,7 @@ export function startServer(
   const deskLedger = new HandledLedger();
   const deskClientMail = options.desk ? new ClientMailLog({ db, config: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, retentionDays: options.desk.mailLog?.retentionDays ?? DEFAULT_MAIL_LOG_RETENTION_DAYS }) : undefined;
   const deskMailRules: MailRuleLoop | undefined = options.desk?.mailActions?.move?.length
-    ? new MailRuleLoop({ db, mailActions: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, config: options.desk.mailRules ?? DEFAULT_MAIL_RULES }, (): SourceReading[] => deskSourceCache.cached())
+    ? new MailRuleLoop({ db, mailActions: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, config: options.desk.mailRules ?? DEFAULT_MAIL_RULES, ownDomains: options.desk.mailOwnDomains ?? [] }, (): SourceReading[] => deskSourceCache.cached())
     : undefined;
   const deskDmarc: DmarcLoop | undefined = deskMailRules && options.desk?.mailDmarc
     ? new DmarcLoop({ db, config: options.desk.mailDmarc, mailActions: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, log: console.error }, (): SourceReading[] => deskSourceCache.cached())

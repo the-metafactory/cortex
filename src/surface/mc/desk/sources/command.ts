@@ -23,6 +23,7 @@ export const SourceEventSchema = z.object({
   url: safeLink.optional(),
 });
 
+const HOST_NAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 export const AUTH_VERDICTS = ["pass", "fail", "softfail", "neutral", "none", "temperror", "permerror", "policy"] as const;
 
 function printable(v: string): string {
@@ -47,7 +48,7 @@ export const MailHeadersSchema = z
     listId: headerText(300),
     listUnsubscribe: headerText(2000),
     listUnsubscribePost: headerText(200),
-    authResults: z.object({ spf: verdict, dkim: verdict, dmarc: verdict }).optional().catch(undefined),
+    authResults: z.object({ spf: verdict, dkim: verdict, dmarc: verdict, dkimDomains: z.array(z.string().trim().toLowerCase().regex(HOST_NAME).max(253)).max(10).optional().catch(undefined) }).optional().catch(undefined),
     replyTo: headerText(300),
     inReplyTo: headerText(1000),
   })
@@ -59,10 +60,28 @@ export interface MailHeaders {
   listId?: string;
   listUnsubscribe?: string;
   listUnsubscribePost?: string;
-  authResults?: Partial<Record<"spf" | "dkim" | "dmarc", (typeof AUTH_VERDICTS)[number]>>;
+  authResults?: Partial<Record<"spf" | "dkim" | "dmarc", (typeof AUTH_VERDICTS)[number]>> & { dkimDomains?: string[] };
   replyTo?: string;
   inReplyTo?: string;
 }
+
+const MAX_LINKS = 20;
+const MailLinkSchema = z.object({
+  text: z.string().transform(printable).pipe(z.string().min(1).max(200)),
+  href: z.string().max(2000).refine((u) => /^https?:\/\//i.test(u) && URL.canParse(u)),
+});
+
+export interface MailLink {
+  text: string;
+  href: string;
+}
+
+const MailLinksSchema = z
+  .array(z.unknown())
+  .max(200)
+  .transform((list): MailLink[] => list.flatMap((l) => { const p = MailLinkSchema.safeParse(l); return p.success ? [p.data] : []; }).slice(0, MAX_LINKS))
+  .optional()
+  .catch(undefined);
 
 export const SourceMailSchema = z.object({
   kind: z.literal("mail"),
@@ -76,6 +95,7 @@ export const SourceMailSchema = z.object({
   url: safeLink.optional(),
   account: z.string().optional(),
   headers: MailHeadersSchema,
+  links: MailLinksSchema,
 });
 
 export type SourceEvent = z.infer<typeof SourceEventSchema>;

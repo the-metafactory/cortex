@@ -10,6 +10,8 @@ import type { SourceMail, SourceReading } from "./sources/command";
 import { DAY_MS } from "./time";
 import type { DeskItem } from "./types";
 import { isVip, listVips } from "./vips";
+import { readClassifications } from "./classify";
+import { isSuspicious, suspicionContext, type SuspicionContext } from "./mail-suspicion";
 
 export { DEFAULT_MAIL_RULES, MAIL_RULES_SQL, RULE_ACTIONS, RULE_MATCHES, type MailRulesConfig, type RuleAction, type RuleMatch } from "./mail-rules-schema";
 
@@ -151,11 +153,14 @@ export function matchesRule(rule: Pick<MailRule, "match" | "value">, mail: Pick<
   }
 }
 
-/** The first rule that is on and matches the mail. A VIP's mail never matches. */
-export function ruleFor(rules: readonly MailRule[], mail: Pick<SourceMail, "from" | "subject" | "headers">, vips: ReadonlySet<string>): MailRule | undefined {
-  if (isVip(vips, mail.from.address)) return undefined;
+/** The first rule that is on and matches the mail. A VIP's mail and a mail that looks like phishing never match. */
+export function ruleFor(rules: readonly MailRule[], mail: Pick<SourceMail, "from" | "subject" | "headers" | "links">, suspicion: SuspicionContext): MailRule | undefined {
+  if (isVip(suspicion.vips, mail.from.address) || isSuspicious(mail, suspicion)) return undefined;
   return rules.find((r) => r.on && matchesRule(r, mail));
 }
+
+const flaggedByClassifier = (db: Database, ids: string[]): Set<string> =>
+  new Set([...readClassifications(db, ids)].filter(([, c]) => c.suspicious === true).map(([id]) => id));
 
 const allRows = (db: Database): RuleRow[] => db.query<RuleRow, []>(`SELECT ${RULE_COLUMNS} FROM desk_mail_rules ORDER BY created_at, id`).all();
 
@@ -201,12 +206,13 @@ export function digestedIds(db: Database, ids: string[]): Set<string> {
 const rulesRun = (db: Database): boolean => listGrants(db).has(RULES_GRANT);
 
 /** Listed mails an approved rule will handle on its next pass. The Desk does not send them to the model; a paused rule's mail goes to the model. */
-export function pendingRuleMail(db: Database, mails: readonly SourceMail[], vips: ReadonlySet<string>): Set<string> {
+export function pendingRuleMail(db: Database, mails: readonly SourceMail[], ownDomains: readonly string[] = []): Set<string> {
   if (!rulesRun(db)) return new Set();
   const rules = listRules(db).filter((r) => r.on && (r.held === null || r.released));
   if (rules.length === 0) return new Set();
   const ran = ranIds(db, mails.map((m) => m.id));
-  return new Set(mails.filter((m) => !ran.has(m.id) && ruleFor(rules, m, vips)).map((m) => m.id));
+  const suspicion = suspicionContext(db, ownDomains);
+  return new Set(mails.filter((m) => !ran.has(m.id) && ruleFor(rules, m, suspicion)).map((m) => m.id));
 }
 
 const DECISIVE = new Set<MailLogAction>(["archive", "junk", "trash", "restore", "kept", "todo", "draft", "plan", "snooze"]);
@@ -411,6 +417,7 @@ export interface RulePassDeps {
   run: WriterRunner;
   now: () => number;
   config: MailRulesConfig;
+  ownDomains?: readonly string[];
   newId?: () => string;
 }
 
@@ -468,13 +475,14 @@ export async function runMailRules(readings: readonly SourceReading[], deps: Rul
   if (!rulesRun(db)) return pass;
   const rules = listRules(db).filter((r) => r.on);
   if (rules.length === 0) return pass;
-  const vips = new Set(listVips(db).map((v) => v.address));
+  const suspicion = suspicionContext(db, deps.ownDomains);
   const listed = readings.filter((r) => r.error === null).flatMap((r) => r.mail.filter((m) => m.unread).map((m): ListedMail => ({ ...m, sourceId: r.id })));
   const ran = ranIds(db, listed.map((m) => m.id));
+  const flagged = flaggedByClassifier(db, listed.map((m) => m.id));
   const byRule = new Map<string, ListedMail[]>();
   for (const m of listed) {
-    if (ran.has(m.id) || movedTarget(deps.ledger, m.id) !== undefined) continue;
-    const rule = ruleFor(rules, m, vips);
+    if (ran.has(m.id) || flagged.has(m.id) || movedTarget(deps.ledger, m.id) !== undefined) continue;
+    const rule = ruleFor(rules, m, suspicion);
     if (rule) byRule.set(rule.id, [...(byRule.get(rule.id) ?? []), m]);
   }
   for (const rule of rules) {

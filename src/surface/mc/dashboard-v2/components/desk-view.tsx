@@ -319,6 +319,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.spam") confirmFirst(item, a, () => move(item, a, "junk"));
     else if (a.id === "mail.draft" && item.reply) openReply(item);
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
+    else if (a.id === "mail.report") void send(item, a, { request: () => submitMailAction({ action: "report", key: item.key }), keepVisible: true });
     else if (a.id.startsWith("mailrule.")) runRule(item, a);
     else if (a.id === "dmarc.ack" && a.target) acknowledge(item, a, a.target);
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
@@ -767,6 +768,12 @@ function DetailPanel({ item, area, onClose, onAction, onShowEvent, sending, chil
           <ul className="desk-evidence">{item.detail.evidence.map((e, i) => <li key={`${e.kind}:${i}`}><EvidenceLink evidence={e} onShowEvent={onShowEvent} /></li>)}</ul>
         </>
       )}
+      {item.detail.suspicion && item.detail.suspicion.length > 0 && (
+        <>
+          <div className="desk-sec">Why this looks like phishing</div>
+          <ul className="desk-hist desk-suspicion">{item.detail.suspicion.map((r) => <li key={r}>{r}</li>)}</ul>
+        </>
+      )}
       {item.detail.precedents && item.detail.precedents.length > 0 && (
         <>
           <div className="desk-sec">Why this suggestion</div>
@@ -881,6 +888,7 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
           {area && <span className="area"><AreaDot area={area} />{area.label}</span>}
           <span className={item.urgency === "today" || item.urgency === "now" ? "due" : ""}>{URGENCY_LABEL[item.urgency]}</span>
           {item.correction && <span className="desk-corr">{CORRECTION_TAG[item.correction]}</span>}
+          {item.suspicious && <span className="desk-suspect">Looks like phishing</span>}
         </div>
         <button type="button" className="desk-title" onClick={onOpen}>{item.title}</button>
         <p className="desk-why">{item.why}</p>
@@ -1013,7 +1021,7 @@ interface SendOptions {
 
 const CHECK_POLL_MS = 3000;
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "ranger.rule": "Recording…" };
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "mail.report": "Reporting…", "ranger.rule": "Recording…" };
 
 const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
 

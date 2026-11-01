@@ -4,13 +4,13 @@ import { readClassifications } from "../desk/classify";
 import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../desk/create";
-import { correctMail, draftReply, findListedMail, MAIL_CORRECTIONS, markUnimportant } from "../desk/mail-actions";
+import { correctMail, draftReply, findListedMail, MAIL_CORRECTIONS, markUnimportant, reportMail } from "../desk/mail-actions";
 import { logMailDecision, mailFeatures } from "../desk/mail-log";
 import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveResult } from "../desk/mail-move";
 
 const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("draft"), key: z.string(), body: z.string(), decision: MailDecisionSchema.optional() }).strict(),
-  z.object({ action: z.enum(["trash", "unimportant"]), key: z.string() }).strict(),
+  z.object({ action: z.enum(["trash", "unimportant", "report"]), key: z.string() }).strict(),
   z.object({ action: z.literal("move"), key: z.string(), target: z.enum(MOVE_TARGETS) }).strict(),
   z.object({ action: z.literal("correct"), key: z.string(), said: z.enum(MAIL_CORRECTIONS) }).strict(),
   z.object({ action: z.enum(["undo", "block"]), move: z.string().min(1).max(64) }).strict(),
@@ -26,7 +26,7 @@ export interface DeskMailDeps {
 }
 
 /**
- * POST {action: "move", key, target: "archive" | "junk" | "trash"}, {action: "trash" | "unimportant", key} or
+ * POST {action: "move", key, target: "archive" | "junk" | "trash"}, {action: "trash" | "unimportant" | "report", key} or
  * {action: "draft", key, body}: acts on one mail the Desk lists. {action: "correct", key, said} logs a per-mail correction. {action: "undo" | "block", move} undoes a logged move,
  * or blocks the domain of a mail moved to Junk. The rebind and identity gates in
  * handleApi run before this handler; there is no step-up. The account and Message-ID come from the mail source's
@@ -58,6 +58,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     return answer(saved);
   }
   if (body.action === "unimportant") return answer(await markUnimportant(db, mail, moveDeps));
+  if (body.action === "report") return answer(await reportMail(mail, runtime.options.mailReport, moveDeps));
   if (body.action === "correct") return answer(correctMail(db, mail, body.said, now));
   return answer(await moveMail(mail, body.action === "move" ? body.target : "trash", moveDeps));
 }

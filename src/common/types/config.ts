@@ -545,6 +545,18 @@ export const DeskSchema = z.object({
           maxPerPass: z.number().int().min(1).max(200).default(20),
         })
         .optional(),
+      report: z
+        .object({
+          command: z.array(z.string().min(1)).min(1),
+          to: z.email("mc.desk.mail.report.to must be one email address").optional(),
+          timeoutSeconds: z.number().int().min(1).max(120).default(30),
+        })
+        .optional(),
+      suspicion: z
+        .object({
+          ownDomains: z.array(z.string().trim().toLowerCase().regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/, "mc.desk.mail.suspicion.ownDomains holds domain names such as example.org")).max(100),
+        })
+        .optional(),
     })
     .default({}),
   ruling: z
