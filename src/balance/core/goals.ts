@@ -63,8 +63,7 @@ export interface AreaReview {
     actualShare: number;
     completions: number;
 }
-export interface MonthReview {
-    month: string;
+export interface CompletionReview {
     wins: {
         title: string;
         date: string;
@@ -78,9 +77,8 @@ export interface MonthReview {
     }[];
     totalCompletions: number;
 }
-export function monthReview(state: AppState, month: string): MonthReview {
-    const { outline, log } = state;
-    const events = log.filter((e) => monthOf(e.date) === month);
+export function completionReview(state: AppState, events: CompletionEvent[], month: string): CompletionReview {
+    const { outline } = state;
     const areaTitleById = new Map(outline.children.map((a) => [a.id, a.title]));
     const focusIds = focusContainment(outline, month);
     const active = outline.children.filter((a) => a.weight > 0);
@@ -123,5 +121,10 @@ export function monthReview(state: AppState, month: string): MonthReview {
         date: e.date,
         areaTitle: areaTitleById.get(e.areaId) ?? "—",
     }));
-    return { month, wins, areas, focus, totalCompletions: events.length };
+    return { wins, areas, focus, totalCompletions: events.length };
+}
+
+export interface MonthReview extends CompletionReview { month: string }
+export function monthReview(state: AppState, month: string): MonthReview {
+    return { month, ...completionReview(state, state.log.filter(e => monthOf(e.date) === month), month) };
 }

@@ -6,7 +6,7 @@ const REFRESH_MS = 30_000;
 const MODE_PARAM = "desk";
 const THREAD_PARAM = "thread";
 
-export type DeskMode = "day" | "studio";
+export type DeskMode = "day" | "studio" | "mirror";
 
 export function useDeskStudio(poll: boolean, revision = 0): StudioView | null {
   const [studio, setStudio] = useState<StudioView | null>(null);
@@ -44,7 +44,8 @@ export interface DeskLocation {
 
 export function readDeskLocation(search: string): DeskLocation {
   const params = new URLSearchParams(search);
-  const mode: DeskMode = params.get(MODE_PARAM) === "studio" ? "studio" : "day";
+  const requested = params.get(MODE_PARAM);
+  const mode: DeskMode = requested === "studio" || requested === "mirror" ? requested : "day";
   return { mode, thread: mode === "studio" ? params.get(THREAD_PARAM) : null };
 }
 
@@ -52,7 +53,7 @@ export function deskSearch(search: string, next: DeskLocation): string {
   const params = new URLSearchParams(search);
   params.delete(MODE_PARAM);
   params.delete(THREAD_PARAM);
-  if (next.mode === "studio") params.set(MODE_PARAM, "studio");
+  if (next.mode !== "day") params.set(MODE_PARAM, next.mode);
   if (next.mode === "studio" && next.thread) params.set(THREAD_PARAM, next.thread);
   const text = params.toString();
   return text ? `?${text}` : "";

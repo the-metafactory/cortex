@@ -119,7 +119,8 @@ describe("the Desk top bar", () => {
 
   it("shows no area filter when the stack defines no areas", () => {
     const bare = renderToStaticMarkup(<DeskBody view={{ ...view, areas: [] }} error={null} onOpenMissionControl={() => {}} />);
-    expect(bare).not.toContain('role="tablist"');
+    expect(bare).not.toContain('aria-label="Area"');
+    expect(bare).toContain('aria-label="View"');
     expect(bare).toContain(">Settings</button>");
   });
 });
