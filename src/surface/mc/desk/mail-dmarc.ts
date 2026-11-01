@@ -147,7 +147,12 @@ export async function runDmarcPass(readings: readonly SourceReading[], deps: Dma
   const listed = readings.filter((r) => r.error === null).flatMap((r) => r.mail.filter((m) => m.unread && isDmarcReportMail(m)).map((m): ListedMail => ({ ...m, sourceId: r.id })));
   const held = digestedIds(db, listed.map((m) => m.id));
   const seen = known(db, listed.map((m) => m.id));
-  const todo = listed.filter((m) => held.has(m.id) && m.account && movedTarget(deps.ledger, m.id) === undefined && (seen.get(m.id)?.status ?? "read") === "read" && !seen.get(m.id)?.filed);
+  const pending = (m: ListedMail): boolean => {
+    const row = seen.get(m.id);
+    const unfiled = row === undefined || (row.status === "read" && !row.filed);
+    return held.has(m.id) && Boolean(m.account) && movedTarget(deps.ledger, m.id) === undefined && unfiled;
+  };
+  const todo = listed.filter(pending);
   for (const mail of todo.slice(0, config.maxPerPass)) {
     const account = mail.account ?? "";
     if (!seen.has(mail.id)) {
@@ -173,11 +178,11 @@ export async function runDmarcPass(readings: readonly SourceReading[], deps: Dma
 export class DmarcLoop {
   private chain: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly deps: DmarcDeps, private readonly readings: () => readonly SourceReading[], private readonly log: (line: string) => void = console.error) {}
+  constructor(private readonly deps: DmarcDeps, private readonly readings: () => readonly SourceReading[]) {}
 
   kick(): Promise<unknown> {
     this.chain = this.chain.then(() => runDmarcPass(this.readings(), this.deps)).catch((err: unknown) => {
-      this.log(`[desk] DMARC pass failed: ${err instanceof Error ? err.message : String(err)}`);
+      (this.deps.log ?? console.error)(`[desk] DMARC pass failed: ${err instanceof Error ? err.message : String(err)}`);
     });
     return this.chain;
   }
