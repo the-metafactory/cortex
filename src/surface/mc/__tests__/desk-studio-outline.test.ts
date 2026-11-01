@@ -269,3 +269,21 @@ test("source arrival preserves a nonempty proposed day", () => {
     expect(readMyDay(db, desk, now, input).items.map(i => i.task.id)).toEqual(["chosen"]);
   } finally { db.close(); }
 });
+
+test("an unreadable different source does not block parking a healthy thread", async () => {
+  const repo = await repository(); const db = initDatabase(":memory:");
+  try {
+    await writeFile(join(repo.dir, "threads/broken.md"), "A malformed unrelated source.");
+    await git(repo.dir, "add", "."); await git(repo.dir, "commit", "-m", "Malformed fixture");
+    const prior = await runStudioAct({ options: repo.options.studio, areas: desk.areas, requestId: "direct-prior-healthy-park", act: { act: "park", thread: "design" } });
+    expect(prior.ok).toBe(true);
+    const reset = await runStudioAct({ options: repo.options.studio, areas: desk.areas, requestId: "direct-healthy-unpark", act: { act: "unpark", thread: "design" } });
+    expect(reset.ok).toBe(true);
+    const response = await handleDeskStudioAct(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ act: "park", thread: "design", requestId: "healthy-park-fixture" }) }), { options: repo.options, ledger: new HandledLedger() }, { db });
+    expect(response.status).toBe(200);
+    const parsed = parseThreadFile("threads/design.md", await readFile(join(repo.dir, "threads/design.md"), "utf8"));
+    expect(parsed.ok && parsed.value.state).toBe("parked");
+    expect((await readStudioMyDay(db, repo.options, now)).studioStatus).toBe("unavailable");
+    expect(loadBalanceState(db)?.log ?? []).toHaveLength(0);
+  } finally { db.close(); }
+});

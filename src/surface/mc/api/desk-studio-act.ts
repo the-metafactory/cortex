@@ -39,7 +39,7 @@ export async function handleDeskStudioAct(req: Request, runtime: DeskRuntime | u
     return answer(200, { ...result, studio: await withThinking(studio, desk.studio.dir, desk.rangerCli, deps.run) });
   }
   try {
-    if (deps.db) await readStudioMyDay(deps.db, desk, deps.now?.().getTime() ?? Date.now(), true);
+    if (deps.db && parsed.data.act === "respond") await readStudioMyDay(deps.db, desk, deps.now?.().getTime() ?? Date.now(), true);
   } catch {
     return fail(409, "Studio is busy or unreadable. Nothing was written; retry when its files are ready.");
   }
