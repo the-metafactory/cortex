@@ -193,6 +193,7 @@ import { expandGoalPaths } from "./surface/mc/desk/goals";
 import { toClassifierConfig, toModelConfig } from "./surface/mc/desk/classify";
 import { resolveVoice } from "./surface/mc/desk/voice";
 import { resolveEmbedder } from "./surface/mc/desk/mail-similar";
+import { resolveDigest } from "./surface/mc/desk/mail-digest";
 import { notifyWithResult } from "./adapters/notify-result";
 import { createVigilDeliveryPorts, startVigil, type VigilHandle } from "./vigil";
 import { somaGoalWording } from "./vigil/result-render";
@@ -4989,6 +4990,7 @@ export async function startCortex(
           ...(config.mc.desk.mail.rules ? { mailRules: config.mc.desk.mail.rules } : {}),
           ...(config.mc.desk.mail.dmarc ? { mailDmarc: config.mc.desk.mail.dmarc } : {}),
           ...(config.mc.desk.mail.report ? { mailReport: config.mc.desk.mail.report } : {}),
+          ...(config.mc.desk.mail.digest ? { mailDigest: resolveDigest(config.mc.desk.mail.digest, expandTilde) } : {}),
           mailOwnDomains: config.mc.desk.mail.suspicion?.ownDomains ?? config.mc.desk.mail.dmarc?.domains ?? [],
           ...(config.mc.desk.mail.links ? { mailLinks: config.mc.desk.mail.links } : {}),
           ...(config.mc.desk.ruling?.explainer

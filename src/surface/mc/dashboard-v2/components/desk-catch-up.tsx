@@ -97,9 +97,11 @@ export function DeskCatchUp({
   onChanged,
   active,
   planItem,
+  top,
 }: {
   view: DeskView;
   renderItem: (item: DeskItem, index: number) => ReactNode;
+  top?: (area: string) => ReactNode;
   done: ReactNode;
   onChanged: () => void;
   active: boolean;
@@ -382,6 +384,7 @@ export function DeskCatchUp({
         </p>
       )}
       <div className="catchup-stream">
+        {active && top?.(location.area)}
         {active && shown.map((item, index) => (
           <article
             key={item.key}

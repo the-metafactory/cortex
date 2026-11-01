@@ -6,6 +6,7 @@ import "./desk-mail-sweeps.css";
 
 const capital = (s: string): string => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
 const SHOWN = 3;
+const SWEEP_NAMES: Record<MailSweepView["kind"], string> = { bundle: "Bundle", sweep: "Sweep", digest: "Digest" };
 
 export const sweepsInArea = (sweeps: readonly MailSweepView[], area: string): MailSweepView[] =>
   area === ALL_AREAS ? [...sweeps] : sweeps.filter((s) => s.area === null || s.area === area);
@@ -53,7 +54,7 @@ export function SweepPreview({ sweep, busy, onConfirm, onCancel }: { sweep: Mail
   return (
     <div className="desk-sweep-preview">
       <div className="desk-panel-top">
-        <span className="area">{sweep.kind === "bundle" ? "Bundle" : "Sweep"} · {sweep.label}</span>
+        <span className="area">{SWEEP_NAMES[sweep.kind]} · {sweep.label}</span>
         <button type="button" className="desk-close" aria-label="Close" onClick={onCancel}>×</button>
       </div>
       <h3>{verb} {keys.length} {keys.length === 1 ? "mail" : "mails"}</h3>
