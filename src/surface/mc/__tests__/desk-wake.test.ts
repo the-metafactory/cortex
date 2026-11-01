@@ -2,6 +2,9 @@ import { describe, expect, it } from "bun:test";
 import { DeskWakeSchema, WAKE_BPE_SHA, wakeConfigurationError } from "../../../common/types/desk-wake";
 import { WakeBuffer, CommandEndpoint, withoutWakePhrase } from "../dashboard-v2/lib/desk-wake-buffer";
 import { wakeAssetResponse } from "../desk/wake-assets";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 
 describe("Desk local wake", () => {
   it("is opt-in and refuses a label without provisioned matched tokens", () => {
@@ -18,6 +21,28 @@ describe("Desk local wake", () => {
     ring.push(Float32Array.of(4, 5, 6, 7));
     expect([...ring.take()]).toEqual([3, 4, 5, 6, 7]);
     ring.clear(); expect(ring.take().length).toBe(0);
+  });
+  it("bounds worklet messages while the page is suspended and reports lost audio on resume", () => {
+    const messages: unknown[] = [];
+    class Processor {
+      port = { onmessage: null as ((event: { data: unknown }) => void) | null, postMessage: (message: unknown) => messages.push(message) };
+    }
+    type Capture = Processor & { process(inputs: Float32Array[][]): boolean };
+    const factories: (new () => Capture)[] = [];
+    runInNewContext(readFileSync(join(import.meta.dir, "../../../../scripts/desk-wake/capture.js"), "utf8"), {
+      AudioWorkletProcessor: Processor,
+      Float32Array,
+      registerProcessor: (_name: string, factory: new () => Capture) => factories.push(factory),
+    });
+    const Factory = factories[0];
+    if (!Factory) throw new Error("Capture processor was not registered");
+    const processor = new Factory();
+    for (let i = 0; i < 20; i++) processor.process([[new Float32Array(2048)]]);
+    expect(messages.length).toBe(8);
+    processor.port.onmessage?.({ data: "ack" });
+    processor.process([[new Float32Array(2048)]]);
+    expect(messages.length).toBe(9);
+    expect(messages.at(-1)).toMatchObject({ dropped: 12 * 2048 });
   });
   it("endpoints on silence and maximum duration and discards no speech", () => {
     const options = { silenceMs: 500, maxCommandMs: 3000, speechThreshold: 0.01 };

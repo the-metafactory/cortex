@@ -98,7 +98,13 @@ export class DeskWake {
       };
       this.source = audio.createMediaStreamSource(stream);
       this.node = new AudioWorkletNode(audio, "desk-wake-capture");
-      this.node.port.onmessage = ({ data }: MessageEvent<unknown>) => { if (!signal.aborted && data instanceof Float32Array) this.pcm(data); };
+      this.node.port.onmessage = ({ data }: MessageEvent<unknown>) => {
+        this.node?.port.postMessage("ack");
+        if (signal.aborted) return;
+        if (!data || typeof data !== "object" || !("samples" in data) || !(data.samples instanceof Float32Array) || !("dropped" in data) || typeof data.dropped !== "number") { this.fail(new Error("Invalid microphone audio frame.")); return; }
+        if (data.dropped > 0 && (this.current.phase === "listening" || this.current.phase === "recording")) { this.fail(new Error("Microphone processing was suspended and audio was lost. Wake is not listening.")); return; }
+        this.pcm(data.samples);
+      };
       this.source.connect(this.node);
       this.node.connect(audio.destination);
       this.worker.postMessage({ type: "init", options: this.options });
