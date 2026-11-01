@@ -1,0 +1,104 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+*{box-sizing:border-box} html,body{margin:0;width:1600px;height:900px;background:#EAE9DF;font-family:"Avenir Next","Helvetica Neue",Arial,sans-serif;color:#1A1A2E}
+.wrap{padding:24px 30px}
+h1{font-family:Georgia,serif;font-style:italic;font-size:34px;margin:0 0 3px}
+.sub{font-family:Georgia,serif;font-size:17px;color:#2D2D2D;margin-bottom:14px}
+.main{display:grid;grid-template-columns:200px 1fr 250px;gap:14px}
+.side{background:#fff;border-radius:10px;border:2px solid var(--c);overflow:hidden;display:flex;flex-direction:column}
+.side .hd{background:var(--c);color:#fff;padding:8px 12px}
+.side .hd b{font-size:11px;letter-spacing:1.2px;opacity:.9;display:block}
+.side .hd span{font-size:16px;font-weight:700}
+.side ul{list-style:none;margin:6px 0 0;padding:0 10px}
+.side li{font-size:13.5px;line-height:1.3;padding:7px 0;border-bottom:1px solid #EEE}
+.side li:last-child{border-bottom:0}
+.side li em{display:block;font-style:normal;color:#6B7280;font-size:11.5px}
+.stack{display:flex;flex-direction:column;gap:11px}
+.L{background:#fff;border-radius:10px;border:2px solid var(--c);display:grid;grid-template-columns:150px 1fr;overflow:hidden}
+.L .tag{background:var(--c);color:#fff;padding:8px 11px;display:flex;flex-direction:column;justify-content:center}
+.L .tag b{font-size:11px;letter-spacing:1.2px;opacity:.9}
+.L .tag span{font-size:15.5px;font-weight:700;line-height:1.2}
+.L .body{padding:11px 12px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.c{border:1.5px solid var(--c);border-radius:7px;padding:5px 9px;font-size:14px;line-height:1.25;background:var(--bg,#fff)}
+.c small{display:block;color:#6B7280;font-size:11.5px}
+.c.new{border-style:dashed}
+.c.wide{flex:1 1 0}
+.note{font-size:11.5px;color:#6B7280;width:100%}
+.seam{border-top:3px double #2D2D2D;margin:2px 0;position:relative;height:0}
+.seam span{position:absolute;left:50%;transform:translate(-50%,-55%);background:#EAE9DF;padding:0 10px;font-size:11.5px;font-weight:800;letter-spacing:1.2px;color:#2D2D2D}
+.bottom{display:grid;grid-template-columns:1.3fr 1.25fr 1fr;gap:14px;margin-top:16px}
+.box{background:#fff;border-radius:10px;border:1.5px solid #2D2D2D;padding:11px 15px;font-size:13.5px;line-height:1.42}
+.box h3{margin:0 0 5px;font-size:14.5px}
+.cp{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-top:3px}
+.cp span{background:#1A1A2E;color:#fff;border-radius:5px;padding:3px 7px;font-size:12px;font-weight:700}
+.cp em{font-style:normal;color:#6B7280}
+.rules{border-color:#C62828} .rules h3{color:#C62828}
+.foot{margin-top:8px;font-size:11.5px;color:#6B7280;display:flex;justify-content:space-between}
+.k{display:inline-block;width:12px;height:10px;border:1.5px dashed #6B7280;border-radius:3px;vertical-align:-1px}
+</style></head><body><div class="wrap">
+<h1>Sovereign agent stack: one foundation, many agents</h1>
+<div class="sub">Every layer is defined in git and the host only pulls, so the host can be thrown away. Provider-specific code exists only below the seam. Design: docs/design-sovereign-agent-stack.md · PR #2553</div>
+<div class="main">
+
+ <div class="side" style="--c:#37474F"><div class="hd"><b>DD-7 · OPEN</b><span>Git defines every layer</span></div><ul>
+  <li>cortex <em>code, schemas, verifier · public</em></li>
+  <li>arc bundles <em>agents, personas, skills, connectors</em></li>
+  <li>&lt;stack&gt;-deploy <em>infra, config YAML, policy + tiers, SOPS+age secrets · private</em></li>
+  <li>workspace repos <em>one per agent/task · Artifacts EU or local git</em></li>
+  <li>registry <em>business data, md + YAML + JSON Schema · private</em></li>
+  <li>audit-checkpoints <em>signed hashes only · public</em></li>
+  <li>Not in git <em>runtime state: JetStream, MC SQLite, live sessions</em></li></ul></div>
+
+ <div class="stack">
+  <div class="L" style="--c:#E0A200"><div class="tag"><b>L4 · USE CASES</b><span>What the agents do</span></div><div class="body">
+   <div class="c wide" style="--c:#E0A200">A · Personal agents<small>bookkeeping (Xero draft → review → approve), inbox, research</small></div>
+   <div class="c wide" style="--c:#E0A200">B · Ops responders<small>alert → triage → runbook proposal → page</small></div>
+   <div class="c wide" style="--c:#E0A200">C · Future projects<small>event source + agents + gated actions</small></div>
+   <div class="note">A use case adds only agents, connectors and policy. If it needs a foundation change, the foundation was wrong.</div></div></div>
+
+  <div class="L" style="--c:#00796B"><div class="tag"><b>L3 · AGENT RUNTIME</b><span>One boundary per agent</span></div><div class="body">
+   <div class="c" style="--c:#00796B">Agent container / VM<small>no host mounts · own creds · DD-1</small></div>
+   <div class="c new" style="--c:#00796B">Workspace = git repo<small>repo-scoped token · clone on start · DD-11</small></div>
+   <div class="c" style="--c:#00796B">Egress proxy<small>no default route · per-agent allowlist</small></div>
+   <div class="c" style="--c:#00796B">Session sandbox<small>defence in depth · DD-10</small></div>
+   <div class="c" style="--c:#00796B">Cloud sessions<small>low-risk hands only · DD-9</small></div></div></div>
+
+  <div class="L" style="--c:#4A148C"><div class="tag"><b>L2 · STACK</b><span>Head + control plane</span></div><div class="body">
+   <div class="c" style="--c:#4A148C">NATS hub<small>leaves the Mac · DD-8</small></div>
+   <div class="c" style="--c:#4A148C">cortex daemon<small>dispatch · policy · Mission Control</small></div>
+   <div class="c new" style="--c:#4A148C">Action broker<small>holds write creds · connectors as plugins · DD-2</small></div>
+   <div class="c new" style="--c:#4A148C">Audit shipper<small>read-only consumer · write-only sink · DD-6</small></div>
+   <div class="c" style="--c:#4A148C">CF Tunnel + Access<small>no inbound ports</small></div></div></div>
+
+  <div class="L" style="--c:#3949AB"><div class="tag"><b>L1 · CONFIGURE</b><span>Smithy roles</span></div><div class="body">
+   <div class="c" style="--c:#3949AB">base · nats_server · bun · claude · docker<small>Ubuntu, pinned apt snapshot</small></div>
+   <div class="c" style="--c:#3949AB">metafactory_arc · metafactory_cortex<small>cortex at a pinned commit</small></div>
+   <div class="c new" style="--c:#3949AB">cortex_stack<small>deploy repo → running stack</small></div>
+   <div class="c" style="--c:#3949AB">assay_env<small>environment digest</small></div></div></div>
+
+  <div class="seam"><span>THE SEAM · PROVIDER-BLIND ABOVE</span></div>
+
+  <div class="L" style="--c:#C62828"><div class="tag"><b>L0 · PROVISION</b><span>The only provider layer</span></div><div class="body">
+   <div class="c" style="--c:#C62828">vm-pve<small>Proxmox · built</small></div>
+   <div class="c new" style="--c:#C62828">vm-aws<small>EC2 · specified</small></div>
+   <div class="c new" style="--c:#C62828">Hetzner / VPS<small>module to write</small></div>
+   <div class="c" style="--c:#C62828">Existing box<small>skip L0 · Ansible over SSH</small></div>
+   <div class="c" style="--c:#C62828">macOS<small>L2 via OrbStack · no L1 roles</small></div></div></div>
+ </div>
+
+ <div class="side" style="--c:#1A1A2E"><div class="hd"><b>CROSS-CUTTING · TRUST</b><span>Propose → approve → audit</span></div><ul>
+  <li>1 · Agent proposes <em>signed action.proposed · artefact = repo@commit</em></li>
+  <li>2 · Policy tier <em>auto · review · step-up, per action + amount</em></li>
+  <li>3 · Review <em>MC renders the artefact or diff · DD-5</em></li>
+  <li>4 · Passkey step-up <em>grove-auth action token, hash-bound, single use · DD-3/4</em></li>
+  <li>5 · Broker executes <em>re-checks hash · short-lived scoped token</em></li>
+  <li>6 · Audit off-host <em>hash-chained batches in locked storage · signed checkpoints in public git · off-host verifier · heartbeat</em></li></ul></div>
+</div>
+
+<div class="bottom">
+ <div class="box"><h3>Phases</h3><div class="cp"><span>1 Off the Mac</span><em>→</em><span>2 Agent containers + workspaces</span><em>+</em><span>2b Audit (in parallel)</span><em>→</em><span>3 Broker + passkeys</span><em>→</em><span>4 Agents</span></div>
+ <div style="margin-top:6px">Phase 1 stands up a <b>new</b> stack with fresh identity. The Mac stack keeps running, so rollback is free.</div></div>
+ <div class="box"><h3>Decisions</h3>DD&#8209;1 container/VM is the boundary · DD&#8209;2 agents propose, broker executes · DD&#8209;3 approval bound to the exact action · DD&#8209;4 passkey for money · DD&#8209;5 review, then approve · DD&#8209;6 audit off-host · DD&#8209;7 all layers in git · DD&#8209;8 hub off the Mac · DD&#8209;9 cloud sessions for low risk only · DD&#8209;10 sandbox re-scoped · DD&#8209;11 workspace = repo (Artifacts EU default)</div>
+ <div class="box rules"><h3>Rules</h3>No business credentials before Phases 2 and 2b.<br>Agents never hold write credentials to systems or canonical repos.<br>The host only pulls from git; any change made on it is drift and gets audited.</div>
+</div>
+<div class="foot"><span><span class="k"></span> dashed = to build · solid = exists</span><span>Builds on: design-isolated-stack-hosting (Mode B) · design-distributed-agent-execution (Mode A) · crucible seam · grove-auth</span></div>
+</div></body></html>
