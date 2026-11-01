@@ -171,6 +171,24 @@ describe("Balance through the real My day owner", () => {
     expect(required(result.view, "first").done).toBe(true);
     expect(loadBalanceState(db)?.log).toHaveLength(1);
   });
+  for (const operation of ["outline-move", "outline-remove"] as const) test(`${operation} preserves monthly focus by refusing to remove its project's last child`, async () => {
+    const state = seed();
+    const project = findNode(state.outline, "project");
+    if (!project) throw new Error("Missing focus project");
+    project.children = [task("only-child")];
+    project.focusMonth = DATE.slice(0, 7);
+    saveBalanceState(db, state);
+    const before = JSON.stringify(loadBalanceState(db));
+    const revision = view().revision;
+    const command = operation === "outline-move" ? { op: operation, id: "only-child", parent: "area:personal", revision } : { op: operation, id: "only-child", confirm: true, revision };
+    const refused = await post(command);
+    expect(refused.status).toBe(409);
+    expect(await refused.text()).toContain("monthly focus");
+    expect(JSON.stringify(loadBalanceState(db))).toBe(before);
+    expect((await post({ op: "outline-move", id: "only-child", parent: "project", revision })).status).toBe(200);
+    await change(edit(view(), "project", { focus: false }));
+    expect((await post({ ...command, revision: view().revision })).status).toBe(200);
+  });
   test("keeps real source attribution through filing into a task-turned-project and moving", async () => {
     const options = { ...desk, sources: [{ id: "mail", command: ["fixture"], everySeconds: 300, timeoutSeconds: 5 }] };
     const cache = new SourceCache(() => Promise.resolve(JSON.stringify({ items: [{ kind: "mail", id: "owned", from: { address: "person@example.test" }, subject: "A source-linked task", receivedAt: new Date(NOW).toISOString(), unread: true, dueAt: "2026-11-04", url: "https://example.test/owned" }] })));

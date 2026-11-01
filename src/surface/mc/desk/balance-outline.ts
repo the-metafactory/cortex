@@ -54,6 +54,9 @@ export function fileBalanceInbox(state: AppState, meta: MyDayMeta, desk: DeskOpt
 function hasStudioOwner(node: OutlineNode, meta: MyDayMeta): boolean {
   return studioOwned(meta, node.id) || node.children.some(child => hasStudioOwner(child, meta));
 }
+function preserveFocusProject(parent: OutlineNode, date: string): void {
+  if (parent.children.length === 1 && parent.focusMonth === date.slice(0, 7)) throw new Error("Remove monthly focus first, then move or remove this project's last child.");
+}
 function openParent(state: AppState, desk: DeskOptions, meta: MyDayMeta, id: string): OutlineNode {
   const node = configuredNode(state, desk, id, "parent");
   if (node.id.startsWith("studio-response:") || (node.done && (node.children.length > 0 || node.effort !== undefined || studioOwned(meta, node.id)))) throw new Error("Choose an available area or open project, or reopen the task first.");
@@ -107,12 +110,14 @@ export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: Desk
   if (!parent) throw new Error("The parent is no longer available.");
   if (command.op === "outline-remove") {
     if (node.children.length || meta.sources.some(source => source.taskId === node.id) || state.log.some(event => event.taskId === node.id)) throw new Error("Only empty items without source links or completion history can be removed.");
+    preserveFocusProject(parent, date);
     parent.children = parent.children.filter(child => child.id !== node.id);
     return node.id;
   }
   const next = openParent(state, desk, meta, command.parent);
   if (findNode(node, next.id)) throw new Error("An item cannot move below itself or one of its descendants.");
   if (parent === next) return node.id;
+  preserveFocusProject(parent, date);
   parent.children = parent.children.filter(child => child.id !== node.id);
   delete next.done;
   next.children.push(node);
