@@ -58,9 +58,10 @@ export async function handleDeskAutonomy(req: Request, db: Database, runtime: De
   if (!desk?.enabled) return fail(409, "The Desk is turned off on this stack.");
   const body = (await req.json().catch(() => null)) as { action?: unknown; on?: unknown } | null;
   if (!isPromotable(body?.action) || typeof body.on !== "boolean") return fail(400, "A promotable action and on (true or false) are required.");
-  if (body.action === "studio.capture" ? !desk.studio : !rangerActionsReady(desk)) return fail(409, "That action is not set up on this stack.");
+  const ready = body.action === "studio.capture" ? Boolean(desk.studio) : body.action === "mail.rules" ? Boolean(desk.mailActions?.move?.length) : rangerActionsReady(desk);
+  if (!ready) return fail(409, "That action is not set up on this stack.");
   setGrant(db, body.action, body.on, now());
-  if (body.on) void runtime?.autonomy?.tick();
+  if (body.on) void (body.action === "mail.rules" ? runtime?.mailRules?.kick() : runtime?.autonomy?.tick());
   const label = PROMOTABLE_LABELS[body.action].label.toLowerCase();
   return Response.json(
     { ok: true, message: body.on ? `The Desk will ${label} on its own and list them under "Done for you".` : `The Desk will ask you again before it acts: ${label}.` },

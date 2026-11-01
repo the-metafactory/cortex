@@ -15,8 +15,8 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.enum(["undo", "block"]), move: z.string().min(1).max(64) }).strict(),
 ]);
 
-const noStore = { "Cache-Control": "no-store" };
-const fail = (status: number, error: string): Response => Response.json({ ok: false, error }, { status, headers: noStore });
+export const noStore = { "Cache-Control": "no-store" };
+export const fail = (status: number, error: string): Response => Response.json({ ok: false, error }, { status, headers: noStore });
 
 export interface DeskMailDeps {
   run?: WriterRunner;

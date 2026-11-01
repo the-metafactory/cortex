@@ -510,6 +510,13 @@ export const DeskSchema = z.object({
         })
         .optional(),
       log: z.object({ retentionDays: z.number().int().min(1).max(3650).default(180) }).optional(),
+      rules: z
+        .object({
+          proposeAfter: z.number().int().min(2).max(100).default(8),
+          maxPerPass: z.number().int().min(1).max(500).default(20),
+          windowDays: z.number().int().min(1).max(3650).default(90),
+        })
+        .optional(),
     })
     .default({}),
   ruling: z

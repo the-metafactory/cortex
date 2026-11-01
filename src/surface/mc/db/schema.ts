@@ -1,4 +1,5 @@
 import { MAIL_LOG_SQL } from "../desk/mail-log-schema";
+import { MAIL_RULES_SQL } from "../desk/mail-rules-schema";
 
 function vigilResolutionsTableSql(table: string): string {
   return `CREATE TABLE IF NOT EXISTS ${table} (
@@ -131,6 +132,8 @@ export const TABLE_NAMES = [
   "desk_my_day",
   "desk_mail_moves",
   "desk_mail_log",
+  "desk_mail_rules",
+  "desk_mail_rule_runs",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -138,6 +141,7 @@ export const SCHEMA_SQL: string[] = [
   "CREATE INDEX IF NOT EXISTS desk_mail_decision_lookup ON desk_mail_decisions (json_extract(binding, '$.source'), json_extract(binding, '$.messageId'), created_at)",
   "CREATE TABLE IF NOT EXISTS desk_mail_moves (id TEXT PRIMARY KEY, account TEXT NOT NULL, message_id TEXT NOT NULL, target TEXT NOT NULL, sender TEXT NOT NULL, folder TEXT, created_at INTEGER NOT NULL, undone_at INTEGER)",
   ...MAIL_LOG_SQL,
+  ...MAIL_RULES_SQL,
   "CREATE TABLE IF NOT EXISTS desk_my_day (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   `CREATE TABLE IF NOT EXISTS desk_routine_proposals (

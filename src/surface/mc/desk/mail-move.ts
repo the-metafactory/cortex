@@ -93,7 +93,12 @@ async function runClaimed(deps: MoveDeps, timeoutSeconds: number, c: Claimed, do
  * move to Trash falls back to the legacy trash command (`{ action: "trash", account, messageId }`, no Undo). The
  * contract asks the command to move only, never to delete or expunge; its last stderr line is the refusal shown.
  */
-export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveDeps, logAs: MailLogAction = target, features: MailFeatures = mailFeatures(deps.db, mail)): Promise<MoveResult> {
+export interface MoveBy {
+  title: string;
+  recorded: (moveId: string) => void;
+}
+
+export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveDeps, logAs: MailLogAction = target, features: MailFeatures = mailFeatures(deps.db, mail), by?: MoveBy): Promise<MoveResult> {
   const config = deps.config;
   const move = config?.move;
   const argv = move?.length ? move : target === "trash" ? config?.trash : undefined;
@@ -108,16 +113,17 @@ export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveD
     deps.ledger.add(movedKey(target, mail.id), deps.now);
     const { message, folder } = printed(stdout, `Moved to ${FOLDER[target]}.`);
     if (command !== "move") {
-      logMailDecision(deps.db, features, logAs, "desk", deps.now, folder ?? FOLDER[target]);
+      logMailDecision(deps.db, features, logAs, by ? "rule" : "desk", deps.now, folder ?? FOLDER[target]);
       return { ok: true, message };
     }
     const id = (deps.newId ?? (() => crypto.randomUUID()))();
     deps.db.transaction(() => {
       deps.db.query("INSERT INTO desk_mail_moves (id, account, message_id, target, sender, folder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .run(id, account, mail.id, target, mail.from.address.toLowerCase(), folder, deps.now);
-      deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'mail.move', ?, ?, 'done', ?, ?, ?)")
-        .run(`mail-move:${id}`, id, `${DONE[target]}: “${mail.subject}”`, message, deps.now, deps.now);
-      logMailDecision(deps.db, features, logAs, "desk", deps.now, folder ?? FOLDER[target]);
+      deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, ?, ?, ?, 'done', ?, ?, ?)")
+        .run(`mail-move:${id}`, by ? "mail.rule" : "mail.move", id, by ? `${by.title}: “${mail.subject}”` : `${DONE[target]}: “${mail.subject}”`, message, deps.now, deps.now);
+      by?.recorded(id);
+      logMailDecision(deps.db, features, logAs, by ? "rule" : "desk", deps.now, folder ?? FOLDER[target]);
     })();
     return { ok: true, message, undo: id, ...(target === "junk" ? { block: `@${senderDomain(mail.from.address)}` } : {}) };
   });
@@ -166,7 +172,7 @@ export async function undoMove(id: string, deps: MoveDeps): Promise<MoveResult> 
     deps.ledger.forget(movedKey(row.target, row.message_id));
     deps.db.transaction(() => {
       deps.db.query("UPDATE desk_mail_moves SET undone_at = ? WHERE id = ?").run(deps.now, id);
-      deps.db.query("UPDATE desk_done SET action = 'mail.move.undone', message = ?, updated_at = ? WHERE attempt_key = ?").run(message, deps.now, `mail-move:${id}`);
+      deps.db.query("UPDATE desk_done SET action = action || '.undone', message = ?, updated_at = ? WHERE attempt_key = ? AND action NOT LIKE '%.undone'").run(message, deps.now, `mail-move:${id}`);
       logMailDecision(deps.db, loggedFeatures(deps.db, row.message_id) ?? movedFeatures(row), "restore", "desk", deps.now, "INBOX");
     })();
     return { ok: true, message, restored: `mail:${row.message_id}` };

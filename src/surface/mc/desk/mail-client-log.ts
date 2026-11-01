@@ -31,7 +31,7 @@ const NOT_LOOKED_UP = "not-looked-up";
 function handledOnDesk(deps: ClientLogDeps, messageId: string): boolean {
   if (movedTarget(deps.ledger, messageId) !== undefined) return true;
   const last = lastMailDecision(deps.db, messageId);
-  return last?.where === "desk" && DESK_MOVES.has(last.action);
+  return (last?.where === "desk" || last?.where === "rule") && DESK_MOVES.has(last.action);
 }
 
 function readLocated(stdout: string): Located | null {
