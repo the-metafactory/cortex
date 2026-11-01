@@ -1,5 +1,6 @@
 import { createRoutineOccurrencePageSchema, type RoutineOccurrencePage } from "../../desk/routine-occurrence-contract";
-import type { CalendarView } from "../hooks/use-routines-location";
+import type { RoutineInventory } from "../../desk/routine-editor-contract";
+import type { CalendarView, RoutinesLocation } from "../hooks/use-routines-location";
 import { getJson } from "./api";
 
 export type CalendarOccurrence = RoutineOccurrencePage["occurrences"][number];
@@ -70,4 +71,21 @@ export async function readCalendar(options: { days: string[]; timezone: string; 
     if (!complete) return { occurrences, complete: false };
   }
   return { occurrences, complete: true };
+}
+export function calendarPeriod(days: string[], timezone: string): { start: string; end: string } {
+  const windows = calendarWindows(days, timezone); const first = windows[0]; const last = windows.at(-1);
+  if (!first || !last) throw new Error("Choose a calendar period.");
+  return { start: first.start, end: last.end };
+}
+export interface BackgroundLaneRow { id: string; name: string; schedule: string; timezone: string; entries: CalendarOccurrence[] }
+export function backgroundLane(input: { occurrences: CalendarOccurrence[]; background: ReadonlySet<string>; inventory: RoutineInventory | null; showPaused: boolean; policy: RoutinesLocation["policy"] }): BackgroundLaneRow[] {
+  const byRoutine = new Map<string, CalendarOccurrence[]>();
+  for (const entry of input.occurrences) if (input.background.has(entry.routineId)) { const list = byRoutine.get(entry.routineId) ?? []; list.push(entry); byRoutine.set(entry.routineId, list); }
+  const shown = (r: RoutineInventory[number]): boolean => byRoutine.has(r.id) || ((input.showPaused || (!r.paused && r.policy !== "disabled")) && (input.policy === "all" || r.policy === input.policy));
+  const rows: BackgroundLaneRow[] = (input.inventory ?? []).filter((r) => input.background.has(r.id) && shown(r)).map((r) => {
+    const first = byRoutine.get(r.id)?.[0];
+    return { id: r.id, name: r.name ?? r.id, schedule: first?.schedule ?? r.schedule, timezone: first?.sourceTimezone ?? r.timezone ?? "Owner local timezone", entries: byRoutine.get(r.id) ?? [] };
+  });
+  for (const [id, entries] of byRoutine) if (!rows.some((row) => row.id === id)) rows.push({ id, name: id, schedule: entries[0]?.schedule ?? "", timezone: entries[0]?.sourceTimezone ?? "Owner local timezone", entries });
+  return rows;
 }

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { RoutineInventory } from "../../desk/routine-editor-contract";
+import type { RoutineDisplayMode } from "../../desk/routine-display-contract";
 import type { RoutinesLocation } from "../hooks/use-routines-location";
-import { calendarDays, moveCalendar, readCalendar, zonedDate, type CalendarOccurrence, type CalendarRead } from "../lib/routine-calendar";
+import { backgroundLane, calendarDays, moveCalendar, readCalendar, zonedDate, type CalendarOccurrence, type CalendarRead } from "../lib/routine-calendar";
 
 const dateLabel = (date: string, options: Intl.DateTimeFormatOptions): string => new Date(`${date}T12:00:00Z`).toLocaleDateString(undefined, { ...options, timeZone: "UTC" });
 const timeLabel = (at: string, timezone: string): string => new Date(at).toLocaleTimeString(undefined, { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
@@ -18,7 +19,23 @@ function TimeGrid({ days, single, cell, onDay }: { days: string[]; single: boole
   return <div className={`routine-time-grid ${single ? "routine-one-day" : ""}`}><div className="routine-time-corner" />{days.map((day) => <div className="routine-time-heading" key={day}><button type="button" className="routine-day-label" onClick={() => { onDay(day); }}>{dateLabel(day, { weekday: "short", day: "numeric" })}</button></div>)}{Array.from({ length: 24 }, (_, hour) => <div className="routine-time-row" key={hour}><time className="routine-hour">{String(hour).padStart(2, "0")}:00</time>{days.map((day) => <div className="routine-hour-cell" key={day}>{cell(day, hour, 1)}</div>)}</div>)}</div>;
 }
 
-export function DeskRoutineCalendar({ location, onLocation, inventory, revision, onSelect }: { location: RoutinesLocation; onLocation: (location: RoutinesLocation) => void; inventory: RoutineInventory | null; revision: number; onSelect: (id: string) => void }) {
+const noBackground: ReadonlySet<string> = new Set();
+export function BackgroundRow({ routineId, name, schedule, timezone, entries, complete, period, displayTimezone, onSelect, onDisplay }: { routineId: string; name: string; schedule: string; timezone: string; entries: CalendarOccurrence[]; complete: boolean; period: string; displayTimezone: string; onSelect: (id: string) => void; onDisplay?: (routineId: string, mode: RoutineDisplayMode) => void }) {
+  const [open, setOpen] = useState(false); const [page, setPage] = useState(0);
+  const pages = Math.max(1, Math.ceil(entries.length / 48));
+  const count = entries.length === 0 ? complete ? "No planned starts in this period" : "Planned starts unavailable in the incomplete result" : `${complete ? "" : "At least "}${entries.length} planned ${period}`;
+  const detail = `routine-background-detail-${routineId}`;
+  return <li className="routine-background-row"><div><strong>{name}</strong><small>{schedule} · {timezone}</small></div>
+    <button type="button" className="desk-btn" aria-expanded={open} aria-controls={detail} onClick={() => { setOpen(!open); setPage(0); }}>{count}</button>
+    {open && <div id={detail} className="routine-background-detail"><p className="soft">Owner-provided planned starts in {displayTimezone}{complete ? "" : "; this period's result is incomplete"}. Planned triggers, not execution results.</p>
+      <div className="routine-background-times">{entries.slice(page * 48, (page + 1) * 48).map((entry) => <time key={entry.scheduledFor} dateTime={entry.scheduledFor}>{dateLabel(zonedDate(entry.scheduledFor, displayTimezone), { weekday: "short", day: "numeric" })} {timeLabel(entry.scheduledFor, displayTimezone)}</time>)}</div>
+      <div className="desk-acts">{pages > 1 && <><button className="desk-btn" type="button" disabled={page === 0} onClick={() => { setPage(page - 1); }}>Earlier starts</button><span>Page {page + 1} of {pages}</span><button className="desk-btn" type="button" disabled={page + 1 >= pages} onClick={() => { setPage(page + 1); }}>Later starts</button></>}
+        <button className="desk-btn" type="button" onClick={() => { onSelect(routineId); }}>Open routine workspace</button>{onDisplay && <button className="desk-btn" type="button" onClick={() => { onDisplay(routineId, "scheduled"); }}>Show individual scheduled starts</button>}</div>
+    </div>}
+  </li>;
+}
+
+export function DeskRoutineCalendar({ location, onLocation, inventory, revision, onSelect, background = noBackground, onDisplay }: { location: RoutinesLocation; onLocation: (location: RoutinesLocation) => void; inventory: RoutineInventory | null; revision: number; onSelect: (id: string) => void; background?: ReadonlySet<string>; onDisplay?: (routineId: string, mode: RoutineDisplayMode) => void }) {
   const days = useMemo(() => calendarDays(location.date, location.view), [location.date, location.view]);
   const [snapshot, setState] = useState<CalendarState>({ key: "", kind: "loading" });
   const [retry, setRetry] = useState(0);
@@ -35,7 +52,9 @@ export function DeskRoutineCalendar({ location, onLocation, inventory, revision,
   useEffect(() => { if (drill) drillRef.current?.focus(); }, [drill?.date, drill?.hour]);
   const names = useMemo(() => new Map(inventory?.map((r) => [r.id, r.name ?? r.id])), [inventory]);
   const all = state.kind === "ready" ? state.occurrences : emptyOccurrences;
-  const visible = useMemo(() => all.filter((r) => (location.showPaused || r.lifecycle === "active" || r.lifecycle === "unconfirmed") && (location.policy === "all" || r.handlingPolicy === location.policy)), [all, location.showPaused, location.policy]);
+  const filtered = useMemo(() => all.filter((r) => (location.showPaused || r.lifecycle === "active" || r.lifecycle === "unconfirmed") && (location.policy === "all" || r.handlingPolicy === location.policy)), [all, location.showPaused, location.policy]);
+  const visible = useMemo(() => filtered.filter((r) => !background.has(r.routineId)), [filtered, background]);
+  const lane = useMemo(() => backgroundLane({ occurrences: filtered, background, inventory, showPaused: location.showPaused, policy: location.policy }), [filtered, background, inventory, location.showPaused, location.policy]);
   const { grouped, hourly, activeCount, inactiveCount, unconfirmedCount } = useMemo(() => {
     const grouped = new Map<string, CalendarOccurrence[]>(); const hourly = new Map<string, CalendarOccurrence[]>(); let activeCount = 0;
     const dayFormatter = new Intl.DateTimeFormat("en", { timeZone: location.timezone, year: "numeric", month: "2-digit", day: "2-digit" });
@@ -57,7 +76,9 @@ export function DeskRoutineCalendar({ location, onLocation, inventory, revision,
     const list = (hour === null ? grouped.get(day) : hourly.get(`${day}/${hour}`)) ?? [];
     return <>{list.slice(0, limit).map(renderOccurrence)}{list.length > limit && <button className="routine-more" type="button" onClick={(event) => { drillOrigin.current = event.currentTarget; setDrill({ date: day, hour, page: 0 }); }}>+{list.length - limit} more<span className="routine-sr"> planned occurrences on {day}{hour === null ? "" : ` at hour ${hour}`}</span></button>}</>;
   };
+  const laneCount = lane.reduce((sum, row) => sum + row.entries.length, 0);
   const drillEntries = drill ? ((drill.hour === null ? grouped.get(drill.date) : hourly.get(`${drill.date}/${drill.hour}`)) ?? []) : [];
+  const drillRoutines = [...new Set(drillEntries.map((entry) => entry.routineId))];
   const first = days[0] ?? location.date; const last = days.at(-1) ?? location.date;
   const title = location.view === "month" ? dateLabel(location.date, { month: "long", year: "numeric" }) : location.view === "day" ? dateLabel(location.date, { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : `${dateLabel(first, { day: "numeric", month: "short" })} – ${dateLabel(last, { day: "numeric", month: "short", year: "numeric" })}`;
   return <section aria-label="Routine schedule" className="routine-schedule">
@@ -68,11 +89,12 @@ export function DeskRoutineCalendar({ location, onLocation, inventory, revision,
     <p className="routine-calendar-meaning">Planned triggers, not execution results. Times shown in {location.timezone}; each routine retains its source timezone.</p>
     {state.kind === "loading" && <p role="status">Reading scheduled occurrences from the configured owner…</p>}
     {state.kind === "error" && <div role="alert"><p>{state.message} The calendar is unavailable.</p><button type="button" className="desk-btn" onClick={() => { setRetry((n) => n + 1); }}>Retry calendar</button></div>}
-    {state.kind === "ready" && <><p role="status">{state.complete ? `${activeCount} active planned occurrences` : `At least ${activeCount} active planned occurrences`}{inactiveCount > 0 ? ` · ${inactiveCount} paused or disabled` : ""}{unconfirmedCount > 0 ? ` · ${unconfirmedCount} scheduling state unconfirmed` : ""}{location.policy !== "all" ? " in this filter" : ""}. Counts cover the visible calendar window.</p>{!state.complete && <p role="alert">This dense window reached the read limit. Counts and days are incomplete. Choose Day or a narrower window to inspect more.</p>}{visible.length === 0 && <p>No scheduled occurrences were returned for this window and these filters.</p>}
+    {state.kind === "ready" && <><p role="status">{state.complete ? `${activeCount} active planned occurrences` : `At least ${activeCount} active planned occurrences`}{inactiveCount > 0 ? ` · ${inactiveCount} paused or disabled` : ""}{unconfirmedCount > 0 ? ` · ${unconfirmedCount} scheduling state unconfirmed` : ""}{laneCount > 0 ? ` · ${laneCount} more in Background routines` : ""}{location.policy !== "all" ? " in this filter" : ""}. Counts cover the visible calendar window.</p>{!state.complete && <p role="alert">This dense window reached the read limit. Counts and days are incomplete. Choose Day or a narrower window to inspect more.</p>}{visible.length === 0 && <p>No scheduled occurrences were returned for this window and these filters.</p>}
       <div className="routine-calendar-scroll" tabIndex={0} aria-label={`${location.view} calendar, scroll horizontally on a narrow screen`}>
         {location.view === "month" ? <MonthGrid days={days} month={location.date.slice(0, 7)} cell={cell} onDay={(date) => { change({ date, view: "day" }); }} /> : <TimeGrid days={days} single={location.view === "day"} cell={cell} onDay={(date) => { change({ date, view: "day" }); }} />}
       </div>
-      {drill && <section className="routine-calendar-drill desk-set-card" aria-label="Scheduled occurrence details" tabIndex={-1} ref={drillRef}><div className="routine-calendar-toolbar"><h3>{dateLabel(drill.date, { weekday: "long", month: "long", day: "numeric" })}{drill.hour === null ? "" : ` · ${String(drill.hour).padStart(2, "0")}:00`}</h3><button className="desk-btn" type="button" onClick={() => { setDrill(null); drillOrigin.current?.focus(); }}>Close occurrence details</button></div><p>{drillEntries.length} planned occurrences{state.complete ? "." : " in the incomplete result."}</p><div className="routine-drill-list">{drillEntries.slice(drill.page * 30, (drill.page + 1) * 30).map(renderOccurrence)}</div><div className="desk-acts"><button className="desk-btn" type="button" disabled={drill.page === 0} onClick={() => { setDrill({ ...drill, page: drill.page - 1 }); }}>Previous occurrences</button><span>Page {drill.page + 1} of {Math.max(1, Math.ceil(drillEntries.length / 30))}</span><button className="desk-btn" type="button" disabled={(drill.page + 1) * 30 >= drillEntries.length} onClick={() => { setDrill({ ...drill, page: drill.page + 1 }); }}>Next occurrences</button></div></section>}
+      {lane.length > 0 && <section className="routine-background-lane" aria-label="Background routines"><h3>Background routines · {lane.length}</h3><p className="soft">Shown once for the whole period. Each start still runs as scheduled; this lane does not block your time.</p><ul>{lane.map((row) => <BackgroundRow key={row.id} routineId={row.id} name={row.name} schedule={row.schedule} timezone={row.timezone} entries={row.entries} complete={state.complete} period="in this view" displayTimezone={location.timezone} onSelect={onSelect} onDisplay={onDisplay} />)}</ul></section>}
+      {drill && <section className="routine-calendar-drill desk-set-card" aria-label="Scheduled occurrence details" tabIndex={-1} ref={drillRef}><div className="routine-calendar-toolbar"><h3>{dateLabel(drill.date, { weekday: "long", month: "long", day: "numeric" })}{drill.hour === null ? "" : ` · ${String(drill.hour).padStart(2, "0")}:00`}</h3><button className="desk-btn" type="button" onClick={() => { setDrill(null); drillOrigin.current?.focus(); }}>Close occurrence details</button></div><p>{drillEntries.length} planned occurrences{state.complete ? "." : " in the incomplete result."}</p>{onDisplay && drillRoutines.length > 0 && <div className="routine-drill-move"><p className="soft">A frequent routine can appear once in Background routines instead. Its schedule does not change.</p><div className="desk-acts">{drillRoutines.map((id) => <button className="desk-btn" type="button" key={id} onClick={() => { onDisplay(id, "background"); }}>Move {names.get(id) ?? id} to Background routines</button>)}</div></div>}<div className="routine-drill-list">{drillEntries.slice(drill.page * 30, (drill.page + 1) * 30).map(renderOccurrence)}</div><div className="desk-acts"><button className="desk-btn" type="button" disabled={drill.page === 0} onClick={() => { setDrill({ ...drill, page: drill.page - 1 }); }}>Previous occurrences</button><span>Page {drill.page + 1} of {Math.max(1, Math.ceil(drillEntries.length / 30))}</span><button className="desk-btn" type="button" disabled={(drill.page + 1) * 30 >= drillEntries.length} onClick={() => { setDrill({ ...drill, page: drill.page + 1 }); }}>Next occurrences</button></div></section>}
     </>}
   </section>;
 }
