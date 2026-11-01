@@ -15,7 +15,7 @@ export type RoutineOccurrenceQuery = z.infer<typeof RoutineOccurrenceQuerySchema
 function occurrenceSchema(zone: typeof timezone) {
   return z.object({
     routineId: z.string().min(1), schedule: z.string().min(1), sourceTimezone: zone,
-    lifecycle: z.enum(["active", "disabled", "paused"]), handlingPolicy: z.enum(["auto", "approval"]).nullable(),
+    lifecycle: z.enum(["active", "disabled", "paused", "unconfirmed"]), handlingPolicy: z.enum(["auto", "approval"]).nullable(),
     readOnly: z.boolean(), scheduledFor: instant,
     capabilities: z.object({ editParameters: z.boolean(), editSchedule: z.boolean(), pause: z.boolean(), delete: z.boolean(), setPolicy: z.boolean() }).strict(),
   }).strict();

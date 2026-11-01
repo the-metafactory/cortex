@@ -17,9 +17,9 @@ export const RoutineDetailSchema = z.object({
 });
 export type RoutineDetail = z.infer<typeof RoutineDetailSchema>;
 export const RoutineInventorySchema = z.array(z.object({
-  id: z.string(), name: z.string().optional(), schedule: z.string(), timezone: z.string().nullable(), target: z.string(), policy: z.enum(["approval", "auto", "disabled"]),
+  id: z.string(), name: z.string().optional(), schedule: z.string(), timezone: z.string().nullable(), target: z.string(), policy: z.enum(["approval", "auto", "disabled"]), paused: z.boolean().default(false), runtimeConfirmed: z.boolean().default(true),
   readOnly: z.boolean().default(true),
-  capabilities: z.object({ editSchedule: z.boolean() }).default({ editSchedule: false }),
+  capabilities: z.object({ editSchedule: z.boolean(), pause: z.boolean().default(false) }).default({ editSchedule: false, pause: false }),
 }));
 export type RoutineInventory = z.infer<typeof RoutineInventorySchema>;
 const mutation = z.object({ id: z.string().min(1).max(100), revision: z.string().regex(/^[a-f0-9]{64}$/) });

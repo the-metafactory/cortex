@@ -13,6 +13,7 @@ import { requireRoutineCapabilities, type RoutineCapabilities } from "./routine-
 import { routineStepLabels } from "./routine-steps";
 import { PendingRoutineSchema, RoutineHistorySchema, RoutineSchema, RoutineRefusal, RoutineWriteFailure, reflexCommand, runRoutineCommand, type RoutineOptions, type RoutineRunner, type RoutineView } from "./routine-command";
 import { checkRoutineOperation, claimRoutineOperation, finishRoutineOperation, pendingRoutineOperations, readRoutineOperation, readRoutineProposal, routineConfigHash, routineOperationBinding, saveRoutineProposal, type RoutineAction, type LegacyRoutineAction, type RoutineProposal, type RoutineResult } from "./routine-store";
+import { actOnRoutineLifecycle, reconcileLifecycle } from "./routine-lifecycle";
 import { actOnRoutineSchedule, reconcileSchedule } from "./routine-schedule-editor";
 
 const ComposerReply = z.discriminatedUnion("status", [
@@ -65,9 +66,9 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
     const operations = pendingRoutineOperations(db, options);
     for (let offset = 0; offset < operations.length; offset += 4) {
       await Promise.all(operations.slice(offset, offset + 4).map(async (operation) => {
-        if (operation.action === "schedule") {
+        if ("revision" in operation) {
           try {
-            const confirmed = await reconcileSchedule(options, operation, run);
+            const confirmed = operation.action === "schedule" ? await reconcileSchedule(options, operation, run) : await reconcileLifecycle(options, operation, run);
             if (confirmed) finishRoutineOperation(db, operation.requestId, confirmed);
           } catch {
             return;
@@ -165,7 +166,7 @@ async function reconcileAndFinish(db: Database, options: RoutineOptions, request
 }
 
 export async function actOnRoutine(db: Database, options: RoutineOptions, request: RoutineAction, now: number, run: RoutineRunner = spawnWithStdin, capabilities?: RoutineCapabilities): Promise<RoutineResult> {
-  if (request.action === "schedule") return actOnRoutineSchedule(db, options, request, run);
+  if ("revision" in request) return request.action === "schedule" ? actOnRoutineSchedule(db, options, request, run) : actOnRoutineLifecycle(db, options, request, run);
   const proposal = request.action === "install" ? readRoutineProposal(db, request.target) : null;
   if (request.action === "install" && (proposal?.configHash !== routineConfigHash(options))) return { ok: false, error: "Prepare this routine again before confirming it." };
   const binding = routineOperationBinding(options, request);
