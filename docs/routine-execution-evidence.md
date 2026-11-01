@@ -1,0 +1,21 @@
+# Routine execution evidence
+
+`GET /api/desk/routine-history` returns a bounded decision page from the configured Reflex owner and an execution observation from Cortex's process audit owner. It accepts an optional `routineId`, `limit` from 1 to 100, and an opaque `cursor`. Without a routine filter, the page covers the configured stack's scheduled routine activity, including deleted definitions.
+
+Reflex exposes the same decision source as `reflex routine history --json`. The CLI accepts `--routine-id`, `--decision-id`, `--limit`, `--cursor`, `--principal` and `--stack`. The daemon rejects a foreign scope. Pages sort by decision time and ID, newest first. A continuation binds the routine and scope. Routine IDs are lowercase slugs of at most 1000 characters for this read contract. Oversized or malformed owner replies fail explicitly.
+
+New decisions retain the definition's display name and target in their existing private decision snapshot. `routine add --name` sets the display name, and Desk creation supplies its confirmed title. Removing a definition does not remove the snapshot. Legacy records without a name snapshot report `nameSource: identifier` and use their recorded routine ID. The response omits impulse payloads, paths, arguments, environment values and free-text guard reasons.
+
+A fired decision establishes dispatch only. An execution observation requires both its recorded decision ID and correlation ID in a local process audit record received on the configured principal and stack's exact process subject. Foreign records, payload-supplied subject claims and legacy records without received-subject provenance cannot establish an execution. No title or approximate-time matching occurs. This observation describes the process runner's own lifecycle, not unobserved downstream work.
+
+The execution union distinguishes `not-started`, `unavailable` and `observed`. Observed process states are `running`, `succeeded` and `failed`. A running observation older than 20 minutes is marked `freshness: stale`; it does not prove the process is still running. Duration exists only for a valid recorded start and terminal timestamp. Missing or delayed evidence, conflicting event chains and a bounded incomplete audit read remain explicit. The read caps at 2000 matching audit events and rejects oversized event payloads rather than inferring a terminal outcome.
+
+## Authorized log references
+
+An observed execution lists `process-audit`, `stdout` and `stderr` file references. `process-audit.jsonl` is a redacted export of the execution owner's existing structured lifecycle events. It contains event, decision and dispatch IDs, the process name, outcome and timestamps. It contains no action output. Per-execution stdout and stderr are unavailable because the current process runner streams them to a shared daemon log without a safe per-execution reader. The Desk never opens that shared log.
+
+`GET /api/desk/routine-log` requires the exact `routineId`, `decisionId`, `executionId` and an allowlisted `file`. The execution reference is derived from the owner's recorded dispatch identity and process-instance fields. It is a read reference, not a claim that the owner emitted a separate execution UUID. The server resolves the decision again through Reflex and checks its current scoped audit records before reading. Arbitrary paths and URLs are rejected.
+
+Audit reads accept a byte `offset` and `limit` from 1 to 65536. The default limit is 16384. A response includes the file revision, content, total bytes, completeness and next offset. Continuations require that revision. A late event changes the revision and refuses a mixed-version continuation. `download=1` returns an attachment with the same byte bound and continuation headers. Content is data and must be rendered as text. Audit files use only ASCII fields, so byte pagination cannot split a UTF-8 character.
+
+The export reads the existing `observability_events` table and follows its existing retention policy. It creates no evidence copy or new retention policy. After retention removes the owner's audit events, an old file reference returns an explicit unavailable response. Deleting a routine leaves its existing decision and process audit records intact.

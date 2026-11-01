@@ -123,6 +123,7 @@ export const OBSERVABILITY_PROJECTION_SUBJECTS: string[] = [
 /** A structural view of an envelope the projection reads. */
 interface ProjectableEnvelope {
   id?: string;
+  timestamp?: string;
   type: string;
   payload: Record<string, unknown>;
 }
@@ -202,6 +203,7 @@ export function projectObservability(
   envelope: ProjectableEnvelope,
   wsRegistry: WsClientRegistry | undefined,
   origin: ObservabilityOrigin = "local",
+  subject?: string,
 ): ObservabilityFamily | null {
   const family = familyForType(envelope.type);
   if (family === null) return null;
@@ -226,8 +228,9 @@ export function projectObservability(
     type: envelope.type,
     stackId: originStackId(payload),
     summary: asString(payload.summary) ?? asString(payload.message),
-    payload,
+    payload: envelope.type === "system.bus.process" ? { ...payload, __cortexProcessSubject: subject ?? null } : payload,
     origin,
+    ...(envelope.type === "system.bus.process" && envelope.timestamp ? { timestamp: envelope.timestamp } : {}),
   });
 
   // The attention producer rides the SAME seam — every observability envelope is
@@ -298,9 +301,9 @@ export function createObservabilityProjectionRenderer(
     id: OBSERVABILITY_PROJECTION_RENDERER_ID,
     subjects: OBSERVABILITY_PROJECTION_SUBJECTS,
     // eslint-disable-next-line @typescript-eslint/require-await
-    render: async (envelope: Envelope): Promise<void> => {
+    render: async (envelope: Envelope, _signal, subject): Promise<void> => {
       try {
-        projectObservability(db, envelope, wsRegistry);
+        projectObservability(db, envelope, wsRegistry, "local", subject);
       } catch (err) {
         process.stderr.write(
           `[mission-control] observability renderer: render() swallowed an error for envelope ${envelope.id} (${envelope.type}): ${err instanceof Error ? err.message : String(err)}\n`,

@@ -117,7 +117,7 @@ async function executeRoutineMutation(options: RoutineOptions, request: RoutineA
       temporary = await mkdtemp(join(tmpdir(), "desk-routine-"));
       const flow = join(temporary, "flow.yaml");
       await writeFile(flow, proposal.yaml, { mode: 0o600, flag: "wx" });
-      args = ["routine", "add", "--id", proposal.routineId, "--schedule", proposal.schedule, "--timezone", proposal.timezone, "--target", options.target, "--policy", "approve", "--payload", JSON.stringify({ input: { request: proposal.request, scenario: proposal.request, text: proposal.request } }), "--flow-file", flow];
+      args = ["routine", "add", "--id", proposal.routineId, "--name", proposal.title.slice(0, 300), "--schedule", proposal.schedule, "--timezone", proposal.timezone, "--target", options.target, "--policy", "approve", "--payload", JSON.stringify({ input: { request: proposal.request, scenario: proposal.request, text: proposal.request } }), "--flow-file", flow];
     } else if (request.action === "approve" || request.action === "deny") args = [request.action, request.target];
     else if (request.action === "remove") args = ["routine", "remove", request.target];
     else args = ["routine", "set-policy", request.target, request.action === "auto" ? "auto" : "approve"];
