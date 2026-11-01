@@ -21,10 +21,16 @@ export const MyDayRequestSchema = z.object({ date: z.iso.date(), requestId: z.uu
 export type MyDayCommand = z.infer<typeof MyDayCommandSchema>;
 const source = z.object({ taskId: id, key: id, fingerprint: z.string(), kind: z.string(), url: z.string().optional() });
 const undo = z.object({ receipt: id, taskId: id, date: z.iso.date(), before: z.string().optional(), after: z.string(), used: z.boolean() });
+const studioThread = z.object({
+  namespace: z.string(), source: z.string(), slug: z.string(), projectId: id,
+  response: z.number().default(0),
+  pending: z.object({ id, at: z.number() }).nullable().default(null),
+});
 export const MyDayMetaSchema = z.object({
+  studio: z.array(studioThread).default([]),
   revision: z.number().int().nonnegative().default(0),
   inbox: z.array(z.object({ id, title: z.string(), weight: z.number(), ordering: z.literal("parallel"), children: z.tuple([]), effort: z.literal(1), note: z.string(), dueDate: z.iso.date().optional() })).default([]),
-  draft: z.object({ date: z.iso.date(), ids: z.array(id) }).nullable().default(null),
+  draft: z.object({ date: z.iso.date(), ids: z.array(id), origin: z.enum(["engine", "person", "studio-unavailable"]).default("engine") }).nullable().default(null),
   sources: z.array(source).default([]),
   receipts: z.array(z.object({ id: id, payload: z.string(), undo: z.string().optional() })).default([]),
   undos: z.array(undo).default([]),

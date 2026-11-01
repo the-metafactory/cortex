@@ -511,7 +511,7 @@ async function handleApi(
     return handleGetDeskStudio(desk);
   }
 
-  if (pathname === "/api/desk/studio/act") return handleDeskStudioAct(req, desk);
+  if (pathname === "/api/desk/studio/act") return handleDeskStudioAct(req, desk, { db });
   if (pathname === "/api/desk/studio/session") return handleDeskStudioSession(req, db, desk);
 
   if (pathname === "/api/vigil/subjects") {

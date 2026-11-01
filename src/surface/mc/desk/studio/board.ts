@@ -1,3 +1,4 @@
+import { responseCoverage } from "./response";
 import type { AreaPolicy } from "../types";
 import type { IvyNote, MaterialLink, StudioCapture, StudioTarget } from "./format";
 import type { StudioProblem, StudioProposalView, StudioThreadView, StudioView } from "./view";
@@ -102,7 +103,7 @@ export function waitsOnYou(thread: Pick<StudioThreadView, "notes" | "responses">
   const latest = latestNote(thread.notes);
   if (latest?.status !== "open") return false;
   const at = time(latest.at);
-  return !thread.responses.some((r) => time(r.at) >= at);
+  return !thread.responses.some((r) => responseCoverage(thread, r) >= at);
 }
 
 export function normaliseLabel(label: string): string {

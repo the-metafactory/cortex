@@ -1,3 +1,4 @@
+import { needsResponse } from "./response";
 import { threadThinking, type ThreadThinking } from "./thinking-view";
 import type { AreaPolicy } from "../types";
 import { areaLookup, latestNote, sameSource, waitsOnYou, type BoardArea } from "./board";
@@ -29,6 +30,7 @@ export interface ThreadPage {
   proposedRelations: IvyNote[];
   latest: IvyNote | null;
   waitsOnYou: boolean;
+  needsResponse: boolean;
   log: LogEntry[];
   outcome: PageOutcome;
   relations: Relations;
@@ -92,6 +94,7 @@ export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesCo
     proposedRelations: notes.filter((n) => n.kind === "relation" && n.status === "open"),
     latest: latestNote(thread.notes),
     waitsOnYou: waitsOnYou(thread),
+    needsResponse: needsResponse(thread),
     log: thread.log,
     outcome: outcomeOf(thread),
     relations: relatesTo(thread, studio, ctx),
