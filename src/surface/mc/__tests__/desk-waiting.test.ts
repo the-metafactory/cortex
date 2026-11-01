@@ -71,6 +71,28 @@ describe("waiting-task source projection", () => {
     expect(closed.agents.waiting).toBe(0);
   });
 
+  it("reads and suppresses Ranger-only tasks across blocked, decision and grilling sources", async () => {
+    const fetchImpl = async () => Response.json({ current: [], needsYou: [{key:"example/game#1",repo:"example/game",nodeId:"12",title:"Completed blocker",status:"blocked",reason:{class:"blocked"}}], maps: [{key:"example/game#1",repo:"example/game",decisions:[{id:"13",title:"Completed decision"}],grillings:[{id:"14",title:"Completed question"}]}] });
+    const requested: string[] = [];
+    const view = await composeDesk(db, {...DESK,rangerUrl:"http://127.0.0.1:7311"}, undefined, {now:NOW,fetchImpl,waitingTasks:{read:async refs=>{
+      requested.push(...refs); return new Map(refs.map(ref=>[ref,source("closed","Completed task")]));
+    }}});
+    expect(requested).toEqual(["example/game#12","example/game#13","example/game#14"]);
+    expect(view.items).toEqual([]);
+    expect(view.agents.waiting).toBe(0);
+  });
+
+  it("serves the Desk while source checks are pending and reconciles after the refresh", async () => {
+    seed("example/game#12");
+    let finish: (value: WaitingTask) => void = () => { throw new Error("Reader has not started"); };
+    const waitingTasks = new WaitingTasks(() => new Promise(resolve => { finish = resolve; }));
+    const cold = await compose({waitingTasks});
+    expect(cold.items[0]?.why).toContain("Source status could not be checked");
+    finish(source("closed","Completed task"));
+    await waitingTasks.warm(["example/game#12"]);
+    expect((await compose({waitingTasks})).items).toEqual([]);
+  });
+
   it("keeps open requests once and explicitly states missing questions and unavailable status", async () => {
     seed("example/game#12"); seed("github:github.com/example/game#12", "second"); seed("example/game#13");
     const view = await compose({ waitingTasks: { read: async () => new Map<string, WaitingTask>([
@@ -112,16 +134,32 @@ describe("waiting source reads", () => {
     expect((await readWaitingTask("example/game#12", async () => ({ type: "issue", state: "unknown", title: "x", labels: [], body: null, html_url: "https://example.test" }))).kind).toBe("unavailable");
   });
 
+  it("bounds the shared background refresh queue across callers", async () => {
+    let active = 0; let maximum = 0;
+    const reader = new WaitingTasks(async () => {
+      active++; maximum = Math.max(maximum, active);
+      await Promise.resolve(); active--;
+      return source("open", "Choose a hull");
+    });
+    const refs = Array.from({length:20}, (_,i) => `example/game#${i+1}`);
+    await Promise.all([reader.warm(refs), reader.warm(refs)]);
+    expect(maximum).toBeLessThanOrEqual(6);
+    expect((await reader.read(refs)).size).toBe(20);
+  });
+
   it("deduplicates concurrent reads, refreshes status and does not retain closure after a failed refresh", async () => {
     let now = 0;
     let calls = 0;
     let task: WaitingTask = source("open", "Choose a hull");
     const reader = new WaitingTasks(async () => { calls++; return task; }, () => now);
-    await Promise.all([reader.read(["example/game#12", "example/game#12"]), reader.read(["example/game#12"])]);
+    const cold = await reader.read(["example/game#12"]);
+    expect(cold.get("example/game#12")?.kind).toBe("unavailable");
+    await Promise.all([reader.warm(["example/game#12", "example/game#12"]), reader.warm(["github:github.com/example/game#12"])]);
     expect(calls).toBe(1);
-    task = source("closed", "Choose a hull"); now = 60_001;
+    task = source("closed", "Choose a hull"); now = 300_001;
+    await reader.warm(["example/game#12"]);
     expect((await reader.read(["example/game#12"])).get("example/game#12")?.kind).toBe("closed");
-    task = { kind: "unavailable", reason: "Source status could not be checked." }; now += 60_001;
+    task = { kind: "unavailable", reason: "Source status could not be checked." }; now += 300_001;
     expect((await reader.read(["example/game#12"])).get("example/game#12")?.kind).toBe("unavailable");
     const broken = new WaitingTasks(async () => { throw new Error("offline"); });
     expect((await broken.read(["example/game#12"])).get("example/game#12")?.kind).toBe("unavailable");

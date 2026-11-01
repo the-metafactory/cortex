@@ -125,9 +125,13 @@ export async function composeDesk(
   const doneKeys = new Set(done.filter((d) => d.status === "done").map((d) => d.attemptKey));
   const handled = deps.handled;
   const filtered = rangerResult?.state ? withoutHandled(rangerResult.state, { has: (k) => doneKeys.has(k) || (handled?.has(k) ?? false) }) : null;
-  const taskRefs = subjects.filter(s => s.vocab === "escalation" && (s.value === "needs-principal" || s.value === "overdue")).map(s => s.ref);
-  const waitingTasks = await deps.waitingTasks?.read(taskRefs) ?? new Map<string, WaitingTask>();
   const reportedRanger = filtered?.state ?? rangerResult?.state ?? null;
+  const taskRefs = [
+    ...subjects.filter(s => s.vocab === "escalation" && (s.value === "needs-principal" || s.value === "overdue")).map(s => s.ref),
+    ...(reportedRanger?.needsYou ?? []).map(n => `${n.repo}#${n.nodeId}`),
+    ...(reportedRanger?.maps ?? []).flatMap(m => [...(m.decisions ?? []), ...(m.grillings ?? [])].map(n => `${m.repo}#${n.id}`)),
+  ];
+  const waitingTasks = await deps.waitingTasks?.read(taskRefs) ?? new Map<string, WaitingTask>();
   const ranger = reportedRanger ? withoutClosedTasks(reportedRanger, waitingTasks) : null;
   if (rangerResult) sources.push(rangerResult.error === null ? { id: "ranger", ok: true } : { id: "ranger", ok: false, error: rangerResult.error });
 

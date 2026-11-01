@@ -10,8 +10,8 @@ export const TASK_UNAVAILABLE: WaitingTask = { kind: "unavailable", reason: "Sou
 export const QUESTION_UNAVAILABLE = "The question is unavailable. Open the source to see what is needed.";
 export const canonicalTaskRef = (ref: string): string => ref.replace(/^github:github\.com\//, "");
 export type WaitingTaskReader = (ref: string) => Promise<WaitingTask>;
-const FRESH_MS = 60_000;
-const RETRY_MS = 15_000;
+const FRESH_MS = 5 * 60_000;
+const RETRY_MS = 5 * 60_000;
 const CONCURRENT_READS = 6;
 
 export function questionSummary(body: string | null): string | null {
@@ -49,18 +49,48 @@ export async function readWaitingTask(ref: string, fetchIssue: typeof fetchIssue
 export class WaitingTasks {
   private readonly cache = new Map<string, { until: number; value: WaitingTask }>();
   private readonly pending = new Map<string, Promise<WaitingTask>>();
+  private readonly queued = new Set<string>();
+  private refreshing: Promise<void> | null = null;
 
   constructor(private readonly reader: WaitingTaskReader = readWaitingTask, private readonly clock = Date.now) {}
 
-  async read(refs: string[]): Promise<ReadonlyMap<string, WaitingTask>> {
+  read(refs: string[]): Promise<ReadonlyMap<string, WaitingTask>> {
     const unique = [...new Set(refs.map(canonicalTaskRef))];
     const active = new Set(unique);
     for (const ref of this.cache.keys()) if (!active.has(ref)) this.cache.delete(ref);
     const values = new Map<string, WaitingTask>();
-    for (let i = 0; i < unique.length; i += CONCURRENT_READS) {
-      await Promise.all(unique.slice(i, i + CONCURRENT_READS).map(async ref => values.set(ref, await this.one(ref))));
+    for (const ref of unique) {
+      const hit = this.cache.get(ref);
+      values.set(ref, hit && hit.until > this.clock() ? hit.value : TASK_UNAVAILABLE);
     }
-    return values;
+    void this.warm(unique);
+    return Promise.resolve(values);
+  }
+
+  warm(refs: string[]): Promise<void> {
+    for (const raw of refs) {
+      const ref = canonicalTaskRef(raw);
+      const hit = this.cache.get(ref);
+      if (!hit || hit.until <= this.clock()) this.queued.add(ref);
+    }
+    return this.queued.size ? this.start() : this.refreshing ?? Promise.resolve();
+  }
+
+  private start(): Promise<void> {
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = this.drain().finally(() => {
+      this.refreshing = null;
+      if (this.queued.size) return this.start();
+    });
+    return this.refreshing;
+  }
+
+  private async drain(): Promise<void> {
+    while (this.queued.size) {
+      const refs = [...this.queued].slice(0, CONCURRENT_READS);
+      for (const ref of refs) this.queued.delete(ref);
+      await Promise.all(refs.map(ref => this.one(ref)));
+    }
   }
 
   private async one(ref: string): Promise<WaitingTask> {
