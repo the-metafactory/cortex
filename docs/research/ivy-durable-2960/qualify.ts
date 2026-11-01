@@ -11,6 +11,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 globalThis.fetch = Object.assign(() => Promise.reject(new Error("Qualification prohibits network calls")), { preconnect: () => undefined });
 const deadline = 20_000;
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+const waitForCrash = () => new Promise<void>(() => undefined);
 const emit = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 async function until(check: () => Promise<boolean> | boolean, label: string) {
@@ -41,12 +42,12 @@ async function open(store: string, phase = "normal", resumed = false) {
     async execute() {
       if (phase === "before-owner" && !resumed) {
         await writeFile(`${store}.ready`, "owner intent committed, effect not performed");
-        await new Promise<void>(() => undefined);
+        await waitForCrash();
       }
       await appendFile(`${store}.owner`, `${JSON.stringify({ operation: "create", correlation: "owner-request-1", object: "scratch-object-1" })}\n`);
       if (phase === "after-owner" && !resumed) {
         await writeFile(`${store}.ready`, "effect persisted, tool result not committed");
-        await new Promise<void>(() => undefined);
+        await waitForCrash();
       }
       return { output: [{ type: "text", text: "scratch-object-1" }], details: { correlation: "owner-request-1", object: "scratch-object-1" } };
     },
@@ -68,7 +69,7 @@ async function writer(store: string, phase: string) {
   if (phase === "during-model") {
     faux.setResponses([async () => {
       await writeFile(`${store}.ready`, "input and generation intent committed; model pending");
-      await new Promise<void>(() => undefined);
+      await waitForCrash();
       return fauxAssistantMessage("unreachable");
     }]);
   } else {
@@ -83,7 +84,7 @@ async function writer(store: string, phase: string) {
   assert(settled.answer !== undefined);
   await root.submit({ type: "write", requestId: "owner-provenance", entry: { kind: "app.created", data: { object: "scratch-object-1", owner: "simulated-owner", exchange: submission.id, correlation: "owner-request-1", answer: settled.answer } } }, context);
   await writeFile(`${store}.ready`, "answer and tool result committed");
-  if (phase === "after-result") await new Promise<void>(() => undefined);
+  if (phase === "after-result") await waitForCrash();
   await harness.close(context);
   emit({ writer: phase, settled });
 }
@@ -152,7 +153,11 @@ async function clients(store: string) {
   assert.deepEqual(a.value.entries.map(entry => entry.id), b.value.entries.map(entry => entry.id));
   emit({ probe: "two-clients", attachment: "two watches on one owning host; transport adapters simulated by caller labels", inbox, rejected, toolIndex, steerIndex, followIndex, finalOrder: entries.map(entry => ({ id: entry.id, kind: entry.kind, model: entry.model })), views, requests });
   await a.stop(); await b.stop();
-  const before = entries.length;
+  await compactAndChangeModel(harness, root, faux, store);
+  await harness.close(context);
+}
+async function compactAndChangeModel(harness: Harness, root: Conversation, faux: ReturnType<typeof fauxProvider>, store: string) {
+  const before = (await records(root)).length;
   for (let index = 0; index < 80; index++) await root.submit({ type: "write", entry: { kind: "app.history", model: [{ role: "user", content: `history-${index} ${"retained original detail ".repeat(30)}`, timestamp: index }], data: { index } } }, context);
   const originals = await records(root);
   await writeFile(`${store}.originals`, JSON.stringify(originals));
@@ -170,7 +175,6 @@ async function clients(store: string) {
   await (await root.submit({ type: "input", content: "Continue with second model", requestId: "second-model" }, context)).wait(context);
   assert(JSON.stringify(reconstructed).includes("Compact working summary"));
   emit({ probe: "compaction-model-change", before, originals: originals.length, after: after.length, task, selectedModel: (await root.agent(context)).model, reconstructed, originalFirst: originals[0], originalLast: originals.at(-1) });
-  await harness.close(context);
 }
 async function verifyCompaction(store: string) {
   const { harness, root } = await open(store);
@@ -195,7 +199,7 @@ async function lock(store: string, hold: boolean) {
     const storage = await openNodeSqliteStorage(store);
     emit({ probe: "host-lock", state: "acquired" });
     await writeFile(`${store}.ready`, "lock held");
-    if (hold) await new Promise<void>(() => undefined);
+    if (hold) await waitForCrash();
     await storage.close(context);
   } finally { await rm(path, { recursive: true }); }
 }

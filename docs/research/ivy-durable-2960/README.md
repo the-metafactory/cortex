@@ -13,15 +13,15 @@ The principal's subsequent architecture decision must weigh those responsibiliti
 Run these commands from this directory:
 
 ```sh
-rtk proxy bun install --frozen-lockfile
-rtk proxy bun run qualify.ts > results-new.jsonl 2> stderr-new.txt
+bun install --frozen-lockfile --ignore-scripts
+bun run qualify.ts > results-new.jsonl 2> stderr-new.txt
 ```
 
 The second command exits zero and ends with `{"qualification":"completed","productionAdoption":false}`. Child processes have 25-second deadlines. Each declared crash waits at most 20 seconds for its checkpoint before sending SIGKILL. Stores and the simulated owner ledger live in a newly created temporary directory and are removed afterward. The fake provider is the only registered provider, and `fetch` rejects network requests. No credentials, production data, Discord messages, or paid model calls are used.
 
 The manifest and lockfile pin `@earendil-works/pi-durable`, `@earendil-works/pi-ai`, and `@earendil-works/chord` to **1.4.0**, including the transitive dependency graph. The measured executable is Bun **1.4.3**, macOS arm64, with Bun's Node compatibility version **26.3.0** and SQLite **3.51.0**. The selected storage is the released `openNodeSqliteStorage` adapter from Durable, backed by Chord **1.4.0** and `node:sqlite`. Import and actual persistence operations succeeded under this Bun version. This is not a claim about all Bun versions. An earlier shell baseline printed Bun 1.4.2; every recorded qualification child uses the parent's exact executable, and the results' version record is authoritative.
 
-The released package declares Node `>=22.19.0`. Its registry metadata is in [registry.json](registry.json). The dependency is isolated from Cortex's production dependencies. Cortex's root TypeScript project excludes this directory; [tsconfig.json](tsconfig.json) typechecks the qualification separately after its dependencies are installed.
+The released package declares Node `>=22.19.0`. Its registry metadata is in [registry.json](registry.json). The dependency is isolated from Cortex's production dependencies. Cortex's root TypeScript and ESLint projects exclude this directory. A separate workflow, filtered to this artifact's paths and pinned to Bun 1.4.3, installs without lifecycle scripts and runs its own typecheck, ESLint check, and qualification with read-only repository permission and no secrets. [tsconfig.json](tsconfig.json) defines that research typecheck. CI re-execution on Linux is distinct from the captured macOS transcript.
 
 ## Requirement-to-result matrix
 
