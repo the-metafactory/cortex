@@ -6,7 +6,8 @@ import type { DeskRuntime } from "../desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../desk/create";
 import { correctMail, draftReply, findListedMail, MAIL_CORRECTIONS, markUnimportant, reportMail } from "../desk/mail-actions";
 import { logMailDecision, mailFeatures } from "../desk/mail-log";
-import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveResult } from "../desk/mail-move";
+import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveDeps } from "../desk/mail-move";
+import { listSweeps, runSweep, sweepContext, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
 
 const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("draft"), key: z.string(), body: z.string(), decision: MailDecisionSchema.optional() }).strict(),
@@ -14,7 +15,12 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("move"), key: z.string(), target: z.enum(MOVE_TARGETS) }).strict(),
   z.object({ action: z.literal("correct"), key: z.string(), said: z.enum(MAIL_CORRECTIONS) }).strict(),
   z.object({ action: z.enum(["undo", "block"]), move: z.string().min(1).max(64) }).strict(),
+  z.object({ action: z.literal("sweep"), sweep: z.string().min(1).max(200), keys: z.array(z.string().min(1).max(1000)).min(1).max(SWEEP_LIMITS.maxMails) }).strict(),
+  z.object({ action: z.literal("sweep.undo"), sweep: z.string().min(1).max(64) }).strict(),
 ]);
+
+export const SWEEP_WAIT_MS = 8000;
+const STILL_MOVING = "Still moving the mails. Done for you shows the result when it is finished.";
 
 export const noStore = { "Cache-Control": "no-store" };
 export const fail = (status: number, error: string): Response => Response.json({ ok: false, error }, { status, headers: noStore });
@@ -23,6 +29,7 @@ export interface DeskMailDeps {
   run?: WriterRunner;
   now?: () => number;
   newId?: () => string;
+  sweepWaitMs?: number;
 }
 
 /**
@@ -40,6 +47,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   const body = parsed.data;
   const now = (deps.now ?? Date.now)();
   const moveDeps = { db, config: runtime.options.mailActions, ledger: runtime.ledger, run: deps.run ?? spawnWithStdin, now, ...(deps.newId ? { newId: deps.newId } : {}) };
+  if (body.action === "sweep" || body.action === "sweep.undo") return sweepAnswer(body, db, runtime, moveDeps, deps.sweepWaitMs ?? SWEEP_WAIT_MS);
   if ("move" in body) {
     return answer(body.action === "undo" ? await undoMove(body.move, moveDeps) : blockSenderDomain(db, body.move, now));
   }
@@ -63,7 +71,33 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   return answer(await moveMail(mail, body.action === "move" ? body.target : "trash", moveDeps));
 }
 
-function answer(result: MoveResult): Response {
+type SweepBody = Extract<z.infer<typeof MailRequestSchema>, { action: "sweep" | "sweep.undo" }>;
+
+async function sweepAnswer(body: SweepBody, db: Database, runtime: DeskRuntime, moveDeps: MoveDeps, waitMs: number): Promise<Response> {
+  if (!moveDeps.config?.move?.length) return fail(409, "Sweeps need the move command (mc.desk.mail.actions.move), and it is not set up on this stack.");
+  let work: Promise<{ ok: true; message: string } | { ok: false; status: number; error: string }>;
+  if (body.action === "sweep.undo") work = undoSweep(body.sweep, moveDeps);
+  else {
+    const readings = runtime.sourceCache?.cached() ?? [];
+    const group = listSweeps(db, readings, sweepContext(runtime.options ?? { areas: [] }, readings, runtime.ledger), moveDeps.now).find((g) => g.id === body.sweep);
+    if (!group) return fail(409, "This group has changed since you opened it. Look at it again.");
+    work = runSweep(group, body.keys, moveDeps);
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => { timer = setTimeout(() => { resolve(null); }, waitMs); });
+  try {
+    const result = await Promise.race([work, late]);
+    if (result === null) {
+      work.catch((err: unknown) => { console.error(`desk: mail sweep: ${err instanceof Error ? err.message : String(err)}`); });
+      return Response.json({ ok: true, message: STILL_MOVING }, { status: 202, headers: noStore });
+    }
+    return answer(result);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function answer(result: { ok: true } | { ok: false; status: number; error: string }): Response {
   if (!result.ok) return fail(result.status, result.error);
   return Response.json(result, { headers: noStore });
 }
