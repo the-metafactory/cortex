@@ -530,6 +530,24 @@ describe("Spam, and blocking the sender's domain as a second step", () => {
   });
 });
 
+describe("a move the Desk cannot record", () => {
+  it("says the mail moved and keeps it hidden, instead of reporting that the command did not run", async () => {
+    const rt = await deskWith([GITLAB], MOVING);
+    db.exec("DROP TABLE desk_mail_moves");
+    const res = await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "archive" }, queue([printed("Archiv", "Moved to Archiv.")]).run);
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toStartWith("The mail moved, but the Desk could not record it:");
+    expect(await itemKeys(rt)).toEqual([]);
+  });
+
+  it("refuses to block a sender address without a domain", async () => {
+    const rt = await deskWith([mail("odd@x", "odd@", { from: { address: "odd@" } })], MOVING);
+    const moved = await (await send(rt, { action: "move", key: "mail:odd@x", target: "junk" }, queue().run)).json();
+    expect((await (await send(rt, { action: "block", move: moved.undo }, queue().run)).json()).error).toBe("The sender's address has no domain the Desk can block.");
+    expect(listSenders(db, "unimportant")).toEqual([]);
+  });
+});
+
 describe("the move actions on a mail card", () => {
   const card = (suggestedAction: "archive" | "reply" | undefined, moves: boolean, category: "fyi" | "action" = "action") => {
     const [item] = mailItems({

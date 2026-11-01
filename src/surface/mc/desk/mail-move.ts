@@ -4,7 +4,7 @@ import type { WriterRunner } from "./create";
 import type { ListedMail, MailActionsConfig, TrashLedger } from "./mail-actions";
 import { CommandTimeout } from "./spawn";
 import { DAY_MS } from "./time";
-import { addSender, isVip, listVips } from "./vips";
+import { addSender, isVip, listVips, normalizeVip } from "./vips";
 
 export const MOVE_TARGETS = ["archive", "junk", "trash"] as const;
 export type MoveTarget = (typeof MOVE_TARGETS)[number];
@@ -69,15 +69,21 @@ interface Claimed {
 
 async function runClaimed(deps: MoveDeps, timeoutSeconds: number, c: Claimed, done: (stdout: string) => MoveResult): Promise<MoveResult> {
   if (!deps.ledger.claim(c.key)) return refuse(409, "This mail is already being moved.");
+  let stdout: string;
   try {
     const result = await deps.run(c.argv, JSON.stringify(c.request), timeoutSeconds * 1000);
     if (result.code !== 0) return refuse(502, c.failed(oneLine(result.stderr || result.stdout, `The ${c.command} command exited with code ${result.code}.`)));
-    return done(result.stdout);
+    stdout = result.stdout;
   } catch (err) {
     if (err instanceof CommandTimeout) return refuse(504, `The ${c.command} command ${err.message}. ${c.timedOut}`);
     return refuse(502, `The ${c.command} command did not run: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     deps.ledger.release(c.key);
+  }
+  try {
+    return done(stdout);
+  } catch (err) {
+    return refuse(500, `The mail moved, but the Desk could not record it: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -158,7 +164,8 @@ export function blockSenderDomain(db: Database, id: string, now: number): MoveRe
   const row = readMove(db, id);
   if (!row) return refuse(404, "The Desk has no record of that move.");
   if (row.target !== "junk") return refuse(409, "Only mail moved to Junk can block its sender's domain.");
-  const domain = `@${domainOf(row.sender)}`;
+  const domain = normalizeVip(`@${domainOf(row.sender)}`);
+  if (!domain?.startsWith("@")) return refuse(409, "The sender's address has no domain the Desk can block.");
   const vips = listVips(db).map((v) => v.address);
   if (isVip(new Set(vips), row.sender) || vips.some((v) => v.endsWith(domain))) {
     return refuse(409, `${domain} has a sender on your VIP list, and VIPs always show. Nothing was blocked.`);

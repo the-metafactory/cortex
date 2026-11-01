@@ -264,11 +264,13 @@ function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): D
   });
 }
 
+const OWN_LINE = ["studio.capture", "mail.move"];
+
 function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, studio: boolean): DeskView["autonomy"] {
   const grants = listGrants(db);
   return {
     types: PROMOTABLE.filter((a) => a === "studio.capture" ? studio : rangerActions).map((action) => ({ action, ...PROMOTABLE_LABELS[action], on: grants.has(action) })),
-    done: done.filter((d) => d.status !== "running").slice(0, 10).map((d) => ({ key: d.attemptKey, ...(d.action.startsWith("studio.capture") || d.action.startsWith("mail.move") ? { action: d.action, ...(d.action === "studio.capture" || d.action === "mail.move" ? { undo: d.itemKey } : {}) } : {}), title: d.title, message: d.message ?? "", at: d.createdAt, ok: d.status === "done" })),
+    done: done.filter((d) => d.status !== "running").slice(0, 10).map((d) => ({ key: d.attemptKey, ...(OWN_LINE.some((a) => d.action.startsWith(a)) ? { action: d.action, ...(OWN_LINE.includes(d.action) ? { undo: d.itemKey } : {}) } : {}), title: d.title, message: d.message ?? "", at: d.createdAt, ok: d.status === "done" })),
   };
 }
 

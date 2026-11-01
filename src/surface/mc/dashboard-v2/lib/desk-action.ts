@@ -7,7 +7,7 @@ export const DESK_MAIL_PATH = "/api/desk/mail";
 export const DESK_RULING_PATH = "/api/desk/ruling";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
-type Outcome = { ok: boolean; text: string; recorded?: boolean; uncertain?: boolean; undo?: string; block?: string; restored?: string };
+export type Outcome = { ok: boolean; text: string; recorded?: boolean; uncertain?: boolean; undo?: string; block?: string; restored?: string };
 
 async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Promise<Outcome> {
   let res: Response;

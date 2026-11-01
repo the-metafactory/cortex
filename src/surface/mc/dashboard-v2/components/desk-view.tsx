@@ -7,7 +7,7 @@ import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
-import { submitDeskAction, submitGoalAction, submitMailAction, submitRuling } from "../lib/desk-action";
+import { submitDeskAction, submitGoalAction, submitMailAction, submitRuling, type Outcome } from "../lib/desk-action";
 import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
 import { newReplyDraft, prepareDeclineDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
 import { chimeForNew } from "../lib/desk-chime";
@@ -361,7 +361,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     if (inFlight.current.has(item.key)) return;
     inFlight.current.add(item.key);
     setSending((m) => new Map(m).set(item.key, action.id));
-    let result: { ok: boolean; text: string; undo?: string; block?: string };
+    let result: Outcome;
     try {
       result = await (request ? request() : submitDeskAction({ action: action.id, key: item.key }));
     } finally {
@@ -953,7 +953,7 @@ export function MailReceipt({ receipt, onUndo, onBlock }: { receipt: Receipt; on
 }
 
 interface SendOptions {
-  request?: () => Promise<{ ok: boolean; text: string; undo?: string; block?: string }>;
+  request?: () => Promise<Outcome>;
   keepVisible?: boolean;
 }
 
@@ -1036,7 +1036,7 @@ export function AheadStrip({ events }: { events: DeskEvent[] }) {
   );
 }
 
-const ownLine = (d: DeskViewModel["autonomy"]["done"][number]): boolean => Boolean(d.action?.startsWith("studio.capture") || d.action?.startsWith("mail.move"));
+const ownLine = (d: DeskViewModel["autonomy"]["done"][number]): boolean => d.action !== undefined;
 
 export function DoneForYou({ autonomy, onPromote, onUndo, routines, onChanged = () => {} }: { autonomy: DeskViewModel["autonomy"]; onPromote: (action: string, on: boolean) => void; onUndo?: (id: string, action?: string) => void; routines?: DeskViewModel["routines"]; onChanged?: () => void }) {
   if (autonomy.types.length === 0 && autonomy.done.length === 0 && !routines?.done.length) return null;
