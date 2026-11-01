@@ -1,3 +1,4 @@
+import { fakeWorker } from "./fake-worker";
 import { DeskWake, type WakeState } from "../../src/surface/mc/dashboard-v2/lib/desk-wake";
 import { DeskWakeSchema, WAKE_BPE_SHA } from "../../src/common/types/desk-wake";
 
@@ -21,12 +22,7 @@ const controller = new DeskWake(options, {
       return stream;
     },
   } as MediaDevices,
-  worker: () => {
-    const url = URL.createObjectURL(new Blob(["let epoch=0;onmessage=({data})=>{if(data.type==='init')postMessage({type:'ready'});if(data.type==='reset')epoch=data.epoch;if(data.type==='audio')postMessage({type:'processed',through:data.through,epoch});}"], { type: "text/javascript" }));
-    const worker = new Worker(url);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    return worker;
-  },
+  worker: () => fakeWorker(false),
   transcribe: () => { throw new Error("Ownership probe must not upload audio"); },
   answer: () => Promise.resolve(),
 });

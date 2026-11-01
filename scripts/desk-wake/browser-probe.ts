@@ -1,3 +1,4 @@
+import { fakeWorker } from "./fake-worker";
 import { DeskWake, type WakeState } from "../../src/surface/mc/dashboard-v2/lib/desk-wake";
 import { DeskWakeSchema, WAKE_BPE_SHA } from "../../src/common/types/desk-wake";
 import { transcribeClip } from "../../src/surface/mc/dashboard-v2/lib/desk-speech";
@@ -10,12 +11,6 @@ const assert = (claim: unknown, message: string): void => { if (!claim) throw ne
 const until = async (claim: () => boolean, timeout = 15000): Promise<void> => {
   const start = performance.now();
   while (!claim()) { if (performance.now() - start > timeout) throw new Error("Probe timed out"); await wait(20); }
-};
-const fakeWorker = (wake: boolean): Worker => {
-  const url = URL.createObjectURL(new Blob([`let epoch=0; let count=0; let woke=false; onmessage=({data})=>{if(data.type==='init')postMessage({type:'ready'});if(data.type==='reset'){epoch=data.epoch;count=0;}if(data.type==='audio'){count+=data.samples.length;if(${wake}&&!woke&&count>data.rate*0.9){woke=true;postMessage({type:'wake',through:data.through,epoch,startFrame:Math.floor(data.rate*0.3)});postMessage({type:'wake',through:data.through,epoch,startFrame:Math.floor(data.rate*0.3)});}postMessage({type:'processed',through:data.through,epoch});}}`], { type: "text/javascript" }));
-  const worker = new Worker(url);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  return worker;
 };
 
 async function run(): Promise<unknown> {
@@ -88,7 +83,7 @@ async function run(): Promise<unknown> {
       state: state => seen.push(state),
       context: () => { const ctx = new AudioContext(); contexts.push(ctx); return ctx; },
       media: { getUserMedia: async () => { await input.resume(); const stream = input.createMediaStreamDestination().stream; streams.push(stream); return stream; } } as MediaDevices,
-      worker: () => kind === "stale" ? new Worker(URL.createObjectURL(new Blob(["onmessage=({data})=>{if(data.type==='init')postMessage({type:'ready'});}"], { type: "text/javascript" }))) : fakeWorker(kind === "capture-cancel"),
+      worker: () => kind === "stale" ? fakeWorker(false, false) : fakeWorker(kind === "capture-cancel"),
       transcribe: () => { throw new Error("Cancelled or broken capture uploaded audio"); },
       answer: () => Promise.resolve(),
     });
@@ -105,7 +100,41 @@ async function run(): Promise<unknown> {
     lifecycle.push(kind);
   }
   const engine = await probeEngine();
-  return { uploads, said, decodedDuration, preRollPeak, phases: states.map(state => state.phase), denied, teardown: "tracks ended", nonWake: "no upload", playback: "no detector frames", manual: "wake-to-manual lock handoff passed", lifecycle, engine };
+  const realInput = new AudioContext();
+  await realInput.resume();
+  const reference = await realInput.decodeAudioData(await (await fetch("/fixtures/public-speech.wav")).arrayBuffer());
+  const destination = realInput.createMediaStreamDestination();
+  const referenceSource = realInput.createBufferSource();
+  referenceSource.buffer = reference;
+  referenceSource.connect(destination);
+  let sourceStarted = false;
+  let realTranscript = "";
+  let realAnswer = "";
+  let realClipBytes = 0;
+  let realClipDuration = 0;
+  const realStates: WakeState[] = [];
+  const real = new DeskWake(DeskWakeSchema.parse({ ...options, phrase: "EARLY NIGHTFALL", tokens: ["▁E", "AR", "LY", "▁", "N", "IGHT", "F", "AL", "L"], maxCommandMs: 15000 }), {
+    state: state => { realStates.push(state); if (state.phase === "listening" && !sourceStarted) { sourceStarted = true; referenceSource.start(realInput.currentTime + 0.1); } },
+    media: { getUserMedia: () => Promise.resolve(destination.stream) } as MediaDevices,
+    transcribe: async (clip, signal) => {
+      realClipBytes = clip.size;
+      const decoded = await realInput.decodeAudioData(await clip.arrayBuffer());
+      realClipDuration = decoded.duration;
+      const response = await fetch("/__engine_transcribe", { method: "POST", headers: { "content-type": clip.type }, body: clip, signal });
+      const body: unknown = await response.json();
+      if (!response.ok || !body || typeof body !== "object" || !("text" in body) || typeof body.text !== "string") throw new Error("Real-engine browser clip transcription failed");
+      realTranscript = body.text;
+      if (!/\bearly nightfall\b/i.test(realTranscript) || !/yellow lamps/i.test(realTranscript)) throw new Error(`Keyword timestamp did not preserve the matched phrase and following speech: ${realTranscript}`);
+      return realTranscript;
+    },
+    answer: text => { realAnswer = text; return Promise.resolve(); },
+  });
+  try {
+    await real.enable();
+    await until(() => { const state = realStates.at(-1); if (state?.phase === "unavailable") throw new Error(state.line); return realAnswer.length > 0 && state?.phase === "listening"; }, 60000);
+    assert(realClipBytes > 0 && realClipDuration > 1, "Real-engine capture lost the command stream");
+  } finally { real.disable(); await realInput.close(); }
+  return { uploads, said, decodedDuration, preRollPeak, phases: states.map(state => state.phase), denied, teardown: "tracks ended", nonWake: "no upload", playback: "no detector frames", manual: "wake-to-manual lock handoff passed", lifecycle, engine, realEngineCapture: { realTranscript, realAnswer, realClipBytes, realClipDuration, phases: realStates.map(state => state.phase) } };
 }
 
 run().then(result => { document.body.dataset.result = JSON.stringify({ ok: true, result }); document.body.textContent = JSON.stringify(result, null, 2); }).catch((error: unknown) => { document.body.dataset.result = JSON.stringify({ ok: false, error: String(error) }); document.body.textContent = String(error); });

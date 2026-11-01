@@ -11,6 +11,9 @@ const ownershipBundle = await Bun.build({ entrypoints: [join(import.meta.dir, "o
 if (!ownershipBundle.success || !ownershipBundle.outputs[0]) throw new Error("Ownership probe failed to build");
 let adapterCalls = 0;
 let receivedBytes = 0;
+let engineCalls = 0;
+const providerBase = process.argv[2];
+if (providerBase && !["127.0.0.1", "localhost", "[::1]"].includes(new URL(providerBase).hostname)) throw new Error("Configured provider probe must use a loopback Desk");
 const server = Bun.serve({
   hostname: "127.0.0.1", port: 0,
   async fetch(req) {
@@ -20,7 +23,11 @@ const server = Bun.serve({
     if (path === "/ownership.js") return new Response(ownershipBundle.outputs[0]);
     if (path === "/ownership") return new Response('<!doctype html><html><body><button id="enable">Enable</button><button id="disable">Disable</button><script src="/ownership.js"></script></body></html>', { headers: { "content-type": "text/html" } });
     if (["/fixtures/public-speech.wav", "/fixtures/hey-ivy.wav", "/fixtures/non-wake.wav"].includes(path)) return new Response(Bun.file(join(import.meta.dir, path.slice(1))));
-    if (path === "/api/desk/voice/transcribe") return handleDeskTranscribe(req, {
+    if (path === "/__engine_transcribe" && providerBase) {
+      engineCalls++;
+      return fetch(new URL("/api/desk/voice/transcribe", providerBase), { method: "POST", headers: { "content-type": req.headers.get("content-type") ?? "audio/webm" }, body: req.body, signal: req.signal });
+    }
+    if (path === "/api/desk/voice/transcribe" || path === "/__engine_transcribe") return handleDeskTranscribe(req, {
       options: { enabled: true, displayName: "", rangerUrl: "", topN: 5, areas: [], sources: [], voice: { enabled: true, input: "elevenlabs", output: "browser", elevenlabs: { voiceId: "testvoice1", apiKeyEnv: "TEST_UNUSED_KEY", ttsModel: "test", sttModel: "test", timeoutSeconds: 5 } } }, ledger: new HandledLedger(),
     }, {
       readKey: () => Promise.resolve("test-provider-key"),
@@ -28,8 +35,9 @@ const server = Bun.serve({
         if (!(init.body instanceof FormData)) throw new Error("Transcription did not use existing adapter FormData");
         const file = init.body.get("file");
         if (!(file instanceof Blob)) throw new Error("No actual browser recording reached the adapter");
-        receivedBytes = file.size; adapterCalls++;
-        return Response.json({ text: "Hey Ivy what needs me" });
+        if (path === "/__engine_transcribe") engineCalls++;
+        else { receivedBytes = file.size; adapterCalls++; }
+        return Response.json({ text: path === "/__engine_transcribe" ? "EARLY NIGHTFALL the yellow lamps" : "Hey Ivy what needs me" });
       },
     });
     return new Response(`<!doctype html><html><body>${path === "/blank" ? "" : '<script src="/probe.js"></script>'}</body></html>`, { headers: { "content-type": "text/html" } });
@@ -43,8 +51,8 @@ try {
   await page.goto(server.url.toString());
   await page.waitForFunction(() => document.body.dataset.result !== undefined, undefined, { timeout: 180000 });
   const result: unknown = JSON.parse(await page.locator("body").getAttribute("data-result") ?? "null");
-  process.stdout.write(JSON.stringify({ result, states: await page.locator("body").getAttribute("data-state"), adapterCalls, receivedBytes }, null, 2) + "\n");
-  if (!result || typeof result !== "object" || !("ok" in result) || result.ok !== true || adapterCalls !== 1 || !receivedBytes) throw new Error("Browser capture probe failed");
+  process.stdout.write(JSON.stringify({ result, states: await page.locator("body").getAttribute("data-state"), adapterCalls, receivedBytes, engineCalls, realEngineProvider: providerBase ? "configured" : "test" }, null, 2) + "\n");
+  if (!result || typeof result !== "object" || !("ok" in result) || result.ok !== true || adapterCalls !== 1 || engineCalls !== 1 || !receivedBytes) throw new Error("Browser capture probe failed");
   const owner = await context.newPage();
   const competitor = await context.newPage();
   await owner.goto(new URL("/ownership", server.url).toString());

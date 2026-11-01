@@ -1,32 +1,22 @@
-import { chromium } from "playwright";
 import { join } from "node:path";
+import { openLoopbackDesk } from "./probe-common";
 
-const base = process.argv[2];
-if (!base || !["127.0.0.1", "localhost", "[::1]"].includes(new URL(base).hostname)) throw new Error("Provide a loopback Desk preview URL");
-const browser = await chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
+const { base, browser, context, page } = await openLoopbackDesk(process.argv[2]);
 try {
-  const context = await browser.newContext();
   let transcriptions = 0;
   let playbackRequests = 0;
   context.on("request", request => { if (request.url().endsWith("/api/desk/voice/transcribe")) transcriptions++; });
   const fixture = join(import.meta.dir, "fixtures/hey-ivy.wav");
-  await context.route("**/__wake_probe_speech.wav", route => route.fulfill({ path: fixture, contentType: "audio/wav" }));
   await context.route("**/api/desk/voice/speak", route => { playbackRequests++; return route.fulfill({ path: fixture, contentType: "audio/wav" }); });
   await context.addInitScript(() => {
     const streams: MediaStream[] = [];
     Object.defineProperty(navigator.mediaDevices, "getUserMedia", { value: async () => {
-      const audio = new AudioContext();
-      await audio.resume();
-      const buffer = await audio.decodeAudioData(await (await fetch("/__wake_probe_speech.wav")).arrayBuffer());
-      const destination = audio.createMediaStreamDestination();
-      const source = audio.createBufferSource();
-      source.buffer = buffer; source.connect(destination); source.start(audio.currentTime + 0.1);
-      streams.push(destination.stream);
-      return destination.stream;
+      const fixture = await window.createProbeFixture();
+      streams.push(fixture.stream);
+      return fixture.stream;
     } });
     setInterval(() => { if (document.body) document.body.dataset.activeProbeTracks = String(streams.flatMap(stream => stream.getTracks()).filter(track => track.readyState !== "ended").length); }, 50);
   });
-  const page = await context.newPage();
   await page.goto(base);
   const turns: { wakeBefore: string; transcript: string; returnedIdle: boolean }[] = [];
   for (const wakeEnabled of [false, true]) {

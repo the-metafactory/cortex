@@ -2,7 +2,7 @@ import { DeskWakeSchema, WAKE_BPE_SHA } from "../../src/common/types/desk-wake";
 
 export async function probeEngine(): Promise<unknown> {
   const context = new AudioContext();
-  const results: { fixture: string; wakes: number; expected: number }[] = [];
+  const results: { fixture: string; wakes: number; expected: number; startFrames: number[] }[] = [];
   try {
     for (const fixture of [
       { name: "public-speech.wav", phrase: "EARLY NIGHTFALL", tokens: ["▁E", "AR", "LY", "▁", "N", "IGHT", "F", "AL", "L"], expected: 1 },
@@ -13,6 +13,7 @@ export async function probeEngine(): Promise<unknown> {
       let ready = false;
       let processed = 0;
       let wakes = 0;
+      const startFrames: number[] = [];
       let error = "";
       const waitFor = async (claim: () => boolean): Promise<void> => {
         const start = performance.now();
@@ -27,7 +28,11 @@ export async function probeEngine(): Promise<unknown> {
         if (!data || typeof data !== "object" || !("type" in data)) return;
         if (data.type === "ready") ready = true;
         if (data.type === "processed" && "through" in data && typeof data.through === "number") processed = data.through;
-        if (data.type === "wake") wakes++;
+        if (data.type === "wake") {
+          wakes++;
+          if (!("startFrame" in data) || typeof data.startFrame !== "number" || !("through" in data) || typeof data.through !== "number" || data.startFrame < 0 || data.startFrame > data.through) error = "Invalid real Sherpa phrase timestamp";
+          else startFrames.push(data.startFrame);
+        }
         if (data.type === "error" && "message" in data && typeof data.message === "string") error = data.message;
       });
       try {
@@ -45,7 +50,7 @@ export async function probeEngine(): Promise<unknown> {
           worker.postMessage({ type: "audio", samples, rate: decoded.sampleRate, through }, [samples.buffer]);
           await waitFor(() => processed >= through);
         }
-        results.push({ fixture: fixture.name, wakes, expected: fixture.expected });
+        results.push({ fixture: fixture.name, wakes, expected: fixture.expected, startFrames });
         if (wakes !== fixture.expected) throw new Error(`Sherpa fixture ${fixture.name}: ${wakes} wakes, expected ${fixture.expected}`);
       } finally { worker.terminate(); }
     }

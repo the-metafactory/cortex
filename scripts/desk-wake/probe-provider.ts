@@ -1,32 +1,19 @@
-import { chromium } from "playwright";
-import { join } from "node:path";
+import { openLoopbackDesk } from "./probe-common";
 
-const base = process.argv[2];
-if (!base || !["127.0.0.1", "localhost", "[::1]"].includes(new URL(base).hostname)) throw new Error("Provide the loopback Desk URL to test its configured voice provider");
-const browser = await chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
+const { base, browser, page } = await openLoopbackDesk(process.argv[2]);
 try {
-  const context = await browser.newContext();
-  await context.route("**/__wake_probe_speech.wav", route => route.fulfill({ path: join(import.meta.dir, "fixtures/hey-ivy.wav"), contentType: "audio/wav" }));
-  const page = await context.newPage();
   await page.goto(base);
   const result = await page.evaluate(async () => {
-    const audio = new AudioContext();
-    await audio.resume();
-    const buffer = await audio.decodeAudioData(await (await fetch("/__wake_probe_speech.wav")).arrayBuffer());
-    const destination = audio.createMediaStreamDestination();
-    const source = audio.createBufferSource();
-    source.buffer = buffer;
-    source.connect(destination);
-    const recorder = new MediaRecorder(destination.stream);
+    const fixture = await window.createProbeFixture();
+    const recorder = new MediaRecorder(fixture.stream);
     const chunks: Blob[] = [];
     recorder.ondataavailable = event => chunks.push(event.data);
     recorder.start();
-    await new Promise<void>(resolve => { source.onended = () => resolve(); source.start(); });
+    await fixture.ended;
     await new Promise(resolve => setTimeout(resolve, 200));
     await new Promise<void>(resolve => { recorder.onstop = () => resolve(); recorder.stop(); });
     const clip = new Blob(chunks, { type: recorder.mimeType });
-    destination.stream.getTracks().forEach(track => track.stop());
-    source.disconnect(); destination.disconnect(); await audio.close();
+    await fixture.stop();
     const response = await fetch("/api/desk/voice/transcribe", { method: "POST", headers: { "content-type": clip.type }, body: clip });
     const body: unknown = await response.json();
     if (!response.ok || !body || typeof body !== "object" || !("text" in body) || typeof body.text !== "string") throw new Error(`Configured transcription refused the generated browser clip: HTTP ${response.status}`);
