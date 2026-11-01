@@ -30,7 +30,7 @@ export const MyDayMetaSchema = z.object({
   studio: z.array(studioThread).default([]),
   revision: z.number().int().nonnegative().default(0),
   inbox: z.array(z.object({ id, title: z.string(), weight: z.number(), ordering: z.literal("parallel"), children: z.tuple([]), effort: z.literal(1), note: z.string(), dueDate: z.iso.date().optional() })).default([]),
-  draft: z.object({ date: z.iso.date(), ids: z.array(id) }).nullable().default(null),
+  draft: z.object({ date: z.iso.date(), ids: z.array(id), origin: z.enum(["engine", "person", "studio-unavailable"]).default("engine") }).nullable().default(null),
   sources: z.array(source).default([]),
   receipts: z.array(z.object({ id: id, payload: z.string(), undo: z.string().optional() })).default([]),
   undos: z.array(undo).default([]),

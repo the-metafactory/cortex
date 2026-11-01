@@ -15,8 +15,9 @@ import { readStudioMyDay } from "../desk/studio-my-day";
 import { parseThreadFile, type StudioThread } from "../desk/studio/format";
 import { acquireStudioLock } from "../desk/studio/write-lock";
 import { StudioWriteLock, runStudioAct } from "../desk/studio/writer";
+import { handleDeskMyDay } from "../api/desk-my-day";
 import { handleDeskStudioAct } from "../api/desk-studio-act";
-import type { DeskOptions, DeskRuntime } from "../desk/compose";
+import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
 import { MyDayLane } from "../dashboard-v2/components/desk-my-day";
 import { HandledLedger } from "../desk/actions";
 
@@ -234,9 +235,10 @@ test("duplicate owned source UUIDs refuse actual response writes without credit"
 test("a successful source projection seeds an empty proposed draft after an unavailable first read", () => {
   const db = initDatabase(":memory:");
   try {
-    expect(readMyDay(db, desk, now).items).toHaveLength(0);
+    const configured = { ...desk, studio: { dir: "/unavailable-studio", maxActive: 5 } };
+    expect(readMyDay(db, configured, now).items).toHaveLength(0);
     const input: StudioProjection = { namespace: "source", threads: [thread()] };
-    expect(readMyDay(db, desk, now, input).items).toHaveLength(1);
+    expect(readMyDay(db, configured, now, input).items).toHaveLength(1);
     const started = changeMyDay({ db, desk, now, date: localDay(now), requestId: crypto.randomUUID(), command: { op: "start", ids: [] }, studio: input });
     expect(started.view.items).toHaveLength(0);
     expect(readMyDay(db, desk, now, input).items).toHaveLength(0);
@@ -285,5 +287,55 @@ test("an unreadable different source does not block parking a healthy thread", a
     expect(parsed.ok && parsed.value.state).toBe("parked");
     expect((await readStudioMyDay(db, repo.options, now)).studioStatus).toBe("unavailable");
     expect(loadBalanceState(db)?.log ?? []).toHaveLength(0);
+  } finally { db.close(); }
+});
+
+test("an explicitly cleared proposed day stays empty with Studio disabled or enabled", async () => {
+  const repo = await repository();
+  for (const options of [desk, repo.options]) {
+    const db = initDatabase(":memory:");
+    try {
+      const seeded = state(); first(seeded.outline.children).children.push({ id: "chosen", title: "My chosen task", weight: 50, ordering: "parallel", children: [], effort: 1 });
+      saveBalanceState(db, seeded); await readStudioMyDay(db, options, now);
+      const cleared = changeMyDay({ db, desk: options, now, date: localDay(now), requestId: crypto.randomUUID(), command: { op: "draft", ids: [] } });
+      expect(cleared.view.items).toHaveLength(0);
+      expect((await readStudioMyDay(db, options, now)).items).toHaveLength(0);
+    } finally { db.close(); }
+  }
+});
+
+test("clearing an unavailable-created draft cancels later automatic recovery", async () => {
+  const repo = await repository(); const db = initDatabase(":memory:");
+  try {
+    const release = await acquireStudioLock(repo.dir); if (!release) throw new Error("Missing fixture lock");
+    try {
+      expect((await readStudioMyDay(db, repo.options, now)).studioStatus).toBe("unavailable");
+      changeMyDay({ db, desk: repo.options, now, date: localDay(now), requestId: crypto.randomUUID(), command: { op: "draft", ids: [] } });
+    } finally { await release(); }
+    const recovered = await readStudioMyDay(db, repo.options, now);
+    expect(recovered.studioStatus).toBe("synced"); expect(recovered.items).toHaveLength(0);
+  } finally { db.close(); }
+});
+
+test("Desk composition derives the outline and briefing from one readable Studio snapshot", async () => {
+  const repo = await repository(); const db = initDatabase(":memory:");
+  try {
+    const view = await composeDesk(db, repo.options, undefined, { now });
+    expect(view.studioBriefing).toContain("Which sketch");
+    expect(view.myDay?.studioStatus).toBe("synced");
+    expect(view.myDay?.items.map(i => i.task.title)).toEqual(["Respond to Ivy on Which sketch?"]);
+  } finally { db.close(); }
+});
+
+test("an engine Refresh while Studio is unavailable recovers its empty proposal once", async () => {
+  const repo = await repository(); const db = initDatabase(":memory:");
+  try {
+    const release = await acquireStudioLock(repo.dir); if (!release) throw new Error("Missing fixture lock");
+    try {
+      await readStudioMyDay(db, repo.options, now);
+      const response = await handleDeskMyDay(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ date: localDay(now), requestId: crypto.randomUUID(), command: { op: "propose" } }) }), db, { options: repo.options, ledger: new HandledLedger() }, undefined, now);
+      expect(response.status).toBe(200);
+    } finally { await release(); }
+    expect((await readStudioMyDay(db, repo.options, now)).items).toHaveLength(1);
   } finally { db.close(); }
 });

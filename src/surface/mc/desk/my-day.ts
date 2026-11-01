@@ -60,6 +60,9 @@ function configuredState(state: AppState, desk: DeskOptions): AppState {
   const ids = new Set(desk.areas.map(a => `area:${a.id}`));
   return { ...state, outline: { ...state.outline, children: state.outline.children.filter(n => ids.has(n.id)) } };
 }
+function engineDraft(state: AppState, desk: DeskOptions, date: string, studio?: StudioProjection): NonNullable<MyDayMeta["draft"]> {
+  return { date, ids: selectToday(configuredState(state, desk), date).map(i => i.task.id), origin: desk.studio && !studio ? "studio-unavailable" : "engine" };
+}
 function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, studio?: StudioProjection): MyDayView {
   const state = configuredState(storedState, desk);
   const day = state.dayState?.date === date ? state.dayState : null;
@@ -86,7 +89,7 @@ export function readMyDay(db: Database, desk: DeskOptions, now: number, studio?:
     const meta = loadMeta(db);
     const state = stateFor(db, desk, date, meta, studio);
     state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
-    if (state.dayState?.date !== date && (meta.draft?.date !== date || (studio && !meta.draft.ids.length))) meta.draft = { date, ids: selectToday(configuredState(state, desk), date).map(i => i.task.id) };
+    if (state.dayState?.date !== date && (meta.draft?.date !== date || (studio?.namespace && meta.draft.origin === "studio-unavailable" && !meta.draft.ids.length))) meta.draft = engineDraft(state, desk, date, studio);
     saveMeta(db, meta);
     saveBalanceState(db, state);
     return viewOf(state, meta, desk, date, studio);
@@ -168,7 +171,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
       case "start": {
         if (state.dayState?.date === date) throw new Error("Your day is already started.");
         validateSelection(configuredState(state, desk), date, command.ids);
-        meta.draft = { date, ids: command.ids };
+        meta.draft = { date, ids: command.ids, origin: "person" };
         if (command.op === "start") {
           state.history = applyDayToHistory(configuredState(state, desk), date, command.ids);
           state.dayState = { date, confirmed: command.ids, closed: false };
@@ -222,7 +225,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         break;
       case "propose":
         if (state.dayState?.date === date) throw new Error("Your day is already started.");
-        meta.draft = { date, ids: selectToday(configuredState(state, desk), date).map(i => i.task.id) };
+        meta.draft = engineDraft(state, desk, date, studio);
         break;
       case "reset-caps":
         meta.caps = null;
@@ -257,7 +260,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         edit(state, command, date);
         break;
     }
-    if ((command.op === "add" || command.op === "file") && !meta.draft?.ids.length && state.dayState?.date !== date) meta.draft = { date, ids: selectToday(configuredState(state, desk), date).map(i => i.task.id) };
+    if ((command.op === "add" || command.op === "file") && !meta.draft?.ids.length && state.dayState?.date !== date) meta.draft = engineDraft(state, desk, date, studio);
     meta.revision += 1;
     meta.receipts.push({ id: requestId, payload, ...(undo ? { undo } : {}) });
     saveBalanceState(db, state);
