@@ -8,7 +8,7 @@ import type { RoutineView } from "./routine-command";
 
 export type DeskUrgency = "now" | "today" | "this-week" | "waiting";
 
-export const DESK_ITEM_KINDS = ["goal", "sensor", "agent-failed", "agent-blocked", "decision", "grilling", "escalation", "mail", "reminder", "meeting", "mail-rule"] as const;
+export const DESK_ITEM_KINDS = ["goal", "sensor", "agent-failed", "agent-blocked", "decision", "grilling", "escalation", "mail", "reminder", "meeting", "mail-rule", "dmarc"] as const;
 
 export type DeskItemKind = (typeof DESK_ITEM_KINDS)[number];
 
@@ -141,6 +141,7 @@ export interface DeskGoal {
 export interface DeskView {
   routines?: RoutineView;
   mailRules?: import("./mail-rules").MailRuleView[];
+  dmarc?: import("./mail-dmarc").DmarcWeek;
   myDay?: MyDayView;
   mirror?: import("./mirror").WeeklyMirror;
   calendars?: DeskCalendar[];

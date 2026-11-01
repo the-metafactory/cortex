@@ -7,7 +7,7 @@ import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
-import { submitDeskAction, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
+import { submitDeskAction, submitDmarcAck, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
 import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
 import { newReplyDraft, prepareDeclineDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
 import { chimeForNew } from "../lib/desk-chime";
@@ -320,10 +320,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.draft" && item.reply) openReply(item);
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
     else if (a.id.startsWith("mailrule.")) runRule(item, a);
+    else if (a.id === "dmarc.ack" && a.target) acknowledge(item, a, a.target);
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
   };
+
+  const acknowledge = (item: DeskItem, a: DeskAction, report: string): void => void send(item, a, { request: () => submitDmarcAck(report) });
 
   const runRule = (item: DeskItem, a: DeskAction): void => {
     const op = a.id.slice("mailrule.".length);
@@ -702,6 +705,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             ) : (
               view.systems.map((s) => <p key={s} className="desk-health"><i />{s}</p>)
             )}
+            {view.dmarc && <p className={view.dmarc.failures === 0 ? "desk-health ok" : "desk-health"}>{view.dmarc.failures === 0 ? null : <i />}{view.dmarc.line}</p>}
             <button type="button" className="desk-mline desk-mc" onClick={onOpenMissionControl}>
               Open Mission Control <span className="desk-chev">›</span>
             </button>

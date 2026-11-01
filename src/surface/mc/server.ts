@@ -80,6 +80,8 @@ import { handleGetDesk } from "./api/desk";
 import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
 import { handleDeskMail } from "./api/desk-mail";
 import { handleDeskMailRules } from "./api/desk-mail-rules";
+import { handleDeskDmarc } from "./api/desk-dmarc";
+import { DmarcLoop } from "./desk/mail-dmarc";
 import { DEFAULT_MAIL_RULES, MailRuleLoop } from "./desk/mail-rules";
 import { handleDeskCorrections } from "./api/desk-corrections";
 import { handleDeskAction, handleDeskAutonomy } from "./api/desk-action";
@@ -197,12 +199,15 @@ export function startServer(
   const deskMailRules: MailRuleLoop | undefined = options.desk?.mailActions?.move?.length
     ? new MailRuleLoop({ db, mailActions: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, config: options.desk.mailRules ?? DEFAULT_MAIL_RULES }, (): SourceReading[] => deskSourceCache.cached())
     : undefined;
+  const deskDmarc: DmarcLoop | undefined = deskMailRules && options.desk?.mailDmarc
+    ? new DmarcLoop({ db, config: options.desk.mailDmarc, mailActions: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, log: console.error }, (): SourceReading[] => deskSourceCache.cached())
+    : undefined;
   const deskSourceCache: SourceCache = new SourceCache(spawnCommand, deskClientMail || deskMailRules ? (prev, next) => {
     void deskClientMail?.observe(prev, next);
-    void deskMailRules?.kick();
+    void deskMailRules?.kick().then(() => deskDmarc?.kick());
   } : undefined);
   const deskRecentWrites = new RecentCalendarWrites();
-  const deskRuntime: DeskRuntime = { waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}) };
+  const deskRuntime: DeskRuntime = { waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(deskDmarc ? { dmarc: deskDmarc } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}) };
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
@@ -504,6 +509,8 @@ async function handleApi(
   if (pathname === "/api/desk/mail") return handleDeskMail(req, db, desk);
 
   if (pathname === "/api/desk/mail/rules") return handleDeskMailRules(req, db, desk);
+
+  if (pathname === "/api/desk/mail/dmarc") return handleDeskDmarc(req, db, desk);
 
   if (pathname === "/api/desk/corrections") return handleDeskCorrections(req, url, db);
 
