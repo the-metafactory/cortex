@@ -117,7 +117,7 @@ export function DeskRoutineEditor({ onBack }: { onBack: () => void }) {
   const [detail, setDetail] = useState<RoutineDetail | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const selectedId = useRef<string | null>(null);
-  const choose = (id: string | null): void => { selectedId.current = id; setSelected(id); };
+  const choose = (id: string | null): void => { selectedId.current = id; setSelected(id); if (id === null) setLoading(false); };
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const load = async (): Promise<void> => {
