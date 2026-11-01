@@ -26,7 +26,7 @@ The redacted default-stack configuration and `GET /api/desk` were read at approx
 ## Shared contracts used by the matrix
 
 - **MC gate:** every non-exempt mutation passes Host/Origin rebinding protection and identity authorization. Desk routes are not the webhook exemption [C2][C21]. This is not a conversation-specific grant system.
-- **Desk confirmation:** `POST /api/desk/ask` produces a proposal. `POST /api/desk/create` validates its card, request ID, configured kind, and allowed task map before invoking a writer [C3]. The generic writer receives JSON `{kind, fields, requestId}` and must return `{id, url?, message?}` [C4].
+- **Desk confirmation:** `POST /api/desk/ask` produces a proposal. `POST /api/desk/create` validates its card, request ID, configured kind, and allowed task map before invoking a writer [C3]. The generic writer receives JSON `{kind, fields, requestId}` and must return `{id, url?, message?}` [C4][A6].
 - **Desk replay:** the generic API uses a process-local handled/running ledger, not a durable result journal. Timeout or unreadable success consumes the key as uncertain; a writer's nonzero exit does not. A restart loses that API ledger. The generic success response retains the message and optional URL but drops the writer's canonical `id` [C3][C4][C5]. Owner guarantees must be assessed separately.
 - **Studio transaction:** configured Git repository, in-process and filesystem locks, a clean-tree/HEAD check, planned file validation, and a commit with `Desk-Request` trailer [C19]. A matching request ID replays a prior commit. The transaction does not compare the new payload with the old one, so this is not conflicting-payload validation [C6]. Caught write/commit errors restore paths; a process kill between file writes is not proven atomic by that rollback path.
 - **Balance transaction:** the My day API validates `{date, requestId: UUID, command}`. The owner compares a persisted receipt's serialized payload, refuses conflicting reuse, and saves state plus receipt in one immediate SQLite transaction. Outline commands additionally carry a revision [C7][C8]. This records operation identity, not a conversation/exchange link.
@@ -123,11 +123,11 @@ Source-reference validation is reproducible with the committed checker:
 python3 verify.py --repos-dir <directory-containing-source-checkouts> --discord-dir <installed-discord-source-checkout>
 ```
 
-It checks each pinned Git commit/path and line bound, reference definitions, and the matrix cells for a citation or explicit unknown/unsupported marker. It does not establish that a claim follows from those lines; the source and review remain necessary. [source-check.json](source-check.json) contains the captured result. The [negative check](negative-check.json) used a scratch copy with a nonexistent source path and exited 1 as expected. No mutation was made to a source checkout.
+It checks each pinned Git commit/path and line bound, reference definitions, and the O01–O25 creation-matrix cells for a citation or explicit unknown/unsupported marker. The Discord capability and gap tables require source review; this checker does not validate their cells. Malformed source references and unknown repository roots are reported as issues. W2 is an explicit issue-link exception. It does not establish that a claim follows from those lines; the source and review remain necessary. [source-check.json](source-check.json) contains the captured result. The [negative checks](negative-check.json) use temporary documents with a missing source path, malformed commit, unknown repository, or no content. Each exited 1 as expected. No mutation was made to a source checkout.
 
 ## Exact source references
 
-Each label is an immutable source link. Line ranges are intentionally narrow enough to check the associated claim; additional test entries identify source coverage, not proof of live integration.
+Each label is an immutable source link. Some references span a small test file or an owner contract rather than one claim. The matrix names the behavior to locate in those ranges. Test entries identify source coverage, not proof of live integration.
 
 [C1]: https://github.com/the-metafactory/cortex/blob/32f0d082fe129feaa97f8aa239f17c7c9c322d82/src/common/types/config.ts#L433-L492
 [C2]: https://github.com/the-metafactory/cortex/blob/32f0d082fe129feaa97f8aa239f17c7c9c322d82/src/surface/mc/server.ts#L441-L448

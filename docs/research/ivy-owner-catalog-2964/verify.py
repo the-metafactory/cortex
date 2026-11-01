@@ -18,18 +18,29 @@ text = doc.read_text()
 refs = re.findall(r'^\[([A-Z]+\d+)\]: https://github.com/the-metafactory/([^/]+)/blob/([0-9a-f]{40})/([^#]+)#L(\d+)-L(\d+)$', text, re.M)
 issues = []
 records = []
+definitions = set(re.findall(r'^\[([A-Z]+\d+)\]:', text, re.M))
+validated = {ref[0] for ref in refs}
+for label in sorted(definitions - validated - {'W2'}):
+    issues.append({'invalidSourceReference': label})
+if not refs:
+    issues.append({'missingSourceReferences': True})
 for label, repo, sha, path, first, last in refs:
-    source = subprocess.run(['git', '-C', str(roots[repo]), 'show', sha + ':' + path], text=True, capture_output=True)
+    root = roots.get(repo)
+    if root is None:
+        issues.append({'missingRepositoryRoot': repo, 'label': label})
+        continue
+    source = subprocess.run(['git', '-C', str(root), 'show', sha + ':' + path], text=True, capture_output=True)
     lines = source.stdout.splitlines()
     valid = source.returncode == 0 and 0 < int(first) <= int(last) <= len(lines)
     records.append({'label': label, 'repo': repo, 'sha': sha, 'path': path, 'first': int(first), 'last': int(last), 'lineCount': len(lines), 'valid': valid})
     if not valid:
         issues.append(records[-1])
-definitions = set(re.findall(r'^\[([A-Z]+\d+)\]:', text, re.M))
 uses = set(re.findall(r'(?<!^)\[([A-Z]+\d+)\](?!:)', text, re.M))
 if uses - definitions:
     issues.append({'undefined': sorted(uses - definitions)})
 rows = [line for line in text.splitlines() if re.match(r'^\| O\d\d ', line)]
+if not rows:
+    issues.append({'missingCreationRows': True})
 for row in rows:
     cells = [cell.strip() for cell in row.split('|')[1:-1]]
     if len(cells) != 6 or any(not cell for cell in cells):
