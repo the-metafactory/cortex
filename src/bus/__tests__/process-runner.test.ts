@@ -13,7 +13,7 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, unlinkSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Envelope } from "../myelin/envelope-validator";
@@ -201,6 +201,54 @@ describe("createProcessRunner", () => {
     expect(sp.calls[0]!.cmd).toContain("7");
     expect(outcomes(published)).toEqual(["started", "completed"]);
     expect(last(published)!.process).toBe("build-journal");
+  });
+
+  test.each([false, true])("snapshots enum-constrained execution inputs before started and retains them after deletion; default=%s", async (useDefault) => {
+    const root = mkdtempSync(join(tmpdir(), "process-snapshot-"));
+    const file = join(root, "routine.yaml"); writeFileSync(file, "owned definition");
+    const { runtime, published } = fakeRuntime(); let snapshot: string | undefined;
+    const spec: ProcessSpec = { ...SPEC, cwd: root, argv: ["bun", "-e", "await Bun.sleep(50); if (await Bun.file(process.argv[1]).text() !== 'owned definition') process.exit(1)", "{flow}"], params: { flow: { type: "string", enum: [file], ...(useDefault ? { default: file } : {}) } }, snapshot_inputs: { flow: root } };
+    const spawn: Spawn = (cmd, options) => {
+      snapshot = cmd.at(-1);
+      expect(snapshot).not.toBe(file); expect(snapshot && readFileSync(snapshot, "utf8")).toBe("owned definition");
+      unlinkSync(file);
+      const child = Bun.spawn(cmd, { cwd: options.cwd, env: options.env, stdout: "pipe", stderr: "pipe" });
+      return { exited: child.exited, kill: () => { child.kill(); } };
+    };
+    try {
+      await createProcessRunner({ runtime, source: SOURCE, processesDir: root, loadSpec: () => spec, spawn })(activation(useDefault ? {} : { flow: file }), target());
+      await flush(); expect(outcomes(published)).toEqual(["started", "completed"]);
+      expect(readdirSync(root)).toEqual([]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("validates original source enums and all parameters before snapshot access", async () => {
+    const { runtime, published } = fakeRuntime(); const sp = fakeSpawn(); let captures = 0;
+    const handler = createProcessRunner({ runtime, source: SOURCE, processesDir: "/unused", loadSpec: () => ({ ...SPEC, snapshot_inputs: { flow: "/allowed" }, params: { flow: { type: "string", enum: ["/allowed/source.yaml"] }, days: { type: "int" } } }), spawn: sp.spawn,
+      snapshotInputs: (_inputs, payload) => { captures++; return Promise.resolve({ payload, cleanup: () => Promise.resolve() }); },
+    });
+    await handler(activation({ flow: "/not-allowed/source.yaml", days: 1 }), target());
+    await handler(activation({ flow: "/allowed/source.yaml", days: "wrong" }), target());
+    await flush(); expect(captures).toBe(0); expect(sp.calls).toEqual([]); expect(outcomes(published)).toEqual(["failed", "failed"]);
+  });
+
+  test("refuses missing execution snapshots before started or spawn", async () => {
+    const { runtime, published } = fakeRuntime(); const sp = fakeSpawn();
+    const spec: ProcessSpec = { ...SPEC, snapshot_inputs: { days: "/unavailable" } };
+    await createProcessRunner({ runtime, source: SOURCE, processesDir: "/unused", loadSpec: () => spec, spawn: sp.spawn })(activation({ days: 7 }), target());
+    await flush(); expect(sp.calls).toEqual([]); expect(outcomes(published)).toEqual(["failed"]);
+  });
+
+  test.each([false, true])("snapshot cleanup failure preserves terminal evidence and produces diagnostics: detach=%s", async (detach) => {
+    const { runtime, published } = fakeRuntime(); const sp = fakeSpawn(); const diagnostics: string[] = [];
+    const handler = createProcessRunner({ runtime, source: SOURCE, processesDir: "/unused", loadSpec: () => ({ ...SPEC, detach }), spawn: sp.spawn,
+      snapshotInputs: async (_inputs, payload) => ({ payload, cleanup: async () => { throw new Error("retained snapshot /owned/.execution-fixture cleanup denied"); } }),
+      log: { info: () => undefined, error: (message) => { diagnostics.push(message); } },
+    });
+    await handler(activation({ days: 7 }), target()); await flush(); await flush();
+    expect(outcomes(published)).toEqual(["started", "completed"]);
+    expect(diagnostics).toEqual([expect.stringContaining("input-snapshot-cleanup-failed")]);
+    expect(diagnostics[0]).toContain("/owned/.execution-fixture");
   });
 
   test("every visibility event of one run carries the same started_at", async () => {

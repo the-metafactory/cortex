@@ -3,7 +3,7 @@ import { postJson } from "../lib/api";
 import type { RoutineAction, LegacyRoutineAction } from "../../desk/routine-store";
 import type { RoutineView } from "../../desk/routine-command";
 
-type RoutineButtonProps = { children: string; onChanged: () => void; retryId?: string } & ({ request: RoutineAction; action?: never; target?: never } | { request?: never; action: LegacyRoutineAction["action"]; target: string });
+type RoutineButtonProps = { children: string; onChanged: () => void; onCompleted?: (request: RoutineAction) => void; retryId?: string } & ({ request: RoutineAction; action?: never; target?: never } | { request?: never; action: LegacyRoutineAction["action"]; target: string });
 export function RoutineButton(props: RoutineButtonProps) {
   const { children, onChanged, retryId } = props;
   const requestId = useRef(retryId ?? props.request?.requestId ?? crypto.randomUUID());
@@ -18,7 +18,7 @@ export function RoutineButton(props: RoutineButtonProps) {
       const result = await postJson<RoutineAction, { ok?: boolean } | null>("/api/desk/routines", request);
       if (result?.ok !== true) throw new Error("The routine result was not confirmed. Retry this same action.");
       if (retryId === undefined) requestId.current = crypto.randomUUID();
-      onChanged();
+      props.onCompleted?.(request); onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "The routine action did not answer.");
     } finally {
@@ -28,8 +28,8 @@ export function RoutineButton(props: RoutineButtonProps) {
   return <><button className="desk-btn" type="button" disabled={busy} onClick={() => void act()}>{busy ? "Checking…" : children}</button>{error && <p role="alert">{error}</p>}</>;
 }
 
-export function PendingRoutineChanges({ changes, onChanged }: { changes: RoutineAction[]; onChanged: () => void }) {
-  return <>{changes.map((change) => <p key={change.requestId}>A routine change is awaiting confirmation. <RoutineButton request={change} retryId={change.requestId} onChanged={onChanged}>Check pending change</RoutineButton></p>)}</>;
+export function PendingRoutineChanges({ changes, onChanged, onCompleted }: { changes: RoutineAction[]; onChanged: () => void; onCompleted?: (request: RoutineAction) => void }) {
+  return <>{changes.map((change) => <p key={change.requestId}>A routine change is awaiting confirmation. <RoutineButton request={change} retryId={change.requestId} onChanged={onChanged} onCompleted={onCompleted}>Check pending change</RoutineButton></p>)}</>;
 }
 
 export function RoutinesSection({ view, onChanged }: { view: RoutineView | undefined; onChanged: () => void }) {
@@ -53,7 +53,7 @@ export function RoutinesSection({ view, onChanged }: { view: RoutineView | undef
           {r.lastDecision && <small>Last fire: {r.lastDecision.outcome}{r.lastDecision.reason ? ` — ${r.lastDecision.reason}` : ""}.</small>}
           <div className="desk-acts">
             <RoutineButton key={`${r.id}:${r.policy}`} action={r.policy === "auto" ? "stop" : "auto"} target={r.id} onChanged={onChanged}>{r.policy === "auto" ? "Stop" : "Handle this yourself"}</RoutineButton>
-            <RoutineButton action="remove" target={r.id} onChanged={onChanged}>Remove</RoutineButton>
+            <a className="desk-btn" href={`?routines=workspace&routine=${encodeURIComponent(r.id)}`}>Open routine workspace</a>
           </div>
         </div></li>)}
       </ul>

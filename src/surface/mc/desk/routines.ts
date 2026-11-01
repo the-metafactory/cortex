@@ -1,3 +1,4 @@
+import { actOnRoutineRemoval, reconcileRemoval } from "./routine-removal";
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -11,7 +12,7 @@ import { spawnWithStdin } from "./create";
 import { routineSchedule } from "./routine-schedule";
 import { requireRoutineCapabilities, type RoutineCapabilities } from "./routine-providers";
 import { routineStepLabels } from "./routine-steps";
-import { PendingRoutineSchema, RoutineHistorySchema, RoutineSchema, RoutineRefusal, RoutineWriteFailure, reflexCommand, runRoutineCommand, type RoutineOptions, type RoutineRunner, type RoutineView } from "./routine-command";
+import { PendingRoutineSchema, RoutineHistorySchema, RoutineSchema, RoutineRefusal, reflexCommand, runRoutineCommand, type RoutineOptions, type RoutineRunner, type RoutineView } from "./routine-command";
 import { checkRoutineOperation, claimRoutineOperation, finishRoutineOperation, pendingRoutineOperations, readRoutineOperation, readRoutineProposal, routineConfigHash, routineOperationBinding, saveRoutineProposal, type RoutineAction, type LegacyRoutineAction, type RoutineProposal, type RoutineResult } from "./routine-store";
 import { actOnRoutineLifecycle, reconcileLifecycle } from "./routine-lifecycle";
 import { actOnRoutineSchedule, reconcileSchedule } from "./routine-schedule-editor";
@@ -68,7 +69,7 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
       await Promise.all(operations.slice(offset, offset + 4).map(async (operation) => {
         if ("revision" in operation) {
           try {
-            const confirmed = operation.action === "schedule" ? await reconcileSchedule(options, operation, run) : await reconcileLifecycle(options, operation, run);
+            const confirmed = operation.action === "delete" ? await reconcileRemoval(options, operation, run) : operation.action === "schedule" ? await reconcileSchedule(options, operation, run) : await reconcileLifecycle(options, operation, run);
             if (confirmed) finishRoutineOperation(db, operation.requestId, confirmed);
           } catch {
             return;
@@ -166,7 +167,8 @@ async function reconcileAndFinish(db: Database, options: RoutineOptions, request
 }
 
 export async function actOnRoutine(db: Database, options: RoutineOptions, request: RoutineAction, now: number, run: RoutineRunner = spawnWithStdin, capabilities?: RoutineCapabilities): Promise<RoutineResult> {
-  if ("revision" in request) return request.action === "schedule" ? actOnRoutineSchedule(db, options, request, run) : actOnRoutineLifecycle(db, options, request, run);
+  if ("revision" in request) return request.action === "delete" ? actOnRoutineRemoval(db, options, request, run) : request.action === "schedule" ? actOnRoutineSchedule(db, options, request, run) : actOnRoutineLifecycle(db, options, request, run);
+  if (request.action === "remove") return { ok: false, error: "Open this routine in Routine workspace and confirm Delete with its current revision." };
   const proposal = request.action === "install" ? readRoutineProposal(db, request.target) : null;
   if (request.action === "install" && (proposal?.configHash !== routineConfigHash(options))) return { ok: false, error: "Prepare this routine again before confirming it." };
   const binding = routineOperationBinding(options, request);
@@ -209,10 +211,6 @@ export async function actOnRoutine(db: Database, options: RoutineOptions, reques
     try {
       const confirmed = await reconcileAndFinish(db, options, request, proposal, run);
       if (confirmed) return confirmed;
-      if (error instanceof RoutineWriteFailure && request.action === "remove") {
-        db.query("DELETE FROM desk_routine_operations WHERE request_id = ? AND result IS NULL").run(request.requestId);
-        return { ok: false, error: `Reflex could not finish removing this routine. Retry Remove after repairing the cause: ${error.message}` };
-      }
     } catch {
       return { ok: false, error: `${UNKNOWN} ${failure(error)}`, uncertain: true };
     }

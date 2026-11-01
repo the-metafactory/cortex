@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { snapshotProcessInputs } from "../../bus/process-input-snapshot";
 import { Command } from "commander";
 import { InMemoryAgentTransport } from "pulse";
 import { loadProcessSpec, resolveArgv } from "../../bus/process-runner";
@@ -43,6 +44,21 @@ describe("routine flow execution", () => {
     const f = await fixture();
     await executeRoutineFlow(f);
     expect(await readFile(f.sentinel, "utf8")).toBe("selected");
+  });
+
+  test("retained execution inputs preserve nested steps and installed relative action imports after deletion", async () => {
+    const f = await fixture();
+    await writeFile(join(f.selected, "helper.ts"), 'export const value = "relative asset";');
+    await writeFile(join(f.selected, "action.ts"), `import { value } from "./helper.ts"; export default { async execute(input) { await Bun.write(${JSON.stringify(f.sentinel)}, value); return input; } };`);
+    await writeFile(f.flow, "name: F_PROBE\nactions:\n  - retry: # sovereignty: D, residency: CH\n      attempts: 1\n      actions:\n        - A_PROBE # sovereignty: D, residency: CH\n");
+    const retained = await snapshotProcessInputs({ flow: f.flowsDir }, { flow: f.flow });
+    const file = retained.payload.flow;
+    if (typeof file !== "string") throw new Error("Execution snapshot missing");
+    try {
+      await rm(f.flow);
+      await executeRoutineFlow({ ...f, flow: file });
+      expect(await readFile(f.sentinel, "utf8")).toBe("relative asset");
+    } finally { await retained.cleanup(); }
   });
 
   test("a trusted inventory file drives execution and missing or invalid files have no fallback", async () => {
