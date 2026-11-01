@@ -1,4 +1,4 @@
-import { RoutineOccurrencePageSchema, type RoutineOccurrencePage } from "../../desk/routine-occurrence-contract";
+import { createRoutineOccurrencePageSchema, type RoutineOccurrencePage } from "../../desk/routine-occurrence-contract";
 import type { CalendarView } from "../hooks/use-routines-location";
 import { getJson } from "./api";
 
@@ -47,14 +47,16 @@ export function calendarWindows(days: string[], timezone: string): { start: stri
 export interface CalendarRead { occurrences: CalendarOccurrence[]; complete: boolean }
 export async function readCalendar(options: { days: string[]; timezone: string; signal: AbortSignal; read?: typeof getJson }): Promise<CalendarRead> {
   const occurrences: CalendarOccurrence[] = []; const seen = new Set<string>();
+  const pageSchema = createRoutineOccurrencePageSchema();
   let scope: string | null = null;
   for (const window of calendarWindows(options.days, options.timezone)) {
     let cursor: string | null = null; const cursors = new Set<string>(); let complete = false;
     for (let pageNumber = 0; pageNumber < 20 && occurrences.length < 20000; pageNumber++) {
-      const query = new URLSearchParams({ ...window, timezone: options.timezone, limit: "1000", ...(cursor ? { cursor } : {}) });
-      const page = RoutineOccurrencePageSchema.parse(await (options.read ?? getJson)(`/api/desk/routine-occurrences?${query}`, { signal: options.signal }));
+      const limit = Math.min(1000, 20000 - occurrences.length);
+      const query = new URLSearchParams({ ...window, timezone: options.timezone, limit: String(limit), ...(cursor ? { cursor } : {}) });
+      const page = pageSchema.parse(await (options.read ?? getJson)(`/api/desk/routine-occurrences?${query}`, { signal: options.signal }));
       const pageScope = JSON.stringify([page.owner, page.principal, page.stack]);
-      if ((scope !== null && scope !== pageScope) || page.start !== window.start || page.end !== window.end || page.timezone !== options.timezone || page.complete !== (page.nextCursor === null) || (!page.complete && !page.occurrences.length)) throw new Error("The routine owner returned inconsistent calendar pages. Refresh the calendar.");
+      if ((scope !== null && scope !== pageScope) || page.start !== window.start || page.end !== window.end || page.timezone !== options.timezone || page.occurrences.length > limit || page.complete !== (page.nextCursor === null) || (!page.complete && !page.occurrences.length)) throw new Error("The routine owner returned inconsistent calendar pages. Refresh the calendar.");
       scope = pageScope;
       for (const occurrence of page.occurrences) {
         const at = Date.parse(occurrence.scheduledFor); const key = `${occurrence.routineId}\0${occurrence.scheduledFor}`;

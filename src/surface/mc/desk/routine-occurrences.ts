@@ -1,5 +1,5 @@
 import { reflexCommand, type RoutineOptions, type RoutineRunner } from "./routine-command";
-import { RoutineOccurrencePageSchema, RoutineOccurrenceQuerySchema, type RoutineOccurrencePage, type RoutineOccurrenceQuery } from "./routine-occurrence-contract";
+import { createRoutineOccurrencePageSchema, RoutineOccurrenceQuerySchema, type RoutineOccurrencePage, type RoutineOccurrenceQuery } from "./routine-occurrence-contract";
 export * from "./routine-occurrence-contract";
 
 export async function readRoutineOccurrences(options: RoutineOptions, input: RoutineOccurrenceQuery, scope: { principal: string; stack: string }, run?: RoutineRunner): Promise<RoutineOccurrencePage> {
@@ -7,7 +7,7 @@ export async function readRoutineOccurrences(options: RoutineOptions, input: Rou
   const page = await reflexCommand({ ...options, timeoutSeconds: options.readTimeoutSeconds }, [
     "routine", "occurrences", "--principal", scope.principal, "--stack", scope.stack, "--start", query.start, "--end", query.end, "--timezone", query.timezone,
     "--limit", String(query.limit), ...(query.cursor ? ["--cursor", query.cursor] : []),
-  ], RoutineOccurrencePageSchema, run);
+  ], createRoutineOccurrencePageSchema(), run);
   const records = page.occurrences;
   const active = records.filter((r) => r.lifecycle === "active").length;
   const disabled = records.filter((r) => r.lifecycle !== "active").length;

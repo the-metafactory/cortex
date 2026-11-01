@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { calendarDayStart, calendarDays, calendarWindows, moveCalendar, readCalendar } from "../dashboard-v2/lib/routine-calendar";
 import { defaultRoutinesLocation, readRoutinesLocation, routinesSearch } from "../dashboard-v2/hooks/use-routines-location";
-import { RoutineOccurrencePageSchema } from "../desk/routine-occurrence-contract";
+import { createRoutineOccurrencePageSchema, RoutineOccurrencePageSchema } from "../desk/routine-occurrence-contract";
 
 const page = (query: URLSearchParams) => ({ owner: "reflex", principal: "test", stack: "default", start: query.get("start"), end: query.get("end"), timezone: query.get("timezone"), meaning: "planned-trigger", occurrences: [], complete: true, nextCursor: null, counts: { scope: "page", total: 0, active: 0, disabled: 0 } });
 const occurrence = (at: string, id = "example") => ({ routineId: id, schedule: "* * * * *", sourceTimezone: "UTC", lifecycle: "active", handlingPolicy: "approval", readOnly: true, scheduledFor: at, capabilities: { editParameters: false, editSchedule: false, pause: false, delete: false, setPolicy: false } });
@@ -49,4 +49,30 @@ describe("Routines page calendar and location", () => {
       expect(RoutineOccurrencePageSchema.safeParse({ ...page(new URLSearchParams()), nextCursor: "", complete: false }).success).toBe(false);
     } finally { server.stop(true); }
   });
+  it.each(["respect", "oversize"])("keeps the second-window global cap exact or refuses a %s reply", async (mode) => {
+    let requests = 0; const limits: number[] = [];
+    const windows = calendarWindows(calendarDays("2026-11-02", "month"), "UTC");
+    const server = Bun.serve({ port: 0, fetch(req) {
+      const q = new URL(req.url).searchParams; const limit = Number(q.get("limit")); limits.push(limit);
+      const first = q.get("start") === windows[0]?.start; const n = Number(q.get("cursor") ?? "0");
+      const count = first ? n === 19 ? 999 : 1000 : limit + (mode === "oversize" ? 1 : 0); requests++;
+      return Response.json({ ...page(q), occurrences: Array.from({ length: count }, (_, i) => occurrence(new Date(Date.parse(q.get("start") ?? "") + (n * 1000 + i) * 1000).toISOString())), complete: first && n === 19, nextCursor: first && n === 19 ? null : String(n + 1), counts: { scope: "page", total: count, active: count, disabled: 0 } });
+    } });
+    try {
+      const read: typeof import("../dashboard-v2/lib/api").getJson = async (path, init) => { const response = await fetch(`${server.url}${path.slice(1)}`, init); return response.json(); };
+      const result = readCalendar({ days: calendarDays("2026-11-02", "month"), timezone: "UTC", signal: new AbortController().signal, read });
+      if (mode === "oversize") { await expect(result).rejects.toThrow("inconsistent"); expect(limits.at(-1)).toBe(1); return; }
+      const page = await result;
+      expect(requests).toBe(21); expect(limits.at(-1)).toBe(1); expect(page.occurrences).toHaveLength(20000); expect(page.complete).toBe(false);
+    } finally { server.stop(true); }
+  });
+
+  it("validates each distinct timezone once across one paginated schema instance", () => {
+    const seen: string[] = [];
+    const parser = createRoutineOccurrencePageSchema((zone) => { seen.push(zone); return zone === "UTC"; });
+    const input = { ...page(new URLSearchParams({ start: "2026-11-02T00:00:00Z", end: "2026-11-03T00:00:00Z", timezone: "UTC" })), occurrences: Array.from({ length: 1000 }, (_, i) => occurrence(new Date(Date.parse("2026-11-02T00:00:00Z") + i * 1000).toISOString())) };
+    parser.parse(input); parser.parse(input); expect(seen).toEqual(["UTC"]);
+    expect(parser.safeParse({ ...input, timezone: "Invalid/Zone" }).success).toBe(false); expect(seen).toEqual(["UTC", "Invalid/Zone"]);
+  });
+
 });
