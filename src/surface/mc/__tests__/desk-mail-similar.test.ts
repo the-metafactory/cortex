@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { handleDeskMail } from "../api/desk-mail";
 import { HandledLedger } from "../desk/actions";
-import { buildMessages, MailClassifier, readClassifications, saveClassification, type ClassifierRequest, type CommandConfig } from "../desk/classify";
+import { buildMessages, MailClassifier, readClassifications, saveClassification, type ClassifierRequest, type CommandConfig, type EndpointConfig } from "../desk/classify";
+import { DAY_MS } from "../desk/time";
 import { logMailDecision, queryMailLog, type MailFeatures, type MailLogEntry } from "../desk/mail-log";
 import {
   CORRECTION_WEIGHT,
@@ -16,6 +17,8 @@ import {
   nearestDecisions,
   NO_EMBEDDER_NOTE,
   precedentLine,
+  readVectors,
+  saveVector,
   senderDecisions,
   type EmbedderAccess,
   type EmbedderConfig,
@@ -180,7 +183,7 @@ describe("the embeddings endpoint", () => {
     expect(parse("http://localhost:11434/v1").success).toBe(true);
     expect(parse("https://api.example/v1").success).toBe(true);
     expect(parse("http://embed.example/v1").success).toBe(false);
-    expect(McSchema.parse({ desk: { mail: { embedder: { baseUrl: "http://localhost:11434/v1", model: "bge-m3" } } } }).desk.mail.embedder).toMatchObject({ threshold: 0.75, neighbours: 8, timeoutSeconds: 10 });
+    expect(McSchema.parse({ desk: { mail: { embedder: { baseUrl: "http://localhost:11434/v1", model: "bge-m3" } } } }).desk.mail.embedder).toMatchObject({ threshold: 0.65, neighbours: 8, timeoutSeconds: 10 });
   });
 });
 
@@ -229,6 +232,30 @@ describe("triage with precedents", () => {
   });
 });
 
+describe("local-policy areas", () => {
+  it("never hands a local area's past mail to a remote classifier as an example, but a loopback one may see it", async () => {
+    logMailDecision(db, features("home", { sourceId: "home-mail", subject: "Private zebra census results" }), "archive", "desk", NOW - 2000);
+    logMailDecision(db, features("work"), "archive", "desk", NOW - 1000);
+    const examples = async (config: CommandConfig | EndpointConfig): Promise<string[]> => {
+      const seen: ClassifierRequest[] = [];
+      const classifier = new MailClassifier(config, async (req) => { seen.push(req); return { category: "bulk", reason: "A report." }; }, quiet, () => NOW, new MailSimilarity(EMBEDDER, fakeEmbed().embed, quiet));
+      await classifier.kick(db, { now: NOW, mail: [listed("new")], events: [], vips: [], localSources: new Set(["home-mail"]) });
+      db.run("DELETE FROM desk_mail_classes");
+      return seen[0]?.examples.map((e) => e.subject) ?? [];
+    };
+    expect(await examples(COMMAND)).toEqual(["Quarterly zebra census results"]);
+    expect(await examples({ baseUrl: "https://llm.example/v1", model: "m", timeoutSeconds: 5, maxPerPass: 10 })).toEqual(["Quarterly zebra census results"]);
+    expect((await examples({ baseUrl: "http://127.0.0.1:11434/v1", model: "m", timeoutSeconds: 5, maxPerPass: 10 })).sort()).toEqual(["Private zebra census results", "Quarterly zebra census results"]);
+  });
+
+  it("forgets vectors no pass has used within the window", () => {
+    saveVector(db, "m", "old", [1, 0], NOW - 200 * DAY_MS);
+    saveVector(db, "m", "fresh", [0, 1], NOW);
+    new MailSimilarity(EMBEDDER, fakeEmbed().embed, quiet).load(db, NOW);
+    expect([...readVectors(db, "m", ["old", "fresh"], NOW).keys()]).toEqual(["fresh"]);
+  });
+});
+
 describe("a per-mail correction", () => {
   it("is logged as a weighted decision and sends the mail back to the classifier", async () => {
     const { sourceId: _s, area: _a, ...plain } = listed("new");
@@ -240,7 +267,7 @@ describe("a per-mail correction", () => {
     const res = await post({ action: "correct", key: "mail:new", said: "not-bulk" });
     expect(res.status).toBe(200);
     expect(((await res.json()) as { message: string }).message).toContain("Noted: this mail is not bulk.");
-    expect(queryMailLog(db, { where: "correction" }).map((e) => [e.messageId, e.action])).toEqual([["new", "kept"]]);
+    expect(queryMailLog(db, { where: "correction" }).map((e) => [e.messageId, e.action, e.category])).toEqual([["new", "kept", "not bulk"]]);
     expect(readClassifications(db, ["new"]).size).toBe(0);
     expect((await post({ action: "correct", key: "mail:new", said: "forward" })).status).toBe(400);
     expect((await post({ action: "correct", key: "mail:gone", said: "archive" })).status).toBe(409);

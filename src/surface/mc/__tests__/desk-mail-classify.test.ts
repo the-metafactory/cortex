@@ -258,7 +258,7 @@ describe("the OpenAI-compatible provider", () => {
   const request: ClassifierRequest = {
     mail: { id: "n1", from: NEWSLETTER.from, subject: NEWSLETTER.subject, firstParagraph: "", receivedAt: NEWSLETTER.receivedAt }, meetings: [], vips: [], unimportant: [],
     corrections: [{ kind: "mail", source: "ops@stats.example", mode: "keep", label: "“Weekly numbers” from ops@stats.example: the person would keep it" }],
-    examples: [{ subject: "Weekly numbers", summary: "The numbers.", sender: "ops@stats.example", action: "archive", decidedAt: "2026-10-30T08:00:00.000Z", similarity: 0.93, weight: 1 }],
+    examples: [{ category: "bulk", subject: "Weekly numbers", summary: "The numbers.", sender: "ops@stats.example", action: "archive", decidedAt: "2026-10-30T08:00:00.000Z", similarity: 0.93, weight: 1 }],
     examplesBasis: "content",
   };
 

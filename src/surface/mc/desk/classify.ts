@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { basename } from "node:path";
 import { z } from "zod";
 import { CLASSIFIER_FORM_ERROR } from "../../../common/types/config";
+import { isLoopbackSideband } from "../../../common/sideband/loopback";
 import { oneLine } from "./actions";
 import { CommandTimeout, runCommand, type CommandResult } from "./spawn";
 import type { SourceEvent, SourceMail } from "./sources/command";
@@ -9,6 +10,8 @@ import type { DeskCorrection, DeskMailClassifier } from "./types";
 import { DAY_MS } from "./time";
 import { isUnimportant } from "./vips";
 import type { MailSimilarity, MailText, SimilarDecisions, SimilarityBasis, SimilarityContext } from "./mail-similar";
+
+export const SIMILARITY_BASES = ["content", "sender"] as const;
 
 export const MAIL_COMMITMENTS = ["request", "invitation", "none", "unknown"] as const;
 export type MailCommitment = (typeof MAIL_COMMITMENTS)[number];
@@ -113,6 +116,7 @@ export interface ClassifierCorrection {
 }
 
 export interface ClassifierExample {
+  category: string | null;
   subject: string;
   summary: string;
   sender: string;
@@ -148,8 +152,9 @@ const mailTextOf = (m: ClassifierMail): MailText => ({
   summary: m.firstParagraph ?? null,
 });
 
-export function classifierExamples(similar: SimilarDecisions): ClassifierExample[] {
-  return similar.neighbours.map(({ entry, action, similarity, weight }) => ({
+export function classifierExamples(similar: SimilarDecisions, shareable: (sourceId: string | null) => boolean = () => true): ClassifierExample[] {
+  return similar.neighbours.filter((n) => shareable(n.entry.sourceId)).map(({ entry, action, similarity, weight }) => ({
+    category: entry.category,
     subject: entry.subject ?? "",
     summary: entry.summary ?? "",
     sender: entry.sender,
@@ -197,7 +202,7 @@ const BaseAnswerSchema = z.object({
 const SummarySchema = z.string().trim().max(MAX_SUMMARY);
 const PredictedSchema = z.enum(PREDICTED_ACTIONS);
 const PrecedentsSchema = z.object({
-  basis: z.enum(["content", "sender"]),
+  basis: z.enum(SIMILARITY_BASES),
   note: z.string().max(300).optional(),
   items: z.array(z.object({ subject: z.string().max(400), sender: z.string().max(400), action: PredictedSchema, at: z.number(), correction: z.boolean() })).max(MAX_PRECEDENTS),
 });
@@ -365,6 +370,8 @@ export function commandClassifier(config: CommandConfig, run: CommandRunner = ru
   return (request, timeoutMs) => runJson(JSON.stringify(request), timeoutMs);
 }
 
+export const classifierIsLocal = (config: ModelConfig): boolean => !isCommand(config) && isLoopbackSideband(config.baseUrl);
+
 export const classifierRunner = (config: ClassifierConfig): ClassifierRunner => (isCommand(config) ? commandClassifier(config) : chatClassifier(config));
 
 export const classifierLabel = (config: ClassifierConfig): string => (isCommand(config) ? basename(config.command[0] ?? "command") : config.model);
@@ -478,6 +485,10 @@ export class MailClassifier {
     return classifierLabel(this.config);
   }
 
+  get local(): boolean {
+    return classifierIsLocal(this.config);
+  }
+
   kick(db: Database, input: ClassifyInput): Promise<PassResult> {
     this.running ??= this.pass(db, input)
       .catch((err: unknown): PassResult => {
@@ -529,7 +540,7 @@ export class MailClassifier {
         vips: input.vips,
         unimportant,
         corrections,
-        examples: similar ? classifierExamples(similar) : [],
+        examples: similar ? classifierExamples(similar, (sourceId) => this.local || sourceId === null || !(input.localSources?.has(sourceId) ?? false)) : [],
         examplesBasis: similar?.basis ?? "sender",
       };
       const started = this.clock();

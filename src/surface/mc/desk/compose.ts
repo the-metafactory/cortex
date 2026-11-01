@@ -171,7 +171,7 @@ export async function composeDesk(
   const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
   const localAreas = new Set(desk.areas.filter((a) => a.policy === "local").map((a) => a.id));
   const localSources = new Set(readings.filter((r) => r.area !== null && localAreas.has(r.area)).map((r) => r.id));
-  if (classifier) void classifier.kick(db, { now, mail: mail.filter((m) => !ruleBound.has(m.id)), events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(db), localSources });
+  if (classifier) void classifier.kick(db, { now, mail: mail.filter((m) => !ruleBound.has(m.id)), events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(db, (sourceId) => classifier.local || sourceId === null || !localSources.has(sourceId)), localSources });
   const classified = classifier ? readClassifications(db, mail.filter((m) => m.unread).map((m) => m.id)) : undefined;
   const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null) : null;
   const yesFilter = await mailYesFilter(db, desk, now);
@@ -239,7 +239,7 @@ export async function composeDesk(
     goals: buildGoals(subjects),
     notes: notes.filter((n) => n.kind === "note").map(({ id, text, createdAt }) => ({ id, text, createdAt })),
     ask: { kinds: [...writableKinds(desk.ask?.writers ?? {}, Boolean(desk.studio)), ...(desk.routines ? ["routine"] : [])], maps: desk.ask?.taskMaps ?? [] },
-    systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable, ...(corrections.ok ? [] : [CORRECTIONS_UNREADABLE])],
+    systems: [...buildSystems(db, subjects, sources, ranger, now), ...unreadable, ...(corrections.ok ? [] : [CORRECTIONS_UNREADABLE]), ...activeCorrections.filter((c) => c.kind === "mail").map((c) => staleMailCorrection(c.source))],
     sources,
     voice: voiceView(desk.voice),
     chime: rules.chime,
@@ -257,9 +257,17 @@ function unreadableLine(r: SourceReading): string {
   return `The ${r.id} source sent ${what}: ${r.problems[0] ?? ""}${more}.`;
 }
 
-function mailCorrections(db: Database): ClassifierCorrection[] {
-  return queryMailLog(db, { where: "correction", limit: MAX_CORRECTIONS }).map((e) => ({ kind: "mail", source: e.sender, mode: learnedAction(e.action) ?? e.action, label: `“${e.subject ?? "(no subject)"}” from ${e.sender}: the person would ${learnedAction(e.action) ?? e.action} it` }));
+const CORRECTED_SAYING: Partial<Record<string, string>> = { "not bulk": "; it is not bulk", matters: "; it matters" };
+
+function mailCorrections(db: Database, shareable: (sourceId: string | null) => boolean): ClassifierCorrection[] {
+  return queryMailLog(db, { where: "correction", limit: MAX_CORRECTIONS }).filter((e) => shareable(e.sourceId)).map((e) => {
+    const action = learnedAction(e.action) ?? e.action;
+    return { kind: "mail", source: e.sender, mode: action, label: `“${e.subject ?? "(no subject)"}” from ${e.sender}: the person would ${action} it${CORRECTED_SAYING[e.category ?? ""] ?? ""}` };
+  });
 }
+
+export const staleMailCorrection = (source: string): string =>
+  `Your earlier ranking correction for mail from ${source} no longer applies: mail is corrected one mail at a time now, from the card's menu. Remove it under Ranking in the margin.`;
 
 function goalActionsFor(goals: DeskGoalOptions | undefined, subjects: VigilSubjectView[], checks: GoalChecks | undefined, now: number): GoalActionsInput {
   const check = new Set(goals ? Object.keys(goals.check) : []);

@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { oneLine } from "./actions";
 import { forgetClassification, PREDICTED_ACTIONS, saveUnimportant } from "./classify";
 import { logMailDecision, mailFeatures, type MailLogAction } from "./mail-log";
+import { loggedAction } from "./mail-similar";
 import { movedKey, moveMail, refuse, type MoveDeps, type MoveResult } from "./mail-move";
 import { CommandTimeout } from "./spawn";
 import { replySubject } from "./mail-triage";
@@ -98,17 +99,9 @@ export async function draftReply(mail: ListedMail, body: string, deps: Omit<Move
 export const MAIL_CORRECTIONS = ["not-bulk", "matters", ...PREDICTED_ACTIONS] as const;
 export type MailCorrection = (typeof MAIL_CORRECTIONS)[number];
 
-const CORRECTION_LOG: Record<MailCorrection, MailLogAction> = {
-  "not-bulk": "kept",
-  matters: "kept",
-  archive: "archive",
-  junk: "junk",
-  trash: "trash",
-  reply: "draft",
-  plan: "plan",
-  todo: "todo",
-  keep: "kept",
-};
+export const CORRECTED_CATEGORY: Partial<Record<MailCorrection, string>> = { "not-bulk": "not bulk", matters: "matters" };
+
+const correctionAction = (said: MailCorrection): MailLogAction => (said === "not-bulk" || said === "matters" ? "kept" : loggedAction(said));
 
 const CORRECTION_DONE: Record<MailCorrection, string> = {
   "not-bulk": "Noted: this mail is not bulk.",
@@ -127,7 +120,9 @@ const CORRECTION_DONE: Record<MailCorrection, string> = {
  * the next pass sorts it again with the correction as its closest example. Nothing moves.
  */
 export function correctMail(db: Database, mail: ListedMail, said: MailCorrection, now: number): MailActionResult {
-  logMailDecision(db, mailFeatures(db, mail), CORRECTION_LOG[said], "correction", now);
+  const features = mailFeatures(db, mail);
+  const category = CORRECTED_CATEGORY[said];
+  logMailDecision(db, category ? { ...features, category } : features, correctionAction(said), "correction", now);
   forgetClassification(db, mail.id);
   return { ok: true, message: `${CORRECTION_DONE[said]} The Desk sorts it and mail like it again with that in mind.` };
 }

@@ -1,14 +1,13 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { isLoopbackSideband } from "../../../common/sideband/loopback";
-import { MissingKey, PREDICTED_ACTIONS, readApiKey, type KeyReader, type MailPrecedent, type MailPrecedents, type PredictedAction } from "./classify";
+import { MissingKey, PREDICTED_ACTIONS, readApiKey, SIMILARITY_BASES, type KeyReader, type MailPrecedent, type MailPrecedents, type PredictedAction } from "./classify";
 import { MAIL_VECTORS_SQL } from "./mail-log-schema";
 import { queryMailLog, senderDomain, type MailLogAction, type MailLogEntry, type MailLogWhere } from "./mail-log";
 import { DAY_MS } from "./time";
 
-export { MAIL_VECTORS_SQL, PREDICTED_ACTIONS, type PredictedAction };
+export { MAIL_VECTORS_SQL, PREDICTED_ACTIONS, SIMILARITY_BASES, type PredictedAction };
 
-export const SIMILARITY_BASES = ["content", "sender"] as const;
 export type SimilarityBasis = (typeof SIMILARITY_BASES)[number];
 
 export interface EmbedderAccess {
@@ -28,7 +27,7 @@ export interface EmbedderConfig extends EmbedderAccess {
   maxPerPass: number;
 }
 
-export const DEFAULT_SIMILARITY = { threshold: 0.75, neighbours: 8, windowDays: 90, maxPerPass: 64 } as const;
+export const DEFAULT_SIMILARITY = { threshold: 0.65, neighbours: 8, windowDays: 90, maxPerPass: 64 } as const;
 
 export const CORRECTION_WEIGHT = 2;
 
@@ -46,6 +45,10 @@ const LEARNED: Partial<Record<MailLogAction, PredictedAction>> = {
 const LEARNED_ACTIONS = Object.keys(LEARNED) as MailLogAction[];
 
 export const learnedAction = (action: MailLogAction): PredictedAction | undefined => LEARNED[action];
+
+const LOGGED: Record<PredictedAction, MailLogAction> = { archive: "archive", junk: "junk", trash: "trash", reply: "draft", plan: "plan", todo: "todo", keep: "kept" };
+
+export const loggedAction = (action: PredictedAction): MailLogAction => LOGGED[action];
 
 export const decisionWeight = (where: MailLogWhere): number => (where === "correction" ? CORRECTION_WEIGHT : 1);
 
@@ -240,7 +243,10 @@ export class MailSimilarity {
 
   load(db: Database, now: number, localSources: ReadonlySet<string> = new Set()): SimilarityContext {
     const { neighbours, windowDays } = this.limits;
+    purgeVectors(db, now - windowDays * DAY_MS);
     const entries = latestDecisions(queryMailLog(db, { since: now - windowDays * DAY_MS, actions: LEARNED_ACTIONS, limit: 5000 }));
+    const hashes = new Map(entries.map((e) => [e, textHash(mailText(e))]));
+    const hashOf = (e: MailLogEntry): string => hashes.get(e) ?? textHash(mailText(e));
     const fallback = (mail: MailText, note: string): SimilarDecisions => ({ basis: "sender", neighbours: senderDecisions(mail, others(entries, mail), neighbours), note });
     const config = this.config;
     if (!config) return { similar: (mail) => Promise.resolve(fallback(mail, NO_EMBEDDER_NOTE)) };
@@ -248,7 +254,7 @@ export class MailSimilarity {
     const stores = new Map<string, Map<string, Float32Array>>();
     const storeFor = (access: EmbedderAccess): Map<string, Float32Array> => {
       const model = vectorModel(access);
-      const known = stores.get(model) ?? readVectors(db, model, entries.map((e) => textHash(mailText(e))), now);
+      const known = stores.get(model) ?? readVectors(db, model, [...hashes.values()], now);
       stores.set(model, known);
       return known;
     };
@@ -297,7 +303,7 @@ export class MailSimilarity {
         const query = known.get(textHash(text));
         if (!query) return fallback(mail, EMBEDDER_DOWN_NOTE);
         const candidates = others(entries, mail).flatMap((entry) => {
-          const vector = known.get(textHash(mailText(entry)));
+          const vector = known.get(hashOf(entry));
           return vector ? [{ entry, vector }] : [];
         });
         return { basis: "content", neighbours: nearestDecisions(query, candidates, neighbours, config.threshold) };

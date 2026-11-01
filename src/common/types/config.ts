@@ -511,7 +511,7 @@ export const DeskSchema = z.object({
         .optional(),
       embedder: EmbedderEndpointSchema.safeExtend({
         local: EmbedderEndpointSchema.optional(),
-        threshold: z.number().min(0).max(1).default(0.75),
+        threshold: z.number().min(0).max(1).default(0.65),
         neighbours: z.number().int().min(5).max(10).default(8),
         windowDays: z.number().int().min(1).max(3650).default(90),
         maxPerPass: z.number().int().min(1).max(1000).default(64),

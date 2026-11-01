@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
 import { handleDeskCorrections, MAIL_IS_PER_MAIL } from "../api/desk-corrections";
-import { composeDesk, CORRECTIONS_UNREADABLE, type DeskOptions } from "../desk/compose";
+import { composeDesk, CORRECTIONS_UNREADABLE, staleMailCorrection, type DeskOptions } from "../desk/compose";
 import { applyCorrections, setCorrection } from "../desk/corrections";
 import { selectItems } from "../desk/present";
 import type { RangerState } from "../desk/sources/ranger";
@@ -75,6 +75,11 @@ describe("ranking corrections", () => {
     expect(ranked.map((i) => i.key)).toEqual(["goal:2", "goal:1", "goal:3"]);
     const mails = applyCorrections([item("mail", 1, "work-mail"), item("mail", 2, "home-mail")], [{ kind: "mail", source: "work-mail", mode: "less", label: "", createdAt: NOW }]);
     expect(mails.map((i) => [i.key, i.correction])).toEqual([["mail:1", undefined], ["mail:2", undefined]]);
+  });
+
+  it("says in the systems line that an earlier per-source mail correction no longer applies", async () => {
+    setCorrection(db, "mail", "work-mail", "less", NOW);
+    expect((await compose()).systems).toContain(staleMailCorrection("work-mail"));
   });
 
   it("refuses a new per-source correction for mail", async () => {
