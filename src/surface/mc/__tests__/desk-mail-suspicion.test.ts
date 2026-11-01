@@ -53,10 +53,16 @@ describe("the suspicion check", () => {
     expect(codes(mail({ headers: { authResults: { spf: "neutral", dkim: "none" } } }))).toEqual(["dkim"]);
   });
 
-  it("does not flag a missing DKIM signature when SPF or DMARC passed, or when no verdicts were reported", () => {
-    expect(codes(mail({ headers: { authResults: { spf: "pass", dkim: "none" } } }))).toEqual([]);
+  it("does not flag a missing DKIM signature when SPF passed for the From domain or DMARC passed, or when no verdicts were reported", () => {
+    expect(codes(mail({ headers: { authResults: { spf: "pass", dkim: "none", spfDomain: "bounces.bank.example" } } }))).toEqual([]);
+    expect(codes(mail({ headers: { authResults: {} } }))).toEqual([]);
     expect(codes(mail({ headers: { authResults: { dmarc: "pass", dkimDomains: [] } } }))).toEqual([]);
     expect(codes(mail({ headers: undefined }))).toEqual([]);
+  });
+
+  it("flags a missing DKIM signature when SPF passed only for another domain", () => {
+    expect(codes(mail({ headers: { authResults: { spf: "pass", dkim: "none", spfDomain: "attacker.example" } } }))).toEqual(["dkim"]);
+    expect(codes(mail({ headers: { authResults: { spf: "pass", dkim: "none" } } }))).toEqual(["dkim"]);
   });
 
   it("counts a signature from a subdomain of the From domain's organisation as the From domain's", () => {
@@ -80,7 +86,7 @@ describe("the suspicion check", () => {
       { code: "display-name", text: "The sender's name matches your VIP Ada Lovelace, but ada.lovelace@bank.example is not on your VIP list." },
     ]);
     expect(codes(mail({ from: { name: "ada@corp.example", address: "x@bank.example" } }))).toEqual(["display-name"]);
-    expect(codes(mail({ from: { name: "Ada Lovelace", address: "ada@corp.example" }, headers: { authResults: { spf: "pass" } } }))).toEqual([]);
+    expect(codes(mail({ from: { name: "Ada Lovelace", address: "ada@corp.example" }, headers: { authResults: { dmarc: "pass" } } }))).toEqual([]);
   });
 
   it("flags a link whose text names another domain than its target, as plain text", () => {
@@ -119,8 +125,8 @@ describe("what a source may report for the check", () => {
     }] }));
     expect(out.mail[0]?.links).toEqual([{ text: "b.example", href: "https://b.example/" }]);
     expect(out.mail[0]?.headers?.authResults).toEqual({ spf: "pass", dkimDomains: ["b.example"] });
-    const bad = parseSourceOutput(JSON.stringify({ items: [{ kind: "mail", id: "y", from: { address: "a@b.example" }, subject: "s", receivedAt: "2026-11-01T08:00:00Z", unread: true, headers: { authResults: { spf: "pass", dkimDomains: ["not a host"] } }, links: "nope" }] }));
-    expect(bad.mail[0]?.headers?.authResults).toEqual({ spf: "pass" });
+    const bad = parseSourceOutput(JSON.stringify({ items: [{ kind: "mail", id: "y", from: { address: "a@b.example" }, subject: "s", receivedAt: "2026-11-01T08:00:00Z", unread: true, headers: { authResults: { spf: "pass", dkimDomains: ["not a host", "b.example"], spfDomain: "not a host" } }, links: "nope" }] }));
+    expect(bad.mail[0]?.headers?.authResults).toEqual({ spf: "pass", dkimDomains: ["b.example"] });
     expect(bad.mail[0]?.links).toBeUndefined();
   });
 
@@ -164,9 +170,9 @@ describe("a suspicious mail on the Desk", () => {
     const context = suspicionContext(db, []);
     expect(ruleFor(rules, phish, context)).toBeUndefined();
     expect(ruleFor(rules, mail({ id: "ok@bank.example" }), context)?.id).toBe("rule-bank");
-    expect(pendingRuleMail(db, [phish, mail({ id: "ok@bank.example" })])).toEqual(new Set(["ok@bank.example"]));
     const flaggedByModel = mail({ id: "model@bank.example" });
     saveClassification(db, flaggedByModel.id, { category: "fyi", reason: "r", suspicious: true }, "test", NOW);
+    expect(pendingRuleMail(db, [phish, flaggedByModel, mail({ id: "ok@bank.example" })])).toEqual(new Set(["ok@bank.example"]));
     const q = queue([{ code: 0, stdout: JSON.stringify({ id: "x", folder: "Archive", message: "Moved." }), stderr: "" }]);
     const reading: SourceReading = { id: "work-mail", area: null, events: [], mail: [phish, flaggedByModel, mail({ id: "ok@bank.example" })], readAt: NOW, error: null, dropped: 0, problems: [] };
     const desk = mailDesk({ move: ["/opt/move"], timeoutSeconds: 20 });

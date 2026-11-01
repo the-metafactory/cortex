@@ -23,7 +23,7 @@ export const SourceEventSchema = z.object({
   url: safeLink.optional(),
 });
 
-const HOST_NAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+export const HOST_NAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 export const AUTH_VERDICTS = ["pass", "fail", "softfail", "neutral", "none", "temperror", "permerror", "policy"] as const;
 
 function printable(v: string): string {
@@ -37,6 +37,14 @@ function printable(v: string): string {
 const headerText = (max: number) => z.string().transform(printable).pipe(z.string().min(1).max(max)).optional().catch(undefined);
 const verdict = z.preprocess((v) => (typeof v === "string" ? v.trim().toLowerCase() : v), z.enum(AUTH_VERDICTS)).optional().catch(undefined);
 
+const hostName = z.string().trim().toLowerCase().max(253).regex(HOST_NAME);
+const hostList = z
+  .array(z.unknown())
+  .max(50)
+  .transform((list) => list.flatMap((d) => { const p = hostName.safeParse(d); return p.success ? [p.data] : []; }).slice(0, 10))
+  .optional()
+  .catch(undefined);
+
 function present<T extends object>(record: T): Partial<T> | undefined {
   const kept = Object.fromEntries(Object.entries(record).filter(([, v]) => v !== undefined));
   return Object.keys(kept).length > 0 ? (kept as Partial<T>) : undefined;
@@ -48,7 +56,7 @@ export const MailHeadersSchema = z
     listId: headerText(300),
     listUnsubscribe: headerText(2000),
     listUnsubscribePost: headerText(200),
-    authResults: z.object({ spf: verdict, dkim: verdict, dmarc: verdict, dkimDomains: z.array(z.string().trim().toLowerCase().regex(HOST_NAME).max(253)).max(10).optional().catch(undefined) }).optional().catch(undefined),
+    authResults: z.object({ spf: verdict, dkim: verdict, dmarc: verdict, dkimDomains: hostList, spfDomain: hostName.optional().catch(undefined) }).optional().catch(undefined),
     replyTo: headerText(300),
     inReplyTo: headerText(1000),
   })
@@ -60,7 +68,7 @@ export interface MailHeaders {
   listId?: string;
   listUnsubscribe?: string;
   listUnsubscribePost?: string;
-  authResults?: Partial<Record<"spf" | "dkim" | "dmarc", (typeof AUTH_VERDICTS)[number]>> & { dkimDomains?: string[] };
+  authResults?: Partial<Record<"spf" | "dkim" | "dmarc", (typeof AUTH_VERDICTS)[number]>> & { dkimDomains?: string[]; spfDomain?: string };
   replyTo?: string;
   inReplyTo?: string;
 }

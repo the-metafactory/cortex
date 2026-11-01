@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { SourceMail } from "./sources/command";
+import { HOST_NAME as HOST, type SourceMail } from "./sources/command";
 import { isVip, listVips } from "./vips";
 
 export const SUSPICION_CODES = ["dmarc", "spf", "dkim", "reply-to", "display-name", "link", "classifier"] as const;
@@ -19,7 +19,6 @@ export interface SuspicionContext {
 export type SuspectMail = Pick<SourceMail, "from" | "headers" | "links">;
 
 const SECOND_LEVEL = new Set(["co", "com", "net", "org", "gov", "ac", "edu", "ne", "or", "go", "gv", "ltd", "plc"]);
-const HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const HOST_IN_TEXT = /(?:^|[^a-z0-9@.-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})(?![a-z0-9-])/;
 const ADDRESS_IN_TEXT = /[^\s<>"'(),;:@]+@((?:[a-z0-9-]+\.)+[a-z]{2,63})/;
 const ADDRESS = /<?([^\s<>"'(),;:@]+@([a-z0-9.-]+\.[a-z]{2,63}))>?/;
@@ -64,7 +63,7 @@ const textDomain = (text: string): string | null => {
 
 function authReasons(mail: SuspectMail): SuspicionReason[] {
   const auth = mail.headers?.authResults;
-  if (!auth) return [];
+  if (!auth || (!auth.spf && !auth.dkim && !auth.dmarc && auth.dkimDomains === undefined)) return [];
   const from = domainOf(mail.from.address);
   const out: SuspicionReason[] = [];
   if (auth.dmarc === "fail") out.push({ code: "dmarc", text: `DMARC failed: ${from} did not authorize this mail.` });
@@ -75,7 +74,8 @@ function authReasons(mail: SuspectMail): SuspicionReason[] {
   }
   const signers = auth.dkimDomains;
   const signed = signers !== undefined ? signers.some((d) => sameOrg(d, from)) : auth.dkim === "pass";
-  const otherwiseAuthenticated = auth.dmarc === "pass" || auth.spf === "pass";
+  const spfAligned = auth.spf === "pass" && auth.spfDomain !== undefined && sameOrg(auth.spfDomain, from);
+  const otherwiseAuthenticated = auth.dmarc === "pass" || spfAligned;
   if (!signed && !otherwiseAuthenticated) {
     out.push({ code: "dkim", text: signers?.length ? `It is not signed by ${from} (DKIM), only by ${signers.slice(0, 2).join(" and ")}, and nothing else vouches for the sender.` : `It carries no DKIM signature from ${from}, and nothing else vouches for the sender.` });
   }

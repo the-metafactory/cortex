@@ -206,13 +206,14 @@ export function digestedIds(db: Database, ids: string[]): Set<string> {
 const rulesRun = (db: Database): boolean => listGrants(db).has(RULES_GRANT);
 
 /** Listed mails an approved rule will handle on its next pass. The Desk does not send them to the model; a paused rule's mail goes to the model. */
-export function pendingRuleMail(db: Database, mails: readonly SourceMail[], ownDomains: readonly string[] = []): Set<string> {
+export function pendingRuleMail(db: Database, mails: readonly SourceMail[], suspicion: SuspicionContext = suspicionContext(db)): Set<string> {
   if (!rulesRun(db)) return new Set();
   const rules = listRules(db).filter((r) => r.on && (r.held === null || r.released));
   if (rules.length === 0) return new Set();
-  const ran = ranIds(db, mails.map((m) => m.id));
-  const suspicion = suspicionContext(db, ownDomains);
-  return new Set(mails.filter((m) => !ran.has(m.id) && ruleFor(rules, m, suspicion)).map((m) => m.id));
+  const ids = mails.map((m) => m.id);
+  const ran = ranIds(db, ids);
+  const flagged = flaggedByClassifier(db, ids);
+  return new Set(mails.filter((m) => !ran.has(m.id) && !flagged.has(m.id) && ruleFor(rules, m, suspicion)).map((m) => m.id));
 }
 
 const DECISIVE = new Set<MailLogAction>(["archive", "junk", "trash", "restore", "kept", "todo", "draft", "plan", "snooze"]);
