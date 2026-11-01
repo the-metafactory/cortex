@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { RoutineView } from "../../desk/routine-command";
 import type { RoutineInventory } from "../../desk/routine-editor-contract";
 import type { RoutineEvidenceRecord } from "../../desk/routine-evidence-contract";
@@ -13,8 +13,26 @@ const pageSize = 10;
 const stamp = (at: string, timezone: string): string => new Date(at).toLocaleString(undefined, { timeZone: timezone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 type HistoryState = { key: string } & ({ kind: "loading" } | { kind: "error"; message: string } | ({ kind: "ready" } & PeriodHistory));
 
+export function coverageText(history: HistoryState | { kind: "inactive" }, timezone: string): string {
+  switch (history.kind) {
+    case "error": return `Execution evidence unavailable: ${history.message} Failures in this period are unknown.`;
+    case "loading": return "Reading recorded execution evidence for this period…";
+    case "inactive": return "Execution evidence not loaded.";
+    case "ready": break;
+  }
+  const read = `${history.checked} recorded decisions read`;
+  const oldest = history.oldest ? stamp(history.oldest, timezone) : null;
+  if (history.coverage === "partial") return history.records.length === 0 ? `${read}, all newer than this period; the read limit was reached before any of this period's records. Failures in this period are unknown.` : `${read}; partial: loaded back to ${oldest ?? "no records"}, older records in this period were not read.`;
+  if (history.reachedStart || oldest === null) return `${read}; this period's history is covered.`;
+  return `${read}; the owner retains no records before ${oldest}.`;
+}
+
+export function Pager({ page, pages, onPage, previous = "Previous", next = "Next" }: { page: number; pages: number; onPage: (page: number) => void; previous?: string; next?: string }) {
+  return <><button className="desk-btn" type="button" disabled={page === 0} onClick={() => { onPage(page - 1); }}>{previous}</button><span>Page {page + 1} of {pages}</span><button className="desk-btn" type="button" disabled={page + 1 >= pages} onClick={() => { onPage(page + 1); }}>{next}</button></>;
+}
+
 export function AttentionSummary({ groups, history, view, inventoryError, timezone }: { groups: AttentionGroup[]; history: HistoryState | { kind: "inactive" }; view: RoutineView | undefined; inventoryError: boolean; timezone: string }) {
-  const evidence = history.kind === "ready" ? `${history.checked} recorded decisions read; ${history.coverage === "partial" ? `partial` : history.reachedStart || history.oldest === null ? "this period's history is covered" : `the owner retains no records before ${stamp(history.oldest, timezone)}`}${history.coverage === "complete" ? "" : `: loaded back to ${history.oldest ? stamp(history.oldest, timezone) : "no records"}, older records in this period were not read`}` : history.kind === "error" ? `Execution evidence unavailable: ${history.message} Failures in this period are unknown.` : history.kind === "loading" ? "Reading recorded execution evidence for this period…" : "Execution evidence not loaded.";
+  const evidence = coverageText(history, timezone);
   const approvals = view === undefined ? "Pending approvals not loaded." : view.error ? `Pending approvals unavailable: ${view.error}` : null;
   return <>
     <p className="soft routine-attention-coverage">{evidence}{approvals ? ` ${approvals}` : ""}{inventoryError ? " Installed routine library unavailable; scheduling uncertainty is unknown." : ""}</p>
@@ -31,7 +49,7 @@ function GroupDetail({ group, timezone, records, onOpen, onChanged }: { group: A
     {group.kind === "approval" && <ul>{group.approvals.slice(page * pageSize, (page + 1) * pageSize).map((pending) => <li key={pending.decisionId}><span>Matched {stamp(pending.matchedAt, timezone)} · expires {stamp(pending.expiresAt, timezone)}</span><div className="desk-acts"><RoutineButton action="approve" target={pending.decisionId} onChanged={onChanged}>Approve</RoutineButton><RoutineButton action="deny" target={pending.decisionId} onChanged={onChanged}>Deny</RoutineButton></div></li>)}</ul>}
     {(group.kind === "failure" || group.kind === "evidence") && <ul>{group.records.slice(page * pageSize, (page + 1) * pageSize).map((record) => <li key={record.decisionId}><span>{evidenceLabel(record)} · <time dateTime={record.at}>{stamp(record.execution.kind === "observed" ? record.execution.startedAt : record.at, timezone)}</time></span><button className="desk-btn" type="button" onClick={() => { setInspect(record); }}>Inspect execution</button></li>)}</ul>}
     {group.kind === "scheduling" && <p>The routine owner could not confirm whether this routine is scheduled. Its planned starts may be missing or stale.</p>}
-    {pages > 1 && <div className="desk-acts"><button className="desk-btn" type="button" disabled={page === 0} onClick={() => { setPage(page - 1); }}>Previous</button><span>Page {page + 1} of {pages}</span><button className="desk-btn" type="button" disabled={page + 1 >= pages} onClick={() => { setPage(page + 1); }}>Next</button></div>}
+    {pages > 1 && <div className="desk-acts"><Pager page={page} pages={pages} onPage={setPage} /></div>}
     <button className="desk-btn" type="button" onClick={() => { onOpen(group.routineId, group.kind === "failure" || group.kind === "evidence" ? "executions" : "overview"); }}>Open routine workspace</button>
     {inspect && <ExecutionViewer key={inspect.decisionId} record={inspect} origin={evidenceOrigin(inspect, records)} onClose={() => { setInspect(null); }} />}
   </div>;
@@ -43,8 +61,9 @@ export function DeskRoutineAttention({ days, timezone, revision, view, inventory
   const [open, setOpen] = useState<string | null>(null);
   const key = JSON.stringify([days, timezone, revision, retry]);
   const history: HistoryState = snapshot.key === key ? snapshot : { key, kind: "loading" };
+  const loaded = useRef(snapshot); loaded.current = snapshot;
   useEffect(() => {
-    if (!active) return;
+    if (!active || (loaded.current.key === key && loaded.current.kind === "ready")) return;
     const abort = new AbortController(); setSnapshot({ key, kind: "loading" }); setOpen(null);
     let period: { start: string; end: string };
     try { period = calendarPeriod(days, timezone); } catch (error) { setSnapshot({ key, kind: "error", message: error instanceof Error ? error.message : "Choose a calendar period." }); return () => { abort.abort(); }; }

@@ -11,7 +11,7 @@ import { backgroundLane, type CalendarOccurrence } from "../dashboard-v2/lib/rou
 import { saveDisplay, withDisplay } from "../dashboard-v2/lib/routine-display";
 import { attentionGroups, attentionMaxPages, readPeriodHistory } from "../dashboard-v2/lib/routine-attention";
 import { BackgroundRow } from "../dashboard-v2/components/desk-routine-calendar";
-import { AttentionSummary } from "../dashboard-v2/components/desk-routine-attention";
+import { AttentionSummary, coverageText } from "../dashboard-v2/components/desk-routine-attention";
 import { RoutineDisplayChoice } from "../dashboard-v2/components/desk-routine-display";
 import { routineAnswer, routineTestRuntime } from "./routine-owner-fixture";
 
@@ -122,6 +122,9 @@ describe("needs-attention evidence", () => {
     const retained = renderToStaticMarkup(<AttentionSummary groups={[]} history={{ key: "k", kind: "ready", records: [], coverage: "complete", reachedStart: false, oldest: "2026-11-02T06:00:00Z", checked: 40 }} view={{ installed: [], pending: [], done: [], changes: [] }} inventoryError={false} timezone="UTC" />);
     expect(retained).toContain("the owner retains no records before");
     expect(retained).not.toContain("history is covered");
+    const beforePeriod = coverageText({ key: "k", kind: "ready", records: [], coverage: "partial", reachedStart: false, oldest: "2026-11-20T00:00:00Z", checked: 1000 }, "UTC");
+    expect(beforePeriod).toContain("before any of this period's records");
+    expect(beforePeriod).toContain("Failures in this period are unknown");
     const failure = renderToStaticMarkup(<AttentionSummary groups={[]} history={{ key: "k", kind: "error", message: "Owner down." }} view={undefined} inventoryError timezone="UTC" />);
     expect(failure).toContain("Failures in this period are unknown");
     expect(failure).toContain("Pending approvals not loaded");

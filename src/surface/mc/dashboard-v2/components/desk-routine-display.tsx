@@ -10,6 +10,7 @@ export function useRoutineDisplay(revision: number) {
   const [changes, setChanges] = useState<Record<string, DisplayChange>>({});
   const current = useRef(preferences); current.current = preferences;
   const tokens = useRef(new Map<string, number>());
+  const clearChange = useCallback((routineId: string): void => { setChanges(({ [routineId]: _removed, ...rest }) => rest); }, []);
   useEffect(() => {
     const abort = new AbortController(); setError(null);
     void readDisplay(abort.signal).then((next) => {
@@ -27,16 +28,16 @@ export function useRoutineDisplay(revision: number) {
     void saveDisplay(scope, routineId, mode).then((result) => {
       if (tokens.current.get(routineId) !== token || !sameScope(current.current?.scope, result)) return;
       setPreferences((previous) => previous ? withDisplay(previous, result) : previous);
-      setChanges((previous) => { const next = { ...previous }; delete next[routineId]; return next; });
+      clearChange(routineId);
     }).catch((failed: unknown) => {
       if (tokens.current.get(routineId) !== token) return;
       setChanges((previous) => ({ ...previous, [routineId]: { mode, busy: false, error: failure(failed) } }));
     });
-  }, []);
+  }, [clearChange]);
   const dismiss = useCallback((routineId: string): void => {
     tokens.current.set(routineId, (tokens.current.get(routineId) ?? 0) + 1);
-    setChanges((previous) => { const next = { ...previous }; delete next[routineId]; return next; });
-  }, []);
+    clearChange(routineId);
+  }, [clearChange]);
   return { preferences, error, changes, change, dismiss };
 }
 

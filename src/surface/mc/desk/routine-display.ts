@@ -6,9 +6,9 @@ export const ROUTINE_DISPLAY_SQL = [
   `CREATE TABLE IF NOT EXISTS desk_routine_display (
     principal TEXT NOT NULL,
     stack TEXT NOT NULL,
-    owner TEXT NOT NULL CHECK(owner = 'reflex'),
+    owner TEXT NOT NULL,
     routine_id TEXT NOT NULL,
-    mode TEXT NOT NULL CHECK(mode = 'background'),
+    mode TEXT NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (principal, stack, owner, routine_id)
   )`,

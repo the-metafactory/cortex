@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { RoutineInventory } from "../../desk/routine-editor-contract";
 import type { RoutineDisplayMode } from "../../desk/routine-display-contract";
 import type { RoutinesLocation } from "../hooks/use-routines-location";
+import { Pager } from "./desk-routine-attention";
 import { backgroundLane, calendarDays, moveCalendar, readCalendar, zonedDate, type CalendarOccurrence, type CalendarRead } from "../lib/routine-calendar";
 
 const dateLabel = (date: string, options: Intl.DateTimeFormatOptions): string => new Date(`${date}T12:00:00Z`).toLocaleDateString(undefined, { ...options, timeZone: "UTC" });
@@ -29,7 +30,7 @@ export function BackgroundRow({ routineId, name, schedule, timezone, entries, co
     <button type="button" className="desk-btn" aria-expanded={open} aria-controls={detail} onClick={() => { setOpen(!open); setPage(0); }}>{count}</button>
     {open && <div id={detail} className="routine-background-detail"><p className="soft">Owner-provided planned starts in {displayTimezone}{complete ? "" : "; this period's result is incomplete"}. Planned triggers, not execution results.</p>
       <div className="routine-background-times">{entries.slice(page * 48, (page + 1) * 48).map((entry) => <time key={entry.scheduledFor} dateTime={entry.scheduledFor}>{dateLabel(zonedDate(entry.scheduledFor, displayTimezone), { weekday: "short", day: "numeric" })} {timeLabel(entry.scheduledFor, displayTimezone)}</time>)}</div>
-      <div className="desk-acts">{pages > 1 && <><button className="desk-btn" type="button" disabled={page === 0} onClick={() => { setPage(page - 1); }}>Earlier starts</button><span>Page {page + 1} of {pages}</span><button className="desk-btn" type="button" disabled={page + 1 >= pages} onClick={() => { setPage(page + 1); }}>Later starts</button></>}
+      <div className="desk-acts">{pages > 1 && <Pager page={page} pages={pages} onPage={setPage} previous="Earlier starts" next="Later starts" />}
         <button className="desk-btn" type="button" onClick={() => { onSelect(routineId); }}>Open routine workspace</button>{onDisplay && <button className="desk-btn" type="button" onClick={() => { onDisplay(routineId, "scheduled"); }}>Show individual scheduled starts</button>}</div>
     </div>}
   </li>;
