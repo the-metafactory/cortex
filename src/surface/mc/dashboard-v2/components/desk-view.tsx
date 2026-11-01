@@ -14,6 +14,7 @@ import { chimeForNew } from "../lib/desk-chime";
 import { browserNotifyEnv, dismissHint, notifyForNew, requestNotifications, wantsHint } from "../lib/desk-notify";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
 import { ProposalCard, proposalTitle } from "./desk-proposal";
+import { useRoutinesLocation, defaultRoutinesLocation } from "../hooks/use-routines-location";
 import { useSettingsLocation } from "../hooks/use-settings-location";
 import { DeskSettings } from "./desk-settings";
 import { changeVips } from "../lib/desk-settings";
@@ -35,7 +36,10 @@ interface DeskViewProps {
 export function DeskView({ onOpenMissionControl }: DeskViewProps) {
   const { view, enabled, error, reload } = useDesk(true);
   const [settings, setSettings] = useSettingsLocation();
-  const [routines, setRoutines] = useState(false);
+  const [routines, setRoutines] = useRoutinesLocation();
+  const [visitedRoutines, setVisitedRoutines] = useState(routines);
+  useEffect(() => { if (routines) setVisitedRoutines(routines); }, [routines]);
+  const routineLocation = routines ?? visitedRoutines;
   if (!enabled) {
     return (
       <div className="desk desk-off">
@@ -52,21 +56,10 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
       </div>
     );
   }
-  if (routines) return <DeskRoutineEditor onBack={() => { setRoutines(false); reload(); }} />;
-  if (settings) {
-    return (
-      <DeskSettings
-        view={view}
-        group={settings}
-        onGroup={setSettings}
-        onBack={() => {
-          setSettings(null);
-          reload();
-        }}
-      />
-    );
-  }
-  return <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} onOpenSettings={() => { setSettings("calendars"); }} onOpenRoutines={() => { setRoutines(true); }} onChanged={reload} />;
+  return <>
+    {routineLocation && <div hidden={!routines}><DeskRoutineEditor location={routineLocation} onLocation={setRoutines} view={view.routines} onChanged={reload} onBack={() => { setRoutines(null); reload(); }} /></div>}
+    {!routines && (settings ? <DeskSettings view={view} group={settings} onGroup={setSettings} onBack={() => { setSettings(null); reload(); }} /> : <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} onOpenSettings={() => { setSettings("calendars"); }} onOpenRoutines={() => { setRoutines(visitedRoutines ?? defaultRoutinesLocation()); }} onChanged={reload} />)}
+  </>;
 }
 
 export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = () => {}, onOpenRoutines, onChanged = () => {} }: { view: DeskViewModel; error: string | null; onOpenSettings?: () => void; onOpenRoutines?: () => void; onChanged?: () => void } & DeskViewProps) {

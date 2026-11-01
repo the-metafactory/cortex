@@ -3,7 +3,7 @@ import { postJson } from "../lib/api";
 import type { RoutineAction } from "../../desk/routine-store";
 import type { RoutineView } from "../../desk/routine-command";
 
-function RoutineButton({ action, target, children, onChanged, retryId }: { action: RoutineAction["action"]; target: string; children: string; onChanged: () => void; retryId?: string }) {
+export function RoutineButton({ action, target, children, onChanged, retryId }: { action: RoutineAction["action"]; target: string; children: string; onChanged: () => void; retryId?: string }) {
   const requestId = useRef(retryId ?? crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
