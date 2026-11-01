@@ -18,6 +18,8 @@ routine_flow_contract_command: [pulse, routine-contract]
 
 The executable must be available in the daemon's PATH; an explicit portable deployment path can also be configured. Reflex owns the update and revision check. Cortex does not write owner files. Generated, owner-marked flows support updates; external definitions remain read-only. A missing inspection command fails closed.
 
+The `scripts/desk-compose.ts` wrapper also accepts `--routine-edit` and forwards it to the installed Pulse CLI while preserving its configured model URL, model and credential environment-variable name. Set `--pulse-bin <executable>` when Pulse is outside the daemon's PATH. Routine creation continues to use the wrapper's trusted action catalog.
+
 The initial editable contract covers retry attempts, backoff and delay parameters, derived from the same Pulse schema used to validate retry execution. Other steps remain inspectable and explain why editing is unavailable. Unclassified parameters are hidden rather than guessed safe. No routine execution is used to preview an edit.
 
 Routines currently have no area classification metadata. AI editing uses the already configured routine composer route and passes only owner-redacted flow metadata. The API refuses a supplied local-area restriction because the composer cannot attest that restriction; it does not silently downgrade it.
