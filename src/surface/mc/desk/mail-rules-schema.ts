@@ -4,8 +4,11 @@ export type RuleMatch = (typeof RULE_MATCHES)[number];
 export const RULE_ACTIONS = ["archive", "junk", "trash", "digest"] as const;
 export type RuleAction = (typeof RULE_ACTIONS)[number];
 
-export const RULE_STATES = ["on", "off", "never", "later"] as const;
+export const RULE_STATES = ["on", "off"] as const;
 export type RuleState = (typeof RULE_STATES)[number];
+
+export const PROPOSAL_ANSWERS = ["later", "never"] as const;
+export type ProposalAnswer = (typeof PROPOSAL_ANSWERS)[number];
 
 export interface MailRulesConfig {
   proposeAfter: number;
@@ -22,7 +25,6 @@ export const MAIL_RULES_SQL = [
     value TEXT NOT NULL,
     action TEXT NOT NULL,
     state TEXT NOT NULL,
-    until INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     last_run_at INTEGER,
@@ -30,6 +32,15 @@ export const MAIL_RULES_SQL = [
     held INTEGER,
     released INTEGER NOT NULL DEFAULT 0,
     UNIQUE (match, value)
+  )`,
+  `CREATE TABLE IF NOT EXISTS desk_mail_rule_answers (
+    match TEXT NOT NULL,
+    value TEXT NOT NULL,
+    action TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    until INTEGER,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (match, value)
   )`,
   `CREATE TABLE IF NOT EXISTS desk_mail_rule_runs (
     id TEXT PRIMARY KEY,

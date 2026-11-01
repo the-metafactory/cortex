@@ -117,10 +117,11 @@ describe("rule proposals from the decision log", () => {
 });
 
 describe("matching", () => {
-  it("matches sender, domain and subdomain, List-Id and subject text", () => {
+  it("matches sender, the exact domain its evidence came from, List-Id and subject text", () => {
     const m = mail("x", "Alerts@Mx.Shop.Example", { subject: "Your DMARC Aggregate Report", headers: { listId: "<Alerts.Shop.Example>" } });
     expect(matchesRule({ match: "sender", value: "alerts@mx.shop.example" }, m)).toBe(true);
-    expect(matchesRule({ match: "domain", value: "shop.example" }, m)).toBe(true);
+    expect(matchesRule({ match: "domain", value: "mx.shop.example" }, m)).toBe(true);
+    expect(matchesRule({ match: "domain", value: "shop.example" }, m)).toBe(false);
     expect(matchesRule({ match: "domain", value: "hop.example" }, m)).toBe(false);
     expect(matchesRule({ match: "list", value: "<alerts.shop.example>" }, m)).toBe(true);
     expect(matchesRule({ match: "subject", value: "dmarc aggregate" }, m)).toBe(true);

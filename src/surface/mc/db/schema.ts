@@ -133,6 +133,7 @@ export const TABLE_NAMES = [
   "desk_mail_moves",
   "desk_mail_log",
   "desk_mail_rules",
+  "desk_mail_rule_answers",
   "desk_mail_rule_runs",
 ] as const;
 

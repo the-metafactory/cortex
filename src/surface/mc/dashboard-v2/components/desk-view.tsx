@@ -318,14 +318,17 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.spam") confirmFirst(item, a, () => move(item, a, "junk"));
     else if (a.id === "mail.draft" && item.reply) openReply(item);
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
-    else if (a.id === "mailrule.approve" || a.id === "mailrule.later" || a.id === "mailrule.never") void send(item, a, { request: () => submitMailRule({ op: a.id === "mailrule.approve" ? "approve" : a.id === "mailrule.later" ? "later" : "never", proposal: item.key }) });
-    else if ((a.id === "mailrule.release" || a.id === "mailrule.stop") && a.target) {
-      const rule = a.target;
-      void send(item, a, { request: () => submitMailRule({ op: a.id === "mailrule.release" ? "release" : "stop", rule }) });
-    }
+    else if (a.id.startsWith("mailrule.")) runRule(item, a);
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
+  };
+
+  const runRule = (item: DeskItem, a: DeskAction): void => {
+    const op = a.id.slice("mailrule.".length);
+    const rule = a.target;
+    if (op === "approve" || op === "later" || op === "never") void send(item, a, { request: () => submitMailRule({ op, proposal: item.key }) });
+    else if ((op === "release" || op === "stop") && rule) void send(item, a, { request: () => submitMailRule({ op, rule }) });
   };
 
   const openRuling = (item: DeskItem): void => {

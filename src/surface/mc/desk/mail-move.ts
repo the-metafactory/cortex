@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { oneLine } from "./actions";
 import type { WriterRunner } from "./create";
 import type { ListedMail, MailActionsConfig, TrashLedger } from "./mail-actions";
-import { loggedFeatures, logMailDecision, mailFeatures, senderDomain, type MailFeatures, type MailLogAction } from "./mail-log";
+import { loggedFeatures, logMailDecision, mailFeatures, senderDomain, type MailFeatures, type MailLogAction, type MailLogWhere } from "./mail-log";
 import { CommandTimeout } from "./spawn";
 import { DAY_MS } from "./time";
 import { addSender, isVip, listVips, normalizeVip } from "./vips";
@@ -94,6 +94,8 @@ async function runClaimed(deps: MoveDeps, timeoutSeconds: number, c: Claimed, do
  * contract asks the command to move only, never to delete or expunge; its last stderr line is the refusal shown.
  */
 export interface MoveBy {
+  where: MailLogWhere;
+  doneAction: string;
   title: string;
   recorded: (moveId: string) => void;
 }
@@ -113,7 +115,7 @@ export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveD
     deps.ledger.add(movedKey(target, mail.id), deps.now);
     const { message, folder } = printed(stdout, `Moved to ${FOLDER[target]}.`);
     if (command !== "move") {
-      logMailDecision(deps.db, features, logAs, by ? "rule" : "desk", deps.now, folder ?? FOLDER[target]);
+      logMailDecision(deps.db, features, logAs, by?.where ?? "desk", deps.now, folder ?? FOLDER[target]);
       return { ok: true, message };
     }
     const id = (deps.newId ?? (() => crypto.randomUUID()))();
@@ -121,9 +123,9 @@ export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveD
       deps.db.query("INSERT INTO desk_mail_moves (id, account, message_id, target, sender, folder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .run(id, account, mail.id, target, mail.from.address.toLowerCase(), folder, deps.now);
       deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, ?, ?, ?, 'done', ?, ?, ?)")
-        .run(`mail-move:${id}`, by ? "mail.rule" : "mail.move", id, by ? `${by.title}: “${mail.subject}”` : `${DONE[target]}: “${mail.subject}”`, message, deps.now, deps.now);
+        .run(`mail-move:${id}`, by?.doneAction ?? "mail.move", id, `${by?.title ?? DONE[target]}: “${mail.subject}”`, message, deps.now, deps.now);
       by?.recorded(id);
-      logMailDecision(deps.db, features, logAs, by ? "rule" : "desk", deps.now, folder ?? FOLDER[target]);
+      logMailDecision(deps.db, features, logAs, by?.where ?? "desk", deps.now, folder ?? FOLDER[target]);
     })();
     return { ok: true, message, undo: id, ...(target === "junk" ? { block: `@${senderDomain(mail.from.address)}` } : {}) };
   });

@@ -158,7 +158,7 @@ export async function composeDesk(
     const setting = calendars.get(calendarKey(e.sourceId, calendarName(e)));
     return setting?.enabled ? [{ ...e, calendar: setting.name, color: setting.color }] : [];
   });
-  const digested = digestedIds(db);
+  const digested = digestedIds(db, readings.flatMap((r) => r.mail.map((m) => m.id)));
   const mail = readings.flatMap((r) => r.mail.filter((m) => !digested.has(m.id) && (!deps.handled || movedTarget(deps.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
   const vipSet = new Set(vips.map((v) => v.address));

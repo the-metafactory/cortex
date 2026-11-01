@@ -66,7 +66,6 @@ interface RuleRow {
   value: string;
   action: RuleAction;
   state: RuleState;
-  until: number | null;
   created_at: number;
   last_run_at: number | null;
   count: number;
@@ -84,7 +83,7 @@ interface RunRow {
   undone_at: number | null;
 }
 
-const RULE_COLUMNS = "id, match, value, action, state, until, created_at, last_run_at, count, held, released";
+const RULE_COLUMNS = "id, match, value, action, state, created_at, last_run_at, count, held, released";
 const RUN_COLUMNS = "id, rule_id, message_id, action, status, created_at, undone_at";
 
 const toRule = (r: RuleRow): MailRule => ({
@@ -137,16 +136,14 @@ export function normalizeRuleValue(match: RuleMatch, raw: string): string | { er
 
 const listIdOf = (mail: Pick<SourceMail, "headers">): string => mail.headers?.listId?.trim().toLowerCase() ?? "";
 
-/** True when the mail matches the rule's sender, domain, List-Id or subject text. It does not look at VIPs. */
+/** True when the mail matches the rule's sender, exact domain, List-Id or subject text. It does not look at VIPs. */
 export function matchesRule(rule: Pick<MailRule, "match" | "value">, mail: Pick<SourceMail, "from" | "subject" | "headers">): boolean {
   const address = mail.from.address.trim().toLowerCase();
   switch (rule.match) {
     case "sender":
       return address === rule.value;
-    case "domain": {
-      const domain = address.slice(address.lastIndexOf("@") + 1);
-      return domain === rule.value || domain.endsWith(`.${rule.value}`);
-    }
+    case "domain":
+      return address.slice(address.lastIndexOf("@") + 1) === rule.value;
     case "list":
       return listIdOf(mail) === rule.value;
     case "subject":
@@ -162,8 +159,8 @@ export function ruleFor(rules: readonly MailRule[], mail: Pick<SourceMail, "from
 
 const allRows = (db: Database): RuleRow[] => db.query<RuleRow, []>(`SELECT ${RULE_COLUMNS} FROM desk_mail_rules ORDER BY created_at, id`).all();
 
-/** The approved rules, on or off, oldest first. Answers to proposals (Not now, Never) are not rules. */
-export const listRules = (db: Database): MailRule[] => allRows(db).filter((r) => r.state === "on" || r.state === "off").map(toRule);
+/** The approved rules, on or off, oldest first. Answers to proposals (Not now, Never) live in desk_mail_rule_answers. */
+export const listRules = (db: Database): MailRule[] => allRows(db).map(toRule);
 
 export const ruleById = (db: Database, id: string): MailRule | null => listRules(db).find((r) => r.id === id) ?? null;
 
@@ -193,9 +190,13 @@ const ranIds = (db: Database, ids: string[]): Set<string> => {
   return new Set(db.query<{ message_id: string }, [string]>("SELECT message_id FROM desk_mail_rule_runs WHERE message_id IN (SELECT value FROM json_each(?))").all(JSON.stringify(ids)).map((r) => r.message_id));
 };
 
-/** Mails a rule kept for the digest and nobody took back: they stay off the Desk. */
-export const digestedIds = (db: Database): Set<string> =>
-  new Set(db.query<{ message_id: string }, []>("SELECT message_id FROM desk_mail_rule_runs WHERE action = 'digest' AND status = 'done' AND undone_at IS NULL").all().map((r) => r.message_id));
+/** Of the given mails, those a rule kept for the digest and nobody took back: they stay off the Desk. */
+export function digestedIds(db: Database, ids: string[]): Set<string> {
+  if (ids.length === 0) return new Set();
+  return new Set(db
+    .query<{ message_id: string }, [string]>("SELECT message_id FROM desk_mail_rule_runs WHERE message_id IN (SELECT value FROM json_each(?)) AND action = 'digest' AND status = 'done' AND undone_at IS NULL")
+    .all(JSON.stringify(ids)).map((r) => r.message_id));
+}
 
 const rulesRun = (db: Database): boolean => listGrants(db).has(RULES_GRANT);
 
@@ -222,7 +223,8 @@ const proposalKey = (match: RuleMatch, value: string, action: RuleAction): strin
  * are left out.
  */
 export function proposeRules(db: Database, now: number, config: MailRulesConfig = DEFAULT_MAIL_RULES, vips: ReadonlySet<string> = new Set(listVips(db).map((v) => v.address))): RuleProposal[] {
-  const answered = new Set(allRows(db).filter((r) => r.state !== "later" || (r.until ?? 0) > now).map((r) => `${r.match}\u0000${r.value}`));
+  const answers = db.query<{ match: string; value: string }, [number]>("SELECT match, value FROM desk_mail_rule_answers WHERE answer = 'never' OR until > ?").all(now);
+  const answered = new Set([...allRows(db), ...answers].map((r) => `${r.match}\u0000${r.value}`));
   const entries = queryMailLog(db, { since: now - config.windowDays * DAY_MS, limit: 5000 }).filter((e) => e.where !== "rule" && DECISIVE.has(e.action));
   const groups = new Map<string, { match: RuleMatch; value: string; entries: MailLogEntry[] }>();
   const add = (match: RuleMatch, value: string | null, e: MailLogEntry): void => {
@@ -328,12 +330,12 @@ function checked(db: Database, edit: { match: unknown; value: unknown; action: u
   const value = normalizeRuleValue(edit.match, edit.value);
   if (typeof value !== "string") return refuse(400, value.error);
   const clash = allRows(db).find((r) => r.match === edit.match && r.value === value && r.id !== except);
-  if (clash && (clash.state === "on" || clash.state === "off")) return refuse(409, `You already have a rule for that: ${ruleSentence(clash)}.`);
+  if (clash) return refuse(409, `You already have a rule for that: ${ruleSentence(clash)}.`);
   return { match: edit.match, value, action: edit.action };
 }
 
-const clearAnswer = (db: Database, match: RuleMatch, value: string, except: string | null): void => {
-  db.query("DELETE FROM desk_mail_rules WHERE match = ? AND value = ? AND state IN ('later','never') AND id IS NOT ?").run(match, value, except);
+const clearAnswer = (db: Database, match: RuleMatch, value: string): void => {
+  db.query("DELETE FROM desk_mail_rule_answers WHERE match = ? AND value = ?").run(match, value);
 };
 
 /** Creates an approved rule and turns on the mail.rules grant: approving is the principal's say-so. */
@@ -342,7 +344,7 @@ export function createRule(db: Database, edit: { match: unknown; value: unknown;
   if ("ok" in rule) return rule;
   const id = newId();
   db.transaction(() => {
-    clearAnswer(db, rule.match, rule.value, null);
+    clearAnswer(db, rule.match, rule.value);
     db.query("INSERT INTO desk_mail_rules (id, match, value, action, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'on', ?, ?)").run(id, rule.match, rule.value, rule.action, now, now);
     setGrant(db, RULES_GRANT, true, now);
   })();
@@ -360,9 +362,8 @@ export function answerProposal(db: Database, key: string, answer: "approve" | "l
   if (!p) return refuse(409, "That proposal is gone: the log no longer supports it, or you already answered it.");
   if (answer === "approve") return createRule(db, p, now, newId);
   db.transaction(() => {
-    clearAnswer(db, p.match, p.value, null);
-    db.query("INSERT INTO desk_mail_rules (id, match, value, action, state, until, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(newId(), p.match, p.value, p.action, answer, answer === "later" ? now + LATER_MS : null, now, now);
+    db.query("INSERT INTO desk_mail_rule_answers (match, value, action, answer, until, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(match, value) DO UPDATE SET action = excluded.action, answer = excluded.answer, until = excluded.until, created_at = excluded.created_at")
+      .run(p.match, p.value, p.action, answer, answer === "later" ? now + LATER_MS : null, now);
   })();
   return { ok: true, message: answer === "later" ? "The Desk will ask again in a week if the log still agrees." : "The Desk will not propose this rule again." };
 }
@@ -372,7 +373,7 @@ export function editRule(db: Database, id: string, edit: { match: unknown; value
   const rule = checked(db, edit, id);
   if ("ok" in rule) return rule;
   db.transaction(() => {
-    clearAnswer(db, rule.match, rule.value, id);
+    clearAnswer(db, rule.match, rule.value);
     db.query("UPDATE desk_mail_rules SET match = ?, value = ?, action = ?, held = NULL, released = 0, updated_at = ? WHERE id = ?").run(rule.match, rule.value, rule.action, now, id);
   })();
   return { ok: true, message: `Saved: ${ruleSentence(rule)}.`, ...withView(db, id) };
@@ -444,7 +445,7 @@ async function handleOne(rule: MailRule, mail: ListedMail, deps: RulePassDeps): 
   }
   if (!deps.mailActions?.move?.length) return "skipped";
   const moveDeps: MoveDeps = { db, config: deps.mailActions, ledger: deps.ledger, run: deps.run, now, newId: () => id };
-  const result = await moveMail(mail, rule.action, moveDeps, rule.action, features, { title: DONE_BY[rule.action], recorded: (moveId) => { recordRun(db, rule, mail, moveId, "done", now); } });
+  const result = await moveMail(mail, rule.action, moveDeps, rule.action, features, { where: "rule", doneAction: "mail.rule", title: DONE_BY[rule.action], recorded: (moveId) => { recordRun(db, rule, mail, moveId, "done", now); } });
   if (result.ok) return "done";
   if (result.status === 409) return "skipped";
   db.transaction(() => {
