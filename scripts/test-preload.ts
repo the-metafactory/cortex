@@ -1,8 +1,9 @@
-import { homedir } from "node:os";
-import { checkTestHome } from "./lib/test-home";
+import { homedir, tmpdir } from "node:os";
+import { checkTestHome, checkTestTmp } from "./lib/test-home";
 
-const verdict = checkTestHome(process.env, homedir());
-if (!verdict.ok) {
-  console.error(verdict.reason);
-  process.exit(2);
+for (const verdict of [checkTestHome(process.env, homedir()), checkTestTmp(process.env, tmpdir())]) {
+  if (!verdict.ok) {
+    console.error(verdict.reason);
+    process.exit(2);
+  }
 }
