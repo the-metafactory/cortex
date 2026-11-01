@@ -6,6 +6,7 @@ export const SETTINGS_GROUPS = [
   { id: "unimportant", label: "Unimportant senders" },
   { id: "notifications", label: "Notifications" },
   { id: "mail-sorting", label: "Mail sorting" },
+  { id: "mail-rules", label: "Mail rules" },
 ] as const;
 
 export type SettingsGroup = typeof SETTINGS_GROUPS[number]["id"];

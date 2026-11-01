@@ -16,6 +16,7 @@ import { listSenders, listVips } from "./vips";
 import type { MailActionsConfig } from "./mail-actions";
 import { movedTarget } from "./mail-move";
 import { historySentence, mailLogFor, type MailLogEntry } from "./mail-log";
+import { DEFAULT_MAIL_RULES, digestedIds, heldItems, listRules, pendingRuleMail, proposalItems, proposeRules, ruleViews, rulesOfRuns, type MailRuleLoop, type MailRulesConfig } from "./mail-rules";
 import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskCorrection, DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
@@ -50,6 +51,7 @@ export interface DeskRuntime {
   mailClassifier?: MailClassifier;
   rulingExplain?: RulingExplainLoop;
   rulings?: RulingLedger;
+  mailRules?: MailRuleLoop;
 }
 
 export interface DeskAskOptions {
@@ -81,6 +83,7 @@ export interface DeskOptions {
   rulingExplainer?: ModelConfig;
   mailActions?: MailActionsConfig;
   mailLog?: { retentionDays: number };
+  mailRules?: MailRulesConfig;
   mailLinks?: EvidenceLinks;
   voice?: VoiceOptions;
 }
@@ -155,13 +158,16 @@ export async function composeDesk(
     const setting = calendars.get(calendarKey(e.sourceId, calendarName(e)));
     return setting?.enabled ? [{ ...e, calendar: setting.name, color: setting.color }] : [];
   });
-  const mail = readings.flatMap((r) => r.mail.filter((m) => !deps.handled || movedTarget(deps.handled, m.id) === undefined).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
+  const digested = digestedIds(db, readings.flatMap((r) => r.mail.map((m) => m.id)));
+  const mail = readings.flatMap((r) => r.mail.filter((m) => !digested.has(m.id) && (!deps.handled || movedTarget(deps.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
+  const vipSet = new Set(vips.map((v) => v.address));
+  const ruleBound = pendingRuleMail(db, mail, vipSet);
   const unimportant = listSenders(db, "unimportant").map((s) => s.address);
   const corrections = readCorrections(db);
   const activeCorrections = corrections.ok ? corrections.corrections : [];
   const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
-  if (classifier) void classifier.kick(db, { now, mail, events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(activeCorrections) });
+  if (classifier) void classifier.kick(db, { now, mail: mail.filter((m) => !ruleBound.has(m.id)), events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(activeCorrections) });
   const classified = classifier ? readClassifications(db, mail.filter((m) => m.unread).map((m) => m.id)) : undefined;
   const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null) : null;
   const yesFilter = await mailYesFilter(db, desk, now);
@@ -189,11 +195,14 @@ export async function composeDesk(
   const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
     .filter((item) => goalListed(goalStatuses, item.goal));
   const canMove = Boolean(desk.mailActions?.move?.length);
+  const rulesConfig = desk.mailRules ?? DEFAULT_MAIL_RULES;
+  const ruleCards = canMove ? [...heldItems(listRules(db), rulesConfig), ...proposalItems(proposeRules(db, now, rulesConfig, vipSet), now)] : [];
   const corrected = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
     ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
+    ...ruleCards,
   ], rules, readDeliveries(db), now), activeCorrections);
   const mailLog = mailLogFor(db, corrected.filter(i => i.kind === "mail").map(i => mailIdOf(i.key)));
   const items = corrected.map(item => item.kind === "mail" ? withMailLog({ ...item, mailDecision: readMailDecision(db, item.source, mailIdOf(item.key)) }, mailLog, now) : item);
@@ -231,7 +240,8 @@ export async function composeDesk(
     voice: voiceView(desk.voice),
     chime: rules.chime,
     notifications: rules.notifications,
-    autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio)),
+    autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio), canMove),
+    ...(canMove ? { mailRules: ruleViews(db) } : {}),
     corrections: activeCorrections,
     mailClassifier,
   };
@@ -276,13 +286,25 @@ function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): D
   });
 }
 
-const OWN_LINE = ["studio.capture", "mail.move"];
+const OWN_LINE = ["studio.capture", "mail.move", "mail.rule"];
 
-function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, studio: boolean): DeskView["autonomy"] {
+function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, studio: boolean, canMove: boolean): DeskView["autonomy"] {
   const grants = listGrants(db);
+  const shown = done.filter((d) => d.status !== "running").slice(0, 10);
+  const ruleOf = rulesOfRuns(db, shown.filter((d) => d.action.startsWith("mail.rule")).map((d) => d.itemKey));
+  const on = new Set(listRules(db).filter((r) => r.on).map((r) => r.id));
+  const ready = (a: string): boolean => a === "studio.capture" ? studio : a === "mail.rules" ? canMove && (grants.has(a) || on.size > 0) : rangerActions;
   return {
-    types: PROMOTABLE.filter((a) => a === "studio.capture" ? studio : rangerActions).map((action) => ({ action, ...PROMOTABLE_LABELS[action], on: grants.has(action) })),
-    done: done.filter((d) => d.status !== "running").slice(0, 10).map((d) => ({ key: d.attemptKey, ...(OWN_LINE.some((a) => d.action.startsWith(a)) ? { action: d.action, ...(OWN_LINE.includes(d.action) ? { undo: d.itemKey } : {}) } : {}), title: d.title, message: d.message ?? "", at: d.createdAt, ok: d.status === "done" })),
+    types: PROMOTABLE.filter(ready).map((action) => ({ action, ...PROMOTABLE_LABELS[action], on: grants.has(action) })),
+    done: shown.map((d) => {
+      const rule = ruleOf.get(d.itemKey);
+      return {
+        key: d.attemptKey,
+        ...(OWN_LINE.some((a) => d.action.startsWith(a)) ? { action: d.action, ...(OWN_LINE.includes(d.action) ? { undo: d.itemKey } : {}) } : {}),
+        ...(rule && on.has(rule) ? { stop: rule } : {}),
+        title: d.title, message: d.message ?? "", at: d.createdAt, ok: d.status === "done",
+      };
+    }),
   };
 }
 

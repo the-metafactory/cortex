@@ -77,6 +77,8 @@ import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
 import { handleGetDesk } from "./api/desk";
 import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
 import { handleDeskMail } from "./api/desk-mail";
+import { handleDeskMailRules } from "./api/desk-mail-rules";
+import { DEFAULT_MAIL_RULES, MailRuleLoop } from "./desk/mail-rules";
 import { handleDeskCorrections } from "./api/desk-corrections";
 import { handleDeskAction, handleDeskAutonomy } from "./api/desk-action";
 import { handleDeskCaptureUndo, handleDeskAsk, handleDeskCreate, handleDeskNoteDone } from "./api/desk-ask";
@@ -91,7 +93,7 @@ import { RulingExplainLoop, RulingLedger, rulingExplainer } from "./desk/ruling"
 import { RecentCalendarWrites, spawnWithStdin } from "./desk/create";
 import { HandledLedger } from "./desk/actions";
 import type { DeskOptions, DeskRuntime } from "./desk/compose";
-import { SourceCache, spawnCommand } from "./desk/sources/command";
+import { SourceCache, spawnCommand, type SourceReading } from "./desk/sources/command";
 import { ClientMailLog } from "./desk/mail-client-log";
 import { DEFAULT_MAIL_LOG_RETENTION_DAYS } from "./desk/mail-log";
 import { startDeskAutonomy, startDeskPushes } from "./desk/push";
@@ -189,9 +191,15 @@ export function startServer(
   const wsRegistry = new WsClientRegistry();
   const deskLedger = new HandledLedger();
   const deskClientMail = options.desk ? new ClientMailLog({ db, config: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, retentionDays: options.desk.mailLog?.retentionDays ?? DEFAULT_MAIL_LOG_RETENTION_DAYS }) : undefined;
-  const deskSourceCache = new SourceCache(spawnCommand, deskClientMail ? (prev, next) => deskClientMail.observe(prev, next) : undefined);
+  const deskMailRules: MailRuleLoop | undefined = options.desk?.mailActions?.move?.length
+    ? new MailRuleLoop({ db, mailActions: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, config: options.desk.mailRules ?? DEFAULT_MAIL_RULES }, (): SourceReading[] => deskSourceCache.cached())
+    : undefined;
+  const deskSourceCache: SourceCache = new SourceCache(spawnCommand, deskClientMail || deskMailRules ? (prev, next) => {
+    void deskClientMail?.observe(prev, next);
+    void deskMailRules?.kick();
+  } : undefined);
   const deskRecentWrites = new RecentCalendarWrites();
-  const deskRuntime: DeskRuntime = { waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}) };
+  const deskRuntime: DeskRuntime = { waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}) };
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
@@ -491,6 +499,8 @@ async function handleApi(
   if (pathname === "/api/desk/unimportant") return handleDeskSenders(req, url, db, "unimportant");
 
   if (pathname === "/api/desk/mail") return handleDeskMail(req, db, desk);
+
+  if (pathname === "/api/desk/mail/rules") return handleDeskMailRules(req, db, desk);
 
   if (pathname === "/api/desk/corrections") return handleDeskCorrections(req, url, db);
 

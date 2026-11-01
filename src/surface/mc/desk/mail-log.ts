@@ -185,6 +185,9 @@ export function historySentence(e: MailLogEntry, now: number): string {
         return `Your mail client recorded “${e.action}” for it (${when}).`;
     }
   }
+  if (e.where === "rule") {
+    return e.action === "digest" ? `A rule you approved kept it for the digest (${when}).` : `A rule you approved moved it to ${folder || e.action} (${when}).`;
+  }
   switch (e.action) {
     case "archive":
       return `You archived it on the Desk (${when}).`;

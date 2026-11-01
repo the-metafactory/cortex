@@ -1,5 +1,7 @@
 import { SETTINGS_GROUPS, type SettingsGroup } from "../hooks/use-settings-location";
 import { CalendarSettings } from "./desk-calendar-settings";
+import { MailRuleSettings } from "./desk-mail-rules";
+import type { MailRuleView } from "../../desk/mail-rules";
 import type { DeskCalendar } from "../../desk/calendars";
 import { useEffect, useState, type ReactNode } from "react";
 import { changeSenders, type SenderChange, type SenderListId, type SenderRow } from "../lib/desk-settings";
@@ -54,6 +56,7 @@ export function DeskSettings({ view, onBack, group, onGroup }: { view: DeskView;
       }}
       calendars={view.calendars ?? []}
       classifier={view.mailClassifier ?? null}
+      {...(view.mailRules ? { mailRules: view.mailRules } : {})}
     />
   );
 }
@@ -76,6 +79,7 @@ export interface SettingsBodyProps {
   onEnableNotify: () => void;
   classifier?: DeskMailClassifier | null;
   calendars?: DeskCalendar[];
+  mailRules?: MailRuleView[];
 }
 
 export function classifierLines(c: DeskMailClassifier | null): string[] {
@@ -152,7 +156,7 @@ function SenderCard({ text, list, busy }: { text: SenderCardText; list: SenderLi
   );
 }
 
-export function SettingsBody({ group = "calendars", onGroup, vips, unimportant, busy, onBack, notify, onEnableNotify, classifier = null, calendars = [] }: SettingsBodyProps) {
+export function SettingsBody({ group = "calendars", onGroup, vips, unimportant, busy, onBack, notify, onEnableNotify, classifier = null, calendars = [], mailRules }: SettingsBodyProps) {
   const panel = (id: SettingsGroup, content: ReactNode): ReactNode => (
     <div key={id} id={`settings-panel-${id}`} role="tabpanel" aria-labelledby={`settings-tab-${id}`} hidden={group !== id} tabIndex={0}>{content}</div>
   );
@@ -207,6 +211,10 @@ export function SettingsBody({ group = "calendars", onGroup, vips, unimportant, 
             {panel("mail-sorting", <section className="desk-set-card" aria-label="Mail sorting">
               <h2>Mail sorting</h2>
               <p className="desk-set-sub">{classifierLines(classifier).join(" ")}</p>
+            </section>)}
+            {panel("mail-rules", mailRules ? <MailRuleSettings initial={mailRules} /> : <section className="desk-set-card" aria-label="Mail rules">
+              <h2>Mail rules</h2>
+              <p className="desk-set-sub">Mail rules need the move command. Set mc.desk.mail.actions.move in the stack config.</p>
             </section>)}
           </div>
         </div>

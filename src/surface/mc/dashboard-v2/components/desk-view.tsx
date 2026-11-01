@@ -7,7 +7,7 @@ import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
-import { submitDeskAction, submitGoalAction, submitMailAction, submitRuling, type Outcome } from "../lib/desk-action";
+import { submitDeskAction, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
 import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
 import { newReplyDraft, prepareDeclineDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
 import { chimeForNew } from "../lib/desk-chime";
@@ -261,7 +261,22 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     onChanged();
   };
 
-  const undoDone = (id: string, action?: string): void => void (action === "mail.move" ? undoMove(id) : undoCapture(id));
+  const undoRuleRun = async (id: string): Promise<void> => {
+    const result = await submitMailRule({ op: "undo", run: id });
+    setNote(result.text);
+    if (!result.ok) return;
+    const restored = result.restored;
+    if (restored) setSnoozed((s) => { const next = new Set(s); next.delete(restored); return next; });
+    onChanged();
+  };
+
+  const stopRule = async (rule: string): Promise<void> => {
+    const result = await submitMailRule({ op: "stop", rule });
+    setNote(result.text);
+    if (result.ok) onChanged();
+  };
+
+  const undoDone = (id: string, action?: string): void => void (action === "mail.move" ? undoMove(id) : action === "mail.rule" ? undoRuleRun(id) : undoCapture(id));
 
   const blockDomain = async (r: Receipt): Promise<void> => {
     if (!r.confirmBlock) {
@@ -303,9 +318,17 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.spam") confirmFirst(item, a, () => move(item, a, "junk"));
     else if (a.id === "mail.draft" && item.reply) openReply(item);
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
+    else if (a.id.startsWith("mailrule.")) runRule(item, a);
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
+  };
+
+  const runRule = (item: DeskItem, a: DeskAction): void => {
+    const op = a.id.slice("mailrule.".length);
+    const rule = a.target;
+    if (op === "approve" || op === "later" || op === "never") void send(item, a, { request: () => submitMailRule({ op, proposal: item.key }) });
+    else if ((op === "release" || op === "stop") && rule) void send(item, a, { request: () => submitMailRule({ op, rule }) });
   };
 
   const openRuling = (item: DeskItem): void => {
@@ -506,7 +529,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       {inStudio && (
         <div className="dst">
           {proposalCard}
-          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onPromote={(action, on) => void promote(action, on)} />
+          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => void stopRule(rule)} onPromote={(action, on) => void promote(action, on)} />
         </div>
       )}
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
@@ -624,7 +647,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             )}
           </section>
 
-          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onPromote={(action, on) => void promote(action, on)} />
+          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => void stopRule(rule)} onPromote={(action, on) => void promote(action, on)} />
 
           <section className="desk-msec">
             <h3 className="desk-mh">The rest</h3>
@@ -1031,7 +1054,7 @@ export function AheadStrip({ events }: { events: DeskEvent[] }) {
 
 const ownLine = (d: DeskViewModel["autonomy"]["done"][number]): boolean => d.action !== undefined;
 
-export function DoneForYou({ autonomy, onPromote, onUndo, routines, onChanged = () => {} }: { autonomy: DeskViewModel["autonomy"]; onPromote: (action: string, on: boolean) => void; onUndo?: (id: string, action?: string) => void; routines?: DeskViewModel["routines"]; onChanged?: () => void }) {
+export function DoneForYou({ autonomy, onPromote, onUndo, onStop, routines, onChanged = () => {} }: { autonomy: DeskViewModel["autonomy"]; onPromote: (action: string, on: boolean) => void; onUndo?: (id: string, action?: string) => void; onStop?: (rule: string) => void; routines?: DeskViewModel["routines"]; onChanged?: () => void }) {
   if (autonomy.types.length === 0 && autonomy.done.length === 0 && !routines?.done.length) return null;
   const anyOn = autonomy.types.some((t) => t.on);
   return (
@@ -1043,6 +1066,7 @@ export function DoneForYou({ autonomy, onPromote, onUndo, routines, onChanged = 
           <li key={d.key} className={d.ok ? undefined : "failed"}>
             <div>{ownLine(d) ? d.title : d.ok ? `Retried "${d.title}"` : `Could not retry "${d.title}"`}<small>{ownLine(d) ? d.message : d.ok ? `at ${clock(d.at)}` : d.message}</small>
               {d.undo && onUndo && <button type="button" className="desk-btn" onClick={() => onUndo(d.undo ?? "", d.action)}>Undo</button>}
+              {d.stop && onStop && <button type="button" className="desk-btn ghost" onClick={() => onStop(d.stop ?? "")}>Stop doing this</button>}
             </div>
           </li>
         ))}
