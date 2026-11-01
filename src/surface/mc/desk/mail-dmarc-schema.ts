@@ -1,11 +1,12 @@
-export const DMARC_FAIL_ON = ["dmarc", "spf-or-dkim"] as const;
+import type { DMARC_AFTER, DMARC_FAIL_ON } from "../../../common/types/config";
+
 export type DmarcFailOn = (typeof DMARC_FAIL_ON)[number];
 
 export interface DmarcConfig {
   command: string[];
   domains: string[];
   failOn: DmarcFailOn;
-  after: "archive" | "trash";
+  after: (typeof DMARC_AFTER)[number];
   timeoutSeconds: number;
   maxPerPass: number;
 }

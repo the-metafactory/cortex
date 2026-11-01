@@ -236,41 +236,46 @@ export function dmarcWeek(db: Database, now: number, config: Pick<DmarcConfig, "
 
 const what = (failOn: DmarcFailOn): string => (failOn === "dmarc" ? "failed SPF and DKIM" : "failed SPF or DKIM");
 
+type FailureConfig = Pick<DmarcConfig, "domains" | "failOn">;
+
+function failureCard(row: Row, d: DmarcDomain, config: FailureConfig, area: string | null): DeskItem | null {
+  const failures = failuresOf(d, config.failOn);
+  if (!owns(config.domains, d.domain) || failures === 0) return null;
+  const sources = d.failing.filter((s) => sourceFailures(s, config.failOn) > 0);
+  const top = sources[0];
+  const from = top ? ` from ${top.ip}${sources.length > 1 ? ` and ${plural(sources.length - 1, "other source")}` : ""}` : "";
+  const span = row.begin_at !== null && row.end_at !== null ? `${localDay(row.begin_at)} to ${localDay(row.end_at)}` : "the report's period";
+  const reported = top ? `${plural(sourceFailures(top, config.failOn), "failing mail")} from ${top.ip}` : "failing mail";
+  return {
+    key: `dmarc:${row.message_id}:${d.domain}`,
+    kind: "dmarc",
+    source: "dmarc",
+    area,
+    urgency: "today",
+    title: `${plural(failures, "mail")} as ${d.domain}${from} ${what(config.failOn)}.`,
+    why: `${row.org ?? "A receiver"} reported ${reported} for ${span}. Someone may be sending as your domain, or one of your senders is not set up.`,
+    score: 40,
+    actions: [
+      ...(row.url ? [{ id: "dmarc.open", label: "Open the report", role: "primary" as const, wired: true, url: row.url }] : []),
+      { id: "dmarc.ack", label: "Got it", role: row.url ? "secondary" as const : "primary" as const, wired: true, target: row.message_id },
+    ],
+    detail: {
+      summary: `${d.domain}: ${plural(d.messages, "message")} in this report, SPF failed for ${d.spf.fail}, DKIM for ${d.dkim.fail}, both for ${d.dmarcFail}. Receivers quarantined ${d.disposition.quarantine} and rejected ${d.disposition.reject}.`,
+      history: sources.map((s) => `${s.ip}: ${plural(s.count, "failing mail")} (SPF ${s.spfFail}, DKIM ${s.dkimFail}, both ${s.dmarcFail})`),
+      refs: [row.message_id],
+      links: row.url ? [{ label: "Raw report", url: row.url }] : [],
+    },
+    since: row.created_at,
+  };
+}
+
 /**
  * A card per report and owned domain with failures, from the last seven days, until the principal answers "Got it".
  * It names the domain, the failing source and its count, and links the raw report mail.
  */
-export function dmarcItems(db: Database, now: number, config: Pick<DmarcConfig, "domains" | "failOn">, areaOf: (sourceId: string | null) => string | null = () => null): DeskItem[] {
-  return rowsSince(db, now - CARD_DAYS * DAY_MS).filter((r) => r.status === "read" && r.acked_at === null).flatMap((row) =>
-    domainsOf(row).flatMap((d): DeskItem[] => {
-      const failures = failuresOf(d, config.failOn);
-      if (!owns(config.domains, d.domain) || failures === 0) return [];
-      const sources = d.failing.filter((s) => sourceFailures(s, config.failOn) > 0);
-      const top = sources[0];
-      const from = top ? ` from ${top.ip}${sources.length > 1 ? ` and ${plural(sources.length - 1, "other source")}` : ""}` : "";
-      const span = row.begin_at !== null && row.end_at !== null ? `${localDay(row.begin_at)} to ${localDay(row.end_at)}` : "the report's period";
-      return [{
-        key: `dmarc:${row.message_id}:${d.domain}`,
-        kind: "dmarc",
-        source: "dmarc",
-        area: areaOf(row.source_id),
-        urgency: "today",
-        title: `${plural(failures, "mail")} as ${d.domain}${from} ${what(config.failOn)}.`,
-        why: `${row.org ?? "A receiver"} reported ${top ? `${plural(sourceFailures(top, config.failOn), "failing mail")} from ${top.ip}` : "failing mail"} for ${span}. Someone may be sending as your domain, or one of your senders is not set up.`,
-        score: 40,
-        actions: [
-          ...(row.url ? [{ id: "dmarc.open", label: "Open the report", role: "primary" as const, wired: true, url: row.url }] : []),
-          { id: "dmarc.ack", label: "Got it", role: row.url ? "secondary" as const : "primary" as const, wired: true, target: row.message_id },
-        ],
-        detail: {
-          summary: `${d.domain}: ${plural(d.messages, "message")} in this report, SPF failed for ${d.spf.fail}, DKIM for ${d.dkim.fail}, both for ${d.dmarcFail}. Receivers quarantined ${d.disposition.quarantine} and rejected ${d.disposition.reject}.`,
-          history: sources.map((s) => `${s.ip}: ${plural(s.count, "failing mail")} (SPF ${s.spfFail}, DKIM ${s.dkimFail}, both ${s.dmarcFail})`),
-          refs: [row.message_id],
-          links: row.url ? [{ label: "Raw report", url: row.url }] : [],
-        },
-        since: row.created_at,
-      }];
-    }));
+export function dmarcItems(db: Database, now: number, config: FailureConfig, areaOf: (sourceId: string | null) => string | null = () => null): DeskItem[] {
+  const rows = rowsSince(db, now - CARD_DAYS * DAY_MS).filter((r) => r.status === "read" && r.acked_at === null);
+  return rows.flatMap((row) => domainsOf(row).flatMap((d) => failureCard(row, d, config, areaOf(row.source_id)) ?? []));
 }
 
 /** "Got it" on a failure card: hides every card of that report. */

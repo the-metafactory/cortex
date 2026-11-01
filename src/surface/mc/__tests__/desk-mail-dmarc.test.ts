@@ -10,6 +10,7 @@ import { createRule, runMailRules } from "../desk/mail-rules";
 import { SourceCache, type SourceMail, type SourceReading } from "../desk/sources/command";
 import { DAY_MS } from "../desk/time";
 import { initDatabase } from "../db/init";
+import { DeskSchema } from "../../../common/types/config";
 import { mailDesk, queue } from "./desk-mail-fixtures";
 
 const NOW = Date.parse("2026-11-04T09:00:00.000Z");
@@ -55,6 +56,16 @@ async function digest(mails: SourceMail[], ledger = new HandledLedger()): Promis
   if (!r.ok) throw new Error(r.error);
   await runMailRules([reading(mails)], { db, mailActions: DESK.mailActions, ledger, run: queue().run, now: () => NOW, config: { proposeAfter: 8, maxPerPass: 20, windowDays: 90 } });
 }
+
+describe("config", () => {
+  it("needs the owned domains, so a stack cannot get a green line that can never fail", () => {
+    const parse = (dmarc: unknown) => DeskSchema.safeParse({ mail: { dmarc } });
+    expect(parse({ command: READER }).success).toBe(false);
+    expect(parse({ command: READER, domains: ["not a domain"] }).success).toBe(false);
+    const ok = parse({ command: READER, domains: ["Example.ORG"] });
+    expect(ok.success && ok.data.mail.dmarc).toEqual({ command: READER, domains: ["example.org"], failOn: "dmarc", after: "archive", timeoutSeconds: 30, maxPerPass: 20 });
+  });
+});
 
 describe("which mail is a DMARC report", () => {
   it("takes the RFC 7489 subject, also forwarded, and nothing else", () => {
@@ -175,7 +186,7 @@ describe("the Desk view and the API", () => {
 
   it("puts the line in the health area and the weekly mirror, and the card on the Desk", async () => {
     await seed([["bad", [FAILING]]]);
-    const cache = new SourceCache(async () => ({ code: 0, stdout: JSON.stringify({ items: [] }), stderr: "" }));
+    const cache = new SourceCache(async () => JSON.stringify({ items: [] }));
     const view = await composeDesk(db, DESK, undefined, { now: NOW, sourceCache: cache });
     expect(view.dmarc?.line).toBe("DMARC: 1 report this week, 4 failures.");
     expect(view.mirror?.dmarc?.line).toBe("DMARC: 1 report this week, 4 failures.");
