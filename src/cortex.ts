@@ -4987,6 +4987,7 @@ export async function startCortex(
           ...(config.mc.desk.mail.actions ? { mailActions: config.mc.desk.mail.actions } : {}),
           ...(config.mc.desk.mail.log ? { mailLog: config.mc.desk.mail.log } : {}),
           ...(config.mc.desk.mail.rules ? { mailRules: config.mc.desk.mail.rules } : {}),
+          ...(config.mc.desk.mail.dmarc ? { mailDmarc: config.mc.desk.mail.dmarc } : {}),
           ...(config.mc.desk.mail.links ? { mailLinks: config.mc.desk.mail.links } : {}),
           ...(config.mc.desk.ruling?.explainer
             ? {

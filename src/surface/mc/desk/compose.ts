@@ -18,6 +18,7 @@ import { movedTarget } from "./mail-move";
 import { historySentence, mailLogFor, queryMailLog, type MailLogEntry } from "./mail-log";
 import { DEFAULT_MAIL_RULES, digestedIds, heldItems, listRules, pendingRuleMail, proposalItems, proposeRules, ruleViews, rulesOfRuns, type MailRuleLoop, type MailRulesConfig } from "./mail-rules";
 import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
+import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
@@ -53,6 +54,7 @@ export interface DeskRuntime {
   rulingExplain?: RulingExplainLoop;
   rulings?: RulingLedger;
   mailRules?: MailRuleLoop;
+  dmarc?: DmarcLoop;
 }
 
 export interface DeskAskOptions {
@@ -86,6 +88,7 @@ export interface DeskOptions {
   mailLog?: { retentionDays: number };
   mailEmbedder?: EmbedderConfig;
   mailRules?: MailRulesConfig;
+  mailDmarc?: DmarcConfig;
   mailLinks?: EvidenceLinks;
   voice?: VoiceOptions;
 }
@@ -201,12 +204,15 @@ export async function composeDesk(
   const canMove = Boolean(desk.mailActions?.move?.length);
   const rulesConfig = desk.mailRules ?? DEFAULT_MAIL_RULES;
   const ruleCards = canMove ? [...heldItems(listRules(db), rulesConfig), ...proposalItems(proposeRules(db, now, rulesConfig, vipSet), now)] : [];
+  const dmarc = desk.mailDmarc ? dmarcWeek(db, now, desk.mailDmarc) : null;
+  const dmarcCards = desk.mailDmarc ? dmarcItems(db, now, desk.mailDmarc, (id) => readings.find((r) => r.id === id)?.area ?? null) : [];
   const corrected = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
     ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
     ...ruleCards,
+    ...dmarcCards,
   ], rules, readDeliveries(db), now), activeCorrections);
   const mailLog = mailLogFor(db, corrected.filter(i => i.kind === "mail").map(i => mailIdOf(i.key)));
   const items = corrected.map(item => item.kind === "mail" ? withMailLog({ ...item, mailDecision: readMailDecision(db, item.source, mailIdOf(item.key)) }, mailLog, now) : item);
@@ -217,7 +223,7 @@ export async function composeDesk(
   return {
     ...(routines ? { routines } : {}),
     myDay,
-    mirror: buildWeeklyMirror({ now, desk, state: loadBalanceState(db), studio, readings, events, calendarSources: [...calendars.values()].map(c => c.source) }),
+    mirror: buildWeeklyMirror({ now, desk, state: loadBalanceState(db), studio, readings, events, calendarSources: [...calendars.values()].map(c => c.source), dmarc }),
     calendars: [...calendars.values()],
     studioBriefing: studio ? studioBriefing([...studio.active, ...studio.parked, ...studio.closed], now) : null,
     generatedAt: now,
@@ -246,6 +252,7 @@ export async function composeDesk(
     notifications: rules.notifications,
     autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio), canMove),
     ...(canMove ? { mailRules: ruleViews(db) } : {}),
+    ...(dmarc ? { dmarc } : {}),
     corrections: activeCorrections,
     mailClassifier,
   };

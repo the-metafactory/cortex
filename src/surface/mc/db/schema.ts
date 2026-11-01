@@ -1,5 +1,6 @@
 import { MAIL_LOG_SQL, MAIL_VECTORS_SQL } from "../desk/mail-log-schema";
 import { MAIL_RULES_SQL } from "../desk/mail-rules-schema";
+import { DMARC_SQL } from "../desk/mail-dmarc-schema";
 
 function vigilResolutionsTableSql(table: string): string {
   return `CREATE TABLE IF NOT EXISTS ${table} (
@@ -136,6 +137,7 @@ export const TABLE_NAMES = [
   "desk_mail_rule_answers",
   "desk_mail_rule_runs",
   "desk_mail_vectors",
+  "desk_mail_dmarc",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -145,6 +147,7 @@ export const SCHEMA_SQL: string[] = [
   ...MAIL_LOG_SQL,
   ...MAIL_RULES_SQL,
   ...MAIL_VECTORS_SQL,
+  ...DMARC_SQL,
   "CREATE TABLE IF NOT EXISTS desk_my_day (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   `CREATE TABLE IF NOT EXISTS desk_routine_proposals (

@@ -533,6 +533,16 @@ export const DeskSchema = z.object({
           windowDays: z.number().int().min(1).max(3650).default(90),
         })
         .optional(),
+      dmarc: z
+        .object({
+          command: z.array(z.string().min(1)).min(1),
+          domains: z.array(z.string().trim().toLowerCase().regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/, "mc.desk.mail.dmarc.domains holds domain names such as example.org")).max(100).default([]),
+          failOn: z.enum(["dmarc", "spf-or-dkim"]).default("dmarc"),
+          after: z.enum(["archive", "trash"]).default("archive"),
+          timeoutSeconds: z.number().int().min(1).max(120).default(30),
+          maxPerPass: z.number().int().min(1).max(200).default(20),
+        })
+        .optional(),
     })
     .default({}),
   ruling: z
