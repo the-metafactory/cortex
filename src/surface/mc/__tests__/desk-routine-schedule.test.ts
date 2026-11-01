@@ -1,23 +1,19 @@
 import { describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
 import { initDatabase } from "../db/init";
-import type { RoutineOptions, RoutineRunner } from "../desk/routine-command";
+import type { RoutineRunner } from "../desk/routine-command";
 import { actOnRoutineSchedule, inspectRoutineSchedule, previewRoutineSchedule } from "../desk/routine-schedule-editor";
 import { ScheduleActionSchema, ScheduleDetailSchema, SchedulePreviewSchema, type ScheduleAction, type ScheduleValue } from "../desk/routine-schedule-contract";
 import { claimRoutineOperation, pendingRoutineOperations, readRoutineOperation, routineOperationBinding } from "../desk/routine-store";
 import { handleDeskRoutineEditor } from "../api/desk-routine-editor";
 import { handleDeskRoutineSchedule } from "../api/desk-routine-schedule";
-import { HandledLedger } from "../desk/actions";
-import type { DeskRuntime } from "../desk/compose";
 import { commonSchedule } from "../dashboard-v2/components/desk-routine-schedule";
 import { readRoutines } from "../desk/routines";
 
-const options: RoutineOptions = { composer: ["compose"], reflex: ["reflex"], target: "@test/pulse-flow", timeZone: "UTC", timeoutSeconds: 2, readTimeoutSeconds: 1 };
-const runtime: DeskRuntime = { ledger: new HandledLedger(), options: { enabled: true, displayName: "Test", topN: 5, rangerUrl: "", areas: [], sources: [], routines: options } };
+import { routineTestOptions as options, routineTestRuntime as runtime, routineAnswer as answer } from "./routine-owner-fixture";
 const at = "2026-01-01T00:00:00.000Z";
 const dates = ["2030-01-01T08:00:00.000Z", "2030-01-02T08:00:00.000Z", "2030-01-03T08:00:00.000Z"];
 const projection = (value: ScheduleValue) => ({ schedule: value.schedule, timezone: value.timezone, effectiveTimezone: value.timezone ?? "UTC", occurrences: dates });
-const answer = (value: unknown, code = 0) => ({ code, stdout: JSON.stringify(value), stderr: "" });
 
 function owner() {
   let current = { id: "sample", revision: "a".repeat(64), at, writable: true, reason: "", current: projection({ schedule: "0 8 * * *", timezone: "UTC" }) };

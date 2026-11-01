@@ -7,7 +7,7 @@ export type { RoutineOptions } from "../../../common/types/desk-routines";
 export type RoutineRunner = WriterRunner;
 const id = z.string().min(1);
 export const RoutineSchema = z.object({
-  id, schedule: z.string(), timezone: z.string().nullable(), policy: z.enum(["approval", "auto", "disabled"]), target: z.string(), file: z.string(),
+  id, schedule: z.string(), timezone: z.string().nullable(), policy: z.enum(["approval", "auto", "disabled"]), paused: z.boolean().default(false), runtimeConfirmed: z.boolean().default(true), target: z.string(), file: z.string(),
   lastDecision: z.object({ id, outcome: z.string(), at: z.string(), reason: z.string().nullable() }).nullable(),
 });
 export const PendingRoutineSchema = z.object({ decisionId: id, blueprintId: id, matchedAt: z.string(), expiresAt: z.string(), impulseSummary: z.string() });

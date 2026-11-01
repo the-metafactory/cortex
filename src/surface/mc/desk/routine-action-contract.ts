@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LifecycleActionSchema } from "./routine-lifecycle-contract";
 import { ScheduleActionSchema } from "./routine-schedule-contract";
 
 export const LegacyRoutineActionSchema = z.object({
@@ -7,7 +8,7 @@ export const LegacyRoutineActionSchema = z.object({
   target: z.string().min(1).max(128),
 }).strict();
 export type LegacyRoutineAction = z.infer<typeof LegacyRoutineActionSchema>;
-export const RoutineActionSchema = z.union([LegacyRoutineActionSchema, ScheduleActionSchema]);
+export const RoutineActionSchema = z.union([LegacyRoutineActionSchema, ScheduleActionSchema, LifecycleActionSchema]);
 export type RoutineAction = z.infer<typeof RoutineActionSchema>;
 export const RoutineResultSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), message: z.string() }),

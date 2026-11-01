@@ -35,8 +35,8 @@ export function DeskRoutineCalendar({ location, onLocation, inventory, revision,
   useEffect(() => { if (drill) drillRef.current?.focus(); }, [drill?.date, drill?.hour]);
   const names = useMemo(() => new Map(inventory?.map((r) => [r.id, r.name ?? r.id])), [inventory]);
   const all = state.kind === "ready" ? state.occurrences : emptyOccurrences;
-  const visible = useMemo(() => all.filter((r) => (location.showPaused || r.lifecycle === "active") && (location.policy === "all" || r.handlingPolicy === location.policy)), [all, location.showPaused, location.policy]);
-  const { grouped, hourly, activeCount, inactiveCount } = useMemo(() => {
+  const visible = useMemo(() => all.filter((r) => (location.showPaused || r.lifecycle === "active" || r.lifecycle === "unconfirmed") && (location.policy === "all" || r.handlingPolicy === location.policy)), [all, location.showPaused, location.policy]);
+  const { grouped, hourly, activeCount, inactiveCount, unconfirmedCount } = useMemo(() => {
     const grouped = new Map<string, CalendarOccurrence[]>(); const hourly = new Map<string, CalendarOccurrence[]>(); let activeCount = 0;
     const dayFormatter = new Intl.DateTimeFormat("en", { timeZone: location.timezone, year: "numeric", month: "2-digit", day: "2-digit" });
     const hourFormatter = new Intl.DateTimeFormat("en", { timeZone: location.timezone, hour: "2-digit", hourCycle: "h23" });
@@ -47,11 +47,11 @@ export function DeskRoutineCalendar({ location, onLocation, inventory, revision,
       const key = `${day}/${Number(hourFormatter.format(at))}`; const hour = hourly.get(key) ?? []; hour.push(entry); hourly.set(key, hour);
       if (entry.lifecycle === "active") activeCount++;
     }
-    return { grouped, hourly, activeCount, inactiveCount: visible.length - activeCount };
+    return { grouped, hourly, activeCount, inactiveCount: visible.filter((entry) => entry.lifecycle === "paused" || entry.lifecycle === "disabled").length, unconfirmedCount: visible.filter((entry) => entry.lifecycle === "unconfirmed").length };
   }, [visible, location.timezone]);
   const change = (next: Partial<RoutinesLocation>): void => { onLocation({ ...location, ...next }); };
   const renderOccurrence = (entry: CalendarOccurrence) => <button type="button" className={`routine-occurrence ${entry.lifecycle !== "active" ? "routine-inactive" : ""}`} key={`${entry.routineId}:${entry.scheduledFor}`} onClick={() => { onSelect(entry.routineId); }} title={`${names.get(entry.routineId) ?? entry.routineId} · ${entry.sourceTimezone} · ${entry.lifecycle} · ${entry.handlingPolicy ?? "Handling policy unknown"}`}>
-    <time dateTime={entry.scheduledFor}>{timeLabel(entry.scheduledFor, location.timezone)}</time><span>{names.get(entry.routineId) ?? entry.routineId}</span><small className="routine-source-zone">{entry.sourceTimezone}</small>{entry.lifecycle !== "active" && <small>{entry.lifecycle === "paused" ? "Paused" : "Disabled"}</small>}
+    <time dateTime={entry.scheduledFor}>{timeLabel(entry.scheduledFor, location.timezone)}</time><span>{names.get(entry.routineId) ?? entry.routineId}</span><small className="routine-source-zone">{entry.sourceTimezone}</small>{entry.lifecycle !== "active" && <small>{entry.lifecycle === "unconfirmed" ? "Scheduling state unconfirmed" : entry.lifecycle === "paused" ? "Paused" : "Disabled"}</small>}
   </button>;
   const cell = (day: string, hour: number | null, limit: number) => {
     const list = (hour === null ? grouped.get(day) : hourly.get(`${day}/${hour}`)) ?? [];
@@ -68,7 +68,7 @@ export function DeskRoutineCalendar({ location, onLocation, inventory, revision,
     <p className="routine-calendar-meaning">Planned triggers, not execution results. Times shown in {location.timezone}; each routine retains its source timezone.</p>
     {state.kind === "loading" && <p role="status">Reading scheduled occurrences from the configured owner…</p>}
     {state.kind === "error" && <div role="alert"><p>{state.message} The calendar is unavailable.</p><button type="button" className="desk-btn" onClick={() => { setRetry((n) => n + 1); }}>Retry calendar</button></div>}
-    {state.kind === "ready" && <><p role="status">{state.complete ? `${activeCount} active planned occurrences` : `At least ${activeCount} active planned occurrences`}{inactiveCount > 0 ? ` · ${inactiveCount} paused or disabled` : ""}{location.policy !== "all" ? " in this filter" : ""}. Counts cover the visible calendar window.</p>{!state.complete && <p role="alert">This dense window reached the read limit. Counts and days are incomplete. Choose Day or a narrower window to inspect more.</p>}{visible.length === 0 && <p>No scheduled occurrences were returned for this window and these filters.</p>}
+    {state.kind === "ready" && <><p role="status">{state.complete ? `${activeCount} active planned occurrences` : `At least ${activeCount} active planned occurrences`}{inactiveCount > 0 ? ` · ${inactiveCount} paused or disabled` : ""}{unconfirmedCount > 0 ? ` · ${unconfirmedCount} scheduling state unconfirmed` : ""}{location.policy !== "all" ? " in this filter" : ""}. Counts cover the visible calendar window.</p>{!state.complete && <p role="alert">This dense window reached the read limit. Counts and days are incomplete. Choose Day or a narrower window to inspect more.</p>}{visible.length === 0 && <p>No scheduled occurrences were returned for this window and these filters.</p>}
       <div className="routine-calendar-scroll" tabIndex={0} aria-label={`${location.view} calendar, scroll horizontally on a narrow screen`}>
         {location.view === "month" ? <MonthGrid days={days} month={location.date.slice(0, 7)} cell={cell} onDay={(date) => { change({ date, view: "day" }); }} /> : <TimeGrid days={days} single={location.view === "day"} cell={cell} onDay={(date) => { change({ date, view: "day" }); }} />}
       </div>

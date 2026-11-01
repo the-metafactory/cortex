@@ -40,7 +40,7 @@ function ScheduleComparison({ preview }: { preview: SchedulePreview }) {
   })}</section>;
 }
 
-export function RoutineScheduleEditor({ id, enabled, active, state, onState, onChanged }: { id: string; enabled: boolean; active: boolean; state: ScheduleSession; onState: (state: ScheduleSession) => void; onChanged: () => void }) {
+export function RoutineScheduleEditor({ id, paused = false, enabled, active, state, onState, onChanged }: { id: string; paused?: boolean; enabled: boolean; active: boolean; state: ScheduleSession; onState: (state: ScheduleSession) => void; onChanged: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null); const version = useRef(0);
   useEffect(() => {
     if (active && state.kind !== "closed") { if (!dialog.current?.open) dialog.current?.showModal(); }
@@ -85,7 +85,7 @@ export function RoutineScheduleEditor({ id, enabled, active, state, onState, onC
   return <><button className="desk-btn" type="button" disabled={!enabled} onClick={() => { void open(); }}>Edit schedule</button>{!enabled && <small className="soft">Schedule is read-only.</small>}{state.kind === "closed" && state.notice && <p role="status">{state.notice}</p>}
     <dialog className="routine-schedule-dialog" ref={dialog} aria-labelledby={`schedule-title-${id}`} onCancel={(event) => { event.preventDefault(); if (!editing || editing.busy === "idle") close(); }}>
       <h2 id={`schedule-title-${id}`}>Edit schedule</h2>{state.kind === "loading" && <p role="status">Reading the installed schedule…</p>}{state.kind === "failed" && <p role="alert">{state.error}</p>}
-      {editing && <><p>Review the current and proposed schedule before saving.</p>{editing.error && <p role="alert">{editing.error}</p>}<fieldset disabled={editing.busy !== "idle" || editing.pending} className="routine-schedule-fields"><legend>Proposed schedule</legend>
+      {editing && <><p>Review the current and proposed schedule before saving.</p>{paused && <p>This routine is paused. Saving its schedule keeps it paused.</p>}{editing.error && <p role="alert">{editing.error}</p>}<fieldset disabled={editing.busy !== "idle" || editing.pending} className="routine-schedule-fields"><legend>Proposed schedule</legend>
         <label>Schedule format<select value={editing.draft.mode} onChange={(event) => {
           if (event.target.value === "custom") change({ ...editing.draft, mode: "custom" });
           else { const days = editing.draft.days.length ? editing.draft.days : [1, 2, 3, 4, 5]; change({ ...editing.draft, mode: "clock", days, schedule: clockSchedule(days, editing.draft.time) }); }

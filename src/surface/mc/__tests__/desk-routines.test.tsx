@@ -60,7 +60,7 @@ function seam() {
     const flag = (name: string): string => args[args.indexOf(name) + 1] ?? "";
     if (kind === "routine" && verb === "add") {
       supplied = await readFile(flag("--flow-file"), "utf8");
-      routines.push({ id: flag("--id"), schedule: flag("--schedule"), timezone: flag("--timezone"), policy: "approval", target: flag("--target"), file: "/owned/routine.yaml", lastDecision: null });
+      routines.push({ id: flag("--id"), schedule: flag("--schedule"), timezone: flag("--timezone"), policy: "approval", paused: false, runtimeConfirmed: true, target: flag("--target"), file: "/owned/routine.yaml", lastDecision: null });
     } else if (kind === "routine" && verb === "set-policy") {
       const row = routines.find((r) => r.id === args[2]);
       if (row) row.policy = args[3] === "auto" ? "auto" : "approval";

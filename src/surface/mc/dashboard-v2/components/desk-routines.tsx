@@ -49,7 +49,7 @@ export function RoutinesSection({ view, onChanged }: { view: RoutineView | undef
           </div>
         </div></li>)}
         {view.installed.map((r) => <li key={r.id}><div>
-          {r.title}<small>{r.words}. {r.policy === "auto" ? "Handled automatically." : r.policy === "disabled" ? "Disabled." : "Asks you before each fire."}</small>
+          {r.title}<small>{r.words}. {!r.runtimeConfirmed ? "Scheduling state unconfirmed. " : r.paused ? "Paused. " : ""}{r.policy === "auto" ? "Handled automatically." : r.policy === "disabled" ? "Disabled." : "Asks you before each fire."}</small>
           {r.lastDecision && <small>Last fire: {r.lastDecision.outcome}{r.lastDecision.reason ? ` — ${r.lastDecision.reason}` : ""}.</small>}
           <div className="desk-acts">
             <RoutineButton key={`${r.id}:${r.policy}`} action={r.policy === "auto" ? "stop" : "auto"} target={r.id} onChanged={onChanged}>{r.policy === "auto" ? "Stop" : "Handle this yourself"}</RoutineButton>
