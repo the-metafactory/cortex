@@ -14,6 +14,8 @@ argv:
 timeout_ms: 900000
 detach: true
 env: [HOME, PATH, XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_STATE_HOME]
+snapshot_inputs:
+  flow: /absolute/routines/flows
 params:
   flow:
     type: string

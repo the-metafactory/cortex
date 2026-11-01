@@ -1,4 +1,4 @@
-# Process handler environment
+# Process handler
 
 The reflex bridge's `process` handler runs a deployment-controlled spec from
 the processes directory: `$CORTEX_PROCESSES_DIR` when set, otherwise the
@@ -42,3 +42,26 @@ envelope's sibling `payload.serves`, and `MF_CORRELATION_ID` from its
 inherited from cortex. Unset parent variables are omitted.
 
 For the generic routine-file process and its configured path boundary, see [Run routine files through Pulse](pulse-flow-process.md).
+
+## Execution input snapshots
+
+A spec can declare `snapshot_inputs: {flow: /absolute/routines/flows}`.
+Before publishing `started`, the runner copies each declared input into a
+private temporary directory under that root and substitutes its path in argv.
+Inputs must be regular files inside the declared root, without symlinks, and
+at most 1 MiB each. The process keeps the snapshot until its terminal result.
+Cleanup failures retain the path in a structured diagnostic and do not suppress
+the process outcome.
+
+For managed routine deletion, `cortex reflex targets --removal-safe --json`
+reports configured targets whose process spec snapshots the `flow` parameter.
+Reflex requires that capability and the matching owned flow root before
+accepting a revision-bound removal. Unknown execution lifetime refuses Delete.
+The supported Pulse runner loads installed actions from its absolute inventory;
+snapshots preserve nested steps and relative imports within those actions.
+They do not add relative file references to Pulse flow YAML.
+
+When upgrading from a runner without snapshots, restart that runner before
+enabling deletion. Check for surviving old children and let them finish before
+removing any routine they use. Absence of an audit event does not prove that
+an old child has released its input.
