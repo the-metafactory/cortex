@@ -1,4 +1,5 @@
 import type { VoiceState } from "../hooks/use-desk-voice";
+import type { WakeState } from "../lib/desk-wake";
 import "./desk-voice.css";
 
 const PHASE_LABEL: Record<VoiceState["phase"], string> = {
@@ -7,6 +8,14 @@ const PHASE_LABEL: Record<VoiceState["phase"], string> = {
   thinking: "Thinking…",
   speaking: "Answering…",
 };
+
+export function WakeControl({ state, onToggle, assistantName }: { state: WakeState; onToggle: () => void; assistantName: string }) {
+  const active = state.phase !== "off" && state.phase !== "unavailable";
+  return <div className="desk-wake-control">
+    <button type="button" aria-pressed={active} title={`Wake for ${assistantName}`} onClick={onToggle}>{active ? "Disable wake" : "Enable wake"}</button>
+    <span role="status" aria-live="polite">{state.phase === "off" ? "Wake is off. Audio stays local until a command is captured." : state.line}</span>
+  </div>;
+}
 
 export function MicButton({ phase, onStart, onStop }: { phase: VoiceState["phase"]; onStart: () => void; onStop: () => void }) {
   const live = phase === "listening";
