@@ -190,9 +190,7 @@ export function elevenLabsInput(env: SpeechEnv): SpeechIn {
         async stop() {
           const audio = await finish();
           if (audio.size === 0) return "";
-          const res = await post(env, "/api/desk/voice/transcribe", { headers: { "content-type": audio.type || "audio/webm" }, body: audio });
-          const body = (await res.json().catch(() => null)) as { text?: unknown } | null;
-          return typeof body?.text === "string" ? body.text : "";
+          return transcribeClip(env, audio);
         },
         cancel() {
           void finish().catch(() => undefined);
@@ -200,6 +198,13 @@ export function elevenLabsInput(env: SpeechEnv): SpeechIn {
       };
     },
   };
+}
+
+export async function transcribeClip(env: SpeechEnv, audio: Blob, signal?: AbortSignal): Promise<string> {
+  const res = await post(env, "/api/desk/voice/transcribe", { headers: { "content-type": audio.type || "audio/webm" }, body: audio, signal });
+  const body: unknown = await res.json();
+  if (!body || typeof body !== "object" || !("text" in body) || typeof body.text !== "string") throw new SpeechFailure("The transcription response was invalid.");
+  return body.text;
 }
 
 export function elevenLabsOutput(env: SpeechEnv): SpeechOut {

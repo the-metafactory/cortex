@@ -31,7 +31,7 @@ import { useDeskLocation, useDeskStudio } from "../hooks/use-desk-studio";
 import { DeskModeSwitch, DeskStudio } from "./desk-studio";
 import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, selectItems, spokenBriefing, URGENCY_LABEL } from "../../desk/present";
 import { useDeskVoice } from "../hooks/use-desk-voice";
-import { MicButton, VoicePanel } from "./desk-voice";
+import { MicButton, VoicePanel, WakeControl } from "./desk-voice";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskPrecedent, DeskView as DeskViewModel } from "../../desk/types";
 import type { MoveTarget } from "../../desk/mail-move";
 import type { MailCorrection } from "../../desk/mail-actions";
@@ -572,6 +572,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 {asking ? <span className="desk-ask-busy" role="status">Thinking…</span> : <kbd className="desk-kbd">⌘K</kbd>}
               </form>
               <VoicePanel state={voice.state} onDismiss={voice.dismiss} />
+              {voice.wakeConfigured && <WakeControl state={voice.wakeState} onToggle={voice.toggleWake} />}
             </div>
           </div>
           <div className="desk-topr">

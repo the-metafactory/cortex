@@ -88,6 +88,7 @@ import { handleDeskCorrections } from "./api/desk-corrections";
 import { handleDeskAction, handleDeskAutonomy } from "./api/desk-action";
 import { handleDeskCaptureUndo, handleDeskAsk, handleDeskCreate, handleDeskNoteDone } from "./api/desk-ask";
 import { handleDeskSpeak, handleDeskTranscribe } from "./api/desk-voice";
+import { wakeAssetResponse } from "./desk/wake-assets";
 import { handleDeskGoal } from "./api/desk-goal";
 import { handleDeskRuling } from "./api/desk-ruling";
 import { handleGetDeskStudio } from "./api/desk-studio";
@@ -340,6 +341,8 @@ export function startServer(
           headers: { "content-type": "text/html; charset=utf-8" },
         });
       }
+
+      if (req.method === "GET" && url.pathname.startsWith("/wake/")) return wakeAssetResponse(url.pathname, DASHBOARD_DIST);
 
       if (req.method === "GET" && DASHBOARD_ASSET_EXT.test(url.pathname)) {
         const rel = url.pathname.slice(1);
