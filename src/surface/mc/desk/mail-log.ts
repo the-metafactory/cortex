@@ -167,6 +167,16 @@ export function purgeMailLog(db: Database, now: number, retentionDays: number = 
 
 const FOLDER_NAMES: Partial<Record<MailLogAction, string>> = { archive: "Archive", junk: "Junk", trash: "Trash" };
 
+const CORRECTED: Partial<Record<MailLogAction, string>> = {
+  archive: "You told the Desk you would archive it",
+  junk: "You told the Desk it is spam",
+  trash: "You told the Desk you would delete it",
+  draft: "You told the Desk you would reply",
+  plan: "You told the Desk you would plan it",
+  todo: "You told the Desk you would make it a to-do",
+  kept: "You told the Desk this mail matters and stays in the inbox",
+};
+
 /** One plain sentence for the detail panel's history. */
 export function historySentence(e: MailLogEntry, now: number): string {
   const when = ago(now, e.at);
@@ -185,6 +195,7 @@ export function historySentence(e: MailLogEntry, now: number): string {
         return `Your mail client recorded “${e.action}” for it (${when}).`;
     }
   }
+  if (e.where === "correction") return `${CORRECTED[e.action] ?? `You corrected the Desk: “${e.action}”`} (${when}).`;
   if (e.where === "rule") {
     return e.action === "digest" ? `A rule you approved kept it for the digest (${when}).` : `A rule you approved moved it to ${folder || e.action} (${when}).`;
   }

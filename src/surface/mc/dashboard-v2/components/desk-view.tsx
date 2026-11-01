@@ -27,8 +27,9 @@ import { DeskModeSwitch, DeskStudio } from "./desk-studio";
 import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, openGroup, selectItems, spokenBriefing, URGENCY_LABEL } from "../../desk/present";
 import { useDeskVoice } from "../hooks/use-desk-voice";
 import { MicButton, VoicePanel } from "./desk-voice";
-import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskView as DeskViewModel } from "../../desk/types";
+import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskPrecedent, DeskView as DeskViewModel } from "../../desk/types";
 import type { MoveTarget } from "../../desk/mail-move";
+import type { MailCorrection } from "../../desk/mail-actions";
 
 interface DeskViewProps {
   onOpenMissionControl: () => void;
@@ -430,6 +431,12 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     }
   };
 
+  const correctMail = async (item: DeskItem, said: MailCorrection): Promise<void> => {
+    const r = await submitMailAction({ action: "correct", key: item.key, said });
+    setNote(r.text);
+    if (r.ok) onChanged();
+  };
+
   const shown = (item: DeskItem): DeskItem => (confirming?.key === item.key ? withConfirm(item, confirming.action) : item);
   const busyWith = (item: DeskItem): string | null => sending.get(item.key) ?? (item.checking ? "goal.check" : null);
   const originalDetail = detail ? view.items.find((i) => i.key === detail.key) ?? detail : null;
@@ -448,6 +455,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       sending={busyWith(item)}
       onFocusEvent={focusEvent}
       onCorrect={(mode) => void correct(item.kind, item.source, mode)}
+      {...(item.kind === "mail" ? { onCorrectMail: (said: MailCorrection) => void correctMail(item, said) } : {})}
       rulingNote={rulings.get(item.key)?.note ?? null}
     />
   );
@@ -755,6 +763,12 @@ function DetailPanel({ item, area, onClose, onAction, onShowEvent, sending, chil
           <ul className="desk-evidence">{item.detail.evidence.map((e, i) => <li key={`${e.kind}:${i}`}><EvidenceLink evidence={e} onShowEvent={onShowEvent} /></li>)}</ul>
         </>
       )}
+      {item.detail.precedents && item.detail.precedents.length > 0 && (
+        <>
+          <div className="desk-sec">Why this suggestion</div>
+          <ul className="desk-hist">{item.detail.precedents.map((p, i) => <li key={`${p.at}:${i}`}>{precedentText(p)}</li>)}</ul>
+        </>
+      )}
       {item.detail.history.length > 0 && (
         <>
           <div className="desk-sec">History</div>
@@ -777,6 +791,9 @@ function DetailPanel({ item, area, onClose, onAction, onShowEvent, sending, chil
     </>
   );
 }
+
+export const precedentText = (p: DeskPrecedent): string =>
+  `“${p.subject}”, ${new Date(p.at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}: ${p.correction ? "you said you would have " : ""}${p.action}`;
 
 const EVIDENCE_KIND: Record<DeskEvidence["kind"], string> = { event: "Meeting", mail: "Mail", note: "Note" };
 
@@ -846,10 +863,11 @@ interface DeskItemRowProps {
   sending: string | null;
   onFocusEvent: (key: string) => void;
   onCorrect: (mode: DeskCorrectionMode | null) => void;
+  onCorrectMail?: (said: MailCorrection) => void;
   rulingNote?: string | null;
 }
 
-function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFocusEvent, onCorrect, rulingNote }: DeskItemRowProps) {
+function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFocusEvent, onCorrect, onCorrectMail, rulingNote }: DeskItemRowProps) {
   return (
     <article className="desk-row desk-item">
       <span className="desk-rank">{rank}</span>
@@ -874,7 +892,7 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
               {clock(event.at)} today ↑
             </button>
           )}
-          <ItemMenu current={item.correction} onCorrect={onCorrect} onTodo={() => onAction({ id: "todo", label: "→ todo", role: "secondary", wired: true })} />
+          <ItemMenu current={item.correction} onCorrect={onCorrect} {...(onCorrectMail ? { onCorrectMail } : {})} onTodo={() => onAction({ id: "todo", label: "→ todo", role: "secondary", wired: true })} />
         </div>
       </div>
     </article>
@@ -889,13 +907,25 @@ const MENU: { mode: DeskCorrectionMode; label: string }[] = [
 ];
 
 const RANKING_LABEL = "Ranking: less like this, always show";
+const MAIL_MENU_LABEL = "Correct this mail's suggestion";
+
+const MAIL_MENU: { said: MailCorrection; label: string }[] = [
+  { said: "not-bulk", label: "This isn't bulk" },
+  { said: "matters", label: "This matters" },
+  { said: "archive", label: "Wrong suggestion: I would archive it" },
+  { said: "reply", label: "Wrong suggestion: I would reply" },
+  { said: "todo", label: "Wrong suggestion: I would make it a to-do" },
+  { said: "keep", label: "Wrong suggestion: I would keep it" },
+  { said: "junk", label: "Wrong suggestion: it is spam" },
+  { said: "trash", label: "Wrong suggestion: I would delete it" },
+];
 
 export function dismissesMenu<T>(e: { type: string; key?: string; target: T }, root: { contains: (t: T) => boolean } | null): boolean {
   if (e.type === "keydown") return e.key === "Escape";
   return e.type === "mousedown" && root !== null && !root.contains(e.target);
 }
 
-export function ItemMenu({ current, onCorrect, onTodo, open: startOpen = false }: { current?: DeskCorrectionMode; onCorrect: (mode: DeskCorrectionMode | null) => void; onTodo?: () => void; open?: boolean }) {
+export function ItemMenu({ current, onCorrect, onCorrectMail, onTodo, open: startOpen = false }: { current?: DeskCorrectionMode; onCorrect: (mode: DeskCorrectionMode | null) => void; onCorrectMail?: (said: MailCorrection) => void; onTodo?: () => void; open?: boolean }) {
   const [open, setOpen] = useState(startOpen);
   const root = useRef<HTMLSpanElement>(null);
   useEffect(() => {
@@ -918,14 +948,18 @@ export function ItemMenu({ current, onCorrect, onTodo, open: startOpen = false }
   };
   return (
     <span className="desk-more" ref={root}>
-      <button type="button" className="desk-btn desk-rank-btn" aria-label={RANKING_LABEL} title={RANKING_LABEL} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>⋯</button>
+      <button type="button" className="desk-btn desk-rank-btn" aria-label={onCorrectMail ? MAIL_MENU_LABEL : RANKING_LABEL} title={onCorrectMail ? MAIL_MENU_LABEL : RANKING_LABEL} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>⋯</button>
       {open && (
         <span className="desk-menu" role="menu">
           {onTodo && <button type="button" role="menuitem" onClick={() => { setOpen(false); onTodo(); }}>→ todo</button>}
-          {MENU.filter((m) => m.mode !== current).map((m) => (
-            <button key={m.mode} type="button" role="menuitem" onClick={() => pick(m.mode)}>{m.label}</button>
-          ))}
-          {current && <button type="button" role="menuitem" onClick={() => pick(null)}>Rank by the base rules again</button>}
+          {onCorrectMail
+            ? MAIL_MENU.map((m) => (
+                <button key={m.said} type="button" role="menuitem" onClick={() => { setOpen(false); onCorrectMail(m.said); }}>{m.label}</button>
+              ))
+            : MENU.filter((m) => m.mode !== current).map((m) => (
+                <button key={m.mode} type="button" role="menuitem" onClick={() => pick(m.mode)}>{m.label}</button>
+              ))}
+          {current && !onCorrectMail && <button type="button" role="menuitem" onClick={() => pick(null)}>Rank by the base rules again</button>}
         </span>
       )}
     </span>

@@ -91,6 +91,7 @@ import { handleDeskStudioAct } from "./api/desk-studio-act";
 import { handleDeskStudioSession } from "./api/desk-studio-session";
 import { GoalChecks, GoalStatuses } from "./desk/goals";
 import { RulingExplainLoop, RulingLedger, rulingExplainer } from "./desk/ruling";
+import { MailSimilarity } from "./desk/mail-similar";
 import { RecentCalendarWrites, spawnWithStdin } from "./desk/create";
 import { HandledLedger } from "./desk/actions";
 import type { DeskOptions, DeskRuntime } from "./desk/compose";
@@ -200,7 +201,7 @@ export function startServer(
     void deskMailRules?.kick();
   } : undefined);
   const deskRecentWrites = new RecentCalendarWrites();
-  const deskRuntime: DeskRuntime = { waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}) };
+  const deskRuntime: DeskRuntime = { waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}) };
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
