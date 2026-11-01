@@ -61,7 +61,7 @@ export function applyCorrections(items: DeskItem[], corrections: DeskCorrection[
   const modes = new Map(corrections.map((c) => [`${c.kind}\u0000${c.source}`, c.mode]));
   return items
     .map((item) => {
-      const mode = modes.get(`${item.kind}\u0000${item.source}`);
+      const mode = item.kind === "mail" ? undefined : modes.get(`${item.kind}\u0000${item.source}`);
       return mode ? { ...item, correction: mode, detail: { ...item.detail, history: [...item.detail.history, HISTORY[mode]] } } : item;
     })
     .sort(byRank);

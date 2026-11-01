@@ -192,6 +192,7 @@ import { commandTransport, discordTransport } from "./surface/mc/desk/transports
 import { expandGoalPaths } from "./surface/mc/desk/goals";
 import { toClassifierConfig, toModelConfig } from "./surface/mc/desk/classify";
 import { resolveVoice } from "./surface/mc/desk/voice";
+import { resolveEmbedder } from "./surface/mc/desk/mail-similar";
 import { notifyWithResult } from "./adapters/notify-result";
 import { createVigilDeliveryPorts, startVigil, type VigilHandle } from "./vigil";
 import { somaGoalWording } from "./vigil/result-render";
@@ -4982,6 +4983,7 @@ export async function startCortex(
                 }),
               }
             : {}),
+          ...(config.mc.desk.mail.embedder ? { mailEmbedder: resolveEmbedder(config.mc.desk.mail.embedder, expandTilde) } : {}),
           ...(config.mc.desk.mail.actions ? { mailActions: config.mc.desk.mail.actions } : {}),
           ...(config.mc.desk.mail.log ? { mailLog: config.mc.desk.mail.log } : {}),
           ...(config.mc.desk.mail.rules ? { mailRules: config.mc.desk.mail.rules } : {}),

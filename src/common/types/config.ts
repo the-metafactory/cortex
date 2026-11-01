@@ -430,6 +430,15 @@ const StudioFilerEndpointSchema = z.object({
   maxPerPass: z.number().int().min(1).max(100).default(10),
 }).refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "set apiKeyEnv or apiKeyFile, not both");
 
+const EmbedderEndpointSchema = z.object({
+  baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), "mc.desk.mail.embedder.baseUrl must use https unless it is a loopback address"),
+  model: z.string().min(1),
+  apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
+  apiKeyFile: z.string().min(1).optional(),
+  caFile: z.string().min(1).optional(),
+  timeoutSeconds: z.number().int().min(1).max(120).default(10),
+}).refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.mail.embedder: set apiKeyEnv or apiKeyFile, not both");
+
 export const DeskSchema = z.object({
   routines: RoutineOptionsSchema.optional(),
   mirror: z.object({ day: z.enum(["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]), time: z.iso.time({ precision: -1 }) }).optional(),
@@ -500,6 +509,13 @@ export const DeskSchema = z.object({
         .refine(hasOneClassifierForm, CLASSIFIER_FORM_ERROR)
         .refine((c) => !(c.command && c.caFile), "mc.desk.mail.classifier.caFile belongs to the endpoint form; pass a CA to the command in its argv")
         .optional(),
+      embedder: EmbedderEndpointSchema.safeExtend({
+        local: EmbedderEndpointSchema.optional(),
+        threshold: z.number().min(0).max(1).default(0.75),
+        neighbours: z.number().int().min(5).max(10).default(8),
+        windowDays: z.number().int().min(1).max(3650).default(90),
+        maxPerPass: z.number().int().min(1).max(1000).default(64),
+      }).optional(),
       links: z.object({ mail: linkTemplate("mail").optional(), note: linkTemplate("note").optional() }).optional(),
       actions: z
         .object({

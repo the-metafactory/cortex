@@ -8,6 +8,7 @@ import type { SourceEvent, SourceMail } from "./sources/command";
 import type { DeskCorrection, DeskMailClassifier } from "./types";
 import { DAY_MS } from "./time";
 import { isUnimportant } from "./vips";
+import type { MailSimilarity, MailText, SimilarDecisions, SimilarityBasis, SimilarityContext } from "./mail-similar";
 
 export const MAIL_COMMITMENTS = ["request", "invitation", "none", "unknown"] as const;
 export type MailCommitment = (typeof MAIL_COMMITMENTS)[number];
@@ -19,11 +20,27 @@ export type MailCategory = (typeof MAIL_CATEGORIES)[number];
 export const SUGGESTED_ACTIONS = ["reply", "archive", "link-meeting", "task", "none"] as const;
 export type SuggestedAction = (typeof SUGGESTED_ACTIONS)[number];
 export const EVIDENCE_KINDS = ["mail", "event", "note"] as const;
+export const PREDICTED_ACTIONS = ["archive", "junk", "trash", "reply", "plan", "todo", "keep"] as const;
+export type PredictedAction = (typeof PREDICTED_ACTIONS)[number];
 
 export interface MailEvidence {
   kind: (typeof EVIDENCE_KINDS)[number];
   ref: string;
   title: string;
+}
+
+export interface MailPrecedent {
+  subject: string;
+  sender: string;
+  action: PredictedAction;
+  at: number;
+  correction: boolean;
+}
+
+export interface MailPrecedents {
+  basis: SimilarityBasis;
+  note?: string;
+  items: MailPrecedent[];
 }
 
 export interface MailClassification {
@@ -33,7 +50,9 @@ export interface MailClassification {
   reason: string;
   summary?: string;
   suggestedAction?: SuggestedAction;
+  predictedAction?: PredictedAction;
   evidence?: MailEvidence[];
+  precedents?: MailPrecedents;
 }
 
 interface ModelAccess {
@@ -86,7 +105,22 @@ export function toClassifierConfig(input: ClassifierConfigInput): ClassifierConf
 
 export const isCommand = (config: ModelConfig): config is CommandAccess => "command" in config;
 
-export type ClassifierCorrection = Pick<DeskCorrection, "kind" | "source" | "mode" | "label">;
+export interface ClassifierCorrection {
+  kind: DeskCorrection["kind"];
+  source: string;
+  mode: string;
+  label: string;
+}
+
+export interface ClassifierExample {
+  subject: string;
+  summary: string;
+  sender: string;
+  action: PredictedAction;
+  decidedAt: string;
+  similarity: number;
+  weight: number;
+}
 
 export interface ClassifierRequest {
   mail: { id: string; from: SourceMail["from"]; subject: string; firstParagraph: string; receivedAt: string; account?: string };
@@ -94,6 +128,8 @@ export interface ClassifierRequest {
   vips: string[];
   unimportant: string[];
   corrections: ClassifierCorrection[];
+  examples: ClassifierExample[];
+  examplesBasis: SimilarityBasis;
 }
 
 export type ClassifierRunner = (request: ClassifierRequest, timeoutMs: number) => Promise<unknown>;
@@ -101,10 +137,42 @@ export type ClassifierRunner = (request: ClassifierRequest, timeoutMs: number) =
 export type ClassifierEvent = SourceEvent & { sourceId: string };
 export type ClassifierMail = SourceMail & { sourceId: string };
 
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
+const mailTextOf = (m: ClassifierMail): MailText => ({
+  messageId: m.id,
+  sourceId: m.sourceId,
+  sender: m.from.address.trim().toLowerCase(),
+  listId: m.headers?.listId ?? null,
+  subject: m.subject,
+  summary: m.firstParagraph ?? null,
+});
+
+export function classifierExamples(similar: SimilarDecisions): ClassifierExample[] {
+  return similar.neighbours.map(({ entry, action, similarity, weight }) => ({
+    subject: entry.subject ?? "",
+    summary: entry.summary ?? "",
+    sender: entry.sender,
+    action,
+    decidedAt: new Date(entry.at).toISOString(),
+    similarity: round2(similarity),
+    weight,
+  }));
+}
+
+export function precedentsOf(similar: SimilarDecisions): MailPrecedents {
+  return {
+    basis: similar.basis,
+    ...(similar.note ? { note: similar.note } : {}),
+    items: similar.neighbours.slice(0, MAX_PRECEDENTS).map(({ entry, action, weight }) => ({ subject: entry.subject ?? "(no subject)", sender: entry.sender, action, at: entry.at, correction: weight > 1 })),
+  };
+}
+
 export const MAX_REASON = 200;
 export const MAX_SUMMARY = 600;
 export const MAX_EVIDENCE = 5;
 export const MAX_CORRECTIONS = 10;
+export const MAX_PRECEDENTS = 10;
 export const CLASSIFIER_KEY_ENV = "DESK_CLASSIFIER_KEY";
 export const LINK_WINDOW_MS = 3 * DAY_MS;
 const CLASSIFY_WINDOW_MS = 14 * DAY_MS;
@@ -127,6 +195,12 @@ const BaseAnswerSchema = z.object({
 });
 
 const SummarySchema = z.string().trim().max(MAX_SUMMARY);
+const PredictedSchema = z.enum(PREDICTED_ACTIONS);
+const PrecedentsSchema = z.object({
+  basis: z.enum(["content", "sender"]),
+  note: z.string().max(300).optional(),
+  items: z.array(z.object({ subject: z.string().max(400), sender: z.string().max(400), action: PredictedSchema, at: z.number(), correction: z.boolean() })).max(MAX_PRECEDENTS),
+});
 const SuggestedSchema = z.enum(SUGGESTED_ACTIONS);
 const EvidenceSchema = z.object({ kind: z.enum(EVIDENCE_KINDS), ref: z.string().trim().min(1).max(300), title: z.string().trim().min(1).max(200) });
 
@@ -136,13 +210,23 @@ const DetailsSchema = z.object({
   evidence: z.array(EvidenceSchema).max(MAX_EVIDENCE).nullish(),
 });
 
-type Extras = Pick<MailClassification, "summary" | "suggestedAction" | "evidence">;
+type Extras = Pick<MailClassification, "summary" | "suggestedAction" | "evidence" | "predictedAction" | "precedents">;
 
-function extras({ summary, suggestedAction, evidence }: { summary?: string | null; suggestedAction?: SuggestedAction | null; evidence?: MailEvidence[] | null }): Extras {
+interface ExtrasInput {
+  summary?: string | null;
+  suggestedAction?: SuggestedAction | null;
+  evidence?: MailEvidence[] | null;
+  predictedAction?: PredictedAction | null;
+  precedents?: MailPrecedents | null;
+}
+
+function extras({ summary, suggestedAction, evidence, predictedAction, precedents }: ExtrasInput): Extras {
   return {
     ...(summary ? { summary } : {}),
     ...(suggestedAction ? { suggestedAction } : {}),
     ...(evidence?.length ? { evidence } : {}),
+    ...(predictedAction ? { predictedAction } : {}),
+    ...(precedents ? { precedents } : {}),
   };
 }
 
@@ -152,7 +236,8 @@ export function validateAnswer(answer: unknown, meetingKeys: ReadonlySet<string>
   if (!parsed.success || details?.success === false) return null;
   const { category, commitment, meetingKey, reason } = parsed.data;
   if (meetingKey && !meetingKeys.has(meetingKey)) return null;
-  const more = { ...(details?.success ? extras(details.data) : {}), ...(commitment ? { commitment } : {}) };
+  const predictedAction = field(PredictedSchema, (answer as { predictedAction?: unknown }).predictedAction);
+  const more = { ...(details?.success ? extras(details.data) : {}), ...(commitment ? { commitment } : {}), ...(predictedAction ? { predictedAction } : {}) };
   if (category === "bulk" || !meetingKey) return { category, reason, ...more };
   return { category, meetingKey, reason, ...more };
 }
@@ -171,14 +256,16 @@ export const SYSTEM_PROMPT = [
   "Bulk mail never belongs to a meeting.",
   'Independently set commitment: "request" when asked to take on a new responsibility or task, "invitation" when invited to participate in something, "none" when no new commitment is asked, "unknown" when evidence is insufficient. An expected reply or existing meeting update alone is not a new commitment.',
   "Mail from a sender on the unimportant list (an address, or a whole domain written as @domain) is bulk, unless the sender is also a VIP.",
-  `Answer with one JSON object and nothing else: {"category": "...", "commitment": "request" | "invitation" | "none" | "unknown", "meetingKey": "..." (only for a meeting), "reason": "one plain sentence under ${MAX_REASON} characters"}.`,
+  "examples are past mails like this one and what the person did with each (action), most similar first; weight 2 marks a correction the person made, which outweighs an ordinary decision. corrections lists the person's latest corrections of the Desk's suggestions.",
+  `Predict what the person will do with this mail as predictedAction, one of ${PREDICTED_ACTIONS.join(", ")}. Follow the examples when they agree with each other and fit the mail; otherwise judge the mail on its own.`,
+  `Answer with one JSON object and nothing else: {"category": "...", "commitment": "request" | "invitation" | "none" | "unknown", "meetingKey": "..." (only for a meeting), "predictedAction": "...", "reason": "one plain sentence under ${MAX_REASON} characters"}.`,
 ].join("\n");
 
-export function buildMessages({ mail, meetings, vips, unimportant }: ClassifierRequest): { role: "system" | "user"; content: string }[] {
+export function buildMessages({ mail, meetings, vips, unimportant, corrections, examples }: ClassifierRequest): { role: "system" | "user"; content: string }[] {
   const { id, from, subject, firstParagraph, receivedAt } = mail;
   return [
     { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: JSON.stringify({ mail: { id, from, subject, firstParagraph, receivedAt }, meetings, vips, unimportant }) },
+    { role: "user", content: JSON.stringify({ mail: { id, from, subject, firstParagraph, receivedAt }, meetings, vips, unimportant, corrections, examples }) },
   ];
 }
 
@@ -315,10 +402,11 @@ const parseStored =(raw: string): unknown => {
 function readDetails(raw: string | null): Extras & Pick<MailClassification, "commitment"> {
   const stored = raw ? field(StoredSchema, parseStored(raw)) : undefined;
   if (!stored) return {};
-  const { summary, suggestedAction, evidence } = stored;
+  const { summary, suggestedAction, evidence, predictedAction, precedents } = stored;
   const items = Array.isArray(evidence) ? evidence.flatMap((e) => field(EvidenceSchema, e) ?? []).slice(0, MAX_EVIDENCE) : [];
   const commitment = stored.contractVersion === MAIL_CLASSIFIER_CONTRACT ? field(z.enum(MAIL_COMMITMENTS), stored.commitment) : undefined;
-  return { ...extras({ summary: field(SummarySchema, summary), suggestedAction: field(SuggestedSchema, suggestedAction), evidence: items }), ...(commitment ? { commitment } : {}) };
+  const learned = { predictedAction: field(PredictedSchema, predictedAction), precedents: field(PrecedentsSchema, precedents) };
+  return { ...extras({ summary: field(SummarySchema, summary), suggestedAction: field(SuggestedSchema, suggestedAction), evidence: items, ...learned }), ...(commitment ? { commitment } : {}) };
 }
 
 const isCategory = (v: string): v is MailCategory => MAIL_CATEGORIES.includes(v as MailCategory);
@@ -359,6 +447,12 @@ export interface ClassifyInput {
   vips: string[];
   unimportant?: string[];
   corrections?: ClassifierCorrection[];
+  localSources?: ReadonlySet<string>;
+}
+
+/** Forgets one mail's classification, so the next pass sorts it again with what the log now knows. */
+export function forgetClassification(db: Database, id: string): void {
+  db.query("DELETE FROM desk_mail_classes WHERE message_id = ? AND model != ?").run(id, UNIMPORTANT_MODEL);
 }
 
 export interface PassResult {
@@ -377,6 +471,7 @@ export class MailClassifier {
     private readonly run: ClassifierRunner = classifierRunner(config),
     private readonly log: (message: string) => void = console.error,
     private readonly clock: () => number = Date.now,
+    private readonly similarity?: MailSimilarity,
   ) {}
 
   get model(): string {
@@ -393,6 +488,16 @@ export class MailClassifier {
         this.running = null;
       });
     return this.running;
+  }
+
+  private async similarTo(similarity: SimilarityContext | undefined, m: ClassifierMail): Promise<SimilarDecisions | undefined> {
+    if (!similarity) return undefined;
+    try {
+      return await similarity.similar(mailTextOf(m));
+    } catch (err) {
+      this.log(`desk: mail similarity: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
   }
 
   private pending(db: Database, input: ClassifyInput): ClassifierMail[] {
@@ -414,13 +519,18 @@ export class MailClassifier {
     const corrections = (input.corrections ?? []).slice(0, MAX_CORRECTIONS);
     const meetings = upcomingMeetings(input.events, input.now, CLASSIFY_WINDOW_MS).map((e) => ({ key: eventKey(e), title: e.title, start: e.start }));
     const keys = new Set(meetings.map((m) => m.key));
-    for (const m of this.pending(db, input)) {
+    const pending = this.pending(db, input);
+    const similarity = pending.length > 0 && this.similarity ? this.similarity.load(db, input.now, input.localSources) : undefined;
+    for (const m of pending) {
+      const similar = await this.similarTo(similarity, m);
       const request: ClassifierRequest = {
         mail: { id: m.id, from: m.from, subject: m.subject, firstParagraph: m.firstParagraph ?? "", receivedAt: m.receivedAt, ...(m.account ? { account: m.account } : {}) },
         meetings,
         vips: input.vips,
         unimportant,
         corrections,
+        examples: similar ? classifierExamples(similar) : [],
+        examplesBasis: similar?.basis ?? "sender",
       };
       const started = this.clock();
       let answer: MailClassification | null = null;
@@ -438,6 +548,7 @@ export class MailClassifier {
       this.keyMissing = false;
       result.ms.push(this.clock() - started);
       if (answer) {
+        if (similar) answer = { ...answer, precedents: precedentsOf(similar) };
         saveClassification(db, m.id, answer, this.model, input.now);
         if (answer.commitment) this.retryAt.delete(m.id);
         else this.retryAt.set(m.id, input.now + RETRY_AFTER_MS);
