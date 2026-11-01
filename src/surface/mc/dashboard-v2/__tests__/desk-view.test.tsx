@@ -152,8 +152,7 @@ describe("DeskBody with calendar, mail and VIPs", () => {
     expect(html).toContain("Your saved day is unavailable");
     expect(html).not.toContain("You have 44 minutes");
     expect(html).toContain("DA results");
-    expect(html).toContain("desk-join");
-    expect(html).toContain("https://teams.example/j/1");
+    expect(html).toMatch(/<a[^>]*href="https:\/\/teams\.example\/j\/1"[^>]*>Join<\/a>/);
   });
 
   it("shows the mail's first paragraph and the next days", () => {

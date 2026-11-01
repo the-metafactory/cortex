@@ -36,5 +36,5 @@ export function savedTaskContext(outline: OutlineNode, item: TodayItem): string 
     if (node.id === item.task.id) return [node];
     for (const child of node.children) { const found = path(child); if (found) return [node, ...found]; }
   };
-  return [item.task.note, item.context, path(outline)?.slice(0, -1).reverse().find(node => node.note)?.note].find(value => value?.trim()) ?? "No additional context is saved for this task.";
+  return [item.task.note, item.context, path(outline)?.slice(0, -1).reverse().find(node => node.note?.trim())?.note].find(value => value?.trim()) ?? "No additional context is saved for this task.";
 }
