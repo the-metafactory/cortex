@@ -1,3 +1,4 @@
+import { withoutClosedTasks, type WaitingTask, type WaitingTasks } from "./sources/waiting";
 import { mailYesFilter, readMailDecision } from "./mail-yes-filter";
 import { calendarKey, calendarName, discoverCalendars } from "./calendars";
 import type { Database } from "bun:sqlite";
@@ -29,6 +30,7 @@ import type { RoutineReadLoop } from "./routine-read";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
 export interface DeskRuntime {
+  waitingTasks?: Pick<WaitingTasks, "read">;
   routineRead?: RoutineReadLoop;
   options?: DeskOptions;
   ledger: HandledLedger;
@@ -78,6 +80,7 @@ export interface DeskVigilSource {
 }
 
 export interface ComposeDeps {
+  waitingTasks?: Pick<WaitingTasks, "read">;
   routineRead?: RoutineReadLoop;
   runRoutine?: RoutineRunner;
   now?: number;
@@ -122,7 +125,14 @@ export async function composeDesk(
   const doneKeys = new Set(done.filter((d) => d.status === "done").map((d) => d.attemptKey));
   const handled = deps.handled;
   const filtered = rangerResult?.state ? withoutHandled(rangerResult.state, { has: (k) => doneKeys.has(k) || (handled?.has(k) ?? false) }) : null;
-  const ranger: RangerState | null = filtered?.state ?? rangerResult?.state ?? null;
+  const reportedRanger = filtered?.state ?? rangerResult?.state ?? null;
+  const taskRefs = [
+    ...subjects.filter(s => s.vocab === "escalation" && (s.value === "needs-principal" || s.value === "overdue")).map(s => s.ref),
+    ...(reportedRanger?.needsYou ?? []).map(n => `${n.repo}#${n.nodeId}`),
+    ...(reportedRanger?.maps ?? []).flatMap(m => [...(m.decisions ?? []), ...(m.grillings ?? [])].map(n => `${m.repo}#${n.id}`)),
+  ];
+  const waitingTasks = await deps.waitingTasks?.read(taskRefs) ?? new Map<string, WaitingTask>();
+  const ranger = reportedRanger ? withoutClosedTasks(reportedRanger, waitingTasks) : null;
   if (rangerResult) sources.push(rangerResult.error === null ? { id: "ranger", ok: true } : { id: "ranger", ok: false, error: rangerResult.error });
 
   for (const r of readings) sources.push(r.error === null ? { id: r.id, ok: true } : { id: r.id, ok: false, error: r.error });
@@ -164,7 +174,7 @@ export async function composeDesk(
   const rulingActions = rangerActions && Boolean(desk.somaBin);
   const goalActions = goalActionsFor(desk.goals, subjects, deps.goalChecks, now);
   const explanations = ranger && deps.rulingExplain ? await deps.rulingExplain.explain(ranger.needsYou) : undefined;
-  const ranked = rankItems({ now, subjects, ranger, areas: desk.areas, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
+  const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
     .filter((item) => goalListed(goalStatuses, item.goal));
   const items = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
@@ -320,7 +330,7 @@ function buildToday(ranger: RangerState | null, items: DeskItem[], areas: AreaRu
 }
 
 function buildAgents(ranger: RangerState | null, items: DeskItem[], now: number): DeskView["agents"] {
-  const waiting = items.filter(isAgentStop).length;
+  const waiting = items.filter(item => isAgentStop(item) || item.kind === "escalation").length;
   const working = (ranger?.current ?? []).map((c) => ({
     title: c.title || `An untitled task in ${repoName(c.repo)}`,
     note: [c.phase, c.prLabel].filter(Boolean).join(" · "),

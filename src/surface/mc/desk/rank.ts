@@ -1,3 +1,4 @@
+import { canonicalTaskRef, QUESTION_UNAVAILABLE, TASK_UNAVAILABLE, type WaitingTask } from "./sources/waiting";
 import { DEFAULT_YES_FILTER } from "./studio/view";
 import type { VigilSubjectView } from "../../../vigil/subjects-view";
 import type { SourceEvent, SourceMail } from "./sources/command";
@@ -18,6 +19,7 @@ export interface AreaRule extends DeskArea {
 }
 
 export interface RankInput {
+  waitingTasks?: ReadonlyMap<string, WaitingTask>;
   now: number;
   subjects: VigilSubjectView[];
   ranger: RangerState | null;
@@ -104,13 +106,27 @@ const issueLinks = (url: string | undefined) => (url ? [{ label: "Issue", url }]
 
 export function rankItems(input: RankInput): DeskItem[] {
   const items = new Map<string, DeskItem>();
+  const titles: Titles = input.ranger ? new Map([...rangerTitles(input.ranger)].map(([ref, value]) => [canonicalTaskRef(ref), value])) : new Map<string, { title: string; url?: string }>();
+  const listedTasks = new Set<string>();
   const add: Add = (item) => {
-    if (!items.has(item.key)) items.set(item.key, item);
+    const ref = canonicalTaskRef(item.detail.refs[0] ?? "");
+    const task = item.source === "ranger" ? input.waitingTasks?.get(ref) : undefined;
+    if (task?.kind === "closed") return;
+    if (item.source === "ranger" && listedTasks.has(rangerItemKey(ref))) return;
+    if (item.source === "ranger") listedTasks.add(rangerItemKey(ref));
+    const enriched = task?.kind === "unavailable"
+      ? { ...item, why: `${item.why} ${task.reason}` }
+      : task?.kind === "open" ? {
+        ...item,
+        title: `"${task.title}" needs you.`,
+        why: `${task.question ?? item.question?.condition ?? item.question?.reason ?? QUESTION_UNAVAILABLE} In ${repoName(ref.split("#")[0] ?? ref)}.`,
+        detail: { ...item.detail, links: issueLinks(task.url) },
+      } : item;
+    if (!items.has(item.key)) items.set(item.key, enriched);
   };
-  const titles: Titles = input.ranger ? rangerTitles(input.ranger) : new Map<string, { title: string; url?: string }>();
   rangerNeedsYouItems(input, add);
   rangerMapItems(input, add);
-  vigilItems(input, titles, (key) => items.has(key) || (input.hidden?.has(key) ?? false), add);
+  vigilItems(input, titles, (key) => listedTasks.has(key) || items.has(key) || (input.hidden?.has(key) ?? false), add);
   return [...items.values()].sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
 }
 
@@ -224,12 +240,13 @@ function goalExtras(goals: GoalActionsInput | undefined, goalId: string): Pick<D
   return { goal: goalId, ...(goals?.checking.has(goalId) ? { checking: true } : {}) };
 }
 
-function vigilItems({ now, subjects, areas, goalActions }: RankInput, titles: Titles, listed: (key: string) => boolean, add: Add): void {
+function vigilItems({ now, subjects, areas, goalActions, waitingTasks }: RankInput, titles: Titles, listed: (key: string) => boolean, add: Add): void {
   const goalWording = new Map<string, string | null>();
   for (const s of subjects) if (s.goalId) goalWording.set(s.goalId, s.goalWording ?? goalWording.get(s.goalId) ?? null);
   const canCheck = (goalId: string): boolean => goalActions?.check.has(goalId) ?? false;
   const canPause = (goalId: string): boolean => (goalActions?.pause ?? false) && (goalActions?.pausable(goalId) ?? false);
 
+  const seenEscalations = new Set<string>();
   for (const s of subjects) {
     if (s.healthy) continue;
     const refs = [s.subjectKey];
@@ -259,16 +276,21 @@ function vigilItems({ now, subjects, areas, goalActions }: RankInput, titles: Ti
         ...goalExtras(goalActions, goalId),
       });
     } else if (s.vocab === "escalation" && (s.value === "needs-principal" || s.value === "overdue")) {
-      if (listed(rangerItemKey(s.ref))) continue;
-      const known = titles.get(s.ref);
-      const repo = s.ref.split("#")[0] ?? s.ref;
+      const ref = canonicalTaskRef(s.ref);
+      if (listed(rangerItemKey(ref)) || seenEscalations.has(ref)) continue;
+      seenEscalations.add(ref);
+      const task = waitingTasks?.get(ref) ?? TASK_UNAVAILABLE;
+      if (task.kind === "closed") continue;
+      const known = task.kind === "open" ? task : titles.get(ref);
+      const question = task.kind === "unavailable" ? `${task.reason} ${QUESTION_UNAVAILABLE}` : task.question ?? QUESTION_UNAVAILABLE;
+      const repo = ref.split("#")[0] ?? ref;
       add({
         key: `vigil:${s.subjectKey}`, kind: "escalation", source: "vigil", area: areaFor(areas, repo, null), urgency: "waiting",
-        title: known ? `"${known.title}" needs you.` : `A task in ${repoName(repo)} needs you.`,
-        why: s.value === "overdue" ? `It has waited past its deadline, since ${ago(now, s.lastEndedAt)}.` : `An agent asked for you ${ago(now, s.lastEndedAt)}.`,
+        title: known ? `"${known.title}" needs you.` : `Task details are unavailable in ${repoName(repo)}.`,
+        why: `${question} In ${repoName(repo)}.`,
         score: s.value === "needs-principal" ? 50 : 35,
         actions: [action("detail", "Look first", "primary", true), LATER],
-        detail: { summary: known?.title ?? "A task that needs you.", history: [`Escalated ${ago(now, s.lastEndedAt)}`], refs: [s.ref, ...refs], links: issueLinks(known?.url) },
+        detail: { summary: question, history: [`Escalated ${ago(now, s.lastEndedAt)}`], refs: [s.ref, ...refs], links: issueLinks(known?.url ?? escalationUrl(s.ref)) },
       });
     }
   }
@@ -408,4 +430,9 @@ export function mailItems(input: MailInput): DeskItem[] {
       since: receivedAt,
     };
   });
+}
+
+function escalationUrl(ref: string): string | undefined {
+  const parts = /^(?:github:github\.com\/)?([\w.-]+\/[\w.-]+)#([1-9]\d*)$/.exec(ref);
+  return parts ? `https://github.com/${parts[1]}/issues/${parts[2]}` : undefined;
 }
