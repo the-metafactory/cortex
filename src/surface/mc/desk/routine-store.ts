@@ -24,7 +24,7 @@ export function readRoutineProposal(db: Database, id: string, column: "id" | "ro
 }
 
 export function routineOperationBinding(options: RoutineOptions, request: RoutineAction): string {
-  return JSON.stringify({ action: request.action, target: request.target, ...("revision" in request ? { revision: request.revision, proposedRevision: request.proposedRevision, ...(request.action === "schedule" ? { schedule: request.schedule, timezone: request.timezone } : {}) } : {}), configHash: routineConfigHash(options) });
+  return JSON.stringify({ action: request.action, target: request.target, ...("revision" in request ? { revision: request.revision, ...("proposedRevision" in request ? { proposedRevision: request.proposedRevision } : {}), ...(request.action === "schedule" ? { schedule: request.schedule, timezone: request.timezone } : {}) } : {}), configHash: routineConfigHash(options) });
 }
 export function claimRoutineOperation(db: Database, requestId: string, binding: string, resource: string): boolean {
   return db.query("INSERT OR IGNORE INTO desk_routine_operations (request_id, binding, resource) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM desk_routine_operations WHERE resource = ? AND result IS NULL)").run(requestId, binding, resource, resource).changes > 0;

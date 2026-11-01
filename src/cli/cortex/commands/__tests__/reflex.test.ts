@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify } from "yaml";
-import { reflexTargets } from "../reflex";
+import { reflexTargets, reflexRemovalTargets } from "../reflex";
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "cortex-reflex-targets-")); });
@@ -42,6 +42,17 @@ describe("configured Reflex target discovery", () => {
     expect(result.exitCode).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).not.toContain("private-secret-string");
+  });
+
+  test("advertises only configured process targets with declared flow snapshots", async () => {
+    const path = single(["@example/safe"]); mkdirSync(join(dir, "processes"));
+    const spec = { name: "noop", cwd: dir, argv: ["cortex", "pulse-flow", "--flow", "{flow}"], params: { flow: { type: "string", freeform: true } } };
+    const file = join(dir, "processes", "noop.yaml");
+    writeFileSync(file, stringify(spec)); expect(JSON.parse((await reflexRemovalTargets(path)).stdout)).toEqual({ targets: [] });
+    writeFileSync(file, stringify({ ...spec, snapshot_inputs: { flow: dir } }));
+    expect(JSON.parse((await reflexRemovalTargets(path)).stdout)).toEqual({ targets: [{ target: "@example/safe", flowRoot: dir }] });
+    writeFileSync(file, "invalid"); expect(JSON.parse((await reflexRemovalTargets(path)).stdout)).toEqual({ targets: [] });
+    expect((await reflexRemovalTargets(join(dir, "missing"))).exitCode).toBe(1);
   });
 
   test("production CLI has strict JSON stdout despite startup and loader diagnostics", async () => {

@@ -49,6 +49,7 @@
 
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import { snapshotProcessInputs } from "./process-input-snapshot";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { MyelinRuntime } from "./myelin/runtime";
@@ -129,6 +130,7 @@ export const ProcessParamSchema = z
 export const ProcessSpecSchema = z.object({
   /** Spec name; must equal the file basename and the target's `process:` value. */
   name: z.string().regex(PROCESS_NAME_RE, "process name must be [a-z0-9-]"),
+  snapshot_inputs: z.record(z.string(), z.string().refine(isAbsolute)).optional(),
   /** Absolute working directory the command runs in. */
   cwd: z.string().min(1).refine((c) => isAbsolute(c), "cwd must be an absolute path"),
   /** argv array (no shell). Elements may contain `{param}` tokens. */
@@ -234,14 +236,7 @@ export async function loadProcessSpec(dir: string, name: string): Promise<Proces
   return spec;
 }
 
-/**
- * Resolve argv for a run: fill each declared param from the activation payload
- * (or its default), validate the value against the param type, then substitute
- * `{token}` occurrences. Throws on a missing required param or a type/enum
- * violation — DATA, not instructions, so a bad value fails the run rather than
- * altering the command shape.
- */
-export function resolveArgv(spec: ProcessSpec, payload: Record<string, unknown>): string[] {
+function resolveParameters(spec: ProcessSpec, payload: Record<string, unknown>): Record<string, string> {
   const values: Record<string, string> = {};
   for (const [name, param] of Object.entries(spec.params)) {
     const provided = payload[name];
@@ -264,7 +259,20 @@ export function resolveArgv(spec: ProcessSpec, payload: Record<string, unknown>)
       values[name] = value;
     }
   }
+  return values;
+}
+function interpolateArgv(spec: ProcessSpec, values: Record<string, string>): string[] {
   return spec.argv.map((el) => el.replace(TOKEN_RE, (_m, k: string) => values[k] ?? `{${k}}`));
+}
+/**
+ * Resolve argv for a run: fill each declared param from the activation payload
+ * (or its default), validate the value against the param type, then substitute
+ * `{token}` occurrences. Throws on a missing required param or a type/enum
+ * violation — DATA, not instructions, so a bad value fails the run rather than
+ * altering the command shape.
+ */
+export function resolveArgv(spec: ProcessSpec, payload: Record<string, unknown>): string[] {
+  return interpolateArgv(spec, resolveParameters(spec, payload));
 }
 
 export interface ProcessRunnerOpts {
@@ -274,6 +282,7 @@ export interface ProcessRunnerOpts {
   processesDir: string;
   /** Injectable spec loader (default: read from {@link processesDir}). */
   loadSpec?: (name: string) => ProcessSpec | Promise<ProcessSpec>;
+  snapshotInputs?: typeof snapshotProcessInputs;
   /** Injectable spawn (default: `Bun.spawn`). */
   spawn?: Spawn;
   /** SIGTERM→SIGKILL grace (default {@link SIGKILL_GRACE_MS}); overridable for tests. */
@@ -333,11 +342,19 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
 
     let spec: ProcessSpec;
     let argv: string[];
+    let cleanup = (): Promise<void> => Promise.resolve();
     try {
       spec = await loadSpec(processName);
-      argv = resolveArgv(spec, activation.payload);
+      const parameters = resolveParameters(spec, activation.payload);
+      const inputs = await (opts.snapshotInputs ?? snapshotProcessInputs)(spec.snapshot_inputs, parameters);
+      cleanup = async () => {
+        try { await inputs.cleanup(); }
+        catch (error) { log.error(JSON.stringify({ event: "process.input-snapshot-cleanup-failed", process: processName, decisionId: activation.decisionId, reason: errMsg(error) })); }
+      };
+      argv = interpolateArgv(spec, inputs.payload);
     } catch (err) {
       // Deterministic: a bad spec / param won't fix on re-fire of THIS decision.
+      await cleanup();
       emit("failed", processName, activation, startedAt, `spec:${errMsg(err)}`);
       return;
     }
@@ -353,6 +370,7 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
     try {
       proc = spawn(argv, { cwd: spec.cwd, env: childEnv });
     } catch (err) {
+      await cleanup();
       emit("failed", processName, activation, startedAt, `spawn:${errMsg(err)}`);
       throw err instanceof Error ? err : new Error(String(err));
     }
@@ -363,13 +381,14 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
       // a failure can't re-fire — the next scheduled fire re-runs the job).
       void superviseRun(proc, spec.timeout_ms, sigkillGraceMs)
         .then((r) => { emit(r.ok ? "completed" : "failed", processName, activation, startedAt, r.ok ? undefined : r.reason); })
-        .catch((err: unknown) => { log.error(`process-runner: detached supervise threw: ${errMsg(err)}`); });
+        .catch((err: unknown) => { log.error(`process-runner: detached supervise threw: ${errMsg(err)}`); })
+        .finally(cleanup);
       return;
     }
 
     // Synchronous: the bridge awaits, and a failure THROWS so the Decision is
     // left un-marked (re-fireable).
-    const result = await superviseRun(proc, spec.timeout_ms, sigkillGraceMs);
+    const result = await superviseRun(proc, spec.timeout_ms, sigkillGraceMs).finally(cleanup);
     if (!result.ok) {
       emit("failed", processName, activation, startedAt, result.reason);
       throw new Error(`process "${processName}" failed: ${result.reason} (decision ${activation.decisionId})`);

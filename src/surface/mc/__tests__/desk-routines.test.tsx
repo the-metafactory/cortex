@@ -157,7 +157,7 @@ describe("Desk routines", () => {
     expect(s.mutations).toHaveLength(1);
   });
 
-  it("recovers from definite discovery refusal and still permits Stop and Remove", async () => {
+  it("recovers from definite discovery refusal, permits Stop and routes deletion through workspace", async () => {
     const s = seam();
     const card = await buildRoutineCard(db, "every minute, read", OPTIONS, NOW, s.run);
     const id = String(card.fields.proposalId);
@@ -173,8 +173,9 @@ describe("Desk routines", () => {
     s.refuse(false);
     expect((await actOnRoutine(db, OPTIONS, promote, NOW, s.run)).ok).toBe(true);
     expect((await actOnRoutine(db, OPTIONS, { action: "stop", target: routine, requestId: "stop-recovery" }, NOW, s.run)).ok).toBe(true);
-    expect((await actOnRoutine(db, OPTIONS, { action: "remove", target: routine, requestId: "remove-recovery" }, NOW, s.run)).ok).toBe(true);
-    expect(s.routines).toHaveLength(0);
+    const removal = await actOnRoutine(db, OPTIONS, { action: "remove", target: routine, requestId: "remove-recovery" }, NOW, s.run);
+    expect(removal.ok).toBe(false); if (!removal.ok) expect(removal.error).toContain("confirm Delete");
+    expect(s.routines).toHaveLength(1);
   });
 
   it("durably reconciles a lost install reply without issuing another add", async () => {
@@ -244,20 +245,6 @@ describe("Desk routines", () => {
     expect(s.mutations).toHaveLength(1);
   });
 
-  it("permits safe removal recovery after an explicit partial-write reply while retaining the activation", async () => {
-    const s = seam();
-    const card = await buildRoutineCard(db, "every minute, read", OPTIONS, NOW, s.run);
-    await actOnRoutine(db, OPTIONS, { action: "install", target: String(card.fields.proposalId), requestId: "install-removal" }, NOW, s.run);
-    const request = { action: "remove", target: s.routines[0]?.id ?? "", requestId: "partial-remove" } as const;
-    s.uncertain();
-    const result = await actOnRoutine(db, OPTIONS, request, NOW, s.run);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("Retry Remove");
-    s.recover();
-    expect((await actOnRoutine(db, OPTIONS, request, NOW, s.run)).ok).toBe(true);
-    expect(s.routines).toHaveLength(0);
-  });
-
   it("approves and denies only the configured target's pending fires and reports automatic dispatch separately", async () => {
     const s = seam();
     const card = await buildRoutineCard(db, "every minute, read", OPTIONS, NOW, s.run);
@@ -275,7 +262,7 @@ describe("Desk routines", () => {
     const html = renderToStaticMarkup(<RoutineDone view={view} onChanged={() => undefined} />);
     expect(html).toContain("Automatically dispatched");
     expect(html).not.toContain("completed");
-    expect(renderToStaticMarkup(<RoutinesSection view={view} onChanged={() => undefined} />)).toContain("Remove");
+    expect(renderToStaticMarkup(<RoutinesSection view={view} onChanged={() => undefined} />)).toContain("Open routine workspace");
   });
 
   it("bounds stalled reads separately from authoring and keeps cached Desk reads immediate", async () => {
