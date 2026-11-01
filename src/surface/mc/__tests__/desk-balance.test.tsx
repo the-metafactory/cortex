@@ -75,6 +75,20 @@ describe("Balance through the real My day owner", () => {
     }
     expect(JSON.stringify(loadBalanceState(db))).toBe(before);
   });
+  test("refuses a stale Day completion after its confirmed leaf becomes a project without creating credit", async () => {
+    expect((await post({ op: "start", ids: ["first", "standalone"] })).status).toBe(200);
+    const current = view();
+    await change({ op: "outline-add", revision: current.revision, parent: "first", title: "Unfinished new child" });
+    const before = loadBalanceState(db);
+    const beforeMeta = db.query("SELECT data FROM desk_my_day WHERE id = 1").get();
+    const response = await post({ op: "done", id: "first" });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Only a task without subtasks can receive completion credit. Refresh My day to see its current state." });
+    expect(loadBalanceState(db)).toEqual(before);
+    expect(db.query("SELECT data FROM desk_my_day WHERE id = 1").get()).toEqual(beforeMeta);
+    expect(view().items.map(item => item.task.id)).toEqual(["standalone"]);
+    expect(required(view(), "first").children[0]?.done).toBeUndefined();
+  });
   test("adds and moves without replacing the confirmed day, and rejects cycles and unavailable parents atomically", async () => {
     expect((await post({ op: "start", ids: ["first", "standalone"] })).status).toBe(200);
     const before = loadBalanceState(db)?.dayState;

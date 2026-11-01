@@ -18,6 +18,7 @@ export function setOutlineFocus(state: AppState, node: OutlineNode, focus: boole
   else delete node.focusMonth;
 }
 export function completeOutlineLeaf(state: AppState, node: OutlineNode, date: string): void {
+  if (node.children.length > 0) throw new Error("Only a task without subtasks can receive completion credit. Refresh My day to see its current state.");
   const area = ancestorIndex(state.outline).get(node.id)?.[1];
   if (!area) throw new Error("This task needs an area.");
   node.done = true;
