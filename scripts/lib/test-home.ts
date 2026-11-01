@@ -27,9 +27,9 @@ export function hermeticTestEnv(host: NodeJS.ProcessEnv, dirs: RunDirs): Record<
   return env;
 }
 
-export type HomeVerdict = { ok: true } | { ok: false; reason: string };
+export type TestEnvVerdict = { ok: true } | { ok: false; reason: string };
 
-export function checkTestHome(env: NodeJS.ProcessEnv, homedir: string): HomeVerdict {
+export function checkTestHome(env: NodeJS.ProcessEnv, homedir: string): TestEnvVerdict {
   if (env[HOST_HOME_OPT_IN_ENV] === "1") return { ok: true };
   const hermetic = env[HERMETIC_HOME_ENV];
   if (hermetic && env.HOME === hermetic && homedir === hermetic) return { ok: true };
@@ -43,7 +43,7 @@ export function checkTestHome(env: NodeJS.ProcessEnv, homedir: string): HomeVerd
   };
 }
 
-export function checkTestTmp(env: NodeJS.ProcessEnv, tmpdir: string): HomeVerdict {
+export function checkTestTmp(env: NodeJS.ProcessEnv, tmpdir: string): TestEnvVerdict {
   if (env[HOST_HOME_OPT_IN_ENV] === "1") return { ok: true };
   const runTmp = env[RUN_TMP_ENV];
   if (runTmp && env.TMPDIR === runTmp && tmpdir === runTmp) return { ok: true };
