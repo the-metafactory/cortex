@@ -4954,6 +4954,7 @@ export async function startCortex(
           resultBaseUrl: config.vigil.result_base_url,
         },
         desk: {
+          routineScope: { principal: principalId, stack: derivedStack.stack },
           enabled: config.mc.desk.enabled,
           displayName: config.mc.desk.displayName,
           topN: config.mc.desk.topN,

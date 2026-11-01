@@ -59,6 +59,7 @@ export interface DeskAskOptions {
 }
 
 export interface DeskOptions {
+  routineScope?: { principal: string; stack: string };
   routines?: RoutineOptions;
   enabled: boolean;
   displayName: string;
