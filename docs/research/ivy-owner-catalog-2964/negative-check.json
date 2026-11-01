@@ -1,0 +1,17 @@
+{
+  "case": "replace C1 source with nonexistent path in temporary document",
+  "command": "python3 verify.py --repos-dir <source-checkouts> --discord-dir <discord-checkout> --document <temporary-document>",
+  "exit": 1,
+  "issues": [
+    {
+      "label": "C1",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "missing-owner-catalog-source.ts",
+      "first": 433,
+      "last": 492,
+      "lineCount": 0,
+      "valid": false
+    }
+  ]
+}

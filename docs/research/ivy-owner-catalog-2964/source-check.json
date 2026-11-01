@@ -1,0 +1,697 @@
+{
+  "sourceReferences": 69,
+  "catalogRows": 25,
+  "records": [
+    {
+      "label": "C1",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/common/types/config.ts",
+      "first": 433,
+      "last": 492,
+      "lineCount": 1288,
+      "valid": true
+    },
+    {
+      "label": "C2",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/server.ts",
+      "first": 441,
+      "last": 448,
+      "lineCount": 1063,
+      "valid": true
+    },
+    {
+      "label": "C3",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/api/desk-ask.ts",
+      "first": 40,
+      "last": 129,
+      "lineCount": 149,
+      "valid": true
+    },
+    {
+      "label": "C4",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/create.ts",
+      "first": 9,
+      "last": 96,
+      "lineCount": 115,
+      "valid": true
+    },
+    {
+      "label": "C5",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/actions.ts",
+      "first": 88,
+      "last": 109,
+      "lineCount": 151,
+      "valid": true
+    },
+    {
+      "label": "C6",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/studio/writer.ts",
+      "first": 60,
+      "last": 131,
+      "lineCount": 132,
+      "valid": true
+    },
+    {
+      "label": "C7",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/my-day.ts",
+      "first": 120,
+      "last": 264,
+      "lineCount": 265,
+      "valid": true
+    },
+    {
+      "label": "C8",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/balance-outline.ts",
+      "first": 30,
+      "last": 125,
+      "lineCount": 126,
+      "valid": true
+    },
+    {
+      "label": "C9",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/studio/format.ts",
+      "first": 4,
+      "last": 134,
+      "lineCount": 372,
+      "valid": true
+    },
+    {
+      "label": "C10",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/studio/acts.ts",
+      "first": 15,
+      "last": 275,
+      "lineCount": 309,
+      "valid": true
+    },
+    {
+      "label": "C11",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/studio/capture.ts",
+      "first": 38,
+      "last": 125,
+      "lineCount": 126,
+      "valid": true
+    },
+    {
+      "label": "C12",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/api/desk-studio-session.ts",
+      "first": 25,
+      "last": 110,
+      "lineCount": 118,
+      "valid": true
+    },
+    {
+      "label": "C13",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/studio-outline.ts",
+      "first": 12,
+      "last": 101,
+      "lineCount": 105,
+      "valid": true
+    },
+    {
+      "label": "C14",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/routines.ts",
+      "first": 1,
+      "last": 200,
+      "lineCount": 215,
+      "valid": true
+    },
+    {
+      "label": "C15",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/notes.ts",
+      "first": 3,
+      "last": 37,
+      "lineCount": 38,
+      "valid": true
+    },
+    {
+      "label": "C16",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/mail-actions.ts",
+      "first": 104,
+      "last": 126,
+      "lineCount": 127,
+      "valid": true
+    },
+    {
+      "label": "C17",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/compose.ts",
+      "first": 110,
+      "last": 200,
+      "lineCount": 387,
+      "valid": true
+    },
+    {
+      "label": "C18",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/studio/thinking.ts",
+      "first": 1,
+      "last": 57,
+      "lineCount": 57,
+      "valid": true
+    },
+    {
+      "label": "S1",
+      "repo": "soma",
+      "sha": "b7d5d7a83d8f8ff570edbbf1a261c6ade79edffe",
+      "path": "src/cli/graph.ts",
+      "first": 127,
+      "last": 150,
+      "lineCount": 2276,
+      "valid": true
+    },
+    {
+      "label": "S2",
+      "repo": "soma",
+      "sha": "b7d5d7a83d8f8ff570edbbf1a261c6ade79edffe",
+      "path": "src/cli/graph.ts",
+      "first": 1170,
+      "last": 1280,
+      "lineCount": 2276,
+      "valid": true
+    },
+    {
+      "label": "S3",
+      "repo": "soma",
+      "sha": "b7d5d7a83d8f8ff570edbbf1a261c6ade79edffe",
+      "path": "test/graph-add-once.test.ts",
+      "first": 21,
+      "last": 179,
+      "lineCount": 179,
+      "valid": true
+    },
+    {
+      "label": "R1",
+      "repo": "ranger",
+      "sha": "a4d5453b2ffe8ceef21d3cfcd61097942ebc6f62",
+      "path": "src/intake.ts",
+      "first": 38,
+      "last": 70,
+      "lineCount": 1604,
+      "valid": true
+    },
+    {
+      "label": "R2",
+      "repo": "ranger",
+      "sha": "a4d5453b2ffe8ceef21d3cfcd61097942ebc6f62",
+      "path": "src/intake.ts",
+      "first": 1490,
+      "last": 1533,
+      "lineCount": 1604,
+      "valid": true
+    },
+    {
+      "label": "R3",
+      "repo": "ranger",
+      "sha": "a4d5453b2ffe8ceef21d3cfcd61097942ebc6f62",
+      "path": "test/intake-recovery.e2e.test.ts",
+      "first": 140,
+      "last": 220,
+      "lineCount": 298,
+      "valid": true
+    },
+    {
+      "label": "R4",
+      "repo": "ranger",
+      "sha": "a4d5453b2ffe8ceef21d3cfcd61097942ebc6f62",
+      "path": "src/studio-think.ts",
+      "first": 13,
+      "last": 224,
+      "lineCount": 231,
+      "valid": true
+    },
+    {
+      "label": "P1",
+      "repo": "pulse",
+      "sha": "dd4e616fe4b8dbbf416a75aa88ba66ce5d26e299",
+      "path": "src/commands/compose.ts",
+      "first": 7,
+      "last": 31,
+      "lineCount": 32,
+      "valid": true
+    },
+    {
+      "label": "P2",
+      "repo": "pulse",
+      "sha": "dd4e616fe4b8dbbf416a75aa88ba66ce5d26e299",
+      "path": "src/commands/flow.ts",
+      "first": 19,
+      "last": 143,
+      "lineCount": 179,
+      "valid": true
+    },
+    {
+      "label": "P3",
+      "repo": "pulse",
+      "sha": "dd4e616fe4b8dbbf416a75aa88ba66ce5d26e299",
+      "path": "tests/flow-cli.test.ts",
+      "first": 143,
+      "last": 201,
+      "lineCount": 201,
+      "valid": true
+    },
+    {
+      "label": "F1",
+      "repo": "reflex",
+      "sha": "767e19eec61a1435d8fe98ffd42c38c47cbbe473",
+      "path": "src/activation/routines.ts",
+      "first": 16,
+      "last": 153,
+      "lineCount": 289,
+      "valid": true
+    },
+    {
+      "label": "F2",
+      "repo": "reflex",
+      "sha": "767e19eec61a1435d8fe98ffd42c38c47cbbe473",
+      "path": "test/activation/routines.test.ts",
+      "first": 90,
+      "last": 250,
+      "lineCount": 254,
+      "valid": true
+    },
+    {
+      "label": "A1",
+      "repo": "cortex-desk-adapters",
+      "sha": "eb09eb37cc588041f4e27b7501425475551bb8c7",
+      "path": "mac/main.swift",
+      "first": 138,
+      "last": 208,
+      "lineCount": 266,
+      "valid": true
+    },
+    {
+      "label": "A2",
+      "repo": "cortex-desk-adapters",
+      "sha": "eb09eb37cc588041f4e27b7501425475551bb8c7",
+      "path": "mac/reminders.swift",
+      "first": 103,
+      "last": 184,
+      "lineCount": 184,
+      "valid": true
+    },
+    {
+      "label": "A3",
+      "repo": "cortex-desk-adapters",
+      "sha": "eb09eb37cc588041f4e27b7501425475551bb8c7",
+      "path": "src/writers.ts",
+      "first": 94,
+      "last": 104,
+      "lineCount": 226,
+      "valid": true
+    },
+    {
+      "label": "A4",
+      "repo": "cortex-desk-adapters",
+      "sha": "eb09eb37cc588041f4e27b7501425475551bb8c7",
+      "path": "src/tana.ts",
+      "first": 21,
+      "last": 153,
+      "lineCount": 154,
+      "valid": true
+    },
+    {
+      "label": "A5",
+      "repo": "cortex-desk-adapters",
+      "sha": "eb09eb37cc588041f4e27b7501425475551bb8c7",
+      "path": "src/calendar.ts",
+      "first": 3,
+      "last": 44,
+      "lineCount": 66,
+      "valid": true
+    },
+    {
+      "label": "A6",
+      "repo": "cortex-desk-adapters",
+      "sha": "eb09eb37cc588041f4e27b7501425475551bb8c7",
+      "path": "README.md",
+      "first": 67,
+      "last": 106,
+      "lineCount": 190,
+      "valid": true
+    },
+    {
+      "label": "D0",
+      "repo": "metafactory-cortex-adapter-discord",
+      "sha": "caafe2d664f0679db6e6e868711d06dcda32e037",
+      "path": "package.json",
+      "first": 2,
+      "last": 25,
+      "lineCount": 29,
+      "valid": true
+    },
+    {
+      "label": "D1",
+      "repo": "metafactory-cortex-adapter-discord",
+      "sha": "caafe2d664f0679db6e6e868711d06dcda32e037",
+      "path": "src/index.ts",
+      "first": 926,
+      "last": 947,
+      "lineCount": 1660,
+      "valid": true
+    },
+    {
+      "label": "D2",
+      "repo": "metafactory-cortex-adapter-discord",
+      "sha": "caafe2d664f0679db6e6e868711d06dcda32e037",
+      "path": "src/index.ts",
+      "first": 950,
+      "last": 1051,
+      "lineCount": 1660,
+      "valid": true
+    },
+    {
+      "label": "D3",
+      "repo": "metafactory-cortex-adapter-discord",
+      "sha": "caafe2d664f0679db6e6e868711d06dcda32e037",
+      "path": "src/index.ts",
+      "first": 405,
+      "last": 497,
+      "lineCount": 1660,
+      "valid": true
+    },
+    {
+      "label": "D4",
+      "repo": "metafactory-cortex-adapter-discord",
+      "sha": "caafe2d664f0679db6e6e868711d06dcda32e037",
+      "path": "src/index.ts",
+      "first": 518,
+      "last": 605,
+      "lineCount": 1660,
+      "valid": true
+    },
+    {
+      "label": "D5",
+      "repo": "metafactory-cortex-adapter-discord",
+      "sha": "caafe2d664f0679db6e6e868711d06dcda32e037",
+      "path": "src/__tests__/create-private-thread.test.ts",
+      "first": 1,
+      "last": 240,
+      "lineCount": 348,
+      "valid": true
+    },
+    {
+      "label": "I1",
+      "repo": "cortex",
+      "sha": "c3165fc408b4829853b4bee677f3f41672f10607",
+      "path": "src/runner/brain-consumer-boot.ts",
+      "first": 480,
+      "last": 498,
+      "lineCount": 711,
+      "valid": true
+    },
+    {
+      "label": "I2",
+      "repo": "cortex",
+      "sha": "c3165fc408b4829853b4bee677f3f41672f10607",
+      "path": "src/brain/daemon-brain-host.ts",
+      "first": 1422,
+      "last": 1486,
+      "lineCount": 2174,
+      "valid": true
+    },
+    {
+      "label": "I3",
+      "repo": "cortex",
+      "sha": "c3165fc408b4829853b4bee677f3f41672f10607",
+      "path": "src/common/policy/resolve-access.ts",
+      "first": 263,
+      "last": 349,
+      "lineCount": 411,
+      "valid": true
+    },
+    {
+      "label": "T1",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/__tests__/desk-my-day.test.ts",
+      "first": 38,
+      "last": 376,
+      "lineCount": 376,
+      "valid": true
+    },
+    {
+      "label": "T2",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/__tests__/desk-balance-store.test.ts",
+      "first": 33,
+      "last": 120,
+      "lineCount": 122,
+      "valid": true
+    },
+    {
+      "label": "T3",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/__tests__/desk-studio-writer.test.ts",
+      "first": 1,
+      "last": 260,
+      "lineCount": 396,
+      "valid": true
+    },
+    {
+      "label": "T4",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/__tests__/desk-studio-capture.test.ts",
+      "first": 1,
+      "last": 211,
+      "lineCount": 211,
+      "valid": true
+    },
+    {
+      "label": "T5",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/__tests__/desk-studio-relates.test.ts",
+      "first": 77,
+      "last": 192,
+      "lineCount": 196,
+      "valid": true
+    },
+    {
+      "label": "T6",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/__tests__/desk-studio-session.test.ts",
+      "first": 1,
+      "last": 225,
+      "lineCount": 225,
+      "valid": true
+    },
+    {
+      "label": "T7",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/__tests__/desk-studio-outline.test.ts",
+      "first": 1,
+      "last": 240,
+      "lineCount": 377,
+      "valid": true
+    },
+    {
+      "label": "T8",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/__tests__/desk-routines.test.tsx",
+      "first": 87,
+      "last": 220,
+      "lineCount": 341,
+      "valid": true
+    },
+    {
+      "label": "T9",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/__tests__/desk-ask.test.ts",
+      "first": 128,
+      "last": 230,
+      "lineCount": 299,
+      "valid": true
+    },
+    {
+      "label": "T10",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/__tests__/desk-mail-actions.test.ts",
+      "first": 1,
+      "last": 220,
+      "lineCount": 377,
+      "valid": true
+    },
+    {
+      "label": "T11",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/__tests__/desk.test.ts",
+      "first": 1,
+      "last": 199,
+      "lineCount": 199,
+      "valid": true
+    },
+    {
+      "label": "T12",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/__tests__/desk-studio-sparring.test.ts",
+      "first": 44,
+      "last": 83,
+      "lineCount": 83,
+      "valid": true
+    },
+    {
+      "label": "C19",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/studio/git.ts",
+      "first": 9,
+      "last": 35,
+      "lineCount": 48,
+      "valid": true
+    },
+    {
+      "label": "C20",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/desk/studio/session.ts",
+      "first": 16,
+      "last": 21,
+      "lineCount": 75,
+      "valid": true
+    },
+    {
+      "label": "A7",
+      "repo": "cortex-desk-adapters",
+      "sha": "eb09eb37cc588041f4e27b7501425475551bb8c7",
+      "path": "test/mac-binary.test.ts",
+      "first": 6,
+      "last": 26,
+      "lineCount": 27,
+      "valid": true
+    },
+    {
+      "label": "A8",
+      "repo": "cortex-desk-adapters",
+      "sha": "eb09eb37cc588041f4e27b7501425475551bb8c7",
+      "path": "test/reminders-mac.test.ts",
+      "first": 5,
+      "last": 53,
+      "lineCount": 53,
+      "valid": true
+    },
+    {
+      "label": "A9",
+      "repo": "cortex-desk-adapters",
+      "sha": "eb09eb37cc588041f4e27b7501425475551bb8c7",
+      "path": "test/writers.test.ts",
+      "first": 31,
+      "last": 158,
+      "lineCount": 159,
+      "valid": true
+    },
+    {
+      "label": "A10",
+      "repo": "cortex-desk-adapters",
+      "sha": "eb09eb37cc588041f4e27b7501425475551bb8c7",
+      "path": "test/tana.test.ts",
+      "first": 35,
+      "last": 157,
+      "lineCount": 158,
+      "valid": true
+    },
+    {
+      "label": "D6",
+      "repo": "metafactory-cortex-adapter-discord",
+      "sha": "caafe2d664f0679db6e6e868711d06dcda32e037",
+      "path": "src/__tests__/dm-ownership.test.ts",
+      "first": 163,
+      "last": 220,
+      "lineCount": 220,
+      "valid": true
+    },
+    {
+      "label": "D7",
+      "repo": "metafactory-cortex-adapter-discord",
+      "sha": "caafe2d664f0679db6e6e868711d06dcda32e037",
+      "path": "src/__tests__/guild-filter.test.ts",
+      "first": 1,
+      "last": 120,
+      "lineCount": 313,
+      "valid": true
+    },
+    {
+      "label": "D8",
+      "repo": "metafactory-cortex-adapter-discord",
+      "sha": "caafe2d664f0679db6e6e868711d06dcda32e037",
+      "path": "src/__tests__/author-is-principal.test.ts",
+      "first": 1,
+      "last": 120,
+      "lineCount": 218,
+      "valid": true
+    },
+    {
+      "label": "R5",
+      "repo": "ranger",
+      "sha": "a4d5453b2ffe8ceef21d3cfcd61097942ebc6f62",
+      "path": "src/intake.ts",
+      "first": 915,
+      "last": 928,
+      "lineCount": 1604,
+      "valid": true
+    },
+    {
+      "label": "R6",
+      "repo": "ranger",
+      "sha": "a4d5453b2ffe8ceef21d3cfcd61097942ebc6f62",
+      "path": "test/studio-think.test.ts",
+      "first": 1,
+      "last": 130,
+      "lineCount": 420,
+      "valid": true
+    },
+    {
+      "label": "C21",
+      "repo": "cortex",
+      "sha": "32f0d082fe129feaa97f8aa239f17c7c9c322d82",
+      "path": "src/surface/mc/api/mutation-guard.ts",
+      "first": 316,
+      "last": 332,
+      "lineCount": 333,
+      "valid": true
+    }
+  ],
+  "issues": []
+}
