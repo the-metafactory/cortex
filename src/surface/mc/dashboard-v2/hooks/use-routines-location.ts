@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 
+export type WorkspaceTab = "overview" | "schedule" | "flow" | "executions";
 export type RoutineTab = "schedule" | "workspace";
 export type CalendarView = "day" | "week" | "month";
 export interface RoutinesLocation {
-  tab: RoutineTab; routine: string | null; view: CalendarView; date: string; timezone: string;
+  tab: RoutineTab; workspace?: WorkspaceTab; routine: string | null; view: CalendarView; date: string; timezone: string;
   policy: "all" | "approval" | "auto"; showPaused: boolean;
 }
-const keys = ["routines", "routine", "routine-view", "routine-date", "routine-timezone", "routine-policy", "routine-paused"];
+const keys = ["routines", "routine", "routine-view", "routine-date", "routine-timezone", "routine-policy", "routine-paused", "routine-workspace"];
 export const localDate = (now = new Date()): string => `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 export function calendarDate(value: string | null): string | null {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.exec(value) || value < "1970-01-01" || value > "2100-12-31") return null;
@@ -18,7 +19,7 @@ export function validTimezone(value: string): boolean {
   catch { return false; }
 }
 export function defaultRoutinesLocation(): RoutinesLocation {
-  return { tab: "schedule", routine: null, view: "week", date: localDate(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, policy: "all", showPaused: false };
+  return { tab: "schedule", workspace: "overview", routine: null, view: "week", date: localDate(), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, policy: "all", showPaused: false };
 }
 export function readRoutinesLocation(search: string): RoutinesLocation | null {
   const p = new URLSearchParams(search);
@@ -27,7 +28,8 @@ export function readRoutinesLocation(search: string): RoutinesLocation | null {
   const view = p.get("routine-view");
   const policy = p.get("routine-policy");
   const timezone = p.get("routine-timezone") ?? defaults.timezone;
-  return { tab: p.get("routines") === "workspace" ? "workspace" : "schedule", routine: p.get("routine") ?? null,
+  const workspace = p.get("routine-workspace");
+  return { workspace: workspace === "schedule" || workspace === "flow" || workspace === "executions" ? workspace : "overview", tab: p.get("routines") === "workspace" ? "workspace" : "schedule", routine: p.get("routine") ?? null,
     view: view === "day" || view === "month" ? view : "week", date: calendarDate(p.get("routine-date")) ?? defaults.date,
     timezone: validTimezone(timezone) ? timezone : defaults.timezone, policy: policy === "approval" || policy === "auto" ? policy : "all", showPaused: p.get("routine-paused") === "1" };
 }
@@ -36,6 +38,7 @@ export function routinesSearch(search: string, next: RoutinesLocation | null): s
   for (const key of keys) p.delete(key);
   if (next) {
     p.delete("settings"); p.set("routines", next.tab); p.set("routine-view", next.view); p.set("routine-date", next.date); p.set("routine-timezone", next.timezone);
+    if (next.workspace && next.workspace !== "overview") p.set("routine-workspace", next.workspace);
     if (next.routine) p.set("routine", next.routine);
     if (next.policy !== "all") p.set("routine-policy", next.policy);
     if (next.showPaused) p.set("routine-paused", "1");
