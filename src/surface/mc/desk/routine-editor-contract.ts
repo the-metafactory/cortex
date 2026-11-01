@@ -4,6 +4,7 @@ const scalar = z.union([z.string(), z.number(), z.boolean()]);
 const path = z.array(z.union([z.string(), z.number().int().nonnegative()])).min(1).max(40);
 export const RoutinePatchSchema = z.object({ path, value: scalar }).strict();
 export type RoutinePatch = z.infer<typeof RoutinePatchSchema>;
+export const RoutineEditProposalSchema = z.object({ status: z.literal("edit"), patches: z.array(RoutinePatchSchema).max(100) }).strict();
 export const RoutineStepSchema = z.object({
   path, action: z.string(), purpose: z.string(), reason: z.string(),
   parameters: z.array(z.object({ name: z.string(), kind: z.enum(["literal", "binding", "redacted"]), value: scalar.nullable() })),

@@ -1,10 +1,34 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getJson, postJson } from "../lib/api";
 import { RoutineDetailSchema, RoutineInventorySchema, parameterError, type RoutineDetail, type RoutineInventory, type RoutinePatch, type RoutineStep } from "../../desk/routine-editor-contract";
 
 const endpoint = "/api/desk/routine-editor";
 const message = (error: unknown): string => error instanceof Error ? error.message : "The routine owner did not answer.";
 const stepKey = (step: RoutineStep): string => JSON.stringify(step.path);
+
+interface FlowStepNode { step: RoutineStep; index: number; children: FlowStepNode[] }
+
+export function routineStepTree(steps: RoutineStep[]): FlowStepNode[] {
+  const roots: FlowStepNode[] = [];
+  const ancestors: FlowStepNode[] = [];
+  for (const [index, step] of steps.entries()) {
+    while (ancestors.length) {
+      const parent = ancestors.at(-1);
+      if (parent && parent.step.path.length < step.path.length && parent.step.path.every((part, position) => part === step.path[position])) break;
+      ancestors.pop();
+    }
+    const node = { step, index, children: [] } satisfies FlowStepNode;
+    const parent = ancestors.at(-1);
+    if (parent) parent.children.push(node);
+    else roots.push(node);
+    ancestors.push(node);
+  }
+  return roots;
+}
+
+function FlowOutline({ nodes, selected, onSelect, label = "Installed flow steps" }: { nodes: FlowStepNode[]; selected: number; onSelect: (index: number) => void; label?: string }) {
+  return <ol aria-label={label}>{nodes.map(({ step, index, children }) => <li key={stepKey(step)}><button type="button" className="desk-btn" aria-pressed={selected === index} onClick={() => { onSelect(index); }}>{index + 1}. {step.action}</button><small>{step.purpose}</small>{children.length > 0 && <FlowOutline nodes={children} selected={selected} onSelect={onSelect} label={`Steps inside ${step.action}`} />}</li>)}</ol>;
+}
 
 function ParameterEditor({ detail, step, onSave, busy }: { detail: RoutineDetail; step: RoutineStep; onSave: (patches: RoutinePatch[]) => Promise<void>; busy: boolean }) {
   const [editing, setEditing] = useState(false);
@@ -73,7 +97,7 @@ function RoutineDetailPage({ detail, onUpdated }: { detail: RoutineDetail; onUpd
     <h2>{detail.flow?.name ?? detail.id}</h2>
     {detail.reason && <p>{detail.reason}</p>}
     {error && <p role="alert">{error}</p>}{saved && <p role="status">Parameters saved and verified.</p>}
-    {detail.flow && <><div className="desk-routine-flow"><ol aria-label="Installed flow steps">{detail.flow.steps.map((entry, index) => <li key={stepKey(entry)}><button type="button" className="desk-btn" aria-pressed={selected === index} onClick={() => { setSelected(index); }}>{index + 1}. {entry.action}</button><small>{entry.purpose}</small></li>)}</ol>
+    {detail.flow && <><div className="desk-routine-flow"><FlowOutline nodes={routineStepTree(detail.flow.steps)} selected={selected} onSelect={setSelected} />
       {step && <ParameterEditor key={`${detail.revision}:${stepKey(step)}`} detail={detail} step={step} busy={busy} onSave={apply} />}</div>
       {detail.writable && detail.flow.steps.some((entry) => entry.editable.length > 0) && <section className="desk-set-card" aria-label="AI routine editing"><h3>Ask Ivy to change this routine</h3><p>Ivy can propose changes to the parameters shown here. Nothing changes until you apply a proposal.</p>
         <form onSubmit={(event) => { event.preventDefault(); void ask(); }}><label htmlFor="routine-edit-request">Requested change</label><textarea id="routine-edit-request" value={text} maxLength={2000} onChange={(event) => { setText(event.target.value); }} /><button className="desk-btn" type="submit" disabled={busy || !text.trim()}>{proposal ? "Revise proposal" : "Propose change"}</button></form>
@@ -92,6 +116,8 @@ export function DeskRoutineEditor({ onBack }: { onBack: () => void }) {
   const [inventory, setInventory] = useState<RoutineInventory | null>(null);
   const [detail, setDetail] = useState<RoutineDetail | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const selectedId = useRef<string | null>(null);
+  const choose = (id: string | null): void => { selectedId.current = id; setSelected(id); };
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const load = async (): Promise<void> => {
@@ -110,13 +136,13 @@ export function DeskRoutineEditor({ onBack }: { onBack: () => void }) {
     return () => { abort.abort(); };
   }, [selected]);
   return <div className="desk desk-settings desk-routine-page"><header className="desk-top"><div className="desk-top-in"><span className="desk-brand">Routines</span><button className="desk-btn" type="button" onClick={onBack}>Back to the Desk</button></div></header><main className="desk-set-main"><h1>Routines</h1>
-    <button className="desk-btn" type="button" onClick={() => { setSelected(null); setDetail(null); void load(); }}>Refresh routines</button>
+    <button className="desk-btn" type="button" onClick={() => { choose(null); setDetail(null); void load(); }}>Refresh routines</button>
     {error && <p role="alert">{error}</p>}
     {!inventory && !error && <p role="status">Reading installed routines…</p>}
     {inventory?.length === 0 && <p>No installed routines were returned by the configured owner.</p>}
-    <div className="desk-routine-layout"><nav aria-label="Installed routines"><ul>{inventory?.map((routine) => <li key={routine.id}><button type="button" className="desk-btn" aria-current={selected === routine.id ? "page" : undefined} onClick={() => { setSelected(routine.id); }}>{routine.name ?? routine.id}</button><small>{routine.schedule} · {routine.timezone ?? "Timezone not specified"}<br />{routine.policy === "auto" ? "Automatic" : routine.policy === "disabled" ? "Disabled" : "Approval required"}{routine.readOnly ? " · Read-only" : ""}</small></li>)}</ul></nav><div>
+    <div className="desk-routine-layout"><nav aria-label="Installed routines"><ul>{inventory?.map((routine) => <li key={routine.id}><button type="button" className="desk-btn" aria-current={selected === routine.id ? "page" : undefined} onClick={() => { choose(routine.id); }}>{routine.name ?? routine.id}</button><small>{routine.schedule} · {routine.timezone ?? "Timezone not specified"}<br />{routine.policy === "auto" ? "Automatic" : routine.policy === "disabled" ? "Disabled" : "Approval required"}{routine.readOnly ? " · Read-only" : ""}</small></li>)}</ul></nav><div>
       {loading && <p role="status">Reading the installed flow…</p>}
-      {detail && <RoutineDetailPage key={detail.id} detail={detail} onUpdated={setDetail} />}
+      {detail && <RoutineDetailPage key={detail.id} detail={detail} onUpdated={(result) => { if (selectedId.current === result.id) setDetail(result); }} />}
       {!selected && <p>Select a routine to inspect its installed flow.</p>}
     </div></div>
   </main></div>;

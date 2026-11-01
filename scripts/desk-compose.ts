@@ -4,7 +4,7 @@ import { Command } from "commander";
 import { z } from "zod";
 import { composeFlow, chatModelLLM, OpenAICompatibleChatModel, type CatalogEntry } from "pulse";
 import { spawnWithStdin, type WriterRunner } from "../src/surface/mc/desk/create";
-import { RoutineDetailSchema, RoutinePatchSchema } from "../src/surface/mc/desk/routine-editor-contract";
+import { RoutineDetailSchema, RoutineEditProposalSchema } from "../src/surface/mc/desk/routine-editor-contract";
 
 const inventorySchema = z.object({ packages: z.array(z.object({ name: z.string(), type: z.string(), status: z.string(), installPath: z.string() })) });
 const field = z.looseObject({ type: z.string(), required: z.boolean().optional() });
@@ -34,7 +34,7 @@ export async function forwardRoutineEdit(options: { pulseBin: string; modelUrl: 
   let raw: unknown;
   try { raw = JSON.parse(result.stdout); }
   catch { throw new Error("The routine model returned an invalid parameter proposal."); }
-  const reply = z.object({ status: z.literal("edit"), patches: z.array(RoutinePatchSchema).max(100) }).strict().safeParse(raw);
+  const reply = RoutineEditProposalSchema.safeParse(raw);
   if (!reply.success) throw new Error("The routine model returned an invalid parameter proposal.");
   return reply.data;
 }
