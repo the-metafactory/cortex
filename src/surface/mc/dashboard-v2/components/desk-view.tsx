@@ -1,10 +1,11 @@
+import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
 import { StudioSessionPanel, useStudioSession } from "./desk-studio-session";
 import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction, submitGoalAction, submitMailAction, submitRuling } from "../lib/desk-action";
 import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
-import { newReplyDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
+import { newReplyDraft, prepareDeclineDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
 import { chimeForNew } from "../lib/desk-chime";
 import { browserNotifyEnv, dismissHint, notifyForNew, requestNotifications, wantsHint } from "../lib/desk-notify";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
@@ -286,7 +287,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     void send(item, save, {
       keepVisible: true,
       request: async () => {
-        const result = await submitMailAction({ action: "draft", key: item.key, body: draft.text });
+        const result = await submitMailAction({ action: "draft", key: item.key, body: draft.text, ...(item.yesFilter ? { decision: { requestId: draft.requestId, commitment: draft.commitment ?? null, intent: draft.intent } } : {}) });
         setReplyDraft((r) => (r?.key !== item.key ? r : result.ok ? null : { ...r, note: result.text }));
         return result;
       },
@@ -636,12 +637,14 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 onCancel={() => setRuling(detailItem.key, (r) => cancelRuling(r ?? null))}
               />
             )}
+            {detailItem.mailDecision && <RecordedMailDecision decision={detailItem.mailDecision} />}
+            {detailItem.yesFilter && <MailYesFilterBox filter={detailItem.yesFilter} selected={replyDraft?.key === detailItem.key ? replyDraft.commitment : undefined} canDraft={Boolean(detailItem.reply)} disabled={busyWith(detailItem) === "mail.draft"} onChoose={commitment => setReplyDraft(r => ({ ...(r?.key === detailItem.key ? r : newReplyDraft(detailItem.key)), commitment, requestId: crypto.randomUUID() }))} onDecline={() => setReplyDraft(r => prepareDeclineDraft(r?.key === detailItem.key ? r : newReplyDraft(detailItem.key)))} />}
             {replyDraft?.key === detailItem.key && detailItem.reply && (
               <ReplyDraftBox
                 reply={detailItem.reply}
                 draft={replyDraft}
                 sending={busyWith(detailItem) === "mail.draft"}
-                onChange={(text) => setReplyDraft((r) => (r?.key === detailItem.key ? { ...r, text } : r))}
+                onChange={(text) => setReplyDraft((r) => (r?.key === detailItem.key ? { ...r, text, requestId: crypto.randomUUID() } : r))}
                 onConfirm={() => confirmReply(detailItem, replyDraft)}
                 onCancel={() => setReplyDraft(null)}
               />

@@ -1,7 +1,15 @@
+import { z } from "zod";
+import { decisionReceipt, MailDecisionSchema, saveDecisionDraft } from "../desk/mail-yes-filter";
+import { readClassifications } from "../desk/classify";
 import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../desk/create";
-import { draftReply, findListedMail, isMailAction, markUnimportant, trashMail, type MailActionId, type MailActionResult } from "../desk/mail-actions";
+import { draftReply, findListedMail, markUnimportant, trashMail } from "../desk/mail-actions";
+
+const MailRequestSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("draft"), key: z.string(), body: z.string(), decision: MailDecisionSchema.optional() }).strict(),
+  z.object({ action: z.enum(["trash", "unimportant"]), key: z.string() }).strict(),
+]);
 
 const noStore = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string): Response => Response.json({ ok: false, error }, { status, headers: noStore });
@@ -19,19 +27,22 @@ export interface DeskMailDeps {
 export async function handleDeskMail(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: DeskMailDeps = {}): Promise<Response> {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   if (!runtime?.options?.enabled) return fail(409, "The Desk is turned off on this stack.");
-  const body = (await req.json().catch(() => null)) as { action?: unknown; key?: unknown; body?: unknown } | null;
-  if (!isMailAction(body?.action) || typeof body.key !== "string") return fail(400, "An action and an item key are required.");
-  if (body.action === "draft" && typeof body.body !== "string") return fail(400, "A draft needs the reply text.");
+  const parsed = MailRequestSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return fail(400, parsed.error.issues.some(issue => issue.path.includes("body")) ? "A draft needs the reply text." : "An action, item key and valid commitment choice are required.");
+  const body = parsed.data;
+  const decision = body.action === "draft" ? body.decision : undefined;
+  if (decision && body.action === "draft") {
+    const receipt = decisionReceipt(db, body.key, body.body, decision);
+    if (receipt) return receipt.ok ? Response.json({ ok: true, message: receipt.message }, { headers: noStore }) : fail(receipt.status, receipt.error);
+  }
   const mail = findListedMail(runtime.sourceCache?.cached() ?? [], body.key);
   if (!mail) return fail(409, "The Desk no longer lists this mail.");
   const now = (deps.now ?? Date.now)();
   const actionDeps = { config: runtime.options.mailActions, ledger: runtime.ledger, run: deps.run ?? spawnWithStdin, now };
-  const act: Record<MailActionId, () => Promise<MailActionResult>> = {
-    draft: () => draftReply(mail, String(body.body), actionDeps),
-    trash: () => trashMail(mail, actionDeps),
-    unimportant: () => markUnimportant(db, mail, actionDeps),
-  };
-  const result = await act[body.action]();
+  if (decision && !["request", "invitation"].includes(readClassifications(db, [mail.id]).get(mail.id)?.commitment ?? "")) return fail(409, "This mail is no longer classified as a request or invitation. Refresh before saving the choice.");
+  const result = body.action === "draft"
+    ? decision ? await saveDecisionDraft({ db, desk: runtime.options, mail, body: body.body, decision, now, save: () => draftReply(mail, body.body, actionDeps) }) : await draftReply(mail, body.body, actionDeps)
+    : body.action === "trash" ? await trashMail(mail, actionDeps) : await markUnimportant(db, mail, actionDeps);
   if (!result.ok) return fail(result.status, result.error);
   return Response.json({ ok: true, message: result.message }, { headers: noStore });
 }

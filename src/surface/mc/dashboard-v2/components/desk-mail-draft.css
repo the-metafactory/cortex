@@ -3,3 +3,8 @@
 .desk-reply-head{font-size:14px;color:var(--ink2);margin:0 0 4px}
 .desk-reply textarea{width:100%;box-sizing:border-box;margin-top:8px;font:inherit;font-size:15px;border:1px solid #d4d4d8;border-radius:8px;padding:8px 10px;resize:vertical;background:#fff}
 .desk-reply-acts{display:flex;gap:8px;margin-top:10px}
+
+.desk-reply{min-width:0;overflow-wrap:anywhere;box-sizing:border-box;max-width:100%}
+.desk-reply label{display:block;min-width:0;max-width:100%}
+.desk-reply select{display:block;width:100%;max-width:100%;min-width:0;box-sizing:border-box;font:inherit;padding:8px;border:1px solid #d4d4d8;border-radius:8px;background:#fff}
+.desk-reply .desk-btn{max-width:100%;white-space:normal}

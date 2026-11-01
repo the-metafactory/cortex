@@ -88,6 +88,8 @@ export interface DeskItem {
   checking?: boolean;
   question?: { condition: string | null; reason: string };
   explanation?: RulingExplanation;
+  mailDecision?: import("./mail-yes-filter").MailDecisionSummary;
+  yesFilter?: import("./mail-yes-filter").MailYesFilter;
   reply?: { to: string; subject: string };
 }
 

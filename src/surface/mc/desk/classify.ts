@@ -9,6 +9,10 @@ import type { DeskCorrection, DeskMailClassifier } from "./types";
 import { DAY_MS } from "./time";
 import { isUnimportant } from "./vips";
 
+export const MAIL_COMMITMENTS = ["request", "invitation", "none", "unknown"] as const;
+export type MailCommitment = (typeof MAIL_COMMITMENTS)[number];
+export const MAIL_CLASSIFIER_CONTRACT = 2;
+
 export const MAIL_CATEGORIES = ["action", "reply", "meeting", "fyi", "bulk"] as const;
 export type MailCategory = (typeof MAIL_CATEGORIES)[number];
 
@@ -24,6 +28,7 @@ export interface MailEvidence {
 
 export interface MailClassification {
   category: MailCategory;
+  commitment?: MailCommitment;
   meetingKey?: string;
   reason: string;
   summary?: string;
@@ -116,6 +121,7 @@ export function upcomingMeetings<T extends SourceEvent>(events: T[], now: number
 
 const BaseAnswerSchema = z.object({
   category: z.enum(MAIL_CATEGORIES),
+  commitment: z.enum(MAIL_COMMITMENTS).optional(),
   meetingKey: z.string().trim().nullish(),
   reason: z.string().trim().min(1).max(MAX_REASON),
 });
@@ -144,9 +150,9 @@ export function validateAnswer(answer: unknown, meetingKeys: ReadonlySet<string>
   const parsed = BaseAnswerSchema.safeParse(answer);
   const details = withDetails ? DetailsSchema.safeParse(answer) : null;
   if (!parsed.success || details?.success === false) return null;
-  const { category, meetingKey, reason } = parsed.data;
+  const { category, commitment, meetingKey, reason } = parsed.data;
   if (meetingKey && !meetingKeys.has(meetingKey)) return null;
-  const more = details?.success ? extras(details.data) : {};
+  const more = { ...(details?.success ? extras(details.data) : {}), ...(commitment ? { commitment } : {}) };
   if (category === "bulk" || !meetingKey) return { category, reason, ...more };
   return { category, meetingKey, reason, ...more };
 }
@@ -163,8 +169,9 @@ export const SYSTEM_PROMPT = [
   "- bulk: newsletters, marketing, notifications, digests and other mass mail.",
   "A mail only belongs to a meeting when it is about the same event, not because it shares a word, a month or a year.",
   "Bulk mail never belongs to a meeting.",
+  'Independently set commitment: "request" when asked to take on a new responsibility or task, "invitation" when invited to participate in something, "none" when no new commitment is asked, "unknown" when evidence is insufficient. An expected reply or existing meeting update alone is not a new commitment.',
   "Mail from a sender on the unimportant list (an address, or a whole domain written as @domain) is bulk, unless the sender is also a VIP.",
-  `Answer with one JSON object and nothing else: {"category": "...", "meetingKey": "..." (only for a meeting), "reason": "one plain sentence under ${MAX_REASON} characters"}.`,
+  `Answer with one JSON object and nothing else: {"category": "...", "commitment": "request" | "invitation" | "none" | "unknown", "meetingKey": "..." (only for a meeting), "reason": "one plain sentence under ${MAX_REASON} characters"}.`,
 ].join("\n");
 
 export function buildMessages({ mail, meetings, vips, unimportant }: ClassifierRequest): { role: "system" | "user"; content: string }[] {
@@ -305,12 +312,13 @@ const parseStored =(raw: string): unknown => {
   }
 };
 
-function readDetails(raw: string | null): Extras {
+function readDetails(raw: string | null): Extras & Pick<MailClassification, "commitment"> {
   const stored = raw ? field(StoredSchema, parseStored(raw)) : undefined;
   if (!stored) return {};
   const { summary, suggestedAction, evidence } = stored;
   const items = Array.isArray(evidence) ? evidence.flatMap((e) => field(EvidenceSchema, e) ?? []).slice(0, MAX_EVIDENCE) : [];
-  return extras({ summary: field(SummarySchema, summary), suggestedAction: field(SuggestedSchema, suggestedAction), evidence: items });
+  const commitment = stored.contractVersion === MAIL_CLASSIFIER_CONTRACT ? field(z.enum(MAIL_COMMITMENTS), stored.commitment) : undefined;
+  return { ...extras({ summary: field(SummarySchema, summary), suggestedAction: field(SuggestedSchema, suggestedAction), evidence: items }), ...(commitment ? { commitment } : {}) };
 }
 
 const isCategory = (v: string): v is MailCategory => MAIL_CATEGORIES.includes(v as MailCategory);
@@ -332,7 +340,7 @@ export function readClassifications(db: Database, ids: string[]): Map<string, Ma
 }
 
 export function saveClassification(db: Database, id: string, c: MailClassification, model: string, now: number): void {
-  const more = extras(c);
+  const more = { ...extras(c), contractVersion: MAIL_CLASSIFIER_CONTRACT, ...(c.commitment ? { commitment: c.commitment } : {}) };
   const details = Object.keys(more).length > 0 ? JSON.stringify(more) : null;
   db.query(
     "INSERT INTO desk_mail_classes (message_id, category, meeting_key, reason, model, classified_at, details) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(message_id) DO UPDATE SET category = excluded.category, meeting_key = excluded.meeting_key, reason = excluded.reason, model = excluded.model, classified_at = excluded.classified_at, details = excluded.details",
@@ -391,7 +399,7 @@ export class MailClassifier {
     const listed = new Set(input.unimportant ?? []);
     const vips = new Set(input.vips);
     const unread = input.mail.filter((m) => m.unread && !isUnimportant(listed, vips, m.from.address));
-    const known = readClassifications(db, unread.map((m) => m.id));
+    const known = new Set(db.query<{ message_id: string }, [number]>("SELECT message_id FROM desk_mail_classes WHERE model != 'desk:unimportant' AND json_extract(CASE WHEN json_valid(details) THEN details ELSE '{}' END, '$.contractVersion') = ?").all(MAIL_CLASSIFIER_CONTRACT).map(r => r.message_id));
     return unread
       .filter((m) => !known.has(m.id) && (this.retryAt.get(m.id) ?? 0) <= input.now)
       .sort((a, b) => Date.parse(b.receivedAt) - Date.parse(a.receivedAt))

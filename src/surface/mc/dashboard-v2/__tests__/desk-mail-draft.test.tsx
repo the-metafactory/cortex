@@ -1,6 +1,7 @@
+import { MailYesFilterBox } from "../components/desk-mail-yes-filter";
 import { expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { newReplyDraft, ReplyDraftBox } from "../components/desk-mail-draft";
+import { newReplyDraft, prepareDeclineDraft, ReplyDraftBox } from "../components/desk-mail-draft";
 import { DESK_MAIL_PATH, submitMailAction } from "../lib/desk-action";
 
 const REPLY = { to: "Ada Boss <boss@example.org>", subject: "Re: Budget" };
@@ -31,4 +32,18 @@ it("posts the reply text to the mail route", async () => {
   };
   expect(await submitMailAction({ action: "draft", key: "mail:b1", body: "Friday works." }, fake)).toEqual({ ok: true, text: "Reply saved in your work Drafts." });
   expect(calls).toEqual([{ path: DESK_MAIL_PATH, body: { action: "draft", key: "mail:b1", body: "Friday works." } }]);
+});
+
+
+it("renders the configured mail Yes-filter and commitment action", () => {
+  const html = renderToStaticMarkup(<MailYesFilterBox filter={{ questions: ["Configured capacity question?"], commitments: [{ kind: "project", id: "constructor", label: "Owned focus project" }], problems: [] }} canDraft disabled={false} onChoose={() => {}} onDecline={() => {}} />);
+  expect(html).toContain("Configured capacity question?");
+  expect(html).toContain("Which current commitment falls away?");
+  expect(html).toContain("Prepare a decline");
+});
+
+
+it("preparing a decline preserves an existing unsent reply and commitment", () => {
+  const draft = { ...newReplyDraft("mail:owned"), text: "My unsent words", commitment: { kind: "thread" as const, id: "owned", label: "Owned" } };
+  expect(prepareDeclineDraft(draft)).toMatchObject({ text: draft.text, commitment: draft.commitment, intent: "decline", note: null });
 });
