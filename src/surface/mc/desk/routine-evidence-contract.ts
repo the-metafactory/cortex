@@ -8,13 +8,17 @@ export const RoutineHistoryQuerySchema = z.object({
   cursor: z.string().min(1).max(2000).optional(),
 }).strict();
 export type RoutineHistoryQuery = z.infer<typeof RoutineHistoryQuerySchema>;
-export const RoutineDecisionSchema = z.object({
-  decisionId: uuid, routineId: RoutineEvidenceIdSchema, routineName: z.string().min(1).max(300), nameSource: z.enum(["recorded", "identifier"]),
+const decisionFields = z.object({
+  decisionId: uuid, routineId: RoutineEvidenceIdSchema, 
   target: z.string().max(300).nullable(), definitionPresent: z.boolean(),
-  decision: z.enum(["ignored", "matched", "blocked", "fired", "denied", "expired"]), at: instant, trigger: z.literal("schedule"),
+  decision: z.enum(["ignored", "matched", "blocked", "fired", "denied", "expired"]), at: instant, impulseKind: z.literal("schedule"),
   correlationId: uuid.nullable(), resolutionOf: uuid.nullable(),
   approval: z.object({ state: z.enum(["waiting", "approved", "denied", "expired"]), decidedAt: instant.nullable(), expiresAt: instant }).strict().nullable(),
 }).strict();
+export const RoutineDecisionSchema = z.discriminatedUnion("nameSource", [
+  decisionFields.extend({ nameSource: z.literal("recorded"), routineName: z.string().min(1).max(300) }),
+  decisionFields.extend({ nameSource: z.literal("identifier"), routineName: RoutineEvidenceIdSchema }),
+]).refine((r) => r.nameSource !== "identifier" || r.routineName === r.routineId, "Fallback name must match the recorded routine ID");
 export type RoutineDecision = z.infer<typeof RoutineDecisionSchema>;
 export const RoutineDecisionPageSchema = z.object({
   owner: z.literal("reflex"), principal: z.string(), stack: z.string(), routineId: RoutineEvidenceIdSchema.nullable(),

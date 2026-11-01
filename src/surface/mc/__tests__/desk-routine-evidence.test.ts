@@ -18,7 +18,7 @@ const correlation = crypto.randomUUID();
 const started = "2026-11-01T09:00:00.000Z";
 const ended = "2026-11-01T09:00:03.000Z";
 const subject = "local.test.default.system.bus.process";
-const record = { decisionId: id, routineId: "fixture", routineName: "Historical routine", nameSource: "recorded", target: "@test/pulse-flow", definitionPresent: false, decision: "fired", at: started, trigger: "schedule", correlationId: correlation, resolutionOf: null, approval: null };
+const record = { decisionId: id, routineId: "fixture", routineName: "Historical routine", nameSource: "recorded", target: "@test/pulse-flow", definitionPresent: false, decision: "fired", at: started, impulseKind: "schedule", correlationId: correlation, resolutionOf: null, approval: null };
 const page = { owner: "reflex", ...scope, routineId: null, records: [record], complete: true, nextCursor: null };
 const response = (data: unknown) => Promise.resolve({ stdout: JSON.stringify(data), stderr: "", code: 0 });
 const run: RoutineRunner = async (argv, input, timeout) => {
@@ -43,6 +43,12 @@ function logUrl(executionId: string, extra: Record<string, string> = {}) {
 beforeEach(() => { db = initDatabase(":memory:"); });
 afterEach(() => { db.close(); });
 describe("routine execution evidence", () => {
+  it("accepts legacy identifier names at the supported ID limit", async () => {
+    const routineId = "a".repeat(1000);
+    const result = await handleDeskRoutineEvidence(new Request(historyUrl), db, runtime, false, () => response({ ...page, records: [{ ...record, routineId, routineName: routineId, nameSource: "identifier" }] }));
+    expect(result.status).toBe(200);
+  });
+
   it("correlates owner audit IDs and exposes a bounded redacted audit file after definition deletion", async () => {
     event("completed"); event("started");
     const history = await readRoutineEvidence(db, options, { limit: 25 }, scope, run);
