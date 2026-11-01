@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runStudioAct } from "../surface/mc/desk/studio/writer";
@@ -99,6 +99,52 @@ test("ignored proposals cannot claim handled capture provenance", async () => {
   expect(result.proposals).toHaveLength(1);
   expect(result.proposals).not.toContain(ignored);
   expect(r.git("show", "HEAD:.studio-overseer-themes.json")).not.toContain(ignored);
+});
+
+for (const kind of ["ignored", "assume-unchanged"] as const) test(`${kind} provenance cannot suppress committed captures`, async () => {
+  const r = await rig();
+  const ledger = ".studio-overseer-themes.json";
+  await mkdir(join(r.dir, "inbox"));
+  for (const id of ["one", "two", "three"]) await writeFile(join(r.dir, `inbox/${id}.md`), `---\nat: 2026-10-31T12:00:00Z\nvia: fixture\n---\nOrchard planting ${id}\n`);
+  if (kind === "ignored") await writeFile(join(r.dir, ".gitignore"), `${ledger}\n`);
+  else await writeFile(join(r.dir, ledger), JSON.stringify({ version: 1, themes: [] }));
+  r.git("add", "."); r.git("commit", "-qm", "Committed provenance baseline");
+  if (kind === "assume-unchanged") r.git("update-index", "--assume-unchanged", ledger);
+  const edited = JSON.stringify({ version: 1, themes: [{ proposal: "theme-00000000000000000000", captures: ["one", "two", "three"] }] });
+  await writeFile(join(r.dir, ledger), edited);
+  expect(r.git("status", "--porcelain", "--untracked-files=all")).toBe("");
+  await expect(runOverseer(r.config)).rejects.toThrow("committed");
+  expect(await readFile(join(r.dir, ledger), "utf8")).toBe(edited);
+  expect(r.git("rev-list", "--count", "HEAD")).toBe("2");
+  expect(await Bun.file(r.calls).exists()).toBe(false);
+});
+
+test("an unchanged assume-unchanged ledger cannot be omitted from a proposal commit", async () => {
+  const r = await rig();
+  const path = ".studio-overseer-themes.json";
+  const original = JSON.stringify({ version: 1, themes: [] });
+  await writeFile(join(r.dir, path), original);
+  await mkdir(join(r.dir, "inbox"));
+  for (const id of ["one", "two", "three"]) await writeFile(join(r.dir, `inbox/${id}.md`), `---\nat: 2026-10-31T12:00:00Z\nvia: fixture\n---\nOrchard planting ${id}\n`);
+  r.git("add", "."); r.git("commit", "-qm", "Unchanged ledger baseline");
+  r.git("update-index", "--assume-unchanged", path);
+  await expect(runOverseer(r.config)).rejects.toThrow("original provenance and files restored");
+  expect(r.git("rev-list", "--count", "HEAD")).toBe("2");
+  expect(await readFile(join(r.dir, path), "utf8")).toBe(original);
+  expect(r.git("status", "--porcelain")).toBe("");
+});
+
+test("an ignored new ledger rolls back its entire proposal transaction", async () => {
+  const r = await rig();
+  await writeFile(join(r.dir, ".gitignore"), ".studio-overseer-themes.json\n");
+  await mkdir(join(r.dir, "inbox"));
+  for (const id of ["one", "two", "three"]) await writeFile(join(r.dir, `inbox/${id}.md`), `---\nat: 2026-10-31T12:00:00Z\nvia: fixture\n---\nOrchard planting ${id}\n`);
+  r.git("add", "."); r.git("commit", "-qm", "Ignored future ledger");
+  await expect(runOverseer(r.config)).rejects.toThrow("original provenance and files restored");
+  expect(r.git("rev-list", "--count", "HEAD")).toBe("2");
+  expect(await Bun.file(join(r.dir, ".studio-overseer-themes.json")).exists()).toBe(false);
+  expect(await readdir(join(r.dir, "proposals"))).toEqual([]);
+  expect(r.git("status", "--porcelain")).toBe("");
 });
 
 test("a HEAD change during policy lookup cannot enqueue a stale selection", async () => {

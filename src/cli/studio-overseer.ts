@@ -68,7 +68,8 @@ async function persistProposals(input: { dir: string; pending: ThemeProposal[]; 
     await input.git(["add", "--", ...paths]);
     const currentHead = await input.git(["rev-parse", "HEAD"]);
     const status = await input.git(["status", "--porcelain", "--untracked-files=all"]);
-    const ownStagedFiles = status.split("\n").filter(Boolean).every(line => writes.has(line.slice(3)) && line[1] === " ");
+    const staged = status.split("\n").filter(Boolean);
+    const ownStagedFiles = staged.length === writes.size && staged.every(line => writes.has(line.slice(3)) && line[1] === " ");
     if (currentHead !== input.head || !ownStagedFiles || [...writes].some(([path, text]) => !lstatSync(join(input.dir, path)).isFile() || readFileSync(join(input.dir, path), "utf8") !== text)) throw new Error("Studio changed before the proposal commit; deferred");
     await input.git(["commit", "-m", "Studio: record recurring-theme provenance and proposals", "--", ...paths]);
   } catch (error) {
@@ -94,7 +95,7 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
     const head = await git(["rev-parse", "HEAD"]);
     const gitDir = await git(["rev-parse", "--absolute-git-dir"]);
     const statePath = join(gitDir, "studio-overseer.json");
-    const ledger = await readThemeLedger(dir);
+    const ledger = await readThemeLedger(dir, head);
     if (ledger.text === null && await git(["log", "-1", "--format=%H", "--", THEME_LEDGER_PATH])) throw new Error("Studio theme provenance was removed; restore it before scanning");
     let previous: z.infer<typeof State> | null = null;
     try { previous = State.parse(JSON.parse(await readFile(statePath, "utf8"))); }
@@ -130,7 +131,7 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
     const selections = selectThinking({ studio, now: now.getTime(), staleDays: config.staleDays, changedAt, newMaterial, events: [...desk.today, ...desk.ahead] }).filter(selection => queued.get(selection.thread) !== today);
     const unchanged = async (): Promise<void> => {
       if (await git(["rev-parse", "HEAD"]) !== head || await git(["status", "--porcelain", "--untracked-files=all"])) throw new Error("Studio changed during overseer scan; deferred");
-      if ((await readThemeLedger(dir)).text !== ledger.text) throw new Error("Studio theme provenance changed during scan; deferred");
+      if ((await readThemeLedger(dir, head)).text !== ledger.text) throw new Error("Studio theme provenance changed during scan; deferred");
       const fresh = await readCommittedStudioFiles(dir, head);
       if (JSON.stringify(fresh) !== JSON.stringify(files)) throw new Error("Studio files changed during overseer scan; deferred");
     };

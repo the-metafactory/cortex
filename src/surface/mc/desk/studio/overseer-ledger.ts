@@ -1,8 +1,8 @@
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { STUDIO_SLUG } from "./format";
-import { STUDIO_MAX_FILE_BYTES } from "./read";
+import { readCommittedStudioFile } from "./committed";
 import type { StudioFile } from "./view";
 
 export const THEME_LEDGER_PATH = ".studio-overseer-themes.json";
@@ -11,17 +11,16 @@ const Ledger = z.object({ version: z.literal(1), themes: z.array(ThemeRecord) })
 export type ThemeLedger = z.infer<typeof Ledger>;
 export interface ThemeLedgerSnapshot { text: string | null; value: ThemeLedger }
 
-export async function readThemeLedger(dir: string): Promise<ThemeLedgerSnapshot> {
+export async function readThemeLedger(dir: string, head: string): Promise<ThemeLedgerSnapshot> {
  const path=join(dir,THEME_LEDGER_PATH);
- try {
-  const info=await lstat(path);
-  if(!info.isFile()||info.size>STUDIO_MAX_FILE_BYTES||await realpath(path)!==path)throw new Error("Studio theme provenance must be a regular file inside Studio and at most one megabyte");
-  const text=await readFile(path,"utf8");
-  return {text,value:Ledger.parse(JSON.parse(text))};
- }catch(error){
-  if(error&&typeof error==="object"&&"code" in error&&error.code==="ENOENT")return {text:null,value:{version:1,themes:[]}};
+ const file=await readCommittedStudioFile(dir,head,THEME_LEDGER_PATH);
+ if(file)return {text:file.text,value:Ledger.parse(JSON.parse(file.text))};
+ const present=await lstat(path).then(()=>true,(error:unknown)=>{
+  if(error&&typeof error==="object"&&"code" in error&&error.code==="ENOENT")return false;
   throw error;
- }
+ });
+ if(present)throw new Error("Studio theme provenance must be committed before scanning");
+ return {text:null,value:{version:1,themes:[]}};
 }
 
 export function proposalProvenance(files: StudioFile[], ledger: ThemeLedger): ThemeLedger {
