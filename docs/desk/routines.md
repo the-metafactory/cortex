@@ -28,6 +28,8 @@ Routines currently have no area classification metadata. AI editing uses the alr
 
 ## Background routines and Needs attention
 
+<!-- glossary-ignore: owner -->
+
 A routine that runs many times a day can crowd the Schedule calendar. Open the routine's workspace, choose **Schedule**, and set **Calendar display** to **Background**. The calendar then shows the routine once, in **Background routines** beneath the calendar, with its recurrence, source timezone and planned count for the visible period. Select the count to page through the owner-provided planned starts or open the workspace. Choose **Show individual scheduled starts**, or **Scheduled starts** in the workspace, to restore one slot per start. A dense cell's occurrence details also offer to move a listed routine to Background; the Desk never moves a routine on its own.
 
 The display choice is a Cortex presentation preference for the configured principal, stack and routine. `GET /api/desk/routine-display` lists the Background choices; `POST` with `principal`, `stack`, `routineId` and `mode` (`scheduled` or `background`) changes one after the routine owner confirms the routine is installed. It never changes the routine definition, schedule, timezone, pause state, handling policy, approvals or execution. Read-only definitions accept a display choice. A failed save keeps the previous display and shows the unsaved choice with Retry.

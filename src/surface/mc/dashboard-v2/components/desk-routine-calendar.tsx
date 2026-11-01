@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { RoutineInventory } from "../../desk/routine-editor-contract";
 import type { RoutineDisplayMode } from "../../desk/routine-display-contract";
 import type { RoutinesLocation } from "../hooks/use-routines-location";
-import { Pager } from "./desk-routine-attention";
+import { Pager } from "./desk-pager";
 import { backgroundLane, calendarDays, moveCalendar, readCalendar, zonedDate, type CalendarOccurrence, type CalendarRead } from "../lib/routine-calendar";
 
 const dateLabel = (date: string, options: Intl.DateTimeFormatOptions): string => new Date(`${date}T12:00:00Z`).toLocaleDateString(undefined, { ...options, timeZone: "UTC" });

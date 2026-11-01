@@ -53,3 +53,7 @@ export function RoutineDisplayChoice({ routineId, saved, available, pending, onC
     {pending?.error && <div role="alert"><p>{pending.error} The calendar still shows {label(saved)}. Your choice of {label(pending.mode)} was not saved.</p><div className="desk-acts"><button className="desk-btn" type="button" onClick={() => { onChange(routineId, pending.mode); }}>Retry {label(pending.mode)}</button><button className="desk-btn" type="button" onClick={() => { onDismiss(routineId); }}>Keep {label(saved)}</button></div></div>}
   </fieldset>;
 }
+
+export function DisplayFailureAlert({ routineId, name, change, onRetry, onKeep }: { routineId: string; name: string; change: DisplayChange; onRetry: (routineId: string, mode: RoutineDisplayMode) => void; onKeep: (routineId: string) => void }) {
+  return <div role="alert"><p>{name}: {change.error} The previous display is unchanged.</p><div className="desk-acts"><button className="desk-btn" type="button" onClick={() => { onRetry(routineId, change.mode); }}>Retry display change</button><button className="desk-btn" type="button" onClick={() => { onKeep(routineId); }}>Keep previous display</button></div></div>;
+}

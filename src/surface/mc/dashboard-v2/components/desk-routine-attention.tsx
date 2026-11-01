@@ -8,6 +8,7 @@ import { calendarPeriod } from "../lib/routine-calendar";
 import { evidenceLabel, evidenceOrigin } from "../lib/routine-evidence";
 import { ExecutionViewer } from "./desk-routine-evidence";
 import { RoutineButton } from "./desk-routines";
+import { Pager } from "./desk-pager";
 
 const pageSize = 10;
 const stamp = (at: string, timezone: string): string => new Date(at).toLocaleString(undefined, { timeZone: timezone, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
@@ -27,9 +28,6 @@ export function coverageText(history: HistoryState | { kind: "inactive" }, timez
   return `${read}; the owner retains no records before ${oldest}.`;
 }
 
-export function Pager({ page, pages, onPage, previous = "Previous", next = "Next" }: { page: number; pages: number; onPage: (page: number) => void; previous?: string; next?: string }) {
-  return <><button className="desk-btn" type="button" disabled={page === 0} onClick={() => { onPage(page - 1); }}>{previous}</button><span>Page {page + 1} of {pages}</span><button className="desk-btn" type="button" disabled={page + 1 >= pages} onClick={() => { onPage(page + 1); }}>{next}</button></>;
-}
 
 export function AttentionSummary({ groups, history, view, inventoryError, timezone }: { groups: AttentionGroup[]; history: HistoryState | { kind: "inactive" }; view: RoutineView | undefined; inventoryError: boolean; timezone: string }) {
   const evidence = coverageText(history, timezone);
