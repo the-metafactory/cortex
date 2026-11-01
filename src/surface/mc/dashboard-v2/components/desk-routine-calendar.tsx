@@ -8,6 +8,8 @@ const timeLabel = (at: string, timezone: string): string => new Date(at).toLocal
 const failed = (error: unknown): string => error instanceof Error ? error.message : "The routine owner could not confirm the calendar.";
 type CalendarState = { key: string } & ({ kind: "loading" } | { kind: "error"; message: string } | ({ kind: "ready" } & CalendarRead));
 
+const emptyOccurrences: CalendarOccurrence[] = [];
+
 type CellRenderer = (day: string, hour: number | null, limit: number) => ReactNode;
 function MonthGrid({ days, month, cell, onDay }: { days: string[]; month: string; cell: CellRenderer; onDay: (day: string) => void }) {
   return <div className="routine-month-grid">{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => <div className="routine-month-heading" key={day}>{day}</div>)}{days.map((day) => <div className={`routine-month-day ${day.slice(0, 7) !== month ? "routine-outside" : ""}`} key={day}><button type="button" className="routine-day-label" onClick={() => { onDay(day); }} aria-label={`Open ${day} in Day view`}>{Number(day.slice(-2))}</button>{cell(day, null, 1)}</div>)}</div>;
@@ -31,20 +33,22 @@ export function DeskRoutineCalendar({ location, onLocation, inventory, revision,
     return () => { controller.abort(); };
   }, [days, location.timezone, revision, retry, queryKey]);
   useEffect(() => { if (drill) drillRef.current?.focus(); }, [drill?.date, drill?.hour]);
-  const names = new Map(inventory?.map((r) => [r.id, r.name ?? r.id]));
-  const all = state.kind === "ready" ? state.occurrences : [];
-  const visible = all.filter((r) => (location.showPaused || r.lifecycle === "active") && (location.policy === "all" || r.handlingPolicy === location.policy));
-  const grouped = new Map<string, CalendarOccurrence[]>(); const hourly = new Map<string, CalendarOccurrence[]>();
-  const dayFormatter = new Intl.DateTimeFormat("en", { timeZone: location.timezone, year: "numeric", month: "2-digit", day: "2-digit" });
-  const hourFormatter = new Intl.DateTimeFormat("en", { timeZone: location.timezone, hour: "2-digit", hourCycle: "h23" });
-  for (const entry of visible) {
-    const at = new Date(entry.scheduledFor); const parts = dayFormatter.formatToParts(at);
-    const day = ["year", "month", "day"].map((type) => parts.find((p) => p.type === type)?.value ?? "").join("-");
-    const list = grouped.get(day) ?? []; list.push(entry); grouped.set(day, list);
-    const key = `${day}/${Number(hourFormatter.format(at))}`; const hour = hourly.get(key) ?? []; hour.push(entry); hourly.set(key, hour);
-  }
-  const activeCount = visible.filter((r) => r.lifecycle === "active").length;
-  const inactiveCount = visible.length - activeCount;
+  const names = useMemo(() => new Map(inventory?.map((r) => [r.id, r.name ?? r.id])), [inventory]);
+  const all = state.kind === "ready" ? state.occurrences : emptyOccurrences;
+  const visible = useMemo(() => all.filter((r) => (location.showPaused || r.lifecycle === "active") && (location.policy === "all" || r.handlingPolicy === location.policy)), [all, location.showPaused, location.policy]);
+  const { grouped, hourly, activeCount, inactiveCount } = useMemo(() => {
+    const grouped = new Map<string, CalendarOccurrence[]>(); const hourly = new Map<string, CalendarOccurrence[]>(); let activeCount = 0;
+    const dayFormatter = new Intl.DateTimeFormat("en", { timeZone: location.timezone, year: "numeric", month: "2-digit", day: "2-digit" });
+    const hourFormatter = new Intl.DateTimeFormat("en", { timeZone: location.timezone, hour: "2-digit", hourCycle: "h23" });
+    for (const entry of visible) {
+      const at = new Date(entry.scheduledFor); const parts = dayFormatter.formatToParts(at);
+      const day = ["year", "month", "day"].map((type) => parts.find((p) => p.type === type)?.value ?? "").join("-");
+      const list = grouped.get(day) ?? []; list.push(entry); grouped.set(day, list);
+      const key = `${day}/${Number(hourFormatter.format(at))}`; const hour = hourly.get(key) ?? []; hour.push(entry); hourly.set(key, hour);
+      if (entry.lifecycle === "active") activeCount++;
+    }
+    return { grouped, hourly, activeCount, inactiveCount: visible.length - activeCount };
+  }, [visible, location.timezone]);
   const change = (next: Partial<RoutinesLocation>): void => { onLocation({ ...location, ...next }); };
   const renderOccurrence = (entry: CalendarOccurrence) => <button type="button" className={`routine-occurrence ${entry.lifecycle !== "active" ? "routine-inactive" : ""}`} key={`${entry.routineId}:${entry.scheduledFor}`} onClick={() => { onSelect(entry.routineId); }} title={`${names.get(entry.routineId) ?? entry.routineId} · ${entry.sourceTimezone} · ${entry.lifecycle} · ${entry.handlingPolicy ?? "Handling policy unknown"}`}>
     <time dateTime={entry.scheduledFor}>{timeLabel(entry.scheduledFor, location.timezone)}</time><span>{names.get(entry.routineId) ?? entry.routineId}</span><small className="routine-source-zone">{entry.sourceTimezone}</small>{entry.lifecycle !== "active" && <small>{entry.lifecycle === "paused" ? "Paused" : "Disabled"}</small>}
