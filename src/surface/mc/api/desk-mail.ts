@@ -7,11 +7,12 @@ import { spawnWithStdin, type WriterRunner } from "../desk/create";
 import { correctMail, draftReply, findListedMail, MAIL_CORRECTIONS, markUnimportant, reportMail } from "../desk/mail-actions";
 import { logMailDecision, mailFeatures } from "../desk/mail-log";
 import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveDeps } from "../desk/mail-move";
-import { listSweeps, runSweep, sweepContext, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
+import { runSweep, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
+import { keepFromDigest, listMailGroups } from "../desk/mail-digest";
 
 const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("draft"), key: z.string(), body: z.string(), decision: MailDecisionSchema.optional() }).strict(),
-  z.object({ action: z.enum(["trash", "unimportant", "report"]), key: z.string() }).strict(),
+  z.object({ action: z.enum(["trash", "unimportant", "report", "digest.keep"]), key: z.string() }).strict(),
   z.object({ action: z.literal("move"), key: z.string(), target: z.enum(MOVE_TARGETS) }).strict(),
   z.object({ action: z.literal("correct"), key: z.string(), said: z.enum(MAIL_CORRECTIONS) }).strict(),
   z.object({ action: z.enum(["undo", "block"]), move: z.string().min(1).max(64) }).strict(),
@@ -34,7 +35,7 @@ export interface DeskMailDeps {
 
 /**
  * POST {action: "move", key, target: "archive" | "junk" | "trash"}, {action: "trash" | "unimportant" | "report", key} or
- * {action: "draft", key, body}: acts on one mail the Desk lists. {action: "correct", key, said} logs a per-mail correction. {action: "undo" | "block", move} undoes a logged move,
+ * {action: "draft", key, body}: acts on one mail the Desk lists. {action: "digest.keep", key} takes one mail out of the newsletter digest. {action: "correct", key, said} logs a per-mail correction. {action: "undo" | "block", move} undoes a logged move,
  * or blocks the domain of a mail moved to Junk. The rebind and identity gates in
  * handleApi run before this handler; there is no step-up. The account and Message-ID come from the mail source's
  * last reading, never from the page, and a mail already moved or still moving is refused.
@@ -67,6 +68,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   }
   if (body.action === "unimportant") return answer(await markUnimportant(db, mail, moveDeps));
   if (body.action === "report") return answer(await reportMail(mail, runtime.options.mailReport, moveDeps));
+  if (body.action === "digest.keep") return answer(keepFromDigest(db, mail, now));
   if (body.action === "correct") return answer(correctMail(db, mail, body.said, now));
   return answer(await moveMail(mail, body.action === "move" ? body.target : "trash", moveDeps));
 }
@@ -79,7 +81,8 @@ async function sweepAnswer(body: SweepBody, db: Database, runtime: DeskRuntime, 
   if (body.action === "sweep.undo") work = undoSweep(body.sweep, moveDeps);
   else {
     const readings = runtime.sourceCache?.cached() ?? [];
-    const group = listSweeps(db, readings, sweepContext(runtime.options ?? { areas: [] }, readings, runtime.ledger), moveDeps.now).find((g) => g.id === body.sweep);
+    const groups = listMailGroups(db, readings, runtime.options ?? { areas: [] }, runtime.ledger, moveDeps.now);
+    const group = [...groups.digests.groups, ...groups.sweeps].find((g) => g.id === body.sweep);
     if (!group) return fail(409, "This group has changed since you opened it. Look at it again.");
     work = runSweep(group, body.keys, moveDeps);
   }

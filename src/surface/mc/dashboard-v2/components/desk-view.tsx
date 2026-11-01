@@ -3,6 +3,7 @@ import { catchupSearch } from "../hooks/use-catchup-location";
 import { scrollBelowDesk } from "../lib/desk-scroll";
 import { DeskBalance } from "./desk-balance";
 import { MailSweeps, SweepPreview, sweepsInArea } from "./desk-mail-sweeps";
+import { digestsInArea, MailDigests } from "./desk-mail-digest";
 import type { MailSweepView } from "../../desk/mail-sweep";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
@@ -332,6 +333,14 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     onChanged();
   };
 
+  const keepDigest = async (key: string): Promise<void> => {
+    setSweeping(true);
+    const result = await submitMailAction({ action: "digest.keep", key });
+    setSweeping(false);
+    setNote(result.text);
+    if (result.ok) onChanged();
+  };
+
   const openSweep = (s: MailSweepView): void => {
     setDetail(null);
     setSweep(s);
@@ -599,7 +608,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       )}
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
-      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} />
+      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={(a) => <MailDigests digests={digestsInArea(view.mailDigests ?? [], a)} busy={sweeping} onArchive={openSweep} onKeep={(key) => void keepDigest(key)} />} />
       <div className="desk-grid" hidden={inStudio || inBalance || inCatchup}>
         <main>
           <section className="desk-lead">
