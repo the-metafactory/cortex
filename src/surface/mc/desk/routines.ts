@@ -62,15 +62,22 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
     ]);
     const selected = installed.filter((r) => r.target === options.target);
     const ids = new Set(selected.map((r) => r.id));
-    for (const operation of pendingRoutineOperations(db, options)) {
-      if (operation.action === "schedule") {
-        const confirmed = await reconcileSchedule(options, operation, run);
+    const operations = pendingRoutineOperations(db, options);
+    for (let offset = 0; offset < operations.length; offset += 4) {
+      await Promise.all(operations.slice(offset, offset + 4).map(async (operation) => {
+        if (operation.action === "schedule") {
+          try {
+            const confirmed = await reconcileSchedule(options, operation, run);
+            if (confirmed) finishRoutineOperation(db, operation.requestId, confirmed);
+          } catch {
+            return;
+          }
+          return;
+        }
+        const proposal = operation.action === "install" ? readRoutineProposal(db, operation.target) : null;
+        const confirmed = reconcileState(options, operation, proposal, { installed, history });
         if (confirmed) finishRoutineOperation(db, operation.requestId, confirmed);
-        continue;
-      }
-      const proposal = operation.action === "install" ? readRoutineProposal(db, operation.target) : null;
-      const confirmed = reconcileState(options, operation, proposal, { installed, history });
-      if (confirmed) finishRoutineOperation(db, operation.requestId, confirmed);
+      }));
     }
     return {
       changes: pendingRoutineOperations(db, options),

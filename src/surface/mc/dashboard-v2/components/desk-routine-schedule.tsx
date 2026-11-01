@@ -21,11 +21,15 @@ export const newScheduleSession = (): ScheduleSession => ({ kind: "closed", noti
 const message = (error: unknown): string => error instanceof Error ? error.message : "The routine owner did not answer.";
 const zoneLabel = (value: { timezone: string | null; effectiveTimezone: string }): string => value.timezone ?? `Owner default (${value.effectiveTimezone})`;
 
+function clockSchedule(days: number[], time: string): string {
+  const parts = /^(\d{2}):(\d{2})$/.exec(time);
+  const day = days.length === 7 ? "*" : [...days].sort((a, b) => a - b).join(",");
+  return parts && days.length ? `${Number(parts[2])} ${Number(parts[1])} * * ${day}` : "";
+}
+
 function ClockFields({ state, change }: { state: ScheduleEdit; change: (draft: ScheduleDraft) => void }) {
   const update = (days: number[], time: string): void => {
-    const parts = /^(\d{2}):(\d{2})$/.exec(time);
-    const day = days.length === 7 ? "*" : [...days].sort((a, b) => a - b).join(",");
-    change({ ...state.draft, days, time, schedule: parts && days.length ? `${Number(parts[2])} ${Number(parts[1])} * * ${day}` : "" });
+    change({ ...state.draft, days, time, schedule: clockSchedule(days, time) });
   };
   return <><fieldset className="routine-schedule-days"><legend>Repeat on</legend>{weekdays.map(([day, name]) => <label key={day}><input type="checkbox" checked={state.draft.days.includes(day)} onChange={(event) => { update(event.target.checked ? [...state.draft.days, day] : state.draft.days.filter((entry) => entry !== day), state.draft.time); }} />{name}</label>)}</fieldset><label>Time<input type="time" value={state.draft.time} onChange={(event) => { update(state.draft.days, event.target.value); }} /></label></>;
 }
@@ -84,9 +88,9 @@ export function RoutineScheduleEditor({ id, enabled, active, state, onState, onC
       {editing && <><p>Review the current and proposed schedule before saving.</p>{editing.error && <p role="alert">{editing.error}</p>}<fieldset disabled={editing.busy !== "idle" || editing.pending} className="routine-schedule-fields"><legend>Proposed schedule</legend>
         <label>Schedule format<select value={editing.draft.mode} onChange={(event) => {
           if (event.target.value === "custom") change({ ...editing.draft, mode: "custom" });
-          else { const [hour, minute] = editing.draft.time.split(":"); const days = editing.draft.days.length ? editing.draft.days : [1, 2, 3, 4, 5]; change({ ...editing.draft, mode: "clock", days, schedule: `${Number(minute)} ${Number(hour)} * * ${days.length === 7 ? "*" : [...days].sort((a, b) => a - b).join(",")}` }); }
+          else { const days = editing.draft.days.length ? editing.draft.days : [1, 2, 3, 4, 5]; change({ ...editing.draft, mode: "clock", days, schedule: clockSchedule(days, editing.draft.time) }); }
         }}><option value="clock">Days and time</option><option value="custom">Custom expression</option></select></label>
-        {editing.draft.mode === "clock" ? <ClockFields state={editing} change={change} /> : <label>Schedule expression<input value={editing.draft.schedule} maxLength={1000} onChange={(event) => { change({ ...editing.draft, schedule: event.target.value }); }} aria-invalid={Boolean(editing.errors.schedule)} /><small>Preserved exactly. Validation and future occurrences come from the routine owner.</small></label>}
+        {editing.draft.mode === "clock" ? <ClockFields state={editing} change={change} /> : <label>Schedule expression<textarea rows={3} value={editing.draft.schedule} maxLength={1000} onChange={(event) => { change({ ...editing.draft, schedule: event.target.value }); }} aria-invalid={Boolean(editing.errors.schedule)} /><small>Preserved exactly. Validation and future occurrences come from the routine owner.</small></label>}
         {editing.errors.schedule && <p role="alert">{editing.errors.schedule}</p>}
         <label><input type="checkbox" checked={editing.draft.timezone === null} onChange={(event) => { change({ ...editing.draft, timezone: event.target.checked ? null : editing.detail.current.effectiveTimezone }); }} />Use owner default timezone</label>
         <label>Timezone<input value={editing.draft.timezone ?? ""} placeholder={editing.detail.current.effectiveTimezone} disabled={editing.draft.timezone === null} maxLength={100} onChange={(event) => { change({ ...editing.draft, timezone: event.target.value }); }} aria-invalid={Boolean(editing.errors.timezone)} /></label>{editing.errors.timezone && <p role="alert">{editing.errors.timezone}</p>}

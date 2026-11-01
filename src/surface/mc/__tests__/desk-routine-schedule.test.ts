@@ -10,6 +10,7 @@ import { handleDeskRoutineSchedule } from "../api/desk-routine-schedule";
 import { HandledLedger } from "../desk/actions";
 import type { DeskRuntime } from "../desk/compose";
 import { commonSchedule } from "../dashboard-v2/components/desk-routine-schedule";
+import { readRoutines } from "../desk/routines";
 
 const options: RoutineOptions = { composer: ["compose"], reflex: ["reflex"], target: "@test/pulse-flow", timeZone: "UTC", timeoutSeconds: 2, readTimeoutSeconds: 1 };
 const runtime: DeskRuntime = { ledger: new HandledLedger(), options: { enabled: true, displayName: "Test", topN: 5, rangerUrl: "", areas: [], sources: [], routines: options } };
@@ -50,6 +51,45 @@ async function intent(s: ReturnType<typeof owner>, requestId = "request-first", 
 }
 
 describe("Desk schedule edit contract and ledger", () => {
+  it("preserves successful routine reads when a pending schedule owner inspection fails", async () => {
+    const db = initDatabase(":memory:"); const s = owner();
+    try {
+      const request = await intent(s); claimRoutineOperation(db, request.requestId, routineOperationBinding(options, request), request.target);
+      const run: RoutineRunner = async (argv) => {
+        if (argv[1] === "routine" && argv[2] === "list") return answer([{ id: "surviving", schedule: "0 8 * * *", timezone: "UTC", policy: "approval", target: options.target, file: "/owned/surviving.yaml", lastDecision: null }]);
+        if (argv[1] === "pending") return answer([{ decisionId: "pending-survivor", blueprintId: "surviving", matchedAt: at, expiresAt: dates[0], impulseSummary: "Scheduled fixture" }]);
+        if (argv[1] === "history") return answer([]);
+        throw new Error("Pending routine was removed from the owner");
+      };
+      const view = await readRoutines(db, options, run);
+      expect(view.error).toBeUndefined(); expect(view.installed.map((entry) => entry.id)).toEqual(["surviving"]); expect(view.pending).toHaveLength(1); expect(view.changes).toEqual([request]);
+    } finally { db.close(); }
+  });
+
+  it("bounds pending schedule reconciliation concurrency while retaining failed intents", async () => {
+    const db = initDatabase(":memory:"); const s = owner();
+    let active = 0; let maximum = 0; let inspected = 0;
+    let release = (): void => {};
+    const firstBatch = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      const request = await intent(s);
+      for (let index = 0; index < 9; index++) {
+        const next = { ...request, requestId: `pending-${index}`, target: `routine-${index}` };
+        claimRoutineOperation(db, next.requestId, routineOperationBinding(options, next), next.target);
+      }
+      const run: RoutineRunner = async (argv) => {
+        if (argv[1] === "history" || argv[1] === "pending" || argv[2] === "list") return answer([]);
+        active++; inspected++; maximum = Math.max(maximum, active);
+        if (active === 4) release();
+        await firstBatch;
+        active--;
+        throw new Error("Owner unavailable");
+      };
+      const view = await readRoutines(db, options, run);
+      expect(view.error).toBeUndefined(); expect(inspected).toBe(9); expect(maximum).toBe(4); expect(view.changes).toHaveLength(9);
+    } finally { db.close(); }
+  });
+
   it("detects only the exact common clock subset and leaves one-off interval ranges and unknown forms custom", () => {
     expect(commonSchedule("0 8 * * 1-5")).toEqual({ days: [1, 2, 3, 4, 5], time: "08:00" });
     expect(commonSchedule("30 23 * * *")?.time).toBe("23:30");
