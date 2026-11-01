@@ -101,7 +101,7 @@ voice:
     sttModel: scribe_v2
 ```
 
-Replace `voiceId` with your ElevenLabs voice ID and make the named key available to the daemon, or set `envFile` to the protected file containing that variable. If valid ElevenLabs options already exist in the stack configuration, `desk.yaml` can contain only `voice: { input: elevenlabs }` to switch recognition while preserving those options.
+Replace `voiceId` with your ElevenLabs voice ID and make the named key available to the Cortex runtime, or set `envFile` to the protected file containing that variable. If valid ElevenLabs options already exist in the stack configuration, `desk.yaml` can contain only `voice: { input: elevenlabs }` to switch recognition while preserving those options.
 
 ElevenLabs input records while you hold the microphone control and transcribes when you release it. It does not use the browser's speech recognition service or show a live partial transcript. Microphone recording still requires browser permission and a secure context, such as HTTPS or localhost. A failed transcription shows the provider's reason and leaves text input available.
 
