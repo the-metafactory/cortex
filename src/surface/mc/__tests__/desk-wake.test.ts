@@ -5,6 +5,8 @@ import { wakeAssetResponse } from "../desk/wake-assets";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 
 describe("Desk local wake", () => {
   it("is opt-in and refuses a label without provisioned matched tokens", () => {
@@ -29,7 +31,7 @@ describe("Desk local wake", () => {
     }
     type Capture = Processor & { process(inputs: Float32Array[][]): boolean };
     const factories: (new () => Capture)[] = [];
-    runInNewContext(readFileSync(join(import.meta.dir, "../../../../scripts/desk-wake/capture.js"), "utf8"), {
+    runInNewContext(readFileSync(join(import.meta.dir, "../dashboard-v2/wake/capture.js"), "utf8"), {
       AudioWorkletProcessor: Processor,
       Float32Array,
       registerProcessor: (_name: string, factory: new () => Capture) => factories.push(factory),
@@ -43,6 +45,10 @@ describe("Desk local wake", () => {
     processor.process([[new Float32Array(2048)]]);
     expect(messages.length).toBe(9);
     expect(messages.at(-1)).toMatchObject({ dropped: 12 * 2048 });
+    processor.port.onmessage?.({ data: { type: "reset", epoch: 2 } });
+    processor.port.onmessage?.({ data: "ack" });
+    processor.process([[new Float32Array(2048)]]);
+    expect(messages.at(-1)).toMatchObject({ dropped: 0, epoch: 2 });
   });
   it("endpoints on silence and maximum duration and discards no speech", () => {
     const options = { silenceMs: 500, maxCommandMs: 3000, speechThreshold: 0.01 };
@@ -67,5 +73,17 @@ describe("Desk local wake", () => {
   it("does not serve arbitrary files or configuration through wake assets", async () => {
     for (const path of ["/wake/../desk.yaml", "/wake/.env", "/wake/vendor/unknown.js"]) expect((await wakeAssetResponse(path, "/unreadable")).status).toBe(404);
     expect((await wakeAssetResponse("/wake/runtime.wasm", "/unreadable")).status).toBe(503);
+  });
+  it("caches only manifest-matched versioned assets immutably", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "desk-wake-assets-"));
+    const hash = "a".repeat(64);
+    try {
+      await mkdir(join(dir, "wake"));
+      await Bun.write(join(dir, "wake/runtime.wasm"), "test binary");
+      await Bun.write(join(dir, "wake/manifest.json"), JSON.stringify({ files: { "runtime.wasm": hash } }));
+      expect((await wakeAssetResponse("/wake/runtime.wasm", dir, hash)).headers.get("cache-control")).toContain("immutable");
+      expect((await wakeAssetResponse("/wake/runtime.wasm", dir, "b".repeat(64))).headers.get("cache-control")).toBe("no-cache");
+      expect((await wakeAssetResponse("/wake/manifest.json", dir)).headers.get("cache-control")).toBe("no-cache");
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
 });

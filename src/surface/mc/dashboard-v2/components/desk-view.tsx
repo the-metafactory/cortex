@@ -572,7 +572,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 {asking ? <span className="desk-ask-busy" role="status">Thinking…</span> : <kbd className="desk-kbd">⌘K</kbd>}
               </form>
               <VoicePanel state={voice.state} onDismiss={voice.dismiss} />
-              {voice.wakeConfigured && <WakeControl state={voice.wakeState} onToggle={voice.toggleWake} />}
+              {voice.wakeConfigured && <WakeControl state={voice.wakeState} onToggle={voice.toggleWake} assistantName={voice.wakeName} />}
             </div>
           </div>
           <div className="desk-topr">

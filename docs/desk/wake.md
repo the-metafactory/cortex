@@ -22,7 +22,7 @@ voice:
   input: elevenlabs
   wake:
     enabled: true
-    agentName: Ivy
+    assistantName: Ivy
     phrase: HEY IVY
     tokens: [▁HE, Y, ▁I, V, Y]
     tokenizerSha256: c8a2a0129c4ab8e463164c142f82d25649661b122c8cd0b7aab5c9e80b90ad24

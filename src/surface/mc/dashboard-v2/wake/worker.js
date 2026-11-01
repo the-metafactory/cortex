@@ -1,14 +1,10 @@
 const module = { exports: {} };
-importScripts("path.js");
-const browserPath = module.exports;
-importScripts("runtime.js", "kws.js");
-const modelFiles = ["encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx", "decoder-epoch-12-avg-2-chunk-16-left-64.onnx", "joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx", "tokens.txt"];
 let detector;
 let stream;
 let through = 0;
 let epoch = 0;
 const checked = async (name, manifest) => {
-  const res = await fetch(name);
+  const res = await fetch(`${name}?sha256=${manifest.files[name]}`);
   if (!res.ok) throw new Error(`Missing wake asset: ${name}. Rebuild the dashboard.`);
   const bytes = new Uint8Array(await res.arrayBuffer());
   const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), x => x.toString(16).padStart(2, "0")).join("");
@@ -21,6 +17,11 @@ onmessage = async ({ data }) => {
       const res = await fetch("manifest.json");
       if (!res.ok) throw new Error("Wake manifest missing. Rebuild the dashboard.");
       const manifest = await res.json();
+      const modelFiles = [manifest.model.encoder, manifest.model.decoder, manifest.model.joiner, manifest.model.tokens];
+      for (const name of ["path.js", "runtime.js", "kws.js"]) await checked(name, manifest);
+      importScripts(`path.js?sha256=${manifest.files["path.js"]}`);
+      const browserPath = module.exports;
+      importScripts(`runtime.js?sha256=${manifest.files["runtime.js"]}`, `kws.js?sha256=${manifest.files["kws.js"]}`);
       const bytes = await checked("runtime.wasm", manifest);
       const runtime = await Module({ wasmBinary: bytes, browserPath, print: () => {}, printErr: () => {} });
       for (const file of modelFiles) runtime.FS.writeFile(`/${file}`, await checked(file, manifest));

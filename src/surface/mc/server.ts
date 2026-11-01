@@ -342,7 +342,7 @@ export function startServer(
         });
       }
 
-      if (req.method === "GET" && url.pathname.startsWith("/wake/")) return wakeAssetResponse(url.pathname, DASHBOARD_DIST);
+      if (req.method === "GET" && url.pathname.startsWith("/wake/")) return wakeAssetResponse(url.pathname, DASHBOARD_DIST, url.searchParams.get("sha256"));
 
       if (req.method === "GET" && DASHBOARD_ASSET_EXT.test(url.pathname)) {
         const rel = url.pathname.slice(1);

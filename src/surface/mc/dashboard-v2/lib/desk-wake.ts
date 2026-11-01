@@ -102,6 +102,7 @@ export class DeskWake {
         this.node?.port.postMessage("ack");
         if (signal.aborted) return;
         if (!data || typeof data !== "object" || !("samples" in data) || !(data.samples instanceof Float32Array) || !("dropped" in data) || typeof data.dropped !== "number") { this.fail(new Error("Invalid microphone audio frame.")); return; }
+        if (!("epoch" in data) || data.epoch !== this.epoch) return;
         if (data.dropped > 0 && (this.current.phase === "listening" || this.current.phase === "recording")) { this.fail(new Error("Microphone processing was suspended and audio was lost. Wake is not listening.")); return; }
         this.pcm(data.samples);
       };
@@ -124,6 +125,7 @@ export class DeskWake {
     this.pending = []; this.pendingSize = 0; this.sent = 0; this.processed = 0; this.inFlight = false;
     this.ring?.clear();
     this.heartbeat = performance.now();
+    this.node?.port.postMessage({ type: "reset", epoch: this.epoch });
     this.worker?.postMessage({ type: "reset", epoch: this.epoch });
     this.set({ phase: "listening", line: `Listening for “${this.options.phrase}”` });
   }

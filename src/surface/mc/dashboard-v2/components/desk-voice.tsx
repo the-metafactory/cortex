@@ -9,10 +9,10 @@ const PHASE_LABEL: Record<VoiceState["phase"], string> = {
   speaking: "Answering…",
 };
 
-export function WakeControl({ state, onToggle }: { state: WakeState; onToggle: () => void }) {
+export function WakeControl({ state, onToggle, assistantName }: { state: WakeState; onToggle: () => void; assistantName: string }) {
   const active = state.phase !== "off" && state.phase !== "unavailable";
   return <div className="desk-wake-control">
-    <button type="button" aria-pressed={active} onClick={onToggle}>{active ? "Disable wake" : "Enable wake"}</button>
+    <button type="button" aria-pressed={active} title={`Wake for ${assistantName}`} onClick={onToggle}>{active ? "Disable wake" : "Enable wake"}</button>
     <span role="status" aria-live="polite">{state.phase === "off" ? "Wake is off. Audio stays local until a command is captured." : state.line}</span>
   </div>;
 }

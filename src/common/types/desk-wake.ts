@@ -3,7 +3,7 @@ import { z } from "zod";
 export const WAKE_BPE_SHA = "c8a2a0129c4ab8e463164c142f82d25649661b122c8cd0b7aab5c9e80b90ad24";
 export const DeskWakeSchema = z.object({
   enabled: z.boolean().default(false),
-  agentName: z.string().min(1).max(60).default("Assistant"),
+  assistantName: z.string().min(1).max(60).default("Assistant"),
   detector: z.literal("sherpa-2.0.1").default("sherpa-2.0.1"),
   model: z.literal("gigaspeech-3.3m-2024-01-01").default("gigaspeech-3.3m-2024-01-01"),
   phrase: z.string().regex(/^[A-Za-z ]{2,60}$/).default("Hey Assistant"),

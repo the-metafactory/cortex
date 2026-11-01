@@ -112,7 +112,7 @@ ElevenLabs input records while you hold the microphone control and transcribes w
 | Key under `voice.wake` | Default | Value and meaning |
 |---|---|---|
 | `enabled` | `false` | Makes the opt-in wake control available. Opening Desk does not activate the microphone. |
-| `agentName` | `Assistant` | Configured agent name. Set `phrase` separately. |
+| `assistantName` | `Assistant` | Configured assistant name. Set `phrase` separately. |
 | `phrase` | `Hey Assistant` | 2 to 60 English letters and spaces. |
 | `tokens` | absent | SentencePiece tokens provisioned from the matched BPE model. |
 | `tokenizerSha256` | absent | Matched BPE hash emitted by the provisioner. |

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { WAKE_MODEL_FILES } from "../src/surface/mc/desk/wake-assets";
 
 const root = join(import.meta.dir, "..");
 const out = join(root, "dist/dashboard-v2/wake");
@@ -54,11 +55,12 @@ try {
       await copy("index.js", "path.js");
       await copy("LICENSE", "path.LICENSE");
     } else {
-      for (const name of ["encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx", "decoder-epoch-12-avg-2-chunk-16-left-64.onnx", "joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx", "tokens.txt", "bpe.model", "README.md"]) await copy(name, name);
+      for (const name of Object.values(WAKE_MODEL_FILES)) await copy(name, name);
     }
   }
-  for (const name of ["worker.js", "capture.js", "LICENSE"]) await emit(name, new Uint8Array(await Bun.file(join(root, "scripts/desk-wake", name)).arrayBuffer()));
-  await Bun.write(join(out, "manifest.json"), JSON.stringify({ version: 1, sources, files: manifest }, null, 2));
+  for (const name of ["worker.js", "capture.js"]) await emit(name, new Uint8Array(await Bun.file(join(root, "src/surface/mc/dashboard-v2/wake", name)).arrayBuffer()));
+  await emit("LICENSE", new Uint8Array(await Bun.file(join(root, "scripts/desk-wake/LICENSE")).arrayBuffer()));
+  await Bun.write(join(out, "manifest.json"), JSON.stringify({ version: 1, sources, model: WAKE_MODEL_FILES, files: manifest }, null, 2));
 } finally {
   await rm(temp, { recursive: true, force: true });
 }
