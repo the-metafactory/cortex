@@ -269,7 +269,7 @@ export async function composeDesk(
     notifications: rules.notifications,
     autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio), canMove),
     ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
-    ...(desk.mailDigest && canMove ? { mailDigests: digests.map((g) => digestView(g, desk.mailDigest?.model ? digestFlags.get(g.id)?.flags : null)) } : {}),
+    ...(desk.mailDigest && canMove ? { mailDigests: digests.map((g) => digestView(g, desk.mailDigest?.model ? digestFlags.get(g.id) : null)) } : {}),
     ...(dmarc ? { dmarc } : {}),
     corrections: activeCorrections,
     mailClassifier,

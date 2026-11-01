@@ -85,10 +85,11 @@ describe("flags", () => {
   it("shows the reason with the topic it names, and the no-flag line when nothing fits", () => {
     const group = buildDigests(input([member(letter("a", "news@weekly.example", at(2, 6))), member(letter("b", "x@y.example", at(2, 6)))], { a: bulk(), b: bulk() })).groups[0];
     if (!group) throw new Error("no digest");
-    const flagged = digestView(group, [{ id: "a", kind: "thread", topic: "Desk routing", reason: "It covers the adapter contract." }, { id: "gone", kind: "goal", topic: "x", reason: "y" }]);
+    const flagged = digestView(group, { stamp: "s", flags: [{ id: "a", kind: "thread", topic: "Desk routing", reason: "It covers the adapter contract." }, { id: "gone", kind: "goal", topic: "x", reason: "y" }] });
     expect(flagged.flags).toEqual([{ key: "mail:a", line: "It covers the adapter contract. (your Studio thread “Desk routing”)" }]);
     expect(flagged.mails.map((m) => [m.key, m.url])).toEqual([["mail:a", "message://%3Ca%3E"], ["mail:b", "message://%3Cb%3E"]]);
-    expect(digestView(group, []).why).toBe("Nothing in them touches your Studio threads, focus projects or goals.");
+    expect(digestView(group, { stamp: "s", flags: [] }).why).toBe("Nothing in them touches your Studio threads, focus projects or goals.");
+    expect(digestView(group, { stamp: "local-only", flags: [], skipped: "local-only" }).why).toBe("Ivy did not read them: this area allows only a local model, and none is set up.");
     expect(digestView(group, undefined).why).toBe("Ivy has not read them yet.");
     expect(digestView(group, null).why).toBe("No model is set up to flag items worth reading.");
   });
@@ -101,11 +102,25 @@ describe("flags", () => {
     if (!g) throw new Error("no digest");
     const topics: DigestTopic[] = [...TOPICS, { kind: "thread", name: "Work secret", local: true }];
     const cloud = flagPlan({ ...MAIN }, g, topics, new Set(["work-mail"]));
-    expect(cloud?.access.model).toBe("cloud");
-    expect(cloud?.members.map((m) => m.id)).toEqual(["p"]);
-    expect(cloud?.topics.map((t) => t.name)).toEqual(["Desk routing", "Publish one post a week"]);
+    if (typeof cloud !== "object") throw new Error(cloud);
+    expect(cloud.access.model).toBe("cloud");
+    expect(cloud.members.map((m) => m.id)).toEqual(["p"]);
+    expect(cloud.topics.map((t) => t.name)).toEqual(["Desk routing", "Publish one post a week"]);
     const local = flagPlan({ ...MAIN, local: LOCAL }, g, topics, new Set(["work-mail"]));
-    expect([local?.access.model, local?.members.map((m) => m.id), local?.topics.length]).toEqual(["local", ["p", "w"], 3]);
+    if (typeof local !== "object") throw new Error(local);
+    expect([local.access.model, local.members.map((m) => m.id), local.topics.length]).toEqual(["local", ["p", "w"], 3]);
+    expect(flagPlan({ ...MAIN }, g, topics, new Set(["work-mail", "personal-mail"]))).toBe("local-only");
+    expect(flagPlan({ ...MAIN }, g, [], new Set())).toBe("no-topics");
+  });
+
+  it("stores why a digest was not read instead of an empty answer", async () => {
+    const g = buildDigests(input([member(letter("a", "news@weekly.example", at(2, 6)))], { a: bulk() })).groups[0];
+    if (!g) throw new Error("no digest");
+    let asked = 0;
+    const flagger = new DigestFlagger(MAIN, async () => { asked++; return { flags: [] }; }, () => {});
+    await flagger.kick(db, [g], [], new Set(), NOW);
+    expect(asked).toBe(0);
+    expect(db.query<{ skipped: string | null }, []>("SELECT skipped FROM desk_mail_digest_flags").get()?.skipped).toBe("no-topics");
   });
 
   it("asks the model once per set of items and topics and stores what it flagged", async () => {
@@ -193,5 +208,20 @@ describe("the digest on the Desk", () => {
     expect(v.mailDigests?.[0]?.mails.map((m) => m.key)).toEqual(["mail:n1", "mail:n3"]);
     expect(v.items.filter((i) => i.kind === "mail").map((i) => i.key).sort()).toEqual(["mail:n2", "mail:o1"]);
     expect(queryMailLog(db, {}).map((e) => [e.messageId, e.action, e.where])).toEqual([["n2", "kept", "desk"]]);
+    expect(v.mailSweeps).toEqual([]);
+  });
+
+  it("never puts kept mail into a bundle, so it really comes back as its own card", async () => {
+    const twins = ["k1", "k2"].map((id) => letter(id, "news@weekly.example", at(2, 6)));
+    for (const m of twins) saveClassification(db, m.id, bulk(), "test", NOW);
+    const rt: DeskRuntime = { options: DESK, ledger: new HandledLedger(), sourceCache: new SourceCache(async () => JSON.stringify({ items: twins })) };
+    await composeWith(db, DESK, rt, NOW);
+    for (const key of ["mail:k1", "mail:k2"]) expect((await handleDeskMail(post({ action: "digest.keep", key }), db, rt, { now: () => NOW })).status).toBe(200);
+    const v = await composeWith(db, DESK, rt, NOW);
+    expect(v.mailDigests).toEqual([]);
+    expect(v.mailSweeps).toEqual([]);
+    expect(v.items.filter((i) => i.kind === "mail").map((i) => i.key).sort()).toEqual(["mail:k1", "mail:k2"]);
+    const without = await composeWith(db, MOVE_DESK, rt, NOW);
+    expect(without.mailSweeps?.map((s) => s.kind)).toEqual(["bundle"]);
   });
 });
