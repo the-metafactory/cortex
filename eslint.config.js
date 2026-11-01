@@ -131,6 +131,7 @@ export default tseslint.config(
       "dist/",
       "node_modules/",
       "docs/mockups/",
+      "docs/research/ivy-durable-2960/",
       // cortex#1950 — GENERATED, self-contained plugin-SDK .d.ts shipped for
       // out-of-tree bundles (bun run sdk:dts). Excluded from tsconfig too;
       // not part of the typed project.

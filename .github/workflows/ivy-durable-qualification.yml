@@ -1,0 +1,31 @@
+name: Pi Durable qualification
+
+on:
+  pull_request:
+    paths:
+      - "docs/research/ivy-durable-2960/**"
+      - ".github/workflows/ivy-durable-qualification.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/research/ivy-durable-2960/**"
+      - ".github/workflows/ivy-durable-qualification.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  qualification:
+    name: Pinned offline qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun install --cwd docs/research/ivy-durable-2960 --frozen-lockfile --ignore-scripts
+      - run: bunx tsc --noEmit -p docs/research/ivy-durable-2960
+      - run: bun --bun eslint --no-ignore docs/research/ivy-durable-2960/qualify.ts
+      - run: bun run docs/research/ivy-durable-2960/qualify.ts

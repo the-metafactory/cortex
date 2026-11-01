@@ -1,0 +1,42 @@
+197 |     await until(() => exists(killAtReady), `child checkpoint ${args.join(" ")}`);
+198 |     process.kill("SIGKILL");
+199 |   }
+200 |   const [stdout, stderr, exit] = await Promise.all([new Response(process.stdout).text(), new Response(process.stderr).text(), process.exited]);
+201 |   emit({ command: ["bun", "qualify.ts", ...args.map(value => value.replace(/.*\/ivy-durable-qualification-[^/]+\//, "$SCRATCH/"))], exit, killed: Boolean(killAtReady), stdout: stdout.replaceAll(scratchRoot, "$SCRATCH"), stderr: stderr.replaceAll(scratchRoot, "$SCRATCH") });
+202 |   if (!killAtReady) assert.equal(exit, 0, stderr);
+                                 ^
+AssertionError:  99 |   const toolResults = entries.filter(entry => entry.kind === "pi.tool-result");
+100 |   if (phase === "before-owner" || phase === "after-owner") {
+101 |     assert.equal(ownerEffects.length, phase === "before-owner" ? 0 : 1);
+102 |     assert(JSON.stringify(toolResults).includes("interrupted"), "Unsafe tool must surface interruption instead of replaying external effect");
+103 |   } else if (phase === "after-result" || phase === "normal") {
+104 |     assert.equal(ownerEffects.length, 1);
+                 ^
+AssertionError: Expected values to be strictly equal:
+
+0 !== 1
+
+ generatedMessage: true,
+     actual: 0,
+   expected: 1,
+   operator: "strictEqual",
+       diff: "simple",
+       code: "ERR_ASSERTION"
+
+      at reopen ($ARTIFACT/qualify.ts:104:12)
+
+Bun v1.4.3 (macOS arm64)
+
+
+1 !== 0
+
+ generatedMessage: false,
+     actual: 1,
+   expected: 0,
+   operator: "strictEqual",
+       diff: "simple",
+       code: "ERR_ASSERTION"
+
+      at child ($ARTIFACT/qualify.ts:202:28)
+
+Bun v1.4.3 (macOS arm64)

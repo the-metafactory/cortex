@@ -1,0 +1,11 @@
+{
+  "name": "ivy-durable-qualification",
+  "private": true,
+  "type": "module",
+  "scripts": { "qualify": "bun run qualify.ts" },
+  "dependencies": {
+    "@earendil-works/pi-durable": "1.4.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/chord": "1.4.0"
+  }
+}
