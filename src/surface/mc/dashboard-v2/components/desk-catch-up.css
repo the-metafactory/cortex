@@ -1,0 +1,33 @@
+.catchup { max-width: 1060px; margin: 0 auto; padding: 38px 32px 80px; overflow-wrap: anywhere; }
+.catchup[hidden] { display: none; }
+.catchup-lead { display: flex; gap: 24px; align-items: end; justify-content: space-between; margin-bottom: 30px; }
+.catchup h1 { font-size: 34px; letter-spacing: -.04em; margin: 6px 0 10px; }
+.catchup p { color: var(--desk-soft, #66716d); line-height: 1.6; }
+.catchup-eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .14em; }
+.catchup-lead > span { font-size: 13px; color: #63716b; }
+.catchup-areas, .catchup-types { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; }
+.catchup-areas button, .catchup-types button { border: 1px solid #dce3de; background: white; color: #5b6860; border-radius: 20px; padding: 9px 13px; font: inherit; font-size: 13px; cursor: pointer; }
+.catchup-areas button[aria-pressed="true"] { background: #263e32; color: white; border-color: #263e32; }
+.catchup-types button { border: 0; border-radius: 6px; background: transparent; }
+.catchup-types button[aria-pressed="true"] { background: #e8eee8; color: #253b2c; }
+.catchup-areas button span { display: inline-block; height: 7px; width: 7px; border-radius: 50%; margin-right: 7px; }
+.catchup-stream { display: grid; gap: 18px; margin-top: 24px; }
+.catchup-card { background: white; border: 1px solid #dce3de; border-radius: 12px; box-shadow: 0 3px 12px #27352b04; scroll-margin-top: 150px; }
+.catchup-card.selected { outline: 2px solid #7d9982; outline-offset: 2px; }
+.catchup-card .desk-row { border: 0; padding: 24px; }
+.catchup-card footer { display: flex; gap: 12px; justify-content: space-between; align-items: center; border-top: 1px solid #edf0ed; padding: 12px 24px; }
+.catchup-card footer > span { color: #788278; font-size: 12px; }
+.catchup-plan, .catchup-empty, .catchup-receipt { border: 1px solid #cbd9cc; border-radius: 12px; background: #f2f6ef; padding: 22px; margin-top: 24px; }
+.catchup-plan h2 { margin-top: 0; font-size: 19px; }
+.catchup-plan select { display: block; max-width: 100%; width: 100%; margin: 8px 0 14px; padding: 10px; background: white; border: 1px solid #c3cfc3; border-radius: 6px; font: inherit; }
+.catchup-plan .desk-btn { margin: 4px 8px 0 0; }
+.catchup-done { margin-top: 30px; border-top: 1px solid #dce3de; padding-top: 20px; }
+.catchup-preview { padding: 18px 0; min-width: 0; }
+.catchup-preview header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.catchup-preview h3 { margin: 0; }
+.catchup-preview p { font-size: 12px; color: #788278; }
+.catchup-preview ul { margin: 0; padding: 0; list-style: none; }
+.catchup-preview li button { display: block; text-align: left; border: 0; background: transparent; width: 100%; padding: 12px 0; cursor: pointer; color: inherit; font: inherit; }
+.catchup-preview strong { display: block; font-size: 13px; font-weight: 500; }
+.catchup-preview small { display: block; margin-top: 5px; font-size: 11px; color: #788278; }
+@media (max-width: 640px) { .catchup { padding: 24px 14px 60px; } .catchup-lead { display: block; } .catchup h1 { font-size: 28px; } .catchup-card .desk-row { padding: 16px; } .catchup-card footer { padding: 10px 16px; } .catchup-areas button { padding: 8px 10px; } .catchup-plan { padding: 16px; } }

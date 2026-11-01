@@ -1,3 +1,4 @@
+import { handleDeskPlan } from "./api/desk-plan";
 import { handleDeskRoutineEvidence } from "./api/desk-routine-evidence";
 import { WaitingTasks } from "./desk/sources/waiting";
 import { handleDeskMyDay } from "./api/desk-my-day";
@@ -493,6 +494,8 @@ async function handleApi(
     if (req.method !== "GET") return methodNotAllowed(["GET"]);
     return handleGetDesk(db, desk, vigil);
   }
+
+  if (pathname === "/api/desk/plan") return handleDeskPlan(req, db, desk, vigil);
 
   if (pathname === "/api/desk/my-day") return handleDeskMyDay(req, db, desk, vigil);
 

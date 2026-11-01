@@ -14,7 +14,7 @@ export async function handleDeskMyDay(req: Request, db: Database, runtime: DeskR
   const parsed = MyDayRequestSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "Provide a valid My day change, date and request id." }, { status: 400 });
   const input = parsed.data;
-  const key = input.command.op === "todo" ? input.command.key : null;
+  const key = (input.command.op === "todo" || input.command.op === "source-plan") ? input.command.key : null;
   const source = key ? (await composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, handled: runtime.ledger, sourceCache: runtime.sourceCache, now })).items.find(i => i.key === key) : undefined;
   try {
     const changed = await withStudioProjection(desk, studio => changeMyDay({ db, desk, now, ...input, studio, ...(source ? { source } : {}) }));

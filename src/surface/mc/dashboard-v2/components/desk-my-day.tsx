@@ -6,7 +6,7 @@ import { balanceSearch } from "../hooks/use-balance-location";
 import { postJson } from "../lib/api";
 import "./desk-my-day.css";
 
-export async function submitMyDay(date: string, command: MyDayCommand, requestId: string = crypto.randomUUID()): Promise<{ view: MyDayView; undo?: string; notice?: string; outlineId?: string }> {
+export async function submitMyDay(date: string, command: MyDayCommand, requestId: string = crypto.randomUUID()): Promise<{ view: MyDayView; undo?: string; notice?: string; outlineId?: string; location?: string }> {
   return postJson("/api/desk/my-day", { date, command, requestId });
 }
 export function MyDayLane({ day, onChanged }: { day: MyDayView; onChanged: () => void }) {

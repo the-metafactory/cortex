@@ -271,7 +271,7 @@ function vigilItems({ now, subjects, areas, goalActions, waitingTasks }: RankInp
       const state = s.value === "stale" ? "has had no news for too long" : s.value === "at-risk" ? "is at risk" : "is off track";
       const reading = asOf(now, s.lastEndedAt);
       add({
-        key: `vigil:${s.subjectKey}`, kind: "goal", source: "vigil", area: areaFor(areas, null, goalId), urgency: "this-week",
+        key: `vigil:${s.subjectKey}`, attention: "update", kind: "goal", source: "vigil", area: areaFor(areas, null, goalId), urgency: "this-week",
         title: `"${goalShort(s.goalWording)}" ${state}.`,
         why: `This reading is ${reading}. ${s.goalWording ?? "Its description is not available, so open it to see which goal this is."}`,
         score: s.value === "off-track" ? 75 : s.value === "at-risk" ? 70 : 55,
@@ -434,6 +434,7 @@ export function mailItems(input: MailInput): DeskItem[] {
       key: `mail:${m.id}`,
       sourceRevision: m.receivedAt,
       ...(m.dueAt ? { dueAt: m.dueAt } : {}),
+      attention: verdict.sorted === "fyi" || verdict.sorted === "bulk" ? "update" : "action",
       kind: "mail",
       source: m.sourceId,
       area: m.area,

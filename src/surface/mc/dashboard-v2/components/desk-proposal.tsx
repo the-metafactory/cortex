@@ -59,7 +59,7 @@ export function ProposalCard(props: ProposalCardProps) {
 function RoutineProposal({ proposal, busy, onConfirm, onCancel }: ProposalCardProps) {
   const steps = Array.isArray(proposal.fields.steps) ? proposal.fields.steps.filter((s): s is string => typeof s === "string") : [];
   return <div className="desk-row desk-propwrap"><span /><span /><div className="body">
-    <article className="desk-prop" aria-label="Proposed routine">
+    <article className="desk-prop" aria-label="Proposed routine" tabIndex={-1}>
       <div className="desk-prop-head"><span className="desk-prop-kind">Routine</span><span className="desk-prop-note">Nothing happens until you confirm.</span></div>
       <h3>{String(proposal.fields.title ?? "Routine")}</h3>
       <p>{String(proposal.fields.schedule ?? "")}</p>
@@ -119,7 +119,7 @@ function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCa
       <span />
       <span />
       <div className="body">
-        <article className="desk-prop" aria-label={`Proposed ${proposal.label.toLowerCase()}`}>
+        <article className="desk-prop" aria-label={`Proposed ${proposal.label.toLowerCase()}`} tabIndex={-1}>
           <div className="desk-prop-head">
             <span className="desk-prop-kind">{proposal.label}</span>
             <span className="desk-prop-note">From “{said}”. Nothing happens until you confirm.</span>

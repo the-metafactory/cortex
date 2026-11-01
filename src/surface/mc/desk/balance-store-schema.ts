@@ -86,3 +86,5 @@ export const BalanceStateSchema: z.ZodType<AppState> = z.object({
   };
   walk(state.outline);
 });
+
+export function balanceNodeSnapshot(node: OutlineNode): string { return JSON.stringify(outline.parse(node)); }

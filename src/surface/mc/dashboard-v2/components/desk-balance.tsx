@@ -1,3 +1,4 @@
+import { scrollBelowDesk } from "../lib/desk-scroll";
 import { useEffect, useRef, useState } from "react";
 import type { OutlineNode } from "../../../../balance";
 import { balanceDetails, type BalanceCommand, type BalanceDetails } from "../../desk/balance-command";
@@ -30,12 +31,7 @@ export function balanceMatches(node: OutlineNode, query: string): boolean {
 }
 const isSourceOwned = (day: MyDayView, id: string): boolean => id.startsWith("studio-response:") || day.studioProjects.some(project => project.id === id);
 const openLeaves = (node: OutlineNode): number => node.done ? 0 : node.children.length ? node.children.reduce((sum, child) => sum + openLeaves(child), 0) : 1;
-function scrollBelowDesk(element: HTMLElement | null): void {
-  if (!element) return;
-  const headerHeight = document.querySelector(".desk-top")?.getBoundingClientRect().height ?? 0;
-  window.scrollTo({ top: window.scrollY + element.getBoundingClientRect().top - headerHeight - 16 });
-  element.focus({ preventScroll: true });
-}
+
 
 export function DeskBalance({ day, view, foreground, onChanged, onThread }: { day: MyDayView; view: DeskView; foreground: ForegroundReading; onChanged: () => void; onThread: (slug: string) => void }) {
   const [local, setLocal] = useState<MyDayView | null>(null);

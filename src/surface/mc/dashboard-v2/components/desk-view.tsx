@@ -1,9 +1,12 @@
+import { CatchupPreview, DeskCatchUp } from "./desk-catch-up";
+import { catchupSearch } from "../hooks/use-catchup-location";
+import { scrollBelowDesk } from "../lib/desk-scroll";
 import { DeskBalance } from "./desk-balance";
 import { MailSweeps, SweepPreview, sweepsInArea } from "./desk-mail-sweeps";
 import type { MailSweepView } from "../../desk/mail-sweep";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
-import { MyDayLane, submitMyDay } from "./desk-my-day";
+import { MyDayLane } from "./desk-my-day";
 import { StudioSessionPanel, useStudioSession } from "./desk-studio-session";
 import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
@@ -26,7 +29,7 @@ import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
 import { useDeskLocation, useDeskStudio } from "../hooks/use-desk-studio";
 import { DeskModeSwitch, DeskStudio } from "./desk-studio";
-import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, openGroup, selectItems, spokenBriefing, URGENCY_LABEL } from "../../desk/present";
+import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, selectItems, spokenBriefing, URGENCY_LABEL } from "../../desk/present";
 import { useDeskVoice } from "../hooks/use-desk-voice";
 import { MicButton, VoicePanel } from "./desk-voice";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskPrecedent, DeskView as DeskViewModel } from "../../desk/types";
@@ -36,6 +39,8 @@ import type { MailCorrection } from "../../desk/mail-actions";
 interface DeskViewProps {
   onOpenMissionControl: () => void;
 }
+
+type DayTarget = { kind: "event"; key: string } | { kind: "proposal" };
 
 export function DeskView({ onOpenMissionControl }: DeskViewProps) {
   const { view, enabled, error, reload } = useDesk(true);
@@ -67,18 +72,19 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
 }
 
 export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = () => {}, onOpenRoutines, onChanged = () => {} }: { view: DeskViewModel; error: string | null; onOpenSettings?: () => void; onOpenRoutines?: () => void; onChanged?: () => void } & DeskViewProps) {
+  const [planItem, setPlanItem] = useState<DeskItem | null>(null);
   const [area, setArea] = useState(ALL_AREAS);
   const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
+  const catchupView = { ...view, items: view.items.filter(i => !snoozed.has(i.key)) };
   const [detail, setDetail] = useState<DeskItem | null>(null);
   const [sweep, setSweep] = useState<MailSweepView | null>(null);
   const [sweeping, setSweeping] = useState(false);
   useEffect(() => {
     if (detail) setSweep(null);
   }, [detail]);
-  const [openRest, setOpenRest] = useState(false);
-  const [groupKind, setGroupKind] = useState<DeskItemKind | null>(null);
   const [openAgents, setOpenAgents] = useState(false);
   const [openStopped, setOpenStopped] = useState(false);
+  const [pendingDayTarget, setPendingDayTarget] = useState<DayTarget | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map());
@@ -107,10 +113,19 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const captureChanged = (): void => { setStudioRevision((n) => n + 1); onChanged(); };
   const inStudio = place.mode === "studio" && studio !== null;
   const inBalance = place.mode === "balance";
+  const inCatchup = place.mode === "catchup";
+  const openCatchup = (key: string | null): void => {
+    const search = catchupSearch(window.location.search, { area: "", filter: "all", card: key });
+    window.history.pushState(null, "", `${window.location.pathname}${search}${window.location.hash}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
+  const revealDay = (target: DayTarget): void => {
+    setPendingDayTarget(target);
+    if (place.mode !== "day") go({ mode: "day", thread: null });
+  };
   const foreground = useStudioForeground(inStudio, view.mirror?.week.timeZone);
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
-  const group = groupKind ? openGroup(selection, groupKind) : null;
   const areaLabel = area === ALL_AREAS ? null : view.areas.find((a) => a.id === area)?.label ?? null;
   const brief = briefing(view, selection, areaLabel);
   const areaById = new Map(view.areas.map((a) => [a.id, a]));
@@ -128,6 +143,19 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const nextMeeting = laterReal.find((e) => e.kind === "meeting");
   const later = withGhost(laterReal, ghostToday);
   const ahead = withGhost(view.ahead.filter(inArea), !ghostToday);
+
+  useEffect(() => {
+    if (place.mode !== "day" || !pendingDayTarget) return;
+    const selector = pendingDayTarget.kind === "event"
+      ? `[data-event="${CSS.escape(pendingDayTarget.key)}"]`
+      : ".desk-grid .desk-prop";
+    const target = document.querySelector<HTMLElement>(selector);
+    if (target) scrollBelowDesk(target);
+    else setNote(pendingDayTarget.kind === "event"
+      ? "That calendar item is no longer on the Desk. Refresh and try again."
+      : "That proposal is no longer available. Try the command again.");
+    setPendingDayTarget(null);
+  }, [place.mode, pendingDayTarget, area, openStopped]);
 
   useEffect(() => {
     latest.current = view;
@@ -182,9 +210,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     }
   };
 
+  const presentProposal = (said: string, p: DeskProposal, requestId: string): void => {
+    setProposal({ p, said, requestId, fields: p.fields });
+    revealDay({ kind: "proposal" });
+  };
+
   const propose = async (said: string, p: DeskProposal): Promise<string | null> => {
     const requestId = crypto.randomUUID();
-    setGroupKind(null);
     if (p.kind === "capture" && p.automatic && !p.problem) {
       const filed = await createFromProposal(requestId, p.kind, p.fields);
       setNote(filed.text);
@@ -192,10 +224,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         captureChanged();
         return filed.text;
       }
-      setProposal({ p, said, requestId, fields: p.fields });
+      presentProposal(said, p, requestId);
       return `${filed.text} Your thought is kept in the draft for retry.`;
     }
-    setProposal({ p, said, requestId, fields: p.fields });
+    presentProposal(said, p, requestId);
     return null;
   };
 
@@ -323,16 +355,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     const goal = item.goal ?? "";
     if (a.id === "detail") setDetail(item);
     else if (a.id === "snooze") setSnoozed((s) => new Set(s).add(item.key));
-    else if (a.id === "todo" && view.myDay) void send(item, a, {
-      keepVisible: true,
-      request: async () => {
-        try {
-          await submitMyDay(view.myDay?.date ?? "", { op: "todo", key: item.key, fingerprint: item.todoFingerprint ?? "" });
-          setDetail(d => d?.key === item.key && d.todoFingerprint === item.todoFingerprint ? null : d);
-          return { ok: true, text: "Moved to your outline Inbox." };
-        } catch (err) { return { ok: false, text: err instanceof Error ? err.message : "Could not move to Inbox." }; }
-      },
-    });
+    else if (a.id === "todo" && view.myDay) { setPlanItem({ ...item }); setDetail(null); openCatchup(item.key); }
     else if (a.id === "vip.add" && a.target) void addVip(a.target, item.title.split(" wrote:")[0] ?? null);
     else if (a.id === "reminder.done" && a.target) {
       setDetail((d) => (d?.key === item.key ? null : d));
@@ -473,13 +496,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const shown = (item: DeskItem): DeskItem => (confirming?.key === item.key ? withConfirm(item, confirming.action) : item);
   const busyWith = (item: DeskItem): string | null => sending.get(item.key) ?? (item.checking ? "goal.check" : null);
   const originalDetail = detail ? view.items.find((i) => i.key === detail.key) ?? detail : null;
-  const detailItem = originalDetail ? { ...originalDetail, more: [...(originalDetail.more ?? []), { id: "todo", label: "→ todo", role: "secondary" as const, wired: true }] } : null;
+  const detailItem = originalDetail ? { ...originalDetail, more: [...(originalDetail.more ?? []), { id: "todo", label: "Plan this", role: "secondary" as const, wired: true }] } : null;
   const detailRuling = detailItem ? rulings.get(detailItem.key) : undefined;
 
   const itemRow = (item: DeskItem, idx: number) => (
     <DeskItemRow
       key={item.key}
-      item={shown({ ...item, more: [...(item.more ?? []), { id: "todo", label: "→ todo", role: "secondary", wired: true }] })}
+      item={shown({ ...item, more: [...(item.more ?? []), { id: "todo", label: "Plan this", role: "secondary", wired: true }] })}
       rank={idx + 1}
       area={item.area ? areaById.get(item.area) : undefined}
       event={item.eventKey ? view.today.find((e) => e.key === item.eventKey) : undefined}
@@ -499,8 +522,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   const focusEvent = (key: string): void => {
-    if (view.today.some((e) => e.key === key && e.kind === "agent-stop")) setOpenStopped(true);
-    requestAnimationFrame(() => document.querySelector(`[data-event="${CSS.escape(key)}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }));
+    const event = [...view.today, ...view.ahead].find((e) => e.key === key);
+    if (event && area !== ALL_AREAS && event.area !== area) setArea(ALL_AREAS);
+    if (event?.kind === "agent-stop") setOpenStopped(true);
+    revealDay({ kind: "event", key });
   };
 
   const proposalCard = proposal && (
@@ -524,7 +549,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         <div className="desk-top-in">
           <div className="desk-left">
             <div className="desk-brand"><span className="desk-mark" />Desk</div>
-            <DeskModeSwitch hasStudio={studio !== null} inStudio={inStudio} inBalance={inBalance} onGo={(mode) => go({ mode, thread: null })} />
+            <DeskModeSwitch hasStudio={studio !== null} inStudio={inStudio} inBalance={inBalance} inCatchup={inCatchup} onGo={(mode) => go({ mode, thread: null })} />
             <div className="desk-askwrap">
               <form
                 className="desk-ask"
@@ -550,7 +575,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             </div>
           </div>
           <div className="desk-topr">
-            {!inStudio && !inBalance && view.areas.length > 0 && (
+            {!inStudio && !inBalance && !inCatchup && view.areas.length > 0 && (
               <div className="desk-seg" role="tablist" aria-label="Area">
                 <button type="button" role="tab" aria-selected={area === ALL_AREAS} onClick={() => setArea(ALL_AREAS)}>All</button>
                 {view.areas.map((a) => (
@@ -574,7 +599,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       )}
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
-      <div className="desk-grid" hidden={inStudio || inBalance}>
+      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} />
+      <div className="desk-grid" hidden={inStudio || inBalance || inCatchup}>
         <main>
           <section className="desk-lead">
             <p><strong>{brief.greeting}</strong> {brief.lines.join(" ")}</p>
@@ -613,7 +639,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 </li>
               )}
               {openStopped && stopped.map((e) => (
-                <li key={e.key} data-event={e.key} className="desk-ev did">
+                <li key={e.key} data-event={e.key} className="desk-ev did" tabIndex={-1}>
                   <time>{clock(e.at)}</time>
                   <span className="desk-pin" />
                   <span className="t">{e.note ?? e.title}</span>
@@ -626,36 +652,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           <div className="desk-nowline"><span className="rule" /><span className="pill">Now {clock(view.generatedAt)}</span></div>
 
           <div className="desk-day-lanes">
-          {group ? (
-            <section className="desk-now" aria-label={group.label}>
-              <div className="desk-row desk-nowhead">
-                <div className="body">
-                  <h2>{group.label}</h2>
-                  <p>{group.items.length === 0 ? "Nothing left here." : `${group.items.length} that did not make your top ${view.topN}, most important first.`}</p>
-                  <button type="button" className="desk-btn" onClick={() => setGroupKind(null)}>Back to what needs you</button>
-                </div>
-              </div>
-              {group.items.map(itemRow)}
-            </section>
-          ) : (
-          <section className="desk-now" aria-label="Needs you">
-            <div className="desk-row desk-nowhead">
-              <div className="body">
-                <h2>{nowHeading(view, selection.needsYou.length, nextMeeting)}</h2>
-                {nextMeeting && (
-                  <p className="desk-next">
-                    <b>{clock(nextMeeting.at)}{nextMeeting.end ? `–${clock(nextMeeting.end)}` : ""}</b> {nextMeeting.title}
-                    {nextMeeting.url && <a href={nextMeeting.url} target="_blank" rel="noopener noreferrer">{nextMeeting.online ? "Join" : "Open"}</a>}
-                  </p>
-                )}
-                <p>{nowSubline(view, selection.needsYou.length, selection.rest.length, nextMeeting)}</p>
-              </div>
-            </div>
-            {!inStudio && proposalCard}
-            <MailSweeps sweeps={sweepsInArea(view.mailSweeps ?? [], area)} onPreview={openSweep} />
-            {selection.needsYou.map(itemRow)}
-          </section>
-          )}
+          <section className="desk-now" aria-label="Current schedule"><h2>{nowHeading(view, selection.needsYou.length, nextMeeting)}</h2>{nextMeeting && <p>{clock(nextMeeting.at)}{nextMeeting.end ? `–${clock(nextMeeting.end)}` : ""} · {nextMeeting.title} {nextMeeting.url && <a href={nextMeeting.url} target="_blank" rel="noopener noreferrer">{nextMeeting.online ? "Join" : "Open"}</a>}</p>}</section>
+          <CatchupPreview view={catchupView} onOpen={openCatchup} />
+          {!inStudio && proposalCard}
+          <MailSweeps sweeps={sweepsInArea(view.mailSweeps ?? [], area)} onPreview={openSweep} />
 
           {view.myDay && <MyDayLane day={view.myDay} onChanged={onChanged} />}
           </div>
@@ -690,17 +690,6 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           </section>
 
           <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => void stopRule(rule)} onPromote={(action, on) => void promote(action, on)} />
-
-          <section className="desk-msec">
-            <h3 className="desk-mh">The rest</h3>
-            <button type="button" className="desk-mline" onClick={() => setOpenRest((o) => !o)} aria-expanded={openRest} disabled={selection.rest.length === 0}>
-              {selection.rest.length} more <span className="soft">nothing urgent</span>
-              <span className={`desk-chev${openRest ? " open" : ""}`}>›</span>
-            </button>
-            {openRest && (
-              <RestGroups groups={selection.groups} active={groupKind} onOpen={setGroupKind} />
-            )}
-          </section>
 
           {view.goals.length > 0 && (
             <section className="desk-msec">
@@ -879,7 +868,7 @@ function ghostEvent(p: DeskProposal): DeskEvent | null {
 
 export function TimelineRow({ event, className }: { event: DeskEvent; className: string }) {
   return (
-    <li data-event={event.key} className={`desk-ev ${className}`.trim()}>
+    <li data-event={event.key} className={`desk-ev ${className}`.trim()} tabIndex={-1}>
       <time>{clock(event.at)}</time>
       <span className="desk-pin" style={event.color ? { background: event.color, borderColor: event.color } : undefined} />
       <span>
@@ -909,7 +898,7 @@ interface DeskItemRowProps {
   rulingNote?: string | null;
 }
 
-function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFocusEvent, onCorrect, onCorrectMail, rulingNote }: DeskItemRowProps) {
+export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFocusEvent, onCorrect, onCorrectMail, rulingNote }: DeskItemRowProps) {
   return (
     <article className="desk-row desk-item">
       <span className="desk-rank">{rank}</span>
@@ -935,7 +924,7 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
               {clock(event.at)} today ↑
             </button>
           )}
-          <ItemMenu current={item.correction} onCorrect={onCorrect} {...(onCorrectMail ? { onCorrectMail } : {})} onTodo={() => onAction({ id: "todo", label: "→ todo", role: "secondary", wired: true })} />
+          <ItemMenu current={item.correction} onCorrect={onCorrect} {...(onCorrectMail ? { onCorrectMail } : {})} onTodo={() => onAction({ id: "todo", label: "Plan this", role: "secondary", wired: true })} />
         </div>
       </div>
     </article>
@@ -1117,7 +1106,7 @@ export function AheadStrip({ events }: { events: DeskEvent[] }) {
           <h3>{day}</h3>
           <ul>
             {list.map((e) => (
-              <li key={e.key} data-event={e.key} className={e.key === GHOST_KEY ? "ghost" : undefined} style={e.color ? { borderLeft: `3px solid ${e.color}`, paddingLeft: 6 } : undefined}>
+              <li key={e.key} data-event={e.key} className={e.key === GHOST_KEY ? "ghost" : undefined} tabIndex={-1} style={e.color ? { borderLeft: `3px solid ${e.color}`, paddingLeft: 6 } : undefined}>
                 {(e.kind === "meeting" || e.kind === "reminder") && <time>{clock(e.at)}</time>}
                 <span className="ttl">{e.title}</span>
               </li>
