@@ -127,11 +127,13 @@ export const TABLE_NAMES = [
   "desk_balance",
   "desk_mail_decisions",
   "desk_my_day",
+  "desk_mail_moves",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
   "CREATE TABLE IF NOT EXISTS desk_mail_decisions (id TEXT PRIMARY KEY, binding TEXT NOT NULL, status TEXT NOT NULL, result TEXT, created_at INTEGER NOT NULL)",
   "CREATE INDEX IF NOT EXISTS desk_mail_decision_lookup ON desk_mail_decisions (json_extract(binding, '$.source'), json_extract(binding, '$.messageId'), created_at)",
+  "CREATE TABLE IF NOT EXISTS desk_mail_moves (id TEXT PRIMARY KEY, account TEXT NOT NULL, message_id TEXT NOT NULL, target TEXT NOT NULL, sender TEXT NOT NULL, folder TEXT, created_at INTEGER NOT NULL, undone_at INTEGER)",
   "CREATE TABLE IF NOT EXISTS desk_my_day (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   `CREATE TABLE IF NOT EXISTS desk_routine_proposals (

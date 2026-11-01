@@ -7,7 +7,7 @@ import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
-import { submitDeskAction, submitGoalAction, submitMailAction, submitRuling } from "../lib/desk-action";
+import { submitDeskAction, submitGoalAction, submitMailAction, submitRuling, type Outcome } from "../lib/desk-action";
 import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
 import { newReplyDraft, prepareDeclineDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
 import { chimeForNew } from "../lib/desk-chime";
@@ -28,6 +28,7 @@ import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, openGroup, selec
 import { useDeskVoice } from "../hooks/use-desk-voice";
 import { MicButton, VoicePanel } from "./desk-voice";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskView as DeskViewModel } from "../../desk/types";
+import type { MoveTarget } from "../../desk/mail-move";
 
 interface DeskViewProps {
   onOpenMissionControl: () => void;
@@ -71,6 +72,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [openAgents, setOpenAgents] = useState(false);
   const [openStopped, setOpenStopped] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map());
   const inFlight = useRef(new Set<string>());
   const [confirming, setConfirming] = useState<{ key: string; action: string } | null>(null);
@@ -243,6 +245,35 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     return () => clearTimeout(t);
   }, [note]);
 
+  useEffect(() => {
+    if (!receipt) return;
+    const t = setTimeout(() => setReceipt(null), RECEIPT_MS);
+    return () => clearTimeout(t);
+  }, [receipt]);
+
+  const undoMove = async (id: string): Promise<void> => {
+    setReceipt(null);
+    const result = await submitMailAction({ action: "undo", move: id });
+    setNote(result.text);
+    if (!result.ok) return;
+    const restored = result.restored;
+    if (restored) setSnoozed((s) => { const next = new Set(s); next.delete(restored); return next; });
+    onChanged();
+  };
+
+  const undoDone = (id: string, action?: string): void => void (action === "mail.move" ? undoMove(id) : undoCapture(id));
+
+  const blockDomain = async (r: Receipt): Promise<void> => {
+    if (!r.confirmBlock) {
+      setReceipt({ ...r, confirmBlock: true });
+      return;
+    }
+    setReceipt(null);
+    const result = await submitMailAction({ action: "block", move: r.undo });
+    setNote(result.text);
+    if (result.ok) onChanged();
+  };
+
   const run = (item: DeskItem, a: DeskAction): void => {
     const goal = item.goal ?? "";
     if (a.id === "detail") setDetail(item);
@@ -266,8 +297,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id.startsWith("ranger.") && a.wired) void send(item, a);
     else if (a.id === "goal.check" && a.wired && item.goal) void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }), keepVisible: true });
     else if (a.id === "goal.pause" && item.goal) confirmFirst(item, a, () => void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }) }));
-    else if (a.id === "mail.seen") trash(item, a);
-    else if (a.id === "mail.trash") confirmFirst(item, a, () => trash(item, a));
+    else if (a.id === "mail.seen") move(item, a, "trash");
+    else if (a.id === "mail.trash") confirmFirst(item, a, () => move(item, a, "trash"));
+    else if (a.id === "mail.archive") move(item, a, "archive");
+    else if (a.id === "mail.spam") confirmFirst(item, a, () => move(item, a, "junk"));
     else if (a.id === "mail.draft" && item.reply) openReply(item);
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
@@ -308,7 +341,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     });
   };
 
-  const trash = (item: DeskItem, a: DeskAction): void => void send(item, a, { request: () => submitMailAction({ action: "trash", key: item.key }) });
+  const move = (item: DeskItem, a: DeskAction, target: MoveTarget): void => void send(item, a, { request: () => submitMailAction({ action: "move", key: item.key, target }) });
 
   const confirmFirst = (item: DeskItem, a: DeskAction, go: () => void): void => {
     if (confirming?.key === item.key && confirming.action === a.id) {
@@ -321,7 +354,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     if (inFlight.current.has(item.key)) return;
     inFlight.current.add(item.key);
     setSending((m) => new Map(m).set(item.key, action.id));
-    let result: { ok: boolean; text: string };
+    let result: Outcome;
     try {
       result = await (request ? request() : submitDeskAction({ action: action.id, key: item.key }));
     } finally {
@@ -332,7 +365,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         return next;
       });
     }
-    setNote(result.text);
+    if (result.ok && result.undo) setReceipt({ text: result.text, undo: result.undo, ...(result.block ? { block: result.block } : {}) });
+    else setNote(result.text);
     if (!result.ok) return;
     if (!keepVisible) {
       setSnoozed((s) => new Set(s).add(item.key));
@@ -472,7 +506,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       {inStudio && (
         <div className="dst">
           {proposalCard}
-          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={(id) => void undoCapture(id)} onPromote={(action, on) => void promote(action, on)} />
+          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onPromote={(action, on) => void promote(action, on)} />
         </div>
       )}
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
@@ -590,7 +624,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             )}
           </section>
 
-          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={(id) => void undoCapture(id)} onPromote={(action, on) => void promote(action, on)} />
+          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onPromote={(action, on) => void promote(action, on)} />
 
           <section className="desk-msec">
             <h3 className="desk-mh">The rest</h3>
@@ -674,7 +708,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         )}
       </aside>
 
-      {note && <div className="desk-note" role="status">{note}</div>}
+      {note ? <div className="desk-note" role="status">{note}</div> : receipt && <MailReceipt receipt={receipt} onUndo={() => void undoMove(receipt.undo)} onBlock={() => void blockDomain(receipt)} />}
     </div>
   );
 }
@@ -892,16 +926,35 @@ export function RankingSection({ corrections, onUndo }: { corrections: DeskCorre
   );
 }
 
+interface Receipt {
+  text: string;
+  undo: string;
+  block?: string;
+  confirmBlock?: boolean;
+}
+
+const RECEIPT_MS = 12_000;
+
+export function MailReceipt({ receipt, onUndo, onBlock }: { receipt: Receipt; onUndo: () => void; onBlock: () => void }) {
+  return (
+    <div className="desk-note desk-receipt" role="status">
+      <span>{receipt.text}</span>
+      <button type="button" className="desk-btn" onClick={onUndo}>Undo</button>
+      {receipt.block && <button type="button" className="desk-btn" onClick={onBlock}>{receipt.confirmBlock ? `Yes, block ${receipt.block}` : `Also block ${receipt.block}`}</button>}
+    </div>
+  );
+}
+
 interface SendOptions {
-  request?: () => Promise<{ ok: boolean; text: string }>;
+  request?: () => Promise<Outcome>;
   keepVisible?: boolean;
 }
 
 const CHECK_POLL_MS = 3000;
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "ranger.rule": "Recording…" };
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "ranger.rule": "Recording…" };
 
-const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash" };
+const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
 
 export function withConfirm(item: DeskItem, actionId: string): DeskItem {
   const label = CONFIRM_LABEL[actionId];
@@ -976,7 +1029,9 @@ export function AheadStrip({ events }: { events: DeskEvent[] }) {
   );
 }
 
-export function DoneForYou({ autonomy, onPromote, onUndo, routines, onChanged = () => {} }: { autonomy: DeskViewModel["autonomy"]; onPromote: (action: string, on: boolean) => void; onUndo?: (id: string) => void; routines?: DeskViewModel["routines"]; onChanged?: () => void }) {
+const ownLine = (d: DeskViewModel["autonomy"]["done"][number]): boolean => d.action !== undefined;
+
+export function DoneForYou({ autonomy, onPromote, onUndo, routines, onChanged = () => {} }: { autonomy: DeskViewModel["autonomy"]; onPromote: (action: string, on: boolean) => void; onUndo?: (id: string, action?: string) => void; routines?: DeskViewModel["routines"]; onChanged?: () => void }) {
   if (autonomy.types.length === 0 && autonomy.done.length === 0 && !routines?.done.length) return null;
   const anyOn = autonomy.types.some((t) => t.on);
   return (
@@ -986,8 +1041,8 @@ export function DoneForYou({ autonomy, onPromote, onUndo, routines, onChanged = 
         <RoutineDone view={routines} onChanged={onChanged} />
         {autonomy.done.map((d) => (
           <li key={d.key} className={d.ok ? undefined : "failed"}>
-            <div>{d.action?.startsWith("studio.capture") ? d.title : d.ok ? `Retried "${d.title}"` : `Could not retry "${d.title}"`}<small>{d.action?.startsWith("studio.capture") ? d.message : d.ok ? `at ${clock(d.at)}` : d.message}</small>
-              {d.undo && onUndo && <button type="button" className="desk-btn" onClick={() => onUndo(d.undo ?? "")}>Undo</button>}
+            <div>{ownLine(d) ? d.title : d.ok ? `Retried "${d.title}"` : `Could not retry "${d.title}"`}<small>{ownLine(d) ? d.message : d.ok ? `at ${clock(d.at)}` : d.message}</small>
+              {d.undo && onUndo && <button type="button" className="desk-btn" onClick={() => onUndo(d.undo ?? "", d.action)}>Undo</button>}
             </div>
           </li>
         ))}

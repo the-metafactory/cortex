@@ -503,6 +503,7 @@ export const DeskSchema = z.object({
       links: z.object({ mail: linkTemplate("mail").optional(), note: linkTemplate("note").optional() }).optional(),
       actions: z
         .object({
+          move: z.array(z.string().min(1)).min(1).optional(),
           trash: z.array(z.string().min(1)).min(1).optional(),
           draft: z.array(z.string().min(1)).min(1).optional(),
           timeoutSeconds: z.number().int().min(1).max(120).default(30),

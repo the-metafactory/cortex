@@ -315,6 +315,8 @@ export interface MailInput {
   classified?: ReadonlyMap<string, MailClassification>;
   unimportant?: ReadonlySet<string>;
   trash?: boolean;
+  archive?: boolean;
+  spam?: boolean;
   draft?: boolean;
   links?: EvidenceLinks;
   onDesk?: ReadonlySet<string>;
@@ -372,13 +374,15 @@ function verdictFor(m: SourceMail, input: MailInput): MailVerdict {
 
 const SEEN = action("mail.seen", "Seen, delete", "primary", true);
 const DELETE = action("mail.trash", "Delete", "secondary", true);
+const ARCHIVE = action("mail.archive", "Archive", "secondary", true);
+const SPAM = action("mail.spam", "Spam", "secondary", true);
 const UNIMPORTANT = action("mail.unimportant", "Unimportant", "secondary", true);
 const SHOW_MEETING = action("meeting.show", "Show on the meeting", "primary", true);
 const DRAFT_LABEL = "Draft a reply";
 const UNIMPORTANT_VERDICT: MailVerdict = { score: CATEGORY_SCORE.bulk, pressing: false, why: UNIMPORTANT_REASON, sorted: "bulk" };
 
 export function mailItems(input: MailInput): DeskItem[] {
-  const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, draft = false, links = {}, onDesk = new Set<string>() } = input;
+  const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, archive = false, spam = false, draft = false, links = {}, onDesk = new Set<string>() } = input;
   return mail.filter((m) => m.unread).map((m): DeskItem => {
     const sender = m.from.name ?? m.from.address;
     const vip = isVip(vips, m.from.address);
@@ -387,7 +391,8 @@ export function mailItems(input: MailInput): DeskItem[] {
     const quiet = trash && (verdict.sorted === "fyi" || verdict.sorted === "bulk");
     const triage = marked ? undefined : classified?.get(m.id);
     const showMeeting: DeskAction[] = triage?.suggestedAction === "link-meeting" && verdict.eventKey && onDesk.has(verdict.eventKey) && !quiet ? [{ ...SHOW_MEETING, target: verdict.eventKey }] : [];
-    const suggestion = showMeeting.length > 0 ? undefined : suggestionLine(triage?.suggestedAction);
+    const archiveFirst = archive && triage?.suggestedAction === "archive" && showMeeting.length === 0;
+    const suggestion = showMeeting.length > 0 || (triage?.suggestedAction === "archive" && !archiveFirst) ? undefined : suggestionLine(triage?.suggestedAction);
     const evidence = triage?.evidence ? evidenceView(triage.evidence, onDesk, links) : [];
     const receivedAt = parsedOr(m.receivedAt, now);
     const ageDays = Math.max(0, (now - receivedAt) / DAY_MS);
@@ -395,12 +400,14 @@ export function mailItems(input: MailInput): DeskItem[] {
     const why = vip ? `${sender} is on your VIP list. ${verdict.sorted && verdict.why ? verdict.why : arrived}` : verdict.why ?? arrived;
     const canDraft = draft && Boolean(m.account);
     const replyFirst = canDraft && triage?.suggestedAction === "reply" && !quiet && showMeeting.length === 0;
-    const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", quiet || showMeeting.length > 0 || replyFirst ? "secondary" : "primary", true), url: m.url }] : [];
+    const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", quiet || archiveFirst || showMeeting.length > 0 || replyFirst ? "secondary" : "primary", true), url: m.url }] : [];
     const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", `Always show mail from ${m.from.name?.split(" ")[0] ?? "this sender"}`, "secondary", true), target: m.from.address }];
     const reply = action("mail.draft", DRAFT_LABEL, replyFirst ? "primary" : "secondary", true);
     const replyLead = replyFirst ? [reply] : [];
     const replyTail = canDraft && !replyFirst ? [reply] : [];
-    const offered = [...(quiet ? [SEEN] : []), ...showMeeting, ...replyLead, ...open, ...(trash && !quiet ? [DELETE] : []), ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, LATER];
+    const lead = archiveFirst ? [{ ...ARCHIVE, role: "primary" as const }] : quiet ? [SEEN] : [];
+    const moves = [...(archive && !archiveFirst ? [ARCHIVE] : []), ...(trash && (!quiet || archiveFirst) ? [DELETE] : []), ...(spam ? [SPAM] : [])];
+    const offered = [...lead, ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, LATER];
     const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
     if (verdict.sorted) history.push(`The mail classifier sorted it as ${verdict.sorted}.`);
     if (triage && (!triage.commitment || triage.commitment === "unknown")) history.push("Whether this mail asks for a new commitment has not been established.");
