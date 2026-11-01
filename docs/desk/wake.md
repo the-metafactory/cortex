@@ -41,4 +41,12 @@ bun scripts/desk-wake/probe-browser.ts
 
 The probe uses generated audio, actual AudioWorklet and MediaRecorder nodes, and the existing server transcription adapter with a test provider. It does not request your microphone or claim a successful real-provider or human acceptance test.
 
+To check an already configured loopback Desk against its actual providers, run:
+
+```sh
+bun scripts/desk-wake/probe-provider.ts http://127.0.0.1:8767/desk
+```
+
+This records the synthesized speech fixture through MediaRecorder, submits it once for transcription, and plays a fixed test sentence through the configured speech output. It does not request microphone access. It uses the providers already configured on that Desk.
+
 See [Local wake detection](configuration.md#local-wake-detection) for settings and lifecycle limits.
