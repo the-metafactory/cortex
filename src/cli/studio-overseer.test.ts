@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runStudioAct } from "../surface/mc/desk/studio/writer";
@@ -31,6 +31,88 @@ test("real committed think-tonight enqueues native arguments once, without mode"
   const args = JSON.parse((await readFile(r.calls, "utf8")).trim());
   expect(args).toEqual(["job", "enqueue", "ivy-think", "--param", "thread=alpha", "--param", "trigger=Asked to think tonight"]);
   expect(r.git("status", "--porcelain")).toBe("");
+});
+
+test("a newly committed constructor thread survives old and same-HEAD checkpoints", async () => {
+  const r = await rig();
+  await runOverseer(r.config);
+  await writeFile(join(r.dir, "threads/constructor.md"), thread());
+  r.git("add", "."); r.git("commit", "-qm", "Constructor thread");
+  expect(await runOverseer(r.config)).toEqual({ queued: ["constructor"], proposals: [] });
+  expect(await runOverseer(r.config)).toEqual({ queued: [], proposals: [] });
+  const state = JSON.parse(await readFile(join(r.dir, ".git/studio-overseer.json"), "utf8"));
+  expect(Object.hasOwn(state.material, "constructor")).toBe(true);
+  expect(typeof state.changedAt.constructor).toBe("number");
+  expect(state.queued.constructor).toBe(new Date().toISOString().slice(0, 10));
+});
+
+test("ignored Markdown never becomes an automatic thread or recurring proposal", async () => {
+  const r = await rig();
+  await writeFile(join(r.dir, ".gitignore"), "threads/draft.md\ninbox/*.md\nlocal-cache/\n");
+  r.git("add", "."); r.git("commit", "-qm", "Ignore private drafts");
+  await mkdir(join(r.dir, "inbox"));
+  await mkdir(join(r.dir, "local-cache"));
+  await writeFile(join(r.dir, "local-cache/state.json"), "private cache");
+  await writeFile(join(r.dir, "threads/draft.md"), thread(true));
+  for (const id of ["one", "two", "three"]) await writeFile(join(r.dir, `inbox/${id}.md`), `---\nat: 2026-10-31T12:00:00Z\nvia: fixture\n---\nOrchard planting ${id}\n`);
+  expect(r.git("status", "--porcelain", "--untracked-files=all")).toBe("");
+  expect(await runOverseer(r.config)).toEqual({ queued: [], proposals: [] });
+  expect(await Bun.file(r.calls).exists()).toBe(false);
+  expect(r.git("rev-list", "--count", "HEAD")).toBe("2");
+});
+
+test("assume-unchanged thread and capture edits defer despite clean git status", async () => {
+  for (const path of ["threads/alpha.md", "inbox/one.md"]) {
+    const r = await rig();
+    await mkdir(join(r.dir, "inbox"));
+    await writeFile(join(r.dir, "inbox/one.md"), "---\nat: 2026-10-31T12:00:00Z\nvia: fixture\n---\nSaved capture\n");
+    r.git("add", "."); r.git("commit", "-qm", "Capture baseline");
+    r.git("update-index", "--assume-unchanged", path);
+    const edited = (await readFile(join(r.dir, path), "utf8")) + "Uncommitted private material\n";
+    await writeFile(join(r.dir, path), edited);
+    expect(r.git("status", "--porcelain")).toBe("");
+    await expect(runOverseer(r.config)).rejects.toThrow("committed");
+    expect(await Bun.file(r.calls).exists()).toBe(false);
+    expect(await readFile(join(r.dir, path), "utf8")).toBe(edited);
+  }
+});
+
+test("committed symbolic links cannot supply automatic thread content", async () => {
+  const r = await rig();
+  await writeFile(join(r.dir, "private.md"), thread(true));
+  await symlink("../private.md", join(r.dir, "threads/linked.md"));
+  r.git("add", "."); r.git("commit", "-qm", "Symbolic thread fixture");
+  await expect(runOverseer(r.config)).rejects.toThrow("regular file");
+  expect(await Bun.file(r.calls).exists()).toBe(false);
+});
+
+test("ignored proposals cannot claim handled capture provenance", async () => {
+  const r = await rig();
+  await mkdir(join(r.dir, "inbox"));
+  await mkdir(join(r.dir, "proposals"));
+  const ignored = "theme-00000000000000000000";
+  await writeFile(join(r.dir, ".gitignore"), `proposals/${ignored}.md\n`);
+  for (const id of ["one", "two", "three"]) await writeFile(join(r.dir, `inbox/${id}.md`), `---\nat: 2026-10-31T12:00:00Z\nvia: fixture\n---\nOrchard planting ${id}\n`);
+  r.git("add", "."); r.git("commit", "-qm", "Committed captures and ignore rule");
+  await writeFile(join(r.dir, `proposals/${ignored}.md`), `---\ntype: question\nareas: [lab]\nproposed: 2026-10-31T12:00:00Z\ntarget:\n  place: new\n  area: lab\n  reason: Draft only\n---\n## Question\nDraft question\n## Why\nNot committed\n\n- Inbox capture: one\n- Inbox capture: two\n- Inbox capture: three\n`);
+  const result = await runOverseer(r.config);
+  expect(result.proposals).toHaveLength(1);
+  expect(result.proposals).not.toContain(ignored);
+  expect(r.git("show", "HEAD:.studio-overseer-themes.json")).not.toContain(ignored);
+});
+
+test("a HEAD change during policy lookup cannot enqueue a stale selection", async () => {
+  const r = await rig(true);
+  const server = Bun.serve({ port: 0, fetch(request) {
+    if (new URL(request.url).pathname.endsWith("studio")) {
+      r.git("commit", "--allow-empty", "-qm", "Concurrent commit");
+      return Response.json({ directory: r.dir, studio: { maxActive: 5, areas: [{ id: "lab", label: "Lab", color: "blue", policy: "local" }] } });
+    }
+    return Response.json({ today: [], ahead: [] });
+  } });
+  cleanup.push(async () => { await server.stop(true); });
+  await expect(runOverseer({ ...r.config, deskUrl: `http://127.0.0.1:${server.port}` })).rejects.toThrow("HEAD changed");
+  expect(await Bun.file(r.calls).exists()).toBe(false);
 });
 
 test("Material baseline and committed addition select; dirty edits defer without enqueue", async () => {

@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { parse, stringify } from "yaml";
 import { z } from "zod";
 import { parseProposalFile } from "../surface/mc/desk/studio/format";
-import { readStudioFiles, STUDIO_MAX_FILE_BYTES } from "../surface/mc/desk/studio/read";
+import { STUDIO_MAX_FILE_BYTES } from "../surface/mc/desk/studio/read";
+import { readCommittedStudioFiles } from "../surface/mc/desk/studio/committed";
 import { buildStudioView } from "../surface/mc/desk/studio/view";
 import { acquireStudioLock } from "../surface/mc/desk/studio/write-lock";
 import { THEME_LEDGER_PATH, proposalProvenance, readThemeLedger, type ThemeLedger, type ThemeLedgerSnapshot } from "../surface/mc/desk/studio/overseer-ledger";
@@ -100,49 +101,50 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
     catch (error) { if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error; }
     const [policy, desk] = await Promise.all([json(`${config.deskUrl}/api/desk/studio`).then(value => Policy.parse(value)), json(`${config.deskUrl}/api/desk`).then(value => Desk.parse(value))]);
     if (await realpath(policy.directory) !== dir) throw new Error("Desk policy belongs to another Studio directory");
-    const read = await readStudioFiles(dir);
-    if (read.problems.length) throw new Error(`Studio read failed: ${read.problems.map(problem => problem.reason).join("; ")}`);
-    const studio = buildStudioView(read.files, { dir, maxActive: policy.studio.maxActive }, policy.studio.areas);
+    const files = await readCommittedStudioFiles(dir, head);
+    const studio = buildStudioView(files, { dir, maxActive: policy.studio.maxActive }, policy.studio.areas);
     if (studio.problems.length) throw new Error("Studio has unreadable files or unknown areas; overseer deferred");
     const changedAt = new Map<string, number>();
-    const material: Record<string, string> = {};
+    const material = new Map<string, string>();
+    const previousMaterial = new Map(Object.entries(previous?.material ?? {}));
+    const previousChangedAt = new Map(Object.entries(previous?.changedAt ?? {}));
     const newMaterial = new Set(previous?.pendingMaterial ?? []);
     for (const thread of [...studio.active, ...studio.parked, ...studio.closed]) {
       if (thread.state === "active") {
-        const cached = previous?.head === head ? previous.changedAt[thread.slug] : undefined;
+        const cached = previous?.head === head ? previousChangedAt.get(thread.slug) : undefined;
         const stamp = cached === undefined ? await git(["log", "-1", "--format=%ct", "--", thread.path]) : null;
         if (cached !== undefined) changedAt.set(thread.slug, cached);
         else if (stamp) changedAt.set(thread.slug, Number(stamp) * 1000);
       }
-      material[thread.slug] = JSON.stringify(thread.material);
-      const before = previous?.material[thread.slug];
+      material.set(thread.slug, JSON.stringify(thread.material));
+      const before = previousMaterial.get(thread.slug);
       const oldMaterial = z.array(z.unknown()).parse(JSON.parse(before ?? "[]"));
       if (previous && (thread.material.length > oldMaterial.length || thread.material.some(item => !oldMaterial.some(old => JSON.stringify(old) === JSON.stringify(item))))) newMaterial.add(thread.slug);
     }
-    const provenance = proposalProvenance(read.files.proposals, ledger.value);
+    const provenance = proposalProvenance(files.proposals, ledger.value);
     const handledCaptures = new Set(provenance.themes.flatMap(theme => theme.captures));
     const themes = recurringThemes(studio.inbox.filter(capture => !handledCaptures.has(capture.id)), studio.areas);
     const pending = themes.filter(theme => !studio.proposals.some(proposal => proposal.id === theme.id));
     const today = now.toISOString().slice(0, 10);
-    const queued = previous?.queued ?? {};
-    const selections = selectThinking({ studio, now: now.getTime(), staleDays: config.staleDays, changedAt, newMaterial, events: [...desk.today, ...desk.ahead] }).filter(selection => queued[selection.thread] !== today);
+    const queued = new Map(Object.entries(previous?.queued ?? {}));
+    const selections = selectThinking({ studio, now: now.getTime(), staleDays: config.staleDays, changedAt, newMaterial, events: [...desk.today, ...desk.ahead] }).filter(selection => queued.get(selection.thread) !== today);
     const unchanged = async (): Promise<void> => {
       if (await git(["rev-parse", "HEAD"]) !== head || await git(["status", "--porcelain", "--untracked-files=all"])) throw new Error("Studio changed during overseer scan; deferred");
       if ((await readThemeLedger(dir)).text !== ledger.text) throw new Error("Studio theme provenance changed during scan; deferred");
-      const fresh = await readStudioFiles(dir);
-      if (JSON.stringify(fresh.files) !== JSON.stringify(read.files)) throw new Error("Studio files changed during overseer scan; deferred");
+      const fresh = await readCommittedStudioFiles(dir, head);
+      if (JSON.stringify(fresh) !== JSON.stringify(files)) throw new Error("Studio files changed during overseer scan; deferred");
     };
     await unchanged();
     const proposals = await persistProposals({ dir, pending, now, git, ledger, provenance, head, unchanged });
     const save = async (): Promise<void> => {
-      const state = { head: await git(["rev-parse", "HEAD"]), material, queued, pendingMaterial: [...newMaterial], changedAt: Object.fromEntries(changedAt) };
+      const state = { head: await git(["rev-parse", "HEAD"]), material: Object.fromEntries(material), queued: Object.fromEntries(queued), pendingMaterial: [...newMaterial], changedAt: Object.fromEntries(changedAt) };
       await writeFile(`${statePath}.tmp`, JSON.stringify(state), { mode: 0o600 });
       await rename(`${statePath}.tmp`, statePath);
     };
     const enqueued: string[] = [];
     if (!pending.length) for (const selection of selections) {
       await command([...config.ranger, "job", "enqueue", "ivy-think", "--param", `thread=${selection.thread}`, "--param", `trigger=${selection.trigger}`], dir);
-      queued[selection.thread] = today;
+      queued.set(selection.thread, today);
       newMaterial.delete(selection.thread);
       enqueued.push(selection.thread);
       await save();

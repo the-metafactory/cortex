@@ -22,6 +22,13 @@ system. The first pass establishes a Material baseline; subsequent passes detect
 added entries in clean, committed files. Notes and stand changes alone do not
 count as new Material. Start the watcher before adding new captures.
 
+Automatic inputs come from regular files tracked at one committed HEAD.
+Ignored Markdown drafts and proposals are excluded. Working bytes must match
+the committed blob, including files marked assume-unchanged in the git index.
+A mismatch, symbolic link or concurrent HEAD change defers the pass. Unrelated
+ignored cache files do not block the scan. Ranger applies the same committed
+source boundary before building a thinking prompt.
+
 Install this Reflex blueprint in the stack's `activations_dir`:
 
 ```yaml
