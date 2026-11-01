@@ -9,7 +9,7 @@ import { z } from "zod";
 import { acquireHostLock, type LockOwner } from "./lock";
 import { chatTurns, cortexModels, CORTEX_PROVIDER, type ChatCall, type ModelEndpoints } from "./model";
 import {
-  AttachmentRefSchema, CONTINUATION_KIND, INPUT_KIND, ObjectRefSchema, OriginSchema,
+  AttachmentRefSchema, CONTINUATION_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema,
   type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationEntry, type ConversationMeta, type CreateConversation,
   type InputRequest, type LinkResolvers, type ModelRoute, type OperationRecord, type OperationState, type OwnerReadbacks, type OwnerType, type Policy, type SubmissionView,
 } from "./types";
@@ -31,16 +31,12 @@ const StoredSchema = z.object({
   lastAt: z.string(),
   origin: OriginSchema,
   createdAt: z.string(),
+  inputs: z.number().int().nonnegative().default(0),
 });
 type Stored = z.infer<typeof StoredSchema>;
 type Directory = JsonObject & { conversations: Record<string, JsonObject>; sessions: Record<string, string> };
 const DirectoryDoc = defineDoc<Directory>({ kind: "cortex.conversations", version: 1, scope: "session", initial: () => ({ conversations: {}, sessions: {} }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 const IngressDoc = defineDocFamily<{ sha256: string }, string>({ kind: "cortex.ingress", version: 1, scope: "conversation", history: "latest", fork: "initial", family: true, initial: sha256 => ({ sha256 }), checkpointWhen: () => true });
-const OperationSchema = z.object({
-  operationId: z.string(), conversationId: z.string(), proposalId: z.string(), revision: z.number().int(), owner: z.string(),
-  state: z.enum(["proposed", "confirmed", "running", "created", "failed", "uncertain"]), canonicalId: z.string().optional(),
-  history: z.array(z.object({ state: z.string(), at: z.string(), detail: z.string().optional() })),
-});
 const JournalDoc = defineDoc<{ operations: Record<string, JsonObject> }>({ kind: "cortex.operations", version: 1, scope: "session", initial: () => ({ operations: {} }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 const NEXT: Record<OperationState, OperationState[]> = { proposed: ["confirmed"], confirmed: ["running"], running: ["created", "failed", "uncertain"], uncertain: ["created", "failed"], created: [], failed: [] };
 
@@ -69,7 +65,8 @@ export const inputHash = (request: InputRequest): string => createHash("sha256")
 const asJson = (value: object): JsonObject => JSON.parse(JSON.stringify(value)) as JsonObject;
 
 export async function openConversationHost(options: HostOptions): Promise<HostStatus> {
-  const lock = await acquireHostLock({ dir: options.dir, stack: options.stack, label: options.label, expectedLabel: options.expectedLabel, ...(options.alive ? { alive: options.alive } : {}), ...(options.pid ? { pid: options.pid } : {}) });
+  const lock = await acquireHostLock({ dir: options.dir, stack: options.stack, label: options.label, expectedLabel: options.expectedLabel, ...(options.alive ? { alive: options.alive } : {}), ...(options.pid ? { pid: options.pid } : {}) })
+    .catch((error: unknown) => ({ held: false as const, reason: `the store lock could not be taken: ${error instanceof Error ? error.message : String(error)}` }));
   if (!lock.held) return { state: "unavailable", reason: `Conversations unavailable: ${lock.reason}` };
   try {
     const host = new ConversationHost(options, lock.release);
@@ -101,9 +98,8 @@ export class ConversationHost {
       onReport: (error, info) => { console.error(`conversations: engine report ${info.type}: ${error instanceof Error ? error.message : String(error)}`); },
     }, this.context);
     const reconciled = await this.reconcile();
-    const inspection = await this.engine.inspect(this.context);
     const directory = await this.directory();
-    const busy = new Set(inspection.submissions.map(s => Number(s.conversationId)));
+    const busy = await this.workingSet();
     const resumed: string[] = [];
     for (const [id, stored] of Object.entries(directory)) {
       if (!busy.has(stored.engineId)) continue;
@@ -132,9 +128,9 @@ export class ConversationHost {
   }
 
   private async stored(id: string): Promise<Stored> {
-    const found = (await this.directory())[id];
-    if (!found) throw new ConversationError(404, "That conversation was not found on this stack.");
-    return found;
+    const raw = (await this.engine.snapshot(DirectoryDoc, this.context))?.conversations[id];
+    if (!raw) throw new ConversationError(404, "That conversation was not found on this stack.");
+    return StoredSchema.parse(raw);
   }
 
   private async update(id: string, change: (stored: Stored) => Stored): Promise<Stored> {
@@ -204,13 +200,10 @@ export class ConversationHost {
     }
   }
 
-  private async view(id: string, stored: Stored, working: Set<number>): Promise<ConversationMeta> {
+  private view(id: string, stored: Stored, working: Set<number>): ConversationMeta {
     let status: ConversationMeta["activity"]["status"] = "idle";
     if (working.has(stored.engineId)) status = "working";
-    else {
-      const last = (await (await this.conversation(stored)).entries({ order: "descending" }, 20, undefined, this.context)).items.find(e => e.kind === "pi.assistant" || e.kind === "pi.user" || e.kind === INPUT_KIND);
-      if (last?.kind === "pi.assistant") status = "waiting";
-    }
+    else if (stored.inputs > 0) status = "waiting";
     return { id, stack: stored.stack, title: stored.title, links: stored.links, policy: stored.policy, state: stored.state, pinned: stored.pinned, activity: { lastAt: stored.lastAt, status }, origin: stored.origin };
   }
 
@@ -221,8 +214,8 @@ export class ConversationHost {
   async create(request: CreateConversation, principal: string): Promise<ConversationMeta> {
     const id = randomUUID();
     const at = this.now().toISOString();
-    const draft: Omit<Stored, "engineId" | "sessionId" | "route"> = { principal, stack: this.options.stack, title: request.title, links: request.links, policy: request.policy, state: "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at };
-    const policy = await this.policyOf({ ...draft, engineId: 0, sessionId: "", route: null });
+    const draft: Omit<Stored, "engineId" | "sessionId" | "route" | "inputs"> = { principal, stack: this.options.stack, title: request.title, links: request.links, policy: request.policy, state: "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at };
+    const policy = await this.policyOf({ ...draft, engineId: 0, sessionId: "", route: null, inputs: 0 });
     const route = this.routeFor(policy);
     await this.engine.createConversation({
       ownership: { kind: "ownerless" },
@@ -230,7 +223,7 @@ export class ConversationHost {
       init: async (tx, engineId) => {
         const sessionId = (await tx.doc(ProviderDoc, engineId)).sessionId;
         const doc = await tx.doc(DirectoryDoc);
-        doc.conversations[id] = asJson({ ...draft, policy, engineId: Number(engineId), sessionId, route } satisfies Stored);
+        doc.conversations[id] = asJson({ ...draft, policy, engineId: Number(engineId), sessionId, route, inputs: 0 } satisfies Stored);
         doc.sessions[sessionId] = id;
       },
     }, this.context);
@@ -239,8 +232,15 @@ export class ConversationHost {
 
   async list(): Promise<ConversationMeta[]> {
     const working = await this.workingSet();
-    const all = await Promise.all(Object.entries(await this.directory()).map(([id, stored]) => this.view(id, stored, working)));
-    return all.sort((a, b) => b.activity.lastAt.localeCompare(a.activity.lastAt));
+    const rows: ConversationMeta[] = [];
+    for (const id of Object.keys(await this.directory())) {
+      const stored = await this.tighten(id).catch((error: unknown) => {
+        if (error instanceof ConversationError && error.status === 403) return null;
+        throw error;
+      });
+      if (stored) rows.push(this.view(id, stored, working));
+    }
+    return rows.sort((a, b) => b.activity.lastAt.localeCompare(a.activity.lastAt));
   }
 
   async meta(id: string): Promise<ConversationMeta> {
@@ -308,7 +308,7 @@ export class ConversationHost {
         type: "input", requestId: request.inputId, content, whenBusy: request.mode === "steer" ? "steer" : "followUp",
         entry: { kind: INPUT_KIND, data: asJson({ inputId: request.inputId, transport: request.transport, mode: request.mode, sha256, attachments }) },
       }, this.context);
-      await this.update(id, s => ({ ...s, route, lastAt: this.now().toISOString() }));
+      await this.update(id, s => ({ ...s, route, inputs: s.inputs + 1, lastAt: this.now().toISOString() }));
       return { duplicate: false, submission: await this.submissionView(request.inputId, await submission.status(this.context)) };
     });
   }
@@ -341,7 +341,7 @@ export class ConversationHost {
 
   async operations(conversationId?: string): Promise<OperationRecord[]> {
     const doc = await this.engine.snapshot(JournalDoc, this.context);
-    return Object.values(doc?.operations ?? {}).map(v => OperationSchema.parse(v) as OperationRecord).filter(o => !conversationId || o.conversationId === conversationId);
+    return Object.values(doc?.operations ?? {}).map(v => OperationRecordSchema.parse(v)).filter(o => !conversationId || o.conversationId === conversationId);
   }
 
   async propose(conversationId: string, proposalId: string, revision: number, owner: OwnerType): Promise<OperationRecord> {
@@ -350,7 +350,7 @@ export class ConversationHost {
     return this.engine.commit(async tx => {
       const doc = await tx.doc(JournalDoc);
       const existing = doc.operations[operationId];
-      if (existing) return OperationSchema.parse(existing) as OperationRecord;
+      if (existing) return OperationRecordSchema.parse(existing);
       const record: OperationRecord = { operationId, conversationId, proposalId, revision, owner, state: "proposed", history: [{ state: "proposed", at: this.now().toISOString() }] };
       doc.operations[operationId] = asJson(record);
       return record;
@@ -363,7 +363,7 @@ export class ConversationHost {
       const doc = await tx.doc(JournalDoc);
       const raw = doc.operations[operationId];
       if (!raw) throw new ConversationError(404, "That operation is not in the journal.");
-      const record = OperationSchema.parse(raw) as OperationRecord;
+      const record = OperationRecordSchema.parse(raw);
       if (!NEXT[record.state].includes(to)) throw new ConversationError(409, `An operation cannot move from ${record.state} to ${to}.`);
       const next: OperationRecord = { ...record, state: to, ...(detail?.canonicalId ? { canonicalId: detail.canonicalId } : {}), history: [...record.history, { state: to, at: this.now().toISOString(), ...(detail?.note ? { detail: detail.note } : {}) }] };
       doc.operations[operationId] = asJson(next);

@@ -86,17 +86,19 @@ export type Continuation =
   | { mode: "native-resume"; engine: string; at: string }
   | { mode: "reconstructed"; from: ModelRoute | null; to: ModelRoute; at: string };
 
-export type OperationState = "proposed" | "confirmed" | "running" | "created" | "failed" | "uncertain";
-export interface OperationRecord {
-  operationId: string;
-  conversationId: ConversationId;
-  proposalId: string;
-  revision: number;
-  owner: OwnerType;
-  state: OperationState;
-  canonicalId?: string;
-  history: { state: OperationState; at: string; detail?: string }[];
-}
+export const OPERATION_STATES = ["proposed", "confirmed", "running", "created", "failed", "uncertain"] as const;
+export type OperationState = (typeof OPERATION_STATES)[number];
+export const OperationRecordSchema = z.object({
+  operationId: z.string(),
+  conversationId: z.string(),
+  proposalId: z.string(),
+  revision: z.number().int(),
+  owner: z.enum(OWNER_TYPES),
+  state: z.enum(OPERATION_STATES),
+  canonicalId: z.string().optional(),
+  history: z.array(z.object({ state: z.enum(OPERATION_STATES), at: z.string(), detail: z.string().optional() })),
+});
+export type OperationRecord = z.infer<typeof OperationRecordSchema>;
 
 export type LinkResolver = (ref: ObjectRef) => Promise<Policy | null>;
 export type LinkResolvers = Partial<Record<OwnerType, LinkResolver>>;

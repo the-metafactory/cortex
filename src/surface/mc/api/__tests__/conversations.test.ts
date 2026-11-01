@@ -47,6 +47,7 @@ describe("conversation API gates", () => {
     const conflict = await call(status, "POST", `/api/conversations/${conversation.id}/inputs`, say("in-1", "different"));
     expect(conflict.status).toBe(409);
     expect((await call(status, "GET", "/api/conversations/00000000-0000-4000-8000-000000000000")).status).toBe(404);
+    expect((await call(status, "GET", `/api/conversations/${conversation.id}/inputs/%E0%A4%A`)).status).toBe(400);
     const unavailable = await call({ state: "unavailable", reason: "Conversations unavailable: store held by 42/ai.meta-factory.cortex.default" }, "GET", "/api/conversations");
     expect(unavailable.status).toBe(503);
     expect(await unavailable.json()).toEqual({ ok: false, error: "Conversations unavailable: store held by 42/ai.meta-factory.cortex.default" });

@@ -123,6 +123,17 @@ describe("conversation host", () => {
     expect(await host.input(conversation.id, "in-1").catch((error: unknown) => (error as ConversationError).status)).toBe(404);
   });
 
+  test("the overview omits a conversation whose linked object is no longer authorized", async () => {
+    let authorized = true;
+    const host = await open(await scratch(), { chat: recorder().chat, resolvers: { "studio-thread": () => Promise.resolve(authorized ? "cloud" : null) } });
+    const linked = await create(host, "cloud", [{ owner: "studio-thread", id: "thread-a" }]);
+    const plain = await create(host);
+    expect((await host.list()).map(c => c.id).sort()).toEqual([linked.id, plain.id].sort());
+    authorized = false;
+    expect((await host.list()).map(c => c.id)).toEqual([plain.id]);
+    expect(await host.meta(linked.id).catch((error: unknown) => (error as ConversationError).status)).toBe(403);
+  });
+
   test("an unresolvable linked object is refused before any model context is built", async () => {
     const { calls, chat } = recorder();
     const host = await open(await scratch(), { chat, resolvers: { "studio-thread": () => Promise.resolve(null) } });
@@ -170,6 +181,34 @@ describe("host lock", () => {
     expect(taken.tookOver?.pid).toBe(999_999_002);
     await taken.host.close();
     expect(existsSync(join(dir, "host.lock"))).toBe(false);
+  });
+});
+
+describe("host lock edge cases", () => {
+  const owner = (pid: number, label: string) => JSON.stringify({ pid, label, stack: "test", at: "2026-11-01T00:00:00.000Z" });
+
+  test("a dead holder without a launchd label is refused with the lock path, as the contract requires", async () => {
+    const dir = await scratch();
+    await mkdir(join(dir, "host.lock"), { recursive: true });
+    await writeFile(join(dir, "host.lock", "owner.json"), owner(999_999_003, ""));
+    const refused = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {}, alive: () => false });
+    expect(refused.state === "unavailable" && refused.reason).toBe(`Conversations unavailable: store held by 999999003/no launchd label; its label does not match ${LABEL}, so it is not taken over (lock ${join(dir, "host.lock")})`);
+  });
+
+  test("a stale lock whose PID was reused by this process is taken over when the label matches", async () => {
+    const dir = await scratch();
+    await mkdir(join(dir, "host.lock"), { recursive: true });
+    await writeFile(join(dir, "host.lock", "owner.json"), owner(process.pid, LABEL));
+    const taken = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {} });
+    expect(taken.state).toBe("ready");
+    if (taken.state === "ready") hosts.push(taken.host);
+  });
+
+  test("a lock that cannot be written reports the host unavailable instead of failing boot", async () => {
+    const dir = await scratch();
+    await writeFile(join(dir, "not-a-directory"), "x");
+    const status = await openConversationHost({ dir: join(dir, "not-a-directory"), stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {} });
+    expect(status.state === "unavailable" && status.reason).toStartWith("Conversations unavailable: the store lock could not be taken:");
   });
 });
 

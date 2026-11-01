@@ -28,6 +28,7 @@ export function processAlive(pid: number): boolean {
   }
 }
 
+const heldHere = new Set<string>();
 const errorCode = (error: unknown): unknown => error instanceof Error && "code" in error ? error.code : undefined;
 
 async function readOwner(path: string): Promise<LockOwner | null> {
@@ -57,17 +58,20 @@ export async function acquireHostLock(options: LockOptions): Promise<LockResult>
       const holder = await readOwner(path);
       if (!holder) return { held: false, reason: `store held by an unreadable lock at ${path}` };
       const who = `${holder.pid}/${holder.label || "no launchd label"}`;
-      if (holder.pid === owner.pid || alive(holder.pid)) return { held: false, reason: `store held by ${who}` };
-      if (holder.label !== options.expectedLabel || holder.stack !== options.stack) return { held: false, reason: `store held by ${who}; its label does not match ${options.expectedLabel}` };
+      const ours = holder.pid === owner.pid && heldHere.has(path);
+      if (ours || (holder.pid !== owner.pid && alive(holder.pid))) return { held: false, reason: `store held by ${who}` };
+      if (holder.label !== options.expectedLabel || holder.stack !== options.stack) return { held: false, reason: `store held by ${who}; its label does not match ${options.expectedLabel}, so it is not taken over (lock ${path})` };
       const stale = `${path}.stale-${holder.pid}-${owner.pid}`;
       await rename(path, stale);
       await rm(stale, { recursive: true, force: true });
       tookOver = holder;
       continue;
     }
+    heldHere.add(path);
     const release = async (): Promise<void> => {
       const current = await readOwner(path);
       if (current?.pid === owner.pid && current.at === owner.at) await rm(path, { recursive: true, force: true });
+      heldHere.delete(path);
     };
     return { held: true, owner, tookOver, release };
   }

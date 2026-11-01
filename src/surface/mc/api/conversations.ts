@@ -7,6 +7,11 @@ export type ConversationAccess = () => HostStatus | null;
 
 const reply = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 const fail = (status: number, error: string): Response => reply(status, { ok: false, error });
+const notAllowed = (allow: string): Response => new Response(null, { status: 405, headers: { Allow: allow } });
+function decoded(value: string): string | null {
+  try { return decodeURIComponent(value); }
+  catch { return null; }
+}
 const ITEM = /^\/api\/conversations\/([0-9a-f-]{36})(?:\/(inputs|entries|attachments)(?:\/([^/]+))?)?$/;
 
 export function isStackPrincipal(principal: string, guard: MutationGuardContext): boolean {
@@ -32,7 +37,7 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
   try {
     if (url.pathname === "/api/conversations") {
       if (req.method === "GET") return reply(200, { ok: true, conversations: await host.list() });
-      if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "GET, POST" } });
+      if (req.method !== "POST") return notAllowed("GET, POST");
       const parsed = CreateConversationSchema.safeParse(await body(req));
       if (!parsed.success) return fail(400, "The conversation request is not valid.");
       return reply(201, { ok: true, conversation: await host.create(parsed.data, auth.principal) });
@@ -42,26 +47,28 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
     if (!match || !id) return fail(404, "Unknown conversation route.");
     const [, , part, inputId] = match;
     if (!part) {
-      if (req.method !== "GET") return new Response(null, { status: 405, headers: { Allow: "GET" } });
+      if (req.method !== "GET") return notAllowed("GET");
       return reply(200, { ok: true, conversation: await host.meta(id) });
     }
     if (part === "entries") {
-      if (req.method !== "GET" || inputId) return new Response(null, { status: 405, headers: { Allow: "GET" } });
+      if (req.method !== "GET" || inputId) return notAllowed("GET");
       const limit = Number(url.searchParams.get("limit") ?? "100");
       if (!Number.isInteger(limit) || limit < 1 || limit > 500) return fail(400, "The limit must be between 1 and 500.");
       return reply(200, { ok: true, ...(await host.entries(id, limit, url.searchParams.get("cursor") ?? undefined)) });
     }
     if (part === "attachments") {
-      if (req.method !== "POST" || inputId) return new Response(null, { status: 405, headers: { Allow: "POST" } });
+      if (req.method !== "POST" || inputId) return notAllowed("POST");
       const parsed = AttachmentUploadSchema.safeParse(await body(req));
       if (!parsed.success) return fail(400, "The attachment is not valid.");
       return reply(201, { ok: true, attachment: await host.storeAttachment(id, parsed.data) });
     }
     if (inputId) {
-      if (req.method !== "GET") return new Response(null, { status: 405, headers: { Allow: "GET" } });
-      return reply(200, { ok: true, submission: await host.input(id, decodeURIComponent(inputId)) });
+      if (req.method !== "GET") return notAllowed("GET");
+      const key = decoded(inputId);
+      if (key === null) return fail(400, "The input id is not valid.");
+      return reply(200, { ok: true, submission: await host.input(id, key) });
     }
-    if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
+    if (req.method !== "POST") return notAllowed("POST");
     const parsed = InputRequestSchema.safeParse(await body(req));
     if (!parsed.success) return fail(400, "The input request is not valid.");
     if (parsed.data.transport !== "web") return fail(400, "This route carries web input only.");
