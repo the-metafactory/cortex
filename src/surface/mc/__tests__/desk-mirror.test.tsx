@@ -5,6 +5,7 @@ import { DEFAULT_SETTINGS, type AppState } from "../../../balance";
 import { buildWeeklyMirror, mirrorOffered, mirrorWeek, type MirrorCalendarEvent } from "../desk/mirror";
 import { type DeskOptions, composeDesk } from "../desk/compose";
 import { buildStudioView } from "../desk/studio/view";
+import { planAct } from "../desk/studio/acts";
 import type { SourceReading } from "../desk/sources/command";
 import { SourceCache, parseSourceOutput } from "../desk/sources/command";
 import { DeskMirror } from "../dashboard-v2/components/desk-mirror";
@@ -89,6 +90,18 @@ describe("weekly mirror over authoritative evidence", () => {
     expect(mirrorOffered(at(31, 12), desk.mirror)).toBe(true);
     expect(mirrorOffered(new Date(2026, 10, 2, 12).getTime(), desk.mirror)).toBe(false);
     expect(mirrorOffered(NOW, undefined)).toBe(false);
+  });
+  test("includes a thread parked by the real replacement act rather than only explicit Park", () => {
+    const file = (slug: string, state: string) => ({ path: `threads/${slug}.md`, text: `---\ntype: question\nareas: [work]\nstate: ${state}\nopened: 2026-10-26\n---\n## Question\n${slug}\n## Where I stand\nThinking\n## Material\n## Ivy's notes\n## Log\n` });
+    const files = { threads: [file("original", "active"), file("replacement", "parked")], inbox: [], proposals: [] };
+    const options = { dir: "/fixture", maxActive: 1 };
+    const view = buildStudioView(files, options, desk.areas);
+    const plan = planAct({ files, view, now: new Date(NOW) }, { act: "unpark", thread: "replacement", park: "original" });
+    if ("error" in plan) throw new Error(plan.error);
+    const saved = { ...files, threads: files.threads.map(f => plan.writes.find(w => w.path === f.path) ?? f) };
+    const studio = buildStudioView(saved, options, desk.areas);
+    expect(studio.active.map(t => t.slug)).toEqual(["replacement"]);
+    expect(mirror({ studio }).threads.parked.map(t => t.slug)).toEqual(["original"]);
   });
   test("real Desk composition includes the mirror and briefing without changing the confirmed day", async () => {
     const db = initDatabase(":memory:");

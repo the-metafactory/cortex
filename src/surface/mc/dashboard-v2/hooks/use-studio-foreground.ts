@@ -8,6 +8,12 @@ export function useStudioForeground(inStudio: boolean, timeZone: string | undefi
   }, [timeZone]);
   const [state, setState] = useState(() => ({ clock, reading: clock.read() }));
   useEffect(() => {
+    if (!inStudio) {
+      const refresh = (): void => setState({ clock, reading: clock.read() });
+      refresh();
+      window.addEventListener("storage", refresh);
+      return () => window.removeEventListener("storage", refresh);
+    }
     const sample = (active = inStudio && document.visibilityState === "visible" && document.hasFocus()): void => {
       setState({ clock, reading: clock.sample({ at: Date.now(), monotonic: performance.now(), active }) });
     };

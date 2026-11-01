@@ -99,7 +99,7 @@ export function buildWeeklyMirror(args: { now: number; desk: DeskOptions; state:
     threads: {
       available: studio !== null, partial: (studio?.problems.length ?? 0) > 0,
       opened: threads.filter(t => thisWeek(t.opened)).map(threadSummary),
-      parked: threads.filter(t => t.log.some(e => thisWeek(e.at?.slice(0, 10)) && e.text === "Parked")).map(threadSummary),
+      parked: threads.filter(t => t.log.some(e => thisWeek(e.at?.slice(0, 10)) && (e.text === "Parked" || e.text.startsWith("Parked to make room for ")))).map(threadSummary),
       closed: threads.filter(t => thisWeek(t.closed)).map(threadSummary),
       reviews: threads.filter(t => t.outcome === "decided" && t.reviewOn !== undefined && t.reviewOn <= week.through).map(threadSummary),
     },
