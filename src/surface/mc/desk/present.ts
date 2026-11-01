@@ -48,6 +48,7 @@ function reactiveBriefing(view: DeskView, selection: DeskSelection, areaLabel: s
   if (!areaLabel) lines.push(`${view.agents.line.charAt(0).toUpperCase()}${view.agents.line.slice(1)}.`);
   if (selection.rest.length > 0) lines.push(`${selection.rest.length} more can wait.`);
   if (view.studioBriefing) lines.push(view.studioBriefing);
+  if (view.mirror?.offered) lines.push("Your weekly mirror is ready: wins first, then attention against intention.");
   return { greeting, lines };
 }
 

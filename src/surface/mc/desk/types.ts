@@ -133,6 +133,7 @@ export interface DeskGoal {
 export interface DeskView {
   routines?: RoutineView;
   myDay?: MyDayView;
+  mirror?: import("./mirror").WeeklyMirror;
   calendars?: DeskCalendar[];
   generatedAt: number;
   displayName: string | null;

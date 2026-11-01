@@ -1,3 +1,5 @@
+import { buildWeeklyMirror, type MirrorSchedule } from "./mirror";
+import { loadBalanceState } from "./balance-store";
 import { withoutClosedTasks, type WaitingTask, type WaitingTasks } from "./sources/waiting";
 import { mailYesFilter, readMailDecision } from "./mail-yes-filter";
 import { readStudioDesk } from "./studio-my-day";
@@ -62,6 +64,7 @@ export interface DeskOptions {
   displayName: string;
   topN: number;
   myDay?: { cap: number };
+  mirror?: MirrorSchedule;
   rangerUrl: string;
   rangerCli?: RangerCli;
   somaBin?: string;
@@ -194,6 +197,7 @@ export async function composeDesk(
   return {
     ...(routines ? { routines } : {}),
     myDay,
+    mirror: buildWeeklyMirror({ now, desk, state: loadBalanceState(db), studio, readings, events, calendarSources: [...calendars.values()].map(c => c.source) }),
     calendars: [...calendars.values()],
     studioBriefing: studio ? studioBriefing([...studio.active, ...studio.parked, ...studio.closed], now) : null,
     generatedAt: now,

@@ -1,3 +1,5 @@
+import { DeskMirror } from "./desk-mirror";
+import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
 import { MyDayLane, submitMyDay } from "./desk-my-day";
 import { StudioSessionPanel, useStudioSession } from "./desk-studio-session";
@@ -101,6 +103,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const studio = useDeskStudio(place.mode === "studio", studioRevision);
   const captureChanged = (): void => { setStudioRevision((n) => n + 1); onChanged(); };
   const inStudio = place.mode === "studio" && studio !== null;
+  const inMirror = place.mode === "mirror";
+  const foreground = useStudioForeground(inStudio, view.mirror?.week.timeZone);
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
   const group = groupKind ? openGroup(selection, groupKind) : null;
@@ -429,7 +433,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         <div className="desk-top-in">
           <div className="desk-left">
             <div className="desk-brand"><span className="desk-mark" />Desk</div>
-            <DeskModeSwitch hasStudio={studio !== null} inStudio={inStudio} onGo={(mode) => go({ mode, thread: null })} />
+            <DeskModeSwitch hasStudio={studio !== null} inStudio={inStudio} inMirror={inMirror} onGo={(mode) => go({ mode, thread: null })} />
             <div className="desk-askwrap">
               <form
                 className="desk-ask"
@@ -455,7 +459,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             </div>
           </div>
           <div className="desk-topr">
-            {!inStudio && view.areas.length > 0 && (
+            {!inStudio && !inMirror && view.areas.length > 0 && (
               <div className="desk-seg" role="tablist" aria-label="Area">
                 <button type="button" role="tab" aria-selected={area === ALL_AREAS} onClick={() => setArea(ALL_AREAS)}>All</button>
                 {view.areas.map((a) => (
@@ -478,7 +482,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={(id) => void undoCapture(id)} onPromote={(action, on) => void promote(action, on)} />
         </div>
       )}
-      <div className="desk-grid" hidden={inStudio}>
+      {inMirror && (view.mirror ? <DeskMirror mirror={view.mirror} areas={view.areas} foreground={foreground} onThread={(slug) => go({ mode: "studio", thread: slug })} /> : <p role="status">Your weekly mirror is unavailable. Refresh the Desk to retry.</p>)}
+      <div className="desk-grid" hidden={inStudio || inMirror}>
         <main>
           <section className="desk-lead">
             <p><strong>{brief.greeting}</strong> {brief.lines.join(" ")}</p>

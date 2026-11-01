@@ -177,14 +177,16 @@ describe("the request id", () => {
   });
 });
 
-describe("the Day | Studio switch", () => {
-  it("shows Day and Studio with the current view selected when the stack has a Studio", () => {
+describe("the Desk view switch", () => {
+  it("shows Day Studio and Weekly mirror with the current view selected", () => {
     const html = renderToStaticMarkup(<DeskModeSwitch hasStudio inStudio onGo={() => {}} />);
-    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map((m) => [m[2], m[1]])).toEqual([["Day", "false"], ["Studio", "true"]]);
+    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map((m) => [m[2], m[1]])).toEqual([["Day", "false"], ["Studio", "true"], ["Weekly mirror", "false"]]);
   });
 
-  it("renders nothing without a Studio", () => {
-    expect(renderToStaticMarkup(<DeskModeSwitch hasStudio={false} inStudio={false} onGo={() => {}} />)).toBe("");
+  it("keeps Day and Weekly mirror reachable without a Studio", () => {
+    const html = renderToStaticMarkup(<DeskModeSwitch hasStudio={false} inStudio={false} inMirror onGo={() => undefined} />);
+    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map(m => [m[2], m[1]])).toEqual([["Day", "false"], ["Weekly mirror", "true"]]);
+    expect(html).not.toContain(">Studio</button>");
   });
 });
 

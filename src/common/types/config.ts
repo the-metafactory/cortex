@@ -432,6 +432,7 @@ const StudioFilerEndpointSchema = z.object({
 
 const DeskSchema = z.object({
   routines: RoutineOptionsSchema.optional(),
+  mirror: z.object({ day: z.enum(["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]), time: z.iso.time({ precision: -1 }) }).optional(),
   enabled: z.boolean().default(true),
   displayName: z.string().default(""),
   topN: z.number().int().min(1).max(10).default(5),
