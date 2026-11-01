@@ -5,6 +5,7 @@ import { handleDeskMyDay } from "./api/desk-my-day";
 import { handleDeskCalendars } from "./api/desk-calendars";
 import { handleDeskRoutines } from "./api/desk-routines";
 import { handleDeskRoutineOccurrences } from "./api/desk-routine-occurrences";
+import { handleDeskRoutineDisplay } from "./api/desk-routine-display";
 import { handleDeskRoutineEditor } from "./api/desk-routine-editor";
 import { handleDeskRoutineRemoval } from "./api/desk-routine-removal";
 import { handleDeskRoutineLifecycle } from "./api/desk-routine-lifecycle";
@@ -93,6 +94,7 @@ import { handleDeskRuling } from "./api/desk-ruling";
 import { handleGetDeskStudio } from "./api/desk-studio";
 import { handleDeskStudioAct } from "./api/desk-studio-act";
 import { handleDeskStudioSession } from "./api/desk-studio-session";
+import { handleConversations, type ConversationAccess } from "./api/conversations";
 import { GoalChecks, GoalStatuses } from "./desk/goals";
 import { RulingExplainLoop, RulingLedger, rulingExplainer } from "./desk/ruling";
 import { MailSimilarity } from "./desk/mail-similar";
@@ -176,6 +178,7 @@ export interface MissionControlViews {
   handoffView?: () => HandoffView | null;
   doctorView?: () => DoctorView | null;
   sidebandUrl?: string;
+  conversations?: ConversationAccess;
 }
 
 export interface StartServerOptions extends MissionControlViews {
@@ -332,6 +335,7 @@ export function startServer(
           authorizer,
           options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined,
           deskRuntime,
+          options.conversations,
         );
       }
 
@@ -456,8 +460,10 @@ async function handleApi(
   authorizer: Authorizer | null = null,
   vigil?: VigilSubjectsOptions,
   desk?: DeskRuntime,
+  conversations?: ConversationAccess,
 ): Promise<Response> {
   const { pathname } = url;
+  if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations);
 
   if (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname)) {
     const rebindDenial = checkRebindGuard(req, guard);
@@ -526,6 +532,7 @@ async function handleApi(
   if (pathname === "/api/desk/routine-history") return handleDeskRoutineEvidence(req, db, desk);
   if (pathname === "/api/desk/routine-log") return handleDeskRoutineEvidence(req, db, desk, true);
   if (pathname === "/api/desk/routine-occurrences") return handleDeskRoutineOccurrences(req, desk);
+  if (pathname === "/api/desk/routine-display") return handleDeskRoutineDisplay(req, db, desk);
   if (pathname === "/api/desk/routine-editor") return handleDeskRoutineEditor(req, desk, undefined, db);
   if (pathname === "/api/desk/routine-removal") return handleDeskRoutineRemoval(req, desk);
   if (pathname === "/api/desk/routine-lifecycle") return handleDeskRoutineLifecycle(req, desk);
