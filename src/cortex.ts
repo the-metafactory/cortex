@@ -258,7 +258,7 @@ import { createDispatchProjectionRenderer } from "./surface/mc/projection/dispat
 // P-14 U3.3 (#937) — projectForeignObservability: the foreign-origin projection
 // entry the federated observability fold's callback writes through.
 import {
-  createObservabilityProjectionRenderer,
+  registerObservabilityProjection,
   projectForeignObservability,
 } from "./surface/mc/projection/observability-renderer";
 // MC-I1.S7 (#849) — funnel the event-driven failed_dispatch attention delta
@@ -5113,7 +5113,7 @@ export async function startCortex(
       // hub-emitted — on a non-hub stack the renderer simply never receives
       // those subjects, so the tab's federation/transport sections stay honestly
       // empty (no synthesized rows).
-      router.register(createObservabilityProjectionRenderer(mcDb, mcHandle.wsRegistry ?? undefined));
+      await registerObservabilityProjection({ db: mcDb, wsRegistry: mcHandle.wsRegistry ?? undefined, router, runtime, principal: principalId, stack: derivedStack.stack });
       console.log("cortex: Mission Control observability projection renderer registered (signal + collector + federation + transport)");
     } catch (err) {
       console.error("cortex: Mission Control embed startup error (non-fatal):", err instanceof Error ? err.message : err);

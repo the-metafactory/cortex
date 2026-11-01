@@ -11,6 +11,10 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { ErrorCode, NatsError, type NatsConnection, type Subscription, type Status } from "nats";
 import type { AgentConfig } from "../../../common/types/config";
 import { startMyelinRuntime } from "../runtime";
+import { registerObservabilityProjection } from "../../../surface/mc/projection/observability-renderer";
+import { initDatabase } from "../../../surface/mc/db/init";
+import { createSystemBusProcessEvent } from "../../system-events";
+import type { SurfaceAdapter } from "../../surface-router";
 
 function makeConfig(natsBlock: AgentConfig["nats"]): AgentConfig {
   // cortex#429 PR-C — `agent.operatorId/operatorName` retired from
@@ -870,6 +874,33 @@ describe("MyelinRuntime", () => {
   // cortex#491 — idempotent push-subscribe per resolved pattern (double-bind fix)
   // -------------------------------------------------------------------------
   describe("cortex#491 idempotent push-subscribe", () => {
+    test("MC process audit opens its exact publisher subject and runtime owns stop and restart", async () => {
+      for (let boot = 0; boot < 2; boot++) {
+        const fake = makeFakeNatsConnection();
+        const runtime = await startMyelinRuntime(makeConfig({ url: "nats://localhost:4222", name: "cortex", subjects: ["local.test.default.agent.heartbeat"] }), { connectImpl: async () => fake.nc, principal: "test", stack: "default" });
+        const db = initDatabase(":memory:");
+        const adapters: SurfaceAdapter[] = [];
+        try {
+          await registerObservabilityProjection({ db, runtime, principal: "test", stack: "default", router: { register: (adapter) => {
+            adapters.push(adapter); return { unregister: () => { adapters.splice(adapters.indexOf(adapter), 1); } };
+          } } });
+          const subject = "local.test.default.system.bus.process";
+          expect(fake.subscribePatterns).toEqual(["local.test.default.agent.heartbeat", subject]);
+          expect(adapters).toHaveLength(1);
+          if (!runtime.subscribe) throw new Error("Expected self-subscription capability");
+          await runtime.subscribe(subject);
+          expect(fake.subscribePatterns).toHaveLength(2);
+          const envelope = createSystemBusProcessEvent({ source: { principal: "test", agent: "cortex", instance: "local" }, outcome: "started", process: "pulse-flow", decisionId: crypto.randomUUID(), correlationId: crypto.randomUUID(), startedAt: new Date() });
+          await runtime.publish(envelope);
+          expect(fake.publishes.at(-1)?.subject).toBe(subject);
+          await runtime.stop();
+          expect(fake.nc.drain).toHaveBeenCalledTimes(1);
+          await expect(runtime.subscribe(subject)).rejects.toThrow("after stop");
+          expect(fake.subscribePatterns).toHaveLength(2);
+        } finally { await runtime.stop(); db.close(); }
+      }
+    });
+
     test("duplicate config nats.subjects pattern binds exactly ONE NATS subscription", async () => {
       const fake = makeFakeNatsConnection();
       const runtime = await startMyelinRuntime(
