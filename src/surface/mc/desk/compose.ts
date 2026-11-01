@@ -15,6 +15,7 @@ import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceReadin
 import { listSenders, listVips } from "./vips";
 import type { MailActionsConfig } from "./mail-actions";
 import { movedTarget } from "./mail-move";
+import { historySentence, mailLogFor, type MailLogEntry } from "./mail-log";
 import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskCorrection, DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
@@ -79,6 +80,7 @@ export interface DeskOptions {
   mailClassifier?: ClassifierConfig;
   rulingExplainer?: ModelConfig;
   mailActions?: MailActionsConfig;
+  mailLog?: { retentionDays: number };
   mailLinks?: EvidenceLinks;
   voice?: VoiceOptions;
 }
@@ -187,12 +189,14 @@ export async function composeDesk(
   const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
     .filter((item) => goalListed(goalStatuses, item.goal));
   const canMove = Boolean(desk.mailActions?.move?.length);
-  const items = applyCorrections(markInterrupts([
+  const corrected = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
     ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
-  ], rules, readDeliveries(db), now), activeCorrections).map(item => item.kind === "mail" ? { ...item, mailDecision: readMailDecision(db, item.source, item.key.slice("mail:".length)) } : item);
+  ], rules, readDeliveries(db), now), activeCorrections);
+  const mailLog = mailLogFor(db, corrected.filter(i => i.kind === "mail").map(i => i.key.slice("mail:".length)));
+  const items = corrected.map(item => item.kind === "mail" ? withMailLog({ ...item, mailDecision: readMailDecision(db, item.source, item.key.slice("mail:".length)) }, mailLog, now) : item);
 
   const { myDay, studio } = await readStudioDesk(db, desk, now);
   const moved = movedKeys(db);
@@ -251,6 +255,11 @@ function goalActionsFor(goals: DeskGoalOptions | undefined, subjects: VigilSubje
     for (const goal of check) if (checks.pending(goal, now)) checking.add(goal);
   }
   return { check: checks ? check : new Set(), checking, pause: Boolean(goals?.somaBin), pausable: (goal) => SOMA_GOAL_ID.test(goal) };
+}
+
+function withMailLog(item: DeskItem, log: Map<string, MailLogEntry[]>, now: number): DeskItem {
+  const entries = log.get(item.key.slice("mail:".length)) ?? [];
+  return entries.length ? { ...item, detail: { ...item.detail, history: [...item.detail.history, ...entries.map(e => historySentence(e, now))] } } : item;
 }
 
 function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): DeskItem[] {

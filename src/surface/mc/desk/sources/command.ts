@@ -23,6 +23,47 @@ export const SourceEventSchema = z.object({
   url: safeLink.optional(),
 });
 
+export const AUTH_VERDICTS = ["pass", "fail", "softfail", "neutral", "none", "temperror", "permerror", "policy"] as const;
+
+function printable(v: string): string {
+  let out = "";
+  for (let i = 0; i < v.length; i += 1) {
+    const code = v.charCodeAt(i);
+    out += code < 32 || code === 127 ? " " : v.charAt(i);
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
+const headerText = (max: number) => z.string().transform(printable).pipe(z.string().min(1).max(max)).optional().catch(undefined);
+const verdict = z.preprocess((v) => (typeof v === "string" ? v.trim().toLowerCase() : v), z.enum(AUTH_VERDICTS)).optional().catch(undefined);
+
+function present<T extends object>(record: T): Partial<T> | undefined {
+  const kept = Object.fromEntries(Object.entries(record).filter(([, v]) => v !== undefined));
+  return Object.keys(kept).length > 0 ? (kept as Partial<T>) : undefined;
+}
+
+/** Headers a mail source may report. Untrusted: each field that does not fit is dropped on its own, never the mail. */
+export const MailHeadersSchema = z
+  .object({
+    listId: headerText(300),
+    listUnsubscribe: headerText(2000),
+    listUnsubscribePost: headerText(200),
+    authResults: z.object({ spf: verdict, dkim: verdict, dmarc: verdict }).optional().catch(undefined),
+    replyTo: headerText(300),
+    inReplyTo: headerText(1000),
+  })
+  .transform((h): MailHeaders | undefined => present({ ...h, authResults: h.authResults && present(h.authResults) }))
+  .optional()
+  .catch(undefined);
+
+export interface MailHeaders {
+  listId?: string;
+  listUnsubscribe?: string;
+  listUnsubscribePost?: string;
+  authResults?: Partial<Record<"spf" | "dkim" | "dmarc", (typeof AUTH_VERDICTS)[number]>>;
+  replyTo?: string;
+  inReplyTo?: string;
+}
+
 export const SourceMailSchema = z.object({
   kind: z.literal("mail"),
   id: z.string().min(1),
@@ -34,6 +75,7 @@ export const SourceMailSchema = z.object({
   firstParagraph: z.string().optional(),
   url: safeLink.optional(),
   account: z.string().optional(),
+  headers: MailHeadersSchema,
 });
 
 export type SourceEvent = z.infer<typeof SourceEventSchema>;
@@ -119,7 +161,10 @@ export class SourceCache {
   private readonly readings = new Map<string, SourceReading>();
   private readonly running = new Map<string, Promise<SourceReading>>();
 
-  constructor(private readonly run: CommandRunner = spawnCommand) {}
+  constructor(
+    private readonly run: CommandRunner = spawnCommand,
+    private readonly onReading?: (prev: SourceReading | undefined, next: SourceReading) => unknown,
+  ) {}
 
   cached(): SourceReading[] {
     return [...this.readings.values()];
@@ -144,6 +189,7 @@ export class SourceCache {
         const reading = { id: source.id, area: source.area ?? null, readAt: now, ...r };
         this.readings.set(source.id, reading);
         this.running.delete(source.id);
+        this.onReading?.(cached, reading);
         return reading;
       });
     this.running.set(source.id, next);

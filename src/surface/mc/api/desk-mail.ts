@@ -5,6 +5,7 @@ import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../desk/create";
 import { draftReply, findListedMail, markUnimportant } from "../desk/mail-actions";
+import { logMailDecision, mailFeatures } from "../desk/mail-log";
 import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveResult } from "../desk/mail-move";
 
 const MailRequestSchema = z.discriminatedUnion("action", [
@@ -50,7 +51,10 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if (!mail) return fail(409, "The Desk no longer lists this mail.");
   if (decision && !["request", "invitation"].includes(readClassifications(db, [mail.id]).get(mail.id)?.commitment ?? "")) return fail(409, "This mail is no longer classified as a request or invitation. Refresh before saving the choice.");
   if (body.action === "draft") {
-    return answer(decision ? await saveDecisionDraft({ db, desk: runtime.options, mail, body: body.body, decision, now, save: () => draftReply(mail, body.body, moveDeps) }) : await draftReply(mail, body.body, moveDeps));
+    const features = mailFeatures(db, mail);
+    const saved = decision ? await saveDecisionDraft({ db, desk: runtime.options, mail, body: body.body, decision, now, save: () => draftReply(mail, body.body, moveDeps) }) : await draftReply(mail, body.body, moveDeps);
+    if (saved.ok) logMailDecision(db, features, "draft", "desk", now, "Drafts");
+    return answer(saved);
   }
   if (body.action === "unimportant") return answer(await markUnimportant(db, mail, moveDeps));
   return answer(await moveMail(mail, body.action === "move" ? body.target : "trash", moveDeps));
