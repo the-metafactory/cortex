@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -19,9 +19,16 @@ function isAlive(pid: number): boolean {
 }
 
 const base = existsSync("/tmp") ? realpathSync("/tmp") : tmpdir();
-for (const name of abandonedRunRoots(readdirSync(base), isAlive)) {
-  rmSync(join(base, name), { recursive: true, force: true });
+function removeIfOwned(path: string): void {
+  try {
+    if (lstatSync(path).uid !== process.getuid?.()) return;
+    rmSync(path, { recursive: true, force: true });
+  } catch (error) {
+    console.error(`skipped abandoned test run root ${path}: ${(error as Error).message}`);
+  }
 }
+
+for (const name of abandonedRunRoots(readdirSync(base), isAlive)) removeIfOwned(join(base, name));
 
 const root = mkdtempSync(join(base, runRootName(process.pid)));
 const home = join(root, "home");
