@@ -21,7 +21,7 @@ export const RoutineOccurrenceSchema = z.object({
 export const RoutineOccurrencePageSchema = z.object({
   owner: z.literal("reflex"), principal: z.string().min(1), stack: z.string().min(1),
   start: instant, end: instant, timezone, meaning: z.literal("planned-trigger"),
-  occurrences: z.array(RoutineOccurrenceSchema).max(1000), complete: z.boolean(), nextCursor: z.string().max(2000).nullable(),
+  occurrences: z.array(RoutineOccurrenceSchema).max(1000), complete: z.boolean(), nextCursor: z.string().min(1).max(2000).nullable(),
   counts: z.object({ scope: z.literal("page"), total: z.number().int().nonnegative(), active: z.number().int().nonnegative(), disabled: z.number().int().nonnegative() }).strict(),
 }).strict();
 export type RoutineOccurrencePage = z.infer<typeof RoutineOccurrencePageSchema>;

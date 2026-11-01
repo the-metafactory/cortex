@@ -35,7 +35,7 @@ describe("routine occurrence read transport", () => {
     expect((await handleDeskRoutineOccurrences(new Request(url), undefined, run)).status).toBe(409);
   });
   it("surfaces owner failure and malformed or inconsistent pages instead of an empty calendar", async () => {
-    for (const invalid of [null, { ...wire, complete: false }, { ...wire, principal: "foreign" }, { ...wire, stack: "foreign" }, { ...wire, counts: { ...wire.counts, active: 2 } }, { ...wire, timezone: "UTC" }, { ...wire, occurrences: [{ ...record, scheduledFor: query.end }] }, { ...wire, occurrences: [record, record] }, { ...wire, occurrences: [{ ...record, capabilities: { ...record.capabilities, delete: true } }] }]) {
+    for (const invalid of [null, { ...wire, complete: false }, { ...wire, complete: false, nextCursor: "" }, { ...wire, principal: "foreign" }, { ...wire, stack: "foreign" }, { ...wire, counts: { ...wire.counts, active: 2 } }, { ...wire, timezone: "UTC" }, { ...wire, occurrences: [{ ...record, scheduledFor: query.end }] }, { ...wire, occurrences: [record, record] }, { ...wire, occurrences: [{ ...record, capabilities: { ...record.capabilities, delete: true } }] }]) {
       expect((await handleDeskRoutineOccurrences(new Request(url), runtime, () => response(invalid))).status).toBe(502);
     }
     expect((await handleDeskRoutineOccurrences(new Request(url), runtime, () => response({ error: "unavailable" }, 2))).status).toBe(502);
