@@ -58,6 +58,7 @@ export class DeskWake {
     this.abort = new AbortController();
     const signal = this.abort.signal;
     this.set({ phase: "starting", line: "Preparing local wake detection…" });
+    window.addEventListener("pagehide", () => this.disable(), { signal });
     try {
       const error = wakeConfigurationError(this.options);
       if (error) throw new Error(error);
@@ -117,7 +118,6 @@ export class DeskWake {
         else if (this.current.phase === "listening" && now - this.heartbeat > 3000) this.fail(new Error("Microphone audio or wake processing stopped. Wake is not listening."));
         else if (this.current.phase === "recording" && !this.recording?.ending && now - this.heartbeat > 3000) this.fail(new Error("Microphone audio stopped during command capture."));
       }, 500);
-      window.addEventListener("pagehide", () => this.disable(), { signal });
       document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && this.current.phase === "listening" && performance.now() - this.heartbeat > 3000) this.fail(new Error("Audio processing became stale while the page was hidden.")); }, { signal });
     } catch (error) { if (!signal.aborted) this.fail(error); }
   }

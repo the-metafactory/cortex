@@ -67,6 +67,19 @@ async function run(): Promise<unknown> {
   assert(denied.includes("Permission denied"), "Permission denial was hidden");
   refusal.disable();
 
+  const lateStreamContext = new AudioContext();
+  const lateStream = lateStreamContext.createMediaStreamDestination().stream;
+  const permissionResolvers: ((stream: MediaStream) => void)[] = [];
+  const earlyExitStates: WakeState[] = [];
+  const earlyExit = new DeskWake(options, { state: state => earlyExitStates.push(state), media: { getUserMedia: () => new Promise<MediaStream>(resolve => permissionResolvers.push(resolve)) } as MediaDevices, transcribe: () => { throw new Error("Exited page must not upload"); }, answer: () => Promise.resolve() });
+  const starting = earlyExit.enable();
+  await until(() => permissionResolvers.length > 0);
+  window.dispatchEvent(new Event("pagehide"));
+  permissionResolvers[0]?.(lateStream);
+  await starting;
+  assert(earlyExitStates.at(-1)?.phase === "off" && lateStream.getTracks().every(track => track.readyState === "ended"), "Navigation during permission left a late microphone active");
+  earlyExit.disable(); await lateStreamContext.close();
+
   const silentContext = new AudioContext();
   const silentStates: WakeState[] = [];
   const silent = new DeskWake(options, { state: state => { silentStates.push(state); }, media: { getUserMedia: async () => { await silentContext.resume(); return silentContext.createMediaStreamDestination().stream; } } as MediaDevices, worker: () => fakeWorker(false), transcribe: () => { throw new Error("Non-wake audio uploaded"); }, answer: () => Promise.resolve() });
