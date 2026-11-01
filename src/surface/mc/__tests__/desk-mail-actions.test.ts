@@ -407,6 +407,7 @@ describe("Archive, Spam and Delete through one move command", () => {
     const body = await res.json();
     expect(body).toEqual({ ok: true, message: "Moved to Archiv.", undo: expect.stringMatching(/^move-\d+$/) });
     expect(r.calls).toEqual([{ argv: MOVE, stdin: { action: "move", account: "work", messageId: "g1@gitlab.example", target: "archive" } }]);
+    expect(db.query("SELECT folder FROM desk_mail_moves").get()).toEqual({ folder: "Archiv" });
     expect(await itemKeys(rt)).toEqual(["mail:b1@example.org"]);
     const done = (await view(rt)).autonomy.done;
     expect(done).toEqual([{ key: `mail-move:${body.undo}`, action: "mail.move", undo: body.undo, title: "Archived: “Pipeline g1@gitlab.example”", message: "Moved to Archiv.", at: NOW, ok: true }]);
@@ -471,7 +472,7 @@ describe("Undo of a move", () => {
     const { undo } = await (await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "junk" }, r.run)).json();
     expect(await itemKeys(rt)).toEqual([]);
     const res = await send(rt, { action: "undo", move: undo }, r.run);
-    expect(await res.json()).toEqual({ ok: true, message: "Moved back to INBOX from Junk." });
+    expect(await res.json()).toEqual({ ok: true, message: "Moved back to INBOX from Junk.", restored: "mail:g1@gitlab.example" });
     expect(r.calls[1]).toEqual({ argv: MOVE, stdin: { action: "restore", account: "work", messageId: "g1@gitlab.example", from: "junk" } });
     expect(await itemKeys(rt)).toEqual(["mail:g1@gitlab.example"]);
     const [line] = (await view(rt)).autonomy.done;

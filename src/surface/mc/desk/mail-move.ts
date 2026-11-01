@@ -35,59 +35,82 @@ export interface MoveDeps {
   newId?: () => string;
 }
 
-export type MoveResult = { ok: true; message: string; undo?: string; block?: string } | { ok: false; status: number; error: string };
+export type MoveResult = { ok: true; message: string; undo?: string; block?: string; restored?: string } | { ok: false; status: number; error: string };
 
 const refuse = (status: number, error: string): { ok: false; status: number; error: string } => ({ ok: false, status, error });
 
-function receipt(stdout: string, fallback: string): string {
+interface Printed {
+  message: string;
+  folder: string | null;
+}
+
+function printed(stdout: string, fallback: string): Printed {
   try {
     const parsed: unknown = JSON.parse(stdout);
-    if (parsed && typeof parsed === "object" && "message" in parsed && typeof parsed.message === "string") return oneLine(parsed.message, fallback);
+    if (!parsed || typeof parsed !== "object") return { message: fallback, folder: null };
+    const message = "message" in parsed && typeof parsed.message === "string" ? oneLine(parsed.message, fallback) : fallback;
+    const folder = "folder" in parsed && typeof parsed.folder === "string" && parsed.folder.trim() ? parsed.folder.trim().slice(0, 200) : null;
+    return { message, folder };
   } catch {
-    return fallback;
+    return { message: fallback, folder: null };
   }
-  return fallback;
 }
 
 const domainOf = (address: string): string => address.toLowerCase().slice(address.indexOf("@") + 1);
+
+interface Claimed {
+  key: string;
+  argv: string[];
+  request: Record<string, string>;
+  command: "move" | "trash";
+  failed: (line: string) => string;
+  timedOut: string;
+}
+
+async function runClaimed(deps: MoveDeps, timeoutSeconds: number, c: Claimed, done: (stdout: string) => MoveResult): Promise<MoveResult> {
+  if (!deps.ledger.claim(c.key)) return refuse(409, "This mail is already being moved.");
+  try {
+    const result = await deps.run(c.argv, JSON.stringify(c.request), timeoutSeconds * 1000);
+    if (result.code !== 0) return refuse(502, c.failed(oneLine(result.stderr || result.stdout, `The ${c.command} command exited with code ${result.code}.`)));
+    return done(result.stdout);
+  } catch (err) {
+    if (err instanceof CommandTimeout) return refuse(504, `The ${c.command} command ${err.message}. ${c.timedOut}`);
+    return refuse(502, `The ${c.command} command did not run: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    deps.ledger.release(c.key);
+  }
+}
 
 /**
  * Moves one listed mail to its account's folder for the target. With `mc.desk.mail.actions.move` the command reads
  * `{ action: "move", account, messageId, target }`, and the move is logged with an Undo in Done for you. Without it, a
  * move to Trash falls back to the legacy trash command (`{ action: "trash", account, messageId }`, no Undo). The
- * command never deletes or expunges; its last stderr line is the refusal shown.
+ * contract asks the command to move only, never to delete or expunge; its last stderr line is the refusal shown.
  */
 export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveDeps): Promise<MoveResult> {
   const config = deps.config;
   const move = config?.move;
   const argv = move?.length ? move : target === "trash" ? config?.trash : undefined;
   if (!config || !argv?.length) return refuse(409, NOT_SET[target]);
-  if (!mail.account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot move it.");
+  const account = mail.account;
+  if (!account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot move it.");
   const already = movedTarget(deps.ledger, mail.id);
   if (already) return refuse(409, `This mail is already in ${FOLDER[already]}.`);
-  if (!deps.ledger.claim(claimKey(mail.id))) return refuse(409, "This mail is already being moved.");
   const command = move?.length ? "move" : "trash";
-  try {
-    const request = command === "move" ? { action: "move", account: mail.account, messageId: mail.id, target } : { action: "trash", account: mail.account, messageId: mail.id };
-    const result = await deps.run(argv, JSON.stringify(request), config.timeoutSeconds * 1000);
-    if (result.code !== 0) return refuse(502, oneLine(result.stderr || result.stdout, `The ${command} command exited with code ${result.code}.`));
+  const request: Record<string, string> = command === "move" ? { action: "move", account, messageId: mail.id, target } : { action: "trash", account, messageId: mail.id };
+  return runClaimed(deps, config.timeoutSeconds, { key: claimKey(mail.id), argv, request, command, failed: (line) => line, timedOut: `The mail may have moved; check ${FOLDER[target]}.` }, (stdout) => {
     deps.ledger.add(movedKey(target, mail.id), deps.now);
-    const message = receipt(result.stdout, `Moved to ${FOLDER[target]}.`);
+    const { message, folder } = printed(stdout, `Moved to ${FOLDER[target]}.`);
     if (command !== "move") return { ok: true, message };
     const id = (deps.newId ?? (() => crypto.randomUUID()))();
     deps.db.transaction(() => {
       deps.db.query("INSERT INTO desk_mail_moves (id, account, message_id, target, sender, folder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(id, mail.account ?? "", mail.id, target, mail.from.address.toLowerCase(), message, deps.now);
+        .run(id, account, mail.id, target, mail.from.address.toLowerCase(), folder, deps.now);
       deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'mail.move', ?, ?, 'done', ?, ?, ?)")
         .run(`mail-move:${id}`, id, `${DONE[target]}: “${mail.subject}”`, message, deps.now, deps.now);
     })();
     return { ok: true, message, undo: id, ...(target === "junk" ? { block: `@${domainOf(mail.from.address)}` } : {}) };
-  } catch (err) {
-    if (err instanceof CommandTimeout) return refuse(504, `The ${command} command ${err.message}. The mail may have moved; check ${FOLDER[target]}.`);
-    return refuse(502, `The ${command} command did not run: ${err instanceof Error ? err.message : String(err)}`);
-  } finally {
-    deps.ledger.release(claimKey(mail.id));
-  }
+  });
 }
 
 interface MoveRow {
@@ -104,7 +127,7 @@ const readMove = (db: Database, id: string): MoveRow | null =>
 
 /**
  * Undo of one logged move: the move command reads `{ action: "restore", account, messageId, from }` and moves the
- * message back to INBOX. The mail shows on the Desk again; Done for you keeps the line, marked undone.
+ * message back to INBOX. The mail shows on the Desk again (`restored` is its item key); Done for you keeps the line, marked undone.
  */
 export async function undoMove(id: string, deps: MoveDeps): Promise<MoveResult> {
   const config = deps.config;
@@ -114,24 +137,17 @@ export async function undoMove(id: string, deps: MoveDeps): Promise<MoveResult> 
   if (!row) return refuse(404, "The Desk has no record of that move.");
   if (row.undone_at !== null) return refuse(409, "That move is already undone.");
   if (deps.now - row.created_at > UNDO_WINDOW_MS) return refuse(409, "That move is too old to undo from the Desk. Move the mail back in your mail client.");
-  if (!deps.ledger.claim(claimKey(row.message_id))) return refuse(409, "This mail is already being moved.");
-  try {
-    const request = { action: "restore", account: row.account, messageId: row.message_id, from: row.target };
-    const result = await deps.run(argv, JSON.stringify(request), config.timeoutSeconds * 1000);
-    if (result.code !== 0) return refuse(502, `The mail was not moved back: ${oneLine(result.stderr || result.stdout, `the move command exited with code ${result.code}.`)}`);
-    const message = receipt(result.stdout, "Moved back to INBOX.");
+  const request = { action: "restore", account: row.account, messageId: row.message_id, from: row.target };
+  const claimed: Claimed = { key: claimKey(row.message_id), argv, request, command: "move", failed: (line) => `The mail was not moved back: ${line}`, timedOut: "The mail may be back; check INBOX." };
+  return runClaimed(deps, config.timeoutSeconds, claimed, (stdout) => {
+    const { message } = printed(stdout, "Moved back to INBOX.");
     deps.db.transaction(() => {
       deps.db.query("UPDATE desk_mail_moves SET undone_at = ? WHERE id = ?").run(deps.now, id);
       deps.db.query("UPDATE desk_done SET action = 'mail.move.undone', message = ?, updated_at = ? WHERE attempt_key = ?").run(message, deps.now, `mail-move:${id}`);
     })();
     deps.ledger.forget(movedKey(row.target, row.message_id));
-    return { ok: true, message };
-  } catch (err) {
-    if (err instanceof CommandTimeout) return refuse(504, `The move command ${err.message}. The mail may be back; check INBOX.`);
-    return refuse(502, `The move command did not run: ${err instanceof Error ? err.message : String(err)}`);
-  } finally {
-    deps.ledger.release(claimKey(row.message_id));
-  }
+    return { ok: true, message, restored: `mail:${row.message_id}` };
+  });
 }
 
 /**

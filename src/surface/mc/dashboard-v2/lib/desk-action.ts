@@ -7,7 +7,7 @@ export const DESK_MAIL_PATH = "/api/desk/mail";
 export const DESK_RULING_PATH = "/api/desk/ruling";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
-type Outcome = { ok: boolean; text: string; recorded?: boolean; uncertain?: boolean; undo?: string; block?: string };
+type Outcome = { ok: boolean; text: string; recorded?: boolean; uncertain?: boolean; undo?: string; block?: string; restored?: string };
 
 async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Promise<Outcome> {
   let res: Response;
@@ -20,11 +20,12 @@ async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Prom
   } catch (err) {
     return { ok: false, uncertain: true, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}` };
   }
-  const parsed = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown; detail?: unknown; recorded?: unknown; undo?: unknown; block?: unknown } | null;
+  const parsed = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown; detail?: unknown; recorded?: unknown; undo?: unknown; block?: unknown; restored?: unknown } | null;
   if (res.ok) {
     return {
       ok: true, text: typeof parsed?.message === "string" ? parsed.message : "Done.",
       ...(typeof parsed?.undo === "string" ? { undo: parsed.undo } : {}), ...(typeof parsed?.block === "string" ? { block: parsed.block } : {}),
+      ...(typeof parsed?.restored === "string" ? { restored: parsed.restored } : {}),
     };
   }
   const error = typeof parsed?.error === "string" ? parsed.error : "";

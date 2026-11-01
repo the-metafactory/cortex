@@ -262,8 +262,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     setReceipt(null);
     const result = await submitMailAction({ action: "undo", move: id });
     setNote(result.text);
-    if (result.ok) onChanged();
+    if (!result.ok) return;
+    const restored = result.restored;
+    if (restored) setSnoozed((s) => { const next = new Set(s); next.delete(restored); return next; });
+    onChanged();
   };
+
+  const undoDone = (id: string, action?: string): void => void (action === "mail.move" ? undoMove(id) : undoCapture(id));
 
   const blockDomain = async (r: Receipt): Promise<void> => {
     if (!r.confirmBlock) {
@@ -508,7 +513,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       {inStudio && (
         <div className="dst">
           {proposalCard}
-          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={(id, action) => void (action === "mail.move" ? undoMove(id) : undoCapture(id))} onPromote={(action, on) => void promote(action, on)} />
+          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onPromote={(action, on) => void promote(action, on)} />
         </div>
       )}
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
@@ -626,7 +631,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             )}
           </section>
 
-          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={(id, action) => void (action === "mail.move" ? undoMove(id) : undoCapture(id))} onPromote={(action, on) => void promote(action, on)} />
+          <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onPromote={(action, on) => void promote(action, on)} />
 
           <section className="desk-msec">
             <h3 className="desk-mh">The rest</h3>
