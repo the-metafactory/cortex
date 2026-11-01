@@ -61,7 +61,11 @@ jobs:
       - run: git fetch --depth=1 origin main
 
       - name: ESLint (errors only — blocking gate)
-        run: bun scripts/check.ts lint
+        run: |
+          bun install --cwd docs/research/ivy-durable-2960 --frozen-lockfile
+          bunx tsc --noEmit -p docs/research/ivy-durable-2960
+          bun run docs/research/ivy-durable-2960/qualify.ts
+          bun scripts/check.ts lint
 
   # Copied code ratchet: a file may not gain jscpd clones past
   # scripts/duplication-baseline.json, and the baseline may not exceed main's.

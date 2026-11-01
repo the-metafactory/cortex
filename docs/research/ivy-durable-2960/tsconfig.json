@@ -1,0 +1,5 @@
+{
+  "extends": "../../../tsconfig.json",
+  "include": ["qualify.ts"],
+  "exclude": ["node_modules"]
+}

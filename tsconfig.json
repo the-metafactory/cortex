@@ -27,6 +27,7 @@
     "noPropertyAccessFromIndexSignature": false
   },
   "exclude": [
+    "docs/research/ivy-durable-2960",
     "src/surface-sdk/generated",
     "src/worker",
     "src/webhook-proxy",
