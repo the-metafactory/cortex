@@ -85,6 +85,7 @@ export async function startMissionControl(
       ...(opts.localAggregation ? { localAggregation: opts.localAggregation } : {}),
       ...(opts.sidebandUrl ? { sidebandUrl: opts.sidebandUrl } : {}),
       ...(opts.degraded ? { degraded: opts.degraded } : {}),
+      ...(opts.conversations ? { conversations: opts.conversations } : {}),
     });
     const { port, wsRegistry } = serverCtx;
     hookPoller = new HookStreamPoller(db, config.hooks, wsRegistry);
