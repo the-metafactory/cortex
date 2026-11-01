@@ -1,9 +1,33 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { CLAUDE_CREDENTIAL_PATHS, HERMETIC_HOME_ENV, hermeticTestEnv } from "./lib/test-home";
+import {
+  abandonedRunRoots,
+  CLAUDE_CREDENTIAL_PATHS,
+  HERMETIC_HOME_ENV,
+  hermeticTestEnv,
+  runRootName,
+} from "./lib/test-home";
 
-const home = mkdtempSync(join(tmpdir(), "cortex-test-home-"));
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+const base = existsSync("/tmp") ? realpathSync("/tmp") : tmpdir();
+for (const name of abandonedRunRoots(readdirSync(base), isAlive)) {
+  rmSync(join(base, name), { recursive: true, force: true });
+}
+
+const root = mkdtempSync(join(base, runRootName(process.pid)));
+const home = join(root, "home");
+const tmp = join(root, "tmp");
+mkdirSync(home);
+mkdirSync(tmp);
 for (const relative of CLAUDE_CREDENTIAL_PATHS) {
   const source = join(homedir(), relative);
   if (!existsSync(source)) continue;
@@ -11,10 +35,27 @@ for (const relative of CLAUDE_CREDENTIAL_PATHS) {
   symlinkSync(source, join(home, relative));
 }
 
-const run = Bun.spawnSync(["bun", "test", ...process.argv.slice(2)], {
-  env: hermeticTestEnv(process.env, home),
+const child = Bun.spawn(["bun", "test", ...process.argv.slice(2)], {
+  env: hermeticTestEnv(process.env, { home, tmp }),
   stdio: ["inherit", "inherit", "inherit"],
 });
-rmSync(home, { recursive: true, force: true });
-if (run.exitCode !== 0) console.error(`bun test exited ${run.exitCode} under ${HERMETIC_HOME_ENV}=${home}`);
-process.exit(run.exitCode ?? 1);
+
+function removeRoot(): void {
+  rmSync(root, { recursive: true, force: true });
+}
+
+const SIGNAL_NUMBERS = { SIGHUP: 1, SIGINT: 2, SIGTERM: 15 } as const;
+for (const signal of Object.keys(SIGNAL_NUMBERS) as (keyof typeof SIGNAL_NUMBERS)[]) {
+  process.on(signal, () => {
+    child.kill(signal);
+    void child.exited.then(() => {
+      removeRoot();
+      process.exit(128 + SIGNAL_NUMBERS[signal]);
+    });
+  });
+}
+
+const exitCode = await child.exited;
+removeRoot();
+if (exitCode !== 0) console.error(`bun test exited ${exitCode} under ${HERMETIC_HOME_ENV}=${home}`);
+process.exit(exitCode);
