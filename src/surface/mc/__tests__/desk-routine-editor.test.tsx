@@ -15,8 +15,8 @@ function fixture() {
   let refuse = false;
   let unavailable = false;
   let modelView = "";
-  const run: RoutineRunner = async (argv) => {
-    const answer = (value: unknown, code = 0) => ({ code, stdout: JSON.stringify(value), stderr: "" });
+  const run: RoutineRunner = (argv) => {
+    const answer = (value: unknown, code = 0) => Promise.resolve({ code, stdout: JSON.stringify(value), stderr: "" });
     if (unavailable) throw new Error("Owner unavailable");
     if (argv[0] === "compose") {
       modelView = argv[argv.indexOf("--routine-edit") + 1] ?? "";
@@ -71,7 +71,7 @@ describe("routine editor owner seam", () => {
     expect(f.writes()).toBe(0);
   });
   it("renders the real page loading surface and validates field types/ranges", () => {
-    expect(renderToStaticMarkup(<DeskRoutineEditor onBack={() => {}} />)).toContain("Reading installed routines");
+    expect(renderToStaticMarkup(<DeskRoutineEditor onBack={() => undefined} />)).toContain("Reading installed routines");
     expect(parameterError({ name: "attempts", type: "number", minimum: 1 }, NaN)).toContain("whole number");
     expect(parameterError({ name: "backoff", type: "string", enum: ["constant"] }, "invalid")).toContain("allowed");
   });
