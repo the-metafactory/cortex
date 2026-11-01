@@ -25,3 +25,13 @@ The initial editable contract covers retry attempts, backoff and delay parameter
 Flows with shared YAML references remain inspectable but do not offer parameter editing, because a shared node could otherwise change more than the selected step. Use the routine owner interfaces for concurrent writes; manual filesystem edits do not participate in its locking protocol.
 
 Routines currently have no area classification metadata. AI editing uses the already configured routine composer route and passes only owner-redacted flow metadata. The API refuses a supplied local-area restriction because the composer cannot attest that restriction; it does not silently downgrade it.
+
+## Background routines and Needs attention
+
+<!-- glossary-ignore: owner -->
+
+A routine that runs many times a day can crowd the Schedule calendar. Open the routine's workspace, choose **Schedule**, and set **Calendar display** to **Background**. The calendar then shows the routine once, in **Background routines** beneath the calendar, with its recurrence, source timezone and planned count for the visible period. Select the count to page through the owner-provided planned starts or open the workspace. Choose **Show individual scheduled starts**, or **Scheduled starts** in the workspace, to restore one slot per start. A dense cell's occurrence details also offer to move a listed routine to Background; the Desk never moves a routine on its own.
+
+The display choice is a Cortex presentation preference for the configured principal, stack and routine. `GET /api/desk/routine-display` lists the Background choices; `POST` with `principal`, `stack`, `routineId` and `mode` (`scheduled` or `background`) changes one after the routine owner confirms the routine is installed. It never changes the routine definition, schedule, timezone, pause state, handling policy, approvals or execution. Read-only definitions accept a display choice. A failed save keeps the previous display and shows the unsaved choice with Retry.
+
+**Needs attention** above the calendar lists, grouped by routine and reason, the pending approvals, the recorded execution failures and stale or conflicting execution evidence in the visible period, and routines whose scheduling state the owner could not confirm. Each group shows its loaded count and latest recorded time; open it to approve or deny, inspect an execution and its log, or open the routine workspace. The section ignores the calendar filters and Background choices. It reads at most 1000 recent decisions and says when this period's history is only partly covered. A dispatched decision without a recorded outcome is not a failure, and an empty section is not a health check.

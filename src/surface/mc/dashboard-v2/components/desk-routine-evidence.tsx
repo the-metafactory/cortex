@@ -50,7 +50,7 @@ function LogFile({ record, file }: { record: RoutineEvidenceRecord; file: Routin
     {page?.nextOffset !== null && page && <button className="desk-btn" type="button" disabled={busy || Boolean(error)} onClick={() => { void more(); }}>Load next log page</button>}
   </section>;
 }
-function ExecutionViewer({ record, origin, onClose }: { record: RoutineEvidenceRecord; origin: string; onClose: () => void }) {
+export function ExecutionViewer({ record, origin, onClose }: { record: RoutineEvidenceRecord; origin: string; onClose: () => void }) {
   const execution = record.execution;
   const files = execution.kind === "observed" ? execution.files : [];
   const [selected, setSelected] = useState(files.find((file) => file.availability === "available")?.ref ?? files[0]?.ref);

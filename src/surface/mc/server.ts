@@ -5,6 +5,7 @@ import { handleDeskMyDay } from "./api/desk-my-day";
 import { handleDeskCalendars } from "./api/desk-calendars";
 import { handleDeskRoutines } from "./api/desk-routines";
 import { handleDeskRoutineOccurrences } from "./api/desk-routine-occurrences";
+import { handleDeskRoutineDisplay } from "./api/desk-routine-display";
 import { handleDeskRoutineEditor } from "./api/desk-routine-editor";
 import { handleDeskRoutineRemoval } from "./api/desk-routine-removal";
 import { handleDeskRoutineLifecycle } from "./api/desk-routine-lifecycle";
@@ -529,6 +530,7 @@ async function handleApi(
   if (pathname === "/api/desk/routine-history") return handleDeskRoutineEvidence(req, db, desk);
   if (pathname === "/api/desk/routine-log") return handleDeskRoutineEvidence(req, db, desk, true);
   if (pathname === "/api/desk/routine-occurrences") return handleDeskRoutineOccurrences(req, desk);
+  if (pathname === "/api/desk/routine-display") return handleDeskRoutineDisplay(req, db, desk);
   if (pathname === "/api/desk/routine-editor") return handleDeskRoutineEditor(req, desk, undefined, db);
   if (pathname === "/api/desk/routine-removal") return handleDeskRoutineRemoval(req, desk);
   if (pathname === "/api/desk/routine-lifecycle") return handleDeskRoutineLifecycle(req, desk);
