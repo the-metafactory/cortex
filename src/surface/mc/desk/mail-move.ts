@@ -98,6 +98,7 @@ export interface MoveBy {
   doneAction: string;
   title: string;
   recorded: (moveId: string) => void;
+  quiet?: boolean;
 }
 
 export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveDeps, logAs: MailLogAction = target, features: MailFeatures = mailFeatures(deps.db, mail), by?: MoveBy): Promise<MoveResult> {
@@ -122,7 +123,7 @@ export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveD
     deps.db.transaction(() => {
       deps.db.query("INSERT INTO desk_mail_moves (id, account, message_id, target, sender, folder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .run(id, account, mail.id, target, mail.from.address.toLowerCase(), folder, deps.now);
-      deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, ?, ?, ?, 'done', ?, ?, ?)")
+      if (!by?.quiet) deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, ?, ?, ?, 'done', ?, ?, ?)")
         .run(`mail-move:${id}`, by?.doneAction ?? "mail.move", id, `${by?.title ?? DONE[target]}: “${mail.subject}”`, message, deps.now, deps.now);
       by?.recorded(id);
       logMailDecision(deps.db, features, logAs, by?.where ?? "desk", deps.now, folder ?? FOLDER[target]);

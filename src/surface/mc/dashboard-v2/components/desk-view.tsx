@@ -1,4 +1,6 @@
 import { DeskBalance } from "./desk-balance";
+import { MailSweeps, SweepPreview, sweepsInArea } from "./desk-mail-sweeps";
+import type { MailSweepView } from "../../desk/mail-sweep";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
 import { MyDayLane, submitMyDay } from "./desk-my-day";
@@ -68,6 +70,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [area, setArea] = useState(ALL_AREAS);
   const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
   const [detail, setDetail] = useState<DeskItem | null>(null);
+  const [sweep, setSweep] = useState<MailSweepView | null>(null);
+  const [sweeping, setSweeping] = useState(false);
   const [openRest, setOpenRest] = useState(false);
   const [groupKind, setGroupKind] = useState<DeskItemKind | null>(null);
   const [openAgents, setOpenAgents] = useState(false);
@@ -277,7 +281,28 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     if (result.ok) onChanged();
   };
 
-  const undoDone = (id: string, action?: string): void => void (action === "mail.move" ? undoMove(id) : action === "mail.rule" ? undoRuleRun(id) : undoCapture(id));
+  const undoSweep = async (id: string): Promise<void> => {
+    const result = await submitMailAction({ action: "sweep.undo", sweep: id });
+    setNote(result.text);
+    if (result.ok) onChanged();
+  };
+
+  const confirmSweep = async (s: MailSweepView, keys: string[]): Promise<void> => {
+    setSweeping(true);
+    const result = await submitMailAction({ action: "sweep", sweep: s.id, keys });
+    setSweeping(false);
+    setNote(result.text);
+    if (!result.ok) return;
+    setSweep(null);
+    onChanged();
+  };
+
+  const openSweep = (s: MailSweepView): void => {
+    setDetail(null);
+    setSweep(s);
+  };
+
+  const undoDone = (id: string, action?: string): void => void (action === "mail.move" ? undoMove(id) : action === "mail.rule" ? undoRuleRun(id) : action === "mail.sweep" ? undoSweep(id) : undoCapture(id));
 
   const blockDomain = async (r: Receipt): Promise<void> => {
     if (!r.confirmBlock) {
@@ -490,7 +515,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   );
 
   return (
-    <div className={`desk${detail ? " panel-open" : ""}${inStudio ? " in-studio" : ""}`}>
+    <div className={`desk${detail || sweep ? " panel-open" : ""}${inStudio ? " in-studio" : ""}`}>
       <div className="desk-top">
         <div className="desk-top-in">
           <div className="desk-left">
@@ -623,6 +648,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
               </div>
             </div>
             {!inStudio && proposalCard}
+            <MailSweeps sweeps={sweepsInArea(view.mailSweeps ?? [], area)} onPreview={openSweep} />
             {selection.needsYou.map(itemRow)}
           </section>
           )}
@@ -714,8 +740,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </aside>
       </div>
 
-      <div className="desk-scrim" onClick={() => setDetail(null)} />
-      <aside className="desk-panel" aria-hidden={!detail} aria-label="Details">
+      <div className="desk-scrim" onClick={() => { setDetail(null); if (!sweeping) setSweep(null); }} />
+      <aside className="desk-panel" aria-hidden={!detail && !sweep} aria-label="Details">
+        {sweep && !detailItem && <SweepPreview key={sweep.id} sweep={sweep} busy={sweeping} onConfirm={(keys) => void confirmSweep(sweep, keys)} onCancel={() => setSweep(null)} />}
         {detailItem && (
           <DetailPanel item={shown(detailItem)} area={detailItem.area ? areaById.get(detailItem.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detailItem, a)} onShowEvent={showEvent} sending={busyWith(detailItem)}>
             {detailRuling?.open && (

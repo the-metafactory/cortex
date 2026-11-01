@@ -211,7 +211,7 @@ export function embedderFor(config: EmbedderConfig, local: boolean): EmbedderAcc
   return isLocal(config) ? config : null;
 }
 
-const vectorModel = (access: EmbedderAccess): string => `${access.baseUrl.replace(/\/+$/, "")}#${access.model}`;
+export const vectorModel = (access: EmbedderAccess): string => `${access.baseUrl.replace(/\/+$/, "")}#${access.model}`;
 
 export const NO_EMBEDDER_NOTE = "matched by sender and mailing list, because no embedder is set up";
 export const EMBEDDER_DOWN_NOTE = "matched by sender and mailing list, because the embedder did not answer";

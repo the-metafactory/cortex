@@ -20,6 +20,7 @@ import { historySentence, mailLogFor, queryMailLog, type MailLogEntry } from "./
 import { DEFAULT_MAIL_RULES, digestedIds, heldItems, listRules, pendingRuleMail, proposalItems, proposeRules, ruleViews, rulesOfRuns, type MailRuleLoop, type MailRulesConfig } from "./mail-rules";
 import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
+import { bundledKeys, listSweeps, sweepContext, sweepView } from "./mail-sweep";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
@@ -218,8 +219,11 @@ export async function composeDesk(
     ...ruleCards,
     ...dmarcCards,
   ], rules, readDeliveries(db), now), activeCorrections);
-  const mailLog = mailLogFor(db, corrected.filter(i => i.kind === "mail").map(i => mailIdOf(i.key)));
-  const items = corrected.map(item => item.kind === "mail" ? withMailLog({ ...item, mailDecision: readMailDecision(db, item.source, mailIdOf(item.key)) }, mailLog, now) : item);
+  const sweeps = canMove ? listSweeps(db, readings, sweepContext(desk, readings, deps.handled), now) : [];
+  const bundled = bundledKeys(sweeps);
+  const unbundled = corrected.filter((i) => !bundled.has(i.key));
+  const mailLog = mailLogFor(db, unbundled.filter(i => i.kind === "mail").map(i => mailIdOf(i.key)));
+  const items = unbundled.map(item => item.kind === "mail" ? withMailLog({ ...item, mailDecision: readMailDecision(db, item.source, mailIdOf(item.key)) }, mailLog, now) : item);
 
   const { myDay, studio } = await readStudioDesk(db, desk, now);
   const moved = movedKeys(db);
@@ -255,7 +259,7 @@ export async function composeDesk(
     chime: rules.chime,
     notifications: rules.notifications,
     autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio), canMove),
-    ...(canMove ? { mailRules: ruleViews(db) } : {}),
+    ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
     ...(dmarc ? { dmarc } : {}),
     corrections: activeCorrections,
     mailClassifier,
@@ -309,7 +313,7 @@ function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): D
   });
 }
 
-const OWN_LINE = ["studio.capture", "mail.move", "mail.rule"];
+const OWN_LINE = ["studio.capture", "mail.move", "mail.rule", "mail.sweep"];
 
 function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, studio: boolean, canMove: boolean): DeskView["autonomy"] {
   const grants = listGrants(db);

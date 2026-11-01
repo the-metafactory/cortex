@@ -51,6 +51,8 @@ export type MailActionBody =
   | { action: "trash" | "unimportant" | "report"; key: string }
   | { action: "move"; key: string; target: import("../../desk/mail-move").MoveTarget }
   | { action: "undo" | "block"; move: string }
+  | { action: "sweep"; sweep: string; keys: string[] }
+  | { action: "sweep.undo"; sweep: string }
   | { action: "correct"; key: string; said: import("../../desk/mail-actions").MailCorrection }
   | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision };
 

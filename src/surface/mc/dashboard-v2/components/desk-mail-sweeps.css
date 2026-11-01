@@ -1,0 +1,15 @@
+.desk-sweeps{display:flex;flex-direction:column;gap:10px;margin:12px 0 14px}
+.desk-sweep{border:1px solid var(--line);border-radius:12px;background:#fff;padding:14px 16px;min-width:0;overflow-wrap:anywhere}
+.desk-sweep h3{font-size:16px;font-weight:600;margin:4px 0 6px;letter-spacing:-.01em}
+.desk-sweep-head{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--mute)}
+.desk-sweep-tag{text-transform:none;letter-spacing:0;font-weight:500;background:#f4f4f5;border-radius:6px;padding:1px 7px}
+.desk-sweep-learned{margin:6px 0;padding:6px 10px;border-radius:8px;background:#ecf3ee;color:var(--ink2);font-size:13.5px}
+.desk-sweep-list{list-style:none;margin:8px 0 10px;padding:0 0 0 10px;border-left:2px solid var(--line);font-size:13.5px;color:var(--ink2)}
+.desk-sweep-list li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.desk-sweep-list .more{color:var(--mute)}
+.desk-sweep-check{list-style:none;margin:14px 0;padding:6px 10px;border:1px solid var(--line);border-radius:10px}
+.desk-sweep-check li{padding:6px 0;border-top:1px solid var(--line2)}
+.desk-sweep-check li:first-child{border-top:0}
+.desk-sweep-check label{display:flex;gap:10px;align-items:flex-start;cursor:pointer;min-width:0}
+.desk-sweep-check span{display:flex;flex-direction:column;min-width:0;overflow-wrap:anywhere;font-size:14px}
+.desk-sweep-check small{color:var(--mute);font-size:12.5px}
