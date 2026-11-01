@@ -241,7 +241,7 @@
 .desk-menu button{text-align:left;padding:8px 10px;border-radius:7px;font-size:14px;color:var(--ink2)}
 .desk-menu button:hover{background:#f4f4f5;color:var(--ink)}
 .desk-corr{color:var(--mute)}
-.desk-set-main{max-width:720px;margin:0 auto;padding:36px 40px 80px}
+.desk-set-main{max-width:1040px;margin:0 auto;padding:36px 40px 80px}
 .desk-set-h{margin:0 0 20px;font-size:26px;font-weight:600;letter-spacing:-.02em;color:var(--ink)}
 .desk-set-card{background:var(--card);border-radius:14px;padding:22px 24px;box-shadow:0 0 0 1px var(--line),0 1px 2px rgba(0,0,0,.03),0 14px 34px -24px rgba(24,24,27,.22)}
 .desk-set-card h2{margin:0;font-size:17.5px;font-weight:600;letter-spacing:-.015em}
@@ -259,3 +259,13 @@
 .desk-calendar-toggle{display:flex;align-items:center;gap:12px;cursor:pointer}
 .desk-calendar-toggle input{width:18px;height:18px;accent-color:var(--ivy)}
 .desk-set-list input[type="color"]{width:42px;height:32px;padding:2px;border:1px solid var(--line);border-radius:6px;background:transparent;cursor:pointer}
+
+.desk-set-layout{display:grid;grid-template-columns:180px minmax(0,1fr);gap:28px;align-items:start}
+.desk-set-tabs{display:flex;flex-direction:column;gap:4px}
+.desk-set-tabs button{border:0;border-radius:9px;padding:11px 12px;text-align:left;font:inherit;font-size:14px;color:var(--mute);background:transparent;cursor:pointer;overflow-wrap:anywhere}
+.desk-set-tabs button[aria-selected="true"]{background:var(--ink);color:#fff}
+.desk-set-tabs button:focus-visible,.desk-set-pages [role="tabpanel"]:focus-visible{outline:3px solid #2563eb;outline-offset:3px}
+.desk-set-pages{min-width:0;overflow-wrap:anywhere}
+.desk-set-pages [hidden]{display:none}
+.desk-set-pages .desk-set-list li>span,.desk-calendar-toggle{min-width:0}
+@media(max-width:600px){.desk-set-main{padding:24px 14px 60px}.desk-set-layout{grid-template-columns:105px minmax(0,1fr);gap:12px}.desk-set-tabs button{padding:10px 7px;font-size:13px}.desk-set-card{padding:16px 12px}.desk-set-list li{flex-wrap:wrap}.desk-set-add{flex-wrap:wrap}.desk-set-add input{width:100%}.desk-settings .desk-top-in{padding:0 14px}.desk-settings .desk-btn{white-space:normal}}
