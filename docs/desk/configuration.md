@@ -129,7 +129,7 @@ The normal dashboard build downloads and checks pinned archives, applies three e
 
 Phrase labels alone do not provision a keyword. See [Enable a wake phrase](wake.md) for the matched-token procedure. Missing assets, unsupported tokens, and mismatched phrase configuration produce an unavailable state.
 
-Detection stays local. After a wake, one browser-recorded command clip goes through the existing transcription adapter and voice turn. The clip includes bounded pre-roll to preserve immediate words. A wake-only clip can reach transcription to distinguish it from a short command contained entirely in pre-roll; a transcript containing only the configured phrase does not start a Desk action. Unmatched speech sends no transcription request.
+Detection stays local. After a wake, one browser-recorded command clip goes through the existing transcription adapter and voice turn. Sherpa's keyword timestamp trims earlier audio from the bounded pre-roll while preserving immediate words. The clip can include the matched wake phrase. A wake-only clip can reach transcription to distinguish it from a short command contained entirely in pre-roll; a transcript containing only the configured phrase does not start a Desk action. Unmatched speech sends no transcription request.
 
 One Desk tab owns the microphone through detection, command capture, and playback. Manual capture in that tab disables wake before taking ownership. Another tab reports that the microphone is in use. Disable wake there before enabling it elsewhere. Recognition pauses during assistant playback and resumes with an empty buffer. Disabled wake, navigation, and page exit release capture resources. No native service is installed.
 

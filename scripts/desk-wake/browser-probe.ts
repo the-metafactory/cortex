@@ -12,7 +12,7 @@ const until = async (claim: () => boolean, timeout = 15000): Promise<void> => {
   while (!claim()) { if (performance.now() - start > timeout) throw new Error("Probe timed out"); await wait(20); }
 };
 const fakeWorker = (wake: boolean): Worker => {
-  const url = URL.createObjectURL(new Blob([`let epoch=0; let count=0; let woke=false; onmessage=({data})=>{if(data.type==='init')postMessage({type:'ready'});if(data.type==='reset'){epoch=data.epoch;count=0;}if(data.type==='audio'){count+=data.samples.length;if(${wake}&&!woke&&count>data.rate*0.9){woke=true;postMessage({type:'wake',through:data.through,epoch});postMessage({type:'wake',through:data.through,epoch});}postMessage({type:'processed',through:data.through,epoch});}}`], { type: "text/javascript" }));
+  const url = URL.createObjectURL(new Blob([`let epoch=0; let count=0; let woke=false; onmessage=({data})=>{if(data.type==='init')postMessage({type:'ready'});if(data.type==='reset'){epoch=data.epoch;count=0;}if(data.type==='audio'){count+=data.samples.length;if(${wake}&&!woke&&count>data.rate*0.9){woke=true;postMessage({type:'wake',through:data.through,epoch,startFrame:Math.floor(data.rate*0.3)});postMessage({type:'wake',through:data.through,epoch,startFrame:Math.floor(data.rate*0.3)});}postMessage({type:'processed',through:data.through,epoch});}}`], { type: "text/javascript" }));
   const worker = new Worker(url);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   return worker;
@@ -56,6 +56,7 @@ async function run(): Promise<unknown> {
   await until(() => said.length > 0 && states.at(-1)?.phase === "listening");
   assert(uploads === 1 && said === "what needs me", "Duplicate wake made duplicate turn or phrase was not stripped");
   assert(decodedDuration > 1.5 && preRollPeak > 0.05, "MediaRecorder lost command pre-roll");
+  assert(decodedDuration < 2.05, "Audio preceding the detected wake phrase was included in the upload");
   wake.disable();
   const releaseManual = await ownMicrophone(new AbortController().signal);
   releaseManual();

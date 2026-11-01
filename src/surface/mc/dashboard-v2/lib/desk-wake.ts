@@ -6,7 +6,8 @@ import { CommandEndpoint, WakeBuffer, withoutWakePhrase } from "./desk-wake-buff
 export type WakeState = { phase: "off" } | { phase: "starting" | "listening" | "recording" | "transcribing" | "responding"; line: string } | { phase: "unavailable"; line: string };
 const WorkerMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ready") }),
-  z.object({ type: z.enum(["wake", "processed"]), through: z.number(), epoch: z.number() }),
+  z.object({ type: z.literal("wake"), through: z.number(), epoch: z.number(), startFrame: z.number().nonnegative() }),
+  z.object({ type: z.literal("processed"), through: z.number(), epoch: z.number() }),
   z.object({ type: z.literal("error"), message: z.string() }),
 ]);
 
@@ -87,7 +88,7 @@ export class DeskWake {
           if (message.type === "wake" && this.current.phase === "listening") {
             const lag = (this.sent - message.through) / audio.sampleRate * 1000;
             if (lag > this.options.preRollMs / 2) this.fail(new Error("Wake processing fell behind. Wake is not listening."));
-            else this.beginRecording();
+            else this.beginRecording(message.startFrame);
           } else if (message.type === "processed") {
             this.processed = message.through;
             this.heartbeat = performance.now();
@@ -168,7 +169,7 @@ export class DeskWake {
     source.start(at);
     recording.next = at + samples.length / audio.sampleRate;
   }
-  private beginRecording(): void {
+  private beginRecording(startFrame: number): void {
     const audio = this.audio;
     if (!audio || this.recording) return;
     try {
@@ -181,7 +182,7 @@ export class DeskWake {
       recorder.start();
       this.set({ phase: "recording", line: "Recording your command…" });
       const before = this.ring?.take();
-      if (before?.length) this.replay(before, recording);
+      if (before?.length) this.replay(before.slice(Math.max(0, startFrame - (this.sent - before.length))), recording);
       this.ring?.clear();
       this.pending = []; this.pendingSize = 0;
       this.heartbeat = performance.now();

@@ -38,7 +38,8 @@ onmessage = async ({ data }) => {
       stream = detector.createStream();
       postMessage({ type: "ready" });
     } else if (data.type === "reset") {
-      detector.reset(stream);
+      stream.free();
+      stream = detector.createStream();
       epoch = data.epoch;
     } else if (data.type === "audio" && stream) {
       stream.acceptWaveform(data.rate, data.samples);
@@ -47,7 +48,9 @@ onmessage = async ({ data }) => {
         detector.decode(stream);
         const result = detector.getResult(stream);
         if (result.keyword) {
-          postMessage({ type: "wake", through, epoch });
+          const start = result.start_time + result.timestamps?.[0];
+          if (!Number.isFinite(start) || start < 0) throw new Error("Sherpa did not report a valid keyword timestamp.");
+          postMessage({ type: "wake", through, epoch, startFrame: Math.floor(start * data.rate) });
           detector.reset(stream);
         }
       }
