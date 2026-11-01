@@ -2,6 +2,9 @@ import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import type { RoutineOptions } from "./routine-command";
+import { RoutineActionSchema, RoutineResultSchema, type RoutineAction, type RoutineResult } from "./routine-action-contract";
+export { LegacyRoutineActionSchema, RoutineActionSchema, RoutineResultSchema } from "./routine-action-contract";
+export type { LegacyRoutineAction, RoutineAction, RoutineResult } from "./routine-action-contract";
 
 export const RoutineProposalSchema = z.object({
   id: z.uuid(), routineId: z.string(), title: z.string(), request: z.string(),
@@ -20,17 +23,12 @@ export function readRoutineProposal(db: Database, id: string, column: "id" | "ro
   return row ? RoutineProposalSchema.parse(JSON.parse(row.document)) : null;
 }
 
-export const RoutineActionSchema = z.object({
-  requestId: z.string().regex(/^[\w-]{8,64}$/),
-  action: z.enum(["install", "remove", "auto", "stop", "approve", "deny"]),
-  target: z.string().min(1).max(128),
-}).strict();
-export type RoutineAction = z.infer<typeof RoutineActionSchema>;
-export const RoutineResultSchema = z.discriminatedUnion("ok", [
-  z.object({ ok: z.literal(true), message: z.string() }),
-  z.object({ ok: z.literal(false), error: z.string(), uncertain: z.literal(true).optional() }),
-]);
-export type RoutineResult = z.infer<typeof RoutineResultSchema>;
+export function routineOperationBinding(options: RoutineOptions, request: RoutineAction): string {
+  return JSON.stringify({ action: request.action, target: request.target, ...(request.action === "schedule" ? { revision: request.revision, proposedRevision: request.proposedRevision, schedule: request.schedule, timezone: request.timezone } : {}), configHash: routineConfigHash(options) });
+}
+export function claimRoutineOperation(db: Database, requestId: string, binding: string, resource: string): boolean {
+  return db.query("INSERT OR IGNORE INTO desk_routine_operations (request_id, binding, resource) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM desk_routine_operations WHERE resource = ? AND result IS NULL)").run(requestId, binding, resource, resource).changes > 0;
+}
 export interface RoutineOperation {
   request_id: string;
   binding: string;
@@ -43,14 +41,21 @@ export function readRoutineOperation(db: Database, requestId: string): RoutineOp
 }
 
 export function pendingRoutineOperations(db: Database, options: RoutineOptions): RoutineAction[] {
-  const bindingSchema = RoutineActionSchema.omit({ requestId: true }).extend({ configHash: z.string() });
+  const bindingSchema = z.looseObject({ configHash: z.string() });
   return db.query<RoutineOperation, []>("SELECT request_id, binding, resource, result FROM desk_routine_operations WHERE result IS NULL").all().flatMap((row) => {
-    const binding = bindingSchema.parse(JSON.parse(row.binding));
-    return binding.configHash === routineConfigHash(options) ? [{ requestId: row.request_id, action: binding.action, target: binding.target }] : [];
+    const { configHash, ...binding } = bindingSchema.parse(JSON.parse(row.binding));
+    return configHash === routineConfigHash(options) ? [RoutineActionSchema.parse({ ...binding, requestId: row.request_id })] : [];
   });
 }
 
 export function finishRoutineOperation(db: Database, requestId: string, result: RoutineResult): RoutineResult {
   db.query("UPDATE desk_routine_operations SET result = ? WHERE request_id = ?").run(JSON.stringify(result), requestId);
   return result;
+}
+
+export async function checkRoutineOperation(db: Database, requestId: string, binding: string, operation: RoutineOperation, reconcile: () => Promise<RoutineResult | null>, unknown: string): Promise<RoutineResult> {
+  if (operation.binding !== binding) return { ok: false, error: "This request id belongs to a different routine action." };
+  if (operation.result) return RoutineResultSchema.parse(JSON.parse(operation.result));
+  try { const result = await reconcile(); return result ? finishRoutineOperation(db, requestId, result) : { ok: false, error: unknown, uncertain: true }; }
+  catch { return { ok: false, error: unknown, uncertain: true }; }
 }

@@ -58,7 +58,7 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
     );
   }
   return <>
-    {routineLocation && <div hidden={!routines}><DeskRoutineEditor location={routineLocation} onLocation={setRoutines} view={view.routines} onChanged={reload} onBack={() => { setRoutines(null); reload(); }} /></div>}
+    {routineLocation && <div hidden={!routines}><DeskRoutineEditor active={Boolean(routines)} location={routineLocation} onLocation={setRoutines} view={view.routines} onChanged={reload} onBack={() => { setRoutines(null); reload(); }} /></div>}
     {!routines && (settings ? <DeskSettings view={view} group={settings} onGroup={setSettings} onBack={() => { setSettings(null); reload(); }} /> : <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} onOpenSettings={() => { setSettings("calendars"); }} onOpenRoutines={() => { setRoutines(visitedRoutines ?? defaultRoutinesLocation()); }} onChanged={reload} />)}
   </>;
 }

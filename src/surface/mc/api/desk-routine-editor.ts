@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { EditorRequestSchema, RoutineInventorySchema, validateRoutinePatches } from "../desk/routine-editor-contract";
 import { inspectRoutine, proposeRoutinePatches } from "../desk/routine-editor";
@@ -7,7 +8,7 @@ import { effectivePolicy } from "../desk/studio/view";
 
 const headers = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string): Response => Response.json({ error }, { status, headers });
-export async function handleDeskRoutineEditor(req: Request, runtime: DeskRuntime | undefined, run?: RoutineRunner): Promise<Response> {
+export async function handleDeskRoutineEditor(req: Request, runtime: DeskRuntime | undefined, run?: RoutineRunner, db?: Database): Promise<Response> {
   const desk = runtime?.options;
   const options = desk?.enabled ? desk.routines : undefined;
   if (!options) return fail(409, "Routines are not set up on this stack.");
@@ -21,6 +22,7 @@ export async function handleDeskRoutineEditor(req: Request, runtime: DeskRuntime
     const input = EditorRequestSchema.safeParse(await req.json().catch(() => null));
     if (!input.success) return fail(400, "Provide a routine, revision and valid parameter edits or request.");
     const request = input.data;
+    if (request.action === "update" && db?.query("SELECT request_id FROM desk_routine_operations WHERE resource = ? AND result IS NULL LIMIT 1").get(request.id)) return fail(409, "Another routine change is awaiting confirmation. Check that pending change before applying parameters.");
     const detail = await inspectRoutine(options, request.id, run);
     if (detail.revision !== request.revision) return fail(409, "This routine changed since it was opened. Refresh before applying edits.");
     if (request.action === "propose") {
