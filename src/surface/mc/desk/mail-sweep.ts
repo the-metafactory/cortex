@@ -233,12 +233,17 @@ export function listSweeps(db: Database, readings: readonly SourceReading[], ctx
   });
 }
 
+export interface SweepFailure {
+  subject: string;
+  error: string;
+}
+
 export interface SweepOutcome {
   ok: true;
   message: string;
   sweep: string;
   moved: number;
-  failed: { subject: string; error: string }[];
+  failed: SweepFailure[];
   skipped: number;
 }
 
@@ -249,7 +254,7 @@ interface Refusal {
 }
 
 
-const failureList = (failed: readonly { subject: string; error: string }[]): string =>
+const failureList = (failed: readonly SweepFailure[]): string =>
   failed.map((f) => `${quoted(f.subject)} (${f.error.replace(/\.$/, "")})`).join("; ");
 
 /**
@@ -280,7 +285,7 @@ export async function runSweep(group: SweepGroup, keys: readonly string[], deps:
 const running = new Set<string>();
 
 async function moveAll(id: string, group: SweepGroup, members: readonly SweepMember[], gone: number, title: string, deps: MoveDeps): Promise<SweepOutcome> {
-  const failed: { subject: string; error: string }[] = [];
+  const failed: SweepFailure[] = [];
   let moved = 0;
   const failMail = (m: SweepMember, error: string): void => {
     failed.push({ subject: m.subject, error });
@@ -318,7 +323,7 @@ export async function undoSweep(id: string, deps: MoveDeps): Promise<{ ok: true;
   if (running.has(id)) return refuse(409, "This sweep is still moving mail. Undo it when Done for you shows the result.");
   deps.db.query("UPDATE desk_mail_sweep_mails SET status = 'failed', error = 'interrupted' WHERE sweep_id = ? AND status = 'moving'").run(id);
   const rows = deps.db.query<SweptRow, [string]>("SELECT s.message_id, s.subject, s.move_id, m.undone_at FROM desk_mail_sweep_mails s JOIN desk_mail_moves m ON m.id = s.move_id WHERE s.sweep_id = ? AND s.status IN ('done', 'undone')").all(id);
-  const failed: { subject: string; error: string }[] = [];
+  const failed: SweepFailure[] = [];
   let back = 0;
   for (const r of rows) {
     const result = r.undone_at === null ? await undoMove(r.move_id, deps) : { ok: true as const };

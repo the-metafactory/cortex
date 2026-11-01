@@ -6,7 +6,7 @@ import type { DeskRuntime } from "../desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../desk/create";
 import { correctMail, draftReply, findListedMail, MAIL_CORRECTIONS, markUnimportant, reportMail } from "../desk/mail-actions";
 import { logMailDecision, mailFeatures } from "../desk/mail-log";
-import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveDeps, type MoveResult } from "../desk/mail-move";
+import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveDeps } from "../desk/mail-move";
 import { listSweeps, runSweep, sweepContext, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
 
 const MailRequestSchema = z.discriminatedUnion("action", [
@@ -91,14 +91,13 @@ async function sweepAnswer(body: SweepBody, db: Database, runtime: DeskRuntime, 
       work.catch((err: unknown) => { console.error(`desk: mail sweep: ${err instanceof Error ? err.message : String(err)}`); });
       return Response.json({ ok: true, message: STILL_MOVING }, { status: 202, headers: noStore });
     }
-    if (!result.ok) return fail(result.status, result.error);
-    return Response.json(result, { headers: noStore });
+    return answer(result);
   } finally {
     clearTimeout(timer);
   }
 }
 
-function answer(result: MoveResult): Response {
+function answer(result: { ok: true } | { ok: false; status: number; error: string }): Response {
   if (!result.ok) return fail(result.status, result.error);
   return Response.json(result, { headers: noStore });
 }
