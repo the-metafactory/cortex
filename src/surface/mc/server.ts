@@ -2,6 +2,7 @@ import { WaitingTasks } from "./desk/sources/waiting";
 import { handleDeskMyDay } from "./api/desk-my-day";
 import { handleDeskCalendars } from "./api/desk-calendars";
 import { handleDeskRoutines } from "./api/desk-routines";
+import { handleDeskRoutineEditor } from "./api/desk-routine-editor";
 import { RoutineReadLoop } from "./desk/routine-read";
 import { localRoutineCapabilities } from "./desk/routine-providers";
 import type { Server, ServerWebSocket } from "bun";
@@ -277,7 +278,7 @@ export function startServer(
       }
 
       if (url.pathname.startsWith("/api/")) {
-        if (req.method === "POST" && ["/api/desk/ask", "/api/desk/create", "/api/desk/routines"].includes(url.pathname)) server.timeout(req, 0);
+        if (req.method === "POST" && ["/api/desk/ask", "/api/desk/create", "/api/desk/routines", "/api/desk/routine-editor"].includes(url.pathname)) server.timeout(req, 0);
         if (req.method === "POST" && /^\/api\/attention\/[^/]+\/resolve$/.test(url.pathname)) {
           server.timeout(req, 0);
         }
@@ -493,6 +494,7 @@ async function handleApi(
 
   if (pathname === "/api/desk/create") return handleDeskCreate(req, db, desk, { routineCapabilities: () => localRoutineCapabilities(agentPresence) });
   if (pathname === "/api/desk/routines") return handleDeskRoutines(req, db, desk, undefined, () => localRoutineCapabilities(agentPresence));
+  if (pathname === "/api/desk/routine-editor") return handleDeskRoutineEditor(req, desk);
 
   if (pathname === "/api/desk/voice/speak") return handleDeskSpeak(req, desk);
 
