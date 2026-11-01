@@ -22,4 +22,6 @@ The `scripts/desk-compose.ts` wrapper also accepts `--routine-edit` and forwards
 
 The initial editable contract covers retry attempts, backoff and delay parameters, derived from the same Pulse schema used to validate retry execution. Other steps remain inspectable and explain why editing is unavailable. Unclassified parameters are hidden rather than guessed safe. No routine execution is used to preview an edit.
 
+Flows with shared YAML references remain inspectable but do not offer parameter editing, because a shared node could otherwise change more than the selected step. Use the routine owner interfaces for concurrent writes; manual filesystem edits do not participate in its locking protocol.
+
 Routines currently have no area classification metadata. AI editing uses the already configured routine composer route and passes only owner-redacted flow metadata. The API refuses a supplied local-area restriction because the composer cannot attest that restriction; it does not silently downgrade it.
