@@ -32,6 +32,12 @@ async function open(dir: string, extra: Partial<HostOptions> = {}): Promise<Conv
   return status.host;
 }
 
+const lockOwner = (pid: number, label: string) => JSON.stringify({ pid, label, stack: "test", at: "2026-11-01T00:00:00.000Z" });
+async function writeLock(dir: string, pid: number, label: string): Promise<void> {
+  await mkdir(join(dir, "host.lock"), { recursive: true });
+  await writeFile(join(dir, "host.lock", "owner.json"), lockOwner(pid, label));
+}
+
 const input = (inputId: string, text: string, mode: "queue" | "steer" = "queue") => ({ inputId, transport: "web" as const, text, mode });
 const create = (host: ConversationHost, policy: Policy = "cloud", links: { owner: "studio-thread"; id: string }[] = []) => host.create({ title: "Synthetic", links, origin: { kind: "web" }, policy }, "local-principal@loopback");
 
@@ -169,11 +175,10 @@ describe("host lock", () => {
 
   test("a dead holder with this stack's launchd label is taken over; another label is refused", async () => {
     const dir = await scratch();
-    await mkdir(join(dir, "host.lock"), { recursive: true });
-    await writeFile(join(dir, "host.lock", "owner.json"), JSON.stringify({ pid: 999_999_002, label: "ai.meta-factory.cortex.other", stack: "test", at: "2026-11-01T00:00:00.000Z" }));
+    await writeLock(dir, 999_999_002, "ai.meta-factory.cortex.other");
     const refused = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {}, alive: () => false });
     expect(refused.state === "unavailable" && refused.reason).toContain("does not match");
-    await writeFile(join(dir, "host.lock", "owner.json"), JSON.stringify({ pid: 999_999_002, label: LABEL, stack: "test", at: "2026-11-01T00:00:00.000Z" }));
+    await writeLock(dir, 999_999_002, LABEL);
     const taken = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {}, alive: pid => pid === process.pid });
     expect(taken.state).toBe("ready");
     if (taken.state !== "ready") return;
@@ -185,20 +190,16 @@ describe("host lock", () => {
 });
 
 describe("host lock edge cases", () => {
-  const owner = (pid: number, label: string) => JSON.stringify({ pid, label, stack: "test", at: "2026-11-01T00:00:00.000Z" });
-
   test("a dead holder without a launchd label is refused with the lock path, as the contract requires", async () => {
     const dir = await scratch();
-    await mkdir(join(dir, "host.lock"), { recursive: true });
-    await writeFile(join(dir, "host.lock", "owner.json"), owner(999_999_003, ""));
+    await writeLock(dir, 999_999_003, "");
     const refused = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {}, alive: () => false });
     expect(refused.state === "unavailable" && refused.reason).toBe(`Conversations unavailable: store held by 999999003/no launchd label; its label does not match ${LABEL}, so it is not taken over (lock ${join(dir, "host.lock")})`);
   });
 
   test("a stale lock whose PID was reused by this process is taken over when the label matches", async () => {
     const dir = await scratch();
-    await mkdir(join(dir, "host.lock"), { recursive: true });
-    await writeFile(join(dir, "host.lock", "owner.json"), owner(process.pid, LABEL));
+    await writeLock(dir, process.pid, LABEL);
     const taken = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {} });
     expect(taken.state).toBe("ready");
     if (taken.state === "ready") hosts.push(taken.host);

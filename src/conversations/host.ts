@@ -44,6 +44,8 @@ export class ConversationError extends Error {
   constructor(readonly status: 400 | 403 | 404 | 409 | 503, message: string) { super(message); }
 }
 
+const INPUT_CONFLICT = (): ConversationError => new ConversationError(409, "That input id was already used with a different payload.");
+
 export interface HostOptions {
   dir: string;
   stack: string;
@@ -281,6 +283,17 @@ export class ConversationHost {
     return view;
   }
 
+  private async priorInput(conversation: Conversation, inputId: string, sha256: string): Promise<SubmissionRecord | null> {
+    const recorded = await this.engine.snapshot(IngressDoc, conversation.id, inputId, this.context);
+    if (recorded && recorded.sha256 !== sha256) throw INPUT_CONFLICT();
+    return (await conversation.commit(tx => tx.submissionByRequest(conversation.id, inputId), this.context)) ?? null;
+  }
+
+  private async claimInput(conversation: Conversation, inputId: string, sha256: string): Promise<void> {
+    const claimed = await conversation.commit(async tx => (await tx.doc(IngressDoc, conversation.id, inputId, sha256)).sha256, this.context);
+    if (claimed !== sha256) throw INPUT_CONFLICT();
+  }
+
   async submit(id: string, request: InputRequest): Promise<{ duplicate: boolean; submission: SubmissionView }> {
     return this.serial(id, async () => {
       const attachments = request.attachments ?? [];
@@ -289,16 +302,10 @@ export class ConversationHost {
       const route = this.routeFor(stored.policy);
       const sha256 = inputHash(request);
       const conversation = await this.conversation(stored);
-      const recorded = (await this.engine.snapshot(IngressDoc, conversation.id, request.inputId, this.context))?.sha256 ?? null;
-      const existing = (await conversation.commit(tx => tx.submissionByRequest(conversation.id, request.inputId), this.context)) ?? null;
-      const known = { existing, recorded };
-      if (known.recorded !== null && known.recorded !== sha256) throw new ConversationError(409, "That input id was already used with a different payload.");
-      if (known.existing) return { duplicate: true, submission: await this.submissionView(request.inputId, known.existing) };
+      const existing = await this.priorInput(conversation, request.inputId, sha256);
+      if (existing) return { duplicate: true, submission: await this.submissionView(request.inputId, existing) };
       if (!route) throw new ConversationError(503, stored.policy === "local" ? "No local model is configured. Nothing was sent; no cloud fallback is used." : "No conversation model is configured. Nothing was sent.");
-      if (known.recorded === null) {
-        const accepted = await conversation.commit(async tx => (await tx.doc(IngressDoc, conversation.id, request.inputId, sha256)).sha256 === sha256, this.context);
-        if (!accepted) throw new ConversationError(409, "That input id was already used with a different payload.");
-      }
+      await this.claimInput(conversation, request.inputId, sha256);
       if (route !== stored.route) {
         await conversation.configure({ model: { provider: CORTEX_PROVIDER, modelId: route } }, this.context);
         if (stored.route !== null) await this.writeEntry(stored, CONTINUATION_KIND, { mode: "reconstructed", from: stored.route, to: route, at: this.now().toISOString() } satisfies Continuation);
