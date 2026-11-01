@@ -47,6 +47,8 @@
 import type { Database } from "bun:sqlite";
 
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
+import type { MyelinRuntime } from "../../../bus/myelin/runtime";
+import type { SurfaceRouter } from "../../../bus/surface-router";
 import type { SurfaceAdapter } from "../../../bus/surface-router";
 import type { WsClientRegistry } from "../ws/client-registry";
 import { broadcastProjection } from "../notifications";
@@ -311,4 +313,15 @@ export function createObservabilityProjectionRenderer(
       }
     },
   };
+}
+
+export async function registerObservabilityProjection(options: {
+  db: Database; wsRegistry?: WsClientRegistry; router: Pick<SurfaceRouter, "register">;
+  runtime: Pick<MyelinRuntime, "enabled" | "subscribe">; principal: string; stack: string;
+}): Promise<void> {
+  options.router.register(createObservabilityProjectionRenderer(options.db, options.wsRegistry));
+  if (!options.runtime.enabled) return;
+  const subject = `local.${options.principal}.${options.stack}.system.bus.process`;
+  const subscriber = await options.runtime.subscribe?.(subject);
+  if (!subscriber) throw new Error("Mission Control process audit subscription is unavailable");
 }
