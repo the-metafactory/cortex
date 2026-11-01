@@ -111,7 +111,7 @@ describe("the Desk", () => {
     expect(all.greeting).toMatch(/, Ada\.$/);
     expect(all.lines[0]).toBe('1 thing needs you today. First: the sensor check for "Ship one release a week" stopped working.');
     const home = briefing(view, selectItems(view, "home", new Set()), "Home");
-    expect(home.lines).toEqual(["Nothing needs you in Home right now."]);
+    expect(home.lines).toEqual(["Nothing needs you in Home right now.", "Your proposed My day is clear. Add a task to your outline, or choose Start the day to keep that space."]);
   });
 
   it("keeps working when Ranger is down and says so as a system line", async () => {

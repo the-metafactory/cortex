@@ -29,6 +29,7 @@ export const SourceMailSchema = z.object({
   from: z.object({ name: z.string().optional(), address: z.string().min(3) }),
   subject: z.string(),
   receivedAt: isoDate,
+  dueAt: isoDate.optional(),
   unread: z.boolean(),
   firstParagraph: z.string().optional(),
   url: safeLink.optional(),

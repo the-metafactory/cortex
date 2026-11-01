@@ -1,4 +1,5 @@
 import { WaitingTasks } from "./desk/sources/waiting";
+import { handleDeskMyDay } from "./api/desk-my-day";
 import { handleDeskCalendars } from "./api/desk-calendars";
 import { handleDeskRoutines } from "./api/desk-routines";
 import { RoutineReadLoop } from "./desk/routine-read";
@@ -469,6 +470,8 @@ async function handleApi(
     if (req.method !== "GET") return methodNotAllowed(["GET"]);
     return handleGetDesk(db, desk, vigil);
   }
+
+  if (pathname === "/api/desk/my-day") return handleDeskMyDay(req, db, desk, vigil);
 
   if (pathname === "/api/desk/action") return handleDeskAction(req, desk);
 

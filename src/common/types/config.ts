@@ -435,6 +435,7 @@ const DeskSchema = z.object({
   enabled: z.boolean().default(true),
   displayName: z.string().default(""),
   topN: z.number().int().min(1).max(10).default(5),
+  myDay: z.object({ cap: z.number().int().min(1).max(7).default(5) }).optional(),
   ranger: z
     .object({ url: z.string().default(""), bin: z.string().default(""), config: z.string().default("") })
     .default({ url: "", bin: "", config: "" }),
