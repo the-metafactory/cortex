@@ -7,7 +7,7 @@ import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose
 import type { WriterResult } from "../desk/create";
 import { logMailDecision, queryMailLog, type MailFeatures, type MailLogAction, type MailLogWhere } from "../desk/mail-log";
 import {
-  answerProposal, createRule, listRules, matchesRule, pendingRuleMail, proposeRules, releaseRule, ruleRuns, runMailRules, setRuleOn, undoRuleRun,
+  answerProposal, createRule, listRules, MailRuleLoop, matchesRule, pendingRuleMail, proposeRules, releaseRule, ruleRuns, runMailRules, setRuleOn, undoRuleRun,
   type MailRulesConfig, type RulePassDeps,
 } from "../desk/mail-rules";
 import { SourceCache, type SourceMail, type SourceReading } from "../desk/sources/command";
@@ -256,8 +256,17 @@ describe("the Desk view and the rules API", () => {
     expect(listRules(db)).toEqual([]);
   });
 
-  it("keeps mail a rule will handle away from the model", async () => {
+  it("keeps mail a rule will handle away from the model, but not a paused rule's mail", async () => {
     approve("reports@dmarc.example");
     expect(pendingRuleMail(db, [mail("m1", "reports@dmarc.example"), mail("m2", "ada@other.example")], new Set())).toEqual(new Set(["m1"]));
+    db.query("UPDATE desk_mail_rules SET held = 30").run();
+    expect(pendingRuleMail(db, [mail("m1", "reports@dmarc.example")], new Set())).toEqual(new Set());
+  });
+
+  it("logs a failed pass instead of dropping it", async () => {
+    const lines: string[] = [];
+    const loop = new MailRuleLoop(passDeps().deps, () => { throw new Error("disk full"); }, (line) => lines.push(line));
+    await loop.kick();
+    expect(lines).toEqual(["[desk] mail rule pass failed: disk full"]);
   });
 });

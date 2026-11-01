@@ -200,10 +200,10 @@ export function digestedIds(db: Database, ids: string[]): Set<string> {
 
 const rulesRun = (db: Database): boolean => listGrants(db).has(RULES_GRANT);
 
-/** Listed mails an approved rule will handle on its next pass. The Desk does not send them to the model. */
+/** Listed mails an approved rule will handle on its next pass. The Desk does not send them to the model; a paused rule's mail goes to the model. */
 export function pendingRuleMail(db: Database, mails: readonly SourceMail[], vips: ReadonlySet<string>): Set<string> {
   if (!rulesRun(db)) return new Set();
-  const rules = listRules(db).filter((r) => r.on);
+  const rules = listRules(db).filter((r) => r.on && (r.held === null || r.released));
   if (rules.length === 0) return new Set();
   const ran = ranIds(db, mails.map((m) => m.id));
   return new Set(mails.filter((m) => !ran.has(m.id) && ruleFor(rules, m, vips)).map((m) => m.id));
@@ -522,10 +522,12 @@ export async function undoRuleRun(id: string, deps: MoveDeps): Promise<MoveResul
 export class MailRuleLoop {
   private chain: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly deps: RulePassDeps, private readonly readings: () => readonly SourceReading[]) {}
+  constructor(private readonly deps: RulePassDeps, private readonly readings: () => readonly SourceReading[], private readonly log: (line: string) => void = console.error) {}
 
   kick(): Promise<unknown> {
-    this.chain = this.chain.then(() => runMailRules(this.readings(), this.deps)).catch(() => undefined);
+    this.chain = this.chain.then(() => runMailRules(this.readings(), this.deps)).catch((err: unknown) => {
+      this.log(`[desk] mail rule pass failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
     return this.chain;
   }
 }
