@@ -430,7 +430,7 @@ const StudioFilerEndpointSchema = z.object({
   maxPerPass: z.number().int().min(1).max(100).default(10),
 }).refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "set apiKeyEnv or apiKeyFile, not both");
 
-const DeskSchema = z.object({
+export const DeskSchema = z.object({
   routines: RoutineOptionsSchema.optional(),
   mirror: z.object({ day: z.enum(["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]), time: z.iso.time({ precision: -1 }) }).optional(),
   enabled: z.boolean().default(true),

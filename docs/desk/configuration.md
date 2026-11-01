@@ -2,6 +2,8 @@
 
 The Desk configuration lives under `mc.desk` in a stack's YAML file. Mission Control must have `mc.enabled: true`. Omitting `mc.desk` uses the defaults below. The schema is [`src/common/types/config.ts`](../../src/common/types/config.ts).
 
+You can also put Desk settings in `desk.yaml` beside the main Cortex configuration file, in either a single-file or directory layout. Set its permissions to `600`. Put the Desk fields directly at the root, without an `mc:` or `desk:` wrapper. This optional file overrides matching `mc.desk` fields after the normal configuration layers. Nested objects merge, while arrays replace the previous array. Omitted fields keep their existing values. Restart Cortex after editing this file.
+
 Command values are argument arrays, such as `[/usr/local/bin/bun, /opt/adapters/calendar.ts]`. Cortex runs them without a shell. Shell variables, pipes, and `~` in source arguments are not expanded. Absolute paths work regardless of the daemon's working directory.
 
 ## General settings
@@ -85,6 +87,23 @@ Browser notifications require a secure context such as HTTPS or localhost. Push 
 | `elevenlabs.timeoutSeconds` | `20` | Integer from 1 to 120. Provider timeout. |
 
 The `elevenlabs` object is required if either direction uses ElevenLabs. Browser input depends on speech recognition support and microphone permission in the browser. The API key stays on the server.
+
+To use ElevenLabs for recognition and spoken answers, put this in `desk.yaml`:
+
+```yaml
+voice:
+  enabled: true
+  input: elevenlabs
+  output: elevenlabs
+  elevenlabs:
+    voiceId: replaceWithYourVoiceId
+    apiKeyEnv: ELEVENLABS_API_KEY
+    sttModel: scribe_v2
+```
+
+Replace `voiceId` with your ElevenLabs voice ID and make the named key available to the Cortex runtime, or set `envFile` to the protected file containing that variable. If valid ElevenLabs options already exist in the stack configuration, `desk.yaml` can contain only `voice: { input: elevenlabs }` to switch recognition while preserving those options.
+
+ElevenLabs input records while you hold the microphone control and transcribes when you release it. It does not use the browser's speech recognition service or show a live partial transcript. Microphone recording still requires browser permission and a secure context, such as HTTPS or localhost. A failed transcription shows the provider's reason and leaves text input available.
 
 ## Mail
 
