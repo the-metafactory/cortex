@@ -165,6 +165,26 @@ describe("sweeps on the Desk", () => {
     expect(line?.undo).toBeString();
   });
 
+  it("answers 202 for a slow sweep, keeps a Done for you line from the start, and holds Undo until the moves finish", async () => {
+    const { rt, view } = await desk();
+    const id = (await view()).mailSweeps?.[0]?.id ?? "";
+    let release = (): void => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const slow = async (_argv: string[], stdin: string): Promise<WriterResult> => {
+      await gate;
+      return moved((JSON.parse(stdin) as { messageId: string }).messageId);
+    };
+    const res = await handleDeskMail(post({ action: "sweep", sweep: id, keys: ["mail:r1", "mail:r2"] }), db, rt, { run: slow, now: () => NOW, newId: () => `slow-${++ids}`, sweepWaitMs: 5 });
+    expect(res.status).toBe(202);
+    const sweepId = doneRows().find((d) => d.action === "mail.sweep")?.attempt_key.slice("mail-sweep:".length) ?? "";
+    expect(doneRows()).toEqual([{ attempt_key: `mail-sweep:${sweepId}`, action: "mail.sweep", status: "done", message: "Moving 2 mails…" }]);
+    const early = await handleDeskMail(post({ action: "sweep.undo", sweep: sweepId }), db, rt, { run: slow, now: () => NOW });
+    expect(early.status).toBe(409);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(doneRows()[0]?.message).toBe("Archived 2 mails.");
+  });
+
   it("refuses a group that changed since the preview", async () => {
     const { rt } = await desk();
     const res = await handleDeskMail(post({ action: "sweep", sweep: "bundle:archive:gone", keys: ["mail:r1"] }), db, rt, { run: queue().run, now: () => NOW });

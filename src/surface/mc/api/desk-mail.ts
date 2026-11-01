@@ -87,7 +87,10 @@ async function sweepAnswer(body: SweepBody, db: Database, runtime: DeskRuntime, 
   const late = new Promise<null>((resolve) => { timer = setTimeout(() => { resolve(null); }, waitMs); });
   try {
     const result = await Promise.race([work, late]);
-    if (result === null) return Response.json({ ok: true, message: STILL_MOVING }, { status: 202, headers: noStore });
+    if (result === null) {
+      work.catch((err: unknown) => { console.error(`desk: mail sweep: ${err instanceof Error ? err.message : String(err)}`); });
+      return Response.json({ ok: true, message: STILL_MOVING }, { status: 202, headers: noStore });
+    }
     if (!result.ok) return fail(result.status, result.error);
     return Response.json(result, { headers: noStore });
   } finally {

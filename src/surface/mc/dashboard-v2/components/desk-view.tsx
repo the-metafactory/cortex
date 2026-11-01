@@ -72,6 +72,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [detail, setDetail] = useState<DeskItem | null>(null);
   const [sweep, setSweep] = useState<MailSweepView | null>(null);
   const [sweeping, setSweeping] = useState(false);
+  useEffect(() => {
+    if (detail) setSweep(null);
+  }, [detail]);
   const [openRest, setOpenRest] = useState(false);
   const [groupKind, setGroupKind] = useState<DeskItemKind | null>(null);
   const [openAgents, setOpenAgents] = useState(false);
@@ -302,7 +305,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     setSweep(s);
   };
 
-  const undoDone = (id: string, action?: string): void => void (action === "mail.move" ? undoMove(id) : action === "mail.rule" ? undoRuleRun(id) : action === "mail.sweep" ? undoSweep(id) : undoCapture(id));
+  const undoBy: Record<string, (id: string) => Promise<void>> = { "mail.move": undoMove, "mail.rule": undoRuleRun, "mail.sweep": undoSweep };
+  const undoDone = (id: string, action?: string): void => void (undoBy[action ?? ""] ?? undoCapture)(id);
 
   const blockDomain = async (r: Receipt): Promise<void> => {
     if (!r.confirmBlock) {

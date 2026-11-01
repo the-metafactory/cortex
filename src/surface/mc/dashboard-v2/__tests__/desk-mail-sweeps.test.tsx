@@ -19,7 +19,7 @@ describe("bundles and sweeps on the stream", () => {
     expect(html).not.toContain("OTRS: Statistics d");
     expect(html).toContain("and 1 more");
     expect(html).toContain(">Preview and archive 4<");
-    expect(previewLabel({ ...BUNDLE, target: "junk" }, 2)).toBe("Preview and move to spam 2");
+    expect(previewLabel({ ...BUNDLE, target: "junk" }, 2)).toBe("Preview and move to Spam 2");
   });
 
   it("filters by area and keeps cross-area groups", () => {
