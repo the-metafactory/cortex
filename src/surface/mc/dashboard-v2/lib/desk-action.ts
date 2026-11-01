@@ -7,6 +7,7 @@ export const DESK_GOAL_PATH = "/api/desk/goal";
 export const DESK_MAIL_PATH = "/api/desk/mail";
 export const DESK_RULING_PATH = "/api/desk/ruling";
 export const DESK_MAIL_RULES_PATH = "/api/desk/mail/rules";
+export const DESK_DMARC_PATH = "/api/desk/mail/dmarc";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 export type Outcome = { ok: boolean; text: string; recorded?: boolean; uncertain?: boolean; undo?: string; block?: string; restored?: string; rule?: MailRuleView };
@@ -47,9 +48,11 @@ export const submitGoalAction = (body: { action: string; goal: string }, fetchIm
   postDesk(DESK_GOAL_PATH, body, fetchImpl);
 
 export type MailActionBody =
-  | { action: "trash" | "unimportant"; key: string }
+  | { action: "trash" | "unimportant" | "report"; key: string }
   | { action: "move"; key: string; target: import("../../desk/mail-move").MoveTarget }
   | { action: "undo" | "block"; move: string }
+  | { action: "sweep"; sweep: string; keys: string[] }
+  | { action: "sweep.undo"; sweep: string }
   | { action: "correct"; key: string; said: import("../../desk/mail-actions").MailCorrection }
   | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision };
 
@@ -69,6 +72,10 @@ export type MailRuleBody =
 /** Answers a rule proposal, changes a rule, or undoes one rule run, and returns one line for the page. Never throws. */
 export const submitMailRule = (body: MailRuleBody, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
   postDesk(DESK_MAIL_RULES_PATH, body, fetchImpl);
+
+/** "Got it" on a DMARC failure card: hides that report's cards. Never throws. */
+export const submitDmarcAck = (report: string, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
+  postDesk(DESK_DMARC_PATH, { op: "ack", report }, fetchImpl);
 
 /**
  * Records a ruling and resumes its node. On a failure, `recorded` means the ruling is in the node and only the resume

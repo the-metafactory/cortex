@@ -19,3 +19,6 @@ export function queue(results: (WriterResult | Error)[] = []) {
     },
   };
 }
+
+export const NOW = Date.parse("2026-11-01T09:00:00.000Z");
+export const MOVE_DESK: DeskOptions = mailDesk({ move: ["/opt/adapters/bin/desk-mail-move.ts"], timeoutSeconds: 20 });

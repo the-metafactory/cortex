@@ -96,6 +96,47 @@ export async function draftReply(mail: ListedMail, body: string, deps: Omit<Move
   }
 }
 
+export interface MailReportConfig {
+  command: string[];
+  to?: string;
+  timeoutSeconds: number;
+}
+
+const reportKey = (messageId: string): string => `report:${messageId}`;
+
+const reportMessage = (stdout: string, fallback: string): string => {
+  try {
+    const out: unknown = JSON.parse(stdout);
+    const message = typeof out === "object" && out !== null && "message" in out && typeof out.message === "string" ? oneLine(out.message, fallback) : fallback;
+    return message.length > 0 && message.length <= 300 ? message : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+/**
+ * Runs the configured report command for one listed mail: stdin `{ action: "report", account, messageId, to? }`. With
+ * `to`, the adapter saves a draft to that address with the original attached as message/rfc822, for the principal to
+ * send; without it, the command reports the mail its own way. Nothing moves; Spam stays a separate action.
+ */
+export async function reportMail(mail: ListedMail, report: MailReportConfig | undefined, deps: Omit<MoveDeps, "db" | "config">): Promise<MailActionResult> {
+  if (!report?.command.length) return refuse(409, "Reporting mail is not set up on this stack.");
+  if (!mail.account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot report it.");
+  const key = reportKey(mail.id);
+  if (!deps.ledger.claim(key)) return refuse(409, "This mail is already being reported.");
+  try {
+    const stdin = JSON.stringify({ action: "report", account: mail.account, messageId: mail.id, ...(report.to ? { to: report.to } : {}) });
+    const result = await deps.run(report.command, stdin, report.timeoutSeconds * 1000);
+    if (result.code !== 0) return refuse(502, `The mail was not reported: ${oneLine(result.stderr || result.stdout, `the report command exited with code ${result.code}.`)}`);
+    return { ok: true, message: reportMessage(result.stdout, report.to ? `A report draft to ${report.to} is in your ${mail.account} Drafts. Send it from there.` : "The mail was reported.") };
+  } catch (err) {
+    if (err instanceof CommandTimeout) return refuse(504, `The report command ${err.message}. A draft may exist; check Drafts.`);
+    return refuse(502, `The report command did not run: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    deps.ledger.release(key);
+  }
+}
+
 export const MAIL_CORRECTIONS = ["not-bulk", "matters", ...PREDICTED_ACTIONS] as const;
 export type MailCorrection = (typeof MAIL_CORRECTIONS)[number];
 

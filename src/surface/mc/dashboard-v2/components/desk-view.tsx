@@ -2,6 +2,8 @@ import { CatchupPreview, DeskCatchUp } from "./desk-catch-up";
 import { catchupSearch } from "../hooks/use-catchup-location";
 import { scrollBelowDesk } from "../lib/desk-scroll";
 import { DeskBalance } from "./desk-balance";
+import { MailSweeps, SweepPreview, sweepsInArea } from "./desk-mail-sweeps";
+import type { MailSweepView } from "../../desk/mail-sweep";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
 import { MyDayLane } from "./desk-my-day";
@@ -10,7 +12,7 @@ import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
-import { submitDeskAction, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
+import { submitDeskAction, submitDmarcAck, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
 import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
 import { newReplyDraft, prepareDeclineDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
 import { chimeForNew } from "../lib/desk-chime";
@@ -75,6 +77,11 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
   const catchupView = { ...view, items: view.items.filter(i => !snoozed.has(i.key)) };
   const [detail, setDetail] = useState<DeskItem | null>(null);
+  const [sweep, setSweep] = useState<MailSweepView | null>(null);
+  const [sweeping, setSweeping] = useState(false);
+  useEffect(() => {
+    if (detail) setSweep(null);
+  }, [detail]);
   const [openAgents, setOpenAgents] = useState(false);
   const [openStopped, setOpenStopped] = useState(false);
   const [pendingDayTarget, setPendingDayTarget] = useState<DayTarget | null>(null);
@@ -309,7 +316,29 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     if (result.ok) onChanged();
   };
 
-  const undoDone = (id: string, action?: string): void => void (action === "mail.move" ? undoMove(id) : action === "mail.rule" ? undoRuleRun(id) : undoCapture(id));
+  const undoSweep = async (id: string): Promise<void> => {
+    const result = await submitMailAction({ action: "sweep.undo", sweep: id });
+    setNote(result.text);
+    if (result.ok) onChanged();
+  };
+
+  const confirmSweep = async (s: MailSweepView, keys: string[]): Promise<void> => {
+    setSweeping(true);
+    const result = await submitMailAction({ action: "sweep", sweep: s.id, keys });
+    setSweeping(false);
+    setNote(result.text);
+    if (!result.ok) return;
+    setSweep(null);
+    onChanged();
+  };
+
+  const openSweep = (s: MailSweepView): void => {
+    setDetail(null);
+    setSweep(s);
+  };
+
+  const undoBy: Record<string, (id: string) => Promise<void>> = { "mail.move": undoMove, "mail.rule": undoRuleRun, "mail.sweep": undoSweep };
+  const undoDone = (id: string, action?: string): void => void (undoBy[action ?? ""] ?? undoCapture)(id);
 
   const blockDomain = async (r: Receipt): Promise<void> => {
     if (!r.confirmBlock) {
@@ -342,11 +371,15 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.spam") confirmFirst(item, a, () => move(item, a, "junk"));
     else if (a.id === "mail.draft" && item.reply) openReply(item);
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
+    else if (a.id === "mail.report") void send(item, a, { request: () => submitMailAction({ action: "report", key: item.key }), keepVisible: true });
     else if (a.id.startsWith("mailrule.")) runRule(item, a);
+    else if (a.id === "dmarc.ack" && a.target) acknowledge(item, a, a.target);
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
     else if (a.url) openLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
   };
+
+  const acknowledge = (item: DeskItem, a: DeskAction, report: string): void => void send(item, a, { request: () => submitDmarcAck(report) });
 
   const runRule = (item: DeskItem, a: DeskAction): void => {
     const op = a.id.slice("mailrule.".length);
@@ -511,7 +544,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   );
 
   return (
-    <div className={`desk${detail ? " panel-open" : ""}${inStudio ? " in-studio" : ""}`}>
+    <div className={`desk${detail || sweep ? " panel-open" : ""}${inStudio ? " in-studio" : ""}`}>
       <div className="desk-top">
         <div className="desk-top-in">
           <div className="desk-left">
@@ -622,6 +655,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           <section className="desk-now" aria-label="Current schedule"><h2>{nowHeading(view, selection.needsYou.length, nextMeeting)}</h2>{nextMeeting && <p>{clock(nextMeeting.at)}{nextMeeting.end ? `–${clock(nextMeeting.end)}` : ""} · {nextMeeting.title} {nextMeeting.url && <a href={nextMeeting.url} target="_blank" rel="noopener noreferrer">{nextMeeting.online ? "Join" : "Open"}</a>}</p>}</section>
           <CatchupPreview view={catchupView} onOpen={openCatchup} />
           {!inStudio && proposalCard}
+          <MailSweeps sweeps={sweepsInArea(view.mailSweeps ?? [], area)} onPreview={openSweep} />
+
           {view.myDay && <MyDayLane day={view.myDay} onChanged={onChanged} />}
           </div>
 
@@ -690,6 +725,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             ) : (
               view.systems.map((s) => <p key={s} className="desk-health"><i />{s}</p>)
             )}
+            {view.dmarc && <p className={view.dmarc.failures === 0 ? "desk-health ok" : "desk-health"}>{view.dmarc.failures === 0 ? null : <i />}{view.dmarc.line}</p>}
             <button type="button" className="desk-mline desk-mc" onClick={onOpenMissionControl}>
               Open Mission Control <span className="desk-chev">›</span>
             </button>
@@ -697,8 +733,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </aside>
       </div>
 
-      <div className="desk-scrim" onClick={() => setDetail(null)} />
-      <aside className="desk-panel" aria-hidden={!detail} aria-label="Details">
+      <div className="desk-scrim" onClick={() => { setDetail(null); if (!sweeping) setSweep(null); }} />
+      <aside className="desk-panel" aria-hidden={!detail && !sweep} aria-label="Details">
+        {sweep && !detailItem && <SweepPreview key={sweep.id} sweep={sweep} busy={sweeping} onConfirm={(keys) => void confirmSweep(sweep, keys)} onCancel={() => setSweep(null)} />}
         {detailItem && (
           <DetailPanel item={shown(detailItem)} area={detailItem.area ? areaById.get(detailItem.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detailItem, a)} onShowEvent={showEvent} sending={busyWith(detailItem)}>
             {detailRuling?.open && (
@@ -749,6 +786,12 @@ function DetailPanel({ item, area, onClose, onAction, onShowEvent, sending, chil
         <>
           <div className="desk-sec">Evidence</div>
           <ul className="desk-evidence">{item.detail.evidence.map((e, i) => <li key={`${e.kind}:${i}`}><EvidenceLink evidence={e} onShowEvent={onShowEvent} /></li>)}</ul>
+        </>
+      )}
+      {item.detail.suspicion && item.detail.suspicion.length > 0 && (
+        <>
+          <div className="desk-sec">Why this looks like phishing</div>
+          <ul className="desk-hist desk-suspicion">{item.detail.suspicion.map((r) => <li key={r}>{r}</li>)}</ul>
         </>
       )}
       {item.detail.precedents && item.detail.precedents.length > 0 && (
@@ -865,6 +908,7 @@ export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending
           {area && <span className="area"><AreaDot area={area} />{area.label}</span>}
           <span className={item.urgency === "today" || item.urgency === "now" ? "due" : ""}>{URGENCY_LABEL[item.urgency]}</span>
           {item.correction && <span className="desk-corr">{CORRECTION_TAG[item.correction]}</span>}
+          {item.suspicious && <span className="desk-suspect">Looks like phishing</span>}
         </div>
         <button type="button" className="desk-title" onClick={onOpen}>{item.title}</button>
         <p className="desk-why">{item.why}</p>
@@ -997,7 +1041,7 @@ interface SendOptions {
 
 const CHECK_POLL_MS = 3000;
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "ranger.rule": "Recording…" };
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "mail.report": "Reporting…", "ranger.rule": "Recording…" };
 
 const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
 

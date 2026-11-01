@@ -12,6 +12,7 @@ import { eventKey, UNIMPORTANT_REASON, upcomingMeetings, type ClassifierEvent, t
 import type { AreaPolicy, DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
 import { evidenceView, replySubject, suggestionLine, type EvidenceLinks } from "./mail-triage";
 import { ACTION_LABEL, precedentLine } from "./mail-similar";
+import { suspicionLine, suspicionOf, type SuspicionContext } from "./mail-suspicion";
 
 export interface AreaRule extends DeskArea {
   repos: string[];
@@ -55,6 +56,7 @@ export const FOLDED_LABELS: Record<DeskItemKind, string> = {
   reminder: "Reminders",
   meeting: "Meetings starting soon",
   "mail-rule": "Mail rules the Desk proposes",
+  dmarc: "DMARC failures for your domains",
 };
 
 export const isRegressedGoalCheck = (s: VigilSubjectView): boolean => s.vocab === "check" && s.goalId !== null && s.value === "regressed";
@@ -322,6 +324,8 @@ export interface MailInput {
   draft?: boolean;
   links?: EvidenceLinks;
   onDesk?: ReadonlySet<string>;
+  suspicion?: SuspicionContext;
+  report?: boolean;
 }
 
 const STOPWORDS = new Set(["meeting", "update", "about", "with", "from", "your", "termin", "sitzung", "einladung", "invitation", "accepted", "re", "fw", "aw", "wg"]);
@@ -379,14 +383,19 @@ const DELETE = action("mail.trash", "Delete", "secondary", true);
 const ARCHIVE = action("mail.archive", "Archive", "secondary", true);
 const SPAM = action("mail.spam", "Spam", "secondary", true);
 const UNIMPORTANT = action("mail.unimportant", "Unimportant", "secondary", true);
+const REPORT = action("mail.report", "Report", "secondary", true);
+const SUSPICIOUS_SCORE = 70;
 const SHOW_MEETING = action("meeting.show", "Show on the meeting", "primary", true);
 const DRAFT_LABEL = "Draft a reply";
 const UNIMPORTANT_VERDICT: MailVerdict = { score: CATEGORY_SCORE.bulk, pressing: false, why: UNIMPORTANT_REASON, sorted: "bulk" };
 
 export function mailItems(input: MailInput): DeskItem[] {
-  const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, archive = false, spam = false, draft = false, links = {}, onDesk = new Set<string>() } = input;
+  const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, archive = false, spam = false, draft = false, links = {}, onDesk = new Set<string>(), report = false } = input;
+  const suspicion = input.suspicion ?? { vips, vipNames: new Map<string, string>(), ownDomains: [] };
   return mail.filter((m) => m.unread).map((m): DeskItem => {
     const sender = m.from.name ?? m.from.address;
+    const reasons = suspicionOf(m, suspicion, classified?.get(m.id)?.suspicious === true);
+    if (reasons.length > 0) return suspiciousItem(m, reasons, input, { spam, report });
     const vip = isVip(vips, m.from.address);
     const marked = isUnimportant(unimportant, vips, m.from.address);
     const verdict = marked ? UNIMPORTANT_VERDICT : verdictFor(m, input);
@@ -451,6 +460,40 @@ export function mailItems(input: MailInput): DeskItem[] {
       since: receivedAt,
     };
   });
+}
+
+function suspiciousItem(m: MailInput["mail"][number], reasons: ReturnType<typeof suspicionOf>, input: MailInput, can: { spam: boolean; report: boolean }): DeskItem {
+  const { now } = input;
+  const receivedAt = parsedOr(m.receivedAt, now);
+  const ageDays = Math.max(0, (now - receivedAt) / DAY_MS);
+  const triage = input.classified?.get(m.id);
+  const spam: DeskAction[] = can.spam ? [{ ...SPAM, role: "primary" }] : [];
+  const report: DeskAction[] = can.report ? [REPORT] : [];
+  const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", spam.length > 0 ? "secondary" : "primary", true), url: m.url }] : [];
+  const offered = [...spam, ...report, ...open, LOOK, LATER];
+  return {
+    key: `mail:${m.id}`,
+    sourceRevision: m.receivedAt,
+    kind: "mail",
+    source: m.sourceId,
+    area: m.area,
+    urgency: "today",
+    title: `${m.from.name ?? m.from.address} wrote: "${m.subject}"`,
+    why: suspicionLine(reasons),
+    score: SUSPICIOUS_SCORE - ageDays * 5,
+    actions: offered.slice(0, 3),
+    more: offered.slice(3),
+    detail: {
+      summary: triage?.summary ?? m.firstParagraph ?? m.subject,
+      history: [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""} from ${m.from.address}`],
+      refs: [m.from.address, m.id],
+      links: m.url ? [{ label: "Open in Mail", url: m.url }] : [],
+      suspicion: reasons.map((r) => r.text),
+    },
+    ...(m.firstParagraph ? { excerpt: m.firstParagraph } : {}),
+    suspicious: true,
+    since: receivedAt,
+  };
 }
 
 function escalationUrl(ref: string): string | undefined {

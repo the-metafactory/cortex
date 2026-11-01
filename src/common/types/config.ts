@@ -1,3 +1,4 @@
+import { HOST_NAME_RE } from "../host-name";
 import { ParserPermissionsSchema } from "./desk-parser";
 import { RoutineOptionsSchema } from "./desk-routines";
 /**
@@ -364,6 +365,8 @@ export type NetworkFile = z.infer<typeof NetworkFileSchema>;
 
 export const DESK_TRANSPORTS = ["none", "discord", "command"] as const;
 export const AREA_POLICIES = ["local", "cloud"] as const;
+export const DMARC_FAIL_ON = ["dmarc", "spf-or-dkim"] as const;
+export const DMARC_AFTER = ["archive", "trash"] as const;
 export const VOICE_PROVIDERS = ["browser", "elevenlabs"] as const;
 
 const DeskVoiceSchema = z
@@ -531,6 +534,28 @@ export const DeskSchema = z.object({
           proposeAfter: z.number().int().min(2).max(100).default(8),
           maxPerPass: z.number().int().min(1).max(500).default(20),
           windowDays: z.number().int().min(1).max(3650).default(90),
+        })
+        .optional(),
+      dmarc: z
+        .object({
+          command: z.array(z.string().min(1)).min(1),
+          domains: z.array(z.string().trim().toLowerCase().regex(HOST_NAME_RE, "mc.desk.mail.dmarc.domains holds domain names such as example.org")).min(1, "mc.desk.mail.dmarc.domains needs the domains you own: without them no report can fail").max(100),
+          failOn: z.enum(DMARC_FAIL_ON).default("dmarc"),
+          after: z.enum(DMARC_AFTER).default("archive"),
+          timeoutSeconds: z.number().int().min(1).max(120).default(30),
+          maxPerPass: z.number().int().min(1).max(200).default(20),
+        })
+        .optional(),
+      report: z
+        .object({
+          command: z.array(z.string().min(1)).min(1),
+          to: z.email("mc.desk.mail.report.to must be one email address").optional(),
+          timeoutSeconds: z.number().int().min(1).max(120).default(30),
+        })
+        .optional(),
+      suspicion: z
+        .object({
+          ownDomains: z.array(z.string().trim().toLowerCase().regex(HOST_NAME_RE, "mc.desk.mail.suspicion.ownDomains holds domain names such as example.org")).max(100),
         })
         .optional(),
     })
