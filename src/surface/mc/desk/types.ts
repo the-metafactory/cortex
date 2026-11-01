@@ -55,6 +55,14 @@ export interface DeskItemDetail {
   refs: string[];
   links: DeskLink[];
   evidence?: DeskEvidence[];
+  precedents?: DeskPrecedent[];
+}
+
+export interface DeskPrecedent {
+  subject: string;
+  at: number;
+  action: string;
+  correction?: boolean;
 }
 
 export type DeskCorrectionMode = "less" | "always";

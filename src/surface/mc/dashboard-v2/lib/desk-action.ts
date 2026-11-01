@@ -50,6 +50,7 @@ export type MailActionBody =
   | { action: "trash" | "unimportant"; key: string }
   | { action: "move"; key: string; target: import("../../desk/mail-move").MoveTarget }
   | { action: "undo" | "block"; move: string }
+  | { action: "correct"; key: string; said: import("../../desk/mail-actions").MailCorrection }
   | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision };
 
 /**

@@ -11,6 +11,7 @@ import { isUnimportant, isVip } from "./vips";
 import { eventKey, UNIMPORTANT_REASON, upcomingMeetings, type ClassifierEvent, type MailCategory, type MailClassification } from "./classify";
 import type { AreaPolicy, DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
 import { evidenceView, replySubject, suggestionLine, type EvidenceLinks } from "./mail-triage";
+import { ACTION_LABEL, precedentLine } from "./mail-similar";
 
 export interface AreaRule extends DeskArea {
   repos: string[];
@@ -392,26 +393,34 @@ export function mailItems(input: MailInput): DeskItem[] {
     const quiet = trash && (verdict.sorted === "fyi" || verdict.sorted === "bulk");
     const triage = marked ? undefined : classified?.get(m.id);
     const showMeeting: DeskAction[] = triage?.suggestedAction === "link-meeting" && verdict.eventKey && onDesk.has(verdict.eventKey) && !quiet ? [{ ...SHOW_MEETING, target: verdict.eventKey }] : [];
-    const archiveFirst = archive && triage?.suggestedAction === "archive" && showMeeting.length === 0;
-    const suggestion = showMeeting.length > 0 || (triage?.suggestedAction === "archive" && !archiveFirst) ? undefined : suggestionLine(triage?.suggestedAction);
+    const predicted = triage?.predictedAction;
+    const learned = predicted && triage.precedents ? precedentLine(predicted, triage.precedents) : null;
+    const archiveFirst = archive && (predicted ? predicted === "archive" : triage?.suggestedAction === "archive") && showMeeting.length === 0;
+    const spamFirst = spam && predicted === "junk" && showMeeting.length === 0;
+    const trashFirst = trash && predicted === "trash" && showMeeting.length === 0;
+    const moveFirst = archiveFirst || spamFirst || trashFirst;
+    const suggestion = learned || showMeeting.length > 0 || (triage?.suggestedAction === "archive" && !archiveFirst) ? undefined : suggestionLine(triage?.suggestedAction);
     const evidence = triage?.evidence ? evidenceView(triage.evidence, onDesk, links) : [];
     const receivedAt = parsedOr(m.receivedAt, now);
     const ageDays = Math.max(0, (now - receivedAt) / DAY_MS);
     const arrived = `It arrived ${ago(now, receivedAt)}.`;
-    const why = vip ? `${sender} is on your VIP list. ${verdict.sorted && verdict.why ? verdict.why : arrived}` : verdict.why ?? arrived;
+    const why = vip ? `${sender} is on your VIP list. ${learned ?? (verdict.sorted && verdict.why ? verdict.why : arrived)}` : learned ?? verdict.why ?? arrived;
     const canDraft = draft && Boolean(m.account);
-    const replyFirst = canDraft && triage?.suggestedAction === "reply" && !quiet && showMeeting.length === 0;
-    const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", quiet || archiveFirst || showMeeting.length > 0 || replyFirst ? "secondary" : "primary", true), url: m.url }] : [];
+    const replyFirst = canDraft && (predicted ? predicted === "reply" : triage?.suggestedAction === "reply" && !quiet) && showMeeting.length === 0;
+    const seenFirst = quiet && !moveFirst && predicted !== "keep" && !replyFirst;
+    const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", seenFirst || moveFirst || showMeeting.length > 0 || replyFirst ? "secondary" : "primary", true), url: m.url }] : [];
     const always: DeskAction[] = vip ? [] : [{ ...action("vip.add", `Always show mail from ${m.from.name?.split(" ")[0] ?? "this sender"}`, "secondary", true), target: m.from.address }];
     const reply = action("mail.draft", DRAFT_LABEL, replyFirst ? "primary" : "secondary", true);
     const replyLead = replyFirst ? [reply] : [];
     const replyTail = canDraft && !replyFirst ? [reply] : [];
-    const lead = archiveFirst ? [{ ...ARCHIVE, role: "primary" as const }] : quiet ? [SEEN] : [];
-    const moves = [...(archive && !archiveFirst ? [ARCHIVE] : []), ...(trash && (!quiet || archiveFirst) ? [DELETE] : []), ...(spam ? [SPAM] : [])];
+    const lead = archiveFirst ? [{ ...ARCHIVE, role: "primary" as const }] : spamFirst ? [{ ...SPAM, role: "primary" as const }] : trashFirst ? [{ ...DELETE, role: "primary" as const }] : seenFirst ? [SEEN] : [];
+    const moves = [...(archive && !archiveFirst ? [ARCHIVE] : []), ...(trash && !trashFirst && !seenFirst ? [DELETE] : []), ...(spam && !spamFirst ? [SPAM] : [])];
     const offered = [...lead, ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, LATER];
     const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
     if (verdict.sorted) history.push(`The mail classifier sorted it as ${verdict.sorted}.`);
     if (triage && (!triage.commitment || triage.commitment === "unknown")) history.push("Whether this mail asks for a new commitment has not been established.");
+    if (triage?.precedents?.note) history.push(`Similar past mail was ${triage.precedents.note}.`);
+    const precedents = triage?.precedents?.items.map(({ subject, at, action: done, correction }) => ({ subject, at, action: ACTION_LABEL[done], ...(correction ? { correction } : {}) })) ?? [];
     return {
       key: `mail:${m.id}`,
       sourceRevision: m.receivedAt,
@@ -432,6 +441,7 @@ export function mailItems(input: MailInput): DeskItem[] {
         refs: [m.from.address, m.id],
         links: m.url ? [{ label: "Open in Mail", url: m.url }] : [],
         ...(evidence.length > 0 ? { evidence } : {}),
+        ...(precedents.length > 0 ? { precedents } : {}),
       },
       ...(m.firstParagraph ? { excerpt: m.firstParagraph } : {}),
       ...(suggestion ? { suggestion } : {}),

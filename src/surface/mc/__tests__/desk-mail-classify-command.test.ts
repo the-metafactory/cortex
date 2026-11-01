@@ -38,6 +38,8 @@ const REQUEST: ClassifierRequest = {
   vips: [],
   unimportant: [],
   corrections: [],
+  examples: [],
+  examplesBasis: "sender",
 };
 
 const EVIDENCE: MailEvidence[] = [{ kind: "event", ref: KUNDEN_KEY, title: "Switch-Kundenmeeting 2026" }, { kind: "mail", ref: "<prev@example.org>", title: "Re: Agenda" }];

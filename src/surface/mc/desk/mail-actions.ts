@@ -1,7 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { oneLine } from "./actions";
-import { saveUnimportant } from "./classify";
-import { logMailDecision, mailFeatures } from "./mail-log";
+import { forgetClassification, PREDICTED_ACTIONS, saveUnimportant } from "./classify";
+import { logMailDecision, mailFeatures, type MailLogAction } from "./mail-log";
+import { loggedAction } from "./mail-similar";
 import { movedKey, moveMail, refuse, type MoveDeps, type MoveResult } from "./mail-move";
 import { CommandTimeout } from "./spawn";
 import { replySubject } from "./mail-triage";
@@ -93,4 +94,35 @@ export async function draftReply(mail: ListedMail, body: string, deps: Omit<Move
   } finally {
     deps.ledger.release(key);
   }
+}
+
+export const MAIL_CORRECTIONS = ["not-bulk", "matters", ...PREDICTED_ACTIONS] as const;
+export type MailCorrection = (typeof MAIL_CORRECTIONS)[number];
+
+export const CORRECTED_CATEGORY: Partial<Record<MailCorrection, string>> = { "not-bulk": "not bulk", matters: "matters" };
+
+const correctionAction = (said: MailCorrection): MailLogAction => (said === "not-bulk" || said === "matters" ? "kept" : loggedAction(said));
+
+const CORRECTION_DONE: Record<MailCorrection, string> = {
+  "not-bulk": "Noted: this mail is not bulk.",
+  matters: "Noted: this mail matters.",
+  archive: "Noted: you would archive this mail.",
+  junk: "Noted: this mail is spam to you.",
+  trash: "Noted: you would delete this mail.",
+  reply: "Noted: you would reply to this mail.",
+  plan: "Noted: you would plan this mail.",
+  todo: "Noted: you would make this mail a to-do.",
+  keep: "Noted: you would keep this mail in the inbox.",
+};
+
+/**
+ * Logs the principal's correction of one mail's triage as a weighted decision, and forgets the mail's classification so
+ * the next pass sorts it again with the correction as its closest example. Nothing moves.
+ */
+export function correctMail(db: Database, mail: ListedMail, said: MailCorrection, now: number): MailActionResult {
+  const features = mailFeatures(db, mail);
+  const category = CORRECTED_CATEGORY[said];
+  logMailDecision(db, category ? { ...features, category } : features, correctionAction(said), "correction", now);
+  forgetClassification(db, mail.id);
+  return { ok: true, message: `${CORRECTION_DONE[said]} The Desk sorts it and mail like it again with that in mind.` };
 }

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
-import { handleDeskCorrections } from "../api/desk-corrections";
-import { composeDesk, CORRECTIONS_UNREADABLE, type DeskOptions } from "../desk/compose";
+import { handleDeskCorrections, MAIL_IS_PER_MAIL } from "../api/desk-corrections";
+import { composeDesk, CORRECTIONS_UNREADABLE, staleMailCorrection, type DeskOptions } from "../desk/compose";
 import { applyCorrections, setCorrection } from "../desk/corrections";
 import { selectItems } from "../desk/present";
 import type { RangerState } from "../desk/sources/ranger";
@@ -66,13 +66,26 @@ describe("ranking corrections", () => {
     expect(top(view)).toEqual(["grilling", "goal"]);
   });
 
-  it("changes only the source it was made for", () => {
-    const mail = (n: number, source: string): DeskItem => ({
-      key: `mail:${n}`, kind: "mail", source, area: null, urgency: "waiting", title: `Mail ${n}`, why: "w", score: 50 - n, actions: [],
+  it("changes only the source it was made for, and never mail, which is corrected per mail", () => {
+    const item = (kind: "goal" | "mail", n: number, source: string): DeskItem => ({
+      key: `${kind}:${n}`, kind, source, area: null, urgency: "waiting", title: `Item ${n}`, why: "w", score: 50 - n, actions: [],
       detail: { summary: "s", history: [], refs: [], links: [] },
     });
-    const ranked = applyCorrections([mail(1, "work-mail"), mail(2, "home-mail"), mail(3, "work-mail")], [{ kind: "mail", source: "work-mail", mode: "less", label: "", createdAt: NOW }]);
-    expect(ranked.map((i) => i.key)).toEqual(["mail:2", "mail:1", "mail:3"]);
+    const ranked = applyCorrections([item("goal", 1, "vigil"), item("goal", 2, "other"), item("goal", 3, "vigil")], [{ kind: "goal", source: "vigil", mode: "less", label: "", createdAt: NOW }]);
+    expect(ranked.map((i) => i.key)).toEqual(["goal:2", "goal:1", "goal:3"]);
+    const mails = applyCorrections([item("mail", 1, "work-mail"), item("mail", 2, "home-mail")], [{ kind: "mail", source: "work-mail", mode: "less", label: "", createdAt: NOW }]);
+    expect(mails.map((i) => [i.key, i.correction])).toEqual([["mail:1", undefined], ["mail:2", undefined]]);
+  });
+
+  it("says in the systems line that an earlier per-source mail correction no longer applies", async () => {
+    setCorrection(db, "mail", "work-mail", "less", NOW);
+    expect((await compose()).systems).toContain(staleMailCorrection("work-mail"));
+  });
+
+  it("refuses a new per-source correction for mail", async () => {
+    const res = await call("POST", "", { kind: "mail", source: "work-mail", mode: "less" });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe(MAIL_IS_PER_MAIL);
   });
 
   it("ranks by the base rules and says so in the systems line when the store cannot be read", async () => {

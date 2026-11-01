@@ -39,6 +39,25 @@ export const RoutineExecutionSchema = z.discriminatedUnion("kind", [
 ]);
 export type RoutineExecution = z.infer<typeof RoutineExecutionSchema>;
 export type RoutineEvidenceRecord = RoutineDecision & { execution: RoutineExecution };
+const evidenceRecordSchema = z.looseObject({ execution: RoutineExecutionSchema }).transform(({ execution, ...decision }, context) => {
+  const parsed = RoutineDecisionSchema.safeParse(decision);
+  if (!parsed.success) {
+    context.addIssue({ code: "custom", message: "Invalid recorded routine decision", params: { issues: parsed.error.issues } });
+    return z.NEVER;
+  }
+  return { ...parsed.data, execution };
+});
+export const RoutineEvidencePageSchema = RoutineDecisionPageSchema.extend({
+  executionOwner: z.literal("cortex-process"),
+  records: z.array(evidenceRecordSchema).max(100),
+});
+export type RoutineEvidencePage = z.infer<typeof RoutineEvidencePageSchema>;
+export const RoutineLogPageSchema = z.object({
+  file: RoutineLogFileSchema, revision: z.string().regex(/^[a-f0-9]{64}$/),
+  offset: z.number().int().nonnegative(), nextOffset: z.number().int().nonnegative().nullable(),
+  totalBytes: z.number().int().nonnegative(), complete: z.boolean(), content: z.string().max(65536),
+}).strict();
+export type RoutineLogPage = z.infer<typeof RoutineLogPageSchema>;
 export const RoutineLogQuerySchema = z.object({
   routineId: RoutineEvidenceIdSchema, decisionId: uuid, executionId: z.string().regex(/^[a-f0-9]{64}$/),
   file: z.enum(["process-audit", "stdout", "stderr"]), offset: z.coerce.number().int().min(0).max(4000000).default(0),

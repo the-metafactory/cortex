@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActionButton, DeskBody, DeskItemRow, DeskView, DoneForYou, EvidenceLink, ItemMenu, MailReceipt, RankingSection, RestGroups, dismissesMenu, withConfirm } from "../components/desk-view";
+import { ActionButton, DeskBody, DeskItemRow, DeskView, DoneForYou, EvidenceLink, ItemMenu, MailReceipt, RankingSection, RestGroups, dismissesMenu, precedentText, withConfirm } from "../components/desk-view";
 import { submitMailAction } from "../lib/desk-action";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
@@ -327,6 +327,20 @@ describe("ranking corrections on the Desk", () => {
     const html = renderCards([item(1, { correction: "always" }), item(2)]);
     expect((html.match(/aria-label="Ranking: less like this, always show"/g) ?? []).length).toBe(2);
     expect(html).toContain("Always shown");
+  });
+
+  it("offers per-mail corrections instead of the per-source ranking on a mail card", () => {
+    const html = renderToStaticMarkup(<ItemMenu onCorrect={() => {}} onCorrectMail={() => {}} open />);
+    expect(html).toContain("This isn&#x27;t bulk");
+    expect(html).toContain("This matters");
+    expect(html).toContain("Wrong suggestion: I would archive it");
+    expect(html).not.toContain("Less like this");
+    expect(html).toContain('aria-label="Correct this mail&#x27;s suggestion"');
+  });
+
+  it("lists the precedents of a suggestion by subject, date and action, never by id", () => {
+    expect(precedentText({ subject: "Weekly numbers", at: Date.parse("2026-10-30T09:00:00.000Z"), action: "archived" })).toBe("“Weekly numbers”, 30 Oct 2026: archived");
+    expect(precedentText({ subject: "Census", at: Date.parse("2026-10-30T09:00:00.000Z"), action: "kept in the inbox", correction: true })).toBe("“Census”, 30 Oct 2026: you said you would have kept in the inbox");
   });
 
   it("shows the ranking control as a bordered button that says what it does", () => {
