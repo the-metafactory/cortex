@@ -1,0 +1,10 @@
+schema: metafactory/activation/v1
+activations:
+  - id: studio-overseer
+    target: studio-overseer
+    when:
+      schedule: "*/15 * * * *"
+      timezone: UTC
+    policy: auto
+    guards:
+      cooldown: 30s
