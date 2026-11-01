@@ -1,3 +1,4 @@
+import { parserPermissions } from "../desk/parser-permissions";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import type { DeskRuntime } from "../desk/compose";
@@ -59,9 +60,9 @@ export async function handleDeskAsk(req: Request, runtime: DeskRuntime | undefin
     const proposal = await buildRoutineCard(db, text, desk.routines, now, deps.runRoutine, deps.routineCapabilities);
     return Response.json({ ok: true, proposal }, { headers: noStore });
   }
-  if ((body.routing || policy.policy === "local") && !ask?.routing) return fail(503, "This request needs provider restrictions. Ask the person who manages this stack to set up routed parsing first.");
-  const permitted = ask?.routing?.permitted.filter((p) => (!body.routing || body.routing.permitted.includes(p)) && (policy.policy !== "local" || p === "pi"));
-  const routing = permitted ? { permitted } : undefined;
+  const permissions = parserPermissions(desk, body.area ? [body.area] : [], body.routing);
+  if (permissions.kind === "denied") return fail(503, permissions.reason);
+  const routing = permissions.routing;
   const writable = writableKinds(ask?.writers ?? {}, Boolean(desk.studio));
   let result = null;
   let via: "parser" | "rules" = "rules";

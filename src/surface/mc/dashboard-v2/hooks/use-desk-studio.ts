@@ -6,7 +6,7 @@ const REFRESH_MS = 30_000;
 const MODE_PARAM = "desk";
 const THREAD_PARAM = "thread";
 
-export type DeskMode = "day" | "studio" | "balance";
+export type DeskMode = "day" | "studio" | "balance" | "catchup";
 
 export function useDeskStudio(poll: boolean, revision = 0): StudioView | null {
   const [studio, setStudio] = useState<StudioView | null>(null);
@@ -45,7 +45,7 @@ export interface DeskLocation {
 export function readDeskLocation(search: string): DeskLocation {
   const params = new URLSearchParams(search);
   const requested = params.get(MODE_PARAM);
-  const mode: DeskMode = requested === "mirror" ? "balance" : requested === "studio" || requested === "balance" ? requested : "day";
+  const mode: DeskMode = requested === "mirror" ? "balance" : requested === "studio" || requested === "balance" || requested === "catchup" ? requested : "day";
   return { mode, thread: mode === "studio" ? params.get(THREAD_PARAM) : null };
 }
 

@@ -54,11 +54,12 @@ const view: DeskViewModel = {
 describe("DeskBody", () => {
   const html = renderToStaticMarkup(<DeskBody view={view} error={null} onOpenMissionControl={() => {}} />);
 
-  it("shows the top N items with their reasons and folds the rest into the margin", () => {
-    expect((html.match(/class="desk-row desk-item"/g) ?? []).length).toBe(3);
-    for (const n of [1, 2, 3]) expect(html).toContain(`Task ${n} needs you.`);
-    expect(html).not.toContain("Task 4 needs you.");
-    expect(html).toContain("2 more can wait");
+  it("keeps a compact working preview and the full stream on its separate page", () => {
+    const preview = /aria-label="Catch-up preview">([\s\S]*?)<\/section>/.exec(html)?.[1] ?? "";
+    expect((preview.match(/<li>/g) ?? []).length).toBe(3);
+    expect(preview).not.toContain("Task 4 needs you.");
+    expect(html).toContain('class="catchup" hidden=""');
+    expect((html.match(/class="desk-row desk-item"/g) ?? []).length).toBe(5);
     expect(html).toContain("It waited since this morning (1).");
   });
 
@@ -147,6 +148,8 @@ describe("DeskBody with calendar, mail and VIPs", () => {
 
   it("leads with the minutes before the next meeting and offers to join it", () => {
     expect(html).toContain("You have 44 minutes before your");
+    const schedule = /aria-label="Current schedule">([\s\S]*?)<\/section>/.exec(html)?.[1];
+    expect(schedule).toContain(`${new Date(NOW + 44 * 60_000).toTimeString().slice(0, 5)}–${new Date(NOW + 104 * 60_000).toTimeString().slice(0, 5)} · DA results`);
     expect(html).toMatch(/<a href="https:\/\/teams\.example\/j\/1"[^>]*>Join<\/a>/);
   });
 

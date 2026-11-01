@@ -1,7 +1,12 @@
+import { localDay } from "./time";
+export { localDay } from "./time";
+import { sourceIdentity, todo } from "./source-task";
+export { sourceIdentity } from "./source-task";
+import { balanceParents } from "./balance-parent";
+import { planSource, unplanSource } from "./source-plan";
 import { projectStudio, studioLinks, studioOwned, type StudioProjection } from "./studio-outline";
 import { DEFAULT_YES_FILTER } from "./yes-filter";
 import { applyBalanceCommand, completeOutlineLeaf, fileBalanceInbox, outlineDestination, setOutlineFocus } from "./balance-outline";
-import { createHash } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import { DEFAULT_SETTINGS, applyDayToHistory, applyRecurrence, collectLeaves, findNode, rankAll, selectToday, shiftDays, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
 import { loadBalanceState, saveBalanceState } from "./balance-store";
@@ -10,10 +15,6 @@ import type { DeskOptions } from "./compose";
 import type { DeskItem } from "./types";
 
 const ROOT_ID = "desk:outline";
-export const localDay = (now: number): string => {
-  const d = new Date(now);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
 function loadMeta(db: Database): MyDayMeta {
   const row = db.query<{ data: string }, []>("SELECT data FROM desk_my_day WHERE id = 1").get();
   return MyDayMetaSchema.parse(row ? JSON.parse(row.data) : {});
@@ -100,11 +101,6 @@ export function readMyDay(db: Database, desk: DeskOptions, now: number, studio?:
     return viewOf(state, meta, desk, date, studio);
   }).immediate();
 }
-export function sourceIdentity(item: DeskItem): string {
-  const sourceFacts = [item.key, item.kind, item.source, item.sourceRevision ?? null, item.dueAt ?? null, item.detail.refs];
-  const identity = item.kind === "mail" ? sourceFacts : [...sourceFacts, item.title, item.detail.summary];
-  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
-}
 export function movedKeys(db: Database): Set<string> {
   return new Set(loadMeta(db).sources.map(s => s.fingerprint));
 }
@@ -117,16 +113,6 @@ function validateSelection(state: AppState, date: string, ids: string[]): void {
   const allowed = new Set(rankAll(state, date).map(i => i.task.id));
   if (new Set(ids).size !== ids.length || ids.length > state.settings.todayCap || ids.some(id => !allowed.has(id))) throw new Error("Choose available items within the My day cap.");
 }
-function todo(meta: MyDayMeta, item: DeskItem): void {
-  if (meta.sources.some(s => s.fingerprint === sourceIdentity(item))) return;
-  const id = `todo:${crypto.randomUUID()}`;
-  const url = item.detail.links[0]?.url;
-  meta.inbox.push({ id, title: item.title, weight: 50, ordering: "parallel", children: [], effort: 1,
-    note: `From ${item.source}: ${item.key}${url ? `\n${url}` : ""}`,
-    ...(item.dueAt ? { dueDate: /^\d{4}-\d{2}-\d{2}$/.test(item.dueAt) ? item.dueAt : localDay(Date.parse(item.dueAt)) } : {}),
-  });
-  meta.sources.push({ taskId: id, key: item.key, fingerprint: sourceIdentity(item), kind: item.kind, ...(url ? { url } : {}) });
-}
 function edit(state: AppState, command: Extract<MyDayCommand, { op: "edit" }>, date: string): void {
   const node = requiredNode(state, command.id);
   if (node.id === state.outline.id) throw new Error("Choose an area, project or task.");
@@ -137,7 +123,7 @@ function edit(state: AppState, command: Extract<MyDayCommand, { op: "edit" }>, d
   if (command.dueDate) node.dueDate = command.dueDate;
   else delete node.dueDate;
 }
-export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number; date: string; requestId: string; command: MyDayCommand; source?: DeskItem; studio?: StudioProjection }): { view: MyDayView; undo?: string; notice?: string; outlineId?: string } {
+export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number; date: string; requestId: string; command: MyDayCommand; source?: DeskItem; studio?: StudioProjection }): { view: MyDayView; undo?: string; notice?: string; outlineId?: string; location?: string } {
   const { db, desk, now, date, requestId, command, source, studio } = args;
   return db.transaction(() => {
     const meta = loadMeta(db);
@@ -147,16 +133,27 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
     const receipt = meta.receipts.find(r => r.id === requestId);
     if (receipt) {
       if (receipt.payload !== payload) throw new Error("This request id was already used for another change.");
+      if (command.op === "source-plan" && meta.planned.some(p => p.filing === requestId && p.reversed)) throw new Error("This planning was undone. The source is back in Catch-up; start a new plan if needed.");
       saveBalanceState(db, state);
       saveMeta(db, meta);
-      return { view: viewOf(state, meta, desk, localDay(now), studio), ...(receipt.undo ? { undo: receipt.undo } : {}), ...(receipt.outlineId ? { outlineId: receipt.outlineId } : {}), ...(receipt.notice ? { notice: receipt.notice } : {}) };
+      return { view: viewOf(state, meta, desk, localDay(now), studio), ...(receipt.undo ? { undo: receipt.undo } : {}), ...(receipt.outlineId ? { outlineId: receipt.outlineId } : {}), ...(receipt.notice ? { notice: receipt.notice } : {}), ...(receipt.location ? { location: receipt.location } : {}) };
     }
     if (date !== localDay(now)) throw new Error("The date changed. Refresh the Desk before changing your day.");
     state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
     let undo: string | undefined;
     let outlineBefore: TodayItem[] | undefined;
     let outlineId: string | undefined;
+    let location: string | undefined;
     switch (command.op) {
+      case "source-plan":
+        if (state.dayState?.date !== date && meta.draft?.date !== date) meta.draft = engineDraft(state, desk, date, studio);
+        location = command.parent === null ? "Inbox" : balanceParents({ outline: state.outline }, desk.areas).find(p => p.id === command.parent)?.path;
+        if (!location) throw new Error("Choose a currently configured area or open project. Your plan is kept.");
+        outlineId = planSource({ state, meta, desk, command, source, requestId, date });
+        break;
+      case "source-unplan":
+        outlineId = unplanSource({ state, meta, command, date });
+        break;
       case "outline-add":
       case "outline-edit":
       case "outline-move":
@@ -257,9 +254,9 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
     const view = viewOf(state, meta, desk, date, studio);
     const unavailable = outlineBefore?.filter(item => !view.items.some(current => current.task.id === item.task.id)).map(item => item.task.title) ?? [];
     const notice = unavailable.length ? `${unavailable.join(", ")} ${unavailable.length === 1 ? "is" : "are"} no longer actionable in today's list. The remaining choices keep their order; no replacement was added.` : undefined;
-    meta.receipts.push({ id: requestId, payload, ...(undo ? { undo } : {}), ...(outlineId ? { outlineId } : {}), ...(notice ? { notice } : {}) });
+    meta.receipts.push({ id: requestId, payload, ...(location ? { location } : {}), ...(undo ? { undo } : {}), ...(outlineId ? { outlineId } : {}), ...(notice ? { notice } : {}) });
     saveBalanceState(db, state);
     saveMeta(db, meta);
-    return { view, ...(undo ? { undo } : {}), ...(outlineId ? { outlineId } : {}), ...(notice ? { notice } : {}) };
+    return { view, ...(location ? { location } : {}), ...(undo ? { undo } : {}), ...(outlineId ? { outlineId } : {}), ...(notice ? { notice } : {}) };
   }).immediate();
 }

@@ -68,6 +68,7 @@ export interface DeskCorrection {
 }
 
 export interface DeskItem {
+  attention?: "action" | "update";
   dueAt?: string;
   sourceRevision?: string;
   todoFingerprint?: string;

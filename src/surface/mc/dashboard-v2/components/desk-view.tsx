@@ -1,3 +1,5 @@
+import { CatchupPreview, DeskCatchUp } from "./desk-catch-up";
+import { catchupSearch } from "../hooks/use-catchup-location";
 import { DeskBalance } from "./desk-balance";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
@@ -64,10 +66,11 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
 }
 
 export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = () => {}, onOpenRoutines, onChanged = () => {} }: { view: DeskViewModel; error: string | null; onOpenSettings?: () => void; onOpenRoutines?: () => void; onChanged?: () => void } & DeskViewProps) {
+  const [planItem, setPlanItem] = useState<DeskItem | null>(null);
   const [area, setArea] = useState(ALL_AREAS);
   const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
+  const catchupView = { ...view, items: view.items.filter(i => !snoozed.has(i.key)) };
   const [detail, setDetail] = useState<DeskItem | null>(null);
-  const [openRest, setOpenRest] = useState(false);
   const [groupKind, setGroupKind] = useState<DeskItemKind | null>(null);
   const [openAgents, setOpenAgents] = useState(false);
   const [openStopped, setOpenStopped] = useState(false);
@@ -99,10 +102,15 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const captureChanged = (): void => { setStudioRevision((n) => n + 1); onChanged(); };
   const inStudio = place.mode === "studio" && studio !== null;
   const inBalance = place.mode === "balance";
+  const inCatchup = place.mode === "catchup";
+  const openCatchup = (key: string | null): void => {
+    const search = catchupSearch(window.location.search, { area: "", filter: "all", card: key });
+    window.history.pushState(null, "", `${window.location.pathname}${search}${window.location.hash}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
   const foreground = useStudioForeground(inStudio, view.mirror?.week.timeZone);
 
   const selection = useMemo(() => selectItems(view, area, snoozed), [view, area, snoozed]);
-  const group = groupKind ? openGroup(selection, groupKind) : null;
   const areaLabel = area === ALL_AREAS ? null : view.areas.find((a) => a.id === area)?.label ?? null;
   const brief = briefing(view, selection, areaLabel);
   const areaById = new Map(view.areas.map((a) => [a.id, a]));
@@ -293,16 +301,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     const goal = item.goal ?? "";
     if (a.id === "detail") setDetail(item);
     else if (a.id === "snooze") setSnoozed((s) => new Set(s).add(item.key));
-    else if (a.id === "todo" && view.myDay) void send(item, a, {
-      keepVisible: true,
-      request: async () => {
-        try {
-          await submitMyDay(view.myDay?.date ?? "", { op: "todo", key: item.key, fingerprint: item.todoFingerprint ?? "" });
-          setDetail(d => d?.key === item.key && d.todoFingerprint === item.todoFingerprint ? null : d);
-          return { ok: true, text: "Moved to your outline Inbox." };
-        } catch (err) { return { ok: false, text: err instanceof Error ? err.message : "Could not move to Inbox." }; }
-      },
-    });
+    else if (a.id === "todo" && view.myDay) { setPlanItem({ ...item }); setDetail(null); openCatchup(item.key); }
     else if (a.id === "vip.add" && a.target) void addVip(a.target, item.title.split(" wrote:")[0] ?? null);
     else if (a.id === "reminder.done" && a.target) {
       setDetail((d) => (d?.key === item.key ? null : d));
@@ -433,13 +432,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const shown = (item: DeskItem): DeskItem => (confirming?.key === item.key ? withConfirm(item, confirming.action) : item);
   const busyWith = (item: DeskItem): string | null => sending.get(item.key) ?? (item.checking ? "goal.check" : null);
   const originalDetail = detail ? view.items.find((i) => i.key === detail.key) ?? detail : null;
-  const detailItem = originalDetail ? { ...originalDetail, more: [...(originalDetail.more ?? []), { id: "todo", label: "→ todo", role: "secondary" as const, wired: true }] } : null;
+  const detailItem = originalDetail ? { ...originalDetail, more: [...(originalDetail.more ?? []), { id: "todo", label: "Plan this", role: "secondary" as const, wired: true }] } : null;
   const detailRuling = detailItem ? rulings.get(detailItem.key) : undefined;
 
   const itemRow = (item: DeskItem, idx: number) => (
     <DeskItemRow
       key={item.key}
-      item={shown({ ...item, more: [...(item.more ?? []), { id: "todo", label: "→ todo", role: "secondary", wired: true }] })}
+      item={shown({ ...item, more: [...(item.more ?? []), { id: "todo", label: "Plan this", role: "secondary", wired: true }] })}
       rank={idx + 1}
       area={item.area ? areaById.get(item.area) : undefined}
       event={item.eventKey ? view.today.find((e) => e.key === item.eventKey) : undefined}
@@ -483,7 +482,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         <div className="desk-top-in">
           <div className="desk-left">
             <div className="desk-brand"><span className="desk-mark" />Desk</div>
-            <DeskModeSwitch hasStudio={studio !== null} inStudio={inStudio} inBalance={inBalance} onGo={(mode) => go({ mode, thread: null })} />
+            <DeskModeSwitch hasStudio={studio !== null} inStudio={inStudio} inBalance={inBalance} inCatchup={inCatchup} onGo={(mode) => go({ mode, thread: null })} />
             <div className="desk-askwrap">
               <form
                 className="desk-ask"
@@ -509,7 +508,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             </div>
           </div>
           <div className="desk-topr">
-            {!inStudio && !inBalance && view.areas.length > 0 && (
+            {!inStudio && !inBalance && !inCatchup && view.areas.length > 0 && (
               <div className="desk-seg" role="tablist" aria-label="Area">
                 <button type="button" role="tab" aria-selected={area === ALL_AREAS} onClick={() => setArea(ALL_AREAS)}>All</button>
                 {view.areas.map((a) => (
@@ -533,7 +532,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       )}
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
-      <div className="desk-grid" hidden={inStudio || inBalance}>
+      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={(id) => void undoCapture(id)} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} />
+      <div className="desk-grid" hidden={inStudio || inBalance || inCatchup}>
         <main>
           <section className="desk-lead">
             <p><strong>{brief.greeting}</strong> {brief.lines.join(" ")}</p>
@@ -585,36 +585,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           <div className="desk-nowline"><span className="rule" /><span className="pill">Now {clock(view.generatedAt)}</span></div>
 
           <div className="desk-day-lanes">
-          {group ? (
-            <section className="desk-now" aria-label={group.label}>
-              <div className="desk-row desk-nowhead">
-                <div className="body">
-                  <h2>{group.label}</h2>
-                  <p>{group.items.length === 0 ? "Nothing left here." : `${group.items.length} that did not make your top ${view.topN}, most important first.`}</p>
-                  <button type="button" className="desk-btn" onClick={() => setGroupKind(null)}>Back to what needs you</button>
-                </div>
-              </div>
-              {group.items.map(itemRow)}
-            </section>
-          ) : (
-          <section className="desk-now" aria-label="Needs you">
-            <div className="desk-row desk-nowhead">
-              <div className="body">
-                <h2>{nowHeading(view, selection.needsYou.length, nextMeeting)}</h2>
-                {nextMeeting && (
-                  <p className="desk-next">
-                    <b>{clock(nextMeeting.at)}{nextMeeting.end ? `–${clock(nextMeeting.end)}` : ""}</b> {nextMeeting.title}
-                    {nextMeeting.url && <a href={nextMeeting.url} target="_blank" rel="noopener noreferrer">{nextMeeting.online ? "Join" : "Open"}</a>}
-                  </p>
-                )}
-                <p>{nowSubline(view, selection.needsYou.length, selection.rest.length, nextMeeting)}</p>
-              </div>
-            </div>
-            {!inStudio && proposalCard}
-            {selection.needsYou.map(itemRow)}
-          </section>
-          )}
-
+          <section className="desk-now" aria-label="Current schedule"><h2>{nowHeading(view, selection.needsYou.length, nextMeeting)}</h2>{nextMeeting && <p>{clock(nextMeeting.at)}{nextMeeting.end ? `–${clock(nextMeeting.end)}` : ""} · {nextMeeting.title} {nextMeeting.url && <a href={nextMeeting.url} target="_blank" rel="noopener noreferrer">{nextMeeting.online ? "Join" : "Open"}</a>}</p>}</section>
+          <CatchupPreview view={catchupView} onOpen={openCatchup} />
+          {!inStudio && proposalCard}
           {view.myDay && <MyDayLane day={view.myDay} onChanged={onChanged} />}
           </div>
 
@@ -648,17 +621,6 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           </section>
 
           <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => void stopRule(rule)} onPromote={(action, on) => void promote(action, on)} />
-
-          <section className="desk-msec">
-            <h3 className="desk-mh">The rest</h3>
-            <button type="button" className="desk-mline" onClick={() => setOpenRest((o) => !o)} aria-expanded={openRest} disabled={selection.rest.length === 0}>
-              {selection.rest.length} more <span className="soft">nothing urgent</span>
-              <span className={`desk-chev${openRest ? " open" : ""}`}>›</span>
-            </button>
-            {openRest && (
-              <RestGroups groups={selection.groups} active={groupKind} onOpen={setGroupKind} />
-            )}
-          </section>
 
           {view.goals.length > 0 && (
             <section className="desk-msec">
@@ -874,7 +836,7 @@ function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFoc
               {clock(event.at)} today ↑
             </button>
           )}
-          <ItemMenu current={item.correction} onCorrect={onCorrect} onTodo={() => onAction({ id: "todo", label: "→ todo", role: "secondary", wired: true })} />
+          <ItemMenu current={item.correction} onCorrect={onCorrect} onTodo={() => onAction({ id: "todo", label: "Plan this", role: "secondary", wired: true })} />
         </div>
       </div>
     </article>
