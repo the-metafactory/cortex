@@ -1,17 +1,18 @@
 import type { Database } from "bun:sqlite";
 import { oneLine } from "./actions";
 import { saveUnimportant } from "./classify";
+import { movedKey, moveMail, type MoveDeps, type MoveResult } from "./mail-move";
 import { CommandTimeout } from "./spawn";
-import type { WriterRunner } from "./create";
 import { replySubject } from "./mail-triage";
 import type { SourceMail, SourceReading } from "./sources/command";
 import { addSender, isVip, listVips } from "./vips";
 
-export const MAIL_ACTIONS = ["trash", "unimportant", "draft"] as const;
+export const MAIL_ACTIONS = ["move", "trash", "unimportant", "draft", "undo", "block"] as const;
 export type MailActionId = (typeof MAIL_ACTIONS)[number];
 export const isMailAction = (v: unknown): v is MailActionId => MAIL_ACTIONS.includes(v as MailActionId);
 
 export interface MailActionsConfig {
+  move?: string[];
   trash?: string[];
   draft?: string[];
   timeoutSeconds: number;
@@ -19,7 +20,6 @@ export interface MailActionsConfig {
 
 export type ListedMail = SourceMail & { sourceId: string };
 
-export const trashKey = (messageId: string): string => `trash:${messageId}`;
 const draftKey = (messageId: string): string => `draft:${messageId}`;
 
 export const MAX_REPLY_CHARS = 20_000;
@@ -40,41 +40,9 @@ export function findListedMail(readings: SourceReading[], itemKey: string): List
 export interface TrashLedger {
   has(key: string): boolean;
   add(key: string, now: number): void;
+  forget(key: string): void;
   claim(key: string): boolean;
   release(key: string): void;
-}
-
-export interface TrashDeps {
-  config: MailActionsConfig | undefined;
-  ledger: TrashLedger;
-  run: WriterRunner;
-  now: number;
-}
-
-/**
- * Runs the configured trash command for one listed mail: stdin `{ action: "trash", account, messageId }`.
- * The command moves that one message to the account's Trash; its last stderr line is the refusal shown.
- */
-export async function trashMail(mail: ListedMail, deps: TrashDeps): Promise<MailActionResult> {
-  const config = deps.config;
-  const argv = config?.trash;
-  if (!config || !argv?.length) return refuse(409, "Deleting mail is not set up on this stack.");
-  if (!mail.account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot move it.");
-  const key = trashKey(mail.id);
-  if (deps.ledger.has(key)) return refuse(409, "This mail is already in Trash.");
-  if (!deps.ledger.claim(key)) return refuse(409, "This mail is already on its way to Trash.");
-  try {
-    const stdin = JSON.stringify({ action: "trash", account: mail.account, messageId: mail.id });
-    const result = await deps.run(argv, stdin, config.timeoutSeconds * 1000);
-    if (result.code !== 0) return refuse(502, oneLine(result.stderr || result.stdout, `The trash command exited with code ${result.code}.`));
-    deps.ledger.add(key, deps.now);
-    return { ok: true, message: "Moved to Trash." };
-  } catch (err) {
-    if (err instanceof CommandTimeout) return refuse(504, `The trash command ${err.message}. The mail may have moved; check Trash.`);
-    return refuse(502, `The trash command did not run: ${err instanceof Error ? err.message : String(err)}`);
-  } finally {
-    deps.ledger.release(key);
-  }
 }
 
 /**
@@ -82,7 +50,7 @@ export async function trashMail(mail: ListedMail, deps: TrashDeps): Promise<Mail
  * A VIP is refused: VIP wins. A refused move keeps the sender marked and the item listed. Without a trash
  * command the mail is hidden like a trashed one.
  */
-export async function markUnimportant(db: Database, mail: ListedMail, deps: TrashDeps): Promise<MailActionResult> {
+export async function markUnimportant(db: Database, mail: ListedMail, deps: MoveDeps): Promise<MoveResult> {
   const address = mail.from.address.toLowerCase();
   const who = mail.from.name ?? address;
   if (isVip(new Set(listVips(db).map((v) => v.address)), address)) {
@@ -91,20 +59,20 @@ export async function markUnimportant(db: Database, mail: ListedMail, deps: Tras
   addSender(db, "unimportant", address, mail.from.name ?? null, deps.now);
   saveUnimportant(db, mail.id, deps.now);
   const marked = `Mail from ${who} will be treated as unimportant`;
-  if (!deps.config?.trash?.length) {
-    deps.ledger.add(trashKey(mail.id), deps.now);
+  if (!deps.config?.trash?.length && !deps.config?.move?.length) {
+    deps.ledger.add(movedKey("trash", mail.id), deps.now);
     return { ok: true, message: `${marked}.` };
   }
-  const moved = await trashMail(mail, deps);
+  const moved = await moveMail(mail, "trash", deps);
   if (!moved.ok) return refuse(moved.status, `${marked}, but moving it to Trash failed: ${moved.error}`);
-  return { ok: true, message: `${moved.message} ${marked}.` };
+  return { ...moved, message: `${moved.message} ${marked}.` };
 }
 
 /**
  * Runs the configured draft command for one listed mail: stdin `{ action: "draft", account, messageId, to, subject, body }`.
  * The command saves a reply in the account's Drafts and never sends it. The item stays on the Desk either way.
  */
-export async function draftReply(mail: ListedMail, body: string, deps: TrashDeps): Promise<MailActionResult> {
+export async function draftReply(mail: ListedMail, body: string, deps: Omit<MoveDeps, "db">): Promise<MailActionResult> {
   const config = deps.config;
   const argv = config?.draft;
   if (!config || !argv?.length) return refuse(409, "Drafting replies is not set up on this stack.");

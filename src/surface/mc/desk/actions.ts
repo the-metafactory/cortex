@@ -98,6 +98,10 @@ export class HandledLedger {
     this.handled.set(key, now);
   }
 
+  forget(key: string): void {
+    this.handled.delete(key);
+  }
+
   claim(key: string): boolean {
     if (this.running.has(key)) return false;
     this.running.add(key);

@@ -13,6 +13,7 @@ import type { WriterResult } from "../desk/create";
 import { mailItems } from "../desk/rank";
 import { SourceCache, type SourceMail } from "../desk/sources/command";
 import { addVip, listSenders } from "../desk/vips";
+import { UNDO_WINDOW_MS } from "../desk/mail-move";
 import { createEnrollment, writeEnrollment } from "../../../common/step-up/enrollment";
 import { McSchema } from "../../../common/types/config";
 import { DEFAULT_CONFIG } from "../config";
@@ -373,5 +374,188 @@ describe("the mail action route through Mission Control", () => {
     } finally {
       ctx.stop(true);
     }
+  });
+});
+
+const MOVE = ["/opt/adapters/bin/desk-mail-move.ts"];
+const MOVING: DeskOptions = { ...DESK, mailActions: { move: MOVE, timeoutSeconds: 20 } };
+const printed = (folder: string, message: string): WriterResult => ({ code: 0, stdout: `${JSON.stringify({ id: "g1@gitlab.example", folder, message })}\n`, stderr: "" });
+
+function queue(results: (WriterResult | Error)[] = []) {
+  const calls: { argv: string[]; stdin: unknown }[] = [];
+  return {
+    calls,
+    run: async (argv: string[], stdin: string): Promise<WriterResult> => {
+      calls.push({ argv, stdin: JSON.parse(stdin) });
+      const next = results.shift() ?? { code: 0, stdout: "", stderr: "" };
+      if (next instanceof Error) throw next;
+      return next;
+    },
+  };
+}
+
+let moves = 0;
+const send = (rt: DeskRuntime, body: unknown, run: ReturnType<typeof queue>["run"], now = NOW) =>
+  handleDeskMail(post(body), db, rt, { run, now: () => now, newId: () => `move-${++moves}` });
+
+describe("Archive, Spam and Delete through one move command", () => {
+  it("archives: the command gets the target, the receipt names the folder, the item leaves and Done for you offers Undo", async () => {
+    const rt = await deskWith([GITLAB, BOSS], MOVING);
+    const r = queue([printed("Archiv", "Moved to Archiv.")]);
+    const res = await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "archive" }, r.run);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ ok: true, message: "Moved to Archiv.", undo: expect.stringMatching(/^move-\d+$/) });
+    expect(r.calls).toEqual([{ argv: MOVE, stdin: { action: "move", account: "work", messageId: "g1@gitlab.example", target: "archive" } }]);
+    expect(await itemKeys(rt)).toEqual(["mail:b1@example.org"]);
+    const done = (await view(rt)).autonomy.done;
+    expect(done).toEqual([{ key: `mail-move:${body.undo}`, action: "mail.move", undo: body.undo, title: "Archived: “Pipeline g1@gitlab.example”", message: "Moved to Archiv.", at: NOW, ok: true }]);
+  });
+
+  it("sends Delete and the legacy trash request through the move command once it is set", async () => {
+    const rt = await deskWith([GITLAB], MOVING);
+    const r = queue([printed("Deleted Items", "Moved to Deleted Items.")]);
+    const res = await send(rt, { action: "trash", key: "mail:g1@gitlab.example" }, r.run);
+    expect(await res.json()).toMatchObject({ ok: true, message: "Moved to Deleted Items." });
+    expect(r.calls[0]?.stdin).toEqual({ action: "move", account: "work", messageId: "g1@gitlab.example", target: "trash" });
+  });
+
+  it("falls back to the legacy trash command for Delete only, without Undo, and refuses Archive and Spam there", async () => {
+    const rt = await deskWith([GITLAB]);
+    const r = queue();
+    const archive = await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "archive" }, r.run);
+    expect(archive.status).toBe(409);
+    expect((await archive.json()).error).toBe("Archiving mail is not set up on this stack.");
+    expect((await (await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "junk" }, r.run)).json()).error).toBe("Moving mail to Junk is not set up on this stack.");
+    expect(r.calls).toEqual([]);
+    expect(await (await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "trash" }, r.run)).json()).toEqual({ ok: true, message: "Moved to Trash." });
+    expect(r.calls).toEqual([{ argv: TRASH, stdin: { action: "trash", account: "work", messageId: "g1@gitlab.example" } }]);
+    expect((await view(rt)).autonomy.done).toEqual([]);
+  });
+
+  it("keeps the item and shows the command's refusal, which names the account and target", async () => {
+    const rt = await deskWith([GITLAB], MOVING);
+    const r = queue([{ code: 1, stdout: "", stderr: "The work account has no Archive mailbox, so nothing was moved.\n" }]);
+    const res = await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "archive" }, r.run);
+    expect(res.status).toBe(502);
+    expect((await res.json()).error).toBe("The work account has no Archive mailbox, so nothing was moved.");
+    expect(await itemKeys(rt)).toEqual(["mail:g1@gitlab.example"]);
+    expect((await view(rt)).autonomy.done).toEqual([]);
+  });
+
+  it("says the mail may have moved on a timeout, and refuses a second move of a moved mail before anything runs", async () => {
+    const rt = await deskWith([GITLAB], MOVING);
+    const slow = await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "junk" }, queue([new CommandTimeout("timed out after 20 s")]).run);
+    expect(slow.status).toBe(504);
+    expect((await slow.json()).error).toBe("The move command timed out after 20 s. The mail may have moved; check Junk.");
+    const r = queue();
+    expect((await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "archive" }, r.run)).status).toBe(200);
+    const again = await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "trash" }, r.run);
+    expect(again.status).toBe(409);
+    expect((await again.json()).error).toBe("This mail is already in Archive.");
+    expect(r.calls).toHaveLength(1);
+  });
+
+  it("refuses an unknown target before anything runs", async () => {
+    const rt = await deskWith([GITLAB], MOVING);
+    const r = queue();
+    expect((await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "INBOX" }, r.run)).status).toBe(400);
+    expect(r.calls).toEqual([]);
+  });
+});
+
+describe("Undo of a move", () => {
+  it("moves the mail back to INBOX by Message-ID, brings the item back and marks the Done for you line undone", async () => {
+    const rt = await deskWith([GITLAB], MOVING);
+    const r = queue([printed("Junk", "Moved to Junk."), printed("INBOX", "Moved back to INBOX from Junk.")]);
+    const { undo } = await (await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "junk" }, r.run)).json();
+    expect(await itemKeys(rt)).toEqual([]);
+    const res = await send(rt, { action: "undo", move: undo }, r.run);
+    expect(await res.json()).toEqual({ ok: true, message: "Moved back to INBOX from Junk." });
+    expect(r.calls[1]).toEqual({ argv: MOVE, stdin: { action: "restore", account: "work", messageId: "g1@gitlab.example", from: "junk" } });
+    expect(await itemKeys(rt)).toEqual(["mail:g1@gitlab.example"]);
+    const [line] = (await view(rt)).autonomy.done;
+    expect(line).toMatchObject({ action: "mail.move.undone", message: "Moved back to INBOX from Junk." });
+    expect(line?.undo).toBeUndefined();
+
+    const twice = await send(rt, { action: "undo", move: undo }, r.run);
+    expect(twice.status).toBe(409);
+    expect((await twice.json()).error).toBe("That move is already undone.");
+    expect(r.calls).toHaveLength(2);
+  });
+
+  it("keeps the mail moved when the command refuses, and refuses an unknown or too old move before anything runs", async () => {
+    const rt = await deskWith([GITLAB], MOVING);
+    const r = queue([printed("Archiv", "Moved to Archiv."), { code: 1, stdout: "", stderr: "The message is no longer in the work Archiv." }]);
+    const { undo } = await (await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "archive" }, r.run)).json();
+    const refused = await send(rt, { action: "undo", move: undo }, r.run);
+    expect(refused.status).toBe(502);
+    expect((await refused.json()).error).toBe("The mail was not moved back: The message is no longer in the work Archiv.");
+    expect(await itemKeys(rt)).toEqual([]);
+    expect((await view(rt)).autonomy.done[0]?.undo).toBe(undo);
+
+    expect((await send(rt, { action: "undo", move: "nope" }, r.run)).status).toBe(404);
+    const old = await send(rt, { action: "undo", move: undo }, r.run, NOW + UNDO_WINDOW_MS + 1);
+    expect((await old.json()).error).toBe("That move is too old to undo from the Desk. Move the mail back in your mail client.");
+    expect(r.calls).toHaveLength(2);
+  });
+});
+
+describe("Spam, and blocking the sender's domain as a second step", () => {
+  it("offers the sender's domain with the receipt, and blocks it as @domain in the unimportant list", async () => {
+    const rt = await deskWith([GITLAB], MOVING);
+    const r = queue([printed("Junk", "Moved to Junk.")]);
+    const moved = await (await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "junk" }, r.run)).json();
+    expect(moved.block).toBe("@gitlab.example");
+    expect(listSenders(db, "unimportant")).toEqual([]);
+    const res = await send(rt, { action: "block", move: moved.undo }, r.run);
+    expect(await res.json()).toEqual({ ok: true, message: "Blocked @gitlab.example: its mail now counts as unimportant. You can change this in Settings." });
+    expect(listSenders(db, "unimportant").map((s) => s.address)).toEqual(["@gitlab.example"]);
+    expect(r.calls).toHaveLength(1);
+  });
+
+  it("refuses to block a domain with a VIP on it, and a move that was not Spam", async () => {
+    addVip(db, "ada@example.org", "Ada", NOW);
+    const rt = await deskWith([BOSS, GITLAB], MOVING);
+    const r = queue();
+    const spam = await (await send(rt, { action: "move", key: "mail:b1@example.org", target: "junk" }, r.run)).json();
+    const vip = await send(rt, { action: "block", move: spam.undo }, r.run);
+    expect(vip.status).toBe(409);
+    expect((await vip.json()).error).toBe("@example.org has a sender on your VIP list, and VIPs always show. Nothing was blocked.");
+    const archived = await (await send(rt, { action: "move", key: "mail:g1@gitlab.example", target: "archive" }, r.run)).json();
+    expect(archived.block).toBeUndefined();
+    expect((await (await send(rt, { action: "block", move: archived.undo }, r.run)).json()).error).toBe("Only mail moved to Junk can block its sender's domain.");
+    expect(listSenders(db, "unimportant")).toEqual([]);
+  });
+});
+
+describe("the move actions on a mail card", () => {
+  const card = (suggestedAction: "archive" | "reply" | undefined, moves: boolean, category: "fyi" | "action" = "action") => {
+    const [item] = mailItems({
+      now: NOW, mail: [{ ...GITLAB, area: null, sourceId: "work-mail" }], events: [], vips: new Set(), trash: true, archive: moves, spam: moves,
+      classified: new Map([[GITLAB.id, { category, reason: "Sorted.", ...(suggestedAction ? { suggestedAction } : {}) }]]),
+    });
+    return { actions: [...(item?.actions ?? []), ...(item?.more ?? [])].map((a) => `${a.id}:${a.role}`), suggestion: item?.suggestion };
+  };
+
+  it("makes Archive the primary action when the classifier suggests archive, even on quiet mail", () => {
+    expect(card("archive", true)).toEqual({ suggestion: "Suggested: archive", actions: ["mail.archive:primary", "open:secondary", "mail.trash:secondary", "vip.add:secondary", "mail.spam:secondary", "mail.unimportant:secondary", "snooze:secondary"] });
+    const quiet = card("archive", true, "fyi").actions;
+    expect(quiet.slice(0, 3)).toEqual(["mail.archive:primary", "open:secondary", "mail.trash:secondary"]);
+    expect(quiet).not.toContain("mail.seen:primary");
+  });
+
+  it("offers Archive and Spam on every card with the move command, and drops the archive suggestion without it", () => {
+    const plain = card(undefined, true).actions;
+    expect(plain.slice(0, 3)).toEqual(["open:primary", "mail.archive:secondary", "mail.trash:secondary"]);
+    expect(plain).toContain("mail.spam:secondary");
+    const legacy = card("archive", false);
+    expect(legacy.suggestion).toBeUndefined();
+    expect(legacy.actions.some((a) => a.startsWith("mail.archive") || a.startsWith("mail.spam"))).toBe(false);
+  });
+
+  it("reads mc.desk.mail.actions.move from the stack config", () => {
+    expect(McSchema.parse({ desk: { mail: { actions: { move: MOVE } } } }).desk.mail.actions).toEqual({ move: MOVE, timeoutSeconds: 30 });
+    expect(McSchema.safeParse({ desk: { mail: { actions: { move: [] } } } }).success).toBe(false);
   });
 });

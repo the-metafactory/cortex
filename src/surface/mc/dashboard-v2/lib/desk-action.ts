@@ -7,7 +7,7 @@ export const DESK_MAIL_PATH = "/api/desk/mail";
 export const DESK_RULING_PATH = "/api/desk/ruling";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
-type Outcome = { ok: boolean; text: string; recorded?: boolean; uncertain?: boolean };
+type Outcome = { ok: boolean; text: string; recorded?: boolean; uncertain?: boolean; undo?: string; block?: string };
 
 async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Promise<Outcome> {
   let res: Response;
@@ -20,8 +20,13 @@ async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Prom
   } catch (err) {
     return { ok: false, uncertain: true, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}` };
   }
-  const parsed = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown; detail?: unknown; recorded?: unknown } | null;
-  if (res.ok) return { ok: true, text: typeof parsed?.message === "string" ? parsed.message : "Done." };
+  const parsed = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown; detail?: unknown; recorded?: unknown; undo?: unknown; block?: unknown } | null;
+  if (res.ok) {
+    return {
+      ok: true, text: typeof parsed?.message === "string" ? parsed.message : "Done.",
+      ...(typeof parsed?.undo === "string" ? { undo: parsed.undo } : {}), ...(typeof parsed?.block === "string" ? { block: parsed.block } : {}),
+    };
+  }
   const error = typeof parsed?.error === "string" ? parsed.error : "";
   const line = typeof parsed?.detail === "string" ? parsed.detail : error;
   return { ok: false, text: line || `The action failed (HTTP ${res.status}).`, ...(parsed?.recorded === true ? { recorded: true } : {}) };
@@ -35,8 +40,17 @@ export const submitDeskAction = (body: { action: string; key: string }, fetchImp
 export const submitGoalAction = (body: { action: string; goal: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
   postDesk(DESK_GOAL_PATH, body, fetchImpl);
 
-/** Moves one listed mail to Trash, marks its sender unimportant, or saves a reply draft, and returns one line for the page. Never throws. */
-export const submitMailAction = (body: { action: "trash" | "unimportant"; key: string } | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
+export type MailActionBody =
+  | { action: "trash" | "unimportant"; key: string }
+  | { action: "move"; key: string; target: import("../../desk/mail-move").MoveTarget }
+  | { action: "undo" | "block"; move: string }
+  | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision };
+
+/**
+ * Moves one listed mail (Archive, Spam, Delete), undoes a move, blocks a spam sender's domain, marks a sender
+ * unimportant, or saves a reply draft, and returns one line for the page. A move carries its Undo id. Never throws.
+ */
+export const submitMailAction = (body: MailActionBody, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
   postDesk(DESK_MAIL_PATH, body, fetchImpl);
 
 /**

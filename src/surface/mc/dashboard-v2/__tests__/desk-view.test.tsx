@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActionButton, DeskBody, DeskView, DoneForYou, EvidenceLink, ItemMenu, RankingSection, RestGroups, dismissesMenu, withConfirm } from "../components/desk-view";
+import { ActionButton, DeskBody, DeskView, DoneForYou, EvidenceLink, ItemMenu, MailReceipt, RankingSection, RestGroups, dismissesMenu, withConfirm } from "../components/desk-view";
 import { submitMailAction } from "../lib/desk-action";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
@@ -283,6 +283,17 @@ describe("Done for you", () => {
     expect(html).not.toContain("Undo");
   });
 
+  it("lists a mail move with its receipt and Undo, and an undone one without", () => {
+    const html = renderToStaticMarkup(<DoneForYou autonomy={{ types: [], done: [
+      { key: "mail-move:m1", action: "mail.move", undo: "m1", title: "Archived: “Pipeline 42”", message: "Moved to Archiv.", at: NOW, ok: true },
+      { key: "mail-move:m2", action: "mail.move.undone", title: "Moved to Junk: “Win now”", message: "Moved back to INBOX from Junk.", at: NOW, ok: true },
+    ] }} onPromote={() => {}} onUndo={() => {}} />);
+    expect(html).toContain("Archived: “Pipeline 42”<small>Moved to Archiv.</small>");
+    expect(html).toContain("Moved back to INBOX from Junk.");
+    expect(html).not.toContain("Retried");
+    expect(html.match(/>Undo</g)).toHaveLength(1);
+  });
+
   it("renders the promote and revoke controls as bordered secondary buttons", () => {
     const button = (on: boolean) => /<button[^>]*>([^<]*)<\/button>/.exec(renderToStaticMarkup(<DoneForYou autonomy={{ types: [{ ...retry, on }], done: [] }} onPromote={() => {}} />));
     for (const [on, label] of [[false, "Handle this yourself"], [true, "Stop doing this on your own"]] as const) {
@@ -388,6 +399,22 @@ describe("a mail item's actions", () => {
     };
     expect(await submitMailAction({ action: "trash", key: "mail:m3" }, fake)).toEqual({ ok: false, text: "The message is no longer in the work INBOX." });
     expect(calls).toEqual([{ path: "/api/desk/mail", body: { action: "trash", key: "mail:m3" } }]);
+  });
+
+  it("carries a move's Undo id and the domain Spam can block", async () => {
+    const fake = async () => Response.json({ ok: true, message: "Moved to Junk.", undo: "move-1", block: "@spam.example" });
+    expect(await submitMailAction({ action: "move", key: "mail:m3", target: "junk" }, fake)).toEqual({ ok: true, text: "Moved to Junk.", undo: "move-1", block: "@spam.example" });
+  });
+
+  it("shows a move's receipt with Undo, and for Spam a second step that blocks the domain", () => {
+    const archived = renderToStaticMarkup(<MailReceipt receipt={{ text: "Moved to Archiv.", undo: "move-1" }} onUndo={() => {}} onBlock={() => {}} />);
+    expect(archived).toContain("Moved to Archiv.");
+    expect(archived).toContain(">Undo</button>");
+    expect(archived).not.toContain("block");
+    const spam = (confirmBlock: boolean) => renderToStaticMarkup(<MailReceipt receipt={{ text: "Moved to Junk.", undo: "move-2", block: "@spam.example", confirmBlock }} onUndo={() => {}} onBlock={() => {}} />);
+    expect(spam(false)).toContain(">Also block @spam.example</button>");
+    expect(spam(true)).toContain(">Yes, block @spam.example</button>");
+    expect(withConfirm({ ...mail, actions: [{ id: "mail.spam", label: "Spam", role: "secondary", wired: true }] }, "mail.spam").actions[0]?.label).toBe("Yes, move it to Junk");
   });
 });
 

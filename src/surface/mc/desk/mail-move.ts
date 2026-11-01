@@ -1,0 +1,152 @@
+import type { Database } from "bun:sqlite";
+import { oneLine } from "./actions";
+import type { WriterRunner } from "./create";
+import type { ListedMail, MailActionsConfig, TrashLedger } from "./mail-actions";
+import { CommandTimeout } from "./spawn";
+import { DAY_MS } from "./time";
+import { addSender, isVip, listVips } from "./vips";
+
+export const MOVE_TARGETS = ["archive", "junk", "trash"] as const;
+export type MoveTarget = (typeof MOVE_TARGETS)[number];
+
+export const UNDO_WINDOW_MS = 7 * DAY_MS;
+
+const FOLDER: Record<MoveTarget, string> = { archive: "Archive", junk: "Junk", trash: "Trash" };
+const DONE: Record<MoveTarget, string> = { archive: "Archived", junk: "Moved to Junk", trash: "Deleted" };
+const NOT_SET: Record<MoveTarget, string> = {
+  archive: "Archiving mail is not set up on this stack.",
+  junk: "Moving mail to Junk is not set up on this stack.",
+  trash: "Deleting mail is not set up on this stack.",
+};
+
+/** The ledger key that hides a moved mail from the Desk until the source reads it again without it. */
+export const movedKey = (target: MoveTarget, messageId: string): string => `moved:${target}:${messageId}`;
+const claimKey = (messageId: string): string => `move:${messageId}`;
+
+export const movedTarget = (ledger: Pick<TrashLedger, "has">, messageId: string): MoveTarget | undefined =>
+  MOVE_TARGETS.find((t) => ledger.has(movedKey(t, messageId)));
+
+export interface MoveDeps {
+  db: Database;
+  config: MailActionsConfig | undefined;
+  ledger: TrashLedger;
+  run: WriterRunner;
+  now: number;
+  newId?: () => string;
+}
+
+export type MoveResult = { ok: true; message: string; undo?: string; block?: string } | { ok: false; status: number; error: string };
+
+const refuse = (status: number, error: string): { ok: false; status: number; error: string } => ({ ok: false, status, error });
+
+function receipt(stdout: string, fallback: string): string {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    if (parsed && typeof parsed === "object" && "message" in parsed && typeof parsed.message === "string") return oneLine(parsed.message, fallback);
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+
+const domainOf = (address: string): string => address.toLowerCase().slice(address.indexOf("@") + 1);
+
+/**
+ * Moves one listed mail to its account's folder for the target. With `mc.desk.mail.actions.move` the command reads
+ * `{ action: "move", account, messageId, target }`, and the move is logged with an Undo in Done for you. Without it, a
+ * move to Trash falls back to the legacy trash command (`{ action: "trash", account, messageId }`, no Undo). The
+ * command never deletes or expunges; its last stderr line is the refusal shown.
+ */
+export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveDeps): Promise<MoveResult> {
+  const config = deps.config;
+  const move = config?.move;
+  const argv = move?.length ? move : target === "trash" ? config?.trash : undefined;
+  if (!config || !argv?.length) return refuse(409, NOT_SET[target]);
+  if (!mail.account) return refuse(409, "The mail source names no account for this mail, so the Desk cannot move it.");
+  const already = movedTarget(deps.ledger, mail.id);
+  if (already) return refuse(409, `This mail is already in ${FOLDER[already]}.`);
+  if (!deps.ledger.claim(claimKey(mail.id))) return refuse(409, "This mail is already being moved.");
+  const command = move?.length ? "move" : "trash";
+  try {
+    const request = command === "move" ? { action: "move", account: mail.account, messageId: mail.id, target } : { action: "trash", account: mail.account, messageId: mail.id };
+    const result = await deps.run(argv, JSON.stringify(request), config.timeoutSeconds * 1000);
+    if (result.code !== 0) return refuse(502, oneLine(result.stderr || result.stdout, `The ${command} command exited with code ${result.code}.`));
+    deps.ledger.add(movedKey(target, mail.id), deps.now);
+    const message = receipt(result.stdout, `Moved to ${FOLDER[target]}.`);
+    if (command !== "move") return { ok: true, message };
+    const id = (deps.newId ?? (() => crypto.randomUUID()))();
+    deps.db.transaction(() => {
+      deps.db.query("INSERT INTO desk_mail_moves (id, account, message_id, target, sender, folder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(id, mail.account ?? "", mail.id, target, mail.from.address.toLowerCase(), message, deps.now);
+      deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'mail.move', ?, ?, 'done', ?, ?, ?)")
+        .run(`mail-move:${id}`, id, `${DONE[target]}: “${mail.subject}”`, message, deps.now, deps.now);
+    })();
+    return { ok: true, message, undo: id, ...(target === "junk" ? { block: `@${domainOf(mail.from.address)}` } : {}) };
+  } catch (err) {
+    if (err instanceof CommandTimeout) return refuse(504, `The ${command} command ${err.message}. The mail may have moved; check ${FOLDER[target]}.`);
+    return refuse(502, `The ${command} command did not run: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    deps.ledger.release(claimKey(mail.id));
+  }
+}
+
+interface MoveRow {
+  account: string;
+  message_id: string;
+  target: MoveTarget;
+  sender: string;
+  created_at: number;
+  undone_at: number | null;
+}
+
+const readMove = (db: Database, id: string): MoveRow | null =>
+  db.query<MoveRow, [string]>("SELECT account, message_id, target, sender, created_at, undone_at FROM desk_mail_moves WHERE id = ?").get(id);
+
+/**
+ * Undo of one logged move: the move command reads `{ action: "restore", account, messageId, from }` and moves the
+ * message back to INBOX. The mail shows on the Desk again; Done for you keeps the line, marked undone.
+ */
+export async function undoMove(id: string, deps: MoveDeps): Promise<MoveResult> {
+  const config = deps.config;
+  const argv = config?.move;
+  if (!config || !argv?.length) return refuse(409, "Undo needs the move command, and it is not set up on this stack.");
+  const row = readMove(deps.db, id);
+  if (!row) return refuse(404, "The Desk has no record of that move.");
+  if (row.undone_at !== null) return refuse(409, "That move is already undone.");
+  if (deps.now - row.created_at > UNDO_WINDOW_MS) return refuse(409, "That move is too old to undo from the Desk. Move the mail back in your mail client.");
+  if (!deps.ledger.claim(claimKey(row.message_id))) return refuse(409, "This mail is already being moved.");
+  try {
+    const request = { action: "restore", account: row.account, messageId: row.message_id, from: row.target };
+    const result = await deps.run(argv, JSON.stringify(request), config.timeoutSeconds * 1000);
+    if (result.code !== 0) return refuse(502, `The mail was not moved back: ${oneLine(result.stderr || result.stdout, `the move command exited with code ${result.code}.`)}`);
+    const message = receipt(result.stdout, "Moved back to INBOX.");
+    deps.db.transaction(() => {
+      deps.db.query("UPDATE desk_mail_moves SET undone_at = ? WHERE id = ?").run(deps.now, id);
+      deps.db.query("UPDATE desk_done SET action = 'mail.move.undone', message = ?, updated_at = ? WHERE attempt_key = ?").run(message, deps.now, `mail-move:${id}`);
+    })();
+    deps.ledger.forget(movedKey(row.target, row.message_id));
+    return { ok: true, message };
+  } catch (err) {
+    if (err instanceof CommandTimeout) return refuse(504, `The move command ${err.message}. The mail may be back; check INBOX.`);
+    return refuse(502, `The move command did not run: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    deps.ledger.release(claimKey(row.message_id));
+  }
+}
+
+/**
+ * The second step after Spam: puts the sender's whole domain on the unimportant list as `@domain`. Refused when the
+ * sender or anyone else on that domain is a VIP, because VIP wins.
+ */
+export function blockSenderDomain(db: Database, id: string, now: number): MoveResult {
+  const row = readMove(db, id);
+  if (!row) return refuse(404, "The Desk has no record of that move.");
+  if (row.target !== "junk") return refuse(409, "Only mail moved to Junk can block its sender's domain.");
+  const domain = `@${domainOf(row.sender)}`;
+  const vips = listVips(db).map((v) => v.address);
+  if (isVip(new Set(vips), row.sender) || vips.some((v) => v.endsWith(domain))) {
+    return refuse(409, `${domain} has a sender on your VIP list, and VIPs always show. Nothing was blocked.`);
+  }
+  addSender(db, "unimportant", domain, "Blocked after Spam", now);
+  return { ok: true, message: `Blocked ${domain}: its mail now counts as unimportant. You can change this in Settings.` };
+}

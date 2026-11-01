@@ -13,7 +13,8 @@ import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, ran
 import { DAY_MS, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceReading } from "./sources/command";
 import { listSenders, listVips } from "./vips";
-import { trashKey, type MailActionsConfig } from "./mail-actions";
+import type { MailActionsConfig } from "./mail-actions";
+import { movedTarget } from "./mail-move";
 import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskCorrection, DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
@@ -152,7 +153,7 @@ export async function composeDesk(
     const setting = calendars.get(calendarKey(e.sourceId, calendarName(e)));
     return setting?.enabled ? [{ ...e, calendar: setting.name, color: setting.color }] : [];
   });
-  const mail = readings.flatMap((r) => r.mail.filter((m) => !(deps.handled?.has(trashKey(m.id)) ?? false)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
+  const mail = readings.flatMap((r) => r.mail.filter((m) => !deps.handled || movedTarget(deps.handled, m.id) === undefined).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
   const unimportant = listSenders(db, "unimportant").map((s) => s.address);
   const corrections = readCorrections(db);
@@ -187,7 +188,7 @@ export async function composeDesk(
     .filter((item) => goalListed(goalStatuses, item.goal));
   const items = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: Boolean(desk.mailActions?.trash?.length), draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)) }),
+    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: Boolean(desk.mailActions?.move?.length ?? desk.mailActions?.trash?.length), archive: Boolean(desk.mailActions?.move?.length), spam: Boolean(desk.mailActions?.move?.length), draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
   ], rules, readDeliveries(db), now), activeCorrections).map(item => item.kind === "mail" ? { ...item, mailDecision: readMailDecision(db, item.source, item.key.slice("mail:".length)) } : item);
@@ -267,7 +268,7 @@ function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, 
   const grants = listGrants(db);
   return {
     types: PROMOTABLE.filter((a) => a === "studio.capture" ? studio : rangerActions).map((action) => ({ action, ...PROMOTABLE_LABELS[action], on: grants.has(action) })),
-    done: done.filter((d) => d.status !== "running").slice(0, 10).map((d) => ({ key: d.attemptKey, ...(d.action.startsWith("studio.capture") ? { action: d.action, ...(d.action === "studio.capture" ? { undo: d.itemKey } : {}) } : {}), title: d.title, message: d.message ?? "", at: d.createdAt, ok: d.status === "done" })),
+    done: done.filter((d) => d.status !== "running").slice(0, 10).map((d) => ({ key: d.attemptKey, ...(d.action.startsWith("studio.capture") || d.action.startsWith("mail.move") ? { action: d.action, ...(d.action === "studio.capture" || d.action === "mail.move" ? { undo: d.itemKey } : {}) } : {}), title: d.title, message: d.message ?? "", at: d.createdAt, ok: d.status === "done" })),
   };
 }
 
