@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { findNode, type AppState, type OutlineNode } from "../../../balance";
 import type { MyDayMeta } from "./my-day-schema";
+import { responseCoverage, lastResponseCoverage } from "./studio/response";
 import type { StudioThread } from "./studio/format";
 
 export interface StudioProjection {
@@ -34,13 +35,13 @@ function responseTask(project: OutlineNode, entry: ProjectionEntry, thread: Stud
   return task;
 }
 function completion(state: AppState, entry: ProjectionEntry, thread: StudioThread, project: OutlineNode, area: OutlineNode): void {
-  const responses = thread.responses.filter(r => r.text.trim() && Date.parse(r.at) > entry.response).sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const responses = thread.responses.filter(r => r.text.trim() && responseCoverage(thread, r) > entry.response).sort((a, b) => responseCoverage(thread, a) - responseCoverage(thread, b));
   for (const response of responses) {
-    const time = Date.parse(response.at);
+    const time = responseCoverage(thread, response);
     const note = thread.notes.find(n => !n.sample && Date.parse(n.at) > entry.response && Date.parse(n.at) <= time);
     if ((entry.pending && entry.pending.at <= time) || note) {
       const task = responseTask(project, entry, thread, note ? Date.parse(note.at) : time);
-      const at = new Date(time);
+      const at = new Date(response.at);
       const date = `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
       task.done = true;
       task.completedAt = date;
@@ -60,7 +61,7 @@ export function projectStudio(state: AppState, meta: MyDayMeta, input: StudioPro
   for (const thread of input.threads) {
     if (thread.id && counts.get(thread.id) !== 1) continue;
     const source = thread.id ? `id:${thread.id}` : `path:${thread.path}`;
-    const latestResponse = Math.max(0, ...thread.responses.filter(r => r.text.trim()).map(r => Date.parse(r.at)));
+    const latestResponse = lastResponseCoverage(thread);
     let entry = meta.studio.find(s => s.namespace === input.namespace && s.source === source);
     if (!entry) {
       entry = { namespace: input.namespace, source, slug: thread.slug, projectId: `studio-thread:${crypto.randomUUID()}`, response: latestResponse, pending: null };

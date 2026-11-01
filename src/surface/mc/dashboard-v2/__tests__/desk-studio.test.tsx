@@ -1,4 +1,5 @@
 import { StudioSessionPanel, type StudioSessionControls } from "../components/desk-studio-session";
+import { waitsOnYou } from "../../desk/studio/board";
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DeskModeSwitch, DeskStudio, ortho, takeLastLook } from "../components/desk-studio";
@@ -231,4 +232,27 @@ it("a recovered unanswered Studio turn can retry with an empty composer", () => 
   const html = renderToStaticMarkup(<StudioSessionPanel controls={controls} voice={{ enabled: false, input: "browser", output: "browser" }} location="studio:one" />);
   expect(html).toContain('<button class="desk-btn pri">Retry saved turn</button>');
   expect(html).toContain("Retry saved turn sends the original saved text.");
+});
+
+it("keeps the response form available after Keep or Dismiss without changing the ambient badge", () => {
+  const statuses: StudioThreadView["notes"][number]["status"][] = ["kept", "dismissed"];
+  for (const status of statuses) {
+    const notes: StudioThreadView["notes"] = [{ at: "2026-10-31T03:12:00.500Z", trigger: "A synthetic idea", model: "local", kind: "idea", status, sample: false, text: "Compare two wings." }];
+    const subject = thread("owned", 1, { notes });
+    const studio: StudioView = { ...STUDIO, active: [subject], parked: [] };
+    expect(waitsOnYou(subject)).toBe(false);
+    const html = renderToStaticMarkup(<DeskStudio studio={studio} thread="owned" onOpenThread={() => {}} at={AT} />);
+    expect(html).toContain("Send my response");
+    expect(html).not.toContain("Ivy waits on you: answer the note");
+    const closed: StudioView = { ...studio, active: [], closed: [{ ...subject, state: "closed", outcome: "shipped" }] };
+    expect(renderToStaticMarkup(<DeskStudio studio={closed} thread="owned" onOpenThread={() => {}} at={AT} />)).not.toContain("Send my response");
+  }
+});
+it("clears the response form and badge for a validated same-second reply", () => {
+  const notes: StudioThreadView["notes"] = [{ at: "2026-10-31T03:12:00.500Z", trigger: "A synthetic idea", model: "local", kind: "idea", status: "open", sample: false, text: "Compare two wings." }];
+  const subject = thread("owned", 1, { notes, responses: [{ at: "2026-10-31T03:12:00Z", re: notes[0]?.at, text: "Use the small wing." }] });
+  expect(waitsOnYou(subject)).toBe(false);
+  const studio: StudioView = { ...STUDIO, active: [subject], parked: [] };
+  const html = renderToStaticMarkup(<DeskStudio studio={studio} thread="owned" onOpenThread={() => {}} at={AT} />);
+  expect(html).not.toContain("Send my response");
 });

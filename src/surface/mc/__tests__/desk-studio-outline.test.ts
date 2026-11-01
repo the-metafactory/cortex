@@ -339,3 +339,39 @@ test("an engine Refresh while Studio is unavailable recovers its empty proposal 
     expect((await readStudioMyDay(db, repo.options, now)).items).toHaveLength(1);
   } finally { db.close(); }
 });
+
+test("same-second response markers finish episodes and baseline history without retroactive credit", () => {
+  const f = fixture(); const source = first(f.source.threads);
+  source.notes = [note("2026-11-01T09:00:00.500Z")]; f.sync();
+  source.responses.push({ at: "2026-11-01T09:00:00Z", re: "2026-11-01T09:00:00.500Z", text: "First answer" });
+  f.sync(); f.sync(); expect(f.model.log).toHaveLength(1); expect(first(f.meta.studio).pending).toBeNull();
+  source.notes.push(note("2026-11-01T09:00:00.700Z")); f.sync(); expect(first(f.meta.studio).pending).not.toBeNull();
+  source.responses.push({ at: "2026-11-01T09:00:00Z", re: "2026-11-01T09:00:00.700Z", text: "Second answer" });
+  f.sync(); f.sync(); expect(f.model.log).toHaveLength(2); expect(first(f.meta.studio).pending).toBeNull();
+  const historical = fixture(); first(historical.source.threads).notes = structuredClone(source.notes); first(historical.source.threads).responses = structuredClone(source.responses);
+  historical.sync(); expect(historical.model.log).toHaveLength(0); expect(first(historical.meta.studio).pending).toBeNull();
+});
+test("a real same-second Studio response completes its task once", async () => {
+  const repo = await repository(); const db = initDatabase(":memory:");
+  try {
+    await writeFile(join(repo.dir, "threads/design.md"), repo.text.replace(noteAt, "2026-11-01T09:00:00.500Z"));
+    await git(repo.dir, "add", "."); await git(repo.dir, "commit", "-m", "Precise note fixture");
+    const payload = { act: "respond", thread: "design", text: "Use the small wing", requestId: "precise-response-fixture" };
+    const request = () => new Request("http://localhost/x", { method: "POST", body: JSON.stringify(payload) });
+    const runtime = { options: repo.options, ledger: new HandledLedger() };
+    const deps = { db, now: () => new Date("2026-11-01T09:00:00.900Z") };
+    expect((await handleDeskStudioAct(request(), runtime, deps)).status).toBe(200);
+    expect((await handleDeskStudioAct(request(), runtime, deps)).status).toBe(200);
+    const view = await readStudioMyDay(db, repo.options, now);
+    expect(view.studioTasks).toHaveLength(0); expect(view.wins).toHaveLength(1);
+  } finally { db.close(); }
+});
+
+test("unmatched or sample response markers cannot suppress unrelated new notes", () => {
+  for (const marker of ["not-a-note", "2099-11-01T09:00:00Z", "2026-11-01T09:00:00.800Z"]) {
+    const f = fixture(); const source = first(f.source.threads);
+    source.notes = [note("2026-11-01T09:00:00.500Z"), { ...note("2026-11-01T09:00:00.800Z"), sample: true }];
+    source.responses = [{ at: "2026-11-01T09:00:00Z", re: marker, text: "A previous response" }];
+    f.sync(); expect(first(f.meta.studio).pending).not.toBeNull(); expect(f.model.log).toHaveLength(0);
+  }
+});

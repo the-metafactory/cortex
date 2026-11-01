@@ -385,9 +385,9 @@ export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack, 
         </div>
         <div className="dst-col right">
           <h4 className="dst-h">Ivy's notes <span className="n">dated, append-only</span></h4>
-          {page.waitsOnYou && (acts
-            ? <RespondBox slug={t.slug} label={`Ivy waits on you: answer the note from ${page.latest ? dayMonthTime(new Date(page.latest.at)) : "Ivy"}.`} acts={acts} />
-            : <p className="dst-waits">Ivy waits on you: the latest note has no answer yet.</p>)}
+          {(page.waitsOnYou || page.needsResponse) && (acts
+            ? <RespondBox slug={t.slug} label={page.waitsOnYou ? `Ivy waits on you: answer the note from ${page.latest ? dayMonthTime(new Date(page.latest.at)) : "Ivy"}.` : "Respond to Ivy"} acts={acts} />
+            : <p className="dst-waits">{page.waitsOnYou ? "Ivy waits on you: the latest note has no answer yet." : "This note has no saved response."}</p>)}
           {page.ideas.map((n, i) => (
             <NoteCard key={`i-${i}-${n.at}`} id={`i-${i}-${n.at}`} note={n} label="Ivy's idea" className="dst-n ghost" ghost="idea">
               <GhostActions keep="Keep" note={n} acting={acting} />
