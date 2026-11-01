@@ -132,15 +132,16 @@ describe("Client decisions from two source readings", () => {
     ]);
   });
 
-  it("skips mail the Desk moved itself, and logs gone without a locate command instead of guessing", async () => {
+  it("skips mail the Desk moved itself, and logs nothing for a mail it has no command to look for", async () => {
     const ledger = new HandledLedger();
     ledger.add(movedKey("archive", "desk-moved"), NOW);
     logMailDecision(db, mailFeatures(db, mail("desk-trashed")), "trash", "desk", NOW - 1000, "Trash");
     const r = queue([]);
-    const prev = reading([mail("desk-moved"), mail("desk-trashed"), mail("no-command")]);
-    expect((await recordClientDecisions(prev, reading([]), deps(r.run, ledger, { timeoutSeconds: 20 }))).logged).toBe(1);
+    const prev = reading([mail("desk-moved"), mail("desk-trashed"), mail("no-command"), mail("read-no-command")]);
+    const pass = await recordClientDecisions(prev, reading([mail("read-no-command", { unread: false })]), deps(r.run, ledger, { timeoutSeconds: 20 }));
+    expect([pass.logged, pass.failed]).toEqual([1, []]);
     expect(r.calls).toEqual([]);
-    expect(rows().filter((e) => e.where === "client")).toEqual([{ messageId: "no-command", action: "gone", where: "client", folder: null }]);
+    expect(rows().filter((e) => e.where === "client")).toEqual([{ messageId: "read-no-command", action: "kept", where: "client", folder: null }]);
   });
 
   it("tries a failed lookup again with the next readings, then gives up without logging a guess", async () => {

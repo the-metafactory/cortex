@@ -19,7 +19,7 @@ export const MAIL_LOG_SQL = [
     subject TEXT,
     summary TEXT,
     action TEXT NOT NULL,
-    place TEXT NOT NULL,
+    origin TEXT NOT NULL,
     folder TEXT,
     created_at INTEGER NOT NULL
   )`,

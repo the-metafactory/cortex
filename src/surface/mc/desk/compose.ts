@@ -195,8 +195,8 @@ export async function composeDesk(
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
   ], rules, readDeliveries(db), now), activeCorrections);
-  const mailLog = mailLogFor(db, corrected.filter(i => i.kind === "mail").map(i => i.key.slice("mail:".length)));
-  const items = corrected.map(item => item.kind === "mail" ? withMailLog({ ...item, mailDecision: readMailDecision(db, item.source, item.key.slice("mail:".length)) }, mailLog, now) : item);
+  const mailLog = mailLogFor(db, corrected.filter(i => i.kind === "mail").map(i => mailIdOf(i.key)));
+  const items = corrected.map(item => item.kind === "mail" ? withMailLog({ ...item, mailDecision: readMailDecision(db, item.source, mailIdOf(item.key)) }, mailLog, now) : item);
 
   const { myDay, studio } = await readStudioDesk(db, desk, now);
   const moved = movedKeys(db);
@@ -257,8 +257,10 @@ function goalActionsFor(goals: DeskGoalOptions | undefined, subjects: VigilSubje
   return { check: checks ? check : new Set(), checking, pause: Boolean(goals?.somaBin), pausable: (goal) => SOMA_GOAL_ID.test(goal) };
 }
 
+const mailIdOf = (key: string): string => key.slice("mail:".length);
+
 function withMailLog(item: DeskItem, log: Map<string, MailLogEntry[]>, now: number): DeskItem {
-  const entries = log.get(item.key.slice("mail:".length)) ?? [];
+  const entries = log.get(mailIdOf(item.key)) ?? [];
   return entries.length ? { ...item, detail: { ...item.detail, history: [...item.detail.history, ...entries.map(e => historySentence(e, now))] } } : item;
 }
 

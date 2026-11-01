@@ -43,12 +43,12 @@ interface Row {
   subject: string | null;
   summary: string | null;
   action: MailLogAction;
-  place: MailLogWhere;
+  origin: MailLogWhere;
   folder: string | null;
   created_at: number;
 }
 
-const COLUMNS = "id, message_id, account, source_id, sender, sender_domain, list_id, category, subject, summary, action, place, folder, created_at";
+const COLUMNS = "id, message_id, account, source_id, sender, sender_domain, list_id, category, subject, summary, action, origin, folder, created_at";
 
 const entry = (r: Row): MailLogEntry => ({
   id: r.id,
@@ -62,7 +62,7 @@ const entry = (r: Row): MailLogEntry => ({
   subject: r.subject,
   summary: r.summary,
   action: r.action,
-  where: r.place,
+  where: r.origin,
   folder: r.folder,
   at: r.created_at,
 });
@@ -112,7 +112,7 @@ export function loggedFeatures(db: Database, messageId: string): MailFeatures | 
 export function logMailDecision(db: Database, features: MailFeatures, action: MailLogAction, where: MailLogWhere, at: number, folder: string | null = null): number {
   if (!MAIL_LOG_ACTIONS.includes(action) || !MAIL_LOG_WHERE.includes(where)) throw new Error(`The mail log has no action "${action}" in "${where}".`);
   const result = db
-    .query("INSERT INTO desk_mail_log (message_id, account, source_id, sender, sender_domain, list_id, category, subject, summary, action, place, folder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .query("INSERT INTO desk_mail_log (message_id, account, source_id, sender, sender_domain, list_id, category, subject, summary, action, origin, folder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
     .run(features.messageId, features.account, features.sourceId, features.sender, features.senderDomain, features.listId, features.category, features.subject, features.summary, action, where, capped(folder, 200), at);
   return Number(result.lastInsertRowid);
 }
@@ -141,7 +141,7 @@ export function queryMailLog(db: Database, q: MailLogQuery = {}): MailLogEntry[]
     ["sender_domain = ?", lowered(q.senderDomain)],
     ["list_id = ?", q.listId === "" ? undefined : q.listId],
     ["action IN (SELECT value FROM json_each(?))", q.actions?.length ? JSON.stringify(q.actions) : undefined],
-    ["place = ?", q.where],
+    ["origin = ?", q.where],
   ];
   const active = filters.filter((f): f is [string, string | number] => f[1] !== undefined);
   const where = active.map(([clause]) => clause);

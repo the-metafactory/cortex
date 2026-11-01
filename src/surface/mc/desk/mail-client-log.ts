@@ -26,7 +26,7 @@ interface Located {
   unread: boolean;
 }
 
-const GONE: Located = { place: "gone", folder: null, unread: false };
+const NOT_LOOKED_UP = "not-looked-up";
 
 function handledOnDesk(deps: ClientLogDeps, messageId: string): boolean {
   if (movedTarget(deps.ledger, messageId) !== undefined) return true;
@@ -48,10 +48,10 @@ function readLocated(stdout: string): Located | null {
   }
 }
 
-async function locate(deps: ClientLogDeps, d: Departure): Promise<Located | null> {
+async function locate(deps: ClientLogDeps, d: Departure): Promise<Located | null | typeof NOT_LOOKED_UP> {
   const argv = deps.config?.move;
   const account = d.mail.account;
-  if (!argv?.length || !account) return GONE;
+  if (!argv?.length || !account) return NOT_LOOKED_UP;
   try {
     const result = await deps.run(argv, JSON.stringify({ action: "locate", account, messageId: d.mail.id }), (deps.config?.timeoutSeconds ?? 30) * 1000);
     return result.code === 0 ? readLocated(result.stdout) : null;
@@ -79,7 +79,8 @@ export interface ClientPass {
 /**
  * Logs, as `client` decisions, what the person did outside the Desk with the mails one reading listed unread: read and
  * kept in the inbox, or moved to Archive, Junk or Trash (found with the move command's `locate`). A mail the command
- * reports in none of those folders, or that no command can look for, is logged as `gone`. A lookup that fails logs
+ * reports in none of those folders is logged as `gone`. Without a move command or an account, a mail that left the list
+ * is not looked for and not logged, since it may only have left the source's window. A lookup that fails logs
  * nothing and comes back in `failed`, so a broken connection is never recorded as the person's decision. A mail the
  * Desk moved itself is skipped. `retry` adds departures an earlier pass could not look up.
  */
@@ -92,6 +93,7 @@ export async function recordClientDecisions(prev: SourceReading | undefined, nex
   for (const d of queued) {
     if (handledOnDesk(deps, d.mail.id)) continue;
     const located = d.read ? null : await locate(deps, d);
+    if (located === NOT_LOOKED_UP) continue;
     if (!d.read && located === null) {
       pass.failed.push(d);
       continue;
