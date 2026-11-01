@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite";
-import { HOST_NAME as HOST, type SourceMail } from "./sources/command";
+import { HOST_NAME_RE as HOST } from "../../../common/host-name";
+import type { SourceMail } from "./sources/command";
 import { isVip, listVips } from "./vips";
 
 export const SUSPICION_CODES = ["dmarc", "spf", "dkim", "reply-to", "display-name", "link", "classifier"] as const;

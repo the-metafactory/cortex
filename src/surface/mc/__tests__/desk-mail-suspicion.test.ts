@@ -229,3 +229,13 @@ describe("what counts as a link that shows a domain", () => {
     expect(linked("Read more on bank.example")).toEqual([]);
   });
 });
+
+describe("a link-stuffed mail", () => {
+  it("still keeps its first valid links instead of dropping the whole list", () => {
+    const links = [...Array.from({ length: 300 }, () => "junk"), { text: "bank.example", href: "https://evil.example/" }];
+    const early = [{ text: "bank.example", href: "https://evil.example/" }, ...Array.from({ length: 300 }, () => "junk")];
+    const parse = (list: unknown[]) => parseSourceOutput(JSON.stringify({ items: [{ kind: "mail", id: "z", from: { address: "a@b.example" }, subject: "s", receivedAt: "2026-11-01T08:00:00Z", unread: true, links: list }] })).mail[0]?.links;
+    expect(parse(early)).toEqual([{ text: "bank.example", href: "https://evil.example/" }]);
+    expect(parse(links)).toEqual([{ text: "bank.example", href: "https://evil.example/" }]);
+  });
+});
