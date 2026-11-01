@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { WAKE_MODEL_FILES } from "../src/surface/mc/desk/wake-assets";
+import { WAKE_ASSET_NAMES, WAKE_MODEL_FILES } from "../src/surface/mc/desk/wake-assets";
+import { z } from "zod";
 
 const root = join(import.meta.dir, "..");
 const out = join(root, "dist/dashboard-v2/wake");
@@ -13,6 +14,26 @@ const sources = [
   { name: "model", url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01.tar.bz2", sha: "f170013b4716e41b62b9bfd809687c207cef798ef9bc6534d524e17af9b6561a", dir: "sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01" },
 ];
 const sha = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
+const localFiles: Record<string, Uint8Array> = {};
+for (const name of ["worker.js", "capture.js"]) localFiles[name] = new Uint8Array(await Bun.file(join(root, "src/surface/mc/dashboard-v2/wake", name)).arrayBuffer());
+localFiles.LICENSE = new Uint8Array(await Bun.file(join(root, "scripts/desk-wake/LICENSE")).arrayBuffer());
+const identityHash = createHash("sha256").update(new Uint8Array(await Bun.file(import.meta.path).arrayBuffer()));
+for (const [name, bytes] of Object.entries(localFiles)) identityHash.update(name).update(bytes);
+const identity = identityHash.digest("hex");
+const ExistingManifest = z.object({
+  version: z.literal(1), identity: z.string(),
+  sources: z.array(z.object({ name: z.string(), url: z.string(), sha: z.string(), dir: z.string() })),
+  model: z.record(z.string(), z.string()),
+  files: z.record(z.string(), z.string().regex(/^[a-f0-9]{64}$/)),
+});
+const existing = ExistingManifest.safeParse(await Bun.file(join(out, "manifest.json")).json().catch(() => null));
+if (existing.success && existing.data.identity === identity && JSON.stringify(existing.data.sources) === JSON.stringify(sources) && Object.entries(WAKE_MODEL_FILES).every(([key, name]) => existing.data.model[key] === name)) {
+  const hashes = await Promise.all([...WAKE_ASSET_NAMES].filter(name => name !== "manifest.json").map(async name => {
+    const file = Bun.file(join(out, name));
+    return await file.exists() && sha(new Uint8Array(await file.arrayBuffer())) === existing.data.files[name];
+  }));
+  if (hashes.every(Boolean)) { process.stdout.write("Wake assets verified; reusing the current bundle.\n"); process.exit(0); }
+}
 await mkdir(cache, { recursive: true });
 await mkdir(out, { recursive: true });
 const temp = await mkdtemp(join(tmpdir(), "cortex-wake-"));
@@ -58,9 +79,8 @@ try {
       for (const name of Object.values(WAKE_MODEL_FILES)) await copy(name, name);
     }
   }
-  for (const name of ["worker.js", "capture.js"]) await emit(name, new Uint8Array(await Bun.file(join(root, "src/surface/mc/dashboard-v2/wake", name)).arrayBuffer()));
-  await emit("LICENSE", new Uint8Array(await Bun.file(join(root, "scripts/desk-wake/LICENSE")).arrayBuffer()));
-  await Bun.write(join(out, "manifest.json"), JSON.stringify({ version: 1, sources, model: WAKE_MODEL_FILES, files: manifest }, null, 2));
+  for (const [name, bytes] of Object.entries(localFiles)) await emit(name, bytes);
+  await Bun.write(join(out, "manifest.json"), JSON.stringify({ version: 1, identity, sources, model: WAKE_MODEL_FILES, files: manifest }, null, 2));
 } finally {
   await rm(temp, { recursive: true, force: true });
 }
