@@ -71,7 +71,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   return answer(await moveMail(mail, body.action === "move" ? body.target : "trash", moveDeps));
 }
 
-type SweepBody = { action: "sweep"; sweep: string; keys: string[] } | { action: "sweep.undo"; sweep: string };
+type SweepBody = Extract<z.infer<typeof MailRequestSchema>, { action: "sweep" | "sweep.undo" }>;
 
 async function sweepAnswer(body: SweepBody, db: Database, runtime: DeskRuntime, moveDeps: MoveDeps, waitMs: number): Promise<Response> {
   if (!moveDeps.config?.move?.length) return fail(409, "Sweeps need the move command (mc.desk.mail.actions.move), and it is not set up on this stack.");

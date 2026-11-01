@@ -269,6 +269,17 @@ export async function runSweep(group: SweepGroup, keys: readonly string[], deps:
     deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'mail.sweep', ?, ?, 'done', ?, ?, ?)")
       .run(`mail-sweep:${id}`, id, title, `Moving ${plural(members.length, "mail")}…`, deps.now, deps.now);
   })();
+  running.add(id);
+  try {
+    return await moveAll(id, group, members, gone.length, title, deps);
+  } finally {
+    running.delete(id);
+  }
+}
+
+const running = new Set<string>();
+
+async function moveAll(id: string, group: SweepGroup, members: readonly SweepMember[], gone: number, title: string, deps: MoveDeps): Promise<SweepOutcome> {
   const failed: { subject: string; error: string }[] = [];
   let moved = 0;
   const failMail = (m: SweepMember, error: string): void => {
@@ -285,11 +296,11 @@ export async function runSweep(group: SweepGroup, keys: readonly string[], deps:
       failMail(m, err instanceof Error ? err.message : String(err));
     }
   }
-  const skipped = gone.length > 0 ? ` ${plural(gone.length, "mail was", "mails were")} no longer in this group and stayed.` : "";
+  const skipped = gone > 0 ? ` ${plural(gone, "mail was", "mails were")} no longer in this group and stayed.` : "";
   const message = failed.length === 0 ? `${SWEEP_WORDS[group.target].done} ${plural(moved, "mail")}.${skipped}` : `${SWEEP_WORDS[group.target].done} ${moved} of ${members.length}. Not moved: ${failureList(failed)}.${skipped}`;
   deps.db.query("UPDATE desk_done SET action = ?, status = ?, message = ?, updated_at = ? WHERE attempt_key = ?")
     .run(moved > 0 ? "mail.sweep" : "mail.sweep.failed", moved > 0 ? "done" : "failed", message, deps.now, `mail-sweep:${id}`);
-  return { ok: true, message, sweep: id, moved, failed, skipped: gone.length };
+  return { ok: true, message, sweep: id, moved, failed, skipped: gone };
 }
 
 interface SweptRow {
@@ -304,8 +315,8 @@ export async function undoSweep(id: string, deps: MoveDeps): Promise<{ ok: true;
   const sweep = deps.db.query<{ undone_at: number | null }, [string]>("SELECT undone_at FROM desk_mail_sweeps WHERE id = ?").get(id);
   if (!sweep) return refuse(404, "The Desk has no record of that sweep.");
   if (sweep.undone_at !== null) return refuse(409, "That sweep is already undone.");
-  const moving = deps.db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM desk_mail_sweep_mails WHERE sweep_id = ? AND status = 'moving'").get(id)?.n ?? 0;
-  if (moving > 0) return refuse(409, "This sweep is still moving mail. Undo it when Done for you shows the result.");
+  if (running.has(id)) return refuse(409, "This sweep is still moving mail. Undo it when Done for you shows the result.");
+  deps.db.query("UPDATE desk_mail_sweep_mails SET status = 'failed', error = 'interrupted' WHERE sweep_id = ? AND status = 'moving'").run(id);
   const rows = deps.db.query<SweptRow, [string]>("SELECT s.message_id, s.subject, s.move_id, m.undone_at FROM desk_mail_sweep_mails s JOIN desk_mail_moves m ON m.id = s.move_id WHERE s.sweep_id = ? AND s.status IN ('done', 'undone')").all(id);
   const failed: { subject: string; error: string }[] = [];
   let back = 0;

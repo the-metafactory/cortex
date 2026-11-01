@@ -128,6 +128,15 @@ describe("sweep executor", () => {
     expect(queryMailLog(db, { actions: ["restore"] })).toHaveLength(3);
     expect(await undoSweep(r.sweep, deps)).toEqual({ ok: false, status: 409, error: "That sweep is already undone." });
   });
+
+  it("undoes what an interrupted sweep moved, after a restart left a mail marked as moving", async () => {
+    const { q, deps } = moveDeps([moved("r1"), moved("r2"), moved("r3"), moved("r1"), moved("r2")]);
+    const r = await runSweep(group(REPORTS), ["mail:r1", "mail:r2", "mail:r3"], deps);
+    if (!r.ok) throw new Error(r.error);
+    db.query("UPDATE desk_mail_sweep_mails SET status = 'moving', move_id = NULL WHERE message_id = 'r3'").run();
+    expect(await undoSweep(r.sweep, deps)).toEqual({ ok: true, message: "Moved 2 mails back to INBOX." });
+    expect(movedIds(q.calls.slice(3))).toEqual(["r1", "r2"]);
+  });
 });
 
 describe("sweeps on the Desk", () => {

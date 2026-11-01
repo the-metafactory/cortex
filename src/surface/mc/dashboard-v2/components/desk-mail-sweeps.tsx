@@ -48,13 +48,15 @@ export function SweepPreview({ sweep, busy, onConfirm, onCancel }: { sweep: Mail
     else next.add(key);
     return next;
   });
+  const words = SWEEP_WORDS[sweep.target];
+  const verb = capital(words.verb);
   return (
     <div className="desk-sweep-preview">
       <div className="desk-panel-top">
         <span className="area">{sweep.kind === "bundle" ? "Bundle" : "Sweep"} · {sweep.label}</span>
         <button type="button" className="desk-close" aria-label="Close" onClick={onCancel}>×</button>
       </div>
-      <h3>{capital(SWEEP_WORDS[sweep.target].verb)} {keys.length} {keys.length === 1 ? "mail" : "mails"}</h3>
+      <h3>{verb} {keys.length} {keys.length === 1 ? "mail" : "mails"}</h3>
       <p className="desk-why">Untick a mail to keep it in your inbox.</p>
       <ul className="desk-sweep-check">
         {sweep.mails.map((m) => (
@@ -66,9 +68,9 @@ export function SweepPreview({ sweep, busy, onConfirm, onCancel }: { sweep: Mail
           </li>
         ))}
       </ul>
-      <p className="desk-why">Each one is logged as {SWEEP_WORDS[sweep.target].logged} decision. Done for you gets one line with Undo for all of them.</p>
+      <p className="desk-why">Each one is logged as {words.logged} decision. Done for you gets one line with Undo for all of them.</p>
       <div className="desk-panel-acts">
-        <button type="button" className="desk-btn pri" disabled={busy || keys.length === 0} onClick={() => onConfirm(keys)}>{busy ? "Moving…" : `${capital(SWEEP_WORDS[sweep.target].verb)} ${keys.length}`}</button>
+        <button type="button" className="desk-btn pri" disabled={busy || keys.length === 0} onClick={() => onConfirm(keys)}>{busy ? "Moving…" : `${verb} ${keys.length}`}</button>
         <button type="button" className="desk-btn" disabled={busy} onClick={onCancel}>Cancel</button>
       </div>
     </div>
