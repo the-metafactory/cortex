@@ -41,12 +41,12 @@ function wroteWhen(iso: string, startOfToday: number): string {
 const viaLabel = (via: string): string => (via === "voice" ? "Voice note" : via === "mail" ? "Forwarded mail" : via.charAt(0).toUpperCase() + via.slice(1));
 const targetKey = (t: BoardTarget | null): string => (t === null ? "" : t.kind === "thread" ? `t:${t.slug}` : `p:${t.place}`);
 
-export function DeskModeSwitch({ hasStudio, inStudio, inMirror = false, onGo }: { hasStudio: boolean; inStudio: boolean; inMirror?: boolean; onGo: (mode: "day" | "studio" | "mirror") => void }) {
+export function DeskModeSwitch({ hasStudio, inStudio, inBalance = false, onGo }: { hasStudio: boolean; inStudio: boolean; inBalance?: boolean; onGo: (mode: "day" | "studio" | "balance") => void }) {
   return (
     <div className="desk-seg desk-mode" role="tablist" aria-label="View">
-      <button type="button" role="tab" aria-selected={!inStudio && !inMirror} onClick={() => onGo("day")}>Day</button>
+      <button type="button" role="tab" aria-selected={!inStudio && !inBalance} onClick={() => onGo("day")}>Day</button>
+      <button type="button" role="tab" aria-selected={inBalance} onClick={() => onGo("balance")}>Balance</button>
       {hasStudio && <button type="button" role="tab" aria-selected={inStudio} onClick={() => onGo("studio")}>Studio</button>}
-      <button type="button" role="tab" aria-selected={inMirror} onClick={() => onGo("mirror")}>Weekly mirror</button>
     </div>
   );
 }

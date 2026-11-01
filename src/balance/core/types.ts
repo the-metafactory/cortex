@@ -18,6 +18,7 @@ export interface OutlineNode {
     done?: boolean;
     completedAt?: string;
     effort?: Effort;
+    estimateMinutes?: number;
     dueDate?: string;
     leadDays?: number;
     startDate?: string;
