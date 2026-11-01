@@ -1317,7 +1317,7 @@ export const REBUILD_MIGRATIONS: RebuildMigration[] = [
       // Recreate the indexes (SCHEMA_SQL's timestamp + family, and the U3.3
       // origin composite that COLUMN_ADD_MIGRATIONS' post[] declares).
       `CREATE INDEX IF NOT EXISTS idx_observability_timestamp ON observability_events(timestamp)`,
-  `CREATE INDEX IF NOT EXISTS idx_observability_process_decision ON observability_events(json_extract(payload, '$.__cortexProcessSubject'), json_extract(payload, '$.decision_id')) WHERE type = 'system.bus.process' AND json_valid(payload)`,
+      `CREATE INDEX IF NOT EXISTS idx_observability_process_decision ON observability_events(json_extract(payload, '$.__cortexProcessSubject'), json_extract(payload, '$.decision_id')) WHERE type = 'system.bus.process' AND json_valid(payload)`,
       `CREATE INDEX IF NOT EXISTS idx_observability_family ON observability_events(family, timestamp DESC)`,
       `CREATE INDEX IF NOT EXISTS idx_observability_origin ON observability_events(origin_kind, origin_peer)`,
     ],
