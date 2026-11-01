@@ -5,6 +5,8 @@ The overseer scans committed Studio files and enqueues the native Ranger
 the area policy, daily thread limit and model budgets. Automatic enqueues omit
 `mode`.
 
+The Studio repository may use Git's SHA-1 or SHA-256 object format.
+
 Configure a deployment-owned YAML file:
 
 ```yaml

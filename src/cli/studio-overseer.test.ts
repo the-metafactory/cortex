@@ -9,13 +9,13 @@ const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 const thread = (tonight = false) => `---\ntype: question\nareas: [lab]\nstate: active\nopened: 2026-10-31\nthinkTonight: ${tonight}\n---\n## Question\nWhat can we test?\n## Where I stand\nOne real repository.\n## Material\n- capture: baseline\n## Ivy's notes\n## Log\n`;
 
-async function rig(tonight = false) {
+async function rig(tonight = false, format = "sha1") {
   const dir = await mkdtemp(join(tmpdir(), "overseer-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   await mkdir(join(dir, "threads"));
   await writeFile(join(dir, "threads/alpha.md"), thread(tonight));
   const git = (...args: string[]) => { const result = Bun.spawnSync(["git", ...args], { cwd: dir }); if (result.exitCode !== 0) throw new Error(result.stderr.toString()); return result.stdout.toString().trim(); };
-  git("init", "-q"); git("config", "user.name", "Fixture"); git("config", "user.email", "fixture@example.invalid"); git("add", "."); git("commit", "-qm", "fixture");
+  git("init", "-q", `--object-format=${format}`); git("config", "user.name", "Fixture"); git("config", "user.email", "fixture@example.invalid"); git("add", "."); git("commit", "-qm", "fixture");
   const calls = join(dir, ".git/calls.jsonl");
   const stub = join(dir, ".git/ranger.ts");
   await writeFile(stub, `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2))+"\\n");`);
@@ -31,6 +31,27 @@ test("real committed think-tonight enqueues native arguments once, without mode"
   const args = JSON.parse((await readFile(r.calls, "utf8")).trim());
   expect(args).toEqual(["job", "enqueue", "ivy-think", "--param", "thread=alpha", "--param", "trigger=Asked to think tonight"]);
   expect(r.git("status", "--porcelain")).toBe("");
+});
+
+test("two actual SHA-256 scans reuse the checkpoint and never duplicate an enqueue", async () => {
+  const r = await rig(true, "sha256");
+  const now = new Date("2026-11-01T00:00:00Z");
+  expect(await runOverseer(r.config, now)).toEqual({ queued: ["alpha"], proposals: [] });
+  expect(await runOverseer(r.config, now)).toEqual({ queued: [], proposals: [] });
+  const saved = JSON.parse(await readFile(join(r.dir, ".git/studio-overseer.json"), "utf8"));
+  expect(saved.head).toBe(r.git("rev-parse", "HEAD"));
+  expect(saved.head).toHaveLength(64);
+  expect((await readFile(r.calls, "utf8")).trim().split("\n")).toHaveLength(1);
+});
+
+test("checkpoint object IDs reject intermediate hash lengths", async () => {
+  const r = await rig();
+  await runOverseer(r.config);
+  const path = join(r.dir, ".git/studio-overseer.json");
+  const saved = JSON.parse(await readFile(path, "utf8"));
+  await writeFile(path, JSON.stringify({ ...saved, head: "a".repeat(45) }));
+  await expect(runOverseer(r.config)).rejects.toThrow();
+  expect(await Bun.file(r.calls).exists()).toBe(false);
 });
 
 test("a newly committed constructor thread survives old and same-HEAD checkpoints", async () => {

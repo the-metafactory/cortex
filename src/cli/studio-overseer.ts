@@ -17,7 +17,7 @@ export const OverseerConfig = z.object({
   ranger: z.array(z.string().min(1)).min(1),
   staleDays: z.number().int().positive().default(6),
 }).strict();
-const State = z.object({ head: z.string().regex(/^[a-f0-9]{40}$/), material: z.record(z.string(), z.string()), queued: z.record(z.string(), z.string()), pendingMaterial: z.array(z.string()).default([]), changedAt: z.record(z.string(), z.number()).default({}) });
+const State = z.object({ head: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), material: z.record(z.string(), z.string()), queued: z.record(z.string(), z.string()), pendingMaterial: z.array(z.string()).default([]), changedAt: z.record(z.string(), z.number()).default({}) });
 const Event = z.object({ key: z.string(), at: z.number(), title: z.string(), area: z.string().nullable(), kind: z.enum(["meeting", "all-day", "reminder", "agent", "agent-stop"]) });
 const Desk = z.object({ today: z.array(Event), ahead: z.array(Event) });
 const Policy = z.object({ directory: z.string(), studio: z.object({ maxActive: z.number(), areas: z.array(z.object({ id: z.string(), label: z.string(), color: z.string(), policy: z.enum(["local", "cloud"]) })) }) });
