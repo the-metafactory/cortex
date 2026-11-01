@@ -1,3 +1,4 @@
+import { mailYesFilter, readMailDecision } from "./mail-yes-filter";
 import { calendarKey, calendarName, discoverCalendars } from "./calendars";
 import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
@@ -141,6 +142,7 @@ export async function composeDesk(
   if (classifier) void classifier.kick(db, { now, mail, events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(activeCorrections) });
   const classified = classifier ? readClassifications(db, mail.filter((m) => m.unread).map((m) => m.id)) : undefined;
   const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null) : null;
+  const yesFilter = await mailYesFilter(db, desk, now);
   const notes = listOpenNotes(db);
   const reminders = notes.filter((n) => n.kind === "reminder" && n.dueAt !== null);
   const written = (deps.recentWrites?.pending(now, events.map((e) => ({ title: e.title, start: Date.parse(e.start) }))) ?? []).map((w, i): CalendarEvent => ({
@@ -166,10 +168,10 @@ export async function composeDesk(
     .filter((item) => goalListed(goalStatuses, item.goal));
   const items = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: Boolean(desk.mailActions?.trash?.length), draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)) }),
+    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: Boolean(desk.mailActions?.trash?.length), draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)) }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
-  ], rules, readDeliveries(db), now), activeCorrections);
+  ], rules, readDeliveries(db), now), activeCorrections).map(item => item.kind === "mail" ? { ...item, mailDecision: readMailDecision(db, item.source, item.key.slice("mail:".length)) } : item);
 
   return {
     ...(routines ? { routines } : {}),

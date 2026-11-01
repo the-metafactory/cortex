@@ -1,3 +1,4 @@
+import { DEFAULT_YES_FILTER } from "./studio/view";
 import type { VigilSubjectView } from "../../../vigil/subjects-view";
 import type { SourceEvent, SourceMail } from "./sources/command";
 import type { RangerMap, RangerMapNode, RangerNeedsYou, RangerState } from "./sources/ranger";
@@ -288,6 +289,7 @@ export interface MailInput {
   mail: (SourceMail & { area: string | null; sourceId: string })[];
   events: ClassifierEvent[];
   vips: ReadonlySet<string>;
+  yesFilter?: import("./mail-yes-filter").MailYesFilter;
   classified?: ReadonlyMap<string, MailClassification>;
   unimportant?: ReadonlySet<string>;
   trash?: boolean;
@@ -379,6 +381,7 @@ export function mailItems(input: MailInput): DeskItem[] {
     const offered = [...(quiet ? [SEEN] : []), ...showMeeting, ...replyLead, ...open, ...(trash && !quiet ? [DELETE] : []), ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, LATER];
     const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
     if (verdict.sorted) history.push(`The mail classifier sorted it as ${verdict.sorted}.`);
+    if (triage && (!triage.commitment || triage.commitment === "unknown")) history.push("Whether this mail asks for a new commitment has not been established.");
     return {
       key: `mail:${m.id}`,
       kind: "mail",
@@ -401,6 +404,7 @@ export function mailItems(input: MailInput): DeskItem[] {
       ...(suggestion ? { suggestion } : {}),
       ...(verdict.eventKey ? { eventKey: verdict.eventKey } : {}),
       ...(canDraft ? { reply: { to: m.from.name ? `${m.from.name} <${m.from.address}>` : m.from.address, subject: replySubject(m.subject) } } : {}),
+      ...((triage?.commitment === "request" || triage?.commitment === "invitation") ? { yesFilter: input.yesFilter ?? { questions: [...DEFAULT_YES_FILTER], commitments: [], problems: [] } } : {}),
       since: receivedAt,
     };
   });
