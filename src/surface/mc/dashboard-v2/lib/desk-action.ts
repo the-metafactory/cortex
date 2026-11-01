@@ -48,7 +48,7 @@ export const submitGoalAction = (body: { action: string; goal: string }, fetchIm
   postDesk(DESK_GOAL_PATH, body, fetchImpl);
 
 export type MailActionBody =
-  | { action: "trash" | "unimportant" | "report"; key: string }
+  | { action: "trash" | "unimportant" | "report" | "digest.keep"; key: string }
   | { action: "move"; key: string; target: import("../../desk/mail-move").MoveTarget }
   | { action: "undo" | "block"; move: string }
   | { action: "sweep"; sweep: string; keys: string[] }

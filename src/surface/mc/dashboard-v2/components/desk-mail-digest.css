@@ -1,0 +1,13 @@
+.desk-digests{display:grid;gap:18px}
+.desk-digest{border:1px solid #dce3de;border-radius:12px;background:#fff;padding:20px 24px;min-width:0;overflow-wrap:anywhere}
+.desk-digest h3{font-size:17px;font-weight:600;margin:6px 0 10px;letter-spacing:-.01em}
+.desk-digest-list{list-style:none;margin:0 0 12px;padding:0}
+.desk-digest-list li{display:flex;gap:10px;align-items:baseline;justify-content:space-between;padding:7px 0;border-top:1px solid #edf0ed;font-size:14px}
+.desk-digest-list li:first-child{border-top:0}
+.desk-digest-list li.flag{font-weight:600}
+.desk-digest-line{display:flex;flex-direction:column;min-width:0;flex:1}
+.desk-digest-line small{font-weight:400;color:#47604f;font-size:13px;margin-top:3px}
+.desk-digest-chip{flex:none;font-size:11px;font-weight:600;background:#e3efe6;color:#264a32;border-radius:6px;padding:1px 7px}
+.desk-digest-acts{display:flex;gap:6px;flex:none}
+.desk-digest-acts .desk-btn{padding:3px 9px;font-size:12.5px}
+@media (max-width:640px){.desk-digest{padding:16px}.desk-digest-list li{flex-wrap:wrap}}
