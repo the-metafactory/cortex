@@ -9,7 +9,7 @@
 import { readFileSync, readdirSync, existsSync, statSync } from "fs";
 import { join, dirname, resolve, isAbsolute, basename } from "path";
 import { parse as parseYaml } from "yaml";
-import { AgentConfigSchema, NetworkFileSchema, type AgentConfig, type NetworkFile } from "../types/config";
+import { AgentConfigSchema, DeskSchema, NetworkFileSchema, type AgentConfig, type NetworkFile } from "../types/config";
 import {
   AgentSchema,
   CortexConfigSchema,
@@ -400,6 +400,18 @@ function listLayerFiles(dir: string): string[] {
   return listYamlFiles(dir).map((f) => join(dir, f));
 }
 
+function withDeskFile(raw: Record<string, unknown>, configPath: string): Record<string, unknown> {
+  const file = join(dirname(configPath), "desk.yaml");
+  if (resolve(file) === resolve(configPath) || !existsSync(file)) return raw;
+  enforceChmod600(file);
+  const desk = readLayerFile(file);
+  const allowed = new Set<string>(DeskSchema.keyof().options);
+  const unknown = Object.keys(desk).filter(key => !allowed.has(key));
+  if (unknown.length > 0) throw new Error(`config-composer: desk.yaml contains unknown Desk settings: ${unknown.join(", ")}; use Desk fields directly without an mc or desk wrapper`);
+  if (Object.keys(desk).length === 0) return raw;
+  return deepMerge(raw, { mc: { desk } });
+}
+
 /**
  * GW.a.3b.2a surfaces-aware variant of the composer (cortex#524).
  *
@@ -447,7 +459,7 @@ function composeRawConfigWithSurfaces(configPath: string): {
     const content = readFileSync(expandedPath, "utf-8");
     const single = (parseYaml(content) ?? {}) as Record<string, unknown>;
     const surfaces = parseSurfaces(single.surfaces);
-    return { raw: foldSurfaceBindings(single, defaultFoldPlatforms()), surfaces };
+    return { raw: foldSurfaceBindings(withDeskFile(single, expandedPath), defaultFoldPlatforms()), surfaces };
   }
 
   // CFG.a.1 — directory layout. Fixed precedence: system → network → surfaces
@@ -470,7 +482,7 @@ function composeRawConfigWithSurfaces(configPath: string): {
   // internally — `parseSurfaces` re-uses the same schema so the parse is
   // redundant but cheap (no I/O). Both share the same validated result shape.
   const surfaces = parseSurfaces(merged.surfaces);
-  return { raw: foldSurfaceBindings(merged, defaultFoldPlatforms()), surfaces };
+  return { raw: foldSurfaceBindings(withDeskFile(merged, expandedPath), defaultFoldPlatforms()), surfaces };
 }
 
 /**
