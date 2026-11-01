@@ -5,6 +5,8 @@ import type { RulingExplanation } from "./ruling";
 import type { DeskVoice } from "./voice";
 import type { AREA_POLICIES } from "../../../common/types/config";
 import type { RoutineView } from "./routine-command";
+import type { CalendarAvailability } from "./calendar-availability";
+import type { EventAvailability } from "./calendar-contract";
 
 export type DeskUrgency = "now" | "today" | "this-week" | "waiting";
 
@@ -121,6 +123,8 @@ export interface DeskFoldedGroup {
 }
 
 export interface DeskEvent {
+  calendarId?: string;
+  availability?: EventAvailability;
   color?: string;
   calendar?: string;
   key: string;
@@ -142,6 +146,7 @@ export interface DeskGoal {
 }
 
 export interface DeskView {
+  calendarAvailability?: CalendarAvailability;
   routines?: RoutineView;
   mailRules?: import("./mail-rules").MailRuleView[];
   mailSweeps?: import("./mail-sweep").MailSweepView[];

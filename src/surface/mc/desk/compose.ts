@@ -4,7 +4,8 @@ import { withoutClosedTasks, type WaitingTask, type WaitingTasks } from "./sourc
 import { mailYesFilter, readMailDecision } from "./mail-yes-filter";
 import { readStudioDesk } from "./studio-my-day";
 import { movedKeys, sourceIdentity } from "./my-day";
-import { calendarKey, calendarName, discoverCalendars } from "./calendars";
+import { calendarSetting, discoverCalendars } from "./calendars";
+import { calendarAvailability } from "./calendar-availability";
 import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
@@ -162,9 +163,10 @@ export async function composeDesk(
   for (const r of readings) sources.push(r.error === null ? { id: r.id, ok: true } : { id: r.id, ok: false, error: r.error });
   const unreadable = readings.filter((r) => r.problems.length > 0).map(unreadableLine);
   const reportedEvents = readings.flatMap((r) => r.events.map((e) => ({ ...e, area: r.area, sourceId: r.id })));
-  const calendars = discoverCalendars(db, reportedEvents);
+  const calendarNames = readings.flatMap(reading => reading.calendarCoverage?.calendars.map(calendar => ({ sourceId: reading.id, calendar: calendar.name, calendarId: calendar.id })) ?? []);
+  const calendars = discoverCalendars(db, [...reportedEvents, ...calendarNames]);
   const events = reportedEvents.flatMap((e) => {
-    const setting = calendars.get(calendarKey(e.sourceId, calendarName(e)));
+    const setting = calendarSetting(calendars, e);
     return setting?.enabled ? [{ ...e, calendar: setting.name, color: setting.color }] : [];
   });
   const digested = digestedIds(db, readings.flatMap((r) => r.mail.map((m) => m.id)));
@@ -230,6 +232,7 @@ export async function composeDesk(
   const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => ({ ...i, todoFingerprint: sourceIdentity(i) }));
   return {
     ...(routines ? { routines } : {}),
+    calendarAvailability: calendarAvailability({ sources: desk.sources, readings, calendars: [...calendars.values()], now }),
     myDay,
     mirror: buildWeeklyMirror({ now, desk, state: loadBalanceState(db), studio, readings, events, calendarSources: [...calendars.values()].map(c => c.source), dmarc }),
     calendars: [...calendars.values()],
@@ -339,10 +342,12 @@ type CalendarEvent = SourceEvent & { area: string | null; sourceId: string; colo
 
 function calendarEvents(events: CalendarEvent[], from: number, to: number): DeskEvent[] {
   return events
-    .filter((e) => { const at = Date.parse(e.start); return at >= from && at < to; })
+    .filter((e) => { const at = Date.parse(e.start); return at < to && (e.end ? Date.parse(e.end) > from : at >= from); })
     .map((e): DeskEvent => ({
       key: `cal:${e.sourceId}:${e.id}`,
       at: Date.parse(e.start),
+      ...(e.availability ? { availability: e.availability } : {}),
+      ...(e.calendarId ? { calendarId: e.calendarId } : {}),
       ...(e.end ? { end: Date.parse(e.end) } : {}),
       title: e.title,
       ...(e.location && !e.online ? { note: e.location } : {}),

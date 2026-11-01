@@ -1,39 +1,14 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type { MyDayView } from "../../desk/my-day";
-import type { MyDayCommand } from "../../desk/my-day-schema";
 import { deskSearch } from "../hooks/use-desk-studio";
 import { balanceSearch } from "../hooks/use-balance-location";
-import { postJson } from "../lib/api";
+import { useMyDay } from "../hooks/use-my-day";
+export { submitMyDay } from "../lib/desk-my-day-action";
 import "./desk-my-day.css";
 
-export async function submitMyDay(date: string, command: MyDayCommand, requestId: string = crypto.randomUUID()): Promise<{ view: MyDayView; undo?: string; notice?: string; outlineId?: string; location?: string }> {
-  return postJson("/api/desk/my-day", { date, command, requestId });
-}
 export function MyDayLane({ day, onChanged }: { day: MyDayView; onChanged: () => void }) {
-  const [local, setLocal] = useState<MyDayView | null>(null);
-  const current = local?.date === day.date && local.revision > day.revision ? local : day;
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
+  const { current, note, busy, change, retryable, retry } = useMyDay(day, onChanged);
   const [swap, setSwap] = useState<string | null>(null);
-  const retry = useRef<{ payload: string; id: string } | null>(null);
-  const change = async (command: MyDayCommand): Promise<boolean> => {
-    if (busy) return false;
-    const payload = JSON.stringify({ date: current.date, command });
-    const requestId = retry.current?.payload === payload ? retry.current.id : crypto.randomUUID();
-    retry.current = { payload, id: requestId };
-    setBusy(true);
-    try {
-      const result = await submitMyDay(current.date, command, requestId);
-      retry.current = null;
-      setLocal(result.view);
-      setNote(command.op === "defer" ? "Set aside for today. Undo is kept below." : "Saved.");
-      onChanged();
-      return true;
-    } catch (err) {
-      setNote(err instanceof Error ? err.message : "Could not save. Try again.");
-      return false;
-    } finally { setBusy(false); }
-  };
   const ids = current.items.map(i => i.task.id);
   return <section className="desk-myday" aria-label="My day">
     <header><h2>My day</h2><span>{current.phase === "proposed" ? "Your proposed day" : current.phase === "closed" ? "Day complete" : "Your intention today"}</span></header>
@@ -54,12 +29,13 @@ export function MyDayLane({ day, onChanged }: { day: MyDayView; onChanged: () =>
           <button className="desk-btn ghost" disabled={busy} onClick={() => void change({ op: "defer", id: item.task.id })}>→ not today</button>
           {current.phase === "proposed" && <button className="desk-btn ghost" onClick={() => setSwap(swap === item.task.id ? null : item.task.id)}>Swap</button>}
         </div>
-        {swap === item.task.id && current.phase === "proposed" && <div className="myday-alternates"><p>Choose an engine alternate</p>{current.alternates.map(a => <button className="desk-btn" key={a.task.id} disabled={busy} onClick={() => { void change({ op: "draft", ids: ids.map(id => id === item.task.id ? a.task.id : id) }); setSwap(null); }}>{a.task.title}</button>)}{current.alternates.length === 0 && <p>No other task is available today.</p>}</div>}
+        {swap === item.task.id && current.phase === "proposed" && <div className="myday-alternates"><p>Choose an engine alternate</p>{current.alternates.map(a => <button className="desk-btn" key={a.task.id} disabled={busy} onClick={() => void change({ op: "draft", ids: ids.map(id => id === item.task.id ? a.task.id : id) }, () => setSwap(null))}>{a.task.title}</button>)}{current.alternates.length === 0 && <p>No other task is available today.</p>}</div>}
       </li>)}</ol>
       {current.phase === "proposed" ? <div className="myday-contract"><p>Does this look like your day?</p><button className="desk-btn pri" disabled={busy} onClick={() => void change({ op: "start", ids })}>Start the day</button> <button className="desk-btn" disabled={busy || ids.length === 0} onClick={() => void change({ op: "draft", ids: ids.slice(0, 1) })}>Just one thing</button> <button className="desk-btn ghost" disabled={busy} onClick={() => void change({ op: "propose" })}>Refresh proposal</button></div> : <><Wins day={current} /><button className="desk-btn" disabled={busy} onClick={() => void change({ op: "close" })}>Done for today</button></>}
     </>}
     {current.undos.map(u => <div className="myday-undo" key={u.receipt}>{u.title} is set aside. <button className="desk-btn" disabled={busy} onClick={() => void change({ op: "undo", receipt: u.receipt })}>Undo</button></div>)}
     {note && <p role="status">{note}</p>}
+    {retryable && <button type="button" className="desk-btn" disabled={busy} onClick={() => void retry()}>Retry saved change</button>}
     <a className="desk-btn ghost myday-outline-toggle" href={`${balanceSearch(typeof window === "undefined" ? "" : window.location.search, { tab: "plan", item: null, area: "", query: "" })}${typeof window === "undefined" ? "" : window.location.hash}`}>Edit outline in Balance →</a>
   </section>;
 }

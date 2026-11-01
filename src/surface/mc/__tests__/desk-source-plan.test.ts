@@ -6,7 +6,7 @@ import { handleDeskMyDay } from "../api/desk-my-day";
 import { handleGetDesk } from "../api/desk";
 import { addNote } from "../desk/notes";
 import { HandledLedger } from "../desk/actions";
-import { afterEach, beforeEach, expect, it } from "bun:test";
+import { afterEach, beforeEach, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
 import { DEFAULT_SETTINGS, findNode, type AppState } from "../../../balance";
@@ -348,6 +348,8 @@ it("freezes the existing proposed day before first-ever filing without a prior r
 });
 
 it("actual Desk handlers retain a changed source and file/read back/replay one current reminder", async () => {
+  const clock = spyOn(Date, "now").mockReturnValue(now);
+  try {
   const runtime = { options: desk, ledger: new HandledLedger() };
   addNote(db, "reminder", "Owned planning probe", now - 60_000, now);
   const initial = await handleGetDesk(db, runtime, undefined);
@@ -440,6 +442,7 @@ it("actual Desk handlers retain a changed source and file/read back/replay one c
       (i: DeskItem) => i.key === source.key,
     ),
   ).toBe(true);
+  } finally { clock.mockRestore(); }
 });
 
 it("reopens a file-backed DB and reverses an unchanged area filing through its original receipt", async () => {
