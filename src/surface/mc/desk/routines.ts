@@ -70,7 +70,7 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
       changes: pendingRoutineOperations(db, options),
       installed: selected.map((r) => {
         const proposal = readRoutineProposal(db, r.id, "routine_id");
-        return { ...r, title: proposal?.title ?? r.id.replaceAll(/[-_]/g, " "), words: proposal?.words ?? `${r.schedule} (${r.timezone})` };
+        return { ...r, title: proposal?.title ?? r.id.replaceAll(/[-_]/g, " "), words: proposal?.words ?? `${r.schedule} (${r.timezone ?? "timezone not specified"})` };
       }),
       pending: pending.filter((p) => ids.has(p.blueprintId)),
       done: history.filter((h) => h.outcome === "fired" && h.resolutionOf === null && selected.some((r) => r.id === h.blueprintId && r.policy === "auto")).slice(0, 10).map((h) => ({ routineId: h.blueprintId, title: readRoutineProposal(db, h.blueprintId, "routine_id")?.title ?? h.blueprintId.replaceAll(/[-_]/g, " "), decisionId: h.decisionId, at: h.at })),

@@ -2,6 +2,7 @@ import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
 import { MyDayLane, submitMyDay } from "./desk-my-day";
 import { StudioSessionPanel, useStudioSession } from "./desk-studio-session";
 import { RoutinesSection, RoutineDone } from "./desk-routines";
+import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
 import { submitDeskAction, submitGoalAction, submitMailAction, submitRuling } from "../lib/desk-action";
@@ -32,6 +33,7 @@ interface DeskViewProps {
 export function DeskView({ onOpenMissionControl }: DeskViewProps) {
   const { view, enabled, error, reload } = useDesk(true);
   const [settings, setSettings] = useSettingsLocation();
+  const [routines, setRoutines] = useState(false);
   if (!enabled) {
     return (
       <div className="desk desk-off">
@@ -48,6 +50,7 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
       </div>
     );
   }
+  if (routines) return <DeskRoutineEditor onBack={() => { setRoutines(false); reload(); }} />;
   if (settings) {
     return (
       <DeskSettings
@@ -61,10 +64,10 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
       />
     );
   }
-  return <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} onOpenSettings={() => { setSettings("calendars"); }} onChanged={reload} />;
+  return <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} onOpenSettings={() => { setSettings("calendars"); }} onOpenRoutines={() => { setRoutines(true); }} onChanged={reload} />;
 }
 
-export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = () => {}, onChanged = () => {} }: { view: DeskViewModel; error: string | null; onOpenSettings?: () => void; onChanged?: () => void } & DeskViewProps) {
+export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = () => {}, onOpenRoutines, onChanged = () => {} }: { view: DeskViewModel; error: string | null; onOpenSettings?: () => void; onOpenRoutines?: () => void; onChanged?: () => void } & DeskViewProps) {
   const [area, setArea] = useState(ALL_AREAS);
   const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
   const [detail, setDetail] = useState<DeskItem | null>(null);
@@ -570,6 +573,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </main>
 
         <aside className="desk-margin" aria-label="At a glance">
+          <button className="desk-btn" type="button" onClick={onOpenRoutines}>Open Routines</button>
           <RoutinesSection view={view.routines} onChanged={onChanged} />
           <section className="desk-msec">
             <h3 className="desk-mh">Agents</h3>

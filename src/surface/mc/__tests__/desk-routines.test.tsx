@@ -296,7 +296,7 @@ describe("Desk routines", () => {
     const base = `http://localhost:${ctx.server.port}`;
     const send = (path: string, email: string, origin = base): Promise<Response> => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json", origin, "Cf-Access-Authenticated-User-Email": email }, body: "{}" });
     try {
-      for (const path of ["/api/desk/create", "/api/desk/routines"]) {
+      for (const path of ["/api/desk/create", "/api/desk/routines", "/api/desk/routine-editor"]) {
         expect((await send(path, "unlisted@example.com")).status).toBe(403);
         expect((await send(path, "principal@example.com", "https://evil.example")).status).toBe(403);
         expect((await send(path, "principal@example.com")).status).toBe(400);
