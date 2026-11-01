@@ -42,6 +42,10 @@ function stateFor(db: Database, desk: DeskOptions, date: string, meta: MyDayMeta
   return state;
 }
 export interface MyDayView {
+  work: {
+    confirmedIds: string[];
+    selection: { kind: "automatic" } | { kind: "manual"; id: string } | { kind: "unavailable"; id: string; reason: string };
+  };
   studioStatus: "synced" | "unavailable" | "disabled";
   studioTasks: { id: string; slug: string }[];
   studioProjects: { id: string; slug: string }[];
@@ -75,7 +79,13 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
   const ids = day?.confirmed ?? (meta.draft?.date === date ? meta.draft.ids : selectToday(state, date).map(i => i.task.id));
   const visibleIds = day ? ids : ids.slice(0, state.settings.todayCap);
   const byId = new Map(all.map(i => [i.task.id, i]));
+  const selected = meta.selection?.date === date ? meta.selection : null;
+  const available = selected && visibleIds.includes(selected.id) && byId.has(selected.id);
   return {
+    work: {
+      confirmedIds: day?.confirmed ?? [],
+      selection: !selected ? { kind: "automatic" } : available ? { kind: "manual", id: selected.id } : { kind: "unavailable", id: selected.id, reason: "Your chosen task is no longer actionable in this day. Choose another task or return to the recommendation." },
+    },
     studioStatus: !desk.studio ? "disabled" : studio ? "synced" : "unavailable",
     studioTasks: studioLinks(meta),
     studioProjects: meta.studio.map(project => ({ id: project.projectId, slug: project.slug })),
@@ -145,6 +155,22 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
     let outlineId: string | undefined;
     let location: string | undefined;
     switch (command.op) {
+      case "select": {
+        if (command.revision !== meta.revision) throw new Error("Your day changed. Refresh before choosing a task.");
+        const current = viewOf(state, meta, desk, date, studio);
+        if (current.phase === "closed") throw new Error("This day is closed.");
+        if (command.id !== null && !current.items.some(item => item.task.id === command.id)) throw new Error("That task is no longer actionable in this day.");
+        meta.selection = command.id === null ? null : { date, id: command.id };
+        break;
+      }
+      case "reorder": {
+        if (command.revision !== meta.revision) throw new Error("Your day changed. Refresh before reshuffling.");
+        const day = state.dayState;
+        if (day?.date !== date || day.closed) throw new Error("Reshuffle an active confirmed day.");
+        if (command.ids.length !== day.confirmed.length || new Set(command.ids).size !== command.ids.length || command.ids.some(id => !day.confirmed.includes(id))) throw new Error("Keep exactly the same tasks when reshuffling your day.");
+        day.confirmed = [...command.ids];
+        break;
+      }
       case "source-plan":
         if (state.dayState?.date !== date && meta.draft?.date !== date) meta.draft = engineDraft(state, desk, date, studio);
         location = command.parent === null ? "Inbox" : balanceParents({ outline: state.outline }, desk.areas).find(p => p.id === command.parent)?.path;

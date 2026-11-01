@@ -148,11 +148,12 @@ describe("DeskBody with calendar, mail and VIPs", () => {
     />,
   );
 
-  it("leads with the minutes before the next meeting and offers to join it", () => {
-    expect(html).toContain("You have 44 minutes before your");
-    const schedule = /aria-label="Current schedule">([\s\S]*?)<\/section>/.exec(html)?.[1];
-    expect(schedule).toContain(`${new Date(NOW + 44 * 60_000).toTimeString().slice(0, 5)}–${new Date(NOW + 104 * 60_000).toTimeString().slice(0, 5)} · DA results`);
-    expect(html).toMatch(/<a href="https:\/\/teams\.example\/j\/1"[^>]*>Join<\/a>/);
+  it("keeps the real calendar entry and Join while an unavailable day makes no gap claim", () => {
+    expect(html).toContain("Your saved day is unavailable");
+    expect(html).not.toContain("You have 44 minutes");
+    expect(html).toContain("DA results");
+    expect(html).toContain("desk-join");
+    expect(html).toContain("https://teams.example/j/1");
   });
 
   it("shows the mail's first paragraph and the next days", () => {
@@ -185,8 +186,9 @@ describe("DeskBody when the next meeting is hours away", () => {
     <DeskBody view={{ ...view, today: [{ key: "cal:p:1", at: NOW + 5 * 3_600_000, title: "Concert", area: null, kind: "meeting" }] }} error={null} onOpenMissionControl={() => {}} />,
   );
 
-  it("says what needs you once, not twice", () => {
-    expect((html.match(/3 things need you, most important first\./g) ?? []).length).toBe(1);
+  it("keeps one quiet Catch-up preview alongside the future calendar entry", () => {
+    expect((html.match(/aria-label="Catch-up preview"/g) ?? []).length).toBe(1);
+    expect(html).not.toContain("3 things need you, most important first.");
     expect(html).toContain("Concert");
   });
 });

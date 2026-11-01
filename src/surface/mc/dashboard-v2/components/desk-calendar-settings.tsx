@@ -40,12 +40,12 @@ export function CalendarSettingsBody({ rows, error, busy, onChange }: {
       {rows.length === 0 && <p className="desk-set-empty">No calendars have been reported by your sources yet.</p>}
       <ul className="desk-set-list">
         {rows.map((c) => (
-          <li key={calendarKey(c.source, c.name)}>
+          <li key={calendarKey(c.source, c.name, c.calendarId)}>
             <label className="desk-calendar-toggle">
-              <input type="checkbox" aria-label={`Show ${c.name} (${c.source})`} checked={c.enabled} disabled={busy} onChange={(e) => onChange({ source: c.source, name: c.name, enabled: e.target.checked })} />
+              <input type="checkbox" aria-label={`Show ${c.name} (${c.source}${c.calendarId ? ` · ${c.calendarId}` : ""})`} checked={c.enabled} disabled={busy} onChange={(e) => onChange({ source: c.source, name: c.name, ...(c.calendarId ? { calendarId: c.calendarId } : {}), enabled: e.target.checked })} />
               <span>{c.name}<small>{c.source}</small></span>
             </label>
-            <input type="color" aria-label={`Colour for ${c.name} (${c.source})`} value={c.color} disabled={busy} onChange={(e) => onChange({ source: c.source, name: c.name, color: e.target.value })} />
+            <input type="color" aria-label={`Colour for ${c.name} (${c.source}${c.calendarId ? ` · ${c.calendarId}` : ""})`} value={c.color} disabled={busy} onChange={(e) => onChange({ source: c.source, name: c.name, ...(c.calendarId ? { calendarId: c.calendarId } : {}), color: e.target.value })} />
           </li>
         ))}
       </ul>

@@ -119,6 +119,7 @@ export const TABLE_NAMES = [
   "vigil_attention_resolutions",
   "desk_vips",
   "desk_calendars",
+  "desk_calendar_identities",
   "desk_notes",
   "desk_routine_proposals",
   "desk_routine_operations",
@@ -171,6 +172,15 @@ export const SCHEMA_SQL: string[] = [
     enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
     color TEXT NOT NULL,
     PRIMARY KEY (source, name)
+  )`,
+  `CREATE TABLE IF NOT EXISTS desk_calendar_identities (
+    source TEXT NOT NULL,
+    calendar_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    legacy_name TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+    color TEXT NOT NULL,
+    PRIMARY KEY (source, calendar_id)
   )`,
   "CREATE TABLE IF NOT EXISTS desk_studio_sessions (id TEXT PRIMARY KEY, directory TEXT NOT NULL, data TEXT NOT NULL)",
   `CREATE TABLE IF NOT EXISTS desk_mail_classes (
