@@ -1,12 +1,13 @@
 import type { WeeklyMirror, MirrorThread } from "../../desk/mirror";
 import type { DeskArea } from "../../desk/types";
 import { foregroundForWeek, type ForegroundReading } from "../lib/studio-foreground";
+import { MirrorMail } from "./desk-mirror-mail";
 import "./desk-mirror.css";
 
 const percent = (value: number): string => `${Math.round(value * 100)}%`;
 const when = (at: number): string => new Date(at).toLocaleString();
 
-export function DeskMirror({ mirror, areas, foreground, onThread }: { mirror: WeeklyMirror; areas: DeskArea[]; foreground: ForegroundReading; onThread: (slug: string) => void }) {
+export function DeskMirror({ mirror, areas, foreground, onThread, onChanged }: { mirror: WeeklyMirror; areas: DeskArea[]; foreground: ForegroundReading; onThread: (slug: string) => void; onChanged?: () => void }) {
   const areaLabel = (id: string | null): string => areas.find(a => a.id === id)?.label ?? (id ? "Unavailable area" : "Unassigned");
   const minutes = foregroundForWeek(foreground, mirror.week);
   return (
@@ -55,12 +56,7 @@ export function DeskMirror({ mirror, areas, foreground, onThread }: { mirror: We
         {mirror.calendar.sources.map(source => <p className="dmr-quiet" key={source.id}>{source.id}: {source.status}{source.readAt === null ? "" : `, read ${when(source.readAt)}`}{source.problems ? `; ${source.problems} source problems` : ""}.</p>)}
         {(mirror.calendar.withoutDuration > 0 || mirror.calendar.allDay > 0) && <p className="dmr-quiet">Not counted as meeting hours: {mirror.calendar.withoutDuration} events without a valid duration; {mirror.calendar.allDay} all-day entries.</p>}
       </section>
-      {mirror.dmarc && <section className="dmr-card" aria-labelledby="dmr-dmarc">
-        <h2 id="dmr-dmarc">Mail sent as your domains</h2>
-        <p>{mirror.dmarc.line}</p>
-        {mirror.dmarc.domains.length > 0 && <ul className="dmr-hours">{mirror.dmarc.domains.map(d => <li key={d.domain}><strong>{d.domain}</strong><span>{d.owned ? `${d.messages} messages, ${d.failures} failing` : `${d.reports} reports, not your domain`}</span></li>)}</ul>}
-        {mirror.dmarc.refused.map((r, index) => <p className="dmr-quiet" key={`${r.subject}:${index}`}>Not read: {r.subject}. {r.reason}</p>)}
-      </section>}
+      <MirrorMail mail={mirror.mail} dmarc={mirror.dmarc} {...(onChanged ? { onChanged } : {})} />
       <section className="dmr-card" aria-labelledby="dmr-threads">
         <h2 id="dmr-threads">What moved in Studio</h2>
         {!mirror.threads.available ? <p>The Studio source is unavailable.</p> : <>

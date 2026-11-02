@@ -448,6 +448,12 @@ const endpointSchema = (path: string, timeoutSeconds: number) => z.object({
 const EmbedderEndpointSchema = endpointSchema("mc.desk.mail.embedder", 10);
 const DigestEndpointSchema = endpointSchema("mc.desk.mail.digest.model", 60);
 
+export const DeskMailMirrorSchema = z.object({
+  checkAfterUndos: z.number().int().min(0).max(1000).default(2),
+  archivedUnread: z.number().int().min(1).max(1000).default(3),
+  top: z.number().int().min(1).max(50).default(5),
+});
+
 export const DeskSchema = z.object({
   routines: RoutineOptionsSchema.optional(),
   mirror: z.object({ day: z.enum(["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]), time: z.iso.time({ precision: -1 }) }).optional(),
@@ -572,6 +578,7 @@ export const DeskSchema = z.object({
           timeoutSeconds: z.number().int().min(1).max(60).default(10),
         })
         .optional(),
+      mirror: DeskMailMirrorSchema.optional(),
       suspicion: z
         .object({
           ownDomains: z.array(z.string().trim().toLowerCase().regex(HOST_NAME_RE, "mc.desk.mail.suspicion.ownDomains holds domain names such as example.org")).max(100),
