@@ -3,9 +3,11 @@ import { findNode } from "../../../balance";
 import type { HostSources } from "../../../conversations/host";
 import type { ObjectRef, OperationRecord, SourceState } from "../../../conversations/types";
 import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-conversation-writer";
+import { calendarWriter } from "./calendar-conversation-writer";
 import { loadBalanceState } from "./balance-store";
 import { studioRequestId } from "./conversation-ids";
 import type { DeskOptions } from "./compose";
+import type { WriterRunner } from "./create";
 import type { ListedMail } from "./mail-actions";
 import type { RoutineRunner } from "./routine-command";
 import { routineWriter } from "./routine-conversation-writer";
@@ -37,6 +39,7 @@ export interface SourceDeps {
   deskItems?: () => Promise<DeskItem[]>;
   listedMail?: (key: string) => ListedMail | null;
   runRoutine?: RoutineRunner;
+  runCalendar?: WriterRunner;
 }
 
 export function conversationSources(deps: SourceDeps): HostSources {
@@ -84,11 +87,12 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const deskItems = deps.deskItems;
   const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps), ...(deskItems ? { "balance-inbox-task": balanceInboxWriter({ ...deps, deskItems }) } : {}) };
   const routine = routineWriter({ routines: () => deps.desk()?.routines, ...(deps.runRoutine ? { run: deps.runRoutine } : {}) });
+  const calendar = calendarWriter({ db: deps.db, desk: deps.desk, ...(deps.runCalendar ? { run: deps.runCalendar } : {}), ...(deps.now ? { now: deps.now } : {}) });
   return {
     get writers() {
       const desk = deps.desk();
       if (!desk?.enabled) return {};
-      return { ...(hasBalanceState(deps.db) ? balanceWriters : {}), ...(desk.routines ? { routine } : {}) };
+      return { ...(hasBalanceState(deps.db) ? balanceWriters : {}), ...(desk.routines ? { routine } : {}), ...(desk.ask?.writers.calendar?.length ? { "calendar-event": calendar } : {}) };
     },
     resolvers: {
       "studio-thread": async ref => {

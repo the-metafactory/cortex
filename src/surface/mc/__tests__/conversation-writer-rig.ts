@@ -37,7 +37,7 @@ export function conversationWriterRig(prefix: string, label: string) {
       const res = await handleConversations(new Request(`http://127.0.0.1:8767${path}`, { method, headers: { host: "127.0.0.1:8767", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), new URL(`http://127.0.0.1:8767${path}`), guard, () => status, { db, runtime });
       return { status: res.status, body: await res.json() as T };
     };
-    const start = async (title: string): Promise<string> => (await call("POST", "/api/conversations", { title, origin: { kind: "web" }, policy: "local" })).body.conversation.id;
+    const start = async (title: string, policy: "local" | "cloud" = "local"): Promise<string> => (await call("POST", "/api/conversations", { title, origin: { kind: "web" }, policy })).body.conversation.id;
     const propose = async (id: string, type: string, fields: Record<string, string>): Promise<ProposalView> => (await call("POST", `/api/conversations/${id}/proposals`, { proposalId: randomUUID(), type, fields })).body.proposal;
     const proposalPath = (id: string, view: ProposalView, verb: "confirm" | "check"): string => `/api/conversations/${id}/proposals/${view.proposal.proposalId}/${verb}`;
     const confirm = (id: string, view: ProposalView, extra: Record<string, unknown> = {}) => call("POST", proposalPath(id, view, "confirm"), { revision: view.proposal.revision, digest: view.digest, ...extra });
