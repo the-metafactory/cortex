@@ -192,7 +192,7 @@ mc:
       pulse: [/opt/desk/pulse]
 ```
 
-`pulse` is a nonempty argument array for the Pulse CLI. When the principal confirms a `flow` proposal, the Desk writes the definition to a private temporary file and runs `pulse flow save --file <file> --request-id <id> --conversation <id> --exchange <id> --json`. Pulse stores the flow in its saved-flows directory and records the conversation as provenance. To use another directory for a stack, set `XDG_CONFIG_HOME` in the command, for example `[env, XDG_CONFIG_HOME=/srv/stack/config, /opt/desk/pulse]`. The Desk reads a save back with `pulse flow show --request-id <id> --json`. It never runs, schedules or enables a flow.
+`pulse` is a nonempty argument array for the Pulse CLI. When the principal confirms a `flow` proposal, the Desk writes the definition to a private temporary file and runs `pulse flow save --file <file> --request-id <id> --conversation <id> --exchange <id> --json`. Pulse stores the flow in its saved-flows directory and records the conversation as provenance. Pulse uses `$XDG_CONFIG_HOME/pulse/flows`, and the flow name is unique within it. When several stacks share a host, give each stack its own directory by setting `XDG_CONFIG_HOME` in its command, for example `[env, XDG_CONFIG_HOME=/srv/stack/config, /opt/desk/pulse]`. The Desk reads a save back with `pulse flow show --request-id <id> --json`. It never runs, schedules or enables a flow.
 
 ## Goal actions
 

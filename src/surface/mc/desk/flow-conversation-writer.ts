@@ -59,7 +59,7 @@ async function withDefinition<T>(definition: string, use: (file: string) => Prom
   }
 }
 
-export function flowSaveArgs(options: FlowOptions, file: string, request: CreateRequest): string[] {
+function flowSaveArgs(options: FlowOptions, file: string, request: CreateRequest): string[] {
   const { provenance } = request;
   return [...options.pulse, "flow", "save", "--file", file, "--request-id", studioRequestId(request.operationId), "--conversation", provenance.conversationId, "--exchange", provenance.entryId ?? provenance.proposalId, "--json"];
 }
