@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { accountOf } from "../../../common/types/config";
 import { oneLine } from "./actions";
 import type { CalendarAvailability, CalendarInterval } from "./calendar-availability";
 import { createFromCard, type DeskWriters, type WriterRunner } from "./create";
@@ -366,12 +367,10 @@ function sentMessage(stdout: string, reply: InviteReply): string {
   return `${DONE[reply]}.`;
 }
 
-export function calendarFor(config: InvitationsConfig | undefined, account: string): { calendar?: string } | null {
-  for (const entry of config?.addToCalendar ?? []) {
-    if (entry === account) return {};
-    if (typeof entry !== "string" && entry.account === account) return entry.calendar ? { calendar: entry.calendar } : {};
-  }
-  return null;
+function calendarFor(config: InvitationsConfig | undefined, account: string): { calendar?: string } | null {
+  const entry = config?.addToCalendar.find((e) => accountOf(e) === account);
+  if (entry === undefined) return null;
+  return typeof entry !== "string" && entry.calendar ? { calendar: entry.calendar } : {};
 }
 
 async function addAccepted(mail: ListedMail, requestId: string, deps: InviteReplyDeps): Promise<string | null> {
@@ -383,5 +382,5 @@ async function addAccepted(mail: ListedMail, requestId: string, deps: InviteRepl
   const argv = target.calendar ? [...writer, "--calendar", target.calendar] : writer;
   const created = await createFromCard(card, { requestId, db: deps.db, writers: { calendar: argv }, run: deps.run, now: deps.now, timeoutMs: deps.writerTimeoutMs });
   if (!created.ok) return `The event was not added to your calendar: ${created.error}`;
-  return target.calendar ? `The event is in your calendar "${target.calendar}".` : "The event is in your calendar.";
+  return target.calendar ? created.message : "The event is in your calendar.";
 }

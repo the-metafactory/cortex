@@ -470,6 +470,8 @@ const InvitationCalendarSchema = z.union([
   }),
 ]);
 
+export const accountOf = (entry: z.infer<typeof InvitationCalendarSchema>): string => (typeof entry === "string" ? entry : entry.account);
+
 export const DeskMailInvitationsSchema = z.object({
   command: z.array(z.string().min(1)).min(1),
   timeoutSeconds: z.number().int().min(1).max(120).default(30),
@@ -478,7 +480,7 @@ export const DeskMailInvitationsSchema = z.object({
     .array(InvitationCalendarSchema)
     .max(20)
     .refine((entries) => {
-      const accounts = entries.map((e) => (typeof e === "string" ? e : e.account));
+      const accounts = entries.map(accountOf);
       return new Set(accounts).size === accounts.length;
     }, "mc.desk.mail.invitations.addToCalendar names an account twice")
     .default([]),

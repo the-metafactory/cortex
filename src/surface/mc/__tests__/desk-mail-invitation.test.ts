@@ -155,15 +155,17 @@ describe("replies", () => {
     expect(calls.filter((c) => c.argv[0] === "calendar-writer")).toHaveLength(1);
   });
 
-  test("an account that names a calendar adds the event through the invitation writer with --calendar; other accounts keep the shared writer", async () => {
-    answer = (argv) => (argv[0] === "invite-reply" ? { code: 0, stdout: JSON.stringify({ id: "r1" }), stderr: "" } : { code: 0, stdout: JSON.stringify({ id: "ev1" }), stderr: "" });
+  test("an account that names a calendar gets --calendar on the invitation writer and the writer's own words; an account without one gets the default calendar", async () => {
+    answer = (argv) => (argv[0] === "invite-reply" ? { code: 0, stdout: JSON.stringify({ id: "r1" }), stderr: "" } : { code: 0, stdout: JSON.stringify({ id: "ev1", message: argv.includes("Privat") ? 'Added "Budget review" to Privat on Tue 3 Nov at 14:00.' : "Added." }), stderr: "" });
     const config: InvitationsConfig = { ...CONFIG, calendarWriter: ["invitation-writer"], addToCalendar: ["work", { account: "personal", calendar: "Privat" }] };
     const priv = await replyToInvitation(mail({ id: "p@example.org", account: "personal" }), input({ reply: "accept" }), deps({ config }));
-    expect(priv.ok && priv.message).toBe('Accepted. The event is in your calendar "Privat".');
-    const work = await replyToInvitation(mail(), input({ reply: "accept" }), deps({ config: { ...config, calendarWriter: undefined } }));
+    expect(priv.ok && priv.message).toBe('Accepted. Added "Budget review" to Privat on Tue 3 Nov at 14:00.');
+    const work = await replyToInvitation(mail(), input({ reply: "accept" }), deps({ config }));
     expect(work.ok && work.message).toBe("Accepted. The event is in your calendar.");
-    expect(calls.filter((c) => c.argv[0] !== "invite-reply").map((c) => c.argv)).toEqual([["invitation-writer", "--calendar", "Privat"], ["calendar-writer"]]);
-    expect(invitationDecisions(db, ["p@example.org"]).get("p@example.org")?.calendar).toBe('The event is in your calendar "Privat".');
+    const shared = await replyToInvitation(mail({ id: "s@example.org" }), input({ reply: "accept" }), deps({ config: { ...config, calendarWriter: undefined } }));
+    expect(shared.ok).toBe(true);
+    expect(calls.filter((c) => c.argv[0] !== "invite-reply").map((c) => c.argv)).toEqual([["invitation-writer", "--calendar", "Privat"], ["invitation-writer"], ["calendar-writer"]]);
+    expect(invitationDecisions(db, ["p@example.org"]).get("p@example.org")?.calendar).toBe('Added "Budget review" to Privat on Tue 3 Nov at 14:00.');
   });
 
   test("a writer that refuses the named calendar leaves the answer sent and says the event was not added", async () => {
