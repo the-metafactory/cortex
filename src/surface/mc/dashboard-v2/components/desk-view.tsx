@@ -7,7 +7,7 @@ import { digestsInArea, MailDigests, type UnsubscribeAsk } from "./desk-mail-dig
 import type { MailSweepView } from "../../desk/mail-sweep";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
-import { MyDayLane } from "./desk-my-day";
+import { DeskTimeFirst } from "./desk-time-first";
 import { StudioSessionPanel, useStudioSession, type StartDiscussion } from "./desk-studio-session";
 import { ConversationsArea } from "./desk-conversations";
 import { useStartConversation } from "./desk-source-conversations";
@@ -634,8 +634,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       )}
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
       <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={(a) => <MailDigests digests={digestsInArea(view.mailDigests ?? [], a)} busy={sweeping} onArchive={openSweep} onKeep={(key) => void keepDigest(key)} onUnsubscribe={(key, ask) => void unsubscribeDigest(key, ask)} />} />
-      <div className="desk-grid" hidden={inStudio || inBalance || inCatchup || inConversation}>
-        <main>
+      <div className="desk-grid tf-shell" hidden={inStudio || inBalance || inCatchup || inConversation}>
+        <DeskTimeFirst day={view.myDay} calendar={view.calendarAvailability} now={view.generatedAt} onChanged={onChanged}
+          before={<>
           <section className="desk-lead">
             <p><strong>{brief.greeting}</strong> {brief.lines.join(" ")}</p>
             {error && <p className="desk-stale">{error}</p>}
@@ -682,18 +683,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
               {past.map((e) => <TimelineRow key={e.key} event={e} className={e.kind === "agent" ? "agentrow" : ""} />)}
             </ol>
           )}
-
-          <div className="desk-nowline"><span className="rule" /><span className="pill">Now {clock(view.generatedAt)}</span></div>
-
-          <div className="desk-day-lanes">
-          <section className="desk-now" aria-label="Current schedule"><h2>{nowHeading(view, selection.needsYou.length, nextMeeting)}</h2>{nextMeeting && <p>{clock(nextMeeting.at)}{nextMeeting.end ? `–${clock(nextMeeting.end)}` : ""} · {nextMeeting.title} {nextMeeting.url && <a href={nextMeeting.url} target="_blank" rel="noopener noreferrer">{nextMeeting.online ? "Join" : "Open"}</a>}</p>}</section>
-          <CatchupPreview view={catchupView} onOpen={openCatchup} />
-          {!inStudio && proposalCard}
-          <MailSweeps sweeps={sweepsInArea(view.mailSweeps ?? [], area)} onPreview={openSweep} />
-
-          {view.myDay && <MyDayLane day={view.myDay} onChanged={onChanged} />}
-          </div>
-
+          </>}
+          after={<>
           {later.length > 0 && (
             <ol className="desk-tl desk-later">
               {later.map((e) => <TimelineRow key={e.key} event={e} className={e.key === GHOST_KEY ? "ghost" : e.kind} />)}
@@ -701,9 +692,11 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           )}
 
           {ahead.length > 0 && <AheadStrip events={ahead} />}
-        </main>
-
-        <aside className="desk-margin" aria-label="At a glance">
+          </>}
+          proposal={proposalCard}
+          sweeps={<MailSweeps sweeps={sweepsInArea(view.mailSweeps ?? [], area)} onPreview={openSweep} />}
+          preview={<CatchupPreview view={catchupView} onOpen={openCatchup} />}
+          ambient={<>
           <button className="desk-btn" type="button" onClick={onOpenRoutines}>Open Routines</button>
           <RoutinesSection view={view.routines} onChanged={onChanged} />
           <section className="desk-msec">
@@ -764,7 +757,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
               Open Mission Control <span className="desk-chev">›</span>
             </button>
           </section>
-        </aside>
+          </>}
+        />
       </div>
 
       <div className="desk-scrim" onClick={() => { setDetail(null); if (!sweeping) setSweep(null); }} />

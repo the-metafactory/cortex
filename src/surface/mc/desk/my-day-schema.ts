@@ -7,6 +7,8 @@ export const MyDayCommandSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("source-plan"), revision: z.number().int().nonnegative(), key: id, fingerprint: z.string().regex(/^[a-f0-9]{64}$/), parent: id.nullable() }),
   z.object({ op: z.literal("source-unplan"), id, filing: z.uuid() }),
   z.object({ op: z.literal("start"), ids: z.array(id).max(7) }),
+  z.object({ op: z.literal("select"), revision: z.number().int().nonnegative(), id: id.nullable() }),
+  z.object({ op: z.literal("reorder"), revision: z.number().int().nonnegative(), ids: z.array(id).max(7) }),
   z.object({ op: z.literal("draft"), ids: z.array(id).max(7) }),
   z.object({ op: z.literal("close") }),
   z.object({ op: z.literal("reset-caps") }),
@@ -31,6 +33,7 @@ const studioThread = z.object({
   pending: z.object({ id, at: z.number() }).nullable().default(null),
 });
 export const MyDayMetaSchema = z.object({
+  selection: z.object({ date: z.iso.date(), id }).nullable().default(null),
   planned: z.array(z.object({ filing: z.uuid(), taskId: id, parent: id.nullable(), snapshot: z.string(), sourceSnapshot: z.string(), reversed: z.boolean() })).default([]),
   studio: z.array(studioThread).default([]),
   revision: z.number().int().nonnegative().default(0),

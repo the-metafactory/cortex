@@ -20,6 +20,8 @@ import type { WaitingTask } from "../desk/sources/waiting";
 import { handleDeskMyDay } from "../api/desk-my-day";
 import { SourceCache } from "../desk/sources/command";
 import { HandledLedger } from "../desk/actions";
+import { nextTask, reorderVisible } from "../desk/time-first";
+import type { CalendarGap } from "../desk/calendar-availability";
 import type { DeskItem } from "../desk/types";
 
 const NOW = new Date(2026, 9, 31, 10).getTime();
@@ -40,6 +42,63 @@ describe("My day lane and day contract", () => {
   beforeEach(() => { db = initDatabase(":memory:"); saveBalanceState(db, seed()); });
   afterEach(() => db.close());
   const change = (command: MyDayCommand, requestId: string = crypto.randomUUID(), extra: { now?: number; date?: string; source?: DeskItem; desk?: DeskOptions } = {}) => changeMyDay({ db, desk, now: NOW, date: DATE, requestId, command, ...extra });
+  it("persists manual selection across reads without changing confirmed membership or scores", () => {
+    change({ op: "start", ids: ["constructor", "__proto__", "third"] });
+    const before = loadBalanceState(db);
+    const current = readMyDay(db, desk, NOW);
+    change({ op: "select", revision: current.revision, id: "__proto__" });
+    expect(readMyDay(db, desk, NOW + 30_000).work.selection).toEqual({ kind: "manual", id: "__proto__" });
+    expect(loadBalanceState(db)).toEqual(before);
+    change({ op: "done", id: "__proto__" });
+    expect(readMyDay(db, desk, NOW).work.selection.kind).toBe("unavailable");
+    expect(readMyDay(db, desk, NOW + 86_400_000).work.selection).toEqual({ kind: "automatic" });
+  });
+  it("reshuffles only exact confirmed membership and preserves history, caps and a deliberate selection", () => {
+    change({ op: "start", ids: ["constructor", "__proto__", "third"] });
+    change({ op: "select", revision: readMyDay(db, desk, NOW).revision, id: "third" });
+    const before = loadBalanceState(db);
+    const requestId = crypto.randomUUID();
+    const command = { op: "reorder", revision: readMyDay(db, desk, NOW).revision, ids: ["third", "constructor", "__proto__"] } satisfies MyDayCommand;
+    const first = change(command, requestId).view;
+    const replay = change(command, requestId).view;
+    expect(first.items.map(item => item.task.id)).toEqual(command.ids);
+    expect(replay.revision).toBe(first.revision);
+    expect(first.work.selection).toEqual({ kind: "manual", id: "third" });
+    const after = loadBalanceState(db);
+    expect(after?.outline).toEqual(before?.outline);
+    expect(after?.history).toEqual(before?.history);
+    expect(after?.settings).toEqual(before?.settings);
+    const revision = first.revision;
+    for (const ids of [["third", "constructor"], ["third", "third", "constructor"], ["third", "constructor", "new"]]) expect(() => change({ op: "reorder", revision, ids })).toThrow("exactly the same");
+    expect(() => change({ op: "reorder", revision: revision - 1, ids: command.ids })).toThrow("day changed");
+  });
+  it("rejects stale or unavailable manual selections and reorder before confirmation", () => {
+    const current = readMyDay(db, desk, NOW);
+    expect(() => change({ op: "select", revision: current.revision, id: "missing" })).toThrow("no longer actionable");
+    expect(() => change({ op: "select", revision: current.revision - 1, id: "constructor" })).toThrow("day changed");
+    expect(() => change({ op: "reorder", revision: current.revision, ids: current.items.map(item => item.task.id) })).toThrow("active confirmed");
+  });
+  it("selects the first estimated task fitting 35 minutes without changing overall order", () => {
+    const state = seed();
+    for (const [id, estimateMinutes] of [["constructor", 90], ["__proto__", 20], ["third", 15]] satisfies [string, number][]) {
+      const task = findNode(state.outline, id);
+      if (task) task.estimateMinutes = estimateMinutes;
+    }
+    saveBalanceState(db, state);
+    const day = change({ op: "start", ids: ["constructor", "__proto__", "third"] }).view;
+    const event = { key: "owned-calendar", source: "calendar", calendar: "Work", calendarId: "work", title: "Owned block", at: NOW + 35 * 60_000, end: NOW + 60 * 60_000, availability: { status: "busy", provenance: "owned-provider" } } satisfies Extract<CalendarGap, { kind: "bounded" }>["event"];
+    const recommendation = nextTask(day, { kind: "bounded", until: event.at, minutes: 35, event });
+    expect(recommendation.kind !== "none" && recommendation.item.task.id).toBe("__proto__");
+    expect(day.items.map(item => item.task.id)).toEqual(["constructor", "__proto__", "third"]);
+    expect(nextTask(day, { kind: "unknown", reasons: ["reader unavailable"] }).kind).toBe("unverified");
+    expect(nextTask(day, { kind: "open", through: NOW + 86_400_000, asOf: NOW }).kind).toBe("normal");
+    expect(nextTask(day, { kind: "busy", until: event.end, event }).kind).toBe("none");
+    expect(nextTask(day, { kind: "bounded", until: NOW + 5 * 60_000, minutes: 5, event }).kind).toBe("none");
+    const unknown = readMyDay(db, desk, NOW);
+    for (const item of unknown.items) delete item.task.estimateMinutes;
+    expect(nextTask(unknown, { kind: "bounded", until: event.at, minutes: 35, event }).kind).toBe("none");
+    expect(reorderVisible(["first", "completed", "second"], ["first", "second"], "second", -1)).toEqual(["second", "completed", "first"]);
+  });
   it("shows exactly the engine list with reasons, bounded alternates and proposed contract", () => {
     const view = readMyDay(db, desk, NOW);
     expect(view.items.map(i => i.task.id)).toEqual(selectToday(seed(), DATE).map(i => i.task.id));

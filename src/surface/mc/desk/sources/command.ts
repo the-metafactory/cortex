@@ -1,6 +1,7 @@
 import { HOST_NAME_RE } from "../../../../common/host-name";
 import { z } from "zod";
 import { runCommand } from "../spawn";
+import { CalendarCoverageSchema, EventAvailabilitySchema, SourceCapabilitiesSchema, type CalendarCoverage, type SourceCapabilities } from "../calendar-contract";
 
 /**
  * The Desk source contract (cortex#2772): a source is a command, run without a shell, that prints one
@@ -19,9 +20,11 @@ export const SourceEventSchema = z.object({
   allDay: z.boolean().optional(),
   title: z.string().min(1),
   calendar: z.string().trim().min(1).max(200).optional(),
+  calendarId: z.string().trim().min(1).max(500).optional(),
   location: z.string().optional(),
   online: z.boolean().optional(),
   url: safeLink.optional(),
+  availability: EventAvailabilitySchema.optional(),
 });
 
 export const AUTH_VERDICTS = ["pass", "fail", "softfail", "neutral", "none", "temperror", "permerror", "policy"] as const;
@@ -115,6 +118,8 @@ export interface DeskSourceConfig {
 }
 
 export interface SourceReading {
+  capabilities?: SourceCapabilities;
+  calendarCoverage?: CalendarCoverage;
   id: string;
   area: string | null;
   events: SourceEvent[];
@@ -126,6 +131,8 @@ export interface SourceReading {
 }
 
 export interface ParsedSource {
+  capabilities?: SourceCapabilities;
+  calendarCoverage?: CalendarCoverage;
   events: SourceEvent[];
   mail: SourceMail[];
   dropped: number;
@@ -165,7 +172,19 @@ export function parseSourceOutput(stdout: string): ParsedSource {
       return [];
     });
   };
-  return { events: keep("events", events, SourceEventSchema), mail: keep("items", items, SourceMailSchema), dropped, problems };
+  const metadata = <T>(name: string, schema: z.ZodType<T>): T | undefined => {
+    if (!(name in body)) return undefined;
+    const parsed = schema.safeParse(Reflect.get(body, name));
+    if (parsed.success) return parsed.data;
+    problems.push(...entryProblems(name, parsed.error));
+    return undefined;
+  };
+  const capabilities = metadata("capabilities", SourceCapabilitiesSchema);
+  const calendarCoverage = metadata("calendarCoverage", CalendarCoverageSchema);
+  if (capabilities?.includes("calendar") && !Array.isArray(events)) problems.push("events: a calendar source must provide its event array");
+  if (capabilities && !capabilities.includes("calendar") && events !== undefined) problems.push("events: an attention-only source cannot provide calendar output");
+  if (calendarCoverage && !capabilities?.includes("calendar")) problems.push("calendarCoverage: requires the calendar capability");
+  return { events: keep("events", events, SourceEventSchema), mail: keep("items", items, SourceMailSchema), dropped, problems, ...(capabilities ? { capabilities } : {}), ...(calendarCoverage ? { calendarCoverage } : {}) };
 }
 
 export type CommandRunner = (argv: string[], timeoutMs: number) => Promise<string>;
