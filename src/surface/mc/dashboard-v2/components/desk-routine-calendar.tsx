@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { RoutineInventory } from "../../desk/routine-editor-contract";
-import type { RoutineDisplayMode } from "../../desk/routine-display-contract";
+import { ROUTINE_BACKGROUND_THRESHOLD, type RoutineDisplayMode } from "../../desk/routine-display-contract";
 import type { RoutinesLocation } from "../hooks/use-routines-location";
 import { Pager } from "./desk-pager";
 import { backgroundLane, calendarDays, moveCalendar, readCalendar, zonedDate, type CalendarOccurrence, type CalendarRead } from "../lib/routine-calendar";
@@ -21,12 +21,12 @@ function TimeGrid({ days, single, cell, onDay }: { days: string[]; single: boole
 }
 
 const noBackground: ReadonlySet<string> = new Set();
-export function BackgroundRow({ routineId, name, schedule, timezone, entries, complete, period, displayTimezone, onSelect, onDisplay }: { routineId: string; name: string; schedule: string; timezone: string; entries: CalendarOccurrence[]; complete: boolean; period: string; displayTimezone: string; onSelect: (id: string) => void; onDisplay?: (routineId: string, mode: RoutineDisplayMode) => void }) {
+export function BackgroundRow({ routineId, name, schedule, timezone, entries, complete, period, displayTimezone, automatic = false, onSelect, onDisplay }: { routineId: string; name: string; schedule: string; timezone: string; entries: CalendarOccurrence[]; complete: boolean; period: string; displayTimezone: string; automatic?: boolean; onSelect: (id: string) => void; onDisplay?: (routineId: string, mode: RoutineDisplayMode) => void }) {
   const [open, setOpen] = useState(false); const [page, setPage] = useState(0);
   const pages = Math.max(1, Math.ceil(entries.length / 48));
   const count = entries.length === 0 ? complete ? "No planned starts in this period" : "Planned starts unavailable in the incomplete result" : `${complete ? "" : "At least "}${entries.length} planned ${period}`;
   const detail = `routine-background-detail-${routineId}`;
-  return <li className="routine-background-row"><div><strong>{name}</strong><small>{schedule} · {timezone}</small></div>
+  return <li className="routine-background-row"><div><strong>{name}</strong><small>{schedule} · {timezone}</small>{automatic && <small className="routine-background-auto">Here automatically: it starts more than {ROUTINE_BACKGROUND_THRESHOLD} times a day.</small>}</div>
     <button type="button" className="desk-btn" aria-expanded={open} aria-controls={detail} onClick={() => { setOpen(!open); setPage(0); }}>{count}</button>
     {open && <div id={detail} className="routine-background-detail"><p className="soft">Owner-provided planned starts in {displayTimezone}{complete ? "" : "; this period's result is incomplete"}. Planned triggers, not execution results.</p>
       <div className="routine-background-times">{entries.slice(page * 48, (page + 1) * 48).map((entry) => <time key={entry.scheduledFor} dateTime={entry.scheduledFor}>{dateLabel(zonedDate(entry.scheduledFor, displayTimezone), { weekday: "short", day: "numeric" })} {timeLabel(entry.scheduledFor, displayTimezone)}</time>)}</div>
@@ -36,7 +36,7 @@ export function BackgroundRow({ routineId, name, schedule, timezone, entries, co
   </li>;
 }
 
-export function DeskRoutineCalendar({ location, onLocation, inventory, revision, onSelect, background = noBackground, onDisplay }: { location: RoutinesLocation; onLocation: (location: RoutinesLocation) => void; inventory: RoutineInventory | null; revision: number; onSelect: (id: string) => void; background?: ReadonlySet<string>; onDisplay?: (routineId: string, mode: RoutineDisplayMode) => void }) {
+export function DeskRoutineCalendar({ location, onLocation, inventory, revision, onSelect, background = noBackground, automatic = noBackground, onDisplay }: { location: RoutinesLocation; onLocation: (location: RoutinesLocation) => void; inventory: RoutineInventory | null; revision: number; onSelect: (id: string) => void; background?: ReadonlySet<string>; automatic?: ReadonlySet<string>; onDisplay?: (routineId: string, mode: RoutineDisplayMode) => void }) {
   const days = useMemo(() => calendarDays(location.date, location.view), [location.date, location.view]);
   const [snapshot, setState] = useState<CalendarState>({ key: "", kind: "loading" });
   const [retry, setRetry] = useState(0);
@@ -94,7 +94,7 @@ export function DeskRoutineCalendar({ location, onLocation, inventory, revision,
       <div className="routine-calendar-scroll" tabIndex={0} aria-label={`${location.view} calendar, scroll horizontally on a narrow screen`}>
         {location.view === "month" ? <MonthGrid days={days} month={location.date.slice(0, 7)} cell={cell} onDay={(date) => { change({ date, view: "day" }); }} /> : <TimeGrid days={days} single={location.view === "day"} cell={cell} onDay={(date) => { change({ date, view: "day" }); }} />}
       </div>
-      {lane.length > 0 && <section className="routine-background-lane" aria-label="Background routines"><h3>Background routines · {lane.length}</h3><p className="soft">Shown once for the whole period. Each start still runs as scheduled; this lane does not block your time.</p><ul>{lane.map((row) => <BackgroundRow key={row.id} routineId={row.id} name={row.name} schedule={row.schedule} timezone={row.timezone} entries={row.entries} complete={state.complete} period="in this view" displayTimezone={location.timezone} onSelect={onSelect} onDisplay={onDisplay} />)}</ul></section>}
+      {lane.length > 0 && <section className="routine-background-lane" aria-label="Background routines"><h3>Background routines · {lane.length}</h3><p className="soft">Shown once for the whole period. Each start still runs as scheduled; this lane does not block your time.</p><ul>{lane.map((row) => <BackgroundRow key={row.id} routineId={row.id} name={row.name} schedule={row.schedule} timezone={row.timezone} entries={row.entries} complete={state.complete} period="in this view" displayTimezone={location.timezone} automatic={automatic.has(row.id)} onSelect={onSelect} onDisplay={onDisplay} />)}</ul></section>}
       {drill && <section className="routine-calendar-drill desk-set-card" aria-label="Scheduled occurrence details" tabIndex={-1} ref={drillRef}><div className="routine-calendar-toolbar"><h3>{dateLabel(drill.date, { weekday: "long", month: "long", day: "numeric" })}{drill.hour === null ? "" : ` · ${String(drill.hour).padStart(2, "0")}:00`}</h3><button className="desk-btn" type="button" onClick={() => { setDrill(null); drillOrigin.current?.focus(); }}>Close occurrence details</button></div><p>{drillEntries.length} planned occurrences{state.complete ? "." : " in the incomplete result."}</p>{onDisplay && drillRoutines.length > 0 && <div className="routine-drill-move"><p className="soft">A frequent routine can appear once in Background routines instead. Its schedule does not change.</p><div className="desk-acts">{drillRoutines.map((id) => <button className="desk-btn" type="button" key={id} onClick={() => { onDisplay(id, "background"); }}>Move {names.get(id) ?? id} to Background routines</button>)}</div></div>}<div className="routine-drill-list">{drillEntries.slice(drill.page * 30, (drill.page + 1) * 30).map(renderOccurrence)}</div><div className="desk-acts"><button className="desk-btn" type="button" disabled={drill.page === 0} onClick={() => { setDrill({ ...drill, page: drill.page - 1 }); }}>Previous occurrences</button><span>Page {drill.page + 1} of {Math.max(1, Math.ceil(drillEntries.length / 30))}</span><button className="desk-btn" type="button" disabled={(drill.page + 1) * 30 >= drillEntries.length} onClick={() => { setDrill({ ...drill, page: drill.page + 1 }); }}>Next occurrences</button></div></section>}
     </>}
   </section>;
