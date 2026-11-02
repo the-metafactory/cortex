@@ -31,13 +31,14 @@ export const captureModel: CaptureModel = (config, request) => chatJson(config)(
   { role: "user", content: JSON.stringify(request) },
 ], config.timeoutSeconds * 1000);
 
-export function captureFiler(options: StudioOptions, ctx: ActContext): EndpointConfig | undefined {
-  return ctx.view.active.some((t) => t.policy === "local") ? options.filer?.local : options.filer;
+export function filerFor(options: StudioOptions, threads: readonly StudioThreadView[], local = false): EndpointConfig | undefined {
+  return local || threads.some((t) => t.policy === "local") ? options.filer?.local : options.filer;
 }
+
+export const captureFiler = (options: StudioOptions, ctx: ActContext): EndpointConfig | undefined => filerFor(options, ctx.view.active);
 
 export const captureId = (requestId: string): string => `capture-${createHash("sha256").update(requestId).digest("hex").slice(0, 32)}`;
 export const captureMarker = (id: string): string => `- capture: [${id}] `;
-const marker = captureMarker;
 
 export type FilerChoice = z.infer<typeof FilerAnswer>;
 
@@ -64,7 +65,7 @@ async function planCapture(ctx: ActContext, options: StudioOptions, id: string, 
   const thread = ctx.view.active.find((t) => t.slug === answer?.thread);
   if (answer && thread && answer.match) {
     const file = ctx.files.threads.find((f) => f.path === thread.path);
-    const material = file ? appendEntry(file.text, "material", "Material", [`${marker(id)}${oneLine(text)}`]) : null;
+    const material = file ? appendEntry(file.text, "material", "Material", [`${captureMarker(id)}${oneLine(text)}`]) : null;
     const edited = material ? appendLog(material, localTime(ctx.now), `Filed capture ${id}: ${oneLine(answer.reason)}`) : null;
     if (!edited) return { status: 409, error: "The matching thread cannot be edited; nothing was written." };
     return { writes: [{ path: thread.path, text: edited }], removes: [], subject: `File capture ${id} in ${thread.slug}`, message: `Filed in “${oneLine(thread.question)}”. ${oneLine(answer.reason)}` };
@@ -120,9 +121,9 @@ async function undoPlan(ctx: ActContext, dir: string, id: string): Promise<ActPl
   }
   const file = ctx.files.threads.find((f) => f.path === original.path);
   const originalLines = original.text.split("\n");
-  const expectedAt = originalLines.findIndex((l) => l.startsWith(marker(id)));
+  const expectedAt = originalLines.findIndex((l) => l.startsWith(captureMarker(id)));
   const lines = file?.text.split("\n") ?? [];
-  const matching = lines.flatMap((l, i) => (l.startsWith(marker(id)) ? [i] : []));
+  const matching = lines.flatMap((l, i) => (l.startsWith(captureMarker(id)) ? [i] : []));
   const at = matching[0];
   if (!file || expectedAt < 0 || matching.length !== 1 || at === undefined) return refuse();
   const expected = entryBlock(originalLines, expectedAt);

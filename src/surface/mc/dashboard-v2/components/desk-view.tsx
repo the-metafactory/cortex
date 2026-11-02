@@ -15,7 +15,7 @@ import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
-import { proposeMailThread, submitDeskAction, submitDmarcAck, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
+import { fetchMailThreadProposal, submitDeskAction, submitDmarcAck, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
 import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
 import { newReplyDraft, prepareDeclineDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
 import { chimeForNew } from "../lib/desk-chime";
@@ -444,7 +444,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     setDetail(item);
     const pick = newStudioPick(item.key);
     setStudioPick(pick);
-    void proposeMailThread(item.key).then((result) => {
+    void fetchMailThreadProposal(item.key).then((result) => {
       setStudioPick((p) => (p?.requestId !== pick.requestId ? p : result.ok ? withProposal(p, result.proposal) : { ...p, note: result.text }));
     });
   };

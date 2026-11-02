@@ -60,7 +60,7 @@ export type MailActionBody =
 
 export type StudioProposalOutcome = { ok: true; proposal: import("../../desk/mail-studio").MailStudioProposal } | { ok: false; text: string };
 
-export async function proposeMailThread(key: string, fetchImpl: FetchLike = fetch): Promise<StudioProposalOutcome> {
+export async function fetchMailThreadProposal(key: string, fetchImpl: FetchLike = fetch): Promise<StudioProposalOutcome> {
   try {
     const res = await fetchImpl(DESK_MAIL_PATH, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "studio.propose", key }) });
     const parsed = (await res.json().catch(() => null)) as { proposal?: import("../../desk/mail-studio").MailStudioProposal; error?: unknown } | null;

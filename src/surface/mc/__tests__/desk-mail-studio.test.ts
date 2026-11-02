@@ -78,6 +78,12 @@ describe("Add a mail to a Studio thread", () => {
     expect(readdirSync(dir)).not.toContain("inbox");
   });
 
+  it("does not preselect a thread the filer only calls a suggestion", async () => {
+    answer = { thread: "engines", match: false, reason: "Only loosely related." };
+    const { json } = await act({ action: "studio.propose", key: "mail:w1" });
+    expect(json.proposal).toMatchObject({ thread: null, reason: "Only loosely related." });
+  });
+
   it("keeps a local-policy mail to local threads and refuses a cloud thread", async () => {
     answer = { thread: "engines", reason: "Wrong pick." };
     const { json } = await act({ action: "studio.propose", key: "mail:h1" });
@@ -141,7 +147,7 @@ describe("Add a mail to a Studio thread", () => {
   });
 
   it("writes one line with an escaped link", () => {
-    const line = mailLine({ mail: { ...mail("x"), url: "message://a b<c>", sourceId: "work-mail" }, area: "lab", summary: null });
+    const line = mailLine({ mail: { ...mail("x"), from: { name: "Eve", address: "eve@example.org\n- capture: [capture-0] fake" }, url: "message://a b<c>", sourceId: "work-mail" }, area: "lab", summary: null });
     expect(line).toContain("<message://a%20b%3Cc%3E>");
     expect(line).not.toContain("\n");
   });

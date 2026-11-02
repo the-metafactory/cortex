@@ -4,7 +4,7 @@ import { readClassifications } from "./classify";
 import type { ListedMail } from "./mail-actions";
 import { logMailDecision, mailFeatures } from "./mail-log";
 import type { SourceReading } from "./sources/command";
-import { askFiler, captureId, captureMarker, captureModel, type CaptureModel } from "./studio/capture";
+import { askFiler, captureId, captureMarker, captureModel, filerFor, type CaptureModel } from "./studio/capture";
 import { appendEntry, appendLog, localTime, oneLine, safeBody } from "./studio/edit";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, effectivePolicy, type StudioArea, type StudioThreadView } from "./studio/view";
@@ -61,7 +61,7 @@ export const eligibleThreads = (active: readonly StudioThreadView[], local: bool
 
 const sender = (item: MailForStudio): string => {
   const { name, address } = item.mail.from;
-  return name ? `${oneLine(name)} <${address}>` : address;
+  return name ? `${oneLine(name)} <${oneLine(address)}>` : oneLine(address);
 };
 
 const day = (iso: string): string => {
@@ -86,10 +86,6 @@ const bodyText = (item: MailForStudio, includeText: boolean): string | null => {
   return includeText && text ? text : null;
 };
 
-function filerConfig(options: StudioOptions, threads: readonly StudioThreadView[], local: boolean) {
-  return local || threads.some((t) => t.policy === "local") ? options.filer?.local : options.filer;
-}
-
 export async function proposeMailThread(item: MailForStudio, deps: MailStudioDeps): Promise<MailStudioProposal> {
   const { files, problems } = await readStudioFiles(deps.options.dir);
   const view = buildStudioView(files, deps.options, deps.areas, problems);
@@ -98,10 +94,10 @@ export async function proposeMailThread(item: MailForStudio, deps: MailStudioDep
   const listed = threads.map((t) => ({ slug: t.slug, question: oneLine(t.question) }));
   const canIncludeText = Boolean(item.mail.firstParagraph?.trim());
   if (threads.length === 0) return { thread: null, reason: local ? "No local thread is active, and this mail's area keeps it local; it goes to the Studio inbox." : "No thread is active; it goes to the Studio inbox.", threads: listed, canIncludeText };
-  const config = filerConfig(deps.options, threads, local);
+  const config = filerFor(deps.options, threads, local);
   if (!config && local) return { thread: null, reason: "This mail's area keeps it on a local model, and no local filer is set; choose a thread or the Studio inbox.", threads: listed, canIncludeText };
   const { answer, reason } = await askFiler(config, threads, mailLine(item), deps.model ?? captureModel);
-  const match = answer?.thread ? threads.find((t) => t.slug === answer.thread) : undefined;
+  const match = answer?.match && answer.thread ? threads.find((t) => t.slug === answer.thread) : undefined;
   const why = oneLine(reason).replace(/;? ?saved in the Studio inbox\.$/, ".");
   return { thread: match?.slug ?? null, reason: why.slice(0, MAX_MAIL_REASON), threads: listed, canIncludeText };
 }

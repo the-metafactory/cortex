@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MailStudioBox, newStudioPick, studioBody, withProposal } from "../components/desk-mail-studio";
-import { proposeMailThread } from "../lib/desk-action";
+import { fetchMailThreadProposal } from "../lib/desk-action";
 
 const PROPOSAL = { thread: "engines", reason: "It is about engines.", threads: [{ slug: "engines", question: "What can engines make?" }, { slug: "home", question: "How do we live?" }], canIncludeText: true };
 const noop = (): void => undefined;
@@ -24,6 +24,6 @@ describe("Add to thread picker", () => {
 
   it("returns the server's refusal as a line", async () => {
     const fake = async (): Promise<Response> => Response.json({ ok: false, error: "The Studio is not set up on this stack." }, { status: 409 });
-    expect(await proposeMailThread("mail:w1", fake)).toEqual({ ok: false, text: "The Studio is not set up on this stack." });
+    expect(await fetchMailThreadProposal("mail:w1", fake)).toEqual({ ok: false, text: "The Studio is not set up on this stack." });
   });
 });
