@@ -115,7 +115,7 @@ describe("Balance task writer for conversation proposals", () => {
   test("a named open project in the area becomes the task's parent, by title or id", async () => {
     const r = await rig();
     const id = await r.start();
-    const byTitle = await r.confirm(id, await r.propose(id, { area: "lab", project: "glider", title: "Tape the nose" }));
+    const byTitle = await r.confirm(id, await r.propose(id, { area: "lab", project: " glider ", title: "Tape the nose" }));
     expect(byTitle.body.proposal.feedback).toBe("created");
     const byId = await r.confirm(id, await r.propose(id, { area: "lab", project: "project-glider", title: "Test the tail" }));
     expect(byId.body.proposal.feedback).toBe("created");

@@ -25,14 +25,14 @@ export function hasBalanceState(db: Database): boolean {
 }
 
 const isTask = (node: OutlineNode): boolean => node.children.length === 0 && node.effort !== undefined;
-const isOpenProject = (node: OutlineNode): boolean =>
-  !node.id.startsWith("studio-response:") && !isTask(node) && !(node.done && node.children.length > 0);
+const isClosedProject = (node: OutlineNode): boolean => Boolean(node.done) && node.children.length > 0;
+const isOpenProject = (node: OutlineNode): boolean => !node.id.startsWith("studio-response:") && !isTask(node) && !isClosedProject(node);
 
 function projectsIn(area: OutlineNode): OutlineNode[] {
   const found: OutlineNode[] = [];
   const visit = (node: OutlineNode): void => {
     for (const child of node.children) {
-      if (child.done && child.children.length > 0) continue;
+      if (isClosedProject(child)) continue;
       if (isOpenProject(child)) found.push(child);
       visit(child);
     }
@@ -46,7 +46,7 @@ export function balanceDestination(state: AppState, desk: DeskOptions, fields: R
   const area = desk.areas.find(a => a.id === areaId);
   if (!area) return { refused: `${areaId} is not a configured area.` };
   const parent = `area:${area.id}`;
-  const project = fields.project;
+  const project = fields.project?.trim();
   if (!project) return { parent };
   const node = state.outline.children.find(n => n.id === parent);
   const open = node ? projectsIn(node) : [];
@@ -64,6 +64,17 @@ function taskCommand(fields: Record<string, string>, parent: string, revision: n
   return parsed.data;
 }
 
+function readReceipt(db: Database, operation: OperationRecord): ReadbackResult {
+  try {
+    const state = loadBalanceState(db);
+    if (!state) return null;
+    const outlineId = loadMeta(db).receipts.find(r => r.id === operationUuid(operation.operationId))?.outlineId;
+    return outlineId && findNode(state.outline, outlineId) ? { found: true, canonicalId: outlineId } : { found: false };
+  } catch {
+    return null;
+  }
+}
+
 export function balanceTaskWriter(deps: BalanceWriterDeps): OwnerWriter {
   const clock = deps.now ?? Date.now;
   const add = (desk: DeskOptions, request: CreateRequest, studio: StudioProjection | undefined): CreateResult => {
@@ -79,16 +90,19 @@ export function balanceTaskWriter(deps: BalanceWriterDeps): OwnerWriter {
       const now = clock();
       return changeMyDay({ db: deps.db, desk, now, date: localDay(now), requestId, command, studio }).outlineId;
     };
-    let outlineId: string | undefined;
-    try {
-      try { outlineId = attempt(loadMeta(deps.db).revision); }
+    const stale = (error: unknown): boolean => ownerRefusal(error) && error.message === STALE_OUTLINE;
+    const attemptWithStaleRetry = (): string | undefined => {
+      try { return attempt(loadMeta(deps.db).revision); }
       catch (error) {
-        if (!(ownerRefusal(error) && error.message === STALE_OUTLINE)) throw error;
-        outlineId = attempt(readMyDay(deps.db, desk, clock(), studio).revision);
+        if (!stale(error)) throw error;
+        return attempt(readMyDay(deps.db, desk, clock(), studio).revision);
       }
-    } catch (error) {
+    };
+    let outlineId: string | undefined;
+    try { outlineId = attemptWithStaleRetry(); }
+    catch (error) {
       if (!ownerRefusal(error)) throw error;
-      return failed(error.message === STALE_OUTLINE ? "Balance kept changing while the task was being added." : error.message);
+      return failed(stale(error) ? "Balance kept changing while the task was being added." : error.message);
     }
     if (!outlineId) throw new Error("Balance answered without the new task's outline id.");
     return { state: "created", canonicalId: outlineId };
@@ -99,17 +113,6 @@ export function balanceTaskWriter(deps: BalanceWriterDeps): OwnerWriter {
       if (!desk?.enabled) return failed("The Desk is turned off on this stack.");
       return withStudioProjection(desk, studio => add(desk, request, studio));
     },
-    readback: (operation: OperationRecord): Promise<ReadbackResult> => {
-      try {
-        const state = loadBalanceState(deps.db);
-        if (!state) return Promise.resolve(null);
-        const receipt = loadMeta(deps.db).receipts.find(r => r.id === operationUuid(operation.operationId));
-        const outlineId = receipt?.outlineId;
-        if (!outlineId || !findNode(state.outline, outlineId)) return Promise.resolve({ found: false });
-        return Promise.resolve({ found: true, canonicalId: outlineId });
-      } catch {
-        return Promise.resolve(null);
-      }
-    },
+    readback: (operation: OperationRecord): Promise<ReadbackResult> => Promise.resolve(readReceipt(deps.db, operation)),
   };
 }
