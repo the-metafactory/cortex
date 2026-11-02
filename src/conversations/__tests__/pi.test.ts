@@ -117,6 +117,16 @@ describe("pi turns", () => {
     await expect(piTurns(silent.settings)(request({ signal: cancelled.signal }))).rejects.toThrow("the turn was cancelled. No other engine is used.");
   });
 
+  test("pi exiting before it reads the prompt, or a turn cancelled before pi starts, reports that reason and not a broken pipe", async () => {
+    const prompt = "q".repeat(2_000_000);
+    const early = await rig({ STUB_PI_IGNORE_STDIN: "1", STUB_PI_EXIT: "2", STUB_PI_STDERR: "unknown option --tools" });
+    await expect(piTurns(early.settings)(request({ prompt }))).rejects.toThrow("pi exited with code 2: unknown option --tools. No other engine is used.");
+    const cancelled = new AbortController();
+    cancelled.abort();
+    const r = await rig();
+    await expect(piTurns(r.settings)(request({ prompt, signal: cancelled.signal }))).rejects.toThrow("the turn was cancelled. No other engine is used.");
+  }, 20_000);
+
   test("an existing pi session resumes natively; a missing one starts fresh with the record reconstructed as fenced data", async () => {
     const r = await rig();
     await script(r, [answer("ok")]);

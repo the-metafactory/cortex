@@ -129,6 +129,16 @@ function spawnPi(settings: PiSettings, args: string[]): Bun.Subprocess<"pipe", "
   }
 }
 
+function feed(stdin: Bun.FileSink, text: string): void {
+  const settle = (written: number | Promise<number>): void => { void Promise.resolve(written).catch(() => 0); };
+  try {
+    settle(stdin.write(text));
+    settle(stdin.end());
+  } catch {
+    return;
+  }
+}
+
 type Answer = Extract<PiEvent, { type: "message_end" }>["message"];
 
 async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: Set<string>, request: TurnRequest, halt: (reason: string) => void): Promise<Answer | null> {
@@ -165,8 +175,7 @@ export function piTurns(settings: PiSettings): TurnCall {
     if (request.signal.aborted) abort();
     const stderr = new Response(child.stderr).text().catch(() => "");
     try {
-      void child.stdin.write(piPrompt(request, resumed));
-      void child.stdin.end();
+      feed(child.stdin, piPrompt(request, resumed));
       const answer = await readTurn(child, new Set(turnTools(settings, request.route)), request, halt);
       const code = await child.exited;
       if (halted.reason) throw new Error(`${halted.reason}. ${NO_FALLBACK}`);

@@ -2,7 +2,7 @@
 import { appendFileSync, readFileSync } from "node:fs";
 
 const log = process.env.STUB_PI_LOG ?? "";
-const stdin = await new Response(Bun.stdin.stream()).text();
+const stdin = process.env.STUB_PI_IGNORE_STDIN ? "" : await new Response(Bun.stdin.stream()).text();
 appendFileSync(log, `${JSON.stringify({ argv: process.argv.slice(2), stdin })}\n`);
 const delay = Number(process.env.STUB_PI_DELAY_MS ?? "0");
 if (delay > 0) await Bun.sleep(delay);
