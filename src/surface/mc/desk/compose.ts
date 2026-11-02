@@ -26,6 +26,7 @@ import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
+import { backSnoozes, snoozedIds, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
 import type { PiSettings } from "../../../conversations/pi";
 import { digestTopics, digestView, listMailGroups, readDigestFlags, type DigestConfig, type DigestFlagger } from "./mail-digest";
@@ -194,11 +195,17 @@ export async function composeDesk(
     const setting = calendarSetting(calendars, e);
     return setting?.enabled ? [{ ...e, calendar: setting.name, color: setting.color }] : [];
   });
+  const availability = calendarAvailability({ sources: desk.sources, readings, calendars: [...calendars.values()], now });
+  const waitingConfig = desk.mailWaiting ?? DEFAULT_WAITING;
+  recordWaitingOnce(db, readings, now, waitingConfig);
+  wakeSnoozes(db, snoozeFacts(db, readings, availability), now);
+  const snoozed = snoozedIds(db);
+  const snoozeBack = backSnoozes(db, now);
   const digested = digestedIds(db, readings.flatMap((r) => r.mail.map((m) => m.id)));
   const canMove = Boolean(desk.mailActions?.move?.length);
   const mailGroups = canMove ? listMailGroups(db, readings, desk, deps.handled, now) : null;
   const held = mailGroups?.digests.held ?? new Set<string>();
-  const mail = readings.flatMap((r) => r.mail.filter((m) => !digested.has(m.id) && !held.has(m.id) && (!deps.handled || movedTarget(deps.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
+  const mail = readings.flatMap((r) => r.mail.filter((m) => !snoozed.has(m.id) && !digested.has(m.id) && !held.has(m.id) && (!deps.handled || movedTarget(deps.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
   const vipSet = new Set(vips.map((v) => v.address));
   const suspicion = suspicionContext(db, desk.mailOwnDomains);
@@ -244,15 +251,12 @@ export async function composeDesk(
   const dmarc = desk.mailDmarc ? dmarcWeek(db, now, desk.mailDmarc) : null;
   const areaOf = (id: string | null): string | null => readings.find((r) => r.id === id)?.area ?? null;
   const dmarcCards = desk.mailDmarc ? dmarcItems(db, now, desk.mailDmarc, areaOf) : [];
-  const waitingConfig = desk.mailWaiting ?? DEFAULT_WAITING;
-  recordWaitingOnce(db, readings, now, waitingConfig);
   if (deps.waitingClassifier) void deps.waitingClassifier.kick(db, readings, localSources, now, waitingConfig.maxPerPass);
   const waitingCards = waitingItems(db, now, { config: waitingConfig, draft: Boolean(desk.mailActions?.draft?.length), areaOf });
   const handing = desk.mailHandoff && deps.mailHandoff ? deps.mailHandoff : undefined;
   if (handing) void handing.kick(db);
   const handoffRows = handing ? openHandoffs(db) : [];
   const handoffOf = handoffsByMail(handoffRows);
-  const availability = calendarAvailability({ sources: desk.sources, readings, calendars: [...calendars.values()], now });
   const invited = mail.filter((m) => m.unread && m.invitation);
   const answers = invitationDecisions(db, invited.map((m) => m.id));
   const invitations = new Map(invited.flatMap((m): [string, InvitationView][] => {
@@ -261,7 +265,7 @@ export async function composeDesk(
   }));
   const corrected = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), ivy: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withHandoff(item, handoffOf.get(mailIdOf(item.key)), now)),
+    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), ivy: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
     ...ruleCards,

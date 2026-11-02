@@ -21,6 +21,7 @@ import { STUDIO_REQUEST_ID } from "../desk/studio/writer";
 import { approveHandoff, discardHandoff, handMailToIvy, HANDOFF_OPS, handoffIdOf, isHandoffOp, MAX_INSTRUCTION, retryHandoff, type HandoffOp } from "../desk/mail-handoff";
 import { handoffReady } from "../desk/compose";
 import { isSuspicious } from "../desk/mail-suspicion";
+import { cancelSnooze, snoozeMail, SNOOZE_TIMES } from "../desk/mail-snooze";
 import { actOnWaiting, nudgeMail, readWaiting, waitingFeatures, waitingIdOf, WAITING_OPS, type WaitingOp } from "../desk/mail-waiting";
 
 const WaitingActionSchema = z.enum(WAITING_OPS.map((op) => `waiting.${op}` as const));
@@ -30,6 +31,13 @@ const waitingOp = (action: string): WaitingOp | null => {
 };
 
 const HANDOFF_REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
+
+const SnoozeChoiceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.enum(SNOOZE_TIMES) }).strict(),
+  z.object({ kind: z.literal("date"), date: z.string().max(10) }).strict(),
+  z.object({ kind: z.literal("meeting"), event: z.string().min(1).max(1000) }).strict(),
+  z.object({ kind: z.literal("person"), address: z.string().min(3).max(320) }).strict(),
+]);
 
 const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("draft"), key: z.string(), body: z.string(), decision: MailDecisionSchema.optional() }).strict(),
@@ -43,6 +51,8 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("ivy.hand"), key: z.string().min(1).max(1000), requestId: z.string().regex(HANDOFF_REQUEST_ID), instruction: z.string().max(MAX_INSTRUCTION).optional() }).strict(),
   z.object({ action: z.enum(HANDOFF_OPS), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("studio.propose"), key: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: z.literal("snooze"), key: z.string().min(1).max(1000), until: SnoozeChoiceSchema }).strict(),
+  z.object({ action: z.literal("snooze.cancel"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("invite.propose"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("invite.reply"), key: z.string().min(1).max(1000), reply: z.enum(INVITE_REPLIES), requestId: z.uuid(), commitment: CommitmentSchema.nullable(), confirmed: z.boolean() }).strict(),
   z.object({ action: z.literal("studio.add"), key: z.string().min(1).max(1000), requestId: z.string().regex(STUDIO_REQUEST_ID), thread: z.string().regex(STUDIO_SLUG).nullable(), reason: z.string().trim().min(1).max(MAX_MAIL_REASON).optional(), includeText: z.boolean() }).strict(),
@@ -67,7 +77,8 @@ export interface DeskMailDeps {
  * POST {action: "move", key, target: "archive" | "junk" | "trash"}, {action: "trash" | "unimportant" | "report", key} or
  * {action: "draft", key, body}: acts on one mail the Desk lists. {action: "unsubscribe", key} sends the list's One-Click
  * unsubscribe after the principal confirmed it; {action: "unsubscribe.rule", key} then adds an archive rule for the list. {action: "digest.keep", key} takes one mail out of the newsletter digest. {action: "correct", key, said, correction?} logs a per-mail correction and, for archive, spam and delete, moves the mail; with `correction` it retries only the move of that logged correction. {action: "undo" | "block", move} undoes a logged move,
- * or blocks the domain of a mail moved to Junk. The rebind and identity gates in
+ * or blocks the domain of a mail moved to Junk. {action: "snooze", key, until} hides one mail until a time, a meeting or a
+ * person writes; {action: "snooze.cancel", key} ends the snooze. The rebind and identity gates in
  * handleApi run before this handler; there is no step-up. The account and Message-ID come from the mail source's
  * last reading, never from the page, and a mail already moved or still moving is refused.
  */
@@ -93,8 +104,10 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     const receipt = decisionReceipt(db, body.key, body.body, decision);
     if (receipt) return receipt.ok ? Response.json({ ok: true, message: receipt.message }, { headers: noStore }) : fail(receipt.status, receipt.error);
   }
+  if (body.action === "snooze.cancel") return answer(body.key.startsWith("mail:") ? cancelSnooze(db, body.key.slice("mail:".length)) : { ok: false, status: 400, error: "A snooze key starts with mail:." });
   const mail = findListedMail(runtime.sourceCache?.cached() ?? [], body.key);
   if (!mail) return fail(409, "The Desk no longer lists this mail.");
+  if (body.action === "snooze") return answer(snoozeMail(db, mail, body.until, { now, readings: runtime.sourceCache?.cached() ?? [] }));
   if (decision && !mail.invitation && !["request", "invitation"].includes(readClassifications(db, [mail.id]).get(mail.id)?.commitment ?? "")) return fail(409, "This mail is no longer classified as a request or invitation. Refresh before saving the choice.");
   if (body.action === "ivy.hand") {
     const worker = runtime.mailHandoff;

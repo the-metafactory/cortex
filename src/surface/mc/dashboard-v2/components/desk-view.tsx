@@ -43,6 +43,8 @@ import type { MailCorrection } from "../../desk/mail-actions";
 import { CORRECTION_MOVES } from "../../desk/mail-correction-schema";
 import { MailStudioBox, newStudioPick, studioBody, withProposal, type StudioPick } from "./desk-mail-studio";
 import { HandoffStatus, handoffBody, handoffKeyFor, MailHandoffBox, newHandoffAsk, type HandoffAsk } from "./desk-mail-handoff";
+import { MailSnoozeBox, newSnoozeAsk, snoozeMeetings, type SnoozeAsk } from "./desk-mail-snooze";
+import type { SnoozeChoice } from "../../desk/mail-snooze-schema";
 
 interface DeskViewProps {
   onOpenMissionControl: () => void;
@@ -112,6 +114,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [inviteAsk, setInviteAsk] = useState<InviteAsk | null>(null);
   const [studioPick, setStudioPick] = useState<StudioPick | null>(null);
   const [handoffAsk, setHandoffAsk] = useState<HandoffAsk | null>(null);
+  const [snoozeAsk, setSnoozeAsk] = useState<SnoozeAsk | null>(null);
   const setRuling = (key: string, next: (d: RulingDraft | undefined) => RulingDraft | null): void =>
     setRulings((m) => {
       const draft = next(m.get(key));
@@ -420,6 +423,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "invite.propose") proposeTimes(item);
     else if (a.id === "mail.studio") openStudioPick(item);
     else if (a.id === "mail.ivy") openHandoff(item);
+    else if (a.id === "mail.snooze") openSnooze(item);
     else if (a.id === "ivy.edit" && item.reply) openReply(item);
     else if (a.id === "ivy.discard") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "ivy.discard", key: handoffKeyFor(item, a.target) }) }));
     else if (a.id === "ivy.approve" || a.id === "ivy.retry") { const action = a.id; void send(item, a, { request: () => submitMailAction({ action, key: handoffKeyFor(item, a.target) }), keepVisible: action === "ivy.retry" && item.kind === "mail" }); }
@@ -526,6 +530,31 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     });
   };
 
+  const openSnooze = (item: DeskItem): void => {
+    setDetail(item);
+    setSnoozeAsk((s) => (s?.key === item.key ? s : newSnoozeAsk(item)));
+  };
+
+  const confirmSnooze = (item: DeskItem, until: SnoozeChoice): void => {
+    const act: DeskAction = { id: "mail.snooze", label: "Snooze", role: "secondary", wired: true };
+    void send(item, act, {
+      request: async () => {
+        const result = await submitMailAction({ action: "snooze", key: item.key, until });
+        setSnoozeAsk((s) => (s?.key !== item.key ? s : result.ok ? null : { ...s, note: result.text }));
+        return result.ok ? { ...result, undo: item.key, undoKind: "snooze" } : result;
+      },
+    });
+  };
+
+  const unsnooze = async (key: string): Promise<void> => {
+    setReceipt(null);
+    const result = await submitMailAction({ action: "snooze.cancel", key });
+    setNote(result.text);
+    if (!result.ok) return;
+    setSnoozed((s) => { const next = new Set(s); next.delete(key); return next; });
+    onChanged();
+  };
+
   const openHandoff = (item: DeskItem): void => {
     setDetail(item);
     setHandoffAsk((h) => (h?.key === item.key ? h : newHandoffAsk(item.key)));
@@ -580,7 +609,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         return next;
       });
     }
-    if (result.ok && result.undo) setReceipt({ text: result.text, undo: result.undo, ...(result.block ? { block: result.block } : {}) });
+    if (result.ok && result.undo) setReceipt({ text: result.text, undo: result.undo, ...(result.undoKind ? { undoKind: result.undoKind } : {}), ...(result.block ? { block: result.block } : {}) });
     else if (!result.ok && failOnCard) setCardNote(item.key, failOnCard(result));
     else setNote(result.text);
     if (!result.ok) return;
@@ -925,6 +954,17 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 onCancel={() => setHandoffAsk(null)}
               />
             )}
+            {snoozeAsk?.key === detailItem.key && (
+              <MailSnoozeBox
+                ask={snoozeAsk}
+                now={view.generatedAt}
+                meetings={snoozeMeetings([...view.today, ...view.ahead], view.generatedAt)}
+                sending={busyWith(detailItem) === "mail.snooze"}
+                onChange={(next) => setSnoozeAsk((s) => (s?.key === detailItem.key ? { ...s, ...next } : s))}
+                onChoose={(until) => confirmSnooze(detailItem, until)}
+                onCancel={() => setSnoozeAsk(null)}
+              />
+            )}
             {replyDraft?.key === detailItem.key && detailItem.reply && (
               <ReplyDraftBox
                 nudge={detailItem.kind === "mail-waiting"}
@@ -940,7 +980,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         )}
       </aside>
 
-      {note ? <div className="desk-note" role="status">{note}</div> : receipt && <MailReceipt receipt={receipt} onUndo={() => void undoMove(receipt.undo)} onBlock={() => void blockDomain(receipt)} />}
+      {note ? <div className="desk-note" role="status">{note}</div> : receipt && <MailReceipt receipt={receipt} onUndo={() => void (receipt.undoKind === "snooze" ? unsnooze(receipt.undo) : undoMove(receipt.undo))} onBlock={() => void blockDomain(receipt)} />}
     </div>
   );
 }
@@ -1232,6 +1272,7 @@ export function RankingSection({ corrections, onUndo }: { corrections: DeskCorre
 interface Receipt {
   text: string;
   undo: string;
+  undoKind?: "move" | "snooze";
   block?: string;
   confirmBlock?: boolean;
 }
@@ -1258,7 +1299,7 @@ const CHECK_POLL_MS = 3000;
 
 const isWaitingAction = (id: string): id is `waiting.${WaitingOp}` => WAITING_OPS.some((op) => id === `waiting.${op}`);
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "invite.accept": "Sending…", "invite.decline": "Sending…", "invite.propose": "Reading calendars…", "mail.report": "Reporting…", "mail.studio": "Adding…", "mail.ivy": "Handing over…", "ivy.approve": "Saving draft…", "ivy.discard": "Discarding…", "ivy.retry": "Asking again…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "invite.accept": "Sending…", "invite.decline": "Sending…", "invite.propose": "Reading calendars…", "mail.report": "Reporting…", "mail.studio": "Adding…", "mail.ivy": "Handing over…", "ivy.approve": "Saving draft…", "ivy.discard": "Discarding…", "ivy.retry": "Asking again…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "mail.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
 
 const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
 const CONFIRM_TARGET: Record<string, (target: string) => string> = { "mail.unsubscribe": (host) => `Yes, unsubscribe via ${host}`, "mail.unsubscribe.page": (host) => `Yes, open ${host}` };
