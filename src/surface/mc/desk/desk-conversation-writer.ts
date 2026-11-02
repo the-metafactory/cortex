@@ -49,10 +49,12 @@ export function deskConversationWriter<K extends DeskWriterKind>(spec: DeskWrite
     const desk = deps.desk();
     const argv = deskWriterArgv(desk, spec.kind);
     if (!desk || !argv) return failed(`${spec.objects} are not set up on this stack`);
-    const place = spec.destination;
-    const destination = place ? argvOption(argv, place.flag) : undefined;
-    const asked = place ? request.fields[place.field] ?? "" : "";
-    if (place && asked && asked !== destination) return failed(`This stack saves ${place.noun} only to ${destination ?? place.fallback}`);
+    if (spec.destination) {
+      const { flag, field, noun, fallback } = spec.destination;
+      const destination = argvOption(argv, flag);
+      const asked = request.fields[field] ?? "";
+      if (asked && asked !== destination) return failed(`This stack saves ${noun} only to ${destination ?? fallback}`);
+    }
     const fields = spec.fields(request);
     if (typeof fields === "string") return failed(fields);
     const card = validateCard(spec.kind, fields);

@@ -55,11 +55,11 @@ describe("Soma goal writer for conversation proposals", () => {
     expect(r.lists).toEqual([[SOMA, "goal", "list", "--wording"]]);
   });
 
-  test("a refusal after the goal was added answers created with the id goal list shows", async () => {
+  test("a refusal after the goal was added answers created with the id goal list shows, also for padded wording", async () => {
     const r = await rig();
     r.answerWith(refusal("soma added a goal but printed no goal id.\n"));
     r.listWith(listing(row("G14", "draft", WORDING)));
-    const { reply } = await r.submit({ wording: WORDING });
+    const { reply } = await r.submit({ wording: `  ${WORDING}\t ` });
     expect(reply.body.proposal).toMatchObject({ feedback: "created", operation: { canonicalId: "G14" } });
   });
 
@@ -74,7 +74,7 @@ describe("Soma goal writer for conversation proposals", () => {
   test("after a timeout, Check marks the operation created with the goal's id from goal list without rerunning the writer", async () => {
     const r = await rig();
     r.listWith(listing(row("G15", "draft", WORDING)));
-    expect(await r.timeoutThenCheck({ wording: WORDING })).toStrictEqual({ runs: 1, feedback: ["uncertain", "created"] });
+    expect(await r.timeoutThenCheck({ wording: ` ${WORDING} ` })).toStrictEqual({ runs: 1, feedback: ["uncertain", "created"] });
     expect(r.lists).toEqual([[SOMA, "goal", "list", "--wording"]]);
   });
 
