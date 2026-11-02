@@ -196,8 +196,6 @@ export const accessPaths = <T extends EmbedderAccess>(access: T, expand: (path: 
   ...(access.caFile ? { caFile: expand(access.caFile) } : {}),
 });
 
-export const resolveEmbedder = (config: EmbedderConfig, expand: (path: string) => string): EmbedderConfig => accessPaths(config, expand);
-
 export const vectorModel = (access: EmbedderAccess): string => `${access.baseUrl.replace(/\/+$/, "")}#${access.model}`;
 
 export const NO_EMBEDDER_NOTE = "matched by sender and mailing list, because no embedder is set up";

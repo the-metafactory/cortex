@@ -191,6 +191,9 @@ describe("the embeddings endpoint", () => {
     expect(parse("http://localhost:11434/v1").success).toBe(true);
     expect(parse("https://api.example/v1").success).toBe(true);
     expect(parse("http://embed.example/v1").success).toBe(false);
+    const removed = McSchema.safeParse({ desk: { mail: { embedder: { baseUrl: "https://api.example/v1", model: "m", local: { baseUrl: "http://127.0.0.1:11434/v1", model: "bge-m3" } } } } });
+    expect(removed.success).toBe(false);
+    expect(JSON.stringify(removed.error?.issues)).toContain("mc.desk.mail.embedder.local was removed");
     expect(McSchema.parse({ desk: { mail: { embedder: { baseUrl: "http://localhost:11434/v1", model: "bge-m3" } } } }).desk.mail.embedder).toMatchObject({ threshold: 0.65, neighbours: 8, timeoutSeconds: 10 });
   });
 });
