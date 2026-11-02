@@ -139,6 +139,50 @@ describe("POST /api/desk/ask", () => {
   });
 });
 
+describe("an open question in the command bar", () => {
+  const BRAINSTORM = "can we think of a better name for this product? \"Desk\" is underselling it";
+  const runtime: DeskRuntime = { options: DESK, ledger: new HandledLedger() };
+  const withParser: DeskRuntime = { options: { ...DESK, ask: { ...ASK, parser: ["parse"] } }, ledger: new HandledLedger() };
+  const talks = () => true;
+  const proposalOf = async (res: Response) => ((await res.json()) as { proposal: Record<string, unknown> }).proposal;
+
+  it("becomes a conversation proposal carrying the typed text when the parser refuses it", async () => {
+    let kinds: unknown;
+    const runParser = async (_argv: string[], stdin: string): Promise<string> => { kinds = (JSON.parse(stdin) as { kinds: unknown }).kinds; return JSON.stringify({ kind: "none", reason: "The Desk cannot handle a brainstorming request." }); };
+    const res = await handleDeskAsk(post("/api/desk/ask", { text: BRAINSTORM, area: "work" }), { ...withParser, options: { ...DESK, ask: { ...ASK, parser: ["parse"] }, areas: [{ id: "work", label: "Work", color: "", repos: [], goals: [] }] } }, { now: () => NOW, runParser, conversations: talks });
+    expect(res.status).toBe(200);
+    expect(await proposalOf(res)).toEqual({ kind: "conversation", label: "Conversation with Ivy", fields: { text: BRAINSTORM, area: "work" }, via: "parser" });
+    expect(kinds).toContain("conversation");
+  });
+
+  it("keeps the typed text when the parser answers conversation in its own words, and without a parser the rules route there too", async () => {
+    const viaParser = await handleDeskAsk(post("/api/desk/ask", { text: BRAINSTORM }), withParser, { now: () => NOW, runParser: async () => JSON.stringify({ kind: "conversation", fields: { text: "Rename the Desk" } }), conversations: talks });
+    expect(await proposalOf(viaParser)).toMatchObject({ kind: "conversation", fields: { text: BRAINSTORM }, via: "parser" });
+    const viaRules = await handleDeskAsk(post("/api/desk/ask", { text: BRAINSTORM }), runtime, { now: () => NOW, conversations: talks });
+    expect(await proposalOf(viaRules)).toMatchObject({ kind: "conversation", fields: { text: BRAINSTORM }, via: "rules" });
+  });
+
+  it("offers the conversation as an alternative on a capture-kind card, and a rules reminder stays a reminder", async () => {
+    const goal = await handleDeskAsk(post("/api/desk/ask", { text: BRAINSTORM }), withParser, { now: () => NOW, runParser: async () => JSON.stringify({ kind: "goal", fields: { wording: "Find a better name" } }), conversations: talks });
+    expect(await proposalOf(goal)).toMatchObject({ kind: "goal", alternative: { kind: "conversation", label: "Conversation with Ivy", fields: { text: BRAINSTORM } } });
+    const reminder = await handleDeskAsk(post("/api/desk/ask", { text: "remind me to call Ada tomorrow at 9" }), runtime, { now: () => NOW, conversations: talks });
+    expect(await proposalOf(reminder)).toMatchObject({ kind: "reminder", via: "rules", fields: { text: "Call Ada", due: new Date(local("2026-10-31T09:00:00")).toISOString() } });
+  });
+
+  it("says conversations are not set up, with no card and no alternative, when the stack has none", async () => {
+    const refused = await handleDeskAsk(post("/api/desk/ask", { text: BRAINSTORM }), withParser, { now: () => NOW, runParser: async () => JSON.stringify({ kind: "conversation", fields: {} }) });
+    expect(refused.status).toBe(422);
+    expect(await refused.json()).toEqual({ ok: false, error: "Conversations with Ivy are not set up on this stack, so I cannot start one." });
+    const note = await handleDeskAsk(post("/api/desk/ask", { text: "note buy milk" }), runtime, { now: () => NOW, conversations: () => false });
+    expect(await proposalOf(note)).not.toHaveProperty("alternative");
+  });
+
+  it("is never written by the Desk create route", async () => {
+    const res = await handleDeskCreate(post("/api/desk/create", { requestId: "req-00099", kind: "conversation", fields: { text: BRAINSTORM } }), initDatabase(":memory:"), runtime, { now: () => NOW });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe("POST /api/desk/create", () => {
   let db: Database;
   let runtime: DeskRuntime;

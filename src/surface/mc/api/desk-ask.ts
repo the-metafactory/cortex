@@ -2,8 +2,8 @@ import { parserPermissions } from "../desk/parser-permissions";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import type { DeskRuntime } from "../desk/compose";
-import { ASK_KINDS, explicitCapture, notSetUp, parseByRules, parseWithCommand, taskMapAllowed, toProposal, validateCard, type ParseResult, type ParserRunner, type RulesResult } from "../desk/ask";
-import { createFromCard, spawnWithStdin, writableKinds, type WriterRunner } from "../desk/create";
+import { ASK_KINDS, conversationFields, conversationOffer, explicitCapture, notSetUp, parseByRules, parseWithCommand, taskMapAllowed, toProposal, validateCard, type ParseResult, type ParserRunner, type RulesResult } from "../desk/ask";
+import { CONVERSATION_NOT_WRITTEN, createFromCard, spawnWithStdin, writableKinds, type WriterRunner } from "../desk/create";
 import { ParserPermissionsSchema } from "../../../common/types/desk-parser";
 import { parserRoutingNotice } from "../desk/parser-routing";
 import { effectivePolicy } from "../desk/studio/view";
@@ -30,7 +30,10 @@ export interface DeskAskDeps {
   captureModel?: CaptureModel;
   now?: () => number;
   timeZone?: string;
+  conversations?: () => boolean;
 }
+
+const NO_CONVERSATIONS = "Conversations with Ivy are not set up on this stack, so I cannot start one.";
 
 const parserFrom = (run: WriterRunner): ParserRunner => async (argv, stdin, timeoutMs) => {
   const result = await run(argv, stdin, timeoutMs);
@@ -63,7 +66,9 @@ export async function handleDeskAsk(req: Request, runtime: DeskRuntime | undefin
   const permissions = parserPermissions(desk, body.area ? [body.area] : [], body.routing);
   if (permissions.kind === "denied") return fail(503, permissions.reason);
   const routing = permissions.routing;
+  const talks = deps.conversations?.() === true;
   const writable = writableKinds(ask?.writers ?? {}, Boolean(desk.studio));
+  if (talks) writable.add("conversation");
   let result: ParseResult | RulesResult | null = explicitCapture(text);
   let via: "parser" | "rules" = "rules";
   if (!result && ask?.parser.length) {
@@ -74,9 +79,13 @@ export async function handleDeskAsk(req: Request, runtime: DeskRuntime | undefin
   if (routing && !ask?.parser.length) return fail(503, "Routed parsing has no parser command. Ask the person who manages this stack to configure it.");
   result ??= parseByRules(text, { now, maps });
   const selected = "routing" in result ? result.routing : undefined;
+  if (result.kind === "none" && selected?.kind !== "unavailable" && talks) result = { kind: "conversation", fields: {} };
+  if (result.kind === "conversation" && !talks) return fail(422, NO_CONVERSATIONS);
+  if (result.kind === "conversation") result = { ...result, fields: conversationFields(text, body.area) };
   if (result.kind === "none") return Response.json({ ok: false, error: selected?.kind === "unavailable" ? parserRoutingNotice(selected) : selected ? `${parserRoutingNotice(selected)} ${result.reason}` : result.reason, ...(selected ? { routing: selected } : {}) }, { status: selected?.kind === "unavailable" ? 503 : 422, headers: noStore });
   const proposal = toProposal(result.kind, result.fields, writable, via);
   if (selected?.kind === "selected") proposal.routing = selected;
+  if (talks && result.kind !== "conversation") proposal.alternative = conversationOffer(text, body.area);
   if (!selected && result.kind === "capture" && db && listGrants(db).has("studio.capture")) proposal.automatic = true;
   return Response.json({ ok: true, proposal }, { headers: noStore });
 }
@@ -93,6 +102,7 @@ export async function handleDeskCreate(req: Request, db: Database, runtime: Desk
   if (!taskMapAllowed(card, desk.ask?.taskMaps ?? [])) {
     return fail(400, "Tasks can only go on the maps set up for the Desk.");
   }
+  if (card.kind === "conversation") return fail(400, CONVERSATION_NOT_WRITTEN);
   if (card.kind === "routine") {
     if (!desk.routines) return fail(409, notSetUp(card.kind));
     const result = await actOnRoutine(db, desk.routines, { requestId, action: "install", target: card.fields.proposalId }, (deps.now ?? Date.now)(), deps.runRoutine, deps.routineCapabilities);

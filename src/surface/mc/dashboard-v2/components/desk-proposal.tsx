@@ -7,6 +7,7 @@ type FieldType = "text" | "long" | "time" | "map";
 
 const FIELDS: Record<AskKind, { key: string; label: string; type: FieldType }[]> = {
   routine: [],
+  conversation: [{ key: "text", label: "Message", type: "long" }],
   reminder: [{ key: "text", label: "What", type: "text" }, { key: "due", label: "When", type: "time" }],
   note: [{ key: "text", label: "Note", type: "long" }],
   capture: [{ key: "text", label: "Thought", type: "long" }],
@@ -49,6 +50,7 @@ interface ProposalCardProps {
   onCancel: () => void;
   onGoto: () => void;
   onFieldsChange: (fields: Record<string, unknown>) => void;
+  onAlternative?: () => void;
 }
 
 export function ProposalCard(props: ProposalCardProps) {
@@ -73,7 +75,7 @@ function RoutineProposal({ proposal, busy, onConfirm, onCancel }: ProposalCardPr
   </div></div>;
 }
 
-function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCancel, onGoto, onFieldsChange }: ProposalCardProps) {
+function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCancel, onGoto, onFieldsChange, onAlternative }: ProposalCardProps) {
   const [fields, setFields] = useState<Record<string, unknown>>(proposal.fields);
   useEffect(() => onFieldsChange(fields), [fields]);
   const unwritable = proposal.unwritable === true;
@@ -113,6 +115,8 @@ function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCa
 
   const at = proposalTime(proposal.kind, fields).at ?? NaN;
   const blocked = unwritable || missing;
+  const talk = proposal.kind === "conversation";
+  const working = talk ? "Starting…" : "Creating…";
 
   return (
     <div className="desk-row desk-propwrap">
@@ -138,8 +142,9 @@ function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCa
           )}
           {proposal.problem && (unwritable || missing) && <p className="desk-prop-problem" role="alert">{unwritable ? `${proposal.problem} Nothing will be created.` : proposal.problem}</p>}
           <div className="desk-acts">
-            <button type="button" className="desk-btn pri" disabled={blocked || busy} aria-busy={busy} onClick={() => onConfirm(fields)}>{busy ? "Creating…" : "Confirm"}</button>
+            <button type="button" className="desk-btn pri" disabled={blocked || busy} aria-busy={busy} onClick={() => onConfirm(fields)}>{busy ? working : talk ? "Start the conversation" : "Confirm"}</button>
             {!unwritable && <button type="button" className="desk-btn" disabled={busy} onClick={() => setEditing((e) => !e)}>{editing ? "Done editing" : "Edit"}</button>}
+            {proposal.alternative && onAlternative && <button type="button" className="desk-btn" disabled={busy} onClick={onAlternative}>Talk it over with Ivy instead</button>}
             <button type="button" className="desk-btn ghost" disabled={busy} onClick={onCancel}>Cancel</button>
           </div>
         </article>

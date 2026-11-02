@@ -1,7 +1,7 @@
 import { ConfirmSchema, creationFor, ProposeSchema, ReviseSchema, type Actor } from "../../../conversations/creation";
 import { ConversationError, type ConversationHost, type HostStatus } from "../../../conversations/host";
 import { AttachmentUploadSchema, CreateConversationSchema, DraftSchema, InputRequestSchema, OrganizeSchema, OverviewQuerySchema } from "../../../conversations/types";
-import { applyStudioOutcome, ImportSchema, isImported, withStudio, importStudioSession, OutcomeSchema, sourceConversations, SourceQuerySchema, StartSchema, startFromSource, type StudioConversationDeps } from "./conversation-studio";
+import { applyStudioOutcome, AskStartSchema, ImportSchema, startFromAsk, isImported, withStudio, importStudioSession, OutcomeSchema, sourceConversations, SourceQuerySchema, StartSchema, startFromSource, type StudioConversationDeps } from "./conversation-studio";
 import { checkRebindGuard, enforceMutationAuth, type MutationGuardContext } from "./mutation-guard";
 import { DEFAULT_LOCAL_PRINCIPAL } from "./networks-admission";
 
@@ -66,6 +66,12 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
       if (!query.success) return fail(400, "The source reference is not valid.");
       if (!studio) return NO_SOURCES();
       return reply(200, { ok: true, ...(await sourceConversations(host, studio, query.data)) });
+    }
+    if (url.pathname === "/api/conversations/asks") {
+      if (req.method !== "POST") return notAllowed("POST");
+      const parsed = AskStartSchema.safeParse(await body(req));
+      if (!parsed.success) return fail(400, "The question is not valid.");
+      return reply(201, { ok: true, conversation: await startFromAsk(host, studio?.runtime?.options?.areas ?? [], parsed.data, auth.principal) });
     }
     if (url.pathname === "/api/conversations/starts" || url.pathname === "/api/conversations/imports") {
       if (req.method !== "POST") return notAllowed("POST");

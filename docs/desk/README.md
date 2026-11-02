@@ -45,7 +45,7 @@ The Desk prepares, and you confirm. Every write goes through Mission Control's r
 - **Rulings**: a blocked agent asks a question. You answer it on the Desk. The Desk records your ruling in the work-graph node with Soma and resumes the agent through Ranger.
 - **Goals**: **Run the check now** runs the goal's configured check. **Pause this goal** pauses a Soma goal.
 - **Mail**: **Delete**, **Unimportant** and **Draft a reply** run the commands in `mc.desk.mail.actions`. A draft is saved in your Drafts folder and never sent.
-- **The command bar** (⌘K, or the microphone) turns what you say into a card: a reminder, a note, an agent task, a goal draft or a calendar entry. You confirm the card, and Cortex runs the writer for that kind.
+- **The command bar** (⌘K, or the microphone) turns what you say into a card: a reminder, a note, an agent task, a goal draft or a calendar entry. You confirm the card, and Cortex runs the writer for that kind. An open question or a request to think something over becomes a proposal to start a conversation with Ivy instead.
 
 ## How the Desk interrupts
 

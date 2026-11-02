@@ -534,7 +534,7 @@ async function handleApi(
 
   if (pathname === "/api/desk/corrections") return handleDeskCorrections(req, url, db);
 
-  if (pathname === "/api/desk/ask") return handleDeskAsk(req, desk, { routineCapabilities: () => localRoutineCapabilities(agentPresence) }, db);
+  if (pathname === "/api/desk/ask") return handleDeskAsk(req, desk, { routineCapabilities: () => localRoutineCapabilities(agentPresence), conversations: () => conversations?.()?.state === "ready" }, db);
 
   if (pathname === "/api/desk/capture/undo") return handleDeskCaptureUndo(req, db, desk);
 
