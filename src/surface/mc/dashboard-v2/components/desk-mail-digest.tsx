@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { MailDigestView } from "../../desk/mail-digest";
 import type { SweepMailView } from "../../desk/mail-sweep";
 import "./desk-mail-sweeps.css";
+import { DeskLink } from "./desk-link";
 import "./desk-mail-digest.css";
 
 export const digestsInArea = (digests: readonly MailDigestView[], area: string): MailDigestView[] =>
@@ -49,7 +50,7 @@ export function MailDigests({ digests, busy, onArchive, onKeep, onUnsubscribe }:
                       {line && <small>{line}</small>}
                     </span>
                     <span className="desk-digest-acts">
-                      {m.url && <a className="desk-btn ghost" href={m.url} target="_blank" rel="noopener noreferrer">Open</a>}
+                      {m.url && <DeskLink className="desk-btn ghost" url={m.url}>Open</DeskLink>}
                       <button type="button" className="desk-btn ghost" disabled={busy} onClick={() => onKeep(m.key)}>Keep</button>
                       {onUnsubscribe && <UnsubscribeButton mail={m} busy={busy} onUnsubscribe={onUnsubscribe} />}
                     </span>

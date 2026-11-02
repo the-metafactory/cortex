@@ -280,4 +280,19 @@ describe("Balance through the real My day owner", () => {
     expect(readBalanceLocation("?desk=mirror").tab).toBe("review");
     expect(readBalanceLocation(balanceItemSearch("?balance-area=missing&balance-search=hidden", "second"))).toEqual({ tab: "plan", item: "second", area: "", query: "" });
   });
+  test("the inspector opens a mail source in place, a web source in a new tab and never renders a hostile source as a link", async () => {
+    const composed = await composeDesk(db, desk, undefined, { now: NOW });
+    const day = composed.myDay;
+    if (!day) throw new Error("Missing My day view");
+    const selected = balanceEntries(day.outline)[0]?.node.id;
+    if (!selected) throw new Error("Missing selected Balance item");
+    const render = (kind: string, url: string): string => renderToStaticMarkup(createElement(DeskBalance, { day: { ...day, sources: [{ taskId: selected, key: "probe", fingerprint: "probe", kind, url }] }, view: composed, foreground: { kind: "unavailable", reason: "Not yet measured" }, onChanged: () => undefined, onThread: () => undefined }));
+    const mail = render("mail", "message://%3Cprobe%40example.org%3E");
+    expect(mail).toContain("<a href=\"message://%3Cprobe%40example.org%3E\">Open in Mail</a>");
+    expect(mail).not.toContain("Open original source");
+    expect(render("github", "https://example.org/issue/1")).toContain("<a href=\"https://example.org/issue/1\" target=\"_blank\" rel=\"noopener noreferrer\">Open original source</a>");
+    const hostile = render("mail", "javascript:alert(1)");
+    expect(hostile).not.toContain("javascript:");
+    expect(hostile).toContain("<p>From mail</p>");
+  });
 });

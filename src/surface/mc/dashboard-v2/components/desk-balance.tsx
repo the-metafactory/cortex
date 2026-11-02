@@ -1,4 +1,5 @@
 import { SourceConversations } from "./desk-source-conversations";
+import { DeskSourceLink } from "./desk-link";
 import { scrollBelowDesk } from "../lib/desk-scroll";
 import { useEffect, useRef, useState } from "react";
 import type { OutlineNode } from "../../../../balance";
@@ -152,7 +153,7 @@ function BalanceInspector({ draft, entry, day, busy, dirty, onDraft, onSave, onD
       <button className="desk-btn pri dbl-save" disabled={busy || !entry}>Save changes</button>{dirty && <button type="button" className="desk-btn ghost" disabled={busy} onClick={onDiscard}>Discard draft and reload saved version</button>}
     </form>
     <div className="dbl-actions"><button className="desk-btn ghost" disabled={busy || dirty || !entry || (node.done ?? false) || node.id.startsWith("studio-response:")} onClick={onAdd}>+ Add subtask</button>{!area && !sourceOwned && <><button className="desk-btn ghost" disabled={busy || dirty || !entry} onClick={onMove}>Move…</button><button className="desk-btn" disabled={busy || dirty || !entry} onClick={onComplete}>{node.done ? "Reopen" : node.children.length ? "Close project" : "Mark complete"}</button></>}{dirty && <p className="dbl-help">Save or discard the draft before changing this item's structure.</p>}
-      {source && (source.url ? <a href={source.url} target="_blank" rel="noopener noreferrer">Open original source</a> : <p>From {source.kind}</p>)}{studio && <button className="desk-btn ghost" onClick={() => { onThread(studio.slug); }}>Open Studio thread →</button>}
+      {source && <DeskSourceLink source={source} />}{studio && <button className="desk-btn ghost" onClick={() => { onThread(studio.slug); }}>Open Studio thread →</button>}
     </div>
     {onConversation && entry && !area && <SourceConversations source={{ owner: node.children.length ? "balance-project" : "balance-task", id: node.id }} onOpen={onConversation} />}
   </>;

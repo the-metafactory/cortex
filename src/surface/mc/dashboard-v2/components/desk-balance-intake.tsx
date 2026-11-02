@@ -4,6 +4,8 @@ import type { BalanceCommand } from "../../desk/balance-command";
 import type { MyDayView } from "../../desk/my-day";
 
 import { DestinationPicker } from "./desk-destination-picker";
+import { DeskLink } from "./desk-link";
+import { sourceLinkLabel } from "../lib/desk-link";
 
 interface FilingIntent { task: OutlineNode; parent: string; revision: number; date: string }
 export function UnfiledBalanceTasks({ day, parents, busy, change, onFiled }: {
@@ -23,7 +25,7 @@ export function UnfiledBalanceTasks({ day, parents, busy, change, onFiled }: {
     {day.inbox.length === 0 ? <p>No unfiled tasks.</p> : <ul>{day.inbox.map(task => {
       const source = sources.get(task.id);
       return <li key={task.id}><strong>{task.title}</strong><small>{source ? `From ${source.kind}` : "Saved task"}{task.dueDate ? ` · Due ${task.dueDate}` : ""}</small>
-        {source?.url && <a href={source.url} target="_blank" rel="noopener noreferrer">Original source</a>}
+        {source?.url && <DeskLink url={source.url}>{sourceLinkLabel(source.kind)}</DeskLink>}
         <button className="desk-btn" disabled={busy} onClick={() => { setFiling({ task, parent: "", revision: day.revision, date: day.date }); }}>File in outline</button>
       </li>;
     })}</ul>}
