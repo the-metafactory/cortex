@@ -209,7 +209,7 @@ Rules:
 
 ## Capture filing
 
-The command bar recognises `capture: <thought>`, `thought: <thought>`, and `studio: <thought>` as a Studio capture. Confirmation files the capture. When File thoughts in the Studio is promoted to Handle this yourself, the command bar files captures immediately. Stop doing this on your own restores confirmation.
+The command bar recognises `capture: <thought>`, `thought: <thought>`, and `studio: <thought>` as a Studio capture before it asks the parser command, so a configured parser cannot turn the thought into another kind. Confirmation files the capture. When File thoughts in the Studio is promoted to Handle this yourself, the command bar files captures immediately. Stop doing this on your own restores confirmation.
 
 The optional `mc.desk.studio.filer` uses an OpenAI-compatible endpoint:
 
