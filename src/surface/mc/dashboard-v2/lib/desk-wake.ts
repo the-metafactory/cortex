@@ -2,6 +2,7 @@ import { z } from "zod";
 import { wakeConfigurationError, type DeskWakeOptions } from "../../../../common/types/desk-wake";
 import { ownMicrophone } from "./desk-microphone";
 import { CommandEndpoint, WakeBuffer, withoutWakePhrase } from "./desk-wake-buffer";
+import { playWakeChime } from "./desk-wake-chime";
 
 export type WakeState = { phase: "off" } | { phase: "starting" | "listening" | "recording" | "transcribing" | "responding"; line: string } | { phase: "unavailable"; line: string };
 const WorkerMessage = z.discriminatedUnion("type", [
@@ -23,7 +24,7 @@ export interface WakeDependencies {
   recorder?: (stream: MediaStream) => MediaRecorder;
 }
 
-type Recording = { recorder: MediaRecorder; destination: MediaStreamAudioDestinationNode; chunks: Blob[]; endpoint: CommandEndpoint; next: number; sources: Set<AudioBufferSourceNode>; ending: boolean };
+interface Recording { recorder: MediaRecorder; destination: MediaStreamAudioDestinationNode; chunks: Blob[]; endpoint: CommandEndpoint; next: number; sources: Set<AudioBufferSourceNode>; ending: boolean }
 
 export class DeskWake {
   private abort = new AbortController();
@@ -58,7 +59,7 @@ export class DeskWake {
     this.abort = new AbortController();
     const signal = this.abort.signal;
     this.set({ phase: "starting", line: "Preparing local wake detection…" });
-    window.addEventListener("pagehide", () => this.disable(), { signal });
+    window.addEventListener("pagehide", () => { this.disable(); }, { signal });
     try {
       const error = wakeConfigurationError(this.options);
       if (error) throw new Error(error);
@@ -66,9 +67,9 @@ export class DeskWake {
       if (signal.aborted) { release(); return; }
       this.release = release;
       const stream = await (this.deps.media ?? navigator.mediaDevices).getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
-      if (signal.aborted) { stream.getTracks().forEach(track => track.stop()); return; }
+      if (this.abort.signal !== signal || this.abort.signal.aborted) { stream.getTracks().forEach(track => { track.stop(); }); return; }
       this.stream = stream;
-      for (const track of stream.getTracks()) track.addEventListener("ended", () => this.fail(new Error("The microphone was lost or permission was revoked.")), { signal });
+      for (const track of stream.getTracks()) track.addEventListener("ended", () => { this.fail(new Error("The microphone was lost or permission was revoked.")); }, { signal });
       const audio = (this.deps.context ?? (() => new AudioContext()))();
       this.audio = audio;
       await audio.resume();
@@ -78,7 +79,7 @@ export class DeskWake {
       signal.throwIfAborted();
       this.ring = new WakeBuffer(Math.ceil(audio.sampleRate * this.options.preRollMs / 1000));
       this.worker = (this.deps.worker ?? (() => new Worker("/wake/worker.js")))();
-      this.worker.onerror = () => this.fail(new Error("Local wake worker failed. Rebuild the dashboard if assets are missing."));
+      this.worker.onerror = () => { this.fail(new Error("Local wake worker failed. Rebuild the dashboard if assets are missing.")); };
       this.worker.onmessage = ({ data }: MessageEvent<unknown>) => {
         if (signal.aborted) return;
         const parsed = WorkerMessage.safeParse(data);
@@ -179,9 +180,10 @@ export class DeskWake {
       const recording: Recording = { recorder, destination, chunks: [], endpoint: new CommandEndpoint(this.options), next: audio.currentTime + 0.05, sources: new Set(), ending: false };
       this.recording = recording;
       recorder.ondataavailable = event => { if (!this.abort.signal.aborted && event.data.size) recording.chunks.push(event.data); };
-      recorder.onerror = () => this.fail(new Error("The browser could not record the command."));
+      recorder.onerror = () => { this.fail(new Error("The browser could not record the command.")); };
       recorder.start();
       this.set({ phase: "recording", line: "Recording your command…" });
+      playWakeChime(audio);
       const before = this.ring?.take();
       if (before?.length) this.replay(before.slice(Math.max(0, startFrame - (this.sent - before.length))), recording);
       this.ring?.clear();
@@ -197,13 +199,13 @@ export class DeskWake {
     const signal = this.abort.signal;
     try {
       await new Promise<void>((resolve, reject) => {
-        const aborted = (): void => { if (this.drainTimer) clearTimeout(this.drainTimer); this.drainTimer = null; reject(signal.reason); };
+        const aborted = (): void => { if (this.drainTimer) clearTimeout(this.drainTimer); this.drainTimer = null; reject(new DOMException("Wake disabled", "AbortError")); };
         signal.addEventListener("abort", aborted, { once: true });
         this.drainTimer = setTimeout(() => { signal.removeEventListener("abort", aborted); this.drainTimer = null; resolve(); }, Math.max(0, (recording.next - audio.currentTime) * 1000) + 100);
       });
       signal.throwIfAborted();
       const clip = await new Promise<Blob>((resolve, reject) => {
-        const aborted = (): void => { clearTimeout(timeout); reject(signal.reason); };
+        const aborted = (): void => { clearTimeout(timeout); reject(new DOMException("Wake disabled", "AbortError")); };
         const timeout = setTimeout(() => { signal.removeEventListener("abort", aborted); reject(new Error("The browser did not finish recording.")); }, 3000);
         signal.addEventListener("abort", aborted, { once: true });
         recording.recorder.onstop = () => { clearTimeout(timeout); signal.removeEventListener("abort", aborted); resolve(new Blob(recording.chunks, { type: recording.recorder.mimeType || "audio/webm" })); };
@@ -232,7 +234,7 @@ export class DeskWake {
     if (recording.recorder.state !== "inactive") recording.recorder.stop();
     for (const source of recording.sources) { source.stop(); source.disconnect(); }
     recording.destination.disconnect();
-    recording.destination.stream.getTracks().forEach(track => track.stop());
+    recording.destination.stream.getTracks().forEach(track => { track.stop(); });
     recording.chunks.length = 0;
   }
   disable(): void {
@@ -245,7 +247,7 @@ export class DeskWake {
     this.worker?.terminate(); this.worker = null;
     this.node?.disconnect(); this.node = null;
     this.source?.disconnect(); this.source = null;
-    this.stream?.getTracks().forEach(track => track.stop()); this.stream = null;
+    this.stream?.getTracks().forEach(track => { track.stop(); }); this.stream = null;
     if (this.audio) void this.audio.close().catch(() => undefined);
     this.audio = null;
     this.ring?.clear(); this.ring = null;
