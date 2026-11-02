@@ -62,7 +62,7 @@ export function useFreshStudio(studio: StudioView): [StudioView, (view: StudioVi
   return [fresh?.base === studio ? fresh.view : studio, take];
 }
 
-export function DeskStudio({ studio: polled, thread, onOpenThread, at, day, onDiscuss }: { studio: StudioView; thread: string | null; onOpenThread: (slug: string | null) => void; at?: number; day?: StudioDay; onDiscuss?: StartDiscussion }) {
+export function DeskStudio({ studio: polled, thread, onOpenThread, at, day, onDiscuss, onConversation }: { studio: StudioView; thread: string | null; onOpenThread: (slug: string | null) => void; at?: number; day?: StudioDay; onDiscuss?: StartDiscussion; onConversation?: (id: string) => void }) {
   const [studio, takeStudio] = useFreshStudio(polled);
   const acts = useStudioActs(takeStudio);
   const [sheet, setSheet] = useState<OpenRequest | null>(null);
@@ -86,7 +86,7 @@ export function DeskStudio({ studio: polled, thread, onOpenThread, at, day, onDi
       </section>
       {zoom.shown !== null
         ? page
-          ? <ThreadPageView key={page.thread.slug} page={page} onBack={back} onOpen={onOpenThread} zoom={zoom} acts={acts} onBringBack={bringBack} {...(onDiscuss ? { onDiscuss } : {})} />
+          ? <ThreadPageView key={page.thread.slug} page={page} onBack={back} onOpen={onOpenThread} zoom={zoom} acts={acts} onBringBack={bringBack} {...(onDiscuss ? { onDiscuss } : {})} {...(onConversation ? { onConversation } : {})} />
           : <ThreadMissing slug={zoom.shown} onBack={back} zoom={zoom} />
         : (
             <>

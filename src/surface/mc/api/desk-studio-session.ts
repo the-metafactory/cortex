@@ -21,6 +21,7 @@ function save(db: Database, dir: string, session: StudioSession): void {
 export interface SessionDeps {
   model?: SessionModel;
   now?: () => Date;
+  imported?: (sessionId: string) => Promise<boolean>;
 }
 export async function handleDeskStudioSession(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: SessionDeps = {}): Promise<Response> {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
@@ -41,7 +42,9 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     if (request.action === "recover") {
       const rows = db.query<{ data: string }, [string]>("SELECT data FROM desk_studio_sessions WHERE directory = ? AND json_extract(data, '$.phase.kind') != 'ended' ORDER BY rowid DESC LIMIT 50").all(dir);
       const sessions = rows.map(row => StudioSessionSchema.parse(JSON.parse(row.data))).filter(s => s.phase.kind !== "ended");
-      return answer(200, { ok: true, sessions });
+      const kept = [];
+      for (const s of sessions) if (s.phase.kind === "ending" || !(await deps.imported?.(s.id))) kept.push(s);
+      return answer(200, { ok: true, sessions: kept });
     }
     let session = readStudioSession(db, dir, request.id);
     const context = async () => {
@@ -61,6 +64,7 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     }
     if (!session) return fail(404, "That session was not found in this Studio.");
     if (request.action === "start" || request.action === "read") return answer(200, { ok: true, session });
+    if (session.phase.kind === "open" && await deps.imported?.(session.id)) return fail(409, "This exchange continues as an Ivy conversation. Open it from its Studio thread.", session);
     if (request.action === "save-message") {
       if (session.phase.kind !== "ended") return fail(409, "Save the exchange before adding a remaining message.", session);
       const hash = createHash("sha256").update(JSON.stringify([session.id, session.thread, request.text])).digest("hex").slice(0, 56);

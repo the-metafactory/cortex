@@ -94,7 +94,8 @@ import { handleDeskRuling } from "./api/desk-ruling";
 import { handleGetDeskStudio } from "./api/desk-studio";
 import { handleDeskStudioAct } from "./api/desk-studio-act";
 import { handleDeskStudioSession } from "./api/desk-studio-session";
-import { handleConversations, type ConversationAccess } from "./api/conversations";
+import { handleConversations, importedSessions, type ConversationAccess } from "./api/conversations";
+import { conversationSources } from "./desk/conversation-sources";
 import { GoalChecks, GoalStatuses } from "./desk/goals";
 import { RulingExplainLoop, RulingLedger, rulingExplainer } from "./desk/ruling";
 import { MailSimilarity } from "./desk/mail-similar";
@@ -212,6 +213,8 @@ export function startServer(
   } : undefined);
   const deskRecentWrites = new RecentCalendarWrites();
   const deskRuntime: DeskRuntime = { waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(deskDmarc ? { dmarc: deskDmarc } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}) };
+  const conversationHost = options.conversations?.();
+  if (conversationHost?.state === "ready") conversationHost.host.attachSources(conversationSources({ db, desk: () => deskRuntime.options }));
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
@@ -463,7 +466,7 @@ async function handleApi(
   conversations?: ConversationAccess,
 ): Promise<Response> {
   const { pathname } = url;
-  if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations);
+  if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });
 
   if (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname)) {
     const rebindDenial = checkRebindGuard(req, guard);
@@ -554,7 +557,7 @@ async function handleApi(
   }
 
   if (pathname === "/api/desk/studio/act") return handleDeskStudioAct(req, desk, { db });
-  if (pathname === "/api/desk/studio/session") return handleDeskStudioSession(req, db, desk);
+  if (pathname === "/api/desk/studio/session") return handleDeskStudioSession(req, db, desk, { imported: importedSessions(conversations) });
 
   if (pathname === "/api/vigil/subjects") {
     if (req.method !== "GET") return methodNotAllowed(["GET"]);

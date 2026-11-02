@@ -63,6 +63,16 @@ export const AttachmentUploadSchema = z.object({
 }).strict();
 export type AttachmentUpload = z.infer<typeof AttachmentUploadSchema>;
 
+export const DraftSchema = z.object({ text: z.string().max(20_000) }).strict();
+
+export interface ConversationDetail {
+  conversation: ConversationMeta;
+  sources: SourceView[];
+  draft: string;
+  pending: SubmissionView[];
+  studio: { scope: "thread" | "note"; subject: string; outcome: OperationRecord | null } | null;
+}
+
 export interface SubmissionView {
   inputId: string;
   submission: string;
@@ -81,6 +91,8 @@ export interface ConversationEntry {
 }
 
 export const CONTINUATION_KIND = "cortex.continuation";
+export const IMPORTED_TURN_KIND = "cortex.imported-turn";
+export const DECISION_KIND = "cortex.decision";
 export const INPUT_KIND = "cortex.input";
 export type Continuation =
   | { mode: "native-resume"; engine: string; at: string }
@@ -96,11 +108,16 @@ export const OperationRecordSchema = z.object({
   owner: z.enum(OWNER_TYPES),
   state: z.enum(OPERATION_STATES),
   canonicalId: z.string().optional(),
+  digest: z.string().optional(),
   history: z.array(z.object({ state: z.enum(OPERATION_STATES), at: z.string(), detail: z.string().optional() })),
 });
 export type OperationRecord = z.infer<typeof OperationRecordSchema>;
 
-export type LinkResolver = (ref: ObjectRef) => Promise<Policy | null>;
+export type SourceState =
+  | { state: "available"; policy: Policy; title: string; context?: string; url?: string }
+  | { state: "unavailable"; reason: "gone" | "unauthorized" };
+export type SourceView = { ref: ObjectRef } & SourceState;
+export type LinkResolver = (ref: ObjectRef) => Promise<SourceState>;
 export type LinkResolvers = Partial<Record<OwnerType, LinkResolver>>;
 export type OwnerReadback = (operation: OperationRecord) => Promise<{ found: true; canonicalId: string } | { found: false } | null>;
 export type OwnerReadbacks = Partial<Record<OwnerType, OwnerReadback>>;

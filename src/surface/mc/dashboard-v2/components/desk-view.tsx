@@ -7,7 +7,9 @@ import type { MailSweepView } from "../../desk/mail-sweep";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
 import { MyDayLane } from "./desk-my-day";
-import { StudioSessionPanel, useStudioSession } from "./desk-studio-session";
+import { StudioSessionPanel, useStudioSession, type StartDiscussion } from "./desk-studio-session";
+import { ConversationWorkspace } from "./desk-conversation";
+import { useStartConversation } from "./desk-source-conversations";
 import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -27,7 +29,7 @@ import { proposalTime, type DeskProposal } from "../../desk/ask";
 import { DAY_MS, startOfDay } from "../../desk/time";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
-import { useDeskLocation, useDeskStudio } from "../hooks/use-desk-studio";
+import { useDeskLocation, useDeskStudio, type DeskLocation } from "../hooks/use-desk-studio";
 import { DeskModeSwitch, DeskStudio } from "./desk-studio";
 import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, selectItems, spokenBriefing, URGENCY_LABEL } from "../../desk/present";
 import { useDeskVoice } from "../hooks/use-desk-voice";
@@ -114,6 +116,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const inStudio = place.mode === "studio" && studio !== null;
   const inBalance = place.mode === "balance";
   const inCatchup = place.mode === "catchup";
+  const inConversation = place.mode === "conversation" && Boolean(place.conversation);
+  const cameFrom = useRef<DeskLocation | null>(null);
+  const openConversation = (id: string): void => {
+    if (place.mode !== "conversation") cameFrom.current = place;
+    go({ mode: "conversation", thread: null, conversation: id });
+  };
+  const leaveConversation = (): void => go(cameFrom.current ?? { mode: "day", thread: null });
   const openCatchup = (key: string | null): void => {
     const search = catchupSearch(window.location.search, { area: "", filter: "all", card: key });
     window.history.pushState(null, "", `${window.location.pathname}${search}${window.location.hash}`);
@@ -232,6 +241,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   const discussion = useStudioSession(captureChanged);
+  const starter = useStartConversation(openConversation);
+  const discuss: StartDiscussion = (thread, scope) => { void starter.start(scope.kind === "ghost" ? { owner: "studio-note", id: `${thread}#${scope.note}` } : { owner: "studio-thread", id: thread }); };
   const voice = useDeskVoice({ ...view.voice, enabled: view.voice.enabled && !discussion.session }, {
     answer: async (said) => {
       const result = await askDesk(said, fetch, area === ALL_AREAS ? undefined : area);
@@ -575,7 +586,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             </div>
           </div>
           <div className="desk-topr">
-            {!inStudio && !inBalance && !inCatchup && view.areas.length > 0 && (
+            {!inStudio && !inBalance && !inCatchup && !inConversation && view.areas.length > 0 && (
               <div className="desk-seg" role="tablist" aria-label="Area">
                 <button type="button" role="tab" aria-selected={area === ALL_AREAS} onClick={() => setArea(ALL_AREAS)}>All</button>
                 {view.areas.map((a) => (
@@ -590,17 +601,19 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       </div>
 
-      <StudioSessionPanel controls={discussion} voice={view.voice} location={`${place.mode}:${place.thread ?? ""}`} />
-      {inStudio && studio && <DeskStudio studio={studio} thread={place.thread} day={view} onDiscuss={discussion.start} onOpenThread={(slug) => go({ mode: "studio", thread: slug })} />}
+      <StudioSessionPanel controls={discussion} voice={view.voice} location={`${place.mode}:${place.thread ?? ""}`} onContinue={(sessionId) => void starter.open(sessionId)} />
+      {starter.error && <p className="desk-unsent" role="alert">{starter.error}</p>}
+      {inConversation && place.conversation && <ConversationWorkspace key={place.conversation} id={place.conversation} onLeave={leaveConversation} />}
+      {inStudio && studio && <DeskStudio studio={studio} thread={place.thread} day={view} onDiscuss={discuss} onConversation={openConversation} onOpenThread={(slug) => go({ mode: "studio", thread: slug })} />}
       {inStudio && (
         <div className="dst">
           {proposalCard}
           <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => void stopRule(rule)} onPromote={(action, on) => void promote(action, on)} />
         </div>
       )}
-      {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
+      {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
       <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} />
-      <div className="desk-grid" hidden={inStudio || inBalance || inCatchup}>
+      <div className="desk-grid" hidden={inStudio || inBalance || inCatchup || inConversation}>
         <main>
           <section className="desk-lead">
             <p><strong>{brief.greeting}</strong> {brief.lines.join(" ")}</p>

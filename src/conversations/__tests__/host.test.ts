@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { scratchDirs } from "./fixtures/scratch";
 import { ConversationError, openConversationHost, type ConversationHost, type HostOptions } from "../host";
 import type { ChatCall, ChatTurn } from "../model";
-import type { LinkResolvers, Policy } from "../types";
+import type { LinkResolvers, Policy, SourceState } from "../types";
 
 const LABEL = "ai.meta-factory.cortex.test";
 const local = { baseUrl: "http://local.invalid", model: "local-model", timeoutSeconds: 5 };
@@ -101,7 +101,7 @@ describe("conversation host", () => {
 
   test("the strictest linked policy routes to the local model and a tightened conversation records reconstructed context", async () => {
     let threadPolicy: Policy = "cloud";
-    const resolvers: LinkResolvers = { "studio-thread": () => Promise.resolve(threadPolicy) };
+    const resolvers: LinkResolvers = { "studio-thread": () => Promise.resolve({ state: "available", policy: threadPolicy, title: "Thread A" }) };
     const { calls, chat } = recorder();
     const host = await open(await scratch(), { chat, resolvers });
     const conversation = await create(host, "cloud", [{ owner: "studio-thread", id: "thread-a" }]);
@@ -129,20 +129,30 @@ describe("conversation host", () => {
     expect(await host.input(conversation.id, "in-1").catch((error: unknown) => (error as ConversationError).status)).toBe(404);
   });
 
-  test("the overview omits a conversation whose linked object is no longer authorized", async () => {
-    let authorized = true;
-    const host = await open(await scratch(), { chat: recorder().chat, resolvers: { "studio-thread": () => Promise.resolve(authorized ? "cloud" : null) } });
+  test("a gone source shows as unavailable without context, keeps the conversation and its history, and allows only the local model", async () => {
+    let source: SourceState = { state: "available", policy: "cloud", title: "Thread A", context: "private question" };
+    const { calls, chat } = recorder();
+    const host = await open(await scratch(), { chat, resolvers: { "studio-thread": () => Promise.resolve(source) } });
     const linked = await create(host, "cloud", [{ owner: "studio-thread", id: "thread-a" }]);
-    const plain = await create(host);
-    expect((await host.list()).map(c => c.id).sort()).toEqual([linked.id, plain.id].sort());
-    authorized = false;
-    expect((await host.list()).map(c => c.id)).toEqual([plain.id]);
-    expect(await host.meta(linked.id).catch((error: unknown) => (error as ConversationError).status)).toBe(403);
+    await host.submit(linked.id, input("in-1", "first"));
+    await host.waitForIdle(linked.id);
+    source = { state: "unavailable", reason: "gone" };
+    expect((await host.list()).map(c => c.id)).toEqual([linked.id]);
+    const detail = await host.detail(linked.id);
+    expect(detail.sources).toEqual([{ ref: { owner: "studio-thread", id: "thread-a" }, state: "unavailable", reason: "gone" }]);
+    expect(JSON.stringify(detail)).not.toContain("private question");
+    expect(detail.conversation.policy).toBe("local");
+    expect((await host.entries(linked.id, 100, undefined)).entries.filter(e => e.role === "user").map(e => e.text)).toEqual(["first"]);
+    await host.submit(linked.id, input("in-2", "second"));
+    await host.waitForIdle(linked.id);
+    expect(calls.map(c => c.model)).toEqual(["cloud-model", "local-model"]);
+    source = { state: "available", policy: "cloud", title: "Thread A" };
+    expect((await host.meta(linked.id)).policy).toBe("cloud");
   });
 
   test("an unresolvable linked object is refused before any model context is built", async () => {
     const { calls, chat } = recorder();
-    const host = await open(await scratch(), { chat, resolvers: { "studio-thread": () => Promise.resolve(null) } });
+    const host = await open(await scratch(), { chat, resolvers: { "studio-thread": () => Promise.resolve({ state: "unavailable", reason: "gone" }) } });
     const refused = await create(host, "cloud", [{ owner: "studio-thread", id: "missing" }]).catch((error: unknown) => error);
     expect((refused as ConversationError).status).toBe(403);
     expect(calls).toHaveLength(0);

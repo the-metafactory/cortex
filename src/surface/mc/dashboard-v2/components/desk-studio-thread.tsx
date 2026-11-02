@@ -1,3 +1,4 @@
+import { SourceConversations } from "./desk-source-conversations";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { clip, plainQuestion } from "../../desk/studio/board";
 import type { IvyNote } from "../../desk/studio/format";
@@ -324,7 +325,7 @@ function Outcome({ page, acting, today }: { page: ThreadPage; acting: Acting; to
   );
 }
 
-export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack, onDiscuss }: {
+export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack, onDiscuss, onConversation }: {
   page: ThreadPage;
   onBack: () => void;
   onOpen: (slug: string) => void;
@@ -332,6 +333,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack, 
   acts?: StudioActs;
   onBringBack?: (slug: string, question: string) => void;
   onDiscuss?: StartDiscussion;
+  onConversation?: (id: string) => void;
 }) {
   const ref = useRef<HTMLElement>(null);
   const t = page.thread;
@@ -360,6 +362,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack, 
             </NoteCard>
           )}
           {onDiscuss && t.state !== "closed" && <button type="button" className="desk-btn" onClick={() => onDiscuss(t.slug, { kind: "thread" })}>Talk it through</button>}
+          {onConversation && <SourceConversations source={{ owner: "studio-thread", id: t.slug }} onOpen={onConversation} offerNew={false} />}
           <Sparring page={page} {...(acts ? { acts } : {})} />
           <Outcome page={page} acting={acting} today={localDate(new Date())} />
         </div>

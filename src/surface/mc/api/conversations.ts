@@ -1,5 +1,6 @@
 import { ConversationError, type HostStatus } from "../../../conversations/host";
-import { AttachmentUploadSchema, CreateConversationSchema, InputRequestSchema } from "../../../conversations/types";
+import { AttachmentUploadSchema, CreateConversationSchema, DraftSchema, InputRequestSchema } from "../../../conversations/types";
+import { applyStudioOutcome, ImportSchema, isImported, withStudio, importStudioSession, OutcomeSchema, sourceConversations, SourceQuerySchema, StartSchema, startFromSource, type StudioConversationDeps } from "./conversation-studio";
 import { checkRebindGuard, enforceMutationAuth, type MutationGuardContext } from "./mutation-guard";
 import { DEFAULT_LOCAL_PRINCIPAL } from "./networks-admission";
 
@@ -7,12 +8,20 @@ export type ConversationAccess = () => HostStatus | null;
 
 const reply = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 const fail = (status: number, error: string): Response => reply(status, { ok: false, error });
+const NO_SOURCES = (): Response => fail(503, "Conversation sources are not set up on this stack.");
 const notAllowed = (allow: string): Response => new Response(null, { status: 405, headers: { Allow: allow } });
 function decoded(value: string): string | null {
   try { return decodeURIComponent(value); }
   catch { return null; }
 }
-const ITEM = /^\/api\/conversations\/([0-9a-f-]{36})(?:\/(inputs|entries|attachments)(?:\/([^/]+))?)?$/;
+const ITEM = /^\/api\/conversations\/([0-9a-f-]{36})(?:\/(inputs|entries|attachments|draft|outcome)(?:\/([^/]+))?)?$/;
+
+export function importedSessions(access: ConversationAccess | undefined): (sessionId: string) => Promise<boolean> {
+  return async sessionId => {
+    const status = access?.();
+    return status?.state === "ready" ? isImported(status.host, sessionId) : false;
+  };
+}
 
 export function isStackPrincipal(principal: string, guard: MutationGuardContext): boolean {
   const who = principal.trim().toLowerCase();
@@ -24,7 +33,7 @@ async function body(req: Request): Promise<unknown> {
   return req.json().catch(() => null);
 }
 
-export async function handleConversations(req: Request, url: URL, guard: MutationGuardContext, access: ConversationAccess | undefined): Promise<Response> {
+export async function handleConversations(req: Request, url: URL, guard: MutationGuardContext, access: ConversationAccess | undefined, studio?: StudioConversationDeps): Promise<Response> {
   const rebind = checkRebindGuard(req, guard);
   if (rebind) return rebind;
   const auth = await enforceMutationAuth(req, guard);
@@ -42,13 +51,48 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
       if (!parsed.success) return fail(400, "The conversation request is not valid.");
       return reply(201, { ok: true, conversation: await host.create(parsed.data, auth.principal) });
     }
+    if (url.pathname === "/api/conversations/source") {
+      if (req.method !== "GET") return notAllowed("GET");
+      const query = SourceQuerySchema.safeParse({ owner: url.searchParams.get("owner"), id: url.searchParams.get("id") });
+      if (!query.success) return fail(400, "The source reference is not valid.");
+      if (!studio) return NO_SOURCES();
+      return reply(200, { ok: true, ...(await sourceConversations(host, studio, query.data)) });
+    }
+    if (url.pathname === "/api/conversations/starts" || url.pathname === "/api/conversations/imports") {
+      if (req.method !== "POST") return notAllowed("POST");
+      if (!studio) return NO_SOURCES();
+      const raw = await body(req);
+      if (url.pathname === "/api/conversations/starts") {
+        const parsed = StartSchema.safeParse(raw);
+        if (!parsed.success) return fail(400, "The start request is not valid.");
+        return reply(201, { ok: true, conversation: await startFromSource(host, studio, parsed.data, auth.principal) });
+      }
+      const parsed = ImportSchema.safeParse(raw);
+      if (!parsed.success) return fail(400, "The import request is not valid.");
+      return reply(200, { ok: true, conversation: await importStudioSession(host, studio, parsed.data.sessionId, auth.principal) });
+    }
     const match = ITEM.exec(url.pathname);
     const id = match?.[1];
     if (!match || !id) return fail(404, "Unknown conversation route.");
     const [, , part, inputId] = match;
     if (!part) {
       if (req.method !== "GET") return notAllowed("GET");
-      return reply(200, { ok: true, conversation: await host.meta(id) });
+      return reply(200, { ok: true, ...(await withStudio(host, id, await host.detail(id))) });
+    }
+    if (part === "draft") {
+      if (req.method !== "PUT" || inputId) return notAllowed("PUT");
+      const parsed = DraftSchema.safeParse(await body(req));
+      if (!parsed.success) return fail(400, "The draft is not valid.");
+      await host.saveDraft(id, parsed.data.text);
+      return reply(200, { ok: true });
+    }
+    if (part === "outcome") {
+      if (req.method !== "POST" || inputId) return notAllowed("POST");
+      if (!studio) return NO_SOURCES();
+      const parsed = OutcomeSchema.safeParse(await body(req));
+      if (!parsed.success) return fail(400, "The outcome is not valid.");
+      const operation = await applyStudioOutcome(host, studio, id, parsed.data);
+      return reply(operation.state === "created" ? 200 : operation.state === "failed" ? 409 : 202, { ok: operation.state === "created", operation, ...(operation.state === "failed" ? { error: operation.history.at(-1)?.detail ?? "The outcome was not saved." } : {}) });
     }
     if (part === "entries") {
       if (req.method !== "GET" || inputId) return notAllowed("GET");
