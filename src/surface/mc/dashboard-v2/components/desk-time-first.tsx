@@ -111,7 +111,6 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, sweeps, pre
         </li>)}</ol>
         {draft && <div className="tf-actions"><button type="button" className="desk-btn pri" disabled={busy || retryable} onClick={() => void saveOrder()}>Confirm reshuffle</button><button type="button" className="desk-btn ghost" disabled={busy || retryable} onClick={() => { setDraft(null); }}>Cancel reshuffle</button></div>}
         <p>Choosing what fits now leaves your overall priorities unchanged.</p>
-        <DaySettings changes={changes} disabled={draft !== null || retryable} />
       </section>
       {preview}
       {selected && <section className="tf-context" aria-label="Selected task context"><span className="tf-eyebrow">Project / goal context</span><p>{[selected.areaTitle, ...selected.path].join(" / ")}</p><h3>{selected.task.title}</h3><p>{savedTaskContext(current.outline, selected)}</p><a className="desk-btn ghost" href={`${balanceItemSearch(typeof window === "undefined" ? "" : window.location.search, selected.task.id)}${typeof window === "undefined" ? "" : window.location.hash}`}>Open task in Balance</a></section>}
@@ -140,9 +139,4 @@ function DayContract({ changes }: { changes: DayChanges }) {
 
 function DayWins({ day }: { day: MyDayView }) {
   return <section className="tf-wins"><h2>Wins today</h2>{day.wins.length ? <ul>{day.wins.map((win, index) => <li key={`${win.taskId}:${index}`}>{win.title}</li>)}</ul> : <p>You made room for what matters. No tasks marked done yet.</p>}</section>;
-}
-
-function DaySettings({ changes, disabled }: { changes: DayChanges; disabled: boolean }) {
-  const { current, busy, change } = changes;
-  return <details className="tf-settings"><summary>Day limits</summary><label>My day <input aria-label="My day cap" type="range" min="1" max="7" value={current.cap} disabled={busy || disabled} onChange={event => void change({ op: "cap", cap: Number(event.target.value) })} /><output>{current.cap}</output></label><label>Needs you <input aria-label="Needs you cap" type="range" min="1" max="10" value={current.topN} disabled={busy || disabled} onChange={event => void change({ op: "topN", topN: Number(event.target.value) })} /><output>{current.topN}</output></label><p>{current.capsOverridden ? "Your saved caps apply until Reset." : "Using your defaults."} Defaults: {current.configuredCaps.cap} My day / {current.configuredCaps.topN} Needs you.</p>{current.capsOverridden && <button type="button" className="desk-btn ghost" disabled={busy || disabled} onClick={() => void change({ op: "reset-caps" })}>Reset</button>}</details>;
 }

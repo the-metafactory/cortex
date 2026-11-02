@@ -7,6 +7,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { changeSenders, type SenderChange, type SenderListId, type SenderRow } from "../lib/desk-settings";
 import { browserNotifyEnv, NOTIFY_LINE, notifyState, requestNotifications, type NotifyState } from "../lib/desk-notify";
 import type { DeskMailClassifier, DeskView } from "../../desk/types";
+import type { MyDayView } from "../../desk/my-day";
+import { useMyDay } from "../hooks/use-my-day";
 import "./desk-view.css";
 
 interface ListState {
@@ -42,6 +44,7 @@ export function DeskSettings({ view, onBack, group, onGroup }: { view: DeskView;
 
   return (
     <SettingsBody
+      day={view.myDay}
       group={group}
       onGroup={onGroup}
       vips={listProps("vips")}
@@ -69,6 +72,7 @@ export interface SenderListProps {
 }
 
 export interface SettingsBodyProps {
+  day?: MyDayView;
   group?: SettingsGroup;
   onGroup?: (group: SettingsGroup) => void;
   vips: SenderListProps;
@@ -130,7 +134,7 @@ function SenderCard({ text, list, busy }: { text: SenderCardText; list: SenderLi
                     {v.label ?? v.address}
                     {v.label && <small>{v.address}</small>}
                   </span>
-                  <button type="button" className="desk-btn ghost" aria-label={`Remove ${v.address}`} disabled={busy} onClick={() => list.onRemove(v.address)}>Remove</button>
+                  <button type="button" className="desk-btn ghost" aria-label={`Remove ${v.address}`} disabled={busy} onClick={() => { list.onRemove(v.address); }}>Remove</button>
                 </li>
               ))}
             </ul>
@@ -146,7 +150,7 @@ function SenderCard({ text, list, busy }: { text: SenderCardText; list: SenderLi
               });
             }}
           >
-            <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="ada@example.org or @example.org" aria-label={text.addLabel} disabled={busy} />
+            <input value={draft} onChange={(e) => { setDraft(e.target.value); }} placeholder="ada@example.org or @example.org" aria-label={text.addLabel} disabled={busy} />
             <button type="submit" className="desk-btn pri" disabled={busy || !draft.trim()}>Add</button>
           </form>
           {list.note && <p className="desk-set-err" role="alert">{list.note}</p>}
@@ -156,7 +160,7 @@ function SenderCard({ text, list, busy }: { text: SenderCardText; list: SenderLi
   );
 }
 
-export function SettingsBody({ group = "calendars", onGroup, vips, unimportant, busy, onBack, notify, onEnableNotify, classifier = null, calendars = [], mailRules }: SettingsBodyProps) {
+export function SettingsBody({ day, group = "calendars", onGroup, vips, unimportant, busy, onBack, notify, onEnableNotify, classifier = null, calendars = [], mailRules }: SettingsBodyProps) {
   const panel = (id: SettingsGroup, content: ReactNode): ReactNode => (
     <div key={id} id={`settings-panel-${id}`} role="tabpanel" aria-labelledby={`settings-tab-${id}`} hidden={group !== id} tabIndex={0}>{content}</div>
   );
@@ -201,6 +205,7 @@ export function SettingsBody({ group = "calendars", onGroup, vips, unimportant, 
           </div>
           <div className="desk-set-pages">
             {panel("calendars", <CalendarSettings initial={calendars} />)}
+            {panel("day-limits", day ? <DayLimitSettings day={day} /> : <section className="desk-set-card" aria-label="Day limits"><h2>Day limits</h2><p role="status">Your saved day limits are unavailable. Return to the Desk to refresh and retry.</p></section>)}
             {panel("vips", <SenderCard text={VIP_TEXT} list={vips} busy={busy} />)}
             {panel("unimportant", <SenderCard text={UNIMPORTANT_TEXT} list={unimportant} busy={busy} />)}
             {panel("notifications", <section className="desk-set-card" aria-label="Notifications">
@@ -221,4 +226,20 @@ export function SettingsBody({ group = "calendars", onGroup, vips, unimportant, 
       </main>
     </div>
   );
+}
+
+function DayLimitSettings({ day }: { day: MyDayView }) {
+  const { current, busy, change, note, retryable, retry } = useMyDay(day, () => undefined);
+  return <section className="desk-set-card" aria-label="Day limits">
+    <h2>Day limits</h2>
+    <p className="desk-set-sub">Choose how many items appear in My day and Needs you.</p>
+    <div className="desk-set-limits">
+      <label>My day <input aria-label="My day cap" type="range" min="1" max="7" value={current.cap} disabled={busy || retryable} onChange={event => { void change({ op: "cap", cap: Number(event.target.value) }); }} /><output>{current.cap}</output></label>
+      <label>Needs you <input aria-label="Needs you cap" type="range" min="1" max="10" value={current.topN} disabled={busy || retryable} onChange={event => { void change({ op: "topN", topN: Number(event.target.value) }); }} /><output>{current.topN}</output></label>
+    </div>
+    <p className="desk-set-sub">{current.capsOverridden ? "Your saved caps apply until Reset." : "Using your defaults."} Defaults: {current.configuredCaps.cap} My day / {current.configuredCaps.topN} Needs you.</p>
+    {current.capsOverridden && <button type="button" className="desk-btn ghost" disabled={busy || retryable} onClick={() => { void change({ op: "reset-caps" }); }}>Reset</button>}
+    {note && <p role="status">{note}</p>}
+    {retryable && <button type="button" className="desk-btn" disabled={busy} onClick={() => { void retry(); }}>Retry saved change</button>}
+  </section>;
 }

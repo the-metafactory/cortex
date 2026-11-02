@@ -12,6 +12,7 @@ import { DEFAULT_SETTINGS, findNode, selectToday, type AppState } from "../../..
 import { saveBalanceState, loadBalanceState } from "../desk/balance-store";
 import { changeMyDay, readMyDay, movedKeys, sourceIdentity, localDay } from "../desk/my-day";
 import { MyDayLane } from "../dashboard-v2/components/desk-my-day";
+import { SettingsBody } from "../dashboard-v2/components/desk-settings";
 import { MyDayMetaSchema, MyDayRequestSchema, type MyDayCommand } from "../desk/my-day-schema";
 import { composeDesk, type DeskOptions } from "../desk/compose";
 import { z } from "zod";
@@ -50,6 +51,19 @@ describe("My day lane and day contract", () => {
   };
   const currentEvent = (title: string, key: string, start: number, end: number): CalendarInterval => ({ key, source: "calendar", calendar: "Work", calendarId: "work", title, at: NOW + start * 60_000, end: NOW + end * 60_000, availability: { status: "busy", provenance: "owned-provider" } });
   const clock = (minutes: number): string => new Date(NOW + minutes * 60_000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  it("places saved day limits and their defaults in Settings, not either work view", () => {
+    const day = change({ op: "cap", cap: 2 }).view;
+    const list = { rows: [], note: null, onAdd: async () => true, onRemove: () => {} };
+    const html = renderToStaticMarkup(createElement(SettingsBody, { group: "day-limits", day, vips: list, unimportant: list, busy: false, onBack: () => {}, notify: "granted", onEnableNotify: () => {} }));
+    expect(html).toContain('id="settings-panel-day-limits" role="tabpanel" aria-labelledby="settings-tab-day-limits" tabindex="0"');
+    expect(html).toContain('aria-label="My day cap" type="range" min="1" max="7" value="2"');
+    expect(html).toContain('aria-label="Needs you cap" type="range" min="1" max="10" value="5"');
+    expect(html).toContain("Defaults: 5 My day / 5 Needs you.");
+    expect(html).toContain("Your saved caps apply until Reset.");
+    expect(html).toContain(">Reset</button>");
+    expect(renderCalendar([])).not.toContain("Day limits");
+    expect(renderCalendar([])).not.toContain("My day cap");
+  });
   it("names the in-progress event and shows its own time range", () => {
     const html = renderCalendar([currentEvent("Design review", "review", -10, 20)]);
     expect(html).toContain("Design review is in progress");
@@ -140,7 +154,8 @@ describe("My day lane and day contract", () => {
     const html = renderToStaticMarkup(createElement(MyDayLane, { day: view, onChanged: () => {} }));
     expect(html).toContain("Start the day");
     expect(html).toContain("Why this");
-    expect(html).toContain("My day cap");
+    expect(html).not.toContain("My day cap");
+    expect(html).not.toContain("Needs you cap");
   });
   it("persists just-one-thing and starts idempotently without applying deficits twice", () => {
     const first = readMyDay(db, desk, NOW).items[0];
