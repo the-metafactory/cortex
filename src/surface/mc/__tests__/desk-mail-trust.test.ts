@@ -4,7 +4,7 @@ import { handleDeskMail } from "../api/desk-mail";
 import { HandledLedger } from "../desk/actions";
 import { setGrant } from "../desk/autonomy";
 import { saveClassification } from "../desk/classify";
-import { composeDesk, type DeskRuntime } from "../desk/compose";
+import type { DeskRuntime } from "../desk/compose";
 import { logMailDecision, mailFeatures, queryMailLog } from "../desk/mail-log";
 import { createRule, listRules, proposeRules, ruleFor } from "../desk/mail-rules";
 import { learnedAction } from "../desk/mail-similar";
@@ -12,7 +12,7 @@ import { suspicionContext, suspicionOf, type SuspicionContext } from "../desk/ma
 import { trustedViews } from "../desk/mail-trust";
 import { SourceCache, type SourceMail } from "../desk/sources/command";
 import { initDatabase } from "../db/init";
-import { mailDesk, mailPost as post } from "./desk-mail-fixtures";
+import { composeWith, mailDesk, mailPost as post } from "./desk-mail-fixtures";
 
 const NOW = Date.parse("2026-11-01T09:00:00.000Z");
 const PASS = { spf: "pass", dkim: "pass", dmarc: "pass", dkimDomains: ["pay.example"] } as const;
@@ -59,7 +59,7 @@ describe("Not phishing on the Desk", () => {
   const second = mail({ id: "m2@pay.example", subject: "Another receipt" });
   let items: SourceMail[] = [first];
   const runtime = (): DeskRuntime => ({ options: mailDesk({ move: ["/opt/move"], timeoutSeconds: 20 }), ledger: new HandledLedger(), sourceCache: new SourceCache(async () => JSON.stringify({ items })) });
-  const view = (rt: DeskRuntime) => composeDesk(db, rt.options ?? mailDesk(undefined), undefined, { now: NOW, handled: rt.ledger, ...(rt.sourceCache ? { sourceCache: rt.sourceCache } : {}) });
+  const view = (rt: DeskRuntime) => composeWith(db, rt.options ?? mailDesk(undefined), rt, NOW);
   const card = async (rt: DeskRuntime, id: string) => (await view(rt)).items.find((i) => i.key === `mail:${id}`);
   const act = async (rt: DeskRuntime, body: unknown) => { const res = await handleDeskMail(post(body), db, rt, { now: () => NOW, newId: () => "trust-1" }); return { status: res.status, body: (await res.json()) as Record<string, unknown> }; };
 
