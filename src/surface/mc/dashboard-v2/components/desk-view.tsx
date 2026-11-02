@@ -90,8 +90,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
   const catchupView = { ...view, items: view.items.filter(i => !snoozed.has(i.key)) };
   const [detail, setDetail] = useState<DeskItem | null>(null);
-  const [sweep, setSweep] = useState<MailSweepView | null>(null);
-  const [sweepTarget, setSweepTarget] = useState<MoveTarget>("archive");
+  const [sweep, setSweep] = useState<{ group: MailSweepView; target: MoveTarget } | null>(null);
   const [sweeping, setSweeping] = useState(false);
   useEffect(() => {
     if (detail) setSweep(null);
@@ -419,8 +418,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
   const openSweep = (s: MailSweepView, target: MoveTarget = s.target): void => {
     setDetail(null);
-    setSweepTarget(target);
-    setSweep(s);
+    setSweep({ group: s, target });
   };
 
   const undoBy: Record<string, (id: string) => Promise<void>> = { "mail.move": undoMove, "mail.rule": undoRuleRun, "mail.sweep": undoSweep, "mail.trust": undoTrust };
@@ -954,7 +952,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
       <div className="desk-scrim" onClick={() => { setDetail(null); if (!sweeping) setSweep(null); }} />
       <aside className="desk-panel" aria-hidden={!detail && !sweep} aria-label="Details">
-        {sweep && !detailItem && <SweepPreview key={`${sweep.id}:${sweepTarget}`} sweep={sweep} target={sweepTarget} busy={sweeping} onConfirm={(keys) => void confirmSweep(sweep, keys, sweepTarget)} onCancel={() => setSweep(null)} />}
+        {sweep && !detailItem && <SweepPreview key={`${sweep.group.id}:${sweep.target}`} sweep={sweep.group} target={sweep.target} busy={sweeping} onConfirm={(keys) => void confirmSweep(sweep.group, keys, sweep.target)} onCancel={() => setSweep(null)} />}
         {detailItem && (
           <DetailPanel item={shown(detailItem)} area={detailItem.area ? areaById.get(detailItem.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detailItem, a)} onShowEvent={showEvent} sending={busyWith(detailItem)}>
             {detailRuling?.open && (

@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { forgetClassification, readClassifications, type MailClassification } from "./classify";
 import type { ListedMail } from "./mail-actions";
-import { logMailDecision, mailFeatures } from "./mail-log";
+import { logMailDecision, mailFeatures, type MailFeatures } from "./mail-log";
 import { movedTarget, moveMail, refuse, undoMove, type MoveDeps, type MoveTarget } from "./mail-move";
 import { digestedIds, pendingRuleMail } from "./mail-rules";
 import { DEFAULT_SIMILARITY, groupBySimilarity, loggedAction, mailText, precedentLine, readVectors, textHash, vectorModel, type EmbedderConfig } from "./mail-similar";
@@ -267,7 +267,7 @@ export async function runSweep(group: SweepGroup, keys: readonly string[], deps:
   })();
   running.add(id);
   try {
-    return await moveAll(id, target, members, gone.length, title, deps);
+    return await moveAll(id, { target, suggested: group.target }, members, gone.length, title, deps);
   } finally {
     running.delete(id);
   }
@@ -275,26 +275,41 @@ export async function runSweep(group: SweepGroup, keys: readonly string[], deps:
 
 const running = new Set<string>();
 
-async function moveAll(id: string, target: MoveTarget, members: readonly SweepMember[], gone: number, title: string, deps: MoveDeps): Promise<SweepOutcome> {
+function correctionOf(deps: MoveDeps, features: MailFeatures, said: MailClassification["predictedAction"] | undefined, target: MoveTarget) {
+  if (said === undefined || said === target) return undefined;
+  const correction = logMailDecision(deps.db, features, loggedAction(target), "correction", deps.now);
+  return {
+    by: { where: "correction" as const, correction },
+    keep: (): void => { forgetClassification(deps.db, features.messageId); },
+    drop: (): void => { deps.db.query("DELETE FROM desk_mail_log WHERE id = ? AND origin = 'correction'").run(correction); },
+  };
+}
+
+async function moveAll(id: string, { target, suggested }: { target: MoveTarget; suggested: MoveTarget }, members: readonly SweepMember[], gone: number, title: string, deps: MoveDeps): Promise<SweepOutcome> {
   const failed: SweepFailure[] = [];
   let moved = 0;
   const failMail = (m: SweepMember, error: string): void => {
     failed.push({ subject: m.subject, error });
     deps.db.query("UPDATE desk_mail_sweep_mails SET status = 'failed', error = ? WHERE sweep_id = ? AND message_id = ?").run(error, id, m.id);
   };
-  const predicted = readClassifications(deps.db, members.map((m) => m.id));
+  const predicted = target === suggested ? new Map<string, MailClassification>() : readClassifications(deps.db, members.map((m) => m.id));
   for (const m of members) {
     const features = mailFeatures(deps.db, m);
-    const said = predicted.get(m.id)?.predictedAction;
-    const correction = said !== undefined && said !== target ? logMailDecision(deps.db, features, loggedAction(target), "correction", deps.now) : undefined;
-    if (correction !== undefined) forgetClassification(deps.db, m.id);
-    const by = { where: correction === undefined ? ("desk" as const) : ("correction" as const), doneAction: "mail.move", title, quiet: true, ...(correction === undefined ? {} : { correction }), recorded: (moveId: string) => { deps.db.query("UPDATE desk_mail_sweep_mails SET move_id = ?, status = 'done' WHERE sweep_id = ? AND message_id = ?").run(moveId, id, m.id); } };
+    const correction = correctionOf(deps, features, predicted.get(m.id)?.predictedAction, target);
+    const fail = (error: string): void => {
+      correction?.drop();
+      failMail(m, error);
+    };
+    const by = { ...(correction?.by ?? { where: "desk" as const }), doneAction: "mail.move", title, quiet: true, recorded: (moveId: string) => { deps.db.query("UPDATE desk_mail_sweep_mails SET move_id = ?, status = 'done' WHERE sweep_id = ? AND message_id = ?").run(moveId, id, m.id); } };
     try {
       const result = await moveMail(m, target, deps, target, features, by);
-      if (result.ok) moved++;
-      else failMail(m, result.error);
+      if (!result.ok) fail(result.error);
+      else {
+        moved++;
+        correction?.keep();
+      }
     } catch (err) {
-      failMail(m, err instanceof Error ? err.message : String(err));
+      fail(err instanceof Error ? err.message : String(err));
     }
   }
   const skipped = gone > 0 ? ` ${plural(gone, "mail was", "mails were")} no longer in this group and stayed.` : "";

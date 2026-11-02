@@ -164,6 +164,18 @@ describe("sweep executor", () => {
     if (!r.ok) throw new Error(r.error);
     expect(await undoSweep(r.sweep, deps)).toEqual({ ok: true, message: "Moved 3 mails back to INBOX." });
     expect(q.calls.slice(3).map((c) => (c.stdin as { from: string }).from)).toEqual(["junk", "junk", "junk"]);
+    expect(queryMailLog(db, { where: "correction" })).toEqual([]);
+  });
+
+  it("keeps no correction for a mail that did not move, and logs none for the suggested move", async () => {
+    for (const id of ["r1", "r2", "r3"]) saveClassification(db, id, archive({ predictedAction: id === "r3" ? "trash" : "archive" }), "test", NOW);
+    const { deps } = moveDeps([junked("r1"), refused("No message with that Message-ID in INBOX."), moved("r3")]);
+    const r = await runSweep(group(REPORTS), ["mail:r1", "mail:r2"], deps, "junk");
+    expect(r).toMatchObject({ ok: true, moved: 1, failed: [{ subject: "Subject r2" }] });
+    expect(queryMailLog(db, { where: "correction" }).map((e) => e.messageId)).toEqual(["r1"]);
+    expect(db.query<{ message_id: string }, []>("SELECT message_id FROM desk_mail_classes ORDER BY message_id").all().map((c) => c.message_id)).toEqual(["r2", "r3"]);
+    await runSweep(group(REPORTS), ["mail:r3"], deps);
+    expect(queryMailLog(db, {}).filter((e) => e.messageId === "r3").map((e) => [e.action, e.where])).toEqual([["archive", "desk"]]);
   });
 
   it("undoes what an interrupted sweep moved, after a restart left a mail marked as moving", async () => {
