@@ -159,6 +159,8 @@
   .desk .desk-kbd{display:none}
   .desk .desk-topr{justify-self:auto;flex:1 1 100%;min-width:0;flex-wrap:wrap}
   .desk .desk-topr .desk-seg{max-width:100%;overflow-x:auto}
+  .desk .desk-mode{flex-wrap:wrap;max-width:100%;margin-left:0}
+  .desk .desk-mode button{flex:1 1 auto;justify-content:center;padding:6px 8px}
   .dst{padding:0 14px 60px}
   .dst-lead p{font-size:15.5px}
   .dst-board{display:flex;flex-direction:column;padding:12px;gap:20px;border-radius:16px}

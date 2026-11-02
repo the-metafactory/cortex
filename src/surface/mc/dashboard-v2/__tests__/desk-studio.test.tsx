@@ -1,6 +1,8 @@
 import { StudioSessionPanel, type StudioSessionControls } from "../components/desk-studio-session";
 import { waitsOnYou } from "../../desk/studio/board";
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DeskModeSwitch, DeskStudio, ortho, takeLastLook } from "../components/desk-studio";
 import { OpenSheet } from "../components/desk-studio-acts";
@@ -192,6 +194,16 @@ describe("the Desk view switch", () => {
     const html = renderToStaticMarkup(<DeskModeSwitch hasStudio={false} inStudio={false} inBalance onGo={() => undefined} />);
     expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map(m => [m[2], m[1]])).toEqual([["Day", "false"], ["Catch-up", "false"], ["Balance", "true"], ["Conversations", "false"]]);
     expect(html).not.toContain(">Studio</button>");
+  });
+
+  it("wraps inside the phone header instead of running past the screen edge", () => {
+    const css = readFileSync(join(import.meta.dir, "../components/desk-studio.css"), "utf8");
+    const phone = css.slice(css.indexOf("@media (max-width:760px){"));
+    const rule = (sel: string, from: string) => new RegExp(`(?:^|\\n)\\s*${sel.replace(/[.]/g, "\\.")}\\{([^}]*)\\}`).exec(from)?.[1] ?? "";
+    expect(rule(".desk .desk-mode", phone)).toBe("flex-wrap:wrap;max-width:100%;margin-left:0");
+    expect(rule(".desk .desk-mode button", phone)).toBe("flex:1 1 auto;justify-content:center;padding:6px 8px");
+    expect(rule(".desk-mode", css)).toBe("margin-left:2px");
+    expect(rule(".desk .desk-mode", css.slice(0, css.indexOf("@media (max-width:760px){")))).toBe("");
   });
 });
 
