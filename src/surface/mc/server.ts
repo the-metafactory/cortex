@@ -106,7 +106,7 @@ import { WaitingClassifier } from "./desk/mail-waiting";
 import { MailSimilarity } from "./desk/mail-similar";
 import { RecentCalendarWrites, spawnWithStdin } from "./desk/create";
 import { HandledLedger } from "./desk/actions";
-import type { DeskOptions, DeskRuntime } from "./desk/compose";
+import { currentDayItems, type DeskOptions, type DeskRuntime } from "./desk/compose";
 import { SourceCache, spawnCommand, type SourceReading } from "./desk/sources/command";
 import { ClientMailLog } from "./desk/mail-client-log";
 import { DEFAULT_MAIL_LOG_RETENTION_DAYS } from "./desk/mail-log";
@@ -219,7 +219,7 @@ export function startServer(
   const deskRecentWrites = new RecentCalendarWrites();
   const deskRuntime: DeskRuntime = { waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(deskDmarc ? { dmarc: deskDmarc } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}), ...(options.desk?.mailDigest?.model ? { digestFlagger: new DigestFlagger(options.desk.mailDigest.model) } : {}), ...(options.desk?.mailWaiting?.model ? { waitingClassifier: new WaitingClassifier(options.desk.mailWaiting.model) } : {}), ...(options.desk?.mailHandoff ? { mailHandoff: new MailHandoffWorker(piHandoffOwner(piTurns(options.desk.mailHandoff.pi), options.desk.mailHandoff.lanes)) } : {}) };
   const conversationHost = options.conversations?.();
-  if (conversationHost?.state === "ready") void conversationHost.host.attachSources(conversationSources({ db, desk: () => deskRuntime.options }));
+  if (conversationHost?.state === "ready") void conversationHost.host.attachSources(conversationSources({ db, desk: () => deskRuntime.options, deskItems: () => currentDayItems(db, deskRuntime, deskVigil(options)) }));
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
@@ -341,7 +341,7 @@ export function startServer(
           doctorView,
           stepUpSecretPath,
           authorizer,
-          options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined,
+          deskVigil(options),
           deskRuntime,
           options.conversations,
         );
@@ -985,6 +985,10 @@ const ASSIGNMENT_ACTION_HANDLERS: Record<
   abandon: handleAbandonAssignment,
   handoff: handleHandoffAssignment,
 };
+
+function deskVigil(options: StartServerOptions): VigilSubjectsOptions | undefined {
+  return options.vigil ? { ...options.vigil, somaHome: options.results?.somaHome ?? options.vigil.somaHome } : undefined;
+}
 
 function methodNotAllowed(allow: string[]): Response {
   return new Response(JSON.stringify({ error: "Method Not Allowed" }), {

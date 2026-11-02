@@ -142,6 +142,12 @@ export const CORRECTIONS_UNREADABLE = "The Desk could not read your ranking corr
 
 const GOAL_STATES = new Set<DeskGoal["state"]>(["on-track", "at-risk", "off-track", "stale"]);
 
+export async function currentDayItems(db: Database, runtime: DeskRuntime, vigil: DeskVigilSource | undefined, now = Date.now()): Promise<DeskItem[]> {
+  const desk = runtime.options;
+  if (!desk?.enabled) return [];
+  return (await composeDesk(db, desk, vigil, { waitingTasks: runtime.waitingTasks, handled: runtime.ledger, sourceCache: runtime.sourceCache, now })).items;
+}
+
 export async function composeDesk(
   db: Database,
   desk: DeskOptions,
