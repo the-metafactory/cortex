@@ -8,5 +8,5 @@ function reminderFields(request: CreateRequest): { text: string; due: string } |
 }
 
 export const reminderWriter = (deps: DeskWriterDeps): OwnerWriter => deskConversationWriter({
-  kind: "reminder", objects: "Reminders", noun: "reminders", destinationFlag: "--list", destinationField: "list", defaultDestination: "the default list", fields: reminderFields,
+  kind: "reminder", objects: "Reminders", destination: { flag: "--list", field: "list", noun: "reminders", fallback: "the default list" }, fields: reminderFields,
 }, deps);

@@ -18,5 +18,5 @@ function eventFields(request: CreateRequest): { title: string; start: string; en
 }
 
 export const calendarWriter = (deps: DeskWriterDeps): OwnerWriter => deskConversationWriter({
-  kind: "calendar", objects: "Calendar events", noun: "events", destinationFlag: "--calendar", destinationField: "calendar", defaultDestination: "the default calendar", fields: eventFields,
+  kind: "calendar", objects: "Calendar events", destination: { flag: "--calendar", field: "calendar", noun: "events", fallback: "the default calendar" }, fields: eventFields,
 }, deps);
