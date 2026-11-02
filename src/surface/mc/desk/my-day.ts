@@ -15,7 +15,7 @@ import type { DeskOptions } from "./compose";
 import type { DeskItem } from "./types";
 
 const ROOT_ID = "desk:outline";
-function loadMeta(db: Database): MyDayMeta {
+export function loadMeta(db: Database): MyDayMeta {
   const row = db.query<{ data: string }, []>("SELECT data FROM desk_my_day WHERE id = 1").get();
   return MyDayMetaSchema.parse(row ? JSON.parse(row.data) : {});
 }

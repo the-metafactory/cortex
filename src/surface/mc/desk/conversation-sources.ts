@@ -1,9 +1,10 @@
 import type { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
 import { findNode } from "../../../balance";
 import type { HostSources } from "../../../conversations/host";
 import type { ObjectRef, OperationRecord, SourceState } from "../../../conversations/types";
+import { balanceTaskWriter, hasBalanceState } from "./balance-conversation-writer";
 import { loadBalanceState } from "./balance-store";
+import { studioRequestId } from "./conversation-ids";
 import type { DeskOptions } from "./compose";
 import { REQUEST_TRAILER, spawnGit, type GitRunner } from "./studio/git";
 import { readStudioFiles } from "./studio/read";
@@ -18,7 +19,7 @@ export function splitNoteId(id: string): { thread: string; note: string } | null
   const at = id.indexOf("#");
   return at > 0 && at < id.length - 1 ? { thread: id.slice(0, at), note: id.slice(at + 1) } : null;
 }
-export const studioRequestId = (operationId: string): string => `conv-${createHash("sha256").update(operationId).digest("hex").slice(0, 56)}`;
+export { operationUuid, studioRequestId } from "./conversation-ids";
 
 export function studioThreadOf(view: StudioView, slug: string): StudioThreadView | undefined {
   return [...view.active, ...view.parked, ...view.closed].find(t => t.slug === slug);
@@ -73,7 +74,12 @@ export function conversationSources(deps: SourceDeps): HostSources {
     const sha = r.stdout.trim();
     return sha ? { found: true, canonicalId: sha } : { found: false };
   };
+  const balanceTask = balanceTaskWriter(deps);
   return {
+    get writers() {
+      const desk = deps.desk();
+      return desk?.enabled && hasBalanceState(deps.db) ? { "balance-task": balanceTask } : {};
+    },
     resolvers: {
       "studio-thread": async ref => {
         const read = await thread(ref.id);
