@@ -507,12 +507,13 @@ export const DeskMailMirrorSchema = z.object({
 });
 
 const DeskWriterArgvSchema = z.array(z.string().min(1)).min(1);
-const DeskWriterSchema = z.union([DeskWriterArgvSchema, z.strictObject({ command: DeskWriterArgvSchema, owner: z.string().regex(/^[a-z][a-z0-9-]*$/).optional() })]);
+const DeskWriterOwnerSchema = z.string().regex(/^[a-z][a-z0-9-]*$/);
+const DeskWriterSchema = z.union([DeskWriterArgvSchema, z.strictObject({ command: DeskWriterArgvSchema, owner: DeskWriterOwnerSchema.optional() })]);
 type DeskWriterEntry = z.infer<typeof DeskWriterSchema>;
 
-function splitDeskWriters<K extends string>(entries: Partial<Record<K, DeskWriterEntry>>): { writers: Partial<Record<K, string[]>>; writerOwners?: Partial<Record<K, string>> } {
+function splitDeskWriters<K extends string>(entries: Partial<Record<K, DeskWriterEntry>>, parsed: Partial<Record<K, string>> = {}): { writers: Partial<Record<K, string[]>>; writerOwners?: Partial<Record<K, string>> } {
   const writers: Partial<Record<K, string[]>> = {};
-  const writerOwners: Partial<Record<K, string>> = {};
+  const writerOwners: Partial<Record<K, string>> = { ...parsed };
   for (const [kind, entry] of Object.entries(entries) as [K, DeskWriterEntry | undefined][]) {
     if (!entry) continue;
     if (Array.isArray(entry)) {
@@ -583,10 +584,11 @@ export const DeskSchema = z.object({
           reminder: DeskWriterSchema.optional(),
         })
         .default({}),
+      writerOwners: z.partialRecord(z.enum(["calendar", "task", "goal", "note", "reminder"]), DeskWriterOwnerSchema).optional(),
       taskMaps: z.array(z.object({ ref: z.string().regex(/^[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/), label: z.string().min(1) })).default([]),
       taskCloser: z.array(z.string().min(1)).min(1).optional(),
     })
-    .transform(({ writers, ...ask }) => ({ ...ask, ...splitDeskWriters(writers) }))
+    .transform(({ writers, writerOwners, ...ask }) => ({ ...ask, ...splitDeskWriters(writers, writerOwners) }))
     .default({ parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }),
   interruptions: DeskInterruptionsSchema.default(DeskInterruptionsSchema.parse({})),
   voice: DeskVoiceSchema.default(DeskVoiceSchema.parse({})),
