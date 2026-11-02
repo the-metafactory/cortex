@@ -438,7 +438,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id.startsWith("mailrule.")) runRule(item, a);
     else if (a.id === "dmarc.ack" && a.target) acknowledge(item, a, a.target);
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
-    else if (a.url) openDeskLink(a.url);
+    else if (a.url) { if (!openDeskLink(a.url)) setNote(`"${a.label}" has a link the Desk does not open.`); }
     else setNote(`"${a.label}" is not connected yet.`);
   };
 
