@@ -80,11 +80,7 @@ describe("creation catalog", () => {
     expect(byType.get("studio-thread")).toBe("blocked:3029");
   });
 
-  test("the blocker map is exhaustive over creatable types, so a type added without a blocker fails type checking", () => {
-    type WithNewType = CreatableType | "new-type";
-    type CoversNewType = typeof OWNER_BLOCKERS extends Record<WithNewType, number> ? true : false;
-    const coversNewType: CoversNewType = false;
-    expect(coversNewType).toBe(false);
+  test("the blocker map names a node for exactly the creatable types", () => {
     expect(Object.keys(OWNER_BLOCKERS).sort()).toEqual([...CREATABLE_TYPES].sort());
   });
 });
