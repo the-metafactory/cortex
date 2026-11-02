@@ -18,6 +18,7 @@ export interface InvitationsConfig {
   timeoutSeconds: number;
   calendarWriter?: string[] | undefined;
   addToCalendar: InvitationCalendar[];
+  removeOnDecline?: { account: string; command: string[] }[] | undefined;
   slots: InvitationSlotsConfig;
 }
 
