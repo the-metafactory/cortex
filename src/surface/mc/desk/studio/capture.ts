@@ -31,8 +31,8 @@ export const captureModel: CaptureModel = (config, request) => chatJson(config)(
   { role: "user", content: JSON.stringify(request) },
 ], config.timeoutSeconds * 1000);
 
-export function filerFor(options: StudioOptions, threads: readonly StudioThreadView[], local = false): EndpointConfig | undefined {
-  return local || threads.some((t) => t.policy === "local") ? options.filer?.local : options.filer;
+export function filerFor(options: StudioOptions, threads: readonly StudioThreadView[]): EndpointConfig | undefined {
+  return threads.some((t) => t.policy === "local") ? options.filer?.local : options.filer;
 }
 
 export const captureFiler = (options: StudioOptions, ctx: ActContext): EndpointConfig | undefined => filerFor(options, ctx.view.active);
