@@ -204,6 +204,7 @@
 .desk-day h3{margin:0 0 6px;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--mute)}
 .desk-day ul{list-style:none;margin:0;padding:0}
 .desk-day li{padding:4px 0;font-size:14px;line-height:1.35;color:var(--ink2)}
+.desk-day .ttl{overflow-wrap:anywhere}
 .desk-day li time{display:block;font-size:12.5px;color:var(--mute);font-variant-numeric:tabular-nums}
 .desk-vips{list-style:none;margin:0 0 6px;padding:0}
 .desk-vips li{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 0;font-size:14px;color:var(--ink2)}
