@@ -1,4 +1,4 @@
-import { displayEntry, resolveDisplay, RoutineDisplayPageSchema, RoutineDisplayResultSchema, type RoutineDisplayChange, type RoutineDisplayChoice, type RoutineDisplayEntry, type RoutineFrequency, type RoutineDisplayResult } from "../../desk/routine-display-contract";
+import { buildDisplayEntry, displayEntry, RoutineDisplayPageSchema, RoutineDisplayResultSchema, type RoutineDisplayChange, type RoutineDisplayChoice, type RoutineDisplayEntry, type RoutineFrequency, type RoutineDisplayResult } from "../../desk/routine-display-contract";
 import { getJson, postJson } from "./api";
 
 export interface DisplayScope { principal: string; stack: string }
@@ -12,7 +12,6 @@ export async function readDisplay(signal: AbortSignal, read: (path: string, init
   const page = RoutineDisplayPageSchema.parse(await read("/api/desk/routine-display", { signal }));
   return preferences({ principal: page.principal, stack: page.stack }, page.frequency, page.routines);
 }
-export const routineDisplay = (current: DisplayPreferences, routineId: string): RoutineDisplayEntry => displayEntry(current, routineId);
 export const storedChoice = (entry: RoutineDisplayEntry): RoutineDisplayChoice => entry.stored ?? "automatic";
 export async function saveDisplay(scope: DisplayScope, routineId: string, mode: RoutineDisplayChoice, post: (path: string, body: RoutineDisplayChange) => Promise<unknown> = postJson): Promise<RoutineDisplayResult> {
   const result = RoutineDisplayResultSchema.parse(await post("/api/desk/routine-display", { principal: scope.principal, stack: scope.stack, routineId, mode }));
@@ -23,6 +22,6 @@ export function withDisplay(current: DisplayPreferences, result: RoutineDisplayR
   if (!sameScope(current.scope, result)) return current;
   const previous = displayEntry(current, result.routineId);
   const stored = result.mode === "automatic" ? null : result.mode;
-  const next = { ...previous, stored, ...resolveDisplay(stored, previous.automatic) };
+  const next = buildDisplayEntry(result.routineId, stored, previous.maxDailyStarts);
   return preferences(current.scope, current.frequency, [...current.routines.filter((entry) => entry.routineId !== result.routineId), next]);
 }

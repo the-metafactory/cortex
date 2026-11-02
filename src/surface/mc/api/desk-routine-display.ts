@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { reflexCommand, type RoutineRunner } from "../desk/routine-command";
 import { RoutineInventorySchema } from "../desk/routine-editor-contract";
-import { automaticMode, readRoutineDisplay, resolveDisplay, ROUTINE_BACKGROUND_THRESHOLD, RoutineDisplayChangeSchema, writeRoutineDisplay, type RoutineDisplayPage } from "../desk/routine-display";
+import { buildDisplayEntry, readRoutineDisplay, ROUTINE_BACKGROUND_THRESHOLD, RoutineDisplayChangeSchema, writeRoutineDisplay, type RoutineDisplayPage } from "../desk/routine-display";
 import { readRoutineFrequency } from "../desk/routine-frequency";
 import { routineReadHeaders as headers } from "./desk-routine-context";
 
@@ -16,12 +16,7 @@ export async function handleDeskRoutineDisplay(req: Request, db: Database, runti
     const stored = readRoutineDisplay(db, scope);
     const { frequency, maxDailyStarts } = await readRoutineFrequency(options, scope, now(), run);
     const ids = [...new Set([...stored.keys(), ...maxDailyStarts.keys()])].sort().slice(0, 2000);
-    const routines = ids.map((routineId) => {
-      const starts = frequency.status === "known" ? maxDailyStarts.get(routineId) ?? 0 : null;
-      const automatic = starts === null ? null : automaticMode(starts);
-      const choice = stored.get(routineId) ?? null;
-      return { routineId, stored: choice, automatic, maxDailyStarts: starts, ...resolveDisplay(choice, automatic) };
-    });
+    const routines = ids.map((routineId) => buildDisplayEntry(routineId, stored.get(routineId) ?? null, frequency.status === "known" ? maxDailyStarts.get(routineId) ?? 0 : null));
     const page: RoutineDisplayPage = { owner: "reflex", ...scope, threshold: ROUTINE_BACKGROUND_THRESHOLD, frequency, routines };
     return Response.json(page, { headers });
   }

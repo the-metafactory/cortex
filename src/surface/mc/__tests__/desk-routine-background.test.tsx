@@ -8,7 +8,7 @@ import type { RoutineEvidenceRecord } from "../desk/routine-evidence-contract";
 import type { RoutineInventory } from "../desk/routine-editor-contract";
 import { displayEntry, maxStartsInWindow, readRoutineDisplay, RoutineDisplayPageSchema, type RoutineDisplayPage } from "../desk/routine-display";
 import { backgroundLane, type CalendarOccurrence } from "../dashboard-v2/lib/routine-calendar";
-import { readDisplay, routineDisplay, saveDisplay, storedChoice, withDisplay } from "../dashboard-v2/lib/routine-display";
+import { readDisplay, saveDisplay, storedChoice, withDisplay } from "../dashboard-v2/lib/routine-display";
 import { attentionGroups, attentionMaxPages, readPeriodHistory } from "../dashboard-v2/lib/routine-attention";
 import { BackgroundRow } from "../dashboard-v2/components/desk-routine-calendar";
 import { AttentionSummary, coverageText } from "../dashboard-v2/components/desk-routine-attention";
@@ -72,6 +72,7 @@ async function displayPage(owner = routineOwner()): Promise<RoutineDisplayPage> 
   expect(response.status).toBe(200);
   return RoutineDisplayPageSchema.parse(await response.json());
 }
+const browserDisplay = (owner = routineOwner()) => readDisplay(new AbortController().signal, async () => (await handleDeskRoutineDisplay(get(), db, runtime, owner, () => saturday)).json());
 const byId = (page: RoutineDisplayPage) => new Map(page.routines.map((entry) => [entry.routineId, entry]));
 
 describe("routine display preference API", () => {
@@ -141,7 +142,7 @@ describe("browser display preference handling", () => {
   it("rejects an answer for a different routine or scope and ignores late foreign results", async () => {
     expect(await rejection(saveDisplay(scope, "studio-overseer", "background", () => Promise.resolve({ owner: "reflex", ...scope, routineId: "morning-briefing", mode: "background" })))).toContain("different routine");
     expect(await rejection(saveDisplay(scope, "studio-overseer", "background", () => Promise.resolve({ owner: "reflex", ...scope, stack: "other", routineId: "studio-overseer", mode: "background" })))).toContain("different routine");
-    const preferences = await readDisplay(new AbortController().signal, async () => (await handleDeskRoutineDisplay(get(), db, runtime, routineOwner(), () => saturday)).json());
+    const preferences = await browserDisplay();
     expect(withDisplay(preferences, { owner: "reflex", ...scope, stack: "other", routineId: "hourly-watch", mode: "scheduled" })).toBe(preferences);
     const kept = withDisplay(preferences, { owner: "reflex", ...scope, routineId: "hourly-watch", mode: "scheduled" });
     expect(kept.background.has("hourly-watch")).toBe(false);
@@ -151,21 +152,21 @@ describe("browser display preference handling", () => {
   });
   it("partitions the calendar and explains Automatic from the same fixtures", async () => {
     await handleDeskRoutineDisplay(post({ ...scope, routineId: "hourly-watch", mode: "scheduled" }), db, runtime, routineOwner());
-    const preferences = await readDisplay(new AbortController().signal, async () => (await handleDeskRoutineDisplay(get(), db, runtime, routineOwner(), () => saturday)).json());
+    const preferences = await browserDisplay();
     const lane = backgroundLane({ occurrences: planned, background: preferences.background, inventory: installed, showPaused: false, policy: "all" });
     expect(lane.map((row) => row.id).sort()).toEqual(["shadow-watch", "studio-overseer", "weekday-watch"]);
     const row = lane.find((entry) => entry.id === "shadow-watch");
     const html = row ? renderToStaticMarkup(<BackgroundRow routineId={row.id} name={row.name} schedule={row.schedule} timezone={row.timezone} entries={row.entries} complete period="in this view" displayTimezone="UTC" automatic={preferences.automatic.has(row.id)} onSelect={() => undefined} />) : "";
     expect(html).toContain("Here automatically: it starts more than 6 times a day.");
-    const choice = (id: string) => renderToStaticMarkup(<RoutineDisplayChoice routineId={id} saved={storedChoice(routineDisplay(preferences, id))} entry={routineDisplay(preferences, id)} frequency={preferences.frequency} available pending={undefined} onChange={() => undefined} onDismiss={() => undefined} />);
+    const choice = (id: string) => renderToStaticMarkup(<RoutineDisplayChoice routineId={id} saved={storedChoice(displayEntry(preferences, id))} entry={displayEntry(preferences, id)} frequency={preferences.frequency} available pending={undefined} onChange={() => undefined} onDismiss={() => undefined} />);
     expect(choice("shadow-watch")).toMatch(/checked="" value="automatic"/);
     expect(choice("shadow-watch")).toContain("Automatic resolves to Background: the routine has 7 starts within 24 hours");
     expect(choice("four-hourly")).toContain("Automatic resolves to Scheduled starts: the routine has at most 6 starts");
     expect(choice("hourly-watch")).toMatch(/checked="" value="scheduled"/);
     expect(choice("hourly-watch")).toContain("Your stored choice of Scheduled starts applies instead.");
-    const unknown = await readDisplay(new AbortController().signal, async () => (await handleDeskRoutineDisplay(get(), db, runtime, routineOwner("occurrence-failure"), () => saturday)).json());
+    const unknown = await browserDisplay(routineOwner("occurrence-failure"));
     expect(backgroundLane({ occurrences: planned, background: unknown.background, inventory: installed, showPaused: false, policy: "all" })).toEqual([]);
-    expect(renderToStaticMarkup(<RoutineDisplayChoice routineId="shadow-watch" saved="automatic" entry={routineDisplay(unknown, "shadow-watch")} frequency={unknown.frequency} available pending={undefined} onChange={() => undefined} onDismiss={() => undefined} />)).toContain("Automatic display is unknown. The routine owner could not list the planned starts for the next 7 days. Without a stored choice the routine stays in the calendar grid.");
+    expect(renderToStaticMarkup(<RoutineDisplayChoice routineId="shadow-watch" saved="automatic" entry={displayEntry(unknown, "shadow-watch")} frequency={unknown.frequency} available pending={undefined} onChange={() => undefined} onDismiss={() => undefined} />)).toContain("Automatic display is unknown. The routine owner could not list the planned starts for the next 7 days. Without a stored choice the routine stays in the calendar grid.");
   });
   it("shows the prior display and the unsaved proposed choice after a failed write", () => {
     const html = renderToStaticMarkup(<RoutineDisplayChoice routineId="studio-overseer" saved="scheduled" entry={null} frequency={null} available pending={{ mode: "background", busy: false, error: "The routine owner could not confirm this routine." }} onChange={() => undefined} onDismiss={() => undefined} />);

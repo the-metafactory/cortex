@@ -56,9 +56,10 @@ export type RoutineDisplayChange = z.infer<typeof RoutineDisplayChangeSchema>;
 export const RoutineDisplayResultSchema = z.object({ ...scope, routineId, mode: RoutineDisplayChoiceSchema }).strict();
 export type RoutineDisplayResult = z.infer<typeof RoutineDisplayResultSchema>;
 
+export function buildDisplayEntry(routineId: string, stored: RoutineDisplayMode | null, maxDailyStarts: number | null): RoutineDisplayEntry {
+  const automatic = maxDailyStarts === null ? null : automaticMode(maxDailyStarts);
+  return { routineId, stored, automatic, maxDailyStarts, ...resolveDisplay(stored, automatic) };
+}
 export function displayEntry(page: Pick<RoutineDisplayPage, "frequency" | "routines">, id: string): RoutineDisplayEntry {
-  const listed = page.routines.find((entry) => entry.routineId === id);
-  if (listed) return listed;
-  const automatic = page.frequency.status === "known" ? "scheduled" : null;
-  return { routineId: id, stored: null, automatic, maxDailyStarts: automatic ? 0 : null, ...resolveDisplay(null, automatic) };
+  return page.routines.find((entry) => entry.routineId === id) ?? buildDisplayEntry(id, null, page.frequency.status === "known" ? 0 : null);
 }
