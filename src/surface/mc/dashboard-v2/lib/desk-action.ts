@@ -49,6 +49,7 @@ export const submitGoalAction = (body: { action: string; goal: string }, fetchIm
 
 export type MailActionBody =
   | { action: "trash" | "unimportant" | "report" | "digest.keep" | "unsubscribe" | "unsubscribe.rule"; key: string }
+  | { action: "waiting.snooze" | "waiting.done" | "waiting.no-answer" | "waiting.expect"; key: string }
   | { action: "move"; key: string; target: import("../../desk/mail-move").MoveTarget }
   | { action: "undo" | "block"; move: string }
   | { action: "sweep"; sweep: string; keys: string[] }

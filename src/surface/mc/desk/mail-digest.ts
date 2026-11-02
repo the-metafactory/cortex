@@ -6,6 +6,7 @@ import { logMailDecision, mailFeatures } from "./mail-log";
 import { movedTarget, refuse } from "./mail-move";
 import { digestedIds } from "./mail-rules";
 import { accessPaths, textHash } from "./mail-similar";
+import { SingleFlight } from "./single-flight";
 import { suspicionContext, suspicionOf, type SuspicionContext } from "./mail-suspicion";
 import { byAge, commonArea, listSweeps, plural, senderOf, sweepContext, sweepView, SWEEP_LIMITS, type MailSweepView, type SweepGroup, type SweepMember, type SweepOptions } from "./mail-sweep";
 import type { ListedMail } from "./mail-actions";
@@ -312,7 +313,7 @@ const RETRY_MS = 5 * 60_000;
 
 /** Flags each digest's items in the background, once per set of items and topics; a failed call is retried after five minutes. */
 export class DigestFlagger {
-  private running: Promise<void> | null = null;
+  private readonly flight = new SingleFlight();
   private readonly retryAt = new Map<string, number>();
 
   constructor(
@@ -322,10 +323,7 @@ export class DigestFlagger {
   ) {}
 
   kick(db: Database, groups: readonly SweepGroup[], topics: readonly DigestTopic[], localSources: ReadonlySet<string>, now: number): Promise<void> {
-    this.running ??= this.pass(db, groups, topics, localSources, now)
-      .catch((err: unknown) => { this.log(`desk: digest flags: ${err instanceof Error ? err.message : String(err)}`); })
-      .finally(() => { this.running = null; });
-    return this.running;
+    return this.flight.run(() => this.pass(db, groups, topics, localSources, now), (message) => { this.log(`desk: digest flags: ${message}`); });
   }
 
   private async pass(db: Database, groups: readonly SweepGroup[], topics: readonly DigestTopic[], localSources: ReadonlySet<string>, now: number): Promise<void> {

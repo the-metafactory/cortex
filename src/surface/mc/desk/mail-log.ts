@@ -224,6 +224,12 @@ export function historySentence(e: MailLogEntry, now: number): string {
       return `You let it pass on the Desk (${when}).`;
     case "unsubscribe":
       return `You unsubscribed from its list on the Desk (${when}).`;
+    case "expect-answer":
+      return `You said you expect an answer to it (${when}).`;
+    case "no-answer":
+      return `You said it needs no answer (${when}).`;
+    case "waiting-done":
+      return `You stopped waiting for an answer to it (${when}).`;
     default:
       return `The Desk recorded “${e.action}” for it (${when}).`;
   }

@@ -23,6 +23,7 @@ import { historySentence, mailLogFor, queryMailLog, type MailLogEntry } from "./
 import { DEFAULT_MAIL_RULES, digestedIds, heldItems, listRules, pendingRuleMail, proposalItems, proposeRules, ruleViews, rulesOfRuns, type MailRuleLoop, type MailRulesConfig } from "./mail-rules";
 import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
+import { DEFAULT_WAITING, recordWaiting, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
 import { digestTopics, digestView, listMailGroups, readDigestFlags, type DigestConfig, type DigestFlagger } from "./mail-digest";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
@@ -62,6 +63,7 @@ export interface DeskRuntime {
   mailRules?: MailRuleLoop;
   dmarc?: DmarcLoop;
   digestFlagger?: DigestFlagger;
+  waitingClassifier?: WaitingClassifier;
 }
 
 export interface DeskAskOptions {
@@ -100,6 +102,7 @@ export interface DeskOptions {
   mailDigest?: DigestConfig;
   mailUnsubscribe?: UnsubscribeConfig;
   mailMirror?: MailMirrorConfig;
+  mailWaiting?: WaitingConfig;
   mailOwnDomains?: string[];
   mailLinks?: EvidenceLinks;
   voice?: VoiceOptions;
@@ -125,6 +128,7 @@ export interface ComposeDeps {
   mailClassifier?: MailClassifier;
   rulingExplain?: RulingExplainLoop;
   digestFlagger?: DigestFlagger;
+  waitingClassifier?: WaitingClassifier;
 }
 
 export const CORRECTIONS_UNREADABLE = "The Desk could not read your ranking corrections, so it ranks by its base rules alone.";
@@ -226,6 +230,10 @@ export async function composeDesk(
   const ruleCards = canMove ? [...heldItems(listRules(db), rulesConfig), ...proposalItems(proposeRules(db, now, rulesConfig, vipSet), now)] : [];
   const dmarc = desk.mailDmarc ? dmarcWeek(db, now, desk.mailDmarc) : null;
   const dmarcCards = desk.mailDmarc ? dmarcItems(db, now, desk.mailDmarc, (id) => readings.find((r) => r.id === id)?.area ?? null) : [];
+  const waitingConfig = desk.mailWaiting ?? DEFAULT_WAITING;
+  recordWaiting(db, readings, now, waitingConfig);
+  if (deps.waitingClassifier) void deps.waitingClassifier.kick(db, readings, localSources, now, waitingConfig.maxPerPass);
+  const waitingCards = waitingItems(db, now, { config: waitingConfig, draft: Boolean(desk.mailActions?.draft?.length), areaOf: (id) => readings.find((r) => r.id === id)?.area ?? null });
   const corrected = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
     ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), unsubscribe }),
@@ -233,6 +241,7 @@ export async function composeDesk(
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
     ...ruleCards,
     ...dmarcCards,
+    ...waitingCards,
   ], rules, readDeliveries(db), now), activeCorrections);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
