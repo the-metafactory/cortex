@@ -18,6 +18,7 @@ import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceMail, 
 import { listSenders, listVips } from "./vips";
 import type { MailActionsConfig, MailReportConfig } from "./mail-actions";
 import { suspicionContext } from "./mail-suspicion";
+import { TRUST_DONE, trustedViews } from "./mail-trust";
 import { listKey, offerContext, unsubscribeOffers, unsubscribeView, type UnsubscribeConfig, type UnsubscribeOffer } from "./mail-unsubscribe";
 import { movedTarget } from "./mail-move";
 import { historySentence, mailLogFor, queryMailLog, type MailLogEntry } from "./mail-log";
@@ -318,6 +319,7 @@ export async function composeDesk(
     notifications: rules.notifications,
     autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio), canMove),
     ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
+    mailTrusted: trustedViews(db),
     ...(desk.mailDigest && canMove ? { mailDigests: digests.map((g) => withUnsubscribe(digestView(g, desk.mailDigest?.model ? digestFlags.get(g.id) : null), unsubscribe)) } : {}),
     ...(dmarc ? { dmarc } : {}),
     corrections: activeCorrections,
@@ -397,7 +399,7 @@ function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): D
   });
 }
 
-const OWN_LINE = ["studio.capture", "mail.move", "mail.rule", "mail.sweep"];
+const OWN_LINE = ["studio.capture", "mail.move", "mail.rule", "mail.sweep", TRUST_DONE];
 
 function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, studio: boolean, canMove: boolean): DeskView["autonomy"] {
   const grants = listGrants(db);

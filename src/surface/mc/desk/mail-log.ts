@@ -243,6 +243,8 @@ export function historySentence(e: MailLogEntry, now: number): string {
       return `You accepted its invitation on the Desk (${when}).`;
     case "decline":
       return `You declined its invitation on the Desk (${when}).`;
+    case "not-phishing":
+      return `You said it is not phishing on the Desk (${when}).`;
     default:
       return `The Desk recorded “${e.action}” for it (${when}).`;
   }

@@ -10,14 +10,22 @@ const list = (rows: SenderRow[] | null, note: string | null = null) => ({ rows, 
 const none = list([]);
 
 describe("the Desk settings page", () => {
-  it("labels seven vertical tabs and their retained panels while selecting only one page", () => {
+  it("labels eight vertical tabs and their retained panels while selecting only one page", () => {
     const html = renderToStaticMarkup(<SettingsBody group="vips" vips={none} unimportant={none} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} />);
     expect(html).toContain('role="tablist" aria-label="Settings groups" aria-orientation="vertical"');
     expect(html).toContain('aria-selected="true" aria-controls="settings-panel-vips" tabindex="0"');
     expect(html).toContain('id="settings-panel-calendars" role="tabpanel" aria-labelledby="settings-tab-calendars" hidden=""');
-    expect(html.match(/role="tab"/g)).toHaveLength(7);
-    expect(html.match(/role="tabpanel"/g)).toHaveLength(7);
-    expect(html.match(/ hidden=""/g)).toHaveLength(6);
+    expect(html.match(/role="tab"/g)).toHaveLength(8);
+    expect(html.match(/role="tabpanel"/g)).toHaveLength(8);
+    expect(html.match(/ hidden=""/g)).toHaveLength(7);
+  });
+  it("lists the senders marked as not phishing with their waived reasons and a way to remove each", () => {
+    const trusted = [{ sender: "billing@pay.example", codes: ["reply-to" as const], mails: [], at: 0, sentence: "Not flagged for replies going to another domain." }];
+    const html = renderToStaticMarkup(<SettingsBody group="not-phishing" vips={none} unimportant={none} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} trusted={trusted} />);
+    expect(html).toContain("<h2>Not phishing</h2>");
+    expect(html).toContain("billing@pay.example<small>Not flagged for replies going to another domain. Since ");
+    expect(html).toContain('aria-label="Remove billing@pay.example"');
+    expect(renderToStaticMarkup(<SettingsBody group="not-phishing" vips={none} unimportant={none} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} />)).toContain("No senders yet.");
   });
   it("lists the VIPs with a way to remove each and to add one", () => {
     const html = renderToStaticMarkup(

@@ -1,6 +1,8 @@
 import { SETTINGS_GROUPS, type SettingsGroup } from "../hooks/use-settings-location";
 import { CalendarSettings } from "./desk-calendar-settings";
 import { MailRuleSettings } from "./desk-mail-rules";
+import { TrustedSenderSettings } from "./desk-trusted-senders";
+import type { TrustedView } from "../../desk/mail-trust";
 import type { MailRuleView } from "../../desk/mail-rules";
 import type { DeskCalendar } from "../../desk/calendars";
 import { useEffect, useState, type ReactNode } from "react";
@@ -60,6 +62,7 @@ export function DeskSettings({ view, onBack, group, onGroup }: { view: DeskView;
       calendars={view.calendars ?? []}
       classifier={view.mailClassifier ?? null}
       {...(view.mailRules ? { mailRules: view.mailRules } : {})}
+      trusted={view.mailTrusted ?? []}
     />
   );
 }
@@ -84,6 +87,7 @@ export interface SettingsBodyProps {
   classifier?: DeskMailClassifier | null;
   calendars?: DeskCalendar[];
   mailRules?: MailRuleView[];
+  trusted?: TrustedView[];
 }
 
 export function classifierLines(c: DeskMailClassifier | null): string[] {
@@ -160,7 +164,7 @@ function SenderCard({ text, list, busy }: { text: SenderCardText; list: SenderLi
   );
 }
 
-export function SettingsBody({ day, group = "calendars", onGroup, vips, unimportant, busy, onBack, notify, onEnableNotify, classifier = null, calendars = [], mailRules }: SettingsBodyProps) {
+export function SettingsBody({ day, group = "calendars", onGroup, vips, unimportant, busy, onBack, notify, onEnableNotify, classifier = null, calendars = [], mailRules, trusted = [] }: SettingsBodyProps) {
   const panel = (id: SettingsGroup, content: ReactNode): ReactNode => (
     <div key={id} id={`settings-panel-${id}`} role="tabpanel" aria-labelledby={`settings-tab-${id}`} hidden={group !== id} tabIndex={0}>{content}</div>
   );
@@ -221,6 +225,7 @@ export function SettingsBody({ day, group = "calendars", onGroup, vips, unimport
               <h2>Mail rules</h2>
               <p className="desk-set-sub">Mail rules need the move command. Set mc.desk.mail.actions.move in the stack config.</p>
             </section>)}
+            {panel("not-phishing", <TrustedSenderSettings initial={trusted} />)}
           </div>
         </div>
       </main>

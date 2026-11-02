@@ -1,6 +1,7 @@
 import { MAIL_LOG_SQL, MAIL_VECTORS_SQL } from "../desk/mail-log-schema";
 import { MAIL_RULES_SQL } from "../desk/mail-rules-schema";
 import { SWEEP_SQL } from "../desk/mail-sweep-schema";
+import { TRUST_SQL } from "../desk/mail-trust-schema";
 import { DMARC_SQL } from "../desk/mail-dmarc-schema";
 import { ROUTINE_DISPLAY_SQL } from "../desk/routine-display";
 import { DIGEST_SQL } from "../desk/mail-digest-schema";
@@ -152,6 +153,7 @@ export const TABLE_NAMES = [
   "desk_mail_digest_kept",
   "desk_mail_digest_flags",
   "desk_mail_sweep_mails",
+  "desk_mail_trusted",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -161,6 +163,7 @@ export const SCHEMA_SQL: string[] = [
   ...MAIL_LOG_SQL,
   ...MAIL_RULES_SQL,
   ...SWEEP_SQL,
+  ...TRUST_SQL,
   ...MAIL_VECTORS_SQL,
   ...DMARC_SQL,
   ...ROUTINE_DISPLAY_SQL,

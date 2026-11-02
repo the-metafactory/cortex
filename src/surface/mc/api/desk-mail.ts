@@ -12,7 +12,8 @@ import { logMailDecision, mailFeatures } from "../desk/mail-log";
 import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveDeps } from "../desk/mail-move";
 import { runSweep, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
 import { keepFromDigest, listMailGroups } from "../desk/mail-digest";
-import { suspicionContext } from "../desk/mail-suspicion";
+import { suspicionContext, suspicionOf } from "../desk/mail-suspicion";
+import { dismissSuspicion, removeTrustedSender, undoDismissal } from "../desk/mail-trust";
 import { archiveWhatArrives, offerContext, unsubscribeMail, type OneClickPost } from "../desk/mail-unsubscribe";
 import { addMailToStudio, mailForStudio, MAX_MAIL_REASON, proposeMailThread } from "../desk/mail-studio";
 import type { CaptureModel } from "../desk/studio/capture";
@@ -53,6 +54,9 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("studio.propose"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("snooze"), key: z.string().min(1).max(1000), until: SnoozeChoiceSchema }).strict(),
   z.object({ action: z.literal("snooze.cancel"), key: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: z.literal("not-phishing"), key: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: z.literal("not-phishing.undo"), trust: z.string().min(1).max(64) }).strict(),
+  z.object({ action: z.literal("not-phishing.remove"), sender: z.string().min(3).max(320) }).strict(),
   z.object({ action: z.literal("invite.propose"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("invite.reply"), key: z.string().min(1).max(1000), reply: z.enum(INVITE_REPLIES), requestId: z.uuid(), commitment: CommitmentSchema.nullable(), confirmed: z.boolean() }).strict(),
   z.object({ action: z.literal("studio.add"), key: z.string().min(1).max(1000), requestId: z.string().regex(STUDIO_REQUEST_ID), thread: z.string().regex(STUDIO_SLUG).nullable(), reason: z.string().trim().min(1).max(MAX_MAIL_REASON).optional(), includeText: z.boolean() }).strict(),
@@ -78,7 +82,9 @@ export interface DeskMailDeps {
  * {action: "draft", key, body}: acts on one mail the Desk lists. {action: "unsubscribe", key} sends the list's One-Click
  * unsubscribe after the principal confirmed it; {action: "unsubscribe.rule", key} then adds an archive rule for the list. {action: "digest.keep", key} takes one mail out of the newsletter digest. {action: "correct", key, said, correction?} logs a per-mail correction and, for archive, spam and delete, moves the mail; with `correction` it retries only the move of that logged correction. {action: "undo" | "block", move} undoes a logged move,
  * or blocks the domain of a mail moved to Junk. {action: "snooze", key, until} hides one mail until a time, a meeting or a
- * person writes; {action: "snooze.cancel", key} ends the snooze. The rebind and identity gates in
+ * person writes; {action: "snooze.cancel", key} ends the snooze. {action: "not-phishing", key} waives a flagged mail's
+ * suspicion reasons (see mail-trust.ts); {action: "not-phishing.undo", trust} takes that back, and
+ * {action: "not-phishing.remove", sender} forgets every dismissal for one sender address. The rebind and identity gates in
  * handleApi run before this handler; there is no step-up. The account and Message-ID come from the mail source's
  * last reading, never from the page, and a mail already moved or still moving is refused.
  */
@@ -104,9 +110,15 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     const receipt = decisionReceipt(db, body.key, body.body, decision);
     if (receipt) return receipt.ok ? Response.json({ ok: true, message: receipt.message }, { headers: noStore }) : fail(receipt.status, receipt.error);
   }
+  if (body.action === "not-phishing.undo") return answer(undoDismissal(db, body.trust, now));
+  if (body.action === "not-phishing.remove") return answer(removeTrustedSender(db, body.sender));
   if (body.action === "snooze.cancel") return answer(body.key.startsWith("mail:") ? cancelSnooze(db, body.key.slice("mail:".length)) : { ok: false, status: 400, error: "A snooze key starts with mail:." });
   const mail = findListedMail(runtime.sourceCache?.cached() ?? [], body.key);
   if (!mail) return fail(409, "The Desk no longer lists this mail.");
+  if (body.action === "not-phishing") {
+    const flagged = readClassifications(db, [mail.id]).get(mail.id)?.suspicious === true;
+    return answer(dismissSuspicion(db, mail, suspicionOf(mail, suspicionContext(db, runtime.options.mailOwnDomains), flagged), now, deps.newId));
+  }
   if (body.action === "snooze") return answer(snoozeMail(db, mail, body.until, { now, readings: runtime.sourceCache?.cached() ?? [] }));
   if (decision && !mail.invitation && !["request", "invitation"].includes(readClassifications(db, [mail.id]).get(mail.id)?.commitment ?? "")) return fail(409, "This mail is no longer classified as a request or invitation. Refresh before saving the choice.");
   if (body.action === "ivy.hand") {
@@ -115,7 +127,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     if (!worker || !ask || !runtime.options.mailHandoff || !handoffReady(runtime.options, worker)) return fail(409, "Handing mail to Ivy is not set up on this stack: it needs the task writer, a task map, the draft command and a model lane.");
     const readings = runtime.sourceCache?.cached() ?? [];
     const flagged = readClassifications(db, [mail.id]).get(mail.id)?.suspicious === true;
-    const suspicious = flagged || isSuspicious(mail, suspicionContext(db, runtime.options.mailOwnDomains));
+    const suspicious = isSuspicious(mail, suspicionContext(db, runtime.options.mailOwnDomains), flagged);
     const handed = await handMailToIvy(mailForStudio(db, readings, mail), { requestId: body.requestId, instruction: body.instruction ?? null, suspicious }, {
       db, writers: ask.writers, maps: ask.taskMaps, lanes: runtime.options.mailHandoff.lanes, run: deps.run ?? spawnWithStdin, now, timeoutMs: ask.timeoutSeconds * 1000,
     });
@@ -164,7 +176,7 @@ async function answerInvitation(db: Database, runtime: DeskRuntime, mail: Listed
   if (!desk) return fail(409, "The Desk is turned off on this stack.");
   if (!invitation) return fail(409, "This mail carries no calendar invitation.");
   const flagged = readClassifications(db, [mail.id]).get(mail.id)?.suspicious === true;
-  const suspicious = flagged || isSuspicious(mail, suspicionContext(db, desk.mailOwnDomains));
+  const suspicious = isSuspicious(mail, suspicionContext(db, desk.mailOwnDomains), flagged);
   if (body.action === "invite.propose") {
     if (suspicious) return fail(409, "This mail may be phishing, so the Desk does not answer its invitation.");
     const readings = runtime.sourceCache?.cached() ?? [];

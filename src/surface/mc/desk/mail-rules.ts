@@ -155,8 +155,8 @@ export function matchesRule(rule: Pick<MailRule, "match" | "value">, mail: Pick<
 }
 
 /** The first rule that is on and matches the mail. A VIP's mail and a mail that looks like phishing never match. */
-export function ruleFor(rules: readonly MailRule[], mail: Pick<SourceMail, "from" | "subject" | "headers" | "links">, suspicion: SuspicionContext): MailRule | undefined {
-  if (isVip(suspicion.vips, mail.from.address) || isSuspicious(mail, suspicion)) return undefined;
+export function ruleFor(rules: readonly MailRule[], mail: Pick<SourceMail, "from" | "subject" | "headers" | "links"> & { id?: string }, suspicion: SuspicionContext, classifierSuspicious = false): MailRule | undefined {
+  if (isVip(suspicion.vips, mail.from.address) || isSuspicious(mail, suspicion, classifierSuspicious)) return undefined;
   return rules.find((r) => r.on && matchesRule(r, mail));
 }
 
@@ -215,7 +215,7 @@ export function pendingRuleMail(db: Database, mails: readonly SourceMail[], susp
   const ran = ranIds(db, ids);
   const flagged = flaggedByClassifier(db, ids);
   const snoozed = snoozedIds(db);
-  return new Set(mails.filter((m) => !ran.has(m.id) && !flagged.has(m.id) && !snoozed.has(m.id) && ruleFor(rules, m, suspicion)).map((m) => m.id));
+  return new Set(mails.filter((m) => !ran.has(m.id) && !snoozed.has(m.id) && ruleFor(rules, m, suspicion, flagged.has(m.id))).map((m) => m.id));
 }
 
 const DECISIVE = new Set<MailLogAction>(["archive", "junk", "trash", "restore", "kept", "todo", "draft", "plan", "snooze"]);
@@ -485,8 +485,8 @@ export async function runMailRules(readings: readonly SourceReading[], deps: Rul
   const snoozed = snoozedIds(db);
   const byRule = new Map<string, ListedMail[]>();
   for (const m of listed) {
-    if (ran.has(m.id) || flagged.has(m.id) || snoozed.has(m.id) || movedTarget(deps.ledger, m.id) !== undefined) continue;
-    const rule = ruleFor(rules, m, suspicion);
+    if (ran.has(m.id) || snoozed.has(m.id) || movedTarget(deps.ledger, m.id) !== undefined) continue;
+    const rule = ruleFor(rules, m, suspicion, flagged.has(m.id));
     if (rule) byRule.set(rule.id, [...(byRule.get(rule.id) ?? []), m]);
   }
   for (const rule of rules) {
