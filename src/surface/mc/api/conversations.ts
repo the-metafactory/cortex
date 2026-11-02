@@ -1,4 +1,5 @@
-import { ConversationError, type HostStatus } from "../../../conversations/host";
+import { ConfirmSchema, creationFor, ProposeSchema, ReviseSchema, type Actor } from "../../../conversations/creation";
+import { ConversationError, type ConversationHost, type HostStatus } from "../../../conversations/host";
 import { AttachmentUploadSchema, CreateConversationSchema, DraftSchema, InputRequestSchema, OrganizeSchema, OverviewQuerySchema } from "../../../conversations/types";
 import { applyStudioOutcome, ImportSchema, isImported, withStudio, importStudioSession, OutcomeSchema, sourceConversations, SourceQuerySchema, StartSchema, startFromSource, type StudioConversationDeps } from "./conversation-studio";
 import { checkRebindGuard, enforceMutationAuth, type MutationGuardContext } from "./mutation-guard";
@@ -14,6 +15,8 @@ function decoded(value: string): string | null {
   try { return decodeURIComponent(value); }
   catch { return null; }
 }
+const PROPOSALS = /^\/api\/conversations\/([0-9a-f-]{36})\/proposals(?:\/([0-9a-f-]{36})(?:\/(confirm|check))?)?$/;
+const GRANT = /^\/api\/conversations\/grants\/(grant-[0-9a-f]{32})$/;
 const ITEM = /^\/api\/conversations\/([0-9a-f-]{36})(?:\/(inputs|entries|attachments|draft|outcome)(?:\/([^/]+))?)?$/;
 
 export function importedSessions(access: ConversationAccess | undefined): (sessionId: string) => Promise<boolean> {
@@ -77,6 +80,9 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
       if (!parsed.success) return fail(400, "The import request is not valid.");
       return reply(200, { ok: true, conversation: await importStudioSession(host, studio, parsed.data.sessionId, auth.principal) });
     }
+    const actor: Actor = { principal: auth.principal, transport: "web" };
+    const creation = await handleCreation(req, url, host, actor);
+    if (creation) return creation;
     const match = ITEM.exec(url.pathname);
     const id = match?.[1];
     if (!match || !id) return fail(404, "Unknown conversation route.");
@@ -134,4 +140,46 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
     console.error(`conversations: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
     return fail(500, "The conversation store failed this request. Nothing further was changed.");
   }
+}
+
+async function handleCreation(req: Request, url: URL, host: ConversationHost, actor: Actor): Promise<Response | null> {
+  const creation = creationFor(host);
+  if (url.pathname === "/api/conversations/capabilities") {
+    if (req.method !== "GET") return notAllowed("GET");
+    return reply(200, { ok: true, types: creation.capabilities() });
+  }
+  if (url.pathname === "/api/conversations/grants") {
+    if (req.method !== "GET") return notAllowed("GET");
+    return reply(200, { ok: true, grants: await creation.grants(actor.principal) });
+  }
+  const grant = GRANT.exec(url.pathname);
+  if (grant?.[1]) {
+    if (req.method !== "DELETE") return notAllowed("DELETE");
+    return reply(200, { ok: true, grant: await creation.revoke(grant[1], actor) });
+  }
+  const match = PROPOSALS.exec(url.pathname);
+  const id = match?.[1];
+  if (!match || !id) return null;
+  const [, , proposalId, action] = match;
+  if (!proposalId) {
+    if (req.method === "GET") return reply(200, { ok: true, ...(await creation.list(id, actor)) });
+    if (req.method !== "POST") return notAllowed("GET, POST");
+    const parsed = ProposeSchema.safeParse(await body(req));
+    if (!parsed.success) return fail(400, "The proposal is not valid.");
+    const made = await creation.propose(id, parsed.data, actor);
+    return reply(made.duplicate ? 200 : 201, { ok: true, proposal: made.view });
+  }
+  if (!action) {
+    if (req.method !== "PATCH") return notAllowed("PATCH");
+    const parsed = ReviseSchema.safeParse(await body(req));
+    if (!parsed.success) return fail(400, "The proposal change is not valid.");
+    return reply(200, { ok: true, proposal: await creation.revise(id, proposalId, parsed.data, actor) });
+  }
+  if (req.method !== "POST") return notAllowed("POST");
+  if (action === "check") return reply(200, { ok: true, proposal: await creation.check(id, proposalId, actor) });
+  const parsed = ConfirmSchema.safeParse(await body(req));
+  if (!parsed.success) return fail(400, "The confirmation is not valid.");
+  const view = await creation.confirm(id, proposalId, parsed.data, actor);
+  const status = view.feedback === "created" ? 200 : view.feedback === "failed" ? 409 : 202;
+  return reply(status, { ok: view.feedback === "created", proposal: view, ...(view.feedback === "failed" ? { error: view.operation?.history.at(-1)?.detail ?? "The owner refused it." } : {}) });
 }

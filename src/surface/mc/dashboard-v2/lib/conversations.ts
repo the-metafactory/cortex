@@ -1,7 +1,7 @@
 import type { ConversationDetail, ConversationEntry, ConversationMeta, LinkedView, ObjectRef, OperationRecord, Organize, OverviewPage, OverviewRow, SubmissionView } from "../../../../conversations/types";
 import type { ImportableSession, SourceConversations } from "../../api/conversation-studio";
 import type { SessionEnd } from "../../desk/studio/session-schema";
-import { CONTINUATION_KIND, DECISION_KIND, IMPORTED_TURN_KIND } from "../../../../conversations/types";
+import { CONTINUATION_KIND, CREATION_KIND, DECISION_KIND, GRANT_KIND, IMPORTED_TURN_KIND, PROPOSAL_KIND } from "../../../../conversations/types";
 import { ApiFailure, getJson, postJson } from "./api";
 
 export const failureText = (error: unknown, fallback: string): string => (error instanceof ApiFailure ? error.info.message : fallback);
@@ -81,6 +81,18 @@ export function entryViews(entry: ConversationEntry): EntryView[] {
     const commit = text(data.commit).slice(0, 7);
     if (data.readOnly === true) return [{ kind: "activity", text: `Earlier Studio outcome (${text(outcome.kind) || "saved"}), commit ${commit}. Read-only; continuing never re-applies it.` }];
     return [{ kind: "activity", text: `Saved to the Studio${text(outcome.kind) ? ` (${text(outcome.kind)})` : ""}, commit ${commit}.` }];
+  }
+  if (entry.kind === PROPOSAL_KIND) {
+    const revision = typeof data.revision === "number" ? data.revision : 1;
+    return [{ kind: "activity", text: revision > 1 ? `Proposal edited (revision ${revision}). Nothing is created until it is confirmed.` : `Proposed ${text(data.type) || "a creation; type and destination still to choose"}. Nothing is created until it is confirmed.` }];
+  }
+  if (entry.kind === CREATION_KIND) {
+    const authority = record(data.authority);
+    const how = authority.kind === "grant" ? `under standing ${text(authority.scope)} permission` : "after your confirmation";
+    return [{ kind: "activity", text: `Created ${text(data.type)} ${text(data.canonicalId)} ${how}.${text(data.url) ? ` ${text(data.url)}` : ""}` }];
+  }
+  if (entry.kind === GRANT_KIND) {
+    return [{ kind: "activity", text: data.action === "revoked" ? `Standing ${text(data.type)} permission (${text(data.scope)}) revoked. Objects created earlier stay.` : `Standing ${text(data.type)} permission granted for ${data.scope === "global" ? "all your conversations" : "this conversation"}. Creation only.` }];
   }
   if (entry.kind === CONTINUATION_KIND) {
     return [{ kind: "activity", text: data.mode === "native-resume" ? "Resumed the same engine after a restart." : `Continued with reconstructed context on the ${text(data.to)} model.` }];

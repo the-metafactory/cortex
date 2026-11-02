@@ -214,7 +214,7 @@ export function startServer(
   const deskRecentWrites = new RecentCalendarWrites();
   const deskRuntime: DeskRuntime = { waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(deskDmarc ? { dmarc: deskDmarc } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}) };
   const conversationHost = options.conversations?.();
-  if (conversationHost?.state === "ready") conversationHost.host.attachSources(conversationSources({ db, desk: () => deskRuntime.options }));
+  if (conversationHost?.state === "ready") void conversationHost.host.attachSources(conversationSources({ db, desk: () => deskRuntime.options }));
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);
