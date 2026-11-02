@@ -71,11 +71,23 @@ export async function markUnimportant(db: Database, mail: ListedMail, deps: Move
   return { ...moved, message: `${moved.message} ${marked}.` };
 }
 
+export type DraftResult = { ok: true; message: string; id: string } | { ok: false; status: number; error: string };
+
+function draftId(stdout: string): string {
+  try {
+    const printed: unknown = JSON.parse(stdout);
+    const id = typeof printed === "object" && printed !== null && "id" in printed ? printed.id : undefined;
+    return typeof id === "string" ? id.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
 /**
  * Runs the configured draft command for one listed mail: stdin `{ action: "draft", account, messageId, to, subject, body }`.
  * The command saves a reply in the account's Drafts and never sends it. The item stays on the Desk either way.
  */
-export async function draftReply(mail: ListedMail, body: string, deps: Omit<MoveDeps, "db">): Promise<MailActionResult> {
+export async function draftReply(mail: ListedMail, body: string, deps: Omit<MoveDeps, "db">): Promise<DraftResult> {
   const config = deps.config;
   const argv = config?.draft;
   if (!config || !argv?.length) return refuse(409, "Drafting replies is not set up on this stack.");
@@ -88,7 +100,7 @@ export async function draftReply(mail: ListedMail, body: string, deps: Omit<Move
     const stdin = JSON.stringify({ action: "draft", account: mail.account, messageId: mail.id, to: mail.from.address, subject: replySubject(mail.subject), body });
     const result = await deps.run(argv, stdin, config.timeoutSeconds * 1000);
     if (result.code !== 0) return refuse(502, `The draft was not saved: ${oneLine(result.stderr || result.stdout, `the draft command exited with code ${result.code}.`)}`);
-    return { ok: true, message: `Reply saved in your ${mail.account} Drafts.` };
+    return { ok: true, message: `Reply saved in your ${mail.account} Drafts.`, id: draftId(result.stdout) };
   } catch (err) {
     if (err instanceof CommandTimeout) return refuse(504, `The draft command ${err.message}. The draft may be saved; check Drafts.`);
     return refuse(502, `The draft command did not run: ${err instanceof Error ? err.message : String(err)}`);

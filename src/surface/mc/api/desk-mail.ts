@@ -147,8 +147,9 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if (body.action === "draft") {
     const features = mailFeatures(db, mail);
     const saved = decision ? await saveDecisionDraft({ db, desk: runtime.options, mail, body: body.body, decision, now, save: () => draftReply(mail, body.body, moveDeps) }) : await draftReply(mail, body.body, moveDeps);
-    if (saved.ok) logMailDecision(db, features, "draft", "desk", now, "Drafts");
-    return answer(saved);
+    if (!saved.ok) return answer(saved);
+    logMailDecision(db, features, "draft", "desk", now, "Drafts");
+    return Response.json({ ok: true, message: saved.message }, { headers: noStore });
   }
   if (body.action === "unimportant") return answer(await markUnimportant(db, mail, moveDeps));
   if (body.action === "report") return answer(await reportMail(mail, runtime.options.mailReport, moveDeps));

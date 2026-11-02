@@ -12,7 +12,8 @@ import { loadBalanceState } from "./balance-store";
 import { studioRequestId } from "./conversation-ids";
 import type { DeskOptions } from "./compose";
 import type { WriterRunner } from "./create";
-import type { ListedMail } from "./mail-actions";
+import type { ListedMail, TrashLedger } from "./mail-actions";
+import { mailDraftReady, mailDraftWriter } from "./mail-draft-conversation-writer";
 import type { RoutineRunner } from "./routine-command";
 import { reminderWriter } from "./reminder-conversation-writer";
 import { routineWriter } from "./routine-conversation-writer";
@@ -44,6 +45,8 @@ export interface SourceDeps {
   now?: () => number;
   deskItems?: () => Promise<DeskItem[]>;
   listedMail?: (key: string) => ListedMail | null;
+  ledger?: TrashLedger;
+  runMailDraft?: WriterRunner;
   runRoutine?: RoutineRunner;
   runWriter?: Partial<Record<DeskWriterKind, WriterRunner>>;
   listGoals?: GoalRunner;
@@ -103,6 +106,8 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const goal = goalWriter({ ...writerDeps("goal"), ...(deps.listGoals ? { list: deps.listGoals } : {}) });
   const tanaNote = tanaNoteWriter(writerDeps("note"));
   const deskNote = deskNoteWriter(writerDeps("note"));
+  const { listedMail, ledger } = deps;
+  const mailDraft = listedMail && ledger ? mailDraftWriter({ desk: deps.desk, listedMail, ledger, ...(deps.runMailDraft ? { run: deps.runMailDraft } : {}), ...(deps.now ? { now: deps.now } : {}) }) : undefined;
   return {
     get writers() {
       const desk = deps.desk();
@@ -115,6 +120,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
         ...(deskWriterArgv(desk, "goal") && desk.somaBin ? { "soma-goal": goal } : {}),
         ...(tanaNoteReady(desk) ? { "tana-note": tanaNote } : {}),
         ...(deskWriterArgv(desk, "note") ? {} : { "desk-note": deskNote }),
+        ...(mailDraft && mailDraftReady(desk) ? { "mail-draft": mailDraft } : {}),
       };
     },
     resolvers: {
