@@ -11,7 +11,7 @@
 .dcv-source p { margin: 6px 0 0; white-space: pre-wrap; font-size: 13px; color: var(--ink2, #3f3f46); }
 .dcv-source.gone { background: #fafaf9; border-style: dashed; }
 .dcv-stream { grid-area: stream; display: grid; gap: 10px; max-height: 60vh; overflow: auto; padding-right: 4px; }
-.dcv-msg { border-radius: 12px; padding: 10px 14px; background: #fff; border: 1px solid var(--line, #ececec); max-width: 90%; }
+.dcv-msg { min-width: 0; box-sizing: border-box; overflow-wrap: anywhere; border-radius: 12px; padding: 10px 14px; background: #fff; border: 1px solid var(--line, #ececec); max-width: 90%; }
 .dcv-msg.you { justify-self: end; background: var(--ivy-soft, #eff5ff); border-color: #dbe6fb; }
 .dcv-msg small { color: var(--mute, #71717a); font-size: 12px; }
 .dcv-msg p { margin: 4px 0 0; white-space: pre-wrap; line-height: 1.55; }
@@ -62,3 +62,12 @@
 .dcv-grants h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--mute, #71717a); }
 .dcv-grants ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .dcv-grants li { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
+
+.dcv-markdown { min-width: 0; line-height: 1.55; }
+.dcv-markdown :is(h1, h2, h3, h4, h5, h6) { margin: 12px 0 6px; font-size: 1.1em; line-height: 1.3; }
+.dcv-markdown :is(ul, ol) { margin: 6px 0; padding-left: 24px; }
+.dcv-markdown blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid #d4d4d8; color: var(--ink2, #3f3f46); }
+.dcv-markdown .md-code-block { box-sizing: border-box; max-width: 100%; overflow-x: auto; white-space: pre; padding: 10px; border-radius: 8px; background: #f4f4f5; }
+.dcv-markdown .md-code-block code { white-space: pre; overflow-wrap: normal; }
+.dcv-markdown .md-inline-code { background: #f4f4f5; border-radius: 3px; padding: 1px 3px; }
+.dcv-markdown .md-link { color: #2563eb; text-decoration: underline; }

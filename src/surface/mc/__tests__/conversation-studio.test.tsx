@@ -228,6 +228,47 @@ describe("workspace A over the authenticated conversation API", () => {
   const noop = (): void => undefined;
   const view = (detail: ConversationDetail, entries: ConversationEntry[], busy = false): string => renderToStaticMarkup(<WorkspaceView detail={detail} entries={entries} draft={detail.draft} ready busy={busy} sending={false} retrying={false} error={null} onDraft={noop} onSend={noop} onRetry={noop} onLeave={noop} onSaved={noop} organizing={false} onOrganize={noop} />);
 
+  test("renders persisted agent Markdown semantically without formatting user input or changing the record", async () => {
+    const answer = "## A clear plan\n\nUse **strong** and _quiet_ words with `code`.\n\n- First task\n- Second task\n\n1. Start here\n2. Finish there\n\n> Keep a margin.\n\n[Reference](https://example.com/guide)\n\n```ts\nconst wing = 2;\n```";
+    const r = await rig(() => answer);
+    const { body } = await r.call("POST", "/api/conversations/starts", { startId: crypto.randomUUID(), source: IDEA });
+    const id = body.conversation.id;
+    await r.call("POST", `/api/conversations/${id}/inputs`, say("markdown", "## Literal **user** input"));
+    await r.idle(id);
+    const before = await r.entries(id);
+    await r.restart();
+    const after = await r.entries(id);
+    expect(after).toEqual(before);
+    expect(after.find(entry => entry.role === "assistant")?.text).toBe(answer);
+    const html = view((await r.call("GET", `/api/conversations/${id}`)).body, after);
+    expect(html).toContain("<h2>A clear plan</h2>");
+    expect(html).toContain("<strong>strong</strong>");
+    expect(html).toContain("<em>quiet</em>");
+    expect(html).toContain('<code class="md-inline-code">code</code>');
+    expect(html).toContain("<ul><li>First task</li><li>Second task</li></ul>");
+    expect(html).toContain("<ol start=\"1\"><li>Start here</li><li>Finish there</li></ol>");
+    expect(html).toContain("<blockquote>");
+    expect(html).toContain('href="https://example.com/guide"');
+    expect(html).toContain('class="md-code-block" data-lang="ts"');
+    expect(html).toContain("<p>## Literal **user** input</p>");
+  });
+
+  test("escapes agent HTML and refuses executable links while retaining safe labels", async () => {
+    const answer = '<script>alert(1)</script>\n\n<img src=x onerror="alert(2)">\n\n[Unsafe](javascript:alert) [Data](data:text/html,attack) [Safe](https://example.com/ok)';
+    const r = await rig(() => answer);
+    const { body } = await r.call("POST", "/api/conversations/starts", { startId: crypto.randomUUID(), source: IDEA });
+    const id = body.conversation.id;
+    await r.call("POST", `/api/conversations/${id}/inputs`, say("hostile-markdown", "Show the fixture"));
+    await r.idle(id);
+    const html = view((await r.call("GET", `/api/conversations/${id}`)).body, await r.entries(id));
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(html).not.toContain("<script>");
+    expect(html).not.toContain("<img ");
+    expect(html).not.toContain('href="javascript:');
+    expect(html).not.toContain('href="data:');
+    expect(html).toContain('href="https://example.com/ok" target="_blank" rel="noopener noreferrer" class="md-link">Safe</a>');
+  });
+
   test("shows saved messages, the Studio source context, the restored draft, Use this now while busy, and an unavailable source without its content", async () => {
     const { promise: release, resolve } = Promise.withResolvers<undefined>();
     let calls = 0;
