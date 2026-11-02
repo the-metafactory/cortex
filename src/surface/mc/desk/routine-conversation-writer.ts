@@ -32,7 +32,7 @@ export function conversationRoutineId(name: string, operationId: string): string
 
 const madeFor = (id: string, suffix: string): boolean => id === suffix || id.endsWith(`-${suffix}`);
 
-export function routineAddArgs(id: string, fields: Record<string, string>): string[] {
+function routineAddArgs(id: string, fields: Record<string, string>): string[] {
   return ["routine", "add", "--id", id, "--name", fields.name ?? "", "--schedule", fields.schedule ?? "", "--timezone", fields.timezone ?? "", "--target", fields.target ?? "", "--payload", "{}", "--paused"];
 }
 

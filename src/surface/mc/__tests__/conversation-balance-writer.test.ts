@@ -33,13 +33,13 @@ async function rig(state: AppState | null = outline([GLIDER]), wrap?: (writer: O
   if (state) saveBalanceState(db, state);
   const options = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [{ id: "lab", label: "Lab", color: "", repos: [], goals: [], policy: "local" as "cloud" | "local" }, { id: "home", label: "Home", color: "", repos: [], goals: [] }], sources: [] };
   const runtime: DeskRuntime = { ledger: new HandledLedger(), options };
-  const { host, call } = await writerRig.open<Reply>(db, runtime);
+  const { host, call, ...rigCalls } = await writerRig.open<Reply>(db, runtime);
   const sources = conversationSources({ db, desk: () => options, deskItems: () => Promise.resolve(view), listedMail: key => mails.find(m => `mail:${m.id}` === key) ?? null });
   const writer = sources.writers?.["balance-task"];
   await host.attachSources(wrap && writer ? { ...sources, writers: { "balance-task": wrap(writer) } } : sources);
-  const start = async (): Promise<string> => (await call("POST", "/api/conversations", { title: "Synthetic task", origin: { kind: "web" }, policy: "local" })).body.conversation.id;
-  const propose = async (id: string, fields: Record<string, string>, type = "balance-task") => (await call("POST", `/api/conversations/${id}/proposals`, { proposalId: randomUUID(), type, fields })).body.proposal;
-  const confirm = (id: string, view: ProposalView, extra: Record<string, unknown> = {}) => call("POST", `/api/conversations/${id}/proposals/${view.proposal.proposalId}/confirm`, { revision: view.proposal.revision, digest: view.digest, ...extra });
+  const start = (): Promise<string> => rigCalls.start("Synthetic task");
+  const propose = (id: string, fields: Record<string, string>, type = "balance-task") => rigCalls.propose(id, type, fields);
+  const { confirm, check } = rigCalls;
   const tasks = (title: string): OutlineNode[] => {
     const found: OutlineNode[] = [];
     const visit = (node: OutlineNode): void => { if (node.title === title) found.push(node); node.children.forEach(visit); };
@@ -55,7 +55,7 @@ async function rig(state: AppState | null = outline([GLIDER]), wrap?: (writer: O
     expect(operation.canonicalId).toBe(node?.id);
     return { operation, node };
   };
-  return { db, options, call, start, propose, confirm, confirmCreated, tasks, host };
+  return { db, options, call, start, propose, confirm, check, confirmCreated, tasks, host };
 }
 
 function operationOf(view: ProposalView): OperationRecord {
@@ -168,7 +168,7 @@ describe("Balance task writer for conversation proposals", () => {
     const confirmed = await r.confirm(id, view);
     expect(confirmed.status).toBe(202);
     expect(confirmed.body.proposal.feedback).toBe("uncertain");
-    const checked = await r.call("POST", `/api/conversations/${id}/proposals/${view.proposal.proposalId}/check`);
+    const checked = await r.check(id, view);
     expect(checked.body.proposal.feedback).toBe("created");
     const [task] = r.tasks("Weigh the glider");
     expect(checked.body.proposal.operation?.canonicalId).toBe(task?.id);

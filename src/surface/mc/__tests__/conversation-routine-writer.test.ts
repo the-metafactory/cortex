@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { randomUUID } from "node:crypto";
 import type { ProposalView } from "../../../conversations/creation";
 import { HandledLedger } from "../desk/actions";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
@@ -41,14 +40,14 @@ async function rig(routines: RoutineOptions | null = routineOptions) {
   const db = writerRig.database();
   const options: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], ...(routines ? { routines } : {}) };
   const runtime: DeskRuntime = { ledger: new HandledLedger(), options };
-  const { host, call } = await writerRig.open<Reply>(db, runtime);
+  const rig = await writerRig.open<Reply>(db, runtime);
   const reflex = fakeReflex();
-  await host.attachSources(conversationSources({ db, desk: () => options, runRoutine: reflex.run }));
-  const id = (await call("POST", "/api/conversations", { title: "Synthetic routine", origin: { kind: "web" }, policy: "local" })).body.conversation.id;
-  const propose = async (fields: Record<string, string>) => (await call("POST", `/api/conversations/${id}/proposals`, { proposalId: randomUUID(), type: "routine", fields })).body.proposal;
-  const confirm = (view: ProposalView) => call("POST", `/api/conversations/${id}/proposals/${view.proposal.proposalId}/confirm`, { revision: view.proposal.revision, digest: view.digest });
-  const check = (view: ProposalView) => call("POST", `/api/conversations/${id}/proposals/${view.proposal.proposalId}/check`);
-  const capability = async () => (await call("GET", "/api/conversations/capabilities")).body.types.find(t => t.type === "routine")?.status;
+  await rig.host.attachSources(conversationSources({ db, desk: () => options, runRoutine: reflex.run }));
+  const id = await rig.start("Synthetic routine");
+  const propose = (fields: Record<string, string>) => rig.propose(id, "routine", fields);
+  const confirm = (view: ProposalView) => rig.confirm(id, view);
+  const check = (view: ProposalView) => rig.check(id, view);
+  const capability = async () => (await rig.call("GET", "/api/conversations/capabilities")).body.types.find(t => t.type === "routine")?.status;
   return { options, reflex, propose, confirm, check, capability };
 }
 
