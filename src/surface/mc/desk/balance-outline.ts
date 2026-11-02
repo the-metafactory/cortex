@@ -4,6 +4,7 @@ import type { DeskOptions } from "./compose";
 import type { MyDayMeta } from "./my-day-schema";
 import { studioOwned } from "./studio-outline";
 
+export const STALE_OUTLINE = "The outline changed in another window or source. Your draft is kept; reload the latest outline before saving again.";
 function focusCount(node: OutlineNode, month: string): number {
   return Number(node.focusMonth === month) + node.children.reduce((sum, child) => sum + focusCount(child, month), 0);
 }
@@ -70,7 +71,7 @@ function removeInboxTask(state: AppState, meta: MyDayMeta, id: string): string {
   return id;
 }
 export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, command: BalanceCommand): string {
-  if (command.revision !== meta.revision) throw new Error("The outline changed in another window or source. Your draft is kept; reload the latest outline before saving again.");
+  if (command.revision !== meta.revision) throw new Error(STALE_OUTLINE);
   if (command.op === "outline-file") {
     fileBalanceInbox(state, meta, desk, command.id, command.parent);
     return command.id;
