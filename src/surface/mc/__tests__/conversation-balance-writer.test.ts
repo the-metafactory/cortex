@@ -13,7 +13,7 @@ import { HandledLedger } from "../desk/actions";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import type { DeskRuntime } from "../desk/compose";
 import { conversationSources, operationUuid } from "../desk/conversation-sources";
-import { loadMeta, readMyDay } from "../desk/my-day";
+import { changeMyDay, loadMeta, localDay, readMyDay } from "../desk/my-day";
 import type { DeskItem } from "../desk/types";
 import { SCHEMA_SQL } from "../db/schema";
 
@@ -144,6 +144,40 @@ describe("Balance task writer for conversation proposals", () => {
     const due = await r.confirm(id, await r.propose(id, { area: "lab", title: "Plant seeds", due: "next week" }));
     expect(due.body.error).toBe("next week is not a due date in the form YYYY-MM-DD. Nothing was created.");
     expect(JSON.stringify(loadBalanceState(r.db))).toBe(before);
+  });
+
+  test("ambiguous project titles and stale UUIDs that match another title fail before the owner writes", async () => {
+    const stale = "d5bd709e-9b83-4000-8000-4e91f1ba4d11";
+    const r = await rig(outline([GLIDER, { ...GLIDER, id: "second-glider", children: [leaf("second-wing", "Second wing")] }, { ...GLIDER, id: "other-project", title: stale, children: [leaf("other-wing", "Other wing")] }]));
+    const id = await r.start();
+    const before = loadBalanceState(r.db);
+    for (const project of ["Glider", stale]) {
+      const reply = await r.confirm(id, await r.propose(id, { area: "lab", project, title: "Refused ambiguous destination" }));
+      expect(reply.status).toBe(409);
+      expect(reply.body.proposal.feedback).toBe("failed");
+      expect(loadBalanceState(r.db)).toEqual(before);
+    }
+    expect(r.tasks("Refused ambiguous destination")).toHaveLength(0);
+  });
+
+  for (const mutation of ["closed", "moved", "deleted"] as const) test(`a saved project selection that is ${mutation} cannot confirm or create a task`, async () => {
+    const empty: OutlineNode = { id: "empty-project", title: "Empty project", weight: 50, ordering: "parallel", children: [], done: true };
+    const r = await rig(outline([GLIDER, empty]));
+    const id = await r.start();
+    const project = mutation === "deleted" ? empty.id : GLIDER.id;
+    const proposal = await r.propose(id, { area: "lab", project, title: "A stale selection" });
+    const now = Date.now();
+    const revision = readMyDay(r.db, r.options, now).revision;
+    const common = { db: r.db, desk: r.options, now, date: localDay(now), requestId: randomUUID() };
+    const command = mutation === "closed" ? { op: "outline-complete", id: project, revision, confirm: true } as const : mutation === "moved" ? { op: "outline-move", id: project, revision, parent: "area:home" } as const : { op: "outline-remove", id: project, revision, confirm: true } as const;
+    changeMyDay({ ...common, command });
+    const before = loadBalanceState(r.db);
+    const response = await r.confirm(id, proposal);
+    expect(response.status).toBe(409);
+    expect(response.body.proposal.feedback).toBe("failed");
+    expect(response.body.error).toContain("Nothing was created");
+    expect(loadBalanceState(r.db)).toEqual(before);
+    expect(r.tasks("A stale selection")).toHaveLength(0);
   });
 
   test("a writer that throws after Balance saved the task leaves the operation uncertain, and Check finds the same task through the receipt", async () => {

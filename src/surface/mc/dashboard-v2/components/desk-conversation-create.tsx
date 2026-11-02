@@ -3,6 +3,8 @@ import { SUBJECT_FIELDS } from "../../../../conversations/catalog";
 import { failureText } from "../lib/conversations";
 import { check, confirm, feedbackLabel, propose, readCapabilities, readCreation, revise, revoke, type Capability, type CreationView, type GrantScope, type ProposalView } from "../lib/conversation-creation";
 
+import { ConversationDestination } from "./desk-conversation-destination";
+
 const QUICK = ["graph-node", "balance-task", "routine", "flow"] as const;
 const SETTLING_MS = 3_000;
 
@@ -63,8 +65,8 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
     {proposals.map(p => <ProposalCard key={p.proposal.proposalId} id={id} view={p} types={creatable} busy={busy} archived={archived} act={act} />)}
     {!archived && <div className="dcv-acts" role="group" aria-label="Create from this exchange">
       <span className="dcv-quiet">Create from this exchange:</span>
-      {QUICK.map(type => { const t = byType.get(type); return t ? <button key={type} type="button" className="desk-btn" disabled={busy} onClick={() => start(type)}>{t.label}</button> : null; })}
-      <button type="button" className="desk-btn" disabled={busy} onClick={() => start(null)}>Card…</button>
+      {QUICK.map(type => { const t = byType.get(type); return t ? <button key={type} type="button" className="desk-btn" disabled={busy} onClick={() => { start(type); }}>{t.label}</button> : null; })}
+      <button type="button" className="desk-btn" disabled={busy} onClick={() => { start(null); }}>Card…</button>
     </div>}
     <div className="dcv-grants" aria-label="Standing creation permissions">
       <h4>Standing creation permissions</h4>
@@ -79,6 +81,7 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
 
 function ProposalCard({ id, view, types, busy, archived, act }: { id: string; view: ProposalView; types: Capability[]; busy: boolean; archived: boolean; act: Act }) {
   const { proposal, capability } = view;
+  const balanceProposal = proposal.type === "balance-task" || proposal.type === "balance-project";
   const [fields, setFields] = useState<Record<string, string>>(proposal.fields);
   const [type, setType] = useState<string>(proposal.type ?? "");
   const [standing, setStanding] = useState(false);
@@ -107,24 +110,25 @@ function ProposalCard({ id, view, types, busy, archived, act }: { id: string; vi
     <p className="dcv-sentence">{view.sentence}</p>
     <p className="dcv-quiet">{why}</p>
     {view.feedback === "choose" && !archived && <div className="dcv-choose">
-      <label>What to create and where<select aria-label="What to create" value={type} onChange={e => setType(e.target.value)}>
+      <label>What to create and where<select aria-label="What to create" value={type} onChange={e => { setType(e.target.value); }}>
         <option value="">Choose a type…</option>
         {types.map(t => <option key={t.type} value={t.type}>{t.label}{t.status === "ready" ? "" : " · unavailable"}</option>)}
       </select></label>
       <button type="button" className="desk-btn" disabled={busy || !type} onClick={() => void act(() => revise(id, proposal.proposalId, { revision: proposal.revision, type }), "The choice was not saved. Try again.")}>Use this type</button>
     </div>}
     {capability && view.feedback !== "choose" && <div className="dcv-fields">
-      {capability.fields.map(f => <label key={f.name}>{f.label}{f.required ? "" : " (optional)"}{f.destination ? " · destination" : ""}
+      {balanceProposal && <ConversationDestination fields={fields} onChange={setFields} disabled={!editable || busy} project={proposal.type === "balance-task"} />}
+      {capability.fields.filter(f => !(balanceProposal && (f.name === "area" || f.name === "project"))).map(f => <label key={f.name}>{f.label}{f.required ? "" : " (optional)"}{f.destination ? " · destination" : ""}
         {f.kind === "long"
-          ? <textarea aria-label={f.label} value={fields[f.name] ?? ""} disabled={!editable} maxLength={20_000} onChange={e => setFields({ ...fields, [f.name]: e.target.value })} />
-          : <input aria-label={f.label} type={f.kind === "date" ? "date" : f.kind === "datetime" ? "datetime-local" : "text"} value={fields[f.name] ?? ""} disabled={!editable} onChange={e => setFields({ ...fields, [f.name]: e.target.value })} />}
+          ? <textarea aria-label={f.label} value={fields[f.name] ?? ""} disabled={!editable} maxLength={20_000} onChange={e => { setFields({ ...fields, [f.name]: e.target.value }); }} />
+          : <input aria-label={f.label} type={f.kind === "date" ? "date" : f.kind === "datetime" ? "datetime-local" : "text"} value={fields[f.name] ?? ""} disabled={!editable} onChange={e => { setFields({ ...fields, [f.name]: e.target.value }); }} />}
       </label>)}
       {capability.fixed.map(t => <p key={t.label} className="dcv-quiet"><strong>{t.label}:</strong> {t.value}</p>)}
     </div>}
     {settled && <p role="status">Created {capability?.label.toLowerCase()} {view.operation?.canonicalId}{view.operation?.url ? <> · <a href={view.operation.url}>Open it</a></> : null}. It links back to this exchange.</p>}
     {editable && view.feedback === "proposed" && <div className="dcv-standing">
-      <label><input type="checkbox" checked={standing} onChange={e => setStanding(e.target.checked)} /> Allow future {capability?.label.toLowerCase()} creation without asking</label>
-      {standing && <select aria-label="Standing permission scope" value={scope} onChange={e => setScope(e.target.value === "global" ? "global" : "conversation")}>
+      <label><input type="checkbox" checked={standing} onChange={e => { setStanding(e.target.checked); }} /> Allow future {capability?.label.toLowerCase()} creation without asking</label>
+      {standing && <select aria-label="Standing permission scope" value={scope} onChange={e => { setScope(e.target.value === "global" ? "global" : "conversation"); }}>
         <option value="conversation">This conversation only</option>
         <option value="global">All my conversations</option>
       </select>}
