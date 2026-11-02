@@ -41,6 +41,20 @@ export interface TodayContext {
 export interface TodayOutcome { notice: string; undo?: string }
 
 const titleOf = (state: AppState, id: string): string => findNode(state.outline, id)?.title ?? "Task";
+const closedToday = ({ state, date }: TodayContext): boolean => state.dayState?.date === date && state.dayState.closed;
+const rankIds = ({ rank }: TodayContext): string[] => rank.map(item => item.task.id);
+
+function actionable(ctx: TodayContext, id: string, origin: "automatic" | "manual"): boolean {
+  const node = findNode(ctx.state.outline, id);
+  if (!node || node.children.length > 0 || node.done || !rankIds(ctx).includes(id)) return false;
+  return origin === "manual" || !studioOwned(ctx.meta, id);
+}
+
+export function liveDayUndo({ state, meta, date }: Pick<TodayContext, "state" | "meta" | "date">): MyDayMeta["dayUndos"][number] | undefined {
+  const day = state.dayState;
+  const latest = meta.dayUndos.filter(entry => !entry.used && entry.date === date).at(-1);
+  return day?.date === date && !day.closed && latest && JSON.stringify(day.confirmed) === JSON.stringify(latest.after) ? latest : undefined;
+}
 
 function lockedIds(ctx: TodayContext, ids: string[]): Set<string> {
   const { meta, date, rank } = ctx;
@@ -70,23 +84,20 @@ function fullNotice(cap: number): string {
 }
 
 export function joinToday(ctx: TodayContext, ids: string[], id: string, cap: number): TodayOutcome {
-  const { state, meta, date, rank } = ctx;
-  if (state.dayState?.date === date && state.dayState.closed) return { notice: "Saved to Balance. Today is closed, so today's priorities are unchanged." };
-  const node = findNode(state.outline, id);
-  if (!node || node.children.length > 0 || node.done || node.weight === 0 || studioOwned(meta, id) || !rank.some(item => item.task.id === id)) return { notice: "Saved to Balance. It is not actionable today, so today's priorities are unchanged." };
-  const placement = placeInDay({ ids, rank: rank.map(item => item.task.id), id, cap, locked: lockedIds(ctx, ids) });
+  if (closedToday(ctx)) return { notice: "Saved to Balance. Today is closed, so today's priorities are unchanged." };
+  if (!actionable(ctx, id, "automatic")) return { notice: "Saved to Balance. It is not actionable today, so today's priorities are unchanged." };
+  const placement = placeInDay({ ids, rank: rankIds(ctx), id, cap, locked: lockedIds(ctx, ids) });
   if (placement.kind === "full") return { notice: fullNotice(cap) };
-  return record(ctx, ids, placement.ids, noticeFor(state, id, placement));
+  return record(ctx, ids, placement.ids, noticeFor(ctx.state, id, placement));
 }
 
 export function addToToday(ctx: TodayContext, ids: string[], id: string, cap: number, replace: string | null): TodayOutcome {
-  const { state, meta, date, rank } = ctx;
-  if (state.dayState?.date === date && state.dayState.closed) throw new Error("Today is closed. This task stays in Balance.");
-  const node = findNode(state.outline, id);
-  if (!node || node.children.length > 0 || node.done || !rank.some(item => item.task.id === id)) throw new Error("Only an actionable task without subtasks can join today.");
+  const { state, meta, date } = ctx;
+  if (closedToday(ctx)) throw new Error("Today is closed. This task stays in Balance.");
+  if (!actionable(ctx, id, "manual")) throw new Error("Only an actionable task without subtasks can join today.");
   if (ids.includes(id)) throw new Error("This task is already in today's priorities.");
   if (ids.length >= cap && replace === null) throw new Error(`Today is full (${cap} of ${cap}). Choose a task to move out.`);
-  const placement = placeInDay({ ids, rank: rank.map(item => item.task.id), id, cap, locked: new Set(), ...(ids.length >= cap && replace !== null ? { replace } : {}) });
+  const placement = placeInDay({ ids, rank: rankIds(ctx), id, cap, locked: new Set(), ...(ids.length >= cap && replace !== null ? { replace } : {}) });
   if (placement.kind === "full") throw new Error("Choose an open task in today's priorities to move out.");
   if (state.dayState?.date === date) meta.manualToday = { date, ids: [...(meta.manualToday?.date === date ? meta.manualToday.ids : []), id] };
   return record(ctx, ids, placement.ids, noticeFor(state, id, placement));
@@ -94,7 +105,7 @@ export function addToToday(ctx: TodayContext, ids: string[], id: string, cap: nu
 
 export function removeFromToday(ctx: TodayContext, ids: string[], id: string): TodayOutcome {
   const { state, date } = ctx;
-  if (state.dayState?.date === date && state.dayState.closed) throw new Error("Today is closed.");
+  if (closedToday(ctx)) throw new Error("Today is closed.");
   if (!ids.includes(id)) throw new Error("This task is not in today's priorities.");
   const node = findNode(state.outline, id);
   if (node?.done || state.log.some(event => event.taskId === id && event.date === date)) throw new Error("A completed task stays in today's wins.");
@@ -109,7 +120,7 @@ export function undoToday(ctx: TodayContext, receipt: string): string | null {
   if (previous.date !== date) throw new Error("This Undo belongs to a previous day.");
   const day = state.dayState;
   if (day?.date !== date || day.closed) throw new Error("Today is closed. Its priorities are kept.");
-  if (JSON.stringify(day.confirmed) !== JSON.stringify(previous.after)) throw new Error("Today's priorities changed since this change. Your newer order is kept.");
+  if (liveDayUndo(ctx) !== previous) throw new Error("Today's priorities changed since this change. Your newer order is kept.");
   day.confirmed = [...previous.before];
   previous.used = true;
   if (meta.manualToday?.date === date) meta.manualToday = { date, ids: meta.manualToday.ids.filter(value => previous.before.includes(value)) };

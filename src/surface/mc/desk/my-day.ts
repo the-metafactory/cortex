@@ -11,7 +11,7 @@ import type { Database } from "bun:sqlite";
 import { DEFAULT_SETTINGS, applyDayToHistory, applyRecurrence, collectLeaves, findNode, rankAll, selectToday, shiftDays, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
 import { loadBalanceState, saveBalanceState } from "./balance-store";
 import { MyDayMetaSchema, type MyDayCommand, type MyDayMeta } from "./my-day-schema";
-import { addToToday, joinToday, removeFromToday, undoToday, type TodayContext } from "./my-day-today";
+import { addToToday, joinToday, liveDayUndo, removeFromToday, undoToday, type TodayContext } from "./my-day-today";
 import type { DeskOptions } from "./compose";
 import type { DeskItem } from "./types";
 
@@ -83,7 +83,7 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
   const byId = new Map(all.map(i => [i.task.id, i]));
   const selected = meta.selection?.date === date ? meta.selection : null;
   const available = selected && visibleIds.includes(selected.id) && byId.has(selected.id);
-  const dayUndo = day && !day.closed ? meta.dayUndos.filter(u => !u.used && u.date === date).at(-1) : undefined;
+  const dayUndo = liveDayUndo({ state, meta, date });
   return {
     work: {
       confirmedIds: day?.confirmed ?? [],
@@ -99,7 +99,7 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
     alternates: all.filter(i => !visibleIds.includes(i.task.id)).slice(0, 3),
     wins: state.log.filter(e => e.date === date).map(({ taskId, title }) => ({ taskId, title })),
     undos: meta.undos.filter(u => !u.used && u.date === date).map(u => ({ receipt: u.receipt, title: findNode(state.outline, u.taskId)?.title ?? "Task" })),
-    dayUndo: day && dayUndo && JSON.stringify(day.confirmed) === JSON.stringify(dayUndo.after) ? { receipt: dayUndo.receipt, text: dayUndo.text } : null,
+    dayUndo: dayUndo ? { receipt: dayUndo.receipt, text: dayUndo.text } : null,
     outline: state.outline, sources: meta.sources, yesFilter: desk.studio?.yesFilter?.length ? [...desk.studio.yesFilter] : [...DEFAULT_YES_FILTER],
   };
 }
@@ -307,7 +307,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         edit(state, command, date);
         break;
     }
-    if (joined && state.dayState?.date !== date && meta.draft?.origin !== "person") {
+    if (joined && state.dayState?.date !== date && !(meta.draft?.date === date && meta.draft.origin === "person")) {
       meta.draft = engineDraft(state, desk, date, studio);
       if (meta.draft.ids.slice(0, state.settings.todayCap).includes(joined)) todayNotice = `Added ${requiredNode(state, joined).title} to today's proposal.`;
     } else if (joined) {

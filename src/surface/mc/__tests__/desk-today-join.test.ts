@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DEFAULT_SETTINGS, findNode, type AppState } from "../../../balance";
+import { DEFAULT_SETTINGS, findNode, rankAll, shiftDays, type AppState } from "../../../balance";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
-import { readMyDay } from "../desk/my-day";
+import { loadMeta, readMyDay } from "../desk/my-day";
 import { MyDayMetaSchema, type MyDayCommand } from "../desk/my-day-schema";
 import { joinToday, placeInDay } from "../desk/my-day-today";
 import { DeskTimeFirst } from "../dashboard-v2/components/desk-time-first";
@@ -44,6 +44,13 @@ describe("a task added in Balance joins Today's priorities", () => {
   const confirmed = (): string[] => readMyDay(database(), desk, NOW).work.confirmedIds;
   const addDue = (title = "Call the venue", parent = "area:work") => change({ op: "outline-add", revision: revision(), parent, title, dueDate: DATE });
   const inOutline = (id: string | undefined): boolean => Boolean(id && findNode(loadBalanceState(database())?.outline ?? seed().outline, id));
+
+  it("re-runs the engine proposal when the only person draft belongs to a previous day", () => {
+    database().query("INSERT INTO desk_my_day (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(JSON.stringify({ draft: { date: shiftDays(DATE, -1), ids: ["first"], origin: "person" } }));
+    const result = change({ op: "add", parent: "area:work", title: "Fresh today", kind: "task" });
+    expect(loadMeta(database()).draft).toMatchObject({ date: DATE, origin: "engine" });
+    expect(result.view.items.map(item => item.task.id)).toContain(findNode(result.view.outline, "area:work")?.children.find(node => node.title === "Fresh today")?.id ?? "missing");
+  });
 
   it("re-runs the engine proposal on a day that has not started", () => {
     readMyDay(database(), desk, NOW);
@@ -139,10 +146,17 @@ describe("a task added in Balance joins Today's priorities", () => {
     area.children.push(leaf("studio-response:x", "Respond in Studio"), leaf("finished", "Finished", { done: true }));
     state.dayState = { date: DATE, confirmed: ["first"], closed: false };
     const meta = MyDayMetaSchema.parse({});
+    const ranked = rankAll(state, DATE);
+    const template = ranked[0];
+    const finished = findNode(state.outline, "finished");
+    if (!template || !finished) throw new Error("Missing rank fixture");
+    const rank = [...ranked, { ...template, task: finished }];
     for (const id of ["studio-response:x", "finished"]) {
-      expect(joinToday({ state, meta, date: DATE, rank: [], requestId: crypto.randomUUID() }, ["first"], id, 5).notice).toContain("not actionable today");
+      expect(rank.some(item => item.task.id === id)).toBe(true);
+      expect(joinToday({ state, meta, date: DATE, rank, requestId: crypto.randomUUID() }, ["first"], id, 5).notice).toContain("not actionable today");
     }
     expect(state.dayState.confirmed).toEqual(["first"]);
+    expect(joinToday({ state, meta, date: DATE, rank, requestId: crypto.randomUUID() }, ["first"], "third", 5).notice).toBe("Added Plan next week to today's priorities.");
   });
 
   it("rejects a stale revision without adding the task to Balance or today", () => {
