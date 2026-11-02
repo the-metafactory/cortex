@@ -34,7 +34,7 @@ try {
         titles: titles.map(element => element.textContent),
       };
     });
-    const passed = result.scrollWidth === result.width && result.days === 4 && result.contained && result.titles.every(value => value === title);
+    const passed = result.scrollWidth === result.width && result.days === 4 && result.titles.length === 4 && result.contained && result.titles.every(value => value === title);
     console.log(JSON.stringify({ width, scrollWidth: result.scrollWidth, days: result.days, contained: result.contained, passed }));
     await page.close();
     if (!passed) throw new Error(`Calendar titles overflow at ${width}px`);
