@@ -82,7 +82,7 @@ describe("conversation creation API", () => {
     expect(html).toContain("Routine · created");
     expect(html).toContain("Created paused. Resuming it is a separate decision.");
     expect(html).toContain("Proposed Flow · unavailable here");
-    expect(html).toContain("Pulse has no place to save a flow without running it yet.");
+    expect(html).toContain("No Pulse writer is connected on this stack yet.");
     expect(html).toContain("Proposed Graph node · nothing written yet");
     expect(html).toContain("Fill in Repository, Parent node, Checkpoint before confirming.");
     expect(html).toContain("Create a graph node “Prepare a practical workshop exercise”.");

@@ -5,6 +5,7 @@ import type { ObjectRef, OperationRecord, SourceState } from "../../../conversat
 import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-conversation-writer";
 import { calendarWriter } from "./calendar-conversation-writer";
 import { DESK_NOTE_WITHHELD, deskNoteWriter } from "./desk-note-conversation-writer";
+import { flowWriter } from "./flow-conversation-writer";
 import { deskWriterArgv, type DeskWriterKind } from "./desk-conversation-writer";
 import { goalWriter } from "./goal-conversation-writer";
 import type { GoalRunner } from "./goals";
@@ -48,6 +49,7 @@ export interface SourceDeps {
   ledger?: TrashLedger;
   runMailDraft?: WriterRunner;
   runRoutine?: RoutineRunner;
+  runFlow?: WriterRunner;
   runWriter?: Partial<Record<DeskWriterKind, WriterRunner>>;
   listGoals?: GoalRunner;
 }
@@ -97,6 +99,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const deskItems = deps.deskItems;
   const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps), ...(deskItems ? { "balance-inbox-task": balanceInboxWriter({ ...deps, deskItems }) } : {}) };
   const routine = routineWriter({ routines: () => deps.desk()?.routines, ...(deps.runRoutine ? { run: deps.runRoutine } : {}) });
+  const flow = flowWriter({ flows: () => deps.desk()?.flows, ...(deps.runFlow ? { run: deps.runFlow } : {}) });
   const writerDeps = (kind: DeskWriterKind) => {
     const run = deps.runWriter?.[kind];
     return { db: deps.db, desk: deps.desk, ...(run ? { run } : {}), ...(deps.now ? { now: deps.now } : {}) };
@@ -115,6 +118,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
       return {
         ...(hasBalanceState(deps.db) ? balanceWriters : {}),
         ...(desk.routines ? { routine } : {}),
+        ...(desk.flows ? { flow } : {}),
         ...(deskWriterArgv(desk, "calendar") ? { "calendar-event": calendar } : {}),
         ...(deskWriterArgv(desk, "reminder") ? { reminder } : {}),
         ...(deskWriterArgv(desk, "goal") && desk.somaBin ? { "soma-goal": goal } : {}),

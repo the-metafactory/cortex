@@ -29,7 +29,7 @@ export const OWNER_BLOCKERS: Record<CreatableType, number> = {
   "graph-node": 3033, "graph-map": 3034,
   "balance-task": 3030, "balance-project": 3031, "balance-inbox-task": 3032,
   "studio-thread": 3029, "studio-capture": 3029, "studio-note": 3029, "studio-outcome": 3029,
-  flow: 3014, routine: 3035, "calendar-event": 3036, reminder: 3037, "soma-goal": 3038, "tana-note": 3039, "desk-note": 3040, "mail-draft": 3041,
+  flow: 3146, routine: 3035, "calendar-event": 3036, reminder: 3037, "soma-goal": 3038, "tana-note": 3039, "desk-note": 3040, "mail-draft": 3041,
 };
 
 export const CREATION_CATALOG: Record<CreatableType, CreatableSpec> = {
@@ -62,8 +62,8 @@ export const CREATION_CATALOG: Record<CreatableType, CreatableSpec> = {
     text("thread", "Thread", true, true), long("text", "Response or outcome", true), { name: "review", label: "Review date (decisions)", kind: "date", required: false },
   ] },
   flow: { row: "O14", label: "Flow", owner: "Pulse", egress: "local", fields: [
-    text("destination", "Package or directory", true, true), text("name", "Name"), long("definition", "Flow definition", true),
-  ], fixed: [{ label: "Run", value: "Saved without running. Running it is a separate decision." }] },
+    text("name", "Name"), long("definition", "Flow definition", true),
+  ], fixed: [{ label: "Run", value: "Saved to this stack's flows. Running it is a separate decision." }] },
   routine: { row: "O15", label: "Routine", owner: "Reflex", egress: "local", fields: [
     text("name", "Name"), text("target", "Target", true, true), text("schedule", "Schedule"), text("timezone", "Time zone"),
   ], fixed: [{ label: "Schedule", value: "Created paused. Resuming it is a separate decision." }] },
