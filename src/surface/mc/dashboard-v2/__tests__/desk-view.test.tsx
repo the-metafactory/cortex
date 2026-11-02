@@ -9,6 +9,7 @@ import { ProposalCard } from "../components/desk-proposal";
 import { askDesk, createFromProposal } from "../lib/desk-ask";
 import type { DeskProposal } from "../../desk/ask";
 import { openGroup, selectItems } from "../../desk/present";
+import { DeskWakeSchema } from "../../../../common/types/desk-wake";
 
 const NOW = Date.parse("2026-10-30T13:16:00.000Z");
 
@@ -102,22 +103,37 @@ describe("the Desk top bar", () => {
   const top = html.slice(html.indexOf('class="desk-top-in"'), html.indexOf('class="desk-grid"'));
   const css = readFileSync(join(import.meta.dir, "../components/desk-view.css"), "utf8");
 
-  it("puts the ask bar on the left and the area filter with Settings in their own cell on the right", () => {
+  it("keeps brand, mode switch, area filter and Settings on row one and gives the ask bar its own row", () => {
     const left = top.indexOf('class="desk-left"');
     const right = top.indexOf('class="desk-topr"');
+    const row = top.indexOf('class="desk-askwrap desk-askrow"');
     expect(left).toBeGreaterThan(-1);
     expect(right).toBeGreaterThan(left);
-    expect(top.indexOf('aria-label="Ask Ivy"')).toBeLessThan(right);
-    const tabs = [...top.slice(right).matchAll(/role="tab" aria-selected="(true|false)">(?:<span[^>]*><\/span>)?([^<]+)</g)].map((m) => [m[2], m[1]]);
+    expect(row).toBeGreaterThan(right);
+    expect(top.slice(left, right)).toContain('aria-label="View"');
+    expect(top.slice(left, right)).not.toContain('aria-label="Ask Ivy"');
+    expect(top.slice(row)).toContain('aria-label="Ask Ivy"');
+    const tabs = [...top.slice(right, row).matchAll(/role="tab" aria-selected="(true|false)">(?:<span[^>]*><\/span>)?([^<]+)</g)].map((m) => [m[2], m[1]]);
     expect(tabs).toEqual([["All", "true"], ["SWITCH", "false"], ["MetaFactory", "false"], ["Personal", "false"]]);
-    expect(top.slice(right)).toContain(">Settings</button>");
+    expect(top.slice(right, row)).toContain(">Settings</button>");
   });
 
-  it("sizes the right cell to its content so the ask bar shrinks first, never over the area filter", () => {
+  it("spans the ask row across the full content width and keeps the right cell sized to its content", () => {
     const rule = (sel: string) => /\{([^}]*)\}/.exec(css.slice(css.indexOf(`\n${sel}{`)))?.[1] ?? "";
     expect(rule(".desk-top-in")).toContain("grid-template-columns:minmax(0,1fr) minmax(330px,max-content)");
+    expect(rule(".desk-askrow")).toContain("grid-column:1/-1");
     expect(rule(".desk-topr>*")).toContain("flex:none");
     expect(rule(".desk-askwrap")).toContain("min-width:0");
+  });
+
+  it("puts the wake switch inside the ask bar, after the input, with its status under the bar", () => {
+    const wake = { ...DeskWakeSchema.parse({ enabled: true, assistantName: "Ivy" }) };
+    const withWake = renderToStaticMarkup(<DeskBody view={{ ...view, voice: { enabled: true, input: "elevenlabs", output: "browser", wake } }} error={null} onOpenMissionControl={() => {}} />);
+    const form = /<form class="desk-ask">([\s\S]*?)<\/form>/.exec(withWake)?.[1] ?? "";
+    expect(form.indexOf('role="switch"')).toBeGreaterThan(form.indexOf('aria-label="Ask Ivy"'));
+    expect(form).toContain('aria-label="Wake for Ivy"');
+    expect(withWake).toMatch(/<\/form><p class="desk-wake-status" role="status" aria-live="polite"><\/p>/);
+    expect(withWake).not.toContain("Enable wake");
   });
 
   it("shows no area filter when the stack defines no areas", () => {

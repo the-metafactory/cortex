@@ -1,3 +1,4 @@
+import { useId } from "react";
 import type { VoiceState } from "../hooks/use-desk-voice";
 import type { WakeState } from "../lib/desk-wake";
 import "./desk-voice.css";
@@ -9,12 +10,29 @@ const PHASE_LABEL: Record<VoiceState["phase"], string> = {
   speaking: "Answering…",
 };
 
-export function WakeControl({ state, onToggle, assistantName }: { state: WakeState; onToggle: () => void; assistantName: string }) {
-  const active = state.phase !== "off" && state.phase !== "unavailable";
-  return <div className="desk-wake-control">
-    <button type="button" aria-pressed={active} title={`Wake for ${assistantName}`} onClick={onToggle}>{active ? "Disable wake" : "Enable wake"}</button>
-    <span role="status" aria-live="polite">{state.phase === "off" ? "Wake is off. Audio stays local until a command is captured." : state.line}</span>
-  </div>;
+export const WAKE_OFF_LINE = "Wake is off. Audio stays local until a command is captured.";
+
+export function wakeSwitch(state: WakeState, blocked: string | null): { on: boolean; disabled: boolean; hint: string; status: string } {
+  if (blocked) return { on: false, disabled: true, hint: blocked, status: "" };
+  if (state.phase === "off") return { on: false, disabled: false, hint: WAKE_OFF_LINE, status: "" };
+  if (state.phase === "unavailable") return { on: false, disabled: false, hint: state.line, status: state.line };
+  return { on: true, disabled: false, hint: state.line, status: state.line };
+}
+
+export function WakeSwitch({ state, blocked, onToggle, assistantName }: { state: WakeState; blocked: string | null; onToggle: () => void; assistantName: string }) {
+  const view = wakeSwitch(state, blocked);
+  const hint = useId();
+  return (
+    <button type="button" role="switch" className="desk-wake-switch" aria-checked={view.on} aria-disabled={view.disabled || undefined} aria-label={`Wake for ${assistantName}`} aria-describedby={hint} title={view.hint} onClick={view.disabled ? undefined : onToggle}>
+      <span className="desk-wake-knob" aria-hidden="true" />
+      <span id={hint} hidden>{view.hint}</span>
+    </button>
+  );
+}
+
+export function WakeStatus({ state, blocked }: { state: WakeState; blocked: string | null }) {
+  const { status } = wakeSwitch(state, blocked);
+  return <p className={`desk-wake-status${state.phase === "unavailable" ? " failed" : ""}`} role="status" aria-live="polite">{status}</p>;
 }
 
 export function MicButton({ phase, onStart, onStop }: { phase: VoiceState["phase"]; onStart: () => void; onStop: () => void }) {

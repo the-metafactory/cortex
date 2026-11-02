@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DeskVoice } from "../../desk/voice";
 import { speechFailureLine, speechFor, voiceTurn, transcribeClip, type Listening, type SpeechEnv, type SpeechProviders } from "../lib/desk-speech";
 import { DeskWake, type WakeState } from "../lib/desk-wake";
+import { wakeConfigurationError } from "../../../../common/types/desk-wake";
 import { ownMicrophone } from "../lib/desk-microphone";
 
 export type VoicePhase = "idle" | "listening" | "thinking" | "speaking";
@@ -25,6 +26,18 @@ export interface VoiceHandlers {
 const CONTROLS = new Set(["INPUT", "TEXTAREA", "SELECT", "BUTTON", "A", "SUMMARY"]);
 type ManualCapture = { controller: AbortController; release: (() => void) | null };
 
+export const WAKE_NEEDS_ELEVENLABS = "Wake needs the configured ElevenLabs transcription adapter. Push-to-talk remains available.";
+export const WAKE_NEEDS_MIC = "Wake needs microphone access, which this browser does not offer on this address.";
+
+export const wakeBlockReason = (voice: DeskVoice, env: SpeechEnv | undefined): string | null => {
+  if (!voice.wake?.enabled) return null;
+  if (voice.input !== "elevenlabs") return WAKE_NEEDS_ELEVENLABS;
+  const config = wakeConfigurationError(voice.wake);
+  if (config) return config;
+  if (env && !env.navigator?.mediaDevices?.getUserMedia) return WAKE_NEEDS_MIC;
+  return null;
+};
+
 export const ownsSpace = (target: EventTarget | null): boolean => {
   const el = target as { tagName?: string; isContentEditable?: boolean; getAttribute?: (name: string) => string | null; classList?: { contains(c: string): boolean } } | null;
   if (el?.classList?.contains("desk-mic")) return false;
@@ -40,6 +53,7 @@ export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: Spe
   const wake = useRef<DeskWake | null>(null);
   const [wakeState, setWakeState] = useState<WakeState>({ phase: "off" });
   const wakeKey = JSON.stringify(voice.wake);
+  const wakeBlocked = useMemo(() => wakeBlockReason(voice, env), [voice, env]);
   const manual = useRef<ManualCapture | null>(null);
   const releaseManual = useCallback((capture = manual.current): void => {
     capture?.controller.abort();
@@ -149,8 +163,7 @@ export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: Spe
       dismiss();
       return;
     }
-    if (!voice.wake?.enabled || !providers || !env || session.current || manual.current || state.phase !== "idle") return;
-    if (input !== "elevenlabs") { setWakeState({ phase: "unavailable", line: "Wake needs the configured ElevenLabs transcription adapter. Push-to-talk remains available." }); return; }
+    if (!voice.wake?.enabled || wakeBlocked || !providers || !env || session.current || manual.current || state.phase !== "idle") return;
     const controller = new DeskWake(voice.wake, {
       state: setWakeState,
       transcribe: (audio, signal) => transcribeClip(env, audio, signal),
@@ -159,7 +172,7 @@ export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: Spe
     });
     wake.current = controller;
     void controller.enable();
-  }, [voice.wake, providers, env, input, state.phase, wakeState.phase, dismiss, answerTranscript]);
+  }, [voice.wake, wakeBlocked, providers, env, state.phase, wakeState.phase, dismiss, answerTranscript]);
 
   useEffect(() => {
     return () => {
@@ -191,5 +204,5 @@ export function useDeskVoice(voice: DeskVoice, handlers: VoiceHandlers, env: Spe
     };
   }, [providers, start, stop]);
 
-  return { available: providers !== null, state, start, stop: () => void stop(), dismiss, wakeState, wakeConfigured: enabled && voice.wake?.enabled === true, wakeName: voice.wake?.assistantName ?? "Assistant", toggleWake };
+  return { available: providers !== null, state, start, stop: () => void stop(), dismiss, wakeState, wakeConfigured: enabled && voice.wake?.enabled === true, wakeName: voice.wake?.assistantName ?? "Assistant", wakeBlocked, toggleWake };
 }

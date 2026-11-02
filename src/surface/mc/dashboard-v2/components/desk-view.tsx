@@ -37,7 +37,7 @@ import { useDeskLocation, useDeskStudio, type DeskLocation } from "../hooks/use-
 import { DeskModeSwitch, DeskStudio } from "./desk-studio";
 import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, selectItems, spokenBriefing, URGENCY_LABEL } from "../../desk/present";
 import { useDeskVoice } from "../hooks/use-desk-voice";
-import { MicButton, VoicePanel, WakeControl } from "./desk-voice";
+import { MicButton, VoicePanel, WakeStatus, WakeSwitch } from "./desk-voice";
 import { WAITING_OPS, type WaitingOp } from "../../desk/mail-waiting-schema";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskPrecedent, DeskView as DeskViewModel } from "../../desk/types";
 import type { MoveTarget } from "../../desk/mail-move";
@@ -728,30 +728,6 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           <div className="desk-left">
             <div className="desk-brand"><span className="desk-mark" />Desk</div>
             <DeskModeSwitch hasStudio={studio !== null} inStudio={inStudio} inBalance={inBalance} inCatchup={inCatchup} inConversation={inConversation} onGo={(mode) => { if (mode === "conversation") cameFrom.current = null; go({ mode, thread: null, ...(mode === "conversation" ? { conversation: null } : {}) }); }} />
-            <div className="desk-askwrap">
-              <form
-                className="desk-ask"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void ask();
-                }}
-              >
-                <span className="desk-ask-lead">Ivy,</span>
-                <input
-                  ref={askInput}
-                  className="desk-input"
-                  aria-label="Ask Ivy"
-                  placeholder="capture…, remind me…, note…, ask an agent to…, schedule…"
-                  value={askText}
-                  disabled={asking}
-                  onChange={(e) => setAskText(e.target.value)}
-                />
-                {voice.available && <MicButton phase={voice.state.phase} onStart={voice.start} onStop={voice.stop} />}
-                {asking ? <span className="desk-ask-busy" role="status">Thinking…</span> : <kbd className="desk-kbd">⌘K</kbd>}
-              </form>
-              <VoicePanel state={voice.state} onDismiss={voice.dismiss} />
-              {voice.wakeConfigured && <WakeControl state={voice.wakeState} onToggle={voice.toggleWake} assistantName={voice.wakeName} />}
-            </div>
           </div>
           <div className="desk-topr">
             {!inStudio && !inBalance && !inCatchup && !inConversation && view.areas.length > 0 && (
@@ -765,6 +741,31 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
               </div>
             )}
             <button type="button" className="desk-btn ghost" onClick={onOpenSettings}>Settings</button>
+          </div>
+          <div className="desk-askwrap desk-askrow">
+            <form
+              className="desk-ask"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void ask();
+              }}
+            >
+              <span className="desk-ask-lead">Ivy,</span>
+              <input
+                ref={askInput}
+                className="desk-input"
+                aria-label="Ask Ivy"
+                placeholder="capture…, remind me…, note…, ask an agent to…, schedule…"
+                value={askText}
+                disabled={asking}
+                onChange={(e) => setAskText(e.target.value)}
+              />
+              {voice.wakeConfigured && <WakeSwitch state={voice.wakeState} blocked={voice.wakeBlocked} onToggle={voice.toggleWake} assistantName={voice.wakeName} />}
+              {voice.available && <MicButton phase={voice.state.phase} onStart={voice.start} onStop={voice.stop} />}
+              {asking ? <span className="desk-ask-busy" role="status">Thinking…</span> : <kbd className="desk-kbd">⌘K</kbd>}
+            </form>
+            <VoicePanel state={voice.state} onDismiss={voice.dismiss} />
+            {voice.wakeConfigured && <WakeStatus state={voice.wakeState} blocked={voice.wakeBlocked} />}
           </div>
         </div>
       </div>
