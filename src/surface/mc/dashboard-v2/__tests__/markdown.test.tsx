@@ -89,4 +89,16 @@ describe("lib/markdown", () => {
     expect(html).not.toContain("<p><h2>");
     expect(html).not.toContain("<p><ul>");
   });
+
+  it("preserves snake_case and path underscores while rendering delimited emphasis", () => {
+    const html = renderToStaticMarkup(<>{renderMarkdown("foo_bar_baz session_schema and user_id with (_quiet_) words")}</>);
+    expect(html).toContain("foo_bar_baz session_schema and user_id");
+    expect(html).toContain("(<em>quiet</em>)");
+  });
+
+  it("preserves balanced parentheses in a labelled link destination", () => {
+    const html = renderToStaticMarkup(<>{renderMarkdown("[A guide](https://example.com/guide_(paper))")}</>);
+    expect(html).toContain('href="https://example.com/guide_(paper)"');
+    expect(html).toContain('class="md-link">A guide</a></p>');
+  });
 });
