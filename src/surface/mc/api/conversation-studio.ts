@@ -3,8 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { ConversationError, type ConversationHost, type HostDetail, type OwnerScope, type Seed, type SeedEntry } from "../../../conversations/host";
 import { DECISION_KIND, IMPORTED_TURN_KIND, ObjectRefSchema, type ConversationDetail, type ConversationMeta, type ObjectRef, type OperationRecord, type SourceView } from "../../../conversations/types";
-import type { DeskOptions } from "../desk/compose";
-import type { DeskRuntime } from "../desk/compose";
+import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { splitNoteId, studioNoteId, studioRequestId, studioThreadOf } from "../desk/conversation-sources";
 import type { GitRunner } from "../desk/studio/git";
 import { readStudioFiles } from "../desk/studio/read";
@@ -176,21 +175,21 @@ async function outcomeOnce(host: ConversationHost, deps: StudioConversationDeps,
       const to = result.status >= 500 ? "uncertain" : "failed";
       return await host.transition(operation.operationId, to, { note: result.error });
     }
-    const created = await host.transition(operation.operationId, "created", { canonicalId: result.commit, note: result.message });
-    await host.record(id, `decision:${operation.operationId}`, DECISION_KIND, { source: "studio-outcome", operationId: operation.operationId, outcome: body.outcome, commit: result.commit });
-    return created;
+    return await markCreated(host, operation, result.commit, result.message, { outcome: body.outcome });
   } catch (error) {
     return host.transition(operation.operationId, "uncertain", { note: error instanceof Error ? error.message : String(error) });
   }
 }
 
+async function markCreated(host: ConversationHost, operation: OperationRecord, commit: string, note: string, extra: object): Promise<OperationRecord> {
+  const created = await host.transition(operation.operationId, "created", { canonicalId: commit, note });
+  await host.record(operation.conversationId, `decision:${operation.operationId}`, DECISION_KIND, { source: "studio-outcome", operationId: operation.operationId, commit, ...extra });
+  return created;
+}
+
 async function check(host: ConversationHost, operation: OperationRecord): Promise<OperationRecord> {
   const found = await host.readback(operation);
-  if (found?.found) {
-    const created = await host.transition(operation.operationId, "created", { canonicalId: found.canonicalId, note: "Check found the saved note." });
-    await host.record(operation.conversationId, `decision:${operation.operationId}`, DECISION_KIND, { source: "studio-outcome", operationId: operation.operationId, commit: found.canonicalId, checked: true });
-    return created;
-  }
+  if (found?.found) return markCreated(host, operation, found.canonicalId, "Check found the saved note.", { checked: true });
   if (found && operation.state === "uncertain") return host.transition(operation.operationId, "failed", { note: "Check found no saved note. Nothing was written; choose again to retry." });
   if (found && operation.state === "running") return host.transition(operation.operationId, "uncertain", { note: "Check found no saved note yet." });
   return operation;
