@@ -103,7 +103,7 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, am
           {selection.kind === "automatic" && recommendation.kind === "unverified" && <p>This is the first task in your day order. Calendar coverage cannot prove that it fits now.</p>}
           <details><summary>Why this task</summary><p>{selected.trace}</p></details>
           <div className="tf-actions"><TaskActions item={selected} changes={changes} disabled={draft !== null || retryable || editor.busy} />{selection.kind === "manual" && <button type="button" className="desk-btn ghost" disabled={busy || retryable || draft !== null} onClick={() => { choose(null); }}>Use recommendation</button>}<a className="desk-btn ghost" href="#today-priorities" onClick={showPriorities}>Choose another</a></div>
-          <TaskMessageBanner message={editor.message} />
+          <TaskMessageBanner message={editor.message} busy={editor.busy || locked} onUndo={receipt => void editor.change({ op: "undo", receipt })} />
           {entry && <TaskDetails titled={false} locked={locked} id={selected.task.id} entry={entry} day={current} editor={editor} choices={choices} onRefresh={onChanged} onAdd={parent => { setAdding({ parent, title: "", revision: current.revision, date: current.date }); }} onMoved={() => undefined} onThread={onThread} {...(onConversation ? { onConversation } : {})}>
             {adding && adding.parent === selected.task.id && <BalanceAddForm adding={adding} choices={choices} busy={editor.busy || locked} heading="Add subtask" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) setAdding(null); }); }} />}
           </TaskDetails>}
@@ -147,6 +147,7 @@ function DayContract({ changes }: { changes: DayChanges }) {
   return <section className="tf-contract" aria-label="Day confirmation">
     {current.phase === "proposed" ? <><p>Does this look like your day?</p><div className="tf-actions"><button type="button" className="desk-btn pri" disabled={busy} onClick={() => void change({ op: "start", ids })}>Start the day</button><button type="button" className="desk-btn" disabled={busy || !ids.length} onClick={() => void change({ op: "draft", ids: ids.slice(0, 1) })}>Just one thing</button><button type="button" className="desk-btn ghost" disabled={busy} onClick={() => void change({ op: "propose" })}>Refresh proposal</button></div></> : current.phase === "started" && <><DayWins day={current} /><button type="button" className="desk-btn" disabled={busy} onClick={() => void change({ op: "close" })}>Done for today</button></>}
     {current.undos.map(undo => <p key={undo.receipt}>{undo.title} is set aside. <button type="button" className="desk-btn" disabled={busy} onClick={() => void change({ op: "undo", receipt: undo.receipt })}>Undo</button></p>)}
+    {current.dayUndo && <p>{current.dayUndo.text} <button type="button" className="desk-btn" disabled={busy} onClick={() => { if (current.dayUndo) void change({ op: "undo", receipt: current.dayUndo.receipt }); }}>Undo</button></p>}
     {note && <p role="status">{note}</p>}{retryable && <button type="button" className="desk-btn" disabled={busy} onClick={() => void retry()}>Retry saved change</button>}
   </section>;
 }

@@ -11,6 +11,7 @@ import type { Database } from "bun:sqlite";
 import { DEFAULT_SETTINGS, applyDayToHistory, applyRecurrence, collectLeaves, findNode, rankAll, selectToday, shiftDays, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
 import { loadBalanceState, saveBalanceState } from "./balance-store";
 import { MyDayMetaSchema, type MyDayCommand, type MyDayMeta } from "./my-day-schema";
+import { addToToday, joinToday, removeFromToday, undoToday, type TodayContext } from "./my-day-today";
 import type { DeskOptions } from "./compose";
 import type { DeskItem } from "./types";
 
@@ -64,6 +65,7 @@ export interface MyDayView {
   sources: MyDayMeta["sources"];
   yesFilter: string[];
   undos: { receipt: string; title: string }[];
+  dayUndo: { receipt: string; text: string } | null;
 }
 function configuredState(state: AppState, desk: DeskOptions): AppState {
   const ids = new Set(desk.areas.map(a => `area:${a.id}`));
@@ -81,6 +83,7 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
   const byId = new Map(all.map(i => [i.task.id, i]));
   const selected = meta.selection?.date === date ? meta.selection : null;
   const available = selected && visibleIds.includes(selected.id) && byId.has(selected.id);
+  const dayUndo = day && !day.closed ? meta.dayUndos.filter(u => !u.used && u.date === date).at(-1) : undefined;
   return {
     work: {
       confirmedIds: day?.confirmed ?? [],
@@ -96,6 +99,7 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
     alternates: all.filter(i => !visibleIds.includes(i.task.id)).slice(0, 3),
     wins: state.log.filter(e => e.date === date).map(({ taskId, title }) => ({ taskId, title })),
     undos: meta.undos.filter(u => !u.used && u.date === date).map(u => ({ receipt: u.receipt, title: findNode(state.outline, u.taskId)?.title ?? "Task" })),
+    dayUndo: day && dayUndo && JSON.stringify(day.confirmed) === JSON.stringify(dayUndo.after) ? { receipt: dayUndo.receipt, text: dayUndo.text } : null,
     outline: state.outline, sources: meta.sources, yesFilter: desk.studio?.yesFilter?.length ? [...desk.studio.yesFilter] : [...DEFAULT_YES_FILTER],
   };
 }
@@ -154,6 +158,11 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
     let outlineBefore: TodayItem[] | undefined;
     let outlineId: string | undefined;
     let location: string | undefined;
+    let joined: string | undefined;
+    let todayNotice: string | undefined;
+    let unavailable: string[] = [];
+    const today = (): TodayContext => ({ state, meta, date, rank: rankAll(configuredState(state, desk), date), requestId });
+    const dayIds = (): string[] => state.dayState?.date === date ? [...state.dayState.confirmed] : viewOf(state, meta, desk, date, studio).items.map(item => item.task.id);
     switch (command.op) {
       case "select": {
         if (command.revision !== meta.revision) throw new Error("Your day changed. Refresh before choosing a task.");
@@ -190,6 +199,9 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         if (state.dayState?.date !== date && meta.draft?.date !== date) meta.draft = engineDraft(state, desk, date, studio);
         outlineBefore = viewOf(state, meta, desk, date, studio).items;
         outlineId = applyBalanceCommand(state, meta, desk, date, command);
+        const outlineAfter = viewOf(state, meta, desk, date, studio).items;
+        unavailable = outlineBefore.filter(item => !outlineAfter.some(current => current.task.id === item.task.id)).map(item => item.task.title);
+        if (command.op === "outline-add" && command.kind !== "project") joined = outlineId;
         break;
       }
       case "draft":
@@ -226,7 +238,20 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         node.deferredUntil = after;
         break;
       }
+      case "today-add":
+      case "today-remove": {
+        if (command.revision !== meta.revision) throw new Error("Your day changed. Refresh before changing today's priorities.");
+        const outcome = command.op === "today-add" ? addToToday(today(), dayIds(), command.id, state.settings.todayCap, command.replace) : removeFromToday(today(), dayIds(), command.id);
+        todayNotice = outcome.notice;
+        undo = outcome.undo;
+        break;
+      }
       case "undo": {
+        const restored = undoToday(today(), command.receipt);
+        if (restored !== null) {
+          todayNotice = restored;
+          break;
+        }
         const previous = meta.undos.find(u => u.receipt === command.receipt);
         if (!previous || previous.used) break;
         if (previous.date !== date) throw new Error("This Undo belongs to a previous day.");
@@ -271,7 +296,9 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
       }
       case "add": {
         const parent = outlineDestination(state, desk, command.parent);
-        parent.children.push({ id: crypto.randomUUID(), title: command.title, weight: 50, ordering: "parallel", children: [], ...(command.kind === "task" ? { effort: 1 } : { done: true }) });
+        const added: OutlineNode = { id: crypto.randomUUID(), title: command.title, weight: 50, ordering: "parallel", children: [], ...(command.kind === "task" ? { effort: 1 } : { done: true }) };
+        parent.children.push(added);
+        if (command.kind === "task") joined = added.id;
         break;
       }
       case "edit":
@@ -280,11 +307,18 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         edit(state, command, date);
         break;
     }
-    if ((command.op === "add" || command.op === "file") && !meta.draft?.ids.length && state.dayState?.date !== date) meta.draft = engineDraft(state, desk, date, studio);
+    if (joined && state.dayState?.date !== date && meta.draft?.origin !== "person") {
+      meta.draft = engineDraft(state, desk, date, studio);
+      if (meta.draft.ids.slice(0, state.settings.todayCap).includes(joined)) todayNotice = `Added ${requiredNode(state, joined).title} to today's proposal.`;
+    } else if (joined) {
+      const outcome = joinToday(today(), dayIds(), joined, state.settings.todayCap);
+      todayNotice = outcome.notice;
+      undo = outcome.undo;
+    }
+    if ((command.op === "add" || command.op === "file") && !joined && !meta.draft?.ids.length && state.dayState?.date !== date) meta.draft = engineDraft(state, desk, date, studio);
     meta.revision += 1;
     const view = viewOf(state, meta, desk, date, studio);
-    const unavailable = outlineBefore?.filter(item => !view.items.some(current => current.task.id === item.task.id)).map(item => item.task.title) ?? [];
-    const notice = unavailable.length ? `${unavailable.join(", ")} ${unavailable.length === 1 ? "is" : "are"} no longer actionable in today's list. The remaining choices keep their order; no replacement was added.` : undefined;
+    const notice = [unavailable.length ? `${unavailable.join(", ")} ${unavailable.length === 1 ? "is" : "are"} no longer actionable in today's list. The remaining choices keep their order; no replacement was added.` : undefined, todayNotice].filter(Boolean).join(" ") || undefined;
     meta.receipts.push({ id: requestId, payload, ...(location ? { location } : {}), ...(undo ? { undo } : {}), ...(outlineId ? { outlineId } : {}), ...(notice ? { notice } : {}) });
     saveBalanceState(db, state);
     saveMeta(db, meta);

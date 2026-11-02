@@ -45,11 +45,11 @@ describe("Balance through the real My day owner", () => {
   afterEach(async () => { db.close(); for (const dir of directories.splice(0)) await rm(dir, { recursive: true, force: true }); });
   const view = () => readMyDay(db, runtime.options, NOW);
   const post = (command: unknown, requestId = crypto.randomUUID()) => handleDeskMyDay(new Request("http://localhost/api/desk/my-day", { method: "POST", body: JSON.stringify({ date: DATE, requestId, command }) }), db, runtime, undefined, NOW);
-  const change = async (command: BalanceCommand): Promise<{ view: MyDayView; notice?: string }> => {
+  const change = async (command: BalanceCommand): Promise<{ view: MyDayView; notice?: string; outlineId?: string }> => {
     const response = await post(command);
     if (response.status !== 200) throw new Error(await response.text());
-    const reply = z.object({ notice: z.string().optional() }).parse(await response.json());
-    return { view: view(), ...(reply.notice ? { notice: reply.notice } : {}) };
+    const reply = z.object({ notice: z.string().optional(), outlineId: z.string().optional() }).parse(await response.json());
+    return { view: view(), ...(reply.notice ? { notice: reply.notice } : {}), ...(reply.outlineId ? { outlineId: reply.outlineId } : {}) };
   };
   const edit = (current: MyDayView, id: string, patch: Partial<ReturnType<typeof balanceDetails>> = {}, yes = false): BalanceCommand => ({ op: "outline-edit", id, revision: current.revision, details: { ...balanceDetails(required(current, id), DATE), ...patch }, yes });
 
@@ -82,7 +82,7 @@ describe("Balance through the real My day owner", () => {
   test("refuses a stale Day completion after its confirmed leaf becomes a project without creating credit", async () => {
     expect((await post({ op: "start", ids: ["first", "standalone"] })).status).toBe(200);
     const current = view();
-    await change({ op: "outline-add", revision: current.revision, parent: "first", title: "Unfinished new child" });
+    const added = await change({ op: "outline-add", revision: current.revision, parent: "first", title: "Unfinished new child" });
     const before = loadBalanceState(db);
     const beforeMeta = db.query("SELECT data FROM desk_my_day WHERE id = 1").get();
     const response = await post({ op: "done", id: "first" });
@@ -90,18 +90,18 @@ describe("Balance through the real My day owner", () => {
     expect(await response.json()).toEqual({ error: "Only a task without subtasks can receive completion credit. Refresh My day to see its current state." });
     expect(loadBalanceState(db)).toEqual(before);
     expect(db.query("SELECT data FROM desk_my_day WHERE id = 1").get()).toEqual(beforeMeta);
-    expect(view().items.map(item => item.task.id)).toEqual(["standalone"]);
+    expect(view().items.map(item => item.task.id)).toEqual(["standalone", added.outlineId ?? ""]);
     expect(required(view(), "first").children[0]?.done).toBeUndefined();
   });
-  test("adds and moves without replacing the confirmed day, and rejects cycles and unavailable parents atomically", async () => {
+  test("adds a new task to a day with room, moves without replacing the confirmed day, and rejects cycles and unavailable parents atomically", async () => {
     expect((await post({ op: "start", ids: ["first", "standalone"] })).status).toBe(200);
-    const before = loadBalanceState(db)?.dayState;
     let current = view();
     current = (await change({ op: "outline-add", revision: current.revision, parent: "first", title: "A new child" })).view;
     const child = required(current, "first").children[0];
     if (!child) throw new Error("Missing created child");
-    expect(loadBalanceState(db)?.dayState).toEqual(before);
-    expect(current.items.map(item => item.task.id)).toEqual(["standalone"]);
+    expect(loadBalanceState(db)?.dayState?.confirmed).toEqual(["first", "standalone", child.id]);
+    expect(current.items.map(item => item.task.id)).toEqual(["standalone", child.id]);
+    const before = loadBalanceState(db)?.dayState;
     const result = await change({ op: "outline-move", revision: current.revision, id: child.id, parent: "area:personal" });
     expect(required(result.view, "area:personal").children.some(node => node.id === child.id)).toBe(true);
     expect(loadBalanceState(db)?.dayState).toEqual(before);
@@ -114,12 +114,11 @@ describe("Balance through the real My day owner", () => {
     runtime = { ...runtime, options: removedArea };
     expect((await post({ op: "outline-move", revision: view().revision, id: "second", parent: "area:personal" })).status).toBe(409);
   });
-  test("keeps a proposed day stable while new outline items wait for an explicit proposal refresh", async () => {
+  test("re-runs an engine-proposed day when a new task is added", async () => {
     const current = view();
-    const ids = current.items.map(item => item.task.id);
     const saved = await change({ op: "outline-add", revision: current.revision, parent: "area:work", title: "A later choice" });
-    expect(saved.view.items.map(item => item.task.id)).toEqual(ids);
-    expect(view().items.map(item => item.task.id)).toEqual(ids);
+    expect(saved.view.items.map(item => item.task.id)).toContain(saved.outlineId ?? "");
+    expect(view().items.map(item => item.task.id)).toEqual(saved.view.items.map(item => item.task.id));
     expect(loadBalanceState(db)?.dayState).toBeNull();
   });
   test("preserves drafts by refusing stale writes, and replays only the identical request payload", async () => {
@@ -161,7 +160,7 @@ describe("Balance through the real My day owner", () => {
     const replay = receipt.parse(await (await post(command, requestId)).json());
     expect(replay).toEqual(first);
     expect(required(view(), "first").children.map(node => node.id)).toEqual([first.outlineId]);
-    expect(loadBalanceState(db)?.dayState?.confirmed).toEqual(["first", "standalone"]);
+    expect(loadBalanceState(db)?.dayState?.confirmed).toEqual(["first", "standalone", first.outlineId]);
     const staleDate = new Request("http://localhost/api/desk/my-day", { method: "POST", body: JSON.stringify({ date: DATE, requestId: crypto.randomUUID(), command: { op: "outline-edit", id: "second", revision: view().revision, details: balanceDetails(required(view(), "second"), DATE), yes: false } }) });
     expect((await handleDeskMyDay(staleDate, db, runtime, undefined, NOW + 86_400_000)).status).toBe(409);
   });
