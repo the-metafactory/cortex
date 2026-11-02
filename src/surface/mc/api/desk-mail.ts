@@ -21,7 +21,7 @@ import { STUDIO_SLUG } from "../desk/studio/format";
 import { STUDIO_REQUEST_ID } from "../desk/studio/writer";
 import { approveHandoff, discardHandoff, handMailToIvy, HANDOFF_OPS, handoffIdOf, isHandoffOp, MAX_INSTRUCTION, retryHandoff, type HandoffOp } from "../desk/mail-handoff";
 import { handoffReady } from "../desk/compose";
-import { closeHandoffTask, taskCloser } from "../desk/mail-handoff-close";
+import { closeHandoffTask } from "../desk/mail-handoff-close";
 import { cancelSnooze, snoozeMail, SNOOZE_TIMES } from "../desk/mail-snooze";
 import { actOnWaiting, nudgeMail, readWaiting, waitingFeatures, waitingIdOf, WAITING_OPS, type WaitingOp } from "../desk/mail-waiting";
 
@@ -206,7 +206,7 @@ async function actOnHandoff(db: Database, runtime: DeskRuntime, body: HandoffBod
   }
   const decided = body.action === "ivy.discard" ? discardHandoff(db, id, moveDeps.now) : await approveHandoff(db, id, body.action === "draft" ? body.body : undefined, (mail, text) => draftReply(mail, text, moveDeps), moveDeps.now);
   if (!decided.ok) return decided;
-  const note = await closeHandoffTask(db, id, taskCloser(runtime.options?.ask, moveDeps.run), moveDeps.now);
+  const note = await closeHandoffTask(db, id, runtime.mailHandoff?.closer, moveDeps.now);
   return note ? { ok: true, message: `${decided.message} ${note}` } : { ok: true, message: decided.message };
 }
 

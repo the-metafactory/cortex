@@ -184,9 +184,8 @@ export async function handMailToIvy(item: MailForStudio, input: HandInput, deps:
     `INSERT INTO desk_mail_handoffs (id, message_id, account, source_id, area, from_name, from_address, subject, url, received_at, summary, text, instruction, route, task_id, task_url, state, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'working', ?)`,
   ).run(input.requestId, mail.id, mail.account ?? null, mail.sourceId, item.area, mail.from.name ?? null, mail.from.address, mail.subject, mail.url ?? null, mail.receivedAt, item.summary, mail.firstParagraph ?? null, instruction, routed.route, filed.id, filed.url ?? null, now);
-  const superseded = db.query<{ id: string }, [string, string]>("SELECT id FROM desk_mail_handoffs WHERE message_id = ? AND state = 'failed' AND id != ?").all(mail.id, input.requestId).map((r) => r.id);
-  db.query("UPDATE desk_mail_handoffs SET state = 'discarded', closed_at = ? WHERE message_id = ? AND state = 'failed' AND id != ?").run(now, mail.id, input.requestId);
-  queueTaskClose(db, superseded);
+  const superseded = db.query<{ id: string }, [number, string, string]>("UPDATE desk_mail_handoffs SET state = 'discarded', closed_at = ? WHERE message_id = ? AND state = 'failed' AND id != ? RETURNING id").all(now, mail.id, input.requestId);
+  queueTaskClose(db, superseded.map((r) => r.id));
   logMailDecision(db, mailFeatures(db, mail), "ivy", "desk", now);
   const row = readHandoff(db, input.requestId);
   return { ok: true, id: input.requestId, message: row ? handedMessage(row, map.label) : "Handed to Ivy." };
@@ -231,7 +230,7 @@ export class MailHandoffWorker {
   constructor(
     private readonly owner: HandoffOwner,
     private readonly log: (message: string) => void = console.error,
-    private readonly closer?: TaskCloser,
+    readonly closer?: TaskCloser,
   ) {}
 
   kick(db: Database, now: () => number = Date.now): Promise<void> {
@@ -239,11 +238,10 @@ export class MailHandoffWorker {
   }
 
   private async pass(db: Database, now: () => number): Promise<void> {
-    if (this.closer) await closePendingTasks(db, this.closer, now());
     const tried = new Set<string>();
     for (;;) {
       const next = db.query<RawRow, []>("SELECT * FROM desk_mail_handoffs WHERE state = 'working' ORDER BY created_at").all().map(toRow).find((r) => !tried.has(r.id));
-      if (!next) return;
+      if (!next) break;
       tried.add(next.id);
       try {
         const answer = await this.owner(jobOf(next));
@@ -255,6 +253,7 @@ export class MailHandoffWorker {
         db.query("UPDATE desk_mail_handoffs SET state = 'failed', error = ?, finished_at = ? WHERE id = ? AND state = 'working'").run(reason, now(), next.id);
       }
     }
+    if (this.closer) await closePendingTasks(db, this.closer, now(), this.log);
   }
 }
 

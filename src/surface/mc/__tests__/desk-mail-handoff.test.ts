@@ -7,7 +7,7 @@ import { saveClassification } from "../desk/classify";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
 import type { WriterRunner } from "../desk/create";
 import { queryMailLog } from "../desk/mail-log";
-import { CLOSE_RETRY_MS, taskCloser } from "../desk/mail-handoff-close";
+import { CLOSE_RETRY_MS, MAX_CLOSE_TRIES, taskCloser } from "../desk/mail-handoff-close";
 import { handoffRoute, MailHandoffWorker, piHandoffOwner, readHandoff, readHandoffAnswer, type HandoffJob, type HandoffOwner } from "../desk/mail-handoff";
 import { SourceCache, type SourceMail } from "../desk/sources/command";
 import type { DeskItem } from "../desk/types";
@@ -295,8 +295,21 @@ describe("Closing the hand-off's task", () => {
     expect(taskClose("hand-req-0002")).toBeNull();
   });
 
+  it("gives up after the last try, says so in the log, and tries no more", async () => {
+    const logged: string[] = [];
+    runtime.mailHandoff = new MailHandoffWorker((job) => owner(job), (m) => { logged.push(m); }, taskCloser(options.ask, run));
+    await hand("mail:w1");
+    await settle();
+    closerFails = true;
+    await act({ action: "ivy.discard", key: "ivy:hand-req-0001" });
+    for (let i = 1; i <= MAX_CLOSE_TRIES + 2; i++) await runtime.mailHandoff.kick(db, () => NOW + i * CLOSE_RETRY_MS);
+    expect(closes()).toHaveLength(MAX_CLOSE_TRIES);
+    expect(taskClose("hand-req-0001")).toBe("failed");
+    expect(logged).toEqual([`desk: mail hand-off hand-req-0001: gave up closing owner/desk#9 after ${MAX_CLOSE_TRIES} tries: gh could not close owner/desk#9: HTTP 502`]);
+  });
+
   it("without a closer nothing runs and Approve answers as before", async () => {
-    delete options.ask?.taskCloser;
+    runtime.mailHandoff = new MailHandoffWorker((job) => owner(job), () => undefined);
     await hand("mail:w1");
     await settle();
     expect((await act({ action: "ivy.approve", key: "ivy:hand-req-0001" })).json.message).toBe("Reply saved in your work Drafts.");
