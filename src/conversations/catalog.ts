@@ -28,7 +28,7 @@ const long = (name: string, label: string, required = false): FieldSpec => ({ na
 export const OWNER_BLOCKERS: Record<CreatableType, number> = {
   "graph-node": 3033, "graph-map": 3034,
   "balance-task": 3030, "balance-project": 3031, "balance-inbox-task": 3032,
-  "studio-thread": 3029, "studio-capture": 3029, "studio-note": 3029, "studio-outcome": 3029,
+  "studio-thread": 3141, "studio-capture": 3142, "studio-note": 3140, "studio-outcome": 3138,
   flow: 3146, routine: 3035, "calendar-event": 3036, reminder: 3037, "soma-goal": 3038, "tana-note": 3039, "desk-note": 3040, "mail-draft": 3041,
 };
 
