@@ -1,14 +1,9 @@
-import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { DEFAULT_SETTINGS, findNode, findParent, type AppState, type OutlineNode } from "../../../balance";
-import { openConversationHost, type ConversationHost, type HostStatus } from "../../../conversations/host";
-import { answering, scratchDirs } from "../../../conversations/__tests__/fixtures/scratch";
 import type { ProposalView } from "../../../conversations/creation";
 import type { ConversationEntry, OperationRecord, OwnerWriter } from "../../../conversations/types";
-import { handleConversations } from "../api/conversations";
-import { buildAllowedHostnames, type MutationGuardContext } from "../api/mutation-guard";
 import { HandledLedger } from "../desk/actions";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import type { DeskRuntime } from "../desk/compose";
@@ -17,17 +12,9 @@ import type { ListedMail } from "../desk/mail-actions";
 import { historySentence, logMailDecision, mailFeatures, queryMailLog } from "../desk/mail-log";
 import { changeMyDay, loadMeta, localDay, readMyDay } from "../desk/my-day";
 import type { DeskItem } from "../desk/types";
-import { SCHEMA_SQL } from "../db/schema";
+import { conversationWriterRig } from "./conversation-writer-rig";
 
-const LABEL = "ai.meta-factory.cortex.balance-writer-test";
-const dirs = scratchDirs("conversation-balance-");
-const hosts: ConversationHost[] = [];
-const databases: Database[] = [];
-afterEach(async () => {
-  for (const host of hosts.splice(0)) await host.close().catch(() => undefined);
-  for (const db of databases.splice(0)) db.close();
-  await dirs.clean();
-});
+const writerRig = conversationWriterRig("conversation-balance-", "ai.meta-factory.cortex.balance-writer-test");
 
 const leaf = (id: string, title: string, extra: Partial<OutlineNode> = {}): OutlineNode => ({ id, title, weight: 50, ordering: "parallel", children: [], effort: 1, ...extra });
 const outline = (lab: OutlineNode[]): AppState => ({
@@ -42,22 +29,14 @@ const GLIDER = { id: "project-glider", title: "Glider", weight: 50, ordering: "p
 interface Reply { ok: boolean; error: string; proposal: ProposalView; conversation: { id: string }; entries: ConversationEntry[]; types: { type: string; status: string }[] }
 
 async function rig(state: AppState | null = outline([GLIDER]), wrap?: (writer: OwnerWriter) => OwnerWriter, view: DeskItem[] = [], mails: ListedMail[] = []) {
-  const db = new Database(":memory:"); databases.push(db); for (const sql of SCHEMA_SQL) db.run(sql);
+  const db = writerRig.database();
   if (state) saveBalanceState(db, state);
   const options = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [{ id: "lab", label: "Lab", color: "", repos: [], goals: [], policy: "local" as "cloud" | "local" }, { id: "home", label: "Home", color: "", repos: [], goals: [] }], sources: [] };
   const runtime: DeskRuntime = { ledger: new HandledLedger(), options };
-  const lane = { provider: "test", model: "test-model" };
-  const status: HostStatus = await openConversationHost({ dir: await dirs.make(), stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local: lane, cloud: lane }, turns: answering(() => "ok") });
-  if (status.state !== "ready") throw new Error(status.reason);
-  hosts.push(status.host);
+  const { host, call } = await writerRig.open<Reply>(db, runtime);
   const sources = conversationSources({ db, desk: () => options, deskItems: () => Promise.resolve(view), listedMail: key => mails.find(m => `mail:${m.id}` === key) ?? null });
   const writer = sources.writers?.["balance-task"];
-  await status.host.attachSources(wrap && writer ? { ...sources, writers: { "balance-task": wrap(writer) } } : sources);
-  const guard: MutationGuardContext = { isLoopback: true, allowedHostnames: buildAllowedHostnames("127.0.0.1"), listenPort: 8767, principals: new Set() };
-  const call = async (method: string, path: string, body?: unknown): Promise<{ status: number; body: Reply }> => {
-    const res = await handleConversations(new Request(`http://127.0.0.1:8767${path}`, { method, headers: { host: "127.0.0.1:8767", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), new URL(`http://127.0.0.1:8767${path}`), guard, () => status, { db, runtime });
-    return { status: res.status, body: await res.json() as Reply };
-  };
+  await host.attachSources(wrap && writer ? { ...sources, writers: { "balance-task": wrap(writer) } } : sources);
   const start = async (): Promise<string> => (await call("POST", "/api/conversations", { title: "Synthetic task", origin: { kind: "web" }, policy: "local" })).body.conversation.id;
   const propose = async (id: string, fields: Record<string, string>, type = "balance-task") => (await call("POST", `/api/conversations/${id}/proposals`, { proposalId: randomUUID(), type, fields })).body.proposal;
   const confirm = (id: string, view: ProposalView, extra: Record<string, unknown> = {}) => call("POST", `/api/conversations/${id}/proposals/${view.proposal.proposalId}/confirm`, { revision: view.proposal.revision, digest: view.digest, ...extra });
@@ -76,7 +55,7 @@ async function rig(state: AppState | null = outline([GLIDER]), wrap?: (writer: O
     expect(operation.canonicalId).toBe(node?.id);
     return { operation, node };
   };
-  return { db, options, call, start, propose, confirm, confirmCreated, tasks, host: status.host };
+  return { db, options, call, start, propose, confirm, confirmCreated, tasks, host };
 }
 
 function operationOf(view: ProposalView): OperationRecord {
