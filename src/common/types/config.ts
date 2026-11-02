@@ -510,6 +510,13 @@ const DeskWriterArgvSchema = z.array(z.string().min(1)).min(1);
 const DeskWriterOwnerSchema = z.string().regex(/^[a-z][a-z0-9-]*$/);
 const DeskWriterSchema = z.union([DeskWriterArgvSchema, z.strictObject({ command: DeskWriterArgvSchema, owner: DeskWriterOwnerSchema.optional() })]);
 type DeskWriterEntry = z.infer<typeof DeskWriterSchema>;
+const DeskWritersSchema = z.object({
+  calendar: DeskWriterSchema.optional(),
+  task: DeskWriterSchema.optional(),
+  goal: DeskWriterSchema.optional(),
+  note: DeskWriterSchema.optional(),
+  reminder: DeskWriterSchema.optional(),
+});
 
 function splitDeskWriters<K extends string>(entries: Partial<Record<K, DeskWriterEntry>>, parsed: Partial<Record<K, string>> = {}): { writers: Partial<Record<K, string[]>>; writerOwners?: Partial<Record<K, string>> } {
   const writers: Partial<Record<K, string[]>> = {};
@@ -572,16 +579,8 @@ export const DeskSchema = z.object({
       parser: z.array(z.string().min(1)).default([]),
       routing: ParserPermissionsSchema.optional(),
       timeoutSeconds: z.number().int().min(1).max(120).default(30),
-      writers: z
-        .object({
-          calendar: DeskWriterSchema.optional(),
-          task: DeskWriterSchema.optional(),
-          goal: DeskWriterSchema.optional(),
-          note: DeskWriterSchema.optional(),
-          reminder: DeskWriterSchema.optional(),
-        })
-        .default({}),
-      writerOwners: z.partialRecord(z.enum(["calendar", "task", "goal", "note", "reminder"]), DeskWriterOwnerSchema).optional(),
+      writers: DeskWritersSchema.default({}),
+      writerOwners: z.partialRecord(DeskWritersSchema.keyof(), DeskWriterOwnerSchema).optional(),
       taskMaps: z.array(z.object({ ref: z.string().regex(/^[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/), label: z.string().min(1) })).default([]),
       taskCloser: z.array(z.string().min(1)).min(1).optional(),
     })
