@@ -1,101 +1,112 @@
-/**
- * Minimal markdown renderer — text only, no library dependency.
- *
- * Per migration addendum Decision 11, assistant text and principal input
- * render as markdown. We support a tight subset:
- *  - Triple-backtick fenced code blocks (with optional language tag)
- *  - Single-backtick inline code
- *  - Bold (**text**) and italic (*text* or _text_)
- *  - Hyperlinks: <https://…> and bare URLs
- *  - Hard line-breaks preserved
- *
- * Anything more (headings, tables, footnotes) is out of scope. Principals
- * who paste richer content still see plain text — readable, not styled.
- *
- * React's default text-content escaping is the XSS safety guarantee.
- * We never use `dangerouslySetInnerHTML`.
- */
-
-import { Fragment, type ReactNode } from "react";
+import { createElement, Fragment, type ReactNode } from "react";
 
 const URL_RE = /https?:\/\/[^\s<>]+[^\s.,!?:;<>)\]]/g;
 const FENCE_RE = /^```([a-z0-9_+-]+)?\s*$/i;
 
 export function renderMarkdown(src: string): ReactNode {
   if (!src) return null;
-  const blocks = splitIntoBlocks(src);
-  return (
-    <>
-      {blocks.map((b, i) =>
-        b.type === "code" ? (
-          <pre key={i} className="md-code-block" data-lang={b.lang ?? ""}>
-            <code>{b.text}</code>
-          </pre>
-        ) : (
-          <p key={i} className="md-paragraph">{renderInline(b.text)}</p>
-        )
-      )}
-    </>
-  );
+  return <>{splitIntoBlocks(src).map(renderBlock)}</>;
 }
 
-interface ParagraphBlock { type: "paragraph"; text: string }
-interface CodeBlock { type: "code"; text: string; lang?: string }
-type Block = ParagraphBlock | CodeBlock;
+type HeadingTag = "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
+type Block =
+  | { type: "paragraph"; text: string }
+  | { type: "code"; text: string; lang?: string }
+  | { type: "heading"; text: string; tag: HeadingTag }
+  | { type: "list"; items: string[]; start: number | null }
+  | { type: "quote"; text: string };
+
+const HEADING_TAGS: HeadingTag[] = ["h1", "h2", "h3", "h4", "h5", "h6"];
+const HEADING_RE = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
+const LIST_RE = /^\s*(?:([-+*])|(\d+)[.)])\s+(.+)$/;
+const QUOTE_RE = /^\s*>\s?(.*)$/;
+
+function renderBlock(block: Block, key: number): ReactNode {
+  switch (block.type) {
+    case "paragraph": return <p key={key} className="md-paragraph">{renderInline(block.text)}</p>;
+    case "code": return <pre key={key} className="md-code-block" data-lang={block.lang ?? ""}><code>{block.text}</code></pre>;
+    case "heading": return createElement(block.tag, { key }, renderInline(block.text));
+    case "list": {
+      const items = block.items.map((text, i) => <li key={i}>{renderInline(text)}</li>);
+      return block.start === null ? <ul key={key}>{items}</ul> : <ol key={key} start={block.start}>{items}</ol>;
+    }
+    case "quote": return <blockquote key={key}><p className="md-paragraph">{renderInline(block.text)}</p></blockquote>;
+    default: {
+      const exhaustive: never = block;
+      return exhaustive;
+    }
+  }
+}
 
 function splitIntoBlocks(src: string): Block[] {
   const lines = src.split("\n");
   const blocks: Block[] = [];
   let i = 0;
   let para: string[] = [];
-
-  function flushPara() {
-    if (para.length === 0) return;
-    blocks.push({ type: "paragraph", text: para.join("\n") });
+  const flush = (): void => {
+    if (para.length) blocks.push({ type: "paragraph", text: para.join("\n") });
     para = [];
-  }
-
+  };
   while (i < lines.length) {
-    const line = lines[i]!;
-    const fence = line.match(FENCE_RE);
+    const line = lines[i] ?? "";
+    const fence = FENCE_RE.exec(line);
+    const heading = HEADING_RE.exec(line);
+    const list = LIST_RE.exec(line);
+    const quote = QUOTE_RE.exec(line);
     if (fence) {
-      flushPara();
-      const lang = fence[1];
-      const codeLines: string[] = [];
+      flush();
+      const code: string[] = [];
       i++;
-      while (i < lines.length && !FENCE_RE.test(lines[i]!)) {
-        codeLines.push(lines[i]!);
-        i++;
+      while (i < lines.length && !FENCE_RE.test(lines[i] ?? "")) code.push(lines[i++] ?? "");
+      i++;
+      blocks.push({ type: "code", text: code.join("\n"), ...(fence[1] ? { lang: fence[1] } : {}) });
+    } else if (heading) {
+      flush();
+      blocks.push({ type: "heading", text: heading[2] ?? "", tag: HEADING_TAGS[(heading[1]?.length ?? 1) - 1] ?? "h6" });
+      i++;
+    } else if (list) {
+      flush();
+      const ordered = list[2] !== undefined;
+      const items: string[] = [];
+      let item: RegExpExecArray | null = list;
+      while (item && (item[2] !== undefined) === ordered) {
+        items.push(item[3] ?? "");
+        item = LIST_RE.exec(lines[++i] ?? "");
       }
-      i++; // skip closing fence (or EOF)
-      const block: CodeBlock = { type: "code", text: codeLines.join("\n") };
-      if (lang) block.lang = lang;
-      blocks.push(block);
-      continue;
+      const first = Number(list[2]);
+      blocks.push({ type: "list", items, start: ordered ? Number.isSafeInteger(first) ? first : 1 : null });
+    } else if (quote) {
+      flush();
+      const quoted: string[] = [];
+      let part: RegExpExecArray | null = quote;
+      while (part) {
+        quoted.push(part[1] ?? "");
+        part = QUOTE_RE.exec(lines[++i] ?? "");
+      }
+      blocks.push({ type: "quote", text: quoted.join("\n") });
+    } else {
+      if (line.trim()) para.push(line);
+      else flush();
+      i++;
     }
-    para.push(line);
-    i++;
   }
-  flushPara();
+  flush();
   return blocks;
 }
 
 function renderInline(text: string): ReactNode {
-  // Sequentially: code spans → bold/italic → URLs.
-  // Tokenise into plain-text + special-segment chunks, render each.
   const parts: ReactNode[] = [];
   let buf = "";
   let i = 0;
   let key = 0;
   const flush = () => {
     if (buf.length === 0) return;
-    parts.push(<Fragment key={key++}>{renderBoldItalicAndLinks(buf, () => key++)}</Fragment>);
+    parts.push(<Fragment key={key++}>{renderLabelledLinks(buf, () => key++)}</Fragment>);
     buf = "";
   };
   while (i < text.length) {
     const ch = text[i];
     if (ch === "`") {
-      // inline code — find closing backtick
       const end = text.indexOf("`", i + 1);
       if (end >= 0) {
         flush();
@@ -104,18 +115,42 @@ function renderInline(text: string): ReactNode {
         continue;
       }
     }
-    buf += ch;
+    buf += ch ?? "";
     i++;
   }
   flush();
   return <>{parts}</>;
 }
 
+const LABELLED_LINK_RE = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+
+function safeHref(value: string): string | null {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" || url.protocol === "mailto:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function renderLabelledLinks(text: string, nextKey: () => number): ReactNode {
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  LABELLED_LINK_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = LABELLED_LINK_RE.exec(text)) !== null) {
+    parts.push(<Fragment key={nextKey()}>{renderBoldItalicAndLinks(text.slice(cursor, match.index), nextKey)}</Fragment>);
+    const label = match[1] ?? "";
+    const href = safeHref(match[2] ?? "");
+    parts.push(href ? <a key={nextKey()} href={href} target="_blank" rel="noopener noreferrer" className="md-link">{renderBoldItalic(label, nextKey)}</a> : <Fragment key={nextKey()}>{label}</Fragment>);
+    cursor = match.index + match[0].length;
+  }
+  parts.push(<Fragment key={nextKey()}>{renderBoldItalicAndLinks(text.slice(cursor), nextKey)}</Fragment>);
+  return <>{parts}</>;
+}
+
 function renderBoldItalicAndLinks(text: string, nextKey: () => number): ReactNode {
-  // Auto-link URLs first, then bold/italic on the residue. Order matters
-  // to avoid matching `**` inside an `https://…/path/with/**`-improbable
-  // edge case.
-  const urlMatches: Array<{ start: number; end: number; url: string }> = [];
+  const urlMatches: { start: number; end: number; url: string }[] = [];
   URL_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = URL_RE.exec(text)) !== null) {
@@ -150,7 +185,6 @@ function renderBoldItalicAndLinks(text: string, nextKey: () => number): ReactNod
 }
 
 function renderBoldItalic(text: string, nextKey: () => number): ReactNode {
-  // Bold (**…**) takes precedence over italic (*…*).
   const parts: ReactNode[] = [];
   let i = 0;
   let buf = "";
@@ -164,8 +198,9 @@ function renderBoldItalic(text: string, nextKey: () => number): ReactNode {
         continue;
       }
     }
-    if (text[i] === "*" && i + 1 < text.length && text[i + 1] !== "*") {
-      const end = text.indexOf("*", i + 1);
+    const marker = text[i];
+    if ((marker === "*" || marker === "_") && i + 1 < text.length && text[i + 1] !== marker) {
+      const end = text.indexOf(marker, i + 1);
       if (end > i + 1) {
         if (buf) { parts.push(buf); buf = ""; }
         parts.push(<em key={nextKey()}>{text.slice(i + 1, end)}</em>);
@@ -173,7 +208,7 @@ function renderBoldItalic(text: string, nextKey: () => number): ReactNode {
         continue;
       }
     }
-    buf += text[i];
+    buf += text[i] ?? "";
     i++;
   }
   if (buf) parts.push(buf);

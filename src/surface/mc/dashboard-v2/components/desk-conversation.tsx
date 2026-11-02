@@ -1,3 +1,4 @@
+import { renderMarkdown } from "../lib/markdown";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionEnd } from "../../desk/studio/session-schema";
 import {
@@ -158,7 +159,7 @@ function StudioOutcome({ id, studio, onSaved }: { id: string; studio: NonNullabl
     {uncertain
       ? <button type="button" className="desk-btn pri" disabled={pending} onClick={() => void choose("check")}>Check</button>
       : <>
-          <label>{studio.scope === "note" ? "Reworded idea or stand" : "Optional proposed stand"}<textarea aria-label={studio.scope === "note" ? "Reworded idea or stand" : "Optional proposed stand"} value={text} maxLength={4000} onChange={e => setText(e.target.value)} /></label>
+          <label>{studio.scope === "note" ? "Reworded idea or stand" : "Optional proposed stand"}<textarea aria-label={studio.scope === "note" ? "Reworded idea or stand" : "Optional proposed stand"} value={text} maxLength={4000} onChange={e => { setText(e.target.value); }} /></label>
           <div className="dcv-acts">{options.map(o => <button key={o.label} type="button" className={`desk-btn${o.primary ? " pri" : ""}`} disabled={pending || (o.needsText === true && !text.trim())} onClick={() => void choose(o.make(text.trim()))}>{o.label}</button>)}</div>
         </>}
     {error && <p className="desk-unsent" role="alert">{error}</p>}
@@ -204,8 +205,8 @@ export function WorkspaceView(c: WorkspaceProps) {
     <header className="dcv-head">
       <div className="dcv-title"><h2>{conversation.title}</h2>
         <div className="dcv-acts">
-          <button type="button" className="desk-btn ghost" disabled={c.organizing} aria-pressed={conversation.pinned} onClick={() => c.onOrganize({ pinned: !conversation.pinned })}>{conversation.pinned ? "Unpin" : "Pin"}</button>
-          <button type="button" className={`desk-btn${archived ? " pri" : " ghost"}`} disabled={c.organizing} onClick={() => c.onOrganize({ state: archived ? "current" : "archived" })}>{archived ? "Restore" : "Archive"}</button>
+          <button type="button" className="desk-btn ghost" disabled={c.organizing} aria-pressed={conversation.pinned} onClick={() => { c.onOrganize({ pinned: !conversation.pinned }); }}>{conversation.pinned ? "Unpin" : "Pin"}</button>
+          <button type="button" className={`desk-btn${archived ? " pri" : " ghost"}`} disabled={c.organizing} onClick={() => { c.onOrganize({ state: archived ? "current" : "archived" }); }}>{archived ? "Restore" : "Archive"}</button>
           <button type="button" className="desk-btn ghost" onClick={c.onLeave}>Leave</button>
         </div>
       </div>
@@ -223,21 +224,21 @@ export function WorkspaceView(c: WorkspaceProps) {
     </aside>
     <div className="dcv-stream" ref={stream} aria-live="polite">
       {views.map(({ key, view }, i) => {
-        if (view.kind === "message") return <article key={key} className={`dcv-msg ${view.who}`}><small>{view.who === "you" ? "You" : "Ivy"}{view.note ? ` · ${view.note}` : ""}</small><p>{view.text}</p></article>;
+        if (view.kind === "message") return <article key={key} className={`dcv-msg ${view.who}`}><small>{view.who === "you" ? "You" : "Ivy"}{view.note ? ` · ${view.note}` : ""}</small>{view.who === "ivy" ? <div className="dcv-markdown">{renderMarkdown(view.text)}</div> : <p>{view.text}</p>}</article>;
         if (view.kind === "activity") return <p key={key} className="dcv-activity">{view.text}</p>;
         const retry = i === views.length - 1 && !archived && !c.busy && said?.text;
         return <p key={key} className="dcv-activity dcv-failed" role="alert">{view.text} Your message stays in the record; no other engine was used.
-          {retry && <button type="button" className="desk-btn" disabled={c.sending} onClick={() => c.onRetry(said.text ?? "")}>Retry</button>}</p>;
+          {retry && <button type="button" className="desk-btn" disabled={c.sending} onClick={() => { c.onRetry(said.text ?? ""); }}>Retry</button>}</p>;
       })}
       {views.length === 0 && <p className="dcv-quiet">No messages yet. Your exchange is saved as you go.</p>}
     </div>
     {pending.length > 0 && <div className="dcv-queue" role="status"><strong>{pending.length === 1 ? "1 message in order" : `${pending.length} messages in order`} · one shared order for web and Discord</strong>
       <ol>{pending.map(p => <li key={p.inputId}>{pendingLabel(p)}</li>)}</ol></div>}
     <form className="dcv-composer" onSubmit={e => { e.preventDefault(); if (!archived) c.onSend("queue"); }}>
-      <label>Message Ivy<textarea aria-label="Message Ivy" value={c.draft} disabled={!c.ready || archived} maxLength={20_000} onChange={e => c.onDraft(e.target.value)} placeholder="Continue the thought…" /></label>
+      <label>Message Ivy<textarea aria-label="Message Ivy" value={c.draft} disabled={!c.ready || archived} maxLength={20_000} onChange={e => { c.onDraft(e.target.value); }} placeholder="Continue the thought…" /></label>
       <div className="dcv-acts">
         <button className="desk-btn pri" disabled={archived || c.sending || !c.draft.trim()}>{c.retrying ? "Send again" : c.busy ? "Queue message" : "Send"}</button>
-        {c.busy && !archived && <button type="button" className="desk-btn" disabled={c.sending || !c.draft.trim()} onClick={() => c.onSend("steer")}>Use this now</button>}
+        {c.busy && !archived && <button type="button" className="desk-btn" disabled={c.sending || !c.draft.trim()} onClick={() => { c.onSend("steer"); }}>Use this now</button>}
       </div>
       <p className="dcv-quiet">{archived ? "This conversation is archived. Restore it to continue with the same history; opening it never resumes it." : c.busy ? "Ivy is working. Queue waits for the current turn; Use this now joins at Ivy's next safe point and never interrupts a running change." : "Your unsent draft is saved here. Leave keeps the conversation; nothing ends."}</p>
       {c.error && <p className="desk-unsent" role="alert">{c.error}</p>}
