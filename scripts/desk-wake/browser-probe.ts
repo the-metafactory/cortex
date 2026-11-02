@@ -4,6 +4,7 @@ import { DeskWakeSchema, WAKE_BPE_SHA } from "../../src/common/types/desk-wake";
 import { transcribeClip } from "../../src/surface/mc/dashboard-v2/lib/desk-speech";
 import { ownMicrophone } from "../../src/surface/mc/dashboard-v2/lib/desk-microphone";
 import { probeEngine } from "./engine-probe";
+import { playWakeChime } from "../../src/surface/mc/dashboard-v2/lib/desk-wake-chime";
 
 const options = DeskWakeSchema.parse({ enabled: true, phrase: "Hey Ivy", tokens: ["▁HE", "Y", "▁I", "V", "Y"], tokenizerSha256: WAKE_BPE_SHA, preRollMs: 2000, silenceMs: 500, maxCommandMs: 3000 });
 const wait = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -14,6 +15,30 @@ const until = async (claim: () => boolean, timeout = 15000): Promise<void> => {
 };
 
 async function run(): Promise<unknown> {
+  const rendered = new OfflineAudioContext(1, 24000, 48000);
+  playWakeChime(rendered);
+  const chime = (await rendered.startRendering()).getChannelData(0);
+  const peak = chime.reduce((value, sample) => Math.max(value, Math.abs(sample)), 0);
+  assert(peak > 0.04 && peak <= 0.056, "Wake chime is inaudible or exceeds its quiet volume limit");
+  assert(chime.slice(7200).every(sample => sample === 0), "Wake chime continues beyond 150ms");
+  const silentInput = new AudioContext();
+  let silentCapturePeak: number | undefined;
+  const chimeIsolation = new DeskWake(options, {
+    state: state => { document.body.dataset.probePhase = state.phase; },
+    media: { getUserMedia: async () => { await silentInput.resume(); return silentInput.createMediaStreamDestination().stream; } },
+    worker: () => fakeWorker(true),
+    transcribe: async clip => {
+      const decoded = await silentInput.decodeAudioData(await clip.arrayBuffer());
+      silentCapturePeak = decoded.getChannelData(0).reduce((value, sample) => Math.max(value, Math.abs(sample)), 0);
+      return "";
+    },
+    answer: () => { throw new Error("Chime must not become a spoken command"); },
+  });
+  try {
+    await chimeIsolation.enable();
+    await until(() => silentCapturePeak !== undefined);
+    assert(silentCapturePeak === 0, "Wake chime leaked into the command recording graph");
+  } finally { chimeIsolation.disable(); await silentInput.close(); }
   const mode: unknown = await (await fetch("/__probe_mode")).json();
   if (!mode || typeof mode !== "object" || !("configuredProvider" in mode) || typeof mode.configuredProvider !== "boolean") throw new Error("Probe provider mode is missing");
   const configuredProvider = mode.configuredProvider;
@@ -82,7 +107,7 @@ async function run(): Promise<unknown> {
 
   let lateLeaseReleased = 0;
   const leaseResolvers: ((release: () => void) => void)[] = [];
-  const lateLease = new DeskWake(options, { state: () => {}, acquire: () => new Promise<() => void>(resolve => leaseResolvers.push(resolve)), media: { getUserMedia: () => { throw new Error("Cancelled acquisition must not open a microphone"); } }, transcribe: () => { throw new Error("Cancelled acquisition must not upload"); }, answer: () => Promise.resolve() });
+  const lateLease = new DeskWake(options, { state: state => { document.body.dataset.probePhase = state.phase; }, acquire: () => new Promise<() => void>(resolve => leaseResolvers.push(resolve)), media: { getUserMedia: () => { throw new Error("Cancelled acquisition must not open a microphone"); } }, transcribe: () => { throw new Error("Cancelled acquisition must not upload"); }, answer: () => Promise.resolve() });
   const acquiring = lateLease.enable();
   await until(() => leaseResolvers.length > 0);
   window.dispatchEvent(new Event("pagehide"));
