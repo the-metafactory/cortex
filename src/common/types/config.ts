@@ -513,15 +513,12 @@ type DeskWriterEntry = z.infer<typeof DeskWriterSchema>;
 
 function splitDeskWriters<K extends string>(entries: Partial<Record<K, DeskWriterEntry>>, parsed: Partial<Record<K, string>> = {}): { writers: Partial<Record<K, string[]>>; writerOwners?: Partial<Record<K, string>> } {
   const writers: Partial<Record<K, string[]>> = {};
-  const writerOwners: Partial<Record<K, string>> = { ...parsed };
+  const writerOwners: Partial<Record<K, string>> = {};
   for (const [kind, entry] of Object.entries(entries) as [K, DeskWriterEntry | undefined][]) {
     if (!entry) continue;
-    if (Array.isArray(entry)) {
-      writers[kind] = entry;
-      continue;
-    }
-    writers[kind] = entry.command;
-    if (entry.owner) writerOwners[kind] = entry.owner;
+    writers[kind] = Array.isArray(entry) ? entry : entry.command;
+    const owner = (Array.isArray(entry) ? undefined : entry.owner) ?? parsed[kind];
+    if (owner) writerOwners[kind] = owner;
   }
   return Object.keys(writerOwners).length ? { writers, writerOwners } : { writers };
 }

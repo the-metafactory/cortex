@@ -469,6 +469,8 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     const ask = loadConfigWithAgents(writeCortexConfig(testDir, cfg)).config.mc.desk?.ask;
     expect(ask?.writers).toEqual({ note: ["desk-note-tana.ts"], goal: ["desk-goal.ts"] });
     expect(ask?.writerOwners).toEqual({ note: "tana" });
+    cfg.mc = { enabled: true, desk: { ask: { writers: { goal: ["desk-goal.ts"] }, writerOwners: { note: "tana" } } } };
+    expect(loadConfigWithAgents(writeCortexConfig(testDir, cfg)).config.mc.desk?.ask).not.toHaveProperty("writerOwners");
   });
 
   test("carries vigil through loadCortexShape and defaults it off when absent", () => {
