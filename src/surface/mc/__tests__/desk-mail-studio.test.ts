@@ -84,14 +84,11 @@ describe("Add a mail to a Studio thread", () => {
     expect(json.proposal).toMatchObject({ thread: null, reason: "Only loosely related." });
   });
 
-  it("keeps a local-policy mail to local threads and refuses a cloud thread", async () => {
-    answer = { thread: "engines", reason: "Wrong pick." };
+  it("lets a mail from a local-policy area go to any active thread", async () => {
     const { json } = await act({ action: "studio.propose", key: "mail:h1" });
-    expect((json.proposal as { threads: { slug: string }[]; thread: string | null }).threads.map((t) => t.slug)).toEqual(["home"]);
-    expect((json.proposal as { thread: string | null }).thread).toBeNull();
-    const refused = await act({ action: "studio.add", key: "mail:h1", requestId: "req-local-1", thread: "engines", includeText: false });
-    expect(refused.status).toBe(409);
-    expect(readThread("engines")).not.toContain("capture:");
+    expect((json.proposal as { threads: { slug: string }[] }).threads.map((t) => t.slug)).toEqual(["engines", "home"]);
+    expect((await act({ action: "studio.add", key: "mail:h1", requestId: "req-local-1", thread: "engines", includeText: false })).status).toBe(200);
+    expect(readThread("engines")).toContain("Mail from nan@example.org");
   });
 
   it("files the summary, sender, date and link in the proposed thread, without the body, and logs it", async () => {

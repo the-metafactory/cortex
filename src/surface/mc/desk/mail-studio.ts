@@ -4,10 +4,10 @@ import { readClassifications } from "./classify";
 import type { ListedMail } from "./mail-actions";
 import { logMailDecision, mailFeatures } from "./mail-log";
 import type { SourceReading } from "./sources/command";
-import { askFiler, captureId, captureMarker, captureModel, filerFor, type CaptureModel } from "./studio/capture";
-import { appendEntry, appendLog, localTime, oneLine, safeBody } from "./studio/edit";
+import { askFiler, captureId, captureInThread, captureModel, filerFor, type CaptureModel } from "./studio/capture";
+import { localTime, oneLine, safeBody } from "./studio/edit";
 import { readStudioFiles } from "./studio/read";
-import { buildStudioView, effectivePolicy, type StudioArea, type StudioThreadView } from "./studio/view";
+import { buildStudioView, type StudioArea } from "./studio/view";
 import { runStudioTransaction, type ActResult } from "./studio/writer";
 import type { ActContext, ActPlan, ActRefusal } from "./studio/acts";
 import type { StudioOptions } from "./types";
@@ -53,12 +53,6 @@ export function mailForStudio(db: Database, readings: readonly SourceReading[], 
   return { mail, area, summary: summary === "" ? null : summary };
 }
 
-export const isLocalMail = (item: MailForStudio, areas: readonly StudioArea[]): boolean =>
-  item.area !== null && effectivePolicy([item.area], areas).policy === "local";
-
-export const eligibleThreads = (active: readonly StudioThreadView[], local: boolean): StudioThreadView[] =>
-  active.filter((t) => !local || t.policy === "local");
-
 const sender = (item: MailForStudio): string => {
   const { name, address } = item.mail.from;
   return name ? `${oneLine(name)} <${oneLine(address)}>` : oneLine(address);
@@ -89,20 +83,17 @@ const bodyText = (item: MailForStudio, includeText: boolean): string | null => {
 export async function proposeMailThread(item: MailForStudio, deps: MailStudioDeps): Promise<MailStudioProposal> {
   const { files, problems } = await readStudioFiles(deps.options.dir);
   const view = buildStudioView(files, deps.options, deps.areas, problems);
-  const local = isLocalMail(item, deps.areas);
-  const threads = eligibleThreads(view.active, local);
+  const threads = view.active;
   const listed = threads.map((t) => ({ slug: t.slug, question: oneLine(t.question) }));
   const canIncludeText = Boolean(item.mail.firstParagraph?.trim());
-  if (threads.length === 0) return { thread: null, reason: local ? "No local thread is active, and this mail's area keeps it local; it goes to the Studio inbox." : "No thread is active; it goes to the Studio inbox.", threads: listed, canIncludeText };
-  const config = filerFor(deps.options, threads, local);
-  if (!config && local) return { thread: null, reason: "This mail's area keeps it on a local model, and no local filer is set; choose a thread or the Studio inbox.", threads: listed, canIncludeText };
-  const { answer, reason } = await askFiler(config, threads, mailLine(item), deps.model ?? captureModel);
+  if (threads.length === 0) return { thread: null, reason: "No thread is active; it goes to the Studio inbox.", threads: listed, canIncludeText };
+  const { answer, reason } = await askFiler(filerFor(deps.options, threads), threads, mailLine(item), deps.model ?? captureModel);
   const match = answer?.match && answer.thread ? threads.find((t) => t.slug === answer.thread) : undefined;
   const why = oneLine(reason).replace(/;? ?saved in the Studio inbox\.$/, ".");
   return { thread: match?.slug ?? null, reason: why.slice(0, MAX_MAIL_REASON), threads: listed, canIncludeText };
 }
 
-function planMail(ctx: ActContext, item: MailForStudio, input: AddMailInput, id: string, local: boolean): ActPlan | ActRefusal {
+function planMail(ctx: ActContext, item: MailForStudio, input: AddMailInput, id: string): ActPlan | ActRefusal {
   const text = bodyText(item, input.includeText);
   const subject = oneLine(item.mail.subject);
   if (input.thread === null) {
@@ -112,22 +103,15 @@ function planMail(ctx: ActContext, item: MailForStudio, input: AddMailInput, id:
   }
   const thread = ctx.view.active.find((t) => t.slug === input.thread);
   if (!thread) return { status: 409, error: "That thread is no longer active; nothing was written." };
-  if (local && thread.policy !== "local") return { status: 409, error: "This mail's area keeps it local, and that thread may use a cloud model; nothing was written." };
-  const file = ctx.files.threads.find((f) => f.path === thread.path);
-  const entry = [`${captureMarker(id)}${mailLine(item)}`, ...(text ? quoted(text) : [])];
-  const material = file ? appendEntry(file.text, "material", "Material", entry) : null;
   const why = input.reason ? `the filer said: ${oneLine(input.reason).slice(0, MAX_MAIL_REASON)}` : "you chose this thread";
-  const edited = material ? appendLog(material, localTime(ctx.now), `Filed capture ${id} from mail; ${why}`) : null;
-  if (!edited) return { status: 409, error: "That thread cannot be edited; nothing was written." };
-  return { writes: [{ path: thread.path, text: edited }], removes: [], subject: `File capture ${id} in ${thread.slug}`, message: `Added “${subject}” to “${oneLine(thread.question)}”.` };
+  return captureInThread(ctx, thread, id, [mailLine(item), ...(text ? quoted(text) : [])], `Filed capture ${id} from mail; ${why}`, `Added “${subject}” to “${oneLine(thread.question)}”.`);
 }
 
 export async function addMailToStudio(item: MailForStudio, input: AddMailInput, deps: MailStudioDeps): Promise<ActResult> {
   const id = captureId(input.requestId);
-  const local = isLocalMail(item, deps.areas);
   const now = deps.now ?? new Date();
   const features = mailFeatures(deps.db, item.mail);
-  const result = await runStudioTransaction({ options: deps.options, areas: deps.areas, requestId: input.requestId, now }, (ctx) => planMail(ctx, item, input, id, local));
+  const result = await runStudioTransaction({ options: deps.options, areas: deps.areas, requestId: input.requestId, now }, (ctx) => planMail(ctx, item, input, id));
   if (!result.ok || result.replayed) return result;
   const at = now.getTime();
   deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'studio.capture', ?, ?, 'done', ?, ?, ?) ON CONFLICT(attempt_key) DO NOTHING")

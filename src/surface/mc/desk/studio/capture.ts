@@ -60,15 +60,20 @@ function entryBlock(lines: readonly string[], at: number): string[] {
   return lines.slice(at, end);
 }
 
+export function captureInThread(ctx: ActContext, thread: StudioThreadView, id: string, entry: readonly string[], log: string, message: string): ActPlan | ActRefusal {
+  const file = ctx.files.threads.find((f) => f.path === thread.path);
+  const lines = entry.map((l, i) => (i === 0 ? `${captureMarker(id)}${l}` : l));
+  const material = file ? appendEntry(file.text, "material", "Material", lines) : null;
+  const edited = material ? appendLog(material, localTime(ctx.now), log) : null;
+  if (!edited) return { status: 409, error: "That thread cannot be edited; nothing was written." };
+  return { writes: [{ path: thread.path, text: edited }], removes: [], subject: `File capture ${id} in ${thread.slug}`, message };
+}
+
 async function planCapture(ctx: ActContext, options: StudioOptions, id: string, text: string, run: CaptureModel): Promise<ActPlan | ActRefusal> {
   const { answer, reason } = await askFiler(captureFiler(options, ctx), ctx.view.active, text, run);
   const thread = ctx.view.active.find((t) => t.slug === answer?.thread);
   if (answer && thread && answer.match) {
-    const file = ctx.files.threads.find((f) => f.path === thread.path);
-    const material = file ? appendEntry(file.text, "material", "Material", [`${captureMarker(id)}${oneLine(text)}`]) : null;
-    const edited = material ? appendLog(material, localTime(ctx.now), `Filed capture ${id}: ${oneLine(answer.reason)}`) : null;
-    if (!edited) return { status: 409, error: "The matching thread cannot be edited; nothing was written." };
-    return { writes: [{ path: thread.path, text: edited }], removes: [], subject: `File capture ${id} in ${thread.slug}`, message: `Filed in “${oneLine(thread.question)}”. ${oneLine(answer.reason)}` };
+    return captureInThread(ctx, thread, id, [oneLine(text)], `Filed capture ${id}: ${oneLine(answer.reason)}`, `Filed in “${oneLine(thread.question)}”. ${oneLine(answer.reason)}`);
   }
   const target = answer?.thread && thread ? { thread: thread.slug, reason: oneLine(answer.reason) } : undefined;
   const front = stringify({ at: localTime(ctx.now), via: "desk", ...(target ? { target } : {}) });
