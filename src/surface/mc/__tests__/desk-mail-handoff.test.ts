@@ -119,17 +119,26 @@ describe("Hand a mail to Ivy", () => {
     expect(writes("task-writer")).toHaveLength(0);
   });
 
-  it("routes by the area policy: a local-policy area only to the local lane", () => {
-    expect(handoffRoute("private", AREAS, { cloud: CLOUD })).toEqual({ refused: "This mail's area keeps mail on a local model, and no local model lane is set up (mc.desk.conversations.local)." });
-    expect(handoffRoute("private", AREAS, { local: LOCAL, cloud: CLOUD })).toEqual({ route: "local", lane: LOCAL });
-    expect(handoffRoute("lab", AREAS, { local: LOCAL, cloud: CLOUD })).toEqual({ route: "cloud", lane: CLOUD });
-    expect(handoffRoute("lab", AREAS, { local: LOCAL })).toEqual({ route: "local", lane: LOCAL });
+  it("routes every area's mail the same way: the cloud lane, else the local one", () => {
+    expect(handoffRoute({ local: LOCAL, cloud: CLOUD })).toEqual({ route: "cloud", lane: CLOUD });
+    expect(handoffRoute({ local: LOCAL })).toEqual({ route: "local", lane: LOCAL });
+    expect(handoffRoute({ cloud: CLOUD })).toEqual({ route: "cloud", lane: CLOUD });
   });
 
-  it("refuses a local-policy mail when only a cloud lane exists, before filing a task", async () => {
+  it("hands a local-policy area's mail to the cloud lane when that is the lane set up", async () => {
     options.mailHandoff = { lanes: { cloud: CLOUD }, pi: PI };
     const { status } = await hand("mail:h1");
+    expect(status).toBe(200);
+    expect(writes("task-writer")).toHaveLength(1);
+    expect(readHandoff(db, "hand-req-0001")).toMatchObject({ messageId: "h1", area: "private", route: "cloud" });
+    expect(jobs.map((j) => j.route)).toEqual(["cloud"]);
+  });
+
+  it("still refuses a hand-off when no model lane is set up, before filing a task", async () => {
+    options.mailHandoff = { lanes: {}, pi: PI };
+    const { status, json } = await hand("mail:h1");
     expect(status).toBe(409);
+    expect(String(json.error)).toContain("model lane");
     expect(writes("task-writer")).toHaveLength(0);
   });
 });

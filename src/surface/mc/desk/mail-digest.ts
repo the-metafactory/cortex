@@ -222,7 +222,7 @@ export function listMailGroups(db: Database, listed: readonly SourceReading[], d
   const digests = desk.mailDigest
     ? listDigests(db, readings, { config: desk.mailDigest, ...(handled ? { handled } : {}), ...(desk.mailOwnDomains ? { ownDomains: desk.mailOwnDomains } : {}) }, now)
     : { groups: [], held: new Set<string>(), kept: new Set<string>() };
-  return { digests, sweeps: listSweeps(db, readings, { ...sweepContext(desk, readings, handled), held: new Set([...digests.held, ...digests.kept]) }, now) };
+  return { digests, sweeps: listSweeps(db, readings, { ...sweepContext(desk, handled), held: new Set([...digests.held, ...digests.kept]) }, now) };
 }
 
 /** Keep one: the mail leaves the digest for good, returns to the stream as its own card, and is logged as kept. */

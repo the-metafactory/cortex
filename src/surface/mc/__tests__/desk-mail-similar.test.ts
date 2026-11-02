@@ -8,11 +8,9 @@ import { logMailDecision, queryMailLog, type MailFeatures, type MailLogEntry } f
 import {
   CORRECTION_WEIGHT,
   EMBEDDER_DOWN_NOTE,
-  embedderFor,
   embeddings,
   groupBySimilarity,
   latestDecisions,
-  LOCAL_ONLY_NOTE,
   MailSimilarity,
   nearestDecisions,
   NO_EMBEDDER_NOTE,
@@ -158,21 +156,15 @@ describe("the similarity module", () => {
     expect(tries).toBe(1);
   });
 
-  it("sends a local-policy area's mail only to a local endpoint", async () => {
+  it("embeds every area's mail with the configured endpoint, also a remote one", async () => {
     const remote: EmbedderConfig = { ...EMBEDDER, baseUrl: "https://embed.example/v1" };
-    expect(embedderFor(remote, true)).toBeNull();
-    expect(embedderFor(EMBEDDER, true)).toBe(EMBEDDER);
-    const local = { baseUrl: "http://127.0.0.1:11434/v1", model: "bge-m3", timeoutSeconds: 5 };
-    expect(embedderFor({ ...remote, local }, true)).toBe(local);
-    logMailDecision(db, features("a", { sourceId: "home-mail", subject: "Private zebra diary" }), "archive", "desk", NOW - 1000);
+    logMailDecision(db, features("a", { sourceId: "home-mail", subject: "Quarterly zebra census results" }), "archive", "desk", NOW - 1000);
     logMailDecision(db, features("b"), "archive", "desk", NOW - 1000);
     const fake = fakeEmbed();
-    const ctx = new MailSimilarity(remote, fake.embed, quiet).load(db, NOW, new Set(["home-mail"]));
-    expect(await ctx.similar({ ...probe, sourceId: "home-mail" })).toMatchObject({ basis: "sender", note: LOCAL_ONLY_NOTE });
-    expect((await ctx.similar(probe)).neighbours.map((n) => n.entry.messageId)).toEqual(["b"]);
-    const sent = fake.calls.flatMap((call) => call.texts);
-    expect(sent.length).toBeGreaterThan(0);
-    expect(sent.some((t) => t.includes("Private"))).toBe(false);
+    const ctx = new MailSimilarity(remote, fake.embed, quiet).load(db, NOW);
+    expect(await ctx.similar({ ...probe, sourceId: "home-mail" })).toMatchObject({ basis: "content" });
+    expect((await ctx.similar(probe)).neighbours.map((n) => n.entry.messageId).sort()).toEqual(["a", "b"]);
+    expect(fake.calls.every((call) => call.access.baseUrl === "https://embed.example/v1")).toBe(true);
   });
 });
 
@@ -199,10 +191,9 @@ describe("the embeddings endpoint", () => {
     expect(parse("http://localhost:11434/v1").success).toBe(true);
     expect(parse("https://api.example/v1").success).toBe(true);
     expect(parse("http://embed.example/v1").success).toBe(false);
-    const local = (baseUrl: string) => McSchema.safeParse({ desk: { mail: { embedder: { baseUrl: "https://api.example/v1", model: "m", local: { baseUrl, model: "bge-m3" } } } } }).success;
-    expect(local("http://127.0.0.1:11434/v1")).toBe(true);
-    expect(local("https://embed.example/v1")).toBe(false);
-    expect(embedderFor({ ...EMBEDDER, baseUrl: "https://api.example/v1", local: { baseUrl: "https://embed.example/v1", model: "m", timeoutSeconds: 5 } }, true)).toBeNull();
+    const removed = McSchema.safeParse({ desk: { mail: { embedder: { baseUrl: "https://api.example/v1", model: "m", local: { baseUrl: "http://127.0.0.1:11434/v1", model: "bge-m3" } } } } });
+    expect(removed.success).toBe(false);
+    expect(JSON.stringify(removed.error?.issues)).toContain("mc.desk.mail.embedder.local was removed");
     expect(McSchema.parse({ desk: { mail: { embedder: { baseUrl: "http://localhost:11434/v1", model: "bge-m3" } } } }).desk.mail.embedder).toMatchObject({ threshold: 0.65, neighbours: 8, timeoutSeconds: 10 });
   });
 });
@@ -253,18 +244,19 @@ describe("triage with precedents", () => {
 });
 
 describe("local-policy areas", () => {
-  it("never hands a local area's past mail to a remote classifier as an example, but a loopback one may see it", async () => {
+  it("hands a local area's past mail to any classifier as an example, remote or loopback", async () => {
     logMailDecision(db, features("home", { sourceId: "home-mail", subject: "Private zebra census results" }), "archive", "desk", NOW - 2000);
     logMailDecision(db, features("work"), "archive", "desk", NOW - 1000);
     const examples = async (config: CommandConfig | EndpointConfig): Promise<string[]> => {
       const seen: ClassifierRequest[] = [];
       const classifier = new MailClassifier(config, async (req) => { seen.push(req); return { category: "bulk", reason: "A report." }; }, quiet, () => NOW, new MailSimilarity(EMBEDDER, fakeEmbed().embed, quiet));
-      await classifier.kick(db, { now: NOW, mail: [listed("new")], events: [], vips: [], localSources: new Set(["home-mail"]) });
+      await classifier.kick(db, { now: NOW, mail: [listed("new")], events: [], vips: [] });
       db.run("DELETE FROM desk_mail_classes");
       return seen[0]?.examples.map((e) => e.subject) ?? [];
     };
-    expect(await examples(COMMAND)).toEqual(["Quarterly zebra census results"]);
-    expect(await examples({ baseUrl: "https://llm.example/v1", model: "m", timeoutSeconds: 5, maxPerPass: 10 })).toEqual(["Quarterly zebra census results"]);
+    const both = ["Private zebra census results", "Quarterly zebra census results"];
+    expect((await examples(COMMAND)).sort()).toEqual(both);
+    expect((await examples({ baseUrl: "https://llm.example/v1", model: "m", timeoutSeconds: 5, maxPerPass: 10 })).sort()).toEqual(both);
     expect((await examples({ baseUrl: "http://127.0.0.1:11434/v1", model: "m", timeoutSeconds: 5, maxPerPass: 10 })).sort()).toEqual(["Private zebra census results", "Quarterly zebra census results"]);
   });
 

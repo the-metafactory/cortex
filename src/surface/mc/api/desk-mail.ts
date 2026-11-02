@@ -117,7 +117,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     const flagged = readClassifications(db, [mail.id]).get(mail.id)?.suspicious === true;
     const suspicious = flagged || isSuspicious(mail, suspicionContext(db, runtime.options.mailOwnDomains));
     const handed = await handMailToIvy(mailForStudio(db, readings, mail), { requestId: body.requestId, instruction: body.instruction ?? null, suspicious }, {
-      db, writers: ask.writers, maps: ask.taskMaps, areas: runtime.options.areas, lanes: runtime.options.mailHandoff.lanes, run: deps.run ?? spawnWithStdin, now, timeoutMs: ask.timeoutSeconds * 1000,
+      db, writers: ask.writers, maps: ask.taskMaps, lanes: runtime.options.mailHandoff.lanes, run: deps.run ?? spawnWithStdin, now, timeoutMs: ask.timeoutSeconds * 1000,
     });
     if (handed.ok) void worker.kick(db, deps.now ?? Date.now);
     return answer(handed);
@@ -217,7 +217,7 @@ async function sweepAnswer(body: SweepBody, db: Database, runtime: DeskRuntime, 
   if (body.action === "sweep.undo") work = undoSweep(body.sweep, moveDeps);
   else {
     const readings = runtime.sourceCache?.cached() ?? [];
-    const groups = listMailGroups(db, readings, runtime.options ?? { areas: [] }, runtime.ledger, moveDeps.now);
+    const groups = listMailGroups(db, readings, runtime.options ?? {}, runtime.ledger, moveDeps.now);
     const group = [...groups.digests.groups, ...groups.sweeps].find((g) => g.id === body.sweep);
     if (!group) return fail(409, "This group has changed since you opened it. Look at it again.");
     work = runSweep(group, body.keys, moveDeps);
