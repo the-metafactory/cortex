@@ -66,7 +66,7 @@ export interface DeskMailDeps {
 /**
  * POST {action: "move", key, target: "archive" | "junk" | "trash"}, {action: "trash" | "unimportant" | "report", key} or
  * {action: "draft", key, body}: acts on one mail the Desk lists. {action: "unsubscribe", key} sends the list's One-Click
- * unsubscribe after the principal confirmed it; {action: "unsubscribe.rule", key} then adds an archive rule for the list. {action: "digest.keep", key} takes one mail out of the newsletter digest. {action: "correct", key, said} logs a per-mail correction. {action: "undo" | "block", move} undoes a logged move,
+ * unsubscribe after the principal confirmed it; {action: "unsubscribe.rule", key} then adds an archive rule for the list. {action: "digest.keep", key} takes one mail out of the newsletter digest. {action: "correct", key, said} logs a per-mail correction and, for archive, spam and delete, moves the mail. {action: "undo" | "block", move} undoes a logged move,
  * or blocks the domain of a mail moved to Junk. The rebind and identity gates in
  * handleApi run before this handler; there is no step-up. The account and Message-ID come from the mail source's
  * last reading, never from the page, and a mail already moved or still moving is refused.
@@ -129,7 +129,10 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if (body.action === "unimportant") return answer(await markUnimportant(db, mail, moveDeps));
   if (body.action === "report") return answer(await reportMail(mail, runtime.options.mailReport, moveDeps));
   if (body.action === "digest.keep") return answer(keepFromDigest(db, mail, now));
-  if (body.action === "correct") return answer(correctMail(db, mail, body.said, now));
+  if (body.action === "correct") {
+    const corrected = await correctMail(mail, body.said, moveDeps);
+    return "recorded" in corrected ? Response.json({ ok: false, error: corrected.error, recorded: true }, { status: corrected.status, headers: noStore }) : answer(corrected);
+  }
   if (body.action === "unsubscribe.rule") return answer(archiveWhatArrives(db, mail, now));
   if (body.action === "unsubscribe") {
     const flagged = readClassifications(db, [mail.id]).get(mail.id)?.suspicious === true ? new Set([mail.id]) : undefined;

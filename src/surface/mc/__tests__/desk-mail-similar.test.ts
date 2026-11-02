@@ -270,7 +270,7 @@ describe("a per-mail correction", () => {
     const post = (body: object) => handleDeskMail(new Request("http://x/api/desk/mail", { method: "POST", body: JSON.stringify(body) }), db, { options: desk, ledger: new HandledLedger(), sourceCache: cache }, { now: () => NOW });
     const res = await post({ action: "correct", key: "mail:new", said: "not-bulk" });
     expect(res.status).toBe(200);
-    expect(((await res.json()) as { message: string }).message).toContain("Noted: this mail is not bulk.");
+    expect(((await res.json()) as { message: string }).message).toContain("Corrected: this mail is not bulk.");
     expect(queryMailLog(db, { where: "correction" }).map((e) => [e.messageId, e.action, e.category])).toEqual([["new", "kept", "not bulk"]]);
     expect(readClassifications(db, ["new"]).size).toBe(0);
     expect((await post({ action: "correct", key: "mail:new", said: "forward" })).status).toBe(400);
