@@ -7,6 +7,8 @@ import { loadBalanceState } from "./balance-store";
 import { studioRequestId } from "./conversation-ids";
 import type { DeskOptions } from "./compose";
 import type { ListedMail } from "./mail-actions";
+import type { RoutineRunner } from "./routine-command";
+import { routineWriter } from "./routine-conversation-writer";
 import { REQUEST_TRAILER, spawnGit, type GitRunner } from "./studio/git";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioThreadView, type StudioView } from "./studio/view";
@@ -34,6 +36,7 @@ export interface SourceDeps {
   now?: () => number;
   deskItems?: () => Promise<DeskItem[]>;
   listedMail?: (key: string) => ListedMail | null;
+  runRoutine?: RoutineRunner;
 }
 
 export function conversationSources(deps: SourceDeps): HostSources {
@@ -80,10 +83,12 @@ export function conversationSources(deps: SourceDeps): HostSources {
   };
   const deskItems = deps.deskItems;
   const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps), ...(deskItems ? { "balance-inbox-task": balanceInboxWriter({ ...deps, deskItems }) } : {}) };
+  const routine = routineWriter({ routines: () => deps.desk()?.routines, ...(deps.runRoutine ? { run: deps.runRoutine } : {}) });
   return {
     get writers() {
       const desk = deps.desk();
-      return desk?.enabled && hasBalanceState(deps.db) ? balanceWriters : {};
+      if (!desk?.enabled) return {};
+      return { ...(hasBalanceState(deps.db) ? balanceWriters : {}), ...(desk.routines ? { routine } : {}) };
     },
     resolvers: {
       "studio-thread": async ref => {
