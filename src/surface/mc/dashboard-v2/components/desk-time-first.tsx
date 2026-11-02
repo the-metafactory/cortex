@@ -5,7 +5,7 @@ import { currentGap, type CalendarAvailability, type CalendarGap, type CalendarI
 import { nextTask, projectContext, reorderVisible } from "../../desk/time-first";
 import { balanceDestinations } from "../../desk/balance-destinations";
 import type { DeskArea } from "../../desk/types";
-import { BalanceAddForm, balanceEntries, TaskDetails, useBalanceEditor } from "./desk-task-details";
+import { BalanceAddForm, balanceEntries, TaskDetails, useBalanceEditor, type TaskAdding } from "./desk-task-details";
 import { useMyDay } from "../hooks/use-my-day";
 import { balanceItemSearch } from "../hooks/use-balance-location";
 import { deskSearch } from "../hooks/use-desk-studio";
@@ -65,7 +65,7 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, sweeps, pre
   const selected = selection.kind === "manual" ? current.items.find(item => item.task.id === selection.id) : selection.kind === "unavailable" || recommendation.kind === "none" ? undefined : recommendation.item;
   const [draft, setDraft] = useState<{ revision: number; ids: string[] } | null>(null);
   const [swap, setSwap] = useState<string | null>(null);
-  const [adding, setAdding] = useState<{ parent: string; title: string; revision: number; date: string } | null>(null);
+  const [adding, setAdding] = useState<TaskAdding | null>(null);
   const editor = useBalanceEditor(current, saved => { changes.adopt(saved); onChanged(); });
   const entry = selected ? balanceEntries(current.outline).find(value => value.node.id === selected.task.id) : undefined;
   const choices = balanceDestinations(current.outline, areas, true);
@@ -104,8 +104,8 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, sweeps, pre
           <details><summary>Why this task</summary><p>{selected.trace}</p></details>
           <div className="tf-actions"><TaskActions item={selected} changes={changes} disabled={draft !== null || retryable || editor.busy} />{selection.kind === "manual" && <button type="button" className="desk-btn ghost" disabled={busy || retryable || draft !== null} onClick={() => { choose(null); }}>Use recommendation</button>}<a className="desk-btn ghost" href="#today-priorities" onClick={showPriorities}>Choose another</a></div>
           {editor.message && <p className={`dbl-message ${editor.message.kind}`} role={editor.message.kind === "error" ? "alert" : "status"}>{editor.message.text}</p>}
-          {entry && <TaskDetails titled={false} id={selected.task.id} entry={entry} day={current} editor={editor} choices={choices} onRefresh={onChanged} onAdd={parent => { setAdding({ parent, title: "", revision: current.revision, date: current.date }); }} onMoved={() => undefined} onThread={onThread} {...(onConversation ? { onConversation } : {})}>
-            {adding && adding.parent === selected.task.id && <BalanceAddForm adding={adding} choices={choices} busy={editor.busy} heading="Add subtask" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.change({ op: "outline-add", parent: adding.parent, title: adding.title, revision: adding.revision }, adding.date).then(saved => { if (saved) setAdding(null); }); }} />}
+          {entry && <TaskDetails titled={false} locked={busy || retryable || draft !== null} id={selected.task.id} entry={entry} day={current} editor={editor} choices={choices} onRefresh={onChanged} onAdd={parent => { setAdding({ parent, title: "", revision: current.revision, date: current.date }); }} onMoved={() => undefined} onThread={onThread} {...(onConversation ? { onConversation } : {})}>
+            {adding && adding.parent === selected.task.id && <BalanceAddForm adding={adding} choices={choices} busy={editor.busy || busy || retryable} heading="Add subtask" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) setAdding(null); }); }} />}
           </TaskDetails>}
         </> : <><h2>Choose what works for you</h2><p>{recommendation.kind === "none" ? recommendation.reason : "Your priorities are available alongside the timeline."}</p><a className="desk-btn" href="#today-priorities" onClick={showPriorities}>See today's priorities</a></>}
       </section>}

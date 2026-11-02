@@ -8,7 +8,7 @@ import { getJson } from "../lib/api";
 import { useBalanceLocation } from "../hooks/use-balance-location";
 import { DeskMirror } from "./desk-mirror";
 import { UnfiledBalanceTasks } from "./desk-balance-intake";
-import { BalanceAddForm, balanceEntries, TaskDetails, useBalanceEditor } from "./desk-task-details";
+import { BalanceAddForm, balanceEntries, TaskDetails, useBalanceEditor, type TaskAdding } from "./desk-task-details";
 import "./desk-balance.css";
 
 import { balanceDestinations } from "../../desk/balance-destinations";
@@ -28,7 +28,7 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
   const [selectionTick, setSelectionTick] = useState(0);
   const editor = useBalanceEditor(current, saved => { setLocal(saved); onChanged(); });
   const { busy, message, change, setMoving } = editor;
-  const [adding, setAdding] = useState<{ parent: string; title: string; revision: number; date: string } | null>(null);
+  const [adding, setAdding] = useState<TaskAdding | null>(null);
   const inspector = useRef<HTMLElement>(null);
   const outlineHeading = useRef<HTMLHeadingElement>(null);
   const entries = balanceEntries(current.outline);
@@ -53,7 +53,7 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
     <nav className="dbl-tabs" aria-label="Balance views"><button className="desk-btn" aria-pressed={location.tab === "plan"} onClick={() => { go({ ...location, tab: "plan" }); }}>Plan</button><button className="desk-btn" aria-pressed={location.tab === "review"} onClick={() => { go({ ...location, tab: "review" }); }}>Weekly review</button><span>Your full hierarchy, beyond today.</span></nav>
     {message && <p className={`dbl-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>{message.text}</p>}
     {current.studioStatus === "unavailable" && <p role="status">Studio is busy or unreadable. Its last saved outline is shown; refresh when its files are ready.</p>}
-    {adding && <BalanceAddForm adding={adding} choices={destinationChoices} busy={busy} heading="Add task" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void change({ op: "outline-add", parent: adding.parent, title: adding.title, revision: adding.revision }, adding.date).then(saved => { if (saved) { setAdding(null); if (saved.outlineId) go({ tab: "plan", item: saved.outlineId, area: "", query: "" }); } }); }} />}
+    {adding && <BalanceAddForm adding={adding} choices={destinationChoices} busy={busy} heading="Add task" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) { setAdding(null); if (saved.outlineId) go({ tab: "plan", item: saved.outlineId, area: "", query: "" }); } }); }} />}
     {location.tab === "review" ? <div className="dbl-review">{view.mirror ? <DeskMirror mirror={view.mirror} areas={view.areas} foreground={foreground} onThread={onThread} onChanged={onChanged} /> : <p role="status">The weekly review is unavailable. Refresh the Desk to retry.</p>}</div> : <div className="dbl-layout">
       <main className="dbl-outline" aria-label="Balance plan"><header className="dbl-toolbar"><div><h2 ref={outlineHeading} tabIndex={-1}>Your outline</h2><p>Areas → projects → tasks</p></div><div><button className="desk-btn ghost" onClick={() => { setCollapsed(new Set()); }}>Expand all</button><button className="desk-btn ghost" onClick={() => { setCollapsed(new Set(entries.filter(item => item.node.children.length).map(item => item.node.id))); }}>Collapse all</button></div></header>
         <div className="dbl-filters"><input aria-label="Search full hierarchy" placeholder="Find a project or task…" value={location.query} onChange={event => { go({ ...location, query: event.target.value }, true); }} /><select aria-label="Outline area" value={location.area} onChange={event => { go({ ...location, area: event.target.value }, true); }}><option value="">All areas</option>{current.outline.children.map(node => <option key={node.id} value={node.id}>{node.title}</option>)}</select></div>
