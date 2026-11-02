@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { findNode, type AppState } from "../../../balance";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, ReadbackResult } from "../../../conversations/types";
 import { BalanceCommandSchema, type BalanceCommand } from "./balance-command";
-import { balanceDestinations } from "./balance-destinations";
+import { areaProjects, balanceDestinations, resolveBalanceProject } from "./balance-destinations";
 import { STALE_OUTLINE } from "./balance-outline";
 import { loadBalanceState } from "./balance-store";
 import type { DeskOptions } from "./compose";
@@ -33,10 +33,8 @@ export function balanceDestination(state: AppState, desk: DeskOptions, fields: R
   const parent = `area:${area.id}`;
   const project = fields.project?.trim();
   if (!project) return { parent };
-  const open = balanceDestinations(state.outline, desk.areas).filter(option => option.area === area.id && option.project);
-  const byId = open.find(p => p.id === project);
-  const byTitle = open.filter(p => p.title.trim().toLowerCase() === project.toLowerCase());
-  const chosen = byId ?? (byTitle.length === 1 ? byTitle[0] : undefined);
+  const open = areaProjects(balanceDestinations(state.outline, desk.areas), area.id);
+  const chosen = resolveBalanceProject(open, project);
   return chosen ? { parent: chosen.id } : { refused: `That project is not open in ${area.label}.` };
 }
 

@@ -81,6 +81,7 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
 
 function ProposalCard({ id, view, types, busy, archived, act }: { id: string; view: ProposalView; types: Capability[]; busy: boolean; archived: boolean; act: Act }) {
   const { proposal, capability } = view;
+  const balanceProposal = proposal.type === "balance-task" || proposal.type === "balance-project";
   const [fields, setFields] = useState<Record<string, string>>(proposal.fields);
   const [type, setType] = useState<string>(proposal.type ?? "");
   const [standing, setStanding] = useState(false);
@@ -116,8 +117,8 @@ function ProposalCard({ id, view, types, busy, archived, act }: { id: string; vi
       <button type="button" className="desk-btn" disabled={busy || !type} onClick={() => void act(() => revise(id, proposal.proposalId, { revision: proposal.revision, type }), "The choice was not saved. Try again.")}>Use this type</button>
     </div>}
     {capability && view.feedback !== "choose" && <div className="dcv-fields">
-      {(proposal.type === "balance-task" || proposal.type === "balance-project") && <ConversationDestination fields={fields} onChange={setFields} disabled={!editable || busy} project={proposal.type === "balance-task"} />}
-      {capability.fields.filter(f => !((proposal.type === "balance-task" || proposal.type === "balance-project") && (f.name === "area" || f.name === "project"))).map(f => <label key={f.name}>{f.label}{f.required ? "" : " (optional)"}{f.destination ? " · destination" : ""}
+      {balanceProposal && <ConversationDestination fields={fields} onChange={setFields} disabled={!editable || busy} project={proposal.type === "balance-task"} />}
+      {capability.fields.filter(f => !(balanceProposal && (f.name === "area" || f.name === "project"))).map(f => <label key={f.name}>{f.label}{f.required ? "" : " (optional)"}{f.destination ? " · destination" : ""}
         {f.kind === "long"
           ? <textarea aria-label={f.label} value={fields[f.name] ?? ""} disabled={!editable} maxLength={20_000} onChange={e => { setFields({ ...fields, [f.name]: e.target.value }); }} />
           : <input aria-label={f.label} type={f.kind === "date" ? "date" : f.kind === "datetime" ? "datetime-local" : "text"} value={fields[f.name] ?? ""} disabled={!editable} onChange={e => { setFields({ ...fields, [f.name]: e.target.value }); }} />}

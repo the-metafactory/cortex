@@ -20,14 +20,15 @@ export function DestinationPicker({ label, value, options, onChange, disabled = 
   const filtered = options.filter(option => option.label.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const index = Math.max(0, Math.min(active, filtered.length - 1));
   useEffect(() => { if (open && !disabled) list.current?.children[index]?.scrollIntoView({ block: "nearest" }); }, [index, open, disabled, query]);
-  const choose = (option: DestinationOption): void => { onChange(option.id); setOpen(false); setQuery(""); };
+  const close = (): void => { setOpen(false); setQuery(""); };
+  const choose = (option: DestinationOption): void => { onChange(option.id); close(); };
   const show = (): void => { setOpen(true); setQuery(""); setActive(0); };
-  return <div className="desk-destination" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) { setOpen(false); setQuery(""); } }}>
+  return <div className="desk-destination" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) { close(); } }}>
     <label htmlFor={id}>{label}</label>
     <input id={id} role="combobox" aria-autocomplete="list" aria-expanded={open && !disabled} aria-controls={`${id}-list`} aria-activedescendant={open && !disabled && filtered[index] ? `${id}-option-${index}` : undefined} aria-invalid={Boolean(value && !selected)} disabled={disabled} value={open ? query : selected?.label ?? (value ? disabled ? "Saved destination unavailable" : "Destination unavailable — choose again" : "")} placeholder={placeholder} onFocus={show} onClick={() => { if (!open) show(); }} onChange={event => { setQuery(event.target.value); setActive(0); setOpen(true); }} onKeyDown={event => {
       if (!open && !event.ctrlKey && !event.metaKey && !event.altKey && !event.nativeEvent.isComposing && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete")) {
         event.preventDefault(); setOpen(true); setQuery(event.key.length === 1 ? event.key : ""); setActive(0);
-      } else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); setQuery(""); }
+      } else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); }
       else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         if (!open) show();

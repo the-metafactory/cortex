@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { OutlineNode } from "../../../balance";
-import { balanceDestinations } from "../desk/balance-destinations";
+import { areaProjects, balanceDestinations, resolveBalanceProject } from "../desk/balance-destinations";
 import { DestinationPicker } from "../dashboard-v2/components/desk-destination-picker";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -29,4 +29,20 @@ test("immutable historical selections retain neutral unavailable feedback", () =
   const html = renderToStaticMarkup(<DestinationPicker label="Saved location" value="deleted" options={[]} disabled onChange={() => undefined} />);
   expect(html).toContain("saved proposal is kept");
   expect(html).not.toContain("Choose another before confirming");
+});
+
+test("unique legacy project titles resolve to IDs while duplicate titles need an explicit selection", () => {
+  const choices = balanceDestinations(outline, areas);
+  const projects = areaProjects(choices, "work");
+  expect(resolveBalanceProject(projects, " same NAME ")?.id).toBeUndefined();
+  expect(resolveBalanceProject(projects, "one")?.id).toBe("one");
+  expect(resolveBalanceProject(areaProjects(choices, "home"), " same NAME ")?.id).toBe("two");
+  expect(resolveBalanceProject(projects, "deleted")).toBeUndefined();
+});
+
+test("stale generated project IDs cannot be reinterpreted as another project's title", () => {
+  const stale = "d5bd709e-9b83-4000-8000-4e91f1ba4d11";
+  const choices = [{ id: "other", title: stale, label: `Work / ${stale}`, area: "work", project: true }];
+  expect(resolveBalanceProject(choices, stale)).toBeUndefined();
+  expect(resolveBalanceProject(choices, "other")?.id).toBe("other");
 });
