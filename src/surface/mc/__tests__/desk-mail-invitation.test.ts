@@ -7,7 +7,7 @@ import type { CalendarAvailability, CalendarInterval } from "../desk/calendar-av
 import type { DeskOptions } from "../desk/compose";
 import type { WriterRunner } from "../desk/create";
 import type { ListedMail } from "../desk/mail-actions";
-import { calendarsOnly, freeSlots, invitationConflicts, invitationDecisions, invitationView, invitePayload, proposalBody, replyToInvitation, type InvitationsConfig, type InviteReplyDeps } from "../desk/mail-invitation";
+import { calendarsOnly, freeSlots, invitationConflicts, invitationDecisions, invitationView, invitePayload, proposalBody, replyToInvitation, withoutAnsweredRead, type InvitationDecision, type InvitationsConfig, type InviteReplyDeps } from "../desk/mail-invitation";
 import { queryMailLog } from "../desk/mail-log";
 import { mailItems } from "../desk/rank";
 import { SourceCache, SourceMailSchema, type MailInvitation, type SourceReading } from "../desk/sources/command";
@@ -281,6 +281,19 @@ describe("card", () => {
     expect(item?.yesFilter).toBeDefined();
     expect(item?.invitation?.canReply).toBe(true);
     expect(item?.urgency).toBe("today");
+  });
+
+  test("a read invitation without an answer keeps Accept and Decline: reading is not an answer", () => {
+    const { m, v } = view({ unread: false });
+    const item = mailItems({ now: NOW, mail: withoutAnsweredRead([{ ...m, area: null }], new Map()), events: [], vips: new Set(), draft: true, invitations: new Map([[m.id, v]]) })[0];
+    expect(item?.actions.map((a) => a.id)).toEqual(["invite.accept", "invite.decline", "invite.propose"]);
+  });
+
+  test("a read mail whose invitation was answered on the Desk leaves the Desk; an unread one, a failed answer and plain read mail stay", () => {
+    const decided = (status: InvitationDecision["status"]): InvitationDecision => ({ reply: "decline", status, at: NOW - 60_000, fallsAway: null, result: null, calendar: null });
+    const list = [mail({ id: "read-sent", unread: false }), mail({ id: "read-uncertain", unread: false }), mail({ id: "read-failed", unread: false }), mail({ id: "unread-sent" }), mail({ id: "read-plain", unread: false, invitation: undefined })];
+    const answers = new Map([["read-sent", decided("sent")], ["read-uncertain", decided("uncertain")], ["read-failed", decided("failed")], ["unread-sent", decided("sent")], ["read-plain", decided("sent")]]);
+    expect(withoutAnsweredRead(list, answers).map((m) => m.id)).toEqual(["read-failed", "unread-sent", "read-plain"]);
   });
 
   test("an answered invitation offers no answer again and says what fell away", () => {

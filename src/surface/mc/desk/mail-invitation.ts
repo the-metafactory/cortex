@@ -244,6 +244,12 @@ export function invitationView(mail: ListedMail, calendar: CalendarAvailability,
   };
 }
 
+export const answeredOnDesk = (decision: InvitationDecision | undefined): boolean => decision !== undefined && decision.status !== "failed";
+
+export function withoutAnsweredRead<M extends { id: string; unread: boolean; invitation?: unknown }>(mail: readonly M[], answers: ReadonlyMap<string, InvitationDecision>): M[] {
+  return mail.filter((m) => m.unread || !m.invitation || !answeredOnDesk(answers.get(m.id)));
+}
+
 const PAST: Record<InviteReply, string> = { accept: "accepted", decline: "declined" };
 const NOUN: Record<InviteReply, string> = { accept: "acceptance", decline: "decline" };
 
