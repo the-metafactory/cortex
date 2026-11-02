@@ -1,14 +1,14 @@
 import { useState } from "react";
 import type { MailDigestView } from "../../desk/mail-digest";
+import type { MoveTarget } from "../../desk/mail-move";
 import type { SweepMailView } from "../../desk/mail-sweep";
+import { OtherMoves } from "./desk-mail-sweeps";
 import "./desk-mail-sweeps.css";
 import { DeskLink } from "./desk-link";
 import "./desk-mail-digest.css";
 
 export const digestsInArea = (digests: readonly MailDigestView[], area: string): MailDigestView[] =>
   digests.filter((d) => !area || d.area === null || d.area === area);
-
-const headline = (d: MailDigestView): string => d.title.replace(/: [^:]*\?$/, "");
 
 export type UnsubscribeAsk = "unsubscribe" | "unsubscribe.rule";
 
@@ -25,7 +25,7 @@ function UnsubscribeButton({ mail, busy, onUnsubscribe }: { mail: SweepMailView;
   );
 }
 
-export function MailDigests({ digests, busy, onArchive, onKeep, onUnsubscribe, onOpen }: { digests: readonly MailDigestView[]; busy: boolean; onArchive: (d: MailDigestView) => void; onKeep: (key: string) => void; onUnsubscribe?: (key: string, ask: UnsubscribeAsk) => void; onOpen?: (key: string) => void }) {
+export function MailDigests({ digests, busy, onMove, onKeep, onUnsubscribe, onOpen }: { digests: readonly MailDigestView[]; busy: boolean; onMove: (d: MailDigestView, target: MoveTarget) => void; onKeep: (key: string) => void; onUnsubscribe?: (key: string, ask: UnsubscribeAsk) => void; onOpen?: (key: string) => void }) {
   if (digests.length === 0) return null;
   return (
     <div className="desk-digests" aria-label="Newsletter digests">
@@ -38,7 +38,7 @@ export function MailDigests({ digests, busy, onArchive, onKeep, onUnsubscribe, o
               <span>Newsletter digest</span>
               {d.flags.length > 0 && <span className="desk-sweep-tag">{d.why}</span>}
             </div>
-            <h3>{headline(d)}</h3>
+            <h3>{d.title}</h3>
             <ul className="desk-digest-list">
               {mails.map((m) => {
                 const line = flagged.get(m.key);
@@ -60,7 +60,8 @@ export function MailDigests({ digests, busy, onArchive, onKeep, onUnsubscribe, o
             </ul>
             {d.flags.length === 0 && <p className="desk-why">{d.why}</p>}
             <div className="desk-acts">
-              <button type="button" className="desk-btn pri" disabled={busy} onClick={() => onArchive(d)}>Archive all {d.mails.length}</button>
+              <button type="button" className="desk-btn pri" disabled={busy} onClick={() => onMove(d, d.target)}>Archive all {d.mails.length}</button>
+              <OtherMoves group={d} busy={busy} onPreview={(t) => onMove(d, t)} />
             </div>
           </article>
         );

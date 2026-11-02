@@ -1,10 +1,10 @@
 import type { Database } from "bun:sqlite";
-import { readClassifications, type MailClassification } from "./classify";
+import { forgetClassification, readClassifications, type MailClassification } from "./classify";
 import type { ListedMail } from "./mail-actions";
-import { mailFeatures } from "./mail-log";
+import { logMailDecision, mailFeatures, type MailFeatures } from "./mail-log";
 import { movedTarget, moveMail, refuse, undoMove, type MoveDeps, type MoveTarget } from "./mail-move";
 import { digestedIds, pendingRuleMail } from "./mail-rules";
-import { DEFAULT_SIMILARITY, groupBySimilarity, mailText, precedentLine, readVectors, textHash, vectorModel, type EmbedderConfig } from "./mail-similar";
+import { DEFAULT_SIMILARITY, groupBySimilarity, loggedAction, mailText, precedentLine, readVectors, textHash, vectorModel, type EmbedderConfig } from "./mail-similar";
 import { suspicionContext, suspicionOf, type SuspicionContext } from "./mail-suspicion";
 import type { SourceReading } from "./sources/command";
 import { SWEEP_WORDS } from "./mail-sweep-schema";
@@ -79,13 +79,12 @@ function eligible(input: SweepInput): SweepMember[] {
     .sort(byAge);
 }
 
-function bundleTitle(basis: SweepBasis, members: readonly SweepMember[], target: MoveTarget): { label: string; title: string; about: string } {
+function bundleTitle(basis: SweepBasis, members: readonly SweepMember[]): { label: string; title: string; about: string } {
   const head = members[0];
   const n = members.length;
-  const verb = `${SWEEP_WORDS[target].verb} all?`;
   if (!head) return { label: "", title: "", about: "" };
   const [label, about] = basis === "list" ? ["same mailing list", `from the ${senderOf(head)} list`] : basis === "sender" ? ["same sender", `from ${senderOf(head)}`] : ["similar content", `like ${quoted(head.subject)}`];
-  return { label, about, title: `${n} mails ${about}: ${verb}` };
+  return { label, about, title: `${n} mails ${about}` };
 }
 
 function learnedWhy(members: readonly SweepMember[], target: MoveTarget, classified: SweepInput["classified"]): string {
@@ -132,7 +131,7 @@ function bundles(pool: readonly SweepMember[], input: SweepInput): SweepGroup[] 
     for (const { basis, members } of [...similar, ...byListOrSender(candidates.filter((c) => !input.vectors?.has(c.id)))]) {
       const head = members[0];
       if (!head || members.length < SWEEP_LIMITS.minBundle) continue;
-      out.push(makeGroup({ id: `bundle:${target}:${hash(head.id)}`, kind: "bundle", basis, target, ...bundleTitle(basis, members, target), why: learnedWhy(members, target, input.classified) }, members));
+      out.push(makeGroup({ id: `bundle:${target}:${hash(head.id)}`, kind: "bundle", basis, target, ...bundleTitle(basis, members), why: learnedWhy(members, target, input.classified) }, members));
     }
   }
   return largestFirst(out, SWEEP_LIMITS.maxBundles);
@@ -250,24 +249,25 @@ const failureList = (failed: readonly SweepFailure[]): string =>
 
 /**
  * Moves exactly the previewed mails of one sweep through the move contract: one move, one log row each, and one Done for
- * you line with Undo for the whole sweep. Keys that are no longer in the group are not moved and are listed.
+ * you line with Undo for the whole sweep. Keys that are no longer in the group are not moved and are listed. `target` defaults to the
+ * group's suggested move; a mail the classifier predicted another move for is logged as a correction of that prediction.
  */
-export async function runSweep(group: SweepGroup, keys: readonly string[], deps: MoveDeps): Promise<SweepOutcome | Refusal> {
+export async function runSweep(group: SweepGroup, keys: readonly string[], deps: MoveDeps, target: MoveTarget = group.target): Promise<SweepOutcome | Refusal> {
   const wanted = new Set(keys);
   const members = group.members.filter((m) => wanted.has(`mail:${m.id}`));
   const gone = keys.filter((k) => !members.some((m) => `mail:${m.id}` === k));
   if (members.length === 0) return refuse(409, "None of these mails is in this group any more. Look at it again.");
   const id = (deps.newId ?? (() => crypto.randomUUID()))();
-  const title = `${SWEEP_WORDS[group.target].done} ${plural(members.length, "mail")} ${group.about}`;
+  const title = `${SWEEP_WORDS[target].done} ${plural(members.length, "mail")} ${group.about}`;
   deps.db.transaction(() => {
-    deps.db.query("INSERT INTO desk_mail_sweeps (id, group_id, target, title, created_at) VALUES (?, ?, ?, ?, ?)").run(id, group.id, group.target, title, deps.now);
+    deps.db.query("INSERT INTO desk_mail_sweeps (id, group_id, target, title, created_at) VALUES (?, ?, ?, ?, ?)").run(id, group.id, target, title, deps.now);
     for (const m of members) deps.db.query("INSERT INTO desk_mail_sweep_mails (sweep_id, message_id, subject, status) VALUES (?, ?, ?, 'moving')").run(id, m.id, m.subject);
     deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'mail.sweep', ?, ?, 'done', ?, ?, ?)")
       .run(`mail-sweep:${id}`, id, title, `Moving ${plural(members.length, "mail")}…`, deps.now, deps.now);
   })();
   running.add(id);
   try {
-    return await moveAll(id, group, members, gone.length, title, deps);
+    return await moveAll(id, { target, suggested: group.target }, members, gone.length, title, deps);
   } finally {
     running.delete(id);
   }
@@ -275,25 +275,45 @@ export async function runSweep(group: SweepGroup, keys: readonly string[], deps:
 
 const running = new Set<string>();
 
-async function moveAll(id: string, group: SweepGroup, members: readonly SweepMember[], gone: number, title: string, deps: MoveDeps): Promise<SweepOutcome> {
+function correctionOf(deps: MoveDeps, features: MailFeatures, said: MailClassification["predictedAction"] | undefined, target: MoveTarget) {
+  if (said === undefined || said === target) return undefined;
+  const correction = logMailDecision(deps.db, features, loggedAction(target), "correction", deps.now);
+  return {
+    by: { where: "correction" as const, correction },
+    keep: (): void => { forgetClassification(deps.db, features.messageId); },
+    drop: (): void => { deps.db.query("DELETE FROM desk_mail_log WHERE id = ? AND origin = 'correction'").run(correction); },
+  };
+}
+
+async function moveAll(id: string, { target, suggested }: { target: MoveTarget; suggested: MoveTarget }, members: readonly SweepMember[], gone: number, title: string, deps: MoveDeps): Promise<SweepOutcome> {
   const failed: SweepFailure[] = [];
   let moved = 0;
   const failMail = (m: SweepMember, error: string): void => {
     failed.push({ subject: m.subject, error });
     deps.db.query("UPDATE desk_mail_sweep_mails SET status = 'failed', error = ? WHERE sweep_id = ? AND message_id = ?").run(error, id, m.id);
   };
+  const predicted = target === suggested ? new Map<string, MailClassification>() : readClassifications(deps.db, members.map((m) => m.id));
   for (const m of members) {
-    const by = { where: "desk" as const, doneAction: "mail.move", title, quiet: true, recorded: (moveId: string) => { deps.db.query("UPDATE desk_mail_sweep_mails SET move_id = ?, status = 'done' WHERE sweep_id = ? AND message_id = ?").run(moveId, id, m.id); } };
+    const features = mailFeatures(deps.db, m);
+    const correction = correctionOf(deps, features, predicted.get(m.id)?.predictedAction, target);
+    const fail = (error: string): void => {
+      correction?.drop();
+      failMail(m, error);
+    };
+    const by = { ...(correction?.by ?? { where: "desk" as const }), doneAction: "mail.move", title, quiet: true, recorded: (moveId: string) => { deps.db.query("UPDATE desk_mail_sweep_mails SET move_id = ?, status = 'done' WHERE sweep_id = ? AND message_id = ?").run(moveId, id, m.id); } };
     try {
-      const result = await moveMail(m, group.target, deps, group.target, mailFeatures(deps.db, m), by);
-      if (result.ok) moved++;
-      else failMail(m, result.error);
+      const result = await moveMail(m, target, deps, target, features, by);
+      if (!result.ok) fail(result.error);
+      else {
+        moved++;
+        correction?.keep();
+      }
     } catch (err) {
-      failMail(m, err instanceof Error ? err.message : String(err));
+      fail(err instanceof Error ? err.message : String(err));
     }
   }
   const skipped = gone > 0 ? ` ${plural(gone, "mail was", "mails were")} no longer in this group and stayed.` : "";
-  const message = failed.length === 0 ? `${SWEEP_WORDS[group.target].done} ${plural(moved, "mail")}.${skipped}` : `${SWEEP_WORDS[group.target].done} ${moved} of ${members.length}. Not moved: ${failureList(failed)}.${skipped}`;
+  const message = failed.length === 0 ? `${SWEEP_WORDS[target].done} ${plural(moved, "mail")}.${skipped}` : `${SWEEP_WORDS[target].done} ${moved} of ${members.length}. Not moved: ${failureList(failed)}.${skipped}`;
   deps.db.query("UPDATE desk_done SET action = ?, status = ?, message = ?, updated_at = ? WHERE attempt_key = ?")
     .run(moved > 0 ? "mail.sweep" : "mail.sweep.failed", moved > 0 ? "done" : "failed", message, deps.now, `mail-sweep:${id}`);
   return { ok: true, message, sweep: id, moved, failed, skipped: gone };

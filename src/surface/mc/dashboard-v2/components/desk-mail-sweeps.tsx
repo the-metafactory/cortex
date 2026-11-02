@@ -1,15 +1,25 @@
 import { useState } from "react";
 import type { MailSweepView } from "../../desk/mail-sweep";
 import { SWEEP_WORDS } from "../../desk/mail-sweep-schema";
+import type { MoveTarget } from "../../desk/mail-move";
 import "./desk-mail-sweeps.css";
 
 const capital = (s: string): string => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
 const SHOWN = 3;
 const SWEEP_NAMES: Record<MailSweepView["kind"], string> = { bundle: "Bundle", sweep: "Sweep", digest: "Digest" };
 
-export const previewLabel = (s: MailSweepView, count = s.mails.length): string => `Preview and ${SWEEP_WORDS[s.target].verb} ${count}`;
+export const previewLabel = (s: MailSweepView, count = s.mails.length, target: MoveTarget = s.target): string => `Preview and ${SWEEP_WORDS[target].verb} ${count}`;
 
-export function MailSweeps({ sweeps, onPreview }: { sweeps: readonly MailSweepView[]; onPreview: (s: MailSweepView) => void }) {
+const OTHER_LABEL: Record<MoveTarget, string> = { archive: "Archive", junk: "Spam", trash: "Delete" };
+const MOVES = Object.keys(OTHER_LABEL) as MoveTarget[];
+
+export function OtherMoves({ group, busy = false, onPreview }: { group: MailSweepView; busy?: boolean; onPreview: (target: MoveTarget) => void }) {
+  return MOVES.filter((t) => t !== group.target).map((t) => (
+    <button key={t} type="button" className="desk-btn" disabled={busy} aria-label={previewLabel(group, group.mails.length, t)} onClick={() => onPreview(t)}>{OTHER_LABEL[t]}</button>
+  ));
+}
+
+export function MailSweeps({ sweeps, onPreview }: { sweeps: readonly MailSweepView[]; onPreview: (s: MailSweepView, target: MoveTarget) => void }) {
   if (sweeps.length === 0) return null;
   return (
     <div className="desk-sweeps" aria-label="Bundles and sweeps">
@@ -28,7 +38,8 @@ export function MailSweeps({ sweeps, onPreview }: { sweeps: readonly MailSweepVi
             </ul>
           )}
           <div className="desk-acts">
-            <button type="button" className="desk-btn pri" onClick={() => onPreview(s)}>{previewLabel(s)}</button>
+            <button type="button" className="desk-btn pri" onClick={() => onPreview(s, s.target)}>{previewLabel(s)}</button>
+            <OtherMoves group={s} onPreview={(t) => onPreview(s, t)} />
           </div>
         </article>
       ))}
@@ -36,7 +47,7 @@ export function MailSweeps({ sweeps, onPreview }: { sweeps: readonly MailSweepVi
   );
 }
 
-export function SweepPreview({ sweep, busy, onConfirm, onCancel }: { sweep: MailSweepView; busy: boolean; onConfirm: (keys: string[]) => void; onCancel: () => void }) {
+export function SweepPreview({ sweep, target = sweep.target, busy, onConfirm, onCancel }: { sweep: MailSweepView; target?: MoveTarget; busy: boolean; onConfirm: (keys: string[]) => void; onCancel: () => void }) {
   const [kept, setKept] = useState<ReadonlySet<string>>(() => new Set());
   const keys = sweep.mails.map((m) => m.key).filter((k) => !kept.has(k));
   const toggle = (key: string): void => setKept((s) => {
@@ -45,7 +56,8 @@ export function SweepPreview({ sweep, busy, onConfirm, onCancel }: { sweep: Mail
     else next.add(key);
     return next;
   });
-  const words = SWEEP_WORDS[sweep.target];
+  const words = SWEEP_WORDS[target];
+  const corrected = target === sweep.target ? "" : ` The Desk suggested to ${SWEEP_WORDS[sweep.target].verb} them; where it predicted that, your choice is logged as a correction it learns from.`;
   const verb = capital(words.verb);
   return (
     <div className="desk-sweep-preview">
@@ -65,7 +77,7 @@ export function SweepPreview({ sweep, busy, onConfirm, onCancel }: { sweep: Mail
           </li>
         ))}
       </ul>
-      <p className="desk-why">Each one is logged as {words.logged} decision. Done for you gets one line with Undo for all of them.</p>
+      <p className="desk-why">Each one is logged as {words.logged} decision.{corrected} Done for you gets one line with Undo for all of them.</p>
       <div className="desk-panel-acts">
         <button type="button" className="desk-btn pri" disabled={busy || keys.length === 0} onClick={() => onConfirm(keys)}>{busy ? "Moving…" : `${verb} ${keys.length}`}</button>
         <button type="button" className="desk-btn" disabled={busy} onClick={onCancel}>Cancel</button>

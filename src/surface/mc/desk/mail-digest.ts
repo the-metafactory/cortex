@@ -115,7 +115,7 @@ export function buildDigests(input: DigestInput): Digests {
         basis: "day",
         target: "archive",
         label: "newsletters",
-        title: `${plural(sorted.length, "newsletter")} from ${dayName(day)}: archive all?`,
+        title: `${plural(sorted.length, "newsletter")} from ${dayName(day)}`,
         about: `from the newsletter digest of ${dayName(day)}`,
         why: NO_FLAG,
         area: commonArea(sorted),
