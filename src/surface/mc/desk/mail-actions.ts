@@ -3,6 +3,7 @@ import { oneLine } from "./actions";
 import { forgetClassification, PREDICTED_ACTIONS, saveUnimportant } from "./classify";
 import { logMailDecision, mailFeatures, type MailLogAction } from "./mail-log";
 import { loggedAction } from "./mail-similar";
+import { CORRECTION_MOVES } from "./mail-correction-schema";
 import { movedKey, moveMail, refuse, type MoveDeps, type MoveResult, type MoveTarget } from "./mail-move";
 import { CommandTimeout } from "./spawn";
 import { replySubject } from "./mail-triage";
@@ -156,31 +157,35 @@ const CORRECTION_DONE: Record<MailCorrection, string> = {
   keep: "Corrected: you keep this.",
 };
 
-const CORRECTION_MOVES: Partial<Record<MailCorrection, MoveTarget>> = { archive: "archive", junk: "junk", trash: "trash" };
 const CORRECTED_TITLE: Record<MoveTarget, string> = { archive: "Archived after your correction", junk: "Moved to Junk after your correction", trash: "Deleted after your correction" };
 
-export const correctionMove = (said: MailCorrection): MoveTarget | undefined => CORRECTION_MOVES[said];
+export type CorrectionResult = MoveResult | { ok: false; status: number; error: string; recorded: true; correction: number };
 
-export type CorrectionResult = MoveResult | { ok: false; status: number; error: string; recorded: true };
+const loggedCorrection = (db: Database, id: number, mail: ListedMail, said: MailCorrection): boolean =>
+  db.query<{ n: number }, [number, string, string]>("SELECT COUNT(*) AS n FROM desk_mail_log WHERE id = ? AND message_id = ? AND action = ? AND origin = 'correction'").get(id, mail.id, correctionAction(said))?.n === 1;
+
+const carriedOut = (db: Database, id: number): boolean =>
+  db.query<{ n: number }, [number]>("SELECT COUNT(*) AS n FROM desk_mail_moves WHERE correction_id = ? AND undone_at IS NULL").get(id)?.n !== 0;
 
 /**
  * Logs the principal's correction of one mail's triage as a weighted decision, and forgets the mail's classification so
- * the next pass sorts it again with the correction as its closest example. Archive, spam and delete also move the mail
- * through the move path, whose decision is the correction itself, so one click logs one decision. A failed move still
- * logs the correction and answers `recorded`.
+ * the next pass sorts it again with the correction as its closest example. Archive, spam and delete then move the mail
+ * with moveMail, which links the move to that one decision instead of logging its own. A failed move keeps the logged
+ * correction and answers `recorded` with its id; sending that id back as `correction` retries only the move.
  */
-export async function correctMail(mail: ListedMail, said: MailCorrection, deps: MoveDeps): Promise<CorrectionResult> {
+export async function correctMail(mail: ListedMail, said: MailCorrection, deps: MoveDeps, retry?: number): Promise<CorrectionResult> {
   const { db, now } = deps;
   const features = mailFeatures(db, mail);
   const category = CORRECTED_CATEGORY[said];
-  const target = correctionMove(said);
-  forgetClassification(db, mail.id);
-  if (!target) {
-    logMailDecision(db, category ? { ...features, category } : features, correctionAction(said), "correction", now);
-    return { ok: true, message: `${CORRECTION_DONE[said]} The Desk sorts it and mail like it again with that in mind.` };
+  const target = CORRECTION_MOVES[said];
+  if (retry !== undefined) {
+    if (!target || !loggedCorrection(db, retry, mail, said)) return refuse(409, "The Desk has no record of that correction for this mail.");
+    if (carriedOut(db, retry)) return refuse(409, "That correction was already carried out.");
   }
-  const moved = await moveMail(mail, target, deps, correctionAction(said), features, { where: "correction", doneAction: "mail.move", title: CORRECTED_TITLE[target] });
+  const correction = retry ?? logMailDecision(db, category ? { ...features, category } : features, correctionAction(said), "correction", now);
+  forgetClassification(db, mail.id);
+  if (!target) return { ok: true, message: `${CORRECTION_DONE[said]} The Desk sorts it and mail like it again with that in mind.` };
+  const moved = await moveMail(mail, target, deps, correctionAction(said), features, { where: "correction", doneAction: "mail.move", title: CORRECTED_TITLE[target], correction });
   if (moved.ok) return { ...moved, message: `${moved.message} ${CORRECTION_DONE[said]}` };
-  logMailDecision(db, features, correctionAction(said), "correction", now);
-  return { ok: false, status: moved.status, error: `${CORRECTION_DONE[said]} The correction is recorded, but the mail was not moved: ${moved.error}`, recorded: true };
+  return { ok: false, status: moved.status, error: `${CORRECTION_DONE[said]} The correction is recorded, but the mail was not moved: ${moved.error}`, recorded: true, correction };
 }

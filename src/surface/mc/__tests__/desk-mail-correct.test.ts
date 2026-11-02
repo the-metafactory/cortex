@@ -65,9 +65,36 @@ describe("a mail correction that names a move", () => {
   it("keeps the mail and the recorded correction when the move fails, and says so", async () => {
     const r = queue([{ code: 1, stdout: "", stderr: "The work account has no Trash mailbox.\n" }]);
     const res = await send({ action: "correct", key: KEY, said: "trash" }, r.run);
-    expect(res).toEqual({ status: 502, body: { ok: false, recorded: true, error: "Corrected: you would delete this. The correction is recorded, but the mail was not moved: The work account has no Trash mailbox." } });
+    expect(res).toEqual({ status: 502, body: { ok: false, recorded: true, correction: expect.any(Number), error: "Corrected: you would delete this. The correction is recorded, but the mail was not moved: The work account has no Trash mailbox." } });
     expect(log()).toEqual([["trash", "correction"]]);
     expect(await keys()).toEqual([KEY]);
+  });
+
+  it("retries only the move of a recorded correction, keeps one log row, and Undo then withdraws it", async () => {
+    const r = queue([{ code: 1, stdout: "", stderr: "Mail server busy.\n" }, { code: 1, stdout: "", stderr: "Still busy.\n" }, MOVED, RESTORED]);
+    const first = await send({ action: "correct", key: KEY, said: "trash" }, r.run);
+    const correction = first.body.correction;
+    expect(typeof correction).toBe("number");
+    const again = await send({ action: "correct", key: KEY, said: "trash", correction }, r.run);
+    expect(again.body).toMatchObject({ ok: false, recorded: true, correction });
+    const retried = await send({ action: "correct", key: KEY, said: "trash", correction }, r.run);
+    expect(retried.body).toMatchObject({ ok: true, undo: "move-1" });
+    expect(log()).toEqual([["trash", "correction"]]);
+    expect((await send({ action: "correct", key: KEY, said: "trash", correction }, r.run)).status).toBe(409);
+    expect((await send({ action: "undo", move: "move-1" }, r.run)).body.message).toBe("Moved back to INBOX from Trash. Your correction is withdrawn.");
+    expect(log()).toEqual([["restore", "desk"]]);
+    expect(r.calls).toHaveLength(4);
+  });
+
+  it("refuses a retry that names no correction of this kind for this mail, before anything runs", async () => {
+    const r = queue();
+    const kept = await send({ action: "correct", key: KEY, said: "keep" }, r.run);
+    expect(kept.status).toBe(200);
+    const [row] = queryMailLog(db);
+    expect((await send({ action: "correct", key: KEY, said: "trash", correction: row?.id }, r.run)).status).toBe(409);
+    expect((await send({ action: "correct", key: KEY, said: "trash", correction: 9999 }, r.run)).status).toBe(409);
+    expect(r.calls).toEqual([]);
+    expect(log()).toEqual([["kept", "correction"]]);
   });
 
   it("records the correction when the mail is already moved, without running the command again", async () => {

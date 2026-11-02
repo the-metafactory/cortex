@@ -1187,6 +1187,7 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
     ],
   },
   { table: "desk_mail_classes", column: "details", ddl: "ALTER TABLE desk_mail_classes ADD COLUMN details TEXT" },
+  { table: "desk_mail_moves", column: "correction_id", ddl: "ALTER TABLE desk_mail_moves ADD COLUMN correction_id INTEGER" },
 ];
 
 /**

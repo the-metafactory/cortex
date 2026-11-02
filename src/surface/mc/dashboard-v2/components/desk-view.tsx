@@ -40,6 +40,7 @@ import { WAITING_OPS, type WaitingOp } from "../../desk/mail-waiting-schema";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskPrecedent, DeskView as DeskViewModel } from "../../desk/types";
 import type { MoveTarget } from "../../desk/mail-move";
 import type { MailCorrection } from "../../desk/mail-actions";
+import { CORRECTION_MOVES } from "../../desk/mail-correction-schema";
 import { MailStudioBox, newStudioPick, studioBody, withProposal, type StudioPick } from "./desk-mail-studio";
 import { HandoffStatus, handoffBody, handoffKeyFor, MailHandoffBox, newHandoffAsk, type HandoffAsk } from "./desk-mail-handoff";
 
@@ -622,8 +623,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     }
   };
 
-  const correctMail = async (item: DeskItem, said: MailCorrection): Promise<void> => {
-    const request = (): Promise<Outcome> => submitMailAction({ action: "correct", key: item.key, said });
+  const correctMail = async (item: DeskItem, said: MailCorrection, correction?: number): Promise<void> => {
+    const request = (): Promise<Outcome> => submitMailAction({ action: "correct", key: item.key, said, ...(correction !== undefined ? { correction } : {}) });
     if (CORRECTION_MOVES[said]) {
       await send(item, { id: `mail.correct.${said}`, label: "Correct", role: "secondary", wired: true }, { request, failOnCard: (r) => correctionStep(said, r, false).note });
       return;
@@ -636,8 +637,6 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     setCardNote(item.key, step.note);
     if (r.ok) onChanged();
   };
-
-  const retryCorrection = (item: DeskItem, target: MoveTarget): void => move(item, { id: `mail.retry.${target}`, label: "Retry the move", role: "secondary", wired: true }, target);
 
   const shown = (item: DeskItem): DeskItem => (confirming?.key === item.key ? withConfirm(item, confirming.action) : item);
   const busyWith = (item: DeskItem): string | null => sending.get(item.key) ?? (item.checking ? "goal.check" : null);
@@ -659,7 +658,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       onCorrect={(mode) => void correct(item.kind, item.source, mode)}
       {...(item.kind === "mail" ? { onCorrectMail: (said: MailCorrection) => void correctMail(item, said) } : {})}
       cardNote={cardNotes.get(item.key) ?? null}
-      onRetryMove={(target) => retryCorrection(item, target)}
+      onRetryMove={(retry) => void correctMail(item, retry.said, retry.correction)}
       rulingNote={rulings.get(item.key)?.note ?? null}
     />
   );
@@ -1074,7 +1073,7 @@ interface DeskItemRowProps {
   onCorrectMail?: (said: MailCorrection) => void;
   rulingNote?: string | null;
   cardNote?: CardNote | null;
-  onRetryMove?: (target: MoveTarget) => void;
+  onRetryMove?: (retry: CorrectionRetry) => void;
 }
 
 export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFocusEvent, onCorrect, onCorrectMail, rulingNote, cardNote, onRetryMove }: DeskItemRowProps) {
@@ -1112,12 +1111,17 @@ export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending
   );
 }
 
-export interface CardNote {
-  text: string;
-  retry?: MoveTarget;
+export interface CorrectionRetry {
+  said: MailCorrection;
+  correction: number;
 }
 
-export function CorrectionNote({ note, onRetry }: { note: CardNote; onRetry?: (target: MoveTarget) => void }) {
+export interface CardNote {
+  text: string;
+  retry?: CorrectionRetry;
+}
+
+export function CorrectionNote({ note, onRetry }: { note: CardNote; onRetry?: (retry: CorrectionRetry) => void }) {
   const { retry } = note;
   return (
     <div className={`desk-corrected${retry ? " failed" : ""}`} role="status">
@@ -1127,16 +1131,14 @@ export function CorrectionNote({ note, onRetry }: { note: CardNote; onRetry?: (t
   );
 }
 
-const CORRECTION_MOVES: Partial<Record<MailCorrection, MoveTarget>> = { archive: "archive", junk: "junk", trash: "trash" };
-
 export interface CorrectionStep {
   note: CardNote;
   open: "reply" | "plan" | null;
 }
 
 export function correctionStep(said: MailCorrection, result: Outcome, canReply: boolean): CorrectionStep {
-  const retry = CORRECTION_MOVES[said];
-  if (!result.ok) return { note: { text: result.text, ...(retry && result.recorded ? { retry } : {}) }, open: null };
+  const { correction } = result;
+  if (!result.ok) return { note: { text: result.text, ...(CORRECTION_MOVES[said] && result.recorded && correction !== undefined ? { retry: { said, correction } } : {}) }, open: null };
   const open = said === "reply" && canReply ? "reply" : said === "todo" || said === "plan" ? "plan" : null;
   return { note: { text: result.text }, open };
 }

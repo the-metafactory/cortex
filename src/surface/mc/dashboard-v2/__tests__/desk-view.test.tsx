@@ -357,10 +357,11 @@ describe("ranking corrections on the Desk", () => {
   });
 
   it("offers a retry on the card when a correction was recorded but the mail did not move", () => {
-    const failed = { ok: false, recorded: true, text: "Corrected: you would delete this. The correction is recorded, but the mail was not moved: no Trash." };
+    const failed = { ok: false, recorded: true, correction: 7, text: "Corrected: you would delete this. The correction is recorded, but the mail was not moved: no Trash." };
     const step = correctionStep("trash", failed, false);
-    expect(step).toEqual({ note: { text: failed.text, retry: "trash" }, open: null });
+    expect(step).toEqual({ note: { text: failed.text, retry: { said: "trash", correction: 7 } }, open: null });
     expect(correctionStep("trash", { ok: false, text: "Mission Control did not answer." }, false).note.retry).toBeUndefined();
+    expect(correctionStep("keep", { ...failed }, false).note.retry).toBeUndefined();
     const html = renderToStaticMarkup(<CorrectionNote note={step.note} onRetry={() => {}} />);
     expect(html).toContain('class="desk-corrected failed" role="status"');
     expect(html).toContain(">Retry the move</button>");
