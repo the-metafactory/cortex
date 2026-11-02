@@ -146,6 +146,20 @@ describe("Balance task writer for conversation proposals", () => {
     expect(JSON.stringify(loadBalanceState(r.db))).toBe(before);
   });
 
+  test("ambiguous project titles and stale UUIDs that match another title fail before the owner writes", async () => {
+    const stale = "d5bd709e-9b83-4000-8000-4e91f1ba4d11";
+    const r = await rig(outline([GLIDER, { ...GLIDER, id: "second-glider", children: [leaf("second-wing", "Second wing")] }, { ...GLIDER, id: "other-project", title: stale, children: [leaf("other-wing", "Other wing")] }]));
+    const id = await r.start();
+    const before = loadBalanceState(r.db);
+    for (const project of ["Glider", stale]) {
+      const reply = await r.confirm(id, await r.propose(id, { area: "lab", project, title: "Refused ambiguous destination" }));
+      expect(reply.status).toBe(409);
+      expect(reply.body.proposal.feedback).toBe("failed");
+      expect(loadBalanceState(r.db)).toEqual(before);
+    }
+    expect(r.tasks("Refused ambiguous destination")).toHaveLength(0);
+  });
+
   for (const mutation of ["closed", "moved", "deleted"] as const) test(`a saved project selection that is ${mutation} cannot confirm or create a task`, async () => {
     const empty: OutlineNode = { id: "empty-project", title: "Empty project", weight: 50, ordering: "parallel", children: [], done: true };
     const r = await rig(outline([GLIDER, empty]));
