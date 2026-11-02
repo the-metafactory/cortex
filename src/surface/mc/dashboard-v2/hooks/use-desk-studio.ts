@@ -5,8 +5,10 @@ import type { StudioView } from "../../desk/studio/view";
 const REFRESH_MS = 30_000;
 const MODE_PARAM = "desk";
 const THREAD_PARAM = "thread";
+const CONVERSATION_PARAM = "conversation";
+const CONVERSATION_ID = /^[0-9a-f-]{36}$/;
 
-export type DeskMode = "day" | "studio" | "balance" | "catchup";
+export type DeskMode = "day" | "studio" | "balance" | "catchup" | "conversation";
 
 export function useDeskStudio(poll: boolean, revision = 0): StudioView | null {
   const [studio, setStudio] = useState<StudioView | null>(null);
@@ -40,11 +42,14 @@ export function useDeskStudio(poll: boolean, revision = 0): StudioView | null {
 export interface DeskLocation {
   mode: DeskMode;
   thread: string | null;
+  conversation?: string | null;
 }
 
 export function readDeskLocation(search: string): DeskLocation {
   const params = new URLSearchParams(search);
   const requested = params.get(MODE_PARAM);
+  const conversation = params.get(CONVERSATION_PARAM);
+  if (requested === "conversation" && conversation && CONVERSATION_ID.test(conversation)) return { mode: "conversation", thread: null, conversation };
   const mode: DeskMode = requested === "mirror" ? "balance" : requested === "studio" || requested === "balance" || requested === "catchup" ? requested : "day";
   return { mode, thread: mode === "studio" ? params.get(THREAD_PARAM) : null };
 }
@@ -53,7 +58,10 @@ export function deskSearch(search: string, next: DeskLocation): string {
   const params = new URLSearchParams(search);
   params.delete(MODE_PARAM);
   params.delete(THREAD_PARAM);
+  params.delete(CONVERSATION_PARAM);
+  if (next.mode === "conversation" && !next.conversation) return deskSearch(search, { mode: "day", thread: null });
   if (next.mode !== "day") params.set(MODE_PARAM, next.mode);
+  if (next.mode === "conversation" && next.conversation) params.set(CONVERSATION_PARAM, next.conversation);
   if (next.mode === "studio" && next.thread) params.set(THREAD_PARAM, next.thread);
   const text = params.toString();
   return text ? `?${text}` : "";

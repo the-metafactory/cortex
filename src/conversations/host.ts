@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type Conversation, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
@@ -10,8 +11,8 @@ import { acquireHostLock, type LockOwner } from "./lock";
 import { chatTurns, cortexModels, CORTEX_PROVIDER, type ChatCall, type ModelEndpoints } from "./model";
 import {
   AttachmentRefSchema, CONTINUATION_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema,
-  type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationEntry, type ConversationMeta, type CreateConversation,
-  type InputRequest, type LinkResolvers, type ModelRoute, type OperationRecord, type OperationState, type OwnerReadbacks, type OwnerType, type Policy, type SubmissionView,
+  type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationMeta, type CreateConversation,
+  type InputRequest, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadbacks, type OwnerType, type Policy, type SourceState, type SourceView, type SubmissionView,
 } from "./types";
 
 export const ENGINE = "pi-durable@1.4.0";
@@ -32,12 +33,24 @@ const StoredSchema = z.object({
   origin: OriginSchema,
   createdAt: z.string(),
   inputs: z.number().int().nonnegative().default(0),
+  key: z.string().optional(),
+  draft: z.string().default(""),
+  seeded: z.boolean().default(true),
+  studio: z.object({ thread: z.string(), note: z.string().optional(), original: z.string(), stand: z.string() }).optional(),
 });
 type Stored = z.infer<typeof StoredSchema>;
+export type StudioScope = NonNullable<Stored["studio"]>;
+export interface SeedMessage { role: "user" | "assistant"; text: string; model?: string; at: number }
+export interface SeedEntry { kind: string; data: object; messages?: SeedMessage[] }
+export interface Seed { key?: string; imported?: boolean; studio?: StudioScope; draft?: string; state?: "current" | "archived"; entries?: SeedEntry[] }
+export interface ExchangeTurn { text: string; reply: string | null; model: string; policy: Policy }
 type Directory = JsonObject & { conversations: Record<string, JsonObject>; sessions: Record<string, string> };
 const DirectoryDoc = defineDoc<Directory>({ kind: "cortex.conversations", version: 1, scope: "session", initial: () => ({ conversations: {}, sessions: {} }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 const IngressDoc = defineDocFamily<{ sha256: string }, string>({ kind: "cortex.ingress", version: 1, scope: "conversation", history: "latest", fork: "initial", family: true, initial: sha256 => ({ sha256 }), checkpointWhen: () => true });
 const JournalDoc = defineDoc<{ operations: Record<string, JsonObject> }>({ kind: "cortex.operations", version: 1, scope: "session", initial: () => ({ operations: {} }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
+export const IMPORTED_TURN_KIND = "cortex.imported-turn";
+export const DECISION_KIND = "cortex.decision";
+const ImportedTurnSchema = z.object({ text: z.string(), reply: z.string().nullable(), model: z.string(), policy: z.enum(["local", "cloud"]) }).loose();
 const NEXT: Record<OperationState, OperationState[]> = { proposed: ["confirmed"], confirmed: ["running"], running: ["created", "failed", "uncertain"], uncertain: ["created", "failed"], created: [], failed: [] };
 
 export class ConversationError extends Error {
@@ -59,6 +72,7 @@ export interface HostOptions {
   alive?: (pid: number) => boolean;
   pid?: number;
 }
+export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks }
 export type HostStatus = { state: "ready"; host: ConversationHost; tookOver: LockOwner | null; resumed: string[]; reconciled: string[] } | { state: "unavailable"; reason: string };
 
 const strictest = (policies: Policy[]): Policy => policies.includes("local") ? "local" : "cloud";
@@ -85,9 +99,11 @@ export class ConversationHost {
   private readonly context: Context = BACKGROUND_CONTEXT;
   private readonly queues = new Map<string, Promise<void>>();
   private readonly now: () => Date;
+  private sources: HostSources;
 
   constructor(private readonly options: HostOptions, private readonly releaseLock: () => Promise<void>) {
     this.now = options.now ?? (() => new Date());
+    this.sources = { resolvers: options.resolvers ?? {}, readbacks: options.readbacks ?? {} };
   }
 
   get attachmentsDir(): string { return join(this.options.dir, "attachments"); }
@@ -167,20 +183,26 @@ export class ConversationHost {
     finally { resolve(undefined); if (this.queues.get(id) === promise) this.queues.delete(id); }
   }
 
-  async policyOf(stored: Stored): Promise<Policy> {
-    const resolved = await Promise.all(stored.links.map(async ref => {
-      const resolver = this.options.resolvers?.[ref.owner];
-      const policy = resolver ? await resolver(ref).catch(() => null) : null;
-      if (!policy) throw new ConversationError(403, `The linked ${ref.owner} ${ref.id} is not authorized for this conversation.`);
-      return policy;
-    }));
-    return strictest([stored.policy, ...resolved]);
+  attachSources(sources: HostSources): void {
+    this.sources = sources;
   }
 
-  private async tighten(id: string): Promise<Stored> {
-    const stored = await this.stored(id);
-    const policy = await this.policyOf(stored);
-    return policy === stored.policy ? stored : this.update(id, s => ({ ...s, policy: strictest([s.policy, policy]) }));
+  private async resolve(ref: ObjectRef): Promise<SourceView> {
+    const resolver = this.sources.resolvers[ref.owner];
+    const state: SourceState = resolver ? await resolver(ref).catch((): SourceState => ({ state: "unavailable", reason: "gone" })) : { state: "unavailable", reason: "unauthorized" };
+    return { ref, ...state };
+  }
+
+  async sourcesOf(links: ObjectRef[]): Promise<SourceView[]> {
+    return Promise.all(links.map(ref => this.resolve(ref)));
+  }
+
+  private async tighten(id: string): Promise<{ stored: Stored; effective: Policy; sources: SourceView[] }> {
+    const current = await this.stored(id);
+    const sources = await this.sourcesOf(current.links);
+    const resolved = strictest([current.policy, ...sources.flatMap(s => s.state === "available" ? [s.policy] : [])]);
+    const stored = resolved === current.policy ? current : await this.update(id, s => ({ ...s, policy: strictest([s.policy, resolved]) }));
+    return { stored, effective: sources.some(s => s.state === "unavailable") ? "local" : stored.policy, sources };
   }
 
   routeFor(policy: Policy): ModelRoute | null {
@@ -194,60 +216,142 @@ export class ConversationHost {
     const id = doc?.sessions[sessionId];
     if (!id) return "the model request does not belong to a known conversation";
     try {
-      const stored = await this.tighten(id);
-      if (stored.policy === "local" && route !== "local") return "this conversation is local-only; the cloud model was refused";
+      const { effective } = await this.tighten(id);
+      if (effective === "local" && route !== "local") return "this conversation is local-only; the cloud model was refused";
       return null;
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
     }
   }
 
-  private view(id: string, stored: Stored, working: Set<number>): ConversationMeta {
+  private view(id: string, stored: Stored, working: Set<number>, policy: Policy = stored.policy): ConversationMeta {
     let status: ConversationMeta["activity"]["status"] = "idle";
     if (working.has(stored.engineId)) status = "working";
     else if (stored.inputs > 0) status = "waiting";
-    return { id, stack: stored.stack, title: stored.title, links: stored.links, policy: stored.policy, state: stored.state, pinned: stored.pinned, activity: { lastAt: stored.lastAt, status }, origin: stored.origin };
+    return { id, stack: stored.stack, title: stored.title, links: stored.links, policy, state: stored.state, pinned: stored.pinned, activity: { lastAt: stored.lastAt, status }, origin: stored.origin };
   }
 
   private async workingSet(): Promise<Set<number>> {
     return new Set((await this.engine.inspect(this.context)).submissions.map(s => Number(s.conversationId)));
   }
 
-  async create(request: CreateConversation, principal: string): Promise<ConversationMeta> {
-    const id = randomUUID();
-    const at = this.now().toISOString();
-    const draft: Omit<Stored, "engineId" | "sessionId" | "route" | "inputs"> = { principal, stack: this.options.stack, title: request.title, links: request.links, policy: request.policy, state: "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at };
-    const policy = await this.policyOf({ ...draft, engineId: 0, sessionId: "", route: null, inputs: 0 });
-    const route = this.routeFor(policy);
-    await this.engine.createConversation({
-      ownership: { kind: "ownerless" },
-      agent: { instructions: IVY_INSTRUCTIONS, ...(route ? { model: { provider: CORTEX_PROVIDER, modelId: route } } : {}) },
-      init: async (tx, engineId) => {
-        const sessionId = (await tx.doc(ProviderDoc, engineId)).sessionId;
-        const doc = await tx.doc(DirectoryDoc);
-        doc.conversations[id] = asJson({ ...draft, policy, engineId: Number(engineId), sessionId, route, inputs: 0 } satisfies Stored);
-        doc.sessions[sessionId] = id;
-      },
-    }, this.context);
-    return this.view(id, await this.stored(id), new Set());
+  async create(request: CreateConversation, principal: string, seed: Seed = {}): Promise<ConversationMeta> {
+    const run = async (): Promise<ConversationMeta> => {
+      const existing = seed.key ? await this.byKey(seed.key) : null;
+      if (existing) {
+        await this.seed(existing, seed);
+        return this.meta(existing);
+      }
+      const sources = await this.sourcesOf(request.links);
+      const gone = sources.find(source => source.state === "unavailable");
+      if (gone && !seed.imported) throw new ConversationError(403, `The linked ${gone.ref.owner} ${gone.ref.id} is unavailable, so no conversation was started.`);
+      const id = randomUUID();
+      const at = this.now().toISOString();
+      const policy = strictest([request.policy, ...sources.flatMap(source => source.state === "available" ? [source.policy] : [])]);
+      const route = this.routeFor(policy);
+      const draft = { principal, stack: this.options.stack, title: request.title, links: request.links, policy, state: seed.state ?? "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at, draft: seed.draft ?? "", seeded: !seed.entries?.length, ...(seed.key ? { key: seed.key } : {}), ...(seed.studio ? { studio: seed.studio } : {}) } satisfies Omit<Stored, "engineId" | "sessionId" | "route" | "inputs">;
+      await this.engine.createConversation({
+        ownership: { kind: "ownerless" },
+        agent: { instructions: IVY_INSTRUCTIONS, ...(route ? { model: { provider: CORTEX_PROVIDER, modelId: route } } : {}) },
+        init: async (tx, engineId) => {
+          const sessionId = (await tx.doc(ProviderDoc, engineId)).sessionId;
+          const doc = await tx.doc(DirectoryDoc);
+          doc.conversations[id] = asJson({ ...draft, engineId: Number(engineId), sessionId, route, inputs: 0 } satisfies Stored);
+          doc.sessions[sessionId] = id;
+        },
+      }, this.context);
+      await this.seed(id, seed);
+      return this.meta(id);
+    };
+    return seed.key ? this.serial(`key:${seed.key}`, run) : run();
   }
 
-  async list(): Promise<ConversationMeta[]> {
+  private async byKey(key: string): Promise<string | null> {
+    return Object.entries(await this.directory()).find(([, stored]) => stored.key === key)?.[0] ?? null;
+  }
+
+  async keyed(prefix: string): Promise<Map<string, string>> {
+    return new Map(Object.entries(await this.directory()).flatMap(([id, stored]) => stored.key?.startsWith(prefix) ? [[stored.key.slice(prefix.length), id] as const] : []));
+  }
+
+  private async seed(id: string, seed: Seed): Promise<void> {
+    const stored = await this.stored(id);
+    if (stored.seeded || !seed.entries?.length) return;
+    const conversation = await this.conversation(stored);
+    for (const [index, entry] of seed.entries.entries()) {
+      const model = entry.messages?.map(message => this.message(message));
+      await conversation.submit({ type: "write", requestId: `seed:${index}`, entry: { kind: entry.kind, data: asJson(entry.data), ...(model?.length ? { model } : {}) } }, this.context);
+    }
+    await this.update(id, s => ({ ...s, seeded: true }));
+  }
+
+  private message(seed: SeedMessage): Message {
+    if (seed.role === "user") return { role: "user", content: seed.text, timestamp: seed.at };
+    const assistant: AssistantMessage = { role: "assistant", content: [{ type: "text", text: seed.text }], api: "cortex-chat", provider: CORTEX_PROVIDER, model: seed.model ?? "imported", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: "stop", timestamp: seed.at };
+    return assistant;
+  }
+
+  async list(linked?: (ref: ObjectRef) => boolean): Promise<ConversationMeta[]> {
     const working = await this.workingSet();
     const rows: ConversationMeta[] = [];
-    for (const id of Object.keys(await this.directory())) {
-      const stored = await this.tighten(id).catch((error: unknown) => {
-        if (error instanceof ConversationError && error.status === 403) return null;
-        throw error;
-      });
-      if (stored) rows.push(this.view(id, stored, working));
+    for (const [id, listed] of Object.entries(await this.directory())) {
+      if (linked && !listed.links.some(linked)) continue;
+      const { stored, effective } = await this.tighten(id);
+      rows.push(this.view(id, stored, working, effective));
     }
     return rows.sort((a, b) => b.activity.lastAt.localeCompare(a.activity.lastAt));
   }
 
   async meta(id: string): Promise<ConversationMeta> {
-    const stored = await this.tighten(id);
-    return this.view(id, stored, await this.workingSet());
+    const { stored, effective } = await this.tighten(id);
+    return this.view(id, stored, await this.workingSet(), effective);
+  }
+
+  async detail(id: string, outcome: (operations: OperationRecord[]) => OperationRecord | null = ops => ops.at(-1) ?? null): Promise<ConversationDetail> {
+    const { stored, effective, sources } = await this.tighten(id);
+    const working = await this.workingSet();
+    const submissions = (await this.engine.inspect(this.context)).submissions.filter(s => s.type === "input" && Number(s.conversationId) === stored.engineId && s.requestId !== undefined);
+    const pending = await Promise.all(submissions.map(record => this.submissionView(record.requestId ?? "", record)));
+    const studio = stored.studio ? { scope: stored.studio.note ? "note" as const : "thread" as const, subject: stored.studio.original, outcome: outcome(await this.operations(id)) } : null;
+    return { conversation: this.view(id, stored, working, effective), sources, draft: stored.draft, pending, studio };
+  }
+
+  async saveDraft(id: string, text: string): Promise<void> {
+    await this.stored(id);
+    await this.update(id, s => ({ ...s, draft: text }));
+  }
+
+  studioScope(id: string): Promise<{ title: string; studio: StudioScope | undefined; draft: string }> {
+    return this.stored(id).then(stored => ({ title: stored.title, studio: stored.studio, draft: stored.draft }));
+  }
+
+  async record(id: string, requestId: string, kind: string, data: object): Promise<void> {
+    const stored = await this.stored(id);
+    await (await this.conversation(stored)).submit({ type: "write", requestId, entry: { kind, data: asJson(data) } }, this.context);
+    await this.update(id, s => ({ ...s, lastAt: this.now().toISOString() }));
+  }
+
+  async exchange(id: string): Promise<ExchangeTurn[]> {
+    const { stored } = await this.tighten(id);
+    const conversation = await this.conversation(stored);
+    const turns: ExchangeTurn[] = [];
+    let cursor: Parameters<Conversation["entries"]>[2];
+    do {
+      const page = await conversation.entries({ order: "ascending" }, 200, cursor, this.context);
+      for (const entry of page.items) {
+        const imported = ImportedTurnSchema.safeParse(entry.data);
+        if (entry.kind === IMPORTED_TURN_KIND && imported.success) { turns.push({ text: imported.data.text, reply: imported.data.reply, model: imported.data.model, policy: imported.data.policy }); continue; }
+        const message = entry.model?.[0];
+        if (entry.kind === INPUT_KIND) turns.push({ text: entryText(entry), reply: null, model: "unavailable", policy: stored.policy });
+        else if (message?.role === "assistant" && message.stopReason !== "error") {
+          const last = turns.at(-1);
+          const route = message.model === "local" || message.model === "cloud" ? message.model : stored.policy;
+          if (last?.reply === null) Object.assign(last, { reply: entryText(entry), model: this.options.endpoints[route]?.model ?? route, policy: route });
+        }
+      }
+      cursor = page.next;
+    } while (cursor);
+    return turns;
   }
 
   async storeAttachment(id: string, upload: AttachmentUpload): Promise<AttachmentRef> {
@@ -298,13 +402,13 @@ export class ConversationHost {
     return this.serial(id, async () => {
       const attachments = request.attachments ?? [];
       await this.checkAttachments(attachments);
-      const stored = await this.tighten(id);
-      const route = this.routeFor(stored.policy);
+      const { stored, effective } = await this.tighten(id);
+      const route = this.routeFor(effective);
       const sha256 = inputHash(request);
       const conversation = await this.conversation(stored);
       const existing = await this.priorInput(conversation, request.inputId, sha256);
       if (existing) return { duplicate: true, submission: await this.submissionView(request.inputId, existing) };
-      if (!route) throw new ConversationError(503, stored.policy === "local" ? "No local model is configured. Nothing was sent; no cloud fallback is used." : "No conversation model is configured. Nothing was sent.");
+      if (!route) throw new ConversationError(503, effective === "local" ? "No local model is configured. Nothing was sent; no cloud fallback is used." : "No conversation model is configured. Nothing was sent.");
       await this.claimInput(conversation, request.inputId, sha256);
       if (route !== stored.route) {
         await conversation.configure({ model: { provider: CORTEX_PROVIDER, modelId: route } }, this.context);
@@ -321,7 +425,7 @@ export class ConversationHost {
   }
 
   async input(id: string, inputId: string): Promise<SubmissionView> {
-    const stored = await this.tighten(id);
+    const { stored } = await this.tighten(id);
     const conversation = await this.conversation(stored);
     const record = await conversation.commit(tx => tx.submissionByRequest(conversation.id, inputId), this.context);
     if (!record) throw new ConversationError(404, "That input was not found in this conversation.");
@@ -333,7 +437,7 @@ export class ConversationHost {
   }
 
   async entries(id: string, limit: number, cursor: string | undefined): Promise<{ entries: ConversationEntry[]; next?: string }> {
-    const stored = await this.tighten(id);
+    const { stored } = await this.tighten(id);
     let decoded: Record<string, never> | undefined;
     if (cursor) {
       try { decoded = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, never>; }
@@ -346,19 +450,28 @@ export class ConversationHost {
     return { entries: page.items.map(toEntry), ...(page.next ? { next: Buffer.from(JSON.stringify(page.next)).toString("base64url") } : {}) };
   }
 
+  async readback(operation: OperationRecord): Promise<{ found: true; canonicalId: string } | { found: false } | null> {
+    const readback = this.sources.readbacks[operation.owner];
+    return readback ? readback(operation).catch(() => null) : null;
+  }
+
   async operations(conversationId?: string): Promise<OperationRecord[]> {
     const doc = await this.engine.snapshot(JournalDoc, this.context);
     return Object.values(doc?.operations ?? {}).map(v => OperationRecordSchema.parse(v)).filter(o => !conversationId || o.conversationId === conversationId);
   }
 
-  async propose(conversationId: string, proposalId: string, revision: number, owner: OwnerType): Promise<OperationRecord> {
+  async propose(conversationId: string, proposalId: string, revision: number, owner: OwnerType, digest?: string): Promise<OperationRecord> {
     await this.stored(conversationId);
     const operationId = `${conversationId}:${proposalId}:${revision}`;
     return this.engine.commit(async tx => {
       const doc = await tx.doc(JournalDoc);
       const existing = doc.operations[operationId];
-      if (existing) return OperationRecordSchema.parse(existing);
-      const record: OperationRecord = { operationId, conversationId, proposalId, revision, owner, state: "proposed", history: [{ state: "proposed", at: this.now().toISOString() }] };
+      if (existing) {
+        const record = OperationRecordSchema.parse(existing);
+        if (record.digest !== digest) throw new ConversationError(409, "That proposal id was already used with a different choice.");
+        return record;
+      }
+      const record: OperationRecord = { operationId, conversationId, proposalId, revision, owner, state: "proposed", ...(digest ? { digest } : {}), history: [{ state: "proposed", at: this.now().toISOString() }] };
       doc.operations[operationId] = asJson(record);
       return record;
     }, this.context);
@@ -382,7 +495,7 @@ export class ConversationHost {
     const touched: string[] = [];
     for (const op of await this.operations()) {
       if (op.state !== "running" && op.state !== "uncertain") continue;
-      const readback = this.options.readbacks?.[op.owner];
+      const readback = this.sources.readbacks[op.owner];
       const result = readback ? await readback(op).catch(() => null) : null;
       if (result?.found) await this.transition(op.operationId, "created", { canonicalId: result.canonicalId, note: "boot readback found the object" });
       else if (op.state === "running") await this.transition(op.operationId, "uncertain", { note: readback ? "boot readback did not find the object" : "no owner readback is available; check before retrying" });
