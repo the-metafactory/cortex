@@ -105,6 +105,36 @@ Replace `voiceId` with your ElevenLabs voice ID and make the named key available
 
 ElevenLabs input records while you hold the microphone control and transcribes when you release it. It does not use the browser's speech recognition service or show a live partial transcript. Microphone recording still requires browser permission and a secure context, such as HTTPS or localhost. A failed transcription shows the provider's reason and leaves text input available.
 
+### Local wake detection
+
+`voice.wake` is optional and disabled by default. Wake uses the pinned Sherpa 2.0.1 detector and English GigaSpeech 3.3M model. It requires `voice.input: elevenlabs`, a secure browser context, AudioWorklet, MediaRecorder, and Web Locks. The existing output provider remains configurable.
+
+| Key under `voice.wake` | Default | Value and meaning |
+|---|---|---|
+| `enabled` | `false` | Makes the opt-in wake control available. Opening Desk does not activate the microphone. |
+| `assistantName` | `Assistant` | Configured assistant name. Set `phrase` separately. |
+| `phrase` | `Hey Assistant` | 2 to 60 English letters and spaces. |
+| `tokens` | absent | SentencePiece tokens provisioned from the matched BPE model. |
+| `tokenizerSha256` | absent | Matched BPE hash emitted by the provisioner. |
+| `detector` | `sherpa-2.0.1` | Only the declared pinned detector is supported. |
+| `model` | `gigaspeech-3.3m-2024-01-01` | Only the declared matched model is supported. |
+| `threshold` | `0.25` | Trigger threshold from 0.01 to 1. Lower values permit weaker matches. |
+| `score` | `3` | Keyword boost from 0.1 to 10. |
+| `preRollMs` | `2000` | Bounded local PCM buffer, 500 to 3000 milliseconds. |
+| `silenceMs` | `900` | End-of-speech silence, 300 to 3000 milliseconds. |
+| `maxCommandMs` | `15000` | Maximum command capture, 3000 to 30000 milliseconds. |
+| `speechThreshold` | `0.015` | RMS energy threshold, 0.001 to 0.2. |
+
+The normal dashboard build downloads and checks pinned archives, applies three exact browser-loader adaptations, and writes the runtime, model, licences, and integrity manifest to `dist/dashboard-v2/wake`. It needs HTTPS access to npm and the official Sherpa release. Downloads are cached by hash under `node_modules/.cache/desk-wake`. The server serves only declared wake asset names.
+
+Phrase labels alone do not provision a keyword. See [Enable a wake phrase](wake.md) for the matched-token procedure. Missing assets, unsupported tokens, and mismatched phrase configuration produce an unavailable state.
+
+Detection stays local. After a wake, one browser-recorded command clip goes through the existing transcription adapter and voice turn. Sherpa's keyword timestamp trims earlier audio from the bounded pre-roll while preserving immediate words. The clip can include the matched wake phrase. A wake-only clip can reach transcription to distinguish it from a short command contained entirely in pre-roll; a transcript containing only the configured phrase does not start a Desk action. Unmatched speech sends no transcription request.
+
+One Desk tab owns the microphone through detection, command capture, and playback. Manual capture in that tab disables wake before taking ownership. Another tab reports that the microphone is in use. Disable wake there before enabling it elsewhere. Recognition pauses during assistant playback and resumes with an empty buffer. Disabled wake, navigation, and page exit release capture resources. No native service is installed.
+
+Minimizing alone does not stop listening. A suspended AudioContext, stale processing, or lost microphone produces an unavailable state on detection or when the page resumes execution. Enable wake again to recover. Browser shutdown ends capture.
+
 ## Mail
 
 `mail.classifier` is optional. It accepts exactly one of two forms: `command`, or `baseUrl` with `model`. Without a classifier, fixed rules rank mail.

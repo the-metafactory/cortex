@@ -12,7 +12,7 @@ export const GATES: Gate[] = [
   { name: "sdk", steps: [["bun", "run", "sdk:dts:check"], ["bun", "scripts/check-release-pins.ts"]] },
   { name: "shippable", steps: [["bun", "scripts/check-shippable-hygiene.ts"]] },
   { name: "xdg", steps: [["bun", "scripts/xdg-audit.ts", "--repos", "."]] },
-  { name: "test", steps: [["bun", "run", "test", "--parallel"]] },
+  { name: "test", steps: [["bun", "scripts/build-desk-wake.ts"], ["bun", "scripts/desk-wake/probe-build-cache.ts"], ["bun", "run", "test", "--parallel"]] },
   { name: "up-to-date", steps: [["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"]], localOnly: true },
 ];
 

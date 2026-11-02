@@ -369,11 +369,14 @@ export const DMARC_FAIL_ON = ["dmarc", "spf-or-dkim"] as const;
 export const DMARC_AFTER = ["archive", "trash"] as const;
 export const VOICE_PROVIDERS = ["browser", "elevenlabs"] as const;
 
+import { DeskWakeSchema } from "./desk-wake";
+
 const DeskVoiceSchema = z
   .object({
     enabled: z.boolean().default(true),
     input: z.enum(VOICE_PROVIDERS).default("browser"),
     output: z.enum(VOICE_PROVIDERS).default("browser"),
+    wake: DeskWakeSchema.optional(),
     elevenlabs: z
       .object({
         voiceId: z.string().regex(/^[A-Za-z0-9]{8,64}$/, "mc.desk.voice.elevenlabs.voiceId must be an ElevenLabs voice id"),

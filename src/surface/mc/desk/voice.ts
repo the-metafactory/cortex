@@ -1,4 +1,5 @@
 import type { VOICE_PROVIDERS } from "../../../common/types/config";
+import type { DeskWakeOptions } from "../../../common/types/desk-wake";
 
 export type VoiceProviderId = (typeof VOICE_PROVIDERS)[number];
 
@@ -15,12 +16,13 @@ export interface VoiceOptions {
   enabled: boolean;
   input: VoiceProviderId;
   output: VoiceProviderId;
+  wake?: DeskWakeOptions;
   elevenlabs?: ElevenLabsOptions;
 }
 
 export type DeskVoice = Omit<VoiceOptions, "elevenlabs">;
 
-export const voiceView = (v: VoiceOptions | undefined): DeskVoice => ({ enabled: v?.enabled ?? true, input: v?.input ?? "browser", output: v?.output ?? "browser" });
+export const voiceView = (v: VoiceOptions | undefined): DeskVoice => ({ enabled: v?.enabled ?? true, input: v?.input ?? "browser", output: v?.output ?? "browser", ...(v?.wake ? { wake: v.wake } : {}) });
 
 export function resolveVoice(voice: VoiceOptions, expand: (path: string) => string): VoiceOptions {
   const el = voice.elevenlabs;
