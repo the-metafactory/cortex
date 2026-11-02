@@ -192,7 +192,7 @@ export function embeddings(fetchImpl: typeof fetch = fetch, readKey: KeyReader =
   };
 }
 
-const accessPaths = <T extends EmbedderAccess>(access: T, expand: (path: string) => string): T => ({
+export const accessPaths = <T extends EmbedderAccess>(access: T, expand: (path: string) => string): T => ({
   ...access,
   ...(access.apiKeyFile ? { apiKeyFile: expand(access.apiKeyFile) } : {}),
   ...(access.caFile ? { caFile: expand(access.caFile) } : {}),

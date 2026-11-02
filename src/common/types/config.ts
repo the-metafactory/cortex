@@ -433,14 +433,17 @@ const StudioFilerEndpointSchema = z.object({
   maxPerPass: z.number().int().min(1).max(100).default(10),
 }).refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "set apiKeyEnv or apiKeyFile, not both");
 
-const EmbedderEndpointSchema = z.object({
-  baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), "mc.desk.mail.embedder.baseUrl must use https unless it is a loopback address"),
+const endpointSchema = (path: string, timeoutSeconds: number) => z.object({
+  baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), `${path}.baseUrl must use https unless it is a loopback address`),
   model: z.string().min(1),
   apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
   apiKeyFile: z.string().min(1).optional(),
   caFile: z.string().min(1).optional(),
-  timeoutSeconds: z.number().int().min(1).max(120).default(10),
-}).refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.mail.embedder: set apiKeyEnv or apiKeyFile, not both");
+  timeoutSeconds: z.number().int().min(1).max(120).default(timeoutSeconds),
+}).refine((c) => !(c.apiKeyEnv && c.apiKeyFile), `${path}: set apiKeyEnv or apiKeyFile, not both`);
+
+const EmbedderEndpointSchema = endpointSchema("mc.desk.mail.embedder", 10);
+const DigestEndpointSchema = endpointSchema("mc.desk.mail.digest.model", 60);
 
 export const DeskSchema = z.object({
   routines: RoutineOptionsSchema.optional(),
@@ -551,6 +554,12 @@ export const DeskSchema = z.object({
           command: z.array(z.string().min(1)).min(1),
           to: z.email("mc.desk.mail.report.to must be one email address").optional(),
           timeoutSeconds: z.number().int().min(1).max(120).default(30),
+        })
+        .optional(),
+      digest: z
+        .object({
+          at: z.iso.time({ precision: -1 }).default("07:00"),
+          model: DigestEndpointSchema.safeExtend({ local: DigestEndpointSchema.optional() }).optional(),
         })
         .optional(),
       suspicion: z

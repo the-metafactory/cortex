@@ -11,9 +11,9 @@ import { SWEEP_WORDS } from "./mail-sweep-schema";
 import { DAY_MS } from "./time";
 import { isVip } from "./vips";
 
-export const SWEEP_KINDS = ["bundle", "sweep"] as const;
+export const SWEEP_KINDS = ["bundle", "sweep", "digest"] as const;
 export type SweepKind = (typeof SWEEP_KINDS)[number];
-export type SweepBasis = "similar" | "list" | "sender" | "age";
+export type SweepBasis = "similar" | "list" | "sender" | "age" | "day";
 
 export const SWEEP_LIMITS = { minBundle: 2, minSweep: 3, ageDays: 3, maxBundles: 5, maxSweeps: 3, maxMails: 200 } as const;
 
@@ -25,6 +25,7 @@ export interface SweepMailView {
   subject: string;
   from: string;
   at: string;
+  url?: string;
 }
 
 export interface MailSweepView {
@@ -58,14 +59,14 @@ const PERSONAL = new Set<string>(["action", "reply", "meeting"]);
 const SAFE = "None is from a VIP or looks suspicious.";
 
 const hash = (text: string): string => textHash(text).slice(0, 16);
-const senderOf = (m: SweepMember): string => m.from.name ?? m.from.address;
-const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
-const commonArea = (members: readonly SweepMember[]): string | null => {
+export const senderOf = (m: SweepMember): string => m.from.name ?? m.from.address;
+export const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+export const commonArea = (members: readonly SweepMember[]): string | null => {
   const first = members[0]?.area ?? null;
   return members.every((m) => m.area === first) ? first : null;
 };
 const quoted = (s: string): string => `“${s.length > 60 ? `${s.slice(0, 59)}…` : s}”`;
-const byAge = (a: SweepMember, b: SweepMember): number => Date.parse(a.receivedAt) - Date.parse(b.receivedAt) || a.id.localeCompare(b.id);
+export const byAge = (a: SweepMember, b: SweepMember): number => Date.parse(a.receivedAt) - Date.parse(b.receivedAt) || a.id.localeCompare(b.id);
 const groupKey = (m: SweepMember): { basis: "list" | "sender"; key: string } =>
   m.headers?.listId ? { basis: "list", key: m.headers.listId.toLowerCase() } : { basis: "sender", key: m.from.address.trim().toLowerCase() };
 
@@ -163,7 +164,7 @@ export function buildSweeps(input: SweepInput): SweepGroup[] {
 
 export const sweepView = (g: SweepGroup): MailSweepView => {
   const { members, ...rest } = g;
-  return { ...rest, mails: members.map((m) => ({ key: `mail:${m.id}`, subject: m.subject, from: senderOf(m), at: m.receivedAt })) };
+  return { ...rest, mails: members.map((m) => ({ key: `mail:${m.id}`, subject: m.subject, from: senderOf(m), at: m.receivedAt, ...(m.url ? { url: m.url } : {}) })) };
 };
 
 export const bundledKeys = (groups: readonly SweepGroup[]): Set<string> =>
@@ -174,6 +175,7 @@ export interface SweepContext {
   ownDomains?: string[];
   localSources: ReadonlySet<string>;
   handled?: { has(key: string): boolean };
+  held?: ReadonlySet<string>;
 }
 
 export interface SweepOptions {
@@ -215,12 +217,12 @@ function vectorsOf(db: Database, mail: readonly SweepMember[], config: EmbedderC
 /**
  * The sweeps and bundles the Desk offers for the sources' last reading. Bundles group mail the classifier would move
  * the same way, by cached content vectors when present and by List-Id or sender otherwise; sweeps group by category
- * and age, or by List-Id or sender. VIP, suspicious, rule-bound, digested and already moved mail is never included.
+ * and age, or by List-Id or sender. VIP, suspicious, rule-bound, digested, digest-held and already moved mail is never included.
  */
 export function listSweeps(db: Database, readings: readonly SourceReading[], ctx: SweepContext, now: number): SweepGroup[] {
   const ids = readings.flatMap((r) => r.mail.map((m) => m.id));
   const digested = digestedIds(db, ids);
-  const mail = readings.flatMap((r) => r.mail.filter((m) => m.unread && !digested.has(m.id) && (!ctx.handled || movedTarget(ctx.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
+  const mail = readings.flatMap((r) => r.mail.filter((m) => m.unread && !digested.has(m.id) && !ctx.held?.has(m.id) && (!ctx.handled || movedTarget(ctx.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const suspicion = suspicionContext(db, ctx.ownDomains);
   return buildSweeps({
     now,
