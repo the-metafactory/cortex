@@ -10,8 +10,6 @@ import { askDesk, createFromProposal } from "../lib/desk-ask";
 import type { DeskProposal } from "../../desk/ask";
 import { openGroup, selectItems } from "../../desk/present";
 import { DeskWakeSchema } from "../../../../common/types/desk-wake";
-import { DeskCatchUp } from "../components/desk-catch-up";
-import { MailSweeps } from "../components/desk-mail-sweeps";
 import type { MailSweepView } from "../../desk/mail-sweep";
 
 const NOW = Date.parse("2026-10-30T13:16:00.000Z");
@@ -98,8 +96,16 @@ describe("sweeps and bundles", () => {
     expect(html).not.toContain("5 unread mails from the Build Bot list");
   });
 
-  it("lead the Catch-up stream, ahead of the cards", () => {
-    const html = renderToStaticMarkup(<DeskCatchUp view={withSweep} renderItem={(entry) => <p>{entry.title}</p>} done={null} onChanged={() => {}} active planItem={null} top={({ sweeps }) => <MailSweeps sweeps={sweeps} onPreview={() => {}} />} />);
+  it("lead the Catch-up stream on the Desk, ahead of the cards", () => {
+    const saved = Object.getOwnPropertyDescriptor(globalThis, "window");
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { search: "?desk=catchup", pathname: "/", hash: "" } } });
+    let html = "";
+    try {
+      html = renderToStaticMarkup(<DeskBody view={withSweep} error={null} onOpenMissionControl={() => {}} />);
+    } finally {
+      if (saved) Object.defineProperty(globalThis, "window", saved);
+      else Reflect.deleteProperty(globalThis, "window");
+    }
     const stream = /class="catchup-stream">([\s\S]*)/.exec(html)?.[1] ?? "";
     expect(stream.indexOf('data-sweep="sweep:abc"')).toBeGreaterThan(-1);
     expect(stream.indexOf('data-sweep="sweep:abc"')).toBeLessThan(stream.indexOf("Task 1 needs you."));

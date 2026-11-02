@@ -84,9 +84,8 @@ function bundleTitle(basis: SweepBasis, members: readonly SweepMember[], target:
   const n = members.length;
   const verb = `${SWEEP_WORDS[target].verb} all?`;
   if (!head) return { label: "", title: "", about: "" };
-  if (basis === "list") return { label: "same mailing list", title: `${n} mails from the ${senderOf(head)} list: ${verb}`, about: `from the ${senderOf(head)} list` };
-  if (basis === "sender") return { label: "same sender", title: `${n} mails from ${senderOf(head)}: ${verb}`, about: `from ${senderOf(head)}` };
-  return { label: "similar content", title: `${n} mails like ${quoted(head.subject)}: ${verb}`, about: `like ${quoted(head.subject)}` };
+  const [label, about] = basis === "list" ? ["same mailing list", `from the ${senderOf(head)} list`] : basis === "sender" ? ["same sender", `from ${senderOf(head)}`] : ["similar content", `like ${quoted(head.subject)}`];
+  return { label, about, title: `${n} mails ${about}: ${verb}` };
 }
 
 function learnedWhy(members: readonly SweepMember[], target: MoveTarget, classified: SweepInput["classified"]): string {
@@ -152,8 +151,8 @@ function sweeps(pool: readonly SweepMember[], input: SweepInput, bundled: readon
   for (const { key, basis, members } of byListOrSender(quiet.filter((x) => !PERSONAL.has(input.classified.get(x.id)?.category ?? "")))) {
     const head = members[0];
     if (!head || members.length < SWEEP_LIMITS.minSweep || bundled.some((g) => same(g.members, members))) continue;
-    const from = basis === "list" ? `the ${senderOf(head)} list` : senderOf(head);
-    out.push(makeGroup({ id: `sweep:${hash(key)}`, kind: "sweep", basis, target: "archive", label: basis === "list" ? "mailing list" : "sender", title: `${members.length} unread mails from ${from}`, about: `from ${from}`, why: SAFE }, members));
+    const about = basis === "list" ? `from the ${senderOf(head)} list` : `from ${senderOf(head)}`;
+    out.push(makeGroup({ id: `sweep:${hash(key)}`, kind: "sweep", basis, target: "archive", label: basis === "list" ? "mailing list" : "sender", title: `${members.length} unread mails ${about}`, about, why: SAFE }, members));
   }
   return largestFirst(out, SWEEP_LIMITS.maxSweeps);
 }
