@@ -52,7 +52,7 @@ export function conversationWriterRig(prefix: string, label: string) {
   return { database, open };
 }
 
-export interface DeskWriterReply { ok: boolean; error: string; proposal: ProposalView; conversation: { id: string }; types: { type: string; status: string }[] }
+export interface DeskWriterReply { ok: boolean; error: string; proposal: ProposalView; conversation: { id: string }; types: { type: string; status: string; reason?: string }[] }
 export interface DeskWriterCall { argv: string[]; stdin: { kind: string; requestId: string; fields: Record<string, string> } }
 interface DeskWriterSetup { prefix: string; label: string; kind: DeskWriterKind; type: string; canonicalId: string; somaBin?: string; owner?: string }
 
@@ -81,7 +81,9 @@ export function deskWriterRig(setup: DeskWriterSetup) {
     const propose = (fields: Record<string, string>) => rig.propose(id, setup.type, fields);
     const confirm = (view: ProposalView) => rig.confirm(id, view);
     const check = (view: ProposalView) => rig.check(id, view);
-    const capability = async () => (await rig.call("GET", "/api/conversations/capabilities")).body.types.find(t => t.type === setup.type)?.status;
+    const typeEntry = async () => (await rig.call("GET", "/api/conversations/capabilities")).body.types.find(t => t.type === setup.type);
+    const capability = async () => (await typeEntry())?.status;
+    const reason = async () => (await typeEntry())?.reason;
     const submit = async (fields: Record<string, string>) => {
       const view = await propose(fields);
       return { view, reply: await confirm(view) };
@@ -93,6 +95,6 @@ export function deskWriterRig(setup: DeskWriterSetup) {
       const { view, reply } = await submit(fields);
       return { feedback: [reply, await check(view)].map(r => r.body.proposal.feedback), runs: calls.length };
     };
-    return { id, db, options, calls, lists, propose, confirm, check, submit, capability, answerWith, listWith, timeoutThenCheck };
+    return { id, db, options, calls, lists, propose, confirm, check, submit, capability, reason, answerWith, listWith, timeoutThenCheck };
   };
 }

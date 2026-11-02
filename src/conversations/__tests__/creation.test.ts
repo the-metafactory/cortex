@@ -315,6 +315,28 @@ describe("refusal texts", () => {
     expect(owner.calls).toHaveLength(0);
   });
 
+  test("a reason the source supplies for a type it withholds replaces the generic sentence in the catalog and the refusal; other types keep theirs", async () => {
+    const { owner, host, creation, start } = await setup(() => ({}));
+    const reason = "Notes go to the note writer set up on this stack, so the Desk does not keep them itself.";
+    await host.attachSources({ resolvers: {}, readbacks: {}, writers: {}, withheld: { "desk-note": reason } });
+    const byType = new Map(creation.capabilities().map(t => [t.type, t]));
+    expect(byType.get("desk-note")).toMatchObject({ status: `blocked:${OWNER_BLOCKERS["desk-note"]}`, reason });
+    expect(byType.get("tana-note")?.reason).toBe("No Tana writer is connected on this stack yet.");
+    const id = await start();
+    const { view } = await creation.propose(id, { proposalId: randomUUID(), type: "desk-note", fields: { text: "Synthetic note" } }, web);
+    expect(view.capability?.reason).toBe(reason);
+    expect(await refused(creation.confirm(id, view.proposal.proposalId, confirmOf(view), web), 409)).toBe(`Keep-in-mind note is unavailable here: ${reason.slice(0, -1)}. Nothing was created.`);
+    expect(owner.calls).toHaveLength(0);
+  });
+
+  test("a withheld reason never wins over a connected writer", async () => {
+    const { owner, host, creation } = await setup(() => ({}));
+    await host.attachSources({ resolvers: {}, readbacks: {}, writers: { "desk-note": owner.writer }, withheld: { "desk-note": "Off." } });
+    const desk = creation.capabilities().find(t => t.type === "desk-note");
+    expect(desk?.status).toBe("ready");
+    expect(desk?.reason).toBeUndefined();
+  });
+
   test("a capability without a reason falls back to its status with one period", () => {
     const capability = { type: "flow", row: "O14", label: "Flow", owner: "Pulse", status: "blocked:3014" as const, fields: [], fixed: [] };
     expect(unavailableHere(capability)).toBe("Flow is unavailable here: blocked:3014. Nothing was created.");

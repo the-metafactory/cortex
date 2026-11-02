@@ -12,7 +12,7 @@ import { chatTurns, cortexModels, CORTEX_PROVIDER, type GateResult, type Lanes, 
 import {
   AttachmentRefSchema, CONTINUATION_KIND, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES,
   type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationMeta, type CreateConversation,
-  type ExchangeLine, type InputRequest, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadback, type OwnerReadbacks, type OwnerType, type OwnerWriters, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView,
+  type ExchangeLine, type InputRequest, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadback, type OwnerReadbacks, type OwnerType, type OwnerWriters, type WithheldReasons, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView,
 } from "./types";
 
 export const ENGINE = "pi-durable@1.4.0";
@@ -82,7 +82,7 @@ export interface HostOptions {
   alive?: (pid: number) => boolean;
   pid?: number;
 }
-export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters }
+export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters; withheld?: WithheldReasons }
 export type HostStatus = { state: "ready"; host: ConversationHost; tookOver: LockOwner | null; resumed: string[]; reconciled: string[] } | { state: "unavailable"; reason: string };
 
 const strictest = (policies: Policy[]): Policy => policies.includes("local") ? "local" : "cloud";
@@ -220,6 +220,8 @@ export class ConversationHost {
   }
 
   get writers(): OwnerWriters { return this.sources.writers ?? {}; }
+
+  get withheld(): WithheldReasons { return this.sources.withheld ?? {}; }
 
   settled(): Promise<unknown> { return this.reconciling; }
 

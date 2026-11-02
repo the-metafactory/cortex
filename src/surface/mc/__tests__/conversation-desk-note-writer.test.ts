@@ -24,12 +24,13 @@ describe("Desk note writer for conversation proposals", () => {
     expect(r.calls).toEqual([]);
   });
 
-  test("with a configured note writer the type is unavailable, no writer is wired and a confirm keeps nothing", async () => {
+  test("with a configured note writer the type is unavailable for that reason, no writer is wired and a confirm keeps nothing", async () => {
     const r = await open(TANA_WRITER);
     expect(await r.capability()).toBe("blocked:3040");
+    expect(await r.reason()).toBe("Notes go to the note writer set up on this stack, so the Desk does not keep them itself.");
     const refused = await r.confirm(await r.propose(NOTE));
     expect(refused.status).toBe(409);
-    expect(refused.body.error).toEndWith("Nothing was created.");
+    expect(refused.body.error).toBe("Keep-in-mind note is unavailable here: Notes go to the note writer set up on this stack, so the Desk does not keep them itself. Nothing was created.");
     expect(listOpenNotes(r.db)).toEqual([]);
     expect(r.calls).toEqual([]);
   });
@@ -38,6 +39,7 @@ describe("Desk note writer for conversation proposals", () => {
     const r = await open(null);
     r.options.enabled = false;
     expect(await r.capability()).toBe("blocked:3040");
+    expect(await r.reason()).toBe("No Desk writer is connected on this stack yet.");
   });
 
   test("an empty note after trimming answers 400 naming the missing field and keeps nothing", async () => {

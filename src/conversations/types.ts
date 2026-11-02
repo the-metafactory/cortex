@@ -167,3 +167,4 @@ export type CreateResult =
   | { state: "failed"; error: string };
 export interface OwnerWriter { create: (request: CreateRequest) => Promise<CreateResult>; readback: OwnerReadback }
 export type OwnerWriters = Partial<Record<OwnerType, OwnerWriter>>;
+export type WithheldReasons = Partial<Record<OwnerType, string>>;
