@@ -3,7 +3,7 @@ import { readMailMirror, type MailMirrorConfig, type MailMirrorUnsubscribe } fro
 import { loadBalanceState } from "./balance-store";
 import { withoutClosedTasks, type WaitingTask, type WaitingTasks } from "./sources/waiting";
 import { mailYesFilter, readMailDecision } from "./mail-yes-filter";
-import { calendarsOnly, invitationDecisions, invitationView, type InvitationsConfig, type InvitationView } from "./mail-invitation";
+import { calendarsOnly, invitationDecisions, invitationView, withoutAnsweredRead, type InvitationsConfig, type InvitationView } from "./mail-invitation";
 import { readStudioDesk } from "./studio-my-day";
 import { movedKeys, sourceIdentity } from "./my-day";
 import { calendarSetting, discoverCalendars } from "./calendars";
@@ -268,7 +268,7 @@ export async function composeDesk(
   }));
   const corrected = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), ivy: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now), snoozeBack.get(mailIdOf(item.key)))),
+    ...mailItems({ now, mail: withoutAnsweredRead(mail, answers), yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), ivy: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
     ...ruleCards,

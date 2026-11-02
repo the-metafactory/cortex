@@ -244,6 +244,10 @@ export function invitationView(mail: ListedMail, calendar: CalendarAvailability,
   };
 }
 
+export function withoutAnsweredRead<M extends { id: string; unread: boolean; invitation?: unknown }>(mail: readonly M[], answers: ReadonlyMap<string, InvitationDecision>): M[] {
+  return mail.filter((m) => m.unread || !m.invitation || answers.get(m.id)?.status !== "sent");
+}
+
 const PAST: Record<InviteReply, string> = { accept: "accepted", decline: "declined" };
 const NOUN: Record<InviteReply, string> = { accept: "acceptance", decline: "decline" };
 

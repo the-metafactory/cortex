@@ -58,6 +58,14 @@ describe("sweep builder", () => {
     expect(groups[0]?.members.map((m) => m.id)).toEqual(["r1", "r2", "r3"]);
   });
 
+  it("never includes mail that carries a calendar invitation", () => {
+    const invitation = { method: "REQUEST" as const, uid: "u1", sequence: 0, summary: "Stats review", start: "2026-11-05T07:00:00.000Z", organizer: { address: "stats@otrs.example" }, attendees: 1 };
+    const invite = mail("i1", "stats@otrs.example", { headers: { listId: "<stats.otrs.example>" }, invitation });
+    const groups = buildSweeps(input([...REPORTS, invite], { r1: archive(), r2: archive(), r3: archive(), i1: archive() }));
+    expect(groups.length).toBeGreaterThan(0);
+    expect(groups.flatMap((g) => g.members.map((m) => m.id))).not.toContain("i1");
+  });
+
   it("bundles by content similarity when vectors exist, across senders, and keeps unlike mail apart", () => {
     const a = mail("a", "one@x.example", { subject: "Weekly ITIL statistics" });
     const b = mail("b", "two@y.example", { subject: "Monthly ITIL statistics" });
