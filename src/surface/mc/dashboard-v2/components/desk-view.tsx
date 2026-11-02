@@ -1,6 +1,8 @@
 import { CatchupPreview, DeskCatchUp } from "./desk-catch-up";
 import { catchupSearch } from "../hooks/use-catchup-location";
 import { scrollBelowDesk } from "../lib/desk-scroll";
+import { deskLinkMode, openDeskLink } from "../lib/desk-link";
+import { DeskLink } from "./desk-link";
 import { DeskBalance } from "./desk-balance";
 import { MailSweeps, SweepPreview, sweepsInArea } from "./desk-mail-sweeps";
 import { digestsInArea, MailDigests, type UnsubscribeAsk } from "./desk-mail-digest";
@@ -430,13 +432,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
     else if (a.id === "mail.report") void send(item, a, { request: () => submitMailAction({ action: "report", key: item.key }), keepVisible: true });
     else if (a.id === "mail.unsubscribe") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "unsubscribe", key: item.key }), keepVisible: true }));
-    else if (a.id === "mail.unsubscribe.page" && a.url) { const url = a.url; confirmFirst(item, a, () => openLink(url)); }
+    else if (a.id === "mail.unsubscribe.page" && a.url) { const url = a.url; confirmFirst(item, a, () => openDeskLink(url)); }
     else if (a.id === "mail.unsubscribe.rule") void send(item, a, { request: () => submitMailAction({ action: "unsubscribe.rule", key: item.key }) });
     else if (isWaitingAction(a.id)) { const action = a.id; void send(item, a, { request: () => submitMailAction({ action, key: item.key }), keepVisible: action === "waiting.expect" }); }
     else if (a.id.startsWith("mailrule.")) runRule(item, a);
     else if (a.id === "dmarc.ack" && a.target) acknowledge(item, a, a.target);
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
-    else if (a.url) openLink(a.url);
+    else if (a.url) openDeskLink(a.url);
     else setNote(`"${a.label}" is not connected yet.`);
   };
 
@@ -1026,7 +1028,7 @@ function DetailPanel({ item, area, onClose, onAction, onShowEvent, sending, chil
         <>
           <div className="desk-sec">Open in</div>
           <div className="desk-links">
-            {item.detail.links.map((l) => <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer">{l.label}<span>↗</span></a>)}
+            {item.detail.links.map((l) => <DeskLink key={l.url} url={l.url}>{l.label}<span>↗</span></DeskLink>)}
           </div>
         </>
       )}
@@ -1048,7 +1050,7 @@ export function EvidenceLink({ evidence, onShowEvent }: { evidence: DeskEvidence
   const label = <><span className="k">{EVIDENCE_KIND[evidence.kind]}</span>{evidence.title}</>;
   const { eventKey, url } = evidence;
   if (eventKey) return <button type="button" onClick={() => onShowEvent(eventKey)}>{label}<span className="go">↑</span></button>;
-  if (url) return <a href={url} target="_blank" rel="noopener noreferrer">{label}<span className="go">↗</span></a>;
+  if (url && deskLinkMode(url)) return <DeskLink url={url}>{label}<span className="go">↗</span></DeskLink>;
   return <span>{label}</span>;
 }
 
@@ -1346,11 +1348,6 @@ function nowSubline(view: DeskViewModel, count: number, rest: number, next: Desk
   const lead = minutesUntil(view, next) <= MEETING_LEAD_MINUTES && canSee(view) && count > 0 ? needsYouLine(count) : "";
   const tail = rest > 0 ? `${rest} more can wait; they are in the margin.` : "";
   return [lead, tail].filter(Boolean).join(" ");
-}
-
-function openLink(url: string): void {
-  if (/^https?:/i.test(url)) window.open(url, "_blank", "noopener");
-  else if (/^(message|mailto):/i.test(url)) window.location.assign(url);
 }
 
 export function AheadStrip({ events }: { events: DeskEvent[] }) {
