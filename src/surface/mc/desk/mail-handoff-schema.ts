@@ -31,8 +31,19 @@ export const HANDOFF_SQL = [
     error TEXT,
     created_at INTEGER NOT NULL,
     finished_at INTEGER,
-    closed_at INTEGER
+    closed_at INTEGER,
+    task_close TEXT,
+    task_close_error TEXT,
+    task_close_tries INTEGER NOT NULL DEFAULT 0,
+    task_close_tried_at INTEGER
   )`,
   "CREATE INDEX IF NOT EXISTS desk_mail_handoffs_message ON desk_mail_handoffs (message_id, created_at)",
   "CREATE INDEX IF NOT EXISTS desk_mail_handoffs_state ON desk_mail_handoffs (state, created_at)",
+];
+
+export const HANDOFF_COLUMNS = [
+  { table: "desk_mail_handoffs", column: "task_close", ddl: "ALTER TABLE desk_mail_handoffs ADD COLUMN task_close TEXT" },
+  { table: "desk_mail_handoffs", column: "task_close_error", ddl: "ALTER TABLE desk_mail_handoffs ADD COLUMN task_close_error TEXT" },
+  { table: "desk_mail_handoffs", column: "task_close_tries", ddl: "ALTER TABLE desk_mail_handoffs ADD COLUMN task_close_tries INTEGER NOT NULL DEFAULT 0" },
+  { table: "desk_mail_handoffs", column: "task_close_tried_at", ddl: "ALTER TABLE desk_mail_handoffs ADD COLUMN task_close_tried_at INTEGER" },
 ];

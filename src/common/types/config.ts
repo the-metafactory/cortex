@@ -560,6 +560,7 @@ export const DeskSchema = z.object({
         })
         .default({}),
       taskMaps: z.array(z.object({ ref: z.string().regex(/^[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/), label: z.string().min(1) })).default([]),
+      taskCloser: z.array(z.string().min(1)).min(1).optional(),
     })
     .default({ parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }),
   interruptions: DeskInterruptionsSchema.default(DeskInterruptionsSchema.parse({})),

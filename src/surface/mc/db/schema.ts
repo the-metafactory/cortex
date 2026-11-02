@@ -7,7 +7,7 @@ import { ROUTINE_DISPLAY_SQL } from "../desk/routine-display";
 import { DIGEST_SQL } from "../desk/mail-digest-schema";
 import { UNSUBSCRIBE_SQL } from "../desk/mail-unsubscribe-schema";
 import { WAITING_SQL } from "../desk/mail-waiting-schema";
-import { HANDOFF_SQL } from "../desk/mail-handoff-schema";
+import { HANDOFF_COLUMNS, HANDOFF_SQL } from "../desk/mail-handoff-schema";
 import { INVITATIONS_SQL } from "../desk/mail-invitation-schema";
 import { SNOOZE_SQL } from "../desk/mail-snooze-schema";
 
@@ -1193,6 +1193,7 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
   },
   { table: "desk_mail_classes", column: "details", ddl: "ALTER TABLE desk_mail_classes ADD COLUMN details TEXT" },
   { table: "desk_mail_moves", column: "correction_id", ddl: "ALTER TABLE desk_mail_moves ADD COLUMN correction_id INTEGER" },
+  ...HANDOFF_COLUMNS,
 ];
 
 /**

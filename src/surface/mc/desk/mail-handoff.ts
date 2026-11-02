@@ -7,6 +7,7 @@ import type { ModelRoute } from "../../../conversations/types";
 import type { AskMap } from "./ask";
 import { createFromCard, type DeskWriters, type WriterRunner } from "./create";
 import { MAX_REPLY_CHARS, type ListedMail, type MailActionResult } from "./mail-actions";
+import { closePendingTasks, queueTaskClose, type TaskCloser } from "./mail-handoff-close";
 import { MAX_FINDING, MAX_FINDINGS, MAX_INSTRUCTION, OPEN_STATES, type HandoffState } from "./mail-handoff-schema";
 import { logMailDecision, mailFeatures, senderDomain, type MailFeatures } from "./mail-log";
 import type { MailForStudio } from "./mail-studio";
@@ -183,7 +184,9 @@ export async function handMailToIvy(item: MailForStudio, input: HandInput, deps:
     `INSERT INTO desk_mail_handoffs (id, message_id, account, source_id, area, from_name, from_address, subject, url, received_at, summary, text, instruction, route, task_id, task_url, state, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'working', ?)`,
   ).run(input.requestId, mail.id, mail.account ?? null, mail.sourceId, item.area, mail.from.name ?? null, mail.from.address, mail.subject, mail.url ?? null, mail.receivedAt, item.summary, mail.firstParagraph ?? null, instruction, routed.route, filed.id, filed.url ?? null, now);
+  const superseded = db.query<{ id: string }, [string, string]>("SELECT id FROM desk_mail_handoffs WHERE message_id = ? AND state = 'failed' AND id != ?").all(mail.id, input.requestId).map((r) => r.id);
   db.query("UPDATE desk_mail_handoffs SET state = 'discarded', closed_at = ? WHERE message_id = ? AND state = 'failed' AND id != ?").run(now, mail.id, input.requestId);
+  queueTaskClose(db, superseded);
   logMailDecision(db, mailFeatures(db, mail), "ivy", "desk", now);
   const row = readHandoff(db, input.requestId);
   return { ok: true, id: input.requestId, message: row ? handedMessage(row, map.label) : "Handed to Ivy." };
@@ -228,6 +231,7 @@ export class MailHandoffWorker {
   constructor(
     private readonly owner: HandoffOwner,
     private readonly log: (message: string) => void = console.error,
+    private readonly closer?: TaskCloser,
   ) {}
 
   kick(db: Database, now: () => number = Date.now): Promise<void> {
@@ -235,6 +239,7 @@ export class MailHandoffWorker {
   }
 
   private async pass(db: Database, now: () => number): Promise<void> {
+    if (this.closer) await closePendingTasks(db, this.closer, now());
     const tried = new Set<string>();
     for (;;) {
       const next = db.query<RawRow, []>("SELECT * FROM desk_mail_handoffs WHERE state = 'working' ORDER BY created_at").all().map(toRow).find((r) => !tried.has(r.id));
@@ -333,6 +338,7 @@ export async function approveHandoff(db: Database, id: string, body: string | un
   const saved = await save(handoffMail(row), text);
   if (!saved.ok) return saved;
   db.query("UPDATE desk_mail_handoffs SET state = 'approved', draft = ?, closed_at = ? WHERE id = ? AND state = 'ready'").run(text, now, id);
+  queueTaskClose(db, [id]);
   logMailDecision(db, featuresOf(row), "draft", "desk", now, "Drafts");
   return { ok: true, message: saved.message };
 }
@@ -341,6 +347,7 @@ export function discardHandoff(db: Database, id: string, now: number): HandoffRe
   const row = readHandoff(db, id);
   if (!row || !OPEN_STATES.includes(row.state)) return refuse(409, "This hand-off is already closed.");
   db.query("UPDATE desk_mail_handoffs SET state = 'discarded', closed_at = ? WHERE id = ?").run(now, id);
+  queueTaskClose(db, [id]);
   return { ok: true, message: row.state === "working" ? "Stopped waiting for Ivy; a late answer is dropped." : "Discarded Ivy's result. Nothing was saved." };
 }
 

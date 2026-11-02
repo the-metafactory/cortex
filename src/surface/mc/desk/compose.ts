@@ -78,6 +78,7 @@ export interface DeskAskOptions {
   timeoutSeconds: number;
   writers: DeskWriters;
   taskMaps: AskMap[];
+  taskCloser?: string[];
 }
 
 export interface DeskOptions {
