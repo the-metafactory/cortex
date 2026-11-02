@@ -81,6 +81,9 @@ function readReceipt(db: Database, operationId: string): ReadbackResult {
   }
 }
 
+const DESK_OFF = "The Desk is turned off on this stack.";
+const receiptReadback = (db: Database) => (operation: OperationRecord): Promise<ReadbackResult> => Promise.resolve(readReceipt(db, operation.operationId));
+
 export function balanceWriter(kind: BalanceKind, deps: BalanceWriterDeps): OwnerWriter {
   const clock = deps.now ?? Date.now;
   const add = (desk: DeskOptions, request: CreateRequest, studio: StudioProjection | undefined): CreateResult => {
@@ -116,10 +119,10 @@ export function balanceWriter(kind: BalanceKind, deps: BalanceWriterDeps): Owner
   return {
     create: async request => {
       const desk = deps.desk();
-      if (!desk?.enabled) return failed("The Desk is turned off on this stack.");
+      if (!desk?.enabled) return failed(DESK_OFF);
       return withStudioProjection(desk, studio => add(desk, request, studio));
     },
-    readback: (operation: OperationRecord): Promise<ReadbackResult> => Promise.resolve(readReceipt(deps.db, operation.operationId)),
+    readback: receiptReadback(deps.db),
   };
 }
 
@@ -144,7 +147,7 @@ export function balanceInboxWriter(deps: InboxWriterDeps): OwnerWriter {
   return {
     create: async request => {
       const desk = deps.desk();
-      if (!desk?.enabled) return failed("The Desk is turned off on this stack.");
+      if (!desk?.enabled) return failed(DESK_OFF);
       const earlier = readReceipt(deps.db, request.operationId);
       if (earlier?.found) return { state: "created", canonicalId: earlier.canonicalId };
       const item = (await deps.deskItems()).find(i => i.key === request.fields.item);
@@ -153,6 +156,6 @@ export function balanceInboxWriter(deps: InboxWriterDeps): OwnerWriter {
       if (item.title.trim() !== request.fields.title) return failed("The Day item changed since it was proposed, or its title was edited; the Inbox task takes the item's own title.");
       return withStudioProjection(desk, studio => move(desk, request, item, studio));
     },
-    readback: (operation: OperationRecord): Promise<ReadbackResult> => Promise.resolve(readReceipt(deps.db, operation.operationId)),
+    readback: receiptReadback(deps.db),
   };
 }
