@@ -93,6 +93,6 @@ export function deskWriterRig(setup: DeskWriterSetup) {
       const { view, reply } = await submit(fields);
       return { feedback: [reply, await check(view)].map(r => r.body.proposal.feedback), runs: calls.length };
     };
-    return { id, options, calls, lists, propose, confirm, check, submit, capability, answerWith, listWith, timeoutThenCheck };
+    return { id, db, options, calls, lists, propose, confirm, check, submit, capability, answerWith, listWith, timeoutThenCheck };
   };
 }

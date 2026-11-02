@@ -17,6 +17,7 @@ export type DeskWriterKind = Extract<WriterKind, "calendar" | "reminder" | "goal
 export interface DeskWriterSpec<K extends DeskWriterKind> {
   kind: K;
   objects: string;
+  keptOnDesk?: true;
   destination?: { flag: string; field: string; noun: string; fallback: string; verb?: string };
   fields: (request: CreateRequest) => AskFields[K] | string;
   afterRefusal?: (request: CreateRequest, error: string) => Promise<ReadbackResult>;
@@ -51,10 +52,11 @@ export function deskConversationWriter<K extends DeskWriterKind>(spec: DeskWrite
   const create = async (request: CreateRequest): Promise<CreateResult> => {
     const desk = deps.desk();
     const argv = deskWriterArgv(desk, spec.kind);
-    if (!desk || !argv) return failed(`${spec.objects} are not set up on this stack`);
+    const writes = spec.keptOnDesk ? !argv : Boolean(argv);
+    if (!desk?.enabled || !writes) return failed(`${spec.objects} are not set up on this stack`);
     if (spec.destination) {
       const { flag, field, noun, fallback, verb = "saves" } = spec.destination;
-      const destination = argvOption(argv, flag);
+      const destination = argvOption(argv ?? [], flag);
       const asked = request.fields[field] ?? "";
       if (asked && asked !== destination) return failed(`This stack ${verb} ${noun} only to ${destination ?? fallback}`);
     }
@@ -63,7 +65,7 @@ export function deskConversationWriter<K extends DeskWriterKind>(spec: DeskWrite
     const card = validateCard(spec.kind, fields);
     if (typeof card === "string") return failed(card);
     if (request.signal.aborted) throw new Error(`The conversation stopped waiting before the ${writerName} was called.`);
-    const saved = await createFromCard(card, { requestId: studioRequestId(request.operationId), writers: { [spec.kind]: argv }, run: deps.run ?? spawnWithStdin, db: deps.db, now: (deps.now ?? Date.now)(), timeoutMs: (desk.ask?.timeoutSeconds ?? 30) * 1000 });
+    const saved = await createFromCard(card, { requestId: studioRequestId(request.operationId), writers: argv ? { [spec.kind]: argv } : {}, run: deps.run ?? spawnWithStdin, db: deps.db, now: (deps.now ?? Date.now)(), timeoutMs: (desk.ask?.timeoutSeconds ?? 30) * 1000 });
     if (saved.ok) return { state: "created", canonicalId: saved.id };
     if (saved.uncertain) throw new Error(saved.error);
     const found = spec.afterRefusal ? await spec.afterRefusal(request, saved.error) : { found: false as const };
