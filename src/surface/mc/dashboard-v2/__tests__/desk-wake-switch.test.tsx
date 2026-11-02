@@ -35,12 +35,17 @@ describe("WakeSwitch", () => {
     expect(html).toContain(`title="${WAKE_NEEDS_ELEVENLABS}"`);
     const described = /aria-describedby="([^"]+)"/.exec(html)?.[1] ?? "missing";
     expect(html).toContain(`id="${described}" hidden="">${WAKE_NEEDS_ELEVENLABS}</span>`);
-    expect(wakeSwitch(LISTENING, WAKE_NEEDS_MIC)).toEqual({ on: false, disabled: true, hint: WAKE_NEEDS_MIC, status: "" });
+    expect(wakeSwitch(OFF, WAKE_NEEDS_MIC)).toEqual({ on: false, disabled: true, failed: false, hint: WAKE_NEEDS_MIC, status: "" });
+    expect(renderToStaticMarkup(<WakeStatus state={{ phase: "unavailable", line: "Old failure." }} blocked={WAKE_NEEDS_MIC} />)).toBe('<p class="desk-wake-status" role="status" aria-live="polite"></p>');
+  });
+
+  it("keeps a running wake shown on and switchable even if a block reason appears", () => {
+    expect(wakeSwitch(LISTENING, WAKE_NEEDS_MIC)).toEqual({ on: true, disabled: false, failed: false, hint: LISTENING.line, status: LISTENING.line });
   });
 
   it("stays switchable after a runtime failure and reports it under the bar", () => {
     const failed: WakeState = { phase: "unavailable", line: "The microphone was lost or permission was revoked. Switch wake on to try again." };
-    expect(wakeSwitch(failed, null)).toEqual({ on: false, disabled: false, hint: failed.line, status: failed.line });
+    expect(wakeSwitch(failed, null)).toEqual({ on: false, disabled: false, failed: true, hint: failed.line, status: failed.line });
     expect(renderToStaticMarkup(<WakeStatus state={failed} blocked={null} />)).toContain('class="desk-wake-status failed"');
   });
 });

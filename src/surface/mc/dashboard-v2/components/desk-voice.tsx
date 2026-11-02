@@ -12,11 +12,11 @@ const PHASE_LABEL: Record<VoiceState["phase"], string> = {
 
 export const WAKE_OFF_LINE = "Wake is off. Audio stays local until a command is captured.";
 
-export function wakeSwitch(state: WakeState, blocked: string | null): { on: boolean; disabled: boolean; hint: string; status: string } {
-  if (blocked) return { on: false, disabled: true, hint: blocked, status: "" };
-  if (state.phase === "off") return { on: false, disabled: false, hint: WAKE_OFF_LINE, status: "" };
-  if (state.phase === "unavailable") return { on: false, disabled: false, hint: state.line, status: state.line };
-  return { on: true, disabled: false, hint: state.line, status: state.line };
+export function wakeSwitch(state: WakeState, blocked: string | null): { on: boolean; disabled: boolean; failed: boolean; hint: string; status: string } {
+  if (state.phase !== "off" && state.phase !== "unavailable") return { on: true, disabled: false, failed: false, hint: state.line, status: state.line };
+  if (blocked) return { on: false, disabled: true, failed: false, hint: blocked, status: "" };
+  if (state.phase === "unavailable") return { on: false, disabled: false, failed: true, hint: state.line, status: state.line };
+  return { on: false, disabled: false, failed: false, hint: WAKE_OFF_LINE, status: "" };
 }
 
 export function WakeSwitch({ state, blocked, onToggle, assistantName }: { state: WakeState; blocked: string | null; onToggle: () => void; assistantName: string }) {
@@ -31,8 +31,8 @@ export function WakeSwitch({ state, blocked, onToggle, assistantName }: { state:
 }
 
 export function WakeStatus({ state, blocked }: { state: WakeState; blocked: string | null }) {
-  const { status } = wakeSwitch(state, blocked);
-  return <p className={`desk-wake-status${state.phase === "unavailable" ? " failed" : ""}`} role="status" aria-live="polite">{status}</p>;
+  const { status, failed } = wakeSwitch(state, blocked);
+  return <p className={`desk-wake-status${failed ? " failed" : ""}`} role="status" aria-live="polite">{status}</p>;
 }
 
 export function MicButton({ phase, onStart, onStop }: { phase: VoiceState["phase"]; onStart: () => void; onStop: () => void }) {
