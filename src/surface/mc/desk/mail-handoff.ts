@@ -11,13 +11,17 @@ import { MAX_FINDING, MAX_FINDINGS, MAX_INSTRUCTION, OPEN_STATES, type HandoffSt
 import { logMailDecision, mailFeatures, senderDomain, type MailFeatures } from "./mail-log";
 import type { MailForStudio } from "./mail-studio";
 import { replySubject } from "./mail-triage";
-import type { AreaRule } from "./rank";
+import { ago, type AreaRule } from "./rank";
 import { SingleFlight } from "./single-flight";
 import { oneLine } from "./studio/edit";
 import { clock, DAY_MS, startOfDay } from "./time";
 import type { DeskAction, DeskItem } from "./types";
 
 export { HANDOFF_SQL, HANDOFF_STATES, MAX_INSTRUCTION, type HandoffState } from "./mail-handoff-schema";
+
+export const HANDOFF_OPS = ["ivy.approve", "ivy.discard", "ivy.retry"] as const;
+export type HandoffOp = (typeof HANDOFF_OPS)[number];
+export const isHandoffOp = (action: string): action is HandoffOp => HANDOFF_OPS.includes(action as HandoffOp);
 
 export const HANDOFF_KEY_PREFIX = "ivy:";
 export const handoffKey = (id: string): string => `${HANDOFF_KEY_PREFIX}${id}`;
@@ -383,13 +387,6 @@ export function withHandoff(item: DeskItem, row: HandoffRow | undefined, now: nu
   return { ...item, actions: all.slice(0, 3), more: all.slice(3), handoff };
 }
 
-const ago = (now: number, at: number): string => {
-  const minutes = Math.max(0, Math.round((now - at) / 60_000));
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  return hours < 24 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`;
-};
 
 /**
  * The result cards: one per hand-off Ivy finished (findings, the draft, Approve, Edit, Discard), and one per failed

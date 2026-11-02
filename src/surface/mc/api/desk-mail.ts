@@ -15,7 +15,7 @@ import { addMailToStudio, mailForStudio, MAX_MAIL_REASON, proposeMailThread } fr
 import type { CaptureModel } from "../desk/studio/capture";
 import { STUDIO_SLUG } from "../desk/studio/format";
 import { STUDIO_REQUEST_ID } from "../desk/studio/writer";
-import { approveHandoff, discardHandoff, handMailToIvy, handoffIdOf, MAX_INSTRUCTION, retryHandoff } from "../desk/mail-handoff";
+import { approveHandoff, discardHandoff, handMailToIvy, HANDOFF_OPS, handoffIdOf, isHandoffOp, MAX_INSTRUCTION, retryHandoff, type HandoffOp } from "../desk/mail-handoff";
 import { handoffReady } from "../desk/compose";
 import { isSuspicious } from "../desk/mail-suspicion";
 import { actOnWaiting, nudgeMail, readWaiting, waitingFeatures, waitingIdOf, WAITING_OPS, type WaitingOp } from "../desk/mail-waiting";
@@ -38,7 +38,7 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("sweep.undo"), sweep: z.string().min(1).max(64) }).strict(),
   z.object({ action: WaitingActionSchema, key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("ivy.hand"), key: z.string().min(1).max(1000), requestId: z.string().regex(HANDOFF_REQUEST_ID), instruction: z.string().max(MAX_INSTRUCTION).optional() }).strict(),
-  z.object({ action: z.enum(["ivy.approve", "ivy.discard", "ivy.retry"]), key: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: z.enum(HANDOFF_OPS), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("studio.propose"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("studio.add"), key: z.string().min(1).max(1000), requestId: z.string().regex(STUDIO_REQUEST_ID), thread: z.string().regex(STUDIO_SLUG).nullable(), reason: z.string().trim().min(1).max(MAX_MAIL_REASON).optional(), includeText: z.boolean() }).strict(),
 ]);
@@ -78,7 +78,8 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if ("move" in body) {
     return answer(body.action === "undo" ? await undoMove(body.move, moveDeps) : blockSenderDomain(db, body.move, now));
   }
-  if (body.action === "ivy.approve" || body.action === "ivy.discard" || body.action === "ivy.retry" || (body.action === "draft" && handoffIdOf(body.key) !== null)) return answer(await actOnHandoff(db, runtime, body, moveDeps));
+  const handoffBody = handoffBodyOf(body);
+  if (handoffBody) return answer(await actOnHandoff(db, runtime, handoffBody, moveDeps));
   const op = waitingOp(body.action);
   if (op && "key" in body) return answer(actOnWaiting(db, body.key, op, now, runtime.options.mailWaiting));
   if (body.action === "draft" && waitingIdOf(body.key) !== null) return answer(await draftNudge(db, body.key, body.body, moveDeps));
@@ -132,7 +133,12 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   return answer(await moveMail(mail, body.action === "move" ? body.target : "trash", moveDeps));
 }
 
-type HandoffBody = Extract<z.infer<typeof MailRequestSchema>, { action: "ivy.approve" | "ivy.discard" | "ivy.retry" | "draft" }>;
+type HandoffBody = Extract<z.infer<typeof MailRequestSchema>, { action: HandoffOp | "draft" }>;
+
+function handoffBodyOf(body: z.infer<typeof MailRequestSchema>): HandoffBody | null {
+  if (body.action === "draft") return handoffIdOf(body.key) !== null ? body : null;
+  return "key" in body && isHandoffOp(body.action) ? { action: body.action, key: body.key } : null;
+}
 
 async function actOnHandoff(db: Database, runtime: DeskRuntime, body: HandoffBody, moveDeps: MoveDeps): Promise<{ ok: true; message: string } | { ok: false; status: number; error: string }> {
   const id = handoffIdOf(body.key);
