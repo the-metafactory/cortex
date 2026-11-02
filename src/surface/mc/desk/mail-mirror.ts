@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { z } from "zod/v4";
 import { DeskMailMirrorSchema } from "../../../common/types/config";
-import { queryMailLog, type MailLogAction, type MailLogEntry, type MailLogWhere } from "./mail-log";
+import { PRINCIPAL_ACTED_WHERE, queryMailLog, type MailLogAction, type MailLogEntry, type MailLogWhere } from "./mail-log";
 import { listRules, matchesRule, ruleSentence, type MailRule, type RuleMatch } from "./mail-rules";
 import { listKey, type UnsubscribeView } from "./mail-unsubscribe";
 import { isVip, listVips } from "./vips";
@@ -90,7 +90,6 @@ export interface MailMirrorInput {
 
 const DISMISSED = new Set<MailLogAction>(["archive", "trash", "unimportant"]);
 const PRINCIPAL = new Set<MailLogWhere>(["desk", "client", "correction", "conversation"]);
-const ACTED = new Set<MailLogWhere>(["desk", "client", "conversation"]);
 
 const counted = <K extends string>(keys: readonly K[]): MailMirrorCount<K>[] => {
   const counts = new Map<K, number>();
@@ -148,7 +147,7 @@ function ruleCounts(input: MailMirrorInput, config: MailMirrorConfig): MailMirro
 function newestPerMail(entries: readonly MailLogEntry[]): MailLogEntry[] {
   const newest = new Map<string, MailLogEntry>();
   for (const e of entries) {
-    if (!ACTED.has(e.where)) continue;
+    if (!PRINCIPAL_ACTED_WHERE.has(e.where)) continue;
     const known = newest.get(e.messageId);
     if (!known || e.at > known.at || (e.at === known.at && e.id > known.id)) newest.set(e.messageId, e);
   }
@@ -192,7 +191,7 @@ function openToAct(entries: readonly MailLogEntry[]): MailMirrorTime | null {
     const ordered = [...rows].sort((a, b) => a.at - b.at || a.id - b.id);
     const opened = ordered.find((e) => e.action === "opened");
     if (!opened) continue;
-    const acted = ordered.find((e) => e.at >= opened.at && e.id !== opened.id && e.action !== "opened" && ACTED.has(e.where));
+    const acted = ordered.find((e) => e.at >= opened.at && e.id !== opened.id && e.action !== "opened" && PRINCIPAL_ACTED_WHERE.has(e.where));
     if (acted) spans.push(acted.at - opened.at);
   }
   if (spans.length === 0) return null;

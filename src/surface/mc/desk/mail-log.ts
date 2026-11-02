@@ -5,7 +5,7 @@ import type { SourceMail, SourceReading } from "./sources/command";
 import { DAY_MS } from "./time";
 import { DEFAULT_MAIL_LOG_RETENTION_DAYS, MAIL_LOG_ACTIONS, MAIL_LOG_WHERE, type MailLogAction, type MailLogWhere } from "./mail-log-schema";
 
-export { DEFAULT_MAIL_LOG_RETENTION_DAYS, MAIL_LOG_ACTIONS, MAIL_LOG_WHERE, type MailLogAction, type MailLogWhere } from "./mail-log-schema";
+export { DEFAULT_MAIL_LOG_RETENTION_DAYS, MAIL_LOG_ACTIONS, MAIL_LOG_WHERE, PRINCIPAL_ACTED_WHERE, type MailLogAction, type MailLogWhere } from "./mail-log-schema";
 
 const MAX_SUMMARY = 600;
 const MAX_SUBJECT = 300;
