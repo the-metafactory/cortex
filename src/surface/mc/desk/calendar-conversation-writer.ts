@@ -17,6 +17,8 @@ const failed = (sentence: string): CreateResult => ({ state: "failed", error: `$
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})?$/;
 const NOTES_MAX = FIELD_SCHEMAS.calendar.shape.notes.unwrap().maxLength ?? Number.POSITIVE_INFINITY;
 
+export const calendarArgv = (desk: DeskOptions | undefined): string[] | undefined => desk?.enabled && desk.ask?.writers.calendar?.length ? desk.ask.writers.calendar : undefined;
+
 export function writerCalendar(argv: readonly string[]): string | undefined {
   const at = argv.indexOf("--calendar");
   return at >= 0 ? argv[at + 1] : undefined;
@@ -43,8 +45,8 @@ function eventFields(request: CreateRequest): { title: string; start: string; en
 export function calendarWriter(deps: CalendarWriterDeps): OwnerWriter {
   const create = async (request: CreateRequest): Promise<CreateResult> => {
     const desk = deps.desk();
-    const argv = desk?.enabled ? desk.ask?.writers.calendar : undefined;
-    if (!desk || !argv?.length) return failed("Calendar events are not set up on this stack");
+    const argv = calendarArgv(desk);
+    if (!desk || !argv) return failed("Calendar events are not set up on this stack");
     const destination = writerCalendar(argv);
     const asked = request.fields.calendar ?? "";
     if (asked && asked !== destination) return failed(`This stack saves events only to ${destination ?? "the default calendar"}`);

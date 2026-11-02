@@ -3,7 +3,7 @@ import { findNode } from "../../../balance";
 import type { HostSources } from "../../../conversations/host";
 import type { ObjectRef, OperationRecord, SourceState } from "../../../conversations/types";
 import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-conversation-writer";
-import { calendarWriter } from "./calendar-conversation-writer";
+import { calendarArgv, calendarWriter } from "./calendar-conversation-writer";
 import { loadBalanceState } from "./balance-store";
 import { studioRequestId } from "./conversation-ids";
 import type { DeskOptions } from "./compose";
@@ -92,7 +92,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
     get writers() {
       const desk = deps.desk();
       if (!desk?.enabled) return {};
-      return { ...(hasBalanceState(deps.db) ? balanceWriters : {}), ...(desk.routines ? { routine } : {}), ...(desk.ask?.writers.calendar?.length ? { "calendar-event": calendar } : {}) };
+      return { ...(hasBalanceState(deps.db) ? balanceWriters : {}), ...(desk.routines ? { routine } : {}), ...(calendarArgv(desk) ? { "calendar-event": calendar } : {}) };
     },
     resolvers: {
       "studio-thread": async ref => {

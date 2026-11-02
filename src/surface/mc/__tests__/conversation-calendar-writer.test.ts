@@ -61,10 +61,17 @@ describe("calendar writer for conversation proposals", () => {
   });
 
   test("a time without an offset, as the conversation form's datetime-local input sends it, is read in the stack's time zone", async () => {
-    const r = await rig();
-    const { reply } = await r.submit({ ...PROBE, start: "2027-01-06T03:00", end: "2027-01-06T03:15" });
-    expect(reply.body.proposal.feedback).toBe("created");
-    expect(r.calls[0]?.stdin.fields).toMatchObject({ start: new Date(2027, 0, 6, 3, 0).toISOString(), end: new Date(2027, 0, 6, 3, 15).toISOString() });
+    const zone = process.env.TZ;
+    process.env.TZ = "Pacific/Auckland";
+    try {
+      const r = await rig();
+      const { reply } = await r.submit({ ...PROBE, start: "2027-01-06T03:00", end: "2027-01-06T03:15" });
+      expect(reply.body.proposal.feedback).toBe("created");
+      expect(r.calls[0]?.stdin.fields).toMatchObject({ start: "2027-01-05T14:00:00.000Z", end: "2027-01-05T14:15:00.000Z" });
+    } finally {
+      if (zone === undefined) delete process.env.TZ;
+      else process.env.TZ = zone;
+    }
   });
 
   test("another calendar is refused with 409 before the writer runs", async () => {
