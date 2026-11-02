@@ -54,20 +54,21 @@ export function conversationWriterRig(prefix: string, label: string) {
 
 export interface DeskWriterReply { ok: boolean; error: string; proposal: ProposalView; conversation: { id: string }; types: { type: string; status: string }[] }
 export interface DeskWriterCall { argv: string[]; stdin: { kind: string; requestId: string; fields: Record<string, string> } }
-interface DeskWriterSetup { prefix: string; label: string; kind: DeskWriterKind; type: string; canonicalId: string; somaBin?: string }
+interface DeskWriterSetup { prefix: string; label: string; kind: DeskWriterKind; type: string; canonicalId: string; somaBin?: string; owner?: string }
 
 export function deskWriterRig(setup: DeskWriterSetup) {
   const writerRig = conversationWriterRig(setup.prefix, setup.label);
   return async (writer: string[] | null, policy: "local" | "cloud" = "cloud") => {
     const db = writerRig.database();
-    const options: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], ...(setup.somaBin ? { somaBin: setup.somaBin } : {}), ...(writer ? { ask: { parser: [], timeoutSeconds: 5, writers: { [setup.kind]: writer }, taskMaps: [] } } : {}) };
+    const options: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], ...(setup.somaBin ? { somaBin: setup.somaBin } : {}), ...(writer ? { ask: { parser: [], timeoutSeconds: 5, writers: { [setup.kind]: writer }, ...(setup.owner ? { writerOwners: { [setup.kind]: setup.owner } } : {}), taskMaps: [] } } : {}) };
     const runtime: DeskRuntime = { ledger: new HandledLedger(), options };
     const rig = await writerRig.open<DeskWriterReply>(db, runtime);
     const calls: DeskWriterCall[] = [];
-    let answer = (): Promise<WriterResult> => Promise.resolve({ code: 0, stdout: JSON.stringify({ id: setup.canonicalId, message: "Added." }), stderr: "" });
+    let answer = (_call: DeskWriterCall): Promise<WriterResult> => Promise.resolve({ code: 0, stdout: JSON.stringify({ id: setup.canonicalId, message: "Added." }), stderr: "" });
     const run: WriterRunner = (argv, stdin) => {
-      calls.push({ argv, stdin: JSON.parse(stdin) as DeskWriterCall["stdin"] });
-      return answer();
+      const call = { argv, stdin: JSON.parse(stdin) as DeskWriterCall["stdin"] };
+      calls.push(call);
+      return answer(call);
     };
     const lists: string[][] = [];
     let listed = (): Promise<GoalRunResult> => Promise.resolve({ code: 0, stdout: "", stderr: "" });
@@ -85,7 +86,7 @@ export function deskWriterRig(setup: DeskWriterSetup) {
       const view = await propose(fields);
       return { view, reply: await confirm(view) };
     };
-    const answerWith = (next: () => Promise<WriterResult>) => { answer = next; };
+    const answerWith = (next: (call: DeskWriterCall) => Promise<WriterResult>) => { answer = next; };
     const listWith = (next: () => Promise<GoalRunResult>) => { listed = next; };
     const timeoutThenCheck = async (fields: Record<string, string>) => {
       answerWith(() => Promise.reject(new WriterTimeout("timed out after 5 seconds")));

@@ -15,6 +15,7 @@ import type { ListedMail } from "./mail-actions";
 import type { RoutineRunner } from "./routine-command";
 import { reminderWriter } from "./reminder-conversation-writer";
 import { routineWriter } from "./routine-conversation-writer";
+import { tanaNoteReady, tanaNoteWriter } from "./tana-note-conversation-writer";
 import { REQUEST_TRAILER, spawnGit, type GitRunner } from "./studio/git";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioThreadView, type StudioView } from "./studio/view";
@@ -99,11 +100,12 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const calendar = calendarWriter(writerDeps("calendar"));
   const reminder = reminderWriter(writerDeps("reminder"));
   const goal = goalWriter({ ...writerDeps("goal"), ...(deps.listGoals ? { list: deps.listGoals } : {}) });
+  const tanaNote = tanaNoteWriter(writerDeps("note"));
   return {
     get writers() {
       const desk = deps.desk();
       if (!desk?.enabled) return {};
-      return { ...(hasBalanceState(deps.db) ? balanceWriters : {}), ...(desk.routines ? { routine } : {}), ...(deskWriterArgv(desk, "calendar") ? { "calendar-event": calendar } : {}), ...(deskWriterArgv(desk, "reminder") ? { reminder } : {}), ...(deskWriterArgv(desk, "goal") && desk.somaBin ? { "soma-goal": goal } : {}) };
+      return { ...(hasBalanceState(deps.db) ? balanceWriters : {}), ...(desk.routines ? { routine } : {}), ...(deskWriterArgv(desk, "calendar") ? { "calendar-event": calendar } : {}), ...(deskWriterArgv(desk, "reminder") ? { reminder } : {}), ...(deskWriterArgv(desk, "goal") && desk.somaBin ? { "soma-goal": goal } : {}), ...(tanaNoteReady(desk) ? { "tana-note": tanaNote } : {}) };
     },
     resolvers: {
       "studio-thread": async ref => {

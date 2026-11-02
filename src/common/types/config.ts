@@ -501,6 +501,25 @@ export const DeskMailMirrorSchema = z.object({
   top: z.number().int().min(1).max(50).default(5),
 });
 
+const DeskWriterArgvSchema = z.array(z.string().min(1)).min(1);
+const DeskWriterSchema = z.union([DeskWriterArgvSchema, z.strictObject({ command: DeskWriterArgvSchema, owner: z.string().regex(/^[a-z][a-z0-9-]*$/).optional() })]);
+type DeskWriterEntry = z.infer<typeof DeskWriterSchema>;
+
+function splitDeskWriters<K extends string>(entries: Partial<Record<K, DeskWriterEntry>>): { writers: Partial<Record<K, string[]>>; writerOwners?: Partial<Record<K, string>> } {
+  const writers: Partial<Record<K, string[]>> = {};
+  const writerOwners: Partial<Record<K, string>> = {};
+  for (const [kind, entry] of Object.entries(entries) as [K, DeskWriterEntry | undefined][]) {
+    if (!entry) continue;
+    if (Array.isArray(entry)) {
+      writers[kind] = entry;
+      continue;
+    }
+    writers[kind] = entry.command;
+    if (entry.owner) writerOwners[kind] = entry.owner;
+  }
+  return Object.keys(writerOwners).length ? { writers, writerOwners } : { writers };
+}
+
 export const DeskSchema = z.object({
   routines: RoutineOptionsSchema.optional(),
   mirror: z.object({ day: z.enum(["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]), time: z.iso.time({ precision: -1 }) }).optional(),
@@ -552,16 +571,17 @@ export const DeskSchema = z.object({
       timeoutSeconds: z.number().int().min(1).max(120).default(30),
       writers: z
         .object({
-          calendar: z.array(z.string().min(1)).min(1).optional(),
-          task: z.array(z.string().min(1)).min(1).optional(),
-          goal: z.array(z.string().min(1)).min(1).optional(),
-          note: z.array(z.string().min(1)).min(1).optional(),
-          reminder: z.array(z.string().min(1)).min(1).optional(),
+          calendar: DeskWriterSchema.optional(),
+          task: DeskWriterSchema.optional(),
+          goal: DeskWriterSchema.optional(),
+          note: DeskWriterSchema.optional(),
+          reminder: DeskWriterSchema.optional(),
         })
         .default({}),
       taskMaps: z.array(z.object({ ref: z.string().regex(/^[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/), label: z.string().min(1) })).default([]),
       taskCloser: z.array(z.string().min(1)).min(1).optional(),
     })
+    .transform(({ writers, ...ask }) => ({ ...ask, ...splitDeskWriters(writers) }))
     .default({ parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }),
   interruptions: DeskInterruptionsSchema.default(DeskInterruptionsSchema.parse({})),
   voice: DeskVoiceSchema.default(DeskVoiceSchema.parse({})),

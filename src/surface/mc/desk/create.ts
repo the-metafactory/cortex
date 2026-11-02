@@ -9,6 +9,7 @@ import { CommandTimeout, runCommand } from "./spawn";
 export const WRITER_KINDS = ["calendar", "task", "goal", "note", "reminder"] as const;
 export type WriterKind = (typeof WRITER_KINDS)[number];
 export type DeskWriters = Partial<Record<WriterKind, string[]>>;
+export type DeskWriterOwners = Partial<Record<WriterKind, string>>;
 const KEPT_ON_DESK: readonly AskKind[] = ["reminder", "note"];
 
 export function writableKinds(writers: DeskWriters, studio = false): Set<AskKind> {
