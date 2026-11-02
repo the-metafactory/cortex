@@ -88,6 +88,15 @@ const NO_MATCH = "I could not tell what to make of that. Start with \"remind me\
 const capital = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 const tidy = (s: string): string => s.replace(/\s+/g, " ").replace(/^[\s,:;-]+|[\s,.;:-]+$/g, "");
 
+const EXPLICIT_CAPTURE = /^(?:capture|studio|thought)\s*:\s*(?<body>\S.*)$/is;
+
+export function explicitCapture(input: string): AskCard | null {
+  const body = EXPLICIT_CAPTURE.exec(input.trim())?.groups?.body;
+  if (!body) return null;
+  const card = validateCard("capture", { text: capital(tidy(body)) });
+  return typeof card === "string" ? null : card;
+}
+
 export function parseByRules(input: string, ctx: RulesContext): RulesResult {
   const raw = tidy(input);
   for (const rule of RULES) {

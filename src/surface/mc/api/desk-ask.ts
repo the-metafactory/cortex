@@ -2,7 +2,7 @@ import { parserPermissions } from "../desk/parser-permissions";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import type { DeskRuntime } from "../desk/compose";
-import { ASK_KINDS, notSetUp, parseByRules, parseWithCommand, taskMapAllowed, toProposal, validateCard, type ParserRunner } from "../desk/ask";
+import { ASK_KINDS, explicitCapture, notSetUp, parseByRules, parseWithCommand, taskMapAllowed, toProposal, validateCard, type ParseResult, type ParserRunner, type RulesResult } from "../desk/ask";
 import { createFromCard, spawnWithStdin, writableKinds, type WriterRunner } from "../desk/create";
 import { ParserPermissionsSchema } from "../../../common/types/desk-parser";
 import { parserRoutingNotice } from "../desk/parser-routing";
@@ -64,9 +64,9 @@ export async function handleDeskAsk(req: Request, runtime: DeskRuntime | undefin
   if (permissions.kind === "denied") return fail(503, permissions.reason);
   const routing = permissions.routing;
   const writable = writableKinds(ask?.writers ?? {}, Boolean(desk.studio));
-  let result = null;
+  let result: ParseResult | RulesResult | null = explicitCapture(text);
   let via: "parser" | "rules" = "rules";
-  if (ask?.parser.length) {
+  if (!result && ask?.parser.length) {
     const request = { text, now: new Date(now).toISOString(), timeZone: deps.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone, kinds: [...ASK_KINDS], maps, ...(routing ? { routing } : {}) };
     result = await parseWithCommand(ask.parser, request, deps.runParser ?? parserFrom(spawnWithStdin), ask.timeoutSeconds * 1000);
     if (result) via = "parser";

@@ -119,6 +119,20 @@ describe("POST /api/desk/ask", () => {
     expect(((await fallback.json()) as { proposal: unknown }).proposal).toMatchObject({ kind: "note", via: "rules" });
   });
 
+  it("files an explicit studio, capture or thought prefix as a capture without asking the parser", async () => {
+    const withParser = { ...runtime, options: { ...DESK, ask: { ...ASK, parser: ["parse"] } } };
+    let asked = 0;
+    const runParser = async (): Promise<string> => { asked += 1; return JSON.stringify({ kind: "task", fields: { title: "Demo", map: MAP.ref } }); };
+    for (const text of ["studio: demo of our AI usage", "Capture : demo of our AI usage", "thought:demo of our AI usage"]) {
+      const res = await handleDeskAsk(post("/api/desk/ask", { text }), withParser, { now: () => NOW, runParser });
+      expect(((await res.json()) as { proposal: unknown }).proposal).toMatchObject({ kind: "capture", via: "rules", fields: { text: "Demo of our AI usage" } });
+    }
+    expect(asked).toBe(0);
+    const unprefixed = await handleDeskAsk(post("/api/desk/ask", { text: "studio session with Anna at 3" }), withParser, { now: () => NOW, runParser });
+    expect(((await unprefixed.json()) as { proposal: unknown }).proposal).toMatchObject({ kind: "task", via: "parser" });
+    expect(asked).toBe(1);
+  });
+
   it("says so when the text matches no kind", async () => {
     const res = await handleDeskAsk(post("/api/desk/ask", { text: "hello there" }), runtime, { now: () => NOW });
     expect(res.status).toBe(422);
