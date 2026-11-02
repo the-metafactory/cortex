@@ -1,7 +1,6 @@
 import type { DeskItem } from "../../desk/types";
+import { MAX_INSTRUCTION } from "../../desk/mail-handoff-schema";
 import "./desk-mail-draft.css";
-
-export const MAX_HANDOFF_INSTRUCTION = 1000;
 
 export interface HandoffAsk {
   key: string;
@@ -28,11 +27,11 @@ export function MailHandoffBox({ ask, sending, onChange, onConfirm, onCancel }: 
   return (
     <section className="desk-reply" aria-label="Hand to Ivy">
       <div className="desk-sec">Hand to Ivy</div>
-      <p className="desk-reply-head">Ivy researches this mail and drafts a reply. It is filed as a task on your private task map with the sender, subject, summary and a link. The result comes back as a card; nothing is sent.</p>
+      <p className="desk-reply-head">Ivy researches this mail and drafts a reply. It is filed as a task on the first task map set up for the command bar, with the sender, subject, summary and a link; the mail text is not filed. The result comes back as a card; nothing is sent.</p>
       <textarea
         aria-label="Your instruction for Ivy"
         rows={3}
-        maxLength={MAX_HANDOFF_INSTRUCTION}
+        maxLength={MAX_INSTRUCTION}
         value={ask.instruction}
         disabled={sending}
         placeholder="Optional: what Ivy should find out, or how to answer."

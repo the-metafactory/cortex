@@ -1,5 +1,6 @@
 export const HANDOFF_STATES = ["working", "ready", "failed", "approved", "discarded"] as const;
 export type HandoffState = (typeof HANDOFF_STATES)[number];
+export const OPEN_STATES: readonly HandoffState[] = ["working", "ready", "failed"];
 
 export const MAX_INSTRUCTION = 1000;
 export const MAX_FINDINGS = 5;

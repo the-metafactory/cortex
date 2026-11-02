@@ -7,7 +7,7 @@ import type { ModelRoute } from "../../../conversations/types";
 import type { AskMap } from "./ask";
 import { createFromCard, type DeskWriters, type WriterRunner } from "./create";
 import { MAX_REPLY_CHARS, type ListedMail, type MailActionResult } from "./mail-actions";
-import { HANDOFF_SQL, MAX_FINDING, MAX_FINDINGS, MAX_INSTRUCTION, type HandoffState } from "./mail-handoff-schema";
+import { MAX_FINDING, MAX_FINDINGS, MAX_INSTRUCTION, OPEN_STATES, type HandoffState } from "./mail-handoff-schema";
 import { logMailDecision, mailFeatures, senderDomain, type MailFeatures } from "./mail-log";
 import type { MailForStudio } from "./mail-studio";
 import { replySubject } from "./mail-triage";
@@ -93,10 +93,6 @@ function toRow(r: RawRow): HandoffRow {
   };
 }
 
-export function ensureHandoffSchema(db: Database): void {
-  for (const sql of HANDOFF_SQL) db.run(sql);
-}
-
 export function readHandoff(db: Database, id: string): HandoffRow | null {
   const r = db.query<RawRow, [string]>("SELECT * FROM desk_mail_handoffs WHERE id = ?").get(id);
   return r ? toRow(r) : null;
@@ -104,7 +100,7 @@ export function readHandoff(db: Database, id: string): HandoffRow | null {
 
 /** Hand-offs still on the Desk: working, ready for the principal, or failed; newest first. */
 export function openHandoffs(db: Database): HandoffRow[] {
-  return db.query<RawRow, []>("SELECT * FROM desk_mail_handoffs WHERE state IN ('working', 'ready', 'failed') ORDER BY created_at DESC").all().map(toRow);
+  return db.query<RawRow, string[]>(`SELECT * FROM desk_mail_handoffs WHERE state IN (${OPEN_STATES.map(() => "?").join(", ")}) ORDER BY created_at DESC`).all(...OPEN_STATES).map(toRow);
 }
 
 /** The newest open hand-off per mail. */
@@ -186,6 +182,7 @@ export async function handMailToIvy(item: MailForStudio, input: HandInput, deps:
     `INSERT INTO desk_mail_handoffs (id, message_id, account, source_id, area, from_name, from_address, subject, url, received_at, summary, text, instruction, route, task_id, task_url, state, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'working', ?)`,
   ).run(input.requestId, mail.id, mail.account ?? null, mail.sourceId, item.area, mail.from.name ?? null, mail.from.address, mail.subject, mail.url ?? null, mail.receivedAt, item.summary, mail.firstParagraph ?? null, instruction, routed.route, filed.id, filed.url ?? null, now);
+  db.query("UPDATE desk_mail_handoffs SET state = 'discarded', closed_at = ? WHERE message_id = ? AND state = 'failed' AND id != ?").run(now, mail.id, input.requestId);
   logMailDecision(db, mailFeatures(db, mail), "ivy", "desk", now);
   const row = readHandoff(db, input.requestId);
   return { ok: true, id: input.requestId, message: row ? handedMessage(row, map.label) : "Handed to Ivy." };
@@ -221,6 +218,7 @@ const jobOf = (row: HandoffRow): HandoffJob => ({
 });
 
 const MAX_ERROR = 300;
+const NO_REASON = "Ivy gave no reason.";
 
 /** Works open hand-offs one at a time, oldest first. A failure keeps the hand-off with its reason for Retry; nothing is lost. */
 export class MailHandoffWorker {
@@ -246,7 +244,7 @@ export class MailHandoffWorker {
         db.query("UPDATE desk_mail_handoffs SET state = 'ready', findings = ?, draft = ?, model = ?, error = NULL, finished_at = ? WHERE id = ? AND state = 'working'")
           .run(JSON.stringify(answer.findings), answer.reply, answer.model, now(), next.id);
       } catch (err) {
-        const reason = oneLine(err instanceof Error ? err.message : String(err)).slice(0, MAX_ERROR) || "Ivy gave no reason.";
+        const reason = oneLine(err instanceof Error ? err.message : String(err)).slice(0, MAX_ERROR) || NO_REASON;
         this.log(`desk: mail hand-off ${next.id}: ${reason}`);
         db.query("UPDATE desk_mail_handoffs SET state = 'failed', error = ?, finished_at = ? WHERE id = ? AND state = 'working'").run(reason, now(), next.id);
       }
@@ -340,7 +338,7 @@ export async function approveHandoff(db: Database, id: string, body: string | un
 
 export function discardHandoff(db: Database, id: string, now: number): HandoffResult {
   const row = readHandoff(db, id);
-  if (!row || !["working", "ready", "failed"].includes(row.state)) return refuse(409, "This hand-off is already closed.");
+  if (!row || !OPEN_STATES.includes(row.state)) return refuse(409, "This hand-off is already closed.");
   db.query("UPDATE desk_mail_handoffs SET state = 'discarded', closed_at = ? WHERE id = ?").run(now, id);
   return { ok: true, message: row.state === "working" ? "Stopped waiting for Ivy; a late answer is dropped." : "Discarded Ivy's result. Nothing was saved." };
 }
@@ -369,6 +367,8 @@ export function handoffLine(row: HandoffRow, now: number): string {
   return "Ivy's findings and reply draft are ready in Catch-up.";
 }
 
+const viewOf = (row: HandoffRow, now: number): HandoffView => ({ id: row.id, state: row.state, line: handoffLine(row, now), since: row.createdAt });
+
 const act = (id: string, label: string, role: DeskAction["role"], target?: string): DeskAction => ({ id, label, role, wired: true, ...(target ? { target } : {}) });
 const HAND_TO_IVY = "mail.ivy";
 
@@ -376,7 +376,7 @@ const HAND_TO_IVY = "mail.ivy";
 export function withHandoff(item: DeskItem, row: HandoffRow | undefined, now: number): DeskItem {
   if (!row) return item;
   const notIvy = (a: DeskAction): boolean => a.id !== HAND_TO_IVY;
-  const handoff: HandoffView = { id: row.id, state: row.state, line: handoffLine(row, now), since: row.createdAt };
+  const handoff = viewOf(row, now);
   if (row.state !== "failed") return { ...item, actions: item.actions.filter(notIvy), more: (item.more ?? []).filter(notIvy), handoff };
   const offered = [...item.actions, ...(item.more ?? [])].filter(notIvy).map((a) => (a.role === "primary" ? { ...a, role: "secondary" as const } : a));
   const all = [act("ivy.retry", "Ask Ivy again", "primary", row.id), ...offered];
@@ -409,21 +409,21 @@ export function handoffItems(rows: readonly HandoffRow[], listed: ReadonlySet<st
     const base = { kind: "mail-handoff" as const, source: row.sourceId, area: row.area, attention: "action" as const, urgency: "today" as const, detail: { summary: "", history, refs: [row.messageId, row.taskId], links } };
     if (row.state === "failed") {
       return [{
-        ...base, key: handoffKey(row.id), title: `Ivy could not finish “${subject}” from ${who}`, why: row.error ?? "Ivy gave no reason.", score: 50,
+        ...base, key: handoffKey(row.id), title: `Ivy could not finish “${subject}” from ${who}`, why: row.error ?? NO_REASON, score: 50,
         actions: [act("ivy.retry", "Ask Ivy again", "primary"), act("ivy.discard", "Discard", "secondary")], more: open,
-        detail: { ...base.detail, summary: row.error ?? "Ivy gave no reason." },
-        handoff: { id: row.id, state: row.state, line: handoffLine(row, now), since: row.createdAt }, since: row.finishedAt ?? row.createdAt,
+        detail: { ...base.detail, summary: row.error ?? NO_REASON },
+        handoff: viewOf(row, now), since: row.finishedAt ?? row.createdAt,
       }];
     }
     const draft = row.draft ?? "";
     return [{
       ...base, key: handoffKey(row.id), title: `Ivy drafted a reply to ${who}: “${subject}”`,
-      why: `Approve saves it in your ${row.account ?? "mail"} Drafts; nothing is sent.`, score: 60,
-      actions: [act("ivy.approve", "Approve", "primary"), act("ivy.edit", "Edit", "secondary"), act("ivy.discard", "Discard", "secondary")], more: open,
+      why: row.account ? `Approve saves it in your ${row.account} Drafts; nothing is sent.` : "The mail source names no account for this mail, so the Desk cannot save the draft. Copy it from the card.", score: 60,
+      actions: row.account ? [act("ivy.approve", "Approve", "primary"), act("ivy.edit", "Edit", "secondary"), act("ivy.discard", "Discard", "secondary")] : [act("ivy.discard", "Discard", "primary")], more: open,
       detail: { ...base.detail, summary: row.findings.join("\n") },
       excerpt: draft,
       ...(row.account ? { reply: { to: senderOf(row.fromName, row.fromAddress), subject: replySubject(row.subject) } } : {}),
-      handoff: { id: row.id, state: row.state, line: handoffLine(row, now), since: row.createdAt, findings: row.findings, draft },
+      handoff: { ...viewOf(row, now), findings: row.findings, draft },
       since: row.finishedAt ?? row.createdAt,
     }];
   });

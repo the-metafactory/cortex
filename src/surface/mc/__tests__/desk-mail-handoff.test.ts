@@ -149,6 +149,16 @@ describe("Ivy's result card", () => {
     expect(writes("draft-cmd")).toHaveLength(0);
   });
 
+  it("offers only Discard when the mail names no account to save a draft in", async () => {
+    items.work = [mail("w1", { account: undefined })];
+    await runtime.sourceCache?.read(options.sources, NOW + 600_000);
+    await hand("mail:w1");
+    await settle();
+    const card = (await composeDesk(db, options, undefined, { now: NOW + 600_000, handled: runtime.ledger, ...(runtime.sourceCache ? { sourceCache: runtime.sourceCache } : {}), ...(runtime.mailHandoff ? { mailHandoff: runtime.mailHandoff } : {}) })).items.find((i) => i.kind === "mail-handoff");
+    expect(card?.actions.map((a) => a.id)).toEqual(["ivy.discard"]);
+    expect(card?.reply).toBeUndefined();
+  });
+
   it("Approve saves Ivy's draft through the draft contract and closes the card", async () => {
     await hand("mail:w1");
     await settle();
@@ -199,6 +209,14 @@ describe("Ivy's result card", () => {
     expect((await act({ action: "ivy.retry", key: "ivy:hand-req-0001" })).status).toBe(200);
     await settle();
     expect(readHandoff(db, "hand-req-0001")).toMatchObject({ state: "ready", draft: "Yes.", error: null });
+  });
+
+  it("a new hand-off of a mail closes its earlier failed one", async () => {
+    owner = () => Promise.reject(new Error("Spark timed out"));
+    await hand("mail:w1");
+    await settle();
+    expect((await hand("mail:w1", "hand-req-0002")).status).toBe(200);
+    expect(readHandoff(db, "hand-req-0001")?.state).toBe("discarded");
   });
 
   it("a failed task whose mail left the inbox still shows as a card with Retry", async () => {
