@@ -10,12 +10,6 @@ import { RoutineOptionsSchema } from "./desk-routines";
  */
 
 import { z } from "zod/v4";
-
-export const DeskMailMirrorSchema = z.object({
-  checkAfterUndos: z.number().int().min(0).max(1000).default(2),
-  archivedUnread: z.number().int().min(1).max(1000).default(3),
-  top: z.number().int().min(1).max(50).default(5),
-});
 import { SubstratesSchema } from "../substrates/config-home";
 import { NKEY_PUBKEY_REGEX } from "./nkey";
 import { NatsSubjectsSchema } from "./nats-subjects";
@@ -453,6 +447,12 @@ const endpointSchema = (path: string, timeoutSeconds: number) => z.object({
 
 const EmbedderEndpointSchema = endpointSchema("mc.desk.mail.embedder", 10);
 const DigestEndpointSchema = endpointSchema("mc.desk.mail.digest.model", 60);
+
+export const DeskMailMirrorSchema = z.object({
+  checkAfterUndos: z.number().int().min(0).max(1000).default(2),
+  archivedUnread: z.number().int().min(1).max(1000).default(3),
+  top: z.number().int().min(1).max(50).default(5),
+});
 
 export const DeskSchema = z.object({
   routines: RoutineOptionsSchema.optional(),

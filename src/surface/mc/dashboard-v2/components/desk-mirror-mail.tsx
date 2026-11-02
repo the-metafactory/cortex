@@ -13,6 +13,7 @@ const ACTION_WORD: Record<MailLogAction, string> = {
 const WHERE_WORD: Record<MailLogWhere, string> = { desk: "On the Desk", client: "In your mail client", rule: "By your rules", correction: "Corrections you gave" };
 
 const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
+const sourceLabel = (s: { kind: "list" | "sender"; value: string }): string => (s.kind === "list" ? `List ${s.value}` : s.value);
 const minutes = (ms: number): string => `${(ms / 60_000).toFixed(1)} min`;
 
 function Counts<K extends string>({ label, rows, words }: { label: string; rows: { key: K; count: number }[]; words: Record<K, string> }) {
@@ -45,7 +46,7 @@ export function MirrorMail({ mail, dmarc, onChanged }: { mail: MailMirror | null
           <Counts label="By action" rows={mail.byAction} words={ACTION_WORD} />
           <Counts label="By where" rows={mail.byWhere} words={WHERE_WORD} />
         </div>}
-        {mail.senders.length > 0 && <><h3>Took the most of your decisions</h3><ul className="dmr-hours">{mail.senders.map(s => <li key={`${s.kind}:${s.value}`}><strong>{s.kind === "list" ? `List ${s.value}` : s.value}</strong><span>{plural(s.decisions, "decision")}</span></li>)}</ul></>}
+        {mail.senders.length > 0 && <><h3>Took the most of your decisions</h3><ul className="dmr-hours">{mail.senders.map(s => <li key={`${s.kind}:${s.value}`}><strong>{sourceLabel(s)}</strong><span>{plural(s.decisions, "decision")}</span></li>)}</ul></>}
         {mail.rules.length > 0 && <><h3>What your rules did</h3><ul className="dmr-hours">{mail.rules.map(r => <li key={r.id}><strong>{r.sentence}{r.on ? "" : " (off)"}</strong><span>{plural(r.runs, "run")}, {plural(r.undone, "Undo", "Undos")}{r.failed ? `, ${r.failed} failed` : ""}</span></li>)}</ul></>}
         {mail.checkRules.length > 0 && <><h3>Check this rule</h3><p className="dmr-quiet">Undone more than {plural(mail.config.checkAfterUndos, "time")} this week.</p><ul>{mail.checkRules.map(r => <CheckRule key={r.id} rule={r} busy={busy} editing={editing?.id === r.id ? editing : null} onEdit={setEditing} onRule={rule} />)}</ul></>}
         {mail.archivedUnread.length > 0 && <><h3>Archived unread, again and again</h3><p className="dmr-quiet">Senders and lists whose mail you archived or deleted unread at least {plural(mail.config.archivedUnread, "time")} this week.</p><ul>{mail.archivedUnread.map(u => <Unread key={`${u.kind}:${u.value}`} item={u} busy={busy} sure={sure === u.unsubscribe?.key} onSure={setSure} onRule={rule} onUnsubscribe={(key) => run(() => submitMailAction({ action: "unsubscribe", key }))} />)}</ul></>}
@@ -76,7 +77,7 @@ function Unread({ item, busy, sure, onSure, onRule, onUnsubscribe }: { item: Mai
   const offer = item.unsubscribe;
   return (
     <li>
-      <strong>{item.kind === "list" ? `List ${item.value}` : item.value}</strong><span>{plural(item.count, "mail")} archived or deleted unread.</span>
+      <strong>{sourceLabel(item)}</strong><span>{plural(item.count, "mail")} archived or deleted unread.</span>
       {offer?.view.kind === "one-click" && <button type="button" className="desk-btn" disabled={busy} onClick={() => { if (!sure) { onSure(offer.key); return; } onSure(null); void onUnsubscribe(offer.key); }}>{sure ? `Yes, unsubscribe via ${offer.view.host}` : "Unsubscribe"}</button>}
       {offer?.view.kind === "page" && offer.view.url && <a className="desk-btn" href={offer.view.url} target="_blank" rel="noreferrer noopener">Open unsubscribe page ({offer.view.host})</a>}
       <button type="button" className="desk-btn ghost" disabled={busy} title={item.rule.sentence} onClick={() => void onRule({ op: "create", match: item.rule.match, value: item.rule.value, action: item.rule.action })}>Make a rule: {item.rule.sentence}</button>
