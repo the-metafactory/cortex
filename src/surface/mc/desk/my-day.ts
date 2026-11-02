@@ -237,12 +237,17 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         previous.used = true;
         break;
       }
-      case "todo":
-        if (meta.sources.some(s => s.fingerprint === command.fingerprint)) break;
+      case "todo": {
+        const moved = meta.sources.find(s => s.fingerprint === command.fingerprint);
+        if (moved) {
+          outlineId = moved.taskId;
+          break;
+        }
         if (source?.key !== command.key) throw new Error("This source item is no longer on the Desk.");
         if (sourceIdentity(source) !== command.fingerprint) throw new Error("The source changed since you opened it. Refresh before moving it to your Inbox.");
-        todo(meta, source);
+        outlineId = todo(meta, source);
         break;
+      }
       case "propose":
         if (state.dayState?.date === date) throw new Error("Your day is already started.");
         meta.draft = engineDraft(state, desk, date, studio);
