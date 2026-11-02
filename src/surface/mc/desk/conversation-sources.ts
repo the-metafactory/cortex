@@ -107,7 +107,15 @@ export function conversationSources(deps: SourceDeps): HostSources {
     get writers() {
       const desk = deps.desk();
       if (!desk?.enabled) return {};
-      return { ...(hasBalanceState(deps.db) ? balanceWriters : {}), ...(desk.routines ? { routine } : {}), ...(deskWriterArgv(desk, "calendar") ? { "calendar-event": calendar } : {}), ...(deskWriterArgv(desk, "reminder") ? { reminder } : {}), ...(deskWriterArgv(desk, "goal") && desk.somaBin ? { "soma-goal": goal } : {}), ...(tanaNoteReady(desk) ? { "tana-note": tanaNote } : {}), ...(deskWriterArgv(desk, "note") ? {} : { "desk-note": deskNote }) };
+      return {
+        ...(hasBalanceState(deps.db) ? balanceWriters : {}),
+        ...(desk.routines ? { routine } : {}),
+        ...(deskWriterArgv(desk, "calendar") ? { "calendar-event": calendar } : {}),
+        ...(deskWriterArgv(desk, "reminder") ? { reminder } : {}),
+        ...(deskWriterArgv(desk, "goal") && desk.somaBin ? { "soma-goal": goal } : {}),
+        ...(tanaNoteReady(desk) ? { "tana-note": tanaNote } : {}),
+        ...(deskWriterArgv(desk, "note") ? {} : { "desk-note": deskNote }),
+      };
     },
     resolvers: {
       "studio-thread": async ref => {

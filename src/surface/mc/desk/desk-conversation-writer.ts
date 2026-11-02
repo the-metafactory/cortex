@@ -17,7 +17,7 @@ export type DeskWriterKind = Extract<WriterKind, "calendar" | "reminder" | "goal
 export interface DeskWriterSpec<K extends DeskWriterKind> {
   kind: K;
   objects: string;
-  onDesk?: true;
+  keptOnDesk?: true;
   destination?: { flag: string; field: string; noun: string; fallback: string; verb?: string };
   fields: (request: CreateRequest) => AskFields[K] | string;
   afterRefusal?: (request: CreateRequest, error: string) => Promise<ReadbackResult>;
@@ -52,7 +52,8 @@ export function deskConversationWriter<K extends DeskWriterKind>(spec: DeskWrite
   const create = async (request: CreateRequest): Promise<CreateResult> => {
     const desk = deps.desk();
     const argv = deskWriterArgv(desk, spec.kind);
-    if (!desk?.enabled || (spec.onDesk ? argv : !argv)) return failed(`${spec.objects} are not set up on this stack`);
+    const writes = spec.keptOnDesk ? !argv : Boolean(argv);
+    if (!desk?.enabled || !writes) return failed(`${spec.objects} are not set up on this stack`);
     if (spec.destination) {
       const { flag, field, noun, fallback, verb = "saves" } = spec.destination;
       const destination = argvOption(argv ?? [], flag);
