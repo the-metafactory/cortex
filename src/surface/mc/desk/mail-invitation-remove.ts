@@ -13,25 +13,24 @@ export interface DeclinedCopyRequest {
   recurring?: true;
 }
 
-export function declinedCopyRequest(mail: ListedMail): DeclinedCopyRequest | null {
+function declinedCopyRequest(mail: ListedMail): DeclinedCopyRequest | null {
   const inv = mail.invitation;
   if (!mail.account || !inv) return null;
   return { action: "remove-declined", account: mail.account, uid: inv.uid, start: inv.start, ...(inv.end ? { end: inv.end } : {}), ...(inv.recurring ? { recurring: true } : {}) };
 }
 
 const KEPT = "The calendar still holds the tentative copy";
-
-const REMOVED = "The tentative copy is removed from your calendar.";
+const UNSURE = "The remove command gave no answer, so the tentative copy may still be in your calendar.";
 
 function removedMessage(stdout: string): string {
   let out: unknown;
   try {
     out = JSON.parse(stdout);
   } catch {
-    return REMOVED;
+    out = null;
   }
   const message = typeof out === "object" && out !== null && "message" in out && typeof out.message === "string" ? out.message.trim() : "";
-  return message && message.length <= 300 ? oneLine(message, REMOVED) : REMOVED;
+  return message && message.length <= 300 ? oneLine(message, UNSURE) : UNSURE;
 }
 
 export async function removeDeclined(mail: ListedMail, config: InvitationsConfig | undefined, run: WriterRunner): Promise<string | null> {

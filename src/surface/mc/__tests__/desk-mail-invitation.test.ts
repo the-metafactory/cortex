@@ -240,6 +240,13 @@ describe("replies", () => {
     };
     const timedOut = await replyToInvitation(mail({ id: "t@example.org" }), input(), deps({ config, run: slow }));
     expect(timedOut).toEqual({ ok: true, message: "Declined. The calendar still holds the tentative copy: the remove command timed out after 30 s." });
+    const throwing: WriterRunner = async (argv) => {
+      if (argv[0] === "exchange-remover") throw new Error("spawn failed");
+      return { code: 0, stdout: JSON.stringify({ id: "r3" }), stderr: "" };
+    };
+    expect(await replyToInvitation(mail({ id: "x@example.org" }), input(), deps({ config, run: throwing }))).toEqual({ ok: true, message: "Declined. The calendar still holds the tentative copy: spawn failed" });
+    const silent: WriterRunner = async (argv) => ({ code: 0, stdout: argv[0] === "exchange-remover" ? "" : JSON.stringify({ id: "r4" }), stderr: "" });
+    expect(await replyToInvitation(mail({ id: "y@example.org" }), input(), deps({ config, run: silent }))).toEqual({ ok: true, message: "Declined. The remove command gave no answer, so the tentative copy may still be in your calendar." });
   });
 
   test("removeOnDecline takes { account, command } entries and refuses an account listed twice", () => {
