@@ -215,12 +215,16 @@ mc:
         extensions: [~/.pi/agent/extensions/soma.ts]
         tools: [soma_context, read, grep, find, ls]
         timeoutSeconds: 300
+        passEnv: []
 ```
 
 `local` and `cloud` are lanes: a pi `provider` and `model`, and optional `thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`). A local-only conversation runs only on `local`. A cloud-allowed conversation uses `cloud`, or `local` when `cloud` is absent. Only you can decide which provider counts as local; Cortex does not infer it.
 
-`pi.bin` defaults to `pi` on the daemon's `PATH`, then `~/.local/bin/pi`. `pi.extensions` defaults to `soma.ts` in pi's agent directory (`PI_CODING_AGENT_DIR`, else `~/.pi/agent/extensions`) when that file exists. These are the only pi extensions loaded: Cortex passes `--no-extensions`, `--no-mcp` and `--no-context-files`, so installed packages, MCP servers and other extensions do not run inside a conversation.
+<!-- glossary-ignore: agent -->
+`pi.bin` defaults to `pi` on the Cortex runtime's `PATH`, then `~/.local/bin/pi`. `pi.extensions` defaults to `soma.ts` in pi's agent directory (`PI_CODING_AGENT_DIR`, else `~/.pi/agent/extensions`) when that file exists. These are the only pi extensions loaded: Cortex passes `--no-extensions`, `--no-mcp` and `--no-context-files`, so installed packages, MCP servers and other extensions are not loaded inside a conversation. Without a projection, Cortex logs "no Soma projection found" at start and turns have no Soma tools.
 
-`pi.tools` can only narrow the read-only tools `soma_context`, `read`, `grep`, `find` and `ls`. Cortex passes them as an explicit `--tools` allowlist, so write, edit, shell, web, task and routing tools, and any tool installed later, stay unavailable. A turn on the `cloud` lane gets no file read or search. Every tool call and its result is recorded in the conversation. If pi reports that a tool outside the allowlist ran, the turn stops with an error.
+pi gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `TERM`, `TZ`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and variables starting with `PI_`, `SOMA_`, `XDG_` or `LC_` from the Cortex environment. Add the names of other variables it needs, such as a provider key variable, to `pi.passEnv`.
+
+`pi.tools` can only narrow the read-only tools `soma_context`, `read`, `grep`, `find` and `ls`. Cortex passes them as an explicit `--tools` allowlist, so write, edit, shell, web, task and routing tools, and any tool installed later, stay unavailable. A turn on the `cloud` lane gets no file read or search. Every tool call and its result is recorded in the conversation. A call to a tool outside the allowlist is recorded as refused when pi answers that the tool was not found; any other result stops the turn with an error.
 
 pi keeps one session per conversation and lane under the stack's conversation directory (`pi-sessions`). If that session is missing, or the lane or engine changed, the next turn starts a new session with the earlier exchange from the conversation record, and the record shows that the context was reconstructed.

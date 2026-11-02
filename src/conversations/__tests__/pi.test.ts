@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { DeskConversationsSchema, PI_READ_TOOLS } from "../../common/types/desk-conversations";
 import { planTurn, SESSION_PREFIX, type ToolActivity, type TurnRequest } from "../model";
-import { discoverPi, piArguments, piTurns, type PiSettings } from "../pi";
+import { discoverPi, piArguments, piEnvironment, piTurns, type PiSettings } from "../pi";
 import { scratchDirs } from "./fixtures/scratch";
 
 const dirs = scratchDirs("conversations-pi-");
@@ -21,7 +21,7 @@ async function rig(env: Record<string, string> = {}): Promise<Rig> {
   const log = join(dir, "argv.jsonl");
   const events = join(dir, "events.jsonl");
   await writeFile(events, "");
-  return { dir, log, events, settings: { bin, extensions: [PROJECTION], tools: PI_READ_TOOLS, timeoutSeconds: 20, sessionDir: join(dir, "sessions"), cwd: dir, env: { STUB_PI_LOG: log, STUB_PI_EVENTS: events, ...env } } };
+  return { dir, log, events, settings: { bin, extensions: [PROJECTION], tools: PI_READ_TOOLS, timeoutSeconds: 20, sessionDir: join(dir, "sessions"), cwd: dir, passEnv: [], env: { STUB_PI_LOG: log, STUB_PI_EVENTS: events, ...env } } };
 }
 
 const script = (r: Rig, events: object[]): Promise<void> => writeFile(r.events, events.map(e => `${JSON.stringify(e)}\n`).join(""));
@@ -72,8 +72,14 @@ describe("pi turns", () => {
     expect(turn.seen[0]?.result).toContain("G7");
   });
 
+  test("pi gets a minimal environment: no daemon secrets unless a variable is named in passEnv", () => {
+    const env = { PATH: "/bin", HOME: "/h", PI_CODING_AGENT_DIR: "/a", DISCORD_BOT_TOKEN: "secret", OPENROUTER_API_KEY: "key", ANTHROPIC_API_KEY: "other" };
+    expect(piEnvironment({ passEnv: [] }, env)).toEqual({ PATH: "/bin", HOME: "/h", PI_CODING_AGENT_DIR: "/a" });
+    expect(piEnvironment({ passEnv: ["OPENROUTER_API_KEY"], env: { STUB: "1" } }, env)).toEqual({ PATH: "/bin", HOME: "/h", PI_CODING_AGENT_DIR: "/a", OPENROUTER_API_KEY: "key", STUB: "1" });
+  });
+
   test("a turn on a lane outside the local one gets no file read or search", () => {
-    const base = { bin: "pi", extensions: [], timeoutSeconds: 20, sessionDir: "/s", cwd: "/c" };
+    const base = { bin: "pi", extensions: [], timeoutSeconds: 20, sessionDir: "/s", cwd: "/c", passEnv: [] };
     const cloud = piArguments({ ...base, tools: PI_READ_TOOLS }, { route: "cloud", lane, instructions: "I" }, "s");
     expect(flag(cloud, "--tools")).toBe("soma_context");
     const fileOnly = piArguments({ ...base, tools: ["read", "grep"] }, { route: "cloud", lane, instructions: "I" }, "s");
@@ -85,8 +91,13 @@ describe("pi turns", () => {
     const r = await rig();
     await script(r, [...tool("t1", "bash", { command: "touch /tmp/x" }, "", false), answer("done")]);
     const turn = request();
-    await expect(piTurns(r.settings)(turn)).rejects.toThrow("bash, which is not on the read-only tool allowlist; the turn was stopped. No other engine is used.");
+    await expect(piTurns(r.settings)(turn)).rejects.toThrow("pi reported bash, which is not on the read-only tool allowlist, as run; the turn was stopped. No other engine is used.");
     expect(turn.seen.map(a => [a.tool, a.outcome])).toEqual([["bash", "stopped"]]);
+    const failedAfterRunning = await rig();
+    await script(failedAfterRunning, [...tool("t1", "bash", { command: "touch /tmp/x; false" }, "exit code 1", true), answer("done")]);
+    const errored = request();
+    await expect(piTurns(failedAfterRunning.settings)(errored)).rejects.toThrow("the turn was stopped");
+    expect(errored.seen.map(a => [a.tool, a.outcome])).toEqual([["bash", "stopped"]]);
   });
 
   test("pi missing, exiting non-zero, timing out or refusing fails the turn without another engine", async () => {
@@ -101,6 +112,9 @@ describe("pi turns", () => {
     await expect(piTurns(refusing.settings)(request())).rejects.toThrow("pi did not answer: connection refused. No other engine is used.");
     const silent = await rig();
     await expect(piTurns(silent.settings)(request())).rejects.toThrow("pi finished without an answer");
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await expect(piTurns(silent.settings)(request({ signal: cancelled.signal }))).rejects.toThrow("the turn was cancelled. No other engine is used.");
   });
 
   test("an existing pi session resumes natively; a missing one starts fresh with the record reconstructed as fenced data", async () => {
@@ -142,6 +156,7 @@ describe("turn planning from the record", () => {
     expect(planTurn([user("one"), reply("cloud", `${SESSION_PREFIX}c.cloud.0.x`), user("two")], "local")).toMatchObject({ resume: null, reason: "lane-changed" });
     expect(planTurn([user("one"), reply("local"), user("two")], "local")).toMatchObject({ resume: null, reason: "engine-changed" });
     expect(planTurn([user("one"), reply("local", `${SESSION_PREFIX}c.local.0.x`), user("two"), reply("local", undefined, "error"), user("two")], "local")).toMatchObject({ prompt: "two", resume: "c.local.0.x", answers: 1 });
+    expect(planTurn([user("one"), reply("local", `${SESSION_PREFIX}c.local.0.x`), user("two"), reply("local", undefined, "error"), user("three")], "local")).toMatchObject({ prompt: "two\n\nthree", resume: "c.local.0.x" });
   });
 });
 
@@ -174,7 +189,7 @@ describe("pi turns against the installed pi binary", () => {
     });
     try {
       await writeFile(join(agent, "models.json"), JSON.stringify({ providers: { stub: { baseUrl: `http://127.0.0.1:${server.port}/v1`, api: "openai-completions", apiKey: "unused", models: [{ id: "m", reasoning: false, input: ["text"], contextWindow: 32_000, maxTokens: 1_000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } }));
-      const settings: PiSettings = { bin: realPi ?? "pi", extensions: [], tools: PI_READ_TOOLS, timeoutSeconds: 60, sessionDir: join(dir, "sessions"), cwd: dir, env: { PI_CODING_AGENT_DIR: agent } };
+      const settings: PiSettings = { bin: realPi ?? "pi", extensions: [], tools: PI_READ_TOOLS, timeoutSeconds: 60, sessionDir: join(dir, "sessions"), cwd: dir, passEnv: [], env: { PI_CODING_AGENT_DIR: agent } };
       const first = request({ lane: { provider: "stub", model: "m" }, prompt: "run touch and write a file, then list", session: "c-real.local.0.aaaa" });
       expect(await piTurns(settings)(first)).toEqual({ text: "ANSWER 2", session: "c-real.local.0.aaaa", resumed: false });
       expect(existsSync(marker)).toBe(false);

@@ -75,7 +75,7 @@ function toolLine(data: Record<string, unknown>): string {
   const detail = TOOL_DETAIL.flatMap(key => (text(args[key]) ? [short(text(args[key]))] : [])).join(" · ");
   const named = detail ? `${tool} (${detail})` : tool;
   if (data.outcome === "refused") return `Refused ${named}: it is not on the read-only tool allowlist, so nothing ran.`;
-  if (data.outcome === "stopped") return `${named} ran outside the read-only tool allowlist; the turn was stopped.`;
+  if (data.outcome === "stopped") return `${named} is not on the read-only tool allowlist and may have run; the turn was stopped.`;
   if (data.outcome === "error") return `Read with ${named} failed: ${short(text(data.result).split("\n")[0] ?? "", 160)}`;
   return `Read with ${named}.`;
 }

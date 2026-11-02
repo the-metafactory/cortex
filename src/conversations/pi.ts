@@ -3,7 +3,7 @@ import { mkdir, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { z } from "zod";
-import { PI_FILE_TOOLS, PI_READ_TOOLS, type DeskConversations, type PiReadTool } from "../common/types/desk-conversations";
+import { PI_DEFAULTS, PI_FILE_TOOLS, type DeskConversations, type PiReadTool } from "../common/types/desk-conversations";
 import type { ChatTurn, ToolActivity, TurnCall, TurnReply, TurnRequest } from "./model";
 
 export interface PiSettings {
@@ -13,12 +13,21 @@ export interface PiSettings {
   timeoutSeconds: number;
   sessionDir: string;
   cwd: string;
+  passEnv: readonly string[];
   env?: Record<string, string>;
 }
 
 const RESULT_LIMIT = 50_000;
 const STDERR_LIMIT = 400;
 const FILE_TOOLS: readonly string[] = PI_FILE_TOOLS;
+const BASE_ENV = new Set(["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM", "TZ", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"]);
+const BASE_ENV_PREFIXES = ["PI_", "SOMA_", "XDG_", "LC_"];
+
+export function piEnvironment(settings: Pick<PiSettings, "passEnv" | "env">, env: Record<string, string | undefined> = process.env): Record<string, string> {
+  const pass = new Set(settings.passEnv);
+  const kept = Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined && (BASE_ENV.has(entry[0]) || pass.has(entry[0]) || BASE_ENV_PREFIXES.some(prefix => entry[0].startsWith(prefix))));
+  return { ...Object.fromEntries(kept), ...settings.env };
+}
 
 export function piAgentDir(env: Record<string, string | undefined> = process.env): string {
   return env.PI_CODING_AGENT_DIR ?? join(env.HOME ?? homedir(), ".pi", "agent");
@@ -39,8 +48,9 @@ export function resolvePiSettings(config: DeskConversations["pi"] | undefined, d
   return {
     bin,
     extensions: config?.extensions ? config.extensions.map(expand) : discoverSomaProjection(),
-    tools: config?.tools ?? PI_READ_TOOLS,
-    timeoutSeconds: config?.timeoutSeconds ?? 300,
+    tools: config?.tools ?? PI_DEFAULTS.tools,
+    timeoutSeconds: config?.timeoutSeconds ?? PI_DEFAULTS.timeoutSeconds,
+    passEnv: config?.passEnv ?? PI_DEFAULTS.passEnv,
     sessionDir: join(dir, "pi-sessions"),
     cwd: dir,
   };
@@ -112,7 +122,7 @@ const NO_FALLBACK = "No other engine is used.";
 
 function spawnPi(settings: PiSettings, args: string[]): Bun.Subprocess<"pipe", "pipe", "pipe"> {
   try {
-    return Bun.spawn([settings.bin, ...args], { cwd: settings.cwd, stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env, ...settings.env } });
+    return Bun.spawn([settings.bin, ...args], { cwd: settings.cwd, stdin: "pipe", stdout: "pipe", stderr: "pipe", env: piEnvironment(settings) });
   } catch (error) {
     const missing = (error as { code?: string }).code === "ENOENT";
     throw new Error(missing ? `pi was not found at ${settings.bin}. ${NO_FALLBACK}` : `pi could not be started from ${settings.bin}. ${NO_FALLBACK}`, { cause: error });
@@ -132,12 +142,11 @@ async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: 
     const e = event.data;
     if (e.type === "tool_execution_start") { calls.set(e.toolCallId, e.args); continue; }
     if (e.type === "message_end") { if (e.message.role === "assistant") answer = e.message; continue; }
-    const permitted = allowed.has(e.toolName);
-    const ran = e.isError !== true;
-    let outcome: ToolActivity["outcome"] = ran ? "done" : "error";
-    if (!permitted) outcome = ran ? "stopped" : "refused";
-    await request.activity({ callId: e.toolCallId, tool: e.toolName, args: calls.get(e.toolCallId) ?? null, outcome, result: capped(textOf(e.result?.content)) });
-    if (outcome === "stopped") { halt(`pi ran ${e.toolName}, which is not on the read-only tool allowlist; the turn was stopped`); return null; }
+    const result = capped(textOf(e.result?.content));
+    let outcome: ToolActivity["outcome"] = e.isError === true ? "error" : "done";
+    if (!allowed.has(e.toolName)) outcome = e.isError === true && result.trim() === `Tool ${e.toolName} not found` ? "refused" : "stopped";
+    await request.activity({ callId: e.toolCallId, tool: e.toolName, args: calls.get(e.toolCallId) ?? null, outcome, result });
+    if (outcome === "stopped") { halt(`pi reported ${e.toolName}, which is not on the read-only tool allowlist, as run; the turn was stopped`); return null; }
   }
   return answer;
 }
@@ -153,6 +162,7 @@ export function piTurns(settings: PiSettings): TurnCall {
     const timer = setTimeout(() => { halt(`pi did not answer within ${settings.timeoutSeconds} seconds`); }, settings.timeoutSeconds * 1000);
     const abort = (): void => { halt("the turn was cancelled"); };
     request.signal.addEventListener("abort", abort, { once: true });
+    if (request.signal.aborted) abort();
     const stderr = new Response(child.stderr).text().catch(() => "");
     try {
       void child.stdin.write(piPrompt(request, resumed));

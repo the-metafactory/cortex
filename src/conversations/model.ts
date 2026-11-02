@@ -3,7 +3,7 @@ import type { AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
 import { createModels, createProvider, type MutableModels } from "@earendil-works/pi-ai/models";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import type { ConversationLane } from "../common/types/desk-conversations";
-import type { ModelRoute } from "./types";
+import type { ContinuationReason, ModelRoute } from "./types";
 
 export const CORTEX_PROVIDER = "cortex";
 const API = "cortex-chat";
@@ -15,7 +15,6 @@ export type GateResult = { refused: string } | { conversationId: string; context
 export type RouteGate = (sessionId: string | undefined, route: ModelRoute) => Promise<GateResult>;
 
 export interface ToolActivity { callId: string; tool: string; args: unknown; outcome: "done" | "error" | "refused" | "stopped"; result: string }
-export type ContinuationReason = "lane-changed" | "engine-changed" | "session-missing";
 export type TurnEvent = { kind: "tool"; activity: ToolActivity } | { kind: "reconstructed"; route: ModelRoute; reason: Exclude<ContinuationReason, "lane-changed"> };
 export interface TurnRequest {
   conversationId: string;
@@ -55,8 +54,9 @@ export function chatTurns(messages: readonly Message[]): ChatTurn[] {
 interface Plan { prompt: string; history: ChatTurn[]; resume: string | null; reason: ContinuationReason | null; answers: number }
 
 export function planTurn(messages: readonly Message[], route: ModelRoute): Plan {
-  const lastReply = messages.findLastIndex(m => m.role === "assistant");
-  const prompt = chatTurns(messages.slice(lastReply + 1).filter(m => m.role === "user")).map(t => t.content).join("\n\n");
+  const lastReply = messages.findLastIndex(m => m.role === "assistant" && m.stopReason !== "error");
+  const asked = chatTurns(messages.slice(lastReply + 1).filter(m => m.role === "user")).map(t => t.content);
+  const prompt = asked.filter((text, i) => asked.indexOf(text) === i).join("\n\n");
   const earlier = messages.slice(0, lastReply + 1).filter(m => m.role !== "system");
   const history = chatTurns(earlier);
   const answered = earlier.filter((m): m is AssistantMessage => m.role === "assistant" && m.stopReason !== "error");
