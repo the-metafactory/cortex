@@ -11,6 +11,13 @@ import { runSweep, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
 import { keepFromDigest, listMailGroups } from "../desk/mail-digest";
 import { suspicionContext } from "../desk/mail-suspicion";
 import { archiveWhatArrives, offerContext, unsubscribeMail, type OneClickPost } from "../desk/mail-unsubscribe";
+import { actOnWaiting, nudgeMail, readWaiting, waitingFeatures, waitingIdOf, WAITING_OPS, type WaitingOp } from "../desk/mail-waiting";
+
+const WaitingActionSchema = z.enum(WAITING_OPS.map((op) => `waiting.${op}` as const));
+const waitingOp = (action: string): WaitingOp | null => {
+  const op = action.slice("waiting.".length);
+  return action.startsWith("waiting.") && WAITING_OPS.includes(op as WaitingOp) ? (op as WaitingOp) : null;
+};
 
 const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("draft"), key: z.string(), body: z.string(), decision: MailDecisionSchema.optional() }).strict(),
@@ -20,6 +27,7 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.enum(["undo", "block"]), move: z.string().min(1).max(64) }).strict(),
   z.object({ action: z.literal("sweep"), sweep: z.string().min(1).max(200), keys: z.array(z.string().min(1).max(1000)).min(1).max(SWEEP_LIMITS.maxMails) }).strict(),
   z.object({ action: z.literal("sweep.undo"), sweep: z.string().min(1).max(64) }).strict(),
+  z.object({ action: WaitingActionSchema, key: z.string().min(1).max(1000) }).strict(),
 ]);
 
 export const SWEEP_WAIT_MS = 8000;
@@ -56,6 +64,9 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if ("move" in body) {
     return answer(body.action === "undo" ? await undoMove(body.move, moveDeps) : blockSenderDomain(db, body.move, now));
   }
+  const op = waitingOp(body.action);
+  if (op && "key" in body) return answer(actOnWaiting(db, body.key, op, now, runtime.options.mailWaiting));
+  if (body.action === "draft" && waitingIdOf(body.key) !== null) return answer(await draftNudge(db, body.key, body.body, moveDeps));
   const decision = body.action === "draft" ? body.decision : undefined;
   if (decision && body.action === "draft") {
     const receipt = decisionReceipt(db, body.key, body.body, decision);
@@ -81,6 +92,17 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     return answer(await unsubscribeMail(mail, ctx, { db, ledger: runtime.ledger, now, ...(deps.post ? { post: deps.post } : {}) }));
   }
   return answer(await moveMail(mail, body.action === "move" ? body.target : "trash", moveDeps));
+}
+
+async function draftNudge(db: Database, key: string, text: string, moveDeps: MoveDeps): Promise<{ ok: true; message: string } | { ok: false; status: number; error: string }> {
+  const id = waitingIdOf(key);
+  const waiting = id ? readWaiting(db, id) : null;
+  const mail = waiting ? nudgeMail(waiting) : null;
+  if (!waiting || !mail) return { ok: false, status: 409, error: "The Desk no longer tracks this sent mail, or it names no account to draft from." };
+  const saved = await draftReply(mail, text, moveDeps);
+  if (!saved.ok) return saved;
+  logMailDecision(db, waitingFeatures(waiting), "draft", "desk", moveDeps.now, "Drafts");
+  return { ok: true, message: `Nudge saved in your ${mail.account ?? "mail"} Drafts. Send it from there; the Desk keeps waiting for the answer.` };
 }
 
 type SweepBody = Extract<z.infer<typeof MailRequestSchema>, { action: "sweep" | "sweep.undo" }>;

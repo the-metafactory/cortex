@@ -16,7 +16,8 @@ export function prepareDeclineDraft(draft: ReplyDraft): ReplyDraft {
   return { ...draft, intent: "decline", requestId: crypto.randomUUID(), text: draft.text.trim() ? draft.text : "Thank you for thinking of me. I cannot take this on.", note: null };
 }
 
-export function ReplyDraftBox({ reply, draft, sending, onChange, onConfirm, onCancel }: {
+export function ReplyDraftBox({ reply, draft, sending, onChange, onConfirm, onCancel, nudge = false }: {
+  nudge?: boolean;
   reply: NonNullable<DeskItem["reply"]>;
   draft: ReplyDraft;
   sending: boolean;
@@ -25,15 +26,15 @@ export function ReplyDraftBox({ reply, draft, sending, onChange, onConfirm, onCa
   onCancel: () => void;
 }) {
   return (
-    <section className="desk-reply" aria-label="Draft a reply">
-      <div className="desk-sec">Draft a reply</div>
+    <section className="desk-reply" aria-label={nudge ? "Draft a nudge" : "Draft a reply"}>
+      <div className="desk-sec">{nudge ? "Draft a nudge" : "Draft a reply"}</div>
       <p className="desk-reply-head">To: {reply.to}</p>
       <p className="desk-reply-head">Subject: {reply.subject}</p>
       <textarea
-        aria-label="Your reply"
+        aria-label={nudge ? "Your nudge" : "Your reply"}
         rows={6}
         value={draft.text}
-        placeholder="Your reply. It is saved in Drafts for you to send."
+        placeholder={nudge ? "A short follow-up to your mail. It is saved in Drafts for you to send." : "Your reply. It is saved in Drafts for you to send."}
         onChange={(e) => onChange(e.target.value)}
       />
       {draft.intent === "decline" && <p>Edit this draft into your decline before saving. It is not sent.</p>}

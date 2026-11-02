@@ -58,6 +58,7 @@ export const FOLDED_LABELS: Record<DeskItemKind, string> = {
   meeting: "Meetings starting soon",
   "mail-rule": "Mail rules the Desk proposes",
   dmarc: "DMARC failures for your domains",
+  "mail-waiting": "Mail still waiting for an answer",
 };
 
 export const isRegressedGoalCheck = (s: VigilSubjectView): boolean => s.vocab === "check" && s.goalId !== null && s.value === "regressed";

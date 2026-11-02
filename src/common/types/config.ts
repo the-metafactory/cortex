@@ -447,6 +447,15 @@ const endpointSchema = (path: string, timeoutSeconds: number) => z.object({
 
 const EmbedderEndpointSchema = endpointSchema("mc.desk.mail.embedder", 10);
 const DigestEndpointSchema = endpointSchema("mc.desk.mail.digest.model", 60);
+const WaitingEndpointSchema = endpointSchema("mc.desk.mail.waiting.model", 60);
+
+export const DeskMailWaitingSchema = z.object({
+  windowDays: z.number().int().min(1).max(90).default(14),
+  afterDays: z.number().int().min(0).max(30).default(4),
+  snoozeDays: z.number().int().min(1).max(30).default(2),
+  maxPerPass: z.number().int().min(1).max(100).default(10),
+  model: WaitingEndpointSchema.safeExtend({ local: WaitingEndpointSchema.optional() }).optional(),
+});
 
 export const DeskMailMirrorSchema = z.object({
   checkAfterUndos: z.number().int().min(0).max(1000).default(2),
@@ -579,6 +588,7 @@ export const DeskSchema = z.object({
         })
         .optional(),
       mirror: DeskMailMirrorSchema.optional(),
+      waiting: DeskMailWaitingSchema.optional(),
       suspicion: z
         .object({
           ownDomains: z.array(z.string().trim().toLowerCase().regex(HOST_NAME_RE, "mc.desk.mail.suspicion.ownDomains holds domain names such as example.org")).max(100),

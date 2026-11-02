@@ -48,6 +48,9 @@ const lenientList = <T>(item: z.ZodType<T>, keep: number) =>
     .catch(undefined);
 
 const hostName = z.string().trim().toLowerCase().max(253).regex(HOST_NAME_RE);
+const messageId = z.string().trim().transform((v) => v.replace(/^<|>$/g, "")).pipe(z.string().min(1).max(512).regex(/^[^\s<>]+$/));
+const MAX_REFERENCES = 20;
+const messageIds = lenientList(messageId, MAX_REFERENCES);
 const hostList = lenientList(hostName, 10);
 
 function present<T extends object>(record: T): Partial<T> | undefined {
@@ -64,6 +67,7 @@ export const MailHeadersSchema = z
     authResults: z.object({ spf: verdict, dkim: verdict, dmarc: verdict, dkimDomains: hostList, spfDomain: hostName.optional().catch(undefined) }).optional().catch(undefined),
     replyTo: headerText(300),
     inReplyTo: headerText(1000),
+    references: messageIds,
   })
   .transform((h): MailHeaders | undefined => present({ ...h, authResults: h.authResults && present(h.authResults) }))
   .optional()
@@ -76,6 +80,7 @@ export interface MailHeaders {
   authResults?: Partial<Record<"spf" | "dkim" | "dmarc", (typeof AUTH_VERDICTS)[number]>> & { dkimDomains?: string[]; spfDomain?: string };
   replyTo?: string;
   inReplyTo?: string;
+  references?: string[];
 }
 
 const MAX_LINKS = 20;
@@ -106,8 +111,34 @@ export const SourceMailSchema = z.object({
   links: MailLinksSchema,
 });
 
+const MailAddressSchema = z.object({
+  name: z.string().transform(printable).pipe(z.string().max(200)).optional().catch(undefined),
+  address: z.string().trim().toLowerCase().pipe(z.string().min(3).max(320).regex(/^[^\s<>@,;]+@[^\s<>@,;]+$/)),
+});
+
+const MAX_RECIPIENTS = 20;
+const MAX_REPLIES = 10;
+export const MAX_SENT_TEXT = 1000;
+
+/** A mail the account sent (cortex#2983): its recipients, its thread headers and the replies the source found. */
+export const SourceSentSchema = z.object({
+  kind: z.literal("sent"),
+  id: messageId,
+  from: MailAddressSchema,
+  to: lenientList(MailAddressSchema, MAX_RECIPIENTS).pipe(z.array(MailAddressSchema).min(1)),
+  subject: z.string().transform(printable).pipe(z.string().max(500)),
+  sentAt: isoDate,
+  text: z.string().transform(printable).transform((t) => t.slice(0, MAX_SENT_TEXT)).optional().catch(undefined),
+  url: safeLink.optional().catch(undefined),
+  account: z.string().optional(),
+  inReplyTo: messageId.optional().catch(undefined),
+  references: messageIds,
+  replies: lenientList(z.object({ id: messageId, from: MailAddressSchema, at: isoDate }), MAX_REPLIES),
+});
+
 export type SourceEvent = z.infer<typeof SourceEventSchema>;
 export type SourceMail = z.infer<typeof SourceMailSchema>;
+export type SourceSent = z.infer<typeof SourceSentSchema>;
 
 export interface DeskSourceConfig {
   id: string;
@@ -124,6 +155,7 @@ export interface SourceReading {
   area: string | null;
   events: SourceEvent[];
   mail: SourceMail[];
+  sent?: SourceSent[];
   readAt: number;
   error: string | null;
   dropped: number;
@@ -135,6 +167,7 @@ export interface ParsedSource {
   calendarCoverage?: CalendarCoverage;
   events: SourceEvent[];
   mail: SourceMail[];
+  sent: SourceSent[];
   dropped: number;
   problems: string[];
 }
@@ -184,7 +217,11 @@ export function parseSourceOutput(stdout: string): ParsedSource {
   if (capabilities?.includes("calendar") && !Array.isArray(events)) problems.push("events: a calendar source must provide its event array");
   if (capabilities && !capabilities.includes("calendar") && events !== undefined) problems.push("events: an attention-only source cannot provide calendar output");
   if (calendarCoverage && !capabilities?.includes("calendar")) problems.push("calendarCoverage: requires the calendar capability");
-  return { events: keep("events", events, SourceEventSchema), mail: keep("items", items, SourceMailSchema), dropped, problems, ...(capabilities ? { capabilities } : {}), ...(calendarCoverage ? { calendarCoverage } : {}) };
+  const isSent = (entry: unknown): boolean => typeof entry === "object" && entry !== null && "kind" in entry && entry.kind === "sent";
+  const listed = Array.isArray(items) ? items : undefined;
+  const mail = listed ? keep("items", listed.filter((e) => !isSent(e)), SourceMailSchema) : keep("items", items, SourceMailSchema);
+  const sent = listed ? keep("sent items", listed.filter(isSent), SourceSentSchema) : [];
+  return { events: keep("events", events, SourceEventSchema), mail, sent, dropped, problems, ...(capabilities ? { capabilities } : {}), ...(calendarCoverage ? { calendarCoverage } : {}) };
 }
 
 export type CommandRunner = (argv: string[], timeoutMs: number) => Promise<string>;
@@ -228,7 +265,7 @@ export class SourceCache {
   private refresh(source: DeskSourceConfig, now: number, cached: SourceReading | undefined): Promise<SourceReading> {
     const next = this.run(source.command, source.timeoutSeconds * 1000)
       .then((stdout) => ({ ...parseSourceOutput(stdout), error: null }))
-      .catch((err: unknown) => ({ events: cached?.events ?? [], mail: cached?.mail ?? [], dropped: 0, problems: [], error: err instanceof Error ? err.message : String(err) }))
+      .catch((err: unknown) => ({ events: cached?.events ?? [], mail: cached?.mail ?? [], sent: cached?.sent ?? [], dropped: 0, problems: [], error: err instanceof Error ? err.message : String(err) }))
       .then((r): SourceReading => {
         const reading = { id: source.id, area: source.area ?? null, readAt: now, ...r };
         this.readings.set(source.id, reading);

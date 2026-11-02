@@ -35,6 +35,7 @@ import { DeskModeSwitch, DeskStudio } from "./desk-studio";
 import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, selectItems, spokenBriefing, URGENCY_LABEL } from "../../desk/present";
 import { useDeskVoice } from "../hooks/use-desk-voice";
 import { MicButton, VoicePanel, WakeControl } from "./desk-voice";
+import { WAITING_OPS, type WaitingOp } from "../../desk/mail-waiting-schema";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskPrecedent, DeskView as DeskViewModel } from "../../desk/types";
 import type { MoveTarget } from "../../desk/mail-move";
 import type { MailCorrection } from "../../desk/mail-actions";
@@ -403,6 +404,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.unsubscribe") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "unsubscribe", key: item.key }), keepVisible: true }));
     else if (a.id === "mail.unsubscribe.page" && a.url) { const url = a.url; confirmFirst(item, a, () => openLink(url)); }
     else if (a.id === "mail.unsubscribe.rule") void send(item, a, { request: () => submitMailAction({ action: "unsubscribe.rule", key: item.key }) });
+    else if (isWaitingAction(a.id)) { const action = a.id; void send(item, a, { request: () => submitMailAction({ action, key: item.key }), keepVisible: action === "waiting.expect" }); }
     else if (a.id.startsWith("mailrule.")) runRule(item, a);
     else if (a.id === "dmarc.ack" && a.target) acknowledge(item, a, a.target);
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
@@ -780,6 +782,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             {detailItem.yesFilter && <MailYesFilterBox filter={detailItem.yesFilter} selected={replyDraft?.key === detailItem.key ? replyDraft.commitment : undefined} canDraft={Boolean(detailItem.reply)} disabled={busyWith(detailItem) === "mail.draft"} onChoose={commitment => setReplyDraft(r => ({ ...(r?.key === detailItem.key ? r : newReplyDraft(detailItem.key)), commitment, requestId: crypto.randomUUID() }))} onDecline={() => setReplyDraft(r => prepareDeclineDraft(r?.key === detailItem.key ? r : newReplyDraft(detailItem.key)))} />}
             {replyDraft?.key === detailItem.key && detailItem.reply && (
               <ReplyDraftBox
+                nudge={detailItem.kind === "mail-waiting"}
                 reply={detailItem.reply}
                 draft={replyDraft}
                 sending={busyWith(detailItem) === "mail.draft"}
@@ -1069,7 +1072,9 @@ interface SendOptions {
 
 const CHECK_POLL_MS = 3000;
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "mail.report": "Reporting…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "ranger.rule": "Recording…" };
+const isWaitingAction = (id: string): id is `waiting.${WaitingOp}` => WAITING_OPS.some((op) => id === `waiting.${op}`);
+
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "mail.report": "Reporting…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
 
 const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
 const CONFIRM_TARGET: Record<string, (target: string) => string> = { "mail.unsubscribe": (host) => `Yes, unsubscribe via ${host}`, "mail.unsubscribe.page": (host) => `Yes, open ${host}` };
