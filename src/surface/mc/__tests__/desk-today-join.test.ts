@@ -221,7 +221,7 @@ describe("a task added in Balance joins Today's priorities", () => {
   it("offers Undo for the latest today change on the Day page", () => {
     change({ op: "start", ids: ["second"] });
     addDue();
-    const html = renderToStaticMarkup(createElement(DeskTimeFirst, { day: readMyDay(database(), desk, NOW), now: NOW, before: null, after: null, proposal: null, sweeps: null, preview: null, ambient: null, areas: desk.areas, onChanged: () => {}, onThread: () => {} }));
+    const html = renderToStaticMarkup(createElement(DeskTimeFirst, { day: readMyDay(database(), desk, NOW), now: NOW, before: null, after: null, proposal: null, preview: null, ambient: null, areas: desk.areas, onChanged: () => {}, onThread: () => {} }));
     expect(html).toContain("Added Call the venue to today&#x27;s priorities.");
     expect(html).toContain(">Undo</button>");
     expect(html).toContain("Call the venue");
