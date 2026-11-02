@@ -10,9 +10,10 @@ const when = (at: number | null): string => (at === null ? "never ran" : `last r
 
 export interface RuleDraft { id: string; match: string; value: string; action: string }
 
-export function RuleEditForm({ editing, busy, onEdit, onSave, onCancel }: { editing: RuleDraft; busy: boolean; onEdit: (next: RuleDraft) => void; onSave: () => void; onCancel: () => void }) {
+export function RuleEditForm({ editing, busy, onEdit, onSubmit }: { editing: RuleDraft; busy: boolean; onEdit: (next: RuleDraft | null) => void; onSubmit: (body: MailRuleBody & { op: "edit"; rule: string }) => Promise<boolean> }) {
+  const save = (): void => { void onSubmit({ op: "edit", rule: editing.id, match: editing.match, value: editing.value, action: editing.action }).then((ok) => { if (ok) onEdit(null); }); };
   return (
-    <form className="desk-set-add" onSubmit={(e) => { e.preventDefault(); onSave(); }}>
+    <form className="desk-set-add" onSubmit={(e) => { e.preventDefault(); save(); }}>
       <select aria-label="Match" value={editing.match} disabled={busy} onChange={(e) => onEdit({ ...editing, match: e.target.value })}>
         {RULE_MATCHES.map((m) => <option key={m} value={m}>{MATCH_LABEL[m]}</option>)}
       </select>
@@ -21,7 +22,7 @@ export function RuleEditForm({ editing, busy, onEdit, onSave, onCancel }: { edit
         {RULE_ACTIONS.map((a) => <option key={a} value={a}>{ACTION_LABEL[a]}</option>)}
       </select>
       <button type="submit" className="desk-btn pri" disabled={busy || !editing.value.trim()}>Save</button>
-      <button type="button" className="desk-btn ghost" onClick={onCancel}>Cancel</button>
+      <button type="button" className="desk-btn ghost" onClick={() => onEdit(null)}>Cancel</button>
     </form>
   );
 }
@@ -54,7 +55,7 @@ export function MailRuleSettingsBody({ rows, note, busy, onChange }: { rows: Mai
         {rows.map((r) => (
           <li key={r.id}>
             {editing?.id === r.id ? (
-              <RuleEditForm editing={editing} busy={busy} onEdit={setEditing} onCancel={() => setEditing(null)} onSave={() => void onChange({ op: "edit", rule: r.id, match: editing.match, value: editing.value, action: editing.action }).then((ok) => { if (ok) setEditing(null); })} />
+              <RuleEditForm editing={editing} busy={busy} onEdit={setEditing} onSubmit={onChange} />
             ) : (
               <>
                 <span>

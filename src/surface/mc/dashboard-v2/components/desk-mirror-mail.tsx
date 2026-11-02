@@ -62,7 +62,7 @@ export function MirrorMail({ mail, dmarc, onChanged }: { mail: MailMirror | null
 }
 
 function CheckRule({ rule, busy, editing, onEdit, onRule }: { rule: MailMirrorRule; busy: boolean; editing: RuleDraft | null; onEdit: (d: RuleDraft | null) => void; onRule: (body: MailRuleBody) => Promise<boolean> }) {
-  if (editing) return <li><RuleEditForm editing={editing} busy={busy} onEdit={onEdit} onCancel={() => onEdit(null)} onSave={() => void onRule({ op: "edit", rule: rule.id, match: editing.match, value: editing.value, action: editing.action }).then(ok => { if (ok) onEdit(null); })} /></li>;
+  if (editing) return <li><RuleEditForm editing={editing} busy={busy} onEdit={onEdit} onSubmit={onRule} /></li>;
   return (
     <li>
       <strong>{rule.sentence}</strong><span>{plural(rule.undone, "Undo", "Undos")} against {plural(rule.runs, "run")} this week.</span>

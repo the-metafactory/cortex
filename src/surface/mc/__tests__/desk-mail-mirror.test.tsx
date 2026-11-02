@@ -54,8 +54,9 @@ describe("mail in the weekly mirror", () => {
     expect(m.byWhere).toEqual([{ key: "desk", count: 3 }, { key: "client", count: 2 }, { key: "rule", count: 1 }]);
     expect(m.senders).toEqual([{ kind: "list", value: "<weekly.news.example>", decisions: 3 }, { kind: "sender", value: "ada@people.example", decisions: 2 }]);
     expect(m.partial).toBe(false);
-    const direct = db.query<{ action: string; origin: string; n: number }, [number, number]>("SELECT action, origin, COUNT(*) AS n FROM desk_mail_log WHERE created_at >= ? AND created_at < ? GROUP BY action, origin").all(WEEK.start, WEEK.end);
-    expect(direct.reduce((sum, r) => sum + r.n, 0)).toBe(m.decisions);
+    const direct = (column: "action" | "origin") => db.query<{ key: string; count: number }, [number, number]>(`SELECT ${column} AS key, COUNT(*) AS count FROM desk_mail_log WHERE created_at >= ? AND created_at < ? GROUP BY ${column} ORDER BY count DESC, key`).all(WEEK.start, WEEK.end);
+    expect(m.byAction).toEqual(direct("action") as typeof m.byAction);
+    expect(m.byWhere).toEqual(direct("origin") as typeof m.byWhere);
   });
 
   it("invents no time: time appears only for mails the log saw opened and then acted on", () => {

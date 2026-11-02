@@ -1,16 +1,14 @@
 import type { Database } from "bun:sqlite";
+import type { z } from "zod/v4";
+import { DeskMailMirrorSchema } from "../../../common/types/config";
 import { queryMailLog, type MailLogAction, type MailLogEntry, type MailLogWhere } from "./mail-log";
 import { listRules, matchesRule, ruleSentence, type MailRule, type RuleMatch } from "./mail-rules";
 import { listKey, type UnsubscribeView } from "./mail-unsubscribe";
 import { isVip, listVips } from "./vips";
 
-export interface MailMirrorConfig {
-  checkAfterUndos: number;
-  archivedUnread: number;
-  top: number;
-}
+export type MailMirrorConfig = z.infer<typeof DeskMailMirrorSchema>;
 
-export const DEFAULT_MAIL_MIRROR: MailMirrorConfig = { checkAfterUndos: 2, archivedUnread: 3, top: 5 };
+export const DEFAULT_MAIL_MIRROR: MailMirrorConfig = DeskMailMirrorSchema.parse({});
 
 export const MAIL_MIRROR_LOG_LIMIT = 5000;
 
