@@ -7,7 +7,7 @@ import { logMailDecision, mailFeatures } from "./mail-log";
 import { refuse } from "./mail-move";
 import type { Commitment } from "./mail-yes-filter";
 import { CommandTimeout } from "./spawn";
-import type { MailInvitation } from "./sources/command";
+import type { MailInvitation, SourceReading } from "./sources/command";
 import { clock, DAY_MS, startOfDay } from "./time";
 import { DEFAULT_SLOTS, type InvitationSlotsConfig, type InvitationsConfig, type InviteReply, type InviteStatus } from "./mail-invitation-schema";
 
@@ -106,6 +106,17 @@ export function invitationConflicts(inv: Pick<MailInvitation, "summary" | "start
     .map((e): InvitationConflict => ({ title: e.title, at: e.at, ...(e.end !== undefined ? { end: e.end } : {}), calendar: e.calendar, maybe: e.availability.status === "unknown" }));
   if (events.length > 0) return { kind: "conflicts", events };
   return reasons.length > 0 ? { kind: "unknown", reasons } : { kind: "clear" };
+}
+
+const mailOnly = (reading: SourceReading): boolean => reading.capabilities !== undefined && !reading.capabilities.includes("calendar");
+
+/**
+ * The calendar coverage without the sources whose last reading declared no calendar capability (mail sources), whose
+ * stale or failed readings say nothing about busy time. A source that never declared its capabilities is kept: unknown.
+ */
+export function calendarsOnly(calendar: CalendarAvailability, readings: SourceReading[]): CalendarAvailability {
+  const mail = new Set(readings.filter(mailOnly).map((r) => r.id));
+  return { ...calendar, sources: calendar.sources.filter((s) => !mail.has(s.id)) };
 }
 
 const dayLabel = (at: number): string => new Date(at).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
