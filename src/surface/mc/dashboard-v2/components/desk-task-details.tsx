@@ -3,18 +3,20 @@ import type { OutlineNode } from "../../../../balance";
 import { balanceDetails, type BalanceCommand, type BalanceDetails } from "../../desk/balance-command";
 import type { BalanceDestination } from "../../desk/balance-destinations";
 import type { MyDayView } from "../../desk/my-day";
+import type { MyDayCommand } from "../../desk/my-day-schema";
 import { submitMyDay } from "../lib/desk-my-day-action";
 import { DeskSourceLink } from "./desk-link";
 import { DestinationPicker } from "./desk-destination-picker";
 import { SourceConversations } from "./desk-source-conversations";
+import { TodayControl } from "./desk-today-control";
 import "./desk-task-details.css";
 
 export interface TaskEntry { node: OutlineNode; parent: OutlineNode; path: string[] }
 export interface TaskDraft { node: OutlineNode; details: BalanceDetails; revision: number; date: string; yes: boolean }
 export interface TaskAdding { parent: string; title: string; revision: number; date: string }
-export type TaskMessage = { kind: "saved" | "error"; text: string } | null;
+export type TaskMessage = { kind: "saved" | "error"; text: string; undo?: string } | null;
 type Saved = Awaited<ReturnType<typeof submitMyDay>>;
-export type BalanceChange = (command: BalanceCommand, date?: string) => Promise<Saved | null>;
+export type BalanceChange = (command: MyDayCommand, date?: string) => Promise<Saved | null>;
 
 export function balanceEntries(root: OutlineNode): TaskEntry[] {
   const entries: TaskEntry[] = [];
@@ -51,7 +53,7 @@ export function useBalanceEditor(day: MyDayView, onSaved: (view: MyDayView) => v
     try {
       const result = await submitMyDay(date, command, requestId);
       retry.current.delete(payload);
-      setMessage({ kind: "saved", text: result.notice ?? "Saved. Today's confirmed choices keep their order." });
+      setMessage({ kind: "saved", text: result.notice ?? "Saved. Today's confirmed choices keep their order.", ...(result.undo ? { undo: result.undo } : {}) });
       onSaved(result.view);
       return result;
     } catch (error) {
@@ -70,12 +72,13 @@ export function useBalanceEditor(day: MyDayView, onSaved: (view: MyDayView) => v
 }
 export type BalanceEditor = ReturnType<typeof useBalanceEditor>;
 
-export function TaskMessageBanner({ message }: { message: TaskMessage }) {
-  return message && <p className={`dbl-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>{message.text}</p>;
+export function TaskMessageBanner({ message, busy = false, onUndo }: { message: TaskMessage; busy?: boolean; onUndo?: (receipt: string) => void }) {
+  const receipt = message?.undo;
+  return message && <p className={`dbl-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>{message.text}{receipt && onUndo && <> <button type="button" className="desk-btn" disabled={busy} onClick={() => { onUndo(receipt); }}>Undo</button></>}</p>;
 }
 
 export function BalanceAddForm({ adding, choices, busy, heading, onChange, onSubmit, onCancel }: { adding: { parent: string; title: string }; choices: BalanceDestination[]; busy: boolean; heading: string; onChange: (next: { parent: string; title: string }) => void; onSubmit: () => void; onCancel: () => void }) {
-  return <form className="dbl-create" onSubmit={event => { event.preventDefault(); onSubmit(); }}><h2>{heading}</h2><DestinationPicker label="New Balance parent" value={adding.parent} options={choices} disabled={busy} onChange={parent => { onChange({ ...adding, parent }); }} /><label>Title<input aria-label="New Balance title" value={adding.title} onChange={event => { onChange({ ...adding, title: event.target.value }); }} required maxLength={300} disabled={busy} /></label><button className="desk-btn pri" disabled={busy || !choices.some(option => option.id === adding.parent)}>Confirm add</button><button type="button" className="desk-btn" disabled={busy} onClick={onCancel}>Cancel</button><p>Adding a subtask turns its parent into a project. It does not add work to today's confirmed list.</p></form>;
+  return <form className="dbl-create" onSubmit={event => { event.preventDefault(); onSubmit(); }}><h2>{heading}</h2><DestinationPicker label="New Balance parent" value={adding.parent} options={choices} disabled={busy} onChange={parent => { onChange({ ...adding, parent }); }} /><label>Title<input aria-label="New Balance title" value={adding.title} onChange={event => { onChange({ ...adding, title: event.target.value }); }} required maxLength={300} disabled={busy} /></label><button className="desk-btn pri" disabled={busy || !choices.some(option => option.id === adding.parent)}>Confirm add</button><button type="button" className="desk-btn" disabled={busy} onClick={onCancel}>Cancel</button><p>Adding a subtask turns its parent into a project. A new task joins today's priorities when it outranks an open task there or today has room.</p></form>;
 }
 
 export function TaskDetails({ id, entry, day, editor, choices, titled = true, locked = false, onRefresh, onAdd, onMoved, onThread, onConversation, children }: { id: string | null; titled?: boolean; locked?: boolean; entry: TaskEntry | undefined; day: MyDayView; editor: BalanceEditor; choices: BalanceDestination[]; onRefresh: () => void; onAdd: (parent: string) => void; onMoved: (id: string) => void; onThread: (slug: string) => void; onConversation?: (id: string) => void; children?: ReactNode }) {
@@ -94,7 +97,7 @@ export function TaskDetails({ id, entry, day, editor, choices, titled = true, lo
   const moveChoices = choices.filter(option => !descendants.has(option.id));
   return <div className="dtd">
     <DetailsForm draft={draft} entry={entry} day={day} titled={titled} busy={busy} dirty={dirty} onDraft={editor.setDraft} onSave={save} onDiscard={() => { editor.discard(draft.node.id); onRefresh(); }} />
-    <DetailsActions node={node} entry={entry} day={day} busy={busy} dirty={dirty} onAdd={() => { setMoving(null); onAdd(node.id); }} onMove={() => { setMoving({ id: node.id, parent: entry?.parent.id ?? "", revision: day.revision, date: day.date }); }} onComplete={complete} onThread={onThread} />
+    <DetailsActions node={node} entry={entry} day={day} busy={busy} dirty={dirty} onAdd={() => { setMoving(null); onAdd(node.id); }} onMove={() => { setMoving({ id: node.id, parent: entry?.parent.id ?? "", revision: day.revision, date: day.date }); }} onComplete={complete} onThread={onThread} change={change} />
     {moving && moving.id === node.id && <form className="dbl-move" onSubmit={event => { event.preventDefault(); void change({ op: "outline-move", id: moving.id, parent: moving.parent, revision: moving.revision }, moving.date).then(saved => { if (saved) { setMoving(null); onMoved(moving.id); } }); }}><DestinationPicker label="Move Balance parent" value={moving.parent} options={moveChoices} disabled={busy} onChange={parent => { setMoving({ ...moving, parent }); }} /><button className="desk-btn pri" disabled={busy || !moveChoices.some(option => option.id === moving.parent)}>Confirm move</button><button type="button" className="desk-btn" disabled={busy} onClick={() => { setMoving(null); }}>Cancel</button></form>}
     {children}
     {onConversation && entry && !isArea(day, node.id) && <SourceConversations source={{ owner: node.children.length ? "balance-project" : "balance-task", id: node.id }} onOpen={onConversation} />}
@@ -128,12 +131,12 @@ function DetailsForm({ draft, entry, day, titled, busy, dirty, onDraft, onSave, 
   </>;
 }
 
-function DetailsActions({ node, entry, day, busy, dirty, onAdd, onMove, onComplete, onThread }: { node: OutlineNode; entry: TaskEntry | undefined; day: MyDayView; busy: boolean; dirty: boolean; onAdd: () => void; onMove: () => void; onComplete: () => void; onThread: (slug: string) => void }) {
+function DetailsActions({ node, entry, day, busy, dirty, onAdd, onMove, onComplete, onThread, change }: { node: OutlineNode; entry: TaskEntry | undefined; day: MyDayView; busy: boolean; dirty: boolean; onAdd: () => void; onMove: () => void; onComplete: () => void; onThread: (slug: string) => void; change: BalanceChange }) {
   const area = isArea(day, node.id);
   const sourceOwned = isSourceOwned(day, node.id);
   const source = day.sources.find(link => link.taskId === node.id);
   const studio = day.studioProjects.find(link => link.id === node.id) ?? day.studioTasks.find(link => link.id === node.id);
-  return <div className="dbl-actions"><button className="desk-btn ghost" disabled={busy || dirty || !entry || (node.done ?? false) || node.id.startsWith("studio-response:")} onClick={onAdd}>+ Add subtask</button>{!area && !sourceOwned && <><button className="desk-btn ghost" disabled={busy || dirty || !entry} onClick={onMove}>Move…</button><button className="desk-btn" disabled={busy || dirty || !entry} onClick={onComplete}>{node.done ? "Reopen" : node.children.length ? "Close project" : "Mark complete"}</button></>}{dirty && <p className="dbl-help">Save or discard the draft before changing this item's structure.</p>}
+  return <div className="dbl-actions"><button className="desk-btn ghost" disabled={busy || dirty || !entry || (node.done ?? false) || node.id.startsWith("studio-response:")} onClick={onAdd}>+ Add subtask</button>{!area && !sourceOwned && <><button className="desk-btn ghost" disabled={busy || dirty || !entry} onClick={onMove}>Move…</button><button className="desk-btn" disabled={busy || dirty || !entry} onClick={onComplete}>{node.done ? "Reopen" : node.children.length ? "Close project" : "Mark complete"}</button></>}{!area && entry && <TodayControl node={node} day={day} busy={busy || dirty} change={change} />}{dirty && <p className="dbl-help">Save or discard the draft before changing this item's structure.</p>}
     {source && <DeskSourceLink source={source} />}{studio && <button className="desk-btn ghost" onClick={() => { onThread(studio.slug); }}>Open Studio thread →</button>}
   </div>;
 }

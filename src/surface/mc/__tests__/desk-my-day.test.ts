@@ -27,9 +27,7 @@ import type { CalendarAvailability, CalendarInterval } from "../desk/calendar-av
 import { DeskTimeFirst } from "../dashboard-v2/components/desk-time-first";
 import type { DeskItem } from "../desk/types";
 
-const NOW = new Date(2026, 9, 31, 10).getTime();
-const DATE = localDay(NOW);
-const desk: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", sources: [], areas: [{ id: "work", label: "Work", color: "", repos: [], goals: [] }] };
+import { DATE, NOW, desk } from "./desk-day-fixture";
 function seed(): AppState {
   return { outline: { id: "root", title: "Outline", weight: 100, ordering: "parallel", children: [{ id: "area:work", title: "Work", weight: 50, ordering: "parallel", children: [
     { id: "constructor", title: "Write the outline", weight: 50, ordering: "parallel", children: [], effort: 1 },
