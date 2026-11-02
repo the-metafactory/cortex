@@ -5009,6 +5009,7 @@ export async function startCortex(
           ...(config.mc.desk.mail.dmarc ? { mailDmarc: config.mc.desk.mail.dmarc } : {}),
           ...(config.mc.desk.mail.report ? { mailReport: config.mc.desk.mail.report } : {}),
           ...(config.mc.desk.mail.unsubscribe ? { mailUnsubscribe: config.mc.desk.mail.unsubscribe } : {}),
+          ...(config.mc.desk.mail.mirror ? { mailMirror: config.mc.desk.mail.mirror } : {}),
           ...(config.mc.desk.mail.digest ? { mailDigest: resolveDigest(config.mc.desk.mail.digest, expandTilde) } : {}),
           mailOwnDomains: config.mc.desk.mail.suspicion?.ownDomains ?? config.mc.desk.mail.dmarc?.domains ?? [],
           ...(config.mc.desk.mail.links ? { mailLinks: config.mc.desk.mail.links } : {}),

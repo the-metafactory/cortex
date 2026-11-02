@@ -67,6 +67,7 @@ export type MailRuleBody =
   | { op: "approve" | "later" | "never"; proposal: string }
   | { op: "release" | "stop" | "start" | "delete"; rule: string }
   | { op: "edit"; rule: string; match: string; value: string; action: string }
+  | { op: "create"; match: string; value: string; action: string }
   | { op: "undo"; run: string };
 
 /** Answers a rule proposal, changes a rule, or undoes one rule run, and returns one line for the page. Never throws. */

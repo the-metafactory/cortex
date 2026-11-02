@@ -572,6 +572,13 @@ export const DeskSchema = z.object({
           timeoutSeconds: z.number().int().min(1).max(60).default(10),
         })
         .optional(),
+      mirror: z
+        .object({
+          checkAfterUndos: z.number().int().min(0).max(1000).default(2),
+          archivedUnread: z.number().int().min(1).max(1000).default(3),
+          top: z.number().int().min(1).max(50).default(5),
+        })
+        .optional(),
       suspicion: z
         .object({
           ownDomains: z.array(z.string().trim().toLowerCase().regex(HOST_NAME_RE, "mc.desk.mail.suspicion.ownDomains holds domain names such as example.org")).max(100),

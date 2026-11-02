@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { spawnWithStdin } from "../desk/create";
 import { fail, noStore, type DeskMailDeps } from "./desk-mail";
-import { answerProposal, DEFAULT_MAIL_RULES, deleteRule, editRule, releaseRule, ruleViews, setRuleOn, undoRuleRun, type RuleChange } from "../desk/mail-rules";
+import { answerProposal, createRule, DEFAULT_MAIL_RULES, deleteRule, editRule, releaseRule, ruleViews, setRuleOn, undoRuleRun, type RuleChange } from "../desk/mail-rules";
 import type { MoveResult } from "../desk/mail-move";
 
 const Id = z.string().min(1).max(64);
@@ -13,6 +13,7 @@ const RuleRequestSchema = z.discriminatedUnion("op", [
   z.object({ op: z.enum(["approve", "later", "never"]), proposal: z.string().min(1).max(400) }).strict(),
   z.object({ op: z.enum(["release", "stop", "start", "delete"]), rule: Id }).strict(),
   z.object({ op: z.literal("edit"), rule: Id, ...Edit }).strict(),
+  z.object({ op: z.literal("create"), ...Edit }).strict(),
   z.object({ op: z.literal("undo"), run: Id }).strict(),
 ]);
 
@@ -21,6 +22,7 @@ export type DeskMailRulesDeps = DeskMailDeps;
 /**
  * GET lists the approved rules. POST {op: "approve" | "later" | "never", proposal} answers a proposal card;
  * {op: "release" | "stop" | "start" | "delete", rule} and {op: "edit", rule, match, value, action} change a rule;
+ * {op: "create", match, value, action} adds the rule the principal asked for from the weekly mirror;
  * {op: "undo", run} takes back one rule run. The rebind and identity gates in handleApi run before this handler.
  */
 export async function handleDeskMailRules(req: Request, db: Database, runtime: DeskRuntime | undefined, deps: DeskMailRulesDeps = {}): Promise<Response> {
@@ -54,6 +56,8 @@ export async function handleDeskMailRules(req: Request, db: Database, runtime: D
       return answer(deleteRule(db, body.rule));
     case "edit":
       return kick(editRule(db, body.rule, body, now));
+    case "create":
+      return kick(createRule(db, body, now, newId));
     case "undo":
       return answer(await undoRuleRun(body.run, { db, config: desk.mailActions, ledger: runtime.ledger, run: deps.run ?? spawnWithStdin, now }));
   }
