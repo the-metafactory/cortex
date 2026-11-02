@@ -232,6 +232,10 @@ export function historySentence(e: MailLogEntry, now: number): string {
       return `You stopped waiting for an answer to it (${when}).`;
     case "studio":
       return `You added it to the Studio (${when}).`;
+    case "accept":
+      return `You accepted its invitation on the Desk (${when}).`;
+    case "decline":
+      return `You declined its invitation on the Desk (${when}).`;
     default:
       return `The Desk recorded “${e.action}” for it (${when}).`;
   }

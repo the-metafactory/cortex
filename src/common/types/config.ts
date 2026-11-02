@@ -458,6 +458,23 @@ export const DeskMailWaitingSchema = z.object({
   model: WaitingEndpointSchema.safeExtend({ local: WaitingEndpointSchema.optional() }).optional(),
 });
 
+const clockTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, "a time as HH:MM");
+
+export const DeskMailInvitationsSchema = z.object({
+  command: z.array(z.string().min(1)).min(1),
+  timeoutSeconds: z.number().int().min(1).max(120).default(30),
+  addToCalendar: z.array(z.string().trim().min(1).max(64)).max(20).default([]),
+  slots: z
+    .object({
+      days: z.number().int().min(1).max(14).default(5),
+      dayStart: clockTime.default("09:00"),
+      dayEnd: clockTime.default("18:00"),
+      max: z.number().int().min(1).max(10).default(5),
+    })
+    .refine((s) => s.dayStart < s.dayEnd, "mc.desk.mail.invitations.slots.dayStart must come before dayEnd")
+    .default({ days: 5, dayStart: "09:00", dayEnd: "18:00", max: 5 }),
+});
+
 export const DeskMailMirrorSchema = z.object({
   checkAfterUndos: z.number().int().min(0).max(1000).default(2),
   archivedUnread: z.number().int().min(1).max(1000).default(3),
@@ -591,6 +608,7 @@ export const DeskSchema = z.object({
         .optional(),
       mirror: DeskMailMirrorSchema.optional(),
       waiting: DeskMailWaitingSchema.optional(),
+      invitations: DeskMailInvitationsSchema.optional(),
       suspicion: z
         .object({
           ownDomains: z.array(z.string().trim().toLowerCase().regex(HOST_NAME_RE, "mc.desk.mail.suspicion.ownDomains holds domain names such as example.org")).max(100),

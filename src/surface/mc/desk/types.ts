@@ -109,6 +109,7 @@ export interface DeskItem {
   reply?: { to: string; subject: string };
   suspicious?: boolean;
   handoff?: import("./mail-handoff").HandoffView;
+  invitation?: import("./mail-invitation").InvitationView;
 }
 
 export interface DeskInterrupt {

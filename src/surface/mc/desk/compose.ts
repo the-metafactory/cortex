@@ -3,6 +3,7 @@ import { readMailMirror, type MailMirrorConfig, type MailMirrorUnsubscribe } fro
 import { loadBalanceState } from "./balance-store";
 import { withoutClosedTasks, type WaitingTask, type WaitingTasks } from "./sources/waiting";
 import { mailYesFilter, readMailDecision } from "./mail-yes-filter";
+import { invitationDecisions, invitationView, type InvitationsConfig, type InvitationView } from "./mail-invitation";
 import { readStudioDesk } from "./studio-my-day";
 import { movedKeys, sourceIdentity } from "./my-day";
 import { calendarSetting, discoverCalendars } from "./calendars";
@@ -106,6 +107,7 @@ export interface DeskOptions {
   mailUnsubscribe?: UnsubscribeConfig;
   mailMirror?: MailMirrorConfig;
   mailWaiting?: WaitingConfig;
+  mailInvitations?: InvitationsConfig;
   mailHandoff?: { lanes: HandoffLanes; pi: PiSettings };
   mailOwnDomains?: string[];
   mailLinks?: EvidenceLinks;
@@ -244,9 +246,16 @@ export async function composeDesk(
   if (handing) void handing.kick(db);
   const handoffRows = handing ? openHandoffs(db) : [];
   const handoffOf = handoffsByMail(handoffRows);
+  const availability = calendarAvailability({ sources: desk.sources, readings, calendars: [...calendars.values()], now });
+  const invited = mail.filter((m) => m.unread && m.invitation);
+  const answers = invitationDecisions(db, invited.map((m) => m.id));
+  const invitations = new Map(invited.flatMap((m): [string, InvitationView][] => {
+    const view = invitationView(m, availability, desk.mailInvitations, answers.get(m.id));
+    return view ? [[m.id, view]] : [];
+  }));
   const corrected = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), ivy: handoffReady(desk, handing), unsubscribe }).map((item) => withHandoff(item, handoffOf.get(mailIdOf(item.key)), now)),
+    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), ivy: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withHandoff(item, handoffOf.get(mailIdOf(item.key)), now)),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
     ...ruleCards,
@@ -268,7 +277,7 @@ export async function composeDesk(
   const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => ({ ...i, todoFingerprint: sourceIdentity(i) }));
   return {
     ...(routines ? { routines } : {}),
-    calendarAvailability: calendarAvailability({ sources: desk.sources, readings, calendars: [...calendars.values()], now }),
+    calendarAvailability: availability,
     myDay,
     mirror: buildWeeklyMirror({ now, desk, state: loadBalanceState(db), studio, readings, events, calendarSources: [...calendars.values()].map(c => c.source), dmarc, mail: readMailMirror(db, mirrorWeek(now), { ...(desk.mailMirror ? { config: desk.mailMirror } : {}), offers: mirrorOffers(offerable, unsubscribe) }) }),
     calendars: [...calendars.values()],
@@ -362,7 +371,7 @@ function withUnsubscribe<V extends { mails: SweepMailView[] }>(view: V, offers: 
 }
 
 function withMailLog(item: DeskItem, log: Map<string, MailLogEntry[]>, now: number): DeskItem {
-  const entries = log.get(mailIdOf(item.key)) ?? [];
+  const entries = (log.get(mailIdOf(item.key)) ?? []).filter(e => !(item.invitation?.decision && (e.action === "accept" || e.action === "decline")));
   return entries.length ? { ...item, detail: { ...item.detail, history: [...item.detail.history, ...entries.map(e => historySentence(e, now))] } } : item;
 }
 
