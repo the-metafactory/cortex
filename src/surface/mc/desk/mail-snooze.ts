@@ -209,16 +209,7 @@ type SnoozeResult = { ok: true; message: string; until: string } | SnoozeFailure
 const refuse = (status: number, error: string): SnoozeFailure => ({ ok: false, status, error });
 const ADDRESS_RE = /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/;
 
-interface Resolved {
-  kind: SnoozeKind;
-  untilAt: number | null;
-  eventKey: string | null;
-  eventTitle: string | null;
-  eventStart: number | null;
-  person: string | null;
-  personName: string | null;
-  label: string;
-}
+type Resolved = Pick<SnoozeRow, "kind" | "untilAt" | "eventKey" | "eventTitle" | "eventStart" | "person" | "personName" | "label">;
 
 function resolve(choice: SnoozeChoice, ctx: { now: number; events: ReadonlyMap<string, SnoozeEvent>; names: ReadonlyMap<string, string> }): Resolved | string {
   const none = { eventKey: null, eventTitle: null, eventStart: null, person: null, personName: null };
