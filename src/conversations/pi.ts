@@ -129,6 +129,15 @@ function spawnPi(settings: PiSettings, args: string[]): Bun.Subprocess<"pipe", "
   }
 }
 
+async function feed(stdin: Bun.FileSink, text: string): Promise<Error | null> {
+  try {
+    try { await stdin.write(text); } finally { await stdin.end(); }
+    return null;
+  } catch (error) {
+    return (error as { code?: string }).code === "EPIPE" ? null : error instanceof Error ? error : new Error(String(error));
+  }
+}
+
 type Answer = Extract<PiEvent, { type: "message_end" }>["message"];
 
 async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: Set<string>, request: TurnRequest, halt: (reason: string) => void): Promise<Answer | null> {
@@ -165,8 +174,7 @@ export function piTurns(settings: PiSettings): TurnCall {
     if (request.signal.aborted) abort();
     const stderr = new Response(child.stderr).text().catch(() => "");
     try {
-      void child.stdin.write(piPrompt(request, resumed));
-      void child.stdin.end();
+      const fed = feed(child.stdin, piPrompt(request, resumed));
       const answer = await readTurn(child, new Set(turnTools(settings, request.route)), request, halt);
       const code = await child.exited;
       if (halted.reason) throw new Error(`${halted.reason}. ${NO_FALLBACK}`);
@@ -174,6 +182,8 @@ export function piTurns(settings: PiSettings): TurnCall {
         const detail = (await stderr).trim().split("\n").filter(Boolean).at(-1)?.slice(0, STDERR_LIMIT);
         throw new Error(`pi exited with code ${code}${detail ? `: ${detail}` : ""}. ${NO_FALLBACK}`);
       }
+      const unfed = await fed;
+      if (unfed) throw new Error(`the prompt could not be sent to pi: ${unfed.message}. ${NO_FALLBACK}`, { cause: unfed });
       if (!answer) throw new Error(`pi finished without an answer. ${NO_FALLBACK}`);
       if (answer.stopReason === "error" || answer.stopReason === "aborted") throw new Error(`pi did not answer: ${answer.errorMessage ?? answer.stopReason}. ${NO_FALLBACK}`);
       const text = textOf(answer.content).trim();
