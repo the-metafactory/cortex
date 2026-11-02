@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { CREATABLE_TYPES, CREATION_CATALOG, SUBJECT_FIELDS, UNAVAILABLE_TYPES, isCreatable, type CreatableType, type Egress, type FieldSpec, type FixedTerm } from "./catalog";
+import { CREATABLE_TYPES, CREATION_CATALOG, OWNER_BLOCKERS, SUBJECT_FIELDS, UNAVAILABLE_TYPES, isCreatable, type CreatableType, type Egress, type FieldSpec, type FixedTerm } from "./catalog";
 import { ConversationError, type ConversationHost } from "./host";
 import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateResult, type OperationRecord, type OwnerWriters } from "./types";
 
@@ -91,7 +91,7 @@ function capabilityOf(type: CreatableType, writers: OwnerWriters): Capability {
   const base = { type, row: spec.row, label: spec.label, owner: spec.owner, egress: spec.egress, fields: spec.fields, fixed: spec.fixed ?? [] };
   if (writers[type]) return { ...base, status: "ready" };
   const reason = type === "flow" ? "Pulse has no place to save a flow without running it yet." : `No ${spec.owner} writer is connected on this stack yet.`;
-  return { ...base, status: `blocked:${spec.blockedBy}`, reason };
+  return { ...base, status: `blocked:${OWNER_BLOCKERS[type]}`, reason };
 }
 
 export function unavailableHere(capability: Capability): string {

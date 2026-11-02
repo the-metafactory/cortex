@@ -38,7 +38,7 @@ describe("conversation creation API", () => {
     const caps = await call("GET", "/api/conversations/capabilities");
     expect(caps.status).toBe(200);
     expect(caps.body.types?.find(t => t.type === "graph-node")?.status).toBe("ready");
-    expect(caps.body.types?.find(t => t.type === "balance-task")?.status).toBe("blocked:2972");
+    expect(caps.body.types?.find(t => t.type === "balance-task")?.status).toBe("blocked:3030");
     const proposalId = randomUUID();
     const made = await call("POST", `/api/conversations/${id}/proposals`, { proposalId, type: "graph-node", fields: { ...node, title: "Draft" } });
     expect(made.status).toBe(201);
