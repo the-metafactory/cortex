@@ -28,6 +28,7 @@ const input = (mails: SourceMail[], classified: Record<string, MailClassificatio
 });
 
 const moved = (id: string): WriterResult => ({ code: 0, stdout: JSON.stringify({ id, folder: "Archive", message: "Moved to Archive." }), stderr: "" });
+const junked = (id: string): WriterResult => ({ code: 0, stdout: JSON.stringify({ id, folder: "Junk", message: "Moved to Junk." }), stderr: "" });
 const refused = (line: string): WriterResult => ({ code: 3, stdout: "", stderr: line });
 
 let ids = 0;
@@ -38,7 +39,7 @@ function moveDeps(results: (WriterResult | Error)[] = []) {
 }
 
 const REPORTS = ["r1", "r2", "r3"].map((id) => mail(id, "stats@otrs.example", { headers: { listId: "<stats.otrs.example>" } }));
-const group = (members: SourceMail[]): SweepGroup => ({ id: "bundle:archive:x", kind: "bundle", basis: "list", target: "archive", label: "same mailing list", title: "3 mails from the stats list: archive all?", about: "from the stats list", why: "", area: null, members: members.map(member) });
+const group = (members: SourceMail[]): SweepGroup => ({ id: "bundle:archive:x", kind: "bundle", basis: "list", target: "archive", label: "same mailing list", title: "3 mails from the stats list", about: "from the stats list", why: "", area: null, members: members.map(member) });
 const doneRows = () => db.query<{ attempt_key: string; action: string; status: string; message: string }, []>("SELECT attempt_key, action, status, message FROM desk_done ORDER BY created_at, attempt_key").all();
 const doneTitle = (): string | undefined => db.query<{ title: string }, []>("SELECT title FROM desk_done WHERE action LIKE 'mail.sweep%'").get()?.title;
 const movedIds = (calls: { stdin: unknown }[]) => calls.map((c) => (c.stdin as { messageId: string }).messageId);
@@ -64,7 +65,7 @@ describe("sweep builder", () => {
     const vectors = new Map([["a", [1, 0, 0]], ["b", [0.95, 0.1, 0]], ["c", [0, 0, 1]]]);
     const groups = buildSweeps(input([a, b, c], { a: archive(), b: archive(), c: archive() }, { vectors, threshold: 0.8 }));
     expect(groups.map((g) => [g.basis, g.members.map((m) => m.id)])).toEqual([["similar", ["a", "b"]]]);
-    expect(groups[0]?.title).toBe("2 mails like “Weekly ITIL statistics”: archive all?");
+    expect(groups[0]?.title).toBe("2 mails like “Weekly ITIL statistics”");
   });
 
   it("falls back to List-Id or sender when no vector is cached, and needs the same predicted move", () => {
@@ -150,6 +151,21 @@ describe("sweep executor", () => {
     expect(await undoSweep(r.sweep, deps)).toEqual({ ok: false, status: 409, error: "That sweep is already undone." });
   });
 
+  it("moves a bundle the Desk suggested to archive to Junk instead, and logs each predicted mail as a correction", async () => {
+    saveClassification(db, "r1", archive(), "test", NOW);
+    saveClassification(db, "r2", archive(), "test", NOW);
+    const { q, deps } = moveDeps([junked("r1"), junked("r2"), junked("r3"), junked("r1"), junked("r2"), junked("r3")]);
+    const r = await runSweep(group(REPORTS), ["mail:r1", "mail:r2", "mail:r3"], deps, "junk");
+    expect(r).toMatchObject({ ok: true, moved: 3, failed: [], message: "Moved to Junk 3 mails." });
+    expect(q.calls.map((c) => (c.stdin as { target: string }).target)).toEqual(["junk", "junk", "junk"]);
+    expect(queryMailLog(db, {}).map((e) => [e.messageId, e.action, e.where]).sort()).toEqual([["r1", "junk", "correction"], ["r2", "junk", "correction"], ["r3", "junk", "desk"]]);
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM desk_mail_classes WHERE message_id IN ('r1', 'r2')").get()?.n).toBe(0);
+    expect(doneTitle()).toBe("Moved to Junk 3 mails from the stats list");
+    if (!r.ok) throw new Error(r.error);
+    expect(await undoSweep(r.sweep, deps)).toEqual({ ok: true, message: "Moved 3 mails back to INBOX." });
+    expect(q.calls.slice(3).map((c) => (c.stdin as { from: string }).from)).toEqual(["junk", "junk", "junk"]);
+  });
+
   it("undoes what an interrupted sweep moved, after a restart left a mail marked as moving", async () => {
     const { q, deps } = moveDeps([moved("r1"), moved("r2"), moved("r3"), moved("r1"), moved("r2")]);
     const r = await runSweep(group(REPORTS), ["mail:r1", "mail:r2", "mail:r3"], deps);
@@ -213,6 +229,16 @@ describe("sweeps on the Desk", () => {
     release();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(doneRows()[0]?.message).toBe("Archived 2 mails.");
+  });
+
+  it("moves the bundle to the target the page chose", async () => {
+    const { rt, view } = await desk();
+    const id = (await view()).mailSweeps?.[0]?.id ?? "";
+    const q = queue([junked("r1"), junked("r2")]);
+    const res = await handleDeskMail(post({ action: "sweep", sweep: id, keys: ["mail:r1", "mail:r2"], target: "junk" }), db, rt, { run: q.run, now: () => NOW, newId: () => `sj-${++ids}` });
+    expect(await res.json()).toMatchObject({ ok: true, moved: 2, message: "Moved to Junk 2 mails." });
+    expect(q.calls.map((c) => (c.stdin as { target: string }).target)).toEqual(["junk", "junk"]);
+    expect(queryMailLog(db, { where: "correction" }).map((e) => e.messageId).sort()).toEqual(["r1", "r2"]);
   });
 
   it("refuses a group that changed since the preview", async () => {

@@ -4,7 +4,7 @@ import { digestsInArea, MailDigests } from "../components/desk-mail-digest";
 import type { MailDigestView } from "../../desk/mail-digest";
 
 const DIGEST: MailDigestView = {
-  id: "digest:2026-11-02", day: "2026-11-02", kind: "digest", basis: "day", target: "archive", label: "newsletters", title: "3 newsletters from Monday 2 November: archive all?",
+  id: "digest:2026-11-02", day: "2026-11-02", kind: "digest", basis: "day", target: "archive", label: "newsletters", title: "3 newsletters from Monday 2 November",
   why: "Worth reading: 1 item.", area: null,
   mails: [
     { key: "mail:a", subject: "Patch round-up", from: "Security Briefing", at: "2026-11-02T06:00:00.000Z", url: "message://%3Ca%3E" },
@@ -16,7 +16,7 @@ const DIGEST: MailDigestView = {
 
 describe("the newsletter digest card", () => {
   it("lists each newsletter in one line, the flagged one first with its reason, and offers Archive all", () => {
-    const html = renderToStaticMarkup(<MailDigests digests={[DIGEST]} busy={false} onArchive={() => {}} onKeep={() => {}} />);
+    const html = renderToStaticMarkup(<MailDigests digests={[DIGEST]} busy={false} onMove={() => {}} onKeep={() => {}} />);
     expect(html).toContain("3 newsletters from Monday 2 November</h3>");
     expect(html.indexOf("Cortex Weekly")).toBeLessThan(html.indexOf("Security Briefing"));
     expect(html).toContain("worth reading");
@@ -24,14 +24,16 @@ describe("the newsletter digest card", () => {
     expect(html).toContain('href="message://%3Ca%3E"');
     expect(html.match(/>Keep</g)).toHaveLength(3);
     expect(html).toContain("Archive all 3");
+    expect(html).toContain(">Spam</button>");
+    expect(html).toContain(">Delete</button>");
   });
 
   it("says why nothing is flagged, and shows nothing without digests", () => {
     const plain = { ...DIGEST, flags: [], why: "Nothing in them touches your Studio threads, focus projects or goals." };
-    const html = renderToStaticMarkup(<MailDigests digests={[plain]} busy={false} onArchive={() => {}} onKeep={() => {}} />);
+    const html = renderToStaticMarkup(<MailDigests digests={[plain]} busy={false} onMove={() => {}} onKeep={() => {}} />);
     expect(html).not.toContain("worth reading");
     expect(html).toContain("Nothing in them touches");
-    expect(renderToStaticMarkup(<MailDigests digests={[]} busy={false} onArchive={() => {}} onKeep={() => {}} />)).toBe("");
+    expect(renderToStaticMarkup(<MailDigests digests={[]} busy={false} onMove={() => {}} onKeep={() => {}} />)).toBe("");
   });
 
   it("offers Unsubscribe, the unsubscribe page or the archive rule on a newsletter line", () => {
@@ -40,12 +42,12 @@ describe("the newsletter digest card", () => {
       { ...DIGEST.mails[1], key: "mail:b", unsubscribe: { kind: "page" as const, host: "cortex.example", url: "https://cortex.example/leave?u=1" } },
       { ...DIGEST.mails[2], key: "mail:c", unsubscribe: { kind: "rule" as const, host: "startups.example" } },
     ].map((m) => ({ subject: "", from: "", at: "", ...m }));
-    const html = renderToStaticMarkup(<MailDigests digests={[{ ...DIGEST, mails }]} busy={false} onArchive={() => {}} onKeep={() => {}} onUnsubscribe={() => {}} />);
+    const html = renderToStaticMarkup(<MailDigests digests={[{ ...DIGEST, mails }]} busy={false} onMove={() => {}} onKeep={() => {}} onUnsubscribe={() => {}} />);
     expect(html).toContain(">Unsubscribe</button>");
     expect(html).toContain('href="https://cortex.example/leave?u=1"');
     expect(html).toContain("Unsubscribe page: cortex.example</a>");
     expect(html).toContain(">Archive what still arrives</button>");
-    expect(renderToStaticMarkup(<MailDigests digests={[{ ...DIGEST, mails }]} busy={false} onArchive={() => {}} onKeep={() => {}} />)).not.toContain("Unsubscribe");
+    expect(renderToStaticMarkup(<MailDigests digests={[{ ...DIGEST, mails }]} busy={false} onMove={() => {}} onKeep={() => {}} />)).not.toContain("Unsubscribe");
   });
 
   it("filters by area and keeps cross-area digests everywhere", () => {

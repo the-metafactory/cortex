@@ -52,7 +52,7 @@ export type MailActionBody =
   | { action: `waiting.${import("../../desk/mail-waiting-schema").WaitingOp}`; key: string }
   | { action: "move"; key: string; target: import("../../desk/mail-move").MoveTarget }
   | { action: "undo" | "block"; move: string }
-  | { action: "sweep"; sweep: string; keys: string[] }
+  | { action: "sweep"; sweep: string; keys: string[]; target?: import("../../desk/mail-move").MoveTarget }
   | { action: "sweep.undo"; sweep: string }
   | { action: "correct"; key: string; said: import("../../desk/mail-actions").MailCorrection; correction?: number }
   | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision }

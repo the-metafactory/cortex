@@ -91,6 +91,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const catchupView = { ...view, items: view.items.filter(i => !snoozed.has(i.key)) };
   const [detail, setDetail] = useState<DeskItem | null>(null);
   const [sweep, setSweep] = useState<MailSweepView | null>(null);
+  const [sweepTarget, setSweepTarget] = useState<MoveTarget>("archive");
   const [sweeping, setSweeping] = useState(false);
   useEffect(() => {
     if (detail) setSweep(null);
@@ -390,9 +391,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     if (result.ok) onChanged();
   };
 
-  const confirmSweep = async (s: MailSweepView, keys: string[]): Promise<void> => {
+  const confirmSweep = async (s: MailSweepView, keys: string[], target: MoveTarget): Promise<void> => {
     setSweeping(true);
-    const result = await submitMailAction({ action: "sweep", sweep: s.id, keys });
+    const result = await submitMailAction({ action: "sweep", sweep: s.id, keys, target });
     setSweeping(false);
     setNote(result.text);
     if (!result.ok) return;
@@ -416,8 +417,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     if (result.ok) onChanged();
   };
 
-  const openSweep = (s: MailSweepView): void => {
+  const openSweep = (s: MailSweepView, target: MoveTarget = s.target): void => {
     setDetail(null);
+    setSweepTarget(target);
     setSweep(s);
   };
 
@@ -823,7 +825,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       )}
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
-      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={({ digests, sweeps }) => <><MailSweeps sweeps={sweeps} onPreview={openSweep} /><MailDigests digests={digests} busy={sweeping} onArchive={openSweep} onKeep={(key) => void keepDigest(key)} onOpen={noteMailOpened} onUnsubscribe={(key, ask) => void unsubscribeDigest(key, ask)} /></>} />
+      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={({ digests, sweeps }) => <><MailSweeps sweeps={sweeps} onPreview={openSweep} /><MailDigests digests={digests} busy={sweeping} onMove={openSweep} onKeep={(key) => void keepDigest(key)} onOpen={noteMailOpened} onUnsubscribe={(key, ask) => void unsubscribeDigest(key, ask)} /></>} />
       <div className="desk-grid tf-shell" hidden={inStudio || inBalance || inCatchup || inConversation}>
         <DeskTimeFirst day={view.myDay} calendar={view.calendarAvailability} now={view.generatedAt} areas={view.areas} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation}
           before={<>
@@ -952,7 +954,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
       <div className="desk-scrim" onClick={() => { setDetail(null); if (!sweeping) setSweep(null); }} />
       <aside className="desk-panel" aria-hidden={!detail && !sweep} aria-label="Details">
-        {sweep && !detailItem && <SweepPreview key={sweep.id} sweep={sweep} busy={sweeping} onConfirm={(keys) => void confirmSweep(sweep, keys)} onCancel={() => setSweep(null)} />}
+        {sweep && !detailItem && <SweepPreview key={`${sweep.id}:${sweepTarget}`} sweep={sweep} target={sweepTarget} busy={sweeping} onConfirm={(keys) => void confirmSweep(sweep, keys, sweepTarget)} onCancel={() => setSweep(null)} />}
         {detailItem && (
           <DetailPanel item={shown(detailItem)} area={detailItem.area ? areaById.get(detailItem.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detailItem, a)} onShowEvent={showEvent} sending={busyWith(detailItem)}>
             {detailRuling?.open && (

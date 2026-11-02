@@ -46,7 +46,7 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("move"), key: z.string(), target: z.enum(MOVE_TARGETS) }).strict(),
   z.object({ action: z.literal("correct"), key: z.string(), said: z.enum(MAIL_CORRECTIONS), correction: z.number().int().positive().optional() }).strict(),
   z.object({ action: z.enum(["undo", "block"]), move: z.string().min(1).max(64) }).strict(),
-  z.object({ action: z.literal("sweep"), sweep: z.string().min(1).max(200), keys: z.array(z.string().min(1).max(1000)).min(1).max(SWEEP_LIMITS.maxMails) }).strict(),
+  z.object({ action: z.literal("sweep"), sweep: z.string().min(1).max(200), keys: z.array(z.string().min(1).max(1000)).min(1).max(SWEEP_LIMITS.maxMails), target: z.enum(MOVE_TARGETS).optional() }).strict(),
   z.object({ action: z.literal("sweep.undo"), sweep: z.string().min(1).max(64) }).strict(),
   z.object({ action: WaitingActionSchema, key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("ivy.hand"), key: z.string().min(1).max(1000), requestId: z.string().regex(HANDOFF_REQUEST_ID), instruction: z.string().max(MAX_INSTRUCTION).optional() }).strict(),
@@ -235,7 +235,7 @@ async function sweepAnswer(body: SweepBody, db: Database, runtime: DeskRuntime, 
     const groups = listMailGroups(db, readings, runtime.options ?? {}, runtime.ledger, moveDeps.now);
     const group = [...groups.digests.groups, ...groups.sweeps].find((g) => g.id === body.sweep);
     if (!group) return fail(409, "This group has changed since you opened it. Look at it again.");
-    work = runSweep(group, body.keys, moveDeps);
+    work = runSweep(group, body.keys, moveDeps, body.target);
   }
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<null>((resolve) => { timer = setTimeout(() => { resolve(null); }, waitMs); });
