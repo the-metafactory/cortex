@@ -68,7 +68,8 @@ function readReceipt(db: Database, operation: OperationRecord): ReadbackResult {
   try {
     const state = loadBalanceState(db);
     if (!state) return null;
-    const outlineId = loadMeta(db).receipts.find(r => r.id === operationUuid(operation.operationId))?.outlineId;
+    const id = operationUuid(operation.operationId);
+    const outlineId = loadMeta(db).receipts.find(r => r.id === id)?.outlineId;
     return outlineId && findNode(state.outline, outlineId) ? { found: true, canonicalId: outlineId } : { found: false };
   } catch {
     return null;
