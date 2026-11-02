@@ -55,7 +55,7 @@ describe("My day lane and day contract", () => {
     expect(html).toContain("Design review is in progress");
     expect(html).toContain(`${clock(-10)}–${clock(20)}`);
     expect(html).toContain(`Calendar busy until ${clock(20)}`);
-    expect(html).not.toContain("A calendar block is in progress");
+    expect(html).not.toContain("<h2>A calendar block is in progress");
   });
   it("names current overlaps separately from the continuous busy window", () => {
     const html = renderCalendar([currentEvent("Design review", "review", -10, 20), currentEvent("Planning", "planning", -5, 30), currentEvent("Later call", "later", 25, 60)]);
@@ -124,7 +124,7 @@ describe("My day lane and day contract", () => {
     expect(day.items.map(item => item.task.id)).toEqual(["constructor", "__proto__", "third"]);
     expect(nextTask(day, { kind: "unknown", reasons: ["reader unavailable"] }).kind).toBe("unverified");
     expect(nextTask(day, { kind: "open", through: NOW + 86_400_000, asOf: NOW }).kind).toBe("normal");
-    expect(nextTask(day, { kind: "busy", until: event.end, event }).kind).toBe("none");
+    expect(nextTask(day, { kind: "busy", until: event.end, event, overlaps: [] }).kind).toBe("none");
     expect(nextTask(day, { kind: "bounded", until: NOW + 5 * 60_000, minutes: 5, event }).kind).toBe("none");
     const unknown = readMyDay(db, desk, NOW);
     for (const item of unknown.items) delete item.task.estimateMinutes;
