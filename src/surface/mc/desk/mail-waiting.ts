@@ -110,48 +110,54 @@ function link(db: Database, parent: string, reply: string, sender: string, at: n
   db.query("INSERT OR IGNORE INTO desk_mail_thread (parent_id, reply_id, sender, at) VALUES (?, ?, ?, ?)").run(parent, reply, sender.toLowerCase(), at);
 }
 
+const REPLY_FROM_OTHERS = "FROM desk_mail_thread t WHERE t.parent_id = desk_mail_waiting.message_id AND t.sender != desk_mail_waiting.sender";
+const OWN_FOLLOW_UP = "FROM desk_mail_thread t JOIN desk_mail_waiting p ON p.message_id = t.parent_id WHERE t.reply_id = desk_mail_waiting.message_id AND t.sender = p.sender AND p.asks = 1";
+
+const CLOSE_ANSWERED = `UPDATE desk_mail_waiting SET state = 'answered', closed_at = ?, closed_by = (SELECT t.sender ${REPLY_FROM_OTHERS} ORDER BY t.at LIMIT 1)
+  WHERE state = 'open' AND EXISTS (SELECT 1 ${REPLY_FROM_OTHERS})`;
+const KEEP_FOLLOW_UPS = `UPDATE desk_mail_waiting SET asks = 1, detected_by = 'follow-up', ask = (SELECT p.ask ${OWN_FOLLOW_UP} ORDER BY p.sent_at DESC LIMIT 1)
+  WHERE state = 'open' AND detected_by = 'heuristic' AND EXISTS (SELECT 1 ${OWN_FOLLOW_UP} AND p.state = 'open')`;
+const SUPERSEDE = `UPDATE desk_mail_waiting SET state = 'superseded', closed_at = ?, closed_by = sender
+  WHERE state = 'open' AND EXISTS (SELECT 1 FROM desk_mail_thread t JOIN desk_mail_waiting w ON w.message_id = t.reply_id WHERE t.parent_id = desk_mail_waiting.message_id AND t.sender = desk_mail_waiting.sender)`;
+
+function ingestReadings(db: Database, readings: readonly SourceReading[], since: number, now: number): void {
+  for (const r of readings) {
+    for (const m of r.mail) {
+      const at = Date.parse(m.receivedAt);
+      for (const parent of parentsOf(m.headers?.inReplyTo, m.headers?.references)) link(db, parent, m.id, m.from.address, Number.isFinite(at) ? at : now);
+    }
+    for (const s of r.sent ?? []) {
+      const sentAt = Date.parse(s.sentAt);
+      if (!Number.isFinite(sentAt) || sentAt < since) continue;
+      for (const parent of parentsOf(s.inReplyTo, s.references)) link(db, parent, s.id, s.from.address, sentAt);
+      for (const reply of s.replies ?? []) link(db, s.id, reply.id, reply.from.address, Date.parse(reply.at));
+      const recipients = counterparts(s);
+      if (recipients.length === 0) continue;
+      db.query(
+        "INSERT OR IGNORE INTO desk_mail_waiting (message_id, account, source_id, sender, recipients, subject, url, sent_at, asks, topic, ask, detected_by, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'heuristic', 'open', ?)",
+      ).run(s.id, s.account ?? null, r.id, s.from.address, JSON.stringify(recipients), s.subject, s.url ?? null, sentAt, asksForAnswer(s.subject, s.text) ? 1 : 0, waitingTopic(s.subject), now);
+    }
+  }
+}
+
+function closeWaits(db: Database, since: number, now: number): void {
+  db.query(CLOSE_ANSWERED).run(now);
+  db.query(KEEP_FOLLOW_UPS).run();
+  db.query(SUPERSEDE).run(now);
+  db.query("DELETE FROM desk_mail_waiting WHERE sent_at < ?").run(since - ROW_KEEP_DAYS * DAY_MS);
+  db.query("DELETE FROM desk_mail_thread WHERE at < ?").run(now - THREAD_KEEP_DAYS * DAY_MS);
+}
+
 /**
  * Records the sources' sent mail and every reply link the readings show, then closes the waits that got an answer. A
  * reply is a message whose In-Reply-To or References names the sent mail, from anyone but its sender; the sender's own
- * later mail in the thread supersedes the wait, so a nudge starts a new one. Idempotent: run it on every reading.
+ * later mail in the thread supersedes the wait, and keeps waiting when the earlier mail asked something. Idempotent.
  */
 export function recordWaiting(db: Database, readings: readonly SourceReading[], now: number, config: WaitingConfig = DEFAULT_WAITING): void {
   const since = now - config.windowDays * DAY_MS;
   db.transaction(() => {
-    for (const r of readings) {
-      for (const m of r.mail) {
-        const at = Date.parse(m.receivedAt);
-        for (const parent of parentsOf(m.headers?.inReplyTo, m.headers?.references)) link(db, parent, m.id, m.from.address, Number.isFinite(at) ? at : now);
-      }
-      for (const s of r.sent ?? []) {
-        const sentAt = Date.parse(s.sentAt);
-        if (!Number.isFinite(sentAt) || sentAt < since) continue;
-        for (const parent of parentsOf(s.inReplyTo, s.references)) link(db, parent, s.id, s.from.address, sentAt);
-        for (const reply of s.replies ?? []) link(db, s.id, reply.id, reply.from.address, Date.parse(reply.at));
-        const recipients = counterparts(s);
-        if (recipients.length === 0) continue;
-        db.query(
-          "INSERT OR IGNORE INTO desk_mail_waiting (message_id, account, source_id, sender, recipients, subject, url, sent_at, asks, topic, ask, detected_by, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'heuristic', 'open', ?)",
-        ).run(s.id, s.account ?? null, r.id, s.from.address, JSON.stringify(recipients), s.subject, s.url ?? null, sentAt, asksForAnswer(s.subject, s.text) ? 1 : 0, waitingTopic(s.subject), now);
-      }
-    }
-    db.query(
-      `UPDATE desk_mail_waiting SET state = 'answered', closed_at = ?,
-        closed_by = (SELECT t.sender FROM desk_mail_thread t WHERE t.parent_id = desk_mail_waiting.message_id AND t.sender != desk_mail_waiting.sender ORDER BY t.at LIMIT 1)
-       WHERE state = 'open' AND EXISTS (SELECT 1 FROM desk_mail_thread t WHERE t.parent_id = desk_mail_waiting.message_id AND t.sender != desk_mail_waiting.sender)`,
-    ).run(now);
-    db.query(
-      `UPDATE desk_mail_waiting SET asks = 1, detected_by = 'follow-up',
-        ask = (SELECT p.ask FROM desk_mail_thread t JOIN desk_mail_waiting p ON p.message_id = t.parent_id WHERE t.reply_id = desk_mail_waiting.message_id AND t.sender = p.sender AND p.asks = 1 ORDER BY p.sent_at DESC LIMIT 1)
-       WHERE state = 'open' AND detected_by = 'heuristic' AND message_id IN
-        (SELECT t.reply_id FROM desk_mail_thread t JOIN desk_mail_waiting p ON p.message_id = t.parent_id WHERE p.state = 'open' AND p.asks = 1 AND t.sender = p.sender)`,
-    ).run();
-    db.query(
-      `UPDATE desk_mail_waiting SET state = 'superseded', closed_at = ?, closed_by = sender
-       WHERE state = 'open' AND EXISTS (SELECT 1 FROM desk_mail_thread t JOIN desk_mail_waiting w ON w.message_id = t.reply_id WHERE t.parent_id = desk_mail_waiting.message_id AND t.sender = desk_mail_waiting.sender)`,
-    ).run(now);
-    db.query("DELETE FROM desk_mail_waiting WHERE sent_at < ?").run(since - ROW_KEEP_DAYS * DAY_MS);
-    db.query("DELETE FROM desk_mail_thread WHERE at < ?").run(now - THREAD_KEEP_DAYS * DAY_MS);
+    ingestReadings(db, readings, since, now);
+    closeWaits(db, since, now);
   })();
 }
 
