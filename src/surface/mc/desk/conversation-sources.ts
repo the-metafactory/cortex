@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { findNode } from "../../../balance";
 import type { HostSources } from "../../../conversations/host";
 import type { ObjectRef, OperationRecord, SourceState } from "../../../conversations/types";
-import { balanceTaskWriter, hasBalanceState } from "./balance-conversation-writer";
+import { balanceWriter, hasBalanceState } from "./balance-conversation-writer";
 import { loadBalanceState } from "./balance-store";
 import { studioRequestId } from "./conversation-ids";
 import type { DeskOptions } from "./compose";
@@ -74,11 +74,11 @@ export function conversationSources(deps: SourceDeps): HostSources {
     const sha = r.stdout.trim();
     return sha ? { found: true, canonicalId: sha } : { found: false };
   };
-  const balanceTask = balanceTaskWriter(deps);
+  const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps) };
   return {
     get writers() {
       const desk = deps.desk();
-      return desk?.enabled && hasBalanceState(deps.db) ? { "balance-task": balanceTask } : {};
+      return desk?.enabled && hasBalanceState(deps.db) ? balanceWriters : {};
     },
     resolvers: {
       "studio-thread": async ref => {

@@ -56,7 +56,7 @@ async function rig(state: AppState | null = outline([GLIDER]), wrap?: (writer: O
     return { status: res.status, body: await res.json() as Reply };
   };
   const start = async (): Promise<string> => (await call("POST", "/api/conversations", { title: "Synthetic task", origin: { kind: "web" }, policy: "local" })).body.conversation.id;
-  const propose = async (id: string, fields: Record<string, string>) => (await call("POST", `/api/conversations/${id}/proposals`, { proposalId: randomUUID(), type: "balance-task", fields })).body.proposal;
+  const propose = async (id: string, fields: Record<string, string>, type = "balance-task") => (await call("POST", `/api/conversations/${id}/proposals`, { proposalId: randomUUID(), type, fields })).body.proposal;
   const confirm = (id: string, view: ProposalView, extra: Record<string, unknown> = {}) => call("POST", `/api/conversations/${id}/proposals/${view.proposal.proposalId}/confirm`, { revision: view.proposal.revision, digest: view.digest, ...extra });
   const tasks = (title: string): OutlineNode[] => {
     const found: OutlineNode[] = [];
@@ -64,7 +64,16 @@ async function rig(state: AppState | null = outline([GLIDER]), wrap?: (writer: O
     visit(readMyDay(db, options, Date.now()).outline);
     return found;
   };
-  return { db, options, call, start, propose, confirm, tasks, host: status.host };
+  const confirmCreated = async (id: string, view: ProposalView, title: string): Promise<{ operation: OperationRecord; node: OutlineNode | undefined }> => {
+    const first = await confirm(id, view);
+    expect(first.status).toBe(200);
+    expect(first.body.proposal.feedback).toBe("created");
+    const operation = operationOf(first.body.proposal);
+    const [node] = tasks(title);
+    expect(operation.canonicalId).toBe(node?.id);
+    return { operation, node };
+  };
+  return { db, options, call, start, propose, confirm, confirmCreated, tasks, host: status.host };
 }
 
 function operationOf(view: ProposalView): OperationRecord {
@@ -95,12 +104,7 @@ describe("Balance task writer for conversation proposals", () => {
     const r = await rig();
     const id = await r.start();
     const view = await r.propose(id, { area: "lab", title: "Fold a test glider", note: "Use A4 paper", due: "2026-12-01" });
-    const first = await r.confirm(id, view);
-    expect(first.status).toBe(200);
-    expect(first.body.proposal.feedback).toBe("created");
-    const operation = operationOf(first.body.proposal);
-    const [task] = r.tasks("Fold a test glider");
-    expect(operation.canonicalId).toBe(task?.id);
+    const { operation, node: task } = await r.confirmCreated(id, view, "Fold a test glider");
     expect(task).toMatchObject({ note: "Use A4 paper", dueDate: "2026-12-01", effort: 1 });
     expect(findParent(readMyDay(r.db, r.options, Date.now()).outline, task?.id ?? "")?.id).toBe("area:lab");
     const entries = (await r.call("GET", `/api/conversations/${id}/entries?limit=100`)).body.entries;
@@ -178,5 +182,55 @@ describe("Balance task writer for conversation proposals", () => {
     expect(created.body.proposal.feedback).toBe("created");
     expect(r.tasks("After a respawn")).toHaveLength(1);
     expect(findNode(readMyDay(r.db, r.options, Date.now()).outline, "task-daily")?.done).toBe(false);
+  });
+});
+
+describe("Balance project writer for conversation proposals", () => {
+  const statusOf = async (r: Awaited<ReturnType<typeof rig>>): Promise<string | undefined> => (await r.call("GET", "/api/conversations/capabilities")).body.types.find(c => c.type === "balance-project")?.status;
+
+  test("the type is ready only with the Desk enabled and Balance state saved", async () => {
+    const ready = await rig();
+    expect(await statusOf(ready)).toBe("ready");
+    ready.options.enabled = false;
+    expect(await statusOf(ready)).toBe("blocked:3031");
+    expect(await statusOf(await rig(null))).toBe("blocked:3031");
+  });
+
+  test("a confirmed proposal adds one empty project with its note to the area, and an equal retry adds nothing", async () => {
+    const r = await rig();
+    const id = await r.start();
+    const view = await r.propose(id, { area: "lab", title: "Build a kite", note: "Paper and string" }, "balance-project");
+    const { operation, node: project } = await r.confirmCreated(id, view, "Build a kite");
+    expect(project).toMatchObject({ note: "Paper and string", done: true, children: [] });
+    expect(project?.effort).toBeUndefined();
+    expect(findParent(readMyDay(r.db, r.options, Date.now()).outline, project?.id ?? "")?.id).toBe("area:lab");
+    const again = await r.confirm(id, view);
+    expect(again.status).toBe(200);
+    expect(again.body.proposal.operation).toMatchObject({ operationId: operation.operationId, canonicalId: operation.canonicalId });
+    expect(r.tasks("Build a kite")).toHaveLength(1);
+    const writer = conversationSources({ db: r.db, desk: () => r.options }).writers?.["balance-project"];
+    expect(await writer?.readback(operation)).toEqual({ found: true, canonicalId: operation.canonicalId ?? "" });
+  });
+
+  test("a later task proposal naming the project by id becomes its child and opens the project", async () => {
+    const r = await rig();
+    const id = await r.start();
+    const projectId = operationOf((await r.confirm(id, await r.propose(id, { area: "lab", title: "Build a kite" }, "balance-project"))).body.proposal).canonicalId ?? "";
+    const task = await r.confirm(id, await r.propose(id, { area: "lab", project: projectId, title: "Cut the sail" }));
+    expect(task.body.proposal.feedback).toBe("created");
+    const project = findNode(readMyDay(r.db, r.options, Date.now()).outline, projectId);
+    expect(project?.children.map(c => c.title)).toEqual(["Cut the sail"]);
+    expect(project?.done).toBeUndefined();
+  });
+
+  test("an unconfigured area is refused with 409 and Balance is unchanged", async () => {
+    const r = await rig();
+    const id = await r.start();
+    const before = JSON.stringify(loadBalanceState(r.db));
+    const refused = await r.confirm(id, await r.propose(id, { area: "garden", title: "Build a kite" }, "balance-project"));
+    expect(refused.status).toBe(409);
+    expect(refused.body.proposal.feedback).toBe("failed");
+    expect(refused.body.error).toBe("garden is not a configured area. Nothing was created.");
+    expect(JSON.stringify(loadBalanceState(r.db))).toBe(before);
   });
 });
