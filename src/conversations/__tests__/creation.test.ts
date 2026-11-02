@@ -49,7 +49,7 @@ describe("creation catalog", () => {
     expect(byType.get("graph-node")).toMatchObject({ row: "O01", status: "ready" });
     expect(byType.get("balance-task")).toMatchObject({ row: "O04", status: "blocked:3030" });
     expect(byType.get("balance-project")).toMatchObject({ row: "O05", status: "blocked:3031" });
-    expect(byType.get("flow")).toMatchObject({ row: "O14", status: "blocked:3014" });
+    expect(byType.get("flow")).toMatchObject({ row: "O14", status: "blocked:3146" });
     expect(byType.get("routine")?.fixed.map(f => f.value).join(" ")).toContain("Created paused");
     expect(byType.get("routine")?.fields.some(f => /enable|run|resume/i.test(f.name))).toBe(false);
     expect(byType.get("desk-source-card")).toMatchObject({ row: "O22", status: "unsupported" });
@@ -62,7 +62,7 @@ describe("creation catalog", () => {
       "graph-node": "blocked:3033", "graph-map": "blocked:3034",
       "balance-task": "blocked:3030", "balance-project": "blocked:3031", "balance-inbox-task": "blocked:3032",
       "studio-thread": "blocked:3029", "studio-capture": "blocked:3029", "studio-note": "blocked:3029", "studio-outcome": "blocked:3029",
-      flow: "blocked:3014", routine: "blocked:3035", "calendar-event": "blocked:3036", reminder: "blocked:3037",
+      flow: "blocked:3146", routine: "blocked:3035", "calendar-event": "blocked:3036", reminder: "blocked:3037",
       "soma-goal": "blocked:3038", "tana-note": "blocked:3039", "desk-note": "blocked:3040", "mail-draft": "blocked:3041",
     };
     const listed = capabilities({});
@@ -129,8 +129,8 @@ describe("conversation creation proposals", () => {
     expect(await refused(creation.confirm(id, proposalId, confirmOf(typed), web), 400)).toContain("Area");
     const placed = await creation.revise(id, proposalId, { revision: 2, fields: { title: "Workshop exercise", area: "work" } }, web);
     expect((await creation.confirm(id, proposalId, confirmOf(placed), web)).feedback).toBe("created");
-    const blocked = await creation.propose(id, { proposalId: randomUUID(), type: "flow", fields: { destination: "pkg", name: "f", definition: "steps: []" } }, web);
-    expect(blocked.view).toMatchObject({ feedback: "unavailable", capability: { status: "blocked:3014" } });
+    const blocked = await creation.propose(id, { proposalId: randomUUID(), type: "flow", fields: { name: "f", definition: "steps: []" } }, web);
+    expect(blocked.view).toMatchObject({ feedback: "unavailable", capability: { status: "blocked:3146" } });
     await refused(creation.confirm(id, blocked.view.proposal.proposalId, confirmOf(blocked.view), web), 409);
     expect(owner.effects).toHaveLength(1);
   });
@@ -310,7 +310,7 @@ describe("refusal texts", () => {
       expect(text).toMatch(/ is unavailable here: .+[^.]\. Nothing was created\.$/);
       expect(text).not.toContain("..");
     }
-    expect(texts[CREATABLE_TYPES.indexOf("flow")]).toBe("Flow is unavailable here: Pulse has no place to save a flow without running it yet. Nothing was created.");
+    expect(texts[CREATABLE_TYPES.indexOf("flow")]).toBe("Flow is unavailable here: No Pulse writer is connected on this stack yet. Nothing was created.");
     expect(texts[CREATABLE_TYPES.indexOf("balance-task")]).toBe("Balance task is unavailable here: No Balance writer is connected on this stack yet. Nothing was created.");
     expect(owner.calls).toHaveLength(0);
   });
@@ -338,8 +338,8 @@ describe("refusal texts", () => {
   });
 
   test("a capability without a reason falls back to its status with one period", () => {
-    const capability = { type: "flow", row: "O14", label: "Flow", owner: "Pulse", status: "blocked:3014" as const, fields: [], fixed: [] };
-    expect(unavailableHere(capability)).toBe("Flow is unavailable here: blocked:3014. Nothing was created.");
+    const capability = { type: "flow", row: "O14", label: "Flow", owner: "Pulse", status: "blocked:3146" as const, fields: [], fixed: [] };
+    expect(unavailableHere(capability)).toBe("Flow is unavailable here: blocked:3146. Nothing was created.");
   });
 
   test("catalog, egress, archived, stale and digest refusals contain no double period", async () => {

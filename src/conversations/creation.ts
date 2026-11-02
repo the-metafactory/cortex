@@ -90,7 +90,7 @@ function capabilityOf(type: CreatableType, writers: OwnerWriters, withheld: With
   const spec = CREATION_CATALOG[type];
   const base = { type, row: spec.row, label: spec.label, owner: spec.owner, egress: spec.egress, fields: spec.fields, fixed: spec.fixed ?? [] };
   if (writers[type]) return { ...base, status: "ready" };
-  const reason = withheld[type] ?? (type === "flow" ? "Pulse has no place to save a flow without running it yet." : `No ${spec.owner} writer is connected on this stack yet.`);
+  const reason = withheld[type] ?? `No ${spec.owner} writer is connected on this stack yet.`;
   return { ...base, status: `blocked:${OWNER_BLOCKERS[type]}`, reason };
 }
 

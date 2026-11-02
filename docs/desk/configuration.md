@@ -181,6 +181,19 @@ mc:
 
 The composer command uses the installed Pulse composer with an explicitly configured model and trusted installed-action catalog. Reflex owns activation files and flow files. The Desk stores the reviewed proposal and supplies a private temporary flow input to Reflex. See the [routine command contract](commands.md#routines).
 
+## Flows
+
+`flows` is optional. Without it, a conversation cannot save a flow, and the `flow` type shows as unavailable.
+
+```yaml
+mc:
+  desk:
+    flows:
+      pulse: [/opt/desk/pulse]
+```
+
+`pulse` is a nonempty argument array for the Pulse CLI. When the principal confirms a `flow` proposal, the Desk writes the definition to a private temporary file and runs `pulse flow save --file <file> --request-id <id> --conversation <id> --exchange <id> --json`. Pulse stores the flow in its saved-flows directory and records the conversation as provenance. To use another directory for a stack, set `XDG_CONFIG_HOME` in the command, for example `[env, XDG_CONFIG_HOME=/srv/stack/config, /opt/desk/pulse]`. The Desk reads a save back with `pulse flow show --request-id <id> --json`. It never runs, schedules or enables a flow.
+
 ## Goal actions
 
 `goals.somaBin` defaults to `""`. Setting it enables goal status reads and pausing through Soma. It is separate from `soma.bin`, which records rulings.

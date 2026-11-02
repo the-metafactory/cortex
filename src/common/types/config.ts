@@ -531,8 +531,12 @@ function splitDeskWriters<K extends string>(entries: Partial<Record<K, DeskWrite
   return Object.keys(writerOwners).length ? { writers, writerOwners } : { writers };
 }
 
+export const FlowOptionsSchema = z.object({ pulse: z.array(z.string().min(1)).min(1) });
+export type FlowOptions = z.infer<typeof FlowOptionsSchema>;
+
 export const DeskSchema = z.object({
   routines: RoutineOptionsSchema.optional(),
+  flows: FlowOptionsSchema.optional(),
   mirror: z.object({ day: z.enum(["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]), time: z.iso.time({ precision: -1 }) }).optional(),
   enabled: z.boolean().default(true),
   displayName: z.string().default(""),
