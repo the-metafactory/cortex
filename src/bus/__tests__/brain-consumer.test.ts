@@ -39,6 +39,7 @@ import type {
   BrainTaskRunResult,
 } from "../../brain/exec-brain-runner";
 import { makeExecBrainRunner } from "../../brain/exec-brain-runner";
+import { encodeBrainEvent, parseBrainEvent } from "../../brain/protocol";
 import type { TaskEvent, ResultEffect } from "../../brain/protocol";
 
 // ---------------------------------------------------------------------------
@@ -431,7 +432,9 @@ describe("BrainConsumer — happy path", () => {
 
     await consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
 
+    expect(seen?.sovereignty?.data_residency).toBe("CH");
     expect(seen?.sovereignty).toEqual(env.sovereignty);
+    expect(parseBrainEvent(encodeBrainEvent(seen!)).kind).toBe("ok");
   });
 
   test("brain post effect → dispatch.task.post lifecycle envelope with task source + text", async () => {

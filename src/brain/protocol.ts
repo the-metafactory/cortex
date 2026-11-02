@@ -201,8 +201,8 @@ export type DispatchSovereignty = z.infer<typeof DispatchSovereigntySchema>;
 /**
  * The task envelope's sovereignty, forwarded verbatim on the `task` event
  * (https://github.com/the-metafactory/cortex/issues/3134). A brain compares it
- * with the model endpoint it would use and refuses a mismatch; the host gate
- * checks only `model_class`.
+ * with the model endpoint it would use and refuses a mismatch; the Cortex
+ * runtime's own gate checks only `model_class`.
  */
 export const TaskSovereigntySchema = z.object({
   classification: z.enum(["local", "federated", "public"]),

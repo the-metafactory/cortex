@@ -18,7 +18,9 @@ import {
   BRAIN_PROTOCOL_ID,
   type BrainEvent,
   type BrainEffect,
+  type TaskSovereignty,
 } from "../protocol";
+import type { Envelope } from "../../bus/myelin/envelope-validator";
 
 // ---------------------------------------------------------------------------
 // Fixtures — one of every event + effect
@@ -968,7 +970,14 @@ describe("round-3: tolerant attachment extras, strict XOR, complete-reason", () 
   });
 });
 
+const toEnvelope = (s: TaskSovereignty): Envelope["sovereignty"] => s;
+const fromEnvelope = (s: Envelope["sovereignty"]): TaskSovereignty => s;
+
 describe("task event sovereignty (cortex#3134)", () => {
+  test("the task sovereignty schema has exactly the envelope's sovereignty type", () => {
+    expect(fromEnvelope(toEnvelope(sovereignty))).toEqual(sovereignty);
+  });
+
   const base = {
     v: 1,
     type: "task",
