@@ -10,6 +10,8 @@ import { HandledLedger } from "../desk/actions";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { conversationSources } from "../desk/conversation-sources";
 import { WriterTimeout, type WriterResult, type WriterRunner } from "../desk/create";
+import type { DeskWriterKind } from "../desk/desk-conversation-writer";
+import type { GoalRunner, GoalRunResult } from "../desk/goals";
 import { SCHEMA_SQL } from "../db/schema";
 
 export type ConversationCall<T> = (method: string, path: string, body?: unknown) => Promise<{ status: number; body: T }>;
@@ -52,13 +54,13 @@ export function conversationWriterRig(prefix: string, label: string) {
 
 export interface DeskWriterReply { ok: boolean; error: string; proposal: ProposalView; conversation: { id: string }; types: { type: string; status: string }[] }
 export interface DeskWriterCall { argv: string[]; stdin: { kind: string; requestId: string; fields: Record<string, string> } }
-interface DeskWriterSetup { prefix: string; label: string; kind: "calendar" | "reminder"; type: string; canonicalId: string }
+interface DeskWriterSetup { prefix: string; label: string; kind: DeskWriterKind; type: string; canonicalId: string; somaBin?: string }
 
 export function deskWriterRig(setup: DeskWriterSetup) {
   const writerRig = conversationWriterRig(setup.prefix, setup.label);
   return async (writer: string[] | null, policy: "local" | "cloud" = "cloud") => {
     const db = writerRig.database();
-    const options: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], ...(writer ? { ask: { parser: [], timeoutSeconds: 5, writers: { [setup.kind]: writer }, taskMaps: [] } } : {}) };
+    const options: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], ...(setup.somaBin ? { somaBin: setup.somaBin } : {}), ...(writer ? { ask: { parser: [], timeoutSeconds: 5, writers: { [setup.kind]: writer }, taskMaps: [] } } : {}) };
     const runtime: DeskRuntime = { ledger: new HandledLedger(), options };
     const rig = await writerRig.open<DeskWriterReply>(db, runtime);
     const calls: DeskWriterCall[] = [];
@@ -67,7 +69,13 @@ export function deskWriterRig(setup: DeskWriterSetup) {
       calls.push({ argv, stdin: JSON.parse(stdin) as DeskWriterCall["stdin"] });
       return answer();
     };
-    await rig.host.attachSources(conversationSources({ db, desk: () => options, ...(setup.kind === "calendar" ? { runCalendar: run } : { runReminder: run }) }));
+    const lists: string[][] = [];
+    let listed = (): Promise<GoalRunResult> => Promise.resolve({ code: 0, stdout: "", stderr: "" });
+    const listGoals: GoalRunner = argv => {
+      lists.push(argv);
+      return listed();
+    };
+    await rig.host.attachSources(conversationSources({ db, desk: () => options, runWriter: { [setup.kind]: run }, listGoals }));
     const id = await rig.start(`Synthetic ${setup.kind}`, policy);
     const propose = (fields: Record<string, string>) => rig.propose(id, setup.type, fields);
     const confirm = (view: ProposalView) => rig.confirm(id, view);
@@ -78,11 +86,12 @@ export function deskWriterRig(setup: DeskWriterSetup) {
       return { view, reply: await confirm(view) };
     };
     const answerWith = (next: () => Promise<WriterResult>) => { answer = next; };
+    const listWith = (next: () => Promise<GoalRunResult>) => { listed = next; };
     const timeoutThenCheck = async (fields: Record<string, string>) => {
       answerWith(() => Promise.reject(new WriterTimeout("timed out after 5 seconds")));
       const { view, reply } = await submit(fields);
       return { feedback: [reply, await check(view)].map(r => r.body.proposal.feedback), runs: calls.length };
     };
-    return { id, options, calls, propose, confirm, check, submit, capability, answerWith, timeoutThenCheck };
+    return { id, options, calls, lists, propose, confirm, check, submit, capability, answerWith, listWith, timeoutThenCheck };
   };
 }

@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { CreateRequest, CreateResult, OwnerWriter } from "../../../conversations/types";
+import type { CreateRequest, CreateResult, OwnerReadback, OwnerWriter, ReadbackResult } from "../../../conversations/types";
 import { KIND_LABEL, validateCard, type AskFields } from "./ask";
 import type { DeskOptions } from "./compose";
 import { studioRequestId } from "./conversation-ids";
@@ -12,20 +12,20 @@ export interface DeskWriterDeps {
   now?: () => number;
 }
 
-type DeskWriterKind = Extract<WriterKind, "calendar" | "reminder">;
+export type DeskWriterKind = Extract<WriterKind, "calendar" | "reminder" | "goal">;
 
 export interface DeskWriterSpec<K extends DeskWriterKind> {
   kind: K;
   objects: string;
-  noun: string;
-  destinationFlag: string;
-  destinationField: string;
-  defaultDestination: string;
+  destination?: { flag: string; field: string; noun: string; fallback: string };
   fields: (request: CreateRequest) => AskFields[K] | string;
+  afterRefusal?: (request: CreateRequest) => Promise<ReadbackResult>;
+  readback?: OwnerReadback;
 }
 
 const NOTHING = "Nothing was created.";
-const failed = (sentence: string): CreateResult => ({ state: "failed", error: `${sentence.trim().replace(/[.\s]+$/, "")}. ${NOTHING}` });
+const sentence = (text: string): string => `${text.trim().replace(/[.\s]+$/, "")}.`;
+const failed = (text: string): CreateResult => ({ state: "failed", error: `${sentence(text)} ${NOTHING}` });
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})?$/;
 
 export const deskWriterArgv = (desk: DeskOptions | undefined, kind: DeskWriterKind): string[] | undefined => {
@@ -49,9 +49,10 @@ export function deskConversationWriter<K extends DeskWriterKind>(spec: DeskWrite
     const desk = deps.desk();
     const argv = deskWriterArgv(desk, spec.kind);
     if (!desk || !argv) return failed(`${spec.objects} are not set up on this stack`);
-    const destination = argvOption(argv, spec.destinationFlag);
-    const asked = request.fields[spec.destinationField] ?? "";
-    if (asked && asked !== destination) return failed(`This stack saves ${spec.noun} only to ${destination ?? spec.defaultDestination}`);
+    const place = spec.destination;
+    const destination = place ? argvOption(argv, place.flag) : undefined;
+    const asked = place ? request.fields[place.field] ?? "" : "";
+    if (place && asked && asked !== destination) return failed(`This stack saves ${place.noun} only to ${destination ?? place.fallback}`);
     const fields = spec.fields(request);
     if (typeof fields === "string") return failed(fields);
     const card = validateCard(spec.kind, fields);
@@ -60,7 +61,9 @@ export function deskConversationWriter<K extends DeskWriterKind>(spec: DeskWrite
     const saved = await createFromCard(card, { requestId: studioRequestId(request.operationId), writers: { [spec.kind]: argv }, run: deps.run ?? spawnWithStdin, db: deps.db, now: (deps.now ?? Date.now)(), timeoutMs: (desk.ask?.timeoutSeconds ?? 30) * 1000 });
     if (saved.ok) return { state: "created", canonicalId: saved.id };
     if (saved.uncertain) throw new Error(saved.error);
-    return failed(saved.error);
+    const found = spec.afterRefusal ? await spec.afterRefusal(request) : { found: false as const };
+    if (!found) throw new Error(`${sentence(saved.error)} Whether the ${writerName} created anything could not be checked.`);
+    return found.found ? { state: "created", canonicalId: found.canonicalId } : failed(saved.error);
   };
-  return { create, readback: () => Promise.resolve(null) };
+  return { create, readback: spec.readback ?? (() => Promise.resolve(null)) };
 }
