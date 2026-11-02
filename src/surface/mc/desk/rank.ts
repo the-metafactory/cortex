@@ -14,6 +14,7 @@ import { evidenceView, replySubject, suggestionLine, type EvidenceLinks } from "
 import { ACTION_LABEL, precedentLine } from "./mail-similar";
 import { suspicionLine, suspicionOf, type SuspicionContext } from "./mail-suspicion";
 import type { UnsubscribeOffer } from "./mail-unsubscribe";
+import { decisionSentence, type InvitationView } from "./mail-invitation";
 
 export interface AreaRule extends DeskArea {
   repos: string[];
@@ -332,6 +333,7 @@ export interface MailInput {
   studio?: boolean;
   ivy?: boolean;
   unsubscribe?: ReadonlyMap<string, UnsubscribeOffer>;
+  invitations?: ReadonlyMap<string, InvitationView>;
 }
 
 const STOPWORDS = new Set(["meeting", "update", "about", "with", "from", "your", "termin", "sitzung", "einladung", "invitation", "accepted", "re", "fw", "aw", "wg"]);
@@ -393,6 +395,26 @@ const REPORT = action("mail.report", "Report", "secondary", true);
 const TO_STUDIO = action("mail.studio", "Add to thread", "secondary", true);
 const TO_IVY = action("mail.ivy", "Hand to Ivy", "secondary", true);
 const SUSPICIOUS_SCORE = 70;
+const ACCEPT = action("invite.accept", "Accept", "primary", true);
+const DECLINE = action("invite.decline", "Decline", "secondary", true);
+const PROPOSE = action("invite.propose", "Propose times", "secondary", true);
+const INVITE_SOON_MS = 3 * DAY_MS;
+
+function inviteLead(invite: InvitationView | undefined, invited: boolean, canDraft: boolean): DeskAction[] {
+  if (invite) {
+    const answered = invite.decision && invite.decision.status !== "failed";
+    if (answered || !invite.canReply) return [];
+    return [ACCEPT, DECLINE, ...(canDraft ? [PROPOSE] : [])];
+  }
+  return invited && canDraft ? [ACCEPT, DECLINE] : [];
+}
+
+function inviteWhy(invite: InvitationView, now: number): string {
+  const head = `${invite.organizer} invites you to "${invite.summary}", ${invite.when}.`;
+  if (invite.decision) return `${head} ${decisionSentence(invite.decision, ago(now, invite.decision.at))}`;
+  if (!invite.attendee) return `${head} You are not listed as an attendee, so the Desk does not answer it.`;
+  return `${head} ${invite.conflictLine}`;
+}
 const SHOW_MEETING = action("meeting.show", "Show on the meeting", "primary", true);
 const DRAFT_LABEL = "Draft a reply";
 const unsubscribeAction = (offer: UnsubscribeOffer): DeskAction => {
@@ -447,8 +469,14 @@ export function mailItems(input: MailInput): DeskItem[] {
     const replyTail = canDraft && !replyFirst ? [reply] : [];
     const lead = archiveFirst ? [{ ...ARCHIVE, role: "primary" as const }] : spamFirst ? [{ ...SPAM, role: "primary" as const }] : trashFirst ? [{ ...DELETE, role: "primary" as const }] : seenFirst ? [SEEN] : [];
     const moves = [...(archive && !archiveFirst ? [ARCHIVE] : []), ...(trash && !trashFirst && !seenFirst ? [DELETE] : []), ...(spam && !spamFirst ? [SPAM] : [])];
-    const offered = [...lead, ...(unsubscribe ? [unsubscribeAction(unsubscribe)] : []), ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, ...(studio ? [TO_STUDIO] : []), ...(ivy ? [TO_IVY] : []), LATER];
+    const invite = input.invitations?.get(m.id);
+    const inviting = inviteLead(invite, triage?.commitment === "invitation", canDraft);
+    const rest = [...lead, ...(unsubscribe ? [unsubscribeAction(unsubscribe)] : []), ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, ...(studio ? [TO_STUDIO] : []), ...(ivy ? [TO_IVY] : []), LATER];
+    const offered = inviting.length > 0 ? [...inviting, ...rest.map((a) => ({ ...a, role: "secondary" as const }))] : rest;
     const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
+    if (invite) history.push(`Invitation: "${invite.summary}", ${invite.when}${invite.location ? `, ${invite.location}` : ""}, from ${invite.organizer}${invite.recurring ? "; it repeats" : ""}.`);
+    if (invite?.decision) history.push(decisionSentence(invite.decision, ago(now, invite.decision.at)));
+    const soon = invite !== undefined && !invite.decision && Date.parse(invite.start) - now < INVITE_SOON_MS;
     if (verdict.sorted) history.push(`The mail classifier sorted it as ${verdict.sorted}.`);
     if (triage && (!triage.commitment || triage.commitment === "unknown")) history.push("Whether this mail asks for a new commitment has not been established.");
     if (triage?.precedents?.note) history.push(`Similar past mail was ${triage.precedents.note}.`);
@@ -461,9 +489,9 @@ export function mailItems(input: MailInput): DeskItem[] {
       kind: "mail",
       source: m.sourceId,
       area: m.area,
-      urgency: vip || verdict.pressing ? "today" : "waiting",
+      urgency: vip || verdict.pressing || soon ? "today" : "waiting",
       title: `${sender} wrote: "${m.subject}"`,
-      why,
+      why: invite ? inviteWhy(invite, now) : why,
       score: (vip ? 80 : verdict.score) - ageDays * 5,
       actions: offered.slice(0, 3),
       more: [...always, ...offered.slice(3)],
@@ -479,7 +507,8 @@ export function mailItems(input: MailInput): DeskItem[] {
       ...(suggestion ? { suggestion } : {}),
       ...(verdict.eventKey ? { eventKey: verdict.eventKey } : {}),
       ...(canDraft ? { reply: { to: m.from.name ? `${m.from.name} <${m.from.address}>` : m.from.address, subject: replySubject(m.subject) } } : {}),
-      ...((triage?.commitment === "request" || triage?.commitment === "invitation") ? { yesFilter: input.yesFilter ?? { questions: [...DEFAULT_YES_FILTER], commitments: [], problems: [] } } : {}),
+      ...((invite || triage?.commitment === "request" || triage?.commitment === "invitation") ? { yesFilter: input.yesFilter ?? { questions: [...DEFAULT_YES_FILTER], commitments: [], problems: [] } } : {}),
+      ...(invite ? { invitation: invite } : {}),
       since: receivedAt,
     };
   });

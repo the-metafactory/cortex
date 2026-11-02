@@ -96,6 +96,32 @@ export interface MailLink {
 
 const MailLinksSchema = lenientList<MailLink>(MailLinkSchema, MAX_LINKS);
 
+export const PART_STATS = ["NEEDS-ACTION", "ACCEPTED", "DECLINED", "TENTATIVE", "DELEGATED"] as const;
+const inviteText = (max: number) => z.string().transform(printable).pipe(z.string().min(1).max(max));
+const inviteAddress = z.string().trim().toLowerCase().pipe(z.string().min(3).max(320).regex(/^[^\s<>@,;:]+@[^\s<>@,;:]+$/));
+
+/** A meeting request a mail carries (iTIP METHOD:REQUEST), as the mail source read it. Untrusted; a bad one is dropped alone. */
+export const MailInvitationSchema = z
+  .object({
+    method: z.literal("REQUEST"),
+    uid: z.string().min(1).max(1000).regex(/^[^\r\n]+$/),
+    sequence: z.number().int().min(0).max(1_000_000).catch(0),
+    summary: inviteText(300).catch("(no title)"),
+    start: isoDate,
+    end: isoDate.optional().catch(undefined),
+    allDay: z.boolean().optional().catch(undefined),
+    location: inviteText(300).optional().catch(undefined),
+    organizer: z.object({ address: inviteAddress, name: inviteText(200).optional().catch(undefined) }),
+    attendee: z.object({ address: inviteAddress, status: z.enum(PART_STATS).catch("NEEDS-ACTION"), rsvp: z.boolean().optional().catch(undefined) }).optional().catch(undefined),
+    recurring: z.boolean().optional().catch(undefined),
+    attendees: z.number().int().min(0).max(100_000).catch(0),
+  })
+  .refine((v) => v.end === undefined || Date.parse(v.end) >= Date.parse(v.start))
+  .optional()
+  .catch(undefined);
+
+export type MailInvitation = NonNullable<z.infer<typeof MailInvitationSchema>>;
+
 export const SourceMailSchema = z.object({
   kind: z.literal("mail"),
   id: z.string().min(1),
@@ -109,6 +135,7 @@ export const SourceMailSchema = z.object({
   account: z.string().optional(),
   headers: MailHeadersSchema,
   links: MailLinksSchema,
+  invitation: MailInvitationSchema,
 });
 
 const MailAddressSchema = z.object({

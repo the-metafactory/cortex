@@ -9,7 +9,7 @@ import type { ListedMail, MailActionResult } from "./mail-actions";
 
 export const CommitmentSchema = z.object({ kind: z.enum(["thread", "project"]), id: z.string().min(1).max(300), label: z.string().max(10000) }).strict();
 export type Commitment = z.infer<typeof CommitmentSchema>;
-export const MailDecisionSchema = z.object({ requestId: z.uuid(), intent: z.enum(["reply", "decline"]), commitment: CommitmentSchema.nullable() }).strict();
+export const MailDecisionSchema = z.object({ requestId: z.uuid(), intent: z.enum(["reply", "decline", "accept", "propose"]), commitment: CommitmentSchema.nullable() }).strict();
 export type MailDecision = z.infer<typeof MailDecisionSchema>;
 export interface MailYesFilter { questions: string[]; commitments: Commitment[]; problems: string[] }
 

@@ -1,10 +1,13 @@
 import { z } from "zod";
-import { decisionReceipt, MailDecisionSchema, saveDecisionDraft } from "../desk/mail-yes-filter";
+import { CommitmentSchema, decisionReceipt, MailDecisionSchema, mailYesFilter, saveDecisionDraft } from "../desk/mail-yes-filter";
+import { freeSlots, INVITE_REPLIES, proposalBody, replyToInvitation } from "../desk/mail-invitation";
+import { calendarAvailability } from "../desk/calendar-availability";
+import { listCalendars } from "../desk/calendars";
 import { readClassifications } from "../desk/classify";
 import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../desk/create";
-import { correctMail, draftReply, findListedMail, MAIL_CORRECTIONS, markUnimportant, reportMail } from "../desk/mail-actions";
+import { correctMail, draftReply, findListedMail, MAIL_CORRECTIONS, markUnimportant, reportMail, type ListedMail } from "../desk/mail-actions";
 import { logMailDecision, mailFeatures } from "../desk/mail-log";
 import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveDeps } from "../desk/mail-move";
 import { runSweep, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
@@ -40,6 +43,8 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("ivy.hand"), key: z.string().min(1).max(1000), requestId: z.string().regex(HANDOFF_REQUEST_ID), instruction: z.string().max(MAX_INSTRUCTION).optional() }).strict(),
   z.object({ action: z.enum(HANDOFF_OPS), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("studio.propose"), key: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: z.literal("invite.propose"), key: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: z.literal("invite.reply"), key: z.string().min(1).max(1000), reply: z.enum(INVITE_REPLIES), requestId: z.uuid(), commitment: CommitmentSchema.nullable(), confirmed: z.boolean() }).strict(),
   z.object({ action: z.literal("studio.add"), key: z.string().min(1).max(1000), requestId: z.string().regex(STUDIO_REQUEST_ID), thread: z.string().regex(STUDIO_SLUG).nullable(), reason: z.string().trim().min(1).max(MAX_MAIL_REASON).optional(), includeText: z.boolean() }).strict(),
 ]);
 
@@ -90,7 +95,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   }
   const mail = findListedMail(runtime.sourceCache?.cached() ?? [], body.key);
   if (!mail) return fail(409, "The Desk no longer lists this mail.");
-  if (decision && !["request", "invitation"].includes(readClassifications(db, [mail.id]).get(mail.id)?.commitment ?? "")) return fail(409, "This mail is no longer classified as a request or invitation. Refresh before saving the choice.");
+  if (decision && !mail.invitation && !["request", "invitation"].includes(readClassifications(db, [mail.id]).get(mail.id)?.commitment ?? "")) return fail(409, "This mail is no longer classified as a request or invitation. Refresh before saving the choice.");
   if (body.action === "ivy.hand") {
     const worker = runtime.mailHandoff;
     const ask = runtime.options.ask;
@@ -104,6 +109,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     if (handed.ok) void worker.kick(db, deps.now ?? Date.now);
     return answer(handed);
   }
+  if (body.action === "invite.propose" || body.action === "invite.reply") return answerInvitation(db, runtime, mail, body, now, deps.run ?? spawnWithStdin);
   if (body.action === "studio.propose" || body.action === "studio.add") {
     const studio = runtime.options.studio;
     if (!studio) return fail(409, "The Studio is not set up on this stack.");
@@ -131,6 +137,28 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     return answer(await unsubscribeMail(mail, ctx, { db, ledger: runtime.ledger, now, ...(deps.post ? { post: deps.post } : {}) }));
   }
   return answer(await moveMail(mail, body.action === "move" ? body.target : "trash", moveDeps));
+}
+
+type InviteBody = Extract<z.infer<typeof MailRequestSchema>, { action: "invite.propose" | "invite.reply" }>;
+
+async function answerInvitation(db: Database, runtime: DeskRuntime, mail: ListedMail, body: InviteBody, now: number, run: WriterRunner): Promise<Response> {
+  const desk = runtime.options;
+  const invitation = mail.invitation;
+  if (!desk) return fail(409, "The Desk is turned off on this stack.");
+  if (!invitation) return fail(409, "This mail carries no calendar invitation.");
+  const flagged = readClassifications(db, [mail.id]).get(mail.id)?.suspicious === true;
+  const suspicious = flagged || isSuspicious(mail, suspicionContext(db, desk.mailOwnDomains));
+  if (body.action === "invite.propose") {
+    if (suspicious) return fail(409, "This mail may be phishing, so the Desk does not answer its invitation.");
+    const calendar = calendarAvailability({ sources: desk.sources, readings: runtime.sourceCache?.cached() ?? [], calendars: listCalendars(db), now });
+    const found = freeSlots(invitation, calendar, now, desk.mailInvitations?.slots);
+    return Response.json({ ok: true, body: found.slots.length > 0 ? proposalBody(invitation, found.slots) : "", slots: found.slots.length, ...(found.reason ? { note: found.reason } : {}) }, { headers: noStore });
+  }
+  const selected = body.commitment;
+  if (selected && !(await mailYesFilter(db, desk, now)).commitments.some((c) => c.kind === selected.kind && c.id === selected.id && c.label === selected.label)) return fail(409, "That commitment is no longer current. Refresh and choose again.");
+  return answer(await replyToInvitation(mail, { reply: body.reply, requestId: body.requestId, commitment: selected, confirmed: body.confirmed, suspicious }, {
+    db, config: desk.mailInvitations, writers: desk.ask?.writers ?? {}, run, now, writerTimeoutMs: (desk.ask?.timeoutSeconds ?? 30) * 1000,
+  }));
 }
 
 type HandoffBody = Extract<z.infer<typeof MailRequestSchema>, { action: HandoffOp | "draft" }>;

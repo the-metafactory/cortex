@@ -58,7 +58,21 @@ export type MailActionBody =
   | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision }
   | { action: "studio.add"; key: string; requestId: string; thread: string | null; reason?: string; includeText: boolean }
   | { action: "ivy.hand"; key: string; requestId: string; instruction?: string }
-  | { action: "ivy.approve" | "ivy.discard" | "ivy.retry"; key: string };
+  | { action: "ivy.approve" | "ivy.discard" | "ivy.retry"; key: string }
+  | { action: "invite.reply"; key: string; reply: import("../../desk/mail-invitation-schema").InviteReply; requestId: string; commitment: import("../../desk/mail-yes-filter").Commitment | null; confirmed: boolean };
+
+export type InviteProposalOutcome = { ok: true; body: string; note: string | null } | { ok: false; text: string };
+
+export async function fetchInviteProposal(key: string, fetchImpl: FetchLike = fetch): Promise<InviteProposalOutcome> {
+  try {
+    const res = await fetchImpl(DESK_MAIL_PATH, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "invite.propose", key }) });
+    const parsed = (await res.json().catch(() => null)) as { body?: unknown; note?: unknown; error?: unknown } | null;
+    if (res.ok && typeof parsed?.body === "string") return { ok: true, body: parsed.body, note: typeof parsed.note === "string" ? parsed.note : null };
+    return { ok: false, text: typeof parsed?.error === "string" ? parsed.error : `The Desk could not read your calendars (HTTP ${res.status}).` };
+  } catch (err) {
+    return { ok: false, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
 
 export type StudioProposalOutcome = { ok: true; proposal: import("../../desk/mail-studio").MailStudioProposal } | { ok: false; text: string };
 

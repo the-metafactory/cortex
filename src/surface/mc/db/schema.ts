@@ -7,6 +7,7 @@ import { DIGEST_SQL } from "../desk/mail-digest-schema";
 import { UNSUBSCRIBE_SQL } from "../desk/mail-unsubscribe-schema";
 import { WAITING_SQL } from "../desk/mail-waiting-schema";
 import { HANDOFF_SQL } from "../desk/mail-handoff-schema";
+import { INVITATIONS_SQL } from "../desk/mail-invitation-schema";
 
 function vigilResolutionsTableSql(table: string): string {
   return `CREATE TABLE IF NOT EXISTS ${table} (
@@ -166,6 +167,7 @@ export const SCHEMA_SQL: string[] = [
   ...UNSUBSCRIBE_SQL,
   ...WAITING_SQL,
   ...HANDOFF_SQL,
+  ...INVITATIONS_SQL,
   "CREATE TABLE IF NOT EXISTS desk_my_day (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   `CREATE TABLE IF NOT EXISTS desk_routine_proposals (
