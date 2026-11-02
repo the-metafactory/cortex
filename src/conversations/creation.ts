@@ -168,6 +168,10 @@ export class ConversationCreation {
     return capabilities(this.host.writers, this.host.withheld);
   }
 
+  private capability(type: CreatableType): Capability {
+    return capabilityOf(type, this.host.writers, this.host.withheld);
+  }
+
   private async serial<T>(key: string, run: () => Promise<T>): Promise<T> {
     const previous = this.locks.get(key) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(run);
@@ -214,7 +218,7 @@ export class ConversationCreation {
     const effective = policy ?? (await this.host.meta(proposal.conversationId)).policy;
     const mine = (operations ?? await this.host.operations(proposal.conversationId)).filter(op => op.proposalId === proposal.proposalId).sort((a, b) => a.revision - b.revision);
     const operation = mine.find(op => isCurrent(op, proposal)) ?? null;
-    const capability = proposal.type ? capabilityOf(proposal.type, this.host.writers, this.host.withheld) : null;
+    const capability = proposal.type ? this.capability(proposal.type) : null;
     let feedback: Feedback;
     if (operation?.state === "created" || operation?.state === "failed" || operation?.state === "uncertain") feedback = operation.state;
     else if (operation && operation.state !== "proposed") feedback = "accepted";
@@ -251,7 +255,7 @@ export class ConversationCreation {
       await this.save(proposal);
       await this.host.record(conversationId, `proposal:${proposal.proposalId}:1`, PROPOSAL_KIND, { proposalId: proposal.proposalId, revision: 1, type, fields, entryId: proposal.entryId });
       const grant = type ? (await this.grants(actor.principal)).find(g => applies(g, conversationId, actor.principal, type)) : undefined;
-      const ready = type && capabilityOf(type, this.host.writers, this.host.withheld).status === "ready" && missingOf(type, fields).length === 0;
+      const ready = type && this.capability(type).status === "ready" && missingOf(type, fields).length === 0;
       if (grant && ready) {
         await this.host.settled();
         const egress = await this.egressRefusal(conversationId, proposal);
@@ -301,7 +305,7 @@ export class ConversationCreation {
       if (body.digest !== proposalDigest(proposal.type, proposal.fields)) throw conflict("The proposal you confirmed differs from the saved one. Nothing was created; review it again.");
       if (proposal.dismissed) throw conflict("This proposal was dismissed. Nothing was created.");
       if (!proposal.type) throw conflict("Choose what to create and where first. Nothing was created.");
-      const capability = capabilityOf(proposal.type, this.host.writers, this.host.withheld);
+      const capability = this.capability(proposal.type);
       if (capability.status !== "ready") throw conflict(unavailableHere(capability));
       const missing = missingOf(proposal.type, proposal.fields);
       if (missing.length > 0) throw new ConversationError(400, `Fill in ${missing.join(", ")} first. Nothing was created.`);
