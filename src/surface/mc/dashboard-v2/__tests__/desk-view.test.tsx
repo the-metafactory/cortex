@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ActionButton, DeskBody, DeskItemRow, DeskView, DoneForYou, EvidenceLink, ItemMenu, MailReceipt, RankingSection, RestGroups, dismissesMenu, precedentText, withConfirm } from "../components/desk-view";
+import { ActionButton, CorrectionNote, DeskBody, DeskItemRow, DeskView, DoneForYou, EvidenceLink, ItemMenu, MailReceipt, RankingSection, RestGroups, correctionStep, dismissesMenu, precedentText, withConfirm } from "../components/desk-view";
 import { submitMailAction } from "../lib/desk-action";
 import type { DeskItem, DeskView as DeskViewModel } from "../../desk/types";
 import { ProposalCard } from "../components/desk-proposal";
@@ -337,6 +337,34 @@ describe("ranking corrections on the Desk", () => {
     expect(html).toContain("Wrong suggestion: I would archive it");
     expect(html).not.toContain("Less like this");
     expect(html).toContain('aria-label="Correct this mail&#x27;s suggestion"');
+  });
+
+  it("keeps the card after keep, not bulk and matters, and the card says the correction was recorded", () => {
+    for (const said of ["keep", "not-bulk", "matters"] as const) {
+      expect(correctionStep(said, { ok: true, text: "Corrected: you keep this." }, true)).toEqual({ note: { text: "Corrected: you keep this." }, open: null });
+    }
+    const card = renderToStaticMarkup(<DeskItemRow item={item(1, { kind: "mail" })} rank={1} onOpen={() => {}} onAction={() => {}} sending={null} onFocusEvent={() => {}} onCorrect={() => {}} cardNote={{ text: "Corrected: you keep this." }} />);
+    expect(card).toContain('<div class="desk-corrected" role="status"><span>Corrected: you keep this.</span></div>');
+    expect(card).not.toContain("Retry the move");
+  });
+
+  it("opens the reply flow after I would reply and the to-do flow after I would make it a to-do", () => {
+    const ok = { ok: true, text: "Corrected." };
+    expect(correctionStep("reply", ok, true).open).toBe("reply");
+    expect(correctionStep("reply", ok, false).open).toBeNull();
+    expect(correctionStep("todo", ok, false).open).toBe("plan");
+    expect(correctionStep("plan", ok, false).open).toBe("plan");
+  });
+
+  it("offers a retry on the card when a correction was recorded but the mail did not move", () => {
+    const failed = { ok: false, recorded: true, correction: 7, text: "Corrected: you would delete this. The correction is recorded, but the mail was not moved: no Trash." };
+    const step = correctionStep("trash", failed, false);
+    expect(step).toEqual({ note: { text: failed.text, retry: { said: "trash", correction: 7 } }, open: null });
+    expect(correctionStep("trash", { ok: false, text: "Mission Control did not answer." }, false).note.retry).toBeUndefined();
+    expect(correctionStep("keep", { ...failed }, false).note.retry).toBeUndefined();
+    const html = renderToStaticMarkup(<CorrectionNote note={step.note} onRetry={() => {}} />);
+    expect(html).toContain('class="desk-corrected failed" role="status"');
+    expect(html).toContain(">Retry the move</button>");
   });
 
   it("lists the precedents of a suggestion by subject, date and action, never by id", () => {

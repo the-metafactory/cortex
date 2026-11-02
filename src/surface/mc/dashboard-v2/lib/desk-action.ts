@@ -10,7 +10,7 @@ export const DESK_MAIL_RULES_PATH = "/api/desk/mail/rules";
 export const DESK_DMARC_PATH = "/api/desk/mail/dmarc";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
-export type Outcome = { ok: boolean; text: string; recorded?: boolean; uncertain?: boolean; undo?: string; block?: string; restored?: string; rule?: MailRuleView };
+export type Outcome = { ok: boolean; text: string; recorded?: boolean; correction?: number; uncertain?: boolean; undo?: string; block?: string; restored?: string; rule?: MailRuleView };
 
 const isRuleView = (v: unknown): v is MailRuleView => typeof v === "object" && v !== null && "id" in v && typeof v.id === "string" && "sentence" in v && typeof v.sentence === "string";
 
@@ -25,7 +25,7 @@ async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Prom
   } catch (err) {
     return { ok: false, uncertain: true, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}` };
   }
-  const parsed = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown; detail?: unknown; recorded?: unknown; undo?: unknown; block?: unknown; restored?: unknown; rule?: unknown } | null;
+  const parsed = (await res.json().catch(() => null)) as { message?: unknown; error?: unknown; detail?: unknown; recorded?: unknown; correction?: unknown; undo?: unknown; block?: unknown; restored?: unknown; rule?: unknown } | null;
   if (res.ok) {
     return {
       ok: true, text: typeof parsed?.message === "string" ? parsed.message : "Done.",
@@ -36,7 +36,7 @@ async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Prom
   }
   const error = typeof parsed?.error === "string" ? parsed.error : "";
   const line = typeof parsed?.detail === "string" ? parsed.detail : error;
-  return { ok: false, text: line || `The action failed (HTTP ${res.status}).`, ...(parsed?.recorded === true ? { recorded: true } : {}) };
+  return { ok: false, text: line || `The action failed (HTTP ${res.status}).`, ...(parsed?.recorded === true ? { recorded: true } : {}), ...(typeof parsed?.correction === "number" ? { correction: parsed.correction } : {}) };
 }
 
 /** Sends one Desk action and returns one line for the page. Never throws. */
@@ -54,7 +54,7 @@ export type MailActionBody =
   | { action: "undo" | "block"; move: string }
   | { action: "sweep"; sweep: string; keys: string[] }
   | { action: "sweep.undo"; sweep: string }
-  | { action: "correct"; key: string; said: import("../../desk/mail-actions").MailCorrection }
+  | { action: "correct"; key: string; said: import("../../desk/mail-actions").MailCorrection; correction?: number }
   | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision }
   | { action: "studio.add"; key: string; requestId: string; thread: string | null; reason?: string; includeText: boolean }
   | { action: "ivy.hand"; key: string; requestId: string; instruction?: string }

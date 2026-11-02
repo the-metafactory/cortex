@@ -40,6 +40,7 @@ import { WAITING_OPS, type WaitingOp } from "../../desk/mail-waiting-schema";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskPrecedent, DeskView as DeskViewModel } from "../../desk/types";
 import type { MoveTarget } from "../../desk/mail-move";
 import type { MailCorrection } from "../../desk/mail-actions";
+import { CORRECTION_MOVES } from "../../desk/mail-correction-schema";
 import { MailStudioBox, newStudioPick, studioBody, withProposal, type StudioPick } from "./desk-mail-studio";
 import { HandoffStatus, handoffBody, handoffKeyFor, MailHandoffBox, newHandoffAsk, type HandoffAsk } from "./desk-mail-handoff";
 
@@ -94,6 +95,15 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [pendingDayTarget, setPendingDayTarget] = useState<DayTarget | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const [cardNotes, setCardNotes] = useState<ReadonlyMap<string, CardNote>>(() => new Map());
+  const setCardNote = (key: string, cardNote: CardNote | null): void =>
+    setCardNotes((m) => {
+      if (!cardNote && !m.has(key)) return m;
+      const copy = new Map(m);
+      if (cardNote) copy.set(key, cardNote);
+      else copy.delete(key);
+      return copy;
+    });
   const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map());
   const inFlight = useRef(new Set<string>());
   const [confirming, setConfirming] = useState<{ key: string; action: string } | null>(null);
@@ -388,6 +398,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
   const run = (item: DeskItem, a: DeskAction): void => {
     const goal = item.goal ?? "";
+    setCardNote(item.key, null);
     if (a.id === "detail") setDetail(item);
     else if (a.id === "snooze") setSnoozed((s) => new Set(s).add(item.key));
     else if (a.id === "todo" && view.myDay) { setPlanItem({ ...item }); setDetail(null); openCatchup(item.key); }
@@ -553,8 +564,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     } else setConfirming({ key: item.key, action: a.id });
   };
 
-  const send = async (item: DeskItem, action: DeskAction, { request, keepVisible = false }: SendOptions = {}): Promise<void> => {
+  const send = async (item: DeskItem, action: DeskAction, { request, keepVisible = false, failOnCard }: SendOptions = {}): Promise<void> => {
     if (inFlight.current.has(item.key)) return;
+    setCardNote(item.key, null);
     inFlight.current.add(item.key);
     setSending((m) => new Map(m).set(item.key, action.id));
     let result: Outcome;
@@ -569,6 +581,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       });
     }
     if (result.ok && result.undo) setReceipt({ text: result.text, undo: result.undo, ...(result.block ? { block: result.block } : {}) });
+    else if (!result.ok && failOnCard) setCardNote(item.key, failOnCard(result));
     else setNote(result.text);
     if (!result.ok) return;
     if (!keepVisible) {
@@ -610,9 +623,18 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     }
   };
 
-  const correctMail = async (item: DeskItem, said: MailCorrection): Promise<void> => {
-    const r = await submitMailAction({ action: "correct", key: item.key, said });
-    setNote(r.text);
+  const correctMail = async (item: DeskItem, said: MailCorrection, correction?: number): Promise<void> => {
+    const request = (): Promise<Outcome> => submitMailAction({ action: "correct", key: item.key, said, ...(correction !== undefined ? { correction } : {}) });
+    if (CORRECTION_MOVES[said]) {
+      await send(item, { id: `mail.correct.${said}`, label: "Correct", role: "secondary", wired: true }, { request, failOnCard: (r) => correctionStep(said, r, false).note });
+      return;
+    }
+    setCardNote(item.key, null);
+    const r = await request();
+    const step = correctionStep(said, r, item.reply !== undefined);
+    if (step.open === "reply") openReply(item);
+    else if (step.open === "plan") run(item, PLAN_THIS);
+    setCardNote(item.key, step.note);
     if (r.ok) onChanged();
   };
 
@@ -635,6 +657,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       onFocusEvent={focusEvent}
       onCorrect={(mode) => void correct(item.kind, item.source, mode)}
       {...(item.kind === "mail" ? { onCorrectMail: (said: MailCorrection) => void correctMail(item, said) } : {})}
+      cardNote={cardNotes.get(item.key) ?? null}
+      onRetryMove={(retry) => void correctMail(item, retry.said, retry.correction)}
       rulingNote={rulings.get(item.key)?.note ?? null}
     />
   );
@@ -1048,9 +1072,11 @@ interface DeskItemRowProps {
   onCorrect: (mode: DeskCorrectionMode | null) => void;
   onCorrectMail?: (said: MailCorrection) => void;
   rulingNote?: string | null;
+  cardNote?: CardNote | null;
+  onRetryMove?: (retry: CorrectionRetry) => void;
 }
 
-export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFocusEvent, onCorrect, onCorrectMail, rulingNote }: DeskItemRowProps) {
+export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending, onFocusEvent, onCorrect, onCorrectMail, rulingNote, cardNote, onRetryMove }: DeskItemRowProps) {
   return (
     <article className="desk-row desk-item">
       <span className="desk-rank">{rank}</span>
@@ -1069,6 +1095,7 @@ export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending
         {item.interrupt?.delivery === "failed" && <p className="desk-why desk-unsent">Not pushed: {item.interrupt.error}</p>}
         {item.interrupt?.delivery === "buffered" && <p className="desk-why desk-waiting">Waiting for Discord</p>}
         {rulingNote && <p className="desk-why desk-unsent">{rulingNote}</p>}
+        {cardNote && <CorrectionNote note={cardNote} {...(onRetryMove ? { onRetry: onRetryMove } : {})} />}
         {item.excerpt && <blockquote className="desk-excerpt">{item.excerpt}</blockquote>}
         <div className="desk-acts">
           {item.actions.map((a) => <ActionButton key={a.id} action={a} onRun={onAction} sending={sending} />)}
@@ -1083,6 +1110,40 @@ export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending
     </article>
   );
 }
+
+export interface CorrectionRetry {
+  said: MailCorrection;
+  correction: number;
+}
+
+export interface CardNote {
+  text: string;
+  retry?: CorrectionRetry;
+}
+
+export function CorrectionNote({ note, onRetry }: { note: CardNote; onRetry?: (retry: CorrectionRetry) => void }) {
+  const { retry } = note;
+  return (
+    <div className={`desk-corrected${retry ? " failed" : ""}`} role="status">
+      <span>{note.text}</span>
+      {retry && onRetry && <button type="button" className="desk-btn" onClick={() => onRetry(retry)}>Retry the move</button>}
+    </div>
+  );
+}
+
+export interface CorrectionStep {
+  note: CardNote;
+  open: "reply" | "plan" | null;
+}
+
+export function correctionStep(said: MailCorrection, result: Outcome, canReply: boolean): CorrectionStep {
+  const { correction } = result;
+  if (!result.ok) return { note: { text: result.text, ...(CORRECTION_MOVES[said] && result.recorded && correction !== undefined ? { retry: { said, correction } } : {}) }, open: null };
+  const open = said === "reply" && canReply ? "reply" : said === "todo" || said === "plan" ? "plan" : null;
+  return { note: { text: result.text }, open };
+}
+
+const PLAN_THIS: DeskAction = { id: "todo", label: "Plan this", role: "secondary", wired: true };
 
 const CORRECTION_TAG: Record<DeskCorrectionMode, string> = { less: "Less like this", always: "Always shown" };
 
@@ -1190,6 +1251,7 @@ export function MailReceipt({ receipt, onUndo, onBlock }: { receipt: Receipt; on
 interface SendOptions {
   request?: () => Promise<Outcome>;
   keepVisible?: boolean;
+  failOnCard?: (result: Outcome) => CardNote;
 }
 
 const CHECK_POLL_MS = 3000;

@@ -97,8 +97,9 @@ export interface MoveBy {
   where: MailLogWhere;
   doneAction: string;
   title: string;
-  recorded: (moveId: string) => void;
+  recorded?: (moveId: string) => void;
   quiet?: boolean;
+  correction?: number;
 }
 
 export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveDeps, logAs: MailLogAction = target, features: MailFeatures = mailFeatures(deps.db, mail), by?: MoveBy): Promise<MoveResult> {
@@ -115,18 +116,19 @@ export async function moveMail(mail: ListedMail, target: MoveTarget, deps: MoveD
   return runClaimed(deps, config.timeoutSeconds, { key: claimKey(mail.id), argv, request, command, failed: (line) => line, timedOut: `The mail may have moved; check ${FOLDER[target]}.` }, (stdout) => {
     deps.ledger.add(movedKey(target, mail.id), deps.now);
     const { message, folder } = printed(stdout, `Moved to ${FOLDER[target]}.`);
+    const correction = by?.correction;
     if (command !== "move") {
-      logMailDecision(deps.db, features, logAs, by?.where ?? "desk", deps.now, folder ?? FOLDER[target]);
+      if (correction === undefined) logMailDecision(deps.db, features, logAs, by?.where ?? "desk", deps.now, folder ?? FOLDER[target]);
       return { ok: true, message };
     }
     const id = (deps.newId ?? (() => crypto.randomUUID()))();
     deps.db.transaction(() => {
-      deps.db.query("INSERT INTO desk_mail_moves (id, account, message_id, target, sender, folder, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(id, account, mail.id, target, mail.from.address.toLowerCase(), folder, deps.now);
+      deps.db.query("INSERT INTO desk_mail_moves (id, account, message_id, target, sender, folder, created_at, correction_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, account, mail.id, target, mail.from.address.toLowerCase(), folder, deps.now, correction ?? null);
       if (!by?.quiet) deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, ?, ?, ?, 'done', ?, ?, ?)")
         .run(`mail-move:${id}`, by?.doneAction ?? "mail.move", id, `${by?.title ?? DONE[target]}: “${mail.subject}”`, message, deps.now, deps.now);
-      by?.recorded(id);
-      logMailDecision(deps.db, features, logAs, by?.where ?? "desk", deps.now, folder ?? FOLDER[target]);
+      by?.recorded?.(id);
+      if (correction === undefined) logMailDecision(deps.db, features, logAs, by?.where ?? "desk", deps.now, folder ?? FOLDER[target]);
     })();
     return { ok: true, message, undo: id, ...(target === "junk" ? { block: `@${senderDomain(mail.from.address)}` } : {}) };
   });
@@ -151,14 +153,16 @@ interface MoveRow {
   sender: string;
   created_at: number;
   undone_at: number | null;
+  correction_id: number | null;
 }
 
 const readMove = (db: Database, id: string): MoveRow | null =>
-  db.query<MoveRow, [string]>("SELECT account, message_id, target, sender, created_at, undone_at FROM desk_mail_moves WHERE id = ?").get(id);
+  db.query<MoveRow, [string]>("SELECT account, message_id, target, sender, created_at, undone_at, correction_id FROM desk_mail_moves WHERE id = ?").get(id);
 
 /**
  * Undo of one logged move: the move command reads `{ action: "restore", account, messageId, from }` and moves the
  * message back to INBOX. The mail shows on the Desk again (`restored` is its item key); Done for you keeps the line, marked undone.
+ * Undo of a move made by a correction withdraws that correction, so the classifier no longer learns from it.
  */
 export async function undoMove(id: string, deps: MoveDeps): Promise<MoveResult> {
   const config = deps.config;
@@ -173,12 +177,15 @@ export async function undoMove(id: string, deps: MoveDeps): Promise<MoveResult> 
   return runClaimed(deps, config.timeoutSeconds, claimed, (stdout) => {
     const { message } = printed(stdout, "Moved back to INBOX.");
     deps.ledger.forget(movedKey(row.target, row.message_id));
-    deps.db.transaction(() => {
+    const withdrawn = deps.db.transaction((): boolean => {
       deps.db.query("UPDATE desk_mail_moves SET undone_at = ? WHERE id = ?").run(deps.now, id);
       deps.db.query("UPDATE desk_done SET action = action || '.undone', message = ?, updated_at = ? WHERE attempt_key = ? AND action NOT LIKE '%.undone'").run(message, deps.now, `mail-move:${id}`);
-      logMailDecision(deps.db, loggedFeatures(deps.db, row.message_id) ?? movedFeatures(row), "restore", "desk", deps.now, "INBOX");
+      const features = loggedFeatures(deps.db, row.message_id) ?? movedFeatures(row);
+      const deleted = row.correction_id === null ? 0 : deps.db.query("DELETE FROM desk_mail_log WHERE id = ? AND origin = 'correction'").run(row.correction_id).changes;
+      logMailDecision(deps.db, features, "restore", "desk", deps.now, "INBOX");
+      return deleted > 0;
     })();
-    return { ok: true, message, restored: `mail:${row.message_id}` };
+    return { ok: true, message: withdrawn ? `${message} Your correction is withdrawn.` : message, restored: `mail:${row.message_id}` };
   });
 }
 
