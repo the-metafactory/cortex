@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { scratchHosts } from "./fixtures/scratch";
 import { fixtureOwner, type FixtureOwner } from "./fixtures/owner";
-import { CREATABLE_TYPES } from "../catalog";
-import { ConversationCreation, unavailableHere, type Actor, type ProposalView } from "../creation";
+import { CREATABLE_TYPES, OWNER_BLOCKERS, type CreatableType } from "../catalog";
+import { ConversationCreation, capabilities, unavailableHere, type Actor, type CapabilityStatus, type ProposalView } from "../creation";
 import { ConversationError, openConversationHost, type ConversationHost } from "../host";
 import { CREATION_KIND, GRANT_KIND, type OwnerWriters, type Policy } from "../types";
 
@@ -47,14 +47,41 @@ describe("creation catalog", () => {
     expect(types.length).toBeGreaterThan(4);
     expect(CREATABLE_TYPES.every(type => byType.has(type))).toBe(true);
     expect(byType.get("graph-node")).toMatchObject({ row: "O01", status: "ready" });
-    expect(byType.get("balance-task")).toMatchObject({ row: "O04", status: "blocked:2972" });
-    expect(byType.get("balance-project")).toMatchObject({ row: "O05", status: "blocked:2972" });
+    expect(byType.get("balance-task")).toMatchObject({ row: "O04", status: "blocked:3030" });
+    expect(byType.get("balance-project")).toMatchObject({ row: "O05", status: "blocked:3031" });
     expect(byType.get("flow")).toMatchObject({ row: "O14", status: "blocked:3014" });
     expect(byType.get("routine")?.fixed.map(f => f.value).join(" ")).toContain("Created paused");
     expect(byType.get("routine")?.fields.some(f => /enable|run|resume/i.test(f.name))).toBe(false);
     expect(byType.get("desk-source-card")).toMatchObject({ row: "O22", status: "unsupported" });
     expect(byType.get("settings")).toMatchObject({ row: "O25", status: "unsupported" });
     expect(byType.has("card")).toBe(false);
+  });
+
+  test("names each unavailable type's own blocking node from the coverage matrix, never the closed coverage node", () => {
+    const expected: Record<CreatableType, CapabilityStatus> = {
+      "graph-node": "blocked:3033", "graph-map": "blocked:3034",
+      "balance-task": "blocked:3030", "balance-project": "blocked:3031", "balance-inbox-task": "blocked:3032",
+      "studio-thread": "blocked:3029", "studio-capture": "blocked:3029", "studio-note": "blocked:3029", "studio-outcome": "blocked:3029",
+      flow: "blocked:3014", routine: "blocked:3035", "calendar-event": "blocked:3036", reminder: "blocked:3037",
+      "soma-goal": "blocked:3038", "tana-note": "blocked:3039", "desk-note": "blocked:3040", "mail-draft": "blocked:3041",
+    };
+    const listed = capabilities({});
+    const statuses = Object.fromEntries(listed.filter(c => c.status !== "unsupported").map(c => [c.type, c.status]));
+    expect(statuses).toEqual(expected);
+    expect(listed.some(c => c.status === "blocked:2972")).toBe(false);
+  });
+
+  test("reports a type with a writer as ready whatever its blocker", () => {
+    const owner = fixtureOwner();
+    const listed = capabilities({ "studio-note": owner.writer, flow: owner.writer });
+    const byType = new Map(listed.map(c => [c.type, c.status]));
+    expect(byType.get("studio-note")).toBe("ready");
+    expect(byType.get("flow")).toBe("ready");
+    expect(byType.get("studio-thread")).toBe("blocked:3029");
+  });
+
+  test("the blocker map names a node for exactly the creatable types", () => {
+    expect(Object.keys(OWNER_BLOCKERS).sort()).toEqual([...CREATABLE_TYPES].sort());
   });
 });
 
