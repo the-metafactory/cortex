@@ -351,7 +351,7 @@ describe("a mail item from a cached classification", () => {
     expect(item.detail.summary).toBe("Here are the numbers.");
     expect(item.detail.evidence).toBeUndefined();
     expect(item.suggestion).toBeUndefined();
-    expect(item.actions.map((a) => [a.id, a.role])).toEqual([["open", "primary"], ["mail.unimportant", "secondary"], ["snooze", "secondary"]]);
+    expect(item.actions.map((a) => [a.id, a.role])).toEqual([["open", "primary"], ["mail.unimportant", "secondary"], ["mail.snooze", "secondary"]]);
   });
 
   it("shows the summary, a suggestion line and each evidence entry as a link", () => {

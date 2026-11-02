@@ -13,6 +13,7 @@ import type { ListedMail } from "./mail-actions";
 import type { SourceMail, SourceReading } from "./sources/command";
 import { DAY_MS, localDay } from "./time";
 import { isVip } from "./vips";
+import { snoozedIds, withoutSnoozed } from "./mail-snooze";
 
 export { DIGEST_SQL, type DigestConfig, type DigestModel } from "./mail-digest-schema";
 
@@ -216,7 +217,8 @@ export interface MailGroups {
 export type MailGroupOptions = SweepOptions & { mailDigest?: DigestConfig };
 
 /** Digests and sweeps together, so a newsletter held for the digest never appears in a bundle or sweep as well. */
-export function listMailGroups(db: Database, readings: readonly SourceReading[], desk: MailGroupOptions, handled: { has(key: string): boolean } | undefined, now: number): MailGroups {
+export function listMailGroups(db: Database, listed: readonly SourceReading[], desk: MailGroupOptions, handled: { has(key: string): boolean } | undefined, now: number): MailGroups {
+  const readings = withoutSnoozed(listed, snoozedIds(db));
   const digests = desk.mailDigest
     ? listDigests(db, readings, { config: desk.mailDigest, ...(handled ? { handled } : {}), ...(desk.mailOwnDomains ? { ownDomains: desk.mailOwnDomains } : {}) }, now)
     : { groups: [], held: new Set<string>(), kept: new Set<string>() };

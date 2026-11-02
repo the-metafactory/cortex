@@ -394,6 +394,7 @@ const UNIMPORTANT = action("mail.unimportant", "Unimportant", "secondary", true)
 const REPORT = action("mail.report", "Report", "secondary", true);
 const TO_STUDIO = action("mail.studio", "Add to thread", "secondary", true);
 const TO_IVY = action("mail.ivy", "Hand to Ivy", "secondary", true);
+const SNOOZE = action("mail.snooze", "Snooze", "secondary", true);
 const SUSPICIOUS_SCORE = 70;
 const ACCEPT = action("invite.accept", "Accept", "primary", true);
 const DECLINE = action("invite.decline", "Decline", "secondary", true);
@@ -471,7 +472,7 @@ export function mailItems(input: MailInput): DeskItem[] {
     const moves = [...(archive && !archiveFirst ? [ARCHIVE] : []), ...(trash && !trashFirst && !seenFirst ? [DELETE] : []), ...(spam && !spamFirst ? [SPAM] : [])];
     const invite = input.invitations?.get(m.id);
     const inviting = inviteLead(invite, triage?.commitment === "invitation", canDraft);
-    const rest = [...lead, ...(unsubscribe ? [unsubscribeAction(unsubscribe)] : []), ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, ...(studio ? [TO_STUDIO] : []), ...(ivy ? [TO_IVY] : []), LATER];
+    const rest = [...lead, ...(unsubscribe ? [unsubscribeAction(unsubscribe)] : []), ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, ...(studio ? [TO_STUDIO] : []), ...(ivy ? [TO_IVY] : []), SNOOZE];
     const offered = inviting.length > 0 ? [...inviting, ...rest.map((a) => ({ ...a, role: "secondary" as const }))] : rest;
     const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
     if (invite) history.push(`Invitation: "${invite.summary}", ${invite.when}${invite.location ? `, ${invite.location}` : ""}, from ${invite.organizer}${invite.recurring ? "; it repeats" : ""}.`);
@@ -522,7 +523,7 @@ function suspiciousItem(m: MailInput["mail"][number], reasons: ReturnType<typeof
   const spam: DeskAction[] = can.spam ? [{ ...SPAM, role: "primary" }] : [];
   const report: DeskAction[] = can.report ? [REPORT] : [];
   const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", spam.length > 0 ? "secondary" : "primary", true), url: m.url }] : [];
-  const offered = [...spam, ...report, ...open, LOOK, LATER];
+  const offered = [...spam, ...report, ...open, LOOK, SNOOZE];
   return {
     key: `mail:${m.id}`,
     sourceRevision: m.receivedAt,

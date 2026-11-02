@@ -110,6 +110,7 @@ export interface DeskItem {
   suspicious?: boolean;
   handoff?: import("./mail-handoff").HandoffView;
   invitation?: import("./mail-invitation").InvitationView;
+  back?: { line: string; at: number };
 }
 
 export interface DeskInterrupt {

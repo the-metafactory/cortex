@@ -148,13 +148,13 @@ describe("the actions on a mail item", () => {
   });
 
   it("keeps Open in Mail first and Delete secondary on mail that wants something", () => {
-    expect(ids(GITLAB, "action")).toEqual({ card: ["open:primary", "mail.trash:secondary", "mail.unimportant:secondary"], more: ["vip.add", "snooze"] });
+    expect(ids(GITLAB, "action")).toEqual({ card: ["open:primary", "mail.trash:secondary", "mail.unimportant:secondary"], more: ["vip.add", "mail.snooze"] });
     expect(ids(GITLAB).card).toEqual(["open:primary", "mail.trash:secondary", "mail.unimportant:secondary"]);
   });
 
   it("offers no Delete without a trash command, and no Unimportant for a VIP", () => {
-    expect(ids(GITLAB, "bulk", false).card).toEqual(["open:primary", "mail.unimportant:secondary", "snooze:secondary"]);
-    expect(ids(BOSS, "action").card).toEqual(["open:primary", "mail.trash:secondary", "snooze:secondary"]);
+    expect(ids(GITLAB, "bulk", false).card).toEqual(["open:primary", "mail.unimportant:secondary", "mail.snooze:secondary"]);
+    expect(ids(BOSS, "action").card).toEqual(["open:primary", "mail.trash:secondary", "mail.snooze:secondary"]);
   });
 });
 
@@ -553,7 +553,7 @@ describe("the move actions on a mail card", () => {
   };
 
   it("makes Archive the primary action when the classifier suggests archive, even on quiet mail", () => {
-    expect(card("archive", true)).toEqual({ suggestion: "Suggested: archive", actions: ["mail.archive:primary", "open:secondary", "mail.trash:secondary", "vip.add:secondary", "mail.spam:secondary", "mail.unimportant:secondary", "snooze:secondary"] });
+    expect(card("archive", true)).toEqual({ suggestion: "Suggested: archive", actions: ["mail.archive:primary", "open:secondary", "mail.trash:secondary", "vip.add:secondary", "mail.spam:secondary", "mail.unimportant:secondary", "mail.snooze:secondary"] });
     const quiet = card("archive", true, "fyi").actions;
     expect(quiet.slice(0, 3)).toEqual(["mail.archive:primary", "open:secondary", "mail.trash:secondary"]);
     expect(quiet).not.toContain("mail.seen:primary");
