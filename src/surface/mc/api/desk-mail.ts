@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { CommitmentSchema, decisionReceipt, MailDecisionSchema, mailYesFilter, saveDecisionDraft } from "../desk/mail-yes-filter";
-import { freeSlots, INVITE_REPLIES, proposalBody, replyToInvitation } from "../desk/mail-invitation";
+import { calendarsOnly, freeSlots, INVITE_REPLIES, proposalBody, replyToInvitation } from "../desk/mail-invitation";
 import { calendarAvailability } from "../desk/calendar-availability";
 import { listCalendars } from "../desk/calendars";
 import { readClassifications } from "../desk/classify";
@@ -150,7 +150,8 @@ async function answerInvitation(db: Database, runtime: DeskRuntime, mail: Listed
   const suspicious = flagged || isSuspicious(mail, suspicionContext(db, desk.mailOwnDomains));
   if (body.action === "invite.propose") {
     if (suspicious) return fail(409, "This mail may be phishing, so the Desk does not answer its invitation.");
-    const calendar = calendarAvailability({ sources: desk.sources, readings: runtime.sourceCache?.cached() ?? [], calendars: listCalendars(db), now });
+    const readings = runtime.sourceCache?.cached() ?? [];
+    const calendar = calendarsOnly(calendarAvailability({ sources: desk.sources, readings, calendars: listCalendars(db), now }), readings);
     const found = freeSlots(invitation, calendar, now, desk.mailInvitations?.slots);
     return Response.json({ ok: true, body: found.slots.length > 0 ? proposalBody(invitation, found.slots) : "", slots: found.slots.length, ...(found.reason ? { note: found.reason } : {}) }, { headers: noStore });
   }

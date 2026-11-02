@@ -6,10 +6,10 @@ import type { CalendarAvailability, CalendarInterval } from "../desk/calendar-av
 import type { DeskOptions } from "../desk/compose";
 import type { WriterRunner } from "../desk/create";
 import type { ListedMail } from "../desk/mail-actions";
-import { freeSlots, invitationConflicts, invitationDecisions, invitationView, invitePayload, proposalBody, replyToInvitation, type InvitationsConfig, type InviteReplyDeps } from "../desk/mail-invitation";
+import { calendarsOnly, freeSlots, invitationConflicts, invitationDecisions, invitationView, invitePayload, proposalBody, replyToInvitation, type InvitationsConfig, type InviteReplyDeps } from "../desk/mail-invitation";
 import { queryMailLog } from "../desk/mail-log";
 import { mailItems } from "../desk/rank";
-import { SourceCache, SourceMailSchema, type MailInvitation } from "../desk/sources/command";
+import { SourceCache, SourceMailSchema, type MailInvitation, type SourceReading } from "../desk/sources/command";
 import { startOfDay } from "../desk/time";
 
 const DAY = 86_400_000;
@@ -62,6 +62,18 @@ describe("conflicts", () => {
     const short = invitationConflicts(INVITATION, calendar([], startOfDay(NOW) + DAY));
     expect(short.kind).toBe("unknown");
     expect(invitationConflicts(INVITATION, { sources: [{ id: "work-calendar", kind: "unknown", reason: "stale" }], events: [] })).toEqual({ kind: "unknown", reasons: ["work-calendar: stale"] });
+  });
+});
+
+describe("mail sources", () => {
+  test("a stale or failed mail source does not make the calendars unknown; a stale calendar source still does", () => {
+    const stale: CalendarAvailability = { ...calendar([]), sources: [...calendar([]).sources.filter((s) => s.kind === "calendar"), { id: "work-mail", kind: "unknown", reason: "The source reading is stale; a refresh is pending." }, { id: "personal-mail", kind: "unknown", reason: "The source could not be read." }] };
+    const reading = (id: string, over: Partial<SourceReading>): SourceReading => ({ id, area: null, events: [], mail: [], readAt: NOW, error: null, dropped: 0, problems: [], ...over });
+    const readings = [reading("work-mail", { capabilities: ["attention"], mail: [mail()] }), reading("personal-mail", { error: "boom", mail: [mail()] }), reading("work-calendar", { capabilities: ["calendar"] })];
+    expect(invitationConflicts(INVITATION, stale).kind).toBe("unknown");
+    expect(invitationConflicts(INVITATION, calendarsOnly(stale, readings)).kind).toBe("clear");
+    const calendarStale: CalendarAvailability = { sources: [{ id: "work-calendar", kind: "unknown", reason: "stale" }], events: [] };
+    expect(invitationConflicts(INVITATION, calendarsOnly(calendarStale, readings)).kind).toBe("unknown");
   });
 });
 
