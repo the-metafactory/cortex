@@ -71,7 +71,7 @@ export const CREATION_CATALOG: Record<CreatableType, CreatableSpec> = {
     text("calendar", "Calendar (empty uses the default)", false, true), text("title", "Title"), { name: "start", label: "Start", kind: "datetime", required: true }, { name: "end", label: "End", kind: "datetime", required: true }, long("notes", "Notes"),
   ] },
   reminder: { row: "O17", label: "Reminder", owner: "Reminders", egress: "cloud", fields: [
-    text("list", "List (empty uses the default)", false, true), text("title", "Title"), { name: "due", label: "Due", kind: "datetime", required: false },
+    text("list", "List (empty uses the default)", false, true), text("title", "Title"), { name: "due", label: "Due", kind: "datetime", required: true },
   ] },
   "soma-goal": { row: "O18", label: "Goal", owner: "Soma goals", egress: "local", fields: [long("wording", "Wording", true)], fixed: [{ label: "Status", value: "Created as a draft goal." }] },
   "tana-note": { row: "O19", label: "Tana note", owner: "Tana", egress: "cloud", fields: [text("target", "Target node (empty uses the inbox)", false, true), long("text", "Note", true)] },
