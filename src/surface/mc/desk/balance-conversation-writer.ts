@@ -56,10 +56,12 @@ export function balanceDestination(state: AppState, desk: DeskOptions, fields: R
   return chosen ? { parent: chosen.id } : { refused: `That project is not open in ${area.label}.` };
 }
 
-function taskCommand(fields: Record<string, string>, parent: string, revision: number): BalanceCommand | { refused: string } {
-  const due = fields.due;
+export type BalanceKind = "task" | "project";
+
+function addCommand(kind: BalanceKind, fields: Record<string, string>, parent: string, revision: number): BalanceCommand | { refused: string } {
+  const due = kind === "task" ? fields.due : undefined;
   if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) return { refused: `${due} is not a due date in the form YYYY-MM-DD.` };
-  const parsed = BalanceCommandSchema.safeParse({ op: "outline-add", revision, parent, title: fields.title ?? "", kind: "task", ...(fields.note ? { note: fields.note } : {}), ...(due ? { dueDate: due } : {}) });
+  const parsed = BalanceCommandSchema.safeParse({ op: "outline-add", revision, parent, title: fields.title ?? "", kind, ...(fields.note ? { note: fields.note } : {}), ...(due ? { dueDate: due } : {}) });
   if (!parsed.success) return { refused: parsed.error.issues.some(i => i.path[0] === "dueDate") ? `${due ?? ""} is not a valid due date.` : "Balance takes a title of up to 300 characters and a note of up to 10,000." };
   return parsed.data;
 }
@@ -76,7 +78,7 @@ function readReceipt(db: Database, operation: OperationRecord): ReadbackResult {
   }
 }
 
-export function balanceTaskWriter(deps: BalanceWriterDeps): OwnerWriter {
+export function balanceWriter(kind: BalanceKind, deps: BalanceWriterDeps): OwnerWriter {
   const clock = deps.now ?? Date.now;
   const add = (desk: DeskOptions, request: CreateRequest, studio: StudioProjection | undefined): CreateResult => {
     if (request.signal.aborted) throw new Error("The conversation stopped waiting before Balance was called.");
@@ -86,7 +88,7 @@ export function balanceTaskWriter(deps: BalanceWriterDeps): OwnerWriter {
     if ("refused" in where) return failed(where.refused);
     const requestId = operationUuid(request.operationId);
     const attempt = (revision: number): string | undefined => {
-      const command = taskCommand(request.fields, where.parent, revision);
+      const command = addCommand(kind, request.fields, where.parent, revision);
       if ("refused" in command) throw new Error(command.refused);
       const now = clock();
       return changeMyDay({ db: deps.db, desk, now, date: localDay(now), requestId, command, studio }).outlineId;
@@ -103,9 +105,9 @@ export function balanceTaskWriter(deps: BalanceWriterDeps): OwnerWriter {
     try { outlineId = attemptWithStaleRetry(); }
     catch (error) {
       if (!ownerRefusal(error)) throw error;
-      return failed(stale(error) ? "Balance kept changing while the task was being added." : error.message);
+      return failed(stale(error) ? `Balance kept changing while the ${kind} was being added.` : error.message);
     }
-    if (!outlineId) throw new Error("Balance answered without the new task's outline id.");
+    if (!outlineId) throw new Error(`Balance answered without the new ${kind}'s outline id.`);
     return { state: "created", canonicalId: outlineId };
   };
   return {
