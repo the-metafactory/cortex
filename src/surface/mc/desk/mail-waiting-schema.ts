@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { DeskMailWaitingSchema } from "../../../common/types/config";
+import type { DeskMailWaitingSchema } from "../../../common/types/config";
 
 export const WAITING_SQL = [
   `CREATE TABLE IF NOT EXISTS desk_mail_waiting (
@@ -34,8 +34,6 @@ export const WAITING_SQL = [
 
 export type WaitingConfig = z.infer<typeof DeskMailWaitingSchema>;
 export type WaitingModel = NonNullable<WaitingConfig["model"]>;
-
-export const DEFAULT_WAITING: WaitingConfig = DeskMailWaitingSchema.parse({});
 
 export const WAITING_STATES = ["open", "answered", "superseded", "no-answer", "done"] as const;
 export type WaitingState = (typeof WAITING_STATES)[number];

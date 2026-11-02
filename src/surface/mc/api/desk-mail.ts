@@ -11,12 +11,13 @@ import { runSweep, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
 import { keepFromDigest, listMailGroups } from "../desk/mail-digest";
 import { suspicionContext } from "../desk/mail-suspicion";
 import { archiveWhatArrives, offerContext, unsubscribeMail, type OneClickPost } from "../desk/mail-unsubscribe";
-import { actOnWaiting, nudgeMail, readWaiting, waitingFeatures, waitingIdOf, type WaitingOp } from "../desk/mail-waiting";
+import { actOnWaiting, nudgeMail, readWaiting, waitingFeatures, waitingIdOf, WAITING_OPS, type WaitingOp } from "../desk/mail-waiting";
 
-const WAITING_ACTIONS = ["waiting.snooze", "waiting.done", "waiting.no-answer", "waiting.expect"] as const;
-type WaitingAction = (typeof WAITING_ACTIONS)[number];
-const WAITING_OP: Record<WaitingAction, WaitingOp> = { "waiting.snooze": "snooze", "waiting.done": "done", "waiting.no-answer": "no-answer", "waiting.expect": "expect" };
-const isWaitingAction = (action: string): action is WaitingAction => WAITING_ACTIONS.includes(action as WaitingAction);
+const WaitingActionSchema = z.enum(WAITING_OPS.map((op) => `waiting.${op}` as const));
+const waitingOp = (action: string): WaitingOp | null => {
+  const op = action.slice("waiting.".length);
+  return action.startsWith("waiting.") && WAITING_OPS.includes(op as WaitingOp) ? (op as WaitingOp) : null;
+};
 
 const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("draft"), key: z.string(), body: z.string(), decision: MailDecisionSchema.optional() }).strict(),
@@ -26,7 +27,7 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.enum(["undo", "block"]), move: z.string().min(1).max(64) }).strict(),
   z.object({ action: z.literal("sweep"), sweep: z.string().min(1).max(200), keys: z.array(z.string().min(1).max(1000)).min(1).max(SWEEP_LIMITS.maxMails) }).strict(),
   z.object({ action: z.literal("sweep.undo"), sweep: z.string().min(1).max(64) }).strict(),
-  z.object({ action: z.enum(WAITING_ACTIONS), key: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: WaitingActionSchema, key: z.string().min(1).max(1000) }).strict(),
 ]);
 
 export const SWEEP_WAIT_MS = 8000;
@@ -63,7 +64,8 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if ("move" in body) {
     return answer(body.action === "undo" ? await undoMove(body.move, moveDeps) : blockSenderDomain(db, body.move, now));
   }
-  if (isWaitingAction(body.action) && "key" in body) return answer(actOnWaiting(db, body.key, WAITING_OP[body.action], now, runtime.options.mailWaiting));
+  const op = waitingOp(body.action);
+  if (op && "key" in body) return answer(actOnWaiting(db, body.key, op, now, runtime.options.mailWaiting));
   if (body.action === "draft" && waitingIdOf(body.key) !== null) return answer(await draftNudge(db, body.key, body.body, moveDeps));
   const decision = body.action === "draft" ? body.decision : undefined;
   if (decision && body.action === "draft") {

@@ -112,6 +112,13 @@ describe("waiting-for tracker", () => {
     expect(dueWaiting(db, at(36)).map((w) => w.messageId)).toEqual(["s2"]);
   });
 
+  it("keeps a plain follow-up waiting when it supersedes an open question", () => {
+    recordWaiting(db, [reading([sent("s1"), sent("s2", { subject: "Re: Venue quote", sentAt: new Date(FRIDAY).toISOString(), references: ["s1"], text: "Just following up on this." })])], FRIDAY);
+    expect(readWaiting(db, "s1")?.state).toBe("superseded");
+    expect(readWaiting(db, "s2")).toMatchObject({ asks: true, detectedBy: "follow-up", state: "open" });
+    expect(cards(at(36))[0]?.detail.history).toContain("It follows up on your earlier question in this conversation.");
+  });
+
   it("ignores sent mail that asks nothing, mail to yourself or to no-reply addresses, and mail older than the window", () => {
     recordWaiting(db, [reading([
       sent("thanks", { text: "Thanks, that is all." }),

@@ -3,15 +3,19 @@ import { z } from "zod";
 import { chatJson, readApiKey, type EndpointAccess, type KeyReader } from "./classify";
 import { logMailDecision, senderDomain, type MailFeatures, type MailLogAction } from "./mail-log";
 import type { ListedMail } from "./mail-actions";
+import { plural } from "./mail-sweep";
 import { replySubject } from "./mail-triage";
 import { ago } from "./rank";
 import type { SourceReading, SourceSent } from "./sources/command";
 import { SingleFlight } from "./single-flight";
 import { DAY_MS, startOfDay } from "./time";
 import type { DeskAction, DeskItem } from "./types";
-import { DEFAULT_WAITING, type WaitingConfig, type WaitingModel, type WaitingOp, type WaitingState } from "./mail-waiting-schema";
+import { DeskMailWaitingSchema } from "../../../common/types/config";
+import type { WaitingConfig, WaitingModel, WaitingOp, WaitingState } from "./mail-waiting-schema";
 
-export { DEFAULT_WAITING, WAITING_OPS, WAITING_SQL, WAITING_STATES, type WaitingConfig, type WaitingModel, type WaitingOp, type WaitingState } from "./mail-waiting-schema";
+export const DEFAULT_WAITING: WaitingConfig = DeskMailWaitingSchema.parse({});
+
+export { WAITING_OPS, WAITING_SQL, WAITING_STATES, type WaitingConfig, type WaitingModel, type WaitingOp, type WaitingState } from "./mail-waiting-schema";
 
 const isWorkingDay = (d: Date): boolean => d.getDay() !== 0 && d.getDay() !== 6;
 
@@ -137,12 +141,28 @@ export function recordWaiting(db: Database, readings: readonly SourceReading[], 
        WHERE state = 'open' AND EXISTS (SELECT 1 FROM desk_mail_thread t WHERE t.parent_id = desk_mail_waiting.message_id AND t.sender != desk_mail_waiting.sender)`,
     ).run(now);
     db.query(
+      `UPDATE desk_mail_waiting SET asks = 1, detected_by = 'follow-up',
+        ask = (SELECT p.ask FROM desk_mail_thread t JOIN desk_mail_waiting p ON p.message_id = t.parent_id WHERE t.reply_id = desk_mail_waiting.message_id AND t.sender = p.sender AND p.asks = 1 ORDER BY p.sent_at DESC LIMIT 1)
+       WHERE state = 'open' AND detected_by = 'heuristic' AND message_id IN
+        (SELECT t.reply_id FROM desk_mail_thread t JOIN desk_mail_waiting p ON p.message_id = t.parent_id WHERE p.state = 'open' AND p.asks = 1 AND t.sender = p.sender)`,
+    ).run();
+    db.query(
       `UPDATE desk_mail_waiting SET state = 'superseded', closed_at = ?, closed_by = sender
        WHERE state = 'open' AND EXISTS (SELECT 1 FROM desk_mail_thread t JOIN desk_mail_waiting w ON w.message_id = t.reply_id WHERE t.parent_id = desk_mail_waiting.message_id AND t.sender = desk_mail_waiting.sender)`,
     ).run(now);
     db.query("DELETE FROM desk_mail_waiting WHERE sent_at < ?").run(since - ROW_KEEP_DAYS * DAY_MS);
     db.query("DELETE FROM desk_mail_thread WHERE at < ?").run(now - THREAD_KEEP_DAYS * DAY_MS);
   })();
+}
+
+const recorded = new WeakMap<Database, string>();
+
+/** recordWaiting, skipped while the readings are the same ones it last recorded for this database. */
+export function recordWaitingOnce(db: Database, readings: readonly SourceReading[], now: number, config: WaitingConfig = DEFAULT_WAITING): void {
+  const stamp = readings.map((r) => `${r.id}:${r.readAt}`).join("|");
+  if (recorded.get(db) === stamp) return;
+  recordWaiting(db, readings, now, config);
+  recorded.set(db, stamp);
 }
 
 export interface ThreadReply {
@@ -247,7 +267,6 @@ export const WAITING_KEY_PREFIX = "waiting:";
 export const waitingKey = (messageId: string): string => `${WAITING_KEY_PREFIX}${messageId}`;
 export const waitingIdOf = (key: string): string | null => (key.startsWith(WAITING_KEY_PREFIX) ? key.slice(WAITING_KEY_PREFIX.length) : null);
 
-const plural = (n: number, one: string): string => `${n} ${one}${n === 1 ? "" : "s"}`;
 const nameOf = (a: Address): string => a.name ?? a.address;
 
 export function sinceDay(now: number, at: number): string {
@@ -267,7 +286,7 @@ const whom = (recipients: readonly Address[]): string => {
 };
 
 const detector = (w: WaitingRow): string =>
-  w.detectedBy === "principal" ? "You said you expect an answer." : w.detectedBy.startsWith("model:") ? `The model ${w.detectedBy.slice("model:".length)} read it as asking for an answer.` : "It contains a question or a request.";
+  w.detectedBy === "principal" ? "You said you expect an answer." : w.detectedBy === "follow-up" ? "It follows up on your earlier question in this conversation." : w.detectedBy.startsWith("model:") ? `The model ${w.detectedBy.slice("model:".length)} read it as asking for an answer.` : "It contains a question or a request.";
 
 const act = (id: string, label: string, role: DeskAction["role"]): DeskAction => ({ id, label, role, wired: true });
 
