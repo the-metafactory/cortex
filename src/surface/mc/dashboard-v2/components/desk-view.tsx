@@ -5,7 +5,7 @@ import { deskLinkMode, openDeskLink } from "../lib/desk-link";
 import { DeskLink } from "./desk-link";
 import { DeskBalance } from "./desk-balance";
 import { MailSweeps, SweepPreview, sweepsInArea } from "./desk-mail-sweeps";
-import { digestsInArea, MailDigests, type UnsubscribeAsk } from "./desk-mail-digest";
+import { MailDigests, type UnsubscribeAsk } from "./desk-mail-digest";
 import type { MailSweepView } from "../../desk/mail-sweep";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
@@ -147,7 +147,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
   const leaveConversation = (): void => go(cameFrom.current ?? { mode: "conversation", thread: null, conversation: null });
   const openCatchup = (key: string | null): void => {
-    const search = catchupSearch(window.location.search, { area: "", filter: "all", card: key });
+    const search = catchupSearch(window.location.search, { area: "", filter: "all", kind: "all", query: "", card: key });
     window.history.pushState(null, "", `${window.location.pathname}${search}${window.location.hash}`);
     window.dispatchEvent(new PopStateEvent("popstate"));
   };
@@ -780,7 +780,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       )}
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
-      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={(a) => <MailDigests digests={digestsInArea(view.mailDigests ?? [], a)} busy={sweeping} onArchive={openSweep} onKeep={(key) => void keepDigest(key)} onUnsubscribe={(key, ask) => void unsubscribeDigest(key, ask)} />} />
+      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={({ digests, sweeps }) => <><MailSweeps sweeps={sweeps} onPreview={openSweep} /><MailDigests digests={digests} busy={sweeping} onArchive={openSweep} onKeep={(key) => void keepDigest(key)} onUnsubscribe={(key, ask) => void unsubscribeDigest(key, ask)} /></>} />
       <div className="desk-grid tf-shell" hidden={inStudio || inBalance || inCatchup || inConversation}>
         <DeskTimeFirst day={view.myDay} calendar={view.calendarAvailability} now={view.generatedAt} areas={view.areas} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation}
           before={<>

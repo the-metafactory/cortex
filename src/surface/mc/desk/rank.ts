@@ -436,7 +436,7 @@ const UNIMPORTANT_VERDICT: MailVerdict = { score: CATEGORY_SCORE.bulk, pressing:
 export function mailItems(input: MailInput): DeskItem[] {
   const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, archive = false, spam = false, draft = false, links = {}, onDesk = new Set<string>(), report = false, studio = false, ivy = false } = input;
   const suspicion = input.suspicion ?? { vips, vipNames: new Map<string, string>(), ownDomains: [] };
-  return mail.filter((m) => m.unread).map((m): DeskItem => {
+  return mail.map((m): DeskItem => {
     const sender = m.from.name ?? m.from.address;
     const reasons = suspicionOf(m, suspicion, classified?.get(m.id)?.suspicious === true);
     if (reasons.length > 0) return suspiciousItem(m, reasons, input, { spam, report });

@@ -123,7 +123,7 @@ describe("ranking with classifications", () => {
 describe("the classification pass", () => {
   const input = (mails: SourceMail[], now = NOW) => ({ now, mail: mails.map((m) => ({ ...m, sourceId: "work-mail" })), events: [KUNDEN], vips: ["boss@example.org"] });
 
-  it("classifies each unread mail once, caches it and sends the contract stdin", async () => {
+  it("classifies each inbox mail once, caches it and sends the contract stdin", async () => {
     const seen: ClassifierRequest[] = [];
     const run: ClassifierRunner = async (req) => {
       seen.push(req);
@@ -133,7 +133,7 @@ describe("the classification pass", () => {
     const read = mail("r1", "Old", { unread: false });
     await c.kick(db, input([NEWSLETTER, read]));
     await c.kick(db, input([NEWSLETTER, read]));
-    expect(seen).toHaveLength(1);
+    expect(seen).toHaveLength(2);
     expect(seen[0]).toEqual({
       mail: { id: "n1", from: NEWSLETTER.from, subject: NEWSLETTER.subject, firstParagraph: "Hello.", receivedAt: NEWSLETTER.receivedAt },
       meetings: [{ key: KUNDEN_KEY, title: KUNDEN.title, start: KUNDEN.start }],
@@ -143,7 +143,7 @@ describe("the classification pass", () => {
       examples: [],
       examplesBasis: "sender",
     });
-    expect(readClassifications(db, ["n1", "r1"])).toEqual(new Map([["n1", { category: "bulk", reason: "A newsletter." }]]));
+    expect(readClassifications(db, ["n1", "r1"])).toEqual(new Map([["n1", { category: "bulk", reason: "A newsletter." }], ["r1", { category: "bulk", reason: "A newsletter." }]]));
   });
 
   it("offers meetings two weeks ahead and links one only once it is within three days", async () => {
@@ -241,7 +241,7 @@ describe("composeDesk with a classifier", () => {
     await c.kick(db, { now: NOW, mail: [], events: [], vips: [] });
     expect(seen[0]?.corrections).toEqual([{ kind: "mail", source: "ops@stats.example", mode: "keep", label: "“Weekly numbers” from ops@stats.example: the person would keep it in the inbox" }]);
     expect(view.mailClassifier).toEqual({ kind: "command", command: "desk-classify-mail.ts", keyNeeded: false, keyFound: false });
-    expect(classifierLines(view.mailClassifier ?? null)[0]).toBe("A command sorts your unread mail: desk-classify-mail.ts.");
+    expect(classifierLines(view.mailClassifier ?? null)[0]).toBe("A command sorts your inbox mail: desk-classify-mail.ts.");
   });
 
   it("ignores cached classifications when no classifier is configured", async () => {
@@ -321,8 +321,8 @@ describe("the classifier config", () => {
 describe("Settings", () => {
   it("shows the provider read-only and whether its key was found", () => {
     expect(classifierLines({ kind: "endpoint", host: "api.spark.switch.ch", model: "coder", keyNeeded: true, keyFound: false }).join(" "))
-      .toBe("A model sorts your unread mail: coder at api.spark.switch.ch. Its API key was not found, so the Desk sorts mail by shared words until it is. Change it in the stack config.");
-    expect(classifierLines(null)[0]).toMatch(/^The Desk sorts unread mail by the words/);
+      .toBe("A model sorts your inbox mail: coder at api.spark.switch.ch. Its API key was not found, so the Desk sorts mail by shared words until it is. Change it in the stack config.");
+    expect(classifierLines(null)[0]).toMatch(/^The Desk sorts inbox mail by the words/);
   });
 });
 

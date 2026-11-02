@@ -110,9 +110,9 @@ describe("mail on the Desk", () => {
     expect(item?.more?.find((a) => a.id === "vip.add")).toMatchObject({ target: "coord@example.com", wired: true });
   });
 
-  it("leaves read mail off the Desk and ranks other unread mail low", () => {
+  it("keeps read mail on the Desk alongside unread mail", () => {
     const items = mailItems({ now: NOW, mail: [mail({ unread: false }), mail({ id: "m2", from: { address: "news@x.ch" }, subject: "Newsletter" })], events: [], vips: new Set() });
-    expect(items.map((i) => i.key)).toEqual(["mail:m2"]);
+    expect(items.map((i) => i.key)).toEqual(["mail:m1@x", "mail:m2"]);
     expect(items[0]?.score).toBeLessThan(20);
   });
 });
@@ -153,6 +153,16 @@ describe("composeDesk with command sources", () => {
     });
     expect(view.sources).toContainEqual({ id: "odd", ok: true });
     expect(view.systems.some((line) => line.startsWith("The odd source sent 2 entries the Desk could not read: events[0].start:"))).toBe(true);
+  });
+
+  it("keeps a read work message visible and removes it when it leaves the source inbox", async () => {
+    let present = true;
+    const view = () => composeDesk(db, { ...DESK, sources: [DESK.sources[1]].filter(source => source !== undefined) }, undefined, {
+      now: NOW, sourceCache: new SourceCache(async () => JSON.stringify({ items: present ? [mail({ unread: false })] : [] })),
+    });
+    expect((await view()).items).toContainEqual(expect.objectContaining({ key: "mail:m1@x", source: "work-mail", area: "switch" }));
+    present = false;
+    expect((await view()).items).toEqual([]);
   });
 });
 
