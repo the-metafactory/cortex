@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiFailure } from "../lib/api";
-import { importSession, readSource, startConversation, type ObjectRef, type SourceConversations } from "../lib/conversations";
+import { failureText as failure, importSession, readSource, startConversation, type ObjectRef, type SourceConversations } from "../lib/conversations";
 import "./desk-conversation.css";
-
-const failure = (error: unknown, fallback: string): string => (error instanceof ApiFailure ? error.info.message : fallback);
 
 export function SourceConversationList({ data, pending, onResume, onImport, onNew, newLabel }: {
   data: SourceConversations;
@@ -55,7 +52,7 @@ export function SourceConversations({ source, onOpen, newLabel = "New conversati
   const starter = useStartConversation(onOpen);
   useEffect(() => {
     const controller = new AbortController();
-    setData(null);
+    setData(null); setError(null);
     readSource(source, controller.signal).then(setData).catch((err: unknown) => { if (!controller.signal.aborted) setError(failure(err, "Conversations are unavailable right now.")); });
     return () => controller.abort();
   }, [source.owner, source.id]);

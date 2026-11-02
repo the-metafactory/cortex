@@ -1,6 +1,6 @@
 import { ConversationError, type HostStatus } from "../../../conversations/host";
 import { AttachmentUploadSchema, CreateConversationSchema, DraftSchema, InputRequestSchema } from "../../../conversations/types";
-import { applyStudioOutcome, ImportSchema, isImported, importStudioSession, OutcomeSchema, sourceConversations, SourceQuerySchema, StartSchema, startFromSource, type StudioConversationDeps } from "./conversation-studio";
+import { applyStudioOutcome, ImportSchema, isImported, withStudio, importStudioSession, OutcomeSchema, sourceConversations, SourceQuerySchema, StartSchema, startFromSource, type StudioConversationDeps } from "./conversation-studio";
 import { checkRebindGuard, enforceMutationAuth, type MutationGuardContext } from "./mutation-guard";
 import { DEFAULT_LOCAL_PRINCIPAL } from "./networks-admission";
 
@@ -76,7 +76,7 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
     const [, , part, inputId] = match;
     if (!part) {
       if (req.method !== "GET") return notAllowed("GET");
-      return reply(200, { ok: true, ...(await host.detail(id)) });
+      return reply(200, { ok: true, ...(await withStudio(host, id, await host.detail(id))) });
     }
     if (part === "draft") {
       if (req.method !== "PUT" || inputId) return notAllowed("PUT");

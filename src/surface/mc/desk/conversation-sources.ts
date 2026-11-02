@@ -9,7 +9,7 @@ import { REQUEST_TRAILER, spawnGit, type GitRunner } from "./studio/git";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioThreadView, type StudioView } from "./studio/view";
 
-const FRESH_MS = 2_000;
+const FRESH_MS = 5_000;
 const gone: SourceState = { state: "unavailable", reason: "gone" };
 const unauthorized: SourceState = { state: "unavailable", reason: "unauthorized" };
 

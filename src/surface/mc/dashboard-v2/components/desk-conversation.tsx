@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionEnd } from "../../desk/studio/session-schema";
-import { ApiFailure } from "../lib/api";
 import {
-  chooseOutcome, entryViews, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel,
+  chooseOutcome, entryViews, failureText as failure, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel,
   type ConversationDetail, type ConversationEntry, type OperationRecord,
 } from "../lib/conversations";
 import "./desk-conversation.css";
@@ -11,7 +10,6 @@ const BUSY_MS = 2_000;
 const IDLE_MS = 15_000;
 const DRAFT_MS = 600;
 
-const failure = (error: unknown, fallback: string): string => (error instanceof ApiFailure ? error.info.message : fallback);
 
 export function useConversation(id: string) {
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
@@ -23,12 +21,17 @@ export function useConversation(id: string) {
   const saved = useRef<string | null>(null);
   const latest = useRef<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seen = useRef("");
 
-  const load = useCallback(async (signal?: AbortSignal): Promise<void> => {
+  const load = useCallback(async (signal?: AbortSignal, full = true): Promise<void> => {
     try {
-      const [next, list] = await Promise.all([readConversation(id, signal), readEntries(id, signal)]);
+      const next = await readConversation(id, signal);
+      const signature = JSON.stringify([next.conversation.activity, next.pending.map(p => [p.inputId, p.status])]);
+      const list = full || signature !== seen.current ? await readEntries(id, signal) : null;
       if (signal?.aborted) return;
-      setDetail(next); setEntries(list); setError(null);
+      seen.current = signature;
+      setDetail(next); setError(null);
+      if (list) setEntries(list);
       if (saved.current === null) { saved.current = next.draft; latest.current = next.draft; setDraftState(next.draft); }
     } catch (err) {
       if (!signal?.aborted) setError(failure(err, "The conversation could not be read. Retry when Mission Control is available."));
@@ -39,7 +42,7 @@ export function useConversation(id: string) {
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
-    const every = setInterval(() => { void load(controller.signal); }, busy ? BUSY_MS : IDLE_MS);
+    const every = setInterval(() => { void load(controller.signal, !busy); }, busy ? BUSY_MS : IDLE_MS);
     return () => { controller.abort(); clearInterval(every); };
   }, [load, busy]);
 

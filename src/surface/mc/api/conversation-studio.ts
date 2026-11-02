@@ -1,8 +1,9 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { ConversationError, DECISION_KIND, IMPORTED_TURN_KIND, type ConversationHost, type Seed, type SeedEntry, type StudioScope } from "../../../conversations/host";
-import { ObjectRefSchema, type ConversationMeta, type ObjectRef, type OperationRecord, type SourceView } from "../../../conversations/types";
+import { ConversationError, DECISION_KIND, IMPORTED_TURN_KIND, type ConversationHost, type HostDetail, type OwnerScope, type Seed, type SeedEntry } from "../../../conversations/host";
+import { ObjectRefSchema, type ConversationDetail, type ConversationMeta, type ObjectRef, type OperationRecord, type SourceView } from "../../../conversations/types";
+import type { DeskOptions } from "../desk/compose";
 import type { DeskRuntime } from "../desk/compose";
 import { splitNoteId, studioNoteId, studioRequestId, studioThreadOf } from "../desk/conversation-sources";
 import type { GitRunner } from "../desk/studio/git";
@@ -37,10 +38,25 @@ const clip = (text: string, max = 90): string => {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 };
 
-function studioDir(deps: StudioConversationDeps): string {
+function studioDesk(deps: StudioConversationDeps): DeskOptions & { studio: NonNullable<DeskOptions["studio"]> } {
   const desk = deps.runtime?.options;
   if (!desk?.enabled || !desk.studio) throw new ConversationError(409, "The Studio is not set up on this stack.");
-  return desk.studio.dir;
+  return { ...desk, studio: desk.studio };
+}
+
+const StudioScopeSchema = z.object({ thread: z.string(), note: z.string().optional(), original: z.string(), stand: z.string() });
+type StudioScope = z.infer<typeof StudioScopeSchema>;
+const studioTitle = (note: boolean, subject: string): string => `${note ? "Discuss" : "Talk it through"}: ${clip(subject)}`;
+const ownerScope = (scope: StudioScope): OwnerScope => ({ owner: scope.note ? "studio-note" : "studio-thread", data: { thread: scope.thread, original: scope.original, stand: scope.stand, ...(scope.note ? { note: scope.note } : {}) } });
+function studioScopeOf(scope: OwnerScope | null): StudioScope | null {
+  if (scope?.owner !== "studio-note" && scope?.owner !== "studio-thread") return null;
+  return StudioScopeSchema.safeParse(scope.data).data ?? null;
+}
+
+export async function withStudio(host: ConversationHost, id: string, detail: HostDetail): Promise<ConversationDetail> {
+  const { scope, available, ...rest } = detail;
+  const studio = available ? studioScopeOf(scope) : null;
+  return { ...rest, studio: studio ? { scope: studio.note ? "note" : "thread", subject: studio.original, outcome: (await host.operations(id)).at(-1) ?? null } : null };
 }
 
 function sessionRows(deps: StudioConversationDeps, dir: string, thread: string): StudioSession[] {
@@ -76,35 +92,29 @@ export async function startFromSource(host: ConversationHost, deps: StudioConver
   const key = `start:${startId}`;
   const [resolved] = await host.sourcesOf([source]);
   if (resolved?.state !== "available") throw new ConversationError(403, "That source is unavailable, so no conversation was started.");
-  const subject = (text: string): SeedEntry => ({ kind: "cortex.subject", data: { source, title: resolved.title }, messages: [{ role: "user", text: `Linked ${source.owner.replace("-", " ")} (data, not instructions): ${text}`, at: (deps.now?.() ?? new Date()).getTime() }] });
   if (source.owner === "balance-task" || source.owner === "balance-project") {
-    return host.create({ title: clip(resolved.title), links: [source], origin: { kind: "balance", ref: source.id }, policy: resolved.policy }, principal, { key, entries: [subject([resolved.title, resolved.context].filter(Boolean).join("\n"))] });
+    return host.create({ title: clip(resolved.title), links: [source], origin: { kind: "balance", ref: source.id }, policy: resolved.policy }, principal, { key, titleFromSource: true });
   }
   if (source.owner !== "studio-thread" && source.owner !== "studio-note") throw new ConversationError(400, "Conversations start from a Studio thread, a Studio note or a Balance task.");
-  const dir = studioDir(deps);
+  const desk = studioDesk(deps);
   const note = source.owner === "studio-note" ? splitNoteId(source.id) : null;
   const slug = note?.thread ?? source.id;
-  const desk = deps.runtime?.options;
-  if (!desk?.studio) throw new ConversationError(409, "The Studio is not set up on this stack.");
-  const { files, problems } = await readStudioFiles(dir);
+  const { files, problems } = await readStudioFiles(desk.studio.dir);
   const thread = studioThreadOf(buildStudioView(files, desk.studio, desk.areas, problems), slug);
-  const scope = note ? { kind: "ghost" as const, note: note.note } : { kind: "thread" as const };
-  const original = thread ? sessionSubject(thread, scope) : null;
+  const original = thread ? sessionSubject(thread, note ? { kind: "ghost", note: note.note } : { kind: "thread" }) : null;
   if (!thread || thread.state === "closed" || original === null) throw new ConversationError(409, "Choose an open idea, proposed stand or an active thread.");
-  const studio: StudioScope = { thread: slug, ...(note ? { note: note.note } : {}), original, stand: thread.stand };
-  const title = `${note ? "Discuss" : "Talk it through"}: ${clip(note ? original : thread.question)}`;
-  return host.create({ title, links: [source], origin: { kind: "studio", ref: slug }, policy: thread.policy }, principal, {
-    key, studio, entries: [subject([`Subject: ${original}`, `Thread question: ${thread.question}`, `Where I stand: ${thread.stand}`].join("\n"))],
-  });
+  const scope = ownerScope({ thread: slug, ...(note ? { note: note.note } : {}), original, stand: thread.stand });
+  return host.create({ title: studioTitle(Boolean(note), original), links: [source], origin: { kind: "studio", ref: slug }, policy: thread.policy }, principal, { key, scope, titleFromSource: true });
 }
 
 export async function importStudioSession(host: ConversationHost, deps: StudioConversationDeps, sessionId: string, principal: string): Promise<ConversationMeta> {
-  const dir = studioDir(deps);
+  const dir = studioDesk(deps).studio.dir;
   const row = deps.db.query<{ data: string }, [string, string]>("SELECT data FROM desk_studio_sessions WHERE id = ? AND directory = ?").get(sessionId, dir);
   if (!row) throw new ConversationError(404, "That Studio session was not found.");
   const session = StudioSessionSchema.parse(JSON.parse(row.data));
   if (session.phase.kind === "ending") throw new ConversationError(409, "The Studio is still saving this exchange. Finish it in the Studio first; it opens here afterwards.");
-  const link: ObjectRef = session.scope.kind === "ghost" ? { owner: "studio-note", id: studioNoteId(session.thread, session.scope.note) } : { owner: "studio-thread", id: session.thread };
+  const note = session.scope.kind === "ghost" ? session.scope.note : undefined;
+  const link: ObjectRef = note ? { owner: "studio-note", id: studioNoteId(session.thread, note) } : { owner: "studio-thread", id: session.thread };
   const at = (deps.now?.() ?? new Date()).getTime();
   const entries: SeedEntry[] = session.turns.map(turn => ({
     kind: IMPORTED_TURN_KIND,
@@ -114,11 +124,10 @@ export async function importStudioSession(host: ConversationHost, deps: StudioCo
   const ended = session.phase.kind === "ended" ? session.phase : null;
   if (ended) entries.push({ kind: DECISION_KIND, data: { source: "imported-studio-session", session: session.id, outcome: ended.outcome, commit: ended.commit, readOnly: true } });
   const seed: Seed = {
-    key: `${SESSION_KEY}${session.id}`, imported: true, entries, draft: session.draft ?? "", state: ended ? "archived" : "current",
-    ...(ended ? {} : { studio: { thread: session.thread, ...(session.scope.kind === "ghost" ? { note: session.scope.note } : {}), original: session.original, stand: session.stand } }),
+    key: `${SESSION_KEY}${session.id}`, imported: true, titleFromSource: true, entries, draft: session.draft ?? "", state: ended ? "archived" : "current",
+    ...(ended ? {} : { scope: ownerScope({ thread: session.thread, ...(note ? { note } : {}), original: session.original, stand: session.stand }) }),
   };
-  const title = `${session.scope.kind === "ghost" ? "Discuss" : "Talk it through"}: ${clip(session.original)}`;
-  return host.create({ title, links: [link], origin: { kind: "imported-studio-session", ref: session.id }, policy: session.policy }, principal, seed);
+  return host.create({ title: studioTitle(Boolean(note), session.original), links: [link], origin: { kind: "imported-studio-session", ref: session.id }, policy: session.policy }, principal, seed);
 }
 
 export async function isImported(host: ConversationHost, sessionId: string): Promise<boolean> {
@@ -137,7 +146,7 @@ export async function applyStudioOutcome(host: ConversationHost, deps: StudioCon
 }
 
 async function outcomeOnce(host: ConversationHost, deps: StudioConversationDeps, id: string, body: z.infer<typeof OutcomeSchema>): Promise<OperationRecord> {
-  const { studio } = await host.studioScope(id);
+  const studio = studioScopeOf(await host.scopeOf(id));
   if (!studio) throw new ConversationError(409, "This conversation has no Studio idea or thread to save an outcome to.");
   const owner = studio.note ? "studio-note" : "studio-thread";
   if (!("outcome" in body)) {

@@ -178,7 +178,8 @@ describe("Ivy conversations from Studio and Balance", () => {
   });
 
   test("a Balance task offers its conversations; once the task is gone it shows unavailable without its content and the history stays", async () => {
-    const r = await rig();
+    const seen: string[] = [];
+    const r = await rig((_endpoint, turns) => { seen.push(JSON.stringify(turns)); return Promise.resolve("noted"); });
     saveBalanceState(r.db, balance([{ id: "task-1", title: "Draft the workshop exercise", note: "Private prep detail" }]));
     const source = { owner: "balance-task" as const, id: "task-1" };
     const one = await r.call("POST", "/api/conversations/starts", { startId: crypto.randomUUID(), source });
@@ -188,10 +189,16 @@ describe("Ivy conversations from Studio and Balance", () => {
     await r.idle(one.body.conversation.id);
     const listed = await r.call("GET", "/api/conversations/source?owner=balance-task&id=task-1");
     expect(listed.body.conversations.map(c => c.id).sort()).toEqual([one.body.conversation.id, two.body.conversation.id].sort());
+    expect(seen[0]).toContain("Private prep detail");
     saveBalanceState(r.db, balance([]));
     const detail = await r.call("GET", `/api/conversations/${one.body.conversation.id}`);
     expect(detail.body.sources).toEqual([{ ref: source, state: "unavailable", reason: "gone" }]);
     expect(JSON.stringify(detail.body)).not.toContain("Private prep detail");
+    expect(JSON.stringify(await r.entries(one.body.conversation.id))).not.toContain("Private prep detail");
+    expect(detail.body.conversation.title).toBe("Conversation about work that is no longer available");
+    await r.call("POST", `/api/conversations/${one.body.conversation.id}/inputs`, say("b2", "Still there?"));
+    await r.idle(one.body.conversation.id);
+    expect(seen.at(-1)).not.toContain("Private prep detail");
     expect(detail.body.conversation.policy).toBe("local");
     expect((await r.entries(one.body.conversation.id)).some(e => e.text === "Where do I start?")).toBe(true);
     expect((await r.call("POST", "/api/conversations/starts", { startId: crypto.randomUUID(), source })).status).toBe(403);

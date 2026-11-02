@@ -1,7 +1,9 @@
 import type { ConversationDetail, ConversationEntry, ConversationMeta, ObjectRef, OperationRecord, SubmissionView } from "../../../../conversations/types";
 import type { ImportableSession, SourceConversations } from "../../api/conversation-studio";
 import type { SessionEnd } from "../../desk/studio/session-schema";
-import { getJson, postJson } from "./api";
+import { ApiFailure, getJson, postJson } from "./api";
+
+export const failureText = (error: unknown, fallback: string): string => (error instanceof ApiFailure ? error.info.message : fallback);
 
 export type { ConversationDetail, ConversationEntry, ConversationMeta, ImportableSession, ObjectRef, OperationRecord, SourceConversations, SubmissionView };
 
@@ -65,7 +67,6 @@ export function entryViews(entry: ConversationEntry): EntryView[] {
       reply ? { kind: "message", who: "ivy", text: reply, note: from } : { kind: "activity", text: "No answer was received for this earlier turn." },
     ];
   }
-  if (entry.kind === "cortex.subject") return [{ kind: "activity", text: `Started from ${text(record(data.source).owner).replace("-", " ")}: ${text(data.title)}` }];
   if (entry.kind === "cortex.decision") {
     const outcome = record(data.outcome);
     const commit = text(data.commit).slice(0, 7);
