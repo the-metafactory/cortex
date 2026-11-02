@@ -2,13 +2,14 @@ import type { Database } from "bun:sqlite";
 import { findNode } from "../../../balance";
 import type { HostSources } from "../../../conversations/host";
 import type { ObjectRef, OperationRecord, SourceState } from "../../../conversations/types";
-import { balanceWriter, hasBalanceState } from "./balance-conversation-writer";
+import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-conversation-writer";
 import { loadBalanceState } from "./balance-store";
 import { studioRequestId } from "./conversation-ids";
 import type { DeskOptions } from "./compose";
 import { REQUEST_TRAILER, spawnGit, type GitRunner } from "./studio/git";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioThreadView, type StudioView } from "./studio/view";
+import type { DeskItem } from "./types";
 
 const FRESH_MS = 5_000;
 const gone: SourceState = { state: "unavailable", reason: "gone" };
@@ -30,6 +31,7 @@ export interface SourceDeps {
   desk: () => DeskOptions | undefined;
   git?: GitRunner;
   now?: () => number;
+  deskItems?: () => Promise<DeskItem[]>;
 }
 
 export function conversationSources(deps: SourceDeps): HostSources {
@@ -74,7 +76,8 @@ export function conversationSources(deps: SourceDeps): HostSources {
     const sha = r.stdout.trim();
     return sha ? { found: true, canonicalId: sha } : { found: false };
   };
-  const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps) };
+  const deskItems = deps.deskItems;
+  const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps), ...(deskItems ? { "balance-inbox-task": balanceInboxWriter({ ...deps, deskItems }) } : {}) };
   return {
     get writers() {
       const desk = deps.desk();

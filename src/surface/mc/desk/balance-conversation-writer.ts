@@ -6,9 +6,10 @@ import { STALE_OUTLINE } from "./balance-outline";
 import { loadBalanceState } from "./balance-store";
 import type { DeskOptions } from "./compose";
 import { operationUuid } from "./conversation-ids";
-import { changeMyDay, loadMeta, localDay, readMyDay } from "./my-day";
+import { changeMyDay, loadMeta, localDay, readMyDay, sourceIdentity } from "./my-day";
 import { withStudioProjection } from "./studio-my-day";
 import type { StudioProjection } from "./studio-outline";
+import type { DeskItem } from "./types";
 
 export interface BalanceWriterDeps {
   db: Database;
@@ -66,13 +67,15 @@ function addCommand(kind: BalanceKind, fields: Record<string, string>, parent: s
   return parsed.data;
 }
 
-function readReceipt(db: Database, operation: OperationRecord): ReadbackResult {
+function readReceipt(db: Database, operationId: string): ReadbackResult {
   try {
     const state = loadBalanceState(db);
     if (!state) return null;
-    const id = operationUuid(operation.operationId);
-    const outlineId = loadMeta(db).receipts.find(r => r.id === id)?.outlineId;
-    return outlineId && findNode(state.outline, outlineId) ? { found: true, canonicalId: outlineId } : { found: false };
+    const id = operationUuid(operationId);
+    const meta = loadMeta(db);
+    const outlineId = meta.receipts.find(r => r.id === id)?.outlineId;
+    const held = outlineId !== undefined && (findNode(state.outline, outlineId) !== null || meta.inbox.some(node => node.id === outlineId));
+    return outlineId && held ? { found: true, canonicalId: outlineId } : { found: false };
   } catch {
     return null;
   }
@@ -116,6 +119,40 @@ export function balanceWriter(kind: BalanceKind, deps: BalanceWriterDeps): Owner
       if (!desk?.enabled) return failed("The Desk is turned off on this stack.");
       return withStudioProjection(desk, studio => add(desk, request, studio));
     },
-    readback: (operation: OperationRecord): Promise<ReadbackResult> => Promise.resolve(readReceipt(deps.db, operation)),
+    readback: (operation: OperationRecord): Promise<ReadbackResult> => Promise.resolve(readReceipt(deps.db, operation.operationId)),
+  };
+}
+
+export interface InboxWriterDeps extends BalanceWriterDeps {
+  deskItems: () => Promise<DeskItem[]>;
+}
+
+export function balanceInboxWriter(deps: InboxWriterDeps): OwnerWriter {
+  const clock = deps.now ?? Date.now;
+  const move = (desk: DeskOptions, request: CreateRequest, item: DeskItem, studio: StudioProjection | undefined): CreateResult => {
+    const now = clock();
+    let outlineId: string | undefined;
+    try {
+      outlineId = changeMyDay({ db: deps.db, desk, now, date: localDay(now), requestId: operationUuid(request.operationId), command: { op: "todo", key: item.key, fingerprint: sourceIdentity(item) }, source: item, studio }).outlineId;
+    } catch (error) {
+      if (!ownerRefusal(error)) throw error;
+      return failed(error.message);
+    }
+    if (!outlineId) throw new Error("Balance answered without the Inbox task's id.");
+    return { state: "created", canonicalId: outlineId };
+  };
+  return {
+    create: async request => {
+      const desk = deps.desk();
+      if (!desk?.enabled) return failed("The Desk is turned off on this stack.");
+      const earlier = readReceipt(deps.db, request.operationId);
+      if (earlier?.found) return { state: "created", canonicalId: earlier.canonicalId };
+      const item = (await deps.deskItems()).find(i => i.key === request.fields.item);
+      if (request.signal.aborted) throw new Error("The conversation stopped waiting before Balance was called.");
+      if (!item) return failed("That Day item is no longer on the Desk.");
+      if (item.title.trim() !== request.fields.title) return failed("The Day item changed since it was proposed, or its title was edited; the Inbox task takes the item's own title.");
+      return withStudioProjection(desk, studio => move(desk, request, item, studio));
+    },
+    readback: (operation: OperationRecord): Promise<ReadbackResult> => Promise.resolve(readReceipt(deps.db, operation.operationId)),
   };
 }

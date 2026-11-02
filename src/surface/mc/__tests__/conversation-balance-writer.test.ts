@@ -14,6 +14,7 @@ import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import type { DeskRuntime } from "../desk/compose";
 import { conversationSources, operationUuid } from "../desk/conversation-sources";
 import { loadMeta, readMyDay } from "../desk/my-day";
+import type { DeskItem } from "../desk/types";
 import { SCHEMA_SQL } from "../db/schema";
 
 const LABEL = "ai.meta-factory.cortex.balance-writer-test";
@@ -38,7 +39,7 @@ const GLIDER = { id: "project-glider", title: "Glider", weight: 50, ordering: "p
 
 interface Reply { ok: boolean; error: string; proposal: ProposalView; conversation: { id: string }; entries: ConversationEntry[]; types: { type: string; status: string }[] }
 
-async function rig(state: AppState | null = outline([GLIDER]), wrap?: (writer: OwnerWriter) => OwnerWriter) {
+async function rig(state: AppState | null = outline([GLIDER]), wrap?: (writer: OwnerWriter) => OwnerWriter, view: DeskItem[] = []) {
   const db = new Database(":memory:"); databases.push(db); for (const sql of SCHEMA_SQL) db.run(sql);
   if (state) saveBalanceState(db, state);
   const options = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [{ id: "lab", label: "Lab", color: "", repos: [], goals: [], policy: "local" as "cloud" | "local" }, { id: "home", label: "Home", color: "", repos: [], goals: [] }], sources: [] };
@@ -47,7 +48,7 @@ async function rig(state: AppState | null = outline([GLIDER]), wrap?: (writer: O
   const status: HostStatus = await openConversationHost({ dir: await dirs.make(), stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local: lane, cloud: lane }, turns: answering(() => "ok") });
   if (status.state !== "ready") throw new Error(status.reason);
   hosts.push(status.host);
-  const sources = conversationSources({ db, desk: () => options });
+  const sources = conversationSources({ db, desk: () => options, deskItems: () => Promise.resolve(view) });
   const writer = sources.writers?.["balance-task"];
   await status.host.attachSources(wrap && writer ? { ...sources, writers: { "balance-task": wrap(writer) } } : sources);
   const guard: MutationGuardContext = { isLoopback: true, allowedHostnames: buildAllowedHostnames("127.0.0.1"), listenPort: 8767, principals: new Set() };
@@ -232,5 +233,74 @@ describe("Balance project writer for conversation proposals", () => {
     expect(refused.body.proposal.feedback).toBe("failed");
     expect(refused.body.error).toBe("garden is not a configured area. Nothing was created.");
     expect(JSON.stringify(loadBalanceState(r.db))).toBe(before);
+  });
+});
+
+describe("Balance Inbox writer for conversation proposals", () => {
+  const MAIL: DeskItem = { key: "mail:probe-1@example.test", kind: "mail", source: "work-mail", area: "lab", urgency: "today", title: "Quote for the glider kit", why: "Unread", score: 1, actions: [], detail: { summary: "Can you confirm the order?", history: [], refs: [], links: [{ label: "Open", url: "message://probe-1" }] } };
+  const inboxRig = (view: DeskItem[] = [{ ...MAIL }]) => rig(outline([GLIDER]), undefined, view);
+  const inbox = (r: Awaited<ReturnType<typeof rig>>) => readMyDay(r.db, r.options, Date.now()).inbox;
+
+  test("the type is ready with a Desk view, and stays blocked without one", async () => {
+    const r = await inboxRig();
+    expect((await r.call("GET", "/api/conversations/capabilities")).body.types.find(c => c.type === "balance-inbox-task")?.status).toBe("ready");
+    expect(conversationSources({ db: r.db, desk: () => r.options }).writers?.["balance-inbox-task"]).toBeUndefined();
+    r.options.enabled = false;
+    expect((await r.call("GET", "/api/conversations/capabilities")).body.types.find(c => c.type === "balance-inbox-task")?.status).toBe("blocked:3032");
+  });
+
+  test("a confirmed proposal moves the Day item into the Inbox linked to its source, and an equal retry adds nothing", async () => {
+    const r = await inboxRig();
+    const id = await r.start();
+    const view = await r.propose(id, { item: MAIL.key, title: MAIL.title }, "balance-inbox-task");
+    const first = await r.confirm(id, view);
+    expect(first.status).toBe(200);
+    expect(first.body.proposal.feedback).toBe("created");
+    const operation = operationOf(first.body.proposal);
+    expect(inbox(r)).toHaveLength(1);
+    expect(inbox(r)[0]).toMatchObject({ id: operation.canonicalId, title: MAIL.title, note: `From work-mail: ${MAIL.key}\nmessage://probe-1` });
+    expect(loadMeta(r.db).sources).toMatchObject([{ taskId: operation.canonicalId, key: MAIL.key }]);
+    const again = await r.confirm(id, view);
+    expect(again.status).toBe(200);
+    expect(again.body.proposal.operation).toMatchObject({ operationId: operation.operationId, canonicalId: operation.canonicalId });
+    expect(inbox(r)).toHaveLength(1);
+    const writer = conversationSources({ db: r.db, desk: () => r.options, deskItems: () => Promise.resolve([]) }).writers?.["balance-inbox-task"];
+    expect(await writer?.readback(operation)).toEqual({ found: true, canonicalId: operation.canonicalId ?? "" });
+    expect(await writer?.readback({ ...operation, operationId: `${operation.operationId}9` })).toEqual({ found: false });
+  });
+
+  test("a second proposal for an item already in the Inbox answers the same task", async () => {
+    const r = await inboxRig();
+    const id = await r.start();
+    const first = operationOf((await r.confirm(id, await r.propose(id, { item: MAIL.key, title: MAIL.title }, "balance-inbox-task"))).body.proposal);
+    const second = await r.confirm(id, await r.propose(id, { item: MAIL.key, title: MAIL.title }, "balance-inbox-task"));
+    expect(second.body.proposal.feedback).toBe("created");
+    expect(operationOf(second.body.proposal).canonicalId).toBe(first.canonicalId);
+    expect(inbox(r)).toHaveLength(1);
+  });
+
+  test("a title that differs from the item's own is refused with 409 and the Inbox is unchanged", async () => {
+    const r = await inboxRig();
+    const id = await r.start();
+    const before = JSON.stringify(loadMeta(r.db));
+    const refused = await r.confirm(id, await r.propose(id, { item: MAIL.key, title: "Order the glider kit" }, "balance-inbox-task"));
+    expect(refused.status).toBe(409);
+    expect(refused.body.proposal.feedback).toBe("failed");
+    expect(refused.body.error).toBe("The Day item changed since it was proposed, or its title was edited; the Inbox task takes the item's own title. Nothing was created.");
+    expect(JSON.stringify(loadMeta(r.db))).toBe(before);
+  });
+
+  test("an item that left the Desk is refused with 409 and nothing is created", async () => {
+    const view = [{ ...MAIL }];
+    const r = await inboxRig(view);
+    const id = await r.start();
+    const proposal = await r.propose(id, { item: MAIL.key, title: MAIL.title }, "balance-inbox-task");
+    view.splice(0);
+    const before = JSON.stringify(loadMeta(r.db));
+    const refused = await r.confirm(id, proposal);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toBe("That Day item is no longer on the Desk. Nothing was created.");
+    expect(JSON.stringify(loadMeta(r.db))).toBe(before);
+    expect(inbox(r)).toHaveLength(0);
   });
 });
