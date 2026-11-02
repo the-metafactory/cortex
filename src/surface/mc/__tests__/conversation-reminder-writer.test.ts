@@ -68,8 +68,7 @@ describe("reminder writer for conversation proposals", () => {
 
   test("an unknown result stays uncertain, and Check never reruns the writer", async () => {
     const r = await rig();
-    const outcome = await r.timeoutThenCheck(PROBE);
-    expect(outcome.feedback.every(feedback => feedback === "uncertain") && outcome.runs === 1).toBe(true);
+    expect(await r.timeoutThenCheck(PROBE)).toStrictEqual({ runs: 1, feedback: ["uncertain", "uncertain"] });
     expect(r.calls[0]?.stdin.kind).toBe("reminder");
   });
 });

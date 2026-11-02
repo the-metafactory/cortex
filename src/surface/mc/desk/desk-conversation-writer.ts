@@ -25,7 +25,7 @@ export interface DeskWriterSpec<K extends DeskWriterKind> {
 }
 
 const NOTHING = "Nothing was created.";
-export const failed = (sentence: string): CreateResult => ({ state: "failed", error: `${sentence.trim().replace(/[.\s]+$/, "")}. ${NOTHING}` });
+const failed = (sentence: string): CreateResult => ({ state: "failed", error: `${sentence.trim().replace(/[.\s]+$/, "")}. ${NOTHING}` });
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})?$/;
 
 export const deskWriterArgv = (desk: DeskOptions | undefined, kind: DeskWriterKind): string[] | undefined => {
@@ -33,7 +33,7 @@ export const deskWriterArgv = (desk: DeskOptions | undefined, kind: DeskWriterKi
   return argv?.length ? argv : undefined;
 };
 
-export function argvOption(argv: readonly string[], flag: string): string | undefined {
+function argvOption(argv: readonly string[], flag: string): string | undefined {
   const at = argv.indexOf(flag);
   return at >= 0 ? argv[at + 1] : undefined;
 }
