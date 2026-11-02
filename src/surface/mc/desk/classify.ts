@@ -2,7 +2,6 @@ import type { Database } from "bun:sqlite";
 import { basename } from "node:path";
 import { z } from "zod";
 import { CLASSIFIER_FORM_ERROR } from "../../../common/types/config";
-import { isLoopbackSideband } from "../../../common/sideband/loopback";
 import { oneLine } from "./actions";
 import { CommandTimeout, runCommand, type CommandResult } from "./spawn";
 import type { SourceEvent, SourceMail } from "./sources/command";
@@ -153,8 +152,8 @@ const mailTextOf = (m: ClassifierMail): MailText => ({
   summary: m.firstParagraph ?? null,
 });
 
-export function classifierExamples(similar: SimilarDecisions, shareable: (sourceId: string | null) => boolean = () => true): ClassifierExample[] {
-  return similar.neighbours.filter((n) => shareable(n.entry.sourceId)).map(({ entry, action, similarity, weight }) => ({
+export function classifierExamples(similar: SimilarDecisions): ClassifierExample[] {
+  return similar.neighbours.map(({ entry, action, similarity, weight }) => ({
     category: entry.category,
     subject: entry.subject ?? "",
     summary: entry.summary ?? "",
@@ -375,12 +374,6 @@ export function commandClassifier(config: CommandConfig, run: CommandRunner = ru
   return (request, timeoutMs) => runJson(JSON.stringify(request), timeoutMs);
 }
 
-/** Whether a classifier may see a past decision from this source: a local-policy area's mail goes only to a loopback classifier. */
-export const shareableWith = (classifierLocal: boolean, localSources: ReadonlySet<string> = new Set()) => (sourceId: string | null): boolean =>
-  classifierLocal || sourceId === null || !localSources.has(sourceId);
-
-export const classifierIsLocal = (config: ModelConfig): boolean => !isCommand(config) && isLoopbackSideband(config.baseUrl);
-
 export const classifierRunner = (config: ClassifierConfig): ClassifierRunner => (isCommand(config) ? commandClassifier(config) : chatClassifier(config));
 
 export const classifierLabel = (config: ClassifierConfig): string => (isCommand(config) ? basename(config.command[0] ?? "command") : config.model);
@@ -463,7 +456,6 @@ export interface ClassifyInput {
   vips: string[];
   unimportant?: string[];
   corrections?: ClassifierCorrection[];
-  localSources?: ReadonlySet<string>;
 }
 
 /** Forgets one mail's classification, so the next pass sorts it again with what the log now knows. */
@@ -492,10 +484,6 @@ export class MailClassifier {
 
   get model(): string {
     return classifierLabel(this.config);
-  }
-
-  get local(): boolean {
-    return classifierIsLocal(this.config);
   }
 
   kick(db: Database, input: ClassifyInput): Promise<PassResult> {
@@ -540,7 +528,7 @@ export class MailClassifier {
     const meetings = upcomingMeetings(input.events, input.now, CLASSIFY_WINDOW_MS).map((e) => ({ key: eventKey(e), title: e.title, start: e.start }));
     const keys = new Set(meetings.map((m) => m.key));
     const pending = this.pending(db, input);
-    const similarity = pending.length > 0 && this.similarity ? this.similarity.load(db, input.now, input.localSources) : undefined;
+    const similarity = pending.length > 0 && this.similarity ? this.similarity.load(db, input.now) : undefined;
     for (const m of pending) {
       const similar = await this.similarTo(similarity, m);
       const request: ClassifierRequest = {
@@ -549,7 +537,7 @@ export class MailClassifier {
         vips: input.vips,
         unimportant,
         corrections,
-        examples: similar ? classifierExamples(similar, shareableWith(this.local, input.localSources)) : [],
+        examples: similar ? classifierExamples(similar) : [],
         examplesBasis: similar?.basis ?? "sender",
       };
       const started = this.clock();

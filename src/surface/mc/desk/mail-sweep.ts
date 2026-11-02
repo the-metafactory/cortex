@@ -4,7 +4,7 @@ import type { ListedMail } from "./mail-actions";
 import { mailFeatures } from "./mail-log";
 import { movedTarget, moveMail, refuse, undoMove, type MoveDeps, type MoveTarget } from "./mail-move";
 import { digestedIds, pendingRuleMail } from "./mail-rules";
-import { DEFAULT_SIMILARITY, embedderFor, groupBySimilarity, mailText, precedentLine, readVectors, textHash, vectorModel, type EmbedderConfig } from "./mail-similar";
+import { DEFAULT_SIMILARITY, groupBySimilarity, mailText, precedentLine, readVectors, textHash, vectorModel, type EmbedderConfig } from "./mail-similar";
 import { suspicionContext, suspicionOf, type SuspicionContext } from "./mail-suspicion";
 import type { SourceReading } from "./sources/command";
 import { SWEEP_WORDS } from "./mail-sweep-schema";
@@ -174,7 +174,6 @@ export const bundledKeys = (groups: readonly SweepGroup[]): Set<string> =>
 export interface SweepContext {
   embedder?: EmbedderConfig;
   ownDomains?: string[];
-  localSources: ReadonlySet<string>;
   handled?: { has(key: string): boolean };
   held?: ReadonlySet<string>;
 }
@@ -182,35 +181,24 @@ export interface SweepContext {
 export interface SweepOptions {
   mailEmbedder?: EmbedderConfig;
   mailOwnDomains?: string[];
-  areas: readonly { id: string; policy?: string }[];
 }
 
-export function sweepContext(desk: SweepOptions, readings: readonly SourceReading[], handled?: SweepContext["handled"]): SweepContext {
-  const local = new Set(desk.areas.filter((a) => a.policy === "local").map((a) => a.id));
+export function sweepContext(desk: SweepOptions, handled?: SweepContext["handled"]): SweepContext {
   return {
     ...(desk.mailEmbedder ? { embedder: desk.mailEmbedder } : {}),
     ...(desk.mailOwnDomains ? { ownDomains: desk.mailOwnDomains } : {}),
-    localSources: new Set(readings.filter((r) => r.area !== null && local.has(r.area)).map((r) => r.id)),
     ...(handled ? { handled } : {}),
   };
 }
 
-function vectorsOf(db: Database, mail: readonly SweepMember[], config: EmbedderConfig | undefined, localSources: ReadonlySet<string>, now: number): Map<string, Float32Array> {
+function vectorsOf(db: Database, mail: readonly SweepMember[], config: EmbedderConfig | undefined, now: number): Map<string, Float32Array> {
   const out = new Map<string, Float32Array>();
   if (!config) return out;
-  const byModel = new Map<string, { id: string; hash: string }[]>();
-  for (const m of mail) {
-    const access = embedderFor(config, localSources.has(m.sourceId));
-    if (!access) continue;
-    const model = vectorModel(access);
-    byModel.set(model, [...(byModel.get(model) ?? []), { id: m.id, hash: textHash(mailText({ subject: m.subject, summary: m.firstParagraph ?? null })) }]);
-  }
-  for (const [model, list] of byModel) {
-    const known = readVectors(db, model, list.map((x) => x.hash), now);
-    for (const { id, hash: h } of list) {
-      const v = known.get(h);
-      if (v) out.set(id, v);
-    }
+  const list = mail.map((m) => ({ id: m.id, hash: textHash(mailText({ subject: m.subject, summary: m.firstParagraph ?? null })) }));
+  const known = readVectors(db, vectorModel(config), list.map((x) => x.hash), now);
+  for (const { id, hash } of list) {
+    const v = known.get(hash);
+    if (v) out.set(id, v);
   }
   return out;
 }
@@ -230,7 +218,7 @@ export function listSweeps(db: Database, readings: readonly SourceReading[], ctx
     mail,
     classified: readClassifications(db, mail.map((m) => m.id)),
     suspicion,
-    vectors: vectorsOf(db, mail, ctx.embedder, ctx.localSources, now),
+    vectors: vectorsOf(db, mail, ctx.embedder, now),
     threshold: ctx.embedder?.threshold ?? DEFAULT_SIMILARITY.threshold,
     exclude: pendingRuleMail(db, mail, suspicion),
   });

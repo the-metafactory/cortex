@@ -11,7 +11,7 @@ import { MAX_FINDING, MAX_FINDINGS, MAX_INSTRUCTION, OPEN_STATES, type HandoffSt
 import { logMailDecision, mailFeatures, senderDomain, type MailFeatures } from "./mail-log";
 import type { MailForStudio } from "./mail-studio";
 import { replySubject } from "./mail-triage";
-import { ago, type AreaRule } from "./rank";
+import { ago } from "./rank";
 import { SingleFlight } from "./single-flight";
 import { oneLine } from "./studio/edit";
 import { clock, DAY_MS, startOfDay } from "./time";
@@ -114,10 +114,8 @@ export function handoffsByMail(rows: readonly HandoffRow[]): Map<string, Handoff
   return out;
 }
 
-/** Which model lane may read this mail: a local-policy area's mail only the local lane; any other area the cloud lane, else the local one. */
-export function handoffRoute(area: string | null, areas: readonly Pick<AreaRule, "id" | "policy">[], lanes: HandoffLanes): { route: ModelRoute; lane: ConversationLane } | { refused: string } {
-  const local = areas.some((a) => a.id === area && a.policy === "local");
-  if (local) return lanes.local ? { route: "local", lane: lanes.local } : { refused: "This mail's area keeps mail on a local model, and no local model lane is set up (mc.desk.conversations.local)." };
+/** Which model lane reads this mail: the cloud lane, else the local one, whatever the mail's area. */
+export function handoffRoute(lanes: HandoffLanes): { route: ModelRoute; lane: ConversationLane } | { refused: string } {
   if (lanes.cloud) return { route: "cloud", lane: lanes.cloud };
   if (lanes.local) return { route: "local", lane: lanes.local };
   return { refused: "No model lane is set up for Ivy (mc.desk.conversations)." };
@@ -149,7 +147,6 @@ export interface HandDeps {
   db: Database;
   writers: DeskWriters;
   maps: readonly AskMap[];
-  areas: readonly AreaRule[];
   lanes: HandoffLanes;
   run: WriterRunner;
   now: number;
@@ -175,7 +172,7 @@ export async function handMailToIvy(item: MailForStudio, input: HandInput, deps:
   if (busy && busy.state !== "failed") return refuse(409, busy.state === "working" ? "Ivy is already working on this mail." : "Ivy's draft for this mail is waiting for you in Catch-up.");
   const map = deps.maps[0];
   if (!map || !deps.writers.task?.length) return refuse(409, "Agent tasks are not set up on this stack, so the Desk cannot hand mail to Ivy.");
-  const routed = handoffRoute(item.area, deps.areas, deps.lanes);
+  const routed = handoffRoute(deps.lanes);
   if ("refused" in routed) return refuse(409, routed.refused);
   const asked = input.instruction?.trim().slice(0, MAX_INSTRUCTION) ?? "";
   const instruction = asked === "" ? null : asked;

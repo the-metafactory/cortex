@@ -1,6 +1,5 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
-import { isLoopbackSideband } from "../../../common/sideband/loopback";
 import { MissingKey, PREDICTED_ACTIONS, readApiKey, SIMILARITY_BASES, type KeyReader, type MailPrecedent, type MailPrecedents, type PredictedAction } from "./classify";
 import { MAIL_VECTORS_SQL } from "./mail-log-schema";
 import { queryMailLog, senderDomain, type MailLogAction, type MailLogEntry, type MailLogWhere } from "./mail-log";
@@ -20,7 +19,6 @@ export interface EmbedderAccess {
 }
 
 export interface EmbedderConfig extends EmbedderAccess {
-  local?: EmbedderAccess;
   threshold: number;
   neighbours: number;
   windowDays: number;
@@ -198,24 +196,12 @@ export const accessPaths = <T extends EmbedderAccess>(access: T, expand: (path: 
   ...(access.caFile ? { caFile: expand(access.caFile) } : {}),
 });
 
-export function resolveEmbedder(config: EmbedderConfig, expand: (path: string) => string): EmbedderConfig {
-  return { ...accessPaths(config, expand), ...(config.local ? { local: accessPaths(config.local, expand) } : {}) };
-}
-
-const isLocal = (access: EmbedderAccess): boolean => isLoopbackSideband(access.baseUrl);
-
-/** The endpoint that may read a mail: a local-policy area only ever goes to a local endpoint. */
-export function embedderFor(config: EmbedderConfig, local: boolean): EmbedderAccess | null {
-  if (!local) return config;
-  if (config.local && isLocal(config.local)) return config.local;
-  return isLocal(config) ? config : null;
-}
+export const resolveEmbedder = (config: EmbedderConfig, expand: (path: string) => string): EmbedderConfig => accessPaths(config, expand);
 
 export const vectorModel = (access: EmbedderAccess): string => `${access.baseUrl.replace(/\/+$/, "")}#${access.model}`;
 
 export const NO_EMBEDDER_NOTE = "matched by sender and mailing list, because no embedder is set up";
 export const EMBEDDER_DOWN_NOTE = "matched by sender and mailing list, because the embedder did not answer";
-export const LOCAL_ONLY_NOTE = "matched by sender and mailing list, because this area allows only a local embedder";
 
 const BATCH = 32;
 const RETRY_MS = 5 * 60_000;
@@ -241,7 +227,7 @@ export class MailSimilarity {
     return { neighbours: this.config?.neighbours ?? DEFAULT_SIMILARITY.neighbours, windowDays: this.config?.windowDays ?? DEFAULT_SIMILARITY.windowDays };
   }
 
-  load(db: Database, now: number, localSources: ReadonlySet<string> = new Set()): SimilarityContext {
+  load(db: Database, now: number): SimilarityContext {
     const { neighbours, windowDays } = this.limits;
     purgeVectors(db, now - windowDays * DAY_MS);
     const entries = latestDecisions(queryMailLog(db, { since: now - windowDays * DAY_MS, actions: LEARNED_ACTIONS, limit: 5000 }));
@@ -250,7 +236,6 @@ export class MailSimilarity {
     const fallback = (mail: MailText, note: string): SimilarDecisions => ({ basis: "sender", neighbours: senderDecisions(mail, others(entries, mail), neighbours), note });
     const config = this.config;
     if (!config) return { similar: (mail) => Promise.resolve(fallback(mail, NO_EMBEDDER_NOTE)) };
-    const isLocalSource = (sourceId: string | null): boolean => sourceId !== null && localSources.has(sourceId);
     const stores = new Map<string, Map<string, Float32Array>>();
     const storeFor = (access: EmbedderAccess): Map<string, Float32Array> => {
       const model = vectorModel(access);
@@ -276,30 +261,27 @@ export class MailSimilarity {
     const ready = async (access: EmbedderAccess): Promise<boolean> => {
       if (now < this.downUntil) return false;
       try {
-        const local = isLocal(access);
-        await vectorsFor(access, entries.filter((e) => local || !isLocalSource(e.sourceId)).map(mailText), config.maxPerPass);
+        await vectorsFor(access, entries.map(mailText), config.maxPerPass);
         return true;
       } catch (err) {
         this.fail(err, now);
         return false;
       }
     };
-    const checked = new Map<EmbedderAccess, boolean>();
+    let checked: Promise<boolean> | undefined;
     return {
       similar: async (mail) => {
-        const access = embedderFor(config, isLocalSource(mail.sourceId));
-        if (!access) return fallback(mail, LOCAL_ONLY_NOTE);
-        const ok = checked.get(access) ?? (await ready(access));
-        checked.set(access, ok);
+        checked ??= ready(config);
+        const ok = await checked;
         if (!ok || now < this.downUntil) return fallback(mail, EMBEDDER_DOWN_NOTE);
         const text = mailText(mail);
         try {
-          await vectorsFor(access, [text], 1);
+          await vectorsFor(config, [text], 1);
         } catch (err) {
           this.fail(err, now);
           return fallback(mail, EMBEDDER_DOWN_NOTE);
         }
-        const known = storeFor(access);
+        const known = storeFor(config);
         const query = known.get(textHash(text));
         if (!query) return fallback(mail, EMBEDDER_DOWN_NOTE);
         const candidates = others(entries, mail).flatMap((entry) => {

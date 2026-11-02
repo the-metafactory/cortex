@@ -41,7 +41,7 @@ import { listOpenNotes, type DeskNote } from "./notes";
 import { markInterrupts, meetingItems, NO_INTERRUPTIONS, readDeliveries, type InterruptLoop, type InterruptRules } from "./interrupt";
 import { listGrants, PROMOTABLE, PROMOTABLE_LABELS, readDone, type DoneEntry } from "./autonomy";
 import { applyCorrections, readCorrections } from "./corrections";
-import { classifierStatus, MAX_CORRECTIONS, readApiKey, shareableWith, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier, type ModelConfig } from "./classify";
+import { classifierStatus, MAX_CORRECTIONS, readApiKey, readClassifications, type ClassifierConfig, type ClassifierCorrection, type MailClassifier, type ModelConfig } from "./classify";
 import { voiceView, type VoiceOptions } from "./voice";
 import { learnedAction, WOULD, type EmbedderConfig } from "./mail-similar";
 import { readRoutines } from "./routines";
@@ -216,7 +216,7 @@ export async function composeDesk(
   const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
   const localAreas = new Set(desk.areas.filter((a) => a.policy === "local").map((a) => a.id));
   const localSources = new Set(readings.filter((r) => r.area !== null && localAreas.has(r.area)).map((r) => r.id));
-  if (classifier) void classifier.kick(db, { now, mail: mail.filter((m) => !ruleBound.has(m.id)), events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(db, shareableWith(classifier.local, localSources)), localSources });
+  if (classifier) void classifier.kick(db, { now, mail: mail.filter((m) => !ruleBound.has(m.id)), events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(db) });
   const classified = classifier ? readClassifications(db, mail.map((m) => m.id)) : undefined;
   const offerable = [...mail.filter((m) => m.unread), ...(mailGroups?.digests.groups ?? []).flatMap((g) => g.members)];
   const flagged = new Set([...readClassifications(db, offerable.map((m) => m.id))].filter(([, c]) => c.suspicious === true).map(([id]) => id));
@@ -333,8 +333,8 @@ function unreadableLine(r: SourceReading): string {
 
 const CORRECTED_SAYING: Partial<Record<string, string>> = { "not bulk": "; it is not bulk", matters: "; it matters" };
 
-function mailCorrections(db: Database, shareable: (sourceId: string | null) => boolean): ClassifierCorrection[] {
-  return queryMailLog(db, { where: "correction", limit: MAX_CORRECTIONS }).filter((e) => shareable(e.sourceId)).map((e) => {
+function mailCorrections(db: Database): ClassifierCorrection[] {
+  return queryMailLog(db, { where: "correction", limit: MAX_CORRECTIONS }).map((e) => {
     const action = learnedAction(e.action);
     return { kind: "mail", source: e.sender, mode: action ?? e.action, label: `“${e.subject ?? "(no subject)"}” from ${e.sender}: the person ${action ? WOULD[action] : `chose ${e.action}`}${CORRECTED_SAYING[e.category ?? ""] ?? ""}` };
   });
