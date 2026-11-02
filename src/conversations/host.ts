@@ -56,6 +56,8 @@ const CursorSchema = z.object({ pinned: z.boolean(), lastAt: z.string(), id: z.s
 type OverviewKey = z.infer<typeof CursorSchema>;
 const ATTACHMENT_LINE = /^\[attachment .*, sha256 [0-9a-f]{64}\]$/;
 const SNIPPET = 160;
+const OVERVIEW_BATCH = 16;
+const TRANSCRIPT_CACHE = 200;
 const NEXT: Record<OperationState, OperationState[]> = { proposed: ["confirmed"], confirmed: ["running"], running: ["created", "failed", "uncertain"], uncertain: ["created", "failed"], created: [], failed: [] };
 
 export class ConversationError extends Error {
@@ -335,10 +337,11 @@ export class ConversationHost {
       .filter(c => !after || overviewOrder(c.key, after) > 0)
       .sort((a, b) => overviewOrder(a.key, b.key));
     const rows: { key: OverviewKey; row: OverviewRow }[] = [];
-    for (const candidate of candidates) {
-      const row = await this.overviewRow(candidate.id, candidate.stored, terms, working);
-      if (row) rows.push({ key: candidate.key, row });
-      if (rows.length > query.limit) break;
+    const batch = Math.min(query.limit + 1, OVERVIEW_BATCH);
+    for (let at = 0; at < candidates.length && rows.length <= query.limit; at += batch) {
+      const slice = candidates.slice(at, at + batch);
+      const built = await Promise.all(slice.map(c => this.overviewRow(c.id, c.stored, terms, working)));
+      slice.forEach((c, i) => { const row = built[i]; if (row) rows.push({ key: c.key, row }); });
     }
     const page = rows.slice(0, query.limit);
     const last = page.at(-1);
@@ -346,7 +349,7 @@ export class ConversationHost {
   }
 
   private async overviewRow(id: string, listed: Stored, terms: string[], working: Set<number>): Promise<OverviewRow | null> {
-    const lines = await this.transcript(id, listed);
+    const lines = terms.length > 0 ? await this.transcript(id, listed) : [];
     const matches = (title: string): boolean => {
       const haystack = [title, ...lines.map(line => line.text)].join("\n").toLowerCase();
       return terms.every(term => haystack.includes(term));
@@ -357,7 +360,7 @@ export class ConversationHost {
     if (terms.length > 0 && !matches(meta.title)) return null;
     const hits = (line: ExchangeLine): number => terms.filter(term => line.text.toLowerCase().includes(term)).length;
     const best = terms.length === 0 ? null : lines.reduce<ExchangeLine | null>((top, line) => hits(line) > (top ? hits(top) : 0) ? line : top, null);
-    const latest = lines.at(-1);
+    const latest = terms.length > 0 ? lines.at(-1) : await this.latestLine(stored);
     return {
       conversation: { ...meta, links: sources.flatMap(source => source.state === "available" ? [source.ref] : []) },
       linked: sources.map(source => ({ owner: source.ref.owner, title: source.state === "available" ? source.title : null })),
@@ -366,12 +369,27 @@ export class ConversationHost {
     };
   }
 
+  private async latestLine(stored: Stored): Promise<ExchangeLine | undefined> {
+    const conversation = await this.conversation(stored);
+    let cursor: Parameters<Conversation["entries"]>[2];
+    do {
+      const page = await conversation.entries({}, 20, cursor, this.context);
+      for (const entry of page.items) {
+        const line = exchangeLines(entry).at(-1);
+        if (line) return line;
+      }
+      cursor = page.next;
+    } while (cursor);
+    return undefined;
+  }
+
   private async transcript(id: string, stored: Stored): Promise<ExchangeLine[]> {
     const conversation = await this.conversation(stored);
     const newest = await conversation.entries({}, 1, undefined, this.context);
     const head = newest.items[0] ? String(newest.items[0].id) : "";
     const cached = this.transcripts.get(id);
-    if (cached?.head === head) return cached.lines;
+    this.transcripts.delete(id);
+    if (cached?.head === head) { this.transcripts.set(id, cached); return cached.lines; }
     const lines: ExchangeLine[] = [];
     let cursor: Parameters<Conversation["entries"]>[2];
     do {
@@ -380,6 +398,10 @@ export class ConversationHost {
       cursor = page.next;
     } while (cursor);
     this.transcripts.set(id, { head, lines });
+    for (const oldest of this.transcripts.keys()) {
+      if (this.transcripts.size <= TRANSCRIPT_CACHE) break;
+      this.transcripts.delete(oldest);
+    }
     return lines;
   }
 
@@ -602,10 +624,10 @@ function exchangeLines(entry: EntryRecord): ExchangeLine[] {
     return clean ? [{ who, text: clean }] : [];
   };
   const imported = ImportedTurnSchema.safeParse(entry.data);
-  if (entry.kind === IMPORTED_TURN_KIND && imported.success) return [...line("you", imported.data.text), ...line("ivy", imported.data.reply ?? "")];
+  if (entry.kind === IMPORTED_TURN_KIND && imported.success) return [...line("user", imported.data.text), ...line("assistant", imported.data.reply ?? "")];
   const message = entry.model?.[0];
-  if (message?.role === "user") return line("you", entryText(entry));
-  if (message?.role === "assistant" && message.stopReason !== "error") return line("ivy", entryText(entry));
+  if (message?.role === "user") return line("user", entryText(entry));
+  if (message?.role === "assistant" && message.stopReason !== "error") return line("assistant", entryText(entry));
   return [];
 }
 

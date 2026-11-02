@@ -4,6 +4,7 @@ import { ConversationWorkspace } from "./desk-conversation";
 import "./desk-conversation.css";
 
 const SEARCH_MS = 300;
+const UNANSWERED = "Mission Control did not answer.";
 type Shelf = "current" | "archived";
 
 interface OverviewState {
@@ -17,33 +18,35 @@ interface OverviewState {
 export function useOverview(shelf: Shelf, query: string, revision: number) {
   const [state, setState] = useState<OverviewState>({ rows: [], next: null, loadedAt: null, error: null, loading: true });
   const shown = useRef(`${shelf}\n${query}`);
+  const asked = useRef(shown.current);
   const [retries, setRetries] = useState(0);
+  const failed = (err: unknown): void => setState(s => ({ ...s, loading: false, error: failure(err, UNANSWERED) }));
 
   useEffect(() => {
     const controller = new AbortController();
     const key = `${shelf}\n${query}`;
+    asked.current = key;
     const same = shown.current === key;
     setState(s => same ? { ...s, loading: true } : { rows: [], next: null, loadedAt: null, error: null, loading: true });
     readOverview({ state: shelf, q: query }, controller.signal).then(page => {
       if (controller.signal.aborted) return;
       shown.current = key;
       setState({ rows: page.rows, next: page.next ?? null, loadedAt: Date.now(), error: null, loading: false });
-    }).catch((err: unknown) => {
-      if (controller.signal.aborted) return;
-      setState(s => ({ ...s, loading: false, error: failure(err, "Mission Control did not answer.") }));
-    });
+    }).catch((err: unknown) => { if (!controller.signal.aborted) failed(err); });
     return () => controller.abort();
   }, [shelf, query, revision, retries]);
 
   const more = useCallback(async (): Promise<void> => {
     const cursor = state.next;
     if (!cursor || state.loading) return;
+    const key = asked.current;
     setState(s => ({ ...s, loading: true }));
     try {
       const page = await readOverview({ state: shelf, q: query, cursor });
+      if (asked.current !== key) return;
       setState(s => ({ ...s, rows: [...s.rows, ...page.rows.filter(r => !s.rows.some(seen => seen.conversation.id === r.conversation.id))], next: page.next ?? null, error: null, loading: false }));
     } catch (err) {
-      setState(s => ({ ...s, loading: false, error: failure(err, "Mission Control did not answer.") }));
+      if (asked.current === key) failed(err);
     }
   }, [shelf, query, state.next, state.loading]);
 
@@ -58,22 +61,17 @@ export function OverviewRowView({ row, selected, searching, onOpen }: { row: Ove
   return <li>
     <button type="button" className={`dcv-row${selected ? " active" : ""}`} aria-current={selected ? "true" : undefined} onClick={() => onOpen(conversation.id)}>
       <strong>{conversation.pinned && <span className="dcv-pin">Pinned · </span>}{conversation.title}</strong>
-      <span className="dcv-excerpt">{line ? `${line.who === "you" ? "You" : "Ivy"}: ${line.text}` : "No messages yet"}</span>
+      <span className="dcv-excerpt">{line ? `${line.who === "user" ? "You" : "Ivy"}: ${line.text}` : "No messages yet"}</span>
       {linked.length > 0 && <small>{linked.map(l => `${sourceLabel(l)}: ${l.title ?? "unavailable"}`).join(" · ")}</small>}
       <small>{statusLabel(conversation.activity.status)} · {day(conversation.activity.lastAt)}{conversation.policy === "local" ? " · Local only" : ""}</small>
     </button>
   </li>;
 }
 
-export interface OverviewProps {
+export interface OverviewProps extends OverviewState {
   shelf: Shelf;
   search: string;
   selected: string | null;
-  rows: OverviewRow[];
-  next: string | null;
-  loadedAt: number | null;
-  error: string | null;
-  loading: boolean;
   onShelf: (shelf: Shelf) => void;
   onSearch: (text: string) => void;
   onOpen: (id: string) => void;
@@ -115,7 +113,7 @@ export function ConversationsArea({ selected, onOpen, onLeave }: { selected: str
   }, [search]);
   const overview = useOverview(shelf, query, revision);
   return <div className="dcv-area">
-    <OverviewView shelf={shelf} search={search} selected={selected} rows={overview.rows} next={overview.next} loadedAt={overview.loadedAt} error={overview.error} loading={overview.loading}
+    <OverviewView {...overview} shelf={shelf} search={search} selected={selected}
       onShelf={setShelf} onSearch={setSearch} onOpen={onOpen} onMore={() => void overview.more()} onRetry={overview.retry} />
     {selected
       ? <ConversationWorkspace key={selected} id={selected} onLeave={onLeave} onOrganized={() => setRevision(n => n + 1)} />

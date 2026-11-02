@@ -92,7 +92,7 @@ export function useConversation(id: string) {
       await load();
       return true;
     } catch (err) {
-      setError(`Nothing was changed: ${failure(err, "Mission Control did not answer.")} Try again; repeating it is safe.`);
+      setError(`Not confirmed: ${failure(err, "Mission Control did not answer.")} Try again; repeating it is safe and changes nothing twice.`);
       return false;
     } finally { setOrganizing(false); }
   }, [id, organizing, load]);
