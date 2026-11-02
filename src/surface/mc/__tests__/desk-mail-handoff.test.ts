@@ -7,6 +7,7 @@ import { saveClassification } from "../desk/classify";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
 import type { WriterRunner } from "../desk/create";
 import { queryMailLog } from "../desk/mail-log";
+import { CLOSE_RETRY_MS, MAX_CLOSE_TRIES, taskCloser } from "../desk/mail-handoff-close";
 import { handoffRoute, MailHandoffWorker, piHandoffOwner, readHandoff, readHandoffAnswer, type HandoffJob, type HandoffOwner } from "../desk/mail-handoff";
 import { SourceCache, type SourceMail } from "../desk/sources/command";
 import type { DeskItem } from "../desk/types";
@@ -30,10 +31,12 @@ let commands: { argv: string[]; stdin: Record<string, unknown> }[];
 let jobs: HandoffJob[];
 let owner: HandoffOwner;
 let items: Record<string, SourceMail[]>;
+let closerFails: boolean;
 
 const run: WriterRunner = async (argv, stdin) => {
   commands.push({ argv, stdin: JSON.parse(stdin) as Record<string, unknown> });
   if (argv[0] === "task-writer") return { code: 0, stdout: JSON.stringify({ id: "owner/desk#9", url: "https://github.com/owner/desk/issues/9" }), stderr: "" };
+  if (argv[0] === "task-closer") return closerFails ? { code: 1, stdout: "", stderr: "gh could not close owner/desk#9: HTTP 502" } : { code: 0, stdout: JSON.stringify({ id: "owner/desk#9", message: "Closed owner/desk#9 as done." }), stderr: "" };
   return { code: 0, stdout: "{}", stderr: "" };
 };
 const post = (body: unknown): Request => new Request("http://localhost/api/desk/mail", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -51,16 +54,17 @@ beforeEach(async () => {
   db = initDatabase(":memory:");
   commands = [];
   jobs = [];
+  closerFails = false;
   owner = async (job) => { jobs.push(job); return { findings: ["Ada asked for a review by Friday.", "You have Friday afternoon free."], reply: "Dear Ada,\n\nI will send my notes on Friday.\n\nJens", model: "spark/longctx" }; };
   options = {
     enabled: true, displayName: "Ada", topN: 5, rangerUrl: "", areas: AREAS,
     sources: [{ id: "work-mail", command: ["work"], area: "lab", everySeconds: 300, timeoutSeconds: 30 }, { id: "home-mail", command: ["home"], area: "private", everySeconds: 300, timeoutSeconds: 30 }],
-    ask: { parser: [], timeoutSeconds: 30, writers: { task: ["task-writer"] }, taskMaps: [{ ref: "owner/desk#1", label: "Desk tasks" }] },
+    ask: { parser: [], timeoutSeconds: 30, writers: { task: ["task-writer"] }, taskMaps: [{ ref: "owner/desk#1", label: "Desk tasks" }], taskCloser: ["task-closer"] },
     mailActions: { draft: ["draft-cmd"], timeoutSeconds: 30 },
     mailHandoff: { lanes: { local: LOCAL }, pi: PI },
   };
   items = { work: [mail("w1")], home: [mail("h1", { from: { address: "nan@example.org" }, account: "home" })] };
-  runtime = { options, ledger: new HandledLedger(), sourceCache: new SourceCache(async (argv) => JSON.stringify({ items: items[argv[0] ?? ""] ?? [] })), mailHandoff: new MailHandoffWorker((job) => owner(job), () => undefined) };
+  runtime = { options, ledger: new HandledLedger(), sourceCache: new SourceCache(async (argv) => JSON.stringify({ items: items[argv[0] ?? ""] ?? [] })), mailHandoff: new MailHandoffWorker((job) => owner(job), () => undefined, taskCloser(options.ask, run)) };
   await compose();
   saveClassification(db, "w1", { category: "reply", reason: "Asks for a review.", summary: "Ada asks for a review of the engine notes by Friday." }, "test", NOW);
 });
@@ -237,6 +241,79 @@ describe("Ivy's result card", () => {
     const card = (await composeDesk(db, options, undefined, { now: NOW + 3_600_000, handled: runtime.ledger, ...(runtime.sourceCache ? { sourceCache: runtime.sourceCache } : {}), ...(runtime.mailHandoff ? { mailHandoff: runtime.mailHandoff } : {}) })).items.find((i) => i.kind === "mail-handoff");
     expect(card).toMatchObject({ key: "ivy:hand-req-0001", why: "Spark timed out" });
     expect(card?.actions.map((a) => a.id)).toEqual(["ivy.retry", "ivy.discard"]);
+  });
+});
+
+const closes = (): Record<string, unknown>[] => writes("task-closer").map((c) => c.stdin);
+const taskClose = (id: string): unknown => db.query<{ task_close: string | null }, [string]>("SELECT task_close FROM desk_mail_handoffs WHERE id = ?").get(id)?.task_close;
+
+describe("Closing the hand-off's task", () => {
+  it("Approve closes the task as approved, with only the Desk receipt", async () => {
+    await hand("mail:w1");
+    await settle();
+    expect((await act({ action: "ivy.approve", key: "ivy:hand-req-0001" })).json.message).toBe("Reply saved in your work Drafts.");
+    expect(closes()).toEqual([{ action: "close", task: "owner/desk#9", outcome: "approved", receipt: "ivy:hand-req-0001" }]);
+    expect(taskClose("hand-req-0001")).toBe("closed");
+    await settle();
+    expect(closes()).toHaveLength(1);
+  });
+
+  it("Discard closes the task as discarded, also while Ivy still works", async () => {
+    owner = () => new Promise(() => undefined);
+    await hand("mail:w1");
+    expect((await act({ action: "ivy.discard", key: "ivy:hand-req-0001" })).status).toBe(200);
+    expect(closes()).toEqual([{ action: "close", task: "owner/desk#9", outcome: "discarded", receipt: "ivy:hand-req-0001" }]);
+  });
+
+  it("a failed close still completes Approve with a plain note, and a later pass closes the task once", async () => {
+    await hand("mail:w1");
+    await settle();
+    closerFails = true;
+    const { status, json } = await act({ action: "ivy.approve", key: "ivy:hand-req-0001" });
+    expect(status).toBe(200);
+    expect(json.message).toBe("Reply saved in your work Drafts. The task owner/desk#9 is still open; the Desk closes it later.");
+    expect(readHandoff(db, "hand-req-0001")?.state).toBe("approved");
+    expect(taskClose("hand-req-0001")).toBe("pending");
+    closerFails = false;
+    await runtime.mailHandoff?.kick(db, () => NOW + 60_000);
+    expect(closes()).toHaveLength(1);
+    await runtime.mailHandoff?.kick(db, () => NOW + CLOSE_RETRY_MS);
+    expect(closes()).toHaveLength(2);
+    expect(taskClose("hand-req-0001")).toBe("closed");
+    await runtime.mailHandoff?.kick(db, () => NOW + 2 * CLOSE_RETRY_MS);
+    expect(closes()).toHaveLength(2);
+  });
+
+  it("a new hand-off of a mail closes the earlier failed one's task as discarded", async () => {
+    owner = () => Promise.reject(new Error("Spark timed out"));
+    await hand("mail:w1");
+    await settle();
+    expect(closes()).toHaveLength(0);
+    await hand("mail:w1", "hand-req-0002");
+    await settle();
+    expect(closes()).toEqual([{ action: "close", task: "owner/desk#9", outcome: "discarded", receipt: "ivy:hand-req-0001" }]);
+    expect(taskClose("hand-req-0002")).toBeNull();
+  });
+
+  it("gives up after the last try, says so in the log, and tries no more", async () => {
+    const logged: string[] = [];
+    runtime.mailHandoff = new MailHandoffWorker((job) => owner(job), (m) => { logged.push(m); }, taskCloser(options.ask, run));
+    await hand("mail:w1");
+    await settle();
+    closerFails = true;
+    await act({ action: "ivy.discard", key: "ivy:hand-req-0001" });
+    for (let i = 1; i <= MAX_CLOSE_TRIES + 2; i++) await runtime.mailHandoff.kick(db, () => NOW + i * CLOSE_RETRY_MS);
+    expect(closes()).toHaveLength(MAX_CLOSE_TRIES);
+    expect(taskClose("hand-req-0001")).toBe("failed");
+    expect(logged).toEqual([`desk: mail hand-off hand-req-0001: gave up closing owner/desk#9 after ${MAX_CLOSE_TRIES} tries: gh could not close owner/desk#9: HTTP 502`]);
+  });
+
+  it("without a closer nothing runs and Approve answers as before", async () => {
+    runtime.mailHandoff = new MailHandoffWorker((job) => owner(job), () => undefined);
+    await hand("mail:w1");
+    await settle();
+    expect((await act({ action: "ivy.approve", key: "ivy:hand-req-0001" })).json.message).toBe("Reply saved in your work Drafts.");
+    expect(closes()).toHaveLength(0);
   });
 });
 
