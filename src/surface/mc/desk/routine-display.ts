@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import type { RoutineDisplayChange, RoutineDisplayPage, RoutineDisplayResult } from "./routine-display-contract";
+import { RoutineDisplayModeSchema, type RoutineDisplayChange, type RoutineDisplayMode, type RoutineDisplayResult } from "./routine-display-contract";
 export * from "./routine-display-contract";
 
 export const ROUTINE_DISPLAY_SQL = [
@@ -14,18 +14,20 @@ export const ROUTINE_DISPLAY_SQL = [
   )`,
 ];
 interface Scope { principal: string; stack: string }
-interface Row { routine_id: string; updated_at: number }
+interface Row { routine_id: string; mode: string }
 
-export function readRoutineDisplay(db: Database, scope: Scope): RoutineDisplayPage {
-  const rows = db.query<Row, [string, string]>("SELECT routine_id, updated_at FROM desk_routine_display WHERE principal = ? AND stack = ? AND owner = 'reflex' ORDER BY routine_id LIMIT 1000").all(scope.principal, scope.stack);
-  return { owner: "reflex", principal: scope.principal, stack: scope.stack, preferences: rows.map((row) => ({ routineId: row.routine_id, mode: "background" as const, updatedAt: new Date(row.updated_at).toISOString() })) };
+export function readRoutineDisplay(db: Database, scope: Scope): Map<string, RoutineDisplayMode> {
+  const rows = db.query<Row, [string, string]>("SELECT routine_id, mode FROM desk_routine_display WHERE principal = ? AND stack = ? AND owner = 'reflex' ORDER BY routine_id LIMIT 1000").all(scope.principal, scope.stack);
+  const stored = new Map<string, RoutineDisplayMode>();
+  for (const row of rows) { const mode = RoutineDisplayModeSchema.safeParse(row.mode); if (mode.success) stored.set(row.routine_id, mode.data); }
+  return stored;
 }
 
 export function writeRoutineDisplay(db: Database, change: RoutineDisplayChange, now = Date.now()): RoutineDisplayResult {
-  if (change.mode === "background") {
-    db.query("INSERT INTO desk_routine_display (principal, stack, owner, routine_id, mode, updated_at) VALUES (?, ?, 'reflex', ?, 'background', ?) ON CONFLICT(principal, stack, owner, routine_id) DO UPDATE SET mode = excluded.mode, updated_at = excluded.updated_at").run(change.principal, change.stack, change.routineId, now);
-  } else {
+  if (change.mode === "automatic") {
     db.query("DELETE FROM desk_routine_display WHERE principal = ? AND stack = ? AND owner = 'reflex' AND routine_id = ?").run(change.principal, change.stack, change.routineId);
+  } else {
+    db.query("INSERT INTO desk_routine_display (principal, stack, owner, routine_id, mode, updated_at) VALUES (?, ?, 'reflex', ?, ?, ?) ON CONFLICT(principal, stack, owner, routine_id) DO UPDATE SET mode = excluded.mode, updated_at = excluded.updated_at").run(change.principal, change.stack, change.routineId, change.mode, now);
   }
   return { owner: "reflex", principal: change.principal, stack: change.stack, routineId: change.routineId, mode: change.mode };
 }
