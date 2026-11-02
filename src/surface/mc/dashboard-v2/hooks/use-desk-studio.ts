@@ -49,7 +49,7 @@ export function readDeskLocation(search: string): DeskLocation {
   const params = new URLSearchParams(search);
   const requested = params.get(MODE_PARAM);
   const conversation = params.get(CONVERSATION_PARAM);
-  if (requested === "conversation" && conversation && CONVERSATION_ID.test(conversation)) return { mode: "conversation", thread: null, conversation };
+  if (requested === "conversation") return { mode: "conversation", thread: null, conversation: conversation && CONVERSATION_ID.test(conversation) ? conversation : null };
   const mode: DeskMode = requested === "mirror" ? "balance" : requested === "studio" || requested === "balance" || requested === "catchup" ? requested : "day";
   return { mode, thread: mode === "studio" ? params.get(THREAD_PARAM) : null };
 }
@@ -59,7 +59,6 @@ export function deskSearch(search: string, next: DeskLocation): string {
   params.delete(MODE_PARAM);
   params.delete(THREAD_PARAM);
   params.delete(CONVERSATION_PARAM);
-  if (next.mode === "conversation" && !next.conversation) return deskSearch(search, { mode: "day", thread: null });
   if (next.mode !== "day") params.set(MODE_PARAM, next.mode);
   if (next.mode === "conversation" && next.conversation) params.set(CONVERSATION_PARAM, next.conversation);
   if (next.mode === "studio" && next.thread) params.set(THREAD_PARAM, next.thread);

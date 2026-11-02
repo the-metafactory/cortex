@@ -41,13 +41,14 @@ function wroteWhen(iso: string, startOfToday: number): string {
 const viaLabel = (via: string): string => (via === "voice" ? "Voice note" : via === "mail" ? "Forwarded mail" : via.charAt(0).toUpperCase() + via.slice(1));
 const targetKey = (t: BoardTarget | null): string => (t === null ? "" : t.kind === "thread" ? `t:${t.slug}` : `p:${t.place}`);
 
-export function DeskModeSwitch({ hasStudio, inStudio, inBalance = false, inCatchup = false, onGo }: { hasStudio: boolean; inStudio: boolean; inBalance?: boolean; inCatchup?: boolean; onGo: (mode: "day" | "studio" | "balance" | "catchup") => void }) {
+export function DeskModeSwitch({ hasStudio, inStudio, inBalance = false, inCatchup = false, inConversation = false, onGo }: { hasStudio: boolean; inStudio: boolean; inBalance?: boolean; inCatchup?: boolean; inConversation?: boolean; onGo: (mode: "day" | "studio" | "balance" | "catchup" | "conversation") => void }) {
   return (
     <div className="desk-seg desk-mode" role="tablist" aria-label="View">
-      <button type="button" role="tab" aria-selected={!inStudio && !inBalance && !inCatchup} onClick={() => onGo("day")}>Day</button>
+      <button type="button" role="tab" aria-selected={!inStudio && !inBalance && !inCatchup && !inConversation} onClick={() => onGo("day")}>Day</button>
       <button type="button" role="tab" aria-selected={inCatchup} onClick={() => onGo("catchup")}>Catch-up</button>
       <button type="button" role="tab" aria-selected={inBalance} onClick={() => onGo("balance")}>Balance</button>
       {hasStudio && <button type="button" role="tab" aria-selected={inStudio} onClick={() => onGo("studio")}>Studio</button>}
+      <button type="button" role="tab" aria-selected={inConversation} onClick={() => onGo("conversation")}>Conversations</button>
     </div>
   );
 }

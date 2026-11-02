@@ -1,5 +1,5 @@
 import { ConversationError, type HostStatus } from "../../../conversations/host";
-import { AttachmentUploadSchema, CreateConversationSchema, DraftSchema, InputRequestSchema } from "../../../conversations/types";
+import { AttachmentUploadSchema, CreateConversationSchema, DraftSchema, InputRequestSchema, OrganizeSchema, OverviewQuerySchema } from "../../../conversations/types";
 import { applyStudioOutcome, ImportSchema, isImported, withStudio, importStudioSession, OutcomeSchema, sourceConversations, SourceQuerySchema, StartSchema, startFromSource, type StudioConversationDeps } from "./conversation-studio";
 import { checkRebindGuard, enforceMutationAuth, type MutationGuardContext } from "./mutation-guard";
 import { DEFAULT_LOCAL_PRINCIPAL } from "./networks-admission";
@@ -51,6 +51,12 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
       if (!parsed.success) return fail(400, "The conversation request is not valid.");
       return reply(201, { ok: true, conversation: await host.create(parsed.data, auth.principal) });
     }
+    if (url.pathname === "/api/conversations/overview") {
+      if (req.method !== "GET") return notAllowed("GET");
+      const query = OverviewQuerySchema.safeParse(Object.fromEntries(url.searchParams));
+      if (!query.success) return fail(400, "The overview query is not valid.");
+      return reply(200, { ok: true, ...(await host.overview(query.data)) });
+    }
     if (url.pathname === "/api/conversations/source") {
       if (req.method !== "GET") return notAllowed("GET");
       const query = SourceQuerySchema.safeParse({ owner: url.searchParams.get("owner"), id: url.searchParams.get("id") });
@@ -76,7 +82,12 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
     if (!match || !id) return fail(404, "Unknown conversation route.");
     const [, , part, inputId] = match;
     if (!part) {
-      if (req.method !== "GET") return notAllowed("GET");
+      if (req.method === "PATCH") {
+        const parsed = OrganizeSchema.safeParse(await body(req));
+        if (!parsed.success) return fail(400, "Send pinned and/or state (current or archived).");
+        return reply(200, { ok: true, conversation: await host.organize(id, parsed.data) });
+      }
+      if (req.method !== "GET") return notAllowed("GET, PATCH");
       return reply(200, { ok: true, ...(await withStudio(host, id, await host.detail(id))) });
     }
     if (part === "draft") {

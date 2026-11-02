@@ -12,7 +12,7 @@ import { chatTurns, cortexModels, CORTEX_PROVIDER, type ChatCall, type GateResul
 import {
   AttachmentRefSchema, CONTINUATION_KIND, IMPORTED_TURN_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES,
   type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationMeta, type CreateConversation,
-  type InputRequest, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadbacks, type OwnerType, type Policy, type SourceState, type SourceView, type SubmissionView,
+  type ExchangeLine, type InputRequest, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadbacks, type OwnerType, type Policy, type SourceState, type SourceView, type SubmissionView,
 } from "./types";
 
 export const ENGINE = "pi-durable@1.4.0";
@@ -52,6 +52,10 @@ const DirectoryDoc = defineDoc<Directory>({ kind: "cortex.conversations", versio
 const IngressDoc = defineDocFamily<{ sha256: string }, string>({ kind: "cortex.ingress", version: 1, scope: "conversation", history: "latest", fork: "initial", family: true, initial: sha256 => ({ sha256 }), checkpointWhen: () => true });
 const JournalDoc = defineDoc<{ operations: Record<string, JsonObject> }>({ kind: "cortex.operations", version: 1, scope: "session", initial: () => ({ operations: {} }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 const ImportedTurnSchema = z.object({ text: z.string(), reply: z.string().nullable(), model: z.string(), policy: z.enum(["local", "cloud"]) }).loose();
+const CursorSchema = z.object({ pinned: z.boolean(), lastAt: z.string(), id: z.string() }).strict();
+type OverviewKey = z.infer<typeof CursorSchema>;
+const ATTACHMENT_LINE = /^\[attachment .*, sha256 [0-9a-f]{64}\]$/;
+const SNIPPET = 160;
 const NEXT: Record<OperationState, OperationState[]> = { proposed: ["confirmed"], confirmed: ["running"], running: ["created", "failed", "uncertain"], uncertain: ["created", "failed"], created: [], failed: [] };
 
 export class ConversationError extends Error {
@@ -80,6 +84,20 @@ const strictest = (policies: Policy[]): Policy => policies.includes("local") ? "
 const canonical = (value: unknown): string => JSON.stringify(value, (_key, v: unknown) => v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a.localeCompare(b))) : v);
 export const inputHash = (request: InputRequest): string => createHash("sha256").update(canonical(request)).digest("hex");
 const asJson = (value: object): JsonObject => JSON.parse(JSON.stringify(value)) as JsonObject;
+const overviewOrder = (a: OverviewKey, b: OverviewKey): number => Number(b.pinned) - Number(a.pinned) || b.lastAt.localeCompare(a.lastAt) || a.id.localeCompare(b.id);
+const searchable = (text: string): string => text.split("\n").filter(line => !ATTACHMENT_LINE.test(line.trim())).join(" ").replace(/\s+/g, " ").trim();
+function snippet(line: ExchangeLine, terms: string[]): ExchangeLine {
+  const lower = line.text.toLowerCase();
+  const at = terms.map(term => lower.indexOf(term)).find(i => i >= 0) ?? 0;
+  const start = line.text.length <= SNIPPET ? 0 : Math.max(0, Math.min(at - 40, line.text.length - SNIPPET));
+  const cut = line.text.slice(start, start + SNIPPET);
+  return { who: line.who, text: `${start > 0 ? "…" : ""}${cut}${start + SNIPPET < line.text.length ? "…" : ""}` };
+}
+function decodeCursor(cursor: string): OverviewKey {
+  try { return CursorSchema.parse(JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"))); }
+  catch { throw new ConversationError(400, "The overview cursor is not valid."); }
+}
+const encodeCursor = (key: OverviewKey): string => Buffer.from(JSON.stringify(key)).toString("base64url");
 
 export async function openConversationHost(options: HostOptions): Promise<HostStatus> {
   const lock = await acquireHostLock({ dir: options.dir, stack: options.stack, label: options.label, expectedLabel: options.expectedLabel, ...(options.alive ? { alive: options.alive } : {}), ...(options.pid ? { pid: options.pid } : {}) })
@@ -99,6 +117,7 @@ export class ConversationHost {
   private harness: Harness | null = null;
   private readonly context: Context = BACKGROUND_CONTEXT;
   private readonly queues = new Map<string, Promise<void>>();
+  private readonly transcripts = new Map<string, { head: string; lines: ExchangeLine[] }>();
   private readonly now: () => Date;
   private sources: HostSources;
 
@@ -306,6 +325,69 @@ export class ConversationHost {
     return rows.sort((a, b) => b.activity.lastAt.localeCompare(a.activity.lastAt));
   }
 
+  async overview(query: OverviewQuery): Promise<OverviewPage> {
+    const after = query.cursor ? decodeCursor(query.cursor) : null;
+    const terms = [...new Set(query.q.toLowerCase().split(/\s+/).filter(Boolean))];
+    const working = await this.workingSet();
+    const candidates = Object.entries(await this.directory())
+      .filter(([, stored]) => stored.state === query.state)
+      .map(([id, stored]) => ({ id, stored, key: { pinned: stored.pinned, lastAt: stored.lastAt, id } }))
+      .filter(c => !after || overviewOrder(c.key, after) > 0)
+      .sort((a, b) => overviewOrder(a.key, b.key));
+    const rows: { key: OverviewKey; row: OverviewRow }[] = [];
+    for (const candidate of candidates) {
+      const row = await this.overviewRow(candidate.id, candidate.stored, terms, working);
+      if (row) rows.push({ key: candidate.key, row });
+      if (rows.length > query.limit) break;
+    }
+    const page = rows.slice(0, query.limit);
+    const last = page.at(-1);
+    return { rows: page.map(r => r.row), ...(rows.length > query.limit && last ? { next: encodeCursor(last.key) } : {}) };
+  }
+
+  private async overviewRow(id: string, listed: Stored, terms: string[], working: Set<number>): Promise<OverviewRow | null> {
+    const lines = await this.transcript(id, listed);
+    const matches = (title: string): boolean => {
+      const haystack = [title, ...lines.map(line => line.text)].join("\n").toLowerCase();
+      return terms.every(term => haystack.includes(term));
+    };
+    if (terms.length > 0 && !matches(listed.title) && !(listed.titleFromSource && matches(UNAVAILABLE_TITLE))) return null;
+    const { stored, effective, sources, available } = await this.tighten(id);
+    const meta = this.view(id, stored, working, effective, available);
+    if (terms.length > 0 && !matches(meta.title)) return null;
+    const hits = (line: ExchangeLine): number => terms.filter(term => line.text.toLowerCase().includes(term)).length;
+    const best = terms.length === 0 ? null : lines.reduce<ExchangeLine | null>((top, line) => hits(line) > (top ? hits(top) : 0) ? line : top, null);
+    const latest = lines.at(-1);
+    return {
+      conversation: { ...meta, links: sources.flatMap(source => source.state === "available" ? [source.ref] : []) },
+      linked: sources.map(source => ({ owner: source.ref.owner, title: source.state === "available" ? source.title : null })),
+      latest: latest ? snippet(latest, []) : null,
+      match: best ? snippet(best, terms) : null,
+    };
+  }
+
+  private async transcript(id: string, stored: Stored): Promise<ExchangeLine[]> {
+    const conversation = await this.conversation(stored);
+    const newest = await conversation.entries({}, 1, undefined, this.context);
+    const head = newest.items[0] ? String(newest.items[0].id) : "";
+    const cached = this.transcripts.get(id);
+    if (cached?.head === head) return cached.lines;
+    const lines: ExchangeLine[] = [];
+    let cursor: Parameters<Conversation["entries"]>[2];
+    do {
+      const page = await conversation.entries({ order: "ascending" }, 200, cursor, this.context);
+      for (const entry of page.items) lines.push(...exchangeLines(entry));
+      cursor = page.next;
+    } while (cursor);
+    this.transcripts.set(id, { head, lines });
+    return lines;
+  }
+
+  async organize(id: string, change: Organize): Promise<ConversationMeta> {
+    await this.update(id, stored => ({ ...stored, ...(change.pinned === undefined ? {} : { pinned: change.pinned }), ...(change.state ? { state: change.state } : {}) }));
+    return this.meta(id);
+  }
+
   async meta(id: string): Promise<ConversationMeta> {
     const { stored, effective, available } = await this.tighten(id);
     return this.view(id, stored, await this.workingSet(), effective, available);
@@ -412,6 +494,7 @@ export class ConversationHost {
       const conversation = await this.conversation(stored);
       const existing = await this.priorInput(conversation, request.inputId, sha256);
       if (existing) return { duplicate: true, submission: await this.submissionView(request.inputId, existing) };
+      if (stored.state === "archived") throw new ConversationError(409, "This conversation is archived. Restore it to continue; nothing was sent.");
       if (!route) throw new ConversationError(503, effective === "local" ? "No local model is configured. Nothing was sent; no cloud fallback is used." : "No conversation model is configured. Nothing was sent.");
       await this.claimInput(conversation, request.inputId, sha256);
       if (route !== stored.route) {
@@ -511,6 +594,19 @@ export class ConversationHost {
 
 function entryText(entry: EntryRecord): string {
   return chatTurns(entry.model ?? []).map(turn => turn.content).join("\n");
+}
+
+function exchangeLines(entry: EntryRecord): ExchangeLine[] {
+  const line = (who: ExchangeLine["who"], text: string): ExchangeLine[] => {
+    const clean = searchable(text);
+    return clean ? [{ who, text: clean }] : [];
+  };
+  const imported = ImportedTurnSchema.safeParse(entry.data);
+  if (entry.kind === IMPORTED_TURN_KIND && imported.success) return [...line("you", imported.data.text), ...line("ivy", imported.data.reply ?? "")];
+  const message = entry.model?.[0];
+  if (message?.role === "user") return line("you", entryText(entry));
+  if (message?.role === "assistant" && message.stopReason !== "error") return line("ivy", entryText(entry));
+  return [];
 }
 
 function toEntry(entry: EntryRecord): ConversationEntry {

@@ -1,4 +1,4 @@
-import type { ConversationDetail, ConversationEntry, ConversationMeta, ObjectRef, OperationRecord, SubmissionView } from "../../../../conversations/types";
+import type { ConversationDetail, ConversationEntry, ConversationMeta, LinkedView, ObjectRef, OperationRecord, Organize, OverviewPage, OverviewRow, SubmissionView } from "../../../../conversations/types";
 import type { ImportableSession, SourceConversations } from "../../api/conversation-studio";
 import type { SessionEnd } from "../../desk/studio/session-schema";
 import { CONTINUATION_KIND, DECISION_KIND, IMPORTED_TURN_KIND } from "../../../../conversations/types";
@@ -6,7 +6,7 @@ import { ApiFailure, getJson, postJson } from "./api";
 
 export const failureText = (error: unknown, fallback: string): string => (error instanceof ApiFailure ? error.info.message : fallback);
 
-export type { ConversationDetail, ConversationEntry, ConversationMeta, ImportableSession, ObjectRef, OperationRecord, SourceConversations, SubmissionView };
+export type { ConversationDetail, ConversationEntry, ConversationMeta, ImportableSession, LinkedView, ObjectRef, OperationRecord, OverviewPage, OverviewRow, SourceConversations, SubmissionView };
 
 const BASE = "/api/conversations";
 const PAGE = 200;
@@ -27,6 +27,14 @@ export async function readEntries(id: string, signal?: AbortSignal): Promise<Con
   }
   return all;
 }
+
+export const OVERVIEW_PAGE = 25;
+
+export const readOverview = (query: { state: "current" | "archived"; q: string; cursor?: string }, signal?: AbortSignal): Promise<OverviewPage> =>
+  getJson<OverviewPage>(`${BASE}/overview?${new URLSearchParams({ state: query.state, limit: String(OVERVIEW_PAGE), ...(query.q ? { q: query.q } : {}), ...(query.cursor ? { cursor: query.cursor } : {}) }).toString()}`, signal ? { signal } : {});
+
+export const organize = (id: string, change: Organize): Promise<{ conversation: ConversationMeta }> =>
+  getJson(`${BASE}/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(change) });
 
 export const readSource = (source: ObjectRef, signal?: AbortSignal): Promise<SourceConversations> =>
   getJson<SourceConversations>(`${BASE}/source?${new URLSearchParams({ owner: source.owner, id: source.id }).toString()}`, signal ? { signal } : {});
@@ -88,10 +96,15 @@ export function pendingLabel(submission: SubmissionView): string {
   return submission.status === "done" ? "Answered" : `Not answered: ${submission.reason ?? "unknown reason"}`;
 }
 
-export function sourceLabel(source: ObjectRef): string {
+export function sourceLabel(source: Pick<ObjectRef, "owner">): string {
   if (source.owner === "studio-thread") return "Studio thread";
   if (source.owner === "studio-note") return "Studio idea";
   if (source.owner === "balance-task") return "Balance task";
   if (source.owner === "balance-project") return "Balance project";
   return source.owner;
+}
+
+export function statusLabel(status: ConversationMeta["activity"]["status"]): string {
+  if (status === "working") return "Ivy is working";
+  return status === "waiting" ? "Waiting for you" : "Ready to continue";
 }

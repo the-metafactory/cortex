@@ -65,6 +65,28 @@ export type AttachmentUpload = z.infer<typeof AttachmentUploadSchema>;
 
 export const DraftSchema = z.object({ text: z.string().max(20_000) }).strict();
 
+export const CONVERSATION_STATES = ["current", "archived"] as const;
+export const OrganizeSchema = z.object({ pinned: z.boolean().optional(), state: z.enum(CONVERSATION_STATES).optional() }).strict()
+  .refine(change => change.pinned !== undefined || change.state !== undefined);
+export type Organize = z.infer<typeof OrganizeSchema>;
+export const OverviewQuerySchema = z.object({
+  state: z.enum(CONVERSATION_STATES).default("current"),
+  q: z.string().trim().max(200).default(""),
+  limit: z.coerce.number().int().min(1).max(100).default(25),
+  cursor: z.string().min(1).max(1024).optional(),
+}).strict();
+export type OverviewQuery = z.infer<typeof OverviewQuerySchema>;
+
+export interface ExchangeLine { who: "you" | "ivy"; text: string }
+export interface LinkedView { owner: OwnerType; title: string | null }
+export interface OverviewRow {
+  conversation: ConversationMeta;
+  linked: LinkedView[];
+  latest: ExchangeLine | null;
+  match: ExchangeLine | null;
+}
+export interface OverviewPage { rows: OverviewRow[]; next?: string }
+
 export interface ConversationDetail {
   conversation: ConversationMeta;
   sources: SourceView[];
