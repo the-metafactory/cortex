@@ -1,7 +1,8 @@
 import type { Database } from "bun:sqlite";
-import { findNode, type AppState, type OutlineNode } from "../../../balance";
+import { findNode, type AppState } from "../../../balance";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, ReadbackResult } from "../../../conversations/types";
 import { BalanceCommandSchema, type BalanceCommand } from "./balance-command";
+import { balanceDestinations } from "./balance-destinations";
 import { STALE_OUTLINE } from "./balance-outline";
 import { loadBalanceState } from "./balance-store";
 import type { DeskOptions } from "./compose";
@@ -25,23 +26,6 @@ export function hasBalanceState(db: Database): boolean {
   return db.query<{ id: number }, []>("SELECT id FROM desk_balance WHERE id = 1").get() !== null;
 }
 
-const isTask = (node: OutlineNode): boolean => node.children.length === 0 && node.effort !== undefined;
-const isClosedProject = (node: OutlineNode): boolean => Boolean(node.done) && node.children.length > 0;
-const isOpenProject = (node: OutlineNode): boolean => !node.id.startsWith("studio-response:") && !isTask(node) && !isClosedProject(node);
-
-function projectsIn(area: OutlineNode): OutlineNode[] {
-  const found: OutlineNode[] = [];
-  const visit = (node: OutlineNode): void => {
-    for (const child of node.children) {
-      if (isClosedProject(child)) continue;
-      if (isOpenProject(child)) found.push(child);
-      visit(child);
-    }
-  };
-  visit(area);
-  return found;
-}
-
 export function balanceDestination(state: AppState, desk: DeskOptions, fields: Record<string, string>): { parent: string } | { refused: string } {
   const areaId = fields.area ?? "";
   const area = desk.areas.find(a => a.id === areaId);
@@ -49,8 +33,7 @@ export function balanceDestination(state: AppState, desk: DeskOptions, fields: R
   const parent = `area:${area.id}`;
   const project = fields.project?.trim();
   if (!project) return { parent };
-  const node = state.outline.children.find(n => n.id === parent);
-  const open = node ? projectsIn(node) : [];
+  const open = balanceDestinations(state.outline, desk.areas).filter(option => option.area === area.id && option.project);
   const byId = open.find(p => p.id === project);
   const byTitle = open.filter(p => p.title.trim().toLowerCase() === project.toLowerCase());
   const chosen = byId ?? (byTitle.length === 1 ? byTitle[0] : undefined);

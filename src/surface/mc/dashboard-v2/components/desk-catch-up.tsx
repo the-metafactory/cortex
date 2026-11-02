@@ -1,3 +1,4 @@
+import { DestinationPicker } from "./desk-destination-picker";
 import { scrollBelowDesk } from "../lib/desk-scroll";
 import type { OutlineNode } from "../../../../balance";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -46,7 +47,7 @@ export function CatchupPreview({
         <button
           type="button"
           className="desk-btn ghost"
-          onClick={() => onOpen(null)}
+          onClick={() => { onOpen(null); }}
         >
           Open inbox · {view.items.length}
         </button>
@@ -55,7 +56,7 @@ export function CatchupPreview({
       <ul>
         {view.items.slice(0, 3).map((item) => (
           <li key={item.key}>
-            <button type="button" onClick={() => onOpen(item.key)}>
+            <button type="button" onClick={() => { onOpen(item.key); }}>
               <strong>{item.title}</strong>
               <small>
                 {view.areas.find((a) => a.id === item.area)?.label ??
@@ -69,11 +70,11 @@ export function CatchupPreview({
     </section>
   );
 }
-type Intent = {
+interface Intent {
   date: string;
   requestId: string;
   command: Extract<MyDayCommand, { op: "source-plan" }>;
-};
+}
 type Plan =
   | { kind: "loading"; item: DeskItem }
   | {
@@ -209,7 +210,7 @@ export function DeskCatchUp({
         intent.command,
         intent.requestId,
       );
-      const link = result.view?.sources.find(
+      const link = result.view.sources.find(
         (s) =>
           s.taskId === result.outlineId &&
           s.fingerprint === intent.command.fingerprint,
@@ -261,7 +262,7 @@ export function DeskCatchUp({
         <button
           type="button"
           aria-pressed={!location.area}
-          onClick={() => go({ area: "", filter: location.filter, card: null })}
+          onClick={() => { go({ area: "", filter: location.filter, card: null }); }}
         >
           All areas · {catchupItems(sourceItems, "", location.filter).length}
         </button>
@@ -271,7 +272,7 @@ export function DeskCatchUp({
             key={a.id}
             aria-pressed={location.area === a.id}
             onClick={() =>
-              go({ area: a.id, filter: location.filter, card: null })
+              { go({ area: a.id, filter: location.filter, card: null }); }
             }
           >
             <span style={{ background: a.color }} />
@@ -286,7 +287,7 @@ export function DeskCatchUp({
             type="button"
             key={f.id}
             aria-pressed={location.filter === f.id}
-            onClick={() => go({ ...location, filter: f.id, card: null })}
+            onClick={() => { go({ ...location, filter: f.id, card: null }); }}
           >
             {f.label} · {catchupItems(areaItems, "", f.id).length}
           </button>
@@ -299,7 +300,7 @@ export function DeskCatchUp({
           <button
             type="button"
             className="desk-btn ghost"
-            onClick={() => go({ area: "", filter: "all", card: open.key })}
+            onClick={() => { go({ area: "", filter: "all", card: open.key }); }}
           >
             Clear filters
           </button>
@@ -314,23 +315,7 @@ export function DeskCatchUp({
           ) : (
             <>
               <p>{plan.proposal.reason}</p>
-              <label>
-                Save in{" "}
-                <select
-                  value={plan.parent ?? ""}
-                  disabled={busy || Boolean(plan.intent)}
-                  onChange={(e) =>
-                    setPlan({ ...plan, parent: e.target.value || null })
-                  }
-                >
-                  <option value="">Inbox</option>
-                  {plan.proposal.parents.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.path}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <DestinationPicker label="Save in Balance" value={plan.parent ?? ""} options={[{ id: "", label: "Inbox" }, ...plan.proposal.parents.map(parent => ({ id: parent.id, label: parent.path }))]} disabled={busy || Boolean(plan.intent)} onChange={parent => { setPlan({ ...plan, parent: parent || null }); }} />
               <p>
                 This becomes planned work. Today's confirmed priorities stay as
                 they are.
@@ -362,7 +347,7 @@ export function DeskCatchUp({
                 type="button"
                 className="desk-btn ghost"
                 disabled={busy || Boolean(plan.intent && !plan.definitive)}
-                onClick={() => setPlan(null)}
+                onClick={() => { setPlan(null); }}
               >
                 Cancel
               </button>
@@ -431,7 +416,7 @@ export function DeskCatchUp({
           <button
             type="button"
             className="desk-btn"
-            onClick={() => go({ area: "", filter: "all", card: null })}
+            onClick={() => { go({ area: "", filter: "all", card: null }); }}
           >
             Clear filters
           </button>

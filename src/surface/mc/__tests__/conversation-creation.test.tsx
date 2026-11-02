@@ -95,4 +95,17 @@ describe("conversation creation API", () => {
     expect(html.match(/>Confirm creation</g)).toHaveLength(1);
     expect(html).toContain("objects already created stay as they are");
   });
+  test("Balance proposals expose shared destination comboboxes independently of writer availability", async () => {
+    const { call, id } = await rig();
+    const { body: caps } = await call("GET", "/api/conversations/capabilities");
+    await call("POST", `/api/conversations/${id}/proposals`, { proposalId: randomUUID(), type: "balance-task", fields: { title: "A local sketch" } });
+    const { body: view } = await call("GET", `/api/conversations/${id}/proposals`);
+    const html = renderToStaticMarkup(<CreationSection id={id} archived={false} types={caps.types ?? []} view={{ proposals: view.proposals ?? [], grants: [] }} error={null} busy={false} seed={{ entryId: null, text: "" }} act={() => Promise.resolve()} />);
+    expect(html.match(/role="combobox"/g)).toHaveLength(2);
+    expect(html).toContain("Loading Balance destinations");
+    expect(html).toContain("Parent project");
+    expect(html).toContain("unavailable here");
+    expect(html).not.toContain('aria-label="Area" type="text"');
+  });
+
 });
