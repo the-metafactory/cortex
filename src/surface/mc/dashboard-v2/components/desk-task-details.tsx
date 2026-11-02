@@ -70,6 +70,10 @@ export function useBalanceEditor(day: MyDayView, onSaved: (view: MyDayView) => v
 }
 export type BalanceEditor = ReturnType<typeof useBalanceEditor>;
 
+export function TaskMessageBanner({ message }: { message: TaskMessage }) {
+  return message && <p className={`dbl-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>{message.text}</p>;
+}
+
 export function BalanceAddForm({ adding, choices, busy, heading, onChange, onSubmit, onCancel }: { adding: { parent: string; title: string }; choices: BalanceDestination[]; busy: boolean; heading: string; onChange: (next: { parent: string; title: string }) => void; onSubmit: () => void; onCancel: () => void }) {
   return <form className="dbl-create" onSubmit={event => { event.preventDefault(); onSubmit(); }}><h2>{heading}</h2><DestinationPicker label="New Balance parent" value={adding.parent} options={choices} disabled={busy} onChange={parent => { onChange({ ...adding, parent }); }} /><label>Title<input aria-label="New Balance title" value={adding.title} onChange={event => { onChange({ ...adding, title: event.target.value }); }} required maxLength={300} disabled={busy} /></label><button className="desk-btn pri" disabled={busy || !choices.some(option => option.id === adding.parent)}>Confirm add</button><button type="button" className="desk-btn" disabled={busy} onClick={onCancel}>Cancel</button><p>Adding a subtask turns its parent into a project. It does not add work to today's confirmed list.</p></form>;
 }

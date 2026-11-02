@@ -31,8 +31,6 @@
 .dbl-foot { border-top: 1px solid #edf0ed; padding: 16px 22px; margin: 0; color: #819085; font-size: 10px; }
 .dbl-inspector { padding: 23px 22px; position: sticky; top: 90px; overflow-wrap: anywhere; }
 .dbl-back { display: none; }
-.dbl-message { border: 1px solid #d8e3d8; border-radius: 8px; padding: 14px; font-size: 12px; line-height: 1.6; background: #f6faf5; overflow-wrap: anywhere; }
-.dbl-message.error { border-color: #e1c6b7; background: #fff8f2; }
 .dbl-empty { padding: 20px; font-size: 12px; }
 .dbl-intake { border-top: 1px solid #edf0ed; padding: 22px; font-size: 12px; }
 .dbl-intake h2 span { color: #819085; font-weight: 400; }

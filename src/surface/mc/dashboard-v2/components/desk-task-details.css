@@ -25,3 +25,5 @@
 .dbl-create label > input, .dbl-create label > select { display: block; margin-top: 7px; }
 .dbl-create p { color: #7b887f; font-size: 11px; line-height: 1.6; }
 @media (max-width: 760px) { .dtd .dbl-pair { grid-template-columns: minmax(0, 1fr); } }
+.dbl-message { border: 1px solid #d8e3d8; border-radius: 8px; padding: 14px; font-size: 12px; line-height: 1.6; background: #f6faf5; overflow-wrap: anywhere; }
+.dbl-message.error { border-color: #e1c6b7; background: #fff8f2; }

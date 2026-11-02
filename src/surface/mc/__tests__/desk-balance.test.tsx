@@ -16,10 +16,10 @@ import { readStudioMyDay } from "../desk/studio-my-day";
 import { SourceCache } from "../desk/sources/command";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { balanceEntries, balanceMatches, DeskBalance } from "../dashboard-v2/components/desk-balance";
+import { balanceMatches, DeskBalance } from "../dashboard-v2/components/desk-balance";
 import { balanceItemSearch, balanceSearch, readBalanceLocation } from "../dashboard-v2/hooks/use-balance-location";
 import { DeskTimeFirst } from "../dashboard-v2/components/desk-time-first";
-import { detailsCommand } from "../dashboard-v2/components/desk-task-details";
+import { balanceEntries, detailsCommand } from "../dashboard-v2/components/desk-task-details";
 import { submitMyDay } from "../dashboard-v2/lib/desk-my-day-action";
 import { STALE_OUTLINE } from "../desk/balance-outline";
 
