@@ -3,7 +3,7 @@ import { ParserPermissionsSchema, type ParserPermissions } from "../../../common
 import { ParserRoutingSchema, parserUnavailable, type ParserRouting } from "./parser-routing";
 import { DAY_MS, startOfDay } from "./time";
 
-export const ASK_KINDS = ["reminder", "note", "capture", "task", "goal", "calendar", "routine"] as const;
+export const ASK_KINDS = ["reminder", "note", "capture", "task", "goal", "calendar", "routine", "conversation"] as const;
 export type AskKind = (typeof ASK_KINDS)[number];
 
 const iso = z.string().refine((s) => Number.isFinite(Date.parse(s)), "not a date");
@@ -11,6 +11,7 @@ const text = (max: number) => z.string().trim().min(1).max(max);
 
 export const FIELD_SCHEMAS = {
   routine: z.object({ proposalId: z.uuid() }),
+  conversation: z.object({ text: text(1000), area: text(200).optional() }),
   reminder: z.object({ text: text(300), due: iso }),
   note: z.object({ text: text(1000) }),
   capture: z.object({ text: text(1000) }),
@@ -48,6 +49,7 @@ export const KIND_LABEL: Record<AskKind, string> = {
   task: "Agent task",
   goal: "Goal draft",
   calendar: "Calendar entry",
+  conversation: "Conversation with Ivy",
 };
 
 export const notSetUp = (kind: AskKind): string => `${KIND_PLURAL[kind]} are not set up on this stack.`;
@@ -60,6 +62,7 @@ const KIND_PLURAL: Record<AskKind, string> = {
   task: "Agent tasks",
   goal: "Goal drafts",
   calendar: "Calendar entries",
+  conversation: "Conversations with Ivy",
 };
 
 export function taskMapAllowed(card: AskCard, maps: readonly AskMap[]): boolean {
@@ -257,6 +260,7 @@ export async function parseWithCommand(argv: string[], request: ParserRequest, r
   if (routing && answer.kind === "none" && !answer.reason?.trim()) return invalid();
   if (answer.kind === "none") return { kind: "none", reason: answer.reason?.trim().length ? answer.reason.trim().slice(0, 200) : NO_MATCH, ...(routing ? { routing } : {}) };
   if (!isAskKind(answer.kind) || !request.kinds.includes(answer.kind)) return routing || request.routing ? invalid() : null;
+  if (answer.kind === "conversation") return { kind: "conversation", fields: conversationFields(request.text), ...(routing ? { routing } : {}) };
   const card = validateCard(answer.kind, answer.fields);
   if (typeof card === "string" || !taskMapAllowed(card, request.maps)) return routing || request.routing ? invalid() : null;
   return { ...card, ...(routing ? { routing } : {}) };
@@ -273,7 +277,18 @@ export interface DeskProposal {
   via: "parser" | "rules";
   automatic?: boolean;
   routing?: Extract<ParserRouting, { kind: "selected" }>;
+  alternative?: ConversationOffer;
 }
+
+export interface ConversationOffer {
+  kind: "conversation";
+  label: string;
+  fields: AskFields["conversation"];
+}
+
+export const conversationFields = (text: string, area?: string): AskFields["conversation"] => ({ text, ...(area ? { area } : {}) });
+
+export const conversationOffer = (text: string, area?: string): ConversationOffer => ({ kind: "conversation", label: KIND_LABEL.conversation, fields: conversationFields(text, area) });
 
 function problemFor(kind: AskKind, fields: Record<string, unknown>, at: number | undefined, writable: ReadonlySet<AskKind>): string | undefined {
   if (!writable.has(kind)) return notSetUp(kind);

@@ -6,6 +6,8 @@ import { openConversationHost, type HostStatus } from "../../../../conversations
 import { answering, scratchDirs } from "../../../../conversations/__tests__/fixtures/scratch";
 import { handleConversations, isStackPrincipal } from "../conversations";
 import { buildAllowedHostnames, type MutationGuardContext } from "../mutation-guard";
+import { initDatabase } from "../../db/init";
+import { HandledLedger } from "../../desk/actions";
 
 const FIXTURE = join(import.meta.dir, "../../../../conversations/__tests__/fixtures/conversation-server.ts");
 const LABEL = "ai.meta-factory.cortex.fixture";
@@ -52,6 +54,44 @@ describe("conversation API gates", () => {
     expect(unavailable.status).toBe(503);
     expect(await unavailable.json()).toEqual({ ok: false, error: "Conversations unavailable: store held by 42/ai.meta-factory.cortex.default" });
     expect((await call(null, "GET", "/api/conversations")).status).toBe(503);
+  });
+
+  test("a command-bar question starts one conversation, sends the typed text first and Ivy answers; a retry opens the same one", async () => {
+    const dir = await scratch();
+    const status = await openConversationHost({ dir, stack: "api", label: LABEL, expectedLabel: LABEL, lanes: { cloud: { provider: "test", model: "m" } }, turns: answering(request => `Some names for ${request.prompt.length} chars`) });
+    statuses.push(status);
+    if (status.state !== "ready") throw new Error("host not ready");
+    const text = "can we think of a better name for this product? \"Desk\" is underselling it";
+    const ask = { startId: "6f1d1c6e-3b0a-4c39-9d43-2a7f3e3c0a11", text };
+    const first = await call(status, "POST", "/api/conversations/asks", ask);
+    expect(first.status).toBe(201);
+    const { conversation } = await first.json() as { conversation: { id: string; title: string; origin: unknown; policy: string } };
+    expect(conversation).toMatchObject({ title: text, origin: { kind: "web", ref: "desk-ask" }, policy: "cloud" });
+    const again = await call(status, "POST", "/api/conversations/asks", ask);
+    expect(((await again.json()) as { conversation: { id: string } }).conversation.id).toBe(conversation.id);
+    expect((await status.host.list()).filter(c => c.id === conversation.id)).toHaveLength(1);
+    expect(await status.host.input(conversation.id, `desk-ask:${ask.startId}`)).toMatchObject({ status: "done", answer: expect.stringContaining("Some names") });
+    const { entries } = await status.host.entries(conversation.id, 50, undefined);
+    expect(entries.filter(e => e.role === "user").map(e => e.text)).toEqual([text]);
+    expect((await call(status, "POST", "/api/conversations/asks", { startId: "not-a-uuid", text })).status).toBe(400);
+    const lab = { enabled: true, displayName: "", topN: 5, rangerUrl: "", sources: [], areas: [{ id: "lab", label: "Lab", color: "", repos: [], goals: [], policy: "local" as const }] };
+    const path = "/api/conversations/asks";
+    const local = await handleConversations(new Request(`http://127.0.0.1:8767${path}`, { method: "POST", headers: { host: "127.0.0.1:8767", "content-type": "application/json" }, body: JSON.stringify({ startId: "2c9a7e51-8b0d-4f3a-9c6e-1d2b3a4f5e60", text: "a lab question", area: "lab" }) }), new URL(`http://127.0.0.1:8767${path}`), guard(), () => status, { db: initDatabase(":memory:"), runtime: { options: lab, ledger: new HandledLedger() } });
+    expect(local.status).toBe(503);
+    expect(((await local.json()) as { error: string }).error).toContain("No local model is configured");
+  });
+
+  test("a command-bar question says why when conversations are not set up or no model can answer, and nothing is sent", async () => {
+    const ask = { startId: "0b6d3f0e-9a3e-4c1f-8f7e-5d2c1b0a9e88", text: "what should we call it?" };
+    const missing = await call(null, "POST", "/api/conversations/asks", ask);
+    expect(missing.status).toBe(503);
+    expect(await missing.json()).toEqual({ ok: false, error: "Conversations are not set up on this stack." });
+    const dir = await scratch();
+    const status = await openConversationHost({ dir, stack: "api", label: LABEL, expectedLabel: LABEL, lanes: {}, turns: answering(() => "never") });
+    statuses.push(status);
+    const failed = await call(status, "POST", "/api/conversations/asks", ask);
+    expect(failed.status).toBe(503);
+    expect(((await failed.json()) as { error: string }).error).toContain("Nothing was sent");
   });
 
   test("the stack principal is the governance allowlist when set, else the local principal", () => {

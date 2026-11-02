@@ -1,6 +1,7 @@
 import type { ConversationDetail, ConversationEntry, ConversationMeta, LinkedView, ObjectRef, OperationRecord, Organize, OverviewPage, OverviewRow, SubmissionView } from "../../../../conversations/types";
 import type { ImportableSession, SourceConversations } from "../../api/conversation-studio";
 import type { SessionEnd } from "../../desk/studio/session-schema";
+import type { AskFields } from "../../desk/ask";
 import { CONTINUATION_KIND, CREATION_KIND, DECISION_KIND, GRANT_KIND, IMPORTED_TURN_KIND, PROPOSAL_KIND, TOOL_ACTIVITY_KIND } from "../../../../conversations/types";
 import { ApiFailure, getJson, postJson } from "./api";
 
@@ -41,6 +42,9 @@ export const readSource = (source: ObjectRef, signal?: AbortSignal): Promise<Sou
 
 export const startConversation = (source: ObjectRef, startId: string): Promise<{ conversation: ConversationMeta }> =>
   postJson(`${BASE}/starts`, { startId, source });
+
+export const startFromAsk = (startId: string, fields: AskFields["conversation"]): Promise<{ conversation: ConversationMeta }> =>
+  postJson(`${BASE}/asks`, { startId, ...fields });
 
 export const importSession = (sessionId: string): Promise<{ conversation: ConversationMeta }> =>
   postJson(`${BASE}/imports`, { sessionId });

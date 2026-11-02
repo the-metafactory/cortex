@@ -3,13 +3,14 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { ConversationError, type ConversationHost, type HostDetail, type OwnerScope, type Seed, type SeedEntry } from "../../../conversations/host";
 import { DECISION_KIND, IMPORTED_TURN_KIND, ObjectRefSchema, type ConversationDetail, type ConversationMeta, type ObjectRef, type OperationRecord, type SourceView } from "../../../conversations/types";
+import { FIELD_SCHEMAS } from "../desk/ask";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { splitNoteId, studioNoteId, studioRequestId, studioThreadOf } from "../desk/conversation-sources";
 import type { GitRunner } from "../desk/studio/git";
 import { readStudioFiles } from "../desk/studio/read";
 import { planExchangeEnd, sessionSubject } from "../desk/studio/session";
 import { SessionEndSchema, StudioSessionSchema, type SessionEnd, type StudioSession } from "../desk/studio/session-schema";
-import { buildStudioView } from "../desk/studio/view";
+import { buildStudioView, effectivePolicy } from "../desk/studio/view";
 import { runStudioTransaction } from "../desk/studio/writer";
 
 export interface StudioConversationDeps {
@@ -21,6 +22,7 @@ export interface StudioConversationDeps {
 
 export const StartSchema = z.object({ startId: z.uuid(), source: ObjectRefSchema }).strict();
 export const ImportSchema = z.object({ sessionId: z.uuid() }).strict();
+export const AskStartSchema = FIELD_SCHEMAS.conversation.extend({ startId: z.uuid() }).strict();
 export const OutcomeSchema = z.union([
   z.object({ proposalId: z.uuid(), outcome: SessionEndSchema }).strict(),
   z.object({ proposalId: z.uuid(), check: z.literal(true) }).strict(),
@@ -109,6 +111,13 @@ export async function startFromSource(host: ConversationHost, deps: StudioConver
   if (!thread || thread.state === "closed" || original === null) throw new ConversationError(409, "Choose an open idea, proposed stand or an active thread.");
   const scope = ownerScope({ thread: slug, ...(note ? { note: note.note } : {}), original, stand: thread.stand });
   return host.create({ title: studioTitle(Boolean(note), original), links: [source], origin: { kind: "studio", ref: slug }, policy: thread.policy }, principal, { key, scope, titleFromSource: true });
+}
+
+export async function startFromAsk(host: ConversationHost, areas: DeskOptions["areas"], body: z.infer<typeof AskStartSchema>, principal: string): Promise<ConversationMeta> {
+  const policy = body.area ? effectivePolicy([body.area], areas).policy : "cloud";
+  const conversation = await host.create({ title: clip(body.text), links: [], origin: { kind: "web", ref: "desk-ask" }, policy }, principal, { key: `desk-ask:${body.startId}` });
+  await host.submit(conversation.id, { inputId: `desk-ask:${body.startId}`, transport: "web", text: body.text, mode: "queue" });
+  return host.meta(conversation.id);
 }
 
 export async function importStudioSession(host: ConversationHost, deps: StudioConversationDeps, sessionId: string, principal: string): Promise<ConversationMeta> {

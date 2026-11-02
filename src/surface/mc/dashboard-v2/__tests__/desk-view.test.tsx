@@ -275,6 +275,22 @@ describe("the command bar", () => {
     expect(html).not.toContain(">Edit<");
   });
 
+  it("proposes a conversation with the typed text and one Start button, and offers it as an alternative on other cards", () => {
+    const said = "can we think of a better name for this product?";
+    const talk = card({ kind: "conversation", label: "Conversation with Ivy", fields: { text: said } });
+    expect(talk).toContain("Conversation with Ivy");
+    expect(talk).toContain(said);
+    expect(talk).toMatch(/<button[^>]*>Start the conversation<\/button>/);
+    expect(talk).not.toContain("Talk it over with Ivy instead");
+    const alternative = { kind: "conversation" as const, label: "Conversation with Ivy", fields: { text: said } };
+    const goal = (onAlternative?: () => void) => renderToStaticMarkup(
+      <ProposalCard proposal={{ kind: "goal", label: "Goal draft", fields: { wording: "Find a better name" }, via: "parser", alternative }} said={said} maps={[]} now={NOW} busy={false}
+        onConfirm={() => {}} onCancel={() => {}} onGoto={() => {}} onFieldsChange={() => {}} {...(onAlternative ? { onAlternative } : {})} />,
+    );
+    expect(goal(() => {})).toContain(">Talk it over with Ivy instead</button>");
+    expect(goal()).not.toContain("Talk it over with Ivy instead");
+  });
+
   it("shows notes under Keep in mind", () => {
     const html = renderToStaticMarkup(<DeskBody view={{ ...view, notes: [{ id: 1, text: "Boiler code 4711", createdAt: NOW }] }} error={null} onOpenMissionControl={() => {}} />);
     expect(html).toContain("Keep in mind");

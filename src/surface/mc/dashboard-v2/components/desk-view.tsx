@@ -13,6 +13,7 @@ import { DeskTimeFirst } from "./desk-time-first";
 import { StudioSessionPanel, useStudioSession, type StartDiscussion } from "./desk-studio-session";
 import { ConversationsArea } from "./desk-conversations";
 import { useStartConversation } from "./desk-source-conversations";
+import { failureText, startFromAsk } from "../lib/conversations";
 import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -29,7 +30,7 @@ import { useRoutinesLocation, defaultRoutinesLocation } from "../hooks/use-routi
 import { useSettingsLocation } from "../hooks/use-settings-location";
 import { DeskSettings } from "./desk-settings";
 import { changeVips } from "../lib/desk-settings";
-import { proposalTime, type DeskProposal } from "../../desk/ask";
+import { FIELD_SCHEMAS, proposalTime, type AskFields, type DeskProposal } from "../../desk/ask";
 import { DAY_MS, startOfDay } from "../../desk/time";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
@@ -281,8 +282,29 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
   useEffect(() => { if (discussion.session) voice.dismiss(); }, [discussion.session?.id, voice.dismiss]);
 
+  const startTalk = async (requestId: string, fields: AskFields["conversation"], said: string): Promise<void> => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      const { conversation } = await startFromAsk(requestId, fields);
+      setProposal(null);
+      openConversation(conversation.id);
+    } catch (err) {
+      setNote(failureText(err, "Mission Control did not answer. Try again; a repeated start opens the same conversation."));
+      setAskText((cur) => (cur.trim() ? cur : said));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const confirm = async (fields: Record<string, unknown>): Promise<void> => {
     if (!proposal || creating) return;
+    if (proposal.p.kind === "conversation") {
+      const talk = FIELD_SCHEMAS.conversation.safeParse(fields);
+      if (talk.success) await startTalk(proposal.requestId, talk.data, proposal.said);
+      else setNote("Type what you want to talk over with Ivy first.");
+      return;
+    }
     setCreating(true);
     const result = await createFromProposal(proposal.requestId, proposal.p.kind, fields);
     setCreating(false);
@@ -706,6 +728,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     revealDay({ kind: "event", key });
   };
 
+  const alternative = proposal?.p.alternative;
   const proposalCard = proposal && (
     <ProposalCard
       key={proposal.requestId}
@@ -718,6 +741,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       onCancel={() => setProposal(null)}
       onGoto={() => focusEvent(GHOST_KEY)}
       onFieldsChange={(fields) => setProposal((cur) => (cur ? { ...cur, fields } : cur))}
+      {...(alternative ? { onAlternative: () => void startTalk(proposal.requestId, alternative.fields, proposal.said) } : {})}
     />
   );
 
