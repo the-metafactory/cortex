@@ -1,6 +1,7 @@
 import { HOST_NAME_RE } from "../host-name";
 import { ParserPermissionsSchema } from "./desk-parser";
 import { RoutineOptionsSchema } from "./desk-routines";
+import { DeskConversationsSchema } from "./desk-conversations";
 /**
  * F-007: Bot Configuration Types
  *
@@ -486,6 +487,7 @@ export const DeskSchema = z.object({
       }),
     )
     .default([]),
+  conversations: DeskConversationsSchema.optional(),
   studio: z
     .object({
       dir: z.string().min(1),

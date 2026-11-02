@@ -1,7 +1,7 @@
 import type { ConversationDetail, ConversationEntry, ConversationMeta, LinkedView, ObjectRef, OperationRecord, Organize, OverviewPage, OverviewRow, SubmissionView } from "../../../../conversations/types";
 import type { ImportableSession, SourceConversations } from "../../api/conversation-studio";
 import type { SessionEnd } from "../../desk/studio/session-schema";
-import { CONTINUATION_KIND, CREATION_KIND, DECISION_KIND, GRANT_KIND, IMPORTED_TURN_KIND, PROPOSAL_KIND } from "../../../../conversations/types";
+import { CONTINUATION_KIND, CREATION_KIND, DECISION_KIND, GRANT_KIND, IMPORTED_TURN_KIND, PROPOSAL_KIND, TOOL_ACTIVITY_KIND } from "../../../../conversations/types";
 import { ApiFailure, getJson, postJson } from "./api";
 
 export const failureText = (error: unknown, fallback: string): string => (error instanceof ApiFailure ? error.info.message : fallback);
@@ -61,10 +61,31 @@ export async function chooseOutcome(id: string, proposalId: string, outcome: Ses
 
 export type EntryView =
   | { kind: "message"; who: "you" | "ivy"; text: string; note?: string }
-  | { kind: "activity"; text: string };
+  | { kind: "activity"; text: string }
+  | { kind: "failure"; text: string };
 
 const record = (value: unknown): Record<string, unknown> => (value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {});
 const text = (value: unknown): string => (typeof value === "string" ? value : "");
+const TOOL_DETAIL = ["action", "query", "skill", "path", "pattern"] as const;
+const short = (value: string, max = 80): string => (value.length > max ? `${value.slice(0, max - 1)}…` : value);
+
+function toolLine(data: Record<string, unknown>): string {
+  const tool = text(data.tool) || "a tool";
+  const args = record(data.args);
+  const detail = TOOL_DETAIL.flatMap(key => (text(args[key]) ? [short(text(args[key]))] : [])).join(" · ");
+  const named = detail ? `${tool} (${detail})` : tool;
+  if (data.outcome === "refused") return `Refused ${named}: it is not on the read-only tool allowlist, so nothing ran.`;
+  if (data.outcome === "stopped") return `${named} is not on the read-only tool allowlist and may have run; the turn was stopped.`;
+  if (data.outcome === "error") return `Read with ${named} failed: ${short(text(data.result).split("\n")[0] ?? "", 160)}`;
+  return `Read with ${named}.`;
+}
+
+function continuationLine(data: Record<string, unknown>): string {
+  if (data.mode === "native-resume") return "Resumed the same engine after a restart.";
+  if (data.reason === "engine-changed") return "Ivy's working context was rebuilt from this conversation's record, because earlier turns came from another engine.";
+  if (data.reason === "session-missing") return "Ivy's earlier pi session was not found, so the working context was rebuilt from this conversation's record.";
+  return `Continued with reconstructed context on the ${text(data.to)} model.`;
+}
 
 export function entryViews(entry: ConversationEntry): EntryView[] {
   const data = record(entry.data);
@@ -94,9 +115,9 @@ export function entryViews(entry: ConversationEntry): EntryView[] {
   if (entry.kind === GRANT_KIND) {
     return [{ kind: "activity", text: data.action === "revoked" ? `Standing ${text(data.type)} permission (${text(data.scope)}) revoked. Objects created earlier stay.` : `Standing ${text(data.type)} permission granted for ${data.scope === "global" ? "all your conversations" : "this conversation"}. Creation only.` }];
   }
-  if (entry.kind === CONTINUATION_KIND) {
-    return [{ kind: "activity", text: data.mode === "native-resume" ? "Resumed the same engine after a restart." : `Continued with reconstructed context on the ${text(data.to)} model.` }];
-  }
+  if (entry.kind === CONTINUATION_KIND) return [{ kind: "activity", text: continuationLine(data) }];
+  if (entry.kind === TOOL_ACTIVITY_KIND) return [{ kind: "activity", text: toolLine(data) }];
+  if (entry.role === "assistant" && entry.error) return [{ kind: "failure", text: `Ivy could not answer: ${entry.error}` }];
   if (entry.role === "user" && entry.text) return [{ kind: "message", who: "you", text: entry.text }];
   if (entry.role === "assistant" && entry.text) return [{ kind: "message", who: "ivy", text: entry.text }];
   return [];

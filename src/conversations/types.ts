@@ -111,6 +111,7 @@ export interface ConversationEntry {
   text?: string;
   data?: unknown;
   at?: number;
+  error?: string;
 }
 
 export const CONTINUATION_KIND = "cortex.continuation";
@@ -120,9 +121,11 @@ export const INPUT_KIND = "cortex.input";
 export const PROPOSAL_KIND = "cortex.proposal";
 export const CREATION_KIND = "cortex.creation";
 export const GRANT_KIND = "cortex.grant";
+export const TOOL_ACTIVITY_KIND = "cortex.tool-activity";
 export type Continuation =
   | { mode: "native-resume"; engine: string; at: string }
-  | { mode: "reconstructed"; from: ModelRoute | null; to: ModelRoute; at: string };
+  | { mode: "reconstructed"; from: ModelRoute | null; to: ModelRoute; at: string; reason?: Exclude<ContinuationReason, "lane-changed"> };
+export type ContinuationReason = "lane-changed" | "engine-changed" | "session-missing";
 
 export const GRANT_SCOPES = ["conversation", "global"] as const;
 export const TRANSPORTS = ["web", "discord"] as const;

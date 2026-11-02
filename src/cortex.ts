@@ -20,6 +20,7 @@
 
 import { resolveStudio } from "./surface/mc/desk/studio/config";
 import { openConversationHost, type HostStatus } from "./conversations/host";
+import { piTurns, resolvePiSettings } from "./conversations/pi";
 import { cortexStateDir } from "./common/state-path";
 import { Command } from "commander";
 import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync } from "fs";
@@ -4941,14 +4942,18 @@ export async function startCortex(
       // independent of headless — a headless stack simply doesn't serve).
       const mcHeadless = !config.mc.server.enabled;
       if (!mcHeadless) {
-        const filer = config.mc.desk.studio ? resolveStudio(config.mc.desk.studio, expandTilde).filer : undefined;
+        const conversationDir = join(cortexStateDir(), "stacks", derivedStack.stack, "conversations");
+        const conversationConfig = config.mc.desk.conversations;
+        const pi = resolvePiSettings(conversationConfig?.pi, conversationDir, expandTilde);
         conversationStatus = await openConversationHost({
-          dir: join(cortexStateDir(), "stacks", derivedStack.stack, "conversations"),
+          dir: conversationDir,
           stack: derivedStack.stack,
           label: process.env.XPC_SERVICE_NAME ?? "",
           expectedLabel: `ai.meta-factory.cortex.${derivedStack.stack}`,
-          endpoints: { ...(filer ? { cloud: filer } : {}), ...(filer?.local ? { local: filer.local } : {}) },
+          lanes: { ...(conversationConfig?.local ? { local: conversationConfig.local } : {}), ...(conversationConfig?.cloud ? { cloud: conversationConfig.cloud } : {}) },
+          turns: piTurns(pi),
         });
+        console.log(`cortex: conversation turns run through pi at ${pi.bin} (${pi.extensions.length ? `projection ${pi.extensions.join(", ")}` : "no Soma projection found"}; tools ${pi.tools.join(",") || "none"}; lanes ${[conversationConfig?.local ? "local" : "", conversationConfig?.cloud ? "cloud" : ""].filter(Boolean).join(", ") || "none configured"})`);
         console.log(conversationStatus.state === "ready"
           ? `cortex: conversation host ready (${conversationStatus.resumed.length} resumed, ${conversationStatus.reconciled.length} reconciled${conversationStatus.tookOver ? `, took over lock of dead pid ${conversationStatus.tookOver.pid}` : ""})`
           : `cortex: ${conversationStatus.reason}`);

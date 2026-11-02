@@ -20,6 +20,7 @@ Command values are argument arrays, such as `[/usr/local/bin/bun, /opt/adapters/
 | `areas` | `[]` | Area definitions described below. |
 | `sources` | `[]` | Calendar and mail commands described below. |
 | `studio` | absent | Optional Studio directory settings. |
+| `conversations` | absent | Model lanes and pi settings for Ivy conversations, described below. |
 
 `ranger.bin`, `ranger.config`, and `soma.bin` accept a leading `~`. Rulings need both Ranger actions and `soma.bin`.
 
@@ -198,3 +199,32 @@ mc:
 ```
 
 The goal check must publish its reading through its own mechanism. Exit 0 only reports that the command ran successfully. See [Goal checks](commands.md#goal-checks).
+
+## Ivy conversations
+
+Ivy answers conversation turns through [pi](https://pi.dev) (`pi --mode json`). Without `conversations`, or without a lane for a conversation's policy, a turn is refused and nothing is sent. No other engine is used as a fallback.
+
+```yaml
+mc:
+  desk:
+    conversations:
+      local: { provider: spark, model: longctx }
+      cloud: { provider: anthropic, model: claude-sonnet-5-5 }
+      pi:
+        bin: ~/.local/bin/pi
+        extensions: [~/.pi/agent/extensions/soma.ts]
+        tools: [soma_context, read, grep, find, ls]
+        timeoutSeconds: 300
+        passEnv: []
+```
+
+`local` and `cloud` are lanes: a pi `provider` and `model`, and optional `thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`). A local-only conversation runs only on `local`. A cloud-allowed conversation uses `cloud`, or `local` when `cloud` is absent. Only you can decide which provider counts as local; Cortex does not infer it.
+
+<!-- glossary-ignore: agent -->
+`pi.bin` defaults to `pi` on the Cortex runtime's `PATH`, then `~/.local/bin/pi`. `pi.extensions` defaults to `soma.ts` in pi's agent directory (`PI_CODING_AGENT_DIR`, else `~/.pi/agent/extensions`) when that file exists. These are the only pi extensions loaded: Cortex passes `--no-extensions`, `--no-mcp` and `--no-context-files`, so installed packages, MCP servers and other extensions are not loaded inside a conversation. Without a projection, Cortex logs "no Soma projection found" at start and turns have no Soma tools.
+
+pi gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `TERM`, `TZ`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and variables starting with `PI_`, `SOMA_`, `XDG_` or `LC_` from the Cortex environment. Add the names of other variables it needs, such as a provider key variable, to `pi.passEnv`.
+
+`pi.tools` can only narrow the read-only tools `soma_context`, `read`, `grep`, `find` and `ls`. Cortex passes them as an explicit `--tools` allowlist, so write, edit, shell, web, task and routing tools, and any tool installed later, stay unavailable. A turn on the `cloud` lane gets no file read or search. Every tool call and its result is recorded in the conversation. A call to a tool outside the allowlist is recorded as refused when pi answers that the tool was not found; any other result stops the turn with an error.
+
+pi keeps one session per conversation and lane under the stack's conversation directory (`pi-sessions`). If that session is missing, or the lane or engine changed, the next turn starts a new session with the earlier exchange from the conversation record, and the record shows that the context was reconstructed.
