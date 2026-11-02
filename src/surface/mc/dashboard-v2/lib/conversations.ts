@@ -1,6 +1,7 @@
 import type { ConversationDetail, ConversationEntry, ConversationMeta, ObjectRef, OperationRecord, SubmissionView } from "../../../../conversations/types";
 import type { ImportableSession, SourceConversations } from "../../api/conversation-studio";
 import type { SessionEnd } from "../../desk/studio/session-schema";
+import { CONTINUATION_KIND, DECISION_KIND, IMPORTED_TURN_KIND } from "../../../../conversations/types";
 import { ApiFailure, getJson, postJson } from "./api";
 
 export const failureText = (error: unknown, fallback: string): string => (error instanceof ApiFailure ? error.info.message : fallback);
@@ -59,7 +60,7 @@ const text = (value: unknown): string => (typeof value === "string" ? value : ""
 
 export function entryViews(entry: ConversationEntry): EntryView[] {
   const data = record(entry.data);
-  if (entry.kind === "cortex.imported-turn") {
+  if (entry.kind === IMPORTED_TURN_KIND) {
     const reply = text(data.reply);
     const from = `From the earlier Studio session · ${text(data.model)}, ${text(data.policy)}`;
     return [
@@ -67,13 +68,13 @@ export function entryViews(entry: ConversationEntry): EntryView[] {
       reply ? { kind: "message", who: "ivy", text: reply, note: from } : { kind: "activity", text: "No answer was received for this earlier turn." },
     ];
   }
-  if (entry.kind === "cortex.decision") {
+  if (entry.kind === DECISION_KIND) {
     const outcome = record(data.outcome);
     const commit = text(data.commit).slice(0, 7);
     if (data.readOnly === true) return [{ kind: "activity", text: `Earlier Studio outcome (${text(outcome.kind) || "saved"}), commit ${commit}. Read-only; continuing never re-applies it.` }];
     return [{ kind: "activity", text: `Saved to the Studio${text(outcome.kind) ? ` (${text(outcome.kind)})` : ""}, commit ${commit}.` }];
   }
-  if (entry.kind === "cortex.continuation") {
+  if (entry.kind === CONTINUATION_KIND) {
     return [{ kind: "activity", text: data.mode === "native-resume" ? "Resumed the same engine after a restart." : `Continued with reconstructed context on the ${text(data.to)} model.` }];
   }
   if (entry.role === "user" && entry.text) return [{ kind: "message", who: "you", text: entry.text }];

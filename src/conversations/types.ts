@@ -91,6 +91,8 @@ export interface ConversationEntry {
 }
 
 export const CONTINUATION_KIND = "cortex.continuation";
+export const IMPORTED_TURN_KIND = "cortex.imported-turn";
+export const DECISION_KIND = "cortex.decision";
 export const INPUT_KIND = "cortex.input";
 export type Continuation =
   | { mode: "native-resume"; engine: string; at: string }

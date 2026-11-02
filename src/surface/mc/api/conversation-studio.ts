@@ -1,8 +1,8 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { ConversationError, DECISION_KIND, IMPORTED_TURN_KIND, type ConversationHost, type HostDetail, type OwnerScope, type Seed, type SeedEntry } from "../../../conversations/host";
-import { ObjectRefSchema, type ConversationDetail, type ConversationMeta, type ObjectRef, type OperationRecord, type SourceView } from "../../../conversations/types";
+import { ConversationError, type ConversationHost, type HostDetail, type OwnerScope, type Seed, type SeedEntry } from "../../../conversations/host";
+import { DECISION_KIND, IMPORTED_TURN_KIND, ObjectRefSchema, type ConversationDetail, type ConversationMeta, type ObjectRef, type OperationRecord, type SourceView } from "../../../conversations/types";
 import type { DeskOptions } from "../desk/compose";
 import type { DeskRuntime } from "../desk/compose";
 import { splitNoteId, studioNoteId, studioRequestId, studioThreadOf } from "../desk/conversation-sources";
@@ -38,10 +38,15 @@ const clip = (text: string, max = 90): string => {
   return line.length > max ? `${line.slice(0, max - 1)}…` : line;
 };
 
-function studioDesk(deps: StudioConversationDeps): DeskOptions & { studio: NonNullable<DeskOptions["studio"]> } {
+type StudioDesk = DeskOptions & { studio: NonNullable<DeskOptions["studio"]> };
+function studioConfigured(deps: StudioConversationDeps): StudioDesk | null {
   const desk = deps.runtime?.options;
-  if (!desk?.enabled || !desk.studio) throw new ConversationError(409, "The Studio is not set up on this stack.");
-  return { ...desk, studio: desk.studio };
+  return desk?.enabled && desk.studio ? { ...desk, studio: desk.studio } : null;
+}
+function studioDesk(deps: StudioConversationDeps): StudioDesk {
+  const desk = studioConfigured(deps);
+  if (!desk) throw new ConversationError(409, "The Studio is not set up on this stack.");
+  return desk;
 }
 
 const StudioScopeSchema = z.object({ thread: z.string(), note: z.string().optional(), original: z.string(), stand: z.string() });
@@ -157,10 +162,10 @@ async function outcomeOnce(host: ConversationHost, deps: StudioConversationDeps,
   const operation = await host.propose(id, body.proposalId, 1, owner, digestOf(body.outcome));
   if (operation.state === "created" || operation.state === "failed") return operation;
   if (operation.state === "uncertain" || operation.state === "running") return check(host, operation);
-  const options = deps.runtime?.options;
-  if (!options?.enabled || !options.studio) return host.transition(operation.operationId, "confirmed").then(() => host.transition(operation.operationId, "running")).then(() => host.transition(operation.operationId, "failed", { note: "The Studio is not set up on this stack. Nothing was written." }));
+  const options = studioConfigured(deps);
   await host.transition(operation.operationId, "confirmed");
   await host.transition(operation.operationId, "running");
+  if (!options) return host.transition(operation.operationId, "failed", { note: "The Studio is not set up on this stack. Nothing was written." });
   const exchange = { thread: studio.thread, scope: studio.note ? { kind: "ghost" as const, note: studio.note } : { kind: "thread" as const }, original: studio.original, stand: studio.stand };
   try {
     const turns = await host.exchange(id);

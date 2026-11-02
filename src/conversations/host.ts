@@ -10,7 +10,7 @@ import { z } from "zod";
 import { acquireHostLock, type LockOwner } from "./lock";
 import { chatTurns, cortexModels, CORTEX_PROVIDER, type ChatCall, type GateResult, type ModelEndpoints } from "./model";
 import {
-  AttachmentRefSchema, CONTINUATION_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES,
+  AttachmentRefSchema, CONTINUATION_KIND, IMPORTED_TURN_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES,
   type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationMeta, type CreateConversation,
   type InputRequest, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadbacks, type OwnerType, type Policy, type SourceState, type SourceView, type SubmissionView,
 } from "./types";
@@ -51,8 +51,6 @@ type Directory = JsonObject & { conversations: Record<string, JsonObject>; sessi
 const DirectoryDoc = defineDoc<Directory>({ kind: "cortex.conversations", version: 1, scope: "session", initial: () => ({ conversations: {}, sessions: {} }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 const IngressDoc = defineDocFamily<{ sha256: string }, string>({ kind: "cortex.ingress", version: 1, scope: "conversation", history: "latest", fork: "initial", family: true, initial: sha256 => ({ sha256 }), checkpointWhen: () => true });
 const JournalDoc = defineDoc<{ operations: Record<string, JsonObject> }>({ kind: "cortex.operations", version: 1, scope: "session", initial: () => ({ operations: {} }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
-export const IMPORTED_TURN_KIND = "cortex.imported-turn";
-export const DECISION_KIND = "cortex.decision";
 const ImportedTurnSchema = z.object({ text: z.string(), reply: z.string().nullable(), model: z.string(), policy: z.enum(["local", "cloud"]) }).loose();
 const NEXT: Record<OperationState, OperationState[]> = { proposed: ["confirmed"], confirmed: ["running"], running: ["created", "failed", "uncertain"], uncertain: ["created", "failed"], created: [], failed: [] };
 

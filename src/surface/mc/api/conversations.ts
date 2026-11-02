@@ -8,6 +8,7 @@ export type ConversationAccess = () => HostStatus | null;
 
 const reply = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 const fail = (status: number, error: string): Response => reply(status, { ok: false, error });
+const NO_SOURCES = (): Response => fail(503, "Conversation sources are not set up on this stack.");
 const notAllowed = (allow: string): Response => new Response(null, { status: 405, headers: { Allow: allow } });
 function decoded(value: string): string | null {
   try { return decodeURIComponent(value); }
@@ -54,12 +55,12 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
       if (req.method !== "GET") return notAllowed("GET");
       const query = SourceQuerySchema.safeParse({ owner: url.searchParams.get("owner"), id: url.searchParams.get("id") });
       if (!query.success) return fail(400, "The source reference is not valid.");
-      if (!studio) return fail(503, "Conversation sources are not set up on this stack.");
+      if (!studio) return NO_SOURCES();
       return reply(200, { ok: true, ...(await sourceConversations(host, studio, query.data)) });
     }
     if (url.pathname === "/api/conversations/starts" || url.pathname === "/api/conversations/imports") {
       if (req.method !== "POST") return notAllowed("POST");
-      if (!studio) return fail(503, "Conversation sources are not set up on this stack.");
+      if (!studio) return NO_SOURCES();
       const raw = await body(req);
       if (url.pathname === "/api/conversations/starts") {
         const parsed = StartSchema.safeParse(raw);
@@ -87,7 +88,7 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
     }
     if (part === "outcome") {
       if (req.method !== "POST" || inputId) return notAllowed("POST");
-      if (!studio) return fail(503, "Conversation sources are not set up on this stack.");
+      if (!studio) return NO_SOURCES();
       const parsed = OutcomeSchema.safeParse(await body(req));
       if (!parsed.success) return fail(400, "The outcome is not valid.");
       const operation = await applyStudioOutcome(host, studio, id, parsed.data);
