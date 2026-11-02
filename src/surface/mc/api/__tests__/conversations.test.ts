@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { openConversationHost, type HostStatus } from "../../../../conversations/host";
-import { scratchDirs } from "../../../../conversations/__tests__/fixtures/scratch";
+import { answering, scratchDirs } from "../../../../conversations/__tests__/fixtures/scratch";
 import { handleConversations, isStackPrincipal } from "../conversations";
 import { buildAllowedHostnames, type MutationGuardContext } from "../mutation-guard";
 
@@ -30,7 +30,7 @@ const say = (inputId: string, text: string) => ({ inputId, transport: "web", tex
 describe("conversation API gates", () => {
   test("only this stack's principal reads or writes, every method passes the rebind guard, and an unavailable host says why", async () => {
     const dir = await scratch();
-    const status = await openConversationHost({ dir, stack: "api", label: LABEL, expectedLabel: LABEL, endpoints: { cloud: { baseUrl: "http://x.invalid", model: "m", timeoutSeconds: 5 } }, chat: () => Promise.resolve("ok") });
+    const status = await openConversationHost({ dir, stack: "api", label: LABEL, expectedLabel: LABEL, lanes: { cloud: { provider: "test", model: "m" } }, turns: answering(() => "ok") });
     statuses.push(status);
     const created = await call(status, "POST", "/api/conversations", NEW);
     expect(created.status).toBe(201);

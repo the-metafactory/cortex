@@ -4,8 +4,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_SETTINGS, type AppState } from "../../../balance";
 import { openConversationHost, type ConversationHost, type HostStatus } from "../../../conversations/host";
-import { scratchDirs } from "../../../conversations/__tests__/fixtures/scratch";
-import type { ChatCall } from "../../../conversations/model";
+import { answering, scratchDirs } from "../../../conversations/__tests__/fixtures/scratch";
+import type { TurnRequest } from "../../../conversations/model";
 import type { ConversationDetail, ConversationEntry, ConversationMeta, OperationRecord, SourceView } from "../../../conversations/types";
 import { handleConversations, importedSessions } from "../api/conversations";
 import { handleDeskStudioSession } from "../api/desk-studio-session";
@@ -40,7 +40,7 @@ const balance = (tasks: { id: string; title: string; note?: string }[]): AppStat
   settings: { ...DEFAULT_SETTINGS }, log: [], history: { deficits: {}, lastSurfaced: {} }, dayState: null,
 });
 
-async function rig(chat: ChatCall = (_endpoint, turns) => Promise.resolve(`Ivy on: ${turns.at(-1)?.content ?? ""}`)) {
+async function rig(answer: (request: TurnRequest) => string | Promise<string> = request => `Ivy on: ${request.prompt}`) {
   const studioDir = await dirs.make();
   const hostDir = await dirs.make();
   mkdirSync(join(studioDir, "threads"));
@@ -52,13 +52,13 @@ async function rig(chat: ChatCall = (_endpoint, turns) => Promise.resolve(`Ivy o
   };
   git("init", "-q"); git("config", "user.email", "test@example.com"); git("config", "user.name", "Test"); git("add", "."); git("commit", "-qm", "fixture");
   const db = new Database(":memory:"); databases.push(db); for (const sql of SCHEMA_SQL) db.run(sql);
-  const endpoint = { baseUrl: "http://model.invalid/v1", model: "test-model", timeoutSeconds: 5 };
+  const lane = { provider: "test", model: "test-model" };
   const options = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [{ id: "lab", label: "Lab", color: "", repos: [], goals: [], policy: "cloud" as "cloud" | "local" }], sources: [], studio: { dir: studioDir, maxActive: 5 } };
   const runtime: DeskRuntime = { ledger: new HandledLedger(), options };
   let status: HostStatus | null = null;
   let skew = 0;
   const boot = async (): Promise<ConversationHost> => {
-    status = await openConversationHost({ dir: hostDir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: { local: endpoint, cloud: endpoint }, chat });
+    status = await openConversationHost({ dir: hostDir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local: lane, cloud: lane }, turns: answering(answer) });
     if (status.state !== "ready") throw new Error(status.reason);
     await status.host.attachSources(conversationSources({ db, desk: () => options, now: () => Date.now() + skew }));
     hosts.push(status.host);
@@ -181,7 +181,7 @@ describe("Ivy conversations from Studio and Balance", () => {
 
   test("a Balance task offers its conversations; once the task is gone it shows unavailable without its content and the history stays", async () => {
     const seen: string[] = [];
-    const r = await rig((_endpoint, turns) => { seen.push(JSON.stringify(turns)); return Promise.resolve("noted"); });
+    const r = await rig(request => { seen.push(JSON.stringify(request)); return "noted"; });
     saveBalanceState(r.db, balance([{ id: "task-1", title: "Draft the workshop exercise", note: "Private prep detail" }]));
     const source = { owner: "balance-task" as const, id: "task-1" };
     const one = await r.call("POST", "/api/conversations/starts", { startId: crypto.randomUUID(), source });
@@ -209,7 +209,7 @@ describe("Ivy conversations from Studio and Balance", () => {
   test("queued status and Use this now come from the host's order, not the browser", async () => {
     const { promise: release, resolve } = Promise.withResolvers<undefined>();
     let calls = 0;
-    const r = await rig(async (_endpoint, turns) => { calls += 1; if (calls === 1) await release; return `answer ${turns.at(-1)?.content ?? ""}`; });
+    const r = await rig(async request => { calls += 1; if (calls === 1) await release; return `answer ${request.prompt}`; });
     const { body } = await r.call("POST", "/api/conversations/starts", { startId: crypto.randomUUID(), source: { owner: "studio-thread", id: "alpha" } });
     const id = body.conversation.id;
     await r.call("POST", `/api/conversations/${id}/inputs`, say("q1", "start"));
@@ -226,12 +226,12 @@ describe("Ivy conversations from Studio and Balance", () => {
 
 describe("workspace A over the authenticated conversation API", () => {
   const noop = (): void => undefined;
-  const view = (detail: ConversationDetail, entries: ConversationEntry[], busy = false): string => renderToStaticMarkup(<WorkspaceView detail={detail} entries={entries} draft={detail.draft} ready busy={busy} sending={false} retrying={false} error={null} onDraft={noop} onSend={noop} onLeave={noop} onSaved={noop} organizing={false} onOrganize={noop} />);
+  const view = (detail: ConversationDetail, entries: ConversationEntry[], busy = false): string => renderToStaticMarkup(<WorkspaceView detail={detail} entries={entries} draft={detail.draft} ready busy={busy} sending={false} retrying={false} error={null} onDraft={noop} onSend={noop} onRetry={noop} onLeave={noop} onSaved={noop} organizing={false} onOrganize={noop} />);
 
   test("shows saved messages, the Studio source context, the restored draft, Use this now while busy, and an unavailable source without its content", async () => {
     const { promise: release, resolve } = Promise.withResolvers<undefined>();
     let calls = 0;
-    const r = await rig(async (_endpoint, turns) => { calls += 1; if (calls === 2) await release; return `Ivy: ${turns.at(-1)?.content ?? ""}`; });
+    const r = await rig(async request => { calls += 1; if (calls === 2) await release; return `Ivy: ${request.prompt}`; });
     const { body } = await r.call("POST", "/api/conversations/starts", { startId: crypto.randomUUID(), source: IDEA });
     const id = body.conversation.id;
     await r.call("POST", `/api/conversations/${id}/inputs`, say("w1", "First thought"));

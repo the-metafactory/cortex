@@ -85,6 +85,14 @@ export function useConversation(id: string) {
     } finally { setSending(false); }
   }, [id, sending, flush, load]);
 
+  const retry = useCallback(async (text: string): Promise<void> => {
+    if (!text || sending) return;
+    setSending(true); setError(null);
+    try { await sendInput(id, { inputId: crypto.randomUUID(), text, mode: "queue" }); await load(); }
+    catch (err) { setError(failure(err, "Mission Control did not confirm the retry. Nothing was sent; try again.")); }
+    finally { setSending(false); }
+  }, [id, sending, load]);
+
   const organize = useCallback(async (change: Organize): Promise<boolean> => {
     if (organizing) return false;
     setOrganizing(true); setError(null);
@@ -98,7 +106,7 @@ export function useConversation(id: string) {
     } finally { setOrganizing(false); }
   }, [id, organizing, load]);
 
-  return { detail, entries, error, draft: draft ?? "", ready: draft !== null, setDraft, send, sending, busy, retrying: unsent.current !== null, reload: load, flush, organize, organizing };
+  return { detail, entries, error, draft: draft ?? "", ready: draft !== null, setDraft, send, retry, sending, busy, retrying: unsent.current !== null, reload: load, flush, organize, organizing };
 }
 
 const OUTCOMES_NOTE: { label: string; primary?: boolean; needsText?: boolean; make: (text: string) => SessionEnd }[] = [
@@ -162,7 +170,7 @@ export function ConversationWorkspace({ id, onLeave, onOrganized }: { id: string
   const c = useConversation(id);
   const leave = (): void => { void c.flush(true); onLeave(); };
   if (!c.detail) return <section className="dcv" aria-label="Ivy conversation"><header className="dcv-head"><button type="button" className="desk-btn ghost" onClick={leave}>Leave</button></header><p role={c.error ? "alert" : "status"}>{c.error ?? "Opening the conversation…"}</p></section>;
-  return <WorkspaceView detail={c.detail} entries={c.entries} draft={c.draft} ready={c.ready} busy={c.busy} sending={c.sending} retrying={c.retrying} error={c.error} onDraft={c.setDraft} onSend={mode => void c.send(mode)} onLeave={leave} onSaved={() => void c.reload()}
+  return <WorkspaceView detail={c.detail} entries={c.entries} draft={c.draft} ready={c.ready} busy={c.busy} sending={c.sending} retrying={c.retrying} error={c.error} onDraft={c.setDraft} onSend={mode => void c.send(mode)} onRetry={text => void c.retry(text)} onLeave={leave} onSaved={() => void c.reload()}
     organizing={c.organizing} onOrganize={change => { void c.organize(change).then(done => { if (done) onOrganized?.(); }); }} />;
 }
 
@@ -177,6 +185,7 @@ export interface WorkspaceProps {
   error: string | null;
   onDraft: (text: string) => void;
   onSend: (mode: "queue" | "steer") => void;
+  onRetry: (text: string) => void;
   onLeave: () => void;
   onSaved: () => void;
   organizing: boolean;
@@ -213,9 +222,13 @@ export function WorkspaceView(c: WorkspaceProps) {
       {sources.length === 0 && <p className="dcv-quiet">No linked work.</p>}
     </aside>
     <div className="dcv-stream" ref={stream} aria-live="polite">
-      {views.map(({ key, view }) => view.kind === "message"
-        ? <article key={key} className={`dcv-msg ${view.who}`}><small>{view.who === "you" ? "You" : "Ivy"}{view.note ? ` · ${view.note}` : ""}</small><p>{view.text}</p></article>
-        : <p key={key} className="dcv-activity">{view.text}</p>)}
+      {views.map(({ key, view }, i) => {
+        if (view.kind === "message") return <article key={key} className={`dcv-msg ${view.who}`}><small>{view.who === "you" ? "You" : "Ivy"}{view.note ? ` · ${view.note}` : ""}</small><p>{view.text}</p></article>;
+        if (view.kind === "activity") return <p key={key} className="dcv-activity">{view.text}</p>;
+        const retry = i === views.length - 1 && !archived && !c.busy && said?.text;
+        return <p key={key} className="dcv-activity dcv-failed" role="alert">{view.text} Your message stays in the record; no other engine was used.
+          {retry && <button type="button" className="desk-btn" disabled={c.sending} onClick={() => c.onRetry(said.text ?? "")}>Retry</button>}</p>;
+      })}
       {views.length === 0 && <p className="dcv-quiet">No messages yet. Your exchange is saved as you go.</p>}
     </div>
     {pending.length > 0 && <div className="dcv-queue" role="status"><strong>{pending.length === 1 ? "1 message in order" : `${pending.length} messages in order`} · one shared order for web and Discord</strong>

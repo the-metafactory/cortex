@@ -1,21 +1,22 @@
 import { writeFile } from "node:fs/promises";
 import { openConversationHost } from "../../host";
+import { answering } from "./scratch";
 import { handleConversations } from "../../../surface/mc/api/conversations";
 import { buildAllowedHostnames } from "../../../surface/mc/api/mutation-guard";
 
 const dir = process.env.CONVERSATION_DIR ?? "";
 const label = process.env.CONVERSATION_LABEL ?? "";
-const endpoint = { baseUrl: "http://fixture.invalid", model: "fixture-model", timeoutSeconds: 30 };
+const lane = { provider: "fixture", model: "fixture-model" };
 const status = await openConversationHost({
-  dir, stack: "fixture", label, expectedLabel: label, endpoints: { local: endpoint, cloud: endpoint },
-  chat: async (_endpoint, turns) => {
-    const last = turns.at(-1)?.content ?? "";
+  dir, stack: "fixture", label, expectedLabel: label, lanes: { local: lane, cloud: lane },
+  turns: answering(async request => {
+    const last = request.prompt;
     if (last.includes("HANG") && process.env.CONVERSATION_HANG === "1") {
       await writeFile(`${dir}/model-entered`, "model request in flight");
       await new Promise(() => undefined);
     }
     return `fixture answer: ${last}`;
-  },
+  }),
 });
 const server = Bun.serve({
   port: 0, hostname: "127.0.0.1",

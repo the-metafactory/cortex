@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { scratchHosts } from "./fixtures/scratch";
+import { answering, scratchHosts } from "./fixtures/scratch";
 import { fixtureOwner, type FixtureOwner } from "./fixtures/owner";
 import { CREATABLE_TYPES, OWNER_BLOCKERS, type CreatableType } from "../catalog";
 import { ConversationCreation, capabilities, unavailableHere, type Actor, type CapabilityStatus, type ProposalView } from "../creation";
@@ -8,14 +8,14 @@ import { ConversationError, openConversationHost, type ConversationHost } from "
 import { CREATION_KIND, GRANT_KIND, type OwnerWriters, type Policy } from "../types";
 
 const LABEL = "ai.meta-factory.cortex.test";
-const endpoint = { baseUrl: "http://model.invalid", model: "m", timeoutSeconds: 5 };
+const lane = { provider: "test", model: "m" };
 const PRINCIPAL = "local-principal@loopback";
 const web: Actor = { principal: PRINCIPAL, transport: "web" };
 const discord: Actor = { principal: PRINCIPAL, transport: "discord" };
 const { dirs, hosts } = scratchHosts("conversations-creation-");
 
 async function open(dir: string, writers: OwnerWriters = {}): Promise<ConversationHost> {
-  const status = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: { local: endpoint, cloud: endpoint }, chat: () => Promise.resolve("ok") });
+  const status = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local: lane, cloud: lane }, turns: answering(() => "ok") });
   if (status.state !== "ready") throw new Error(status.reason);
   hosts.push(status.host);
   await status.host.attachSources({ resolvers: {}, readbacks: {}, writers });
@@ -284,7 +284,7 @@ describe("operation journal recovery", () => {
     owner.objects.set(found.operationId, "fixture-recovered");
     await first.close();
     hosts.splice(hosts.indexOf(first), 1);
-    const status = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: { cloud: endpoint }, chat: () => Promise.resolve("ok") });
+    const status = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { cloud: lane }, turns: answering(() => "ok") });
     if (status.state !== "ready") throw new Error(status.reason);
     hosts.push(status.host);
     expect((await status.host.operations(id)).map(o => o.state).sort()).toEqual(["uncertain", "uncertain"]);

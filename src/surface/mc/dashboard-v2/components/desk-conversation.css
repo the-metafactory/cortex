@@ -16,6 +16,7 @@
 .dcv-msg small { color: var(--mute, #71717a); font-size: 12px; }
 .dcv-msg p { margin: 4px 0 0; white-space: pre-wrap; line-height: 1.55; }
 .dcv-activity, .dcv-quiet { color: var(--mute, #71717a); font-size: 12.5px; margin: 0; }
+.dcv-failed { color: var(--danger, #b91c1c); display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .dcv-queue { grid-area: queue; border: 1px solid #f1dfb8; background: #fffbeb; border-radius: 10px; padding: 10px 14px; font-size: 13px; }
 .dcv-queue ol { margin: 6px 0 0; padding-left: 20px; }
 .dcv-composer { grid-area: composer; display: grid; gap: 8px; }

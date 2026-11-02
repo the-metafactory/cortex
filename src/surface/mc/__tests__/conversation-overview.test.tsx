@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { openConversationHost, type ConversationHost, type HostStatus } from "../../../conversations/host";
-import { scratchDirs } from "../../../conversations/__tests__/fixtures/scratch";
+import { answering, scratchDirs } from "../../../conversations/__tests__/fixtures/scratch";
 import type { ConversationDetail, ConversationMeta, LinkResolvers, OverviewRow, SourceState } from "../../../conversations/types";
 import { handleConversations } from "../api/conversations";
 import { buildAllowedHostnames, type MutationGuardContext } from "../api/mutation-guard";
@@ -23,10 +23,10 @@ async function rig() {
   let clock = Date.parse("2026-11-01T08:00:00.000Z");
   const tasks = new Map<string, SourceState>();
   const resolvers: LinkResolvers = { "balance-task": ref => Promise.resolve(tasks.get(ref.id) ?? { state: "unavailable", reason: "gone" }) };
-  const endpoint = { baseUrl: "http://model.invalid/v1", model: "test-model", timeoutSeconds: 5 };
+  const lane = { provider: "test", model: "test-model" };
   const status: HostStatus = await openConversationHost({
-    dir: await dirs.make(), stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: { local: endpoint, cloud: endpoint }, resolvers,
-    chat: (_endpoint, turns) => Promise.resolve(`Ivy heard: ${turns.at(-1)?.content ?? ""}`), now: () => new Date(clock),
+    dir: await dirs.make(), stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local: lane, cloud: lane }, resolvers,
+    turns: answering(request => `Ivy heard: ${request.prompt}`), now: () => new Date(clock),
   });
   if (status.state !== "ready") throw new Error(status.reason);
   const host = status.host;
@@ -173,7 +173,7 @@ describe("Ivy conversation overview view", () => {
 
   test("an archived conversation opens read-only with Restore and no way to send", () => {
     const detail: ConversationDetail = { conversation: meta({ state: "archived" }), sources: [], draft: "", pending: [], studio: null };
-    const html = renderToStaticMarkup(<WorkspaceView detail={detail} entries={[]} draft="" ready busy={false} sending={false} retrying={false} error={null} onDraft={noop} onSend={noop} onLeave={noop} onSaved={noop} organizing={false} onOrganize={noop} />);
+    const html = renderToStaticMarkup(<WorkspaceView detail={detail} entries={[]} draft="" ready busy={false} sending={false} retrying={false} error={null} onDraft={noop} onSend={noop} onRetry={noop} onLeave={noop} onSaved={noop} organizing={false} onOrganize={noop} />);
     expect(html).toContain(">Restore</button>");
     expect(html).toContain(">Unpin</button>");
     expect(html).toContain("Archived · read-only until you restore it");

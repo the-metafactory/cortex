@@ -2,6 +2,7 @@ import { afterEach } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { TurnCall, TurnRequest } from "../../model";
 
 export function scratchDirs(prefix: string): { make: () => Promise<string>; clean: () => Promise<void> } {
   const dirs: string[] = [];
@@ -26,3 +27,5 @@ export function scratchHosts(prefix: string): { dirs: ReturnType<typeof scratchD
   });
   return { dirs, hosts };
 }
+
+export const answering = (answer: (request: TurnRequest) => string | Promise<string>): TurnCall => async request => ({ text: await answer(request), session: request.session, resumed: false });

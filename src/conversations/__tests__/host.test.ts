@@ -2,25 +2,25 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { scratchHosts } from "./fixtures/scratch";
+import { answering, scratchHosts } from "./fixtures/scratch";
 import { ConversationError, openConversationHost, type ConversationHost, type HostOptions } from "../host";
-import type { ChatCall, ChatTurn } from "../model";
+import type { TurnCall, TurnRequest } from "../model";
 import type { LinkResolvers, Policy, SourceState } from "../types";
 
 const LABEL = "ai.meta-factory.cortex.test";
-const local = { baseUrl: "http://local.invalid", model: "local-model", timeoutSeconds: 5 };
-const cloud = { baseUrl: "http://cloud.invalid", model: "cloud-model", timeoutSeconds: 5 };
+const local = { provider: "test", model: "local-model" };
+const cloud = { provider: "test", model: "cloud-model" };
 const { dirs, hosts } = scratchHosts("conversations-host-");
 const scratch = dirs.make;
 
-interface Call { model: string; turns: ChatTurn[] }
-function recorder(answer: (turns: ChatTurn[]) => Promise<string> | string = turns => `echo ${turns.at(-1)?.content ?? ""}`): { calls: Call[]; chat: ChatCall } {
+interface Call { model: string; request: TurnRequest }
+function recorder(answer: (request: TurnRequest) => Promise<string> | string = request => `echo ${request.prompt}`): { calls: Call[]; turns: TurnCall } {
   const calls: Call[] = [];
-  return { calls, chat: async (endpoint, turns) => { calls.push({ model: endpoint.model, turns }); return answer(turns); } };
+  return { calls, turns: answering(request => { calls.push({ model: request.lane.model, request }); return answer(request); }) };
 }
 
 async function open(dir: string, extra: Partial<HostOptions> = {}): Promise<ConversationHost> {
-  const status = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: { local, cloud }, ...extra });
+  const status = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local, cloud }, turns: answering(() => "ok"), ...extra });
   if (status.state !== "ready") throw new Error(status.reason);
   hosts.push(status.host);
   return status.host;
@@ -37,8 +37,8 @@ const create = (host: ConversationHost, policy: Policy = "cloud", links: { owner
 
 describe("conversation host", () => {
   test("an input is acknowledged after commit, answered, and an equal retry returns the original", async () => {
-    const { calls, chat } = recorder();
-    const host = await open(await scratch(), { chat });
+    const { calls, turns } = recorder();
+    const host = await open(await scratch(), { turns });
     const conversation = await create(host);
     const first = await host.submit(conversation.id, input("in-1", "hello"));
     expect(first.duplicate).toBe(false);
@@ -49,13 +49,13 @@ describe("conversation host", () => {
     const retry = await host.submit(conversation.id, input("in-1", "hello"));
     expect(retry).toEqual({ duplicate: true, submission: settled });
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.turns[0]?.content).toContain("You are Ivy");
+    expect(calls[0]?.request.instructions).toContain("You are Ivy");
     expect((await host.meta(conversation.id)).activity.status).toBe("waiting");
   });
 
   test("a conflicting payload under a used input id is refused with 409 and never reaches the record", async () => {
-    const { chat } = recorder();
-    const host = await open(await scratch(), { chat });
+    const { turns } = recorder();
+    const host = await open(await scratch(), { turns });
     const conversation = await create(host);
     await host.submit(conversation.id, input("in-1", "hello"));
     await host.waitForIdle(conversation.id);
@@ -68,11 +68,11 @@ describe("conversation host", () => {
   test("busy input queues by default and a steer waits for the next safe boundary instead of interrupting the run", async () => {
     const { promise: gate, resolve: release } = Promise.withResolvers<undefined>();
     let entered = false;
-    const { chat } = recorder(async turns => {
+    const { turns } = recorder(async request => {
       if (!entered) { entered = true; await gate; }
-      return `answer to ${turns.at(-1)?.content ?? ""}`;
+      return `answer to ${request.prompt}`;
     });
-    const host = await open(await scratch(), { chat });
+    const host = await open(await scratch(), { turns });
     const conversation = await create(host);
     await host.submit(conversation.id, input("web-1", "start"));
     while (!entered) await Bun.sleep(5);
@@ -96,8 +96,8 @@ describe("conversation host", () => {
   test("the strictest linked policy routes to the local model and a tightened conversation records reconstructed context", async () => {
     let threadPolicy: Policy = "cloud";
     const resolvers: LinkResolvers = { "studio-thread": () => Promise.resolve({ state: "available", policy: threadPolicy, title: "Thread A" }) };
-    const { calls, chat } = recorder();
-    const host = await open(await scratch(), { chat, resolvers });
+    const { calls, turns } = recorder();
+    const host = await open(await scratch(), { turns, resolvers });
     const conversation = await create(host, "cloud", [{ owner: "studio-thread", id: "thread-a" }]);
     await host.submit(conversation.id, input("in-1", "first"));
     await host.waitForIdle(conversation.id);
@@ -113,8 +113,8 @@ describe("conversation host", () => {
   });
 
   test("a local conversation without a local model fails closed and admits nothing", async () => {
-    const { calls, chat } = recorder();
-    const host = await open(await scratch(), { chat, endpoints: { cloud } });
+    const { calls, turns } = recorder();
+    const host = await open(await scratch(), { turns, lanes: { cloud } });
     const conversation = await create(host, "local");
     const refused = await host.submit(conversation.id, input("in-1", "private")).catch((error: unknown) => error);
     expect((refused as ConversationError).status).toBe(503);
@@ -125,8 +125,8 @@ describe("conversation host", () => {
 
   test("a gone source shows as unavailable without context, keeps the conversation and its history, and allows only the local model", async () => {
     let source: SourceState = { state: "available", policy: "cloud", title: "Thread A", context: "private question" };
-    const { calls, chat } = recorder();
-    const host = await open(await scratch(), { chat, resolvers: { "studio-thread": () => Promise.resolve(source) } });
+    const { calls, turns } = recorder();
+    const host = await open(await scratch(), { turns, resolvers: { "studio-thread": () => Promise.resolve(source) } });
     const linked = await create(host, "cloud", [{ owner: "studio-thread", id: "thread-a" }]);
     await host.submit(linked.id, input("in-1", "first"));
     await host.waitForIdle(linked.id);
@@ -145,23 +145,23 @@ describe("conversation host", () => {
   });
 
   test("an unresolvable linked object is refused before any model context is built", async () => {
-    const { calls, chat } = recorder();
-    const host = await open(await scratch(), { chat, resolvers: { "studio-thread": () => Promise.resolve({ state: "unavailable", reason: "gone" }) } });
+    const { calls, turns } = recorder();
+    const host = await open(await scratch(), { turns, resolvers: { "studio-thread": () => Promise.resolve({ state: "unavailable", reason: "gone" }) } });
     const refused = await create(host, "cloud", [{ owner: "studio-thread", id: "missing" }]).catch((error: unknown) => error);
     expect((refused as ConversationError).status).toBe(403);
     expect(calls).toHaveLength(0);
   });
 
   test("attachment bytes are copied at ingress and an input may reference only stored attachments", async () => {
-    const { calls, chat } = recorder();
+    const { calls, turns } = recorder();
     const dir = await scratch();
-    const host = await open(dir, { chat });
+    const host = await open(dir, { turns });
     const conversation = await create(host);
     const ref = await host.storeAttachment(conversation.id, { name: "note.txt", mediaType: "text/plain", base64: Buffer.from("synthetic bytes").toString("base64") });
     expect(await readFile(join(dir, "attachments", ref.sha256), "utf8")).toBe("synthetic bytes");
     await host.submit(conversation.id, { ...input("in-1", "see attached"), attachments: [ref] });
     await host.waitForIdle(conversation.id);
-    expect(calls[0]?.turns.at(-1)?.content).toContain(ref.sha256);
+    expect(calls[0]?.request.prompt).toContain(ref.sha256);
     const forged = { ...ref, sha256: "0".repeat(64), uri: `attachment://sha256/${"0".repeat(64)}` };
     const refused = await host.submit(conversation.id, { ...input("in-2", "forged"), attachments: [forged] }).catch((error: unknown) => error);
     expect((refused as ConversationError).status).toBe(400);
@@ -171,8 +171,8 @@ describe("conversation host", () => {
 describe("host lock", () => {
   test("a live holder keeps a second host out with an explicit reason", async () => {
     const dir = await scratch();
-    await open(dir, { chat: recorder().chat });
-    const second = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {}, pid: 999_999_001, alive: pid => pid === process.pid });
+    await open(dir, { turns: recorder().turns });
+    const second = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: {}, turns: answering(() => "ok"), pid: 999_999_001, alive: pid => pid === process.pid });
     expect(second.state).toBe("unavailable");
     expect(second.state === "unavailable" && second.reason).toBe(`Conversations unavailable: store held by ${process.pid}/${LABEL}`);
   });
@@ -180,10 +180,10 @@ describe("host lock", () => {
   test("a dead holder with this stack's launchd label is taken over; another label is refused", async () => {
     const dir = await scratch();
     await writeLock(dir, 999_999_002, "ai.meta-factory.cortex.other");
-    const refused = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {}, alive: () => false });
+    const refused = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: {}, turns: answering(() => "ok"), alive: () => false });
     expect(refused.state === "unavailable" && refused.reason).toContain("does not match");
     await writeLock(dir, 999_999_002, LABEL);
-    const taken = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {}, alive: pid => pid === process.pid });
+    const taken = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: {}, turns: answering(() => "ok"), alive: pid => pid === process.pid });
     expect(taken.state).toBe("ready");
     if (taken.state !== "ready") return;
     hosts.push(taken.host);
@@ -197,14 +197,14 @@ describe("host lock edge cases", () => {
   test("a dead holder without a launchd label is refused with the lock path, as the contract requires", async () => {
     const dir = await scratch();
     await writeLock(dir, 999_999_003, "");
-    const refused = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {}, alive: () => false });
+    const refused = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: {}, turns: answering(() => "ok"), alive: () => false });
     expect(refused.state === "unavailable" && refused.reason).toBe(`Conversations unavailable: store held by 999999003/no launchd label; its label does not match ${LABEL}, so it is not taken over (lock ${join(dir, "host.lock")})`);
   });
 
   test("a stale lock whose PID was reused by this process is taken over when the label matches", async () => {
     const dir = await scratch();
     await writeLock(dir, process.pid, LABEL);
-    const taken = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {} });
+    const taken = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: {}, turns: answering(() => "ok") });
     expect(taken.state).toBe("ready");
     if (taken.state === "ready") hosts.push(taken.host);
   });
@@ -212,7 +212,7 @@ describe("host lock edge cases", () => {
   test("a lock that cannot be written reports the host unavailable instead of failing boot", async () => {
     const dir = await scratch();
     await writeFile(join(dir, "not-a-directory"), "x");
-    const status = await openConversationHost({ dir: join(dir, "not-a-directory"), stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {} });
+    const status = await openConversationHost({ dir: join(dir, "not-a-directory"), stack: "test", label: LABEL, expectedLabel: LABEL, lanes: {}, turns: answering(() => "ok") });
     expect(status.state === "unavailable" && status.reason).toStartWith("Conversations unavailable: the store lock could not be taken:");
   });
 });
@@ -220,7 +220,7 @@ describe("host lock edge cases", () => {
 describe("operation journal skeleton", () => {
   test("states advance only along the contract and boot turns an unreadable running operation into uncertain", async () => {
     const dir = await scratch();
-    const first = await open(dir, { chat: recorder().chat });
+    const first = await open(dir, { turns: recorder().turns });
     const conversation = await create(first);
     const op = await first.propose(conversation.id, "proposal-1", 1, "graph-node");
     expect(op.operationId).toBe(`${conversation.id}:proposal-1:1`);
@@ -231,7 +231,7 @@ describe("operation journal skeleton", () => {
     expect(await first.transition(op.operationId, "created").catch((error: unknown) => (error as ConversationError).status)).toBe(409);
     await first.close();
     hosts.splice(hosts.indexOf(first), 1);
-    const second = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: {} });
+    const second = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: {}, turns: answering(() => "ok") });
     if (second.state !== "ready") throw new Error(second.reason);
     hosts.push(second.host);
     expect(second.reconciled).toEqual([op.operationId]);
