@@ -1,7 +1,8 @@
 import { z } from "zod";
+import { CREATABLE_TYPES, type CreatableType } from "./catalog";
 
-export const OWNER_TYPES = ["graph-node", "balance-task", "balance-project", "studio-thread", "studio-note", "routine", "flow"] as const;
-export type OwnerType = (typeof OWNER_TYPES)[number];
+export const OWNER_TYPES = CREATABLE_TYPES;
+export type OwnerType = CreatableType;
 export type ConversationId = string;
 export type Policy = "local" | "cloud";
 export type ModelRoute = Policy;
@@ -116,6 +117,9 @@ export const CONTINUATION_KIND = "cortex.continuation";
 export const IMPORTED_TURN_KIND = "cortex.imported-turn";
 export const DECISION_KIND = "cortex.decision";
 export const INPUT_KIND = "cortex.input";
+export const PROPOSAL_KIND = "cortex.proposal";
+export const CREATION_KIND = "cortex.creation";
+export const GRANT_KIND = "cortex.grant";
 export type Continuation =
   | { mode: "native-resume"; engine: string; at: string }
   | { mode: "reconstructed"; from: ModelRoute | null; to: ModelRoute; at: string };
@@ -130,7 +134,12 @@ export const OperationRecordSchema = z.object({
   owner: z.enum(OWNER_TYPES),
   state: z.enum(OPERATION_STATES),
   canonicalId: z.string().optional(),
+  url: z.string().optional(),
   digest: z.string().optional(),
+  authority: z.union([
+    z.object({ kind: z.literal("confirmation"), transport: z.enum(["web", "discord"]) }).strict(),
+    z.object({ kind: z.literal("grant"), grantId: z.string(), scope: z.enum(["conversation", "global"]) }).strict(),
+  ]).optional(),
   history: z.array(z.object({ state: z.enum(OPERATION_STATES), at: z.string(), detail: z.string().optional() })),
 });
 export type OperationRecord = z.infer<typeof OperationRecordSchema>;
@@ -141,5 +150,15 @@ export type SourceState =
 export type SourceView = { ref: ObjectRef } & SourceState;
 export type LinkResolver = (ref: ObjectRef) => Promise<SourceState>;
 export type LinkResolvers = Partial<Record<OwnerType, LinkResolver>>;
-export type OwnerReadback = (operation: OperationRecord) => Promise<{ found: true; canonicalId: string } | { found: false } | null>;
+export type ReadbackResult = { found: true; canonicalId: string; url?: string } | { found: false } | null;
+export type OwnerReadback = (operation: OperationRecord) => Promise<ReadbackResult>;
 export type OwnerReadbacks = Partial<Record<OwnerType, OwnerReadback>>;
+
+export interface Provenance { conversationId: string; proposalId: string; revision: number; operationId: string; entryId: string | null; link: string }
+export interface CreateRequest { operationId: string; type: OwnerType; fields: Record<string, string>; provenance: Provenance; signal: AbortSignal }
+export type CreateResult =
+  | { state: "created"; canonicalId: string; url?: string }
+  | { state: "accepted"; receipt?: string }
+  | { state: "failed"; error: string };
+export interface OwnerWriter { create: (request: CreateRequest) => Promise<CreateResult>; readback: OwnerReadback }
+export type OwnerWriters = Partial<Record<OwnerType, OwnerWriter>>;

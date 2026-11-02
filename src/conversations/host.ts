@@ -12,7 +12,7 @@ import { chatTurns, cortexModels, CORTEX_PROVIDER, type ChatCall, type GateResul
 import {
   AttachmentRefSchema, CONTINUATION_KIND, IMPORTED_TURN_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES,
   type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationMeta, type CreateConversation,
-  type ExchangeLine, type InputRequest, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadbacks, type OwnerType, type Policy, type SourceState, type SourceView, type SubmissionView,
+  type ExchangeLine, type InputRequest, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadbacks, type OwnerType, type OwnerWriters, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView,
 } from "./types";
 
 export const ENGINE = "pi-durable@1.4.0";
@@ -51,6 +51,9 @@ type Directory = JsonObject & { conversations: Record<string, JsonObject>; sessi
 const DirectoryDoc = defineDoc<Directory>({ kind: "cortex.conversations", version: 1, scope: "session", initial: () => ({ conversations: {}, sessions: {} }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 const IngressDoc = defineDocFamily<{ sha256: string }, string>({ kind: "cortex.ingress", version: 1, scope: "conversation", history: "latest", fork: "initial", family: true, initial: sha256 => ({ sha256 }), checkpointWhen: () => true });
 const JournalDoc = defineDoc<{ operations: Record<string, JsonObject> }>({ kind: "cortex.operations", version: 1, scope: "session", initial: () => ({ operations: {} }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
+type CreationRecords = JsonObject & { proposals: Record<string, JsonObject>; grants: Record<string, JsonObject> };
+const CreationDoc = defineDoc<CreationRecords>({ kind: "cortex.creation", version: 1, scope: "session", initial: () => ({ proposals: {}, grants: {} }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
+export interface CreationState { proposals: Record<string, unknown>; grants: Record<string, unknown> }
 const ImportedTurnSchema = z.object({ text: z.string(), reply: z.string().nullable(), model: z.string(), policy: z.enum(["local", "cloud"]) }).loose();
 const CursorSchema = z.object({ pinned: z.boolean(), lastAt: z.string(), id: z.string() }).strict();
 type OverviewKey = z.infer<typeof CursorSchema>;
@@ -79,7 +82,7 @@ export interface HostOptions {
   alive?: (pid: number) => boolean;
   pid?: number;
 }
-export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks }
+export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters }
 export type HostStatus = { state: "ready"; host: ConversationHost; tookOver: LockOwner | null; resumed: string[]; reconciled: string[] } | { state: "unavailable"; reason: string };
 
 const strictest = (policies: Policy[]): Policy => policies.includes("local") ? "local" : "cloud";
@@ -122,6 +125,7 @@ export class ConversationHost {
   private readonly transcripts = new Map<string, { head: string; lines: ExchangeLine[] }>();
   private readonly now: () => Date;
   private sources: HostSources;
+  private reconciling: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: HostOptions, private readonly releaseLock: () => Promise<void>) {
     this.now = options.now ?? (() => new Date());
@@ -205,8 +209,37 @@ export class ConversationHost {
     finally { resolve(undefined); if (this.queues.get(id) === promise) this.queues.delete(id); }
   }
 
-  attachSources(sources: HostSources): void {
+  attachSources(sources: HostSources): Promise<string[]> {
     this.sources = sources;
+    const run = this.reconciling.then(() => this.reconcile()).catch((error: unknown): string[] => {
+      console.error(`conversations: reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+      return [];
+    });
+    this.reconciling = run;
+    return run;
+  }
+
+  get writers(): OwnerWriters { return this.sources.writers ?? {}; }
+
+  settled(): Promise<unknown> { return this.reconciling; }
+
+  async principalOf(id: string): Promise<string> {
+    return (await this.stored(id)).principal;
+  }
+
+  async creation(): Promise<CreationState> {
+    const doc = await this.engine.snapshot(CreationDoc, this.context);
+    return { proposals: doc?.proposals ?? {}, grants: doc?.grants ?? {} };
+  }
+
+  async changeCreation<T>(change: (state: CreationState) => { result: T; proposals?: Record<string, object>; grants?: Record<string, object> }): Promise<T> {
+    return this.engine.commit(async tx => {
+      const doc = await tx.doc(CreationDoc);
+      const { result, proposals, grants } = change({ proposals: { ...doc.proposals }, grants: { ...doc.grants } });
+      for (const [key, value] of Object.entries(proposals ?? {})) doc.proposals[key] = asJson(value);
+      for (const [key, value] of Object.entries(grants ?? {})) doc.grants[key] = asJson(value);
+      return result;
+    }, this.context);
   }
 
   private async resolve(ref: ObjectRef): Promise<SourceView> {
@@ -508,6 +541,7 @@ export class ConversationHost {
   }
 
   async submit(id: string, request: InputRequest): Promise<{ duplicate: boolean; submission: SubmissionView }> {
+    await this.settled();
     return this.serial(id, async () => {
       const attachments = request.attachments ?? [];
       await this.checkAttachments(attachments);
@@ -560,8 +594,8 @@ export class ConversationHost {
     return { entries: page.items.map(toEntry), ...(page.next ? { next: Buffer.from(JSON.stringify(page.next)).toString("base64url") } : {}) };
   }
 
-  async readback(operation: OperationRecord): Promise<{ found: true; canonicalId: string } | { found: false } | null> {
-    const readback = this.sources.readbacks[operation.owner];
+  async readback(operation: OperationRecord): Promise<ReadbackResult> {
+    const readback = this.sources.readbacks[operation.owner] ?? this.sources.writers?.[operation.owner]?.readback;
     return readback ? readback(operation).catch(() => null) : null;
   }
 
@@ -587,7 +621,7 @@ export class ConversationHost {
     }, this.context);
   }
 
-  async transition(operationId: string, to: OperationState, detail?: { canonicalId?: string; note?: string }): Promise<OperationRecord> {
+  async transition(operationId: string, to: OperationState, detail?: { canonicalId?: string; url?: string; note?: string; authority?: OperationRecord["authority"] }): Promise<OperationRecord> {
     if (to === "created" && !detail?.canonicalId) throw new ConversationError(409, "An operation is created only with the owner's canonical id.");
     return this.engine.commit(async tx => {
       const doc = await tx.doc(JournalDoc);
@@ -595,7 +629,7 @@ export class ConversationHost {
       if (!raw) throw new ConversationError(404, "That operation is not in the journal.");
       const record = OperationRecordSchema.parse(raw);
       if (!NEXT[record.state].includes(to)) throw new ConversationError(409, `An operation cannot move from ${record.state} to ${to}.`);
-      const next: OperationRecord = { ...record, state: to, ...(detail?.canonicalId ? { canonicalId: detail.canonicalId } : {}), history: [...record.history, { state: to, at: this.now().toISOString(), ...(detail?.note ? { detail: detail.note } : {}) }] };
+      const next: OperationRecord = { ...record, state: to, ...(detail?.canonicalId ? { canonicalId: detail.canonicalId } : {}), ...(detail?.url ? { url: detail.url } : {}), ...(detail?.authority ? { authority: detail.authority } : {}), history: [...record.history, { state: to, at: this.now().toISOString(), ...(detail?.note ? { detail: detail.note } : {}) }] };
       doc.operations[operationId] = asJson(next);
       return next;
     }, this.context);
@@ -605,9 +639,9 @@ export class ConversationHost {
     const touched: string[] = [];
     for (const op of await this.operations()) {
       if (op.state !== "running" && op.state !== "uncertain") continue;
-      const readback = this.sources.readbacks[op.owner];
+      const readback = this.sources.readbacks[op.owner] ?? this.sources.writers?.[op.owner]?.readback;
       const result = await this.readback(op);
-      if (result?.found) await this.transition(op.operationId, "created", { canonicalId: result.canonicalId, note: "boot readback found the object" });
+      if (result?.found) await this.transition(op.operationId, "created", { canonicalId: result.canonicalId, ...(result.url ? { url: result.url } : {}), note: "boot readback found the object" });
       else if (op.state === "running") await this.transition(op.operationId, "uncertain", { note: readback ? "boot readback did not find the object" : "no owner readback is available; check before retrying" });
       touched.push(op.operationId);
     }

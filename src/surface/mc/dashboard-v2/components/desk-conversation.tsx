@@ -5,6 +5,7 @@ import {
   type ConversationDetail, type ConversationEntry, type OperationRecord,
 } from "../lib/conversations";
 import type { Organize } from "../../../../conversations/types";
+import { CreationPanel } from "./desk-conversation-create";
 import "./desk-conversation.css";
 
 const BUSY_MS = 2_000;
@@ -189,6 +190,7 @@ export function WorkspaceView(c: WorkspaceProps) {
   const { conversation, sources, pending, studio } = c.detail;
   const views = c.entries.flatMap(entry => entryViews(entry).map((view, i) => ({ key: `${entry.id}-${i}`, view })));
   const archived = conversation.state === "archived";
+  const said = c.entries.filter(entry => entry.role === "user" && entry.text).at(-1);
   return <section className="dcv" aria-label={`Ivy conversation: ${conversation.title}`}>
     <header className="dcv-head">
       <div className="dcv-title"><h2>{conversation.title}</h2>
@@ -227,6 +229,7 @@ export function WorkspaceView(c: WorkspaceProps) {
       <p className="dcv-quiet">{archived ? "This conversation is archived. Restore it to continue with the same history; opening it never resumes it." : c.busy ? "Ivy is working. Queue waits for the current turn; Use this now joins at Ivy's next safe point and never interrupts a running change." : "Your unsent draft is saved here. Leave keeps the conversation; nothing ends."}</p>
       {c.error && <p className="desk-unsent" role="alert">{c.error}</p>}
     </form>
+    <CreationPanel id={conversation.id} archived={archived} revision={count} seed={{ entryId: said?.id ?? null, text: said?.text ?? "" }} />
     {studio && !archived && <StudioOutcome id={conversation.id} studio={studio} onSaved={c.onSaved} />}
   </section>;
 }

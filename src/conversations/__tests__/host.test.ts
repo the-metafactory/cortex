@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { scratchDirs } from "./fixtures/scratch";
+import { scratchHosts } from "./fixtures/scratch";
 import { ConversationError, openConversationHost, type ConversationHost, type HostOptions } from "../host";
 import type { ChatCall, ChatTurn } from "../model";
 import type { LinkResolvers, Policy, SourceState } from "../types";
@@ -10,14 +10,8 @@ import type { LinkResolvers, Policy, SourceState } from "../types";
 const LABEL = "ai.meta-factory.cortex.test";
 const local = { baseUrl: "http://local.invalid", model: "local-model", timeoutSeconds: 5 };
 const cloud = { baseUrl: "http://cloud.invalid", model: "cloud-model", timeoutSeconds: 5 };
-const dirs = scratchDirs("conversations-host-");
+const { dirs, hosts } = scratchHosts("conversations-host-");
 const scratch = dirs.make;
-const hosts: ConversationHost[] = [];
-
-afterEach(async () => {
-  for (const host of hosts.splice(0)) await host.close().catch(() => undefined);
-  await dirs.clean();
-});
 
 interface Call { model: string; turns: ChatTurn[] }
 function recorder(answer: (turns: ChatTurn[]) => Promise<string> | string = turns => `echo ${turns.at(-1)?.content ?? ""}`): { calls: Call[]; chat: ChatCall } {

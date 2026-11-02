@@ -1,4 +1,4 @@
-.dcv { display: grid; grid-template-columns: minmax(0, 1fr) 280px; grid-template-areas: "head head" "stream sources" "queue sources" "composer sources" "outcome sources"; gap: 16px 24px; max-width: 1100px; margin: 24px auto 90px; padding: 0 24px; }
+.dcv { display: grid; grid-template-columns: minmax(0, 1fr) 280px; grid-template-areas: "head head" "stream sources" "queue sources" "composer sources" "create sources" "outcome sources"; gap: 16px 24px; max-width: 1100px; margin: 24px auto 90px; padding: 0 24px; }
 .dcv-head { grid-area: head; border-bottom: 1px solid var(--line, #ececec); padding-bottom: 12px; }
 .dcv-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .dcv-title h2 { margin: 0; font-size: 22px; letter-spacing: -.3px; }
@@ -28,7 +28,7 @@
 .dcv-src h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--mute, #71717a); }
 .dcv-src ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .dcv-src li button { text-align: left; width: 100%; }
-@media (max-width: 860px) { .dcv { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "sources" "stream" "queue" "composer" "outcome"; } }
+@media (max-width: 860px) { .dcv { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "sources" "stream" "queue" "composer" "create" "outcome"; } }
 .dcv-area { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; max-width: 1400px; margin: 24px auto 90px; padding: 0 24px; align-items: start; }
 .dcv-area > .dcv { margin: 0; padding: 0; max-width: none; }
 .dcv-overview { display: grid; gap: 10px; align-content: start; position: sticky; top: 72px; max-height: calc(100vh - 96px); overflow: auto; }
@@ -44,3 +44,20 @@
 .dcv-empty { padding: 32px 0; }
 .dcv-empty h2 { margin: 0 0 6px; font-size: 20px; }
 @media (max-width: 860px) { .dcv-area { grid-template-columns: minmax(0, 1fr); } .dcv-overview { position: static; max-height: none; } }
+.dcv-create { grid-area: create; display: grid; gap: 12px; }
+.dcv-proposal { border: 1px solid var(--line, #ececec); border-radius: 10px; padding: 14px; background: #fff; display: grid; gap: 8px; }
+.dcv-proposal > small { color: var(--mute, #71717a); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.dcv-proposal.created { border-color: #c9dcc5; background: #f6faf4; }
+.dcv-proposal.uncertain, .dcv-proposal.accepted { border-color: #f1dfb8; background: #fffbeb; }
+.dcv-proposal.failed { border-color: #f1c4c4; }
+.dcv-proposal.unavailable { border-style: dashed; }
+.dcv-sentence { margin: 0; font-weight: 500; }
+.dcv-fields, .dcv-choose, .dcv-standing { display: grid; gap: 8px; }
+.dcv-fields label, .dcv-choose label { display: grid; gap: 4px; font-size: 12.5px; color: var(--ink2, #3f3f46); }
+.dcv-fields input, .dcv-fields textarea, .dcv-choose select, .dcv-standing select { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid #d4d4d8; border-radius: 7px; font: inherit; background: #fff; color: inherit; }
+.dcv-fields textarea { min-height: 64px; }
+.dcv-standing label { font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.dcv-grants { border-top: 1px solid var(--line, #ececec); padding-top: 10px; display: grid; gap: 6px; }
+.dcv-grants h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--mute, #71717a); }
+.dcv-grants ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.dcv-grants li { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
