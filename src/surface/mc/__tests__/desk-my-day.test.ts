@@ -389,12 +389,16 @@ describe("outline-add creates a task or project with its note and due date", () 
     const { outlineId } = z.object({ outlineId: z.string() }).parse(await response.json());
     expect(work().find(node => node.id === outlineId)).toMatchObject({ title: "Call the venue", note: "Ask about Thursday", dueDate: "2026-11-03", effort: 1, children: [] });
   });
-  it("stores a project as add does and opens it when a child is added", () => {
+  it("stores a project exactly as add does and opens it when a child is added", () => {
     const project = change({ op: "outline-add", revision: readMyDay(db, desk, NOW).revision, parent: "area:work", title: "Venue", kind: "project", note: "Spring event" }).outlineId;
-    const node = work().find(n => n.id === project);
-    expect(node).toMatchObject({ done: true, children: [], note: "Spring event" });
-    expect(node && "effort" in node).toBe(false);
     if (!project) throw new Error("Missing project id");
+    const node = work().find(n => n.id === project);
+    change({ op: "add", parent: "area:work", title: "Venue", kind: "project" });
+    const added = work().find(n => n.title === "Venue" && n.id !== project);
+    if (!added) throw new Error("Missing added project");
+    expect(node).toEqual({ ...added, id: project, note: "Spring event" });
+    expect(node).toMatchObject({ done: true, children: [] });
+    expect(node && "effort" in node).toBe(false);
     const child = change({ op: "outline-add", revision: readMyDay(db, desk, NOW).revision, parent: project, title: "Book the hall" }).outlineId;
     const opened = work().find(n => n.id === project);
     expect(opened?.done).toBeUndefined();
