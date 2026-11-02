@@ -8,7 +8,7 @@ import { HandledLedger } from "../desk/actions";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { queryMailLog } from "../desk/mail-log";
 import { createRule, pendingRuleMail } from "../desk/mail-rules";
-import { backLine, cancelSnooze, readSnooze, snoozeAt, snoozedIds, snoozeFacts, snoozeMail, wakeOf, wakeSnoozes, withoutSnoozed, type SnoozeRow, type WakeFacts } from "../desk/mail-snooze";
+import { backLine, backSnoozes, cancelSnooze, readSnooze, snoozeAt, snoozedIds, snoozeFacts, snoozeMail, wakeOf, wakeSnoozes, withoutSnoozed, type SnoozeRow, type WakeFacts } from "../desk/mail-snooze";
 import { recordWaiting } from "../desk/mail-waiting";
 import { SourceCache, type SourceEvent, type SourceMail, type SourceReading } from "../desk/sources/command";
 import { initDatabase } from "../db/init";
@@ -102,6 +102,8 @@ describe("the snooze store", () => {
     expect(wakeSnoozes(db, snoozeFacts(db, [wrote], undefined), at(4, 11))).toEqual(["m1"]);
     expect(snoozedIds(db).size).toBe(0);
     expect(readSnooze(db, "m1")).toMatchObject({ state: "back", reason: "lena@example.org wrote: “Figures”" });
+    expect(backSnoozes(db, at(5, 10, 59)).get("m1")).toEqual({ line: "Back because lena@example.org wrote: “Figures”.", at: at(4, 11) });
+    expect(backSnoozes(db, at(5, 11)).size).toBe(0);
     db.close();
   });
 

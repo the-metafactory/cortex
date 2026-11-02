@@ -49,6 +49,7 @@ export type WakeDecision =
   | { kind: "moved"; event: SnoozeEvent };
 
 const BACK_KEEP_DAYS = 14;
+const BACK_SHOWN_MS = DAY_MS;
 const SNOOZE_KEEP_DAYS = 400;
 
 const quoted = (title: string): string => `“${title}”`;
@@ -191,8 +192,9 @@ export interface SnoozeBack {
   at: number;
 }
 
+/** Mail that came back within the last day: after that the card is an ordinary mail card again. */
 export function backSnoozes(db: Database, now: number): Map<string, SnoozeBack> {
-  return new Map(readSnoozes(db, "back").map((r) => [r.messageId, { line: backLine(r, now), at: r.backAt ?? now }]));
+  return new Map(readSnoozes(db, "back").flatMap((r): [string, SnoozeBack][] => (r.backAt !== null && now - r.backAt < BACK_SHOWN_MS ? [[r.messageId, { line: backLine(r, now), at: r.backAt }]] : [])));
 }
 
 /** A mail card that came back from a snooze leads with why, and asks for attention today. */
@@ -201,9 +203,10 @@ export function withSnoozeBack(item: DeskItem, back: SnoozeBack | undefined): De
   return { ...item, urgency: item.urgency === "now" ? "now" : "today", why: `${back.line} ${item.why}`, back: { line: back.line, at: back.at } };
 }
 
-type SnoozeResult = { ok: true; message: string; until: string } | { ok: false; status: number; error: string };
+interface SnoozeFailure { ok: false; status: number; error: string }
+type SnoozeResult = { ok: true; message: string; until: string } | SnoozeFailure;
 
-const refuse = (status: number, error: string): SnoozeResult => ({ ok: false, status, error });
+const refuse = (status: number, error: string): SnoozeFailure => ({ ok: false, status, error });
 const ADDRESS_RE = /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/;
 
 interface Resolved {
@@ -259,9 +262,9 @@ export function snoozeMail(db: Database, mail: ListedMail, choice: SnoozeChoice,
 }
 
 /** Ends a snooze now: the mail is back on the Desk as it was, without a reason line. */
-export function cancelSnooze(db: Database, messageId: string): { ok: true; message: string } | { ok: false; status: number; error: string } {
+export function cancelSnooze(db: Database, messageId: string): { ok: true; message: string } | SnoozeFailure {
   const row = readSnooze(db, messageId);
-  if (!row) return { ok: false, status: 409, error: "This mail is not snoozed." };
+  if (!row) return refuse(409, "This mail is not snoozed.");
   db.query("DELETE FROM desk_mail_snoozes WHERE message_id = ?").run(messageId);
   return { ok: true, message: `${quoted(row.subject)} is back on the Desk.` };
 }

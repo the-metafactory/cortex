@@ -541,7 +541,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       request: async () => {
         const result = await submitMailAction({ action: "snooze", key: item.key, until });
         setSnoozeAsk((s) => (s?.key !== item.key ? s : result.ok ? null : { ...s, note: result.text }));
-        return result.ok ? { ...result, undo: item.key } : result;
+        return result.ok ? { ...result, undo: item.key, undoKind: "snooze" } : result;
       },
     });
   };
@@ -609,7 +609,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         return next;
       });
     }
-    if (result.ok && result.undo) setReceipt({ text: result.text, undo: result.undo, ...(result.block ? { block: result.block } : {}) });
+    if (result.ok && result.undo) setReceipt({ text: result.text, undo: result.undo, ...(result.undoKind ? { undoKind: result.undoKind } : {}), ...(result.block ? { block: result.block } : {}) });
     else if (!result.ok && failOnCard) setCardNote(item.key, failOnCard(result));
     else setNote(result.text);
     if (!result.ok) return;
@@ -980,7 +980,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         )}
       </aside>
 
-      {note ? <div className="desk-note" role="status">{note}</div> : receipt && <MailReceipt receipt={receipt} onUndo={() => void (receipt.undo.startsWith("mail:") ? unsnooze(receipt.undo) : undoMove(receipt.undo))} onBlock={() => void blockDomain(receipt)} />}
+      {note ? <div className="desk-note" role="status">{note}</div> : receipt && <MailReceipt receipt={receipt} onUndo={() => void (receipt.undoKind === "snooze" ? unsnooze(receipt.undo) : undoMove(receipt.undo))} onBlock={() => void blockDomain(receipt)} />}
     </div>
   );
 }
@@ -1272,6 +1272,7 @@ export function RankingSection({ corrections, onUndo }: { corrections: DeskCorre
 interface Receipt {
   text: string;
   undo: string;
+  undoKind?: "move" | "snooze";
   block?: string;
   confirmBlock?: boolean;
 }
