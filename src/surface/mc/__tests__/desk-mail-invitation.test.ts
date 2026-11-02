@@ -208,6 +208,55 @@ describe("replies", () => {
     expect(queryMailLog(db, {}).map((e) => e.action)).toEqual(["accept"]);
   });
 
+  test("a decline on an account listed under removeOnDecline runs its remover with the invitation's UID and time, and the card line says what it did", async () => {
+    answer = (argv) => (argv[0] === "exchange-remover" ? { code: 0, stdout: JSON.stringify({ id: "uid-1", message: "Exchange's tentative copy is removed from your calendar." }), stderr: "" } : { code: 0, stdout: JSON.stringify({ id: "r1", message: "The decline went to Olga." }), stderr: "" });
+    const config: InvitationsConfig = { ...CONFIG, removeOnDecline: [{ account: "work", command: ["exchange-remover", "--ical-account", "me"] }] };
+    const recurring = mail({ invitation: { ...INVITATION, recurring: true } });
+    const result = await replyToInvitation(recurring, input(), deps({ config }));
+    expect(result).toEqual({ ok: true, message: "Declined. The decline went to Olga. Exchange's tentative copy is removed from your calendar." });
+    expect(calls.map((c) => c.argv[0])).toEqual(["invite-reply", "exchange-remover"]);
+    expect(JSON.parse(calls[1]?.stdin ?? "{}")).toEqual({ action: "remove-declined", account: "work", uid: "uid-1", start: INVITATION.start, end: INVITATION.end, recurring: true });
+    expect(invitationDecisions(db, ["invite@example.org"]).get("invite@example.org")).toMatchObject({ reply: "decline", status: "sent", calendar: "Exchange's tentative copy is removed from your calendar." });
+  });
+
+  test("accept, and a decline on an account not listed, never run the remover", async () => {
+    const config: InvitationsConfig = { ...CONFIG, addToCalendar: [], removeOnDecline: [{ account: "work", command: ["exchange-remover"] }] };
+    await replyToInvitation(mail(), input({ reply: "accept" }), deps({ config }));
+    await replyToInvitation(mail({ id: "p@example.org", account: "personal" }), input(), deps({ config }));
+    expect(calls.map((c) => c.argv[0])).toEqual(["invite-reply", "invite-reply"]);
+  });
+
+  test("a remover that fails, throws or times out leaves the decline sent and says the copy is still there", async () => {
+    const config: InvitationsConfig = { ...CONFIG, removeOnDecline: [{ account: "work", command: ["exchange-remover"] }] };
+    answer = (argv) => (argv[0] === "exchange-remover" ? { code: 1, stdout: "", stderr: "Exchange answered HTTP 401." } : { code: 0, stdout: JSON.stringify({ id: "r1", message: "The decline went to Olga." }), stderr: "" });
+    const failed = await replyToInvitation(mail(), input(), deps({ config }));
+    expect(failed).toEqual({ ok: true, message: "Declined. The decline went to Olga. The calendar still holds the tentative copy: Exchange answered HTTP 401." });
+    expect(invitationDecisions(db, ["invite@example.org"]).get("invite@example.org")).toMatchObject({ status: "sent", calendar: "The calendar still holds the tentative copy: Exchange answered HTTP 401." });
+    expect(queryMailLog(db, {}).map((e) => e.action)).toEqual(["decline"]);
+    const { CommandTimeout } = await import("../desk/spawn");
+    const slow: WriterRunner = async (argv) => {
+      if (argv[0] === "exchange-remover") throw new CommandTimeout("timed out after 30 s");
+      return { code: 0, stdout: JSON.stringify({ id: "r2" }), stderr: "" };
+    };
+    const timedOut = await replyToInvitation(mail({ id: "t@example.org" }), input(), deps({ config, run: slow }));
+    expect(timedOut).toEqual({ ok: true, message: "Declined. The calendar still holds the tentative copy: the remove command timed out after 30 s." });
+    const throwing: WriterRunner = async (argv) => {
+      if (argv[0] === "exchange-remover") throw new Error("spawn failed");
+      return { code: 0, stdout: JSON.stringify({ id: "r3" }), stderr: "" };
+    };
+    expect(await replyToInvitation(mail({ id: "x@example.org" }), input(), deps({ config, run: throwing }))).toEqual({ ok: true, message: "Declined. The calendar still holds the tentative copy: spawn failed" });
+    const silent: WriterRunner = async (argv) => ({ code: 0, stdout: argv[0] === "exchange-remover" ? "" : JSON.stringify({ id: "r4" }), stderr: "" });
+    expect(await replyToInvitation(mail({ id: "y@example.org" }), input(), deps({ config, run: silent }))).toEqual({ ok: true, message: "Declined. The remove command gave no answer, so the tentative copy may still be in your calendar." });
+  });
+
+  test("removeOnDecline takes { account, command } entries and refuses an account listed twice", () => {
+    const parse = (removeOnDecline: unknown) => DeskMailInvitationsSchema.safeParse({ command: ["x"], removeOnDecline });
+    expect(parse([{ account: "work", command: ["desk-exchange-decline", "--ical-account", "me"] }]).success).toBe(true);
+    expect(parse([{ account: "work", command: [] }]).success).toBe(false);
+    expect(parse([{ account: "work", command: ["a"] }, { account: "work", command: ["b"] }]).success).toBe(false);
+    expect(DeskMailInvitationsSchema.parse({ command: ["x"] }).removeOnDecline).toEqual([]);
+  });
+
   test("the payload names the source's account, Message-ID and invitation UID", () => {
     expect(invitePayload(mail(), "accept", "req-1")).toEqual({ action: "invite-reply", account: "work", messageId: "invite@example.org", uid: "uid-1", reply: "accept", requestId: "req-1" });
     expect(invitePayload(mail({ invitation: undefined }), "accept", "req-1")).toBeNull();

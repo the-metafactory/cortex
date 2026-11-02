@@ -6,6 +6,7 @@ import { createFromCard, type DeskWriters, type WriterRunner } from "./create";
 import type { ListedMail, MailActionResult } from "./mail-actions";
 import { logMailDecision, mailFeatures } from "./mail-log";
 import { refuse } from "./mail-move";
+import { removeDeclined } from "./mail-invitation-remove";
 import type { Commitment } from "./mail-yes-filter";
 import { CommandTimeout } from "./spawn";
 import type { MailInvitation, SourceReading } from "./sources/command";
@@ -349,7 +350,7 @@ export async function replyToInvitation(mail: ListedMail, input: InviteReplyInpu
     finish("failed", why);
     return refuse(502, `The reply command did not run: ${why}`);
   }
-  const calendar = input.reply === "accept" ? await addAccepted(mail, input.requestId, deps).catch((err: unknown) => `The event was not added to your calendar: ${err instanceof Error ? err.message : String(err)}`) : null;
+  const calendar = input.reply === "accept" ? await addAccepted(mail, input.requestId, deps).catch((err: unknown) => `The event was not added to your calendar: ${err instanceof Error ? err.message : String(err)}`) : await removeDeclined(mail, config, deps.run);
   finish("sent", sent, calendar);
   logMailDecision(db, features, input.reply, "desk", now);
   return { ok: true, message: calendar ? `${sent} ${calendar}` : sent };

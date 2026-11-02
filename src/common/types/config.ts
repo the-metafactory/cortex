@@ -484,6 +484,11 @@ export const DeskMailInvitationsSchema = z.object({
       return new Set(accounts).size === accounts.length;
     }, "mc.desk.mail.invitations.addToCalendar names an account twice")
     .default([]),
+  removeOnDecline: z
+    .array(z.strictObject({ account: invitationAccount, command: z.array(z.string().min(1)).min(1) }))
+    .max(20)
+    .refine((entries) => new Set(entries.map((e) => e.account)).size === entries.length, "mc.desk.mail.invitations.removeOnDecline names an account twice")
+    .default([]),
   slots: z
     .object({
       days: z.number().int().min(1).max(14).default(5),
