@@ -1,3 +1,4 @@
+import { SourceConversations } from "./desk-source-conversations";
 import { scrollBelowDesk } from "../lib/desk-scroll";
 import { useEffect, useRef, useState } from "react";
 import type { OutlineNode } from "../../../../balance";
@@ -33,7 +34,7 @@ const isSourceOwned = (day: MyDayView, id: string): boolean => id.startsWith("st
 const openLeaves = (node: OutlineNode): number => node.done ? 0 : node.children.length ? node.children.reduce((sum, child) => sum + openLeaves(child), 0) : 1;
 
 
-export function DeskBalance({ day, view, foreground, onChanged, onThread }: { day: MyDayView; view: DeskView; foreground: ForegroundReading; onChanged: () => void; onThread: (slug: string) => void }) {
+export function DeskBalance({ day, view, foreground, onChanged, onThread, onConversation }: { day: MyDayView; view: DeskView; foreground: ForegroundReading; onChanged: () => void; onThread: (slug: string) => void; onConversation?: (id: string) => void }) {
   const [local, setLocal] = useState<MyDayView | null>(null);
   const current = local?.date === day.date && local.revision >= day.revision ? local : day;
   const [location, go] = useBalanceLocation();
@@ -101,7 +102,7 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread }: { da
         <UnfiledBalanceTasks day={current} parents={fileParents.map(parent => ({ id: parent.node.id, label: [...parent.path, parent.node.title].join(" / ") }))} busy={busy} change={change} onFiled={id => go({ tab: "plan", item: id, area: "", query: "" })} />
       </main>
       <aside className="dbl-inspector" aria-label="Selected Balance item" ref={inspector} tabIndex={-1}><button className="desk-btn ghost dbl-back" onClick={() => scrollBelowDesk(outlineHeading.current)}>← Back to outline</button>
-        {draft ? <BalanceInspector draft={draft} entry={entry} day={current} busy={busy} dirty={edited !== undefined} onDraft={setDraft} onSave={() => { void change({ op: "outline-edit", id: draft.node.id, revision: draft.revision, details: draft.details, yes: draft.yes }, draft.date).then(saved => { if (saved) { discard(draft.node.id); } }); }} onDiscard={() => { discard(draft.node.id); void refresh(); }} onAdd={() => beginAdd(draft.node.id)} onMove={() => setMoving({ id: draft.node.id, parent: entry?.parent.id ?? "", revision: current.revision, date: current.date })} onComplete={() => { const node = entry?.node; if (!node) return; if (node.children.length && !node.done && !window.confirm("Close this project? Its leaves will not be marked complete or given completion credit.")) return; void change({ op: node.done ? "outline-reopen" : "outline-complete", id: node.id, revision: current.revision, confirm: true }); }} onThread={onThread} /> : <p>{selectedId ? "This outline item is no longer available. Choose another item from the outline." : "Add a task to begin shaping your outline."}</p>}
+        {draft ? <BalanceInspector draft={draft} entry={entry} day={current} busy={busy} dirty={edited !== undefined} onDraft={setDraft} onSave={() => { void change({ op: "outline-edit", id: draft.node.id, revision: draft.revision, details: draft.details, yes: draft.yes }, draft.date).then(saved => { if (saved) { discard(draft.node.id); } }); }} onDiscard={() => { discard(draft.node.id); void refresh(); }} onAdd={() => beginAdd(draft.node.id)} onMove={() => setMoving({ id: draft.node.id, parent: entry?.parent.id ?? "", revision: current.revision, date: current.date })} onComplete={() => { const node = entry?.node; if (!node) return; if (node.children.length && !node.done && !window.confirm("Close this project? Its leaves will not be marked complete or given completion credit.")) return; void change({ op: node.done ? "outline-reopen" : "outline-complete", id: node.id, revision: current.revision, confirm: true }); }} onThread={onThread} {...(onConversation ? { onConversation } : {})} /> : <p>{selectedId ? "This outline item is no longer available. Choose another item from the outline." : "Add a task to begin shaping your outline."}</p>}
         {moving && draft && moving.id === draft.node.id && <form className="dbl-move" onSubmit={event => { event.preventDefault(); void change({ op: "outline-move", id: moving.id, parent: moving.parent, revision: moving.revision }, moving.date).then(saved => { if (saved) { setMoving(null); go({ ...location, item: moving.id, area: "", query: "" }); } }); }}><label>Move to<select aria-label="Move Balance parent" value={moving.parent} disabled={busy} onChange={event => setMoving({ ...moving, parent: event.target.value })}>{parentChoices.filter(item => !moveDescendants.has(item.node.id)).map(item => <option key={item.node.id} value={item.node.id}>{[...item.path, item.node.title].join(" / ")}</option>)}</select></label><button className="desk-btn pri" disabled={busy}>Confirm move</button><button type="button" className="desk-btn" disabled={busy} onClick={() => setMoving(null)}>Cancel</button></form>}
       </aside>
     </div>}
@@ -119,7 +120,7 @@ function BalanceTree({ node, depth, query, collapsed, selected, date, studioProj
   </div>{branch && open && <ul>{node.children.map(child => <BalanceTree key={child.id} node={child} depth={depth + 1} query={query} collapsed={collapsed} selected={selected} date={date} studioProjects={studioProjects} today={today} onToggle={onToggle} onSelect={onSelect} />)}</ul>}</li>;
 }
 
-function BalanceInspector({ draft, entry, day, busy, dirty, onDraft, onSave, onDiscard, onAdd, onMove, onComplete, onThread }: { draft: Draft; entry: Entry | undefined; day: MyDayView; busy: boolean; dirty: boolean; onDraft: (draft: Draft) => void; onSave: () => void; onDiscard: () => void; onAdd: () => void; onMove: () => void; onComplete: () => void; onThread: (slug: string) => void }) {
+function BalanceInspector({ draft, entry, day, busy, dirty, onDraft, onSave, onDiscard, onAdd, onMove, onComplete, onThread, onConversation }: { draft: Draft; entry: Entry | undefined; day: MyDayView; busy: boolean; dirty: boolean; onDraft: (draft: Draft) => void; onSave: () => void; onDiscard: () => void; onAdd: () => void; onMove: () => void; onComplete: () => void; onThread: (slug: string) => void; onConversation?: (id: string) => void }) {
   const node = entry?.node ?? draft.node;
   const area = day.outline.children.some(root => root.id === node.id);
   const sourceOwned = isSourceOwned(day, node.id);
@@ -148,5 +149,6 @@ function BalanceInspector({ draft, entry, day, busy, dirty, onDraft, onSave, onD
     <div className="dbl-actions"><button className="desk-btn ghost" disabled={busy || dirty || !entry || node.done || node.id.startsWith("studio-response:")} onClick={onAdd}>+ Add subtask</button>{!area && !sourceOwned && <><button className="desk-btn ghost" disabled={busy || dirty || !entry} onClick={onMove}>Move…</button><button className="desk-btn" disabled={busy || dirty || !entry} onClick={onComplete}>{node.done ? "Reopen" : node.children.length ? "Close project" : "Mark complete"}</button></>}{dirty && <p className="dbl-help">Save or discard the draft before changing this item's structure.</p>}
       {source && (source.url ? <a href={source.url} target="_blank" rel="noopener noreferrer">Open original source</a> : <p>From {source.kind}</p>)}{studio && <button className="desk-btn ghost" onClick={() => onThread(studio.slug)}>Open Studio thread →</button>}
     </div>
+    {onConversation && entry && !area && <SourceConversations source={{ owner: node.children.length ? "balance-project" : "balance-task", id: node.id }} onOpen={onConversation} />}
   </>;
 }

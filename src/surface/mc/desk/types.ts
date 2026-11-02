@@ -145,6 +145,7 @@ export interface DeskView {
   routines?: RoutineView;
   mailRules?: import("./mail-rules").MailRuleView[];
   mailSweeps?: import("./mail-sweep").MailSweepView[];
+  mailDigests?: import("./mail-digest").MailDigestView[];
   dmarc?: import("./mail-dmarc").DmarcWeek;
   myDay?: MyDayView;
   mirror?: import("./mirror").WeeklyMirror;

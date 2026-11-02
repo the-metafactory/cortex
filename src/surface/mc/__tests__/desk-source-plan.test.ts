@@ -6,7 +6,7 @@ import { handleDeskMyDay } from "../api/desk-my-day";
 import { handleGetDesk } from "../api/desk";
 import { addNote } from "../desk/notes";
 import { HandledLedger } from "../desk/actions";
-import { afterEach, beforeEach, expect, it } from "bun:test";
+import { afterEach, beforeEach, expect, it, setSystemTime } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
 import { DEFAULT_SETTINGS, findNode, type AppState } from "../../../balance";
@@ -99,7 +99,7 @@ beforeEach(() => {
   };
   saveBalanceState(db, state);
 });
-afterEach(() => db.close());
+afterEach(() => { setSystemTime(); db.close(); });
 function plan(
   parent: string | null = "area:work",
   requestId = crypto.randomUUID(),
@@ -348,6 +348,7 @@ it("freezes the existing proposed day before first-ever filing without a prior r
 });
 
 it("actual Desk handlers retain a changed source and file/read back/replay one current reminder", async () => {
+  setSystemTime(now);
   const runtime = { options: desk, ledger: new HandledLedger() };
   addNote(db, "reminder", "Owned planning probe", now - 60_000, now);
   const initial = await handleGetDesk(db, runtime, undefined);

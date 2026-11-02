@@ -3,6 +3,8 @@ import { MAIL_RULES_SQL } from "../desk/mail-rules-schema";
 import { SWEEP_SQL } from "../desk/mail-sweep-schema";
 import { DMARC_SQL } from "../desk/mail-dmarc-schema";
 import { ROUTINE_DISPLAY_SQL } from "../desk/routine-display";
+import { DIGEST_SQL } from "../desk/mail-digest-schema";
+import { UNSUBSCRIBE_SQL } from "../desk/mail-unsubscribe-schema";
 
 function vigilResolutionsTableSql(table: string): string {
   return `CREATE TABLE IF NOT EXISTS ${table} (
@@ -142,6 +144,8 @@ export const TABLE_NAMES = [
   "desk_mail_vectors",
   "desk_mail_dmarc",
   "desk_mail_sweeps",
+  "desk_mail_digest_kept",
+  "desk_mail_digest_flags",
   "desk_mail_sweep_mails",
 ] as const;
 
@@ -155,6 +159,8 @@ export const SCHEMA_SQL: string[] = [
   ...MAIL_VECTORS_SQL,
   ...DMARC_SQL,
   ...ROUTINE_DISPLAY_SQL,
+  ...DIGEST_SQL,
+  ...UNSUBSCRIBE_SQL,
   "CREATE TABLE IF NOT EXISTS desk_my_day (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   `CREATE TABLE IF NOT EXISTS desk_routine_proposals (

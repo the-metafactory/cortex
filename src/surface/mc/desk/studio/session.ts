@@ -33,7 +33,25 @@ export function sessionPrompt(session: StudioSession, thread: StudioThreadView):
   };
 }
 const refused = (error: string): ActRefusal => ({ status: 409, error });
+export interface StudioExchange {
+  thread: string;
+  scope: SessionScope;
+  original: string;
+  stand: string;
+  policy: "local" | "cloud";
+  summary?: string;
+  turns: { text: string; reply: string | null; model: string; policy: "local" | "cloud" }[];
+  draft?: string;
+}
 export function planSessionEnd(ctx: ActContext, session: StudioSession, outcome: SessionEnd): ActPlan | ActRefusal {
+  const summary = session.turns.at(-1)?.answer?.summary;
+  return planExchangeEnd(ctx, {
+    thread: session.thread, scope: session.scope, original: session.original, stand: session.stand, policy: session.policy,
+    turns: session.turns.map(t => ({ text: t.text, reply: t.answer?.reply ?? null, model: t.model, policy: t.policy })),
+    ...(summary ? { summary } : {}), ...(session.draft ? { draft: session.draft } : {}),
+  }, outcome, `Record Studio session ${session.id}`);
+}
+export function planExchangeEnd(ctx: ActContext, session: StudioExchange, outcome: SessionEnd, subject: string): ActPlan | ActRefusal {
   const thread = sessionThread(ctx, session.thread);
   const file = ctx.files.threads.find(f => f.path === thread?.path);
   if (!thread || !file) return refused("The thread is no longer readable. Your exchange is retained; restore the thread and retry.");
@@ -52,8 +70,8 @@ export function planSessionEnd(ctx: ActContext, session: StudioSession, outcome:
   const at = new Date(ctx.now);
   while (thread.notes.some(n => Date.parse(n.at) === at.getTime())) at.setMilliseconds(at.getMilliseconds() + 1);
   const entry = [`### ${at.toISOString()}`, `trigger: ${trigger}`, `model: ${latest?.policy ?? thread.policy}`, "status: kept", "", ...safeBody([
-    `Subject: ${session.original}`, latest?.answer?.summary ?? "Session closed. The exchange is recorded below.",
-    ...session.turns.flatMap(t => [`You: ${t.text}`, `Ivy (${t.model}, ${t.policy}): ${t.answer?.reply ?? "No answer received; your text was saved."}`]),
+    `Subject: ${session.original}`, session.summary ?? "Session closed. The exchange is recorded below.",
+    ...session.turns.flatMap(t => [`You: ${t.text}`, `Ivy (${t.model}, ${t.policy}): ${t.reply ?? "No answer received; your text was saved."}`]),
     ...(session.draft ? [`You (unsent draft): ${session.draft}`] : []),
     `Outcome: ${outcome.kind}${"text" in outcome ? `: ${outcome.text}` : ""}.`,
   ].join("\n\n"))];
@@ -65,7 +83,7 @@ export function planSessionEnd(ctx: ActContext, session: StudioSession, outcome:
   }
   if (text !== null) text = appendLog(text, localTime(ctx.now), `${trigger}; saved the exchange (${outcome.kind})`);
   return text === null ? refused("The thread cannot be edited. The exchange is retained.") : {
-    writes: [{ path: file.path, text }], removes: [], subject: `Record Studio session ${session.id}`, message: "The exchange is saved as a note in the thread.",
+    writes: [{ path: file.path, text }], removes: [], subject, message: "The exchange is saved as a note in the thread.",
   };
 }
 

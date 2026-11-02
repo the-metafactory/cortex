@@ -160,7 +160,7 @@ export function useStudioSession(onSaved?: () => void) {
 }
 export type StudioSessionControls = ReturnType<typeof useStudioSession>;
 
-export function StudioSessionPanel({ controls: c, voice, location }: { controls: StudioSessionControls; voice: DeskVoice; location: string }) {
+export function StudioSessionPanel({ controls: c, voice, location, onContinue }: { controls: StudioSessionControls; voice: DeskVoice; location: string; onContinue?: (sessionId: string) => void }) {
   const input = useRef<HTMLTextAreaElement>(null);
   const previousLocation = useRef(location);
   useEffect(() => {
@@ -174,7 +174,9 @@ export function StudioSessionPanel({ controls: c, voice, location }: { controls:
   if (!c.session) return c.recoverable.length || c.error ? <aside className="dst-session-recovery">
     {c.error && <p role="alert">{c.error}</p>}
     {c.resumeId && !c.recoverable.some(s => s.id === c.resumeId) && <button type="button" className="desk-btn" onClick={() => c.resumeId && void c.load(c.resumeId)}>Resume saved exchange</button>}
-    {c.recoverable.map(s => <button type="button" className="desk-btn" key={s.id} onClick={() => void c.load(s.id)}>Resume saved exchange on {s.thread}</button>)}
+    {c.recoverable.map(s => s.phase.kind === "open" && onContinue
+      ? <button type="button" className="desk-btn" key={s.id} onClick={() => onContinue(s.id)}>Continue saved exchange on {s.thread} as a conversation</button>
+      : <button type="button" className="desk-btn" key={s.id} onClick={() => void c.load(s.id)}>Resume saved exchange on {s.thread}</button>)}
   </aside> : null;
   const session = c.session;
   const ghost = session.scope.kind === "ghost";

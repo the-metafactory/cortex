@@ -180,12 +180,17 @@ describe("the request id", () => {
 describe("the Desk view switch", () => {
   it("shows Day Catch-up Balance and Studio with the current view selected", () => {
     const html = renderToStaticMarkup(<DeskModeSwitch hasStudio inStudio onGo={() => {}} />);
-    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map((m) => [m[2], m[1]])).toEqual([["Day", "false"], ["Catch-up", "false"], ["Balance", "false"], ["Studio", "true"]]);
+    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map((m) => [m[2], m[1]])).toEqual([["Day", "false"], ["Catch-up", "false"], ["Balance", "false"], ["Studio", "true"], ["Conversations", "false"]]);
+  });
+
+  it("selects Conversations in the conversation view", () => {
+    const html = renderToStaticMarkup(<DeskModeSwitch hasStudio={false} inStudio={false} inConversation onGo={() => undefined} />);
+    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map(m => [m[2], m[1]])).toEqual([["Day", "false"], ["Catch-up", "false"], ["Balance", "false"], ["Conversations", "true"]]);
   });
 
   it("keeps Day and Balance reachable without a Studio", () => {
     const html = renderToStaticMarkup(<DeskModeSwitch hasStudio={false} inStudio={false} inBalance onGo={() => undefined} />);
-    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map(m => [m[2], m[1]])).toEqual([["Day", "false"], ["Catch-up", "false"], ["Balance", "true"]]);
+    expect([...html.matchAll(/aria-selected="(true|false)">([^<]+)</g)].map(m => [m[2], m[1]])).toEqual([["Day", "false"], ["Catch-up", "false"], ["Balance", "true"], ["Conversations", "false"]]);
     expect(html).not.toContain(">Studio</button>");
   });
 });
