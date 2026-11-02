@@ -587,6 +587,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     onChanged();
   };
 
+  const undoByKind: Record<NonNullable<Receipt["undoKind"]>, (id: string) => Promise<void>> = { move: undoMove, snooze: unsnooze, trust: undoTrust };
+
   const openHandoff = (item: DeskItem): void => {
     setDetail(item);
     setHandoffAsk((h) => (h?.key === item.key ? h : newHandoffAsk(item.key)));
@@ -1014,7 +1016,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         )}
       </aside>
 
-      {note ? <div className="desk-note" role="status">{note}</div> : receipt && <MailReceipt receipt={receipt} onUndo={() => void (receipt.undoKind === "snooze" ? unsnooze(receipt.undo) : receipt.undoKind === "trust" ? undoTrust(receipt.undo) : undoMove(receipt.undo))} onBlock={() => void blockDomain(receipt)} />}
+      {note ? <div className="desk-note" role="status">{note}</div> : receipt && <MailReceipt receipt={receipt} onUndo={() => void undoByKind[receipt.undoKind ?? "move"](receipt.undo)} onBlock={() => void blockDomain(receipt)} />}
     </div>
   );
 }

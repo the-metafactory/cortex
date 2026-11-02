@@ -79,7 +79,7 @@ export function undoDismissal(db: Database, id: string, now: number): TrustResul
     for (const logId of logIds) db.query("DELETE FROM desk_mail_log WHERE id = ? AND action = 'not-phishing'").run(logId);
     db.query("UPDATE desk_done SET action = ?, message = ?, updated_at = ? WHERE attempt_key = ?").run(`${TRUST_DONE}.undone`, "Flagged as possible phishing again.", now, `mail-trust:${id}`);
   })();
-  if (rows.length === 0) return { ok: true, message: "Nothing to undo: the sender was already removed in Settings." };
+  if (rows.length === 0) return { ok: true, message: "Undone." };
   const messageId = rows.find((r) => r.message_id !== "")?.message_id;
   return { ok: true, message: "Undone. The mail shows as possible phishing again.", ...(messageId ? { restored: `mail:${messageId}` } : {}) };
 }
@@ -105,9 +105,14 @@ export function trustedViews(db: Database): TrustedView[] {
   });
 }
 
-/** Settings' Remove: forgets every "Not phishing" for one sender address, so its mail is checked in full again. */
-export function removeTrustedSender(db: Database, address: string): TrustResult {
+/** Settings' Remove: forgets every "Not phishing" for one sender address, so its mail is checked in full again. Their Done for you lines lose Undo. */
+export function removeTrustedSender(db: Database, address: string, now: number): TrustResult {
   const sender = senderKey(address);
-  if (db.query("DELETE FROM desk_mail_trusted WHERE sender = ?").run(sender).changes === 0) return refuse(404, `${sender} has no "Not phishing" remembered.`);
+  const dismissals = db.query<{ dismissal: string }, [string]>("SELECT DISTINCT dismissal FROM desk_mail_trusted WHERE sender = ?").all(sender).map((r) => `mail-trust:${r.dismissal}`);
+  if (dismissals.length === 0) return refuse(404, `${sender} has no "Not phishing" remembered.`);
+  db.transaction(() => {
+    db.query("DELETE FROM desk_mail_trusted WHERE sender = ?").run(sender);
+    db.query("UPDATE desk_done SET action = ?, message = ?, updated_at = ? WHERE action = ? AND attempt_key IN (SELECT value FROM json_each(?))").run(`${TRUST_DONE}.undone`, "Removed in Settings: flagged as possible phishing again.", now, TRUST_DONE, JSON.stringify(dismissals));
+  })();
   return { ok: true, message: `Mail from ${sender} is checked for phishing in full again.`, trusted: trustedViews(db) };
 }

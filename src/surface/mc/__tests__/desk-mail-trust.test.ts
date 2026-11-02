@@ -107,6 +107,8 @@ describe("Not phishing on the Desk", () => {
     expect((await act(rt, { action: "not-phishing", key: `mail:${first.id}` })).status).toBe(200);
     expect((await act(rt, { action: "not-phishing.remove", sender: "BILLING@pay.example" })).body).toEqual({ ok: true, message: "Mail from billing@pay.example is checked for phishing in full again.", trusted: [] });
     expect((await card(rt, first.id))?.suspicious).toBe(true);
+    expect((await view(rt)).autonomy.done.find((d) => d.key === "mail-trust:trust-1")).toMatchObject({ action: "mail.trust.undone", message: "Removed in Settings: flagged as possible phishing again." });
+    expect((await act(rt, { action: "not-phishing.undo", trust: "trust-1" })).status).toBe(409);
     expect((await act(rt, { action: "not-phishing.remove", sender: "billing@pay.example" })).status).toBe(404);
   });
 
