@@ -13,6 +13,7 @@ import type { AreaPolicy, DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskI
 import { evidenceView, replySubject, suggestionLine, type EvidenceLinks } from "./mail-triage";
 import { ACTION_LABEL, precedentLine } from "./mail-similar";
 import { suspicionLine, suspicionOf, type SuspicionContext } from "./mail-suspicion";
+import type { UnsubscribeOffer } from "./mail-unsubscribe";
 
 export interface AreaRule extends DeskArea {
   repos: string[];
@@ -326,6 +327,7 @@ export interface MailInput {
   onDesk?: ReadonlySet<string>;
   suspicion?: SuspicionContext;
   report?: boolean;
+  unsubscribe?: ReadonlyMap<string, UnsubscribeOffer>;
 }
 
 const STOPWORDS = new Set(["meeting", "update", "about", "with", "from", "your", "termin", "sitzung", "einladung", "invitation", "accepted", "re", "fw", "aw", "wg"]);
@@ -387,6 +389,19 @@ const REPORT = action("mail.report", "Report", "secondary", true);
 const SUSPICIOUS_SCORE = 70;
 const SHOW_MEETING = action("meeting.show", "Show on the meeting", "primary", true);
 const DRAFT_LABEL = "Draft a reply";
+const unsubscribeAction = (offer: UnsubscribeOffer): DeskAction => {
+  if (offer.kind === "one-click") return { ...action("mail.unsubscribe", "Unsubscribe", "secondary", true), target: offer.host };
+  if (offer.kind === "page") return { ...action("mail.unsubscribe.page", "Open unsubscribe page", "secondary", true), target: offer.host, url: offer.url };
+  return action("mail.unsubscribe.rule", "Archive what still arrives", "secondary", true);
+};
+
+const unsubscribeLine = (offer: UnsubscribeOffer, now: number): string => {
+  if (offer.kind === "rule") return `You unsubscribed ${ago(now, offer.at)} via ${offer.host}, and its mail still arrives.`;
+  const left = `You archived or deleted ${offer.dismissed} of its mails unread.`;
+  if (offer.kind === "page") return `${left} Its unsubscribe page is ${offer.url}; the Desk does not open it for you.`;
+  return offer.failed ? `${left} The last unsubscribe attempt failed: ${offer.failed}.` : `${left} It offers a one-click unsubscribe via ${offer.host}.`;
+};
+
 const UNIMPORTANT_VERDICT: MailVerdict = { score: CATEGORY_SCORE.bulk, pressing: false, why: UNIMPORTANT_REASON, sorted: "bulk" };
 
 export function mailItems(input: MailInput): DeskItem[] {
@@ -397,6 +412,7 @@ export function mailItems(input: MailInput): DeskItem[] {
     const reasons = suspicionOf(m, suspicion, classified?.get(m.id)?.suspicious === true);
     if (reasons.length > 0) return suspiciousItem(m, reasons, input, { spam, report });
     const vip = isVip(vips, m.from.address);
+    const unsubscribe = vip ? undefined : input.unsubscribe?.get(m.id);
     const marked = isUnimportant(unimportant, vips, m.from.address);
     const verdict = marked ? UNIMPORTANT_VERDICT : verdictFor(m, input);
     const quiet = trash && (verdict.sorted === "fyi" || verdict.sorted === "bulk");
@@ -413,7 +429,8 @@ export function mailItems(input: MailInput): DeskItem[] {
     const receivedAt = parsedOr(m.receivedAt, now);
     const ageDays = Math.max(0, (now - receivedAt) / DAY_MS);
     const arrived = `It arrived ${ago(now, receivedAt)}.`;
-    const why = vip ? `${sender} is on your VIP list. ${learned ?? (verdict.sorted && verdict.why ? verdict.why : arrived)}` : learned ?? verdict.why ?? arrived;
+    const plainWhy = vip ? `${sender} is on your VIP list. ${learned ?? (verdict.sorted && verdict.why ? verdict.why : arrived)}` : learned ?? verdict.why ?? arrived;
+    const why = unsubscribe ? `${plainWhy} ${unsubscribeLine(unsubscribe, now)}` : plainWhy;
     const canDraft = draft && Boolean(m.account);
     const replyFirst = canDraft && (predicted ? predicted === "reply" : triage?.suggestedAction === "reply" && !quiet) && showMeeting.length === 0;
     const seenFirst = quiet && !moveFirst && predicted !== "keep" && !replyFirst;
@@ -424,7 +441,7 @@ export function mailItems(input: MailInput): DeskItem[] {
     const replyTail = canDraft && !replyFirst ? [reply] : [];
     const lead = archiveFirst ? [{ ...ARCHIVE, role: "primary" as const }] : spamFirst ? [{ ...SPAM, role: "primary" as const }] : trashFirst ? [{ ...DELETE, role: "primary" as const }] : seenFirst ? [SEEN] : [];
     const moves = [...(archive && !archiveFirst ? [ARCHIVE] : []), ...(trash && !trashFirst && !seenFirst ? [DELETE] : []), ...(spam && !spamFirst ? [SPAM] : [])];
-    const offered = [...lead, ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, LATER];
+    const offered = [...lead, ...(unsubscribe ? [unsubscribeAction(unsubscribe)] : []), ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, LATER];
     const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
     if (verdict.sorted) history.push(`The mail classifier sorted it as ${verdict.sorted}.`);
     if (triage && (!triage.commitment || triage.commitment === "unknown")) history.push("Whether this mail asks for a new commitment has not been established.");
@@ -448,7 +465,7 @@ export function mailItems(input: MailInput): DeskItem[] {
         summary: triage?.summary ?? m.firstParagraph ?? m.subject,
         history,
         refs: [m.from.address, m.id],
-        links: m.url ? [{ label: "Open in Mail", url: m.url }] : [],
+        links: [...(m.url ? [{ label: "Open in Mail", url: m.url }] : []), ...(unsubscribe?.kind === "page" ? [{ label: `Unsubscribe page: ${unsubscribe.url}`, url: unsubscribe.url }] : [])],
         ...(evidence.length > 0 ? { evidence } : {}),
         ...(precedents.length > 0 ? { precedents } : {}),
       },

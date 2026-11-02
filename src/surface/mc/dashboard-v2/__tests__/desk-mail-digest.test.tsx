@@ -34,6 +34,20 @@ describe("the newsletter digest card", () => {
     expect(renderToStaticMarkup(<MailDigests digests={[]} busy={false} onArchive={() => {}} onKeep={() => {}} />)).toBe("");
   });
 
+  it("offers Unsubscribe, the unsubscribe page or the archive rule on a newsletter line", () => {
+    const mails = [
+      { ...DIGEST.mails[0], key: "mail:a", unsubscribe: { kind: "one-click" as const, host: "lists.example" } },
+      { ...DIGEST.mails[1], key: "mail:b", unsubscribe: { kind: "page" as const, host: "cortex.example", url: "https://cortex.example/leave?u=1" } },
+      { ...DIGEST.mails[2], key: "mail:c", unsubscribe: { kind: "rule" as const, host: "startups.example" } },
+    ].map((m) => ({ subject: "", from: "", at: "", ...m }));
+    const html = renderToStaticMarkup(<MailDigests digests={[{ ...DIGEST, mails }]} busy={false} onArchive={() => {}} onKeep={() => {}} onUnsubscribe={() => {}} />);
+    expect(html).toContain(">Unsubscribe</button>");
+    expect(html).toContain('href="https://cortex.example/leave?u=1"');
+    expect(html).toContain("Unsubscribe page: cortex.example</a>");
+    expect(html).toContain(">Archive what still arrives</button>");
+    expect(renderToStaticMarkup(<MailDigests digests={[{ ...DIGEST, mails }]} busy={false} onArchive={() => {}} onKeep={() => {}} />)).not.toContain("Unsubscribe");
+  });
+
   it("filters by area and keeps cross-area digests everywhere", () => {
     const work = { ...DIGEST, id: "digest:w", area: "work" };
     expect(digestsInArea([DIGEST, work], "personal").map((d) => d.id)).toEqual([DIGEST.id]);

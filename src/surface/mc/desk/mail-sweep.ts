@@ -26,6 +26,7 @@ export interface SweepMailView {
   from: string;
   at: string;
   url?: string;
+  unsubscribe?: import("./mail-unsubscribe").UnsubscribeView;
 }
 
 export interface MailSweepView {

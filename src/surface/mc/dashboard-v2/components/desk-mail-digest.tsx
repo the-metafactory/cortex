@@ -1,4 +1,6 @@
+import { useState } from "react";
 import type { MailDigestView } from "../../desk/mail-digest";
+import type { SweepMailView } from "../../desk/mail-sweep";
 import "./desk-mail-sweeps.css";
 import "./desk-mail-digest.css";
 
@@ -7,7 +9,22 @@ export const digestsInArea = (digests: readonly MailDigestView[], area: string):
 
 const headline = (d: MailDigestView): string => d.title.replace(/: [^:]*\?$/, "");
 
-export function MailDigests({ digests, busy, onArchive, onKeep }: { digests: readonly MailDigestView[]; busy: boolean; onArchive: (d: MailDigestView) => void; onKeep: (key: string) => void }) {
+export type UnsubscribeAsk = "unsubscribe" | "unsubscribe.rule";
+
+function UnsubscribeButton({ mail, busy, onUnsubscribe }: { mail: SweepMailView; busy: boolean; onUnsubscribe: (key: string, ask: UnsubscribeAsk) => void }) {
+  const [sure, setSure] = useState(false);
+  const offer = mail.unsubscribe;
+  if (!offer) return null;
+  if (offer.kind === "page" && offer.url) return <a className="desk-btn ghost" href={offer.url} title={offer.url} target="_blank" rel="noopener noreferrer">Unsubscribe page: {offer.host}</a>;
+  if (offer.kind === "rule") return <button type="button" className="desk-btn ghost" disabled={busy} onClick={() => onUnsubscribe(mail.key, "unsubscribe.rule")}>Archive what still arrives</button>;
+  return (
+    <button type="button" className="desk-btn ghost" disabled={busy} onClick={() => { if (sure) { setSure(false); onUnsubscribe(mail.key, "unsubscribe"); } else setSure(true); }}>
+      {sure ? `Yes, unsubscribe via ${offer.host}` : "Unsubscribe"}
+    </button>
+  );
+}
+
+export function MailDigests({ digests, busy, onArchive, onKeep, onUnsubscribe }: { digests: readonly MailDigestView[]; busy: boolean; onArchive: (d: MailDigestView) => void; onKeep: (key: string) => void; onUnsubscribe?: (key: string, ask: UnsubscribeAsk) => void }) {
   if (digests.length === 0) return null;
   return (
     <div className="desk-digests" aria-label="Newsletter digests">
@@ -34,6 +51,7 @@ export function MailDigests({ digests, busy, onArchive, onKeep }: { digests: rea
                     <span className="desk-digest-acts">
                       {m.url && <a className="desk-btn ghost" href={m.url} target="_blank" rel="noopener noreferrer">Open</a>}
                       <button type="button" className="desk-btn ghost" disabled={busy} onClick={() => onKeep(m.key)}>Keep</button>
+                      {onUnsubscribe && <UnsubscribeButton mail={m} busy={busy} onUnsubscribe={onUnsubscribe} />}
                     </span>
                   </li>
                 );

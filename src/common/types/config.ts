@@ -562,6 +562,13 @@ export const DeskSchema = z.object({
           model: DigestEndpointSchema.safeExtend({ local: DigestEndpointSchema.optional() }).optional(),
         })
         .optional(),
+      unsubscribe: z
+        .object({
+          enabled: z.boolean().default(true),
+          after: z.number().int().min(1).max(100).default(5),
+          timeoutSeconds: z.number().int().min(1).max(60).default(10),
+        })
+        .optional(),
       suspicion: z
         .object({
           ownDomains: z.array(z.string().trim().toLowerCase().regex(HOST_NAME_RE, "mc.desk.mail.suspicion.ownDomains holds domain names such as example.org")).max(100),
