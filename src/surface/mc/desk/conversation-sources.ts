@@ -4,7 +4,7 @@ import type { HostSources } from "../../../conversations/host";
 import type { ObjectRef, OperationRecord, SourceState } from "../../../conversations/types";
 import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-conversation-writer";
 import { calendarWriter } from "./calendar-conversation-writer";
-import { deskNoteWriter } from "./desk-note-conversation-writer";
+import { DESK_NOTE_WITHHELD, deskNoteWriter } from "./desk-note-conversation-writer";
 import { deskWriterArgv, type DeskWriterKind } from "./desk-conversation-writer";
 import { goalWriter } from "./goal-conversation-writer";
 import type { GoalRunner } from "./goals";
@@ -122,6 +122,9 @@ export function conversationSources(deps: SourceDeps): HostSources {
         ...(deskWriterArgv(desk, "note") ? {} : { "desk-note": deskNote }),
         ...(mailDraft && mailDraftReady(desk) ? { "mail-draft": mailDraft } : {}),
       };
+    },
+    get withheld() {
+      return deskWriterArgv(deps.desk(), "note") ? { "desk-note": DESK_NOTE_WITHHELD } : {};
     },
     resolvers: {
       "studio-thread": async ref => {

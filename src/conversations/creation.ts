@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { CREATABLE_TYPES, CREATION_CATALOG, OWNER_BLOCKERS, SUBJECT_FIELDS, UNAVAILABLE_TYPES, isCreatable, type CreatableType, type Egress, type FieldSpec, type FixedTerm } from "./catalog";
 import { ConversationError, type ConversationHost } from "./host";
-import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateResult, type OperationRecord, type OwnerWriters } from "./types";
+import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateResult, type OperationRecord, type OwnerWriters, type WithheldReasons } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 export type GrantScope = (typeof GRANT_SCOPES)[number];
@@ -80,17 +80,17 @@ const clean = (fields: Record<string, string>): Record<string, string> => Object
 export const proposalDigest = (type: CreatableType | null, fields: Record<string, string>): string => sha256(canonical({ type, fields: clean(fields) }));
 const conflict = (message: string): ConversationError => new ConversationError(409, message);
 
-export function capabilities(writers: OwnerWriters): Capability[] {
-  const creatable = CREATABLE_TYPES.map((type): Capability => capabilityOf(type, writers));
+export function capabilities(writers: OwnerWriters, withheld: WithheldReasons = {}): Capability[] {
+  const creatable = CREATABLE_TYPES.map((type): Capability => capabilityOf(type, writers, withheld));
   const unavailable = UNAVAILABLE_TYPES.map((spec): Capability => ({ type: spec.type, row: spec.row, label: spec.label, owner: spec.owner, status: "unsupported", reason: spec.reason, fields: [], fixed: [] }));
   return [...creatable, ...unavailable];
 }
 
-function capabilityOf(type: CreatableType, writers: OwnerWriters): Capability {
+function capabilityOf(type: CreatableType, writers: OwnerWriters, withheld: WithheldReasons): Capability {
   const spec = CREATION_CATALOG[type];
   const base = { type, row: spec.row, label: spec.label, owner: spec.owner, egress: spec.egress, fields: spec.fields, fixed: spec.fixed ?? [] };
   if (writers[type]) return { ...base, status: "ready" };
-  const reason = type === "flow" ? "Pulse has no place to save a flow without running it yet." : `No ${spec.owner} writer is connected on this stack yet.`;
+  const reason = withheld[type] ?? (type === "flow" ? "Pulse has no place to save a flow without running it yet." : `No ${spec.owner} writer is connected on this stack yet.`);
   return { ...base, status: `blocked:${OWNER_BLOCKERS[type]}`, reason };
 }
 
@@ -165,7 +165,11 @@ export class ConversationCreation {
   }
 
   capabilities(): Capability[] {
-    return capabilities(this.host.writers);
+    return capabilities(this.host.writers, this.host.withheld);
+  }
+
+  private capability(type: CreatableType): Capability {
+    return capabilityOf(type, this.host.writers, this.host.withheld);
   }
 
   private async serial<T>(key: string, run: () => Promise<T>): Promise<T> {
@@ -214,7 +218,7 @@ export class ConversationCreation {
     const effective = policy ?? (await this.host.meta(proposal.conversationId)).policy;
     const mine = (operations ?? await this.host.operations(proposal.conversationId)).filter(op => op.proposalId === proposal.proposalId).sort((a, b) => a.revision - b.revision);
     const operation = mine.find(op => isCurrent(op, proposal)) ?? null;
-    const capability = proposal.type ? capabilityOf(proposal.type, this.host.writers) : null;
+    const capability = proposal.type ? this.capability(proposal.type) : null;
     let feedback: Feedback;
     if (operation?.state === "created" || operation?.state === "failed" || operation?.state === "uncertain") feedback = operation.state;
     else if (operation && operation.state !== "proposed") feedback = "accepted";
@@ -251,7 +255,7 @@ export class ConversationCreation {
       await this.save(proposal);
       await this.host.record(conversationId, `proposal:${proposal.proposalId}:1`, PROPOSAL_KIND, { proposalId: proposal.proposalId, revision: 1, type, fields, entryId: proposal.entryId });
       const grant = type ? (await this.grants(actor.principal)).find(g => applies(g, conversationId, actor.principal, type)) : undefined;
-      const ready = type && capabilityOf(type, this.host.writers).status === "ready" && missingOf(type, fields).length === 0;
+      const ready = type && this.capability(type).status === "ready" && missingOf(type, fields).length === 0;
       if (grant && ready) {
         await this.host.settled();
         const egress = await this.egressRefusal(conversationId, proposal);
@@ -301,7 +305,7 @@ export class ConversationCreation {
       if (body.digest !== proposalDigest(proposal.type, proposal.fields)) throw conflict("The proposal you confirmed differs from the saved one. Nothing was created; review it again.");
       if (proposal.dismissed) throw conflict("This proposal was dismissed. Nothing was created.");
       if (!proposal.type) throw conflict("Choose what to create and where first. Nothing was created.");
-      const capability = capabilityOf(proposal.type, this.host.writers);
+      const capability = this.capability(proposal.type);
       if (capability.status !== "ready") throw conflict(unavailableHere(capability));
       const missing = missingOf(proposal.type, proposal.fields);
       if (missing.length > 0) throw new ConversationError(400, `Fill in ${missing.join(", ")} first. Nothing was created.`);
