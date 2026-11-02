@@ -18,7 +18,9 @@ import {
   BRAIN_PROTOCOL_ID,
   type BrainEvent,
   type BrainEffect,
+  type TaskSovereignty,
 } from "../protocol";
+import type { Envelope } from "../../bus/myelin/envelope-validator";
 
 // ---------------------------------------------------------------------------
 // Fixtures — one of every event + effect
@@ -965,5 +967,47 @@ describe("round-3: tolerant attachment extras, strict XOR, complete-reason", () 
   test("complete result carrying a reason is rejected, not stripped", () => {
     const r = _parseR3(JSON.stringify({ v: 1, type: "result", task_id: "t1", status: "complete", reason: { kind: "cant_do", detail: "x" } }));
     expect(r.kind).toBe("invalid");
+  });
+});
+
+const toEnvelope = (s: TaskSovereignty): Envelope["sovereignty"] => s;
+const fromEnvelope = (s: Envelope["sovereignty"]): TaskSovereignty => s;
+
+describe("task event sovereignty (cortex#3134)", () => {
+  test("the task sovereignty schema has exactly the envelope's sovereignty type", () => {
+    expect(fromEnvelope(toEnvelope(sovereignty))).toEqual(sovereignty);
+  });
+
+  const base = {
+    v: 1,
+    type: "task",
+    task_id: "t1",
+    capability: "compose.judgment",
+    payload: { prompt: "Summarise" },
+    source: { surface: "bus", channel: "", thread: "", user: "" },
+  };
+  const sovereignty = {
+    classification: "local",
+    data_residency: "CH",
+    max_hop: 0,
+    frontier_ok: false,
+    model_class: "local-only",
+  } as const;
+
+  test("a task carrying the envelope's sovereignty round-trips", () => {
+    const parsed = parseBrainEvent(JSON.stringify({ ...base, sovereignty }));
+    expect(parsed.kind).toBe("ok");
+    if (parsed.kind === "ok" && parsed.event.type === "task") {
+      expect(parsed.event.sovereignty).toEqual(sovereignty);
+    }
+  });
+
+  test("a task without sovereignty stays valid", () => {
+    expect(parseBrainEvent(JSON.stringify(base)).kind).toBe("ok");
+  });
+
+  test("a task whose sovereignty has an unknown model_class is invalid", () => {
+    const line = JSON.stringify({ ...base, sovereignty: { ...sovereignty, model_class: "whatever" } });
+    expect(parseBrainEvent(line).kind).toBe("invalid");
   });
 });

@@ -77,7 +77,6 @@
   "src/brain/__tests__/attachment-budget.test.ts": 1,
   "src/brain/__tests__/daemon-socket-auth.test.ts": 1,
   "src/brain/__tests__/exec-brain-runner.test.ts": 5,
-  "src/brain/__tests__/protocol.test.ts": 4,
   "src/brain/protocol.ts": 2,
   "src/bus/__tests__/admit-offered-dispatch.test.ts": 3,
   "src/bus/__tests__/brain-consumer.compose.test.ts": 9,

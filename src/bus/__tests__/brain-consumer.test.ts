@@ -39,6 +39,7 @@ import type {
   BrainTaskRunResult,
 } from "../../brain/exec-brain-runner";
 import { makeExecBrainRunner } from "../../brain/exec-brain-runner";
+import { encodeBrainEvent, parseBrainEvent } from "../../brain/protocol";
 import type { TaskEvent, ResultEffect } from "../../brain/protocol";
 
 // ---------------------------------------------------------------------------
@@ -414,6 +415,26 @@ describe("BrainConsumer — happy path", () => {
     expect(completed.length).toBe(1);
     expect(completed[0]?.correlation_id).toBe(env.id);
     expect((completed[0]?.payload as { result_summary?: string }).result_summary).toBe("done");
+  });
+
+  test("the brain's task event carries the envelope's sovereignty (cortex#3134)", async () => {
+    const runtime = createRecordingRuntime();
+    const env = makeTaskEnvelope({ data_residency: "CH" });
+    let seen: TaskEvent | undefined;
+    const consumer = new BrainConsumer(
+      baseOpts({
+        runtime,
+        runBrainTask: stubRunner(completeResult(env.id, "done"), async (_hooks, task) => {
+          seen = task;
+        }),
+      }),
+    );
+
+    await consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
+
+    expect(seen?.sovereignty?.data_residency).toBe("CH");
+    expect(seen?.sovereignty).toEqual(env.sovereignty);
+    expect(parseBrainEvent(encodeBrainEvent(seen!)).kind).toBe("ok");
   });
 
   test("brain post effect → dispatch.task.post lifecycle envelope with task source + text", async () => {

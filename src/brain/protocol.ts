@@ -198,6 +198,21 @@ export const DispatchSovereigntySchema = z.object({
 });
 export type DispatchSovereignty = z.infer<typeof DispatchSovereigntySchema>;
 
+/**
+ * The task envelope's sovereignty, forwarded verbatim on the `task` event
+ * (https://github.com/the-metafactory/cortex/issues/3134). A brain compares it
+ * with the model endpoint it would use and refuses a mismatch; the Cortex
+ * runtime's own gate checks only `model_class`.
+ */
+export const TaskSovereigntySchema = z.object({
+  classification: z.enum(["local", "federated", "public"]),
+  data_residency: z.string(),
+  max_hop: z.number().int().nonnegative(),
+  frontier_ok: z.boolean(),
+  model_class: z.enum(["local-only", "frontier", "any"]),
+});
+export type TaskSovereignty = z.infer<typeof TaskSovereigntySchema>;
+
 // ---------------------------------------------------------------------------
 // Cortex → brain events
 // ---------------------------------------------------------------------------
@@ -226,6 +241,7 @@ export const TaskEventSchema = z.object({
   source: TaskSourceSchema,
   /** Per-task lifecycle: the brain's persona text, delivered on the task. */
   persona: z.string().optional(),
+  sovereignty: TaskSovereigntySchema.optional(),
 });
 export type TaskEvent = z.infer<typeof TaskEventSchema>;
 

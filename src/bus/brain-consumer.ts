@@ -669,6 +669,7 @@ export class BrainConsumer {
       payload: envelope.payload,
       source,
       ...(this.persona !== undefined && { persona: this.persona }),
+      sovereignty: envelope.sovereignty,
     };
 
     let result: ResultEffect;

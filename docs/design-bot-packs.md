@@ -129,7 +129,9 @@ socket (stdio kept for logs).
   "protocol": "cortex-brain/v1" }                                          // daemon handshake — host-authoritative identity; per-task brains get persona on task instead
 { "v": 1, "type": "task",    "task_id": "…", "capability": "soc.compose.flow",
   "payload": { /* envelope payload */ },
-  "source": { "surface": "mattermost", "channel": "…", "thread": "…", "user": "…" } }
+  "source": { "surface": "mattermost", "channel": "…", "thread": "…", "user": "…" },
+  "sovereignty": { "classification": "local", "data_residency": "CH", "max_hop": 0,
+                   "frontier_ok": false, "model_class": "local-only" } }      // optional: the envelope's sovereignty, for the brain to refuse a mismatch (cortex#3134)
 { "v": 1, "type": "message", "task_id": "…", "text": "…", "user": "…" }   // follow-up in an open task's thread
 { "v": 1, "type": "gate_verdict", "task_id": "…", "gate": "principal-ack",
   "verdict": "pass", "principal": "…", "notes": "run it" }                                   // answer to ask_principal
