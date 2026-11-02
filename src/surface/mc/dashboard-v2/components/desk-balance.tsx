@@ -57,7 +57,8 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
   const edited = selectedId ? drafts.get(selectedId) : undefined;
   const draft = edited ?? (entry ? { node: entry.node, details: balanceDetails(entry.node, current.date), revision: current.revision, date: current.date, yes: false } : null);
   const destinationChoices = balanceDestinations(current.outline, view.areas, true);
-  const parentChoices = entries.filter(({ node }) => destinationChoices.some(option => option.id === node.id));
+  const destinationIds = new Set(destinationChoices.map(option => option.id));
+  const parentChoices = entries.filter(({ node }) => destinationIds.has(node.id));
   const fileParents = balanceDestinations(current.outline, view.areas);
   const roots = current.outline.children.filter(node => !location.area || node.id === location.area);
   const visible = roots.filter(node => balanceMatches(node, location.query));
