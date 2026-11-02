@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { ConversationError, type ConversationHost, type HostDetail, type OwnerScope, type Seed, type SeedEntry } from "../../../conversations/host";
 import { DECISION_KIND, IMPORTED_TURN_KIND, ObjectRefSchema, type ConversationDetail, type ConversationMeta, type ObjectRef, type OperationRecord, type SourceView } from "../../../conversations/types";
+import { FIELD_SCHEMAS } from "../desk/ask";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { splitNoteId, studioNoteId, studioRequestId, studioThreadOf } from "../desk/conversation-sources";
 import type { GitRunner } from "../desk/studio/git";
@@ -21,7 +22,7 @@ export interface StudioConversationDeps {
 
 export const StartSchema = z.object({ startId: z.uuid(), source: ObjectRefSchema }).strict();
 export const ImportSchema = z.object({ sessionId: z.uuid() }).strict();
-export const AskStartSchema = z.object({ startId: z.uuid(), text: z.string().trim().min(1).max(1000), area: z.string().trim().min(1).max(200).optional() }).strict();
+export const AskStartSchema = FIELD_SCHEMAS.conversation.extend({ startId: z.uuid() }).strict();
 export const OutcomeSchema = z.union([
   z.object({ proposalId: z.uuid(), outcome: SessionEndSchema }).strict(),
   z.object({ proposalId: z.uuid(), check: z.literal(true) }).strict(),

@@ -11,7 +11,7 @@ const text = (max: number) => z.string().trim().min(1).max(max);
 
 export const FIELD_SCHEMAS = {
   routine: z.object({ proposalId: z.uuid() }),
-  conversation: z.object({ text: text(1000), area: z.string().min(1).optional() }),
+  conversation: z.object({ text: text(1000), area: text(200).optional() }),
   reminder: z.object({ text: text(300), due: iso }),
   note: z.object({ text: text(1000) }),
   capture: z.object({ text: text(1000) }),
