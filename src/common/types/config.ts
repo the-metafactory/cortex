@@ -460,10 +460,30 @@ export const DeskMailWaitingSchema = z.object({
 
 const clockTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, "a time as HH:MM");
 
+const invitationAccount = z.string().trim().min(1).max(64);
+
+const InvitationCalendarSchema = z.union([
+  invitationAccount,
+  z.strictObject({
+    account: invitationAccount,
+    calendar: z.string().trim().min(1).max(200).refine((c) => !c.startsWith("-"), "a calendar name, not a flag").optional(),
+  }),
+]);
+
+export const accountOf = (entry: z.infer<typeof InvitationCalendarSchema>): string => (typeof entry === "string" ? entry : entry.account);
+
 export const DeskMailInvitationsSchema = z.object({
   command: z.array(z.string().min(1)).min(1),
   timeoutSeconds: z.number().int().min(1).max(120).default(30),
-  addToCalendar: z.array(z.string().trim().min(1).max(64)).max(20).default([]),
+  calendarWriter: z.array(z.string().min(1)).min(1).optional(),
+  addToCalendar: z
+    .array(InvitationCalendarSchema)
+    .max(20)
+    .refine((entries) => {
+      const accounts = entries.map(accountOf);
+      return new Set(accounts).size === accounts.length;
+    }, "mc.desk.mail.invitations.addToCalendar names an account twice")
+    .default([]),
   slots: z
     .object({
       days: z.number().int().min(1).max(14).default(5),

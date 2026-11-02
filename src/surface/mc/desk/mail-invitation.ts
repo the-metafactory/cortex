@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { accountOf } from "../../../common/types/config";
 import { oneLine } from "./actions";
 import type { CalendarAvailability, CalendarInterval } from "./calendar-availability";
 import { createFromCard, type DeskWriters, type WriterRunner } from "./create";
@@ -299,7 +300,7 @@ const bindingOf = (row: InvitationRow & { uid: string }): string => binding(row.
 /**
  * Sends the principal's confirmed answer to one invitation through the calendar-reply command, records it with the
  * Yes-filter choice, logs the mail decision and, for an accepted invitation in an account listed under addToCalendar,
- * adds the event through the calendar writer. Nothing is sent without `confirmed`, for suspicious mail, for a mail without
+ * adds the event through the calendar writer, to the calendar that entry names. Nothing is sent without `confirmed`, for suspicious mail, for a mail without
  * an invitation the principal is invited to, or when an answer to this mail is already sent or may have been.
  */
 export async function replyToInvitation(mail: ListedMail, input: InviteReplyInput, deps: InviteReplyDeps): Promise<MailActionResult> {
@@ -366,10 +367,20 @@ function sentMessage(stdout: string, reply: InviteReply): string {
   return `${DONE[reply]}.`;
 }
 
+function calendarFor(config: InvitationsConfig | undefined, account: string): { calendar?: string } | null {
+  const entry = config?.addToCalendar.find((e) => accountOf(e) === account);
+  if (entry === undefined) return null;
+  return typeof entry !== "string" && entry.calendar ? { calendar: entry.calendar } : {};
+}
+
 async function addAccepted(mail: ListedMail, requestId: string, deps: InviteReplyDeps): Promise<string | null> {
-  if (!mail.account || !deps.config?.addToCalendar.includes(mail.account)) return null;
+  const target = mail.account ? calendarFor(deps.config, mail.account) : null;
+  if (!target) return null;
   const card = acceptedEventCard(mail);
-  if (!card || !deps.writers.calendar?.length) return "The event was not added to your calendar: no calendar writer is set up.";
-  const created = await createFromCard(card, { requestId, db: deps.db, writers: deps.writers, run: deps.run, now: deps.now, timeoutMs: deps.writerTimeoutMs });
-  return created.ok ? "The event is in your calendar." : `The event was not added to your calendar: ${created.error}`;
+  const writer = deps.config?.calendarWriter ?? deps.writers.calendar;
+  if (!card || !writer?.length) return "The event was not added to your calendar: no calendar writer is set up.";
+  const argv = target.calendar ? [...writer, "--calendar", target.calendar] : writer;
+  const created = await createFromCard(card, { requestId, db: deps.db, writers: { calendar: argv }, run: deps.run, now: deps.now, timeoutMs: deps.writerTimeoutMs });
+  if (!created.ok) return `The event was not added to your calendar: ${created.error}`;
+  return target.calendar ? created.message : "The event is in your calendar.";
 }
