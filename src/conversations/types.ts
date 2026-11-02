@@ -124,6 +124,8 @@ export type Continuation =
   | { mode: "native-resume"; engine: string; at: string }
   | { mode: "reconstructed"; from: ModelRoute | null; to: ModelRoute; at: string };
 
+export const GRANT_SCOPES = ["conversation", "global"] as const;
+export const TRANSPORTS = ["web", "discord"] as const;
 export const OPERATION_STATES = ["proposed", "confirmed", "running", "created", "failed", "uncertain"] as const;
 export type OperationState = (typeof OPERATION_STATES)[number];
 export const OperationRecordSchema = z.object({
@@ -137,8 +139,8 @@ export const OperationRecordSchema = z.object({
   url: z.string().optional(),
   digest: z.string().optional(),
   authority: z.union([
-    z.object({ kind: z.literal("confirmation"), transport: z.enum(["web", "discord"]) }).strict(),
-    z.object({ kind: z.literal("grant"), grantId: z.string(), scope: z.enum(["conversation", "global"]) }).strict(),
+    z.object({ kind: z.literal("confirmation"), transport: z.enum(TRANSPORTS) }).strict(),
+    z.object({ kind: z.literal("grant"), grantId: z.string(), scope: z.enum(GRANT_SCOPES) }).strict(),
   ]).optional(),
   history: z.array(z.object({ state: z.enum(OPERATION_STATES), at: z.string(), detail: z.string().optional() })),
 });

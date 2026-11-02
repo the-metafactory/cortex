@@ -2,15 +2,14 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { CREATABLE_TYPES, CREATION_CATALOG, SUBJECT_FIELDS, UNAVAILABLE_TYPES, isCreatable, type CreatableType, type Egress, type FieldSpec, type FixedTerm } from "./catalog";
 import { ConversationError, type ConversationHost } from "./host";
-import { CREATION_KIND, GRANT_KIND, PROPOSAL_KIND, type CreateResult, type OperationRecord, type OwnerWriters } from "./types";
+import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateResult, type OperationRecord, type OwnerWriters } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const GRANT_SCOPES = ["conversation", "global"] as const;
 export type GrantScope = (typeof GRANT_SCOPES)[number];
 
 export type CapabilityStatus = "ready" | `blocked:${number}` | "unsupported";
 export interface Capability { type: string; row: string; label: string; owner: string; status: CapabilityStatus; reason?: string; egress?: Egress; fields: FieldSpec[]; fixed: FixedTerm[] }
-export interface Actor { principal: string; transport: "web" | "discord" }
+export interface Actor { principal: string; transport: (typeof TRANSPORTS)[number] }
 
 const FieldsSchema = z.record(z.string().regex(/^[a-z]{1,40}$/), z.string().max(20_000)).refine(fields => Object.keys(fields).length <= 20);
 export const ProposeSchema = z.object({
@@ -128,6 +127,7 @@ function egressRefusal(type: CreatableType | null, policy: "local" | "cloud"): C
   return new ConversationError(403, `This conversation is local-only and a ${CREATION_CATALOG[type].label.toLowerCase()} leaves this machine, so it cannot be created from here. Nothing was created.`);
 }
 
+const isCurrent = (op: OperationRecord, proposal: Proposal): boolean => op.proposalId === proposal.proposalId && op.revision === proposal.revision;
 const samePrincipal = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
 const applies = (grant: Grant, conversationId: string, principal: string, type: CreatableType): boolean =>
   !grant.revokedAt && grant.type === type && samePrincipal(grant.principal, principal) && (grant.scope === "global" || grant.conversationId === conversationId);
@@ -193,6 +193,10 @@ export class ConversationCreation {
     return found;
   }
 
+  private async currentOperation(proposal: Proposal): Promise<OperationRecord | undefined> {
+    return (await this.host.operations(proposal.conversationId)).find(op => isCurrent(op, proposal));
+  }
+
   async grants(principal: string): Promise<Grant[]> {
     return Object.values((await this.host.creation()).grants).map(raw => GrantSchema.parse(raw)).filter(g => samePrincipal(g.principal, principal)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
@@ -204,7 +208,7 @@ export class ConversationCreation {
   private async view(proposal: Proposal, operations?: OperationRecord[], policy?: "local" | "cloud"): Promise<ProposalView> {
     const effective = policy ?? (await this.host.meta(proposal.conversationId)).policy;
     const mine = (operations ?? await this.host.operations(proposal.conversationId)).filter(op => op.proposalId === proposal.proposalId).sort((a, b) => a.revision - b.revision);
-    const operation = mine.find(op => op.revision === proposal.revision) ?? null;
+    const operation = mine.find(op => isCurrent(op, proposal)) ?? null;
     const capability = proposal.type ? capabilityOf(proposal.type, this.host.writers) : null;
     let feedback: Feedback;
     if (operation?.state === "created" || operation?.state === "failed" || operation?.state === "uncertain") feedback = operation.state;
@@ -258,7 +262,7 @@ export class ConversationCreation {
     return this.serial(conversationId, async () => {
       const proposal = await this.proposal(conversationId, proposalId);
       if (body.revision !== proposal.revision) throw conflict(`This proposal changed since you opened it; it is now revision ${proposal.revision}. Review it again.`);
-      const current = (await this.host.operations(conversationId)).find(op => op.proposalId === proposalId && op.revision === proposal.revision);
+      const current = await this.currentOperation(proposal);
       if (current?.state === "created") throw conflict("This proposal was already created. Propose again to create another.");
       if (current && current.state !== "failed" && current.state !== "proposed") throw conflict("The owner has not answered for this proposal yet. Check it before changing anything.");
       if (body.dismiss) {
@@ -333,7 +337,7 @@ export class ConversationCreation {
     await this.gate(conversationId, actor, false);
     return this.serial(conversationId, async () => {
       const proposal = await this.proposal(conversationId, proposalId);
-      const operation = (await this.host.operations(conversationId)).find(op => op.proposalId === proposalId && op.revision === proposal.revision);
+      const operation = await this.currentOperation(proposal);
       if (!operation || (operation.state !== "running" && operation.state !== "uncertain")) return this.view(proposal);
       const found = await this.host.readback(operation);
       if (found?.found) await this.created(proposal, operation, found.canonicalId, found.url, "Check found the object at the owner.");
