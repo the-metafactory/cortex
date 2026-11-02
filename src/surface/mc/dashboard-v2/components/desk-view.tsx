@@ -15,7 +15,7 @@ import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
-import { submitDeskAction, submitDmarcAck, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
+import { fetchMailThreadProposal, submitDeskAction, submitDmarcAck, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
 import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
 import { newReplyDraft, prepareDeclineDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
 import { chimeForNew } from "../lib/desk-chime";
@@ -39,6 +39,7 @@ import { WAITING_OPS, type WaitingOp } from "../../desk/mail-waiting-schema";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskPrecedent, DeskView as DeskViewModel } from "../../desk/types";
 import type { MoveTarget } from "../../desk/mail-move";
 import type { MailCorrection } from "../../desk/mail-actions";
+import { MailStudioBox, newStudioPick, studioBody, withProposal, type StudioPick } from "./desk-mail-studio";
 
 interface DeskViewProps {
   onOpenMissionControl: () => void;
@@ -96,6 +97,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [confirming, setConfirming] = useState<{ key: string; action: string } | null>(null);
   const [rulings, setRulings] = useState<ReadonlyMap<string, RulingDraft>>(() => new Map());
   const [replyDraft, setReplyDraft] = useState<ReplyDraft | null>(null);
+  const [studioPick, setStudioPick] = useState<StudioPick | null>(null);
   const setRuling = (key: string, next: (d: RulingDraft | undefined) => RulingDraft | null): void =>
     setRulings((m) => {
       const draft = next(m.get(key));
@@ -399,6 +401,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.archive") move(item, a, "archive");
     else if (a.id === "mail.spam") confirmFirst(item, a, () => move(item, a, "junk"));
     else if (a.id === "mail.draft" && item.reply) openReply(item);
+    else if (a.id === "mail.studio") openStudioPick(item);
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
     else if (a.id === "mail.report") void send(item, a, { request: () => submitMailAction({ action: "report", key: item.key }), keepVisible: true });
     else if (a.id === "mail.unsubscribe") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "unsubscribe", key: item.key }), keepVisible: true }));
@@ -432,6 +435,28 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       request: async () => {
         const result = await submitRuling({ key: item.key, text: draft.text, requestId: draft.requestId });
         setRuling(item.key, (r) => (r?.requestId !== draft.requestId ? r ?? null : result.ok ? null : afterFailure(r, result)));
+        return result;
+      },
+    });
+  };
+
+  const openStudioPick = (item: DeskItem): void => {
+    setDetail(item);
+    const pick = newStudioPick(item.key);
+    setStudioPick(pick);
+    void fetchMailThreadProposal(item.key).then((result) => {
+      setStudioPick((p) => (p?.requestId !== pick.requestId ? p : result.ok ? withProposal(p, result.proposal) : { ...p, note: result.text }));
+    });
+  };
+
+  const confirmStudio = (item: DeskItem, pick: StudioPick): void => {
+    const add: DeskAction = { id: "mail.studio", label: "Add to thread", role: "secondary", wired: true };
+    void send(item, add, {
+      keepVisible: true,
+      request: async () => {
+        const result = await submitMailAction(studioBody(pick));
+        setStudioPick((p) => (p?.requestId !== pick.requestId ? p : result.ok ? null : { ...p, note: result.text }));
+        if (result.ok) captureChanged();
         return result;
       },
     });
@@ -780,6 +805,16 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             )}
             {detailItem.mailDecision && <RecordedMailDecision decision={detailItem.mailDecision} />}
             {detailItem.yesFilter && <MailYesFilterBox filter={detailItem.yesFilter} selected={replyDraft?.key === detailItem.key ? replyDraft.commitment : undefined} canDraft={Boolean(detailItem.reply)} disabled={busyWith(detailItem) === "mail.draft"} onChoose={commitment => setReplyDraft(r => ({ ...(r?.key === detailItem.key ? r : newReplyDraft(detailItem.key)), commitment, requestId: crypto.randomUUID() }))} onDecline={() => setReplyDraft(r => prepareDeclineDraft(r?.key === detailItem.key ? r : newReplyDraft(detailItem.key)))} />}
+            {studioPick?.key === detailItem.key && (
+              <MailStudioBox
+                pick={studioPick}
+                sending={busyWith(detailItem) === "mail.studio"}
+                onChoose={(thread) => setStudioPick((p) => (p?.key === detailItem.key ? { ...p, thread } : p))}
+                onIncludeText={(includeText) => setStudioPick((p) => (p?.key === detailItem.key ? { ...p, includeText } : p))}
+                onConfirm={() => confirmStudio(detailItem, studioPick)}
+                onCancel={() => setStudioPick(null)}
+              />
+            )}
             {replyDraft?.key === detailItem.key && detailItem.reply && (
               <ReplyDraftBox
                 nudge={detailItem.kind === "mail-waiting"}
@@ -1074,7 +1109,7 @@ const CHECK_POLL_MS = 3000;
 
 const isWaitingAction = (id: string): id is `waiting.${WaitingOp}` => WAITING_OPS.some((op) => id === `waiting.${op}`);
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "mail.report": "Reporting…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "mail.report": "Reporting…", "mail.studio": "Adding…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
 
 const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
 const CONFIRM_TARGET: Record<string, (target: string) => string> = { "mail.unsubscribe": (host) => `Yes, unsubscribe via ${host}`, "mail.unsubscribe.page": (host) => `Yes, open ${host}` };

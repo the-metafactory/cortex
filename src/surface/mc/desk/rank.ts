@@ -328,6 +328,7 @@ export interface MailInput {
   onDesk?: ReadonlySet<string>;
   suspicion?: SuspicionContext;
   report?: boolean;
+  studio?: boolean;
   unsubscribe?: ReadonlyMap<string, UnsubscribeOffer>;
 }
 
@@ -387,6 +388,7 @@ const ARCHIVE = action("mail.archive", "Archive", "secondary", true);
 const SPAM = action("mail.spam", "Spam", "secondary", true);
 const UNIMPORTANT = action("mail.unimportant", "Unimportant", "secondary", true);
 const REPORT = action("mail.report", "Report", "secondary", true);
+const TO_STUDIO = action("mail.studio", "Add to thread", "secondary", true);
 const SUSPICIOUS_SCORE = 70;
 const SHOW_MEETING = action("meeting.show", "Show on the meeting", "primary", true);
 const DRAFT_LABEL = "Draft a reply";
@@ -406,7 +408,7 @@ const unsubscribeLine = (offer: UnsubscribeOffer, now: number): string => {
 const UNIMPORTANT_VERDICT: MailVerdict = { score: CATEGORY_SCORE.bulk, pressing: false, why: UNIMPORTANT_REASON, sorted: "bulk" };
 
 export function mailItems(input: MailInput): DeskItem[] {
-  const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, archive = false, spam = false, draft = false, links = {}, onDesk = new Set<string>(), report = false } = input;
+  const { now, mail, vips, classified, unimportant = new Set<string>(), trash = false, archive = false, spam = false, draft = false, links = {}, onDesk = new Set<string>(), report = false, studio = false } = input;
   const suspicion = input.suspicion ?? { vips, vipNames: new Map<string, string>(), ownDomains: [] };
   return mail.filter((m) => m.unread).map((m): DeskItem => {
     const sender = m.from.name ?? m.from.address;
@@ -442,7 +444,7 @@ export function mailItems(input: MailInput): DeskItem[] {
     const replyTail = canDraft && !replyFirst ? [reply] : [];
     const lead = archiveFirst ? [{ ...ARCHIVE, role: "primary" as const }] : spamFirst ? [{ ...SPAM, role: "primary" as const }] : trashFirst ? [{ ...DELETE, role: "primary" as const }] : seenFirst ? [SEEN] : [];
     const moves = [...(archive && !archiveFirst ? [ARCHIVE] : []), ...(trash && !trashFirst && !seenFirst ? [DELETE] : []), ...(spam && !spamFirst ? [SPAM] : [])];
-    const offered = [...lead, ...(unsubscribe ? [unsubscribeAction(unsubscribe)] : []), ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, LATER];
+    const offered = [...lead, ...(unsubscribe ? [unsubscribeAction(unsubscribe)] : []), ...showMeeting, ...replyLead, ...open, ...moves, ...(vip || marked ? [] : [UNIMPORTANT]), ...replyTail, ...(studio ? [TO_STUDIO] : []), LATER];
     const history = [`Received ${ago(now, receivedAt)}${m.account ? ` in your ${m.account} mailbox` : ""}`];
     if (verdict.sorted) history.push(`The mail classifier sorted it as ${verdict.sorted}.`);
     if (triage && (!triage.commitment || triage.commitment === "unknown")) history.push("Whether this mail asks for a new commitment has not been established.");

@@ -11,6 +11,10 @@ import { runSweep, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
 import { keepFromDigest, listMailGroups } from "../desk/mail-digest";
 import { suspicionContext } from "../desk/mail-suspicion";
 import { archiveWhatArrives, offerContext, unsubscribeMail, type OneClickPost } from "../desk/mail-unsubscribe";
+import { addMailToStudio, mailForStudio, MAX_MAIL_REASON, proposeMailThread } from "../desk/mail-studio";
+import type { CaptureModel } from "../desk/studio/capture";
+import { STUDIO_SLUG } from "../desk/studio/format";
+import { STUDIO_REQUEST_ID } from "../desk/studio/writer";
 import { actOnWaiting, nudgeMail, readWaiting, waitingFeatures, waitingIdOf, WAITING_OPS, type WaitingOp } from "../desk/mail-waiting";
 
 const WaitingActionSchema = z.enum(WAITING_OPS.map((op) => `waiting.${op}` as const));
@@ -28,6 +32,8 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("sweep"), sweep: z.string().min(1).max(200), keys: z.array(z.string().min(1).max(1000)).min(1).max(SWEEP_LIMITS.maxMails) }).strict(),
   z.object({ action: z.literal("sweep.undo"), sweep: z.string().min(1).max(64) }).strict(),
   z.object({ action: WaitingActionSchema, key: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: z.literal("studio.propose"), key: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: z.literal("studio.add"), key: z.string().min(1).max(1000), requestId: z.string().regex(STUDIO_REQUEST_ID), thread: z.string().regex(STUDIO_SLUG).nullable(), reason: z.string().trim().min(1).max(MAX_MAIL_REASON).optional(), includeText: z.boolean() }).strict(),
 ]);
 
 export const SWEEP_WAIT_MS = 8000;
@@ -42,6 +48,7 @@ export interface DeskMailDeps {
   newId?: () => string;
   sweepWaitMs?: number;
   post?: OneClickPost;
+  captureModel?: CaptureModel;
 }
 
 /**
@@ -75,6 +82,16 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   const mail = findListedMail(runtime.sourceCache?.cached() ?? [], body.key);
   if (!mail) return fail(409, "The Desk no longer lists this mail.");
   if (decision && !["request", "invitation"].includes(readClassifications(db, [mail.id]).get(mail.id)?.commitment ?? "")) return fail(409, "This mail is no longer classified as a request or invitation. Refresh before saving the choice.");
+  if (body.action === "studio.propose" || body.action === "studio.add") {
+    const studio = runtime.options.studio;
+    if (!studio) return fail(409, "The Studio is not set up on this stack.");
+    const item = mailForStudio(db, runtime.sourceCache?.cached() ?? [], mail);
+    const studioDeps = { options: studio, areas: runtime.options.areas, db, now: new Date(now), ...(deps.captureModel ? { model: deps.captureModel } : {}) };
+    if (body.action === "studio.propose") return Response.json({ ok: true, proposal: await proposeMailThread(item, studioDeps) }, { headers: noStore });
+    const { requestId, thread, reason, includeText } = body;
+    const added = await addMailToStudio(item, { requestId, thread, includeText, ...(reason ? { reason } : {}) }, studioDeps);
+    return added.ok ? Response.json({ ok: true, message: added.message }, { headers: noStore }) : fail(added.status, added.error);
+  }
   if (body.action === "draft") {
     const features = mailFeatures(db, mail);
     const saved = decision ? await saveDecisionDraft({ db, desk: runtime.options, mail, body: body.body, decision, now, save: () => draftReply(mail, body.body, moveDeps) }) : await draftReply(mail, body.body, moveDeps);

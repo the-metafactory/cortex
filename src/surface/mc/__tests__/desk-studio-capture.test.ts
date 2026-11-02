@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { initDatabase } from "../db/init";
 import { handleDeskAsk, handleDeskCaptureUndo, handleDeskCreate } from "../api/desk-ask";
@@ -13,6 +12,7 @@ import { fileStudioCapture, undoStudioCapture, type CaptureModel } from "../desk
 import { parseThreadFile } from "../desk/studio/format";
 import { runStudioAct } from "../desk/studio/writer";
 import type { StudioOptions } from "../desk/types";
+import { gitIn, seedStudioRepo } from "./__fixtures__/studio-git";
 
 const NOW = new Date("2026-10-31T17:00:00Z");
 const ENDPOINT = { baseUrl: "http://127.0.0.1:1234/v1", model: "cloud-test", timeoutSeconds: 5, maxPerPass: 10 };
@@ -25,24 +25,13 @@ let runtime: DeskRuntime;
 let sequence = 0;
 const rid = (): string => `capture-request-${++sequence}`;
 const request = (body: unknown): Request => new Request("http://localhost/api/desk", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-function git(...args: string[]): string {
-  const result = Bun.spawnSync(["git", "-C", dir, ...args]);
-  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
-  return result.stdout.toString().trim();
-}
+const git = (...args: string[]): string => gitIn(dir, ...args);
 const matching: CaptureModel = async () => ({ thread: "studio", reason: "This develops the Studio question." });
 const file = (model: CaptureModel = matching, requestId = rid()) => fileStudioCapture({ options, areas: AREAS, db, requestId, text: "Let the board show empty places.", now: NOW, model });
 const capture = (): string => readDone(db, NOW.getTime())[0]?.itemKey ?? "";
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "desk-capture-"));
-  mkdirSync(join(dir, "threads"));
-  writeFileSync(join(dir, "threads/studio.md"), thread());
-  git("init", "-q");
-  git("config", "user.name", "Test");
-  git("config", "user.email", "test@example.org");
-  git("add", "-A");
-  git("commit", "-qm", "seed");
+  dir = seedStudioRepo("desk-capture-", { studio: thread() });
   db = initDatabase(":memory:");
   options = { dir, maxActive: 5, filer: ENDPOINT };
   runtime = { options: { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: AREAS, studio: options, sources: [] }, ledger: new HandledLedger() };
