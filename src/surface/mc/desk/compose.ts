@@ -217,7 +217,7 @@ export async function composeDesk(
   const localAreas = new Set(desk.areas.filter((a) => a.policy === "local").map((a) => a.id));
   const localSources = new Set(readings.filter((r) => r.area !== null && localAreas.has(r.area)).map((r) => r.id));
   if (classifier) void classifier.kick(db, { now, mail: mail.filter((m) => !ruleBound.has(m.id)), events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(db, shareableWith(classifier.local, localSources)), localSources });
-  const classified = classifier ? readClassifications(db, mail.filter((m) => m.unread).map((m) => m.id)) : undefined;
+  const classified = classifier ? readClassifications(db, mail.map((m) => m.id)) : undefined;
   const offerable = [...mail.filter((m) => m.unread), ...(mailGroups?.digests.groups ?? []).flatMap((g) => g.members)];
   const flagged = new Set([...readClassifications(db, offerable.map((m) => m.id))].filter(([, c]) => c.suspicious === true).map(([id]) => id));
   const unsubscribe = unsubscribeOffers(db, offerable, offerContext(db, desk.mailUnsubscribe, suspicion, flagged));
@@ -257,7 +257,7 @@ export async function composeDesk(
   if (handing) void handing.kick(db);
   const handoffRows = handing ? openHandoffs(db) : [];
   const handoffOf = handoffsByMail(handoffRows);
-  const invited = mail.filter((m) => m.unread && m.invitation);
+  const invited = mail.filter((m) => m.invitation);
   const answers = invitationDecisions(db, invited.map((m) => m.id));
   const invitations = new Map(invited.flatMap((m): [string, InvitationView][] => {
     const view = invitationView(m, calendarsOnly(availability, readings), desk.mailInvitations, answers.get(m.id));
@@ -271,7 +271,7 @@ export async function composeDesk(
     ...ruleCards,
     ...dmarcCards,
     ...waitingCards,
-    ...handoffItems(handoffRows, new Set(mail.filter((m) => m.unread).map((m) => m.id)), now),
+    ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now),
   ], rules, readDeliveries(db), now), activeCorrections);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);

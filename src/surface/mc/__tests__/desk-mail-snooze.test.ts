@@ -107,12 +107,23 @@ describe("the snooze store", () => {
     db.close();
   });
 
-  it("refuses read mail, past times, unknown or finished meetings and bad addresses", () => {
+  it("snoozes read mail without changing its read status", () => {
+    const db = initDatabase(":memory:");
+    try {
+      const m = mail("read", { unread: false });
+      expect(snoozeMail(db, listed(m), { kind: "later" }, { now: NOW, readings: [reading([m])] })).toMatchObject({ ok: true });
+      expect(snoozedIds(db).has("read")).toBe(true);
+      expect(m.unread).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("refuses past times, unknown or finished meetings and bad addresses", () => {
     const db = initDatabase(":memory:");
     try {
       const r = reading([mail("m1")], [event("e1", at(4, 8), at(4, 9))], "work-mail");
       const snooze = (choice: Parameters<typeof snoozeMail>[2], m = mail("m1")) => snoozeMail(db, listed(m), choice, { now: NOW, readings: [r] });
-      expect(snooze({ kind: "later" }, mail("m1", { unread: false }))).toMatchObject({ ok: false, status: 409 });
       expect(snooze({ kind: "date", date: "2026-11-01" })).toMatchObject({ ok: false, error: "That time has already passed." });
       expect(snooze({ kind: "meeting", event: "cal:work-mail:nope" })).toMatchObject({ ok: false });
       expect(snooze({ kind: "meeting", event: "cal:work-mail:e1" })).toMatchObject({ ok: false, error: "That meeting is already over." });
@@ -145,7 +156,7 @@ describe("snoozed mail on the Desk", () => {
     const before = await composeWith(db, options, first, NOW);
     const card = before.items.find((i) => i.key === "mail:m1");
     expect([...(card?.actions ?? []), ...(card?.more ?? [])].map((a) => a.id)).toContain("mail.snooze");
-    expect(await ask(first, { action: "snooze", key: "mail:m1", until: { kind: "person", address: "lena@example.org" } })).toMatchObject({ ok: true, message: "Snoozed “Venue quote” until lena@example.org writes. It stays unread in your mail." });
+    expect(await ask(first, { action: "snooze", key: "mail:m1", until: { kind: "person", address: "lena@example.org" } })).toMatchObject({ ok: true, message: "Snoozed “Venue quote” until lena@example.org writes. Its read status in your mail stays unchanged." });
     expect((await composeWith(db, options, runtime([mail("m1")]), at(4, 10, 5))).items.some((i) => i.key === "mail:m1")).toBe(false);
     const later = await composeWith(db, options, runtime([mail("m1"), mail("n1", { from: { name: "Lena Roth", address: "lena@example.org" }, subject: "Figures", receivedAt: new Date(at(4, 11)).toISOString() })]), at(4, 11, 5));
     const back = later.items.find((i) => i.key === "mail:m1");

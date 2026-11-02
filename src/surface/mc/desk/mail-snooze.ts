@@ -231,12 +231,7 @@ function resolve(choice: SnoozeChoice, ctx: { now: number; events: ReadonlyMap<s
   return { ...none, kind: "time", untilAt: at, label: `until ${snoozeWhen(at, ctx.now)}` };
 }
 
-/**
- * Snoozes one listed unread mail. The mail stays unread in the mail client; the Desk hides it until the condition
- * happens, then shows it again with the reason. A second snooze replaces the first. Logged as `snooze` (origin desk).
- */
 export function snoozeMail(db: Database, mail: ListedMail, choice: SnoozeChoice, ctx: { now: number; readings: readonly SourceReading[] }): SnoozeResult {
-  if (!mail.unread) return refuse(409, "This mail is already read, so the Desk no longer lists it.");
   const names = new Map(ctx.readings.flatMap((r) => r.mail.flatMap((m): [string, string][] => (m.from.name ? [[m.from.address.toLowerCase(), m.from.name]] : []))));
   const resolved = resolve(choice, { now: ctx.now, events: readingEvents(ctx.readings), names });
   if (typeof resolved === "string") return refuse(409, resolved);
@@ -249,7 +244,7 @@ export function snoozeMail(db: Database, mail: ListedMail, choice: SnoozeChoice,
        label = excluded.label, state = 'snoozed', back_at = NULL, reason = NULL, created_at = excluded.created_at`,
   ).run(mail.id, mail.sourceId, mail.from.address.toLowerCase(), mail.subject.slice(0, 300), resolved.kind, resolved.untilAt, resolved.eventKey, resolved.eventTitle, resolved.eventStart, resolved.person, resolved.personName, resolved.label, ctx.now);
   logMailDecision(db, features, "snooze", "desk", ctx.now);
-  return { ok: true, message: `Snoozed ${quoted(mail.subject)} ${resolved.label}. It stays unread in your mail.`, until: resolved.label };
+  return { ok: true, message: `Snoozed ${quoted(mail.subject)} ${resolved.label}. Its read status in your mail stays unchanged.`, until: resolved.label };
 }
 
 /** Ends a snooze now: the mail is back on the Desk as it was, without a reason line. */
