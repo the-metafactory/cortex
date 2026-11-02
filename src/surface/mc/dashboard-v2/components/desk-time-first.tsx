@@ -2,7 +2,10 @@ import { useRef, useState, type MouseEventHandler, type ReactNode } from "react"
 import type { TodayItem } from "../../../../balance";
 import type { MyDayView } from "../../desk/my-day";
 import { currentGap, type CalendarAvailability, type CalendarGap, type CalendarInterval } from "../../desk/calendar-availability";
-import { nextTask, reorderVisible, savedTaskContext } from "../../desk/time-first";
+import { nextTask, projectContext, reorderVisible } from "../../desk/time-first";
+import { balanceDestinations } from "../../desk/balance-destinations";
+import type { DeskArea } from "../../desk/types";
+import { BalanceAddForm, balanceEntries, TaskDetails, TaskMessageBanner, useBalanceEditor, type TaskAdding } from "./desk-task-details";
 import { useMyDay } from "../hooks/use-my-day";
 import { balanceItemSearch } from "../hooks/use-balance-location";
 import { deskSearch } from "../hooks/use-desk-studio";
@@ -20,7 +23,10 @@ interface TimeFirstProps {
   sweeps: ReactNode;
   preview: ReactNode;
   ambient: ReactNode;
+  areas: DeskArea[];
   onChanged: () => void;
+  onThread: (slug: string) => void;
+  onConversation?: (id: string) => void;
 }
 const time = (at: number): string => new Date(at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 const dayTime = (at: number): string => new Date(at).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" });
@@ -50,7 +56,7 @@ export function DeskTimeFirst(props: TimeFirstProps) {
   return <TimeFirstDay {...props} day={props.day} />;
 }
 
-function TimeFirstDay({ day, calendar, now, before, after, proposal, sweeps, preview, ambient, onChanged }: Omit<TimeFirstProps, "day"> & { day: MyDayView }) {
+function TimeFirstDay({ day, calendar, now, before, after, proposal, sweeps, preview, ambient, areas, onChanged, onThread, onConversation }: Omit<TimeFirstProps, "day"> & { day: MyDayView }) {
   const changes = useMyDay(day, onChanged);
   const { current, busy, change, retryable } = changes;
   const gap = currentGap(calendar ?? { sources: [], events: [] }, now);
@@ -59,6 +65,12 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, sweeps, pre
   const selected = selection.kind === "manual" ? current.items.find(item => item.task.id === selection.id) : selection.kind === "unavailable" || recommendation.kind === "none" ? undefined : recommendation.item;
   const [draft, setDraft] = useState<{ revision: number; ids: string[] } | null>(null);
   const [swap, setSwap] = useState<string | null>(null);
+  const [adding, setAdding] = useState<TaskAdding | null>(null);
+  const editor = useBalanceEditor(current, saved => { changes.adopt(saved); onChanged(); });
+  const entry = selected ? balanceEntries(current.outline).find(value => value.node.id === selected.task.id) : undefined;
+  const choices = balanceDestinations(current.outline, areas, true);
+  const locked = busy || retryable || draft !== null;
+  const context = selected ? projectContext(current.outline, selected.task.id) : null;
   const priorities = useRef<HTMLElement>(null);
   const showPriorities: MouseEventHandler<HTMLAnchorElement> = event => { event.preventDefault(); scrollBelowDesk(priorities.current); };
   const items = draft ? draft.ids.flatMap(id => { const item = current.items.find(value => value.task.id === id); return item ? [item] : []; }) : current.items;
@@ -91,7 +103,11 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, sweeps, pre
           {selection.kind === "automatic" && recommendation.kind === "fit" && <p>The first eligible task in your saved order that fits the {recommendation.minutes}-minute gap.</p>}
           {selection.kind === "automatic" && recommendation.kind === "unverified" && <p>This is the first task in your day order. Calendar coverage cannot prove that it fits now.</p>}
           <details><summary>Why this task</summary><p>{selected.trace}</p></details>
-          <div className="tf-actions"><TaskActions item={selected} changes={changes} disabled={draft !== null || retryable} />{selection.kind === "manual" && <button type="button" className="desk-btn ghost" disabled={busy || retryable || draft !== null} onClick={() => { choose(null); }}>Use recommendation</button>}<a className="desk-btn ghost" href="#today-priorities" onClick={showPriorities}>Choose another</a></div>
+          <div className="tf-actions"><TaskActions item={selected} changes={changes} disabled={draft !== null || retryable || editor.busy} />{selection.kind === "manual" && <button type="button" className="desk-btn ghost" disabled={busy || retryable || draft !== null} onClick={() => { choose(null); }}>Use recommendation</button>}<a className="desk-btn ghost" href="#today-priorities" onClick={showPriorities}>Choose another</a></div>
+          <TaskMessageBanner message={editor.message} />
+          {entry && <TaskDetails titled={false} locked={locked} id={selected.task.id} entry={entry} day={current} editor={editor} choices={choices} onRefresh={onChanged} onAdd={parent => { setAdding({ parent, title: "", revision: current.revision, date: current.date }); }} onMoved={() => undefined} onThread={onThread} {...(onConversation ? { onConversation } : {})}>
+            {adding && adding.parent === selected.task.id && <BalanceAddForm adding={adding} choices={choices} busy={editor.busy || locked} heading="Add subtask" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) setAdding(null); }); }} />}
+          </TaskDetails>}
         </> : <><h2>Choose what works for you</h2><p>{recommendation.kind === "none" ? recommendation.reason : "Your priorities are available alongside the timeline."}</p><a className="desk-btn" href="#today-priorities" onClick={showPriorities}>See today's priorities</a></>}
       </section>}
       <DayContract changes={changes} />
@@ -113,7 +129,7 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, sweeps, pre
         <p>Choosing what fits now leaves your overall priorities unchanged.</p>
       </section>
       {preview}
-      {selected && <section className="tf-context" aria-label="Selected task context"><span className="tf-eyebrow">Project / goal context</span><p>{[selected.areaTitle, ...selected.path].join(" / ")}</p><h3>{selected.task.title}</h3><p>{savedTaskContext(current.outline, selected)}</p><a className="desk-btn ghost" href={`${balanceItemSearch(typeof window === "undefined" ? "" : window.location.search, selected.task.id)}${typeof window === "undefined" ? "" : window.location.hash}`}>Open task in Balance</a></section>}
+      {selected && <section className="tf-context" aria-label="Selected task context"><span className="tf-eyebrow">Project / goal context</span>{context && <p>{context}</p>}<a className="desk-btn ghost" href={`${balanceItemSearch(typeof window === "undefined" ? "" : window.location.search, selected.task.id)}${typeof window === "undefined" ? "" : window.location.hash}`}>Open task in Balance</a></section>}
       <details className="tf-ambient"><summary>At a glance</summary><div className="desk-margin">{ambient}</div></details>
     </aside>
   </div>;

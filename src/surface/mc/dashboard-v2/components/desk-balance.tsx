@@ -1,9 +1,6 @@
-import { SourceConversations } from "./desk-source-conversations";
-import { DeskSourceLink } from "./desk-link";
 import { scrollBelowDesk } from "../lib/desk-scroll";
 import { useEffect, useRef, useState } from "react";
 import type { OutlineNode } from "../../../../balance";
-import { balanceDetails, type BalanceCommand, type BalanceDetails } from "../../desk/balance-command";
 import type { MyDayView } from "../../desk/my-day";
 import type { DeskView } from "../../desk/types";
 import type { ForegroundReading } from "../lib/studio-foreground";
@@ -11,30 +8,13 @@ import { getJson } from "../lib/api";
 import { useBalanceLocation } from "../hooks/use-balance-location";
 import { DeskMirror } from "./desk-mirror";
 import { UnfiledBalanceTasks } from "./desk-balance-intake";
-import { submitMyDay } from "./desk-my-day";
+import { BalanceAddForm, balanceEntries, TaskDetails, TaskMessageBanner, useBalanceEditor, type TaskAdding } from "./desk-task-details";
 import "./desk-balance.css";
 
-import { DestinationPicker } from "./desk-destination-picker";
 import { balanceDestinations } from "../../desk/balance-destinations";
-
-interface Entry { node: OutlineNode; parent: OutlineNode; path: string[] }
-interface Draft { node: OutlineNode; details: BalanceDetails; revision: number; date: string; yes: boolean }
-type Message = { kind: "saved" | "error"; text: string } | null;
-export function balanceEntries(root: OutlineNode): Entry[] {
-  const entries: Entry[] = [];
-  const walk = (parent: OutlineNode, path: string[]): void => {
-    for (const node of parent.children) {
-      entries.push({ node, parent, path });
-      walk(node, [...path, node.title]);
-    }
-  };
-  walk(root, []);
-  return entries;
-}
 export function balanceMatches(node: OutlineNode, query: string): boolean {
   return node.title.toLocaleLowerCase().includes(query.toLocaleLowerCase()) || node.children.some(child => balanceMatches(child, query));
 }
-const isSourceOwned = (day: MyDayView, id: string): boolean => id.startsWith("studio-response:") || day.studioProjects.some(project => project.id === id);
 const openLeaves = (node: OutlineNode): number => node.done ? 0 : node.children.length ? node.children.reduce((sum, child) => sum + openLeaves(child), 0) : 1;
 
 
@@ -44,19 +24,14 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
   const [location, go] = useBalanceLocation();
   const [collapsed, setCollapsed] = useState(new Set<string>());
   const [selectionTick, setSelectionTick] = useState(0);
-  const [drafts, setDrafts] = useState(new Map<string, Draft>());
-  const [message, setMessage] = useState<Message>(null);
-  const [busy, setBusy] = useState(false);
-  const [adding, setAdding] = useState<{ parent: string; title: string; revision: number; date: string } | null>(null);
-  const [moving, setMoving] = useState<{ id: string; parent: string; revision: number; date: string } | null>(null);
-  const retry = useRef(new Map<string, string>());
+  const editor = useBalanceEditor(current, saved => { setLocal(saved); onChanged(); });
+  const { busy, message, change, setMoving } = editor;
+  const [adding, setAdding] = useState<TaskAdding | null>(null);
   const inspector = useRef<HTMLElement>(null);
   const outlineHeading = useRef<HTMLHeadingElement>(null);
   const entries = balanceEntries(current.outline);
   const selectedId = location.item ?? entries[0]?.node.id ?? null;
   const entry = entries.find(item => item.node.id === selectedId);
-  const edited = selectedId ? drafts.get(selectedId) : undefined;
-  const draft = edited ?? (entry ? { node: entry.node, details: balanceDetails(entry.node, current.date), revision: current.revision, date: current.date, yes: false } : null);
   const destinationChoices = balanceDestinations(current.outline, view.areas, true);
   const destinationIds = new Set(destinationChoices.map(option => option.id));
   const parentChoices = entries.filter(({ node }) => destinationIds.has(node.id));
@@ -65,30 +40,8 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
   const visible = roots.filter(node => balanceMatches(node, location.query));
   const refresh = async (): Promise<void> => {
     try { setLocal(await getJson<MyDayView>("/api/desk/my-day")); onChanged(); }
-    catch (error) { setMessage({ kind: "error", text: error instanceof Error ? error.message : "The outline could not be refreshed. Your drafts are kept." }); }
+    catch (error) { editor.setMessage({ kind: "error", text: error instanceof Error ? error.message : "The outline could not be refreshed. Your drafts are kept." }); }
   };
-  const change = async (command: BalanceCommand, date = current.date): Promise<Awaited<ReturnType<typeof submitMyDay>> | null> => {
-    if (busy) return null;
-    const payload = JSON.stringify({ date, command });
-    const requestId = retry.current.get(payload) ?? crypto.randomUUID();
-    retry.current.set(payload, requestId);
-    setBusy(true);
-    setMessage(null);
-    try {
-      const result = await submitMyDay(date, command, requestId);
-      retry.current.delete(payload);
-      setLocal(result.view);
-      setMessage({ kind: "saved", text: result.notice ?? "Saved. Today's confirmed choices keep their order." });
-      onChanged();
-      return result;
-    } catch (error) {
-      setMessage({ kind: "error", text: error instanceof Error ? error.message : "The save was not confirmed. Your draft is kept; retry the same change." });
-      return null;
-    } finally { setBusy(false); }
-  };
-  const setDraft = (next: Draft): void => { setDrafts(previous => new Map(previous).set(next.node.id, next)); setMoving(null); };
-  const discard = (id: string): void => { setDrafts(previous => { const next = new Map(previous); next.delete(id); return next; }); };
-  const moveDescendants = new Set(moving && draft ? [draft.node.id, ...balanceEntries(draft.node).map(item => item.node.id)] : []);
   const beginAdd = (parent: string): void => { setAdding({ parent, title: "", revision: current.revision, date: current.date }); setMoving(null); };
   useEffect(() => {
     if (location.tab === "plan" && location.item && window.matchMedia("(max-width: 760px)").matches) scrollBelowDesk(inspector.current);
@@ -96,9 +49,9 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
   return <div className="dbl">
     <header className="dbl-heading"><div><p className="dbl-eyebrow">The whole picture</p><h1>Balance</h1><p>Your areas, projects and tasks. Choose what deserves room.</p></div><button className="desk-btn pri" disabled={busy || parentChoices.length === 0} onClick={() => { beginAdd(entry && parentChoices.includes(entry) ? entry.node.id : parentChoices[0]?.node.id ?? ""); }}>+ Add task</button></header>
     <nav className="dbl-tabs" aria-label="Balance views"><button className="desk-btn" aria-pressed={location.tab === "plan"} onClick={() => { go({ ...location, tab: "plan" }); }}>Plan</button><button className="desk-btn" aria-pressed={location.tab === "review"} onClick={() => { go({ ...location, tab: "review" }); }}>Weekly review</button><span>Your full hierarchy, beyond today.</span></nav>
-    {message && <p className={`dbl-message ${message.kind}`} role={message.kind === "error" ? "alert" : "status"}>{message.text}</p>}
+    <TaskMessageBanner message={message} />
     {current.studioStatus === "unavailable" && <p role="status">Studio is busy or unreadable. Its last saved outline is shown; refresh when its files are ready.</p>}
-    {adding && <form className="dbl-create" onSubmit={event => { event.preventDefault(); void change({ op: "outline-add", parent: adding.parent, title: adding.title, revision: adding.revision }, adding.date).then(saved => { if (saved) { setAdding(null); if (saved.outlineId) go({ tab: "plan", item: saved.outlineId, area: "", query: "" }); } }); }}><h2>Add task</h2><DestinationPicker label="New Balance parent" value={adding.parent} options={destinationChoices} disabled={busy} onChange={parent => { setAdding({ ...adding, parent }); }} /><label>Title<input aria-label="New Balance title" value={adding.title} onChange={event => { setAdding({ ...adding, title: event.target.value }); }} required maxLength={300} disabled={busy} /></label><button className="desk-btn pri" disabled={busy || !destinationChoices.some(option => option.id === adding.parent)}>Confirm add</button><button type="button" className="desk-btn" disabled={busy} onClick={() => { setAdding(null); }}>Cancel</button><p>Adding a subtask turns its parent into a project. It does not add work to today's confirmed list.</p></form>}
+    {adding && <BalanceAddForm adding={adding} choices={destinationChoices} busy={busy} heading="Add task" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) { setAdding(null); if (saved.outlineId) go({ tab: "plan", item: saved.outlineId, area: "", query: "" }); } }); }} />}
     {location.tab === "review" ? <div className="dbl-review">{view.mirror ? <DeskMirror mirror={view.mirror} areas={view.areas} foreground={foreground} onThread={onThread} onChanged={onChanged} /> : <p role="status">The weekly review is unavailable. Refresh the Desk to retry.</p>}</div> : <div className="dbl-layout">
       <main className="dbl-outline" aria-label="Balance plan"><header className="dbl-toolbar"><div><h2 ref={outlineHeading} tabIndex={-1}>Your outline</h2><p>Areas → projects → tasks</p></div><div><button className="desk-btn ghost" onClick={() => { setCollapsed(new Set()); }}>Expand all</button><button className="desk-btn ghost" onClick={() => { setCollapsed(new Set(entries.filter(item => item.node.children.length).map(item => item.node.id))); }}>Collapse all</button></div></header>
         <div className="dbl-filters"><input aria-label="Search full hierarchy" placeholder="Find a project or task…" value={location.query} onChange={event => { go({ ...location, query: event.target.value }, true); }} /><select aria-label="Outline area" value={location.area} onChange={event => { go({ ...location, area: event.target.value }, true); }}><option value="">All areas</option>{current.outline.children.map(node => <option key={node.id} value={node.id}>{node.title}</option>)}</select></div>
@@ -108,8 +61,7 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
         <UnfiledBalanceTasks day={current} parents={fileParents} busy={busy} change={change} onFiled={id => { go({ tab: "plan", item: id, area: "", query: "" }); }} />
       </main>
       <aside className="dbl-inspector" aria-label="Selected Balance item" ref={inspector} tabIndex={-1}><button className="desk-btn ghost dbl-back" onClick={() => { scrollBelowDesk(outlineHeading.current); }}>← Back to outline</button>
-        {draft ? <BalanceInspector draft={draft} entry={entry} day={current} busy={busy} dirty={edited !== undefined} onDraft={setDraft} onSave={() => { void change({ op: "outline-edit", id: draft.node.id, revision: draft.revision, details: draft.details, yes: draft.yes }, draft.date).then(saved => { if (saved) { discard(draft.node.id); } }); }} onDiscard={() => { discard(draft.node.id); void refresh(); }} onAdd={() => { beginAdd(draft.node.id); }} onMove={() => { setMoving({ id: draft.node.id, parent: entry?.parent.id ?? "", revision: current.revision, date: current.date }); }} onComplete={() => { const node = entry?.node; if (!node) return; if (node.children.length && !node.done && !window.confirm("Close this project? Its leaves will not be marked complete or given completion credit.")) return; void change({ op: node.done ? "outline-reopen" : "outline-complete", id: node.id, revision: current.revision, confirm: true }); }} onThread={onThread} {...(onConversation ? { onConversation } : {})} /> : <p>{selectedId ? "This outline item is no longer available. Choose another item from the outline." : "Add a task to begin shaping your outline."}</p>}
-        {moving && moving.id === draft?.node.id && <form className="dbl-move" onSubmit={event => { event.preventDefault(); void change({ op: "outline-move", id: moving.id, parent: moving.parent, revision: moving.revision }, moving.date).then(saved => { if (saved) { setMoving(null); go({ ...location, item: moving.id, area: "", query: "" }); } }); }}><DestinationPicker label="Move Balance parent" value={moving.parent} options={destinationChoices.filter(option => !moveDescendants.has(option.id))} disabled={busy} onChange={parent => { setMoving({ ...moving, parent }); }} /><button className="desk-btn pri" disabled={busy || !destinationChoices.some(option => option.id === moving.parent && !moveDescendants.has(option.id))}>Confirm move</button><button type="button" className="desk-btn" disabled={busy} onClick={() => { setMoving(null); }}>Cancel</button></form>}
+        <TaskDetails id={selectedId} entry={entry} day={current} editor={editor} choices={destinationChoices} onRefresh={() => { void refresh(); }} onAdd={beginAdd} onMoved={id => { go({ ...location, item: id, area: "", query: "" }); }} onThread={onThread} {...(onConversation ? { onConversation } : {})} />
       </aside>
     </div>}
   </div>;
@@ -126,35 +78,3 @@ function BalanceTree({ node, depth, query, collapsed, selected, date, studioProj
   </div>{branch && open && <ul>{node.children.map(child => <BalanceTree key={child.id} node={child} depth={depth + 1} query={query} collapsed={collapsed} selected={selected} date={date} studioProjects={studioProjects} today={today} onToggle={onToggle} onSelect={onSelect} />)}</ul>}</li>;
 }
 
-function BalanceInspector({ draft, entry, day, busy, dirty, onDraft, onSave, onDiscard, onAdd, onMove, onComplete, onThread, onConversation }: { draft: Draft; entry: Entry | undefined; day: MyDayView; busy: boolean; dirty: boolean; onDraft: (draft: Draft) => void; onSave: () => void; onDiscard: () => void; onAdd: () => void; onMove: () => void; onComplete: () => void; onThread: (slug: string) => void; onConversation?: (id: string) => void }) {
-  const node = entry?.node ?? draft.node;
-  const area = day.outline.children.some(root => root.id === node.id);
-  const sourceOwned = isSourceOwned(day, node.id);
-  const source = day.sources.find(link => link.taskId === node.id);
-  const studio = day.studioProjects.find(link => link.id === node.id) ?? day.studioTasks.find(link => link.id === node.id);
-  const update = (patch: Partial<BalanceDetails>): void => { onDraft({ ...draft, details: { ...draft.details, ...patch }, yes: patch.focus !== undefined ? false : draft.yes }); };
-  const siblings = entry?.parent.children ?? [];
-  const total = siblings.reduce((sum, sibling) => sum + sibling.weight, 0);
-  const nextTotal = total - node.weight + draft.details.weight;
-  const share = nextTotal > 0 ? Math.round(100 * draft.details.weight / nextTotal) : 0;
-  const newFocus = draft.details.focus && node.focusMonth !== day.date.slice(0, 7);
-  return <>
-    <p className="dbl-eyebrow">{area ? "Configured area" : sourceOwned ? "From Studio" : node.children.length ? "Project details" : "Task details"}</p><h2>{node.title}</h2><p className="dbl-breadcrumb">{(entry?.path.join(" / ") ?? "") || "Top-level area"}</p>
-    {!entry && <p role="alert">This item is no longer available. Your unsaved draft is kept here for copying; it cannot overwrite a missing item.</p>}
-    {dirty && (draft.revision !== day.revision || draft.date !== day.date) && <p role="status">The saved outline has changed. Your draft and its original version are kept; saving will report a conflict.</p>}
-    <form onSubmit={event => { event.preventDefault(); onSave(); }}>
-      <label>Title<input aria-label="Balance item title" value={draft.details.title} readOnly={area || sourceOwned} disabled={busy} onChange={event => { update({ title: event.target.value }); }} required maxLength={300} /></label>{(area || sourceOwned) && <p className="dbl-help">The title comes from its configured area or Studio source.</p>}
-      <label>Importance <output>{draft.details.weight}</output><input aria-label="Balance importance" type="range" min="0" max="100" value={draft.details.weight} disabled={busy} onChange={event => { update({ weight: Number(event.target.value) }); }} /></label><p className="dbl-help">Relative to siblings · {Number.isFinite(share) ? share : 0}% of their total weight. Zero pauses this branch.</p>
-      {(area || node.children.length > 0) && <><label>Children become available<select aria-label="Children ordering" value={draft.details.ordering} disabled={busy} onChange={event => { update({ ordering: event.target.value === "sequential" ? "sequential" : "parallel" }); }}><option value="parallel">In parallel</option><option value="sequential">In sequence</option></select></label>{!area && <label className="dbl-check"><input type="checkbox" checked={draft.details.focus} disabled={busy} onChange={event => { update({ focus: event.target.checked }); }} />Focus this month</label>}<p className="dbl-help">Up to three projects can be in focus this month.</p></>}
-      {!area && node.children.length === 0 && <><div className="dbl-pair"><label>Estimate · minutes<input aria-label="Balance estimate minutes" type="number" min="1" step="1" value={draft.details.estimateMinutes ?? ""} placeholder="Unknown" disabled={busy} onChange={event => { update({ estimateMinutes: event.target.value === "" ? null : Number(event.target.value) }); }} /></label><label>Effort credit<select aria-label="Balance effort credit" value={draft.details.effort} disabled={busy} onChange={event => { update({ effort: event.target.value === "4" ? 4 : event.target.value === "2" ? 2 : 1 }); }}><option value="1">Small · 1</option><option value="2">Medium · 2</option><option value="4">Large · 4</option></select></label></div><p className="dbl-help">An absent estimate stays unknown. Minutes are separate from effort credit.</p></>}
-      {!area && <><label>Due date<input aria-label="Balance due date" type="date" value={draft.details.dueDate} disabled={busy} onChange={event => { update({ dueDate: event.target.value }); }} /></label><label>Context<input aria-label="Balance context" value={draft.details.context} maxLength={120} disabled={busy} onChange={event => { update({ context: event.target.value }); }} placeholder="No context" /></label></>}
-      <label>Notes<textarea aria-label="Balance notes" value={draft.details.note} disabled={busy} maxLength={10_000} onChange={event => { update({ note: event.target.value }); }} /></label>
-      {newFocus && <fieldset><legend>Before you say yes</legend>{day.yesFilter.map(question => <p key={question}>{question}</p>)}<label className="dbl-check"><input type="checkbox" required checked={draft.yes} disabled={busy} onChange={event => { onDraft({ ...draft, yes: event.target.checked }); }} />I have considered these questions and choose this focus.</label></fieldset>}
-      <button className="desk-btn pri dbl-save" disabled={busy || !entry}>Save changes</button>{dirty && <button type="button" className="desk-btn ghost" disabled={busy} onClick={onDiscard}>Discard draft and reload saved version</button>}
-    </form>
-    <div className="dbl-actions"><button className="desk-btn ghost" disabled={busy || dirty || !entry || (node.done ?? false) || node.id.startsWith("studio-response:")} onClick={onAdd}>+ Add subtask</button>{!area && !sourceOwned && <><button className="desk-btn ghost" disabled={busy || dirty || !entry} onClick={onMove}>Move…</button><button className="desk-btn" disabled={busy || dirty || !entry} onClick={onComplete}>{node.done ? "Reopen" : node.children.length ? "Close project" : "Mark complete"}</button></>}{dirty && <p className="dbl-help">Save or discard the draft before changing this item's structure.</p>}
-      {source && <DeskSourceLink source={source} />}{studio && <button className="desk-btn ghost" onClick={() => { onThread(studio.slug); }}>Open Studio thread →</button>}
-    </div>
-    {onConversation && entry && !area && <SourceConversations source={{ owner: node.children.length ? "balance-project" : "balance-task", id: node.id }} onOpen={onConversation} />}
-  </>;
-}

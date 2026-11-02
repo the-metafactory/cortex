@@ -31,10 +31,10 @@ export function reorderVisible(confirmed: string[], visible: string[], id: strin
   return confirmed.map(current => current === id ? other : current === other ? id : current);
 }
 
-export function savedTaskContext(outline: OutlineNode, item: TodayItem): string {
+export function projectContext(outline: OutlineNode, id: string): string | null {
   const path = (node: OutlineNode): OutlineNode[] | undefined => {
-    if (node.id === item.task.id) return [node];
+    if (node.id === id) return [node];
     for (const child of node.children) { const found = path(child); if (found) return [node, ...found]; }
   };
-  return [item.task.note, item.context, path(outline)?.slice(0, -1).reverse().find(node => node.note?.trim())?.note].find(value => value?.trim()) ?? "No additional context is saved for this task.";
+  return path(outline)?.slice(0, -1).reverse().find(node => node.note?.trim())?.note ?? null;
 }
