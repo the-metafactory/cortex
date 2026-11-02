@@ -4,6 +4,7 @@ import type { HostSources } from "../../../conversations/host";
 import type { ObjectRef, OperationRecord, SourceState } from "../../../conversations/types";
 import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-conversation-writer";
 import { calendarWriter } from "./calendar-conversation-writer";
+import { deskNoteWriter } from "./desk-note-conversation-writer";
 import { deskWriterArgv, type DeskWriterKind } from "./desk-conversation-writer";
 import { goalWriter } from "./goal-conversation-writer";
 import type { GoalRunner } from "./goals";
@@ -101,11 +102,12 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const reminder = reminderWriter(writerDeps("reminder"));
   const goal = goalWriter({ ...writerDeps("goal"), ...(deps.listGoals ? { list: deps.listGoals } : {}) });
   const tanaNote = tanaNoteWriter(writerDeps("note"));
+  const deskNote = deskNoteWriter(writerDeps("note"));
   return {
     get writers() {
       const desk = deps.desk();
       if (!desk?.enabled) return {};
-      return { ...(hasBalanceState(deps.db) ? balanceWriters : {}), ...(desk.routines ? { routine } : {}), ...(deskWriterArgv(desk, "calendar") ? { "calendar-event": calendar } : {}), ...(deskWriterArgv(desk, "reminder") ? { reminder } : {}), ...(deskWriterArgv(desk, "goal") && desk.somaBin ? { "soma-goal": goal } : {}), ...(tanaNoteReady(desk) ? { "tana-note": tanaNote } : {}) };
+      return { ...(hasBalanceState(deps.db) ? balanceWriters : {}), ...(desk.routines ? { routine } : {}), ...(deskWriterArgv(desk, "calendar") ? { "calendar-event": calendar } : {}), ...(deskWriterArgv(desk, "reminder") ? { reminder } : {}), ...(deskWriterArgv(desk, "goal") && desk.somaBin ? { "soma-goal": goal } : {}), ...(tanaNoteReady(desk) ? { "tana-note": tanaNote } : {}), ...(deskWriterArgv(desk, "note") ? {} : { "desk-note": deskNote }) };
     },
     resolvers: {
       "studio-thread": async ref => {
