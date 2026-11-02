@@ -15,6 +15,9 @@ import { addMailToStudio, mailForStudio, MAX_MAIL_REASON, proposeMailThread } fr
 import type { CaptureModel } from "../desk/studio/capture";
 import { STUDIO_SLUG } from "../desk/studio/format";
 import { STUDIO_REQUEST_ID } from "../desk/studio/writer";
+import { approveHandoff, discardHandoff, handMailToIvy, HANDOFF_OPS, handoffIdOf, isHandoffOp, MAX_INSTRUCTION, retryHandoff, type HandoffOp } from "../desk/mail-handoff";
+import { handoffReady } from "../desk/compose";
+import { isSuspicious } from "../desk/mail-suspicion";
 import { actOnWaiting, nudgeMail, readWaiting, waitingFeatures, waitingIdOf, WAITING_OPS, type WaitingOp } from "../desk/mail-waiting";
 
 const WaitingActionSchema = z.enum(WAITING_OPS.map((op) => `waiting.${op}` as const));
@@ -22,6 +25,8 @@ const waitingOp = (action: string): WaitingOp | null => {
   const op = action.slice("waiting.".length);
   return action.startsWith("waiting.") && WAITING_OPS.includes(op as WaitingOp) ? (op as WaitingOp) : null;
 };
+
+const HANDOFF_REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
 
 const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("draft"), key: z.string(), body: z.string(), decision: MailDecisionSchema.optional() }).strict(),
@@ -32,6 +37,8 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("sweep"), sweep: z.string().min(1).max(200), keys: z.array(z.string().min(1).max(1000)).min(1).max(SWEEP_LIMITS.maxMails) }).strict(),
   z.object({ action: z.literal("sweep.undo"), sweep: z.string().min(1).max(64) }).strict(),
   z.object({ action: WaitingActionSchema, key: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: z.literal("ivy.hand"), key: z.string().min(1).max(1000), requestId: z.string().regex(HANDOFF_REQUEST_ID), instruction: z.string().max(MAX_INSTRUCTION).optional() }).strict(),
+  z.object({ action: z.enum(HANDOFF_OPS), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("studio.propose"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("studio.add"), key: z.string().min(1).max(1000), requestId: z.string().regex(STUDIO_REQUEST_ID), thread: z.string().regex(STUDIO_SLUG).nullable(), reason: z.string().trim().min(1).max(MAX_MAIL_REASON).optional(), includeText: z.boolean() }).strict(),
 ]);
@@ -71,6 +78,8 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if ("move" in body) {
     return answer(body.action === "undo" ? await undoMove(body.move, moveDeps) : blockSenderDomain(db, body.move, now));
   }
+  const handoffBody = handoffBodyOf(body);
+  if (handoffBody) return answer(await actOnHandoff(db, runtime, handoffBody, moveDeps));
   const op = waitingOp(body.action);
   if (op && "key" in body) return answer(actOnWaiting(db, body.key, op, now, runtime.options.mailWaiting));
   if (body.action === "draft" && waitingIdOf(body.key) !== null) return answer(await draftNudge(db, body.key, body.body, moveDeps));
@@ -82,6 +91,19 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   const mail = findListedMail(runtime.sourceCache?.cached() ?? [], body.key);
   if (!mail) return fail(409, "The Desk no longer lists this mail.");
   if (decision && !["request", "invitation"].includes(readClassifications(db, [mail.id]).get(mail.id)?.commitment ?? "")) return fail(409, "This mail is no longer classified as a request or invitation. Refresh before saving the choice.");
+  if (body.action === "ivy.hand") {
+    const worker = runtime.mailHandoff;
+    const ask = runtime.options.ask;
+    if (!worker || !ask || !runtime.options.mailHandoff || !handoffReady(runtime.options, worker)) return fail(409, "Handing mail to Ivy is not set up on this stack: it needs the task writer, a task map, the draft command and a model lane.");
+    const readings = runtime.sourceCache?.cached() ?? [];
+    const flagged = readClassifications(db, [mail.id]).get(mail.id)?.suspicious === true;
+    const suspicious = flagged || isSuspicious(mail, suspicionContext(db, runtime.options.mailOwnDomains));
+    const handed = await handMailToIvy(mailForStudio(db, readings, mail), { requestId: body.requestId, instruction: body.instruction ?? null, suspicious }, {
+      db, writers: ask.writers, maps: ask.taskMaps, areas: runtime.options.areas, lanes: runtime.options.mailHandoff.lanes, run: deps.run ?? spawnWithStdin, now, timeoutMs: ask.timeoutSeconds * 1000,
+    });
+    if (handed.ok) void worker.kick(db, deps.now ?? Date.now);
+    return answer(handed);
+  }
   if (body.action === "studio.propose" || body.action === "studio.add") {
     const studio = runtime.options.studio;
     if (!studio) return fail(409, "The Studio is not set up on this stack.");
@@ -109,6 +131,25 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     return answer(await unsubscribeMail(mail, ctx, { db, ledger: runtime.ledger, now, ...(deps.post ? { post: deps.post } : {}) }));
   }
   return answer(await moveMail(mail, body.action === "move" ? body.target : "trash", moveDeps));
+}
+
+type HandoffBody = Extract<z.infer<typeof MailRequestSchema>, { action: HandoffOp | "draft" }>;
+
+function handoffBodyOf(body: z.infer<typeof MailRequestSchema>): HandoffBody | null {
+  if (body.action === "draft") return handoffIdOf(body.key) !== null ? body : null;
+  return "key" in body && isHandoffOp(body.action) ? { action: body.action, key: body.key } : null;
+}
+
+async function actOnHandoff(db: Database, runtime: DeskRuntime, body: HandoffBody, moveDeps: MoveDeps): Promise<{ ok: true; message: string } | { ok: false; status: number; error: string }> {
+  const id = handoffIdOf(body.key);
+  if (!id) return { ok: false, status: 400, error: "A hand-off key starts with ivy:." };
+  if (body.action === "ivy.discard") return discardHandoff(db, id, moveDeps.now);
+  if (body.action === "ivy.retry") {
+    const retried = retryHandoff(db, id);
+    if (retried.ok) void runtime.mailHandoff?.kick(db);
+    return retried;
+  }
+  return approveHandoff(db, id, body.action === "draft" ? body.body : undefined, (mail, text) => draftReply(mail, text, moveDeps), moveDeps.now);
 }
 
 async function draftNudge(db: Database, key: string, text: string, moveDeps: MoveDeps): Promise<{ ok: true; message: string } | { ok: false; status: number; error: string }> {
