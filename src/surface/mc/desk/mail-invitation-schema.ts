@@ -11,10 +11,13 @@ export interface InvitationSlotsConfig {
   max: number;
 }
 
+export type InvitationCalendar = string | { account: string; calendar?: string | undefined };
+
 export interface InvitationsConfig {
   command: string[];
   timeoutSeconds: number;
-  addToCalendar: string[];
+  calendarWriter?: string[] | undefined;
+  addToCalendar: InvitationCalendar[];
   slots: InvitationSlotsConfig;
 }
 

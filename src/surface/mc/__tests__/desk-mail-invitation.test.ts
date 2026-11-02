@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { DeskMailInvitationsSchema } from "../../../common/types/config";
 import { initDatabase } from "../db/init";
 import { handleDeskMail } from "../api/desk-mail";
 import { HandledLedger } from "../desk/actions";
@@ -152,6 +153,34 @@ describe("replies", () => {
     const other = await replyToInvitation(mail({ id: "other@example.org", account: "personal" }), input({ reply: "accept" }), deps());
     expect(other.ok && other.message).toBe("Declined. The decline went to Olga.".replace("Declined", "Accepted"));
     expect(calls.filter((c) => c.argv[0] === "calendar-writer")).toHaveLength(1);
+  });
+
+  test("an account that names a calendar adds the event through the invitation writer with --calendar; other accounts keep the shared writer", async () => {
+    answer = (argv) => (argv[0] === "invite-reply" ? { code: 0, stdout: JSON.stringify({ id: "r1" }), stderr: "" } : { code: 0, stdout: JSON.stringify({ id: "ev1" }), stderr: "" });
+    const config: InvitationsConfig = { ...CONFIG, calendarWriter: ["invitation-writer"], addToCalendar: ["work", { account: "personal", calendar: "Privat" }] };
+    const priv = await replyToInvitation(mail({ id: "p@example.org", account: "personal" }), input({ reply: "accept" }), deps({ config }));
+    expect(priv.ok && priv.message).toBe('Accepted. The event is in your calendar "Privat".');
+    const work = await replyToInvitation(mail(), input({ reply: "accept" }), deps({ config: { ...config, calendarWriter: undefined } }));
+    expect(work.ok && work.message).toBe("Accepted. The event is in your calendar.");
+    expect(calls.filter((c) => c.argv[0] !== "invite-reply").map((c) => c.argv)).toEqual([["invitation-writer", "--calendar", "Privat"], ["calendar-writer"]]);
+    expect(invitationDecisions(db, ["p@example.org"]).get("p@example.org")?.calendar).toBe('The event is in your calendar "Privat".');
+  });
+
+  test("a writer that refuses the named calendar leaves the answer sent and says the event was not added", async () => {
+    answer = (argv) => (argv[0] === "invite-reply" ? { code: 0, stdout: JSON.stringify({ id: "r1" }), stderr: "" } : { code: 1, stdout: "", stderr: "2 calendars are named Calendar, so it is unclear which one is meant and nothing was added." });
+    const config: InvitationsConfig = { ...CONFIG, addToCalendar: [{ account: "work", calendar: "Calendar" }] };
+    const result = await replyToInvitation(mail(), input({ reply: "accept" }), deps({ config }));
+    expect(result.ok && result.message).toBe("Accepted. The event was not added to your calendar: 2 calendars are named Calendar, so it is unclear which one is meant and nothing was added.");
+    expect(calls.at(-1)?.argv).toEqual(["calendar-writer", "--calendar", "Calendar"]);
+    expect(invitationDecisions(db, ["invite@example.org"]).get("invite@example.org")?.status).toBe("sent");
+  });
+
+  test("the invitations config takes account names and { account, calendar } entries, and refuses a calendar that reads as a flag", () => {
+    const parse = (addToCalendar: unknown) => DeskMailInvitationsSchema.safeParse({ command: ["x"], addToCalendar });
+    expect(parse(["personal", { account: "work", calendar: "Privat" }]).success).toBe(true);
+    expect(parse([{ account: "work", calendar: "--all" }]).success).toBe(false);
+    expect(parse([{ account: "work", calendar: "Privat", extra: 1 }]).success).toBe(false);
+    expect(parse(["work", { account: "work", calendar: "Privat" }]).success).toBe(false);
   });
 
   test("a failed command is recorded and can be retried with a new request; a timeout makes it uncertain and blocks another answer", async () => {
