@@ -61,7 +61,7 @@ export function OverviewRowView({ row, selected, searching, onOpen }: { row: Ove
   return <li>
     <button type="button" className={`dcv-row${selected ? " active" : ""}`} aria-current={selected ? "true" : undefined} onClick={() => onOpen(conversation.id)}>
       <strong>{conversation.pinned && <span className="dcv-pin">Pinned · </span>}{conversation.title}</strong>
-      <span className="dcv-excerpt">{line ? `${line.who === "user" ? "You" : "Ivy"}: ${line.text}` : "No messages yet"}</span>
+      <span className="dcv-excerpt">{line ? `${line.who === "principal" ? "You" : "Ivy"}: ${line.text}` : "No messages yet"}</span>
       {linked.length > 0 && <small>{linked.map(l => `${sourceLabel(l)}: ${l.title ?? "unavailable"}`).join(" · ")}</small>}
       <small>{statusLabel(conversation.activity.status)} · {day(conversation.activity.lastAt)}{conversation.policy === "local" ? " · Local only" : ""}</small>
     </button>

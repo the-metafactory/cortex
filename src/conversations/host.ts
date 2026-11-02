@@ -349,37 +349,38 @@ export class ConversationHost {
   }
 
   private async overviewRow(id: string, listed: Stored, terms: string[], working: Set<number>): Promise<OverviewRow | null> {
-    const lines = terms.length > 0 ? await this.transcript(id, listed) : [];
-    const matches = (title: string): boolean => {
-      const haystack = [title, ...lines.map(line => line.text)].join("\n").toLowerCase();
-      return terms.every(term => haystack.includes(term));
-    };
-    if (terms.length > 0 && !matches(listed.title) && !(listed.titleFromSource && matches(UNAVAILABLE_TITLE))) return null;
+    const found = terms.length > 0 ? await this.searchHit(id, listed, terms) : null;
+    if (found === false) return null;
     const { stored, effective, sources, available } = await this.tighten(id);
     const meta = this.view(id, stored, working, effective, available);
-    if (terms.length > 0 && !matches(meta.title)) return null;
-    const hits = (line: ExchangeLine): number => terms.filter(term => line.text.toLowerCase().includes(term)).length;
-    const best = terms.length === 0 ? null : lines.reduce<ExchangeLine | null>((top, line) => hits(line) > (top ? hits(top) : 0) ? line : top, null);
-    const latest = terms.length > 0 ? lines.at(-1) : await this.latestLine(stored);
+    if (found && !found.matches(meta.title)) return null;
+    const latest = found ? found.lines.at(-1) : await this.latestLine(stored);
     return {
       conversation: { ...meta, links: sources.flatMap(source => source.state === "available" ? [source.ref] : []) },
       linked: sources.map(source => ({ owner: source.ref.owner, title: source.state === "available" ? source.title : null })),
       latest: latest ? snippet(latest, []) : null,
-      match: best ? snippet(best, terms) : null,
+      match: found?.best ? snippet(found.best, terms) : null,
     };
   }
 
+  private async searchHit(id: string, listed: Stored, terms: string[]): Promise<false | { lines: ExchangeLine[]; best: ExchangeLine | null; matches: (title: string) => boolean }> {
+    const lines = await this.transcript(id, listed);
+    const text = lines.map(line => line.text).join("\n");
+    const matches = (title: string): boolean => {
+      const haystack = `${title}\n${text}`.toLowerCase();
+      return terms.every(term => haystack.includes(term));
+    };
+    if (!matches(listed.title) && !(listed.titleFromSource && matches(UNAVAILABLE_TITLE))) return false;
+    const hits = (line: ExchangeLine): number => terms.filter(term => line.text.toLowerCase().includes(term)).length;
+    const best = lines.reduce<ExchangeLine | null>((top, line) => hits(line) > (top ? hits(top) : 0) ? line : top, null);
+    return { lines, best, matches };
+  }
+
   private async latestLine(stored: Stored): Promise<ExchangeLine | undefined> {
-    const conversation = await this.conversation(stored);
-    let cursor: Parameters<Conversation["entries"]>[2];
-    do {
-      const page = await conversation.entries({}, 20, cursor, this.context);
-      for (const entry of page.items) {
-        const line = exchangeLines(entry).at(-1);
-        if (line) return line;
-      }
-      cursor = page.next;
-    } while (cursor);
+    for await (const entry of allEntries(await this.conversation(stored), {}, 20, this.context)) {
+      const line = exchangeLines(entry).at(-1);
+      if (line) return line;
+    }
     return undefined;
   }
 
@@ -391,12 +392,7 @@ export class ConversationHost {
     this.transcripts.delete(id);
     if (cached?.head === head) { this.transcripts.set(id, cached); return cached.lines; }
     const lines: ExchangeLine[] = [];
-    let cursor: Parameters<Conversation["entries"]>[2];
-    do {
-      const page = await conversation.entries({ order: "ascending" }, 200, cursor, this.context);
-      for (const entry of page.items) lines.push(...exchangeLines(entry));
-      cursor = page.next;
-    } while (cursor);
+    for await (const entry of allEntries(conversation, { order: "ascending" }, 200, this.context)) lines.push(...exchangeLines(entry));
     this.transcripts.set(id, { head, lines });
     for (const oldest of this.transcripts.keys()) {
       if (this.transcripts.size <= TRANSCRIPT_CACHE) break;
@@ -618,15 +614,24 @@ function entryText(entry: EntryRecord): string {
   return chatTurns(entry.model ?? []).map(turn => turn.content).join("\n");
 }
 
+async function* allEntries(conversation: Conversation, query: Parameters<Conversation["entries"]>[0], size: number, context: Context): AsyncGenerator<EntryRecord> {
+  let cursor: Parameters<Conversation["entries"]>[2];
+  do {
+    const page = await conversation.entries(query, size, cursor, context);
+    yield* page.items;
+    cursor = page.next;
+  } while (cursor);
+}
+
 function exchangeLines(entry: EntryRecord): ExchangeLine[] {
   const line = (who: ExchangeLine["who"], text: string): ExchangeLine[] => {
     const clean = searchable(text);
     return clean ? [{ who, text: clean }] : [];
   };
   const imported = ImportedTurnSchema.safeParse(entry.data);
-  if (entry.kind === IMPORTED_TURN_KIND && imported.success) return [...line("user", imported.data.text), ...line("assistant", imported.data.reply ?? "")];
+  if (entry.kind === IMPORTED_TURN_KIND && imported.success) return [...line("principal", imported.data.text), ...line("assistant", imported.data.reply ?? "")];
   const message = entry.model?.[0];
-  if (message?.role === "user") return line("user", entryText(entry));
+  if (message?.role === "user") return line("principal", entryText(entry));
   if (message?.role === "assistant" && message.stopReason !== "error") return line("assistant", entryText(entry));
   return [];
 }

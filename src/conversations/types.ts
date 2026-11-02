@@ -77,7 +77,7 @@ export const OverviewQuerySchema = z.object({
 }).strict();
 export type OverviewQuery = z.infer<typeof OverviewQuerySchema>;
 
-export interface ExchangeLine { who: "user" | "assistant"; text: string }
+export interface ExchangeLine { who: "principal" | "assistant"; text: string }
 export interface LinkedView { owner: OwnerType; title: string | null }
 export interface OverviewRow {
   conversation: ConversationMeta;

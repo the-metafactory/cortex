@@ -88,7 +88,7 @@ describe("Ivy conversation overview", () => {
     for (let i = 0; i < 3; i++) await r.make(`Errand ${i}`, [`Errand number ${i}`]);
     const found = await r.overview("?q=quince%20pruning");
     expect(found.body.rows.map(row => row.conversation.id)).toEqual([older]);
-    expect(found.body.rows[0]?.match).toEqual({ who: "user", text: "The quince tree needs pruning in late winter." });
+    expect(found.body.rows[0]?.match).toEqual({ who: "principal", text: "The quince tree needs pruning in late winter." });
     expect(found.body.rows[0]?.latest?.text).toContain("roses");
     expect((await r.overview("?q=garden")).body.rows.map(row => row.conversation.id)).toEqual([older]);
     expect((await r.overview("?q=quince%20tulips")).body.rows).toEqual([]);
@@ -159,7 +159,7 @@ describe("Ivy conversation overview view", () => {
     expect(failed).toContain("Conversations could not be loaded: HTTP 503. This is not an empty history.");
     expect(failed).toContain(">Retry</button>");
     expect(failed).not.toContain("No current conversations.");
-    const row: OverviewRow = { conversation: meta(), linked: [{ owner: "balance-task", title: null }], latest: { who: "assistant", text: "Broad wings glide." }, match: { who: "user", text: "Which wing shape flies farther?" } };
+    const row: OverviewRow = { conversation: meta(), linked: [{ owner: "balance-task", title: null }], latest: { who: "assistant", text: "Broad wings glide." }, match: { who: "principal", text: "Which wing shape flies farther?" } };
     const stale = renderToStaticMarkup(<OverviewView {...base} rows={[row]} loadedAt={Date.parse("2026-11-01T08:00:00.000Z")} error="HTTP 500." search="wing" next="c" />);
     expect(stale).toContain("The list could not be refreshed: HTTP 500.");
     expect(stale).toContain("Pinned · ");
