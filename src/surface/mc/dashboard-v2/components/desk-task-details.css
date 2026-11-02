@@ -1,0 +1,27 @@
+.dtd { min-width: 0; overflow-wrap: anywhere; color: var(--desk-ink, #242a32); }
+.dtd h2 { font-size: 17px; font-weight: 600; letter-spacing: -.02em; margin: 0 0 10px; }
+.dtd .dbl-eyebrow { font-size: 10px; letter-spacing: .12em; font-weight: 650; text-transform: uppercase; color: #758177; }
+.dtd .dbl-help, .dtd .dbl-breadcrumb { color: #78837b; font-size: 11px; line-height: 1.6; }
+.dtd input:not([type="range"]):not([type="checkbox"]), .dtd select, .dtd textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: 10px 11px; background: #f8faf9; border: 1px solid #dce3df; color: #303b34; border-radius: 6px; font: inherit; font-size: 12px; }
+.dtd input[readonly] { color: #758177; }
+.dtd label { display: block; font-size: 11px; color: #6f7e73; margin: 18px 0 7px; }
+.dtd label > input:not([type="checkbox"]), .dtd label > select, .dtd textarea { display: block; margin-top: 7px; }
+.dtd input[type="range"] { width: 100%; accent-color: #65856c; margin: 10px 0 0; }
+.dtd output { float: right; }
+.dtd textarea { min-height: 135px; resize: vertical; }
+.dtd .dbl-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.dtd .dbl-check { display: flex; align-items: center; gap: 8px; line-height: 1.6; }
+.dtd fieldset { border: 1px solid #dce3df; margin: 20px 0; font-size: 11px; line-height: 1.6; }
+.dtd .dbl-save { width: 100%; margin: 20px 0 8px; }
+.dtd .dbl-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border-top: 1px solid #edf0ed; padding-top: 20px; margin-top: 20px; font-size: 12px; }
+.dtd .dbl-actions p { flex-basis: 100%; }
+.dtd .desk-btn { max-width: 100%; white-space: normal; }
+.dtd [role="alert"], .dtd [role="status"] { font-size: 12px; line-height: 1.6; color: #8b5a3f; }
+.dtd .dbl-move { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 14px; }
+.dtd .dbl-move > * { min-width: 0; max-width: 100%; }
+.dbl-create { min-width: 0; background: white; border: 1px solid #e2e7e3; border-radius: 12px; padding: 22px; margin: 20px 0; display: flex; align-items: end; flex-wrap: wrap; gap: 12px; }
+.dbl-create h2, .dbl-create p { flex-basis: 100%; }
+.dbl-create label { display: block; font-size: 11px; color: #6f7e73; margin: 18px 0 7px; flex: 1; min-width: min(180px, 100%); }
+.dbl-create label > input, .dbl-create label > select { display: block; margin-top: 7px; }
+.dbl-create p { color: #7b887f; font-size: 11px; line-height: 1.6; }
+@media (max-width: 760px) { .dtd .dbl-pair { grid-template-columns: minmax(0, 1fr); } }

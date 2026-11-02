@@ -49,5 +49,5 @@ export function useMyDay(day: MyDayView, onChanged: () => void) {
     return send({ date: current.date, command, requestId: crypto.randomUUID(), ...(onSaved ? { onSaved } : {}) });
   };
   const retry = (): Promise<boolean> => pending.current ? send(pending.current) : Promise.resolve(false);
-  return { current, note, busy, retryable, change, retry };
+  return { current, note, busy, retryable, change, retry, adopt: setLocal };
 }

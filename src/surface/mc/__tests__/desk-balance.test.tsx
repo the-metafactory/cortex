@@ -18,6 +18,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { balanceEntries, balanceMatches, DeskBalance } from "../dashboard-v2/components/desk-balance";
 import { balanceItemSearch, balanceSearch, readBalanceLocation } from "../dashboard-v2/hooks/use-balance-location";
+import { DeskTimeFirst } from "../dashboard-v2/components/desk-time-first";
+import { detailsCommand } from "../dashboard-v2/components/desk-task-details";
+import { submitMyDay } from "../dashboard-v2/lib/desk-my-day-action";
+import { STALE_OUTLINE } from "../desk/balance-outline";
 
 const NOW = new Date(2026, 10, 1, 10).getTime();
 const DATE = localDay(NOW);
@@ -294,5 +298,39 @@ describe("Balance through the real My day owner", () => {
     const hostile = render("mail", "javascript:alert(1)");
     expect(hostile).not.toContain("javascript:");
     expect(hostile).toContain("<p>From mail</p>");
+  });
+  const selectFirst = async (): Promise<MyDayView> => {
+    await change(edit(view(), "first", { note: "Bring the signed form", dueDate: "2026-11-05" }));
+    expect((await post({ op: "start", ids: ["first", "standalone"] })).status).toBe(200);
+    expect((await post({ op: "select", id: "first", revision: view().revision })).status).toBe(200);
+    return view();
+  };
+  const between = (html: string, from: string, to: string): string => html.slice(html.indexOf(from), html.indexOf(to, html.indexOf(from)));
+  test("the Day page shows the selected task's full Balance details in its main column, once", async () => {
+    const day = { ...(await selectFirst()), sources: [{ taskId: "first", key: "mail:probe", fingerprint: "probe", kind: "mail", url: "message://%3Cprobe%40example.org%3E" }] };
+    const html = renderToStaticMarkup(createElement(DeskTimeFirst, { day, now: NOW, before: null, after: null, proposal: null, sweeps: null, preview: null, ambient: null, areas: desk.areas, onChanged: () => undefined, onThread: () => undefined, onConversation: () => undefined }));
+    const main = between(html, "class=\"tf-current\"", "class=\"tf-contract\"");
+    for (const part of ["<h2>first</h2>", "Work / project", "Bring the signed form", "value=\"2026-11-05\"", "aria-label=\"Balance estimate minutes\"", "<a href=\"message://%3Cprobe%40example.org%3E\">Open in Mail</a>", "+ Add subtask", "Move…", "Mark complete", "Save changes", ">Done</button>", ">Not today</button>", ">Use recommendation</button>", ">Choose another</a>"]) expect(main).toContain(part);
+    expect(main.split("aria-label=\"Balance notes\"")).toHaveLength(2);
+    const side = between(html, "aria-label=\"Selected task context\"", "</section>");
+    expect(side).toContain("Open task in Balance");
+    expect(side).not.toContain("Bring the signed form");
+    expect(side).not.toContain("<h3>");
+  });
+  test("a Day details save goes through the Balance writer, persists, and a stale revision is refused without overwriting", async () => {
+    const day = await selectFirst();
+    const node = required(day, "first");
+    const original = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => handleDeskMyDay(new Request(new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, "http://localhost"), init), db, runtime, undefined, NOW)) as typeof fetch;
+    try {
+      const draft = { node, details: { ...balanceDetails(node, DATE), note: "Saved from the Day page" }, revision: day.revision, date: DATE, yes: false };
+      await submitMyDay(DATE, detailsCommand(draft));
+      expect(required(view(), "first").note).toBe("Saved from the Day page");
+      const before = JSON.stringify(loadBalanceState(db));
+      const refusal = await submitMyDay(DATE, detailsCommand({ ...draft, details: { ...draft.details, note: "Stale Day draft" } })).then(() => null, (error: unknown) => error);
+      expect(refusal).toMatchObject({ info: { status: 409, message: STALE_OUTLINE } });
+      expect(JSON.stringify(loadBalanceState(db))).toBe(before);
+      expect(required(view(), "first").note).toBe("Saved from the Day page");
+    } finally { globalThis.fetch = original; }
   });
 });
