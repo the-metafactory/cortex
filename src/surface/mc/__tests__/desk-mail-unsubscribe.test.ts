@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { handleDeskMail } from "../api/desk-mail";
 import { HandledLedger } from "../desk/actions";
@@ -7,7 +7,7 @@ import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { logMailDecision, mailFeatures, queryMailLog, type MailLogAction, type MailLogWhere } from "../desk/mail-log";
 import { listRules } from "../desk/mail-rules";
 import type { SuspicionContext } from "../desk/mail-suspicion";
-import { archiveWhatArrives, DEFAULT_UNSUBSCRIBE, isPublicAddress, publicLookup, offerContext, oneClickRefusal, unreadDismissals, unsubscribeMail, unsubscribeMethod, unsubscribeOffer, type OneClickPost } from "../desk/mail-unsubscribe";
+import { archiveWhatArrives, DEFAULT_UNSUBSCRIBE, guardedLookup, isPublicAddress, postOneClick, publicLookup, unsubscribeOffers, offerContext, oneClickRefusal, unreadDismissals, unsubscribeMail, unsubscribeMethod, unsubscribeOffer, type OneClickPost } from "../desk/mail-unsubscribe";
 import { mailItems } from "../desk/rank";
 import { SourceCache, type SourceMail } from "../desk/sources/command";
 import { initDatabase } from "../db/init";
@@ -98,6 +98,16 @@ describe("unsubscribe offer", () => {
     expect(unsubscribeOffer(db, failing, ctx())).toBeNull();
   });
 
+  it("reads the log once per list for many mails of that list", () => {
+    archivedUnread(5);
+    const context = ctx();
+    const spy = spyOn(db, "query");
+    const offers = unsubscribeOffers(db, [letter("a"), letter("b"), letter("c"), letter("d", { headers: {} })], context);
+    expect([...offers.keys()]).toEqual(["a", "b", "c"]);
+    expect(spy.mock.calls.filter(([sql]) => sql.includes("desk_mail_log"))).toHaveLength(1);
+    spy.mockRestore();
+  });
+
   it("can be turned off", () => {
     archivedUnread(5);
     expect(unsubscribeOffer(db, letter("new"), { ...ctx(), config: { ...DEFAULT_UNSUBSCRIBE, enabled: false } })).toBeNull();
@@ -112,6 +122,21 @@ describe("host guard", () => {
 
   it("refuses a host name that resolves to a loopback address at connect time", async () => {
     const error = await new Promise<Error | null>((resolve) => { publicLookup("localhost", { all: true }, (err) => { resolve(err); }); });
+    expect(error?.message).toContain("private or local address");
+  });
+
+  it("passes a lookup error on and refuses a name with any private address", async () => {
+    const ask = (resolve: Parameters<typeof guardedLookup>[0]) =>
+      new Promise<{ err: Error | null; addresses: unknown }>((done) => { guardedLookup(resolve)("lists.example", { all: true }, (err, addresses) => { done({ err, addresses }); }); });
+    const nx = Object.assign(new Error("getaddrinfo ENOTFOUND lists.example"), { code: "ENOTFOUND" });
+    expect((await ask((_h, _o, cb) => { cb(nx, undefined as unknown as []); })).err?.message).toContain("ENOTFOUND");
+    expect((await ask((_h, _o, cb) => { cb(null, [{ address: "93.184.216.34", family: 4 }, { address: "10.0.0.1", family: 4 }]); })).err?.message).toContain("private or local address (10.0.0.1)");
+    expect((await ask((_h, _o, cb) => { cb(null, []); })).err?.message).toContain("no address");
+    expect(await ask((_h, _o, cb) => { cb(null, [{ address: "93.184.216.34", family: 4 }]); })).toEqual({ err: null, addresses: [{ address: "93.184.216.34", family: 4 }] });
+  });
+
+  it("connects through the guarded lookup, so a POST to a loopback name is refused before any connection", async () => {
+    const error = await postOneClick(new URL("https://localhost/u"), 2000).then(() => null, (err: unknown) => err as Error);
     expect(error?.message).toContain("private or local address");
   });
 
