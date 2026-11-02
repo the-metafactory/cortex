@@ -42,6 +42,7 @@ describe("Catch-Up filters", () => {
     const groups = [{ ...group, mails: [...group.mails] }];
     expect(catchupMailGroups(groups, "work", "mail", "ada invoice")).toHaveLength(1);
     expect(catchupMailGroups(groups, "home", "mail", "")).toEqual([]);
+    expect(catchupMailGroups([{ ...group, mails: [...group.mails], id: "cross", area: null }], "home", "mail", "").map((g) => g.id)).toEqual(["cross"]);
     expect(catchupMailGroups(groups, "", "decision", "")).toEqual([]);
     expect(catchupMailGroups(groups, "", "mail", "missing")).toEqual([]);
   });

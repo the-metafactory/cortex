@@ -20,7 +20,6 @@ interface TimeFirstProps {
   before: ReactNode;
   after: ReactNode;
   proposal: ReactNode;
-  sweeps: ReactNode;
   preview: ReactNode;
   ambient: ReactNode;
   areas: DeskArea[];
@@ -52,11 +51,11 @@ function choiceLabel(item: TodayItem, gap: CalendarGap, manual: boolean): string
 }
 
 export function DeskTimeFirst(props: TimeFirstProps) {
-  if (!props.day) return <div className="tf-layout"><main className="tf-main">{props.before}<p role="status">Your saved day is unavailable. Refresh the Desk to retry.</p>{props.proposal}{props.sweeps}{props.after}</main><aside className="tf-side">{props.preview}{props.ambient}</aside></div>;
+  if (!props.day) return <div className="tf-layout"><main className="tf-main">{props.before}<p role="status">Your saved day is unavailable. Refresh the Desk to retry.</p>{props.proposal}{props.after}</main><aside className="tf-side">{props.preview}{props.ambient}</aside></div>;
   return <TimeFirstDay {...props} day={props.day} />;
 }
 
-function TimeFirstDay({ day, calendar, now, before, after, proposal, sweeps, preview, ambient, areas, onChanged, onThread, onConversation }: Omit<TimeFirstProps, "day"> & { day: MyDayView }) {
+function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, ambient, areas, onChanged, onThread, onConversation }: Omit<TimeFirstProps, "day"> & { day: MyDayView }) {
   const changes = useMyDay(day, onChanged);
   const { current, busy, change, retryable } = changes;
   const gap = currentGap(calendar ?? { sources: [], events: [] }, now);
@@ -111,7 +110,6 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, sweeps, pre
         </> : <><h2>Choose what works for you</h2><p>{recommendation.kind === "none" ? recommendation.reason : "Your priorities are available alongside the timeline."}</p><a className="desk-btn" href="#today-priorities" onClick={showPriorities}>See today's priorities</a></>}
       </section>}
       <DayContract changes={changes} />
-      {sweeps}
       {after}
     </main>
     <aside className="tf-side" aria-label="Priorities, task context and Catch-up">

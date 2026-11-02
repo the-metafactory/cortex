@@ -4,7 +4,7 @@ import { scrollBelowDesk } from "../lib/desk-scroll";
 import { deskLinkMode, openDeskLink } from "../lib/desk-link";
 import { DeskLink } from "./desk-link";
 import { DeskBalance } from "./desk-balance";
-import { MailSweeps, SweepPreview, sweepsInArea } from "./desk-mail-sweeps";
+import { MailSweeps, SweepPreview } from "./desk-mail-sweeps";
 import { MailDigests, type UnsubscribeAsk } from "./desk-mail-digest";
 import type { MailSweepView } from "../../desk/mail-sweep";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
@@ -842,7 +842,6 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           {ahead.length > 0 && <AheadStrip events={ahead} />}
           </>}
           proposal={proposalCard}
-          sweeps={<MailSweeps sweeps={sweepsInArea(view.mailSweeps ?? [], area)} onPreview={openSweep} />}
           preview={<CatchupPreview view={catchupView} onOpen={openCatchup} />}
           ambient={<>
           <button className="desk-btn" type="button" onClick={onOpenRoutines}>Open Routines</button>

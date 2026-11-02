@@ -31,7 +31,7 @@ export function matchesCatchupItem(item: DeskItem, kind: CatchupKind, query: str
 }
 export function catchupMailGroups<T extends MailSweepView>(groups: readonly T[], area: string, kind: CatchupKind, query: string): T[] {
   if (kind !== "all" && kind !== "mail") return [];
-  return groups.filter(group => (!area || group.area === area) && matchesCatchupText(query, [
+  return groups.filter(group => (!area || group.area === null || group.area === area) && matchesCatchupText(query, [
     group.title, group.why, group.label, ...group.mails.flatMap(mail => [mail.subject, mail.from]),
   ]));
 }

@@ -1,15 +1,11 @@
 import { useState } from "react";
 import type { MailSweepView } from "../../desk/mail-sweep";
 import { SWEEP_WORDS } from "../../desk/mail-sweep-schema";
-import { ALL_AREAS } from "../../desk/present";
 import "./desk-mail-sweeps.css";
 
 const capital = (s: string): string => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
 const SHOWN = 3;
 const SWEEP_NAMES: Record<MailSweepView["kind"], string> = { bundle: "Bundle", sweep: "Sweep", digest: "Digest" };
-
-export const sweepsInArea = (sweeps: readonly MailSweepView[], area: string): MailSweepView[] =>
-  area === ALL_AREAS ? [...sweeps] : sweeps.filter((s) => s.area === null || s.area === area);
 
 export const previewLabel = (s: MailSweepView, count = s.mails.length): string => `Preview and ${SWEEP_WORDS[s.target].verb} ${count}`;
 

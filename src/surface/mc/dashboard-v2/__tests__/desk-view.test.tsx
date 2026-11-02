@@ -10,6 +10,9 @@ import { askDesk, createFromProposal } from "../lib/desk-ask";
 import type { DeskProposal } from "../../desk/ask";
 import { openGroup, selectItems } from "../../desk/present";
 import { DeskWakeSchema } from "../../../../common/types/desk-wake";
+import { DeskCatchUp } from "../components/desk-catch-up";
+import { MailSweeps } from "../components/desk-mail-sweeps";
+import type { MailSweepView } from "../../desk/mail-sweep";
 
 const NOW = Date.parse("2026-10-30T13:16:00.000Z");
 
@@ -82,6 +85,24 @@ describe("DeskBody", () => {
 
   it("disables actions that are not connected yet", () => {
     expect(renderCards(view.items)).toMatch(/<button[^>]*disabled=""[^>]*title="Not connected yet"[^>]*>Let it retry<\/button>/);
+  });
+});
+
+describe("sweeps and bundles", () => {
+  const sweep: MailSweepView = { id: "sweep:abc", kind: "sweep", basis: "list", target: "archive", label: "mailing list", title: "5 unread mails from the Build Bot list", why: "None is from a VIP or looks suspicious.", area: null, mails: [{ key: "mail:b1", subject: "Build 1", from: "Build Bot", at: "2026-10-30T08:00:00.000Z" }] };
+  const withSweep: DeskViewModel = { ...view, mailSweeps: [sweep] };
+
+  it("stay out of the Day view", () => {
+    const html = renderToStaticMarkup(<DeskBody view={withSweep} error={null} onOpenMissionControl={() => {}} />);
+    expect(html).not.toContain("data-sweep=");
+    expect(html).not.toContain("5 unread mails from the Build Bot list");
+  });
+
+  it("lead the Catch-up stream, ahead of the cards", () => {
+    const html = renderToStaticMarkup(<DeskCatchUp view={withSweep} renderItem={(entry) => <p>{entry.title}</p>} done={null} onChanged={() => {}} active planItem={null} top={({ sweeps }) => <MailSweeps sweeps={sweeps} onPreview={() => {}} />} />);
+    const stream = /class="catchup-stream">([\s\S]*)/.exec(html)?.[1] ?? "";
+    expect(stream.indexOf('data-sweep="sweep:abc"')).toBeGreaterThan(-1);
+    expect(stream.indexOf('data-sweep="sweep:abc"')).toBeLessThan(stream.indexOf("Task 1 needs you."));
   });
 });
 

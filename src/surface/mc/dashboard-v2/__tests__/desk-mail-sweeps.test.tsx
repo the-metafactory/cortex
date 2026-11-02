@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MailSweeps, previewLabel, SweepPreview, sweepsInArea } from "../components/desk-mail-sweeps";
+import { MailSweeps, previewLabel, SweepPreview } from "../components/desk-mail-sweeps";
 import { submitMailAction } from "../lib/desk-action";
 import type { MailSweepView } from "../../desk/mail-sweep";
 
@@ -20,11 +20,6 @@ describe("bundles and sweeps on the stream", () => {
     expect(html).toContain("and 1 more");
     expect(html).toContain(">Preview and archive 4<");
     expect(previewLabel({ ...BUNDLE, target: "junk" }, 2)).toBe("Preview and move to Spam 2");
-  });
-
-  it("filters by area and keeps cross-area groups", () => {
-    expect(sweepsInArea([BUNDLE, { ...BUNDLE, id: "x", area: null }], "home").map((s) => s.id)).toEqual(["x"]);
-    expect(sweepsInArea([BUNDLE], "all")).toHaveLength(1);
   });
 
   it("previews every mail ticked, with one confirm button", () => {

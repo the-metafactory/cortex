@@ -42,6 +42,7 @@ export interface MailSweepView {
 }
 
 export interface SweepGroup extends Omit<MailSweepView, "mails"> {
+  about: string;
   members: SweepMember[];
 }
 
@@ -78,14 +79,14 @@ function eligible(input: SweepInput): SweepMember[] {
     .sort(byAge);
 }
 
-function bundleTitle(basis: SweepBasis, members: readonly SweepMember[], target: MoveTarget): { label: string; title: string } {
+function bundleTitle(basis: SweepBasis, members: readonly SweepMember[], target: MoveTarget): { label: string; title: string; about: string } {
   const head = members[0];
   const n = members.length;
   const verb = `${SWEEP_WORDS[target].verb} all?`;
-  if (!head) return { label: "", title: "" };
-  if (basis === "list") return { label: "same mailing list", title: `${n} mails from the ${senderOf(head)} list: ${verb}` };
-  if (basis === "sender") return { label: "same sender", title: `${n} mails from ${senderOf(head)}: ${verb}` };
-  return { label: "similar content", title: `${n} mails like ${quoted(head.subject)}: ${verb}` };
+  if (!head) return { label: "", title: "", about: "" };
+  if (basis === "list") return { label: "same mailing list", title: `${n} mails from the ${senderOf(head)} list: ${verb}`, about: `from the ${senderOf(head)} list` };
+  if (basis === "sender") return { label: "same sender", title: `${n} mails from ${senderOf(head)}: ${verb}`, about: `from ${senderOf(head)}` };
+  return { label: "similar content", title: `${n} mails like ${quoted(head.subject)}: ${verb}`, about: `like ${quoted(head.subject)}` };
 }
 
 function learnedWhy(members: readonly SweepMember[], target: MoveTarget, classified: SweepInput["classified"]): string {
@@ -145,14 +146,14 @@ function sweeps(pool: readonly SweepMember[], input: SweepInput, bundled: readon
   for (const category of ["fyi", "bulk"] as const) {
     const members = quiet.filter((m) => input.classified.get(m.id)?.category === category && Date.parse(m.receivedAt) < old);
     if (members.length < SWEEP_LIMITS.minSweep) continue;
-    out.push(makeGroup({ id: `sweep:age:${category}`, kind: "sweep", basis: "age", target: "archive", label: category, title: `${members.length} ${category} mails older than ${SWEEP_LIMITS.ageDays} days are still unread`, why: SAFE }, members));
+    out.push(makeGroup({ id: `sweep:age:${category}`, kind: "sweep", basis: "age", target: "archive", label: category, title: `${members.length} ${category} mails older than ${SWEEP_LIMITS.ageDays} days are still unread`, about: `older than ${SWEEP_LIMITS.ageDays} days (${category})`, why: SAFE }, members));
   }
   const same = (a: readonly SweepMember[], b: readonly SweepMember[]): boolean => a.length === b.length && a.every((m) => b.some((x) => x.id === m.id));
   for (const { key, basis, members } of byListOrSender(quiet.filter((x) => !PERSONAL.has(input.classified.get(x.id)?.category ?? "")))) {
     const head = members[0];
     if (!head || members.length < SWEEP_LIMITS.minSweep || bundled.some((g) => same(g.members, members))) continue;
     const from = basis === "list" ? `the ${senderOf(head)} list` : senderOf(head);
-    out.push(makeGroup({ id: `sweep:${hash(key)}`, kind: "sweep", basis, target: "archive", label: basis === "list" ? "mailing list" : "sender", title: `${members.length} unread mails from ${from}`, why: SAFE }, members));
+    out.push(makeGroup({ id: `sweep:${hash(key)}`, kind: "sweep", basis, target: "archive", label: basis === "list" ? "mailing list" : "sender", title: `${members.length} unread mails from ${from}`, about: `from ${from}`, why: SAFE }, members));
   }
   return largestFirst(out, SWEEP_LIMITS.maxSweeps);
 }
@@ -164,7 +165,7 @@ export function buildSweeps(input: SweepInput): SweepGroup[] {
 }
 
 export const sweepView = (g: SweepGroup): MailSweepView => {
-  const { members, ...rest } = g;
+  const { members, about: _about, ...rest } = g;
   return { ...rest, mails: members.map((m) => ({ key: `mail:${m.id}`, subject: m.subject, from: senderOf(m), at: m.receivedAt, ...(m.url ? { url: m.url } : {}) })) };
 };
 
@@ -258,7 +259,7 @@ export async function runSweep(group: SweepGroup, keys: readonly string[], deps:
   const gone = keys.filter((k) => !members.some((m) => `mail:${m.id}` === k));
   if (members.length === 0) return refuse(409, "None of these mails is in this group any more. Look at it again.");
   const id = (deps.newId ?? (() => crypto.randomUUID()))();
-  const title = `${SWEEP_WORDS[group.target].done} ${plural(members.length, "mail")}: ${group.title.replace(/: [^:]*\?$/, "")}`;
+  const title = `${SWEEP_WORDS[group.target].done} ${plural(members.length, "mail")} ${group.about}`;
   deps.db.transaction(() => {
     deps.db.query("INSERT INTO desk_mail_sweeps (id, group_id, target, title, created_at) VALUES (?, ?, ?, ?, ?)").run(id, group.id, group.target, title, deps.now);
     for (const m of members) deps.db.query("INSERT INTO desk_mail_sweep_mails (sweep_id, message_id, subject, status) VALUES (?, ?, ?, 'moving')").run(id, m.id, m.subject);
