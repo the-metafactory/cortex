@@ -230,6 +230,8 @@ export function historySentence(e: MailLogEntry, now: number): string {
       return `You said it needs no answer (${when}).`;
     case "waiting-done":
       return `You stopped waiting for an answer to it (${when}).`;
+    case "studio":
+      return `You added it to the Studio (${when}).`;
     default:
       return `The Desk recorded “${e.action}” for it (${when}).`;
   }

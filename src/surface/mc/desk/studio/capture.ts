@@ -9,7 +9,7 @@ import { appendEntry, appendLog, localTime, oneLine } from "./edit";
 import { spawnGit } from "./git";
 import { STUDIO_SLUG } from "./format";
 import { runStudioTransaction, type ActResult } from "./writer";
-import type { StudioArea } from "./view";
+import type { StudioArea, StudioThreadView } from "./view";
 
 const FilerAnswer = z.object({
   thread: z.string().regex(STUDIO_SLUG).nullable(),
@@ -35,22 +35,32 @@ export function captureFiler(options: StudioOptions, ctx: ActContext): EndpointC
   return ctx.view.active.some((t) => t.policy === "local") ? options.filer?.local : options.filer;
 }
 
-const captureId = (requestId: string): string => `capture-${createHash("sha256").update(requestId).digest("hex").slice(0, 32)}`;
-const marker = (id: string): string => `- capture: [${id}] `;
+export const captureId = (requestId: string): string => `capture-${createHash("sha256").update(requestId).digest("hex").slice(0, 32)}`;
+export const captureMarker = (id: string): string => `- capture: [${id}] `;
+const marker = captureMarker;
+
+export type FilerChoice = z.infer<typeof FilerAnswer>;
+
+export async function askFiler(config: EndpointConfig | undefined, threads: readonly StudioThreadView[], text: string, run: CaptureModel): Promise<{ answer: FilerChoice | null; reason: string }> {
+  if (!config) return { answer: null, reason: "No filer is configured for the active threads' policy; saved in the Studio inbox." };
+  try {
+    const parsed = FilerAnswer.safeParse(await run(config, { capture: text, threads: threads.map((t) => ({ slug: t.slug, question: t.question, stand: t.stand })) }));
+    return parsed.success ? { answer: parsed.data, reason: parsed.data.reason } : { answer: null, reason: "The filer could not choose a thread; saved in the Studio inbox." };
+  } catch {
+    return { answer: null, reason: "The filer did not answer; saved in the Studio inbox." };
+  }
+}
+
+const continuation = (line: string | undefined): boolean => line !== undefined && line.startsWith("  ") && line.trim() !== "";
+
+function entryBlock(lines: readonly string[], at: number): string[] {
+  let end = at + 1;
+  while (continuation(lines[end])) end++;
+  return lines.slice(at, end);
+}
 
 async function planCapture(ctx: ActContext, options: StudioOptions, id: string, text: string, run: CaptureModel): Promise<ActPlan | ActRefusal> {
-  const config = captureFiler(options, ctx);
-  let answer: z.infer<typeof FilerAnswer> | null = null;
-  let reason = "No filer is configured for the active threads' policy; saved in the Studio inbox.";
-  if (config) {
-    try {
-      const parsed = FilerAnswer.safeParse(await run(config, { capture: text, threads: ctx.view.active.map((t) => ({ slug: t.slug, question: t.question, stand: t.stand })) }));
-      if (parsed.success) answer = parsed.data;
-      else reason = "The filer could not choose a thread; saved in the Studio inbox.";
-    } catch {
-      reason = "The filer did not answer; saved in the Studio inbox.";
-    }
-  }
+  const { answer, reason } = await askFiler(captureFiler(options, ctx), ctx.view.active, text, run);
   const thread = ctx.view.active.find((t) => t.slug === answer?.thread);
   if (answer && thread && answer.match) {
     const file = ctx.files.threads.find((f) => f.path === thread.path);
@@ -109,11 +119,18 @@ async function undoPlan(ctx: ActContext, dir: string, id: string): Promise<ActPl
     return { writes: [], removes: [inbox.path], subject: `Undo capture ${id}`, message: "Removed the capture from the Studio inbox." };
   }
   const file = ctx.files.threads.find((f) => f.path === original.path);
-  const expected = original.text.split("\n").find((l) => l.startsWith(marker(id)));
+  const originalLines = original.text.split("\n");
+  const expectedAt = originalLines.findIndex((l) => l.startsWith(marker(id)));
   const lines = file?.text.split("\n") ?? [];
-  const matching = lines.filter((l) => l.startsWith(marker(id)));
-  if (!file || !expected || matching.length !== 1 || matching[0] !== expected) return refuse();
-  const changed = appendLog(lines.filter((l) => l !== expected).join("\n"), localTime(ctx.now), `Undid capture ${id}`);
+  const matching = lines.flatMap((l, i) => (l.startsWith(marker(id)) ? [i] : []));
+  const at = matching[0];
+  if (!file || expectedAt < 0 || matching.length !== 1 || at === undefined) return refuse();
+  const expected = entryBlock(originalLines, expectedAt);
+  const found = entryBlock(lines, at);
+  if (found.length !== expected.length || found.some((l, i) => l !== expected[i])) return refuse();
+  const next = lines[at + found.length];
+  const from = lines[at - 1]?.trim() === "" && (next === undefined || next.trim() === "" || next.startsWith("## ")) ? at - 1 : at;
+  const changed = appendLog([...lines.slice(0, from), ...lines.slice(at + found.length)].join("\n"), localTime(ctx.now), `Undid capture ${id}`);
   if (!changed) return { status: 409, error: "That thread cannot be edited; nothing was written." };
   return { writes: [{ path: file.path, text: changed }], removes: [], subject: `Undo capture ${id}`, message: "Removed the capture from its thread. Later changes were kept." };
 }

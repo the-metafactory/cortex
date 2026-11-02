@@ -55,7 +55,21 @@ export type MailActionBody =
   | { action: "sweep"; sweep: string; keys: string[] }
   | { action: "sweep.undo"; sweep: string }
   | { action: "correct"; key: string; said: import("../../desk/mail-actions").MailCorrection }
-  | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision };
+  | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision }
+  | { action: "studio.add"; key: string; requestId: string; thread: string | null; reason?: string; includeText: boolean };
+
+export type StudioProposalOutcome = { ok: true; proposal: import("../../desk/mail-studio").MailStudioProposal } | { ok: false; text: string };
+
+export async function proposeMailThread(key: string, fetchImpl: FetchLike = fetch): Promise<StudioProposalOutcome> {
+  try {
+    const res = await fetchImpl(DESK_MAIL_PATH, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "studio.propose", key }) });
+    const parsed = (await res.json().catch(() => null)) as { proposal?: import("../../desk/mail-studio").MailStudioProposal; error?: unknown } | null;
+    if (res.ok && parsed?.proposal) return { ok: true, proposal: parsed.proposal };
+    return { ok: false, text: typeof parsed?.error === "string" ? parsed.error : `The Studio did not answer (HTTP ${res.status}).` };
+  } catch (err) {
+    return { ok: false, text: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
 
 /**
  * Moves one listed mail (Archive, Spam, Delete), undoes a move, blocks a spam sender's domain, marks a sender
