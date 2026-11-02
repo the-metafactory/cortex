@@ -99,6 +99,16 @@ export async function fetchMailThreadProposal(key: string, fetchImpl: FetchLike 
 export const submitMailAction = (body: MailActionBody, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
   postDesk(DESK_MAIL_PATH, body, fetchImpl);
 
+/** Tells the Desk the principal opened one mail. Fire and forget: it never delays the open and never throws. */
+export function noteMailOpened(key: string, fetchImpl: FetchLike = fetch): void {
+  if (!key.startsWith("mail:")) return;
+  try {
+    fetchImpl(DESK_MAIL_PATH, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "opened", key }), keepalive: true }).catch(() => undefined);
+  } catch {
+    return;
+  }
+}
+
 export type MailRuleBody =
   | { op: "approve" | "later" | "never"; proposal: string }
   | { op: "release" | "stop" | "start" | "delete"; rule: string }

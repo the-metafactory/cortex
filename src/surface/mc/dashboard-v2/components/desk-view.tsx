@@ -18,7 +18,7 @@ import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
-import { fetchInviteProposal, fetchMailThreadProposal, submitDeskAction, submitDmarcAck, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
+import { fetchInviteProposal, fetchMailThreadProposal, noteMailOpened, submitDeskAction, submitDmarcAck, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
 import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
 import { newReplyDraft, prepareAcceptDraft, prepareDeclineDraft, prepareProposalDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
 import { InvitationBox, newInviteAsk, type InviteAsk } from "./desk-mail-invitation";
@@ -205,6 +205,11 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     const t = setInterval(onChanged, CHECK_POLL_MS);
     return () => clearInterval(t);
   }, [checking, onChanged]);
+
+  const openedMail = detail?.kind === "mail" ? detail.key : null;
+  useEffect(() => {
+    if (openedMail) noteMailOpened(openedMail);
+  }, [openedMail]);
 
   useEffect(() => {
     if (!detail) return;
@@ -468,7 +473,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id.startsWith("mailrule.")) runRule(item, a);
     else if (a.id === "dmarc.ack" && a.target) acknowledge(item, a, a.target);
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
-    else if (a.url) { if (!openDeskLink(a.url)) setNote(`"${a.label}" has a link the Desk does not open.`); }
+    else if (a.url) {
+      if (a.id === "open" && item.kind === "mail") noteMailOpened(item.key);
+      if (!openDeskLink(a.url)) setNote(`"${a.label}" has a link the Desk does not open.`);
+    }
     else setNote(`"${a.label}" is not connected yet.`);
   };
 
@@ -815,7 +823,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       )}
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
-      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={({ digests, sweeps }) => <><MailSweeps sweeps={sweeps} onPreview={openSweep} /><MailDigests digests={digests} busy={sweeping} onArchive={openSweep} onKeep={(key) => void keepDigest(key)} onUnsubscribe={(key, ask) => void unsubscribeDigest(key, ask)} /></>} />
+      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={({ digests, sweeps }) => <><MailSweeps sweeps={sweeps} onPreview={openSweep} /><MailDigests digests={digests} busy={sweeping} onArchive={openSweep} onKeep={(key) => void keepDigest(key)} onOpen={noteMailOpened} onUnsubscribe={(key, ask) => void unsubscribeDigest(key, ask)} /></>} />
       <div className="desk-grid tf-shell" hidden={inStudio || inBalance || inCatchup || inConversation}>
         <DeskTimeFirst day={view.myDay} calendar={view.calendarAvailability} now={view.generatedAt} areas={view.areas} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation}
           before={<>

@@ -504,6 +504,7 @@ export const DeskMailMirrorSchema = z.object({
   checkAfterUndos: z.number().int().min(0).max(1000).default(2),
   archivedUnread: z.number().int().min(1).max(1000).default(3),
   top: z.number().int().min(1).max(50).default(5),
+  openCapMinutes: z.number().int().min(1).max(240).default(15),
 });
 
 const DeskWriterArgvSchema = z.array(z.string().min(1)).min(1);

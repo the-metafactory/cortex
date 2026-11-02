@@ -97,8 +97,16 @@ export function mailFeatures(db: Database, mail: SourceMail & { sourceId?: strin
 
 /** The newest decision on one message, or null. */
 export function lastMailDecision(db: Database, messageId: string): MailLogEntry | null {
-  const row = db.query<Row, [string]>(`SELECT ${COLUMNS} FROM desk_mail_log WHERE message_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`).get(messageId);
+  const row = db.query<Row, [string]>(`SELECT ${COLUMNS} FROM desk_mail_log WHERE message_id = ? AND action <> 'opened' ORDER BY created_at DESC, id DESC LIMIT 1`).get(messageId);
   return row ? entry(row) : null;
+}
+
+/** Logs that the principal opened a listed mail on the Desk, unless the mail's newest row already is an open. */
+export function recordMailOpened(db: Database, mail: SourceMail & { sourceId?: string }, at: number): boolean {
+  const newest = db.query<{ action: string }, [string]>("SELECT action FROM desk_mail_log WHERE message_id = ? ORDER BY created_at DESC, id DESC LIMIT 1").get(mail.id);
+  if (newest?.action === "opened") return false;
+  logMailDecision(db, mailFeatures(db, mail), "opened", "desk", at);
+  return true;
 }
 
 /** The features the log last recorded for a message, for a decision on a mail the Desk no longer lists (Undo). */

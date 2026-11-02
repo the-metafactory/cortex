@@ -8,7 +8,7 @@ import type { Database } from "bun:sqlite";
 import type { DeskRuntime } from "../desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../desk/create";
 import { correctMail, draftReply, findListedMail, MAIL_CORRECTIONS, markUnimportant, reportMail, type ListedMail } from "../desk/mail-actions";
-import { logMailDecision, mailFeatures } from "../desk/mail-log";
+import { logMailDecision, mailFeatures, recordMailOpened } from "../desk/mail-log";
 import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveDeps } from "../desk/mail-move";
 import { runSweep, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
 import { keepFromDigest, listMailGroups } from "../desk/mail-digest";
@@ -54,6 +54,7 @@ const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("studio.propose"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("snooze"), key: z.string().min(1).max(1000), until: SnoozeChoiceSchema }).strict(),
   z.object({ action: z.literal("snooze.cancel"), key: z.string().min(1).max(1000) }).strict(),
+  z.object({ action: z.literal("opened"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("not-phishing"), key: z.string().min(1).max(1000) }).strict(),
   z.object({ action: z.literal("not-phishing.undo"), trust: z.string().min(1).max(64) }).strict(),
   z.object({ action: z.literal("not-phishing.remove"), sender: z.string().min(3).max(320) }).strict(),
@@ -84,7 +85,8 @@ export interface DeskMailDeps {
  * or blocks the domain of a mail moved to Junk. {action: "snooze", key, until} hides one mail until a time, a meeting or a
  * person writes; {action: "snooze.cancel", key} ends the snooze. {action: "not-phishing", key} waives a flagged mail's
  * suspicion reasons (see mail-trust.ts); {action: "not-phishing.undo", trust} takes that back, and
- * {action: "not-phishing.remove", sender} forgets every dismissal for one sender address. The rebind and identity gates in
+ * {action: "not-phishing.remove", sender} forgets every dismissal for one sender address. {action: "opened", key} logs that
+ * the principal opened the mail on the Desk (once until the next decision on it). The rebind and identity gates in
  * handleApi run before this handler; there is no step-up. The account and Message-ID come from the mail source's
  * last reading, never from the page, and a mail already moved or still moving is refused.
  */
@@ -115,6 +117,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if (body.action === "snooze.cancel") return answer(body.key.startsWith("mail:") ? cancelSnooze(db, body.key.slice("mail:".length)) : { ok: false, status: 400, error: "A snooze key starts with mail:." });
   const mail = findListedMail(runtime.sourceCache?.cached() ?? [], body.key);
   if (!mail) return fail(409, "The Desk no longer lists this mail.");
+  if (body.action === "opened") return Response.json({ ok: true, recorded: recordMailOpened(db, mail, now) }, { headers: noStore });
   if (body.action === "not-phishing") return answer(dismissSuspicion(db, mail, mailSuspicion(db, mail, runtime.options.mailOwnDomains), now, deps.newId));
   if (body.action === "snooze") return answer(snoozeMail(db, mail, body.until, { now, readings: runtime.sourceCache?.cached() ?? [] }));
   if (decision && !mail.invitation && !["request", "invitation"].includes(readClassifications(db, [mail.id]).get(mail.id)?.commitment ?? "")) return fail(409, "This mail is no longer classified as a request or invitation. Refresh before saving the choice.");

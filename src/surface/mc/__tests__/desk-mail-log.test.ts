@@ -6,7 +6,7 @@ import { saveClassification } from "../desk/classify";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
 import type { WriterResult } from "../desk/create";
 import { ClientMailLog, LOCATE_ATTEMPTS, recordClientDecisions, type ClientLogDeps } from "../desk/mail-client-log";
-import { departures, historySentence, logMailDecision, logMailTodo, mailFeatures, purgeMailLog, queryMailLog, type MailLogEntry } from "../desk/mail-log";
+import { departures, historySentence, lastMailDecision, logMailDecision, logMailTodo, mailFeatures, purgeMailLog, queryMailLog, recordMailOpened, type MailLogEntry } from "../desk/mail-log";
 import { movedKey } from "../desk/mail-move";
 import { parseSourceOutput, SourceCache, type SourceMail, type SourceReading } from "../desk/sources/command";
 import { DAY_MS } from "../desk/time";
@@ -219,5 +219,32 @@ describe("Retention and headers", () => {
       { messageId: "t1@stats", action: "todo", where: "desk", folder: null },
       { messageId: "t1@stats", action: "todo", where: "conversation", folder: null },
     ]);
+  });
+});
+
+describe("Opened on the Desk", () => {
+  it("logs one open per mail until the next decision, never as a decision, and refuses a mail the Desk does not list", async () => {
+    const rt = await deskWith([mail("o1@stats"), mail("o2@stats")]);
+    const open = async (key: string, at: number): Promise<Response> => handleDeskMail(post({ action: "opened", key }), db, rt, { now: () => at });
+    expect(await (await open("mail:o1@stats", NOW)).json()).toEqual({ ok: true, recorded: true });
+    expect(await (await open("mail:o1@stats", NOW + 1000)).json()).toEqual({ ok: true, recorded: false });
+    expect((await open("mail:gone@stats", NOW)).status).toBe(409);
+    expect(lastMailDecision(db, "o1@stats")).toBeNull();
+    logMailDecision(db, mailFeatures(db, mail("o1@stats")), "restore", "desk", NOW + 2000);
+    expect(await (await open("mail:o1@stats", NOW + 3000)).json()).toEqual({ ok: true, recorded: true });
+    expect(lastMailDecision(db, "o1@stats")?.action).toBe("restore");
+    expect(rows()).toEqual([
+      { messageId: "o1@stats", action: "opened", where: "desk", folder: null },
+      { messageId: "o1@stats", action: "restore", where: "desk", folder: null },
+      { messageId: "o1@stats", action: "opened", where: "desk", folder: null },
+    ]);
+  });
+
+  it("lets the client log see a Desk move behind a later open", async () => {
+    logMailDecision(db, mailFeatures(db, mail("moved")), "archive", "desk", NOW - 2000, "Archive");
+    recordMailOpened(db, mail("moved"), NOW - 1000);
+    const r = queue([]);
+    await recordClientDecisions(reading([mail("moved")]), reading([]), { db, config: { move: MOVE, timeoutSeconds: 20 }, ledger: new HandledLedger(), run: r.run, now: () => NOW, retentionDays: 180 });
+    expect(r.calls).toEqual([]);
   });
 });

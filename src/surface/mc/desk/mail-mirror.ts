@@ -53,6 +53,9 @@ export interface MailMirrorTime {
   mails: number;
   totalMs: number;
   medianMs: number;
+  capped: number;
+  untimed: number;
+  capMs: number;
 }
 
 export interface MailMirror {
@@ -183,19 +186,31 @@ function median(values: number[]): number {
   return sorted.length % 2 === 1 ? at(mid) : (at(mid - 1) + at(mid)) / 2;
 }
 
-function openToAct(entries: readonly MailLogEntry[]): MailMirrorTime | null {
+const ON_THE_DESK = new Set<MailLogWhere>(["desk", "conversation"]);
+
+function openToDecision(entries: readonly MailLogEntry[], capMs: number): MailMirrorTime | null {
   const byMail = new Map<string, MailLogEntry[]>();
   for (const e of entries) byMail.set(e.messageId, [...(byMail.get(e.messageId) ?? []), e]);
   const spans: number[] = [];
+  let opens = 0;
   for (const rows of byMail.values()) {
     const ordered = [...rows].sort((a, b) => a.at - b.at || a.id - b.id);
-    const opened = ordered.find((e) => e.action === "opened");
+    const opened = ordered.find((e) => e.action === "opened" && e.where === "desk");
     if (!opened) continue;
-    const acted = ordered.find((e) => e.at >= opened.at && e.id !== opened.id && e.action !== "opened" && PRINCIPAL_ACTED_WHERE.has(e.where));
+    opens += 1;
+    const acted = ordered.find((e) => e.at >= opened.at && e.id !== opened.id && e.action !== "opened" && ON_THE_DESK.has(e.where));
     if (acted) spans.push(acted.at - opened.at);
   }
-  if (spans.length === 0) return null;
-  return { mails: spans.length, totalMs: spans.reduce((sum, s) => sum + s, 0), medianMs: median(spans) };
+  if (opens === 0) return null;
+  const counted = spans.map((s) => Math.min(s, capMs));
+  return {
+    mails: spans.length,
+    totalMs: counted.reduce((sum, s) => sum + s, 0),
+    medianMs: counted.length > 0 ? median(counted) : 0,
+    capped: spans.filter((s) => s > capMs).length,
+    untimed: opens - spans.length,
+    capMs,
+  };
 }
 
 /** The weekly mirror's mail section, from the decision log and rule runs of one week. Pure. */
@@ -214,7 +229,7 @@ export function mailMirror(input: MailMirrorInput): MailMirror {
     rules,
     checkRules: rules.filter((r) => r.check),
     archivedUnread: archivedUnread({ ...input, entries: decided }, config),
-    time: openToAct(entries),
+    time: openToDecision(entries, config.openCapMinutes * 60_000),
     config,
   };
 }
