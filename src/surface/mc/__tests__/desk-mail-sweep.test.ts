@@ -38,8 +38,9 @@ function moveDeps(results: (WriterResult | Error)[] = []) {
 }
 
 const REPORTS = ["r1", "r2", "r3"].map((id) => mail(id, "stats@otrs.example", { headers: { listId: "<stats.otrs.example>" } }));
-const group = (members: SourceMail[]): SweepGroup => ({ id: "bundle:archive:x", kind: "bundle", basis: "list", target: "archive", label: "same mailing list", title: "3 mails from the stats list: archive all?", why: "", area: null, members: members.map(member) });
+const group = (members: SourceMail[]): SweepGroup => ({ id: "bundle:archive:x", kind: "bundle", basis: "list", target: "archive", label: "same mailing list", title: "3 mails from the stats list: archive all?", about: "from the stats list", why: "", area: null, members: members.map(member) });
 const doneRows = () => db.query<{ attempt_key: string; action: string; status: string; message: string }, []>("SELECT attempt_key, action, status, message FROM desk_done ORDER BY created_at, attempt_key").all();
+const doneTitle = (): string | undefined => db.query<{ title: string }, []>("SELECT title FROM desk_done WHERE action LIKE 'mail.sweep%'").get()?.title;
 const movedIds = (calls: { stdin: unknown }[]) => calls.map((c) => (c.stdin as { messageId: string }).messageId);
 
 describe("sweep builder", () => {
@@ -102,6 +103,26 @@ describe("sweep executor", () => {
     expect(movedIds(q.calls)).toEqual(["r1", "r3"]);
     expect(r).toMatchObject({ ok: true, moved: 2, skipped: 1 });
     expect(deps.ledger.has("moved:archive:r2")).toBe(false);
+    expect(doneTitle()).toBe("Archived 2 mails from the stats list");
+  });
+
+  it("titles a partial sweep with the count it moved, not the count the card showed", async () => {
+    const builds = ["b1", "b2", "b3", "b4", "b5"].map((id) => mail(id, "bot@builds.example", { from: { name: "Nightly Build Bot", address: "bot@builds.example" }, headers: { listId: "<builds.example>" } }));
+    const [sweep] = buildSweeps(input(builds, Object.fromEntries(builds.map((b) => [b.id, { category: "bulk" as const, reason: "A build report." }]))));
+    expect(sweep).toMatchObject({ kind: "sweep", title: "5 unread mails from the Nightly Build Bot list" });
+    if (!sweep) throw new Error("no sweep");
+    const { deps } = moveDeps(["b1", "b2", "b4", "b5"].map(moved));
+    const r = await runSweep(sweep, ["mail:b1", "mail:b2", "mail:b4", "mail:b5"], deps);
+    expect(r).toMatchObject({ ok: true, moved: 4, message: "Archived 4 mails." });
+    expect(doneTitle()).toBe("Archived 4 mails from the Nightly Build Bot list");
+    expect(db.query<{ title: string }, []>("SELECT title FROM desk_mail_sweeps").get()?.title).toBe("Archived 4 mails from the Nightly Build Bot list");
+  });
+
+  it("refuses a sweep when none of the confirmed mails is still in the group, and writes no Done line", async () => {
+    const { q, deps } = moveDeps();
+    expect(await runSweep(group(REPORTS), ["mail:gone"], deps)).toEqual({ ok: false, status: 409, error: "None of these mails is in this group any more. Look at it again." });
+    expect(q.calls).toHaveLength(0);
+    expect(doneTitle()).toBeUndefined();
   });
 
   it("lists the mails that did not move when one move fails", async () => {

@@ -308,7 +308,7 @@ describe("Balance through the real My day owner", () => {
   const between = (html: string, from: string, to: string): string => html.slice(html.indexOf(from), html.indexOf(to, html.indexOf(from)));
   test("the Day page shows the selected task's full Balance details in its main column, once", async () => {
     const day = { ...(await selectFirst()), sources: [{ taskId: "first", key: "mail:probe", fingerprint: "probe", kind: "mail", url: "message://%3Cprobe%40example.org%3E" }] };
-    const html = renderToStaticMarkup(createElement(DeskTimeFirst, { day, now: NOW, before: null, after: null, proposal: null, sweeps: null, preview: null, ambient: null, areas: desk.areas, onChanged: () => undefined, onThread: () => undefined, onConversation: () => undefined }));
+    const html = renderToStaticMarkup(createElement(DeskTimeFirst, { day, now: NOW, before: null, after: null, proposal: null, preview: null, ambient: null, areas: desk.areas, onChanged: () => undefined, onThread: () => undefined, onConversation: () => undefined }));
     const main = between(html, "class=\"tf-current\"", "class=\"tf-contract\"");
     for (const part of ["<h2>first</h2>", "Work / project", "Bring the signed form", "value=\"2026-11-05\"", "aria-label=\"Balance estimate minutes\"", "<a href=\"message://%3Cprobe%40example.org%3E\">Open in Mail</a>", "+ Add subtask", "Move…", "Mark complete", "Save changes", ">Done</button>", ">Not today</button>", ">Use recommendation</button>", ">Choose another</a>"]) expect(main).toContain(part);
     expect(main.split("aria-label=\"Balance notes\"")).toHaveLength(2);

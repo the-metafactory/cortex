@@ -194,7 +194,7 @@ describe("the digest on the Desk", () => {
     const after = await view();
     expect(after.mailDigests).toEqual([]);
     const line = after.autonomy.done.find((d) => d.action === "mail.sweep");
-    expect(line?.title).toBe("Archived 3 mails: 3 newsletters from Monday 2 November");
+    expect(line?.title).toBe("Archived 3 mails from the newsletter digest of Monday 2 November");
     const undo = await handleDeskMail(post({ action: "sweep.undo", sweep: "dg-1" }), db, rt, { run: q.run, now: () => NOW });
     expect(await undo.json()).toMatchObject({ ok: true, message: "Moved 3 mails back to INBOX." });
   });
