@@ -365,14 +365,19 @@ export class ConversationHost {
 
   private async searchHit(id: string, listed: Stored, terms: string[]): Promise<false | { lines: ExchangeLine[]; best: ExchangeLine | null; matches: (title: string) => boolean }> {
     const lines = await this.transcript(id, listed);
-    const text = lines.map(line => line.text).join("\n");
+    const lowered = lines.map(line => line.text.toLowerCase());
+    const text = lowered.join("\n");
     const matches = (title: string): boolean => {
-      const haystack = `${title}\n${text}`.toLowerCase();
-      return terms.every(term => haystack.includes(term));
+      const head = title.toLowerCase();
+      return terms.every(term => head.includes(term) || text.includes(term));
     };
     if (!matches(listed.title) && !(listed.titleFromSource && matches(UNAVAILABLE_TITLE))) return false;
-    const hits = (line: ExchangeLine): number => terms.filter(term => line.text.toLowerCase().includes(term)).length;
-    const best = lines.reduce<ExchangeLine | null>((top, line) => hits(line) > (top ? hits(top) : 0) ? line : top, null);
+    let best: ExchangeLine | null = null;
+    let score = 0;
+    lowered.forEach((line, i) => {
+      const hits = terms.filter(term => line.includes(term)).length;
+      if (hits > score) { score = hits; best = lines[i] ?? null; }
+    });
     return { lines, best, matches };
   }
 
