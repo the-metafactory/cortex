@@ -289,11 +289,11 @@ describe("card", () => {
     expect(item?.actions.map((a) => a.id)).toEqual(["invite.accept", "invite.decline", "invite.propose"]);
   });
 
-  test("a read mail whose invitation was answered on the Desk leaves the Desk; an unread one, a failed answer and plain read mail stay", () => {
+  test("a read mail whose answer was sent on the Desk leaves the Desk; an unread one, an uncertain or failed answer and plain read mail stay", () => {
     const decided = (status: InvitationDecision["status"]): InvitationDecision => ({ reply: "decline", status, at: NOW - 60_000, fallsAway: null, result: null, calendar: null });
     const list = [mail({ id: "read-sent", unread: false }), mail({ id: "read-uncertain", unread: false }), mail({ id: "read-failed", unread: false }), mail({ id: "unread-sent" }), mail({ id: "read-plain", unread: false, invitation: undefined })];
     const answers = new Map([["read-sent", decided("sent")], ["read-uncertain", decided("uncertain")], ["read-failed", decided("failed")], ["unread-sent", decided("sent")], ["read-plain", decided("sent")]]);
-    expect(withoutAnsweredRead(list, answers).map((m) => m.id)).toEqual(["read-failed", "unread-sent", "read-plain"]);
+    expect(withoutAnsweredRead(list, answers).map((m) => m.id)).toEqual(["read-uncertain", "read-failed", "unread-sent", "read-plain"]);
   });
 
   test("an answered invitation offers no answer again and says what fell away", () => {
