@@ -10,7 +10,7 @@ export const DESK_MAIL_RULES_PATH = "/api/desk/mail/rules";
 export const DESK_DMARC_PATH = "/api/desk/mail/dmarc";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
-export type Outcome = { ok: boolean; text: string; recorded?: boolean; correction?: number; uncertain?: boolean; undo?: string; undoKind?: "move" | "snooze"; block?: string; restored?: string; rule?: MailRuleView };
+export type Outcome = { ok: boolean; text: string; recorded?: boolean; correction?: number; uncertain?: boolean; undo?: string; undoKind?: "move" | "snooze" | "trust"; block?: string; restored?: string; rule?: MailRuleView };
 
 const isRuleView = (v: unknown): v is MailRuleView => typeof v === "object" && v !== null && "id" in v && typeof v.id === "string" && "sentence" in v && typeof v.sentence === "string";
 
@@ -60,6 +60,9 @@ export type MailActionBody =
   | { action: "ivy.hand"; key: string; requestId: string; instruction?: string }
   | { action: "snooze"; key: string; until: import("../../desk/mail-snooze-schema").SnoozeChoice }
   | { action: "snooze.cancel"; key: string }
+  | { action: "not-phishing"; key: string }
+  | { action: "not-phishing.undo"; trust: string }
+  | { action: "not-phishing.remove"; sender: string }
   | { action: "ivy.approve" | "ivy.discard" | "ivy.retry"; key: string }
   | { action: "invite.reply"; key: string; reply: import("../../desk/mail-invitation-schema").InviteReply; requestId: string; commitment: import("../../desk/mail-yes-filter").Commitment | null; confirmed: boolean };
 

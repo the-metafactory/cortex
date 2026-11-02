@@ -12,7 +12,7 @@ import { eventKey, UNIMPORTANT_REASON, upcomingMeetings, type ClassifierEvent, t
 import type { AreaPolicy, DeskAction, DeskArea, DeskFoldedGroup, DeskItem, DeskItemKind } from "./types";
 import { evidenceView, replySubject, suggestionLine, type EvidenceLinks } from "./mail-triage";
 import { ACTION_LABEL, precedentLine } from "./mail-similar";
-import { suspicionLine, suspicionOf, type SuspicionContext } from "./mail-suspicion";
+import { suspicionLine, suspicionOf, waivedSuspicion, type SuspicionContext } from "./mail-suspicion";
 import type { UnsubscribeOffer } from "./mail-unsubscribe";
 import { decisionSentence, type InvitationView } from "./mail-invitation";
 
@@ -392,6 +392,7 @@ const ARCHIVE = action("mail.archive", "Archive", "secondary", true);
 const SPAM = action("mail.spam", "Spam", "secondary", true);
 const UNIMPORTANT = action("mail.unimportant", "Unimportant", "secondary", true);
 const REPORT = action("mail.report", "Report", "secondary", true);
+const NOT_PHISHING = action("mail.trust", "Not phishing", "secondary", true);
 const TO_STUDIO = action("mail.studio", "Add to thread", "secondary", true);
 const TO_IVY = action("mail.ivy", "Hand to Ivy", "secondary", true);
 const SNOOZE = action("mail.snooze", "Snooze", "secondary", true);
@@ -438,8 +439,10 @@ export function mailItems(input: MailInput): DeskItem[] {
   const suspicion = input.suspicion ?? { vips, vipNames: new Map<string, string>(), ownDomains: [] };
   return mail.map((m): DeskItem => {
     const sender = m.from.name ?? m.from.address;
-    const reasons = suspicionOf(m, suspicion, classified?.get(m.id)?.suspicious === true);
+    const classifierSaid = classified?.get(m.id)?.suspicious === true;
+    const reasons = suspicionOf(m, suspicion, classifierSaid);
     if (reasons.length > 0) return suspiciousItem(m, reasons, input, { spam, report });
+    const waived = waivedSuspicion(m, suspicion, classifierSaid);
     const vip = isVip(vips, m.from.address);
     const unsubscribe = vip ? undefined : input.unsubscribe?.get(m.id);
     const marked = isUnimportant(unimportant, vips, m.from.address);
@@ -478,6 +481,7 @@ export function mailItems(input: MailInput): DeskItem[] {
     if (invite) history.push(`Invitation: "${invite.summary}", ${invite.when}${invite.location ? `, ${invite.location}` : ""}, from ${invite.organizer}${invite.recurring ? "; it repeats" : ""}.`);
     if (invite?.decision) history.push(decisionSentence(invite.decision, ago(now, invite.decision.at)));
     const soon = invite !== undefined && !invite.decision && Date.parse(invite.start) - now < INVITE_SOON_MS;
+    if (waived.length > 0) history.push(`The Desk would flag it (${waived.map((r) => r.text.replace(/\.$/, "")).join("; ")}), but you said mail like this from ${m.from.address} is not phishing.`);
     if (verdict.sorted) history.push(`The mail classifier sorted it as ${verdict.sorted}.`);
     if (triage && (!triage.commitment || triage.commitment === "unknown")) history.push("Whether this mail asks for a new commitment has not been established.");
     if (triage?.precedents?.note) history.push(`Similar past mail was ${triage.precedents.note}.`);
@@ -523,7 +527,7 @@ function suspiciousItem(m: MailInput["mail"][number], reasons: ReturnType<typeof
   const spam: DeskAction[] = can.spam ? [{ ...SPAM, role: "primary" }] : [];
   const report: DeskAction[] = can.report ? [REPORT] : [];
   const open: DeskAction[] = m.url ? [{ ...action("open", "Open in Mail", spam.length > 0 ? "secondary" : "primary", true), url: m.url }] : [];
-  const offered = [...spam, ...report, ...open, LOOK, SNOOZE];
+  const offered = [...spam, ...report, ...open, LOOK, NOT_PHISHING, SNOOZE];
   return {
     key: `mail:${m.id}`,
     sourceRevision: m.receivedAt,

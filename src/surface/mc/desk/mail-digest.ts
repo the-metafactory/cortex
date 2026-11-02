@@ -94,7 +94,7 @@ export function buildDigests(input: DigestInput): Digests {
   for (const m of input.mail) {
     if (!m.unread || input.kept.has(m.id) || isVip(input.suspicion.vips, m.from.address)) continue;
     const c = input.classified.get(m.id);
-    if (c?.suspicious === true || suspicionOf(m, input.suspicion).length > 0) continue;
+    if (suspicionOf(m, input.suspicion, c?.suspicious === true).length > 0) continue;
     if (!isNewsletter(m, c, input.ruleHeld.has(m.id))) continue;
     const received = Date.parse(m.receivedAt);
     if (Number.isNaN(received)) continue;

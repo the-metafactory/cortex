@@ -357,6 +357,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     onChanged();
   };
 
+  const undoTrust = async (id: string): Promise<void> => {
+    setReceipt(null);
+    const result = await submitMailAction({ action: "not-phishing.undo", trust: id });
+    setNote(result.text);
+    if (result.ok) onChanged();
+  };
+
   const undoRuleRun = async (id: string): Promise<void> => {
     const result = await submitMailRule({ op: "undo", run: id });
     setNote(result.text);
@@ -409,7 +416,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     setSweep(s);
   };
 
-  const undoBy: Record<string, (id: string) => Promise<void>> = { "mail.move": undoMove, "mail.rule": undoRuleRun, "mail.sweep": undoSweep };
+  const undoBy: Record<string, (id: string) => Promise<void>> = { "mail.move": undoMove, "mail.rule": undoRuleRun, "mail.sweep": undoSweep, "mail.trust": undoTrust };
   const undoDone = (id: string, action?: string): void => void (undoBy[action ?? ""] ?? undoCapture)(id);
 
   const blockDomain = async (r: Receipt): Promise<void> => {
@@ -452,6 +459,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "ivy.discard") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "ivy.discard", key: handoffKeyFor(item, a.target) }) }));
     else if (a.id === "ivy.approve" || a.id === "ivy.retry") { const action = a.id; void send(item, a, { request: () => submitMailAction({ action, key: handoffKeyFor(item, a.target) }), keepVisible: action === "ivy.retry" && item.kind === "mail" }); }
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
+    else if (a.id === "mail.trust") confirmFirst(item, a, () => void send(item, a, { request: async () => { const r = await submitMailAction({ action: "not-phishing", key: item.key }); return r.ok && r.undo ? { ...r, undoKind: "trust" } : r; }, keepVisible: true }));
     else if (a.id === "mail.report") void send(item, a, { request: () => submitMailAction({ action: "report", key: item.key }), keepVisible: true });
     else if (a.id === "mail.unsubscribe") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "unsubscribe", key: item.key }), keepVisible: true }));
     else if (a.id === "mail.unsubscribe.page" && a.url) { const url = a.url; confirmFirst(item, a, () => openDeskLink(url)); }
@@ -578,6 +586,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     setSnoozed((s) => { const next = new Set(s); next.delete(key); return next; });
     onChanged();
   };
+
+  const undoByKind: Record<NonNullable<Receipt["undoKind"]>, (id: string) => Promise<void>> = { move: undoMove, snooze: unsnooze, trust: undoTrust };
 
   const openHandoff = (item: DeskItem): void => {
     setDetail(item);
@@ -1006,7 +1016,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         )}
       </aside>
 
-      {note ? <div className="desk-note" role="status">{note}</div> : receipt && <MailReceipt receipt={receipt} onUndo={() => void (receipt.undoKind === "snooze" ? unsnooze(receipt.undo) : undoMove(receipt.undo))} onBlock={() => void blockDomain(receipt)} />}
+      {note ? <div className="desk-note" role="status">{note}</div> : receipt && <MailReceipt receipt={receipt} onUndo={() => void undoByKind[receipt.undoKind ?? "move"](receipt.undo)} onBlock={() => void blockDomain(receipt)} />}
     </div>
   );
 }
@@ -1298,7 +1308,7 @@ export function RankingSection({ corrections, onUndo }: { corrections: DeskCorre
 interface Receipt {
   text: string;
   undo: string;
-  undoKind?: "move" | "snooze";
+  undoKind?: "move" | "snooze" | "trust";
   block?: string;
   confirmBlock?: boolean;
 }
@@ -1325,9 +1335,9 @@ const CHECK_POLL_MS = 3000;
 
 const isWaitingAction = (id: string): id is `waiting.${WaitingOp}` => WAITING_OPS.some((op) => id === `waiting.${op}`);
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "invite.accept": "Sending…", "invite.decline": "Sending…", "invite.propose": "Reading calendars…", "mail.report": "Reporting…", "mail.studio": "Adding…", "mail.ivy": "Handing over…", "ivy.approve": "Saving draft…", "ivy.discard": "Discarding…", "ivy.retry": "Asking again…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "mail.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "invite.accept": "Sending…", "invite.decline": "Sending…", "invite.propose": "Reading calendars…", "mail.report": "Reporting…", "mail.trust": "Saving…", "mail.studio": "Adding…", "mail.ivy": "Handing over…", "ivy.approve": "Saving draft…", "ivy.discard": "Discarding…", "ivy.retry": "Asking again…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "mail.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
 
-const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
+const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trust": "Yes, it is not phishing", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
 const CONFIRM_TARGET: Record<string, (target: string) => string> = { "mail.unsubscribe": (host) => `Yes, unsubscribe via ${host}`, "mail.unsubscribe.page": (host) => `Yes, open ${host}` };
 
 const confirmLabel = (a: DeskAction): string | undefined => CONFIRM_LABEL[a.id] ?? (a.target ? CONFIRM_TARGET[a.id]?.(a.target) : undefined);

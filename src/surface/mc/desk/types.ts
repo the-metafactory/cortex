@@ -152,6 +152,7 @@ export interface DeskView {
   calendarAvailability?: CalendarAvailability;
   routines?: RoutineView;
   mailRules?: import("./mail-rules").MailRuleView[];
+  mailTrusted?: import("./mail-trust").TrustedView[];
   mailSweeps?: import("./mail-sweep").MailSweepView[];
   mailDigests?: import("./mail-digest").MailDigestView[];
   dmarc?: import("./mail-dmarc").DmarcWeek;

@@ -26,3 +26,5 @@ export const MOVE_DESK: DeskOptions = mailDesk({ move: ["/opt/adapters/bin/desk-
 
 export const composeWith = (db: Database, options: DeskOptions, rt: DeskRuntime, now: number) =>
   composeDesk(db, options, undefined, { now, handled: rt.ledger, ...(rt.sourceCache ? { sourceCache: rt.sourceCache } : {}) });
+
+export const mailPost = (body: unknown): Request => new Request("http://localhost/api/desk/mail", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });

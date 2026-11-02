@@ -75,7 +75,7 @@ const groupKey = (m: SweepMember): { basis: "list" | "sender"; key: string } =>
 function eligible(input: SweepInput): SweepMember[] {
   const vips = input.suspicion.vips;
   return input.mail
-    .filter((m) => m.unread && !input.exclude?.has(m.id) && !isVip(vips, m.from.address) && input.classified.get(m.id)?.suspicious !== true && suspicionOf(m, input.suspicion).length === 0)
+    .filter((m) => m.unread && !input.exclude?.has(m.id) && !isVip(vips, m.from.address) && suspicionOf(m, input.suspicion, input.classified.get(m.id)?.suspicious === true).length === 0)
     .sort(byAge);
 }
 

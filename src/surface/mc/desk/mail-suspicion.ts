@@ -15,9 +15,25 @@ export interface SuspicionContext {
   vips: ReadonlySet<string>;
   vipNames: ReadonlyMap<string, string>;
   ownDomains: readonly string[];
+  dismissed?: Dismissals;
 }
 
-export type SuspectMail = Pick<SourceMail, "from" | "headers" | "links">;
+export type Dismissals = ReadonlyMap<string, ReadonlySet<string>>;
+
+export type SuspectMail = Pick<SourceMail, "from" | "headers" | "links"> & { id?: string };
+
+export const SENDER_WIDE_CODES: ReadonlySet<SuspicionCode> = new Set<SuspicionCode>(["reply-to", "display-name", "link"]);
+
+export const dismissalKey = (code: SuspicionCode, messageId: string): string => (SENDER_WIDE_CODES.has(code) ? code : `${code} ${messageId}`);
+
+export const senderKey = (address: string): string => address.trim().toLowerCase();
+
+const isDismissed = (mail: SuspectMail, ctx: SuspicionContext, code: SuspicionCode): boolean => {
+  const keys = ctx.dismissed?.get(senderKey(mail.from.address));
+  if (!keys) return false;
+  if (SENDER_WIDE_CODES.has(code)) return keys.has(code);
+  return mail.id !== undefined && keys.has(dismissalKey(code, mail.id));
+};
 
 const SECOND_LEVEL = new Set(["co", "com", "net", "org", "gov", "ac", "edu", "ne", "or", "go", "gv", "ltd", "plc"]);
 const HOST_IN_TEXT = /(?:^|[^a-z0-9@.-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})(?![a-z0-9-])/;
@@ -141,8 +157,20 @@ function linkReasons(mail: SuspectMail): SuspicionReason[] {
  * Why a mail looks like phishing, in plain words; empty when nothing does. Deterministic over the headers, sender and
  * links the source reported. Verdicts come from an untrusted Authentication-Results header: a failing verdict always
  * counts, and a "pass" only excuses a missing DKIM signature; it never clears a finding from the sender, Reply-To or links.
+ * The principal's "Not phishing" waives reasons: Reply-To, display-name and link reasons for that exact sender address,
+ * authentication and classifier reasons only for the one mail dismissed. One reason not waived brings back every reason.
  */
 export function suspicionOf(mail: SuspectMail, ctx: SuspicionContext, classifierSuspicious = false): SuspicionReason[] {
+  const reasons = everyReason(mail, ctx, classifierSuspicious);
+  return reasons.some((r) => !isDismissed(mail, ctx, r.code)) ? reasons : [];
+}
+
+export function waivedSuspicion(mail: SuspectMail, ctx: SuspicionContext, classifierSuspicious = false): SuspicionReason[] {
+  const reasons = everyReason(mail, ctx, classifierSuspicious);
+  return reasons.length > 0 && reasons.every((r) => isDismissed(mail, ctx, r.code)) ? reasons : [];
+}
+
+function everyReason(mail: SuspectMail, ctx: SuspicionContext, classifierSuspicious: boolean): SuspicionReason[] {
   return [
     ...authReasons(mail),
     ...replyToReason(mail),
@@ -152,7 +180,7 @@ export function suspicionOf(mail: SuspectMail, ctx: SuspicionContext, classifier
   ];
 }
 
-export const isSuspicious = (mail: SuspectMail, ctx: SuspicionContext): boolean => suspicionOf(mail, ctx).length > 0;
+export const isSuspicious = (mail: SuspectMail, ctx: SuspicionContext, classifierSuspicious = false): boolean => suspicionOf(mail, ctx, classifierSuspicious).length > 0;
 
 const MIN_VIP_NAME = 5;
 
@@ -164,7 +192,17 @@ export function suspicionContext(db: Database, ownDomains: readonly string[] = [
     const key = v.label ? nameKey(v.label) : "";
     if (v.label && key.replace(/\s/g, "").length >= MIN_VIP_NAME) vipNames.set(key, v.label);
   }
-  return { vips: new Set(vips.map((v) => v.address)), vipNames, ownDomains: ownDomains.map((d) => d.toLowerCase()) };
+  return { vips: new Set(vips.map((v) => v.address)), vipNames, ownDomains: ownDomains.map((d) => d.toLowerCase()), dismissed: readDismissals(db) };
+}
+
+function readDismissals(db: Database): Dismissals {
+  const out = new Map<string, Set<string>>();
+  for (const r of db.query<{ sender: string; code: SuspicionCode; message_id: string }, []>("SELECT sender, code, message_id FROM desk_mail_trusted").all()) {
+    const keys = out.get(r.sender) ?? new Set<string>();
+    keys.add(dismissalKey(r.code, r.message_id));
+    out.set(r.sender, keys);
+  }
+  return out;
 }
 
 export const suspicionLine = (reasons: readonly SuspicionReason[]): string =>
