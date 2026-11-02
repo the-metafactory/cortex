@@ -12,26 +12,29 @@ export interface DeskWriterDeps {
   now?: () => number;
 }
 
-export type DeskWriterKind = Extract<WriterKind, "calendar" | "reminder" | "goal">;
+export type DeskWriterKind = Extract<WriterKind, "calendar" | "reminder" | "goal" | "note">;
 
 export interface DeskWriterSpec<K extends DeskWriterKind> {
   kind: K;
   objects: string;
-  destination?: { flag: string; field: string; noun: string; fallback: string };
+  destination?: { flag: string; field: string; noun: string; fallback: string; verb?: string };
   fields: (request: CreateRequest) => AskFields[K] | string;
-  afterRefusal?: (request: CreateRequest) => Promise<ReadbackResult>;
+  afterRefusal?: (request: CreateRequest, error: string) => Promise<ReadbackResult>;
   readback?: OwnerReadback;
 }
 
 const NOTHING = "Nothing was created.";
 const sentence = (text: string): string => `${text.trim().replace(/[.\s]+$/, "")}.`;
-const failed = (text: string): CreateResult => ({ state: "failed", error: `${sentence(text)} ${NOTHING}` });
+const failed = (text: string): CreateResult => ({ state: "failed", error: `${sentence(text.replace(/[;,]\s*nothing was created[.\s]*$/i, ""))} ${NOTHING}` });
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})?$/;
 
 export const deskWriterArgv = (desk: DeskOptions | undefined, kind: DeskWriterKind): string[] | undefined => {
   const argv = desk?.enabled ? desk.ask?.writers[kind] : undefined;
   return argv?.length ? argv : undefined;
 };
+
+export const deskWriterOwner = (desk: DeskOptions | undefined, kind: DeskWriterKind): string | undefined =>
+  deskWriterArgv(desk, kind) ? desk?.ask?.writerOwners?.[kind] : undefined;
 
 function argvOption(argv: readonly string[], flag: string): string | undefined {
   const at = argv.indexOf(flag);
@@ -50,10 +53,10 @@ export function deskConversationWriter<K extends DeskWriterKind>(spec: DeskWrite
     const argv = deskWriterArgv(desk, spec.kind);
     if (!desk || !argv) return failed(`${spec.objects} are not set up on this stack`);
     if (spec.destination) {
-      const { flag, field, noun, fallback } = spec.destination;
+      const { flag, field, noun, fallback, verb = "saves" } = spec.destination;
       const destination = argvOption(argv, flag);
       const asked = request.fields[field] ?? "";
-      if (asked && asked !== destination) return failed(`This stack saves ${noun} only to ${destination ?? fallback}`);
+      if (asked && asked !== destination) return failed(`This stack ${verb} ${noun} only to ${destination ?? fallback}`);
     }
     const fields = spec.fields(request);
     if (typeof fields === "string") return failed(fields);
@@ -63,7 +66,7 @@ export function deskConversationWriter<K extends DeskWriterKind>(spec: DeskWrite
     const saved = await createFromCard(card, { requestId: studioRequestId(request.operationId), writers: { [spec.kind]: argv }, run: deps.run ?? spawnWithStdin, db: deps.db, now: (deps.now ?? Date.now)(), timeoutMs: (desk.ask?.timeoutSeconds ?? 30) * 1000 });
     if (saved.ok) return { state: "created", canonicalId: saved.id };
     if (saved.uncertain) throw new Error(saved.error);
-    const found = spec.afterRefusal ? await spec.afterRefusal(request) : { found: false as const };
+    const found = spec.afterRefusal ? await spec.afterRefusal(request, saved.error) : { found: false as const };
     if (!found) throw new Error(`${sentence(saved.error)} Whether the ${writerName} created anything could not be checked.`);
     return found.found ? { state: "created", canonicalId: found.canonicalId } : failed(saved.error);
   };
