@@ -24,7 +24,7 @@ export function DestinationPicker({ label, value, options, onChange, disabled = 
   const show = (): void => { setOpen(true); setQuery(""); setActive(0); };
   return <div className="desk-destination" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) { setOpen(false); setQuery(""); } }}>
     <label htmlFor={id}>{label}</label>
-    <input id={id} role="combobox" aria-autocomplete="list" aria-expanded={open && !disabled} aria-controls={`${id}-list`} aria-activedescendant={open && !disabled && filtered[index] ? `${id}-option-${index}` : undefined} aria-invalid={Boolean(value && !selected)} disabled={disabled} value={open ? query : selected?.label ?? (value ? "Destination unavailable — choose again" : "")} placeholder={placeholder} onFocus={show} onClick={() => { if (!open) show(); }} onChange={event => { setQuery(event.target.value); setActive(0); setOpen(true); }} onKeyDown={event => {
+    <input id={id} role="combobox" aria-autocomplete="list" aria-expanded={open && !disabled} aria-controls={`${id}-list`} aria-activedescendant={open && !disabled && filtered[index] ? `${id}-option-${index}` : undefined} aria-invalid={Boolean(value && !selected)} disabled={disabled} value={open ? query : selected?.label ?? (value ? disabled ? "Saved destination unavailable" : "Destination unavailable — choose again" : "")} placeholder={placeholder} onFocus={show} onClick={() => { if (!open) show(); }} onChange={event => { setQuery(event.target.value); setActive(0); setOpen(true); }} onKeyDown={event => {
       if (!open && !event.ctrlKey && !event.metaKey && !event.altKey && !event.nativeEvent.isComposing && (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete")) {
         event.preventDefault(); setOpen(true); setQuery(event.key.length === 1 ? event.key : ""); setActive(0);
       } else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); setQuery(""); }
@@ -38,6 +38,6 @@ export function DestinationPicker({ label, value, options, onChange, disabled = 
       {filtered.map((option, i) => <li key={option.id} id={`${id}-option-${i}`} role="option" aria-selected={value === option.id} className={i === index ? "active" : ""} onMouseDown={event => { event.preventDefault(); }} onMouseMove={() => { setActive(i); }} onClick={() => { choose(option); }}>{option.label}</li>)}
     </ul>{filtered.length === 0 && <p role="status">{options.length ? "No matching destinations." : empty}</p>}</div>}
     {!open && options.length === 0 && <p role="status">{empty}</p>}
-    {value && !selected && <p role="alert">This destination is no longer available. Choose another before confirming.</p>}
+    {value && !selected && <p role={disabled ? "status" : "alert"}>{disabled ? "This saved destination is no longer listed. The saved proposal is kept." : "This destination is no longer available. Choose another before confirming."}</p>}
   </div>;
 }

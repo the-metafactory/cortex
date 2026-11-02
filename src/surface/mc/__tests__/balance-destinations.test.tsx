@@ -24,3 +24,9 @@ test("missing selected ids are explicit invalid destinations rather than a silen
   expect(html).toContain("no longer available");
   expect(html).not.toContain('value="Other"');
 });
+
+test("immutable historical selections retain neutral unavailable feedback", () => {
+  const html = renderToStaticMarkup(<DestinationPicker label="Saved location" value="deleted" options={[]} disabled onChange={() => undefined} />);
+  expect(html).toContain("saved proposal is kept");
+  expect(html).not.toContain("Choose another before confirming");
+});
