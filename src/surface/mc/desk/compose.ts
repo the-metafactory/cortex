@@ -25,6 +25,8 @@ import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
 import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifier, type WaitingConfig } from "./mail-waiting";
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
+import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
+import type { PiSettings } from "../../../conversations/pi";
 import { digestTopics, digestView, listMailGroups, readDigestFlags, type DigestConfig, type DigestFlagger } from "./mail-digest";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
@@ -64,6 +66,7 @@ export interface DeskRuntime {
   dmarc?: DmarcLoop;
   digestFlagger?: DigestFlagger;
   waitingClassifier?: WaitingClassifier;
+  mailHandoff?: MailHandoffWorker;
 }
 
 export interface DeskAskOptions {
@@ -103,6 +106,7 @@ export interface DeskOptions {
   mailUnsubscribe?: UnsubscribeConfig;
   mailMirror?: MailMirrorConfig;
   mailWaiting?: WaitingConfig;
+  mailHandoff?: { lanes: HandoffLanes; pi: PiSettings };
   mailOwnDomains?: string[];
   mailLinks?: EvidenceLinks;
   voice?: VoiceOptions;
@@ -129,6 +133,7 @@ export interface ComposeDeps {
   rulingExplain?: RulingExplainLoop;
   digestFlagger?: DigestFlagger;
   waitingClassifier?: WaitingClassifier;
+  mailHandoff?: MailHandoffWorker;
 }
 
 export const CORRECTIONS_UNREADABLE = "The Desk could not read your ranking corrections, so it ranks by its base rules alone.";
@@ -235,14 +240,19 @@ export async function composeDesk(
   recordWaitingOnce(db, readings, now, waitingConfig);
   if (deps.waitingClassifier) void deps.waitingClassifier.kick(db, readings, localSources, now, waitingConfig.maxPerPass);
   const waitingCards = waitingItems(db, now, { config: waitingConfig, draft: Boolean(desk.mailActions?.draft?.length), areaOf });
+  const handing = desk.mailHandoff && deps.mailHandoff ? deps.mailHandoff : undefined;
+  if (handing) void handing.kick(db);
+  const handoffRows = handing ? openHandoffs(db) : [];
+  const handoffOf = handoffsByMail(handoffRows);
   const corrected = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), unsubscribe }),
+    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), ivy: handoffReady(desk, handing), unsubscribe }).map((item) => withHandoff(item, handoffOf.get(mailIdOf(item.key)), now)),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
     ...ruleCards,
     ...dmarcCards,
     ...waitingCards,
+    ...handoffItems(handoffRows, new Set(mail.filter((m) => m.unread).map((m) => m.id)), now),
   ], rules, readDeliveries(db), now), activeCorrections);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
@@ -325,6 +335,12 @@ function goalActionsFor(goals: DeskGoalOptions | undefined, subjects: VigilSubje
 }
 
 const mailIdOf = (key: string): string => key.slice("mail:".length);
+
+/** "Hand to Ivy" needs the task writer and a task map to file on, the draft command for Approve, a model lane and the worker. */
+export function handoffReady(desk: DeskOptions, worker: MailHandoffWorker | undefined): boolean {
+  const lanes = desk.mailHandoff?.lanes;
+  return Boolean(worker && (lanes?.local ?? lanes?.cloud) && desk.ask?.writers.task?.length && desk.ask.taskMaps.length > 0 && desk.mailActions?.draft?.length);
+}
 
 function mirrorOffers(mails: readonly SourceMail[], offers: ReadonlyMap<string, UnsubscribeOffer>): Map<string, MailMirrorUnsubscribe> {
   const out = new Map<string, MailMirrorUnsubscribe>();

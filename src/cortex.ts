@@ -5018,6 +5018,14 @@ export async function startCortex(
           ...(config.mc.desk.mail.mirror ? { mailMirror: config.mc.desk.mail.mirror } : {}),
           ...(config.mc.desk.mail.digest ? { mailDigest: resolveDigest(config.mc.desk.mail.digest, expandTilde) } : {}),
           ...(config.mc.desk.mail.waiting ? { mailWaiting: resolveWaiting(config.mc.desk.mail.waiting, expandTilde) } : {}),
+          ...(config.mc.desk.conversations?.local || config.mc.desk.conversations?.cloud
+            ? {
+                mailHandoff: {
+                  lanes: { ...(config.mc.desk.conversations.local ? { local: config.mc.desk.conversations.local } : {}), ...(config.mc.desk.conversations.cloud ? { cloud: config.mc.desk.conversations.cloud } : {}) },
+                  pi: resolvePiSettings(config.mc.desk.conversations.pi, join(cortexStateDir(), "stacks", derivedStack.stack, "mail-handoff"), expandTilde),
+                },
+              }
+            : {}),
           mailOwnDomains: config.mc.desk.mail.suspicion?.ownDomains ?? config.mc.desk.mail.dmarc?.domains ?? [],
           ...(config.mc.desk.mail.links ? { mailLinks: config.mc.desk.mail.links } : {}),
           ...(config.mc.desk.ruling?.explainer

@@ -8,3 +8,4 @@
 .desk-reply label{display:block;min-width:0;max-width:100%}
 .desk-reply select{display:block;width:100%;max-width:100%;min-width:0;box-sizing:border-box;font:inherit;padding:8px;border:1px solid #d4d4d8;border-radius:8px;background:#fff}
 .desk-reply .desk-btn{max-width:100%;white-space:normal}
+.desk-findings{margin:4px 0 0;padding-left:18px}

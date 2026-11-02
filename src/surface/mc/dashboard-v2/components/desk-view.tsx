@@ -40,6 +40,7 @@ import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEven
 import type { MoveTarget } from "../../desk/mail-move";
 import type { MailCorrection } from "../../desk/mail-actions";
 import { MailStudioBox, newStudioPick, studioBody, withProposal, type StudioPick } from "./desk-mail-studio";
+import { HandoffStatus, handoffBody, handoffKeyFor, MailHandoffBox, newHandoffAsk, type HandoffAsk } from "./desk-mail-handoff";
 
 interface DeskViewProps {
   onOpenMissionControl: () => void;
@@ -98,6 +99,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [rulings, setRulings] = useState<ReadonlyMap<string, RulingDraft>>(() => new Map());
   const [replyDraft, setReplyDraft] = useState<ReplyDraft | null>(null);
   const [studioPick, setStudioPick] = useState<StudioPick | null>(null);
+  const [handoffAsk, setHandoffAsk] = useState<HandoffAsk | null>(null);
   const setRuling = (key: string, next: (d: RulingDraft | undefined) => RulingDraft | null): void =>
     setRulings((m) => {
       const draft = next(m.get(key));
@@ -402,6 +404,10 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.spam") confirmFirst(item, a, () => move(item, a, "junk"));
     else if (a.id === "mail.draft" && item.reply) openReply(item);
     else if (a.id === "mail.studio") openStudioPick(item);
+    else if (a.id === "mail.ivy") openHandoff(item);
+    else if (a.id === "ivy.edit" && item.reply) openReply(item);
+    else if (a.id === "ivy.discard") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "ivy.discard", key: handoffKeyFor(item, a.target) }) }));
+    else if (a.id === "ivy.approve" || a.id === "ivy.retry") { const action = a.id; void send(item, a, { request: () => submitMailAction({ action, key: handoffKeyFor(item, a.target) }), keepVisible: action === "ivy.retry" && item.kind === "mail" }); }
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
     else if (a.id === "mail.report") void send(item, a, { request: () => submitMailAction({ action: "report", key: item.key }), keepVisible: true });
     else if (a.id === "mail.unsubscribe") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "unsubscribe", key: item.key }), keepVisible: true }));
@@ -464,7 +470,24 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
   const openReply = (item: DeskItem): void => {
     setDetail(item);
-    setReplyDraft((r) => (r?.key === item.key ? r : newReplyDraft(item.key)));
+    setReplyDraft((r) => (r?.key === item.key ? r : { ...newReplyDraft(item.key), text: item.handoff?.draft ?? "" }));
+  };
+
+  const openHandoff = (item: DeskItem): void => {
+    setDetail(item);
+    setHandoffAsk((h) => (h?.key === item.key ? h : newHandoffAsk(item.key)));
+  };
+
+  const confirmHandoff = (item: DeskItem, ask: HandoffAsk): void => {
+    const hand: DeskAction = { id: "mail.ivy", label: "Hand to Ivy", role: "secondary", wired: true };
+    void send(item, hand, {
+      keepVisible: true,
+      request: async () => {
+        const result = await submitMailAction(handoffBody(ask));
+        setHandoffAsk((h) => (h?.requestId !== ask.requestId ? h : result.ok ? null : { ...h, note: result.text }));
+        return result;
+      },
+    });
   };
 
   const confirmReply = (item: DeskItem, draft: ReplyDraft): void => {
@@ -815,6 +838,15 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 onCancel={() => setStudioPick(null)}
               />
             )}
+            {handoffAsk?.key === detailItem.key && (
+              <MailHandoffBox
+                ask={handoffAsk}
+                sending={busyWith(detailItem) === "mail.ivy"}
+                onChange={(instruction) => setHandoffAsk((h) => (h?.key === detailItem.key ? { ...h, instruction } : h))}
+                onConfirm={() => confirmHandoff(detailItem, handoffAsk)}
+                onCancel={() => setHandoffAsk(null)}
+              />
+            )}
             {replyDraft?.key === detailItem.key && detailItem.reply && (
               <ReplyDraftBox
                 nudge={detailItem.kind === "mail-waiting"}
@@ -978,6 +1010,7 @@ export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending
         </div>
         <button type="button" className="desk-title" onClick={onOpen}>{item.title}</button>
         <p className="desk-why">{item.why}</p>
+        <HandoffStatus item={item} />
         {item.suggestion && <p className="desk-why desk-suggest">{item.suggestion}</p>}
         {item.interrupt?.delivery === "failed" && <p className="desk-why desk-unsent">Not pushed: {item.interrupt.error}</p>}
         {item.interrupt?.delivery === "buffered" && <p className="desk-why desk-waiting">Waiting for Discord</p>}
@@ -1109,7 +1142,7 @@ const CHECK_POLL_MS = 3000;
 
 const isWaitingAction = (id: string): id is `waiting.${WaitingOp}` => WAITING_OPS.some((op) => id === `waiting.${op}`);
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "mail.report": "Reporting…", "mail.studio": "Adding…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "mail.report": "Reporting…", "mail.studio": "Adding…", "mail.ivy": "Handing over…", "ivy.approve": "Saving draft…", "ivy.discard": "Discarding…", "ivy.retry": "Asking again…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
 
 const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
 const CONFIRM_TARGET: Record<string, (target: string) => string> = { "mail.unsubscribe": (host) => `Yes, unsubscribe via ${host}`, "mail.unsubscribe.page": (host) => `Yes, open ${host}` };

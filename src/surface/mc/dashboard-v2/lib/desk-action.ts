@@ -56,7 +56,9 @@ export type MailActionBody =
   | { action: "sweep.undo"; sweep: string }
   | { action: "correct"; key: string; said: import("../../desk/mail-actions").MailCorrection }
   | { action: "draft"; key: string; body: string; decision?: import("../../desk/mail-yes-filter").MailDecision }
-  | { action: "studio.add"; key: string; requestId: string; thread: string | null; reason?: string; includeText: boolean };
+  | { action: "studio.add"; key: string; requestId: string; thread: string | null; reason?: string; includeText: boolean }
+  | { action: "ivy.hand"; key: string; requestId: string; instruction?: string }
+  | { action: "ivy.approve" | "ivy.discard" | "ivy.retry"; key: string };
 
 export type StudioProposalOutcome = { ok: true; proposal: import("../../desk/mail-studio").MailStudioProposal } | { ok: false; text: string };
 
