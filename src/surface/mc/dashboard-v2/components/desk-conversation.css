@@ -25,10 +25,12 @@
 .dcv-acts { display: flex; flex-wrap: wrap; gap: 8px; }
 .dcv-outcome { grid-area: outcome; border-top: 1px solid var(--line, #ececec); padding-top: 12px; display: grid; gap: 8px; }
 .dcv-outcome h3 { margin: 0; font-size: 15px; }
-.dcv-src { border-top: 1px solid var(--line, #ececec); margin-top: 14px; padding-top: 10px; display: grid; gap: 6px; }
+.dcv-src { border-top: 1px solid var(--line, #ececec); margin-top: 14px; padding-top: 10px; display: grid; gap: 6px; overflow-wrap: anywhere; }
 .dcv-src h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--mute, #71717a); }
 .dcv-src ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .dcv-src li button { text-align: left; width: 100%; }
+.dcv-src .desk-btn { max-width: 100%; }
+.dcv-src li .desk-btn { height: auto; min-height: 34px; padding: 7px 14px !important; white-space: normal; line-height: 1.4; }
 @media (max-width: 860px) { .dcv { grid-template-columns: minmax(0, 1fr); grid-template-areas: "head" "sources" "stream" "queue" "composer" "create" "outcome"; } }
 .dcv-area { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; max-width: 1400px; margin: 24px auto 90px; padding: 0 24px; align-items: start; }
 .dcv-area > .dcv { margin: 0; padding: 0; max-width: none; }
