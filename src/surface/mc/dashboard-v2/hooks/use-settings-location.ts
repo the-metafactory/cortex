@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 export const SETTINGS_GROUPS = [
   { id: "calendars", label: "Calendars" },
+  { id: "day-limits", label: "Day limits" },
   { id: "vips", label: "VIPs" },
   { id: "unimportant", label: "Unimportant senders" },
   { id: "notifications", label: "Notifications" },

@@ -54,7 +54,7 @@ describe("My day lane and day contract", () => {
   it("places saved day limits and their defaults in Settings, not either work view", () => {
     const day = change({ op: "cap", cap: 2 }).view;
     const list = { rows: [], note: null, onAdd: async () => true, onRemove: () => {} };
-    const html = renderToStaticMarkup(createElement(SettingsBody, { group: "day-limits", day, onChanged: () => {}, vips: list, unimportant: list, busy: false, onBack: () => {}, notify: "granted", onEnableNotify: () => {} }));
+    const html = renderToStaticMarkup(createElement(SettingsBody, { group: "day-limits", day, vips: list, unimportant: list, busy: false, onBack: () => {}, notify: "granted", onEnableNotify: () => {} }));
     expect(html).toContain('id="settings-panel-day-limits" role="tabpanel" aria-labelledby="settings-tab-day-limits" tabindex="0"');
     expect(html).toContain('aria-label="My day cap" type="range" min="1" max="7" value="2"');
     expect(html).toContain('aria-label="Needs you cap" type="range" min="1" max="10" value="5"');
