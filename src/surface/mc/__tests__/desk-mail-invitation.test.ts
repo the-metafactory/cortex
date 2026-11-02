@@ -151,6 +151,18 @@ describe("replies", () => {
     expect(await replyToInvitation(mail(), input(), deps())).toMatchObject({ ok: false, status: 409 });
   });
 
+  test("a calendar writer that throws after a sent acceptance still records the answer as sent", async () => {
+    const throwing: WriterRunner = async (argv, stdin) => {
+      calls.push({ argv, stdin });
+      if (argv[0] === "calendar-writer") throw new Error("spawn failed");
+      return { code: 0, stdout: JSON.stringify({ id: "r1" }), stderr: "" };
+    };
+    const result = await replyToInvitation(mail(), input({ reply: "accept" }), deps({ run: throwing }));
+    expect(result.ok && result.message).toContain("The event was not added to your calendar");
+    expect(invitationDecisions(db, ["invite@example.org"]).get("invite@example.org")?.status).toBe("sent");
+    expect(queryMailLog(db, {}).map((e) => e.action)).toEqual(["accept"]);
+  });
+
   test("the payload names the source's account, Message-ID and invitation UID", () => {
     expect(invitePayload(mail(), "accept", "req-1")).toEqual({ action: "invite-reply", account: "work", messageId: "invite@example.org", uid: "uid-1", reply: "accept", requestId: "req-1" });
     expect(invitePayload(mail({ invitation: undefined }), "accept", "req-1")).toBeNull();

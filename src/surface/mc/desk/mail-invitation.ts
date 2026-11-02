@@ -91,7 +91,7 @@ function qualifiedCalendars(calendar: CalendarAvailability, span: Slot): { cover
 
 /**
  * The principal's events that overlap the invitation, from every calendar source that covers its time. An event that is
- * the invitation itself (same title and start, as a server that places invitations shows it) is not a conflict. Events
+ * the invitation itself (same title and start, as a calendar service that places invitations shows it) is not a conflict. Events
  * with unknown availability count as possible conflicts. With no conflict and a calendar that does not cover the time,
  * the answer is unknown, never clear.
  */
@@ -232,13 +232,14 @@ export function invitationView(mail: ListedMail, calendar: CalendarAvailability,
 }
 
 const PAST: Record<InviteReply, string> = { accept: "accepted", decline: "declined" };
+const NOUN: Record<InviteReply, string> = { accept: "acceptance", decline: "decline" };
 
 export function decisionSentence(decision: InvitationDecision, ago: string): string {
   const falls = decision.fallsAway ? ` Falls away: ${decision.fallsAway}.` : decision.reply === "accept" ? " Nothing was named to fall away." : "";
   if (decision.status === "sent") return `You ${PAST[decision.reply]} this invitation on the Desk (${ago}).${falls}`;
-  if (decision.status === "sending") return `Your ${decision.reply === "accept" ? "acceptance" : "decline"} is being sent (${ago}).${falls}`;
-  if (decision.status === "uncertain") return `Your ${decision.reply === "accept" ? "acceptance" : "decline"} may have been sent (${ago}); check Sent before answering again.${falls}`;
-  return `Your ${decision.reply === "accept" ? "acceptance" : "decline"} was not sent (${ago}): ${decision.result ?? "the reply command failed"}.`;
+  if (decision.status === "sending") return `Your ${NOUN[decision.reply]} is being sent (${ago}).${falls}`;
+  if (decision.status === "uncertain") return `Your ${NOUN[decision.reply]} may have been sent (${ago}); check Sent before answering again.${falls}`;
+  return `Your ${NOUN[decision.reply]} was not sent (${ago}): ${decision.result ?? "the reply command failed"}.`;
 }
 
 /** The stdin of the calendar-reply command for one answer. */
@@ -281,8 +282,8 @@ export interface InviteReplyDeps {
   writerTimeoutMs: number;
 }
 
-const bindingOf = (row: InvitationRow & { uid: string }): string =>
-  JSON.stringify({ messageId: row.message_id, uid: row.uid, reply: row.reply, commitment: row.commitment ? (JSON.parse(row.commitment) as unknown) : null });
+const binding = (messageId: string, uid: string, reply: InviteReply, commitment: unknown): string => JSON.stringify({ messageId, uid, reply, commitment });
+const bindingOf = (row: InvitationRow & { uid: string }): string => binding(row.message_id, row.uid, row.reply, row.commitment ? (JSON.parse(row.commitment) as unknown) : null);
 
 /**
  * Sends the principal's confirmed answer to one invitation through the calendar-reply command, records it with the
@@ -299,11 +300,11 @@ export async function replyToInvitation(mail: ListedMail, input: InviteReplyInpu
   const inv = mail.invitation;
   if (!payload || !inv) return refuse(409, "This mail carries no calendar invitation the Desk can answer.");
   if (!inv.attendee) return refuse(409, "You are not listed as an attendee of this invitation, so the Desk does not answer it.");
-  const binding = JSON.stringify({ messageId: mail.id, uid: inv.uid, reply: input.reply, commitment: input.commitment });
+  const bound = binding(mail.id, inv.uid, input.reply, input.commitment);
   const claimed = db.transaction((): MailActionResult | null => {
     const same = db.query<InvitationRow & { uid: string }, [string]>("SELECT * FROM desk_mail_invitations WHERE request_id = ?").get(input.requestId);
     if (same) {
-      if (bindingOf(same) !== binding) return refuse(409, "This answer changed. Start again before sending it.");
+      if (bindingOf(same) !== bound) return refuse(409, "This answer changed. Start again before sending it.");
       if (same.status === "sent") return { ok: true, message: same.result ?? "The answer was already sent." };
       if (same.status !== "failed") return refuse(409, "This answer may already be sent. Check Sent before answering again.");
     }
@@ -336,7 +337,7 @@ export async function replyToInvitation(mail: ListedMail, input: InviteReplyInpu
     finish("failed", why);
     return refuse(502, `The reply command did not run: ${why}`);
   }
-  const calendar = input.reply === "accept" ? await addAccepted(mail, input.requestId, deps) : null;
+  const calendar = input.reply === "accept" ? await addAccepted(mail, input.requestId, deps).catch((err: unknown) => `The event was not added to your calendar: ${err instanceof Error ? err.message : String(err)}`) : null;
   finish("sent", sent, calendar);
   logMailDecision(db, features, input.reply, "desk", now);
   return { ok: true, message: calendar ? `${sent} ${calendar}` : sent };
