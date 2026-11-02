@@ -22,6 +22,8 @@ import { SourceCache } from "../desk/sources/command";
 import { HandledLedger } from "../desk/actions";
 import { nextTask, reorderVisible } from "../desk/time-first";
 import type { CalendarGap } from "../desk/calendar-availability";
+import type { CalendarAvailability, CalendarInterval } from "../desk/calendar-availability";
+import { DeskTimeFirst } from "../dashboard-v2/components/desk-time-first";
 import type { DeskItem } from "../desk/types";
 
 const NOW = new Date(2026, 9, 31, 10).getTime();
@@ -42,6 +44,36 @@ describe("My day lane and day contract", () => {
   beforeEach(() => { db = initDatabase(":memory:"); saveBalanceState(db, seed()); });
   afterEach(() => db.close());
   const change = (command: MyDayCommand, requestId: string = crypto.randomUUID(), extra: { now?: number; date?: string; source?: DeskItem; desk?: DeskOptions } = {}) => changeMyDay({ db, desk, now: NOW, date: DATE, requestId, command, ...extra });
+  const renderCalendar = (events: CalendarInterval[], known = true): string => {
+    const calendar: CalendarAvailability = { sources: known ? [{ id: "calendar", kind: "calendar", from: NOW - 86_400_000, to: NOW + 86_400_000, readAt: NOW, calendars: ["work"], provenance: "owned-reader" }] : [{ id: "calendar", kind: "unknown", reason: "The reading is stale." }], events };
+    return renderToStaticMarkup(createElement(DeskTimeFirst, { day: readMyDay(db, desk, NOW), calendar, now: NOW, before: null, after: null, proposal: null, sweeps: null, preview: null, ambient: null, onChanged: () => {} }));
+  };
+  const currentEvent = (title: string, key: string, start: number, end: number): CalendarInterval => ({ key, source: "calendar", calendar: "Work", calendarId: "work", title, at: NOW + start * 60_000, end: NOW + end * 60_000, availability: { status: "busy", provenance: "owned-provider" } });
+  const clock = (minutes: number): string => new Date(NOW + minutes * 60_000).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  it("names the in-progress event and shows its own time range", () => {
+    const html = renderCalendar([currentEvent("Design review", "review", -10, 20)]);
+    expect(html).toContain("Design review is in progress");
+    expect(html).toContain(`${clock(-10)}–${clock(20)}`);
+    expect(html).toContain(`Calendar busy until ${clock(20)}`);
+    expect(html).not.toContain("<h2>A calendar block is in progress");
+  });
+  it("names current overlaps separately from the continuous busy window", () => {
+    const html = renderCalendar([currentEvent("Design review", "review", -10, 20), currentEvent("Planning", "planning", -5, 30), currentEvent("Later call", "later", 25, 60)]);
+    expect(html).toContain("Design review is in progress");
+    expect(html).toContain("1 overlapping event");
+    expect(html).toContain("Planning");
+    expect(html).toContain(`${clock(-5)}–${clock(30)}`);
+    expect(html).toContain(`Calendar busy until ${clock(60)}`);
+    expect(html).not.toContain("Later call");
+  });
+  it("labels an unavailable title and never presents stale event details as current", () => {
+    expect(renderCalendar([currentEvent("   ", "private", -10, 20)])).toContain("Untitled or private event is in progress");
+    const html = renderCalendar([currentEvent("Withheld stale title", "stale", -10, 20)], false);
+    expect(html).toContain("Calendar availability is not fully known");
+    expect(html).toContain("The reading is stale.");
+    expect(html).not.toContain("Withheld stale title");
+    expect(renderCalendar([])).toContain("No upcoming busy event in this calendar reading");
+  });
   it("persists manual selection across reads without changing confirmed membership or scores", () => {
     change({ op: "start", ids: ["constructor", "__proto__", "third"] });
     const before = loadBalanceState(db);
@@ -92,7 +124,7 @@ describe("My day lane and day contract", () => {
     expect(day.items.map(item => item.task.id)).toEqual(["constructor", "__proto__", "third"]);
     expect(nextTask(day, { kind: "unknown", reasons: ["reader unavailable"] }).kind).toBe("unverified");
     expect(nextTask(day, { kind: "open", through: NOW + 86_400_000, asOf: NOW }).kind).toBe("normal");
-    expect(nextTask(day, { kind: "busy", until: event.end, event }).kind).toBe("none");
+    expect(nextTask(day, { kind: "busy", until: event.end, event, overlaps: [] }).kind).toBe("none");
     expect(nextTask(day, { kind: "bounded", until: NOW + 5 * 60_000, minutes: 5, event }).kind).toBe("none");
     const unknown = readMyDay(db, desk, NOW);
     for (const item of unknown.items) delete item.task.estimateMinutes;

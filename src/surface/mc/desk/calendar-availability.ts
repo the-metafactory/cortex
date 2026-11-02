@@ -48,7 +48,7 @@ export function calendarAvailability(args: { sources: DeskSourceConfig[]; readin
 }
 
 export type CalendarGap =
-  | { kind: "busy"; until: number; event: CalendarInterval }
+  | { kind: "busy"; until: number; event: CalendarInterval; overlaps: CalendarInterval[] }
   | { kind: "unknown"; reasons: string[] }
   | { kind: "bounded"; until: number; minutes: number; event: CalendarInterval }
   | { kind: "open"; through: number; asOf: number };
@@ -61,7 +61,7 @@ export function currentGap(calendar: CalendarAvailability, now: number): Calenda
   if (current?.end !== undefined) {
     let until = current.end;
     for (const event of ordered) if (event.at <= until && event.end !== undefined) until = Math.max(until, event.end);
-    return { kind: "busy", until, event: current };
+    return { kind: "busy", until, event: current, overlaps: ordered.filter(event => event !== current && event.at <= now) };
   }
   const next = busy.filter(event => event.at > now).sort((a, b) => a.at - b.at)[0];
   const until = next?.at;
