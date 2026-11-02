@@ -5,7 +5,7 @@ import type { SourceMail, SourceReading } from "./sources/command";
 import { DAY_MS } from "./time";
 import { DEFAULT_MAIL_LOG_RETENTION_DAYS, MAIL_LOG_ACTIONS, MAIL_LOG_WHERE, type MailLogAction, type MailLogWhere } from "./mail-log-schema";
 
-export { DEFAULT_MAIL_LOG_RETENTION_DAYS, MAIL_LOG_ACTIONS, MAIL_LOG_WHERE, type MailLogAction, type MailLogWhere } from "./mail-log-schema";
+export { DEFAULT_MAIL_LOG_RETENTION_DAYS, MAIL_LOG_ACTIONS, MAIL_LOG_WHERE, PRINCIPAL_ACTED_WHERE, type MailLogAction, type MailLogWhere } from "./mail-log-schema";
 
 const MAX_SUMMARY = 600;
 const MAX_SUBJECT = 300;
@@ -108,6 +108,12 @@ export function loggedFeatures(db: Database, messageId: string): MailFeatures | 
   return { messageId: e.messageId, account: e.account, sourceId: e.sourceId, sender: e.sender, senderDomain: e.senderDomain, listId: e.listId, category: e.category, subject: e.subject, summary: e.summary };
 }
 
+export function logMailTodo(db: Database, mail: SourceMail & { sourceId?: string }, where: MailLogWhere, at: number): boolean {
+  if (mailLogFor(db, [mail.id]).get(mail.id)?.some((e) => e.action === "todo" && e.where === where)) return false;
+  logMailDecision(db, mailFeatures(db, mail), "todo", where, at);
+  return true;
+}
+
 /** Appends one decision. Callers write it only after the action it records has succeeded. */
 export function logMailDecision(db: Database, features: MailFeatures, action: MailLogAction, where: MailLogWhere, at: number, folder: string | null = null): number {
   if (!MAIL_LOG_ACTIONS.includes(action) || !MAIL_LOG_WHERE.includes(where)) throw new Error(`The mail log has no action "${action}" in "${where}".`);
@@ -196,6 +202,7 @@ export function historySentence(e: MailLogEntry, now: number): string {
     }
   }
   if (e.where === "correction") return `${CORRECTED[e.action] ?? `You corrected the Desk: “${e.action}”`} (${when}).`;
+  if (e.where === "conversation") return e.action === "todo" ? `You made it a to-do in an Ivy conversation (${when}).` : `An Ivy conversation recorded “${e.action}” for it (${when}).`;
   if (e.where === "rule") {
     return e.action === "digest" ? `A rule you approved kept it for the digest (${when}).` : `A rule you approved moved it to ${folder || e.action} (${when}).`;
   }

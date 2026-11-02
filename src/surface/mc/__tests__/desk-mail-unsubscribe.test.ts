@@ -77,6 +77,12 @@ describe("unsubscribe offer", () => {
     expect(unsubscribeOffer(db, letter("new"), ctx())).toBeNull();
   });
 
+  it("takes a later to-do made in an Ivy conversation as the mail's newest decision (unreadDismissals)", () => {
+    archivedUnread(5);
+    decide("old-0", "todo", "conversation", {}, NOW - 3600_000);
+    expect(unreadDismissals(db, letter("new"))).toBe(4);
+  });
+
   it("counts by sender when the mail has no List-Id", () => {
     const noList = { headers: { ...ONE_CLICK } };
     archivedUnread(5, noList);

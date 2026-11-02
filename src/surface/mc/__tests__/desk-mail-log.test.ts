@@ -6,7 +6,7 @@ import { saveClassification } from "../desk/classify";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
 import type { WriterResult } from "../desk/create";
 import { ClientMailLog, LOCATE_ATTEMPTS, recordClientDecisions, type ClientLogDeps } from "../desk/mail-client-log";
-import { departures, historySentence, logMailDecision, mailFeatures, purgeMailLog, queryMailLog, type MailLogEntry } from "../desk/mail-log";
+import { departures, historySentence, logMailDecision, logMailTodo, mailFeatures, purgeMailLog, queryMailLog, type MailLogEntry } from "../desk/mail-log";
 import { movedKey } from "../desk/mail-move";
 import { parseSourceOutput, SourceCache, type SourceMail, type SourceReading } from "../desk/sources/command";
 import { DAY_MS } from "../desk/time";
@@ -205,5 +205,19 @@ describe("Retention and headers", () => {
     expect(e("gone", "client")).toBe("It left the inbox outside the Desk, and the Desk could not find where it went (3 days ago).");
     expect(e("junk", "desk")).toBe("You moved it to Junk on the Desk (3 days ago).");
     expect(e("unimportant", "desk", "Trash")).toBe("You marked its sender unimportant on the Desk (3 days ago).");
+    expect(e("todo", "desk")).toBe("You made it a to-do on the Desk (3 days ago).");
+    expect(e("todo", "conversation")).toBe("You made it a to-do in an Ivy conversation (3 days ago).");
+  });
+
+  it("logs a mail's to-do once per place it happened, Desk or Ivy conversation", () => {
+    const m = { ...mail("t1@stats"), sourceId: "work-mail" };
+    expect(logMailTodo(db, m, "desk", NOW - 2000)).toBe(true);
+    expect(logMailTodo(db, m, "desk", NOW - 1000)).toBe(false);
+    expect(logMailTodo(db, m, "conversation", NOW)).toBe(true);
+    expect(logMailTodo(db, m, "conversation", NOW)).toBe(false);
+    expect(rows()).toEqual([
+      { messageId: "t1@stats", action: "todo", where: "desk", folder: null },
+      { messageId: "t1@stats", action: "todo", where: "conversation", folder: null },
+    ]);
   });
 });
