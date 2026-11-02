@@ -460,13 +460,16 @@ describe("My day lane and day contract", () => {
     expect(findNode(loadBalanceState(db)?.outline ?? seed().outline, "constructor")?.title).toBe("Write the outline");
   });
 });
+const myDayRuntime = { options: desk, ledger: new HandledLedger() };
+function postMyDay(db: Database, body: unknown): Promise<Response> {
+  return handleDeskMyDay(new Request("http://localhost/api/desk/my-day", { method: "POST", body: JSON.stringify(body) }), db, myDayRuntime, undefined, NOW);
+}
 describe("outline-add creates a task or project with its note and due date", () => {
   let db: Database;
   beforeEach(() => { db = initDatabase(":memory:"); saveBalanceState(db, seed()); });
   afterEach(() => db.close());
-  const runtime = { options: desk, ledger: new HandledLedger() };
   const change = (command: MyDayCommand, requestId: string = crypto.randomUUID()) => changeMyDay({ db, desk, now: NOW, date: DATE, requestId, command });
-  const post = (body: unknown) => handleDeskMyDay(new Request("http://localhost/api/desk/my-day", { method: "POST", body: JSON.stringify(body) }), db, runtime, undefined, NOW);
+  const post = (body: unknown) => postMyDay(db, body);
   const work = () => readMyDay(db, desk, NOW).outline.children[0]?.children ?? [];
   const stored = () => JSON.stringify([loadBalanceState(db), readMyDay(db, desk, NOW).revision]);
   it("saves title, note and due date on a new task and answers its outlineId", async () => {
@@ -521,5 +524,85 @@ describe("outline-add creates a task or project with its note and due date", () 
     if (!outlineId) throw new Error("Missing outline id");
     const node = work().find(n => n.id === outlineId);
     expect(node).toEqual({ id: outlineId, title: "Plain", weight: 50, ordering: "parallel", children: [], effort: 1 });
+  });
+});
+describe("outline-remove deletes an Inbox task with no completion history", () => {
+  let db: Database;
+  beforeEach(() => { db = initDatabase(":memory:"); saveBalanceState(db, seed()); });
+  afterEach(() => db.close());
+  const change = (command: MyDayCommand, requestId: string = crypto.randomUUID(), item?: DeskItem) => changeMyDay({ db, desk, now: NOW, date: DATE, requestId, command, ...(item ? { source: item } : {}) });
+  const post = (body: unknown) => postMyDay(db, body);
+  const meta = () => MyDayMetaSchema.parse(JSON.parse(db.query<{ data: string }, []>("SELECT data FROM desk_my_day WHERE id = 1").get()?.data ?? "{}"));
+  const stored = () => JSON.stringify([loadBalanceState(db), meta().inbox, meta().sources, meta().revision]);
+  const intake = (item: DeskItem = source("agent-blocked")) => {
+    const id = change({ op: "todo", key: item.key, fingerprint: sourceIdentity(item) }, crypto.randomUUID(), item).outlineId;
+    if (!id) throw new Error("Missing Inbox task");
+    return id;
+  };
+  const remove = (id: string): MyDayCommand => ({ op: "outline-remove", id, revision: readMyDay(db, desk, NOW).revision, confirm: true });
+  it("removes the Inbox task and saves its receipt with the change", async () => {
+    const id = intake();
+    const kept = intake({ ...source("mail"), key: "mail:other" });
+    const requestId = crypto.randomUUID();
+    const body = { date: DATE, requestId, command: remove(id) };
+    const response = await post(body);
+    expect(response.status).toBe(200);
+    expect(z.object({ outlineId: z.string() }).parse(await response.json()).outlineId).toBe(id);
+    expect(meta().inbox.map(node => node.id)).toEqual([kept]);
+    const receipt = meta().receipts.find(r => r.id === requestId);
+    expect(receipt?.outlineId).toBe(id);
+    expect(JSON.parse(receipt?.payload ?? "{}")).toEqual({ date: DATE, command: body.command });
+    expect((await post(body)).status).toBe(200);
+    expect(meta().inbox.map(node => node.id)).toEqual([kept]);
+  });
+  it("refuses an Inbox task with completion history and changes nothing", async () => {
+    const id = intake();
+    const state = loadBalanceState(db);
+    if (!state) throw new Error("Missing state");
+    saveBalanceState(db, { ...state, log: [{ taskId: id, areaId: "area:work", effort: 1, date: DATE, title: "Choose a next step" }] });
+    const before = stored();
+    const response = await post({ date: DATE, requestId: crypto.randomUUID(), command: remove(id) });
+    expect(response.status).toBe(409);
+    expect(z.object({ error: z.string() }).parse(await response.json()).error).toBe("This task has work history or belongs to your day. Its state is kept.");
+    expect(stored()).toBe(before);
+  });
+  it("leaves the source untouched and a later todo for the same unchanged episode files a new Inbox task", () => {
+    const item = source("agent-blocked");
+    const snapshot = structuredClone(item);
+    const id = intake(item);
+    expect(movedKeys(db).has(sourceIdentity(item))).toBe(true);
+    change(remove(id));
+    expect(item).toEqual(snapshot);
+    expect(meta().sources).toEqual([]);
+    expect(movedKeys(db).has(sourceIdentity(item))).toBe(false);
+    const again = intake(item);
+    expect(again).not.toBe(id);
+    expect(meta().inbox.map(node => node.id)).toEqual([again]);
+    expect(intake(item)).toBe(again);
+  });
+  it("keeps the stale-revision and reused-requestId refusals", () => {
+    const id = intake();
+    const stale = remove(id);
+    change({ op: "cap", cap: 2 });
+    const before = stored();
+    expect(() => change(stale)).toThrow("The outline changed in another window or source");
+    expect(stored()).toBe(before);
+    const requestId = crypto.randomUUID();
+    change({ op: "cap", cap: 3 }, requestId);
+    const reused = stored();
+    expect(() => change(remove(id), requestId)).toThrow("already used for another change");
+    expect(stored()).toBe(reused);
+    expect(meta().inbox.map(node => node.id)).toEqual([id]);
+  });
+  it("keeps configured-area removal unchanged", () => {
+    intake();
+    change(remove("third"));
+    expect(findNode(loadBalanceState(db)?.outline ?? seed().outline, "third")).toBeNull();
+    const state = loadBalanceState(db);
+    if (!state) throw new Error("Missing state");
+    saveBalanceState(db, { ...state, log: [{ taskId: "constructor", areaId: "area:work", effort: 1, date: DATE, title: "Write the outline" }] });
+    expect(() => change(remove("constructor"))).toThrow("Only empty items without source links or completion history can be removed.");
+    expect(() => change(remove("todo:missing"))).toThrow("That outline item is unavailable or its area is no longer configured.");
+    expect(meta().inbox).toHaveLength(1);
   });
 });

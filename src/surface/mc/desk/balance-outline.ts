@@ -63,6 +63,12 @@ function openParent(state: AppState, desk: DeskOptions, meta: MyDayMeta, id: str
   if (node.id.startsWith("studio-response:") || (node.done && (node.children.length > 0 || node.effort !== undefined || studioOwned(meta, node.id)))) throw new Error("Choose an available area or open project, or reopen the task first.");
   return node;
 }
+function removeInboxTask(state: AppState, meta: MyDayMeta, id: string): string {
+  if (state.log.some(event => event.taskId === id) || state.dayState?.confirmed.includes(id) || meta.draft?.ids.includes(id)) throw new Error("This task has work history or belongs to your day. Its state is kept.");
+  meta.inbox = meta.inbox.filter(node => node.id !== id);
+  meta.sources = meta.sources.filter(source => source.taskId !== id);
+  return id;
+}
 export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, command: BalanceCommand): string {
   if (command.revision !== meta.revision) throw new Error("The outline changed in another window or source. Your draft is kept; reload the latest outline before saving again.");
   if (command.op === "outline-file") {
@@ -76,6 +82,7 @@ export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: Desk
     parent.children.push(node);
     return node.id;
   }
+  if (command.op === "outline-remove" && meta.inbox.some(node => node.id === command.id)) return removeInboxTask(state, meta, command.id);
   const node = configuredNode(state, desk, command.id);
   if (command.op === "outline-edit") {
     const details = command.details;
