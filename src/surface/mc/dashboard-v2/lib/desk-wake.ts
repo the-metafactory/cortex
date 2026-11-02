@@ -51,7 +51,7 @@ export class DeskWake {
   private fail(error: unknown): void {
     const line = error instanceof Error ? error.message : String(error);
     this.disable();
-    this.set({ phase: "unavailable", line: `${line} Disable and enable wake to try again.` });
+    this.set({ phase: "unavailable", line: `${line} Switch wake on to try again.` });
   }
   async enable(): Promise<void> {
     this.disable();
