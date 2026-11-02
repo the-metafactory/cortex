@@ -9,10 +9,12 @@ import { logMailDecision, mailFeatures } from "../desk/mail-log";
 import { blockSenderDomain, MOVE_TARGETS, moveMail, undoMove, type MoveDeps } from "../desk/mail-move";
 import { runSweep, SWEEP_LIMITS, undoSweep } from "../desk/mail-sweep";
 import { keepFromDigest, listMailGroups } from "../desk/mail-digest";
+import { suspicionContext } from "../desk/mail-suspicion";
+import { archiveWhatArrives, offerContext, unsubscribeMail, type OneClickPost } from "../desk/mail-unsubscribe";
 
 const MailRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("draft"), key: z.string(), body: z.string(), decision: MailDecisionSchema.optional() }).strict(),
-  z.object({ action: z.enum(["trash", "unimportant", "report", "digest.keep"]), key: z.string() }).strict(),
+  z.object({ action: z.enum(["trash", "unimportant", "report", "digest.keep", "unsubscribe", "unsubscribe.rule"]), key: z.string() }).strict(),
   z.object({ action: z.literal("move"), key: z.string(), target: z.enum(MOVE_TARGETS) }).strict(),
   z.object({ action: z.literal("correct"), key: z.string(), said: z.enum(MAIL_CORRECTIONS) }).strict(),
   z.object({ action: z.enum(["undo", "block"]), move: z.string().min(1).max(64) }).strict(),
@@ -31,11 +33,13 @@ export interface DeskMailDeps {
   now?: () => number;
   newId?: () => string;
   sweepWaitMs?: number;
+  post?: OneClickPost;
 }
 
 /**
  * POST {action: "move", key, target: "archive" | "junk" | "trash"}, {action: "trash" | "unimportant" | "report", key} or
- * {action: "draft", key, body}: acts on one mail the Desk lists. {action: "digest.keep", key} takes one mail out of the newsletter digest. {action: "correct", key, said} logs a per-mail correction. {action: "undo" | "block", move} undoes a logged move,
+ * {action: "draft", key, body}: acts on one mail the Desk lists. {action: "unsubscribe", key} sends the list's One-Click
+ * unsubscribe after the principal confirmed it; {action: "unsubscribe.rule", key} then adds an archive rule for the list. {action: "digest.keep", key} takes one mail out of the newsletter digest. {action: "correct", key, said} logs a per-mail correction. {action: "undo" | "block", move} undoes a logged move,
  * or blocks the domain of a mail moved to Junk. The rebind and identity gates in
  * handleApi run before this handler; there is no step-up. The account and Message-ID come from the mail source's
  * last reading, never from the page, and a mail already moved or still moving is refused.
@@ -70,6 +74,12 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
   if (body.action === "report") return answer(await reportMail(mail, runtime.options.mailReport, moveDeps));
   if (body.action === "digest.keep") return answer(keepFromDigest(db, mail, now));
   if (body.action === "correct") return answer(correctMail(db, mail, body.said, now));
+  if (body.action === "unsubscribe.rule") return answer(archiveWhatArrives(db, mail, now));
+  if (body.action === "unsubscribe") {
+    const flagged = readClassifications(db, [mail.id]).get(mail.id)?.suspicious === true ? new Set([mail.id]) : undefined;
+    const ctx = offerContext(db, runtime.options.mailUnsubscribe, suspicionContext(db, runtime.options.mailOwnDomains), flagged);
+    return answer(await unsubscribeMail(mail, ctx, { db, ledger: runtime.ledger, now, ...(deps.post ? { post: deps.post } : {}) }));
+  }
   return answer(await moveMail(mail, body.action === "move" ? body.target : "trash", moveDeps));
 }
 

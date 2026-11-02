@@ -3,7 +3,7 @@ import { catchupSearch } from "../hooks/use-catchup-location";
 import { scrollBelowDesk } from "../lib/desk-scroll";
 import { DeskBalance } from "./desk-balance";
 import { MailSweeps, SweepPreview, sweepsInArea } from "./desk-mail-sweeps";
-import { digestsInArea, MailDigests } from "./desk-mail-digest";
+import { digestsInArea, MailDigests, type UnsubscribeAsk } from "./desk-mail-digest";
 import type { MailSweepView } from "../../desk/mail-sweep";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
@@ -352,6 +352,14 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     if (result.ok) onChanged();
   };
 
+  const unsubscribeDigest = async (key: string, ask: UnsubscribeAsk): Promise<void> => {
+    setSweeping(true);
+    const result = await submitMailAction({ action: ask, key });
+    setSweeping(false);
+    setNote(result.text);
+    if (result.ok) onChanged();
+  };
+
   const openSweep = (s: MailSweepView): void => {
     setDetail(null);
     setSweep(s);
@@ -392,6 +400,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.draft" && item.reply) openReply(item);
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
     else if (a.id === "mail.report") void send(item, a, { request: () => submitMailAction({ action: "report", key: item.key }), keepVisible: true });
+    else if (a.id === "mail.unsubscribe") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "unsubscribe", key: item.key }), keepVisible: true }));
+    else if (a.id === "mail.unsubscribe.page" && a.url) { const url = a.url; confirmFirst(item, a, () => openLink(url)); }
+    else if (a.id === "mail.unsubscribe.rule") void send(item, a, { request: () => submitMailAction({ action: "unsubscribe.rule", key: item.key }) });
     else if (a.id.startsWith("mailrule.")) runRule(item, a);
     else if (a.id === "dmarc.ack" && a.target) acknowledge(item, a, a.target);
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
@@ -621,7 +632,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       )}
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
-      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={(a) => <MailDigests digests={digestsInArea(view.mailDigests ?? [], a)} busy={sweeping} onArchive={openSweep} onKeep={(key) => void keepDigest(key)} />} />
+      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={(a) => <MailDigests digests={digestsInArea(view.mailDigests ?? [], a)} busy={sweeping} onArchive={openSweep} onKeep={(key) => void keepDigest(key)} onUnsubscribe={(key, ask) => void unsubscribeDigest(key, ask)} />} />
       <div className="desk-grid" hidden={inStudio || inBalance || inCatchup || inConversation}>
         <main>
           <section className="desk-lead">
@@ -1063,13 +1074,15 @@ interface SendOptions {
 
 const CHECK_POLL_MS = 3000;
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "mail.report": "Reporting…", "ranger.rule": "Recording…" };
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "mail.report": "Reporting…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "ranger.rule": "Recording…" };
 
 const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
+const CONFIRM_TARGET: Record<string, (target: string) => string> = { "mail.unsubscribe": (host) => `Yes, unsubscribe via ${host}`, "mail.unsubscribe.page": (host) => `Yes, open ${host}` };
+
+const confirmLabel = (a: DeskAction): string | undefined => CONFIRM_LABEL[a.id] ?? (a.target ? CONFIRM_TARGET[a.id]?.(a.target) : undefined);
 
 export function withConfirm(item: DeskItem, actionId: string): DeskItem {
-  const label = CONFIRM_LABEL[actionId];
-  return label ? { ...item, actions: item.actions.map((a) => (a.id === actionId ? { ...a, label } : a)) } : item;
+  return { ...item, actions: item.actions.map((a) => { const label = a.id === actionId ? confirmLabel(a) : undefined; return label ? { ...a, label } : a; }) };
 }
 
 export function ActionButton({ action, onRun, sending }: { action: DeskAction; onRun: (a: DeskAction) => void; sending: string | null }) {
@@ -1112,7 +1125,7 @@ function nowSubline(view: DeskViewModel, count: number, rest: number, next: Desk
 
 function openLink(url: string): void {
   if (/^https?:/i.test(url)) window.open(url, "_blank", "noopener");
-  else if (/^message:/i.test(url)) window.location.assign(url);
+  else if (/^(message|mailto):/i.test(url)) window.location.assign(url);
 }
 
 export function AheadStrip({ events }: { events: DeskEvent[] }) {

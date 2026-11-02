@@ -222,6 +222,8 @@ export function historySentence(e: MailLogEntry, now: number): string {
       return `You opened it from the Desk (${when}).`;
     case "ignored":
       return `You let it pass on the Desk (${when}).`;
+    case "unsubscribe":
+      return `You unsubscribed from its list on the Desk (${when}).`;
     default:
       return `The Desk recorded “${e.action}” for it (${when}).`;
   }
