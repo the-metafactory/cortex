@@ -6,6 +6,7 @@ import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-co
 import { loadBalanceState } from "./balance-store";
 import { studioRequestId } from "./conversation-ids";
 import type { DeskOptions } from "./compose";
+import type { ListedMail } from "./mail-actions";
 import { REQUEST_TRAILER, spawnGit, type GitRunner } from "./studio/git";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioThreadView, type StudioView } from "./studio/view";
@@ -32,6 +33,7 @@ export interface SourceDeps {
   git?: GitRunner;
   now?: () => number;
   deskItems?: () => Promise<DeskItem[]>;
+  listedMail?: (key: string) => ListedMail | null;
 }
 
 export function conversationSources(deps: SourceDeps): HostSources {

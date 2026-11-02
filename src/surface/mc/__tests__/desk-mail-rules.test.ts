@@ -74,6 +74,16 @@ describe("rule proposals from the decision log", () => {
     }
   });
 
+  it("counts a to-do made in an Ivy conversation as a counter-example, like one made on the Desk", () => {
+    for (const where of ["desk", "conversation"] as const) {
+      db.exec("DELETE FROM desk_mail_log");
+      decide(10, "news@shop.example");
+      expect(proposeRules(db, NOW, CONFIG)).toHaveLength(1);
+      decide(1, "news@shop.example", "todo", where, `todo-${where}`);
+      expect(proposeRules(db, NOW, CONFIG)).toEqual([]);
+    }
+  });
+
   it("ignores what rules did, decisions outside the window and a VIP's mail", () => {
     decide(10, "bot@ci.example", "archive", "rule");
     logMailDecision(db, features("old", "bot@ci.example"), "archive", "desk", NOW - 100 * DAY_MS);

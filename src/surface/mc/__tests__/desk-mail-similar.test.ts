@@ -74,6 +74,15 @@ describe("neighbour selection", () => {
     expect(decided.map((e) => [e.messageId, e.action])).toEqual([["x", "restore"]]);
   });
 
+  it("weighs and counts a to-do made in an Ivy conversation exactly like one made on the Desk", () => {
+    const candidates = [
+      { entry: entry(1, "todo"), vector: [1, 0] },
+      { entry: entry(2, "todo", { where: "conversation" }), vector: [1, 0] },
+    ];
+    expect(nearestDecisions([1, 0], candidates, 5, 0.75).map((n) => [n.entry.where, n.action, n.weight])).toEqual([["desk", "todo", 1], ["conversation", "todo", 1]]);
+    expect(latestDecisions([entry(3, "archive", { messageId: "y", at: NOW - 5000 }), entry(4, "todo", { messageId: "y", at: NOW - 1000, where: "conversation" })]).map((e) => [e.action, e.where])).toEqual([["todo", "conversation"]]);
+  });
+
   it("falls back to the same List-Id first, then the sender domain", () => {
     const list = entry(1, "archive", { listId: "<weekly.stats.example>", senderDomain: "other.example" });
     const domain = entry(2, "trash");
@@ -112,6 +121,13 @@ function fakeEmbed(vector: (text: string) => number[] = zebra) {
 const probe = { messageId: "new", sourceId: "work-mail", sender: "fourth@else.example", listId: null, subject: "Quarterly zebra census results", summary: "The zebra census for Q3 is attached." };
 
 describe("the similarity module", () => {
+  it("reads a conversation to-do from the log as a precedent, like a Desk to-do", async () => {
+    logMailDecision(db, features("a", { sender: "a@else.example", senderDomain: "else.example" }), "todo", "desk", NOW - 2000);
+    logMailDecision(db, features("b", { sender: "b@else.example", senderDomain: "else.example" }), "todo", "conversation", NOW - 1000);
+    const similar = await new MailSimilarity(undefined, fakeEmbed().embed, quiet).load(db, NOW).similar(probe);
+    expect(similar.neighbours.map((n) => [n.entry.messageId, n.entry.where, n.action, n.weight])).toEqual([["b", "conversation", "todo", 1], ["a", "desk", "todo", 1]]);
+  });
+
   it("falls back to sender domain and List-Id without an embedder, and says so", async () => {
     logMailDecision(db, features("a", { sender: "a@else.example", senderDomain: "else.example" }), "archive", "desk", NOW - 1000);
     const ctx = new MailSimilarity(undefined, fakeEmbed().embed, quiet).load(db, NOW);

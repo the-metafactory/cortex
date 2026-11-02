@@ -7,6 +7,8 @@ import { STALE_OUTLINE } from "./balance-outline";
 import { loadBalanceState } from "./balance-store";
 import type { DeskOptions } from "./compose";
 import { operationUuid } from "./conversation-ids";
+import type { ListedMail } from "./mail-actions";
+import { logMailTodo } from "./mail-log";
 import { changeMyDay, loadMeta, localDay, readMyDay, sourceIdentity } from "./my-day";
 import { withStudioProjection } from "./studio-my-day";
 import type { StudioProjection } from "./studio-outline";
@@ -109,6 +111,7 @@ export function balanceWriter(kind: BalanceKind, deps: BalanceWriterDeps): Owner
 
 export interface InboxWriterDeps extends BalanceWriterDeps {
   deskItems: () => Promise<DeskItem[]>;
+  listedMail?: (key: string) => ListedMail | null;
 }
 
 export function balanceInboxWriter(deps: InboxWriterDeps): OwnerWriter {
@@ -123,6 +126,8 @@ export function balanceInboxWriter(deps: InboxWriterDeps): OwnerWriter {
       return failed(error.message);
     }
     if (!outlineId) throw new Error("Balance answered without the Inbox task's id.");
+    const mail = item.kind === "mail" ? deps.listedMail?.(item.key) : null;
+    if (mail) logMailTodo(deps.db, mail, "conversation", now);
     return { state: "created", canonicalId: outlineId };
   };
   return {

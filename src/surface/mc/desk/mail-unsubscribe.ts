@@ -78,7 +78,7 @@ const DISMISSED = new Set<MailLogAction>(["archive", "trash", "unimportant"]);
  */
 export function unreadDismissals(db: Database, mail: Pick<SourceMail, "from" | "headers">): number {
   const listId = listIdOf(mail);
-  const entries = queryMailLog(db, { ...(listId ? { listId } : { sender: mail.from.address }), limit: 5000 }).filter((e) => e.where === "desk" || e.where === "client");
+  const entries = queryMailLog(db, { ...(listId ? { listId } : { sender: mail.from.address }), limit: 5000 }).filter((e) => e.where === "desk" || e.where === "client" || e.where === "conversation");
   const latest = new Map<string, MailLogAction>();
   for (const e of entries) if (!latest.has(e.messageId)) latest.set(e.messageId, e.action);
   return [...latest.values()].filter((a) => DISMISSED.has(a)).length;

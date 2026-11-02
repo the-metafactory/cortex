@@ -13,6 +13,8 @@ import { HandledLedger } from "../desk/actions";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import type { DeskRuntime } from "../desk/compose";
 import { conversationSources, operationUuid } from "../desk/conversation-sources";
+import type { ListedMail } from "../desk/mail-actions";
+import { historySentence, logMailDecision, mailFeatures, queryMailLog } from "../desk/mail-log";
 import { changeMyDay, loadMeta, localDay, readMyDay } from "../desk/my-day";
 import type { DeskItem } from "../desk/types";
 import { SCHEMA_SQL } from "../db/schema";
@@ -39,7 +41,7 @@ const GLIDER = { id: "project-glider", title: "Glider", weight: 50, ordering: "p
 
 interface Reply { ok: boolean; error: string; proposal: ProposalView; conversation: { id: string }; entries: ConversationEntry[]; types: { type: string; status: string }[] }
 
-async function rig(state: AppState | null = outline([GLIDER]), wrap?: (writer: OwnerWriter) => OwnerWriter, view: DeskItem[] = []) {
+async function rig(state: AppState | null = outline([GLIDER]), wrap?: (writer: OwnerWriter) => OwnerWriter, view: DeskItem[] = [], mails: ListedMail[] = []) {
   const db = new Database(":memory:"); databases.push(db); for (const sql of SCHEMA_SQL) db.run(sql);
   if (state) saveBalanceState(db, state);
   const options = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [{ id: "lab", label: "Lab", color: "", repos: [], goals: [], policy: "local" as "cloud" | "local" }, { id: "home", label: "Home", color: "", repos: [], goals: [] }], sources: [] };
@@ -48,7 +50,7 @@ async function rig(state: AppState | null = outline([GLIDER]), wrap?: (writer: O
   const status: HostStatus = await openConversationHost({ dir: await dirs.make(), stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local: lane, cloud: lane }, turns: answering(() => "ok") });
   if (status.state !== "ready") throw new Error(status.reason);
   hosts.push(status.host);
-  const sources = conversationSources({ db, desk: () => options, deskItems: () => Promise.resolve(view) });
+  const sources = conversationSources({ db, desk: () => options, deskItems: () => Promise.resolve(view), listedMail: key => mails.find(m => `mail:${m.id}` === key) ?? null });
   const writer = sources.writers?.["balance-task"];
   await status.host.attachSources(wrap && writer ? { ...sources, writers: { "balance-task": wrap(writer) } } : sources);
   const guard: MutationGuardContext = { isLoopback: true, allowedHostnames: buildAllowedHostnames("127.0.0.1"), listenPort: 8767, principals: new Set() };
@@ -272,8 +274,11 @@ describe("Balance project writer for conversation proposals", () => {
 
 describe("Balance Inbox writer for conversation proposals", () => {
   const MAIL: DeskItem = { key: "mail:probe-1@example.test", kind: "mail", source: "work-mail", area: "lab", urgency: "today", title: "Quote for the glider kit", why: "Unread", score: 1, actions: [], detail: { summary: "Can you confirm the order?", history: [], refs: [], links: [{ label: "Open", url: "message://probe-1" }] } };
-  const inboxRig = (view: DeskItem[] = [{ ...MAIL }]) => rig(outline([GLIDER]), undefined, view);
+  const LISTED: ListedMail = { kind: "mail", id: "probe-1@example.test", from: { name: "Kit Shop", address: "Sales@Kits.Example" }, subject: "Quote for the glider kit", receivedAt: "2026-11-02T08:00:00.000Z", unread: true, account: "work", sourceId: "work-mail" };
+  const inboxRig = (view: DeskItem[] = [{ ...MAIL }]) => rig(outline([GLIDER]), undefined, view, [LISTED]);
   const inbox = (r: Awaited<ReturnType<typeof rig>>) => readMyDay(r.db, r.options, Date.now()).inbox;
+  const mailRows = (r: Awaited<ReturnType<typeof rig>>) => queryMailLog(r.db).map(({ messageId, action, where, sender }) => ({ messageId, action, where, sender }));
+  const CONVERSATION_TODO = { messageId: LISTED.id, action: "todo" as const, where: "conversation" as const, sender: "sales@kits.example" };
 
   test("the type is ready with a Desk view, and stays blocked without one", async () => {
     const r = await inboxRig();
@@ -322,6 +327,7 @@ describe("Balance Inbox writer for conversation proposals", () => {
     expect(refused.body.proposal.feedback).toBe("failed");
     expect(refused.body.error).toBe("The Day item changed since it was proposed, or its title was edited; the Inbox task takes the item's own title. Nothing was created.");
     expect(JSON.stringify(loadMeta(r.db))).toBe(before);
+    expect(mailRows(r)).toEqual([]);
   });
 
   test("an item that left the Desk is refused with 409 and nothing is created", async () => {
@@ -336,5 +342,37 @@ describe("Balance Inbox writer for conversation proposals", () => {
     expect(refused.body.error).toBe("That Day item is no longer on the Desk. Nothing was created.");
     expect(JSON.stringify(loadMeta(r.db))).toBe(before);
     expect(inbox(r)).toHaveLength(0);
+    expect(mailRows(r)).toEqual([]);
+  });
+
+  test("a mail moved to the Inbox logs one to-do from the conversation, and an equal retry or a second proposal logs no other", async () => {
+    const r = await inboxRig();
+    const id = await r.start();
+    const view = await r.propose(id, { item: MAIL.key, title: MAIL.title }, "balance-inbox-task");
+    expect((await r.confirm(id, view)).body.proposal.feedback).toBe("created");
+    expect(mailRows(r)).toEqual([CONVERSATION_TODO]);
+    expect((await r.confirm(id, view)).status).toBe(200);
+    expect((await r.confirm(id, await r.propose(id, { item: MAIL.key, title: MAIL.title }, "balance-inbox-task"))).body.proposal.feedback).toBe("created");
+    expect(mailRows(r)).toEqual([CONVERSATION_TODO]);
+    const [row] = queryMailLog(r.db);
+    expect(row ? historySentence(row, row.at) : "").toMatch(/^You made it a to-do in an Ivy conversation \(today at \d\d:\d\d\)\.$/);
+  });
+
+  test("a conversation to-do already logged for the mail is not logged again", async () => {
+    const r = await inboxRig();
+    logMailDecision(r.db, mailFeatures(r.db, LISTED), "todo", "conversation", Date.now() - 60_000);
+    const id = await r.start();
+    expect((await r.confirm(id, await r.propose(id, { item: MAIL.key, title: MAIL.title }, "balance-inbox-task"))).body.proposal.feedback).toBe("created");
+    expect(inbox(r)).toHaveLength(1);
+    expect(mailRows(r)).toEqual([CONVERSATION_TODO]);
+  });
+
+  test("a Day item that is not a mail moves to the Inbox and writes nothing to the mail log", async () => {
+    const blocked: DeskItem = { ...MAIL, kind: "agent-blocked", source: "ranger", title: "Ranger waits on the glider review" };
+    const r = await rig(outline([GLIDER]), undefined, [blocked], [LISTED]);
+    const id = await r.start();
+    expect((await r.confirm(id, await r.propose(id, { item: blocked.key, title: blocked.title }, "balance-inbox-task"))).body.proposal.feedback).toBe("created");
+    expect(inbox(r)).toHaveLength(1);
+    expect(mailRows(r)).toEqual([]);
   });
 });

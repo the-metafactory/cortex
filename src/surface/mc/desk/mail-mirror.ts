@@ -89,8 +89,8 @@ export interface MailMirrorInput {
 }
 
 const DISMISSED = new Set<MailLogAction>(["archive", "trash", "unimportant"]);
-const PRINCIPAL = new Set<MailLogWhere>(["desk", "client", "correction"]);
-const ACTED = new Set<MailLogWhere>(["desk", "client"]);
+const PRINCIPAL = new Set<MailLogWhere>(["desk", "client", "correction", "conversation"]);
+const ACTED = new Set<MailLogWhere>(["desk", "client", "conversation"]);
 
 const counted = <K extends string>(keys: readonly K[]): MailMirrorCount<K>[] => {
   const counts = new Map<K, number>();
