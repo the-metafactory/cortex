@@ -374,3 +374,66 @@ describe("My day lane and day contract", () => {
     expect(findNode(loadBalanceState(db)?.outline ?? seed().outline, "constructor")?.title).toBe("Write the outline");
   });
 });
+describe("outline-add creates a task or project with its note and due date", () => {
+  let db: Database;
+  beforeEach(() => { db = initDatabase(":memory:"); saveBalanceState(db, seed()); });
+  afterEach(() => db.close());
+  const runtime = { options: desk, ledger: new HandledLedger() };
+  const change = (command: MyDayCommand, requestId: string = crypto.randomUUID()) => changeMyDay({ db, desk, now: NOW, date: DATE, requestId, command });
+  const post = (body: unknown) => handleDeskMyDay(new Request("http://localhost/api/desk/my-day", { method: "POST", body: JSON.stringify(body) }), db, runtime, undefined, NOW);
+  const work = () => readMyDay(db, desk, NOW).outline.children[0]?.children ?? [];
+  const stored = () => JSON.stringify([loadBalanceState(db), readMyDay(db, desk, NOW).revision]);
+  it("saves title, note and due date on a new task and answers its outlineId", async () => {
+    const response = await post({ date: DATE, requestId: crypto.randomUUID(), command: { op: "outline-add", revision: readMyDay(db, desk, NOW).revision, parent: "area:work", title: "Call the venue", note: "Ask about Thursday", dueDate: "2026-11-03" } });
+    expect(response.status).toBe(200);
+    const { outlineId } = z.object({ outlineId: z.string() }).parse(await response.json());
+    expect(work().find(node => node.id === outlineId)).toMatchObject({ title: "Call the venue", note: "Ask about Thursday", dueDate: "2026-11-03", effort: 1, children: [] });
+  });
+  it("stores a project exactly as add does and opens it when a child is added", () => {
+    const project = change({ op: "outline-add", revision: readMyDay(db, desk, NOW).revision, parent: "area:work", title: "Venue", kind: "project", note: "Spring event" }).outlineId;
+    if (!project) throw new Error("Missing project id");
+    const node = work().find(n => n.id === project);
+    change({ op: "add", parent: "area:work", title: "Venue", kind: "project" });
+    const added = work().find(n => n.title === "Venue" && n.id !== project);
+    if (!added) throw new Error("Missing added project");
+    expect(node).toEqual({ ...added, id: project, note: "Spring event" });
+    expect(node).toMatchObject({ done: true, children: [] });
+    expect(node && "effort" in node).toBe(false);
+    const child = change({ op: "outline-add", revision: readMyDay(db, desk, NOW).revision, parent: project, title: "Book the hall" }).outlineId;
+    const opened = work().find(n => n.id === project);
+    expect(opened?.done).toBeUndefined();
+    expect(opened?.children.map(c => c.id)).toEqual(child ? [child] : []);
+    expect(child).toBeString();
+  });
+  it("answers the same outlineId for a repeated request and refuses a changed payload", () => {
+    const requestId = crypto.randomUUID();
+    const command: MyDayCommand = { op: "outline-add", revision: readMyDay(db, desk, NOW).revision, parent: "area:work", title: "Once", note: "n", dueDate: "2026-11-03" };
+    const first = change(command, requestId).outlineId;
+    expect(change(command, requestId).outlineId).toBe(first);
+    expect(work().filter(n => n.title === "Once")).toHaveLength(1);
+    expect(() => change({ ...command, note: "other" }, requestId)).toThrow("already used for another change");
+    expect(work().filter(n => n.title === "Once")).toHaveLength(1);
+  });
+  it("answers 400 for an invalid due date or an oversized note and saves nothing", async () => {
+    const before = stored();
+    const revision = readMyDay(db, desk, NOW).revision;
+    for (const extra of [{ dueDate: "2026-13-01" }, { note: "x".repeat(10_001) }, { kind: "area" }]) {
+      const response = await post({ date: DATE, requestId: crypto.randomUUID(), command: { op: "outline-add", revision, parent: "area:work", title: "Bad", ...extra } });
+      expect(response.status).toBe(400);
+    }
+    expect(stored()).toBe(before);
+  });
+  it("keeps the stale-revision refusal and saves nothing", () => {
+    const revision = readMyDay(db, desk, NOW).revision;
+    change({ op: "cap", cap: 2 });
+    const before = stored();
+    expect(() => change({ op: "outline-add", revision, parent: "area:work", title: "Late", note: "n", dueDate: "2026-11-03" })).toThrow("The outline changed in another window or source");
+    expect(stored()).toBe(before);
+  });
+  it("keeps the existing four-field request unchanged", () => {
+    const outlineId = change({ op: "outline-add", revision: readMyDay(db, desk, NOW).revision, parent: "area:work", title: "Plain" }).outlineId;
+    if (!outlineId) throw new Error("Missing outline id");
+    const node = work().find(n => n.id === outlineId);
+    expect(node).toEqual({ id: outlineId, title: "Plain", weight: 50, ordering: "parallel", children: [], effort: 1 });
+  });
+});
