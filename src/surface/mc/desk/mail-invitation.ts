@@ -108,10 +108,12 @@ export function invitationConflicts(inv: Pick<MailInvitation, "summary" | "start
   return reasons.length > 0 ? { kind: "unknown", reasons } : { kind: "clear" };
 }
 
-const mailOnly = (reading: SourceReading | undefined): boolean =>
-  reading !== undefined && (reading.capabilities ? !reading.capabilities.includes("calendar") : reading.events.length === 0 && (reading.mail.length > 0 || (reading.sent?.length ?? 0) > 0));
+const mailOnly = (reading: SourceReading): boolean => reading.capabilities !== undefined && !reading.capabilities.includes("calendar");
 
-/** The calendar coverage without the mail sources, whose stale or failed readings say nothing about busy time. */
+/**
+ * The calendar coverage without the sources whose last reading declared no calendar capability (mail sources), whose
+ * stale or failed readings say nothing about busy time. A source that never declared its capabilities is kept: unknown.
+ */
 export function calendarsOnly(calendar: CalendarAvailability, readings: SourceReading[]): CalendarAvailability {
   const mail = new Set(readings.filter(mailOnly).map((r) => r.id));
   return { ...calendar, sources: calendar.sources.filter((s) => !mail.has(s.id)) };

@@ -292,7 +292,7 @@ export class SourceCache {
   private refresh(source: DeskSourceConfig, now: number, cached: SourceReading | undefined): Promise<SourceReading> {
     const next = this.run(source.command, source.timeoutSeconds * 1000)
       .then((stdout) => ({ ...parseSourceOutput(stdout), error: null }))
-      .catch((err: unknown) => ({ events: cached?.events ?? [], mail: cached?.mail ?? [], sent: cached?.sent ?? [], dropped: 0, problems: [], error: err instanceof Error ? err.message : String(err) }))
+      .catch((err: unknown) => ({ events: cached?.events ?? [], mail: cached?.mail ?? [], sent: cached?.sent ?? [], dropped: 0, problems: [], ...(cached?.capabilities ? { capabilities: cached.capabilities } : {}), error: err instanceof Error ? err.message : String(err) }))
       .then((r): SourceReading => {
         const reading = { id: source.id, area: source.area ?? null, readAt: now, ...r };
         this.readings.set(source.id, reading);

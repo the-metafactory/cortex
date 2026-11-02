@@ -69,9 +69,11 @@ describe("mail sources", () => {
   test("a stale or failed mail source does not make the calendars unknown; a stale calendar source still does", () => {
     const stale: CalendarAvailability = { ...calendar([]), sources: [...calendar([]).sources.filter((s) => s.kind === "calendar"), { id: "work-mail", kind: "unknown", reason: "The source reading is stale; a refresh is pending." }, { id: "personal-mail", kind: "unknown", reason: "The source could not be read." }] };
     const reading = (id: string, over: Partial<SourceReading>): SourceReading => ({ id, area: null, events: [], mail: [], readAt: NOW, error: null, dropped: 0, problems: [], ...over });
-    const readings = [reading("work-mail", { capabilities: ["attention"], mail: [mail()] }), reading("personal-mail", { error: "boom", mail: [mail()] }), reading("work-calendar", { capabilities: ["calendar"] })];
+    const readings = [reading("work-mail", { capabilities: ["attention"], mail: [mail()] }), reading("personal-mail", { error: "boom", capabilities: ["attention"] }), reading("work-calendar", { capabilities: ["calendar"] })];
     expect(invitationConflicts(INVITATION, stale).kind).toBe("unknown");
     expect(invitationConflicts(INVITATION, calendarsOnly(stale, readings)).kind).toBe("clear");
+    const undeclared = calendarsOnly(stale, [reading("work-mail", { mail: [mail()] }), reading("personal-mail", { error: "boom" })]);
+    expect(invitationConflicts(INVITATION, undeclared).kind).toBe("unknown");
     const calendarStale: CalendarAvailability = { sources: [{ id: "work-calendar", kind: "unknown", reason: "stale" }], events: [] };
     expect(invitationConflicts(INVITATION, calendarsOnly(calendarStale, readings)).kind).toBe("unknown");
   });
@@ -249,4 +251,17 @@ describe("api", () => {
     expect(await proposed.json()).toMatchObject({ ok: true, body: "", slots: 0 });
     db.close();
   });
+});
+
+test("a failed refresh keeps the capabilities of the last good reading", async () => {
+  let fail = false;
+  const cache = new SourceCache(async () => { if (fail) throw new Error("down"); return JSON.stringify({ capabilities: ["attention"], items: [] }); });
+  const sources = [{ id: "work-mail", command: ["mail"], everySeconds: 300, timeoutSeconds: 30 }];
+  await cache.read(sources, NOW);
+  fail = true;
+  await cache.read(sources, NOW + 600_000);
+  await new Promise((r) => setTimeout(r, 10));
+  const [reading] = cache.cached();
+  expect(reading?.error).toBe("down");
+  expect(reading?.capabilities).toEqual(["attention"]);
 });
