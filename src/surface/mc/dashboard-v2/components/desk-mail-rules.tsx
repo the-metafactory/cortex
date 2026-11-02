@@ -8,6 +8,25 @@ const ACTION_LABEL: Record<(typeof RULE_ACTIONS)[number], string> = { archive: "
 
 const when = (at: number | null): string => (at === null ? "never ran" : `last ran ${new Date(at).toLocaleString()}`);
 
+export interface RuleDraft { id: string; match: string; value: string; action: string }
+
+export function RuleEditForm({ editing, busy, onEdit, onSubmit }: { editing: RuleDraft; busy: boolean; onEdit: (next: RuleDraft | null) => void; onSubmit: (body: MailRuleBody & { op: "edit"; rule: string }) => Promise<boolean> }) {
+  const save = (): void => { void onSubmit({ op: "edit", rule: editing.id, match: editing.match, value: editing.value, action: editing.action }).then((ok) => { if (ok) onEdit(null); }); };
+  return (
+    <form className="desk-set-add" onSubmit={(e) => { e.preventDefault(); save(); }}>
+      <select aria-label="Match" value={editing.match} disabled={busy} onChange={(e) => onEdit({ ...editing, match: e.target.value })}>
+        {RULE_MATCHES.map((m) => <option key={m} value={m}>{MATCH_LABEL[m]}</option>)}
+      </select>
+      <input aria-label="Match value" value={editing.value} disabled={busy} onChange={(e) => onEdit({ ...editing, value: e.target.value })} />
+      <select aria-label="Action" value={editing.action} disabled={busy} onChange={(e) => onEdit({ ...editing, action: e.target.value })}>
+        {RULE_ACTIONS.map((a) => <option key={a} value={a}>{ACTION_LABEL[a]}</option>)}
+      </select>
+      <button type="submit" className="desk-btn pri" disabled={busy || !editing.value.trim()}>Save</button>
+      <button type="button" className="desk-btn ghost" onClick={() => onEdit(null)}>Cancel</button>
+    </form>
+  );
+}
+
 export function MailRuleSettings({ initial }: { initial: MailRuleView[] }) {
   const [rows, setRows] = useState(initial);
   const [note, setNote] = useState<string | null>(null);
@@ -25,7 +44,7 @@ export function MailRuleSettings({ initial }: { initial: MailRuleView[] }) {
 }
 
 export function MailRuleSettingsBody({ rows, note, busy, onChange }: { rows: MailRuleView[]; note: string | null; busy: boolean; onChange: (body: MailRuleBody & { rule: string }) => Promise<boolean> }) {
-  const [editing, setEditing] = useState<{ id: string; match: string; value: string; action: string } | null>(null);
+  const [editing, setEditing] = useState<RuleDraft | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
   return (
     <section className="desk-set-card" aria-label="Mail rules">
@@ -36,23 +55,7 @@ export function MailRuleSettingsBody({ rows, note, busy, onChange }: { rows: Mai
         {rows.map((r) => (
           <li key={r.id}>
             {editing?.id === r.id ? (
-              <form
-                className="desk-set-add"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void onChange({ op: "edit", rule: r.id, match: editing.match, value: editing.value, action: editing.action }).then((ok) => { if (ok) setEditing(null); });
-                }}
-              >
-                <select aria-label="Match" value={editing.match} disabled={busy} onChange={(e) => setEditing({ ...editing, match: e.target.value })}>
-                  {RULE_MATCHES.map((m) => <option key={m} value={m}>{MATCH_LABEL[m]}</option>)}
-                </select>
-                <input aria-label="Match value" value={editing.value} disabled={busy} onChange={(e) => setEditing({ ...editing, value: e.target.value })} />
-                <select aria-label="Action" value={editing.action} disabled={busy} onChange={(e) => setEditing({ ...editing, action: e.target.value })}>
-                  {RULE_ACTIONS.map((a) => <option key={a} value={a}>{ACTION_LABEL[a]}</option>)}
-                </select>
-                <button type="submit" className="desk-btn pri" disabled={busy || !editing.value.trim()}>Save</button>
-                <button type="button" className="desk-btn ghost" onClick={() => setEditing(null)}>Cancel</button>
-              </form>
+              <RuleEditForm editing={editing} busy={busy} onEdit={setEditing} onSubmit={onChange} />
             ) : (
               <>
                 <span>

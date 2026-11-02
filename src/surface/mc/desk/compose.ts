@@ -1,4 +1,5 @@
-import { buildWeeklyMirror, type MirrorSchedule } from "./mirror";
+import { buildWeeklyMirror, mirrorWeek, type MirrorSchedule } from "./mirror";
+import { readMailMirror, type MailMirrorConfig, type MailMirrorUnsubscribe } from "./mail-mirror";
 import { loadBalanceState } from "./balance-store";
 import { withoutClosedTasks, type WaitingTask, type WaitingTasks } from "./sources/waiting";
 import { mailYesFilter, readMailDecision } from "./mail-yes-filter";
@@ -12,11 +13,11 @@ import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
 import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoName, type AreaRule, type GoalActionsInput } from "./rank";
 import { DAY_MS, startOfDay } from "./time";
-import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceReading } from "./sources/command";
+import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceMail, type SourceReading } from "./sources/command";
 import { listSenders, listVips } from "./vips";
 import type { MailActionsConfig, MailReportConfig } from "./mail-actions";
 import { suspicionContext } from "./mail-suspicion";
-import { offerContext, unsubscribeOffers, unsubscribeView, type UnsubscribeConfig, type UnsubscribeOffer } from "./mail-unsubscribe";
+import { listKey, offerContext, unsubscribeOffers, unsubscribeView, type UnsubscribeConfig, type UnsubscribeOffer } from "./mail-unsubscribe";
 import { movedTarget } from "./mail-move";
 import { historySentence, mailLogFor, queryMailLog, type MailLogEntry } from "./mail-log";
 import { DEFAULT_MAIL_RULES, digestedIds, heldItems, listRules, pendingRuleMail, proposalItems, proposeRules, ruleViews, rulesOfRuns, type MailRuleLoop, type MailRulesConfig } from "./mail-rules";
@@ -98,6 +99,7 @@ export interface DeskOptions {
   mailReport?: MailReportConfig;
   mailDigest?: DigestConfig;
   mailUnsubscribe?: UnsubscribeConfig;
+  mailMirror?: MailMirrorConfig;
   mailOwnDomains?: string[];
   mailLinks?: EvidenceLinks;
   voice?: VoiceOptions;
@@ -248,7 +250,7 @@ export async function composeDesk(
     ...(routines ? { routines } : {}),
     calendarAvailability: calendarAvailability({ sources: desk.sources, readings, calendars: [...calendars.values()], now }),
     myDay,
-    mirror: buildWeeklyMirror({ now, desk, state: loadBalanceState(db), studio, readings, events, calendarSources: [...calendars.values()].map(c => c.source), dmarc }),
+    mirror: buildWeeklyMirror({ now, desk, state: loadBalanceState(db), studio, readings, events, calendarSources: [...calendars.values()].map(c => c.source), dmarc, mail: readMailMirror(db, mirrorWeek(now), { ...(desk.mailMirror ? { config: desk.mailMirror } : {}), offers: mirrorOffers(offerable, unsubscribe) }) }),
     calendars: [...calendars.values()],
     studioBriefing: studio ? studioBriefing([...studio.active, ...studio.parked, ...studio.closed], now) : null,
     generatedAt: now,
@@ -313,6 +315,15 @@ function goalActionsFor(goals: DeskGoalOptions | undefined, subjects: VigilSubje
 }
 
 const mailIdOf = (key: string): string => key.slice("mail:".length);
+
+function mirrorOffers(mails: readonly SourceMail[], offers: ReadonlyMap<string, UnsubscribeOffer>): Map<string, MailMirrorUnsubscribe> {
+  const out = new Map<string, MailMirrorUnsubscribe>();
+  for (const m of mails) {
+    const offer = offers.get(m.id);
+    if (offer && offer.kind !== "rule" && !out.has(listKey(m))) out.set(listKey(m), { key: `mail:${m.id}`, view: unsubscribeView(offer) });
+  }
+  return out;
+}
 
 function withUnsubscribe<V extends { mails: SweepMailView[] }>(view: V, offers: ReadonlyMap<string, UnsubscribeOffer>): V {
   return {

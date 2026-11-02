@@ -5,6 +5,7 @@ import type { DeskOptions } from "./compose";
 import type { SourceEvent, SourceReading } from "./sources/command";
 import type { StudioView, StudioThreadView } from "./studio/view";
 import type { DmarcWeek } from "./mail-dmarc";
+import type { MailMirror } from "./mail-mirror";
 
 export const MIRROR_DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"] as const;
 export interface MirrorSchedule { day: typeof MIRROR_DAYS[number]; time: string }
@@ -46,6 +47,7 @@ export interface WeeklyMirror {
   calendar: MirrorCalendar;
   threads: { available: boolean; partial: boolean; opened: MirrorThread[]; parked: MirrorThread[]; closed: MirrorThread[]; reviews: MirrorThread[] };
   dmarc: DmarcWeek | null;
+  mail: MailMirror | null;
 }
 function unionDuration(intervals: [number, number][]): number {
   let total = 0;
@@ -81,7 +83,7 @@ function calendarReview(args: { now: number; week: MirrorWeek; events: MirrorCal
   });
   return { sources: snapshots, areas: [...byArea].map(([id, intervals]) => ({ id, hours: unionDuration(intervals) / 3_600_000 })), withoutDuration, allDay, available: snapshots.some(s => s.status === "snapshot" || s.status === "stale") };
 }
-export function buildWeeklyMirror(args: { now: number; desk: DeskOptions; state: AppState | null; studio: StudioView | null; readings: SourceReading[]; events: MirrorCalendarEvent[]; calendarSources?: string[]; dmarc?: DmarcWeek | null }): WeeklyMirror {
+export function buildWeeklyMirror(args: { now: number; desk: DeskOptions; state: AppState | null; studio: StudioView | null; readings: SourceReading[]; events: MirrorCalendarEvent[]; calendarSources?: string[]; dmarc?: DmarcWeek | null; mail?: MailMirror | null }): WeeklyMirror {
   const { now, desk, state, studio } = args;
   const week = mirrorWeek(now);
   const configured = new Set(desk.areas.map(a => `area:${a.id}`));
@@ -106,5 +108,6 @@ export function buildWeeklyMirror(args: { now: number; desk: DeskOptions; state:
       reviews: threads.filter(t => t.outcome === "decided" && t.reviewOn !== undefined && t.reviewOn <= week.through).map(threadSummary),
     },
     dmarc: args.dmarc ?? null,
+    mail: args.mail ?? null,
   };
 }
