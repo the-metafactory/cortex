@@ -24,13 +24,13 @@ export interface WriterResult {
 export type WriterRunner = (argv: string[], stdin: string, timeoutMs: number) => Promise<WriterResult>;
 
 const WriterAnswer = z.object({
-  id: z.string().min(1),
+  id: z.string().trim().min(1),
   url: z.string().regex(/^https?:/i).optional(),
   message: z.string().max(300).optional(),
 });
 
 export type Created =
-  | { ok: true; message: string; url?: string; event?: { at: number; end?: number; title: string; allDay?: boolean } }
+  | { ok: true; id: string; message: string; url?: string; event?: { at: number; end?: number; title: string; allDay?: boolean } }
   | { ok: false; error: string; uncertain?: true };
 
 export { CommandTimeout as WriterTimeout } from "./spawn";
@@ -55,12 +55,12 @@ const day = (at: number, now: number): string => {
 function keepOnDesk(card: AskCard, deps: CreateDeps): Created | null {
   if (card.kind === "reminder") {
     const due = Date.parse(card.fields.due);
-    addNote(deps.db, "reminder", card.fields.text, due, deps.now);
-    return { ok: true, message: `I will remind you ${day(due, deps.now)} at ${clock(due)}.` };
+    const kept = addNote(deps.db, "reminder", card.fields.text, due, deps.now);
+    return { ok: true, id: String(kept.id), message: `I will remind you ${day(due, deps.now)} at ${clock(due)}.` };
   }
   if (card.kind === "note") {
-    addNote(deps.db, "note", card.fields.text, null, deps.now);
-    return { ok: true, message: "Noted. It is under Keep in mind." };
+    const kept = addNote(deps.db, "note", card.fields.text, null, deps.now);
+    return { ok: true, id: String(kept.id), message: "Noted. It is under Keep in mind." };
   }
   return null;
 }
@@ -85,11 +85,12 @@ export async function createFromCard(card: AskCard, deps: CreateDeps): Promise<C
     return { ok: false, error: `The ${KIND_LABEL[card.kind].toLowerCase()} writer answered in a form the Desk cannot read. ${MAYBE_CREATED}`, uncertain: true };
   }
   const message = answer.message ?? `Created the ${KIND_LABEL[card.kind].toLowerCase()}.`;
-  if (card.kind !== "calendar") return { ok: true, message, ...(answer.url ? { url: answer.url } : {}) };
+  if (card.kind !== "calendar") return { ok: true, id: answer.id, message, ...(answer.url ? { url: answer.url } : {}) };
   const at = Date.parse(card.fields.start);
   const end = card.fields.end ? Date.parse(card.fields.end) : undefined;
   return {
     ok: true,
+    id: answer.id,
     message,
     ...(answer.url ? { url: answer.url } : {}),
     event: { at, ...(end !== undefined ? { end } : {}), title: card.fields.title, ...(card.fields.allDay ? { allDay: true } : {}) },
