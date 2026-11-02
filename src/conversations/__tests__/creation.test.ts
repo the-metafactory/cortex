@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { scratchHosts } from "./fixtures/scratch";
 import { fixtureOwner, type FixtureOwner } from "./fixtures/owner";
 import { CREATABLE_TYPES } from "../catalog";
-import { ConversationCreation, type Actor, type ProposalView } from "../creation";
+import { ConversationCreation, unavailableHere, type Actor, type ProposalView } from "../creation";
 import { ConversationError, openConversationHost, type ConversationHost } from "../host";
 import { CREATION_KIND, GRANT_KIND, type OwnerWriters, type Policy } from "../types";
 
@@ -267,5 +267,48 @@ describe("operation journal recovery", () => {
     expect(states["p-found"]).toMatchObject({ state: "created", canonicalId: "fixture-recovered" });
     expect(states["p-lost"]?.state).toBe("uncertain");
     expect(owner.calls).toHaveLength(0);
+  });
+});
+
+describe("refusal texts", () => {
+  test("an unavailable type is refused with one period before Nothing was created, for every creatable type without a writer", async () => {
+    const { owner, creation, start } = await setup(() => ({}));
+    const id = await start();
+    const texts = await Promise.all(CREATABLE_TYPES.map(async type => {
+      const { view } = await creation.propose(id, { proposalId: randomUUID(), type, fields: {} }, web);
+      return refused(creation.confirm(id, view.proposal.proposalId, confirmOf(view), web), 409);
+    }));
+    expect(texts).toHaveLength(CREATABLE_TYPES.length);
+    for (const text of texts) {
+      expect(text).toMatch(/ is unavailable here: .+[^.]\. Nothing was created\.$/);
+      expect(text).not.toContain("..");
+    }
+    expect(texts[CREATABLE_TYPES.indexOf("flow")]).toBe("Flow is unavailable here: Pulse has no place to save a flow without running it yet. Nothing was created.");
+    expect(texts[CREATABLE_TYPES.indexOf("balance-task")]).toBe("Balance task is unavailable here: No Balance writer is connected on this stack yet. Nothing was created.");
+    expect(owner.calls).toHaveLength(0);
+  });
+
+  test("a capability without a reason falls back to its status with one period", () => {
+    const capability = { type: "flow", row: "O14", label: "Flow", owner: "Pulse", status: "blocked:3014" as const, fields: [], fixed: [] };
+    expect(unavailableHere(capability)).toBe("Flow is unavailable here: blocked:3014. Nothing was created.");
+  });
+
+  test("catalog, egress, archived, stale and digest refusals contain no double period", async () => {
+    const { host, creation, start } = await setup();
+    const id = await start();
+    const texts: string[] = [];
+    for (const type of ["settings", "desk-source-card", "ranger-job", "card"]) texts.push(await refused(creation.propose(id, { proposalId: randomUUID(), type, fields: {} }, web), 409));
+    const proposalId = randomUUID();
+    const first = (await creation.propose(id, { proposalId, type: "graph-node", fields: node }, web)).view;
+    const edited = await creation.revise(id, proposalId, { revision: 1, fields: { ...node, title: "Edited" } }, web);
+    texts.push(await refused(creation.confirm(id, proposalId, confirmOf(first), web), 409));
+    texts.push(await refused(creation.confirm(id, proposalId, { revision: edited.proposal.revision, digest: first.digest }, web), 409));
+    const local = await start("local");
+    const leaving = (await creation.propose(local, { proposalId: randomUUID(), type: "tana-note", fields: { text: "private" } }, web)).view;
+    texts.push(await refused(creation.confirm(local, leaving.proposal.proposalId, confirmOf(leaving), web), 403));
+    await host.organize(id, { state: "archived" });
+    texts.push(await refused(creation.propose(id, { proposalId: randomUUID(), type: "graph-node", fields: node }, web), 409));
+    expect(texts).toHaveLength(8);
+    for (const text of texts) expect(text).not.toContain("..");
   });
 });

@@ -94,6 +94,11 @@ function capabilityOf(type: CreatableType, writers: OwnerWriters): Capability {
   return { ...base, status: `blocked:${spec.blockedBy}`, reason };
 }
 
+export function unavailableHere(capability: Capability): string {
+  const why = (capability.reason ?? capability.status).replace(/\.+$/, "");
+  return `${capability.label} is unavailable here: ${why}. Nothing was created.`;
+}
+
 function unavailable(type: string): ConversationError {
   const known = UNAVAILABLE_TYPES.find(spec => spec.type === type);
   return conflict(known ? `${known.label} cannot be created from a conversation: ${known.reason}` : `"${type}" is not a type in the creation catalog. Choose one of the listed types.`);
@@ -297,7 +302,7 @@ export class ConversationCreation {
       if (proposal.dismissed) throw conflict("This proposal was dismissed. Nothing was created.");
       if (!proposal.type) throw conflict("Choose what to create and where first. Nothing was created.");
       const capability = capabilityOf(proposal.type, this.host.writers);
-      if (capability.status !== "ready") throw conflict(`${capability.label} is unavailable here: ${capability.reason ?? capability.status}. Nothing was created.`);
+      if (capability.status !== "ready") throw conflict(unavailableHere(capability));
       const missing = missingOf(proposal.type, proposal.fields);
       if (missing.length > 0) throw new ConversationError(400, `Fill in ${missing.join(", ")} first. Nothing was created.`);
       const egress = await this.egressRefusal(conversationId, proposal);
