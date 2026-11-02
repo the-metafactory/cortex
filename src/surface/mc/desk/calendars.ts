@@ -62,10 +62,13 @@ export function changeCalendar(db: Database, change: CalendarChange): boolean {
   const enabled = change.enabled === undefined ? null : Number(change.enabled);
   if (change.calendarId) return db.query("UPDATE desk_calendar_identities SET enabled = COALESCE(?, enabled), color = COALESCE(?, color) WHERE source = ? AND calendar_id = ?").run(enabled, change.color ?? null, change.source, change.calendarId).changes > 0;
   return db.transaction(() => {
-    const current = db.query("UPDATE desk_calendar_identities SET enabled = COALESCE(?, enabled), color = COALESCE(?, color) WHERE source = ? AND name = ?").run(enabled, change.color ?? null, change.source, change.name).changes;
+    const matching = db.query<{ calendarId: string }, [string, string]>("SELECT calendar_id AS calendarId FROM desk_calendar_identities WHERE source = ? AND name = ?").all(change.source, change.name);
+    if (matching.length > 1) return false;
+    const selected = matching[0];
+    if (selected) return db.query("UPDATE desk_calendar_identities SET enabled = COALESCE(?, enabled), color = COALESCE(?, color) WHERE source = ? AND calendar_id = ?").run(enabled, change.color ?? null, change.source, selected.calendarId).changes > 0;
     const hidden = db.query("SELECT 1 FROM desk_calendar_identities WHERE source = ? AND legacy_name = ?").get(change.source, change.name);
-    if (!current && hidden) return false;
+    if (hidden) return false;
     const legacy = db.query("UPDATE desk_calendars SET enabled = COALESCE(?, enabled), color = COALESCE(?, color) WHERE source = ? AND name = ?").run(enabled, change.color ?? null, change.source, change.name).changes;
-    return current > 0 || legacy > 0;
+    return legacy > 0;
   }).immediate();
 }

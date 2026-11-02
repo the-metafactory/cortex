@@ -49,15 +49,24 @@ describe("Desk calendars", () => {
     expect(listCalendars(db)).toContainEqual({ source: "one", name: "Home", calendarId: "second", enabled: false, color: "#123456" });
     expect(listCalendars(db)).toHaveLength(2);
   });
-  it("keeps legacy label changes effective for all currently matching stable identities", () => {
+  it("refuses ambiguous name-only changes without changing either stable calendar", async () => {
     discoverCalendars(db, [{ sourceId: "one", calendar: "Home", calendarId: "first" }, { sourceId: "one", calendar: "Home", calendarId: "second" }]);
-    expect(changeCalendar(db, { source: "one", name: "Home", enabled: false })).toBe(true);
-    expect(listCalendars(db).every(row => !row.enabled)).toBe(true);
-    changeCalendar(db, { source: "one", name: "Home", calendarId: "second", enabled: true });
-    expect(listCalendars(db).find(row => row.calendarId === "first")?.enabled).toBe(false);
-    expect(listCalendars(db).find(row => row.calendarId === "second")?.enabled).toBe(true);
-    expect(changeCalendar(db, { source: "one", name: "Home", color: "#456789" })).toBe(true);
-    expect(listCalendars(db).every(row => row.color === "#456789")).toBe(true);
+    changeCalendar(db, { source: "one", name: "Home", calendarId: "second", color: "#123456" });
+    const before = listCalendars(db);
+    const response = await handleDeskCalendars(new Request("http://localhost/api/desk/calendars", { method: "PATCH", body: JSON.stringify({ source: "one", name: "Home", enabled: false, color: "#456789" }) }), db);
+    expect(response.status).toBe(404);
+    expect(listCalendars(db)).toEqual(before);
+    expect(changeCalendar(db, { source: "one", name: "Home", calendarId: "first", enabled: false })).toBe(true);
+    expect(listCalendars(db)).toContainEqual({ source: "one", name: "Home", calendarId: "first", enabled: false, color: "#2563eb" });
+    expect(listCalendars(db)).toContainEqual({ source: "one", name: "Home", calendarId: "second", enabled: true, color: "#123456" });
+  });
+
+  it("keeps name-only changes working for a unique stable calendar", () => {
+    discoverCalendars(db, [{ sourceId: "one", calendar: "Home", calendarId: "first" }]);
+    expect(changeCalendar(db, { source: "one", name: "Home", enabled: false, color: "#123456" })).toBe(true);
+    discoverCalendars(db, [{ sourceId: "one", calendar: "Renamed", calendarId: "first" }]);
+    expect(changeCalendar(db, { source: "one", name: "Home", enabled: true })).toBe(false);
+    expect(listCalendars(db)).toEqual([{ source: "one", name: "Renamed", calendarId: "first", enabled: false, color: "#123456" }]);
   });
 
   it("filters hidden calendar events from today, ahead and meeting actions while retaining their settings", async () => {
