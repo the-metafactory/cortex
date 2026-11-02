@@ -16,12 +16,14 @@ import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceReadin
 import { listSenders, listVips } from "./vips";
 import type { MailActionsConfig, MailReportConfig } from "./mail-actions";
 import { suspicionContext } from "./mail-suspicion";
+import { offerContext, unsubscribeOffers, unsubscribeView, type UnsubscribeConfig, type UnsubscribeOffer } from "./mail-unsubscribe";
 import { movedTarget } from "./mail-move";
 import { historySentence, mailLogFor, queryMailLog, type MailLogEntry } from "./mail-log";
 import { DEFAULT_MAIL_RULES, digestedIds, heldItems, listRules, pendingRuleMail, proposalItems, proposeRules, ruleViews, rulesOfRuns, type MailRuleLoop, type MailRulesConfig } from "./mail-rules";
 import { TIMELINE_DAYS, type EvidenceLinks } from "./mail-triage";
 import { dmarcItems, dmarcWeek, type DmarcConfig, type DmarcLoop } from "./mail-dmarc";
-import { bundledKeys, listSweeps, sweepContext, sweepView } from "./mail-sweep";
+import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
+import { digestTopics, digestView, listMailGroups, readDigestFlags, type DigestConfig, type DigestFlagger } from "./mail-digest";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
 import type { DeskEvent, DeskGoal, DeskItem, DeskView, StudioOptions } from "./types";
 import { rangerActionsReady, withoutHandled, type HandledLedger, type RangerCli } from "./actions";
@@ -58,6 +60,7 @@ export interface DeskRuntime {
   rulings?: RulingLedger;
   mailRules?: MailRuleLoop;
   dmarc?: DmarcLoop;
+  digestFlagger?: DigestFlagger;
 }
 
 export interface DeskAskOptions {
@@ -93,6 +96,8 @@ export interface DeskOptions {
   mailRules?: MailRulesConfig;
   mailDmarc?: DmarcConfig;
   mailReport?: MailReportConfig;
+  mailDigest?: DigestConfig;
+  mailUnsubscribe?: UnsubscribeConfig;
   mailOwnDomains?: string[];
   mailLinks?: EvidenceLinks;
   voice?: VoiceOptions;
@@ -117,6 +122,7 @@ export interface ComposeDeps {
   goalStatuses?: GoalStatuses;
   mailClassifier?: MailClassifier;
   rulingExplain?: RulingExplainLoop;
+  digestFlagger?: DigestFlagger;
 }
 
 export const CORRECTIONS_UNREADABLE = "The Desk could not read your ranking corrections, so it ranks by its base rules alone.";
@@ -170,7 +176,10 @@ export async function composeDesk(
     return setting?.enabled ? [{ ...e, calendar: setting.name, color: setting.color }] : [];
   });
   const digested = digestedIds(db, readings.flatMap((r) => r.mail.map((m) => m.id)));
-  const mail = readings.flatMap((r) => r.mail.filter((m) => !digested.has(m.id) && (!deps.handled || movedTarget(deps.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
+  const canMove = Boolean(desk.mailActions?.move?.length);
+  const mailGroups = canMove ? listMailGroups(db, readings, desk, deps.handled, now) : null;
+  const held = mailGroups?.digests.held ?? new Set<string>();
+  const mail = readings.flatMap((r) => r.mail.filter((m) => !digested.has(m.id) && !held.has(m.id) && (!deps.handled || movedTarget(deps.handled, m.id) === undefined)).map((m) => ({ ...m, area: r.area, sourceId: r.id })));
   const vips = listVips(db);
   const vipSet = new Set(vips.map((v) => v.address));
   const suspicion = suspicionContext(db, desk.mailOwnDomains);
@@ -183,6 +192,9 @@ export async function composeDesk(
   const localSources = new Set(readings.filter((r) => r.area !== null && localAreas.has(r.area)).map((r) => r.id));
   if (classifier) void classifier.kick(db, { now, mail: mail.filter((m) => !ruleBound.has(m.id)), events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(db, shareableWith(classifier.local, localSources)), localSources });
   const classified = classifier ? readClassifications(db, mail.filter((m) => m.unread).map((m) => m.id)) : undefined;
+  const offerable = [...mail.filter((m) => m.unread), ...(mailGroups?.digests.groups ?? []).flatMap((g) => g.members)];
+  const flagged = new Set([...readClassifications(db, offerable.map((m) => m.id))].filter(([, c]) => c.suspicious === true).map(([id]) => id));
+  const unsubscribe = unsubscribeOffers(db, offerable, offerContext(db, desk.mailUnsubscribe, suspicion, flagged));
   const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null) : null;
   const yesFilter = await mailYesFilter(db, desk, now);
   const notes = listOpenNotes(db);
@@ -208,26 +220,28 @@ export async function composeDesk(
   const explanations = ranger && deps.rulingExplain ? await deps.rulingExplain.explain(ranger.needsYou) : undefined;
   const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
     .filter((item) => goalListed(goalStatuses, item.goal));
-  const canMove = Boolean(desk.mailActions?.move?.length);
   const rulesConfig = desk.mailRules ?? DEFAULT_MAIL_RULES;
   const ruleCards = canMove ? [...heldItems(listRules(db), rulesConfig), ...proposalItems(proposeRules(db, now, rulesConfig, vipSet), now)] : [];
   const dmarc = desk.mailDmarc ? dmarcWeek(db, now, desk.mailDmarc) : null;
   const dmarcCards = desk.mailDmarc ? dmarcItems(db, now, desk.mailDmarc, (id) => readings.find((r) => r.id === id)?.area ?? null) : [];
   const corrected = applyCorrections(markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
-    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport) }),
+    ...mailItems({ now, mail, yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), unsubscribe }),
     ...reminderItems(reminders, now),
     ...meetingItems([...todayCalendar, ...aheadCalendar], now, rules.meetingMinutes),
     ...ruleCards,
     ...dmarcCards,
   ], rules, readDeliveries(db), now), activeCorrections);
-  const sweeps = canMove ? listSweeps(db, readings, sweepContext(desk, readings, deps.handled), now) : [];
+  const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));
   const mailLog = mailLogFor(db, unbundled.filter(i => i.kind === "mail").map(i => mailIdOf(i.key)));
   const items = unbundled.map(item => item.kind === "mail" ? withMailLog({ ...item, mailDecision: readMailDecision(db, item.source, mailIdOf(item.key)) }, mailLog, now) : item);
 
   const { myDay, studio } = await readStudioDesk(db, desk, now);
+  const digests = mailGroups?.digests.groups ?? [];
+  if (deps.digestFlagger && digests.length > 0) void deps.digestFlagger.kick(db, digests, digestTopics(studio, () => loadBalanceState(db), buildGoals(subjects), now), localSources, now);
+  const digestFlags = readDigestFlags(db, digests.map((g) => g.id));
   const moved = movedKeys(db);
   const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => ({ ...i, todoFingerprint: sourceIdentity(i) }));
   return {
@@ -263,6 +277,7 @@ export async function composeDesk(
     notifications: rules.notifications,
     autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio), canMove),
     ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
+    ...(desk.mailDigest && canMove ? { mailDigests: digests.map((g) => withUnsubscribe(digestView(g, desk.mailDigest?.model ? digestFlags.get(g.id) : null), unsubscribe)) } : {}),
     ...(dmarc ? { dmarc } : {}),
     corrections: activeCorrections,
     mailClassifier,
@@ -298,6 +313,16 @@ function goalActionsFor(goals: DeskGoalOptions | undefined, subjects: VigilSubje
 }
 
 const mailIdOf = (key: string): string => key.slice("mail:".length);
+
+function withUnsubscribe<V extends { mails: SweepMailView[] }>(view: V, offers: ReadonlyMap<string, UnsubscribeOffer>): V {
+  return {
+    ...view,
+    mails: view.mails.map((m) => {
+      const offer = offers.get(mailIdOf(m.key));
+      return offer ? { ...m, unsubscribe: unsubscribeView(offer) } : m;
+    }),
+  };
+}
 
 function withMailLog(item: DeskItem, log: Map<string, MailLogEntry[]>, now: number): DeskItem {
   const entries = log.get(mailIdOf(item.key)) ?? [];

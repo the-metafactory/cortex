@@ -3,11 +3,14 @@ import { catchupSearch } from "../hooks/use-catchup-location";
 import { scrollBelowDesk } from "../lib/desk-scroll";
 import { DeskBalance } from "./desk-balance";
 import { MailSweeps, SweepPreview, sweepsInArea } from "./desk-mail-sweeps";
+import { digestsInArea, MailDigests, type UnsubscribeAsk } from "./desk-mail-digest";
 import type { MailSweepView } from "../../desk/mail-sweep";
 import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
 import { DeskTimeFirst } from "./desk-time-first";
-import { StudioSessionPanel, useStudioSession } from "./desk-studio-session";
+import { StudioSessionPanel, useStudioSession, type StartDiscussion } from "./desk-studio-session";
+import { ConversationsArea } from "./desk-conversations";
+import { useStartConversation } from "./desk-source-conversations";
 import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -27,7 +30,7 @@ import { proposalTime, type DeskProposal } from "../../desk/ask";
 import { DAY_MS, startOfDay } from "../../desk/time";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
-import { useDeskLocation, useDeskStudio } from "../hooks/use-desk-studio";
+import { useDeskLocation, useDeskStudio, type DeskLocation } from "../hooks/use-desk-studio";
 import { DeskModeSwitch, DeskStudio } from "./desk-studio";
 import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, selectItems, spokenBriefing, URGENCY_LABEL } from "../../desk/present";
 import { useDeskVoice } from "../hooks/use-desk-voice";
@@ -114,6 +117,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const inStudio = place.mode === "studio" && studio !== null;
   const inBalance = place.mode === "balance";
   const inCatchup = place.mode === "catchup";
+  const inConversation = place.mode === "conversation";
+  const cameFrom = useRef<DeskLocation | null>(null);
+  const openConversation = (id: string): void => {
+    if (place.mode !== "conversation") cameFrom.current = place;
+    go({ mode: "conversation", thread: null, conversation: id });
+  };
+  const leaveConversation = (): void => go(cameFrom.current ?? { mode: "conversation", thread: null, conversation: null });
   const openCatchup = (key: string | null): void => {
     const search = catchupSearch(window.location.search, { area: "", filter: "all", card: key });
     window.history.pushState(null, "", `${window.location.pathname}${search}${window.location.hash}`);
@@ -232,6 +242,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
 
   const discussion = useStudioSession(captureChanged);
+  const starter = useStartConversation(openConversation);
+  const discuss: StartDiscussion = (thread, scope) => { void starter.start(scope.kind === "ghost" ? { owner: "studio-note", id: `${thread}#${scope.note}` } : { owner: "studio-thread", id: thread }); };
   const voice = useDeskVoice({ ...view.voice, enabled: view.voice.enabled && !discussion.session }, {
     answer: async (said) => {
       const result = await askDesk(said, fetch, area === ALL_AREAS ? undefined : area);
@@ -332,6 +344,22 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     onChanged();
   };
 
+  const keepDigest = async (key: string): Promise<void> => {
+    setSweeping(true);
+    const result = await submitMailAction({ action: "digest.keep", key });
+    setSweeping(false);
+    setNote(result.text);
+    if (result.ok) onChanged();
+  };
+
+  const unsubscribeDigest = async (key: string, ask: UnsubscribeAsk): Promise<void> => {
+    setSweeping(true);
+    const result = await submitMailAction({ action: ask, key });
+    setSweeping(false);
+    setNote(result.text);
+    if (result.ok) onChanged();
+  };
+
   const openSweep = (s: MailSweepView): void => {
     setDetail(null);
     setSweep(s);
@@ -372,6 +400,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "mail.draft" && item.reply) openReply(item);
     else if (a.id === "mail.unimportant") void send(item, a, { request: () => submitMailAction({ action: "unimportant", key: item.key }) });
     else if (a.id === "mail.report") void send(item, a, { request: () => submitMailAction({ action: "report", key: item.key }), keepVisible: true });
+    else if (a.id === "mail.unsubscribe") confirmFirst(item, a, () => void send(item, a, { request: () => submitMailAction({ action: "unsubscribe", key: item.key }), keepVisible: true }));
+    else if (a.id === "mail.unsubscribe.page" && a.url) { const url = a.url; confirmFirst(item, a, () => openLink(url)); }
+    else if (a.id === "mail.unsubscribe.rule") void send(item, a, { request: () => submitMailAction({ action: "unsubscribe.rule", key: item.key }) });
     else if (a.id.startsWith("mailrule.")) runRule(item, a);
     else if (a.id === "dmarc.ack" && a.target) acknowledge(item, a, a.target);
     else if (a.id === "meeting.show" && a.target) showEvent(a.target);
@@ -549,7 +580,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         <div className="desk-top-in">
           <div className="desk-left">
             <div className="desk-brand"><span className="desk-mark" />Desk</div>
-            <DeskModeSwitch hasStudio={studio !== null} inStudio={inStudio} inBalance={inBalance} inCatchup={inCatchup} onGo={(mode) => go({ mode, thread: null })} />
+            <DeskModeSwitch hasStudio={studio !== null} inStudio={inStudio} inBalance={inBalance} inCatchup={inCatchup} inConversation={inConversation} onGo={(mode) => { if (mode === "conversation") cameFrom.current = null; go({ mode, thread: null, ...(mode === "conversation" ? { conversation: null } : {}) }); }} />
             <div className="desk-askwrap">
               <form
                 className="desk-ask"
@@ -575,7 +606,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
             </div>
           </div>
           <div className="desk-topr">
-            {!inStudio && !inBalance && !inCatchup && view.areas.length > 0 && (
+            {!inStudio && !inBalance && !inCatchup && !inConversation && view.areas.length > 0 && (
               <div className="desk-seg" role="tablist" aria-label="Area">
                 <button type="button" role="tab" aria-selected={area === ALL_AREAS} onClick={() => setArea(ALL_AREAS)}>All</button>
                 {view.areas.map((a) => (
@@ -590,17 +621,19 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         </div>
       </div>
 
-      <StudioSessionPanel controls={discussion} voice={view.voice} location={`${place.mode}:${place.thread ?? ""}`} />
-      {inStudio && studio && <DeskStudio studio={studio} thread={place.thread} day={view} onDiscuss={discussion.start} onOpenThread={(slug) => go({ mode: "studio", thread: slug })} />}
+      <StudioSessionPanel controls={discussion} voice={view.voice} location={`${place.mode}:${place.thread ?? ""}`} onContinue={(sessionId) => void starter.open(sessionId)} />
+      {starter.error && <p className="desk-unsent" role="alert">{starter.error}</p>}
+      {inConversation && <ConversationsArea selected={place.conversation ?? null} onOpen={openConversation} onLeave={leaveConversation} />}
+      {inStudio && studio && <DeskStudio studio={studio} thread={place.thread} day={view} onDiscuss={discuss} onConversation={openConversation} onOpenThread={(slug) => go({ mode: "studio", thread: slug })} />}
       {inStudio && (
         <div className="dst">
           {proposalCard}
           <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => void stopRule(rule)} onPromote={(action, on) => void promote(action, on)} />
         </div>
       )}
-      {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
-      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} />
-      <div className="desk-grid tf-shell" hidden={inStudio || inBalance || inCatchup}>
+      {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
+      <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={(a) => <MailDigests digests={digestsInArea(view.mailDigests ?? [], a)} busy={sweeping} onArchive={openSweep} onKeep={(key) => void keepDigest(key)} onUnsubscribe={(key, ask) => void unsubscribeDigest(key, ask)} />} />
+      <div className="desk-grid tf-shell" hidden={inStudio || inBalance || inCatchup || inConversation}>
         <DeskTimeFirst day={view.myDay} calendar={view.calendarAvailability} now={view.generatedAt} onChanged={onChanged}
           before={<>
           <section className="desk-lead">
@@ -1035,13 +1068,15 @@ interface SendOptions {
 
 const CHECK_POLL_MS = 3000;
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "mail.report": "Reporting…", "ranger.rule": "Recording…" };
+const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "mail.report": "Reporting…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "ranger.rule": "Recording…" };
 
 const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
+const CONFIRM_TARGET: Record<string, (target: string) => string> = { "mail.unsubscribe": (host) => `Yes, unsubscribe via ${host}`, "mail.unsubscribe.page": (host) => `Yes, open ${host}` };
+
+const confirmLabel = (a: DeskAction): string | undefined => CONFIRM_LABEL[a.id] ?? (a.target ? CONFIRM_TARGET[a.id]?.(a.target) : undefined);
 
 export function withConfirm(item: DeskItem, actionId: string): DeskItem {
-  const label = CONFIRM_LABEL[actionId];
-  return label ? { ...item, actions: item.actions.map((a) => (a.id === actionId ? { ...a, label } : a)) } : item;
+  return { ...item, actions: item.actions.map((a) => { const label = a.id === actionId ? confirmLabel(a) : undefined; return label ? { ...a, label } : a; }) };
 }
 
 export function ActionButton({ action, onRun, sending }: { action: DeskAction; onRun: (a: DeskAction) => void; sending: string | null }) {
@@ -1084,7 +1119,7 @@ function nowSubline(view: DeskViewModel, count: number, rest: number, next: Desk
 
 function openLink(url: string): void {
   if (/^https?:/i.test(url)) window.open(url, "_blank", "noopener");
-  else if (/^message:/i.test(url)) window.location.assign(url);
+  else if (/^(message|mailto):/i.test(url)) window.location.assign(url);
 }
 
 export function AheadStrip({ events }: { events: DeskEvent[] }) {

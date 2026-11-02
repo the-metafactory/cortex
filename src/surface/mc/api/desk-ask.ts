@@ -124,7 +124,7 @@ export async function handleDeskCreate(req: Request, db: Database, runtime: Desk
     }
     runtime.ledger.add(key, now);
     if (created.event) runtime.recentWrites?.add(created.event, now);
-    return Response.json({ ok: true, message: created.message, ...(created.url ? { url: created.url } : {}) }, { headers: noStore });
+    return Response.json({ ok: true, id: created.id, message: created.message, ...(created.url ? { url: created.url } : {}) }, { headers: noStore });
   } finally {
     runtime.ledger.release(key);
   }
