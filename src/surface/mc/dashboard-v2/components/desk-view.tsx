@@ -1,5 +1,5 @@
 import { CatchupPreview, DeskCatchUp } from "./desk-catch-up";
-import { catchupSearch } from "../hooks/use-catchup-location";
+import { catchupSearch, clearedCatchup } from "../hooks/use-catchup-location";
 import { scrollBelowDesk } from "../lib/desk-scroll";
 import { deskLinkMode, openDeskLink } from "../lib/desk-link";
 import { DeskLink } from "./desk-link";
@@ -147,7 +147,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   };
   const leaveConversation = (): void => go(cameFrom.current ?? { mode: "conversation", thread: null, conversation: null });
   const openCatchup = (key: string | null): void => {
-    const search = catchupSearch(window.location.search, { area: "", filter: "all", kind: "all", query: "", card: key });
+    const search = catchupSearch(window.location.search, clearedCatchup(key));
     window.history.pushState(null, "", `${window.location.pathname}${search}${window.location.hash}`);
     window.dispatchEvent(new PopStateEvent("popstate"));
   };

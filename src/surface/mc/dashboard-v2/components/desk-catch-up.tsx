@@ -13,6 +13,7 @@ import { submitMyDay } from "./desk-my-day";
 import { balanceItemSearch } from "../hooks/use-balance-location";
 import {
   catchupSearch,
+  clearedCatchup,
   useCatchupLocation,
   type CardFilter,
 } from "../hooks/use-catchup-location";
@@ -133,8 +134,11 @@ export function DeskCatchUp({
   const filtered = catchupItems(sourceItems, location.area, location.filter, location.kind, location.query);
   const matchingDigests = catchupMailGroups(view.mailDigests ?? [], location.area, location.kind, location.query);
   const matchingSweeps = catchupMailGroups(view.mailSweeps ?? [], location.area, location.kind, location.query);
-  const digests = location.filter === "action" ? [] : matchingDigests;
-  const sweeps = location.filter === "update" ? [] : matchingSweeps;
+  const groupsFor = (filter: CardFilter) => ({
+    digests: filter === "action" ? [] : matchingDigests,
+    sweeps: filter === "update" ? [] : matchingSweeps,
+  });
+  const { digests, sweeps } = groupsFor(location.filter);
   const groupCount = digests.length + sweeps.length;
   const shown =
     open && !filtered.some((i) => i.key === open.key)
@@ -300,19 +304,22 @@ export function DeskCatchUp({
         <label>Search cards
           <input type="search" placeholder="Search all card content…" value={location.query} onChange={event => go({ ...location, query: event.target.value, card: null }, true)} />
         </label>
-        {(location.area || location.kind !== "all" || location.query || location.filter !== "all") && <button type="button" className="desk-btn ghost" onClick={() => go({ area: "", filter: "all", kind: "all", query: "", card: null })}>Clear filters</button>}
+        {(location.area || location.kind !== "all" || location.query || location.filter !== "all") && <button type="button" className="desk-btn ghost" onClick={() => go(clearedCatchup())}>Clear filters</button>}
       </div>
       <nav className="catchup-types" aria-label="Catch-up attention">
-        {FILTERS.map((f) => (
+        {FILTERS.map((f) => {
+          const groups = groupsFor(f.id);
+          return (
           <button
             type="button"
             key={f.id}
             aria-pressed={location.filter === f.id}
             onClick={() => { go({ ...location, filter: f.id, card: null }); }}
           >
-            {f.label} · {catchupItems(areaItems, "", f.id).length + (f.id === "all" ? matchingDigests.length + matchingSweeps.length : f.id === "action" ? matchingSweeps.length : matchingDigests.length)}
+            {f.label} · {catchupItems(areaItems, "", f.id).length + groups.digests.length + groups.sweeps.length}
           </button>
-        ))}
+          );
+        })}
       </nav>
       {notice && <p role="status">{notice}</p>}
       {open && !filtered.some((i) => i.key === open.key) && (
@@ -321,7 +328,7 @@ export function DeskCatchUp({
           <button
             type="button"
             className="desk-btn ghost"
-            onClick={() => { go({ area: "", filter: "all", kind: "all", query: "", card: open.key }); }}
+            onClick={() => { go(clearedCatchup(open.key)); }}
           >
             Clear filters
           </button>
@@ -437,7 +444,7 @@ export function DeskCatchUp({
           <button
             type="button"
             className="desk-btn"
-            onClick={() => { go({ area: "", filter: "all", kind: "all", query: "", card: null }); }}
+            onClick={() => { go(clearedCatchup()); }}
           >
             Clear filters
           </button>
@@ -451,10 +458,4 @@ function contains(node: OutlineNode, id: string): boolean {
   return node.id === id || node.children.some((child) => contains(child, id));
 }
 export const catchupHref = (key: string | null): string =>
-  catchupSearch(typeof window === "undefined" ? "" : window.location.search, {
-    area: "",
-    filter: "all",
-    kind: "all",
-    query: "",
-    card: key,
-  });
+  catchupSearch(typeof window === "undefined" ? "" : window.location.search, clearedCatchup(key));

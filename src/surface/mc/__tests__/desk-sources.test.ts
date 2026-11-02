@@ -113,7 +113,7 @@ describe("mail on the Desk", () => {
   it("keeps read mail on the Desk alongside unread mail", () => {
     const items = mailItems({ now: NOW, mail: [mail({ unread: false }), mail({ id: "m2", from: { address: "news@x.ch" }, subject: "Newsletter" })], events: [], vips: new Set() });
     expect(items.map((i) => i.key)).toEqual(["mail:m1@x", "mail:m2"]);
-    expect(items[0]?.score).toBeLessThan(20);
+    expect(items.find(item => item.key === "mail:m2")?.score).toBeLessThan(20);
   });
 });
 

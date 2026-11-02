@@ -9,6 +9,9 @@ export interface CatchupLocation {
   kind: CatchupKind;
   query: string;
 }
+export function clearedCatchup(card: string | null = null): CatchupLocation {
+  return { area: "", filter: "all", kind: "all", query: "", card };
+}
 export function readCatchupLocation(search: string): CatchupLocation {
   const params = new URLSearchParams(search);
   const filter = params.get("catchup-type");
