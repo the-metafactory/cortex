@@ -8,7 +8,7 @@ import { useStudioForeground } from "../hooks/use-studio-foreground";
 import { MailYesFilterBox, RecordedMailDecision } from "./desk-mail-yes-filter";
 import { MyDayLane } from "./desk-my-day";
 import { StudioSessionPanel, useStudioSession, type StartDiscussion } from "./desk-studio-session";
-import { ConversationWorkspace } from "./desk-conversation";
+import { ConversationsArea } from "./desk-conversations";
 import { useStartConversation } from "./desk-source-conversations";
 import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
@@ -116,13 +116,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const inStudio = place.mode === "studio" && studio !== null;
   const inBalance = place.mode === "balance";
   const inCatchup = place.mode === "catchup";
-  const inConversation = place.mode === "conversation" && Boolean(place.conversation);
+  const inConversation = place.mode === "conversation";
   const cameFrom = useRef<DeskLocation | null>(null);
   const openConversation = (id: string): void => {
     if (place.mode !== "conversation") cameFrom.current = place;
     go({ mode: "conversation", thread: null, conversation: id });
   };
-  const leaveConversation = (): void => go(cameFrom.current ?? { mode: "day", thread: null });
+  const leaveConversation = (): void => go(cameFrom.current ?? { mode: "conversation", thread: null, conversation: null });
   const openCatchup = (key: string | null): void => {
     const search = catchupSearch(window.location.search, { area: "", filter: "all", card: key });
     window.history.pushState(null, "", `${window.location.pathname}${search}${window.location.hash}`);
@@ -560,7 +560,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
         <div className="desk-top-in">
           <div className="desk-left">
             <div className="desk-brand"><span className="desk-mark" />Desk</div>
-            <DeskModeSwitch hasStudio={studio !== null} inStudio={inStudio} inBalance={inBalance} inCatchup={inCatchup} onGo={(mode) => go({ mode, thread: null })} />
+            <DeskModeSwitch hasStudio={studio !== null} inStudio={inStudio} inBalance={inBalance} inCatchup={inCatchup} inConversation={inConversation} onGo={(mode) => { if (mode === "conversation") cameFrom.current = null; go({ mode, thread: null, ...(mode === "conversation" ? { conversation: null } : {}) }); }} />
             <div className="desk-askwrap">
               <form
                 className="desk-ask"
@@ -603,7 +603,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
       <StudioSessionPanel controls={discussion} voice={view.voice} location={`${place.mode}:${place.thread ?? ""}`} onContinue={(sessionId) => void starter.open(sessionId)} />
       {starter.error && <p className="desk-unsent" role="alert">{starter.error}</p>}
-      {inConversation && place.conversation && <ConversationWorkspace key={place.conversation} id={place.conversation} onLeave={leaveConversation} />}
+      {inConversation && <ConversationsArea selected={place.conversation ?? null} onOpen={openConversation} onLeave={leaveConversation} />}
       {inStudio && studio && <DeskStudio studio={studio} thread={place.thread} day={view} onDiscuss={discuss} onConversation={openConversation} onOpenThread={(slug) => go({ mode: "studio", thread: slug })} />}
       {inStudio && (
         <div className="dst">

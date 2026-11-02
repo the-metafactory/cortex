@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { SessionEnd } from "../../desk/studio/session-schema";
 import {
-  chooseOutcome, entryViews, failureText as failure, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel,
+  chooseOutcome, entryViews, failureText as failure, organize as organizeConversation, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel, statusLabel,
   type ConversationDetail, type ConversationEntry, type OperationRecord,
 } from "../lib/conversations";
+import type { Organize } from "../../../../conversations/types";
 import "./desk-conversation.css";
 
 const BUSY_MS = 2_000;
 const IDLE_MS = 15_000;
 const DRAFT_MS = 600;
-
 
 export function useConversation(id: string) {
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
@@ -17,6 +17,7 @@ export function useConversation(id: string) {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraftState] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [organizing, setOrganizing] = useState(false);
   const unsent = useRef<{ inputId: string; text: string; mode: "queue" | "steer" } | null>(null);
   const saved = useRef<string | null>(null);
   const latest = useRef<string | null>(null);
@@ -83,7 +84,20 @@ export function useConversation(id: string) {
     } finally { setSending(false); }
   }, [id, sending, flush, load]);
 
-  return { detail, entries, error, draft: draft ?? "", ready: draft !== null, setDraft, send, sending, busy, retrying: unsent.current !== null, reload: load, flush };
+  const organize = useCallback(async (change: Organize): Promise<boolean> => {
+    if (organizing) return false;
+    setOrganizing(true); setError(null);
+    try {
+      await organizeConversation(id, change);
+      await load();
+      return true;
+    } catch (err) {
+      setError(`Not confirmed: ${failure(err, "Mission Control did not answer.")} Try again; repeating it is safe and changes nothing twice.`);
+      return false;
+    } finally { setOrganizing(false); }
+  }, [id, organizing, load]);
+
+  return { detail, entries, error, draft: draft ?? "", ready: draft !== null, setDraft, send, sending, busy, retrying: unsent.current !== null, reload: load, flush, organize, organizing };
 }
 
 const OUTCOMES_NOTE: { label: string; primary?: boolean; needsText?: boolean; make: (text: string) => SessionEnd }[] = [
@@ -143,11 +157,12 @@ function StudioOutcome({ id, studio, onSaved }: { id: string; studio: NonNullabl
   </section>;
 }
 
-export function ConversationWorkspace({ id, onLeave }: { id: string; onLeave: () => void }) {
+export function ConversationWorkspace({ id, onLeave, onOrganized }: { id: string; onLeave: () => void; onOrganized?: () => void }) {
   const c = useConversation(id);
   const leave = (): void => { void c.flush(true); onLeave(); };
   if (!c.detail) return <section className="dcv" aria-label="Ivy conversation"><header className="dcv-head"><button type="button" className="desk-btn ghost" onClick={leave}>Leave</button></header><p role={c.error ? "alert" : "status"}>{c.error ?? "Opening the conversation…"}</p></section>;
-  return <WorkspaceView detail={c.detail} entries={c.entries} draft={c.draft} ready={c.ready} busy={c.busy} sending={c.sending} retrying={c.retrying} error={c.error} onDraft={c.setDraft} onSend={mode => void c.send(mode)} onLeave={leave} onSaved={() => void c.reload()} />;
+  return <WorkspaceView detail={c.detail} entries={c.entries} draft={c.draft} ready={c.ready} busy={c.busy} sending={c.sending} retrying={c.retrying} error={c.error} onDraft={c.setDraft} onSend={mode => void c.send(mode)} onLeave={leave} onSaved={() => void c.reload()}
+    organizing={c.organizing} onOrganize={change => { void c.organize(change).then(done => { if (done) onOrganized?.(); }); }} />;
 }
 
 export interface WorkspaceProps {
@@ -163,6 +178,8 @@ export interface WorkspaceProps {
   onSend: (mode: "queue" | "steer") => void;
   onLeave: () => void;
   onSaved: () => void;
+  organizing: boolean;
+  onOrganize: (change: Organize) => void;
 }
 
 export function WorkspaceView(c: WorkspaceProps) {
@@ -171,13 +188,20 @@ export function WorkspaceView(c: WorkspaceProps) {
   useEffect(() => { stream.current?.scrollTo({ top: stream.current.scrollHeight }); }, [count]);
   const { conversation, sources, pending, studio } = c.detail;
   const views = c.entries.flatMap(entry => entryViews(entry).map((view, i) => ({ key: `${entry.id}-${i}`, view })));
+  const archived = conversation.state === "archived";
   return <section className="dcv" aria-label={`Ivy conversation: ${conversation.title}`}>
     <header className="dcv-head">
-      <div className="dcv-title"><h2>{conversation.title}</h2><button type="button" className="desk-btn ghost" onClick={c.onLeave}>Leave</button></div>
+      <div className="dcv-title"><h2>{conversation.title}</h2>
+        <div className="dcv-acts">
+          <button type="button" className="desk-btn ghost" disabled={c.organizing} aria-pressed={conversation.pinned} onClick={() => c.onOrganize({ pinned: !conversation.pinned })}>{conversation.pinned ? "Unpin" : "Pin"}</button>
+          <button type="button" className={`desk-btn${archived ? " pri" : " ghost"}`} disabled={c.organizing} onClick={() => c.onOrganize({ state: archived ? "current" : "archived" })}>{archived ? "Restore" : "Archive"}</button>
+          <button type="button" className="desk-btn ghost" onClick={c.onLeave}>Leave</button>
+        </div>
+      </div>
       <p className="dcv-meta">
         <span className={`dcv-badge${conversation.policy === "local" ? " local" : ""}`}>{conversation.policy === "local" ? "Local only · local model" : "Cloud allowed"}</span>
-        <span>{conversation.activity.status === "working" ? "Ivy is working" : conversation.activity.status === "waiting" ? "Waiting for you" : "Ready to continue"}</span>
-        {conversation.state === "archived" && <span>Archived · continuing adds new turns</span>}
+        <span>{statusLabel(conversation.activity.status)}</span>
+        {archived && <span>Archived · read-only until you restore it</span>}
       </p>
     </header>
     <aside className="dcv-sources" aria-label="Linked work">
@@ -194,15 +218,15 @@ export function WorkspaceView(c: WorkspaceProps) {
     </div>
     {pending.length > 0 && <div className="dcv-queue" role="status"><strong>{pending.length === 1 ? "1 message in order" : `${pending.length} messages in order`} · one shared order for web and Discord</strong>
       <ol>{pending.map(p => <li key={p.inputId}>{pendingLabel(p)}</li>)}</ol></div>}
-    <form className="dcv-composer" onSubmit={e => { e.preventDefault(); c.onSend("queue"); }}>
-      <label>Message Ivy<textarea aria-label="Message Ivy" value={c.draft} disabled={!c.ready} maxLength={20_000} onChange={e => c.onDraft(e.target.value)} placeholder="Continue the thought…" /></label>
+    <form className="dcv-composer" onSubmit={e => { e.preventDefault(); if (!archived) c.onSend("queue"); }}>
+      <label>Message Ivy<textarea aria-label="Message Ivy" value={c.draft} disabled={!c.ready || archived} maxLength={20_000} onChange={e => c.onDraft(e.target.value)} placeholder="Continue the thought…" /></label>
       <div className="dcv-acts">
-        <button className="desk-btn pri" disabled={c.sending || !c.draft.trim()}>{c.retrying ? "Send again" : c.busy ? "Queue message" : "Send"}</button>
-        {c.busy && <button type="button" className="desk-btn" disabled={c.sending || !c.draft.trim()} onClick={() => c.onSend("steer")}>Use this now</button>}
+        <button className="desk-btn pri" disabled={archived || c.sending || !c.draft.trim()}>{c.retrying ? "Send again" : c.busy ? "Queue message" : "Send"}</button>
+        {c.busy && !archived && <button type="button" className="desk-btn" disabled={c.sending || !c.draft.trim()} onClick={() => c.onSend("steer")}>Use this now</button>}
       </div>
-      <p className="dcv-quiet">{c.busy ? "Ivy is working. Queue waits for the current turn; Use this now joins at Ivy's next safe point and never interrupts a running change." : "Your unsent draft is saved here. Leave keeps the conversation; nothing ends."}</p>
+      <p className="dcv-quiet">{archived ? "This conversation is archived. Restore it to continue with the same history; opening it never resumes it." : c.busy ? "Ivy is working. Queue waits for the current turn; Use this now joins at Ivy's next safe point and never interrupts a running change." : "Your unsent draft is saved here. Leave keeps the conversation; nothing ends."}</p>
       {c.error && <p className="desk-unsent" role="alert">{c.error}</p>}
     </form>
-    {studio && <StudioOutcome id={conversation.id} studio={studio} onSaved={c.onSaved} />}
+    {studio && !archived && <StudioOutcome id={conversation.id} studio={studio} onSaved={c.onSaved} />}
   </section>;
 }

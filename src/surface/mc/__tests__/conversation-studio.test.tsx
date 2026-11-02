@@ -165,7 +165,9 @@ describe("Ivy conversations from Studio and Balance", () => {
     const decision = (await r.entries(archived.body.conversation.id)).find(e => e.kind === "cortex.decision");
     expect(decision?.data).toMatchObject({ readOnly: true, commit: "a".repeat(40), outcome: { kind: "keep" } });
     expect((await r.call("GET", `/api/conversations/${archived.body.conversation.id}`)).body.studio).toBeNull();
-    await r.call("POST", `/api/conversations/${archived.body.conversation.id}/inputs`, say("later", "Continue the old idea"));
+    expect((await r.call("POST", `/api/conversations/${archived.body.conversation.id}/inputs`, say("later", "Continue the old idea"))).status).toBe(409);
+    expect((await r.call("PATCH", `/api/conversations/${archived.body.conversation.id}`, { state: "current" })).body.conversation.state).toBe("current");
+    expect((await r.call("POST", `/api/conversations/${archived.body.conversation.id}/inputs`, say("later", "Continue the old idea"))).status).toBe(202);
     await r.idle(archived.body.conversation.id);
     expect(r.git("log", "--oneline").split("\n")).toHaveLength(1);
     expect(r.parsed().notes[0]?.status).toBe("open");
@@ -224,7 +226,7 @@ describe("Ivy conversations from Studio and Balance", () => {
 
 describe("workspace A over the authenticated conversation API", () => {
   const noop = (): void => undefined;
-  const view = (detail: ConversationDetail, entries: ConversationEntry[], busy = false): string => renderToStaticMarkup(<WorkspaceView detail={detail} entries={entries} draft={detail.draft} ready busy={busy} sending={false} retrying={false} error={null} onDraft={noop} onSend={noop} onLeave={noop} onSaved={noop} />);
+  const view = (detail: ConversationDetail, entries: ConversationEntry[], busy = false): string => renderToStaticMarkup(<WorkspaceView detail={detail} entries={entries} draft={detail.draft} ready busy={busy} sending={false} retrying={false} error={null} onDraft={noop} onSend={noop} onLeave={noop} onSaved={noop} organizing={false} onOrganize={noop} />);
 
   test("shows saved messages, the Studio source context, the restored draft, Use this now while busy, and an unavailable source without its content", async () => {
     const { promise: release, resolve } = Promise.withResolvers<undefined>();
@@ -268,6 +270,6 @@ describe("workspace A over the authenticated conversation API", () => {
     expect(html).toContain("New conversation");
     const location = { mode: "conversation" as const, thread: null, conversation: one.body.conversation.id };
     expect(readDeskLocation(deskSearch("", location))).toEqual(location);
-    expect(readDeskLocation("?desk=conversation&conversation=not-an-id").mode).toBe("day");
+    expect(readDeskLocation("?desk=conversation&conversation=not-an-id")).toEqual({ mode: "conversation", thread: null, conversation: null });
   });
 });
