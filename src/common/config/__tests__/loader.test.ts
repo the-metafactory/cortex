@@ -463,6 +463,16 @@ describe("MIG-7.2e — cortex-shape detection + transform", () => {
     expect(config.cockpit.repo).toBe("the-metafactory/cortex");
   });
 
+  test("keeps a Desk writer's declared owner through the cortex-shape parse", () => {
+    const cfg = minimalCortex();
+    cfg.mc = { enabled: true, desk: { ask: { writers: { note: { command: ["desk-note-tana.ts"], owner: "tana" }, goal: ["desk-goal.ts"] } } } };
+    const ask = loadConfigWithAgents(writeCortexConfig(testDir, cfg)).config.mc.desk?.ask;
+    expect(ask?.writers).toEqual({ note: ["desk-note-tana.ts"], goal: ["desk-goal.ts"] });
+    expect(ask?.writerOwners).toEqual({ note: "tana" });
+    cfg.mc = { enabled: true, desk: { ask: { writers: { goal: ["desk-goal.ts"] }, writerOwners: { note: "tana" } } } };
+    expect(loadConfigWithAgents(writeCortexConfig(testDir, cfg)).config.mc.desk?.ask).not.toHaveProperty("writerOwners");
+  });
+
   test("carries vigil through loadCortexShape and defaults it off when absent", () => {
     const cfg = minimalCortex();
     // glossary-ignore: run

@@ -507,20 +507,25 @@ export const DeskMailMirrorSchema = z.object({
 });
 
 const DeskWriterArgvSchema = z.array(z.string().min(1)).min(1);
-const DeskWriterSchema = z.union([DeskWriterArgvSchema, z.strictObject({ command: DeskWriterArgvSchema, owner: z.string().regex(/^[a-z][a-z0-9-]*$/).optional() })]);
+const DeskWriterOwnerSchema = z.string().regex(/^[a-z][a-z0-9-]*$/);
+const DeskWriterSchema = z.union([DeskWriterArgvSchema, z.strictObject({ command: DeskWriterArgvSchema, owner: DeskWriterOwnerSchema.optional() })]);
 type DeskWriterEntry = z.infer<typeof DeskWriterSchema>;
+const DeskWritersSchema = z.object({
+  calendar: DeskWriterSchema.optional(),
+  task: DeskWriterSchema.optional(),
+  goal: DeskWriterSchema.optional(),
+  note: DeskWriterSchema.optional(),
+  reminder: DeskWriterSchema.optional(),
+});
 
-function splitDeskWriters<K extends string>(entries: Partial<Record<K, DeskWriterEntry>>): { writers: Partial<Record<K, string[]>>; writerOwners?: Partial<Record<K, string>> } {
+function splitDeskWriters<K extends string>(entries: Partial<Record<K, DeskWriterEntry>>, parsed: Partial<Record<K, string>> = {}): { writers: Partial<Record<K, string[]>>; writerOwners?: Partial<Record<K, string>> } {
   const writers: Partial<Record<K, string[]>> = {};
   const writerOwners: Partial<Record<K, string>> = {};
   for (const [kind, entry] of Object.entries(entries) as [K, DeskWriterEntry | undefined][]) {
     if (!entry) continue;
-    if (Array.isArray(entry)) {
-      writers[kind] = entry;
-      continue;
-    }
-    writers[kind] = entry.command;
-    if (entry.owner) writerOwners[kind] = entry.owner;
+    writers[kind] = Array.isArray(entry) ? entry : entry.command;
+    const owner = (Array.isArray(entry) ? undefined : entry.owner) ?? parsed[kind];
+    if (owner) writerOwners[kind] = owner;
   }
   return Object.keys(writerOwners).length ? { writers, writerOwners } : { writers };
 }
@@ -574,19 +579,12 @@ export const DeskSchema = z.object({
       parser: z.array(z.string().min(1)).default([]),
       routing: ParserPermissionsSchema.optional(),
       timeoutSeconds: z.number().int().min(1).max(120).default(30),
-      writers: z
-        .object({
-          calendar: DeskWriterSchema.optional(),
-          task: DeskWriterSchema.optional(),
-          goal: DeskWriterSchema.optional(),
-          note: DeskWriterSchema.optional(),
-          reminder: DeskWriterSchema.optional(),
-        })
-        .default({}),
+      writers: DeskWritersSchema.default({}),
+      writerOwners: z.partialRecord(DeskWritersSchema.keyof(), DeskWriterOwnerSchema).optional(),
       taskMaps: z.array(z.object({ ref: z.string().regex(/^[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/), label: z.string().min(1) })).default([]),
       taskCloser: z.array(z.string().min(1)).min(1).optional(),
     })
-    .transform(({ writers, ...ask }) => ({ ...ask, ...splitDeskWriters(writers) }))
+    .transform(({ writers, writerOwners, ...ask }) => ({ ...ask, ...splitDeskWriters(writers, writerOwners) }))
     .default({ parser: [], timeoutSeconds: 30, writers: {}, taskMaps: [] }),
   interruptions: DeskInterruptionsSchema.default(DeskInterruptionsSchema.parse({})),
   voice: DeskVoiceSchema.default(DeskVoiceSchema.parse({})),
