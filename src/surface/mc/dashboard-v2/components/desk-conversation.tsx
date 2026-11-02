@@ -1,5 +1,5 @@
 import { renderMarkdown } from "../lib/markdown";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { SessionEnd } from "../../desk/studio/session-schema";
 import {
   chooseOutcome, entryViews, failureText as failure, organize as organizeConversation, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel, statusLabel,
@@ -193,6 +193,10 @@ export interface WorkspaceProps {
   onOrganize: (change: Organize) => void;
 }
 
+const IvyAnswer = memo(function IvyAnswer({ text }: { text: string }) {
+  return <div className="dcv-markdown">{renderMarkdown(text)}</div>;
+});
+
 export function WorkspaceView(c: WorkspaceProps) {
   const stream = useRef<HTMLDivElement>(null);
   const count = c.entries.length;
@@ -224,7 +228,7 @@ export function WorkspaceView(c: WorkspaceProps) {
     </aside>
     <div className="dcv-stream" ref={stream} aria-live="polite">
       {views.map(({ key, view }, i) => {
-        if (view.kind === "message") return <article key={key} className={`dcv-msg ${view.who}`}><small>{view.who === "you" ? "You" : "Ivy"}{view.note ? ` · ${view.note}` : ""}</small>{view.who === "ivy" ? <div className="dcv-markdown">{renderMarkdown(view.text)}</div> : <p>{view.text}</p>}</article>;
+        if (view.kind === "message") return <article key={key} className={`dcv-msg ${view.who}`}><small>{view.who === "you" ? "You" : "Ivy"}{view.note ? ` · ${view.note}` : ""}</small>{view.who === "ivy" ? <IvyAnswer text={view.text} /> : <p>{view.text}</p>}</article>;
         if (view.kind === "activity") return <p key={key} className="dcv-activity">{view.text}</p>;
         const retry = i === views.length - 1 && !archived && !c.busy && said?.text;
         return <p key={key} className="dcv-activity dcv-failed" role="alert">{view.text} Your message stays in the record; no other engine was used.

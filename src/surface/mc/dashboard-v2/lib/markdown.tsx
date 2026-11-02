@@ -17,9 +17,18 @@ type Block =
   | { type: "quote"; text: string };
 
 const HEADING_TAGS: HeadingTag[] = ["h1", "h2", "h3", "h4", "h5", "h6"];
-const HEADING_RE = /^(#{1,6})\s+(.+?)\s*#*\s*$/;
+const HEADING_RE = /^(#{1,6})[ \t]+(.*)$/;
 const LIST_RE = /^\s*(?:([-+*])|(\d+)[.)])\s+(.+)$/;
 const QUOTE_RE = /^\s*>\s?(.*)$/;
+const WORD_RE = /[\p{L}\p{N}_]/u;
+
+function headingText(raw: string): string {
+  const text = raw.trim();
+  let end = text.length;
+  while (end > 0 && text[end - 1] === "#") end--;
+  if (end === 0) return "";
+  return text[end - 1] === " " || text[end - 1] === "\t" ? text.slice(0, end).trimEnd() : text;
+}
 
 function renderBlock(block: Block, key: number): ReactNode {
   switch (block.type) {
@@ -62,7 +71,7 @@ function splitIntoBlocks(src: string): Block[] {
       blocks.push({ type: "code", text: code.join("\n"), ...(fence[1] ? { lang: fence[1] } : {}) });
     } else if (heading) {
       flush();
-      blocks.push({ type: "heading", text: heading[2] ?? "", tag: HEADING_TAGS[(heading[1]?.length ?? 1) - 1] ?? "h6" });
+      blocks.push({ type: "heading", text: headingText(heading[2] ?? ""), tag: HEADING_TAGS[(heading[1]?.length ?? 1) - 1] ?? "h6" });
       i++;
     } else if (list) {
       flush();
@@ -74,7 +83,8 @@ function splitIntoBlocks(src: string): Block[] {
         item = LIST_RE.exec(lines[++i] ?? "");
       }
       const first = Number(list[2]);
-      blocks.push({ type: "list", items, start: ordered ? Number.isSafeInteger(first) ? first : 1 : null });
+      const start = Number.isSafeInteger(first) ? first : 1;
+      blocks.push({ type: "list", items, start: ordered ? start : null });
     } else if (quote) {
       flush();
       const quoted: string[] = [];
@@ -122,7 +132,7 @@ function renderInline(text: string): ReactNode {
   return <>{parts}</>;
 }
 
-const LABELLED_LINK_RE = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+const LABELLED_LINK_RE = /\[([^[\]\n]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/g;
 
 function safeHref(value: string): string | null {
   try {
@@ -199,8 +209,10 @@ function renderBoldItalic(text: string, nextKey: () => number): ReactNode {
       }
     }
     const marker = text[i];
-    if ((marker === "*" || marker === "_") && i + 1 < text.length && text[i + 1] !== marker) {
-      const end = text.indexOf(marker, i + 1);
+    const opening = marker === "*" || (marker === "_" && !WORD_RE.test(text[i - 1] ?? ""));
+    if (opening && i + 1 < text.length && text[i + 1] !== marker) {
+      let end = text.indexOf(marker, i + 1);
+      while (marker === "_" && end >= 0 && WORD_RE.test(text[end + 1] ?? "")) end = text.indexOf(marker, end + 1);
       if (end > i + 1) {
         if (buf) { parts.push(buf); buf = ""; }
         parts.push(<em key={nextKey()}>{text.slice(i + 1, end)}</em>);
