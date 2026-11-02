@@ -967,3 +967,38 @@ describe("round-3: tolerant attachment extras, strict XOR, complete-reason", () 
     expect(r.kind).toBe("invalid");
   });
 });
+
+describe("task event sovereignty (cortex#3134)", () => {
+  const base = {
+    v: 1,
+    type: "task",
+    task_id: "t1",
+    capability: "compose.judgment",
+    payload: { prompt: "Summarise" },
+    source: { surface: "bus", channel: "", thread: "", user: "" },
+  };
+  const sovereignty = {
+    classification: "local",
+    data_residency: "CH",
+    max_hop: 0,
+    frontier_ok: false,
+    model_class: "local-only",
+  } as const;
+
+  test("a task carrying the envelope's sovereignty round-trips", () => {
+    const parsed = parseBrainEvent(JSON.stringify({ ...base, sovereignty }));
+    expect(parsed.kind).toBe("ok");
+    if (parsed.kind === "ok" && parsed.event.type === "task") {
+      expect(parsed.event.sovereignty).toEqual(sovereignty);
+    }
+  });
+
+  test("a task without sovereignty stays valid", () => {
+    expect(parseBrainEvent(JSON.stringify(base)).kind).toBe("ok");
+  });
+
+  test("a task whose sovereignty has an unknown model_class is invalid", () => {
+    const line = JSON.stringify({ ...base, sovereignty: { ...sovereignty, model_class: "whatever" } });
+    expect(parseBrainEvent(line).kind).toBe("invalid");
+  });
+});
