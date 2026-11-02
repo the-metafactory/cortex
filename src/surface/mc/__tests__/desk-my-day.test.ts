@@ -12,7 +12,7 @@ import { DEFAULT_SETTINGS, findNode, selectToday, type AppState } from "../../..
 import { saveBalanceState, loadBalanceState } from "../desk/balance-store";
 import { changeMyDay, readMyDay, movedKeys, sourceIdentity, localDay } from "../desk/my-day";
 import { MyDayLane } from "../dashboard-v2/components/desk-my-day";
-import { MyDayRequestSchema, type MyDayCommand } from "../desk/my-day-schema";
+import { MyDayMetaSchema, MyDayRequestSchema, type MyDayCommand } from "../desk/my-day-schema";
 import { composeDesk, type DeskOptions } from "../desk/compose";
 import { z } from "zod";
 import { handleGetDesk } from "../api/desk";
@@ -219,6 +219,32 @@ describe("My day lane and day contract", () => {
     change(command, crypto.randomUUID(), { source: reworded });
     expect(readMyDay(db, desk, NOW).inbox).toHaveLength(1);
   });
+  it("todo answers the Inbox task's id, stores it in the receipt and returns the same id for the same source episode", () => {
+    const item = source("agent-blocked");
+    const command = { op: "todo", key: item.key, fingerprint: sourceIdentity(item) } satisfies MyDayCommand;
+    const requestId = crypto.randomUUID();
+    const created = change(command, requestId, { source: item });
+    const task = created.view.inbox[0];
+    if (!task) throw new Error("Missing intake");
+    expect(created.outlineId).toBe(task.id);
+    expect(task.id).toStartWith("todo:");
+    const stored = MyDayMetaSchema.parse(JSON.parse(db.query<{ data: string }, []>("SELECT data FROM desk_my_day WHERE id = 1").get()?.data ?? "{}"));
+    expect(stored.receipts.find(r => r.id === requestId)?.outlineId).toBe(task.id);
+    expect(change(command, requestId).outlineId).toBe(task.id);
+    const again = change(command, crypto.randomUUID(), { source: item });
+    expect(again.outlineId).toBe(task.id);
+    expect(again.view.inbox).toHaveLength(1);
+  });
+  it("todo refusals for a missing or changed source answer no Inbox id", async () => {
+    const item = source("agent-blocked");
+    const runtime = { options: desk, ledger: new HandledLedger() };
+    const body = { date: DATE, requestId: crypto.randomUUID(), command: { op: "todo", key: item.key, fingerprint: sourceIdentity(item) } };
+    const response = await handleDeskMyDay(new Request("http://localhost/api/desk/my-day", { method: "POST", body: JSON.stringify(body) }), db, runtime, undefined, NOW);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "This source item is no longer on the Desk." });
+    expect(() => change(body.command as MyDayCommand, crypto.randomUUID(), { source: { ...item, title: "A newer episode" } })).toThrow("source changed");
+    expect(readMyDay(db, desk, NOW).inbox).toHaveLength(0);
+  });
   it("visible and spoken briefings end with the engine proposal and put closed-day wins first", async () => {
     const composed = await composeDesk(db, desk, undefined, { now: NOW });
     const selected = selectItems(composed, "all", new Set());
@@ -258,10 +284,11 @@ describe("My day lane and day contract", () => {
       if (!seen) throw new Error("Missing source reading");
       const body = { date: DATE, requestId: crypto.randomUUID(), command: { op: "todo", key, fingerprint: sourceIdentity(seen) }, title: "Forged title", dueAt: "2030-01-01" };
       const request = () => new Request("http://localhost/api/desk/my-day", { method: "POST", body: JSON.stringify(body) });
-      expect((await handleDeskMyDay(request(), db, runtime, undefined, NOW)).status).toBe(200);
-      expect((await handleDeskMyDay(request(), db, runtime, undefined, NOW)).status).toBe(200);
+      const post = async () => { const response = await handleDeskMyDay(request(), db, runtime, undefined, NOW); expect(response.status).toBe(200); return z.object({ outlineId: z.string() }).parse(await response.json()).outlineId; };
+      const answers = [await post(), await post()];
       const view = readMyDay(db, options, NOW);
       expect(view.inbox).toHaveLength(1);
+      expect(answers).toEqual([view.inbox[0]?.id ?? "", view.inbox[0]?.id ?? ""]);
       expect(view.inbox[0]?.title).not.toBe("Forged title");
       expect(view.inbox[0]?.dueDate).toBe("2026-11-04");
       expect(view.sources[0]?.url).toBe(`https://example.test/${kind}`);
