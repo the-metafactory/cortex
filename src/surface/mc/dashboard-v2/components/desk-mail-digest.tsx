@@ -25,7 +25,7 @@ function UnsubscribeButton({ mail, busy, onUnsubscribe }: { mail: SweepMailView;
   );
 }
 
-export function MailDigests({ digests, busy, onArchive, onKeep, onUnsubscribe }: { digests: readonly MailDigestView[]; busy: boolean; onArchive: (d: MailDigestView) => void; onKeep: (key: string) => void; onUnsubscribe?: (key: string, ask: UnsubscribeAsk) => void }) {
+export function MailDigests({ digests, busy, onArchive, onKeep, onUnsubscribe, onOpen }: { digests: readonly MailDigestView[]; busy: boolean; onArchive: (d: MailDigestView) => void; onKeep: (key: string) => void; onUnsubscribe?: (key: string, ask: UnsubscribeAsk) => void; onOpen?: (key: string) => void }) {
   if (digests.length === 0) return null;
   return (
     <div className="desk-digests" aria-label="Newsletter digests">
@@ -50,7 +50,7 @@ export function MailDigests({ digests, busy, onArchive, onKeep, onUnsubscribe }:
                       {line && <small>{line}</small>}
                     </span>
                     <span className="desk-digest-acts">
-                      {m.url && <DeskLink className="desk-btn ghost" url={m.url}>Open</DeskLink>}
+                      {m.url && <DeskLink className="desk-btn ghost" url={m.url} {...(onOpen ? { onClick: () => onOpen(m.key) } : {})}>Open</DeskLink>}
                       <button type="button" className="desk-btn ghost" disabled={busy} onClick={() => onKeep(m.key)}>Keep</button>
                       {onUnsubscribe && <UnsubscribeButton mail={m} busy={busy} onUnsubscribe={onUnsubscribe} />}
                     </span>

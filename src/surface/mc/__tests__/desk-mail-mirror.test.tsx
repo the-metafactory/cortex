@@ -11,7 +11,7 @@ import { createRule, listRules } from "../desk/mail-rules";
 import { mirrorWeek } from "../desk/mirror";
 import { addVip } from "../desk/vips";
 import { initDatabase } from "../db/init";
-import { MirrorMail } from "../dashboard-v2/components/desk-mirror-mail";
+import { MirrorMail, timeLine } from "../dashboard-v2/components/desk-mirror-mail";
 import { composeWith, MOVE_DESK } from "./desk-mail-fixtures";
 
 const NOW = new Date(2026, 9, 29, 12).getTime();
@@ -65,7 +65,7 @@ describe("mail in the weekly mirror", () => {
     const m = readMailMirror(db, WEEK);
     expect(m.byWhere).toEqual([{ key: "conversation", count: 1 }]);
     expect(m.senders).toEqual([{ kind: "sender", value: "ada@people.example", decisions: 1 }]);
-    expect(m.time).toEqual({ mails: 1, totalMs: 600_000, medianMs: 600_000 });
+    expect(m.time).toEqual({ mails: 1, totalMs: 600_000, medianMs: 600_000, capped: 0, untimed: 0, capMs: 900_000 });
     expect(renderToStaticMarkup(createElement(MirrorMail, { mail: m, dmarc: null }))).toContain("In an Ivy conversation");
   });
 
@@ -76,10 +76,34 @@ describe("mail in the weekly mirror", () => {
     log("t1", "ada@people.example", "archive", "desk", WEEK.start + 10 * HOUR + 120_000);
     log("t2", "ada@people.example", "opened", "desk", WEEK.start + 11 * HOUR);
     const m = readMailMirror(db, WEEK);
-    expect(m.time).toEqual({ mails: 1, totalMs: 120_000, medianMs: 120_000 });
+    expect(m.time).toEqual({ mails: 1, totalMs: 120_000, medianMs: 120_000, capped: 0, untimed: 1, capMs: 900_000 });
     expect(m.byAction.some((a) => a.key === "opened")).toBe(false);
     const html = renderToStaticMarkup(createElement(MirrorMail, { mail: readMailMirror(db, { start: WEEK.start, end: WEEK.start + 9 * HOUR }), dmarc: null }));
-    expect(html).toContain("Time on mail is not measured");
+    expect(html).toContain("Time on mail is not measured: no mail was opened on the Desk this week.");
+  });
+
+  it("caps an idle gap, and lets neither a client decision nor a read-and-kept end a Desk open", () => {
+    log("x1", "ada@people.example", "opened", "desk", WEEK.start + HOUR);
+    log("x1", "ada@people.example", "archive", "desk", WEEK.start + 3 * HOUR);
+    log("x2", "ada@people.example", "opened", "desk", WEEK.start + HOUR);
+    log("x2", "ada@people.example", "opened", "desk", WEEK.start + HOUR + 60_000);
+    log("x2", "ada@people.example", "draft", "desk", WEEK.start + HOUR + 240_000);
+    log("x3", "ada@people.example", "opened", "desk", WEEK.start + HOUR);
+    log("x3", "ada@people.example", "kept", "client", WEEK.start + HOUR + 60_000);
+    log("x4", "ada@people.example", "opened", "desk", WEEK.start + HOUR);
+    log("x4", "ada@people.example", "archive", "client", WEEK.start + HOUR + 60_000);
+    const m = readMailMirror(db, WEEK);
+    expect(m.time).toEqual({ mails: 2, totalMs: 900_000 + 240_000, medianMs: (900_000 + 240_000) / 2, capped: 1, untimed: 2, capMs: 900_000 });
+    expect(timeLine(m.time)).toBe("Open to decision on the Desk: 19.0 min over 2 mails, median 9.5 min. Each mail counts from its first open on the Desk to your next decision there, at most 15 min. 1 mail took longer and counts as 15 min. 2 mails opened on the Desk had no decision there and are not timed. Mail read only in your mail program is not timed.");
+    expect(readMailMirror(db, WEEK, { config: { checkAfterUndos: 2, archivedUnread: 3, top: 5, openCapMinutes: 1 } }).time).toMatchObject({ mails: 2, totalMs: 120_000, capped: 2, capMs: 60_000 });
+  });
+
+  it("says no time is shown when mails were opened on the Desk but none was decided there", () => {
+    log("y1", "ada@people.example", "opened", "desk", WEEK.start + HOUR);
+    log("y1", "ada@people.example", "kept", "client", WEEK.start + 2 * HOUR);
+    const m = readMailMirror(db, WEEK);
+    expect(m.time).toEqual({ mails: 0, totalMs: 0, medianMs: 0, capped: 0, untimed: 1, capMs: 900_000 });
+    expect(renderToStaticMarkup(createElement(MirrorMail, { mail: m, dmarc: null }))).toContain("Time on mail is not measured yet: no mail opened on the Desk was decided there this week. 1 mail opened on the Desk had no decision there and is not timed.");
   });
 
   it("lists a rule undone more than the threshold as check this rule, counting undos made this week", () => {
@@ -98,7 +122,7 @@ describe("mail in the weekly mirror", () => {
     run("b4", "busy", WEEK.start + 3 * HOUR, WEEK.start + 4 * HOUR);
     const at3 = readMailMirror(db, WEEK);
     expect(at3.checkRules.map((r) => r.id)).toEqual(["busy"]);
-    expect(readMailMirror(db, WEEK, { config: { checkAfterUndos: 1, archivedUnread: 3, top: 5 } }).checkRules.map((r) => r.id)).toEqual(["busy", "quiet"]);
+    expect(readMailMirror(db, WEEK, { config: { checkAfterUndos: 1, archivedUnread: 3, top: 5, openCapMinutes: 15 } }).checkRules.map((r) => r.id)).toEqual(["busy", "quiet"]);
     const html = renderToStaticMarkup(createElement(MirrorMail, { mail: at3, dmarc: null }));
     expect(html).toContain("Check this rule");
     expect(html).toContain("Disable");

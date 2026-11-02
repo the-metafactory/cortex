@@ -17,6 +17,15 @@ const plural = (n: number, one: string, many = `${one}s`): string => `${n} ${n =
 const sourceLabel = (s: { kind: "list" | "sender"; value: string }): string => (s.kind === "list" ? `List ${s.value}` : s.value);
 const minutes = (ms: number): string => `${(ms / 60_000).toFixed(1)} min`;
 
+export function timeLine(time: MailMirror["time"]): string {
+  if (!time) return "Time on mail is not measured: no mail was opened on the Desk this week.";
+  const cap = `${Math.round(time.capMs / 60_000)} min`;
+  const untimed = time.untimed > 0 ? ` ${plural(time.untimed, "mail")} opened on the Desk had no decision there and ${time.untimed === 1 ? "is" : "are"} not timed.` : "";
+  if (time.mails === 0) return `Time on mail is not measured yet: no mail opened on the Desk was decided there this week.${untimed}`;
+  const capped = time.capped > 0 ? ` ${plural(time.capped, "mail")} took longer and ${time.capped === 1 ? "counts" : "count"} as ${cap}.` : "";
+  return `Open to decision on the Desk: ${minutes(time.totalMs)} over ${plural(time.mails, "mail")}, median ${minutes(time.medianMs)}. Each mail counts from its first open on the Desk to your next decision there, at most ${cap}.${capped}${untimed} Mail read only in your mail program is not timed.`;
+}
+
 function Counts<K extends string>({ label, rows, words }: { label: string; rows: { key: K; count: number }[]; words: Record<K, string> }) {
   return <div><h3>{label}</h3><ul className="dmr-hours">{rows.map(r => <li key={r.key}><strong>{words[r.key]}</strong><span>{r.count}</span></li>)}</ul></div>;
 }
@@ -42,7 +51,7 @@ export function MirrorMail({ mail, dmarc, onChanged }: { mail: MailMirror | null
       <h2 id="dmr-mail">Mail this week</h2>
       {mail && shown && <>
         <p>{plural(mail.decisions, "decision")} on {plural(mail.mails, "mail")}, from the Desk's mail log.{mail.partial ? " The log holds more than the mirror reads; these counts are a lower bound." : ""}</p>
-        <p className="dmr-quiet">{mail.time ? `Open to act: ${minutes(mail.time.totalMs)} over ${plural(mail.time.mails, "mail")}, median ${minutes(mail.time.medianMs)}. Only mails the log saw opened are timed.` : "Time on mail is not measured: the log has no open times this week, so no time is shown."}</p>
+        <p className="dmr-quiet">{timeLine(mail.time)}</p>
         {mail.decisions > 0 && <div className="dmr-columns">
           <Counts label="By action" rows={mail.byAction} words={ACTION_WORD} />
           <Counts label="By where" rows={mail.byWhere} words={WHERE_WORD} />
