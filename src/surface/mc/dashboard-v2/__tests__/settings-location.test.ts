@@ -5,6 +5,7 @@ describe("Settings navigation", () => {
   it("reads every group and defaults unknown groups without opening settings on the Desk", () => {
     expect(readSettingsGroup("?desk=studio")).toBeNull();
     expect(readSettingsGroup("?settings=unknown")).toBe("calendars");
+    expect(readSettingsGroup("?settings=day-limits")).toBe("day-limits");
     for (const group of SETTINGS_GROUPS) expect(readSettingsGroup(settingsSearch("", group.id))).toBe(group.id);
   });
   it("preserves other router selections when opening and leaving settings", () => {
