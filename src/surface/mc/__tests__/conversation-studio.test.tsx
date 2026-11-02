@@ -60,7 +60,7 @@ async function rig(chat: ChatCall = (_endpoint, turns) => Promise.resolve(`Ivy o
   const boot = async (): Promise<ConversationHost> => {
     status = await openConversationHost({ dir: hostDir, stack: "test", label: LABEL, expectedLabel: LABEL, endpoints: { local: endpoint, cloud: endpoint }, chat });
     if (status.state !== "ready") throw new Error(status.reason);
-    status.host.attachSources(conversationSources({ db, desk: () => options, now: () => Date.now() + skew }));
+    await status.host.attachSources(conversationSources({ db, desk: () => options, now: () => Date.now() + skew }));
     hosts.push(status.host);
     return status.host;
   };

@@ -12,7 +12,7 @@ import { chatTurns, cortexModels, CORTEX_PROVIDER, type ChatCall, type GateResul
 import {
   AttachmentRefSchema, CONTINUATION_KIND, IMPORTED_TURN_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES,
   type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationMeta, type CreateConversation,
-  type ExchangeLine, type InputRequest, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadbacks, type OwnerType, type OwnerWriters, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView,
+  type ExchangeLine, type InputRequest, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadback, type OwnerReadbacks, type OwnerType, type OwnerWriters, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView,
 } from "./types";
 
 export const ENGINE = "pi-durable@1.4.0";
@@ -595,8 +595,12 @@ export class ConversationHost {
   }
 
   async readback(operation: OperationRecord): Promise<ReadbackResult> {
-    const readback = this.sources.readbacks[operation.owner] ?? this.sources.writers?.[operation.owner]?.readback;
+    const readback = this.readbackFor(operation.owner);
     return readback ? readback(operation).catch(() => null) : null;
+  }
+
+  private readbackFor(owner: OwnerType): OwnerReadback | undefined {
+    return this.sources.readbacks[owner] ?? this.sources.writers?.[owner]?.readback;
   }
 
   async operations(conversationId?: string): Promise<OperationRecord[]> {
@@ -639,7 +643,7 @@ export class ConversationHost {
     const touched: string[] = [];
     for (const op of await this.operations()) {
       if (op.state !== "running" && op.state !== "uncertain") continue;
-      const readback = this.sources.readbacks[op.owner] ?? this.sources.writers?.[op.owner]?.readback;
+      const readback = this.readbackFor(op.owner);
       const result = await this.readback(op);
       if (result?.found) await this.transition(op.operationId, "created", { canonicalId: result.canonicalId, ...(result.url ? { url: result.url } : {}), note: "boot readback found the object" });
       else if (op.state === "running") await this.transition(op.operationId, "uncertain", { note: readback ? "boot readback did not find the object" : "no owner readback is available; check before retrying" });

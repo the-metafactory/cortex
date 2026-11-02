@@ -80,6 +80,7 @@ describe("conversation creation proposals", () => {
     expect(again.operation).toEqual(done.operation);
     expect(owner.effects).toHaveLength(1);
     expect(owner.calls).toHaveLength(1);
+    expect(owner.effects[0]?.activation).toBe("none");
     expect(owner.effects[0]?.provenance).toEqual({ conversationId: id, proposalId, revision: 2, operationId: `${id}:${proposalId}:2`, entryId: "7", link: `?desk=conversation&conversation=${id}` });
     await refused(creation.revise(id, proposalId, { revision: 2, fields: { ...node, title: "Changed after" } }, web), 409);
     const { entries } = await host.entries(id, 100, undefined);
@@ -113,7 +114,7 @@ describe("conversation creation proposals", () => {
     const there = await start();
     const first = await creation.propose(here, { proposalId: randomUUID(), type: "graph-node", fields: node }, web);
     await creation.confirm(here, first.view.proposal.proposalId, { ...confirmOf(first.view), grant: { scope: "conversation" } }, web);
-    const [grant] = await creation.grants();
+    const [grant] = await creation.grants(PRINCIPAL);
     expect(grant).toMatchObject({ type: "graph-node", scope: "conversation", conversationId: here });
     const auto = await creation.propose(here, { proposalId: randomUUID(), type: "graph-node", fields: { ...node, title: "Second" } }, web);
     expect(auto.view.operation).toMatchObject({ state: "created", authority: { kind: "grant", scope: "conversation", grantId: grant?.grantId } });
@@ -124,10 +125,10 @@ describe("conversation creation proposals", () => {
     await creation.confirm(there, elsewhere.view.proposal.proposalId, { ...confirmOf(elsewhere.view), grant: { scope: "global" } }, web);
     const third = await start();
     expect((await creation.propose(third, { proposalId: randomUUID(), type: "graph-node", fields: node }, web)).view.feedback).toBe("created");
-    for (const g of await creation.grants()) await creation.revoke(g.grantId, web);
+    for (const g of await creation.grants(PRINCIPAL)) await creation.revoke(g.grantId, web);
     const after = await creation.propose(third, { proposalId: randomUUID(), type: "graph-node", fields: node }, web);
     expect(after.view.feedback).toBe("proposed");
-    const grants = await creation.grants();
+    const grants = await creation.grants(PRINCIPAL);
     expect(grants).toHaveLength(2);
     expect(grants.every(g => g.revokedAt)).toBe(true);
     expect((await creation.list(here, web)).proposals.filter(p => p.feedback === "created")).toHaveLength(2);
@@ -136,12 +137,31 @@ describe("conversation creation proposals", () => {
     expect(kinds).toEqual(["granted", "revoked"]);
   });
 
+  test("a grant belongs to the principal who gave it, and a refused confirmation grants nothing", async () => {
+    const { owner, host, creation, start } = await setup();
+    const mine = await start();
+    const first = (await creation.propose(mine, { proposalId: randomUUID(), type: "graph-node", fields: node }, web)).view;
+    await creation.confirm(mine, first.proposal.proposalId, { ...confirmOf(first), grant: { scope: "global" } }, web);
+    const otherPrincipal = "second-principal@example.invalid";
+    const theirs = (await host.create({ title: "Other principal", links: [], origin: { kind: "web" }, policy: "cloud" }, otherPrincipal)).id;
+    const other: Actor = { principal: otherPrincipal, transport: "web" };
+    expect((await creation.propose(theirs, { proposalId: randomUUID(), type: "graph-node", fields: node }, other)).view.feedback).toBe("proposed");
+    expect(await creation.grants(otherPrincipal)).toEqual([]);
+    const [grant] = await creation.grants(PRINCIPAL);
+    await refused(creation.revoke(grant?.grantId ?? "", other), 404);
+    owner.mode = "fail";
+    const failing = (await creation.propose(mine, { proposalId: randomUUID(), type: "balance-task", fields: { area: "a", title: "t" } }, web)).view;
+    expect((await creation.confirm(mine, failing.proposal.proposalId, { ...confirmOf(failing), grant: { scope: "conversation" } }, web)).feedback).toBe("failed");
+    expect((await creation.grants(PRINCIPAL)).map(g => g.type)).toEqual(["graph-node"]);
+    expect(owner.effects).toHaveLength(1);
+  });
+
   test("a revoked grant is rechecked before execution", async () => {
     const { owner, creation, start } = await setup();
     const id = await start();
     const first = await creation.propose(id, { proposalId: randomUUID(), type: "routine", fields: { name: "r", target: "t", schedule: "daily", timezone: "Europe/Zurich" } }, web);
     await creation.confirm(id, first.view.proposal.proposalId, { ...confirmOf(first.view), grant: { scope: "conversation" } }, web);
-    const [grant] = await creation.grants();
+    const [grant] = await creation.grants(PRINCIPAL);
     if (!grant) throw new Error("no grant");
     await creation.revoke(grant.grantId, web);
     const next = await creation.propose(id, { proposalId: randomUUID(), type: "routine", fields: { name: "r2", target: "t", schedule: "daily", timezone: "Europe/Zurich" } }, web);
@@ -206,9 +226,9 @@ describe("conversation creation proposals", () => {
     await refused(creation.list(id, other), 403);
     await refused(creation.confirm(id, view.proposal.proposalId, confirmOf(view), other), 403);
     expect((await creation.confirm(id, view.proposal.proposalId, { ...confirmOf(view), grant: { scope: "conversation" } }, discord)).operation?.authority).toEqual({ kind: "confirmation", transport: "discord" });
-    const [grant] = await creation.grants();
+    const [grant] = await creation.grants(PRINCIPAL);
     if (!grant) throw new Error("no grant");
-    await refused(creation.revoke(grant.grantId, other), 403);
+    await refused(creation.revoke(grant.grantId, other), 404);
 
     const local = await start("local");
     await refused(creation.propose(local, { proposalId: randomUUID(), type: "balance-task", fields: { area: "a", title: "t" } }, discord), 403);

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { SUBJECT_FIELDS } from "../../../../conversations/catalog";
 import { failureText } from "../lib/conversations";
 import { check, confirm, feedbackLabel, propose, readCapabilities, readCreation, revise, revoke, type Capability, type CreationView, type GrantScope, type ProposalView } from "../lib/conversation-creation";
 
@@ -51,7 +52,7 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
   const start = (type: string | null): void => {
     const title = seed.text.split("\n")[0]?.slice(0, 200) ?? "";
     const spec = type ? byType.get(type) : undefined;
-    const subject = spec?.fields.find(f => ["title", "name", "question", "wording", "text"].includes(f.name))?.name ?? "title";
+    const subject = SUBJECT_FIELDS.find(name => spec?.fields.some(f => f.name === name)) ?? "title";
     void act(() => propose(id, { proposalId: crypto.randomUUID(), ...(type ? { type } : { intent: "card" }), fields: title ? { [subject]: title } : {}, ...(seed.entryId ? { entryId: seed.entryId } : {}) }), "The proposal was not saved. Try again; nothing was created.");
   };
   const proposals = view?.proposals ?? [];
@@ -82,7 +83,8 @@ function ProposalCard({ id, view, types, busy, archived, act }: { id: string; vi
   const [type, setType] = useState<string>(proposal.type ?? "");
   const [standing, setStanding] = useState(false);
   const [scope, setScope] = useState<GrantScope>("conversation");
-  useEffect(() => { setFields(proposal.fields); setType(proposal.type ?? ""); }, [proposal.revision, proposal.fields, proposal.type]);
+  const savedFields = JSON.stringify(proposal.fields);
+  useEffect(() => { setFields(JSON.parse(savedFields) as Record<string, string>); setType(proposal.type ?? ""); }, [proposal.revision, savedFields, proposal.type]);
   const dirty = JSON.stringify(fields) !== JSON.stringify(proposal.fields);
   const open = view.feedback === "proposed" || view.feedback === "unavailable" || view.feedback === "choose" || view.feedback === "failed";
   const editable = open && !archived;

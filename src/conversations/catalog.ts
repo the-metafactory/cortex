@@ -86,4 +86,6 @@ export const UNAVAILABLE_TYPES: UnavailableSpec[] = [
   { type: "settings", row: "O25", label: "Settings and status views", owner: "Configuration", reason: "Observation only: settings and status change through their own controls." },
 ];
 
+export const SUBJECT_FIELDS = ["title", "name", "question", "wording", "text", "body"] as const;
+
 export const isCreatable = (type: string): type is CreatableType => (CREATABLE_TYPES as readonly string[]).includes(type);

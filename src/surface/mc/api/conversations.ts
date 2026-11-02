@@ -150,7 +150,7 @@ async function handleCreation(req: Request, url: URL, host: ConversationHost, ac
   }
   if (url.pathname === "/api/conversations/grants") {
     if (req.method !== "GET") return notAllowed("GET");
-    return reply(200, { ok: true, grants: await creation.grants() });
+    return reply(200, { ok: true, grants: await creation.grants(actor.principal) });
   }
   const grant = GRANT.exec(url.pathname);
   if (grant?.[1]) {

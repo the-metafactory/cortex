@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { renderToStaticMarkup } from "react-dom/server";
-import { openConversationHost, type HostStatus } from "../../../conversations/host";
-import { scratchDirs } from "../../../conversations/__tests__/fixtures/scratch";
+import { openConversationHost } from "../../../conversations/host";
+import { scratchHosts } from "../../../conversations/__tests__/fixtures/scratch";
 import { fixtureOwner } from "../../../conversations/__tests__/fixtures/owner";
 import type { Capability, CreationView, ProposalView } from "../../../conversations/creation";
 import { handleConversations } from "../api/conversations";
@@ -11,19 +11,14 @@ import { CreationSection } from "../dashboard-v2/components/desk-conversation-cr
 
 const LABEL = "ai.meta-factory.cortex.creation-test";
 const OTHER = { "cf-access-authenticated-user-email": "someone-else@example.invalid" };
-const dirs = scratchDirs("conversation-creation-");
-const statuses: HostStatus[] = [];
-afterEach(async () => {
-  for (const status of statuses.splice(0)) if (status.state === "ready") await status.host.close().catch(() => undefined);
-  await dirs.clean();
-});
+const { dirs, hosts } = scratchHosts("conversation-creation-");
 
 const guard = (): MutationGuardContext => ({ isLoopback: true, allowedHostnames: buildAllowedHostnames("127.0.0.1"), listenPort: 8767, principals: new Set() });
 async function rig() {
   const owner = fixtureOwner();
   const status = await openConversationHost({ dir: await dirs.make(), stack: "api", label: LABEL, expectedLabel: LABEL, endpoints: { cloud: { baseUrl: "http://x.invalid", model: "m", timeoutSeconds: 5 } }, chat: () => Promise.resolve("ok") });
-  statuses.push(status);
   if (status.state !== "ready") throw new Error(status.reason);
+  hosts.push(status.host);
   await status.host.attachSources({ resolvers: {}, readbacks: {}, writers: { "graph-node": owner.writer, routine: owner.writer } });
   const raw = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Response> =>
     handleConversations(new Request(`http://127.0.0.1:8767${path}`, { method, headers: { host: "127.0.0.1:8767", "content-type": "application/json", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), new URL(`http://127.0.0.1:8767${path}`), guard(), () => status);
