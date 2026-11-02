@@ -1,40 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { ProposalView } from "../../../conversations/creation";
-import { HandledLedger } from "../desk/actions";
-import type { DeskOptions, DeskRuntime } from "../desk/compose";
-import { conversationSources, studioRequestId } from "../desk/conversation-sources";
-import { WriterTimeout, type WriterResult } from "../desk/create";
-import { conversationWriterRig } from "./conversation-writer-rig";
+import { studioRequestId } from "../desk/conversation-sources";
+import { deskWriterRig } from "./conversation-writer-rig";
 
 const WRITER = ["calendar-bin", "--create"];
-const writerRig = conversationWriterRig("conversation-calendar-", "ai.meta-factory.cortex.calendar-writer-test");
-
-interface Reply { ok: boolean; error: string; proposal: ProposalView; conversation: { id: string }; types: { type: string; status: string }[] }
-interface Call { argv: string[]; stdin: { kind: string; requestId: string; fields: Record<string, string> } }
-
-async function rig(writer: string[] | null = WRITER, policy: "local" | "cloud" = "cloud") {
-  const db = writerRig.database();
-  const options: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], ...(writer ? { ask: { parser: [], timeoutSeconds: 5, writers: { calendar: writer }, taskMaps: [] } } : {}) };
-  const runtime: DeskRuntime = { ledger: new HandledLedger(), options };
-  const rig = await writerRig.open<Reply>(db, runtime);
-  const calls: Call[] = [];
-  let answer = (): Promise<WriterResult> => Promise.resolve({ code: 0, stdout: JSON.stringify({ id: "EVENT-1:ABC", message: "Added." }), stderr: "" });
-  const run = (argv: string[], stdin: string): Promise<WriterResult> => {
-    calls.push({ argv, stdin: JSON.parse(stdin) as Call["stdin"] });
-    return answer();
-  };
-  await rig.host.attachSources(conversationSources({ db, desk: () => options, runCalendar: run }));
-  const id = await rig.start("Synthetic calendar", policy);
-  const propose = (fields: Record<string, string>) => rig.propose(id, "calendar-event", fields);
-  const confirm = (view: ProposalView) => rig.confirm(id, view);
-  const check = (view: ProposalView) => rig.check(id, view);
-  const capability = async () => (await rig.call("GET", "/api/conversations/capabilities")).body.types.find(t => t.type === "calendar-event")?.status;
-  const submit = async (fields: Record<string, string>) => {
-    const view = await propose(fields);
-    return { view, reply: await confirm(view) };
-  };
-  return { id, options, calls, propose, confirm, check, submit, capability, answerWith: (next: () => Promise<WriterResult>) => { answer = next; } };
-}
+const open = deskWriterRig({ prefix: "conversation-calendar-", label: "ai.meta-factory.cortex.calendar-writer-test", kind: "calendar", type: "calendar-event", canonicalId: "EVENT-1:ABC" });
+const rig = (writer: string[] | null = WRITER, policy: "local" | "cloud" = "cloud") => open(writer, policy);
 
 const PROBE = { title: "Ivy probe 0a1b", start: "2027-01-06T03:00:00+01:00", end: "2027-01-06T03:15:00+01:00", notes: "Safe to delete." };
 
@@ -88,12 +58,7 @@ describe("calendar writer for conversation proposals", () => {
   });
 
   test("a writer timeout stays uncertain, and Check keeps it uncertain without running the writer again", async () => {
-    const r = await rig();
-    r.answerWith(() => Promise.reject(new WriterTimeout("timed out after 5 seconds")));
-    const { view, reply } = await r.submit(PROBE);
-    const checked = await r.check(view);
-    expect([reply, checked].map(answer => answer.body.proposal.feedback)).toEqual(["uncertain", "uncertain"]);
-    expect(r.calls).toHaveLength(1);
+    expect(await (await rig()).timeoutThenCheck(PROBE)).toEqual({ feedback: ["uncertain", "uncertain"], runs: 1 });
   });
 
   test.each([
