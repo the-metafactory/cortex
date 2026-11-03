@@ -36,6 +36,7 @@ export const CREATION_CATALOG: Record<CreatableType, CreatableSpec> = {
   "graph-node": { row: "O01", label: "Graph node", owner: "Soma work graph", egress: "cloud", fields: [
     text("repository", "Repository", true, true), text("parent", "Parent node", true, true), text("title", "Title"), long("body", "Body"), text("checkpoint", "Checkpoint"),
     { name: "dependencies", label: "Blocked by", kind: "list", required: false },
+    text("autonomy", "Autonomy (approve or propose; empty uses approve)", false), text("kind", "Kind (research, grilling, prototype, task or build; empty uses grilling)", false),
   ], fixed: [{ label: "Claim and close", value: "Not done here; the node is only filed." }] },
   "graph-map": { row: "O02", label: "Graph map", owner: "Soma work graph", egress: "cloud", fields: [
     text("repository", "Repository", true, true), text("title", "Title"), long("body", "Destination and constraints", true), text("checkpoint", "Checkpoint"),
