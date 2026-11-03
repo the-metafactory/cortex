@@ -2,11 +2,14 @@ import { z } from "zod";
 
 const CapabilityMapRef = /^(?:(?:github|gitlab):[\w.-]+\/)?[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/;
 const BudgetCount = z.number().int().min(1).max(1_000_000_000);
+const NodeCommand = z.array(z.string().min(1)).min(1).refine((argv) => argv.some((arg) => arg.includes("{ref}") || arg.includes("{id}")), "must pass the node with {ref} or {id}");
 
 export const CapabilityBuildSchema = z.object({
   writer: z.array(z.string().min(1)).min(1),
   map: z.string().regex(CapabilityMapRef),
   template: z.string().min(1).optional(),
+  start: NodeCommand.optional(),
+  status: NodeCommand.optional(),
   budget: z.object({ tokens: BudgetCount, invocations: BudgetCount, minutes: BudgetCount }),
 });
 export type CapabilityBuildOptions = z.infer<typeof CapabilityBuildSchema>;

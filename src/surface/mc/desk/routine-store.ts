@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import type { RoutineOptions } from "./routine-command";
-import { CapabilityNodeSchema, MissingCapabilitySchema, type CapabilityNode } from "./routine-capability-contract";
+import { BuiltNodeSchema, MissingCapabilitySchema, type BuiltNode } from "./routine-capability-contract";
 import { RoutineActionSchema, RoutineResultSchema, type RoutineAction, type RoutineResult } from "./routine-action-contract";
 export { LegacyRoutineActionSchema, RoutineActionSchema, RoutineResultSchema } from "./routine-action-contract";
 export type { LegacyRoutineAction, RoutineAction, RoutineResult } from "./routine-action-contract";
@@ -10,7 +10,7 @@ export type { LegacyRoutineAction, RoutineAction, RoutineResult } from "./routin
 export const RoutineDraftSchema = z.object({
   text: z.string(),
   missing: z.array(MissingCapabilitySchema).min(1),
-  nodes: z.record(z.string(), CapabilityNodeSchema).default({}),
+  nodes: z.record(z.string(), BuiltNodeSchema).default({}),
 });
 export type RoutineDraft = z.infer<typeof RoutineDraftSchema>;
 
@@ -27,12 +27,20 @@ export function saveRoutineProposal(db: Database, proposal: RoutineProposal): vo
   db.query("INSERT INTO desk_routine_proposals (id, routine_id, document) VALUES (?, ?, ?)").run(proposal.id, proposal.routineId, JSON.stringify(proposal));
 }
 
-export function recordDraftNode(db: Database, id: string, capability: string, node: CapabilityNode): RoutineProposal | null {
+export function recordDraftNode(db: Database, id: string, capability: string, node: BuiltNode): RoutineProposal | null {
   const proposal = readRoutineProposal(db, id);
   if (!proposal?.draft) return null;
   const next: RoutineProposal = { ...proposal, draft: { ...proposal.draft, nodes: { ...proposal.draft.nodes, [capability]: node } } };
   db.query("UPDATE desk_routine_proposals SET document = ? WHERE id = ?").run(JSON.stringify(next), id);
   return next;
+}
+
+const DRAFT_LIST_LIMIT = 10;
+const DRAFT_SCAN_LIMIT = 200;
+
+export function listFiledDrafts(db: Database): RoutineProposal[] {
+  const rows = db.query<{ document: string }, [number]>("SELECT document FROM desk_routine_proposals WHERE json_extract(document, '$.draft') IS NOT NULL ORDER BY rowid DESC LIMIT ?").all(DRAFT_SCAN_LIMIT);
+  return rows.map((row) => RoutineProposalSchema.parse(JSON.parse(row.document))).filter((p) => Object.keys(p.draft?.nodes ?? {}).length > 0).slice(0, DRAFT_LIST_LIMIT);
 }
 
 export function readRoutineProposal(db: Database, id: string, column: "id" | "routine_id" = "id"): RoutineProposal | null {

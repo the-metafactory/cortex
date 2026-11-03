@@ -11,6 +11,7 @@ import type { DeskProposal } from "./ask";
 import { spawnWithStdin } from "./create";
 import { routineSchedule } from "./routine-schedule";
 import { MissingCapabilitiesError, requireRoutineCapabilities, type RoutineCapabilities } from "./routine-providers";
+import { readDraftViews } from "./routine-draft-state";
 import { routineStepLabels } from "./routine-steps";
 import { PendingRoutineSchema, RoutineHistorySchema, RoutineSchema, RoutineRefusal, reflexCommand, runRoutineCommand, type RoutineOptions, type RoutineRunner, type RoutineView } from "./routine-command";
 import { checkRoutineOperation, claimRoutineOperation, finishRoutineOperation, pendingRoutineOperations, readRoutineOperation, readRoutineProposal, routineConfigHash, routineOperationBinding, saveRoutineProposal, type RoutineAction, type LegacyRoutineAction, type RoutineProposal, type RoutineResult } from "./routine-store";
@@ -61,8 +62,18 @@ export async function buildRoutineCard(db: Database, text: string, options: Rout
   }
 }
 
-export async function readRoutines(db: Database, options: RoutineOptions, run: RoutineRunner = spawnWithStdin): Promise<RoutineView> {
+function draftsUnreadable(error: unknown): never[] {
+  process.stderr.write(`${JSON.stringify({ event: "desk.routine.drafts-unreadable", reason: failure(error) })}\n`);
+  return [];
+}
+
+export async function readRoutines(db: Database, options: RoutineOptions, run: RoutineRunner = spawnWithStdin, draftCapabilities?: RoutineCapabilities): Promise<RoutineView> {
   const reads = { ...options, timeoutSeconds: options.readTimeoutSeconds };
+  const draftsRead = draftCapabilities ? readDraftViews(db, options, draftCapabilities, run).catch(draftsUnreadable) : Promise.resolve([]);
+  const withDrafts = async (view: RoutineView): Promise<RoutineView> => {
+    const drafts = await draftsRead;
+    return drafts.length > 0 ? { ...view, drafts } : view;
+  };
   try {
     const [installed, pending, history] = await Promise.all([
       reflexCommand(reads, ["routine", "list"], z.array(RoutineSchema), run),
@@ -88,7 +99,7 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
         if (confirmed) finishRoutineOperation(db, operation.requestId, confirmed);
       }));
     }
-    return {
+    return await withDrafts({
       changes: pendingRoutineOperations(db, options),
       installed: selected.map((r) => {
         const proposal = readRoutineProposal(db, r.id, "routine_id");
@@ -96,9 +107,9 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
       }),
       pending: pending.filter((p) => ids.has(p.blueprintId)),
       done: history.filter((h) => h.outcome === "fired" && h.resolutionOf === null && selected.some((r) => r.id === h.blueprintId && r.policy === "auto")).slice(0, 10).map((h) => ({ routineId: h.blueprintId, title: readRoutineProposal(db, h.blueprintId, "routine_id")?.title ?? h.blueprintId.replaceAll(/[-_]/g, " "), decisionId: h.decisionId, at: h.at })),
-    };
+    });
   } catch (error) {
-    return { installed: [], pending: [], done: [], changes: pendingRoutineOperations(db, options), error: `Routines could not be read: ${failure(error)}` };
+    return withDrafts({ installed: [], pending: [], done: [], changes: pendingRoutineOperations(db, options), error: `Routines could not be read: ${failure(error)}` });
   }
 }
 

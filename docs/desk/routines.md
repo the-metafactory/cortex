@@ -30,7 +30,7 @@ Routines currently have no area classification metadata. AI editing uses the alr
 
 When a composed agent or reviewer step needs a capability that no fresh online local agent offers, the Desk refuses the routine and lists each missing capability with the steps that need it: the step, its prompt and its sovereignty limits. The flow is kept as a draft. It is not installed.
 
-If the stack sets `routines.capabilityBuild`, choose **Build this capability**. The Desk files one build node per missing capability on the configured map and shows each node's link on the card. Filing the same capability twice reuses the open node. See [capability writers](commands.md#capability-writers). Starting the build and installing the draft afterwards are separate steps that this release does not include.
+If the stack sets `routines.capabilityBuild`, choose **Build this capability**. The Desk files one build node per missing capability on the configured map and shows each node's link on the card. Filing the same capability twice reuses the open node. See [capability writers](commands.md#capability-writers). When the stack also sets `start`, the Desk starts each newly filed build at once, and a failed start shows as "Not started" with the reason. When it sets `status`, the draft lists each node's state: filed, building, in review, merged, live, or failed with its reason. See [build start and status commands](commands.md#build-start-and-status-commands). Installing the draft afterwards is a separate step that this release does not include.
 
 ## Background routines and Needs attention
 

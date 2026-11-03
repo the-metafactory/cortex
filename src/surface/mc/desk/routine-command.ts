@@ -3,6 +3,7 @@ import { spawnWithStdin, type WriterRunner } from "./create";
 
 import type { RoutineOptions } from "../../../common/types/desk-routines";
 import type { RoutineAction } from "./routine-store";
+import type { RoutineDraftView } from "./routine-capability-contract";
 export type { RoutineOptions } from "../../../common/types/desk-routines";
 export type RoutineRunner = WriterRunner;
 const id = z.string().min(1);
@@ -47,5 +48,6 @@ export interface RoutineView {
   pending: PendingRoutine[];
   done: { routineId: string; title: string; decisionId: string; at: string }[];
   changes: RoutineAction[];
+  drafts?: RoutineDraftView[];
   error?: string;
 }
