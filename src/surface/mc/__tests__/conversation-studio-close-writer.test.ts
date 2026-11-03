@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { failureOf, studioConversationRig } from "./studio-conversation-rig";
+import { runStudioAct } from "../desk/studio/writer";
+import { directRequest, failureOf, studioConversationRig } from "./studio-conversation-rig";
 
 const rig = studioConversationRig("conversation-studio-close-", "studio-close", { alpha: "active", beta: "active", gamma: "parked", omega: "closed" });
 const inDays = (days: number): string => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
@@ -69,6 +70,16 @@ describe("Studio close writer", () => {
     try {
       await r.replayed({ thread: "alpha", outcome: "dropped", text: "Not worth it." });
       expect(r.parsed("alpha").state).toBe("closed");
+    } finally { r.repo.clean(); }
+  });
+
+  test("says the outcome is missing when the writer is called without one, and the studio/act close keeps its plain log line", async () => {
+    const r = await rig();
+    try {
+      expect(await r.writer().create(directRequest("studio-close", { thread: "alpha", outcome: " ", text: "Gone." }))).toEqual({ state: "failed", error: "The outcome is missing; use decided, shipped or dropped. Nothing was created." });
+      const closed = await runStudioAct({ options: { dir: r.repo.dir, maxActive: 5 }, areas: [{ id: "lab", label: "Lab", color: "#7c3aed", policy: "local" }], requestId: "studio-act-close-xyz", act: { act: "close", thread: "beta", outcome: "dropped", text: "Not now." } });
+      expect(closed).toMatchObject({ ok: true });
+      expect(r.parsed("beta").log.at(-1)?.text).toBe("Closed as dropped");
     } finally { r.repo.clean(); }
   });
 

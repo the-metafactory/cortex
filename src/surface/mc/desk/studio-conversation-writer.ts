@@ -130,7 +130,7 @@ export function studioCloseWriter(deps: StudioWriterDeps): OwnerWriter {
     prepare: request => {
       const { thread = "", outcome = "", text = "", expect = "", reviewOn = "" } = request.fields;
       const chosen = outcome.trim();
-      if (!isOutcome(chosen)) return `${chosen} is not an outcome; use decided, shipped or dropped.`;
+      if (!isOutcome(chosen)) return `${chosen ? `${chosen} is not an outcome` : "The outcome is missing"}; use decided, shipped or dropped.`;
       const act = studioAct({ act: "close", thread, outcome: chosen, text, ...(expect.trim() ? { expect } : {}), ...(reviewOn.trim() ? { reviewOn: reviewOn.trim() } : {}) }, CLOSE_LABELS);
       if (typeof act === "string") return act;
       return ctx => planAct(ctx, act, conversationVia(request));
