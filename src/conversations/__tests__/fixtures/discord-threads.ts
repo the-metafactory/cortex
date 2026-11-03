@@ -1,4 +1,4 @@
-import type { CreatePrivateThreadResult, ThreadDeleteResult, ThreadMembersResult, ThreadMessage, ThreadPostResult, ThreadReadResult } from "../../../adapters/types";
+import type { ResponseTarget, CreatePrivateThreadResult, ThreadDeleteResult, ThreadMembersResult, ThreadMessage, ThreadPostResult, ThreadReadResult } from "../../../adapters/types";
 import type { ThreadCapable } from "../../discord";
 
 export const BOT = "bot-1";
@@ -14,7 +14,14 @@ export class FakeThreads implements ThreadCapable {
   intruder: string | null = null;
   faults: PostFault[] = [];
   readFails = false;
+  readonly instanceId = "pilot-discord";
+  readonly replies: { target: ResponseTarget; text: string }[] = [];
   private seq = 0;
+
+  postResponse(target: ResponseTarget, text: string): Promise<void> {
+    this.replies.push({ target, text });
+    return Promise.resolve();
+  }
 
   getPlatformUserId(): Promise<string> { return Promise.resolve(BOT); }
   createPrivateThread(opts: { channelId: string; name: string; memberIds: string[] }): Promise<CreatePrivateThreadResult> {

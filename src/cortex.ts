@@ -2610,7 +2610,7 @@ export async function startCortex(
       const consumed = gateReplyRouter.offer(toGateReplyOffer(msg));
       if (consumed) return Promise.resolve();
       const discordConversations = conversationDiscord;
-      if (discordConversations && msg.platform === "discord" && msg.threadId) {
+      if (discordConversations && msg.platform === "discord" && (msg.threadId || msg.isDM === true)) {
         return discordConversations.offer(msg).then((taken) => (taken ? undefined : routeInbound(adapter, agent, msg)));
       }
       return routeInbound(adapter, agent, msg);

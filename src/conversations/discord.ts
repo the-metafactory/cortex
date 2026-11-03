@@ -3,11 +3,12 @@ import { z } from "zod";
 import type { InboundMessage, PlatformAdapter, ThreadMessage } from "../adapters/types";
 import { safeAttachmentRefs } from "../bus/brain-consumer";
 import type { DeskConversationsDiscord } from "../common/types/desk-conversations";
+import { DmPicker, type DmReplier } from "./discord-dm";
 import { ConversationError, type ConversationHost, type DiscordLink } from "./host";
 import { INPUT_KIND, type AttachmentRef, type ConversationEntry, type ConversationMeta } from "./types";
 
 type ThreadMethods = "createPrivateThread" | "privateThreadMembers" | "postToThread" | "recentThreadMessages" | "deleteThread";
-export type ThreadCapable = Pick<PlatformAdapter, "getPlatformUserId" | ThreadMethods>;
+export type ThreadCapable = Pick<PlatformAdapter, "getPlatformUserId" | ThreadMethods> & Partial<DmReplier>;
 export type ThreadAdapter = Pick<PlatformAdapter, "getPlatformUserId"> & Required<Pick<PlatformAdapter, ThreadMethods>>;
 export interface DiscordConversationOptions {
   host: ConversationHost;
@@ -59,10 +60,21 @@ export class DiscordConversations {
   private unsubscribe: (() => void) | null = null;
   private readonly now: () => Date;
   private readonly log: (line: string) => void;
+  private readonly dm: DmPicker;
 
   constructor(private readonly options: DiscordConversationOptions) {
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? (line => { console.log(`conversations: discord: ${line}`); });
+    this.dm = new DmPicker({
+      host: options.host,
+      adapter: () => dmReplier(options.adapter()),
+      principalId: options.principalId,
+      attach: id => this.attach(id),
+      threadUrl: threadId => this.threadUrl(threadId),
+      webLink: id => this.webLink(id),
+      now: this.now,
+      log: this.log,
+    });
   }
 
   start(): void {
@@ -182,12 +194,21 @@ export class DiscordConversations {
   }
 
   async offer(msg: InboundMessage): Promise<boolean> {
-    if (msg.platform !== "discord" || !msg.threadId || msg.isDM) return false;
+    if (msg.platform === "discord" && msg.isDM === true) return this.offerDm(msg);
+    if (msg.platform !== "discord" || !msg.threadId) return false;
     const id = await this.conversationFor(msg.threadId).catch(() => null);
     if (!id) return false;
     const threadId = msg.threadId;
     await this.serial(`in:${id}`, () => this.receive(id, threadId, msg)).catch((error: unknown) => {
       this.log(`inbound message in thread ${threadId} failed: ${messageOf(error)}`);
+    });
+    return true;
+  }
+
+  private async offerDm(msg: InboundMessage): Promise<boolean> {
+    if (!await this.dm.claims(msg).catch(() => false)) return false;
+    await this.serial(`dm:${msg.channelId}`, () => this.dm.handle(msg)).catch((error: unknown) => {
+      this.log(`DM conversation choice failed: ${messageOf(error)}`);
     });
     return true;
   }
@@ -385,6 +406,12 @@ export class DiscordConversations {
   private async used(id: string): Promise<void> {
     await this.options.host.setDiscordLink(id, current => current && (current.usedAt ? current : { ...current, usedAt: this.now().toISOString() }));
   }
+}
+
+function dmReplier(adapter: ThreadCapable | null): DmReplier | null {
+  if (!adapter?.postResponse || adapter.instanceId === undefined) return null;
+  const { instanceId, postResponse } = adapter;
+  return { instanceId, postResponse: postResponse.bind(adapter) };
 }
 
 function isThreadAdapter(adapter: ThreadCapable): adapter is ThreadAdapter {
