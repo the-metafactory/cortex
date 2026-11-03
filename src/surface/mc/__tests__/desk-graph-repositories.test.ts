@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { handleDeskGraphRepositories, type DeskGraphRepositoryDeps } from "../api/desk-graph-repositories";
-import { githubRef, gitlabRef, isGraphRepositoryAllowed, listGraphRepositories, type GraphRepositoryRunner } from "../desk/graph-repositories";
+import { githubRef, gitlabRef, isGraphRepositoryAllowed, listGraphRepositories, type GitlabListing, type GraphRepositoryRunner } from "../desk/graph-repositories";
 import { initDatabase } from "../db/init";
 import { DEFAULT_CONFIG } from "../config";
 import { startServer } from "../server";
@@ -20,11 +20,12 @@ const loggedIn = (...hosts: string[]): Reply => ({
 });
 const projects = (...paths: string[]): Reply => ok(JSON.stringify(paths.map((p, i) => ({ id: i + 1, name: p.split("/").at(-1), path_with_namespace: p }))));
 const NO_GLAB = new Error("Executable not found in $PATH: \"glab\"");
-const forges = (replies: { gh?: Reply; glabStatus?: Reply; glab?: Reply }): GraphRepositoryRunner & { calls: { argv: string[]; timeoutMs: number }[] } => {
+const forges = (replies: { gh?: Reply; glabStatus?: Reply; glab?: Reply; glabByHost?: Record<string, Reply> }): GraphRepositoryRunner & { calls: { argv: string[]; timeoutMs: number }[] } => {
   const calls: { argv: string[]; timeoutMs: number }[] = [];
+  const glabFor = (host: string): Reply => replies.glabByHost?.[host] ?? replies.glab ?? NO_GLAB;
   const run = Object.assign(async (argv: string[], timeoutMs: number) => {
     calls.push({ argv, timeoutMs });
-    const reply = argv[0] === "gh" ? replies.gh ?? ok("") : argv[1] === "auth" ? replies.glabStatus ?? NO_GLAB : replies.glab ?? NO_GLAB;
+    const reply = argv[0] === "gh" ? replies.gh ?? ok("") : argv[1] === "auth" ? replies.glabStatus ?? NO_GLAB : glabFor(argv[3] ?? "");
     if (reply instanceof Error) throw reply;
     return reply;
   }, { calls });
@@ -73,7 +74,7 @@ describe("GET /api/desk/graph-repositories", () => {
         { ref: "github:github.com/zeta/last", label: "zeta/last", forge: "github", enabled: false },
       ],
       listing: { ok: true },
-      gitlab: { ok: false, kind: "unavailable", reason: "Executable not found in $PATH: \"glab\"" },
+      gitlab: { ok: false, reason: "Executable not found in $PATH: \"glab\"" },
     });
     expect(run.calls[0]).toEqual({ argv: ["gh", "api", "--paginate", "user/repos?affiliation=owner,organization_member", "--jq", ".[].full_name"], timeoutMs: 30_000 });
   });
@@ -121,54 +122,93 @@ describe("the GitLab projects in the listing", () => {
         { ref: "github:github.com/jcfischer/desk", label: "jcfischer/desk", forge: "github", enabled: false },
       ],
       listing: { ok: true },
-      gitlab: { ok: true, host: "gitlab.switch.ch" },
+      gitlab: { ok: true, hosts: [{ host: "gitlab.switch.ch", ok: true }] },
     });
     expect(run.calls.filter((c) => c.argv[0] === "glab")).toEqual([{ argv: GLAB_STATUS, timeoutMs: 30_000 }, { argv: glabList("gitlab.switch.ch"), timeoutMs: 30_000 }]);
   });
 
   it("lists the projects although glab auth status exits non-zero for another, failing host", async () => {
     const view = await listGraphRepositories(db, forges({ glabStatus: loggedIn("gitlab.example.org"), glab: projects("g/p") }));
-    expect(view.gitlab).toEqual({ ok: true, host: "gitlab.example.org" });
+    expect(view.gitlab).toEqual({ ok: true, hosts: [{ host: "gitlab.example.org", ok: true }] });
     expect(view.repositories.map((r) => r.ref)).toEqual(["gitlab:gitlab.example.org/g/p"]);
   });
 
-  it("lists no project and says why when several GitLab hosts are logged in, and never asks either host", async () => {
+  it("lists the projects of every logged-in host, reports a failing host on its own, and never asks a host without a login", async () => {
     db.query("INSERT INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run(gitlabRef("a.example.org", "g/p"), NOW);
-    const run = forges({ gh: ok("jcfischer/desk\n"), glabStatus: loggedIn("b.example.org", "a.example.org"), glab: projects("g/other") });
-    const view = await listGraphRepositories(db, run);
-    expect(view.gitlab).toEqual({ ok: false, kind: "several-hosts", reason: "glab is logged in to a.example.org, b.example.org" });
-    expect(view.repositories).toEqual([
-      { ref: "gitlab:a.example.org/g/p", label: "g/p", forge: "gitlab", enabled: true },
-      { ref: "github:github.com/jcfischer/desk", label: "jcfischer/desk", forge: "github", enabled: false },
-    ]);
-    expect(run.calls.some((c) => c.argv[1] === "api" && c.argv[0] === "glab")).toBe(false);
+    db.query("INSERT INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run(gitlabRef("c.example.org", "g/ticked"), NOW);
+    const run = forges({
+      gh: ok("jcfischer/desk\n"),
+      glabStatus: loggedIn("c.example.org", "b.example.org", "a.example.org"),
+      glabByHost: { "a.example.org": projects("g/p", "g/q"), "b.example.org": projects("team/tool"), "c.example.org": { code: 1, signal: null, stdout: "", stderr: "glab: 502 Bad Gateway\nmore" } },
+    });
+    const res = await call("/api/desk/graph-repositories", "GET", { run });
+    expect(await res.json()).toEqual({
+      repositories: [
+        { ref: "gitlab:a.example.org/g/p", label: "g/p", forge: "gitlab", enabled: true },
+        { ref: "gitlab:a.example.org/g/q", label: "g/q", forge: "gitlab", enabled: false },
+        { ref: "gitlab:c.example.org/g/ticked", label: "g/ticked", forge: "gitlab", enabled: true },
+        { ref: "github:github.com/jcfischer/desk", label: "jcfischer/desk", forge: "github", enabled: false },
+        { ref: "gitlab:b.example.org/team/tool", label: "team/tool", forge: "gitlab", enabled: false },
+      ],
+      listing: { ok: true },
+      gitlab: { ok: true, hosts: [{ host: "a.example.org", ok: true }, { host: "b.example.org", ok: true }, { host: "c.example.org", ok: false, reason: "glab: 502 Bad Gateway" }] },
+    });
+    expect(run.calls.filter((c) => c.argv[0] === "glab").map((c) => c.argv)).toEqual([GLAB_STATUS, glabList("a.example.org"), glabList("b.example.org"), glabList("c.example.org")]);
+    expect(run.calls.some((c) => c.argv.includes("gitlab.com"))).toBe(false);
+  });
+
+  it("reads every page that glab --paginate prints back to back", async () => {
+    const page = (...paths: string[]) => JSON.stringify(paths.map((p) => ({ path_with_namespace: p, description: "a ][ b \"q\" [c]" })));
+    const view = await listGraphRepositories(db, forges({ glabStatus: loggedIn("gitlab.example.org"), glab: ok(`${page("g/one", "g/two")}${page("g/three")}\n`) }));
+    expect(view.repositories.map((r) => r.label)).toEqual(["g/one", "g/three", "g/two"]);
+    expect(view.gitlab).toEqual({ ok: true, hosts: [{ host: "gitlab.example.org", ok: true }] });
+  });
+
+  it("allows a ticked project on any host by exact reference, and refuses a host that was never ticked", async () => {
+    const ref = gitlabRef("b.example.org", "team/tool");
+    expect((await put(ref, true)).status).toBe(200);
+    expect(isGraphRepositoryAllowed(db, ref)).toBe(true);
+    expect(isGraphRepositoryAllowed(db, gitlabRef("a.example.org", "team/tool"))).toBe(false);
+    expect(isGraphRepositoryAllowed(db, gitlabRef("gitlab.com", "team/tool"))).toBe(false);
+  });
+
+  it("marks a ticked project on a host that is not logged in as not listed", async () => {
+    const ref = gitlabRef("gitlab.com", "g/p");
+    db.query("INSERT INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run(ref, NOW);
+    const view = await listGraphRepositories(db, forges({ glabStatus: loggedIn("a.example.org"), glab: projects() }));
+    expect(view.repositories).toEqual([{ ref, label: "g/p", forge: "gitlab", enabled: true, listed: false }]);
   });
 
   it("reports GitLab as unavailable, and leaves the GitHub rows alone, when glab is missing, not logged in or fails", async () => {
     const notLoggedIn: Reply = { code: 1, signal: null, stdout: "", stderr: "gitlab.com\n  x gitlab.com: API call failed\n  ! No token found" };
     const failing: Reply = { code: 1, signal: null, stdout: "", stderr: "glab: 401 Unauthorized\nmore" };
-    const cases: [Parameters<typeof forges>[0], string][] = [
-      [{}, "Executable not found in $PATH: \"glab\""],
-      [{ glabStatus: notLoggedIn }, "glab is not logged in to any GitLab host"],
-      [{ glabStatus: loggedIn("gitlab.example.org"), glab: failing }, "glab: 401 Unauthorized"],
-      [{ glabStatus: loggedIn("gitlab.example.org"), glab: ok("not json") }, "glab did not return a project list"],
-      [{ glabStatus: loggedIn("gitlab.example.org"), glab: ok("{}") }, "glab did not return a project list"],
+    const host = (reason: string): GitlabListing => ({ ok: true, hosts: [{ host: "gitlab.example.org", ok: false, reason }] });
+    const cases: [Parameters<typeof forges>[0], GitlabListing][] = [
+      [{}, { ok: false, reason: "Executable not found in $PATH: \"glab\"" }],
+      [{ glabStatus: notLoggedIn }, { ok: false, reason: "glab is not logged in to any GitLab host" }],
+      [{ glabStatus: loggedIn("gitlab.example.org"), glab: failing }, host("glab: 401 Unauthorized")],
+      [{ glabStatus: loggedIn("gitlab.example.org"), glab: ok("not json") }, host("glab did not return a project list")],
+      [{ glabStatus: loggedIn("gitlab.example.org"), glab: ok("{}") }, host("glab did not return a project list")],
+      [{ glabStatus: loggedIn("gitlab.example.org"), glab: ok("[{\"path_with_namespace\":\"g/p\"}") }, host("glab did not return a project list")],
+      [{ glabStatus: loggedIn("gitlab.example.org"), glab: ok("") }, host("glab did not return a project list")],
     ];
-    for (const [replies, reason] of cases) {
+    for (const [replies, gitlab] of cases) {
       const view = await listGraphRepositories(db, forges({ gh: ok("jcfischer/desk\n"), ...replies }));
-      expect(view.gitlab).toEqual({ ok: false, kind: "unavailable", reason });
+      expect(view.gitlab).toEqual(gitlab);
       expect(view.listing).toEqual({ ok: true });
       expect(view.repositories).toEqual([{ ref: "github:github.com/jcfischer/desk", label: "jcfischer/desk", forge: "github", enabled: false }]);
     }
   });
 
-  it("keeps a ticked project the listing no longer returns, marked not listed, and does not mark it while GitLab cannot be listed", async () => {
+  it("keeps a ticked project the listing no longer returns, marked not listed, and does not mark it while its host cannot be listed", async () => {
     const ref = gitlabRef("gitlab.example.org", "gone/project");
     db.query("INSERT INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run(ref, NOW);
     const listed = await listGraphRepositories(db, forges({ glabStatus: loggedIn("gitlab.example.org"), glab: projects() }));
     expect(listed.repositories).toEqual([{ ref, label: "gone/project", forge: "gitlab", enabled: true, listed: false }]);
     const unlisted = await listGraphRepositories(db, forges({}));
     expect(unlisted.repositories).toEqual([{ ref, label: "gone/project", forge: "gitlab", enabled: true }]);
+    const hostFailed = await listGraphRepositories(db, forges({ glabStatus: loggedIn("gitlab.example.org", "other.example.org"), glabByHost: { "other.example.org": projects() } }));
+    expect(hostFailed.repositories).toEqual([{ ref, label: "gone/project", forge: "gitlab", enabled: true }]);
   });
 
   it("skips project entries without a usable path", async () => {

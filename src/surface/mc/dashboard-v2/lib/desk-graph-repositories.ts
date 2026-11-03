@@ -1,4 +1,4 @@
-import type { GitlabListing, GraphRepository, GraphRepositoryListing } from "../../desk/graph-repositories";
+import type { GitlabHostListing, GitlabListing, GraphRepository, GraphRepositoryListing } from "../../desk/graph-repositories";
 import { GRAPH_REPOSITORIES_PATH } from "../../desk/graph-repository-schema";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
@@ -21,10 +21,18 @@ async function send(path: string, init: RequestInit, fetchImpl: FetchLike): Prom
   }
 }
 
+const record = (v: unknown): Record<string, unknown> => (typeof v === "object" && v !== null ? v : {}) as Record<string, unknown>;
+
+const readGitlabHost = (v: unknown): GitlabHostListing[] => {
+  const h = record(v);
+  if (typeof h.host !== "string" || h.host === "") return [];
+  return [h.ok === true ? { host: h.host, ok: true } : { host: h.host, ok: false, reason: typeof h.reason === "string" ? h.reason : "" }];
+};
+
 const readGitlab = (v: unknown): GitlabListing => {
-  const g = (typeof v === "object" && v !== null ? v : {}) as Record<string, unknown>;
-  if (g.ok === true && typeof g.host === "string") return { ok: true, host: g.host };
-  return { ok: false, kind: g.kind === "several-hosts" ? "several-hosts" : "unavailable", reason: typeof g.reason === "string" ? g.reason : "" };
+  const g = record(v);
+  if (g.ok === true && Array.isArray(g.hosts)) return { ok: true, hosts: g.hosts.flatMap(readGitlabHost) };
+  return { ok: false, reason: typeof g.reason === "string" ? g.reason : "" };
 };
 
 const refusal = (res: Response, body: Record<string, unknown> | null): string => (typeof body?.error === "string" && body.error ? body.error : `Mission Control answered HTTP ${res.status}.`);

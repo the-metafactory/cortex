@@ -1,13 +1,12 @@
 // glossary-ignore: run, host
 import type { Database } from "bun:sqlite";
 import { CommandTimeout, runCommand, type CommandResult } from "./spawn";
+import { GITLAB_HOST, GITLAB_PATH, GITLAB_REF_PREFIX, parseGitlabRef } from "./graph-repository-schema";
 
+export { GITLAB_REF_PREFIX } from "./graph-repository-schema";
 export const GITHUB_REF_PREFIX = "github:github.com/";
-export const GITLAB_REF_PREFIX = "gitlab:";
 
 const FULL_NAME = /^[^/\s]+\/[^/\s]+$/;
-const GITLAB_HOST = /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?(?::\d{1,5})?$/;
-const GITLAB_PATH = /^[^/\s]+(?:\/[^/\s]+)+$/;
 const LOGGED_IN = /✓\s+Logged in to (\S+) as /;
 const FORGE_TIMEOUT_MS = 30_000;
 const GH_LIST_ARGV = ["gh", "api", "--paginate", "user/repos?affiliation=owner,organization_member", "--jq", ".[].full_name"];
@@ -24,7 +23,11 @@ export interface GraphRepository {
 
 export type GraphRepositoryListing = { ok: true } | { ok: false; reason: string };
 
-export type GitlabListing = { ok: true; host: string } | { ok: false; kind: "unavailable" | "several-hosts"; reason: string };
+/** One logged-in GitLab host and whether its projects could be listed. */
+export type GitlabHostListing = { host: string; ok: true } | { host: string; ok: false; reason: string };
+
+/** Fails as a whole only when glab cannot say which hosts it is logged in to; otherwise reports each logged-in host. */
+export type GitlabListing = { ok: true; hosts: GitlabHostListing[] } | { ok: false; reason: string };
 
 export interface GraphRepositoryView {
   repositories: GraphRepository[];
@@ -39,15 +42,6 @@ export const githubRef = (fullName: string): string => `${GITHUB_REF_PREFIX}${fu
 export const gitlabRef = (host: string, path: string): string => `${GITLAB_REF_PREFIX}${host}/${path}`;
 
 export const isGithubRef = (ref: string): boolean => ref.startsWith(GITHUB_REF_PREFIX) && FULL_NAME.test(ref.slice(GITHUB_REF_PREFIX.length));
-
-function parseGitlabRef(ref: string): { host: string; path: string } | null {
-  if (!ref.startsWith(GITLAB_REF_PREFIX)) return null;
-  const rest = ref.slice(GITLAB_REF_PREFIX.length);
-  const slash = rest.indexOf("/");
-  const host = rest.slice(0, slash);
-  const path = rest.slice(slash + 1);
-  return slash > 0 && GITLAB_HOST.test(host) && GITLAB_PATH.test(path) ? { host, path } : null;
-}
 
 export const isGitlabRef = (ref: string): boolean => parseGitlabRef(ref) !== null;
 
@@ -102,34 +96,88 @@ async function loggedInGitlabHostsIgnoringExitCode(run: GraphRepositoryRunner): 
   return { ok: true, hosts: [...hosts].sort() };
 }
 
-async function listGitlabProjects(run: GraphRepositoryRunner): Promise<{ listing: GitlabListing; paths: string[] }> {
-  const unavailable = (reason: string) => ({ listing: { ok: false as const, kind: "unavailable" as const, reason }, paths: [] });
-  const status = await loggedInGitlabHostsIgnoringExitCode(run);
-  if (!status.ok) return unavailable(status.reason);
-  const [host, ...others] = status.hosts;
-  if (host === undefined) return unavailable("glab is not logged in to any GitLab host");
-  if (others.length > 0) return { listing: { ok: false, kind: "several-hosts", reason: `glab is logged in to ${status.hosts.join(", ")}` }, paths: [] };
-  const ran = await attempt(run, "glab", glabListArgv(host));
-  if (!ran.ok) return unavailable(ran.reason);
-  if (ran.result.code !== 0) return unavailable(firstLine(ran.result.stderr) || `glab exited with code ${ran.result.code}`);
-  let projects: unknown;
-  try {
-    projects = JSON.parse(ran.result.stdout);
-  } catch (_err) {
-    return unavailable("glab did not return a project list");
+/**
+ * `glab api --paginate` prints one JSON array per page with nothing between them (`[...][...]`), so the output is
+ * split into its top-level values before parsing. Null unless every value is an array.
+ */
+export function parsePaginatedArrays(text: string): unknown[] | null {
+  const items: unknown[] = [];
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let start = -1;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === "\"") inString = false;
+      continue;
+    }
+    if (c === "\"") inString = true;
+    else if (c === "[" || c === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (c === "]" || c === "}") {
+      depth--;
+      if (depth < 0) return null;
+      if (depth === 0) {
+        let page: unknown;
+        try {
+          page = JSON.parse(text.slice(start, i + 1));
+        } catch (_err) {
+          return null;
+        }
+        if (!Array.isArray(page)) return null;
+        items.push(...(page as unknown[]));
+      }
+    } else if (depth === 0 && !/\s/.test(c ?? "")) return null;
   }
-  if (!Array.isArray(projects)) return unavailable("glab did not return a project list");
+  return depth === 0 && !inString && start >= 0 ? items : null;
+}
+
+async function listHostProjects(run: GraphRepositoryRunner, host: string): Promise<{ ok: true; paths: string[] } | { ok: false; reason: string }> {
+  const ran = await attempt(run, "glab", glabListArgv(host));
+  if (!ran.ok) return ran;
+  if (ran.result.code !== 0) return { ok: false, reason: firstLine(ran.result.stderr) || `glab exited with code ${ran.result.code}` };
+  const projects = parsePaginatedArrays(ran.result.stdout);
+  if (projects === null) return { ok: false, reason: "glab did not return a project list" };
   const paths = projects
     .map((p: unknown) => (typeof p === "object" && p !== null ? (p as Record<string, unknown>).path_with_namespace : undefined))
     .filter((p): p is string => typeof p === "string" && GITLAB_PATH.test(p));
-  return { listing: { ok: true, host }, paths };
+  return { ok: true, paths };
+}
+
+async function listGitlabProjects(run: GraphRepositoryRunner): Promise<{ listing: GitlabListing; refs: { ref: string; path: string }[] }> {
+  const status = await loggedInGitlabHostsIgnoringExitCode(run);
+  if (!status.ok) return { listing: { ok: false, reason: status.reason }, refs: [] };
+  if (status.hosts.length === 0) return { listing: { ok: false, reason: "glab is not logged in to any GitLab host" }, refs: [] };
+  const hosts: GitlabHostListing[] = [];
+  const refs: { ref: string; path: string }[] = [];
+  for (const host of status.hosts) {
+    const listed = await listHostProjects(run, host);
+    if (!listed.ok) {
+      hosts.push({ host, ok: false, reason: listed.reason });
+      continue;
+    }
+    hosts.push({ host, ok: true });
+    for (const path of listed.paths) refs.push({ ref: gitlabRef(host, path), path });
+  }
+  return { listing: { ok: true, hosts }, refs };
+}
+
+function listingAnswered(ref: string, github: { ok: boolean }, gitlab: GitlabListing): boolean {
+  if (!ref.startsWith(GITLAB_REF_PREFIX)) return github.ok;
+  if (!gitlab.ok) return false;
+  const host = parseGitlabRef(ref)?.host;
+  return gitlab.hosts.find((h) => h.host === host)?.ok ?? true;
 }
 
 /**
  * Every GitHub repository the signed-in `gh` can see (own account and organisations) and every GitLab project `glab`
- * can see while it is logged in to exactly one GitLab, merged with the stored ticks. A ticked repository its forge's listing does not
- * return stays in the result with `listed: false`; when a forge's listing fails, its ticked repositories are still
- * returned, so they can be unticked. Logged in to several GitLabs, no GitLab project is listed (fail closed).
+ * can see on each host it is logged in to, merged with the stored ticks. A ticked repository its listing does not
+ * return stays in the result with `listed: false`; when a forge's or a host's listing fails, its ticked repositories
+ * are still returned, so they can be unticked.
  */
 export async function listGraphRepositories(db: Database, run: GraphRepositoryRunner = runCommand): Promise<GraphRepositoryView> {
   const enabled = new Set(storedRefs(db));
@@ -141,17 +189,11 @@ export async function listGraphRepositories(db: Database, run: GraphRepositoryRu
       rows.set(ref, { ref, label: name, forge: "github", enabled: enabled.has(ref) });
     }
   }
-  if (gitlab.listing.ok) {
-    for (const path of gitlab.paths) {
-      const ref = gitlabRef(gitlab.listing.host, path);
-      rows.set(ref, { ref, label: path, forge: "gitlab", enabled: enabled.has(ref) });
-    }
-  }
+  for (const { ref, path } of gitlab.refs) rows.set(ref, { ref, label: path, forge: "gitlab", enabled: enabled.has(ref) });
   for (const ref of enabled) {
     if (rows.has(ref)) continue;
     const described = describeRef(ref);
-    const listingOk = described.forge === "gitlab" ? gitlab.listing.ok : github.ok;
-    rows.set(ref, { ref, ...described, enabled: true, ...(listingOk ? { listed: false as const } : {}) });
+    rows.set(ref, { ref, ...described, enabled: true, ...(listingAnswered(ref, github, gitlab.listing) ? { listed: false as const } : {}) });
   }
   const repositories = [...rows.values()].sort((a, b) => a.label.localeCompare(b.label) || a.ref.localeCompare(b.ref));
   return { repositories, listing: github.ok ? { ok: true } : { ok: false, reason: github.reason }, gitlab: gitlab.listing };
