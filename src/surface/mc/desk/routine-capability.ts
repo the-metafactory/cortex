@@ -2,7 +2,8 @@ import type { Database } from "bun:sqlite";
 import { oneLine } from "./actions";
 import type { HandledLedger } from "./actions";
 import { spawnWithStdin } from "./create";
-import { CapabilityNodeSchema, FILEABLE_CAPABILITY, type CapabilityBuildRequest, type CapabilityBuildResult, type CapabilityNode, type MissingCapability } from "./routine-capability-contract";
+import { CapabilityNodeSchema, FILEABLE_CAPABILITY, type BuiltNode, type CapabilityBuildRequest, type CapabilityBuildResult, type CapabilityNode, type MissingCapability } from "./routine-capability-contract";
+import { runNodeCommand } from "./routine-node-command";
 import { runRoutineCommand, type RoutineOptions, type RoutineRunner } from "./routine-command";
 import { readRoutineProposal, recordDraftNode, routineConfigHash } from "./routine-store";
 
@@ -28,8 +29,13 @@ async function fileCapability(options: RoutineOptions, writer: string[], input: 
   }
 }
 
+async function startBuild(options: RoutineOptions, start: string[], map: string, node: CapabilityNode, run: RoutineRunner): Promise<string | undefined> {
+  const result = await runNodeCommand({ argv: start, ref: node.ref, map, label: "start", timeoutMs: options.timeoutSeconds * 1000, run });
+  return result.ok ? undefined : result.error;
+}
+
 function summary(built: CapabilityBuildResult["built"], problems: CapabilityBuildResult["failed"]): string {
-  const filed = built.map((b) => `${b.capability}: ${b.existing ? "already filed as" : "filed as"} ${b.ref}`);
+  const filed = built.map((b) => `${b.capability}: ${b.existing ? "already filed as" : "filed as"} ${b.ref}${b.notStarted ? `, not started: ${b.notStarted}` : ""}`);
   const refused = problems.map((p) => `${p.capability} failed: ${p.error}`);
   return [...filed, ...refused].join(" ");
 }
@@ -56,8 +62,10 @@ export async function buildRoutineCapabilities(db: Database, options: RoutineOpt
         ...(build.template ? { template: build.template } : {}),
       }, run);
       if (!filed.ok) { problems.push({ capability, error: filed.error }); return; }
-      recordDraftNode(db, request.proposalId, capability, filed.node);
-      built.push({ capability, ...filed.node });
+      const notStarted = build.start && !filed.node.existing ? await startBuild(options, build.start, build.map, filed.node, run) : undefined;
+      const node: BuiltNode = notStarted ? { ...filed.node, notStarted } : filed.node;
+      recordDraftNode(db, request.proposalId, capability, node);
+      built.push({ capability, ...node });
     } finally {
       ledger.release(key);
     }

@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { postJson } from "../lib/api";
 import type { RoutineAction, LegacyRoutineAction } from "../../desk/routine-store";
 import type { RoutineView } from "../../desk/routine-command";
+import { RoutineDrafts } from "./desk-routine-drafts";
 
 type RoutineButtonProps = { children: string; onChanged: () => void; onCompleted?: (request: RoutineAction) => void; retryId?: string } & ({ request: RoutineAction; action?: never; target?: never } | { request?: never; action: LegacyRoutineAction["action"]; target: string });
 export function RoutineButton(props: RoutineButtonProps) {
@@ -57,6 +58,7 @@ export function RoutinesSection({ view, onChanged }: { view: RoutineView | undef
           </div>
         </div></li>)}
       </ul>
+      <RoutineDrafts drafts={view.drafts} />
     </section>
   );
 }

@@ -2,12 +2,15 @@ import type { Database } from "bun:sqlite";
 import type { RoutineOptions, RoutineRunner, RoutineView } from "./routine-command";
 import { routineConfigHash } from "./routine-store";
 import { readRoutines } from "./routines";
+import type { RoutineCapabilities } from "./routine-providers";
 
 export class RoutineReadLoop {
   private snapshot: RoutineView = { installed: [], pending: [], done: [], changes: [], error: "Routines are loading." };
   private inFlight: Promise<void> | null = null;
   private at = 0;
   private hash = "";
+
+  constructor(private readonly capabilities?: RoutineCapabilities) {}
 
   read(db: Database, options: RoutineOptions, now: number): RoutineView {
     const hash = routineConfigHash(options);
@@ -22,7 +25,7 @@ export class RoutineReadLoop {
 
   refresh(db: Database, options: RoutineOptions, now = Date.now(), run?: RoutineRunner): Promise<void> {
     this.hash = routineConfigHash(options);
-    this.inFlight ??= readRoutines(db, options, run).then((view) => { this.snapshot = view; this.at = now; }).finally(() => { this.inFlight = null; });
+    this.inFlight ??= readRoutines(db, options, run, this.capabilities).then((view) => { this.snapshot = view; this.at = now; }).finally(() => { this.inFlight = null; });
     return this.inFlight;
   }
 

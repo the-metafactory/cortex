@@ -1,0 +1,54 @@
+import type { Database } from "bun:sqlite";
+import { spawnWithStdin } from "./create";
+import type { CapabilityBuildOptions } from "../../../common/types/desk-routines";
+import { BuildStatusSchema, type BuildState, type RoutineDraftView } from "./routine-capability-contract";
+import { runNodeCommand } from "./routine-node-command";
+import type { RoutineOptions, RoutineRunner } from "./routine-command";
+import type { RoutineCapabilities } from "./routine-providers";
+import { listFiledDrafts } from "./routine-store";
+
+const READ_CONCURRENCY = 4;
+const MAX_REASON = 400;
+const brief = (text: string): string => { const line = text.replaceAll(/\s+/g, " ").trim(); return line.length > MAX_REASON ? `${line.slice(0, MAX_REASON - 1)}…` : line; };
+const unknown = (error: string): BuildState => ({ state: "unknown", error });
+
+async function readBuildState(build: CapabilityBuildOptions, status: string[], ref: string, timeoutMs: number, run: RoutineRunner): Promise<BuildState> {
+  const result = await runNodeCommand({ argv: status, ref, map: build.map, label: "status", timeoutMs, run });
+  if (!result.ok) return unknown(result.error);
+  let raw: unknown;
+  try { raw = JSON.parse(result.stdout); }
+  catch { return unknown("the status command printed invalid JSON."); }
+  const parsed = BuildStatusSchema.safeParse(raw);
+  if (!parsed.success) return unknown("the status command printed a state the Desk does not know.");
+  const { state, reason, pr } = parsed.data;
+  return { state, ...(reason ? { reason: brief(reason) } : {}), ...(pr ? { pr } : {}) };
+}
+
+async function pooled<T>(items: T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => { while (next < items.length) { const item = items[next++] as T; await work(item); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+const withPresence = (build: BuildState | null, live: boolean): BuildState | null => build?.state === "merged" && live ? { ...build, state: "live" } : build;
+
+export async function readDraftViews(db: Database, options: RoutineOptions, capabilities: RoutineCapabilities, run: RoutineRunner = spawnWithStdin): Promise<RoutineDraftView[]> {
+  const build = options.capabilityBuild;
+  if (!build) return [];
+  const drafts = listFiledDrafts(db);
+  const states = new Map<string, BuildState>();
+  const status = build.status;
+  if (status) {
+    const refs = [...new Set(drafts.flatMap((draft) => Object.values(draft.draft?.nodes ?? {}).map((node) => node.ref)))];
+    await pooled(refs, READ_CONCURRENCY, async (ref) => { states.set(ref, await readBuildState(build, status, ref, options.readTimeoutSeconds * 1000, run)); });
+  }
+  const present = capabilities();
+  return drafts.map((draft) => ({
+    proposalId: draft.id,
+    title: draft.title,
+    nodes: Object.entries(draft.draft?.nodes ?? {}).map(([capability, { ref, url, notStarted }]) => ({
+      capability, ref, url, ...(notStarted ? { notStarted } : {}),
+      build: withPresence(states.get(ref) ?? null, present.has(capability)),
+    })),
+  }));
+}

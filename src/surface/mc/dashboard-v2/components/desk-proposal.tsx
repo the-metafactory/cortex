@@ -102,7 +102,7 @@ function MissingCapabilities({ refusal, busy }: { refusal: CapabilityRefusal; bu
       return <div key={m.capability}>
         <h4>{m.capability}</h4>
         <ul>{m.steps.map((step, i) => <li key={i}><strong>{step.label}</strong><p>{step.prompt}</p><p className="desk-prop-note">{sovereigntyText(step.sovereignty)}</p></li>)}</ul>
-        {node && <p role="status">{node.existing ? "Already filed as " : "Filed as "}<a href={node.url} target="_blank" rel="noreferrer">{node.ref}</a></p>}
+        {node && <p role="status">{node.existing ? "Already filed as " : "Filed as "}<a href={node.url} target="_blank" rel="noreferrer">{node.ref}</a>{node.notStarted && <> · Not started: {node.notStarted}</>}</p>}
         {problem && <p role="alert">Could not file {m.capability}: {problem.error}</p>}
       </div>;
     })}

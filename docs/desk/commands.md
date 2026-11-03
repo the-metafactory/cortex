@@ -41,6 +41,29 @@ The writer prints one JSON object, `{ "ref": "owner/repo#123", "url": "https://â
 
 `scripts/desk-capability-node.ts` is the shipped writer. It finds an open node by the exact last body line `desk-capability:<capability>` under the label `desk-capability`, and otherwise files a node with `soma graph add <root> --kind build --autonomy auto --once desk-capability:<capability> --label desk-capability` plus the budget flags. A closed node with the marker is never reused. The body comes from the template, which accepts `{{capability}}`, `{{request}}`, `{{criteria}}` and `{{flow}}`. soma files an `auto` node only with a probe, so the writer needs at least one `--probe <json>` argument, and it can take several. Each one is a soma probe in which `{capability}` becomes the capability and `{slug}` becomes the capability in lowercase with dashes. For example, `--probe '{"type":"artifact-exists","path":"capabilities/{slug}/index.ts","atRef":"main"}'` is met once the capability is merged on `main`. `--template <path>` overrides `capabilityBuild.template`. Which probe proves a capability depends on the target repository, so it belongs to the configuration. `soma` must be on the daemon's PATH, or set `SOMA_BIN`. The request text goes into the node body, so file nodes only on a map that you control.
 
+### Build start and status commands
+
+<!-- glossary-ignore: node -->
+<!-- glossary-ignore: agent -->
+<!-- glossary-ignore: daemon -->
+<!-- glossary-ignore: path -->
+<!-- glossary-ignore: message -->
+<!-- glossary-ignore: run -->
+
+`capabilityBuild.start` runs after the writer files a node that was not already filed. A node that the writer reused (`existing: true`) is not started again. Exit code 0 means the build was started. Any other exit, a timeout or a failure to run the command leaves the filing in place and shows **Not started: <reason>** on the routine draft. The reason is the last line of the command's output. The node stays on the map's frontier, so the next walk can pick it up. The command runs with `routines.timeoutSeconds`. With Ranger it is `ranger build-now {id} --map {map}`.
+
+`capabilityBuild.status` runs once for each filed node on every routine read, with `routines.readTimeoutSeconds` and at most four at a time. A node that several drafts share is read once. It prints one JSON object on stdout and exits 0:
+
+| Field | Meaning |
+|---|---|
+| `state` | One of `filed`, `building`, `in-review`, `merged`, `failed`. |
+| `reason` | Optional text. The Desk shows it for `failed`. |
+| `pr` | Optional pull request number or URL. |
+
+If the command exits non-zero, times out, prints invalid JSON or prints another `state`, the draft shows **State unknown** with the error. The Desk never guesses a state. It shows `merged` as **Live** once the capability is in the local agent presence. Installing a merged capability is a separate step.
+
+`scripts/desk-capability-status.ts <owner/repo#node>` is the shipped status command for Ranger. It reads `ranger journal --node <id> --repo <repo>` and maps the node's newest worker: no worker is `filed`; a claimed or running worker is `building`; a worker with an open pull request or waiting at the merge desk is `in-review`; a worker that succeeded in the close phase is `merged`; a failed, parked or released worker is `failed` with the journal's outcome as the reason. The adapter never reads `merged` from outcome text. It exits 1 with a message when the journal shows a status it cannot map. Set `RANGER_BIN` when `ranger` is not on the daemon's PATH.
+
 A routine refused for a missing capability stays a draft. The Desk does not install it, and a gate, research, targeted or federated step is never offered for building.
 
 ## Source output

@@ -21,11 +21,26 @@ export type MissingCapability = z.infer<typeof MissingCapabilitySchema>;
 export const CapabilityNodeSchema = z.object({ ref: z.string().trim().min(1).max(200), url: z.string().regex(/^https?:/i), existing: z.boolean() });
 export type CapabilityNode = z.infer<typeof CapabilityNodeSchema>;
 
+export const BuiltNodeSchema = CapabilityNodeSchema.extend({ notStarted: z.string().optional() });
+export type BuiltNode = z.infer<typeof BuiltNodeSchema>;
+
+export const BUILD_STATES = ["filed", "building", "in-review", "merged", "failed"] as const;
+export const BuildStatusSchema = z.object({
+  state: z.enum(BUILD_STATES),
+  reason: z.string().optional(),
+  pr: z.union([z.string(), z.number()]).transform(String).optional(),
+});
+export type BuildState =
+  | { state: (typeof BUILD_STATES)[number] | "live"; reason?: string; pr?: string }
+  | { state: "unknown"; error: string };
+export interface DraftNodeView { capability: string; ref: string; url: string; notStarted?: string; build: BuildState | null }
+export interface RoutineDraftView { proposalId: string; title: string; nodes: DraftNodeView[] }
+
 export const CapabilityRefusalSchema = z.object({
   proposalId: z.uuid(),
   missing: z.array(MissingCapabilitySchema).min(1),
   offer: z.boolean(),
-  nodes: z.record(z.string(), CapabilityNodeSchema).default({}),
+  nodes: z.record(z.string(), BuiltNodeSchema).default({}),
 });
 export type CapabilityRefusal = z.infer<typeof CapabilityRefusalSchema>;
 
@@ -38,7 +53,7 @@ export type CapabilityBuildRequest = z.infer<typeof CapabilityBuildRequestSchema
 export const CapabilityBuildResultSchema = z.object({
   ok: z.boolean(),
   message: z.string(),
-  built: z.array(CapabilityNodeSchema.extend({ capability: z.string() })),
+  built: z.array(BuiltNodeSchema.extend({ capability: z.string() })),
   failed: z.array(z.object({ capability: z.string(), error: z.string() })),
 });
 export type CapabilityBuildResult = z.infer<typeof CapabilityBuildResultSchema>;
