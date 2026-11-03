@@ -175,39 +175,30 @@ describe("wireBrainConsumers — per-capability binding", () => {
     expect(routed).toEqual([{ subject: "local.andreas.work.tasks.compose.judgment", capability: "compose.judgment" }]);
   });
 
-  test("a capability whose tasks. binding does not open is logged as partial, not subscribed", async () => {
+  async function helmReadyLine(capabilities: string[], declined: (pattern: string) => boolean): Promise<string | undefined> {
     const runtime = fakeRuntime();
     const realSubscribe = runtime.subscribePull!;
-    runtime.subscribePull = (o) => (o.pattern.includes(".tasks.") ? null : realSubscribe(o));
+    runtime.subscribePull = (o) => (declined(o.pattern) ? null : realSubscribe(o));
     const lines: string[] = [];
     const origLog = console.log;
     console.log = (...a: unknown[]) => lines.push(a.join(" "));
     try {
-      await wireBrainConsumers(baseOpts({ runtime })).startForAgent(agent("helm", ["compose.judgment"]));
+      await wireBrainConsumers(baseOpts({ runtime })).startForAgent(agent("helm", capabilities));
     } finally {
       console.log = origLog;
     }
+    return lines.find((l) => l.includes("brain consumer ready for agent=helm"));
+  }
 
-    const ready = lines.find((l) => l.includes("brain consumer ready for agent=helm"));
+  test("a capability whose tasks. binding does not open is logged as partial, not subscribed", async () => {
+    const ready = await helmReadyLine(["compose.judgment"], (p) => p.includes(".tasks."));
     expect(ready).toContain("subscribed=[]");
     expect(ready).toContain("partial=[compose.judgment]");
     expect(ready).not.toContain("unsubscribed=");
   });
 
   test("a capability with no opened binding is logged as unsubscribed, not partial", async () => {
-    const runtime = fakeRuntime();
-    const realSubscribe = runtime.subscribePull!;
-    runtime.subscribePull = (o) => (o.pattern.endsWith(".rate.feed") ? null : realSubscribe(o));
-    const lines: string[] = [];
-    const origLog = console.log;
-    console.log = (...a: unknown[]) => lines.push(a.join(" "));
-    try {
-      await wireBrainConsumers(baseOpts({ runtime })).startForAgent(agent("helm", ["compose.judgment", "rate.feed"]));
-    } finally {
-      console.log = origLog;
-    }
-
-    const ready = lines.find((l) => l.includes("brain consumer ready for agent=helm"));
+    const ready = await helmReadyLine(["compose.judgment", "rate.feed"], (p) => p.endsWith(".rate.feed"));
     expect(ready).toContain("subscribed=[compose.judgment]");
     expect(ready).toContain("unsubscribed=[rate.feed]");
     expect(ready).not.toContain("partial=");
