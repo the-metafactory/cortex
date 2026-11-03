@@ -37,6 +37,8 @@ const CHECK_NAME = "Ivy capability check";
 const CLOCK_SKEW_MS = 10_000;
 const DeliverySchema = z.object({ state: z.enum(["sending", "sent", "uncertain", "failed"]), conversationId: z.string(), threadId: z.string(), text: z.string().optional(), nonce: z.string(), at: z.string(), messageId: z.string().optional(), detail: z.string().optional() });
 type Delivery = z.infer<typeof DeliverySchema>;
+const StartSchema = z.object({ kind: z.literal("channel-start"), conversationId: z.string() }).loose();
+const START_TITLE = 80;
 const InputDataSchema = z.object({ transport: z.enum(["web", "discord"]), mode: z.enum(["queue", "steer"]).optional() }).loose();
 
 const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
@@ -209,6 +211,7 @@ export class DiscordConversations {
 
   async offer(msg: InboundMessage): Promise<boolean> {
     if (msg.platform === "discord" && msg.isDM === true) return this.offerDm(msg);
+    if (msg.platform === "discord" && !msg.threadId && msg.channelId === this.options.config.channelId) return this.offerStart(msg);
     if (msg.platform !== "discord" || !msg.threadId) return false;
     const id = await this.conversationFor(msg.threadId).catch(() => null);
     if (!id) return false;
@@ -227,9 +230,59 @@ export class DiscordConversations {
     return true;
   }
 
+  private fromPrincipal(msg: InboundMessage): boolean {
+    const { config, principalId } = this.options;
+    return msg.guildId === config.guildId && Boolean(principalId) && msg.authorId === principalId;
+  }
+
+  private async offerStart(msg: InboundMessage): Promise<boolean> {
+    if (!this.fromPrincipal(msg)) return false;
+    const messageId = msg.messageId;
+    if (!messageId) {
+      this.log("a conversation start in the conversation channel was not recorded: the installed Discord adapter does not carry message ids");
+      return true;
+    }
+    await this.serial(`start:${messageId}`, () => this.startFromChannel(msg, messageId)).catch((error: unknown) => {
+      this.log(`conversation start from message ${messageId} failed: ${messageOf(error)}`);
+    });
+    return true;
+  }
+
+  private async startFromChannel(msg: InboundMessage, messageId: string): Promise<void> {
+    const { host } = this.options;
+    const key = `start:${messageId}`;
+    const recorded = StartSchema.safeParse(await host.delivery(key));
+    let id = recorded.success ? recorded.data.conversationId : (await host.list()).find(meta => meta.origin.kind === "discord-thread" && meta.origin.ref === messageId)?.id ?? null;
+    if (!id) {
+      const principal = this.webPrincipal;
+      if (!principal) {
+        this.log(`no conversation started from message ${messageId}: this stack has more than one web principal, so the conversation would have no clear owner`);
+        return;
+      }
+      const title = (msg.content.trim().split("\n")[0] ?? "").slice(0, START_TITLE).trim() || "Discord conversation";
+      const created = await host.create({ title, links: [], origin: { kind: "discord-thread", ref: messageId }, policy: "cloud" }, principal);
+      id = created.id;
+    }
+    if (!recorded.success) await host.recordDelivery(key, { kind: "channel-start", conversationId: id, at: this.now().toISOString() });
+    const meta = await this.attach(id);
+    const threadId = meta.discord?.threadId;
+    if (!threadId) throw new Error(`conversation ${id} has no private thread after attach`);
+    const attachments = await this.ingest(id, msg).catch((error: unknown) => error instanceof Error ? error : new Error(String(error)));
+    if (attachments instanceof Error) {
+      await this.note(id, threadId, `att:${messageId}`, `Not sent to Ivy: ${attachments.message} Send it again here.`);
+      return;
+    }
+    const text = msg.content.trim() || (attachments.length ? "Attached from Discord." : "");
+    if (!text) {
+      await this.note(id, threadId, `empty:${messageId}`, "Write your first message here to continue.");
+      return;
+    }
+    await host.submit(id, { inputId: messageId, transport: "discord", text, mode: "queue", ...(attachments.length ? { attachments } : {}) });
+  }
+
   private async receive(id: string, threadId: string, msg: InboundMessage): Promise<void> {
-    const { host, config, principalId } = this.options;
-    if (msg.guildId !== config.guildId || !principalId || msg.authorId !== principalId) {
+    const { host } = this.options;
+    if (!this.fromPrincipal(msg)) {
       this.log(`refused a message in thread ${threadId}: the author is not this stack's verified principal`);
       return;
     }

@@ -1,35 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import type { InboundMessage } from "../../adapters/types";
-import { FakeThreads } from "./fixtures/discord-threads";
+import { bridgeRig, RIG } from "./fixtures/discord-rig";
 import { answering, scratchHosts } from "./fixtures/scratch";
-import { DiscordConversations } from "../discord";
 import { CLAIM_WINDOW_MS, conversationWebPrincipal, OFFER_TTL_MS, parseDmCommand } from "../discord-dm";
-import { openConversationHost, type ConversationHost } from "../host";
+import type { ConversationHost } from "../host";
 import type { LinkResolvers, Policy } from "../types";
 
-const LABEL = "ai.meta-factory.cortex.test";
-const PRINCIPAL = "111111111111111111";
+const { principal: PRINCIPAL, web: WEB, owner: OWNER } = RIG;
 const STRANGER = "999999999999999999";
-const GUILD = "2222222222222222222";
-const CHANNEL = "3333333333333333333";
 const DM = "4444444444444444444";
-const WEB = "http://127.0.0.1:8767";
-const OWNER = "principal@example.org";
-const config = { channelId: CHANNEL, guildId: GUILD, webUrl: WEB };
 const { dirs, hosts } = scratchHosts("conversations-discord-dm-");
 
 async function setup(resolvers?: LinkResolvers) {
-  const dir = await dirs.make();
   const prompts: string[] = [];
-  const status = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local: { provider: "t", model: "l" }, cloud: { provider: "t", model: "c" } }, turns: answering(request => { const last = request.prompt.split("\n").at(-1) ?? ""; prompts.push(last); return `answer to ${last}`; }), ...(resolvers ? { resolvers } : {}) });
-  if (status.state !== "ready") throw new Error(status.reason);
-  hosts.push(status.host);
-  const host = status.host;
-  const fake = new FakeThreads();
-  const lines: string[] = [];
   const clock = { at: new Date("2026-11-03T10:00:00Z") };
-  const bridge = new DiscordConversations({ host, adapter: () => fake, config, principalId: PRINCIPAL, now: () => clock.at, log: line => { lines.push(line); } });
-  bridge.setWebPrincipal(OWNER);
+  const turns = answering(request => { const last = request.prompt.split("\n").at(-1) ?? ""; prompts.push(last); return `answer to ${last}`; });
+  const { host, fake, lines, bridge } = await bridgeRig(hosts, await dirs.make(), { turns, ...(resolvers ? { resolvers } : {}) }, () => clock.at);
   let seq = 0;
   const dm = async (content: string, extra: Partial<InboundMessage> = {}): Promise<boolean> => {
     const msg: InboundMessage = {
