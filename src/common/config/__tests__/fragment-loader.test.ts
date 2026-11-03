@@ -507,7 +507,7 @@ describe("loadAgentsDirectory — exec brain pack dir (cortex#3134)", () => {
     "",
   ].join("\n");
 
-  function layout(): { root: string; agentsDir: string; packDir: string } {
+  function packDirAfter(place: (agentsDir: string, packDir: string) => void): { packDir: string; loaded: string | undefined } {
     const root = mkdtempSync(join(tmpdir(), "agents-d-pack-"));
     const agentsDir = join(root, "agents.d");
     const packDir = join(root, "repos", "helm-agents");
@@ -516,40 +516,34 @@ describe("loadAgentsDirectory — exec brain pack dir (cortex#3134)", () => {
     mkdirSync(packDir, { recursive: true });
     writeFileSync(join(root, "personas", "helm.md"), "# helm\n");
     writeFileSync(join(packDir, "agent.yaml"), EXEC_FRAGMENT);
-    return { root, agentsDir, packDir };
+    try {
+      place(agentsDir, packDir);
+      const [helm] = loadAgentsDirectory(agentsDir);
+      return { packDir: realpathSync(packDir), loaded: helm!.runtime!.brain!.packDir };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 
   test("a fragment linked into an install dir named after the repo sets packDir to that dir", () => {
-    const { root, agentsDir, packDir } = layout();
-    symlinkSync(join(packDir, "agent.yaml"), join(agentsDir, "helm.yaml"));
-    try {
-      const [helm] = loadAgentsDirectory(agentsDir);
-      expect(helm!.runtime!.brain!.packDir).toBe(realpathSync(packDir));
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const { packDir, loaded } = packDirAfter((agentsDir, pack) => {
+      symlinkSync(join(pack, "agent.yaml"), join(agentsDir, "helm.yaml"));
+    });
+    expect(loaded).toBe(packDir);
   });
 
   test("a fragment linked to a file not named agent.yaml leaves packDir unset", () => {
-    const { root, agentsDir, packDir } = layout();
-    writeFileSync(join(packDir, "helm-fragment.yaml"), EXEC_FRAGMENT);
-    symlinkSync(join(packDir, "helm-fragment.yaml"), join(agentsDir, "helm.yaml"));
-    try {
-      const [helm] = loadAgentsDirectory(agentsDir);
-      expect(helm!.runtime!.brain!.packDir).toBeUndefined();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const { loaded } = packDirAfter((agentsDir, pack) => {
+      writeFileSync(join(pack, "helm-fragment.yaml"), EXEC_FRAGMENT);
+      symlinkSync(join(pack, "helm-fragment.yaml"), join(agentsDir, "helm.yaml"));
+    });
+    expect(loaded).toBeUndefined();
   });
 
   test("a plain fragment file leaves packDir unset, so boot falls back to {arc repos}/{id}", () => {
-    const { root, agentsDir } = layout();
-    writeFileSync(join(agentsDir, "helm.yaml"), EXEC_FRAGMENT);
-    try {
-      const [helm] = loadAgentsDirectory(agentsDir);
-      expect(helm!.runtime!.brain!.packDir).toBeUndefined();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
+    const { loaded } = packDirAfter((agentsDir) => {
+      writeFileSync(join(agentsDir, "helm.yaml"), EXEC_FRAGMENT);
+    });
+    expect(loaded).toBeUndefined();
   });
 });
