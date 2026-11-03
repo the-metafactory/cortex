@@ -65,15 +65,28 @@ export function renderBrief(template: string, input: WriterInput): string {
   return template.replaceAll(/\{\{(capability|request|criteria|flow)\}\}/g, (_match, key: string) => values[key] ?? "").trim();
 }
 
-function addArguments(input: WriterInput, bodyFile: string, once: boolean, dryRun: boolean): string[] {
+export const capabilitySlug = (capability: string): string => capability.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-");
+
+export function renderProbes(patterns: string[], capability: string): string[] {
+  if (patterns.length === 0) throw new Error("pass at least one --probe <json>: soma files an auto build node only with a machine-checkable probe");
+  return patterns.map((pattern) => {
+    const probe = pattern.replaceAll("{capability}", capability).replaceAll("{slug}", capabilitySlug(capability));
+    try { JSON.parse(probe); }
+    catch { throw new Error(`--probe is not JSON once filled in: ${oneLine(probe)}`); }
+    return probe;
+  });
+}
+
+function addArguments(input: WriterInput, bodyFile: string, probes: string[], once: boolean, dryRun: boolean): string[] {
   const { repo, root } = parseMap(input.map);
   return [
     "graph", "add", root, "--repo", repo,
     "--title", `Build capability ${input.capability}`,
     "--kind", "build", "--autonomy", "auto",
-    "--checkpoint", `desk-capability-${input.capability.toLowerCase().replaceAll(/[^a-z0-9]+/g, "-")}`,
+    "--checkpoint", `desk-capability-${capabilitySlug(input.capability)}`,
     "--label", CAPABILITY_MARKER_LABEL,
     "--body-file", bodyFile,
+    ...probes.flatMap((probe) => ["--probe", probe]),
     "--budget-tokens", String(input.budget.tokens), "--budget-invocations", String(input.budget.invocations), "--budget-minutes", String(input.budget.minutes),
     ...(once ? ["--once", capabilityMarker(input.capability)] : []),
     ...(dryRun ? ["--dry-run"] : []),
@@ -87,8 +100,8 @@ const soma = async (run: SomaRunner, argv: string[]): Promise<SomaResult> => {
   throw new Error(oneLine(result.stderr || result.stdout) || `soma ${argv.slice(0, 2).join(" ")} exited with code ${result.code}`);
 };
 
-async function candidates(run: SomaRunner, input: WriterInput, bodyFile: string): Promise<string[]> {
-  const result = await run(addArguments(input, bodyFile, true, true));
+async function candidates(run: SomaRunner, input: WriterInput, bodyFile: string, probes: string[]): Promise<string[]> {
+  const result = await run(addArguments(input, bodyFile, probes, true, true));
   const text = result.stdout.trim() || result.stderr.trim();
   let raw: unknown;
   try { raw = JSON.parse(text); }
@@ -106,13 +119,14 @@ async function readNode(run: SomaRunner, input: WriterInput, id: string): Promis
   return NodeSchema.parse(JSON.parse((await soma(run, ["graph", "node", id, "--repo", repo, "--json"])).stdout));
 }
 
-export async function fileCapabilityNode(input: WriterInput, template: string, run: SomaRunner): Promise<WriterAnswer> {
+export async function fileCapabilityNode(input: WriterInput, template: string, run: SomaRunner, probePatterns: string[]): Promise<WriterAnswer> {
+  const probes = renderProbes(probePatterns, input.capability);
   const directory = await mkdtemp(join(tmpdir(), "desk-capability-"));
   try {
     const marker = capabilityMarker(input.capability);
     const bodyFile = join(directory, "brief.md");
     await writeFile(bodyFile, `${renderBrief(template, input)}\n`, { mode: 0o600 });
-    const hits = await candidates(run, input, bodyFile);
+    const hits = await candidates(run, input, bodyFile, probes);
     const nodes = await Promise.all(hits.map(async (id) => ({ id, node: await readNode(run, input, id) })));
     const open = nodes.filter(({ node }) => node.status === "open");
     if (open.length > 1) throw new Error(`nodes ${open.map(({ id }) => `#${id}`).join(", ")} are all open under ${marker}; close the duplicates and retry`);
@@ -121,7 +135,7 @@ export async function fileCapabilityNode(input: WriterInput, template: string, r
     if (reused && hits.length > 1) throw new Error(`node #${reused.id} carries ${marker} but has no parent, and other nodes carry it too; attach it by hand`);
     const reusing = reused !== undefined;
     if (!reusing && hits.length > 0) await writeFile(bodyFile, `${renderBrief(template, input)}\n\n${marker}\n`, { mode: 0o600 });
-    const created = CreatedSchema.parse(JSON.parse((await soma(run, addArguments(input, bodyFile, reusing || hits.length === 0, false))).stdout));
+    const created = CreatedSchema.parse(JSON.parse((await soma(run, addArguments(input, bodyFile, probes, reusing || hits.length === 0, false))).stdout));
     const node = await readNode(run, input, created.node);
     return { ref: `${node.repo}#${created.node}`, url: node.url, existing: reusing };
   } finally {
@@ -129,16 +143,30 @@ export async function fileCapabilityNode(input: WriterInput, template: string, r
   }
 }
 
-export async function runWriter(stdin: string, templateOverride: string | undefined, run: SomaRunner = somaRunner()): Promise<WriterAnswer> {
+export interface WriterFlags { template?: string; probes: string[] }
+
+export function parseWriterFlags(argv: string[]): WriterFlags {
+  const flags: WriterFlags = { probes: [] };
+  for (let i = 0; i < argv.length; i += 1) {
+    const value = argv[i + 1];
+    if (argv[i] !== "--template" && argv[i] !== "--probe") throw new Error(`unknown argument ${argv[i]}`);
+    if (value === undefined) throw new Error(`${argv[i]} needs a value`);
+    if (argv[i] === "--template") flags.template = value;
+    else flags.probes.push(value);
+    i += 1;
+  }
+  return flags;
+}
+
+export async function runWriter(stdin: string, flags: WriterFlags, run: SomaRunner = somaRunner()): Promise<WriterAnswer> {
   const input = WriterInputSchema.parse(JSON.parse(stdin));
-  const template = await readFile(templateOverride ?? input.template ?? DEFAULT_TEMPLATE, "utf8");
-  return fileCapabilityNode(input, template, run);
+  const template = await readFile(flags.template ?? input.template ?? DEFAULT_TEMPLATE, "utf8");
+  return fileCapabilityNode(input, template, run, flags.probes);
 }
 
 if (import.meta.main) {
-  const flag = process.argv.indexOf("--template");
   try {
-    const answer = await runWriter(await Bun.stdin.text(), flag >= 0 ? process.argv[flag + 1] : undefined);
+    const answer = await runWriter(await Bun.stdin.text(), parseWriterFlags(process.argv.slice(2)));
     process.stdout.write(`${JSON.stringify(answer)}\n`);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
