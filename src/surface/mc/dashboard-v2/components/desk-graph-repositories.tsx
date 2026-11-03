@@ -51,6 +51,7 @@ function RepositoryList({ rows, busy, onChange }: { rows: GraphRepository[]; bus
   );
 }
 
+// glossary-ignore: host
 type GitlabGroup = { host: string; notice: string | null; failed: boolean; rows: GraphRepository[] };
 
 /** One group per logged-in host, then one per other host a ticked project names, so every tick can be unticked. */

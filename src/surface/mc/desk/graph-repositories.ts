@@ -97,11 +97,7 @@ async function loggedInGitlabHostsIgnoringExitCode(run: GraphRepositoryRunner): 
   return { ok: true, hosts: [...hosts].sort() };
 }
 
-/**
- * `glab api --paginate` prints one JSON array per page with nothing between them (`[...][...]`), so the output is
- * split into its top-level values before parsing. Null unless every value is an array.
- */
-export function parsePaginatedArrays(text: string): unknown[] | null {
+function parseBackToBackJsonArrays(text: string): unknown[] | null {
   const items: unknown[] = [];
   let depth = 0;
   let inString = false;
@@ -141,7 +137,7 @@ async function listHostProjects(run: GraphRepositoryRunner, host: string): Promi
   const ran = await attempt(run, "glab", glabListArgv(host));
   if (!ran.ok) return ran;
   if (ran.result.code !== 0) return { ok: false, reason: firstLine(ran.result.stderr) || `glab exited with code ${ran.result.code}` };
-  const projects = parsePaginatedArrays(ran.result.stdout);
+  const projects = parseBackToBackJsonArrays(ran.result.stdout);
   if (projects === null) return { ok: false, reason: "glab did not return a project list" };
   const paths = projects
     .map((p: unknown) => (typeof p === "object" && p !== null ? (p as Record<string, unknown>).path_with_namespace : undefined))
