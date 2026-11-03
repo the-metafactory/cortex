@@ -54,6 +54,7 @@ const StoredSchema = z.object({
 });
 type Stored = z.infer<typeof StoredSchema>;
 export type OwnerScope = NonNullable<Stored["scope"]>;
+export const DISCORD_HISTORY_NOTICE = "This conversation was used in Discord. Earlier Discord messages stay there; they are not recalled. From now on its content stays private on the web, and Discord gets only a link to continue here. Send again with acknowledge to link it.";
 export const UNAVAILABLE_TITLE = "Conversation about work that is no longer available";
 export interface SeedMessage { role: "user" | "assistant"; text: string; model?: string; at: number }
 export interface SeedEntry { kind: string; data: object; messages?: SeedMessage[] }
@@ -73,6 +74,7 @@ const CursorSchema = z.object({ pinned: z.boolean(), lastAt: z.string(), id: z.s
 type OverviewKey = z.infer<typeof CursorSchema>;
 const ATTACHMENT_LINE = /^\[attachment .*, sha256 [0-9a-f]{64}\]$/;
 const SNIPPET = 160;
+const MAX_LINKS = 50;
 const OVERVIEW_BATCH = 16;
 const TRANSCRIPT_CACHE = 200;
 const NEXT: Record<OperationState, OperationState[]> = { proposed: ["confirmed"], confirmed: ["running"], running: ["created", "failed", "uncertain"], uncertain: ["created", "failed"], created: [], failed: [] };
@@ -480,6 +482,20 @@ export class ConversationHost {
     const mine = submissions.filter(s => s.type === "input" && Number(s.conversationId) === stored.engineId && s.requestId !== undefined);
     const pending = await Promise.all(mine.map(record => this.submissionView(record.requestId ?? "", record)));
     return { conversation: this.view(id, stored, working, effective, available), sources, draft: stored.draft, pending, scope: stored.scope ?? null, available };
+  }
+
+  async link(id: string, ref: ObjectRef, acknowledged: boolean): Promise<ConversationMeta> {
+    return this.serial(id, async () => {
+      const stored = await this.stored(id);
+      if (stored.state === "archived") throw new ConversationError(409, "This conversation is archived. Restore it before linking work; nothing was linked.");
+      if (stored.links.some(link => link.owner === ref.owner && link.id === ref.id)) return this.meta(id);
+      if (stored.links.length >= MAX_LINKS) throw new ConversationError(409, `A conversation links at most ${MAX_LINKS} work objects; nothing was linked.`);
+      const [source] = await this.sourcesOf([ref]);
+      if (source?.state !== "available") throw new ConversationError(403, `The ${ref.owner} ${ref.id} is unavailable, so nothing was linked.`);
+      if (source.policy === "local" && stored.discord?.usedAt && !acknowledged) throw new ConversationError(409, DISCORD_HISTORY_NOTICE);
+      await this.update(id, s => ({ ...s, links: [...s.links, ref], policy: strictest([s.policy, source.policy]), lastAt: this.now().toISOString() }));
+      return this.meta(id);
+    });
   }
 
   async saveDraft(id: string, text: string): Promise<void> {

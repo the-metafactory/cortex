@@ -3,7 +3,7 @@ import type { InboundMessage } from "../../adapters/types";
 import { BOT, FakeThreads, type PostFault } from "./fixtures/discord-threads";
 import { answering, scratchHosts } from "./fixtures/scratch";
 import { chunks, DiscordConversations, type ThreadCapable } from "../discord";
-import { ConversationError, openConversationHost, type ConversationHost } from "../host";
+import { ConversationError, DISCORD_HISTORY_NOTICE, openConversationHost, type ConversationHost } from "../host";
 import type { LinkResolvers, Policy } from "../types";
 
 const LABEL = "ai.meta-factory.cortex.test";
@@ -259,6 +259,39 @@ describe("conversation Discord threads", () => {
     fake.intruder = STRANGER;
     await bridge.offer(inbound("thread-1", undefined, "no id"));
     expect(fake.texts("thread-1")).toHaveLength(1);
+  });
+
+  test("linking local-only material to a Discord-used conversation needs the notice acknowledged, then Discord gets only the neutral link", async () => {
+    const resolvers: LinkResolvers = {
+      "studio-thread": ref => Promise.resolve(ref.id === "gone" ? { state: "unavailable", reason: "gone" } : { state: "available", policy: ref.id === "private" ? "local" : "cloud", title: "Thread" }),
+    };
+    const { host, bridge, fake } = await setup({ resolvers });
+    const conversation = await start(host);
+    await bridge.attach(conversation.id);
+    const local = { owner: "studio-thread" as const, id: "private" };
+    const refused = await host.link(conversation.id, local, false).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ status: 409, message: DISCORD_HISTORY_NOTICE });
+    expect((await host.meta(conversation.id)).links).toEqual([]);
+    expect(host.link(conversation.id, { owner: "studio-thread", id: "gone" }, true)).rejects.toMatchObject({ status: 403 });
+    const linked = await host.link(conversation.id, local, true);
+    expect(linked).toMatchObject({ policy: "local", links: [local] });
+    expect((await host.link(conversation.id, local, true)).links).toEqual([local]);
+    await bridge.sync(conversation.id);
+    const neutral = `This conversation is now private. Earlier messages in this thread stay here; nothing new from it is sent to Discord. Continue privately on the web: <http://127.0.0.1:8767/?desk=conversation&conversation=${conversation.id}>`;
+    expect(fake.texts("thread-1").at(-1)).toBe(neutral);
+    await host.submit(conversation.id, { inputId: "web-1", transport: "web", text: "private content", mode: "queue" });
+    await settle(host, bridge, conversation.id);
+    expect(fake.texts("thread-1")).toHaveLength(2);
+    expect((await bridge.deliveries(conversation.id)).map(d => [d.key, d.state])).toEqual([["intro", "sent"], ["neutral", "sent"]]);
+  });
+
+  test("a conversation never used in Discord links local-only material without the notice", async () => {
+    const resolvers: LinkResolvers = { "studio-thread": () => Promise.resolve({ state: "available", policy: "local", title: "Thread" }) };
+    const { host } = await setup({ resolvers });
+    const conversation = await start(host);
+    expect(await host.link(conversation.id, { owner: "studio-thread", id: "private" }, false)).toMatchObject({ policy: "local" });
+    await host.organize(conversation.id, { state: "archived" });
+    expect(host.link(conversation.id, { owner: "studio-thread", id: "other" }, true)).rejects.toMatchObject({ status: 409 });
   });
 
   test("long answers are split under Discord's message limit", () => {

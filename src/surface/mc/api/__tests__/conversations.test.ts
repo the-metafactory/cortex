@@ -209,6 +209,27 @@ describe("conversation Discord routes", () => {
     expect(fake.created).toBe(2);
   });
 
+  test("linking local-only work to a Discord-used conversation answers 409 with the notice until acknowledged", async () => {
+    const fake = new FakeThreads();
+    const { send, status } = await withDiscord(fake);
+    if (status.state !== "ready") throw new Error("host not ready");
+    await status.host.attachSources({ resolvers: { "studio-thread": () => Promise.resolve({ state: "available", policy: "local", title: "Private thread" }) }, readbacks: {} });
+    const { conversation } = await (await send("POST", "/api/conversations", NEW)).json() as { conversation: { id: string } };
+    await send("POST", `/api/conversations/${conversation.id}/discord`);
+    const ref = { owner: "studio-thread", id: "private" };
+    expect((await send("POST", `/api/conversations/${conversation.id}/links`, { ref }, OTHER)).status).toBe(403);
+    expect((await send("POST", `/api/conversations/${conversation.id}/links`, { ref, acknowledge: "yes" })).status).toBe(400);
+    const refused = await send("POST", `/api/conversations/${conversation.id}/links`, { ref });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ ok: false, notice: "discord-history" });
+    const linked = await send("POST", `/api/conversations/${conversation.id}/links`, { ref, acknowledge: "discord-history" });
+    expect(linked.status).toBe(200);
+    expect(await linked.json()).toMatchObject({ conversation: { policy: "local", links: [ref] } });
+    const view = await (await send("GET", `/api/conversations/${conversation.id}/discord`)).json() as { deliveries: { key: string; state: string }[] };
+    expect(view.deliveries.map(d => [d.key, d.state])).toEqual([["intro", "sent"], ["neutral", "sent"]]);
+    expect(fake.texts("thread-1").at(-1)).toContain("Continue privately on the web");
+  });
+
   test("a stack without Discord conversations says so and creates nothing", async () => {
     const { send } = await withDiscord(null);
     const { conversation } = await (await send("POST", "/api/conversations", NEW)).json() as { conversation: { id: string } };

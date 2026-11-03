@@ -21,6 +21,7 @@ export interface DiscordConversationOptions {
 export type DiscordCheck =
   | { ok: true; threadId: string; members: string[]; deleted: true }
   | { ok: false; stage: "capability" | "create" | "members" | "delete"; detail: string; threadId?: string; members?: string[] };
+export interface DeliveryView { key: string; state: "sending" | "sent" | "uncertain" | "failed"; at: string; messageId?: string; detail?: string }
 export type DiscordState = { available: true; url?: string; blocked?: string } | { available: false; reason: string };
 type Delivered = "sent" | "uncertain" | "failed";
 
@@ -98,6 +99,17 @@ export class DiscordConversations {
     const capability = this.capability();
     if (link?.threadId) return { available: true, url: this.threadUrl(link.threadId), ...(link.blocked ? { blocked: link.blocked } : {}) };
     return capability.ok ? { available: true } : { available: false, reason: capability.reason };
+  }
+
+  async deliveries(id: string): Promise<DeliveryView[]> {
+    await this.options.host.meta(id);
+    const prefix = `${id}:`;
+    return Object.entries(await this.options.host.deliveries()).flatMap(([key, raw]) => {
+      const parsed = DeliverySchema.safeParse(raw);
+      if (!parsed.success || parsed.data.conversationId !== id) return [];
+      const { state, at, messageId, detail } = parsed.data;
+      return [{ key: key.startsWith(prefix) ? key.slice(prefix.length) : key, state, at, ...(messageId ? { messageId } : {}), ...(detail ? { detail } : {}) }];
+    }).sort((a, b) => a.at.localeCompare(b.at));
   }
 
   async check(): Promise<DiscordCheck> {
@@ -251,11 +263,15 @@ export class DiscordConversations {
     const threadId = link?.threadId;
     if (!link || !threadId) return;
     for (const key of link.open) await this.reconcile(id, key);
+    if (!link.neutralAt && (await host.meta(id)).policy === "local") {
+      await this.neutral(id, threadId);
+      return;
+    }
     const entries = await host.entriesAfter(id, link.cursor);
     for (const entry of entries) {
       const meta = await host.meta(id);
       if (meta.policy === "local") {
-        await this.neutral(id, threadId, entries.at(-1));
+        await this.neutral(id, threadId);
         return;
       }
       const text = projection(entry);
@@ -267,14 +283,15 @@ export class DiscordConversations {
     }
   }
 
-  private async neutral(id: string, threadId: string, last: ConversationEntry | undefined): Promise<void> {
+  private async neutral(id: string, threadId: string): Promise<void> {
     const { host } = this.options;
     const link = await host.discordLink(id);
+    const last = await host.latestEntryId(id);
     if (!link?.neutralAt) {
       const sent = await this.deliver(id, threadId, `${id}:neutral`, `This conversation is now private. Earlier messages in this thread stay here; nothing new from it is sent to Discord. Continue privately on the web: <${this.webLink(id)}>`);
       if (sent !== "sent") return;
     }
-    await host.setDiscordLink(id, current => current && { ...current, neutralAt: current.neutralAt ?? this.now().toISOString(), cursor: last ? Number(last.id) : current.cursor });
+    await host.setDiscordLink(id, current => current && { ...current, neutralAt: current.neutralAt ?? this.now().toISOString(), cursor: last ?? current.cursor });
   }
 
   private async note(id: string, threadId: string, key: string, text: string): Promise<void> {
