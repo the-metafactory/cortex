@@ -40,6 +40,7 @@ export const CREATION_CATALOG: Record<CreatableType, CreatableSpec> = {
   ], fixed: [{ label: "Claim and close", value: "Not done here; the node is only filed." }] },
   "graph-map": { row: "O02", label: "Graph map", owner: "Soma work graph", egress: "cloud", fields: [
     text("repository", "Repository", true, true), text("title", "Title"), long("body", "Destination and constraints", true), text("checkpoint", "Checkpoint"),
+    text("autonomy", "Autonomy (approve or propose; empty uses approve)", false), text("serves", "Serves goal (G<n>, optional)", false),
   ] },
   "balance-task": { row: "O04", label: "Balance task", owner: "Balance", egress: "local", fields: [
     text("area", "Area", true, true), text("project", "Parent project", false, true), text("title", "Title"), long("note", "Note"), { name: "due", label: "Due", kind: "date", required: false },

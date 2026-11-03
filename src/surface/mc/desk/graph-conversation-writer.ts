@@ -144,28 +144,66 @@ const oneOf = <T extends string>(values: readonly T[], value: string | undefined
   return (values as readonly string[]).includes(chosen) ? (chosen as T) : null;
 };
 
-/** Files a graph node under the confirmed parent with `soma graph add --once`; it never claims or closes it. */
-export function graphNodeWriter(deps: GraphWriterDeps): OwnerWriter {
+interface GraphCall { verb: "add" | "chart"; parent: string | null; before: string[]; tail: string[] }
+interface Destination { repository: string; autonomy: (typeof GRAPH_AUTONOMIES)[number]; marker: string }
+type GraphPlan = (fields: Record<string, string>, destination: Destination) => GraphCall | CreateResult;
+
+function graphWriter(deps: GraphWriterDeps, plan: GraphPlan): OwnerWriter {
   const run = deps.run ?? spawnWithStdin;
   const now = deps.now ?? Date.now;
   const create = async (request: CreateRequest): Promise<CreateResult> => {
     const somaBin = deps.desk()?.somaBin;
     if (!somaBin) return graphFailed("Soma is not set up on this stack.");
-    const { repository = "", parent = "", title = "", checkpoint = "" } = request.fields;
+    const repository = request.fields.repository ?? "";
     const refused = repositoryRefusal(deps.db, repository);
     if (refused) return refused;
     const autonomy = oneOf(GRAPH_AUTONOMIES, request.fields.autonomy, "approve");
     if (!autonomy) return graphFailed("A conversation may file only approve or propose nodes.");
-    const kind = oneOf(GRAPH_KINDS, request.fields.kind, "grilling");
-    if (!kind) return graphFailed("A conversation may file only research, grilling, prototype, task or build nodes.");
-    const dependencies = list(request.fields.dependencies);
-    if ([parent, ...dependencies].some(flagShaped)) return graphFailed("The parent and the dependencies must be node references, not options.");
-    const head = ["graph", "add", parent, "--repo", repository, "--title", title, "--autonomy", autonomy, "--kind", kind, "--label", GRAPH_LABEL, "--checkpoint", checkpoint];
-    const tail = [...dependencies.flatMap(d => ["--blocked-by", d]), "--once", graphMarker(request.operationId), "--json"];
+    const call = plan(request.fields, { repository, autonomy, marker: graphMarker(request.operationId) });
+    if ("state" in call) return call;
+    const head = ["graph", call.verb, ...call.before];
     if (request.signal.aborted) throw new Error("The conversation stopped waiting before soma was called.");
-    recordGraphOperation(deps.db, request.operationId, { repository, parent, args: [...head, ...tail] }, now());
-    const result = await withBodyFile(graphBody(request.fields.body, request.provenance), file => run([somaBin, ...head, "--body-file", file, ...tail], "", ADD_TIMEOUT_MS));
-    return graphAnswer(result, "add");
+    recordGraphOperation(deps.db, request.operationId, { repository, parent: call.parent, args: [...head, ...call.tail] }, now());
+    const result = await withBodyFile(graphBody(request.fields.body, request.provenance), file => run([somaBin, ...head, "--body-file", file, ...call.tail], "", ADD_TIMEOUT_MS));
+    return graphAnswer(result, call.verb);
   };
   return { create, readback: graphReadback(deps) };
+}
+
+/** Files the proposal under the confirmed parent with `soma graph add --once`; it never claims or closes what it files. */
+export function graphNodeWriter(deps: GraphWriterDeps): OwnerWriter {
+  return graphWriter(deps, (fields, { repository, autonomy, marker }) => {
+    const { parent = "", title = "", checkpoint = "" } = fields;
+    const kind = oneOf(GRAPH_KINDS, fields.kind, "grilling");
+    if (!kind) return graphFailed("A conversation may file only research, grilling, prototype, task or build nodes.");
+    const dependencies = list(fields.dependencies);
+    if ([parent, ...dependencies].some(flagShaped)) return graphFailed("The parent and the dependencies must be node references, not options.");
+    return {
+      verb: "add",
+      parent,
+      before: [parent, "--repo", repository, "--title", title, "--autonomy", autonomy, "--kind", kind, "--label", GRAPH_LABEL, "--checkpoint", checkpoint],
+      tail: [...dependencies.flatMap(d => ["--blocked-by", d]), "--once", marker, "--json"],
+    };
+  });
+}
+
+const GITLAB_PROJECT = /^gitlab:[^/]+\/(.+)$/;
+const GOAL = /^G\d+$/;
+
+/** Charts a map root in the confirmed repository with `soma graph chart --once`; on GitLab the project itself is the home project. */
+export function graphMapWriter(deps: GraphWriterDeps): OwnerWriter {
+  return graphWriter(deps, (fields, { repository, autonomy, marker }) => {
+    const { title = "", checkpoint = "", serves } = fields;
+    if (serves !== undefined && !GOAL.test(serves)) return graphFailed("A map may serve only a goal written as G<n>, such as G5.");
+    const home = GITLAB_PROJECT.exec(repository)?.[1];
+    return {
+      verb: "chart",
+      parent: null,
+      before: [
+        "--repo", repository, ...(home ? ["--home-project", home] : []), "--title", title, "--autonomy", autonomy, "--checkpoint", checkpoint, "--label", GRAPH_LABEL,
+        ...(serves ? ["--serves", serves] : []),
+      ],
+      tail: ["--once", marker, "--json"],
+    };
+  });
 }
