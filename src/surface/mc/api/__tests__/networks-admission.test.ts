@@ -22,6 +22,7 @@ import {
   resetCfAccessJwksCache,
   cfAccessIssuer,
 } from "../../../../common/auth/cf-access-jwt";
+import { createCfAccessSigningKeys, jwksFetch, mintCfAccessJwt } from "./cf-access-fixture";
 
 const TEAM = "metafactory";
 const AUD = "test-access-aud-tag";
@@ -96,43 +97,10 @@ async function body(res: Response): Promise<Record<string, unknown>> {
   return (await res.json()) as Record<string, unknown>;
 }
 
-// ── Crypto helpers for the non-loopback (verified-JWT) cases ───────────────
-
-function b64url(bytes: Uint8Array): string {
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-function b64urlStr(s: string): string {
-  return b64url(new TextEncoder().encode(s));
-}
-
-const RSA_PARAMS = {
-  name: "RSASSA-PKCS1-v1_5",
-  modulusLength: 2048,
-  publicExponent: new Uint8Array([1, 0, 1]),
-  hash: "SHA-256",
-} as const;
-
-let signKey: CryptoKey; // the "real" signer whose pubkey is in the stub JWKS
-let wrongKey: CryptoKey; // an off-JWKS signer, for the bad-signature case
-let jwksJwk: JsonWebKey & { kid: string };
-
-async function mint(
-  key: CryptoKey,
-  claims: Record<string, unknown>,
-  kid = "test-kid",
-): Promise<string> {
-  const header = b64urlStr(JSON.stringify({ alg: "RS256", kid, typ: "JWT" }));
-  const payload = b64urlStr(JSON.stringify(claims));
-  const data = new TextEncoder().encode(`${header}.${payload}`);
-  const sig = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, data);
-  return `${header}.${payload}.${b64url(new Uint8Array(sig))}`;
-}
-
-/** stub fetch returning our single-key JWKS. */
-const stubFetch = ((): Promise<Response> =>
-  Promise.resolve({ ok: true, json: () => Promise.resolve({ keys: [jwksJwk] }) } as unknown as Response)) as unknown as typeof fetch;
+let signKey: CryptoKey;
+let wrongKey: CryptoKey;
+let stubFetch: typeof fetch;
+const mint = mintCfAccessJwt;
 
 /** stub fetch that fails (JWKS unavailable). */
 const failFetch = ((): Promise<Response> =>
@@ -153,12 +121,10 @@ function validClaims(over: Record<string, unknown> = {}): Record<string, unknown
 }
 
 beforeAll(async () => {
-  const kp = await crypto.subtle.generateKey(RSA_PARAMS, true, ["sign", "verify"]);
-  const kp2 = await crypto.subtle.generateKey(RSA_PARAMS, true, ["sign", "verify"]);
-  signKey = kp.privateKey;
-  wrongKey = kp2.privateKey;
-  const exported = await crypto.subtle.exportKey("jwk", kp.publicKey);
-  jwksJwk = { ...exported, kid: "test-kid", alg: "RS256" };
+  const keys = await createCfAccessSigningKeys();
+  signKey = keys.signKey;
+  wrongKey = keys.wrongKey;
+  stubFetch = jwksFetch(keys.jwk);
 });
 
 beforeEach(() => {
