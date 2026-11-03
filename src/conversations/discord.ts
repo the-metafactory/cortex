@@ -194,7 +194,7 @@ export class DiscordConversations {
 
   private async receive(id: string, threadId: string, msg: InboundMessage): Promise<void> {
     const { host, config, principalId } = this.options;
-    if (msg.guildId !== config.guildId || !principalId || msg.authorId !== principalId || msg.authorIsPrincipal !== true) {
+    if (msg.guildId !== config.guildId || !principalId || msg.authorId !== principalId) {
       this.log(`refused a message in thread ${threadId}: the author is not this stack's verified principal`);
       return;
     }

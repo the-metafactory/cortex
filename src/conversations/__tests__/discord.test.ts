@@ -122,17 +122,33 @@ describe("conversation Discord threads", () => {
     expect(fake.texts("thread-1")).toHaveLength(4);
   });
 
+  test("the principal's message is accepted by Discord id when the adapter does not flag the author as principal", async () => {
+    const { host, bridge, prompts, lines } = await setup();
+    const conversation = await start(host);
+    await bridge.attach(conversation.id);
+    expect(await bridge.offer(inbound("thread-1", "discord-msg-5", "flag false", PRINCIPAL, { authorIsPrincipal: false }))).toBe(true);
+    const { authorIsPrincipal: _flag, ...unflagged } = inbound("thread-1", "discord-msg-6", "flag absent");
+    expect(await bridge.offer(unflagged)).toBe(true);
+    await host.waitForIdle(conversation.id);
+    expect(lines.filter(line => line.includes("not this stack's verified principal"))).toHaveLength(0);
+    expect(prompts.filter(prompt => prompt.includes("flag false"))).toHaveLength(1);
+    const inputs = (await host.entriesAfter(conversation.id, null)).filter(entry => entry.kind === "cortex.input").map(entry => entry.data as { inputId: string; transport: string });
+    expect(inputs.map(input => [input.inputId, input.transport])).toEqual([["discord-msg-5", "discord"], ["discord-msg-6", "discord"]]);
+  });
+
   test("messages from anyone but the principal, or without a message id, never reach Ivy", async () => {
     const { host, bridge, fake, prompts, lines } = await setup();
     const conversation = await start(host);
     await bridge.attach(conversation.id);
     expect(await bridge.offer(inbound("thread-1", "discord-msg-2", "let me in", STRANGER))).toBe(true);
+    expect(await bridge.offer(inbound("thread-1", "discord-msg-7", "flagged stranger", STRANGER, { authorIsPrincipal: true }))).toBe(true);
     expect(await bridge.offer(inbound("thread-1", "discord-msg-3", "spoofed", PRINCIPAL, { guildId: "999" }))).toBe(true);
+    expect(await bridge.offer(inbound("thread-1", "discord-msg-8", "unflagged other guild", PRINCIPAL, { guildId: "999", authorIsPrincipal: false }))).toBe(true);
     expect(await bridge.offer(inbound("thread-1", undefined, "no id"))).toBe(true);
     expect(await bridge.offer(inbound("thread-9", "discord-msg-4", "not a conversation thread"))).toBe(false);
     await host.waitForIdle(conversation.id);
     expect(prompts).toHaveLength(0);
-    expect(lines.filter(line => line.includes("not this stack's verified principal"))).toHaveLength(2);
+    expect(lines.filter(line => line.includes("not this stack's verified principal"))).toHaveLength(4);
     expect(fake.texts("thread-1").at(-1)).toContain("does not carry message ids");
   });
 
