@@ -10,7 +10,7 @@ import { z } from "zod";
 import type { DeskProposal } from "./ask";
 import { spawnWithStdin } from "./create";
 import { routineSchedule } from "./routine-schedule";
-import { requireRoutineCapabilities, type RoutineCapabilities } from "./routine-providers";
+import { MissingCapabilitiesError, requireRoutineCapabilities, type RoutineCapabilities } from "./routine-providers";
 import { routineStepLabels } from "./routine-steps";
 import { PendingRoutineSchema, RoutineHistorySchema, RoutineSchema, RoutineRefusal, reflexCommand, runRoutineCommand, type RoutineOptions, type RoutineRunner, type RoutineView } from "./routine-command";
 import { checkRoutineOperation, claimRoutineOperation, finishRoutineOperation, pendingRoutineOperations, readRoutineOperation, readRoutineProposal, routineConfigHash, routineOperationBinding, saveRoutineProposal, type RoutineAction, type LegacyRoutineAction, type RoutineProposal, type RoutineResult } from "./routine-store";
@@ -38,15 +38,22 @@ export async function buildRoutineCard(db: Database, text: string, options: Rout
     if (reply.status === "invalid") return blocked(reply.findings.map((f) => f.message).join("; ") || "The composer could not produce a valid flow.");
     if (result.code !== 0) return blocked("The composer did not complete successfully.");
     const flow = FlowDocument.parse(parseYaml(reply.yaml));
-    requireRoutineCapabilities(validateSteps(flow.actions), capabilities);
+    const steps = validateSteps(flow.actions);
     const id = randomUUID();
     const proposal: RoutineProposal = {
       id, routineId: `desk-${id}`, title: schedule.request, request: schedule.request,
       schedule: schedule.expression, words: schedule.words, timezone: schedule.clock === "elapsed" ? "UTC" : options.timeZone,
       yaml: flow.input ? reply.yaml : `${reply.yaml}\n${stringifyYaml({ input: { request: schedule.request, scenario: schedule.request, text: schedule.request } })}`,
-      steps: routineStepLabels(validateSteps(flow.actions)),
+      steps: routineStepLabels(steps),
       configHash: routineConfigHash(options), createdAt: now,
     };
+    try {
+      requireRoutineCapabilities(steps, capabilities);
+    } catch (error) {
+      if (!(error instanceof MissingCapabilitiesError)) throw error;
+      saveRoutineProposal(db, { ...proposal, draft: { text, missing: error.missing, nodes: {} } });
+      return { ...blocked(`The routine could not be prepared: ${error.message}`), capabilities: { proposalId: id, missing: error.missing, offer: options.capabilityBuild !== undefined, nodes: {} } };
+    }
     saveRoutineProposal(db, proposal);
     return { kind: "routine", label: "Routine", fields: { proposalId: id, title: proposal.title, schedule: schedule.clock === "elapsed" ? proposal.words : `${proposal.words} (${proposal.timezone})`, steps: proposal.steps }, via: "rules" };
   } catch (error) {
@@ -170,6 +177,7 @@ export async function actOnRoutine(db: Database, options: RoutineOptions, reques
   if ("revision" in request) return request.action === "delete" ? actOnRoutineRemoval(db, options, request, run) : request.action === "schedule" ? actOnRoutineSchedule(db, options, request, run) : actOnRoutineLifecycle(db, options, request, run);
   if (request.action === "remove") return { ok: false, error: "Open this routine in Routine workspace and confirm Delete with its current revision." };
   const proposal = request.action === "install" ? readRoutineProposal(db, request.target) : null;
+  if (proposal?.draft) return { ok: false, error: "This routine is a draft waiting for a capability. It cannot be installed yet." };
   if (request.action === "install" && (proposal?.configHash !== routineConfigHash(options))) return { ok: false, error: "Prepare this routine again before confirming it." };
   const binding = routineOperationBinding(options, request);
   const prior = readRoutineOperation(db, request.requestId);

@@ -179,6 +179,24 @@ mc:
 
 `composer` and `reflex` are nonempty argument arrays. `target` names the configured principal's `pulse-flow` process. `timeZone` is an IANA timezone. `timeoutSeconds` accepts integers from 1 to 300 and bounds composition and writes. `readTimeoutSeconds` accepts numbers from 0.01 to 5 and bounds state reads separately. The Desk refreshes routine state in the background.
 
+`capabilityBuild` is optional. Without it, a routine refused for a missing capability shows the missing capability and the steps that need it, and offers no action. With it, the refusal offers **Build this capability**.
+
+```yaml
+mc:
+  desk:
+    routines:
+      capabilityBuild:
+        writer: [bun, /opt/cortex/scripts/desk-capability-node.ts]
+        map: example-org/example-maps#12
+        template: /opt/desk/capability-brief.md
+        budget:
+          tokens: 200000
+          invocations: 40
+          minutes: 60
+```
+
+`writer` is a nonempty argument array. `map` is the map root where the build nodes are filed, written as `owner/repo#123` (GitHub), `github:host/owner/repo#123` or `gitlab:host/group/project#123`. `template` is optional and names a brief template file that replaces the shipped `scripts/desk-capability-template.md`. `budget` sets the `tokens`, `invocations` and `minutes` limits of each filed node; all three are required positive integers. The map belongs to the stack's configuration and never to Cortex's code. See [capability writers](commands.md#capability-writers).
+
 The composer command uses the installed Pulse composer with an explicitly configured model and trusted installed-action catalog. Reflex owns activation files and flow files. The Desk stores the reviewed proposal and supplies a private temporary flow input to Reflex. See the [routine command contract](commands.md#routines).
 
 ## Flows

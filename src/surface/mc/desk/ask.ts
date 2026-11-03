@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ParserPermissionsSchema, type ParserPermissions } from "../../../common/types/desk-parser";
 import { ParserRoutingSchema, parserUnavailable, type ParserRouting } from "./parser-routing";
 import { DAY_MS, startOfDay } from "./time";
+import type { CapabilityRefusal } from "./routine-capability-contract";
 
 export const ASK_KINDS = ["reminder", "note", "capture", "task", "goal", "calendar", "routine", "conversation"] as const;
 export type AskKind = (typeof ASK_KINDS)[number];
@@ -278,6 +279,7 @@ export interface DeskProposal {
   automatic?: boolean;
   routing?: Extract<ParserRouting, { kind: "selected" }>;
   alternative?: ConversationOffer;
+  capabilities?: CapabilityRefusal;
 }
 
 export interface ConversationOffer {

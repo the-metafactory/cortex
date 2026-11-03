@@ -2,20 +2,37 @@ import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import type { RoutineOptions } from "./routine-command";
+import { CapabilityNodeSchema, MissingCapabilitySchema, type CapabilityNode } from "./routine-capability-contract";
 import { RoutineActionSchema, RoutineResultSchema, type RoutineAction, type RoutineResult } from "./routine-action-contract";
 export { LegacyRoutineActionSchema, RoutineActionSchema, RoutineResultSchema } from "./routine-action-contract";
 export type { LegacyRoutineAction, RoutineAction, RoutineResult } from "./routine-action-contract";
+
+export const RoutineDraftSchema = z.object({
+  text: z.string(),
+  missing: z.array(MissingCapabilitySchema).min(1),
+  nodes: z.record(z.string(), CapabilityNodeSchema).default({}),
+});
+export type RoutineDraft = z.infer<typeof RoutineDraftSchema>;
 
 export const RoutineProposalSchema = z.object({
   id: z.uuid(), routineId: z.string(), title: z.string(), request: z.string(),
   schedule: z.string(), words: z.string(), timezone: z.string(), yaml: z.string(),
   steps: z.array(z.string()), configHash: z.string(), createdAt: z.number(),
+  draft: RoutineDraftSchema.optional(),
 });
 export type RoutineProposal = z.infer<typeof RoutineProposalSchema>;
 export const routineConfigHash = (options: RoutineOptions): string => createHash("sha256").update(JSON.stringify(options)).digest("hex");
 
 export function saveRoutineProposal(db: Database, proposal: RoutineProposal): void {
   db.query("INSERT INTO desk_routine_proposals (id, routine_id, document) VALUES (?, ?, ?)").run(proposal.id, proposal.routineId, JSON.stringify(proposal));
+}
+
+export function recordDraftNode(db: Database, id: string, capability: string, node: CapabilityNode): RoutineProposal | null {
+  const proposal = readRoutineProposal(db, id);
+  if (!proposal?.draft) return null;
+  const next: RoutineProposal = { ...proposal, draft: { ...proposal.draft, nodes: { ...proposal.draft.nodes, [capability]: node } } };
+  db.query("UPDATE desk_routine_proposals SET document = ? WHERE id = ?").run(JSON.stringify(next), id);
+  return next;
 }
 
 export function readRoutineProposal(db: Database, id: string, column: "id" | "routine_id" = "id"): RoutineProposal | null {
