@@ -235,6 +235,21 @@ describe("conversation Discord threads", () => {
     expect((await host.discordLink(conversation.id))?.open).toEqual([]);
   });
 
+  test("a readback message without a usable time leaves the send uncertain instead of resending", async () => {
+    const { host, bridge, fake } = await setup();
+    const conversation = await start(host);
+    await bridge.attach(conversation.id);
+    fake.faults = ["uncertain-landed"];
+    await host.submit(conversation.id, { inputId: "web-1", transport: "web", text: "timeless", mode: "queue" });
+    await host.waitForIdle(conversation.id);
+    await bridge.sync(conversation.id);
+    const landed = fake.threads.get("thread-1")?.messages.at(-1);
+    if (landed) landed.at = "not a time";
+    await bridge.sync(conversation.id);
+    expect(fake.texts("thread-1").filter(text => text.endsWith("\ntimeless"))).toHaveLength(1);
+    expect((await host.discordLink(conversation.id))?.open).toHaveLength(1);
+  });
+
   test("an inbound note is not posted into a thread that gained another member", async () => {
     const { host, bridge, fake } = await setup();
     const conversation = await start(host);

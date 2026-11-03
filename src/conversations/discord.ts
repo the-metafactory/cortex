@@ -296,12 +296,7 @@ export class DiscordConversations {
     await this.track(id, key, true);
     await host.recordDelivery(key, record);
     const result = await capability.adapter.postToThread({ threadId, text, nonce: record.nonce }).catch((error: unknown) => ({ ok: false as const, uncertain: true, detail: messageOf(error) }));
-    if (result.ok) {
-      await host.recordDelivery(key, sentRecord(record, result.messageId));
-      await this.track(id, key, false);
-      await this.used(id);
-      return "sent";
-    }
+    if (result.ok) return this.markSent(id, key, record, result.messageId);
     await host.recordDelivery(key, { ...record, state: result.uncertain ? "uncertain" : "failed", detail: result.detail });
     if (!result.uncertain) await this.track(id, key, false);
     this.log(`${result.uncertain ? "uncertain" : "failed"} delivery ${key} to thread ${threadId}: ${result.detail}`);
@@ -329,16 +324,23 @@ export class DiscordConversations {
       return other.success && other.data.threadId === record.threadId && other.data.messageId ? [other.data.messageId] : [];
     }));
     const since = Date.parse(record.at) - CLOCK_SKEW_MS;
-    const found = recent.messages.find((message: ThreadMessage) => message.authorId === bot && message.content === record.text && !bound.has(message.id) && Date.parse(message.at) >= since);
-    if (found) {
-      await host.recordDelivery(key, { ...sentRecord(record, found.id), detail: "found by thread readback" });
-      await this.track(id, key, false);
-      await this.used(id);
-      return "sent";
+    const candidates = recent.messages.filter((message: ThreadMessage) => message.authorId === bot && message.content === record.text && !bound.has(message.id));
+    if (candidates.some(message => Number.isNaN(Date.parse(message.at)))) {
+      this.log(`delivery ${key} stays uncertain: the adapter returned a message without a usable time`);
+      return "uncertain";
     }
+    const found = candidates.find(message => Date.parse(message.at) >= since);
+    if (found) return this.markSent(id, key, record, found.id, "found by thread readback");
     await host.recordDelivery(key, { ...record, state: "failed", detail: "not found by thread readback; sent again" });
     await this.track(id, key, false);
     return "failed";
+  }
+
+  private async markSent(id: string, key: string, record: Delivery, messageId: string, detail?: string): Promise<Delivered> {
+    await this.options.host.recordDelivery(key, { ...sentRecord(record, messageId), ...(detail ? { detail } : {}) });
+    await this.track(id, key, false);
+    await this.used(id);
+    return "sent";
   }
 
   private async destination(id: string, threadId: string, adapter: ThreadAdapter, principal: string): Promise<boolean> {
