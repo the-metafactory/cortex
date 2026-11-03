@@ -17,6 +17,7 @@ export interface DmPickerOptions {
 
 export const OFFER_SIZE = 5;
 export const OFFER_TTL_MS = 10 * 60_000;
+export const CLAIM_WINDOW_MS = 60 * 60_000;
 const SEARCH_MAX = 200;
 
 const OfferSchema = z.object({
@@ -25,6 +26,7 @@ const OfferSchema = z.object({
   channelId: z.string(),
   offerId: z.string(),
   at: z.string(),
+  requestedAt: z.string(),
   rows: z.array(z.object({ id: z.string(), archived: z.boolean() })),
 });
 type Offer = z.infer<typeof OfferSchema>;
@@ -35,7 +37,7 @@ type Command =
   | { kind: "search"; q: string }
   | { kind: "pick"; index: number; restore: boolean };
 
-const RECENT_RE = /^(?:conversations|ivy)$/i;
+const RECENT_RE = /^conversations$/i;
 const SEARCH_RE = /^search\s+(\S[\s\S]*)$/i;
 const PICK_RE = /^(restore\s+)?(\d{1,2})$/i;
 
@@ -62,7 +64,10 @@ export class DmPicker {
     const command = parseDmCommand(msg.content);
     if (!command) return false;
     if (command.kind !== "pick") return true;
-    return await this.options.host.delivery(offerKey(msg.channelId)) !== undefined;
+    const offer = OfferSchema.safeParse(await this.options.host.delivery(offerKey(msg.channelId)));
+    if (!offer.success) return false;
+    const age = this.options.now().getTime() - Date.parse(offer.data.at);
+    return age >= 0 && age <= CLAIM_WINDOW_MS;
   }
 
   async handle(msg: InboundMessage): Promise<void> {
@@ -108,14 +113,11 @@ export class DmPicker {
 
   private async offer(msg: InboundMessage, messageId: string, rows: OverviewRow[], heading: string, empty: string): Promise<string> {
     const { host, principalId } = this.options;
-    if (!rows.length) {
-      await host.recordDelivery(offerKey(msg.channelId), { kind: "dm-offer", principal: principalId ?? "", channelId: msg.channelId, offerId: messageId, at: this.options.now().toISOString(), rows: [] } satisfies Offer);
-      return empty;
-    }
-    const offer: Offer = { kind: "dm-offer", principal: principalId ?? "", channelId: msg.channelId, offerId: messageId, at: this.options.now().toISOString(), rows: rows.map(row => ({ id: row.conversation.id, archived: row.conversation.state === "archived" })) };
+    const offer: Offer = { kind: "dm-offer", principal: principalId ?? "", channelId: msg.channelId, offerId: messageId, at: this.options.now().toISOString(), requestedAt: msg.timestamp.toISOString(), rows: rows.map(row => ({ id: row.conversation.id, archived: row.conversation.state === "archived" })) };
     await host.recordDelivery(offerKey(msg.channelId), offer);
+    if (!rows.length) return empty;
     const lines = rows.map((row, index) => `${index + 1}. ${line(row)}`);
-    return [heading, ...lines, HELP, "This list expires in 10 minutes."].join("\n");
+    return [heading, ...lines, HELP, `This list expires in ${OFFER_TTL_MS / 60_000} minutes.`].join("\n");
   }
 
   private async pick(msg: InboundMessage, index: number, restore: boolean): Promise<string> {
@@ -124,7 +126,7 @@ export class DmPicker {
     if (!parsed.success || parsed.data.principal !== principalId || parsed.data.channelId !== msg.channelId) return `Nothing changed: there is no open list to choose from. ${HELP}`;
     const offer = parsed.data;
     const age = this.options.now().getTime() - Date.parse(offer.at);
-    if (!(age >= 0 && age <= OFFER_TTL_MS) || msg.timestamp.getTime() < Date.parse(offer.at)) return "Nothing changed: that list has expired. Send `conversations` or `search <words>` for a fresh one.";
+    if (!(age >= 0 && age <= OFFER_TTL_MS) || msg.timestamp.getTime() <= Date.parse(offer.requestedAt)) return "Nothing changed: that list has expired. Send `conversations` or `search <words>` for a fresh one.";
     const chosen = offer.rows[index - 1];
     if (!chosen) return `Nothing changed: the list has no number ${index}.`;
     const meta = await host.meta(chosen.id).catch((error: unknown) => {

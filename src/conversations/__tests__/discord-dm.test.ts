@@ -3,7 +3,7 @@ import type { InboundMessage } from "../../adapters/types";
 import { FakeThreads } from "./fixtures/discord-threads";
 import { answering, scratchHosts } from "./fixtures/scratch";
 import { DiscordConversations } from "../discord";
-import { OFFER_TTL_MS, parseDmCommand } from "../discord-dm";
+import { CLAIM_WINDOW_MS, OFFER_TTL_MS, parseDmCommand } from "../discord-dm";
 import { openConversationHost, type ConversationHost } from "../host";
 import type { Policy } from "../types";
 
@@ -31,7 +31,7 @@ async function setup() {
     const before = fake.replies.length;
     const msg: InboundMessage = {
       platform: "discord", instanceId: "pilot-discord", authorId: PRINCIPAL, authorName: "someone", content, channelId: DM, threadId: DM, isDM: true,
-      authorIsPrincipal: false, attachments: [], timestamp: clock.at, messageId: `dm-msg-${++seq}`, ...extra,
+      authorIsPrincipal: false, attachments: [], timestamp: new Date(clock.at.getTime() + ++seq), messageId: `dm-msg-${seq}`, ...extra,
     };
     const taken = await bridge.offer(msg);
     return { taken, reply: fake.replies.length > before ? fake.replies.at(-1)?.text : undefined };
@@ -52,6 +52,7 @@ describe("choosing a conversation from the Discord DM", () => {
     expect(parseDmCommand("search  spring workshop ")).toEqual({ kind: "search", q: "spring workshop" });
     expect(parseDmCommand("restore 3")).toEqual({ kind: "pick", index: 3, restore: true });
     expect(parseDmCommand("search")).toBeNull();
+    expect(parseDmCommand("ivy")).toBeNull();
   });
 
   test("the principal is recognised by Discord id with the adapter's principal flag false, gets recent conversations, and a choice links the private thread and web view", async () => {
@@ -127,6 +128,8 @@ describe("choosing a conversation from the Discord DM", () => {
     expect(replay).toEqual({ taken: true, reply: undefined });
     expect(fake.created).toBe(1);
     expect((await host.meta(conversation.id)).discord?.threadId).toBe("thread-1");
+    clock.at = new Date(clock.at.getTime() + CLAIM_WINDOW_MS + 1);
+    expect(await dm("1")).toEqual({ taken: false, reply: undefined });
   });
 
   test("a stranger, or a choice from another DM channel, has no effect and is not answered", async () => {
