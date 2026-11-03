@@ -2,6 +2,8 @@ import { parserRoutingNotice } from "../../desk/parser-routing";
 import { useEffect, useState } from "react";
 import { proposalTime, type AskKind, type AskMap, type DeskProposal } from "../../desk/ask";
 import { clock } from "../../desk/time";
+import type { CapabilityBuildResult, CapabilityRefusal, StepSovereignty } from "../../desk/routine-capability-contract";
+import { buildCapabilities } from "../lib/desk-ask";
 
 type FieldType = "text" | "long" | "time" | "map";
 
@@ -67,12 +69,46 @@ function RoutineProposal({ proposal, busy, onConfirm, onCancel }: ProposalCardPr
       <p>{String(proposal.fields.schedule ?? "")}</p>
       {steps.length > 0 && <ol>{steps.map((step, i) => <li key={i}>{step}</li>)}</ol>}
       {proposal.problem ? <p role="alert">{proposal.problem}</p> : <p className="desk-prop-note">Each fire will ask you first.</p>}
+      {proposal.capabilities && <MissingCapabilities refusal={proposal.capabilities} busy={busy} />}
       <div className="desk-acts">
         {!proposal.problem && !proposal.unwritable && <button type="button" className="desk-btn pri" disabled={busy} onClick={() => onConfirm({ proposalId: proposal.fields.proposalId })}>{busy ? "Installing…" : "Confirm"}</button>}
         <button type="button" className="desk-btn ghost" disabled={busy} onClick={onCancel}>Cancel</button>
       </div>
     </article>
   </div></div>;
+}
+
+const sovereigntyText = (s: StepSovereignty): string => [
+  `model class: ${s.model_class ?? "not set"}`,
+  `frontier allowed: ${s.frontier_ok === undefined ? "not set" : s.frontier_ok ? "yes" : "no"}`,
+  `data residency: ${s.data_residency ?? "not set"}`,
+].join(", ");
+
+function MissingCapabilities({ refusal, busy }: { refusal: CapabilityRefusal; busy: boolean }) {
+  const [requestId] = useState(() => crypto.randomUUID());
+  const [working, setWorking] = useState(false);
+  const [result, setResult] = useState<CapabilityBuildResult | null>(null);
+  const build = async (): Promise<void> => {
+    setWorking(true);
+    try { setResult(await buildCapabilities(requestId, refusal.proposalId)); }
+    finally { setWorking(false); }
+  };
+  const nodes = new Map([...Object.entries(refusal.nodes), ...(result?.built ?? []).map((b): [string, (typeof refusal.nodes)[string]] => [b.capability, b])]);
+  const done = refusal.missing.every((m) => nodes.has(m.capability));
+  return <section className="desk-prop-capabilities" aria-label="Missing capabilities">
+    {refusal.missing.map((m) => {
+      const node = nodes.get(m.capability);
+      const problem = result?.failed.find((f) => f.capability === m.capability);
+      return <div key={m.capability}>
+        <h4>{m.capability}</h4>
+        <ul>{m.steps.map((step, i) => <li key={i}><strong>{step.label}</strong><p>{step.prompt}</p><p className="desk-prop-note">{sovereigntyText(step.sovereignty)}</p></li>)}</ul>
+        {node && <p role="status">{node.existing ? "Already filed as " : "Filed as "}<a href={node.url} target="_blank" rel="noreferrer">{node.ref}</a></p>}
+        {problem && <p role="alert">Could not file {m.capability}: {problem.error}</p>}
+      </div>;
+    })}
+    {result && !result.ok && result.failed.length === 0 && <p role="alert">{result.message}</p>}
+    {refusal.offer && !done && <div className="desk-acts"><button type="button" className="desk-btn pri" disabled={busy || working} aria-busy={working} onClick={() => void build()}>{working ? "Filing…" : "Build this capability"}</button></div>}
+  </section>;
 }
 
 function StandardProposalCard({ proposal, said, maps, now, busy, onConfirm, onCancel, onGoto, onFieldsChange, onAlternative }: ProposalCardProps) {

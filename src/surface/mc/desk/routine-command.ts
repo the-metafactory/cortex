@@ -19,11 +19,11 @@ const RefusalSchema = z.object({ error: z.object({ code: z.string(), message: z.
 export class RoutineRefusal extends Error {}
 export class RoutineWriteFailure extends Error {}
 
-export async function runRoutineCommand(run: RoutineRunner, argv: string[], timeoutMs: number) {
+export async function runRoutineCommand(run: RoutineRunner, argv: string[], timeoutMs: number, stdin = "") {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      run(argv, "", timeoutMs),
+      run(argv, stdin, timeoutMs),
       new Promise<never>((_resolve, reject) => { timer = setTimeout(() => { reject(new Error("Routine command timed out.")); }, timeoutMs); }),
     ]);
   } finally {

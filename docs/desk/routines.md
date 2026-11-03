@@ -26,6 +26,12 @@ Flows with shared YAML references remain inspectable but do not offer parameter 
 
 Routines currently have no area classification metadata. AI editing uses the already configured routine composer route and passes only owner-redacted flow metadata. The API refuses a supplied local-area restriction because the composer cannot attest that restriction; it does not silently downgrade it.
 
+## A routine that needs a capability nobody offers
+
+When a composed agent or reviewer step needs a capability that no fresh online local agent offers, the Desk refuses the routine and lists each missing capability with the steps that need it: the step, its prompt and its sovereignty limits. The flow is kept as a draft. It is not installed.
+
+If the stack sets `routines.capabilityBuild`, choose **Build this capability**. The Desk files one build node per missing capability on the configured map and shows each node's link on the card. Filing the same capability twice reuses the open node. See [capability writers](commands.md#capability-writers). Starting the build and installing the draft afterwards are separate steps that this release does not include.
+
 ## Background routines and Needs attention
 
 <!-- glossary-ignore: owner -->

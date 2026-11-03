@@ -3,6 +3,8 @@ import type { PipelineStep } from "pulse";
 const words = (name: string): string => name.replace(/^A_/, "").replaceAll(/[_-]/g, " ").toLowerCase();
 const together = (steps: PipelineStep[]): string => routineStepLabels(steps).join(", then ");
 
+export const routineSeatLabel = (tribunal: string, seat: string): string => `Ask reviewer ${words(seat)} to ${words(tribunal)}`;
+
 export function routineStepLabels(steps: PipelineStep[]): string[] {
   return steps.map((step): string => {
     if (typeof step === "string") return words(step);

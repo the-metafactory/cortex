@@ -22,6 +22,27 @@ The Desk reads `routine list --json`, `pending --json` and `history --limit 200 
 
 Confirm and routine controls keep durable request receipts. A definite daemon refusal permits retry after the cause is repaired. A lost reply triggers state reconciliation without resending the write. **Check pending change** retries that reconciliation. A dispatch receipt means Reflex dispatched the flow; execution outcomes appear separately in Mission Control.
 
+### Capability writers
+
+When `routines.capabilityBuild` is set and the principal chooses **Build this capability**, the Desk runs `capabilityBuild.writer` once per missing capability. It writes one JSON object to stdin:
+
+| Field | Meaning |
+|---|---|
+| `requestId` | The Desk's request id. |
+| `capability` | The missing capability, such as `compose.judgment`. |
+| `steps` | The composed steps that need it: `label`, `prompt` and `sovereignty` (`model_class`, `frontier_ok`, `data_residency`, each present only when the flow sets it). |
+| `request` | The text the principal typed. |
+| `yaml` | The composed flow. |
+| `map` | `capabilityBuild.map`. |
+| `budget` | `{ tokens, invocations, minutes }` from the configuration. |
+| `template` | `capabilityBuild.template`, present only when configured. |
+
+The writer prints one JSON object, `{ "ref": "owner/repo#123", "url": "https://…", "existing": false }`, and exits 0. `existing: true` means an open node for that capability was already on the map and nothing new was filed. A non-zero exit, a timeout (`routines.timeoutSeconds`) or output that does not match this shape records nothing for that capability. The card names the capability and the reason, and a retry with the same request id may file it. The Desk stores each returned `ref` on the routine draft. A second confirm of the same request id calls no writer and returns the stored result.
+
+`scripts/desk-capability-node.ts` is the shipped writer. It finds an open node by the exact last body line `desk-capability:<capability>` under the label `desk-capability`, and otherwise files a node with `soma graph add <root> --kind build --autonomy auto --once desk-capability:<capability> --label desk-capability` plus the budget flags. A closed node with the marker is never reused. The body comes from the template, which accepts `{{capability}}`, `{{request}}`, `{{criteria}}` and `{{flow}}`. `soma` must be on the daemon's PATH, or set `SOMA_BIN`. The request text goes into the node body, so file nodes only on a map that you control.
+
+A routine refused for a missing capability stays a draft. The Desk does not install it, and a gate, research, targeted or federated step is never offered for building.
+
 ## Source output
 
 A source exits 0 and prints an object with optional `events` and `items` arrays. An empty source can print `{}`. Unknown object fields are ignored. `items` currently accepts mail only. Source adapters do not declare UI actions in their output: Cortex adds actions from the item kind and configured commands.

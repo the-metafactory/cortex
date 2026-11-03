@@ -1,4 +1,5 @@
 import type { DeskProposal } from "../../desk/ask";
+import { CapabilityBuildResultSchema, type CapabilityBuildResult } from "../../desk/routine-capability-contract";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -28,4 +29,15 @@ export async function createFromProposal(
 ): Promise<{ ok: boolean; text: string; uncertain?: true }> {
   const r = await post<{ message?: string }>("/api/desk/create", { requestId, kind, fields }, fetchImpl);
   return r.ok ? { ok: true, text: r.body.message ?? "Done." } : r;
+}
+
+export async function buildCapabilities(requestId: string, proposalId: string, fetchImpl: FetchLike = fetch): Promise<CapabilityBuildResult> {
+  let res: Response;
+  try {
+    res = await fetchImpl("/api/desk/routine-capability", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ requestId, proposalId }) });
+  } catch (err) {
+    return { ok: false, message: `Mission Control did not answer: ${err instanceof Error ? err.message : String(err)}`, built: [], failed: [] };
+  }
+  const parsed = CapabilityBuildResultSchema.safeParse(await res.json().catch(() => null));
+  return parsed.success ? parsed.data : { ok: false, message: `The request failed (HTTP ${res.status}).`, built: [], failed: [] };
 }
