@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { runCommand } from "../src/surface/mc/desk/spawn";
+import type { BuildStatusSchema } from "../src/surface/mc/desk/routine-capability-contract";
+import { splitNodeRef } from "../src/surface/mc/desk/routine-node-command";
 
 const JOURNAL_TIMEOUT_MS = 10_000;
 
@@ -14,7 +16,7 @@ const WorkerSchema = z.looseObject({
 const JournalSchema = z.looseObject({ workers: z.array(WorkerSchema) });
 type Worker = z.infer<typeof WorkerSchema>;
 
-export interface BuildStatus { state: "filed" | "building" | "in-review" | "merged" | "failed"; reason?: string; pr?: number }
+export type BuildStatus = z.input<typeof BuildStatusSchema>;
 export type JournalRunner = (argv: string[]) => Promise<{ code: number; stdout: string; stderr: string }>;
 
 export const rangerRunner = (bin = process.env.RANGER_BIN ?? "ranger"): JournalRunner => async (argv) => {
@@ -23,11 +25,9 @@ export const rangerRunner = (bin = process.env.RANGER_BIN ?? "ranger"): JournalR
 };
 
 export function parseNodeRef(ref: string): { repo: string; id: string } {
-  const at = ref.lastIndexOf("#");
-  const repo = ref.slice(0, at);
-  const id = ref.slice(at + 1);
-  if (at <= 0 || !/^[1-9]\d*$/.test(id)) throw new Error(`${JSON.stringify(ref)} is not a node reference like owner/repo#123`);
-  return { repo, id };
+  const parts = splitNodeRef(ref);
+  if (!parts) throw new Error(`${JSON.stringify(ref)} is not a node reference like owner/repo#123`);
+  return parts;
 }
 
 const latest = (workers: Worker[]): Worker | undefined =>
@@ -61,7 +61,6 @@ export function statusFromJournal(journal: unknown): BuildStatus {
       if (worker.phase === "close") return withPr({ state: "merged" }, worker);
       throw new Error(`ranger reports success in phase ${worker.phase ?? "none"}, which does not mean merged`);
     case "released":
-      if (worker.phase === "close" && /\bmerged\b/i.test(reason ?? "")) return withPr({ state: "merged" }, worker);
       return withPr({ state: "failed", reason: reason ?? "the claim was released without a merged build" }, worker);
     case "failed":
     case "parked":

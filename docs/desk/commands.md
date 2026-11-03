@@ -43,9 +43,16 @@ The writer prints one JSON object, `{ "ref": "owner/repo#123", "url": "https://â
 
 ### Build start and status commands
 
-`capabilityBuild.start` runs after the writer files a node that was not already filed. A node that the writer reused (`existing: true`) is not started again. Exit code 0 means the build was started. Any other exit, a timeout or a failure to run the command leaves the filing in place and shows **Not started: <reason>** on the routine draft. The reason is the last line of the command's output. The node stays on the map's frontier, so the next walk can pick it up. The command runs with `routines.timeoutSeconds`. For the first user it is `ranger build-now {id} --map {map}`.
+<!-- glossary-ignore: node -->
+<!-- glossary-ignore: agent -->
+<!-- glossary-ignore: daemon -->
+<!-- glossary-ignore: path -->
+<!-- glossary-ignore: message -->
+<!-- glossary-ignore: run -->
 
-`capabilityBuild.status` runs once for each filed node on every routine read, with `routines.readTimeoutSeconds`. It prints one JSON object on stdout and exits 0:
+`capabilityBuild.start` runs after the writer files a node that was not already filed. A node that the writer reused (`existing: true`) is not started again. Exit code 0 means the build was started. Any other exit, a timeout or a failure to run the command leaves the filing in place and shows **Not started: <reason>** on the routine draft. The reason is the last line of the command's output. The node stays on the map's frontier, so the next walk can pick it up. The command runs with `routines.timeoutSeconds`. With Ranger it is `ranger build-now {id} --map {map}`.
+
+`capabilityBuild.status` runs once for each filed node on every routine read, with `routines.readTimeoutSeconds` and at most four at a time. A node that several drafts share is read once. It prints one JSON object on stdout and exits 0:
 
 | Field | Meaning |
 |---|---|
@@ -55,7 +62,7 @@ The writer prints one JSON object, `{ "ref": "owner/repo#123", "url": "https://â
 
 If the command exits non-zero, times out, prints invalid JSON or prints another `state`, the draft shows **State unknown** with the error. The Desk never guesses a state. It shows `merged` as **Live** once the capability is in the local agent presence. Installing a merged capability is a separate step.
 
-`scripts/desk-capability-status.ts <owner/repo#node>` is the shipped status command for Ranger. It reads `ranger journal --node <id> --repo <repo>` and maps the node's newest worker: no worker is `filed`; a claimed or running worker is `building`; a worker with an open pull request or waiting at the merge desk is `in-review`; a worker that finished the close phase is `merged`; a failed or parked worker is `failed` with the journal's outcome as the reason. It exits 1 with a message when the journal shows a status it cannot map. Set `RANGER_BIN` when `ranger` is not on the daemon's PATH.
+`scripts/desk-capability-status.ts <owner/repo#node>` is the shipped status command for Ranger. It reads `ranger journal --node <id> --repo <repo>` and maps the node's newest worker: no worker is `filed`; a claimed or running worker is `building`; a worker with an open pull request or waiting at the merge desk is `in-review`; a worker that succeeded in the close phase is `merged`; a failed, parked or released worker is `failed` with the journal's outcome as the reason. The adapter never reads `merged` from outcome text. It exits 1 with a message when the journal shows a status it cannot map. Set `RANGER_BIN` when `ranger` is not on the daemon's PATH.
 
 A routine refused for a missing capability stays a draft. The Desk does not install it, and a gate, research, targeted or federated step is never offered for building.
 

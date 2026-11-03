@@ -25,8 +25,13 @@ describe("mapping the journal to a build state", () => {
   });
 
   it("is merged when the node was closed outside the walker after a merged pull request", () => {
-    const closed = worker({ status: "released", phase: "close", outcome: "closed outside ranger by someone; receipt: https://example.test/1; PR #3163 merged" });
+    const closed = worker({ status: "success", phase: "close", outcome: "closed outside ranger by someone; receipt: https://example.test/1; PR #3163 merged" });
     expect(statusFromJournal(journal(closed))).toEqual({ state: "merged", pr: 3163 });
+  });
+
+  it("never reads merged from the outcome text of a released worker", () => {
+    const released = worker({ status: "released", phase: "close", outcome: "closed outside ranger by someone; PR #3163 not merged" });
+    expect(statusFromJournal(journal(released))).toEqual({ state: "failed", reason: "closed outside ranger by someone; PR #3163 not merged", pr: 3163 });
   });
 
   it("is failed with the reason for a failed, parked or released-without-merge worker", () => {

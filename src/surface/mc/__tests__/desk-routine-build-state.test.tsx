@@ -10,6 +10,7 @@ import type { RoutineOptions, RoutineRunner } from "../desk/routine-command";
 import { HandledLedger } from "../desk/actions";
 import { RoutinesSection } from "../dashboard-v2/components/desk-routines";
 import { RoutineOptionsSchema } from "../../../common/types/desk-routines";
+import { RoutineReadLoop } from "../desk/routine-read";
 
 const START = ["builder", "build-now", "{id}", "--map", "{map}"];
 const STATUS = ["status-command", "{ref}"];
@@ -172,6 +173,26 @@ describe("reading the build state of a draft", () => {
     await read(h);
     expect(h.statuses.map((s) => s.argv[1]).sort()).toEqual(["example/maps#21", "example/maps#22"]);
     expect(h.statuses.every((s) => s.timeoutMs === 1000)).toBe(true);
+  });
+
+  it("reads a node shared by two drafts once", async () => {
+    const h = harness({ existing: true });
+    await draftWithNodes(db, h, OPTIONS, YAML);
+    const composer: RoutineRunner = () => ok(JSON.stringify({ status: "complete", yaml: YAML }));
+    const second = await buildRoutineCard(db, "every hour, derive a result", OPTIONS, NOW, composer, none);
+    await buildRoutineCapabilities(db, OPTIONS, new HandledLedger(), { requestId: "build-request-3", proposalId: CapabilityRefusalSchema.parse(second.capabilities).proposalId }, h.run);
+    const view = await read(h);
+    expect(view.drafts).toHaveLength(2);
+    expect(h.statuses.map((s) => s.argv[1])).toEqual(["example/maps#21"]);
+  });
+
+  it("the Desk read loop shows drafts and Live through its presence check", async () => {
+    const h = harness({ status: () => ok(JSON.stringify({ state: "merged" })) });
+    await draftWithNodes(db, h);
+    const loop = new RoutineReadLoop(() => new Set(["compose.judgment"]));
+    await loop.refresh(db, OPTIONS, NOW, h.run);
+    const view = loop.read(db, OPTIONS, NOW);
+    expect(view.drafts?.[0]?.nodes.map((n) => [n.capability, n.build?.state])).toEqual([["compose.judgment", "live"], ["review.adversarial", "merged"]]);
   });
 
   it("shows a node that was not started with its reason", async () => {

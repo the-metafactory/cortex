@@ -3,7 +3,7 @@ import { oneLine } from "./actions";
 import type { HandledLedger } from "./actions";
 import { spawnWithStdin } from "./create";
 import { CapabilityNodeSchema, FILEABLE_CAPABILITY, type BuiltNode, type CapabilityBuildRequest, type CapabilityBuildResult, type CapabilityNode, type MissingCapability } from "./routine-capability-contract";
-import { expandNodeCommand } from "./routine-node-command";
+import { runNodeCommand } from "./routine-node-command";
 import { runRoutineCommand, type RoutineOptions, type RoutineRunner } from "./routine-command";
 import { readRoutineProposal, recordDraftNode, routineConfigHash } from "./routine-store";
 
@@ -30,15 +30,8 @@ async function fileCapability(options: RoutineOptions, writer: string[], input: 
 }
 
 async function startBuild(options: RoutineOptions, start: string[], map: string, node: CapabilityNode, run: RoutineRunner): Promise<string | undefined> {
-  const argv = expandNodeCommand(start, node.ref, map);
-  if (!argv) return `the node reference ${node.ref} cannot be passed to the start command.`;
-  let result;
-  try {
-    result = await runRoutineCommand(run, argv, options.timeoutSeconds * 1000);
-  } catch (error) {
-    return `the start command did not finish: ${error instanceof Error ? error.message : String(error)}`;
-  }
-  return result.code === 0 ? undefined : oneLine(result.stderr || result.stdout, `the start command exited with code ${result.code}.`);
+  const result = await runNodeCommand({ argv: start, ref: node.ref, map, label: "start", timeoutMs: options.timeoutSeconds * 1000, run });
+  return result.ok ? undefined : result.error;
 }
 
 function summary(built: CapabilityBuildResult["built"], problems: CapabilityBuildResult["failed"]): string {
