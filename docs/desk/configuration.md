@@ -186,7 +186,7 @@ mc:
   desk:
     routines:
       capabilityBuild:
-        writer: [bun, /opt/cortex/scripts/desk-capability-node.ts]
+        writer: [bun, /opt/cortex/scripts/desk-capability-node.ts, --probe, '{"type":"artifact-exists","path":"capabilities/{slug}/index.ts","atRef":"main"}']
         map: example-org/example-maps#12
         template: /opt/desk/capability-brief.md
         budget:
