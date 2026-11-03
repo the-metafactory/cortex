@@ -30,10 +30,13 @@ const RECENT = 50;
 const MAX_ATTACHMENT = 10 * 1024 * 1024;
 const SWEEP_MS = 60_000;
 const CHECK_NAME = "Ivy capability check";
+const CLOCK_SKEW_MS = 10_000;
 const DeliverySchema = z.object({ state: z.enum(["sending", "sent", "uncertain", "failed"]), conversationId: z.string(), threadId: z.string(), text: z.string().optional(), nonce: z.string(), at: z.string(), messageId: z.string().optional(), detail: z.string().optional() });
 type Delivery = z.infer<typeof DeliverySchema>;
 const InputDataSchema = z.object({ transport: z.enum(["web", "discord"]), mode: z.enum(["queue", "steer"]).optional() }).loose();
 
+const messageOf = (error: unknown): string => error instanceof Error ? error.message : String(error);
+const threadIndex = (links: Map<string, DiscordLink>): Map<string, string> => new Map([...links].flatMap(([id, link]) => link.threadId ? [[link.threadId, id] as const] : []));
 export const nonceFor = (key: string): string => createHash("sha256").update(key).digest("hex").slice(0, 25);
 export function chunks(text: string): string[] {
   const out: string[] = [];
@@ -140,7 +143,7 @@ export class DiscordConversations {
       const capability = this.capability();
       if (!capability.ok) throw new ConversationError(503, capability.reason);
       const { adapter, principal } = capability;
-      await host.setDiscordLink(id, () => ({ cursor: null, pendingAt: this.now().toISOString() }));
+      await host.setDiscordLink(id, () => ({ cursor: null, open: [], pendingAt: this.now().toISOString() }));
       const created = await adapter.createPrivateThread({ channelId: this.options.config.channelId, name: meta.title.slice(0, THREAD_NAME), memberIds: [principal] });
       if (!created.ok) {
         await host.setDiscordLink(id, () => null);
@@ -153,7 +156,7 @@ export class DiscordConversations {
         throw new ConversationError(503, `The private thread is not usable: ${members.detail}. ${removed.ok ? "It was deleted." : `It could not be deleted (${removed.detail}); remove thread ${created.threadId} by hand.`}`);
       }
       const cursor = await host.latestEntryId(id);
-      await host.setDiscordLink(id, () => ({ threadId: created.threadId, attachedAt: this.now().toISOString(), cursor }));
+      await host.setDiscordLink(id, () => ({ threadId: created.threadId, attachedAt: this.now().toISOString(), cursor, open: [] }));
       this.threads?.set(created.threadId, id);
       await this.deliver(id, created.threadId, `${id}:intro`, `**${meta.title}**\nThis private thread continues your Ivy conversation. Mention me here to continue; the full record stays on the web: <${this.webLink(id)}>`);
       return host.meta(id);
@@ -161,7 +164,7 @@ export class DiscordConversations {
   }
 
   private async conversationFor(threadId: string): Promise<string | null> {
-    this.threads ??= new Map([...(await this.options.host.discordLinks())].flatMap(([id, link]) => link.threadId ? [[link.threadId, id] as const] : []));
+    this.threads ??= threadIndex(await this.options.host.discordLinks());
     return this.threads.get(threadId) ?? null;
   }
 
@@ -171,7 +174,7 @@ export class DiscordConversations {
     if (!id) return false;
     const threadId = msg.threadId;
     await this.serial(`in:${id}`, () => this.receive(id, threadId, msg)).catch((error: unknown) => {
-      this.log(`inbound message in thread ${threadId} failed: ${error instanceof Error ? error.message : String(error)}`);
+      this.log(`inbound message in thread ${threadId} failed: ${messageOf(error)}`);
     });
     return true;
   }
@@ -226,15 +229,15 @@ export class DiscordConversations {
     void this.sync(id).then(async () => {
       await this.options.host.waitForIdle(id);
       await this.sync(id);
-    }).catch((error: unknown) => { this.log(`projection of ${id} failed: ${error instanceof Error ? error.message : String(error)}`); });
+    }).catch((error: unknown) => { this.log(`projection of ${id} failed: ${messageOf(error)}`); });
   }
 
   async sweep(): Promise<void> {
     const links = await this.options.host.discordLinks().catch(() => new Map<string, DiscordLink>());
-    this.threads = new Map([...links].flatMap(([id, link]) => link.threadId ? [[link.threadId, id] as const] : []));
+    this.threads = threadIndex(links);
     for (const [id, link] of links) {
       if (!link.threadId) continue;
-      await this.sync(id).catch((error: unknown) => { this.log(`projection of ${id} failed: ${error instanceof Error ? error.message : String(error)}`); });
+      await this.sync(id).catch((error: unknown) => { this.log(`projection of ${id} failed: ${messageOf(error)}`); });
     }
   }
 
@@ -247,22 +250,8 @@ export class DiscordConversations {
     const link = await host.discordLink(id);
     const threadId = link?.threadId;
     if (!link || !threadId) return;
-    const pending = Object.entries(await host.deliveries()).flatMap(([key, raw]) => {
-      const parsed = DeliverySchema.safeParse(raw);
-      return parsed.success && parsed.data.conversationId === id && (parsed.data.state === "sending" || parsed.data.state === "uncertain") ? [key] : [];
-    });
-    for (const key of pending) await this.reconcile(key);
+    for (const key of link.open) await this.reconcile(id, key);
     const entries = await host.entriesAfter(id, link.cursor);
-    if (!entries.length) return;
-    const capability = this.capability();
-    if (!capability.ok) return;
-    const members = await this.privateMembers(capability.adapter, threadId, capability.principal);
-    if (!members.ok) {
-      if (link.blocked !== members.detail) await host.setDiscordLink(id, current => current && { ...current, blocked: members.detail });
-      this.log(`nothing sent to thread ${threadId}: ${members.detail}`);
-      return;
-    }
-    if (link.blocked) await host.setDiscordLink(id, current => current && withoutBlocked(current));
     for (const entry of entries) {
       const meta = await host.meta(id);
       if (meta.policy === "local") {
@@ -297,30 +286,36 @@ export class DiscordConversations {
     const existing = DeliverySchema.safeParse(await host.delivery(key));
     if (existing.success && existing.data.state === "sent") return "sent";
     if (existing.success && (existing.data.state === "sending" || existing.data.state === "uncertain")) {
-      const settled = await this.reconcile(key);
+      const settled = await this.reconcile(id, key);
       if (settled !== "failed") return settled;
     }
     const capability = this.capability();
     if (!capability.ok) return "failed";
+    if (!await this.destination(id, threadId, capability.adapter, capability.principal)) return "failed";
     const record: Delivery = { state: "sending", conversationId: id, threadId, text, nonce: nonceFor(key), at: this.now().toISOString() };
+    await this.track(id, key, true);
     await host.recordDelivery(key, record);
-    const result = await capability.adapter.postToThread({ threadId, text, nonce: record.nonce }).catch((error: unknown) => ({ ok: false as const, uncertain: true, detail: error instanceof Error ? error.message : String(error) }));
+    const result = await capability.adapter.postToThread({ threadId, text, nonce: record.nonce }).catch((error: unknown) => ({ ok: false as const, uncertain: true, detail: messageOf(error) }));
     if (result.ok) {
       await host.recordDelivery(key, sentRecord(record, result.messageId));
+      await this.track(id, key, false);
       await this.used(id);
       return "sent";
     }
     await host.recordDelivery(key, { ...record, state: result.uncertain ? "uncertain" : "failed", detail: result.detail });
+    if (!result.uncertain) await this.track(id, key, false);
     this.log(`${result.uncertain ? "uncertain" : "failed"} delivery ${key} to thread ${threadId}: ${result.detail}`);
     return result.uncertain ? "uncertain" : "failed";
   }
 
-  private async reconcile(key: string): Promise<Delivered> {
+  private async reconcile(id: string, key: string): Promise<Delivered> {
     const { host } = this.options;
     const parsed = DeliverySchema.safeParse(await host.delivery(key));
-    if (!parsed.success) return "failed";
+    if (!parsed.success || parsed.data.state === "sent" || parsed.data.state === "failed") {
+      await this.track(id, key, false);
+      return parsed.success && parsed.data.state === "sent" ? "sent" : "failed";
+    }
     const record = parsed.data;
-    if (record.state === "sent") return "sent";
     const capability = this.capability();
     if (!capability.ok) return "uncertain";
     const recent = await capability.adapter.recentThreadMessages({ threadId: record.threadId, limit: RECENT });
@@ -329,14 +324,42 @@ export class DiscordConversations {
       return "uncertain";
     }
     const bot = await capability.adapter.getPlatformUserId();
-    const found = recent.messages.find((message: ThreadMessage) => message.authorId === bot && message.content === record.text);
+    const bound = new Set(Object.values(await host.deliveries()).flatMap(raw => {
+      const other = DeliverySchema.safeParse(raw);
+      return other.success && other.data.threadId === record.threadId && other.data.messageId ? [other.data.messageId] : [];
+    }));
+    const since = Date.parse(record.at) - CLOCK_SKEW_MS;
+    const found = recent.messages.find((message: ThreadMessage) => message.authorId === bot && message.content === record.text && !bound.has(message.id) && Date.parse(message.at) >= since);
     if (found) {
       await host.recordDelivery(key, { ...sentRecord(record, found.id), detail: "found by thread readback" });
-      await this.used(record.conversationId);
+      await this.track(id, key, false);
+      await this.used(id);
       return "sent";
     }
     await host.recordDelivery(key, { ...record, state: "failed", detail: "not found by thread readback; sent again" });
+    await this.track(id, key, false);
     return "failed";
+  }
+
+  private async destination(id: string, threadId: string, adapter: ThreadAdapter, principal: string): Promise<boolean> {
+    const { host } = this.options;
+    const members = await this.privateMembers(adapter, threadId, principal);
+    const link = await host.discordLink(id);
+    if (!members.ok) {
+      if (link?.blocked !== members.detail) await host.setDiscordLink(id, current => current && { ...current, blocked: members.detail });
+      this.log(`nothing sent to thread ${threadId}: ${members.detail}`);
+      return false;
+    }
+    if (link?.blocked) await host.setDiscordLink(id, current => current && withoutBlocked(current));
+    return true;
+  }
+
+  private async track(id: string, key: string, open: boolean): Promise<void> {
+    await this.options.host.setDiscordLink(id, current => {
+      if (!current) return current;
+      const rest = current.open.filter(k => k !== key);
+      return { ...current, open: open ? [...rest, key] : rest };
+    });
   }
 
   private async used(id: string): Promise<void> {

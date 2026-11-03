@@ -65,7 +65,8 @@
  *   an optional `messageId` (the platform's own message id, the durable
  *   delivery identity for Ivy conversations), and `PlatformAdapter` gains the
  *   optional private-thread primitives `privateThreadMembers`, `postToThread`
- *   (one message, nonce enforced), `recentThreadMessages` and `deleteThread`.
+ *   (one message, nonce enforced), `recentThreadMessages` (id, author,
+ *   content and ISO creation time) and `deleteThread`.
  *   Each resolves a result and never throws. No migration required; bundles
  *   without them keep compiling and Cortex reports the missing capability.
  *   Minor bump — no `sdkRange` change needed for existing plugins.

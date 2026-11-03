@@ -222,7 +222,7 @@ export type CreatePrivateThreadResult =
 
 export type ThreadMembersResult = { ok: true; memberIds: string[] } | { ok: false; detail: string };
 export type ThreadPostResult = { ok: true; messageId: string } | { ok: false; detail: string; uncertain: boolean };
-export interface ThreadMessage { id: string; authorId: string; content: string }
+export interface ThreadMessage { id: string; authorId: string; content: string; at: string }
 export type ThreadReadResult = { ok: true; messages: ThreadMessage[] } | { ok: false; detail: string };
 export type ThreadDeleteResult = { ok: true } | { ok: false; detail: string };
 

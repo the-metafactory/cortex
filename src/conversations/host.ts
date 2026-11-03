@@ -26,6 +26,7 @@ const DiscordLinkSchema = z.object({
   cursor: z.number().int().nullable().default(null),
   neutralAt: z.string().optional(),
   blocked: z.string().optional(),
+  open: z.array(z.string()).default([]),
 });
 export type DiscordLink = z.infer<typeof DiscordLinkSchema>;
 

@@ -35,7 +35,7 @@ export class FakeThreads implements ThreadCapable {
     if (fault === "failed") return Promise.resolve({ ok: false, detail: "Missing Permissions", uncertain: false });
     if (fault === "uncertain-lost") return Promise.resolve({ ok: false, detail: "timeout", uncertain: true });
     this.posts.push(opts);
-    const message = { id: `m-${++this.seq}`, authorId: BOT, content: opts.text };
+    const message = { id: `m-${++this.seq}`, authorId: BOT, content: opts.text, at: new Date().toISOString() };
     thread.messages.push(message);
     if (fault === "uncertain-landed") return Promise.resolve({ ok: false, detail: "timeout", uncertain: true });
     return Promise.resolve({ ok: true, messageId: message.id });

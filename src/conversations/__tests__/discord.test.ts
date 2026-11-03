@@ -220,6 +220,30 @@ describe("conversation Discord threads", () => {
     expect(fake.texts("thread-1").at(-1)).toBe("answer to retry me");
   });
 
+  test("readback never claims an earlier identical message for a lost send", async () => {
+    const { host, bridge, fake } = await setup();
+    const conversation = await start(host);
+    await bridge.attach(conversation.id);
+    await host.submit(conversation.id, { inputId: "web-1", transport: "web", text: "same", mode: "queue" });
+    await settle(host, bridge, conversation.id);
+    fake.faults = ["uncertain-lost"];
+    await host.submit(conversation.id, { inputId: "web-2", transport: "web", text: "same", mode: "queue" });
+    await settle(host, bridge, conversation.id);
+    expect(fake.texts("thread-1").filter(text => text === "**You, on the web:**\nsame")).toHaveLength(1);
+    await bridge.sync(conversation.id);
+    expect(fake.texts("thread-1").filter(text => text === "**You, on the web:**\nsame")).toHaveLength(2);
+    expect((await host.discordLink(conversation.id))?.open).toEqual([]);
+  });
+
+  test("an inbound note is not posted into a thread that gained another member", async () => {
+    const { host, bridge, fake } = await setup();
+    const conversation = await start(host);
+    await bridge.attach(conversation.id);
+    fake.intruder = STRANGER;
+    await bridge.offer(inbound("thread-1", undefined, "no id"));
+    expect(fake.texts("thread-1")).toHaveLength(1);
+  });
+
   test("long answers are split under Discord's message limit", () => {
     const parts = chunks(`${"a".repeat(1500)}\n${"b".repeat(1500)}`);
     expect(parts).toEqual(["a".repeat(1500), "b".repeat(1500)]);
