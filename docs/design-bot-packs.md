@@ -236,6 +236,13 @@ verification) generalizes to a `BrainConsumer` — same skeleton, the
 `pipelineRunner` slot becomes the protocol bridge. `cant_do / not_now /
 wont_do` failure vocabulary maps 1:1 onto brain exit codes / error events.
 
+As built, a brain binds two durables per declared capability:
+
+- `local.{principal}.{stack}.brain.{capability}` on `BRAIN_TASKS`, which carries surface @-mentions.
+- `local.{principal}.{stack}.tasks.{capability}` on its own stream `BRAIN_BUS_{PRINCIPAL}_{STACK}_{CAPABILITY}`, which carries bus tasks addressed by capability, such as a Pulse routine step (cortex#3134).
+
+A `code-review.*` or `dev.*` capability gets only the first durable, because `CODE_REVIEW` and `DEV_IMPLEMENT` already own those `tasks.` subjects.
+
 ## 7. Hot-loading
 
 The process boundary makes this almost boring — no module-cache exorcism:

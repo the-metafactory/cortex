@@ -67,13 +67,18 @@ import { join } from "path";
 import {
   BrainConsumer,
   BRAIN_TASK_SUBJECT_FAMILY,
+  type BrainBinding,
   type BrainConsumerAgent,
 } from "../bus/brain-consumer";
 import {
   SubprocessDispatchStateRecorder,
   type DispatchStateRecorder,
 } from "../common/agents/dispatch-state-recorder";
-import { provisionReviewConsumer, type ProvisionJsm } from "../bus/jetstream/provision";
+import {
+  provisionReviewConsumer,
+  provisionReviewStream,
+  type ProvisionJsm,
+} from "../bus/jetstream/provision";
 import { makeExecBrainRunner } from "../brain/exec-brain-runner";
 import {
   DaemonBrainHost,
@@ -610,12 +615,12 @@ export function wireBrainConsumers(
       }
       opts.brainConsumers.push(consumer);
 
-      // Provision + bind one durable pull consumer per declared capability.
-      // Subject grammar: `local.{principal}.{stack}.tasks.{capability}` (the
-      // myelin task-envelope grammar the design + agent envelopes use — the
-      // capability is a literal trailing segment, no `>` wildcard since a brain
-      // task subject is exact per capability). Durable name is unique per
-      // (principal, agent, capability).
+      // Provision + bind two durable pull consumers per declared capability:
+      // `…brain.{capability}` on BRAIN_TASKS (surface @-mentions, B-3) and
+      // `…tasks.{capability}` on that capability's own stream (bus tasks, e.g.
+      // a Pulse routine step; cortex#3134). Each subject is exact per
+      // capability, no `>` wildcard. Durable names are unique per
+      // (principal, agent, capability, family).
       //
       // cortex#1033 §Architecture/§HonestOracle — provision ALL capability
       // durables UP-FRONT and AWAIT them BEFORE calling `consumer.start()`, so
@@ -626,15 +631,14 @@ export function wireBrainConsumers(
       // synchronous `resolve` callback, which returned the subscription params
       // immediately while provisioning was still in flight. `resolve` is now a
       // pure subject/durable resolver with no side effect.
-      // B-3 (cortex#1021): brain task subjects live on the `brain.` family /
-      // BRAIN_TASKS stream — NOT `tasks.`/CODE_REVIEW (where B-1 bound them,
-      // a stream that never carried non-code-review capabilities). The inbound
-      // dispatch publishes onto exactly this subject.
-      const brainCapabilities = consumerAgent.capabilities;
-      const brainDurableFor = (capability: string): string =>
-        `cortex-brain-consumer-${opts.reviewPrincipalId}-${agent.id}-${capability.replaceAll(".", "-")}`;
-      const brainPatternFor = (capability: string): string =>
-        `local.${opts.reviewPrincipalId}.${opts.stack}.${BRAIN_TASK_SUBJECT_FAMILY}.${capability}`;
+      const bindingsFor = (capability: string): BrainBinding[] =>
+        brainBindingsFor({
+          principal: opts.reviewPrincipalId,
+          stack: opts.stack,
+          agentId: agent.id,
+          capability,
+          brainTasksStream: opts.brainTasksStream,
+        });
 
       if (opts.brainJsm !== null) {
         // Hoisted to a local `const` — a narrowed PROPERTY access
@@ -646,22 +650,29 @@ export function wireBrainConsumers(
         // Independent durables — provision in one parallel wave (sage
         // cortex#1033 round 2); still awaited as a whole BEFORE start().
         await Promise.all(
-          brainCapabilities.map(async (capability) => {
-            const durable = brainDurableFor(capability);
+          consumerAgent.capabilities.flatMap(bindingsFor).map(async (binding) => {
             try {
+              if (binding.stream !== opts.brainTasksStream) {
+                await provisionReviewStream({
+                  ...(bootRetry !== undefined && { bootRetry }),
+                  jsm,
+                  name: binding.stream,
+                  subjects: [binding.pattern],
+                });
+              }
               await provisionReviewConsumer({
                 ...(bootRetry !== undefined && { bootRetry }),
                 jsm,
-                stream: opts.brainTasksStream,
-                durable,
-                filterSubject: brainPatternFor(capability),
+                stream: binding.stream,
+                durable: binding.durable,
+                filterSubject: binding.pattern,
                 maxDeliver: opts.reviewConsumerMaxDeliver,
               });
             } catch (provisionErr) {
               // Don't abort — let `consumer.start()` surface the bind failure
               // through its own dormant/skip path (mirrors the review path).
               process.stderr.write(
-                `cortex: provisionReviewConsumer (brain) failed for "${durable}": ` +
+                `cortex: provisionReviewConsumer (brain) failed for "${binding.durable}": ` +
                   `${provisionErr instanceof Error ? provisionErr.message : String(provisionErr)}\n`,
               );
             }
@@ -671,11 +682,7 @@ export function wireBrainConsumers(
 
       const started = await consumer.start({
         ...(bootRetry !== undefined && { bootRetry }),
-        resolve: (capability) => ({
-          pattern: brainPatternFor(capability),
-          stream: opts.brainTasksStream,
-          durable: brainDurableFor(capability),
-        }),
+        resolve: bindingsFor,
       });
 
       const capSummary =
@@ -708,4 +715,39 @@ export function wireBrainConsumers(
   };
 
   return { startForAgent };
+}
+
+/**
+ * Subject families whose `tasks.` subjects another stream already owns
+ * (CODE_REVIEW, DEV_IMPLEMENT). JetStream rejects overlapping streams, so a
+ * brain capability in one of them gets no bus-task binding of its own.
+ */
+const BUS_TASK_FAMILIES_OWNED_ELSEWHERE = new Set(["code-review", "dev"]);
+
+/**
+ * The pull bindings one exec-brain capability gets (cortex#3134): a
+ * `…brain.{capability}` durable on BRAIN_TASKS for surface @-mentions, and a
+ * `…tasks.{capability}` durable on a stream of its own for bus tasks, such as
+ * a Pulse routine step addressed by capability.
+ */
+export function brainBindingsFor(o: {
+  principal: string;
+  stack: string;
+  agentId: string;
+  capability: string;
+  brainTasksStream: string;
+}): BrainBinding[] {
+  const base = `local.${o.principal}.${o.stack}`;
+  const durable = `cortex-brain-consumer-${o.principal}-${o.agentId}-${o.capability.replaceAll(".", "-")}`;
+  const bindings: BrainBinding[] = [
+    { pattern: `${base}.${BRAIN_TASK_SUBJECT_FAMILY}.${o.capability}`, stream: o.brainTasksStream, durable },
+  ];
+  if (!BUS_TASK_FAMILIES_OWNED_ELSEWHERE.has(o.capability.split(".")[0] ?? "")) {
+    bindings.push({
+      pattern: `${base}.tasks.${o.capability}`,
+      stream: `BRAIN_BUS_${o.principal}_${o.stack}_${o.capability}`.replaceAll(/[^A-Za-z0-9]/g, "_").toUpperCase(),
+      durable: `${durable}-tasks`,
+    });
+  }
+  return bindings;
 }
