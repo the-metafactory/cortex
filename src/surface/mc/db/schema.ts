@@ -3,6 +3,7 @@ import { MAIL_RULES_SQL } from "../desk/mail-rules-schema";
 import { SWEEP_SQL } from "../desk/mail-sweep-schema";
 import { TRUST_SQL } from "../desk/mail-trust-schema";
 import { GRAPH_REPOSITORY_SQL } from "../desk/graph-repository-schema";
+import { GRAPH_WRITER_SQL } from "../desk/graph-writer-schema";
 import { DMARC_SQL } from "../desk/mail-dmarc-schema";
 import { ROUTINE_DISPLAY_SQL } from "../desk/routine-display";
 import { DIGEST_SQL } from "../desk/mail-digest-schema";
@@ -167,6 +168,7 @@ export const SCHEMA_SQL: string[] = [
   ...SWEEP_SQL,
   ...TRUST_SQL,
   ...GRAPH_REPOSITORY_SQL,
+  ...GRAPH_WRITER_SQL,
   ...MAIL_VECTORS_SQL,
   ...DMARC_SQL,
   ...ROUTINE_DISPLAY_SQL,

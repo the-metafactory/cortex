@@ -7,7 +7,7 @@ import { studioRequestId } from "../desk/conversation-ids";
 import { conversationSources } from "../desk/conversation-sources";
 import type { WriterResult } from "../desk/create";
 import type { FlowOptions } from "../desk/flow-conversation-writer";
-import { conversationWriterRig } from "./conversation-writer-rig";
+import { conversationWriterRig, type ConversationWriterReply as Reply } from "./conversation-writer-rig";
 
 const PULSE = ["pulse-bin", "--stack", "test"];
 const writerRig = conversationWriterRig("conversation-flow-", "ai.meta-factory.cortex.flow-writer-test");
@@ -47,8 +47,6 @@ function fakePulse() {
   };
   return { flows, calls, files, run, save: (argv: string[]) => save(argv.slice(PULSE.length)), answerNext: (reply: typeof next) => { next = reply; } };
 }
-
-interface Reply { ok: boolean; error: string; proposal: ProposalView; conversation: { id: string }; types: { type: string; status: string; reason?: string; fields: { name: string }[] }[] }
 
 async function rig(flows: FlowOptions | null = { pulse: PULSE }) {
   const db = writerRig.database();
