@@ -37,7 +37,7 @@ describe("mapping the journal to a build state", () => {
   it("is failed with the reason for a failed, parked or released-without-merge worker", () => {
     expect(statusFromJournal(journal(worker({ status: "failed", outcome: "tests failed after the worker" })))).toEqual({ state: "failed", reason: "tests failed after the worker" });
     expect(statusFromJournal(journal(worker({ status: "parked", outcome: "blocked: needs a decision" })))).toEqual({ state: "failed", reason: "blocked: needs a decision" });
-    expect(statusFromJournal(journal(worker({ status: "released", phase: "close", outcome: "closed outside ranger by someone" })))).toMatchObject({ state: "failed", reason: "closed outside ranger by someone" });
+    expect(statusFromJournal(journal(worker({ status: "released", phase: "close", outcome: "closed outside ranger by someone; receipt: https://example.test/1; PR #3163 closed" })))).toEqual({ state: "failed", reason: "closed outside ranger by someone; receipt: https://example.test/1; PR #3163 closed", pr: 3163 });
   });
 
   it("reads the newest worker when a node has run more than once", () => {
