@@ -163,10 +163,23 @@ export function loadConfig(
         `cfAccess.teamDomain must be a non-empty string when set in ${resolvedPath}`,
       );
     }
+    const hostnamesRaw = cfAccessRaw.hostnames;
+    if (
+      hostnamesRaw !== undefined &&
+      (!Array.isArray(hostnamesRaw) ||
+        hostnamesRaw.some((h) => typeof h !== "string" || h.trim() === ""))
+    ) {
+      throw new Error(
+        `cfAccess.hostnames must be a list of non-empty hostnames in ${resolvedPath}`,
+      );
+    }
     cfAccess = {
       aud: cfAccessRaw.aud,
       ...(typeof cfAccessRaw.teamDomain === "string"
         ? { teamDomain: cfAccessRaw.teamDomain }
+        : {}),
+      ...(Array.isArray(hostnamesRaw)
+        ? { hostnames: hostnamesRaw.map((h: string) => h.trim().toLowerCase()) }
         : {}),
     };
   }

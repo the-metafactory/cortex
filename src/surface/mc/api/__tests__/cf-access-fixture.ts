@@ -1,3 +1,5 @@
+import { base64UrlNoPad as b64url } from "../../../../common/nats/leaf-psk";
+
 export const TEST_KID = "test-kid";
 
 const RSA_PARAMS = {
@@ -11,12 +13,6 @@ export interface CfAccessSigningKeys {
   signKey: CryptoKey;
   wrongKey: CryptoKey;
   jwk: JsonWebKey & { kid: string };
-}
-
-function b64url(bytes: Uint8Array): string {
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function b64urlStr(s: string): string {

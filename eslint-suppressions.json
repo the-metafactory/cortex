@@ -2638,7 +2638,7 @@
   },
   "src/common/nats/leaf-psk.ts": {
     "cortex/no-comments": {
-      "count": 3
+      "count": 2
     }
   },
   "src/common/nats/leaf-remote-renderer.ts": {
@@ -4621,7 +4621,7 @@
   },
   "src/surface/mc/api/__tests__/networks-admission.test.ts": {
     "cortex/no-comments": {
-      "count": 11
+      "count": 7
     }
   },
   "src/surface/mc/api/__tests__/networks-authorize.test.ts": {
