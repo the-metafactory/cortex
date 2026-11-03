@@ -61,13 +61,13 @@ describe("Studio response writer", () => {
     } finally { r.repo.clean(); }
   });
 
-  test("lists studio-response as ready and studio-close as blocked by its own build, without studio-outcome", async () => {
+  test("lists studio-response and studio-close as ready, without studio-outcome", async () => {
     const r = await rig();
     const bare = await rig({ studio: false });
     try {
       expect(await r.status("studio-outcome")).toBeUndefined();
       expect(await r.status("studio-response")).toBe("ready");
-      expect(await r.status("studio-close")).toBe("blocked:3139");
+      expect(await r.status("studio-close")).toBe("ready");
       expect(await bare.status("studio-response")).toBe("blocked:3138");
     } finally {
       r.repo.clean();

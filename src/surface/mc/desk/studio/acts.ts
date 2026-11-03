@@ -196,7 +196,7 @@ function close(ctx: Ctx, act: Extract<StudioAct, { act: "close" }>, { thread, te
     (t) => setFront(t, "reviewOn", decided ? act.reviewOn : undefined),
     (t) => setFront(t, "thinkTonight", thread.thinkTonight ? false : undefined),
     (t) => setSection(t, "outcome", "Outcome", act.text),
-    (t) => appendLog(t, ctx.today, `Closed as ${act.outcome}`),
+    (t) => appendLog(t, ctx.today, logged(ctx, `Closed as ${act.outcome}`)),
   );
   const message = decided ? `Closed as decided. It is in the decision journal, with a review on ${act.reviewOn ?? ""}.` : `Closed as ${act.outcome}.`;
   return plan([edited(thread.path, out)], `Close ${thread.slug} as ${act.outcome}`, message);

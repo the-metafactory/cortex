@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { answering, scratchHosts } from "./fixtures/scratch";
 import { fixtureOwner, type FixtureOwner } from "./fixtures/owner";
-import { CREATABLE_TYPES, OWNER_BLOCKERS, type CreatableType } from "../catalog";
-import { ConversationCreation, capabilities, unavailableHere, type Actor, type CapabilityStatus, type ProposalView } from "../creation";
+import { CREATABLE_TYPES, CREATION_CATALOG, OWNER_BLOCKERS, type CreatableType } from "../catalog";
+import { ConversationCreation, capabilities, ProposeSchema, unavailableHere, type Actor, type CapabilityStatus, type ProposalView } from "../creation";
 import { ConversationError, openConversationHost, type ConversationHost } from "../host";
 import { CREATION_KIND, GRANT_KIND, type OwnerWriters, type Policy } from "../types";
 
@@ -78,6 +78,13 @@ describe("creation catalog", () => {
     expect(byType.get("studio-note")).toBe("ready");
     expect(byType.get("flow")).toBe("ready");
     expect(byType.get("studio-thread")).toBe("blocked:3141");
+  });
+
+  test("every catalog field name is a valid proposal key, and keys that are not lower camel case are refused", () => {
+    const names = CREATABLE_TYPES.flatMap(type => CREATION_CATALOG[type].fields.map(f => f.name));
+    expect(names).toContain("reviewOn");
+    for (const name of names) expect(ProposeSchema.safeParse({ proposalId: randomUUID(), fields: { [name]: "x" } }).success).toBe(true);
+    for (const bad of ["ReviewOn", "review_on", "review-on", "1st", ""]) expect(ProposeSchema.safeParse({ proposalId: randomUUID(), fields: { [bad]: "x" } }).success).toBe(false);
   });
 
   test("the blocker map names a node for exactly the creatable types", () => {
