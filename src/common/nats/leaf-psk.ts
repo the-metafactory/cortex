@@ -15,6 +15,8 @@
  * dial URL userinfo or the hub config). It is never logged.
  */
 
+import { base64UrlNoPad } from "../encoding/base64url";
+
 /** Length of a minted leaf PSK in raw bytes (256 bits of entropy). */
 const PSK_BYTES = 32;
 
@@ -29,13 +31,6 @@ export function mintLeafPsk(): string {
   const bytes = new Uint8Array(PSK_BYTES);
   crypto.getRandomValues(bytes);
   return base64UrlNoPad(bytes);
-}
-
-/** Standard base64 → base64url, padding stripped. */
-function base64UrlNoPad(bytes: Uint8Array): string {
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 /**

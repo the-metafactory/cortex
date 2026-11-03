@@ -15,7 +15,7 @@
  * the CK-6a attention lifecycle route rides the same gate.
  */
 
-import { describe, it, expect, afterEach } from "bun:test";
+import { describe, it, expect, afterEach, beforeAll, afterAll, beforeEach } from "bun:test";
 import net from "node:net";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -26,9 +26,11 @@ import { initDatabase } from "../db/init";
 import { DEFAULT_CONFIG } from "../config";
 import { ProcessManager } from "../session/process-manager";
 import type { SpawnFn } from "../session/endpoint-resolver";
-import type { Config } from "../types";
+import type { CfAccessConfig, Config } from "../types";
 import { upsertAttentionItem } from "../db/attention";
 import type { Database } from "bun:sqlite";
+import { cfAccessCertsUrl, cfAccessIssuer, resetCfAccessJwksCache } from "../../../common/auth/cf-access-jwt";
+import { createCfAccessSigningKeys, jwksFetch, mintCfAccessJwt, type CfAccessSigningKeys } from "../api/__tests__/cf-access-fixture";
 
 const PRINCIPAL = "principal@example.com";
 const AUTH_HEADER = { "Cf-Access-Authenticated-User-Email": PRINCIPAL };
@@ -45,7 +47,7 @@ interface Ctx {
   tmpDir: string;
 }
 
-function start(principals?: string[], localPrincipal?: string): Ctx {
+function start(principals?: string[], localPrincipal?: string, cfAccess?: CfAccessConfig): Ctx {
   const tmpDir = join(tmpdir(), `mc-fnd6-${Date.now()}-${Math.random()}`);
   const db = initDatabase(join(tmpDir, "test.db"));
   const pm = new ProcessManager();
@@ -60,6 +62,7 @@ function start(principals?: string[], localPrincipal?: string): Ctx {
           },
         }
       : {}),
+    ...(cfAccess ? { cfAccess } : {}),
   };
   const ctx = startServer(config, db, { processManager: pm, spawn: fakeCatSpawn });
   const port = ctx.server.port;
@@ -87,13 +90,15 @@ function rawHttp(
     host: string;
     origin?: string;
     email?: string;
+    jwt?: string;
     body?: string;
   },
 ): Promise<number> {
-  const { method = "POST", path, host, origin, email, body = "" } = opts;
+  const { method = "POST", path, host, origin, email, jwt, body = "" } = opts;
   const lines = [`${method} ${path} HTTP/1.1`, `Host: ${host}`];
   if (origin !== undefined) lines.push(`Origin: ${origin}`);
   if (email !== undefined) lines.push(`Cf-Access-Authenticated-User-Email: ${email}`);
+  if (jwt !== undefined) lines.push(`Cf-Access-Jwt-Assertion: ${jwt}`);
   lines.push("Content-Type: application/json");
   lines.push(`Content-Length: ${Buffer.byteLength(body, "utf8")}`);
   lines.push("Connection: close");
@@ -395,5 +400,89 @@ describe("FND-6 — CK-6a attention lifecycle rides the same gate", () => {
       email: PRINCIPAL,
     });
     expect(status).toBe(403);
+  });
+});
+
+describe("cfAccess.hostnames — a request under an Access hostname must carry a verified Access JWT", () => {
+  const TEAM = "test-team";
+  const AUD = "test-access-aud";
+  const ACCESS_HOST = "desk.example.com";
+  const ACCESS_ORIGIN = `https://${ACCESS_HOST}`;
+  const CF_ACCESS: CfAccessConfig = { aud: AUD, teamDomain: TEAM, hostnames: [ACCESS_HOST] };
+  const realFetch = globalThis.fetch;
+  let keys: CfAccessSigningKeys;
+  let c: Ctx;
+
+  function claims(over: Record<string, unknown> = {}): Record<string, unknown> {
+    const now = Math.floor(Date.now() / 1000);
+    return { aud: AUD, iss: cfAccessIssuer(TEAM), email: PRINCIPAL, iat: now - 30, exp: now + 3600, ...over };
+  }
+
+  beforeAll(async () => {
+    keys = await createCfAccessSigningKeys();
+    const serveJwks = jwksFetch(keys.jwk);
+    const urlOf = (input: RequestInfo | URL): string =>
+      typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+      urlOf(input) === cfAccessCertsUrl(TEAM) ? serveJwks(input, init) : realFetch(input, init)) as typeof fetch;
+  });
+  afterAll(() => {
+    globalThis.fetch = realFetch;
+  });
+  beforeEach(() => {
+    resetCfAccessJwksCache();
+    c = start([PRINCIPAL], PRINCIPAL, CF_ACCESS);
+  });
+  afterEach(() => teardown(c));
+
+  it("ALLOWS a mutation with a verified JWT for a listed principal — 201", async () => {
+    const jwt = await mintCfAccessJwt(keys.signKey, claims());
+    const status = await rawHttp(c.port, { path: "/api/sessions", host: ACCESS_HOST, origin: ACCESS_ORIGIN, jwt, body: SESSION_BODY });
+    expect(status).toBe(201);
+  });
+
+  it("ALLOWS a read with a verified JWT — 200", async () => {
+    const jwt = await mintCfAccessJwt(keys.signKey, claims());
+    expect(await rawHttp(c.port, { method: "GET", path: "/health", host: ACCESS_HOST, jwt })).toBe(200);
+  });
+
+  it("REJECTS a read without a JWT — 401, the edge is not the only gate", async () => {
+    expect(await rawHttp(c.port, { method: "GET", path: "/health", host: ACCESS_HOST })).toBe(401);
+  });
+
+  it("REJECTS a self-asserted email header without a JWT — 401, no loopback trust under an Access hostname", async () => {
+    const status = await rawHttp(c.port, { path: "/api/sessions", host: ACCESS_HOST, origin: ACCESS_ORIGIN, email: PRINCIPAL, body: SESSION_BODY });
+    expect(status).toBe(401);
+    expect(c.pm.size).toBe(0);
+  });
+
+  it("REJECTS a JWT signed by a key outside the team JWKS — 401", async () => {
+    const jwt = await mintCfAccessJwt(keys.wrongKey, claims());
+    expect(await rawHttp(c.port, { method: "GET", path: "/health", host: ACCESS_HOST, jwt })).toBe(401);
+  });
+
+  it("REJECTS a JWT minted for another Access application — 401", async () => {
+    const jwt = await mintCfAccessJwt(keys.signKey, claims({ aud: "another-app" }));
+    expect(await rawHttp(c.port, { method: "GET", path: "/health", host: ACCESS_HOST, jwt })).toBe(401);
+  });
+
+  it("REJECTS a verified JWT for a principal outside mc.governance.principals — 403", async () => {
+    const jwt = await mintCfAccessJwt(keys.signKey, claims({ email: "someone-else@example.com" }));
+    expect(await rawHttp(c.port, { method: "GET", path: "/health", host: ACCESS_HOST, jwt })).toBe(403);
+  });
+
+  it("keeps result files loopback-only even with a verified JWT — 404", async () => {
+    const jwt = await mintCfAccessJwt(keys.signKey, claims());
+    expect(await rawHttp(c.port, { method: "GET", path: "/results/anything", host: ACCESS_HOST, jwt })).toBe(404);
+  });
+
+  it("leaves the loopback path unchanged — headerless same-origin mutation still 201", async () => {
+    const status = await rawHttp(c.port, { path: "/api/sessions", host: `127.0.0.1:${c.port}`, origin: `http://127.0.0.1:${c.port}`, body: SESSION_BODY });
+    expect(status).toBe(201);
+  });
+
+  it("still REJECTS a foreign Host — 403", async () => {
+    const jwt = await mintCfAccessJwt(keys.signKey, claims());
+    expect(await rawHttp(c.port, { path: "/api/sessions", host: "evil.attacker.example", jwt, body: SESSION_BODY })).toBe(403);
   });
 });

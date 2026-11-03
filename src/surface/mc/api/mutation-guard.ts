@@ -62,11 +62,38 @@ const WILDCARD_HOSTS: ReadonlySet<string> = new Set(["0.0.0.0", "::", "*", ""]);
  * the loopback interfaces plus the configured bind hostname (when it is a real
  * name, not a wildcard). Lowercased for case-insensitive comparison.
  */
-export function buildAllowedHostnames(configHostname: string): Set<string> {
+export function buildAllowedHostnames(
+  configHostname: string,
+  accessHostnames: Iterable<string> = [],
+): Set<string> {
   const hosts = new Set<string>(["127.0.0.1", "::1", "localhost"]);
   const h = configHostname.trim().toLowerCase();
   if (!WILDCARD_HOSTS.has(h)) hosts.add(h);
+  for (const accessHost of accessHostnames) hosts.add(accessHost);
   return hosts;
+}
+
+export function buildAccessHostnames(
+  hostnames: readonly string[] = [],
+): ReadonlySet<string> {
+  return new Set(hostnames);
+}
+
+export function arrivesViaAccessHostname(
+  req: Request,
+  accessHostnames: ReadonlySet<string>,
+): boolean {
+  const hostHeader = req.headers.get("host");
+  if (hostHeader === null) return false;
+  const parsed = parseHostHeader(hostHeader);
+  return parsed !== null && accessHostnames.has(parsed.host);
+}
+
+export function guardForRequest(
+  base: MutationGuardContext,
+  viaAccessHostname: boolean,
+): MutationGuardContext {
+  return viaAccessHostname ? { ...base, isLoopback: false } : base;
 }
 
 /**

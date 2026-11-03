@@ -7,7 +7,10 @@
 
 import { describe, it, expect } from "bun:test";
 import {
+  arrivesViaAccessHostname,
+  buildAccessHostnames,
   buildAllowedHostnames,
+  guardForRequest,
   parseHostHeader,
   isHostAllowed,
   isOriginAllowed,
@@ -188,5 +191,29 @@ describe("isRebindExempt", () => {
     expect(isRebindExempt("/api/github/webhook")).toBe(true);
     expect(isRebindExempt("/api/sessions")).toBe(false);
     expect(isRebindExempt("/api/networks/admission-decision")).toBe(false);
+  });
+});
+
+describe("Access hostnames", () => {
+  const access = buildAccessHostnames(["desk.example.com"]);
+  const viaHost = (host: string): Request =>
+    new Request("http://127.0.0.1:8767/api/x", { headers: { host } });
+
+  it("admits an Access hostname in the Host/Origin allowlist", () => {
+    const hosts = buildAllowedHostnames("127.0.0.1", access);
+    expect(hosts.has("desk.example.com")).toBe(true);
+    expect(isHostAllowed("desk.example.com", ctx({ allowedHostnames: hosts }))).toBe(true);
+    expect(isOriginAllowed("https://desk.example.com", ctx({ allowedHostnames: hosts }))).toBe(true);
+  });
+
+  it("recognizes a request under an Access hostname, case-insensitively", () => {
+    expect(arrivesViaAccessHostname(viaHost("DESK.example.com"), access)).toBe(true);
+    expect(arrivesViaAccessHostname(viaHost("127.0.0.1:8767"), access)).toBe(false);
+    expect(arrivesViaAccessHostname(viaHost("evil.example.com"), access)).toBe(false);
+  });
+
+  it("treats a request under an Access hostname as off-loopback", () => {
+    expect(guardForRequest(ctx(), true).isLoopback).toBe(false);
+    expect(guardForRequest(ctx(), false).isLoopback).toBe(true);
   });
 });

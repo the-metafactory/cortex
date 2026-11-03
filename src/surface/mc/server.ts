@@ -123,9 +123,12 @@ import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil"
 import { handleResult, type ResultRouteOptions } from "./results";
 import {
   MUTATING_METHODS,
+  buildAccessHostnames,
   buildAllowedHostnames,
   checkRebindGuard,
   enforceMutationAuth,
+  guardForRequest,
+  arrivesViaAccessHostname,
   isIdentityGatedMutation,
   isRebindExempt,
   type MutationGuardContext,
@@ -238,9 +241,10 @@ export function startServer(
         })
     : undefined;
 
+  const accessHostnames = buildAccessHostnames(cfAccess?.hostnames);
   const guardBase: Omit<MutationGuardContext, "listenPort"> = {
     isLoopback,
-    allowedHostnames: buildAllowedHostnames(config.hostname),
+    allowedHostnames: buildAllowedHostnames(config.hostname, accessHostnames),
     principals: new Set(
       (config.governance?.principals ?? []).map((p) => p.trim().toLowerCase()),
     ),
@@ -281,11 +285,20 @@ export function startServer(
 
     async fetch(req, server) {
       const url = new URL(req.url);
+      const viaAccessHostname = arrivesViaAccessHostname(req, accessHostnames);
+      const guard = guardForRequest(
+        { ...guardBase, listenPort: server.port ?? config.port },
+        viaAccessHostname,
+      );
+      if (viaAccessHostname) {
+        const verified = await enforceMutationAuth(req, guard);
+        if (verified instanceof Response) return verified;
+      }
 
       if (url.pathname.startsWith("/results/") || url.pathname.startsWith("/proposals/")) {
-        if (!isLoopback) return new Response("Not Found", { status: 404 });
+        if (!guard.isLoopback) return new Response("Not Found", { status: 404 });
         if (req.method !== "GET") return methodNotAllowed(["GET"]);
-        const denial = checkRebindGuard(req, { ...guardBase, listenPort: server.port ?? config.port });
+        const denial = checkRebindGuard(req, guard);
         if (denial) return denial;
         const directory = url.pathname.startsWith("/proposals/") ? "proposals" : "outputs";
         const prefix = directory === "proposals" ? "/proposals/" : "/results/";
@@ -330,10 +343,6 @@ export function startServer(
         const authorizer = options.authorizer?.() ?? null;
         const handoffView = options.handoffView?.() ?? null;
         const doctorView = options.doctorView?.() ?? null;
-        const guard: MutationGuardContext = {
-          ...guardBase,
-          listenPort: server.port ?? config.port,
-        };
         return handleApi(
           req,
           url,

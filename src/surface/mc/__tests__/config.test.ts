@@ -164,6 +164,29 @@ describe("mission-control config", () => {
     loadConfig(configPath, { onWarning: (m) => warnings.push(m) });
     expect(warnings).toHaveLength(0);
   });
+  it("parses cfAccess.hostnames, trimmed and lowercased", () => {
+    const configPath = join(tmpDir, "mc.yaml");
+    writeFileSync(configPath, "cfAccess:\n  aud: test-aud\n  hostnames:\n    - ' Desk.Example.COM '\n");
+    expect(loadConfig(configPath).cfAccess?.hostnames).toEqual(["desk.example.com"]);
+  });
+
+  it("leaves cfAccess.hostnames unset when the key is absent", () => {
+    const configPath = join(tmpDir, "mc.yaml");
+    writeFileSync(configPath, "cfAccess:\n  aud: test-aud\n");
+    expect(loadConfig(configPath).cfAccess?.hostnames).toBeUndefined();
+  });
+
+  it("throws when cfAccess.hostnames is not a list", () => {
+    const configPath = join(tmpDir, "mc.yaml");
+    writeFileSync(configPath, "cfAccess:\n  aud: test-aud\n  hostnames: desk.example.com\n");
+    expect(() => loadConfig(configPath)).toThrow(/cfAccess.hostnames must be a list/);
+  });
+
+  it("throws when cfAccess.hostnames holds an empty entry", () => {
+    const configPath = join(tmpDir, "mc.yaml");
+    writeFileSync(configPath, "cfAccess:\n  aud: test-aud\n  hostnames:\n    - ''\n");
+    expect(() => loadConfig(configPath)).toThrow(/cfAccess.hostnames must be a list/);
+  });
 });
 
 describe("detectLocalPrincipalDrift (FND-6 posture A, pure)", () => {
@@ -209,4 +232,5 @@ describe("detectLocalPrincipalDrift (FND-6 posture A, pure)", () => {
       }),
     ).toBeNull();
   });
+
 });

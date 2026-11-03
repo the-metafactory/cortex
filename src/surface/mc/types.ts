@@ -633,6 +633,7 @@ export interface CfAccessConfig {
   aud: string;
   /** CF Access team slug → issuer + JWKS URL. Defaults to "metafactory". */
   teamDomain?: string;
+  hostnames?: readonly string[];
 }
 
 export interface WsConfig {
