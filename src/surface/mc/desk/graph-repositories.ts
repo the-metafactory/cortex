@@ -1,4 +1,4 @@
-// glossary-ignore: run
+// glossary-ignore: run, host
 import type { Database } from "bun:sqlite";
 import { CommandTimeout, runCommand, type CommandResult } from "./spawn";
 
@@ -40,12 +40,16 @@ export const gitlabRef = (host: string, path: string): string => `${GITLAB_REF_P
 
 export const isGithubRef = (ref: string): boolean => ref.startsWith(GITHUB_REF_PREFIX) && FULL_NAME.test(ref.slice(GITHUB_REF_PREFIX.length));
 
-export function isGitlabRef(ref: string): boolean {
-  if (!ref.startsWith(GITLAB_REF_PREFIX)) return false;
+function parseGitlabRef(ref: string): { host: string; path: string } | null {
+  if (!ref.startsWith(GITLAB_REF_PREFIX)) return null;
   const rest = ref.slice(GITLAB_REF_PREFIX.length);
   const slash = rest.indexOf("/");
-  return slash > 0 && GITLAB_HOST.test(rest.slice(0, slash)) && GITLAB_PATH.test(rest.slice(slash + 1));
+  const host = rest.slice(0, slash);
+  const path = rest.slice(slash + 1);
+  return slash > 0 && GITLAB_HOST.test(host) && GITLAB_PATH.test(path) ? { host, path } : null;
 }
+
+export const isGitlabRef = (ref: string): boolean => parseGitlabRef(ref) !== null;
 
 /** True only for a ref that matches a stored row exactly: a string comparison, no normalisation. An empty table allows nothing. */
 export function isGraphRepositoryAllowed(db: Database, ref: string): boolean {
@@ -63,11 +67,7 @@ function describeRef(ref: string): Pick<GraphRepository, "label" | "forge"> {
   const colon = ref.indexOf(":");
   const forge = colon > 0 ? ref.slice(0, colon) : "unknown";
   if (ref.startsWith(GITHUB_REF_PREFIX)) return { forge, label: ref.slice(GITHUB_REF_PREFIX.length) };
-  if (isGitlabRef(ref)) {
-    const rest = ref.slice(GITLAB_REF_PREFIX.length);
-    return { forge, label: rest.slice(rest.indexOf("/") + 1) };
-  }
-  return { forge, label: ref };
+  return { forge, label: parseGitlabRef(ref)?.path ?? ref };
 }
 
 const failureReason = (tool: string, err: unknown): string => (err instanceof CommandTimeout ? `${tool} ${err.message}` : err instanceof Error ? err.message : String(err));
