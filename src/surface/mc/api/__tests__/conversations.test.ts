@@ -175,13 +175,13 @@ describe("conversation record across process restarts", () => {
 });
 
 describe("conversation Discord routes", () => {
-  const principal = "285700000000000001";
+  const principal = "111111111111111111";
   async function withDiscord(fake: FakeThreads | null) {
     const dir = await scratch();
     const status = await openConversationHost({ dir, stack: "api", label: LABEL, expectedLabel: LABEL, lanes: { cloud: { provider: "test", model: "m" }, local: { provider: "test", model: "l" } }, turns: answering(() => "ok") });
     statuses.push(status);
     if (status.state !== "ready") throw new Error(status.reason);
-    const bridge = fake ? new DiscordConversations({ host: status.host, adapter: () => fake, config: { channelId: "1566000000000000001", guildId: "1460000000000000001", webUrl: "http://127.0.0.1:8767" }, principalId: principal, log: () => undefined }) : null;
+    const bridge = fake ? new DiscordConversations({ host: status.host, adapter: () => fake, config: { channelId: "3333333333333333333", guildId: "2222222222222222222", webUrl: "http://127.0.0.1:8767" }, principalId: principal, log: () => undefined }) : null;
     const access = Object.assign(() => status, { discord: () => bridge });
     const send = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>
       handleConversations(new Request(`http://127.0.0.1:8767${path}`, { method, headers: { host: "127.0.0.1:8767", "content-type": "application/json", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), new URL(`http://127.0.0.1:8767${path}`), guard(), access);
@@ -200,10 +200,10 @@ describe("conversation Discord routes", () => {
     expect((await send("POST", `/api/conversations/${conversation.id}/discord`, { retry: "yes" })).status).toBe(400);
     const attached = await send("POST", `/api/conversations/${conversation.id}/discord`);
     expect(attached.status).toBe(200);
-    expect(await attached.json()).toMatchObject({ conversation: { discord: { threadId: "thread-2" } }, discord: { available: true, url: "https://discord.com/channels/1460000000000000001/thread-2" } });
+    expect(await attached.json()).toMatchObject({ conversation: { discord: { threadId: "thread-2" } }, discord: { available: true, url: "https://discord.com/channels/2222222222222222222/thread-2" } });
     const detail = await (await send("GET", `/api/conversations/${conversation.id}`)).json() as { conversation: { discord?: { threadId: string } }; discord: { url?: string } };
     expect(detail.conversation.discord?.threadId).toBe("thread-2");
-    expect(detail.discord.url).toBe("https://discord.com/channels/1460000000000000001/thread-2");
+    expect(detail.discord.url).toBe("https://discord.com/channels/2222222222222222222/thread-2");
     const local = await (await send("POST", "/api/conversations", { ...NEW, policy: "local" })).json() as { conversation: { id: string } };
     expect((await send("POST", `/api/conversations/${local.conversation.id}/discord`)).status).toBe(403);
     expect(fake.created).toBe(2);

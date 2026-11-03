@@ -7,10 +7,10 @@ import { ConversationError, openConversationHost, type ConversationHost } from "
 import type { LinkResolvers, Policy } from "../types";
 
 const LABEL = "ai.meta-factory.cortex.test";
-const PRINCIPAL = "285700000000000001";
-const STRANGER = "285700000000000099";
-const GUILD = "1460000000000000001";
-const CHANNEL = "1566000000000000001";
+const PRINCIPAL = "111111111111111111";
+const STRANGER = "999999999999999999";
+const GUILD = "2222222222222222222";
+const CHANNEL = "3333333333333333333";
 const config = { channelId: CHANNEL, guildId: GUILD, webUrl: "http://127.0.0.1:8767" };
 const { dirs, hosts } = scratchHosts("conversations-discord-");
 
@@ -107,14 +107,14 @@ describe("conversation Discord threads", () => {
     await host.submit(conversation.id, { inputId: "web-1", transport: "web", text: "first from the web", mode: "queue" });
     await host.waitForIdle(conversation.id);
     await bridge.attach(conversation.id);
-    expect(await bridge.offer(inbound("thread-1", "1567000000000000001", "then from Discord"))).toBe(true);
+    expect(await bridge.offer(inbound("thread-1", "discord-msg-1", "then from Discord"))).toBe(true);
     await settle(host, bridge, conversation.id);
-    expect(await bridge.offer(inbound("thread-1", "1567000000000000001", "then from Discord"))).toBe(true);
+    expect(await bridge.offer(inbound("thread-1", "discord-msg-1", "then from Discord"))).toBe(true);
     await host.submit(conversation.id, { inputId: "web-2", transport: "web", text: "back on the web", mode: "queue" });
     await settle(host, bridge, conversation.id);
     expect(prompts.filter(prompt => prompt.includes("then from Discord"))).toHaveLength(1);
     const inputs = (await host.entriesAfter(conversation.id, null)).filter(entry => entry.kind === "cortex.input").map(entry => entry.data as { inputId: string; transport: string });
-    expect(inputs.map(input => [input.inputId, input.transport])).toEqual([["web-1", "web"], ["1567000000000000001", "discord"], ["web-2", "web"]]);
+    expect(inputs.map(input => [input.inputId, input.transport])).toEqual([["web-1", "web"], ["discord-msg-1", "discord"], ["web-2", "web"]]);
     const texts = fake.texts("thread-1");
     expect(texts.slice(1)).toEqual(["answer to then from Discord", "**You, on the web:**\nback on the web", "answer to back on the web"]);
     expect(texts.join("\n")).not.toContain("first from the web");
@@ -126,10 +126,10 @@ describe("conversation Discord threads", () => {
     const { host, bridge, fake, prompts, lines } = await setup();
     const conversation = await start(host);
     await bridge.attach(conversation.id);
-    expect(await bridge.offer(inbound("thread-1", "1567000000000000002", "let me in", STRANGER))).toBe(true);
-    expect(await bridge.offer(inbound("thread-1", "1567000000000000003", "spoofed", PRINCIPAL, { guildId: "999" }))).toBe(true);
+    expect(await bridge.offer(inbound("thread-1", "discord-msg-2", "let me in", STRANGER))).toBe(true);
+    expect(await bridge.offer(inbound("thread-1", "discord-msg-3", "spoofed", PRINCIPAL, { guildId: "999" }))).toBe(true);
     expect(await bridge.offer(inbound("thread-1", undefined, "no id"))).toBe(true);
-    expect(await bridge.offer(inbound("thread-9", "1567000000000000004", "not a conversation thread"))).toBe(false);
+    expect(await bridge.offer(inbound("thread-9", "discord-msg-4", "not a conversation thread"))).toBe(false);
     await host.waitForIdle(conversation.id);
     expect(prompts).toHaveLength(0);
     expect(lines.filter(line => line.includes("not this stack's verified principal"))).toHaveLength(2);
@@ -142,8 +142,8 @@ describe("conversation Discord threads", () => {
     const conversation = await start(host);
     await bridge.attach(conversation.id);
     const file = (url: string) => ({ attachments: [{ url, filename: "notes.txt", contentType: "text/plain", size: 5 }] });
-    await bridge.offer(inbound("thread-1", "1567000000000000005", "see file", PRINCIPAL, file("https://cdn.discordapp.com/attachments/1/2/notes.txt")));
-    await bridge.offer(inbound("thread-1", "1567000000000000006", "see this", PRINCIPAL, file("https://evil.example/notes.txt")));
+    await bridge.offer(inbound("thread-1", "discord-msg-5", "see file", PRINCIPAL, file("https://cdn.discordapp.com/attachments/1/2/notes.txt")));
+    await bridge.offer(inbound("thread-1", "discord-msg-6", "see this", PRINCIPAL, file("https://evil.example/notes.txt")));
     await settle(host, bridge, conversation.id);
     expect(fetched).toEqual(["https://cdn.discordapp.com/attachments/1/2/notes.txt"]);
     expect(prompts).toHaveLength(1);
@@ -191,7 +191,7 @@ describe("conversation Discord threads", () => {
     await settle(host, bridge, conversation.id);
     const before = fake.texts("thread-1").length;
     policy = "local";
-    await bridge.offer(inbound("thread-1", "1567000000000000007", "secret plan"));
+    await bridge.offer(inbound("thread-1", "discord-msg-7", "secret plan"));
     await settle(host, bridge, conversation.id);
     await host.submit(conversation.id, { inputId: "web-2", transport: "web", text: "more secrets", mode: "queue" });
     await settle(host, bridge, conversation.id);
