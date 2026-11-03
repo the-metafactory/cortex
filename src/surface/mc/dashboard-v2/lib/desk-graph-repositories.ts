@@ -1,9 +1,9 @@
-import type { GraphRepository, GraphRepositoryListing } from "../../desk/graph-repositories";
+import type { GitlabListing, GraphRepository, GraphRepositoryListing } from "../../desk/graph-repositories";
 import { GRAPH_REPOSITORIES_PATH } from "../../desk/graph-repository-schema";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
-export type GraphRepositoriesResult = { ok: true; repositories: GraphRepository[]; listing: GraphRepositoryListing } | { ok: false; text: string };
+export type GraphRepositoriesResult = { ok: true; repositories: GraphRepository[]; listing: GraphRepositoryListing; gitlab: GitlabListing } | { ok: false; text: string };
 export type GraphRepositoryChange = { ok: true } | { ok: false; text: string };
 
 const isRepository = (v: unknown): v is GraphRepository => {
@@ -21,6 +21,12 @@ async function send(path: string, init: RequestInit, fetchImpl: FetchLike): Prom
   }
 }
 
+const readGitlab = (v: unknown): GitlabListing => {
+  const g = (typeof v === "object" && v !== null ? v : {}) as Record<string, unknown>;
+  if (g.ok === true && typeof g.host === "string") return { ok: true, host: g.host };
+  return { ok: false, kind: g.kind === "several-hosts" ? "several-hosts" : "unavailable", reason: typeof g.reason === "string" ? g.reason : "" };
+};
+
 const refusal = (res: Response, body: Record<string, unknown> | null): string => (typeof body?.error === "string" && body.error ? body.error : `Mission Control answered HTTP ${res.status}.`);
 
 export async function loadGraphRepositories(fetchImpl: FetchLike = fetch): Promise<GraphRepositoriesResult> {
@@ -33,6 +39,7 @@ export async function loadGraphRepositories(fetchImpl: FetchLike = fetch): Promi
     ok: true,
     repositories: body.repositories.filter(isRepository),
     listing: listing?.ok === true ? { ok: true } : { ok: false, reason: typeof listing?.reason === "string" ? listing.reason : "" },
+    gitlab: readGitlab(body.gitlab),
   };
 }
 
