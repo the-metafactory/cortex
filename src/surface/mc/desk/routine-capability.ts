@@ -8,7 +8,7 @@ import { readRoutineProposal, recordDraftNode, routineConfigHash } from "./routi
 
 const NOT_SET_UP = "Building capabilities is not set up on this stack.";
 const NO_DRAFT = "This routine draft is no longer available. Ask for the routine again.";
-const RETRY_IS_SAFE = "Retrying is safe: each capability is filed at most once.";
+const CHECK_BEFORE_RETRY = "The writer may have filed it anyway: check the map for a node marked with this capability before retrying.";
 
 const failed = (error: string): CapabilityBuildResult => ({ ok: false, message: error, built: [], failed: [] });
 const ledgerKey = (requestId: string, capability: string): string => `capability-build:${requestId}:${capability}`;
@@ -18,13 +18,13 @@ async function fileCapability(options: RoutineOptions, writer: string[], input: 
   try {
     result = await runRoutineCommand(run, writer, options.timeoutSeconds * 1000, JSON.stringify(input));
   } catch (error) {
-    return { ok: false, error: `the writer did not finish: ${error instanceof Error ? error.message : String(error)}. ${RETRY_IS_SAFE}` };
+    return { ok: false, error: `the writer did not finish: ${error instanceof Error ? error.message : String(error)}. ${CHECK_BEFORE_RETRY}` };
   }
   if (result.code !== 0) return { ok: false, error: oneLine(result.stderr || result.stdout, `the writer exited with code ${result.code}.`) };
   try {
     return { ok: true, node: CapabilityNodeSchema.parse(JSON.parse(result.stdout)) };
   } catch {
-    return { ok: false, error: `the writer answered in a form the Desk cannot read. ${RETRY_IS_SAFE}` };
+    return { ok: false, error: `the writer answered in a form the Desk cannot read. ${CHECK_BEFORE_RETRY}` };
   }
 }
 

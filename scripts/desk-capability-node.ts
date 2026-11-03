@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 import { CAPABILITY_MARKER_LABEL, CapabilityStepSchema, FILEABLE_CAPABILITY, capabilityMarker, type CapabilityStep } from "../src/surface/mc/desk/routine-capability-contract";
 import { runCommand } from "../src/surface/mc/desk/spawn";
+import { CapabilityBuildSchema } from "../src/common/types/desk-routines";
 
 const WriterInputSchema = z.object({
   requestId: z.string().min(1),
@@ -11,8 +12,8 @@ const WriterInputSchema = z.object({
   steps: z.array(CapabilityStepSchema).min(1),
   request: z.string(),
   yaml: z.string(),
-  map: z.string().regex(/^(?:(?:github|gitlab):[\w.-]+\/)?[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/),
-  budget: z.object({ tokens: z.number().int().min(1), invocations: z.number().int().min(1), minutes: z.number().int().min(1) }),
+  map: CapabilityBuildSchema.shape.map,
+  budget: CapabilityBuildSchema.shape.budget,
   template: z.string().min(1).optional(),
 });
 export type WriterInput = z.infer<typeof WriterInputSchema>;

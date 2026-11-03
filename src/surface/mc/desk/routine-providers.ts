@@ -6,6 +6,7 @@ import { routineSeatLabel, routineStepLabels } from "./routine-steps";
 export type RoutineCapabilities = () => ReadonlySet<string>;
 
 const MAX_PROMPT = 4000;
+const GATE_UNBUILDABLE = "A gate provider is configured on pulse-flow, not built per routine, so a build node cannot supply it.";
 
 export class MissingCapabilitiesError extends Error {
   constructor(readonly missing: MissingCapability[]) {
@@ -47,9 +48,9 @@ export function requireRoutineCapabilities(steps: PipelineStep[], capabilities: 
       need(step.agent.capability, stepDetail(routineStepLabels([step])[0] ?? step.agent.name, step.agent.prompt, step.agent.sovereignty));
     }
     else if ("tribunal" in step) seats(step.tribunal.name, step.tribunal.seats, step.tribunal.tiebreaker);
-    else if ("gate" in step || "research" in step) throw new UnbuildableRoutineError("This routine needs a gate or research provider that pulse-flow does not have configured. A gate provider is configured on pulse-flow, not built per routine, so a build node cannot supply it.");
+    else if ("gate" in step || "research" in step) throw new UnbuildableRoutineError(`This routine needs a gate or research provider that pulse-flow does not have configured. ${GATE_UNBUILDABLE}`);
     else if ("governed" in step) {
-      if (step.governed.gate) throw new UnbuildableRoutineError("This routine needs a gate provider that pulse-flow does not have configured. A gate provider is configured on pulse-flow, not built per routine, so a build node cannot supply it.");
+      if (step.governed.gate) throw new UnbuildableRoutineError(`This routine needs a gate provider that pulse-flow does not have configured. ${GATE_UNBUILDABLE}`);
       if (step.governed.tribunal) seats(step.governed.name, step.governed.tribunal.seats, step.governed.tribunal.tiebreaker);
     } else if ("parallel" in step) queue.push(...Object.values(step.parallel.branches).flatMap((b) => b.actions));
     else if ("map" in step) queue.push(...step.map.actions);
