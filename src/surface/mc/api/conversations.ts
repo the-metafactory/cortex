@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ConfirmSchema, creationFor, ProposeSchema, ReviseSchema, type Actor } from "../../../conversations/creation";
 import type { DiscordConversations } from "../../../conversations/discord";
 import { ConversationError, type ConversationHost, type HostStatus } from "../../../conversations/host";
-import { AttachmentUploadSchema, CreateConversationSchema, DraftSchema, InputRequestSchema, OrganizeSchema, OverviewQuerySchema } from "../../../conversations/types";
+import { AttachmentUploadSchema, CreateConversationSchema, DraftSchema, InputRequestSchema, ObjectRefSchema, OrganizeSchema, OverviewQuerySchema } from "../../../conversations/types";
 import { applyStudioOutcome, AskStartSchema, ImportSchema, startFromAsk, isImported, withStudio, importStudioSession, OutcomeSchema, sourceConversations, SourceQuerySchema, StartSchema, startFromSource, type StudioConversationDeps } from "./conversation-studio";
 import { checkRebindGuard, enforceMutationAuth, type MutationGuardContext } from "./mutation-guard";
 import { DEFAULT_LOCAL_PRINCIPAL } from "./networks-admission";
@@ -14,6 +14,7 @@ const fail = (status: number, error: string): Response => reply(status, { ok: fa
 const NO_SOURCES = (): Response => fail(503, "Conversation sources are not set up on this stack.");
 const NO_DISCORD = "Discord threads are not set up for conversations on this stack.";
 const AttachSchema = z.object({ retry: z.boolean().optional() }).strict();
+const LinkSchema = z.object({ ref: ObjectRefSchema, acknowledge: z.literal("discord-history").optional() }).strict();
 const notAllowed = (allow: string): Response => new Response(null, { status: 405, headers: { Allow: allow } });
 function decoded(value: string): string | null {
   try { return decodeURIComponent(value); }
@@ -21,7 +22,7 @@ function decoded(value: string): string | null {
 }
 const PROPOSALS = /^\/api\/conversations\/([0-9a-f-]{36})\/proposals(?:\/([0-9a-f-]{36})(?:\/(confirm|check))?)?$/;
 const GRANT = /^\/api\/conversations\/grants\/(grant-[0-9a-f]{32})$/;
-const ITEM = /^\/api\/conversations\/([0-9a-f-]{36})(?:\/(inputs|entries|attachments|draft|outcome|discord)(?:\/([^/]+))?)?$/;
+const ITEM = /^\/api\/conversations\/([0-9a-f-]{36})(?:\/(inputs|entries|attachments|draft|outcome|discord|links)(?:\/([^/]+))?)?$/;
 
 export function importedSessions(access: ConversationAccess | undefined): (sessionId: string) => Promise<boolean> {
   return async sessionId => {
@@ -114,8 +115,25 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
       const detail = await withStudio(host, id, await host.detail(id));
       return reply(200, { ok: true, ...detail, discord: discord ? await discord.state(id) : { available: false, reason: NO_DISCORD } });
     }
-    if (part === "discord") {
+    if (part === "links") {
       if (req.method !== "POST" || inputId) return notAllowed("POST");
+      const parsed = LinkSchema.safeParse(await body(req));
+      if (!parsed.success) return fail(400, "The link request is not valid.");
+      try {
+        const conversation = await host.link(id, parsed.data.ref, parsed.data.acknowledge === "discord-history");
+        await discord?.sync(id).catch((error: unknown) => { console.error(`conversations: Discord projection after linking ${id} failed: ${error instanceof Error ? error.message : String(error)}`); });
+        return reply(200, { ok: true, conversation });
+      } catch (error) {
+        if (error instanceof ConversationError && error.code === "discord-history") return reply(409, { ok: false, error: error.message, notice: error.code });
+        throw error;
+      }
+    }
+    if (part === "discord") {
+      if (req.method === "GET" && !inputId) {
+        if (!discord) return fail(503, NO_DISCORD);
+        return reply(200, { ok: true, discord: await discord.state(id), deliveries: await discord.deliveries(id) });
+      }
+      if (req.method !== "POST" || inputId) return notAllowed("GET, POST");
       if (!discord) return fail(503, NO_DISCORD);
       const parsed = AttachSchema.safeParse((await body(req)) ?? {});
       if (!parsed.success) return fail(400, "The Discord request is not valid.");
