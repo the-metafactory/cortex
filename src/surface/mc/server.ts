@@ -285,12 +285,12 @@ export function startServer(
 
     async fetch(req, server) {
       const url = new URL(req.url);
+      const viaAccessHostname = arrivesViaAccessHostname(req, accessHostnames);
       const guard = guardForRequest(
-        req,
         { ...guardBase, listenPort: server.port ?? config.port },
-        accessHostnames,
+        viaAccessHostname,
       );
-      if (arrivesViaAccessHostname(req, accessHostnames)) {
+      if (viaAccessHostname) {
         const verified = await enforceMutationAuth(req, guard);
         if (verified instanceof Response) return verified;
       }

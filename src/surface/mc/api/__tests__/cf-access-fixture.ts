@@ -1,4 +1,4 @@
-import { base64UrlNoPad as b64url } from "../../../../common/nats/leaf-psk";
+import { base64UrlNoPad as b64url } from "../../../../common/encoding/base64url";
 
 export const TEST_KID = "test-kid";
 

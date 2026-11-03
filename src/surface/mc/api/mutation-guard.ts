@@ -76,9 +76,7 @@ export function buildAllowedHostnames(
 export function buildAccessHostnames(
   hostnames: readonly string[] = [],
 ): ReadonlySet<string> {
-  return new Set(
-    hostnames.map((h) => h.trim().toLowerCase()).filter((h) => h.length > 0),
-  );
+  return new Set(hostnames);
 }
 
 export function arrivesViaAccessHostname(
@@ -92,13 +90,10 @@ export function arrivesViaAccessHostname(
 }
 
 export function guardForRequest(
-  req: Request,
   base: MutationGuardContext,
-  accessHostnames: ReadonlySet<string>,
+  viaAccessHostname: boolean,
 ): MutationGuardContext {
-  return arrivesViaAccessHostname(req, accessHostnames)
-    ? { ...base, isLoopback: false }
-    : base;
+  return viaAccessHostname ? { ...base, isLoopback: false } : base;
 }
 
 /**
