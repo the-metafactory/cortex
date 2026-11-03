@@ -11,11 +11,11 @@ export const SESSION_PREFIX = "pi-session:";
 export interface ChatTurn { role: "system" | "user" | "assistant"; content: string }
 export type Lane = ConversationLane;
 export interface Lanes { local?: Lane; cloud?: CloudConfig }
-export interface RoutedLane { route: ModelRoute; id: string | null; lane: Lane }
+export interface RoutedLane { route: ModelRoute; lane: Lane }
 export const cloudRoute = (id: string): ModelRoute => id === LEGACY_CLOUD_ID ? "cloud" : `cloud:${id}`;
 export function routedLanes(lanes: Lanes): RoutedLane[] {
-  const clouds = cloudLanes(lanes.cloud).map(({ id, ...lane }): RoutedLane => ({ route: cloudRoute(id), id, lane }));
-  return [...(lanes.local ? [{ route: "local" as const, id: null, lane: lanes.local }] : []), ...clouds];
+  const clouds = cloudLanes(lanes.cloud).map(({ id, ...lane }): RoutedLane => ({ route: cloudRoute(id), lane }));
+  return [...(lanes.local ? [{ route: "local" as const, lane: lanes.local }] : []), ...clouds];
 }
 export const laneFor = (lanes: Lanes, route: ModelRoute): Lane | undefined => routedLanes(lanes).find(routed => routed.route === route)?.lane;
 export type GateResult = { refused: string } | { conversationId: string; context: string | null };
