@@ -6,6 +6,7 @@ import { readStudioMyDay } from "./studio-my-day";
 import { planAct, StudioActSchema, type ActContext, type ActPlan, type ActRefusal, type StudioAct } from "./studio/acts";
 import { CONVERSATION_NOTE_KINDS, planConversationNote, type ConversationNoteKind } from "./studio/conversation-note";
 import { REQUEST_TRAILER, spawnGit, type GitRunner } from "./studio/git";
+import { THREAD_OUTCOMES, type ThreadOutcome } from "./studio/format";
 import { runStudioTransaction } from "./studio/writer";
 
 export interface StudioWriterDeps {
@@ -116,6 +117,23 @@ export function studioNoteWriter(deps: StudioWriterDeps): OwnerWriter {
       if (!isNoteKind(chosen)) return `${chosen} is not a note kind; use note, idea or stand.`;
       if (!text.trim()) return "The text is empty.";
       return ctx => planConversationNote(ctx, { thread, kind: chosen, text, via: conversationVia(request) });
+    },
+    after: refreshMyDay(deps),
+  });
+}
+
+const CLOSE_LABELS = { thread: "The thread", outcome: "The outcome", text: "The outcome text", expect: "What you expect to happen", reviewOn: "The review date" };
+const isOutcome = (outcome: string): outcome is ThreadOutcome => (THREAD_OUTCOMES as readonly string[]).includes(outcome);
+
+export function studioCloseWriter(deps: StudioWriterDeps): OwnerWriter {
+  return studioConversationWriter(deps, {
+    prepare: request => {
+      const { thread = "", outcome = "", text = "", expect = "", reviewOn = "" } = request.fields;
+      const chosen = outcome.trim();
+      if (!isOutcome(chosen)) return `${chosen} is not an outcome; use decided, shipped or dropped.`;
+      const act = studioAct({ act: "close", thread, outcome: chosen, text, ...(expect.trim() ? { expect } : {}), ...(reviewOn.trim() ? { reviewOn: reviewOn.trim() } : {}) }, CLOSE_LABELS);
+      if (typeof act === "string") return act;
+      return ctx => planAct(ctx, act, conversationVia(request));
     },
     after: refreshMyDay(deps),
   });

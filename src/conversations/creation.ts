@@ -11,7 +11,7 @@ export type CapabilityStatus = "ready" | `blocked:${number}` | "unsupported";
 export interface Capability { type: string; row: string; label: string; owner: string; status: CapabilityStatus; reason?: string; egress?: Egress; fields: FieldSpec[]; fixed: FixedTerm[] }
 export interface Actor { principal: string; transport: (typeof TRANSPORTS)[number] }
 
-const FieldsSchema = z.record(z.string().regex(/^[a-z]{1,40}$/), z.string().max(20_000)).refine(fields => Object.keys(fields).length <= 20);
+const FieldsSchema = z.record(z.string().regex(/^[a-z][a-zA-Z]{0,39}$/), z.string().max(20_000)).refine(fields => Object.keys(fields).length <= 20);
 export const ProposeSchema = z.object({
   proposalId: z.uuid(),
   type: z.string().trim().min(1).max(64).optional(),
