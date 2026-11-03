@@ -2,7 +2,7 @@ import type { ConversationDetail, ConversationEntry, ConversationMeta, LinkedVie
 import type { ImportableSession, SourceConversations } from "../../api/conversation-studio";
 import type { SessionEnd } from "../../desk/studio/session-schema";
 import type { AskFields } from "../../desk/ask";
-import { CONTINUATION_KIND, CREATION_KIND, DECISION_KIND, GRANT_KIND, IMPORTED_TURN_KIND, PROPOSAL_KIND, TOOL_ACTIVITY_KIND } from "../../../../conversations/types";
+import { CONTINUATION_KIND, CREATION_KIND, DECISION_KIND, GRANT_KIND, IMPORTED_TURN_KIND, laneName, PROPOSAL_KIND, routeLabel, TOOL_ACTIVITY_KIND } from "../../../../conversations/types";
 import { ApiFailure, getJson, postJson } from "./api";
 
 export const failureText = (error: unknown, fallback: string): string => (error instanceof ApiFailure ? error.info.message : fallback);
@@ -40,7 +40,7 @@ export const organize = (id: string, change: Organize): Promise<{ conversation: 
 export function modelLine(models: ConversationDetail["models"]): { choose: boolean; text: string; missing: string | null } {
   const lane = models.cloud.find(candidate => candidate.id === models.using);
   const missing = models.chosen !== null && !models.cloud.some(candidate => candidate.id === models.chosen) ? models.chosen : null;
-  return { choose: models.cloud.length > 1 || missing !== null, text: lane ? `${lane.provider}/${lane.model}` : "", missing };
+  return { choose: models.cloud.length > 1 || missing !== null, text: lane ? laneName(lane) : "", missing };
 }
 
 export const continueInDiscord = (id: string, retry = false): Promise<{ conversation: ConversationMeta }> =>
@@ -97,8 +97,7 @@ function continuationLine(data: Record<string, unknown>): string {
   if (data.mode === "native-resume") return "Resumed the same engine after a restart.";
   if (data.reason === "engine-changed") return "Ivy's working context was rebuilt from this conversation's record, because earlier turns came from another engine.";
   if (data.reason === "session-missing") return "Ivy's earlier pi session was not found, so the working context was rebuilt from this conversation's record.";
-  const to = text(data.to);
-  return `Continued with reconstructed context on the ${to.startsWith("cloud:") ? `${to.slice("cloud:".length)} cloud` : to} model.`;
+  return `Continued with reconstructed context on the ${routeLabel(text(data.to))} model.`;
 }
 
 export function entryViews(entry: ConversationEntry): EntryView[] {

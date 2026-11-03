@@ -3,7 +3,7 @@ import type { AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
 import { createModels, createProvider, type MutableModels } from "@earendil-works/pi-ai/models";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { cloudLanes, LEGACY_CLOUD_ID, type CloudConfig, type ConversationLane } from "../common/types/desk-conversations";
-import type { ContinuationReason, ModelRoute } from "./types";
+import { laneName, type ContinuationReason, type ModelRoute } from "./types";
 
 export const CORTEX_PROVIDER = "cortex";
 const API = "cortex-chat";
@@ -13,7 +13,6 @@ export type Lane = ConversationLane;
 export interface Lanes { local?: Lane; cloud?: CloudConfig }
 export interface RoutedLane { route: ModelRoute; id: string | null; lane: Lane }
 export const cloudRoute = (id: string): ModelRoute => id === LEGACY_CLOUD_ID ? "cloud" : `cloud:${id}`;
-export const laneName = (lane: Lane): string => `${lane.provider}/${lane.model}`;
 export function routedLanes(lanes: Lanes): RoutedLane[] {
   const clouds = cloudLanes(lanes.cloud).map(({ id, ...lane }): RoutedLane => ({ route: cloudRoute(id), id, lane }));
   return [...(lanes.local ? [{ route: "local" as const, id: null, lane: lanes.local }] : []), ...clouds];

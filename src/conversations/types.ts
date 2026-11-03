@@ -10,6 +10,8 @@ export type ModelRoute = Policy | `cloud:${string}`;
 export const ROUTE = new RegExp(`^(?:local|cloud|cloud:${CLOUD_LANE_ID})$`);
 export const isModelRoute = (value: unknown): value is ModelRoute => typeof value === "string" && ROUTE.test(value);
 export const routePolicy = (route: ModelRoute): Policy => route === "local" ? "local" : "cloud";
+export const laneName = (lane: { provider: string; model: string }): string => `${lane.provider}/${lane.model}`;
+export const routeLabel = (route: string): string => route.startsWith("cloud:") ? `${route.slice("cloud:".length)} cloud` : route;
 
 export const ObjectRefSchema = z.object({
   owner: z.enum(OWNER_TYPES),

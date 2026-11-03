@@ -6,7 +6,7 @@ import {
   chooseOutcome, continueInDiscord, entryViews, failureText as failure, modelLine, organize as organizeConversation, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel, statusLabel,
   type ConversationDetail, type ConversationEntry, type OperationRecord,
 } from "../lib/conversations";
-import type { Organize } from "../../../../conversations/types";
+import { laneName, type Organize } from "../../../../conversations/types";
 import { CreationPanel } from "./desk-conversation-create";
 import "./desk-conversation.css";
 
@@ -222,8 +222,8 @@ export function ModelPicker({ models, disabled, onChoose }: { models: Conversati
   return <div className="dcv-model" role="group" aria-label="Cloud model">
     {line.choose
       ? <label>Cloud model <select value={models.chosen ?? ""} disabled={disabled} onChange={e => { onChoose(e.target.value || null); }}>
-          {first && <option value="">Default · {first.provider}/{first.model}</option>}
-          {models.cloud.map(lane => <option key={lane.id} value={lane.id}>{lane.id} · {lane.provider}/{lane.model}</option>)}
+          {first && <option value="">Default · {laneName(first)}</option>}
+          {models.cloud.map(lane => <option key={lane.id} value={lane.id}>{lane.id} · {laneName(lane)}</option>)}
           {line.missing && <option value={line.missing}>{line.missing} · no longer configured</option>}
         </select></label>
       : line.text && <span className="dcv-quiet">Cloud model {line.text}</span>}
