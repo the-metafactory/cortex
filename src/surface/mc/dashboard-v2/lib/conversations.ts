@@ -37,6 +37,12 @@ export const readOverview = (query: { state: "current" | "archived"; q: string; 
 export const organize = (id: string, change: Organize): Promise<{ conversation: ConversationMeta }> =>
   getJson(`${BASE}/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(change) });
 
+export function modelLine(models: ConversationDetail["models"]): { choose: boolean; text: string; missing: string | null } {
+  const lane = models.cloud.find(candidate => candidate.id === models.using);
+  const missing = models.chosen !== null && !models.cloud.some(candidate => candidate.id === models.chosen) ? models.chosen : null;
+  return { choose: models.cloud.length > 1, text: lane ? `${lane.provider}/${lane.model}` : "", missing };
+}
+
 export const continueInDiscord = (id: string, retry = false): Promise<{ conversation: ConversationMeta }> =>
   postJson(`${BASE}/${id}/discord`, retry ? { retry } : {});
 
@@ -91,7 +97,8 @@ function continuationLine(data: Record<string, unknown>): string {
   if (data.mode === "native-resume") return "Resumed the same engine after a restart.";
   if (data.reason === "engine-changed") return "Ivy's working context was rebuilt from this conversation's record, because earlier turns came from another engine.";
   if (data.reason === "session-missing") return "Ivy's earlier pi session was not found, so the working context was rebuilt from this conversation's record.";
-  return `Continued with reconstructed context on the ${text(data.to)} model.`;
+  const to = text(data.to);
+  return `Continued with reconstructed context on the ${to.startsWith("cloud:") ? `${to.slice("cloud:".length)} cloud` : to} model.`;
 }
 
 export function entryViews(entry: ConversationEntry): EntryView[] {
@@ -124,9 +131,9 @@ export function entryViews(entry: ConversationEntry): EntryView[] {
   }
   if (entry.kind === CONTINUATION_KIND) return [{ kind: "activity", text: continuationLine(data) }];
   if (entry.kind === TOOL_ACTIVITY_KIND) return [{ kind: "activity", text: toolLine(data) }];
-  if (entry.role === "assistant" && entry.error) return [{ kind: "failure", text: `Ivy could not answer: ${entry.error}` }];
+  if (entry.role === "assistant" && entry.error) return [{ kind: "failure", text: `Ivy could not answer${entry.model ? ` on ${entry.model}` : ""}: ${entry.error}` }];
   if (entry.role === "user" && entry.text) return [{ kind: "message", who: "you", text: entry.text }];
-  if (entry.role === "assistant" && entry.text) return [{ kind: "message", who: "ivy", text: entry.text }];
+  if (entry.role === "assistant" && entry.text) return [{ kind: "message", who: "ivy", text: entry.text, ...(entry.model ? { note: entry.model } : {}) }];
   return [];
 }
 

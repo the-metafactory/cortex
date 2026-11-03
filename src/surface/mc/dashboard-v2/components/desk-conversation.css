@@ -3,6 +3,8 @@
 .dcv-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .dcv-title h2 { margin: 0; font-size: 22px; letter-spacing: -.3px; }
 .dcv-meta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 8px 0 0; color: var(--mute, #71717a); font-size: 13px; }
+.dcv-model { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0 0; font-size: 13px; }
+.dcv-model select { margin-left: 6px; font: inherit; }
 .dcv-discord { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 8px 0 0; }
 .dcv-discord p { margin: 0; }
 .dcv-badge { background: #eaf0e5; color: #355742; padding: 2px 8px; border-radius: 5px; font-size: 12px; }

@@ -53,7 +53,7 @@ describe("pi turns in the conversation record", () => {
     expect(failed?.error).toBe("pi was not found at /nowhere/pi. No other engine is used.");
     const detail = await host.detail(conversation.id);
     const html = renderToStaticMarkup(<WorkspaceView detail={{ ...detail, studio: null }} entries={entries} draft="" ready busy={false} sending={false} retrying={false} error={null} onDraft={() => undefined} onSend={() => undefined} onRetry={() => undefined} onLeave={() => undefined} onSaved={() => undefined} organizing={false} onOrganize={() => undefined} />);
-    expect(html).toContain("Ivy could not answer: pi was not found at /nowhere/pi.");
+    expect(html).toContain("Ivy could not answer on test/cloud-model: pi was not found at /nowhere/pi.");
     expect(html).toContain(">Retry</button>");
   });
 

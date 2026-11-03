@@ -5,7 +5,7 @@ import type { ConversationDetail } from "../lib/conversations";
 
 const base: ConversationDetail = {
   conversation: { id: "c1", stack: "default", title: "Plan", links: [], policy: "cloud", state: "current", pinned: false, activity: { lastAt: "2026-11-03T10:00:00Z", status: "idle" }, origin: { kind: "web" } },
-  sources: [], draft: "", pending: [], studio: null,
+  models: { cloud: [], chosen: null, using: null }, sources: [], draft: "", pending: [], studio: null,
 };
 const render = (detail: ConversationDetail): string => renderToStaticMarkup(<DiscordStrip detail={detail} onSaved={() => undefined} />);
 

@@ -1,9 +1,9 @@
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { ConversationLane } from "../../../common/types/desk-conversations";
+import { cloudLanes, type CloudConfig, type ConversationLane } from "../../../common/types/desk-conversations";
 import type { TurnCall } from "../../../conversations/model";
-import type { ModelRoute } from "../../../conversations/types";
+import type { Policy } from "../../../conversations/types";
 import type { AskMap } from "./ask";
 import { createFromCard, type DeskWriters, type WriterRunner } from "./create";
 import { MAX_REPLY_CHARS, type ListedMail, type MailActionResult } from "./mail-actions";
@@ -28,7 +28,15 @@ export const HANDOFF_KEY_PREFIX = "ivy:";
 export const handoffKey = (id: string): string => `${HANDOFF_KEY_PREFIX}${id}`;
 export const handoffIdOf = (key: string): string | null => (key.startsWith(HANDOFF_KEY_PREFIX) ? key.slice(HANDOFF_KEY_PREFIX.length) : null);
 
-export type HandoffLanes = Partial<Record<ModelRoute, ConversationLane>>;
+export type HandoffLanes = Partial<Record<Policy, ConversationLane>>;
+
+/** Hand-offs read with the local lane or the first (default) cloud lane. */
+export function handoffLanes(config: { local?: ConversationLane | undefined; cloud?: CloudConfig | undefined }): HandoffLanes {
+  const [cloud] = cloudLanes(config.cloud);
+  const lanes: HandoffLanes = config.local ? { local: config.local } : {};
+  if (cloud) lanes.cloud = { provider: cloud.provider, model: cloud.model, ...(cloud.thinking ? { thinking: cloud.thinking } : {}) };
+  return lanes;
+}
 export type HandoffResult = { ok: true; message: string; id?: string } | { ok: false; status: number; error: string };
 
 const refuse = (status: number, error: string): HandoffResult => ({ ok: false, status, error });
@@ -47,7 +55,7 @@ export interface HandoffRow {
   summary: string | null;
   text: string | null;
   instruction: string | null;
-  route: ModelRoute;
+  route: Policy;
   taskId: string;
   taskUrl: string | null;
   state: HandoffState;
@@ -116,7 +124,7 @@ export function handoffsByMail(rows: readonly HandoffRow[]): Map<string, Handoff
 }
 
 /** Which model lane reads this mail: the cloud lane, else the local one, whatever the mail's area. */
-export function handoffRoute(lanes: HandoffLanes): { route: ModelRoute; lane: ConversationLane } | { refused: string } {
+export function handoffRoute(lanes: HandoffLanes): { route: Policy; lane: ConversationLane } | { refused: string } {
   if (lanes.cloud) return { route: "cloud", lane: lanes.cloud };
   if (lanes.local) return { route: "local", lane: lanes.local };
   return { refused: "No model lane is set up for Ivy (mc.desk.conversations)." };
@@ -195,7 +203,7 @@ const handedMessage = (row: HandoffRow, map?: string): string => `Handed to Ivy 
 
 export interface HandoffJob {
   id: string;
-  route: ModelRoute;
+  route: Policy;
   from: string;
   subject: string;
   receivedAt: string;

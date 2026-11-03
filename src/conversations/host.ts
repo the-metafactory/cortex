@@ -8,11 +8,12 @@ import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type 
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { z } from "zod";
 import { acquireHostLock, type LockOwner } from "./lock";
-import { chatTurns, cortexModels, CORTEX_PROVIDER, type GateResult, type Lanes, type TurnCall, type TurnEvent } from "./model";
+import { cloudLanes } from "../common/types/desk-conversations";
+import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, laneName, type GateResult, type Lanes, type TurnCall, type TurnEvent } from "./model";
 import {
-  AttachmentRefSchema, CONTINUATION_KIND, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES,
+  AttachmentRefSchema, CONTINUATION_KIND, isModelRoute, routePolicy, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES,
   type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationMeta, type CreateConversation,
-  type ExchangeLine, type InputRequest, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadback, type OwnerReadbacks, type OwnerType, type OwnerWriters, type WithheldReasons, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView,
+  type ExchangeLine, type InputRequest, type ModelChoices, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadback, type OwnerReadbacks, type OwnerType, type OwnerWriters, type WithheldReasons, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView,
 } from "./types";
 
 export const ENGINE = "pi-durable@1.4.0";
@@ -38,7 +39,8 @@ const StoredSchema = z.object({
   title: z.string(),
   links: z.array(ObjectRefSchema),
   policy: z.enum(["local", "cloud"]),
-  route: z.enum(["local", "cloud"]).nullable(),
+  route: z.custom<ModelRoute>(isModelRoute).nullable(),
+  cloud: z.string().optional(),
   state: z.enum(["current", "archived"]),
   pinned: z.boolean(),
   lastAt: z.string(),
@@ -280,9 +282,19 @@ export class ConversationHost {
     return { stored, effective: available ? stored.policy : "local", sources, available };
   }
 
-  routeFor(policy: Policy): ModelRoute | null {
+  routeFor(policy: Policy, chosen?: string): ModelRoute | null {
     if (policy === "local") return this.options.lanes.local ? "local" : null;
-    return this.options.lanes.cloud ? "cloud" : this.options.lanes.local ? "local" : null;
+    const clouds = cloudLanes(this.options.lanes.cloud);
+    const cloud = clouds.find(lane => lane.id === chosen) ?? clouds[0];
+    if (cloud) return cloudRoute(cloud.id);
+    return this.options.lanes.local ? "local" : null;
+  }
+
+  private choices(stored: Stored, effective: Policy): ModelChoices {
+    const clouds = cloudLanes(this.options.lanes.cloud);
+    const chosen = stored.cloud ?? null;
+    const lane = chosen === null ? clouds[0] : clouds.find(candidate => candidate.id === chosen);
+    return { cloud: clouds.map(({ id, provider, model }) => ({ id, provider, model })), chosen, using: effective === "cloud" ? lane?.id ?? null : null };
   }
 
   private async gate(sessionId: string | undefined, route: ModelRoute): Promise<GateResult> {
@@ -466,7 +478,15 @@ export class ConversationHost {
   }
 
   async organize(id: string, change: Organize): Promise<ConversationMeta> {
-    await this.update(id, stored => ({ ...stored, ...(change.pinned === undefined ? {} : { pinned: change.pinned }), ...(change.state ? { state: change.state } : {}) }));
+    const { cloud } = change;
+    if (cloud && !cloudLanes(this.options.lanes.cloud).some(lane => lane.id === cloud)) throw new ConversationError(400, `No cloud model ${cloud} is configured on this stack; the conversation's model was not changed.`);
+    await this.update(id, stored => {
+      const next: Stored = { ...stored, ...(change.pinned === undefined ? {} : { pinned: change.pinned }), ...(change.state ? { state: change.state } : {}) };
+      if (cloud === undefined) return next;
+      if (cloud !== null) return { ...next, cloud };
+      delete next.cloud;
+      return next;
+    });
     return this.meta(id);
   }
 
@@ -481,7 +501,7 @@ export class ConversationHost {
     const working = new Set(submissions.map(s => Number(s.conversationId)));
     const mine = submissions.filter(s => s.type === "input" && Number(s.conversationId) === stored.engineId && s.requestId !== undefined);
     const pending = await Promise.all(mine.map(record => this.submissionView(record.requestId ?? "", record)));
-    return { conversation: this.view(id, stored, working, effective, available), sources, draft: stored.draft, pending, scope: stored.scope ?? null, available };
+    return { conversation: this.view(id, stored, working, effective, available), models: this.choices(stored, effective), sources, draft: stored.draft, pending, scope: stored.scope ?? null, available };
   }
 
   async link(id: string, ref: ObjectRef, acknowledged: boolean): Promise<ConversationMeta> {
@@ -527,8 +547,9 @@ export class ConversationHost {
         if (entry.kind === INPUT_KIND) turns.push({ text: entryText(entry), reply: null, model: "unavailable", policy: stored.policy });
         else if (message?.role === "assistant" && message.stopReason !== "error") {
           const last = turns.at(-1);
-          const route = message.model === "local" || message.model === "cloud" ? message.model : stored.policy;
-          if (last?.reply === null) Object.assign(last, { reply: entryText(entry), model: this.options.lanes[route]?.model ?? route, policy: route });
+          const route = isModelRoute(message.model) ? message.model : stored.policy;
+          const lane = laneFor(this.options.lanes, route);
+          if (last?.reply === null) Object.assign(last, { reply: entryText(entry), model: message.responseModel ?? (lane ? laneName(lane) : route), policy: routePolicy(route) });
         }
       }
       cursor = page.next;
@@ -586,13 +607,14 @@ export class ConversationHost {
       const attachments = request.attachments ?? [];
       await this.checkAttachments(attachments);
       const { stored, effective } = await this.tighten(id);
-      const route = this.routeFor(effective);
+      const route = this.routeFor(effective, stored.cloud);
       const sha256 = inputHash(request);
       const conversation = await this.conversation(stored);
       const existing = await this.priorInput(conversation, request.inputId, sha256);
       if (existing) return { duplicate: true, submission: await this.submissionView(request.inputId, existing) };
       if (stored.state === "archived") throw new ConversationError(409, "This conversation is archived. Restore it to continue; nothing was sent.");
       if (!route) throw new ConversationError(503, effective === "local" ? "No local model is configured. Nothing was sent; no cloud fallback is used." : "No conversation model is configured. Nothing was sent.");
+      if (effective === "cloud" && stored.cloud && !cloudLanes(this.options.lanes.cloud).some(lane => lane.id === stored.cloud)) throw new ConversationError(503, `The cloud model ${stored.cloud} chosen for this conversation is no longer configured. Choose another model; nothing was sent and no other model was used.`);
       await this.claimInput(conversation, request.inputId, sha256);
       if (route !== stored.route) {
         await conversation.configure({ model: { provider: CORTEX_PROVIDER, modelId: route } }, this.context);
@@ -779,5 +801,6 @@ function toEntry(entry: EntryRecord): ConversationEntry {
   const at = message && "timestamp" in message ? message.timestamp : undefined;
   const text = entryText(entry);
   const error = message?.role === "assistant" && message.stopReason === "error" ? message.errorMessage ?? "the turn failed" : undefined;
-  return { id: String(entry.id), kind: entry.kind, ...(role ? { role } : {}), ...(text ? { text } : {}), ...(entry.data !== undefined ? { data: entry.data } : {}), ...(at !== undefined ? { at } : {}), ...(error ? { error } : {}) };
+  const model = message?.role === "assistant" ? message.responseModel : undefined;
+  return { id: String(entry.id), kind: entry.kind, ...(role ? { role } : {}), ...(text ? { text } : {}), ...(entry.data !== undefined ? { data: entry.data } : {}), ...(at !== undefined ? { at } : {}), ...(error ? { error } : {}), ...(model ? { model } : {}) };
 }

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
 import { createModels, createProvider, type MutableModels } from "@earendil-works/pi-ai/models";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
-import type { ConversationLane } from "../common/types/desk-conversations";
+import { cloudLanes, LEGACY_CLOUD_ID, type CloudConfig, type ConversationLane } from "../common/types/desk-conversations";
 import type { ContinuationReason, ModelRoute } from "./types";
 
 export const CORTEX_PROVIDER = "cortex";
@@ -10,7 +10,15 @@ const API = "cortex-chat";
 export const SESSION_PREFIX = "pi-session:";
 export interface ChatTurn { role: "system" | "user" | "assistant"; content: string }
 export type Lane = ConversationLane;
-export type Lanes = Partial<Record<ModelRoute, Lane>>;
+export interface Lanes { local?: Lane; cloud?: CloudConfig }
+export interface RoutedLane { route: ModelRoute; id: string | null; lane: Lane }
+export const cloudRoute = (id: string): ModelRoute => id === LEGACY_CLOUD_ID ? "cloud" : `cloud:${id}`;
+export const laneName = (lane: Lane): string => `${lane.provider}/${lane.model}`;
+export function routedLanes(lanes: Lanes): RoutedLane[] {
+  const clouds = cloudLanes(lanes.cloud).map(({ id, ...lane }): RoutedLane => ({ route: cloudRoute(id), id, lane }));
+  return [...(lanes.local ? [{ route: "local" as const, id: null, lane: lanes.local }] : []), ...clouds];
+}
+export const laneFor = (lanes: Lanes, route: ModelRoute): Lane | undefined => routedLanes(lanes).find(routed => routed.route === route)?.lane;
 export type GateResult = { refused: string } | { conversationId: string; context: string | null };
 export type RouteGate = (sessionId: string | undefined, route: ModelRoute) => Promise<GateResult>;
 
@@ -69,29 +77,26 @@ export function planTurn(messages: readonly Message[], route: ModelRoute): Plan 
 }
 
 const ZERO_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-const isRoute = (value: string): value is ModelRoute => value === "local" || value === "cloud";
 
 export function cortexModels(lanes: Lanes, gate: RouteGate, turn: TurnCall, record: TurnRecorder, instructions: string): MutableModels {
-  const models: Model<string>[] = (["local", "cloud"] as const).flatMap(route => {
-    const lane = lanes[route];
-    return lane ? [{ id: route, name: `${route} (${lane.provider}/${lane.model})`, api: API, provider: CORTEX_PROVIDER, baseUrl: `pi:${lane.provider}`, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, reasoning: false, contextWindow: 262_144, maxTokens: 32_768 }] : [];
-  });
+  const routed = routedLanes(lanes);
+  const models: Model<string>[] = routed.map(({ route, lane }) => ({ id: route, name: `${route} (${laneName(lane)})`, api: API, provider: CORTEX_PROVIDER, baseUrl: `pi:${lane.provider}`, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, reasoning: false, contextWindow: 262_144, maxTokens: 32_768 }));
   const stream = (model: Model<string>, context: { messages: Message[] }, options?: { signal?: AbortSignal; sessionId?: string }) => {
     const out = createAssistantMessageEventStream();
-    const base: AssistantMessage = { role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id, usage: ZERO_USAGE, stopReason: "stop", timestamp: Date.now() };
+    let base: AssistantMessage = { role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id, usage: ZERO_USAGE, stopReason: "stop", timestamp: Date.now() };
     void (async () => {
       try {
-        if (!isRoute(model.id)) throw new Error(`unknown conversation model ${model.id}`);
-        const route = model.id;
+        const found = routed.find(candidate => candidate.route === model.id);
+        if (!found) throw new Error(`no ${model.id} conversation model is configured`);
+        const { route, lane } = found;
+        base = { ...base, responseModel: laneName(lane) };
         const gated = await gate(options?.sessionId, route);
         if ("refused" in gated) throw new Error(gated.refused);
-        const lane = lanes[route];
-        if (!lane) throw new Error(`no ${route} conversation model is configured`);
         const plan = planTurn(context.messages, route);
         if (!plan.prompt) throw new Error("the turn carries no new input");
         const reply = await turn({
           conversationId: gated.conversationId, route, lane, instructions, prompt: plan.prompt, linked: gated.context,
-          history: plan.history, resume: plan.resume, session: `${gated.conversationId}.${route}.${plan.answers}.${randomUUID().slice(0, 8)}`,
+          history: plan.history, resume: plan.resume, session: `${gated.conversationId}.${route.replace(":", "-")}.${plan.answers}.${randomUUID().slice(0, 8)}`,
           signal: options?.signal ?? new AbortController().signal,
           activity: activity => record(gated.conversationId, { kind: "tool", activity }),
         });

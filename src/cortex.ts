@@ -22,6 +22,8 @@ import { resolveStudio } from "./surface/mc/desk/studio/config";
 import { DiscordConversations } from "./conversations/discord";
 import { openConversationHost, type HostStatus } from "./conversations/host";
 import { piTurns, resolvePiSettings } from "./conversations/pi";
+import { cloudLanes } from "./common/types/desk-conversations";
+import { handoffLanes } from "./surface/mc/desk/mail-handoff";
 import { cortexStateDir } from "./common/state-path";
 import { Command } from "commander";
 import { existsSync, writeFileSync, readFileSync, unlinkSync, mkdirSync } from "fs";
@@ -4971,7 +4973,7 @@ export async function startCortex(
           lanes: { ...(conversationConfig?.local ? { local: conversationConfig.local } : {}), ...(conversationConfig?.cloud ? { cloud: conversationConfig.cloud } : {}) },
           turns: piTurns(pi),
         });
-        console.log(`cortex: conversation turns run through pi at ${pi.bin} (${pi.extensions.length ? `projection ${pi.extensions.join(", ")}` : "no Soma projection found"}; tools ${pi.tools.join(",") || "none"}; lanes ${[conversationConfig?.local ? "local" : "", conversationConfig?.cloud ? "cloud" : ""].filter(Boolean).join(", ") || "none configured"})`);
+        console.log(`cortex: conversation turns run through pi at ${pi.bin} (${pi.extensions.length ? `projection ${pi.extensions.join(", ")}` : "no Soma projection found"}; tools ${pi.tools.join(",") || "none"}; lanes ${[conversationConfig?.local ? "local" : "", ...cloudLanes(conversationConfig?.cloud).map(lane => `cloud ${lane.id}`)].filter(Boolean).join(", ") || "none configured"})`);
         console.log(conversationStatus.state === "ready"
           ? `cortex: conversation host ready (${conversationStatus.resumed.length} resumed, ${conversationStatus.reconciled.length} reconciled${conversationStatus.tookOver ? `, took over lock of dead pid ${conversationStatus.tookOver.pid}` : ""})`
           : `cortex: ${conversationStatus.reason}`);
@@ -5053,7 +5055,7 @@ export async function startCortex(
           ...(config.mc.desk.conversations?.local || config.mc.desk.conversations?.cloud
             ? {
                 mailHandoff: {
-                  lanes: { ...(config.mc.desk.conversations.local ? { local: config.mc.desk.conversations.local } : {}), ...(config.mc.desk.conversations.cloud ? { cloud: config.mc.desk.conversations.cloud } : {}) },
+                  lanes: handoffLanes(config.mc.desk.conversations),
                   pi: resolvePiSettings(config.mc.desk.conversations.pi, join(cortexStateDir(), "stacks", derivedStack.stack, "mail-handoff"), expandTilde),
                 },
               }
