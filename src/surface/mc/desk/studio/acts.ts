@@ -77,7 +77,10 @@ const NOT_EDITABLE = "has a layout the Studio cannot edit: its front matter must
 
 interface Ctx extends ActContext {
   today: string;
+  via?: string;
 }
+
+const logged = (ctx: Ctx, line: string): string => (ctx.via ? `${line} ${ctx.via}` : line);
 
 function source(ctx: Ctx, path: string): string | undefined {
   return [...ctx.files.threads, ...ctx.files.inbox, ...ctx.files.proposals].find((f) => f.path === path)?.text;
@@ -110,7 +113,7 @@ function plan(writes: (StudioFile | ActRefusal)[], subject: string, message: str
 function respond(ctx: Ctx, act: Extract<StudioAct, { act: "respond" }>, { thread, text }: Found): ActPlan | ActRefusal {
   const latest = latestNote(thread.notes);
   const entry = [`### ${localTime(ctx.now)}`, ...(latest ? [`re: ${latest.at}`] : []), "", ...safeBody(act.text)];
-  const out = chain(text, (t) => appendEntry(t, "responses", "Responses", entry), (t) => appendLog(t, ctx.today, "Answered Ivy"));
+  const out = chain(text, (t) => appendEntry(t, "responses", "Responses", entry), (t) => appendLog(t, ctx.today, logged(ctx, "Answered Ivy")));
   return plan([edited(thread.path, out)], `Answer Ivy on ${thread.slug}`, `Your answer is in ${quoted(thread.question)}.`);
 }
 
@@ -297,8 +300,8 @@ function threadAct(ctx: Ctx, act: Exclude<StudioAct, { act: "open" }>, found: Fo
   }
 }
 
-export function planAct(context: ActContext, act: StudioAct): ActPlan | ActRefusal {
-  const ctx: Ctx = { ...context, today: localDate(context.now) };
+export function planAct(context: ActContext, act: StudioAct, via?: string): ActPlan | ActRefusal {
+  const ctx: Ctx = { ...context, today: localDate(context.now), ...(via ? { via } : {}) };
   if (act.act === "open") return open(ctx, act);
   const found = threadOf(ctx, act.thread);
   if (isRefusal(found)) return found;
