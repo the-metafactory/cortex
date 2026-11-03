@@ -5,7 +5,7 @@ import { answering, scratchHosts } from "./fixtures/scratch";
 import { DiscordConversations } from "../discord";
 import { CLAIM_WINDOW_MS, OFFER_TTL_MS, parseDmCommand } from "../discord-dm";
 import { openConversationHost, type ConversationHost } from "../host";
-import type { Policy } from "../types";
+import type { LinkResolvers, Policy } from "../types";
 
 const LABEL = "ai.meta-factory.cortex.test";
 const PRINCIPAL = "111111111111111111";
@@ -14,135 +14,198 @@ const GUILD = "2222222222222222222";
 const CHANNEL = "3333333333333333333";
 const DM = "4444444444444444444";
 const WEB = "http://127.0.0.1:8767";
+const OWNER = "principal@example.org";
 const config = { channelId: CHANNEL, guildId: GUILD, webUrl: WEB };
 const { dirs, hosts } = scratchHosts("conversations-discord-dm-");
 
-async function setup() {
+async function setup(resolvers?: LinkResolvers) {
   const dir = await dirs.make();
-  const status = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local: { provider: "t", model: "l" }, cloud: { provider: "t", model: "c" } }, turns: answering(request => `answer to ${request.prompt.split("\n").at(-1) ?? ""}`) });
+  const prompts: string[] = [];
+  const status = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local: { provider: "t", model: "l" }, cloud: { provider: "t", model: "c" } }, turns: answering(request => { const last = request.prompt.split("\n").at(-1) ?? ""; prompts.push(last); return `answer to ${last}`; }), ...(resolvers ? { resolvers } : {}) });
   if (status.state !== "ready") throw new Error(status.reason);
   hosts.push(status.host);
+  const host = status.host;
   const fake = new FakeThreads();
   const lines: string[] = [];
   const clock = { at: new Date("2026-11-03T10:00:00Z") };
-  const bridge = new DiscordConversations({ host: status.host, adapter: () => fake, config, principalId: PRINCIPAL, now: () => clock.at, log: line => { lines.push(line); } });
+  const bridge = new DiscordConversations({ host, adapter: () => fake, config, principalId: PRINCIPAL, now: () => clock.at, log: line => { lines.push(line); } });
+  bridge.setOwner(OWNER);
   let seq = 0;
-  const dm = async (content: string, extra: Partial<InboundMessage> = {}): Promise<{ taken: boolean; reply: string | undefined }> => {
-    const before = fake.replies.length;
+  const dm = async (content: string, extra: Partial<InboundMessage> = {}): Promise<boolean> => {
     const msg: InboundMessage = {
       platform: "discord", instanceId: "pilot-discord", authorId: PRINCIPAL, authorName: "someone", content, channelId: DM, threadId: DM, isDM: true,
       authorIsPrincipal: false, attachments: [], timestamp: new Date(clock.at.getTime() + ++seq), messageId: `dm-msg-${seq}`, ...extra,
     };
-    const taken = await bridge.offer(msg);
-    return { taken, reply: fake.replies.length > before ? fake.replies.at(-1)?.text : undefined };
+    return bridge.offer(msg);
   };
-  return { host: status.host, fake, bridge, lines, clock, dm };
+  const settle = async (): Promise<void> => {
+    const id = (await bridge.dmConversation()) ?? "";
+    if (!id) return;
+    await host.waitForIdle(id);
+    await bridge.sync(id);
+  };
+  const inputs = async (id: string) => (await host.entriesAfter(id, null)).filter(entry => entry.kind === "cortex.input").map(entry => entry.data as { inputId: string; transport: string });
+  return { host, fake, bridge, lines, clock, dm, settle, inputs, prompts };
 }
 
-const start = (host: ConversationHost, title: string, policy: Policy = "cloud") => host.create({ title, links: [], origin: { kind: "web" }, policy }, "local-principal@loopback");
+const start = (host: ConversationHost, title: string, policy: Policy = "cloud") => host.create({ title, links: [], origin: { kind: "web" }, policy }, OWNER);
 const webLink = (id: string) => `${WEB}/?desk=conversation&conversation=${id}`;
 
-describe("choosing a conversation from the Discord DM", () => {
-  test("only picker commands are claimed; any other DM goes on to the normal DM path", async () => {
-    const { dm, fake } = await setup();
-    expect(await dm("hello Vigil, what is on today?")).toEqual({ taken: false, reply: undefined });
-    expect(await dm("1")).toEqual({ taken: false, reply: undefined });
-    expect(fake.replies).toHaveLength(0);
-    expect(parseDmCommand("Conversations")).toEqual({ kind: "recent" });
-    expect(parseDmCommand("search  spring workshop ")).toEqual({ kind: "search", q: "spring workshop" });
+describe("the principal's Discord DM is a running conversation", () => {
+  test("commands are recognised and everything else is conversation text", () => {
+    expect(parseDmCommand(" New ")).toEqual({ kind: "new" });
+    expect(parseDmCommand("conversations")).toEqual({ kind: "list" });
     expect(parseDmCommand("restore 3")).toEqual({ kind: "pick", index: 3, restore: true });
-    expect(parseDmCommand("search")).toBeNull();
-    expect(parseDmCommand("ivy")).toBeNull();
+    expect(parseDmCommand("what is on today?")).toEqual({ kind: "text" });
   });
 
-  test("the principal is recognised by Discord id with the adapter's principal flag false, gets recent conversations, and a choice links the private thread and web view", async () => {
-    const { host, dm, fake } = await setup();
+  test("a principal DM with the adapter's principal flag false is claimed, starts a DM conversation owned by the web principal, and Ivy answers in the DM", async () => {
+    const { host, fake, bridge, dm, settle, inputs } = await setup();
+    expect(await dm("plan the spring workshop", { authorIsPrincipal: false })).toBe(true);
+    await settle();
+    const id = await bridge.dmConversation();
+    if (!id) throw new Error("no DM conversation");
+    const meta = await host.meta(id);
+    expect(meta).toMatchObject({ title: "plan the spring workshop", origin: { kind: "discord-dm" }, policy: "cloud", state: "current" });
+    expect(await host.principalOf(id)).toBe(OWNER);
+    expect(await inputs(id)).toEqual([expect.objectContaining({ inputId: "dm-msg-1", transport: "discord" })]);
+    expect(fake.dms).toEqual(["answer to plan the spring workshop"]);
+    expect(await dm("and the venue?")).toBe(true);
+    await settle();
+    expect(await bridge.dmConversation()).toBe(id);
+    expect(fake.dms).toEqual(["answer to plan the spring workshop", "answer to and the venue?"]);
+    expect(fake.created).toBe(0);
+  });
+
+  test("`new` starts a fresh conversation with the next message", async () => {
+    const { bridge, dm, settle, fake } = await setup();
+    await dm("first topic");
+    await settle();
+    const first = await bridge.dmConversation();
+    await dm("new");
+    expect(fake.dms.at(-1)).toBe("Your next message here starts a new conversation.");
+    await dm("second topic");
+    await settle();
+    const second = await bridge.dmConversation();
+    expect(second).not.toBe(first);
+    expect(fake.dms.at(-1)).toBe("answer to second topic");
+  });
+
+  test("`conversations` lists five recent ones and a number switches the DM; local-only gets the web link only; archived needs restore", async () => {
+    const { host, bridge, dm, settle, fake, inputs } = await setup();
     const older = await start(host, "Older plan");
-    const newer = await start(host, "Plan the spring workshop");
-    await host.submit(newer.id, { inputId: "web-1", transport: "web", text: "latest", mode: "queue" });
-    await host.waitForIdle(newer.id);
-    const offer = await dm("conversations", { authorIsPrincipal: false });
-    expect(offer.taken).toBe(true);
-    const lines = offer.reply?.split("\n") ?? [];
-    expect(lines[0]).toBe("Which conversation shall we continue?");
-    expect(lines[1]).toStartWith("1. Plan the spring workshop (");
-    expect(lines[2]).toStartWith("2. Older plan (");
-    expect(fake.replies[0]?.target).toEqual({ instanceId: "pilot-discord", channelId: DM });
-    const chosen = await dm("2");
-    expect(chosen.taken).toBe(true);
-    expect(chosen.reply).toBe(`**Older plan**\nContinue in its private thread: <https://discord.com/channels/${GUILD}/thread-1>\nFull record on the web: <${webLink(older.id)}>`);
-    expect((await host.meta(older.id)).discord?.threadId).toBe("thread-1");
-    expect(fake.created).toBe(1);
-    expect(await host.latestEntryId(older.id)).toBeNull();
-  });
-
-  test("search finds an older archived exchange, which continues only after a deliberate restore", async () => {
-    const { host, dm, fake } = await setup();
-    const archived = await start(host, "Summer reading");
-    await host.submit(archived.id, { inputId: "web-1", transport: "web", text: "the lighthouse novel", mode: "queue" });
-    await host.waitForIdle(archived.id);
-    await host.organize(archived.id, { state: "archived" });
-    await start(host, "Unrelated");
-    const found = await dm("search lighthouse");
-    expect(found.reply?.split("\n").slice(0, 2)).toEqual(['Conversations matching "lighthouse":', expect.stringMatching(/^1\. Summer reading \(archived, /)]);
-    const plain = await dm("1");
-    expect(plain.reply).toBe("**Summer reading** is archived. Reply `restore 1` to restore it and continue.");
-    expect((await host.meta(archived.id)).state).toBe("archived");
-    expect(fake.created).toBe(0);
-    const restored = await dm("restore 1");
-    expect(restored.reply).toStartWith("**Summer reading** (restored)\nContinue in its private thread: <https://discord.com/channels/");
-    expect((await host.meta(archived.id)).state).toBe("current");
-    expect((await dm("search nothing-like-this")).reply).toBe('No conversation matches "nothing-like-this".');
-  });
-
-  test("a local-only conversation shows no title or snippet and offers only the neutral web path", async () => {
-    const { host, dm, fake } = await setup();
-    const local = await start(host, "Salary negotiation notes", "local");
-    await host.submit(local.id, { inputId: "web-1", transport: "web", text: "private figures", mode: "queue" });
-    await host.waitForIdle(local.id);
-    const offer = await dm("search private");
-    expect(offer.reply).toContain("1. Private conversation, continue on the web");
-    const chosen = await dm("1");
-    expect(chosen.reply).toBe(`Private conversation, continue on the web: <${webLink(local.id)}>`);
-    const all = fake.replies.map(reply => reply.text).join("\n");
-    expect(all).not.toContain("Salary");
-    expect(all).not.toContain("figures");
-    expect(fake.created).toBe(0);
-  });
-
-  test("an expired, early or replayed choice changes nothing", async () => {
-    const { host, dm, clock, fake } = await setup();
-    const conversation = await start(host, "Plan the spring workshop");
+    for (let i = 0; i < 4; i += 1) await start(host, `Filler ${i}`);
+    const local = await start(host, "Salary notes", "local");
     await dm("conversations");
-    const sentAt = clock.at;
-    clock.at = new Date(sentAt.getTime() + OFFER_TTL_MS + 1);
-    expect((await dm("1")).reply).toBe("Nothing changed: that list has expired. Send `conversations` or `search <words>` for a fresh one.");
-    clock.at = new Date(sentAt.getTime() + OFFER_TTL_MS * 2);
+    const list = fake.dms.at(-1)?.split("\n") ?? [];
+    expect(list[0]).toBe("Recent conversations:");
+    expect(list.slice(1, 6)).toHaveLength(5);
+    expect(list.slice(1, 6).every(row => /^\d\. /.exec(row))).toBe(true);
+    expect(fake.dms.join("\n")).not.toContain("Older plan");
+    await host.submit(older.id, { inputId: "web-0", transport: "web", text: "bump", mode: "queue" });
+    await host.waitForIdle(older.id);
     await dm("conversations");
-    expect((await dm("1", { timestamp: sentAt })).reply).toContain("that list has expired");
-    expect((await dm("7")).reply).toBe("Nothing changed: the list has no number 7.");
-    expect(fake.created).toBe(0);
-    const first = await dm("1", { messageId: "dm-replayed" });
-    expect(first.reply).toContain("Continue in its private thread");
-    const replay = await dm("1", { messageId: "dm-replayed" });
-    expect(replay).toEqual({ taken: true, reply: undefined });
-    expect(fake.created).toBe(1);
-    expect((await host.meta(conversation.id)).discord?.threadId).toBe("thread-1");
+    const rows = fake.dms.at(-1)?.split("\n") ?? [];
+    const olderAt = rows.findIndex(row => row.includes("Older plan"));
+    const localAt = rows.findIndex(row => row.includes("Private conversation, continue on the web"));
+    expect(olderAt).toBeGreaterThan(0);
+    expect(fake.dms.join("\n")).not.toContain("Salary");
+    expect(localAt).toBeGreaterThan(0);
+    await dm(String(localAt));
+    expect(fake.dms.at(-1)).toBe(`Private conversation, continue on the web: <${webLink(local.id)}>`);
+    expect(await bridge.dmConversation()).toBeNull();
+    await host.organize(older.id, { state: "archived" });
+    await dm(String(olderAt));
+    expect(fake.dms.at(-1)).toBe(`**Older plan** is archived. Reply \`restore ${olderAt}\` to restore it and continue here.`);
+    expect(await bridge.dmConversation()).toBeNull();
+    await dm(`restore ${olderAt}`);
+    expect(fake.dms.at(-1)).toBe(`Now continuing **Older plan** (restored) here.\nFull record on the web: <${webLink(older.id)}>`);
+    expect((await host.meta(older.id)).state).toBe("current");
+    await dm("picking this up again");
+    await settle();
+    expect(await bridge.dmConversation()).toBe(older.id);
+    expect((await inputs(older.id)).map(input => input.transport)).toEqual(["web", "discord"]);
+    expect(fake.dms.at(-1)).toBe("answer to picking this up again");
+    expect(fake.dms.join("\n")).not.toContain("answer to bump");
+  });
+
+  test("an expired list refuses a number; after an hour a number is ordinary text", async () => {
+    const { host, bridge, dm, clock, fake, settle } = await setup();
+    await start(host, "Plan the spring workshop");
+    await dm("conversations");
+    clock.at = new Date(clock.at.getTime() + OFFER_TTL_MS + 1);
+    await dm("1");
+    expect(fake.dms.at(-1)).toBe("Nothing changed: that list has expired. Send `conversations` for a fresh one.");
+    expect(await bridge.dmConversation()).toBeNull();
+    await dm("conversations");
+    await dm("7");
+    expect(fake.dms.at(-1)).toBe("Nothing changed: the list has no number 7.");
     clock.at = new Date(clock.at.getTime() + CLAIM_WINDOW_MS + 1);
-    expect(await dm("1")).toEqual({ taken: false, reply: undefined });
+    await dm("1");
+    await settle();
+    expect(fake.dms.at(-1)).toBe("answer to 1");
   });
 
-  test("a stranger, or a choice from another DM channel, has no effect and is not answered", async () => {
-    const { host, dm, fake, lines } = await setup();
-    const archived = await start(host, "Plan the spring workshop");
-    await host.organize(archived.id, { state: "archived" });
-    expect(await dm("conversations", { authorId: STRANGER, authorIsPrincipal: true, dmType: "principal" })).toEqual({ taken: true, reply: undefined });
-    await dm("search spring");
-    expect(await dm("restore 1", { authorId: STRANGER, authorIsPrincipal: true })).toEqual({ taken: true, reply: undefined });
-    expect(await dm("restore 1", { channelId: "5555555555555555555", threadId: "5555555555555555555" })).toEqual({ taken: false, reply: undefined });
-    expect((await host.meta(archived.id)).state).toBe("archived");
-    expect(fake.created).toBe(0);
-    expect(fake.replies).toHaveLength(1);
-    expect(lines.filter(line => line.includes("not this stack's verified principal"))).toHaveLength(2);
+  test("a stranger's DM is not claimed, a DM without a message id is not recorded, and a redelivered message is handled once", async () => {
+    const { bridge, dm, settle, fake, prompts, inputs } = await setup();
+    expect(await dm("let me in", { authorId: STRANGER, authorIsPrincipal: true, dmType: "principal" })).toBe(false);
+    expect(await bridge.dmConversation()).toBeNull();
+    expect(await dm("no id", { messageId: undefined })).toBe(true);
+    expect(fake.dms.at(-1)).toContain("does not carry message ids");
+    expect(await bridge.dmConversation()).toBeNull();
+    await dm("once only", { messageId: "dm-replayed" });
+    await settle();
+    await dm("once only", { messageId: "dm-replayed" });
+    await settle();
+    const id = await bridge.dmConversation();
+    if (!id) throw new Error("no DM conversation");
+    expect(await inputs(id)).toHaveLength(1);
+    expect(prompts.filter(prompt => prompt === "once only")).toHaveLength(1);
+    expect(fake.dms.filter(text => text === "answer to once only")).toHaveLength(1);
+  });
+
+  test("a web message is mirrored to the DM, and a conversation turned local sends one neutral link and nothing more", async () => {
+    let policy: Policy = "cloud";
+    const { host, bridge, dm, settle, fake } = await setup({ "studio-thread": () => Promise.resolve({ state: "available", policy, title: "Workshop thread" }) });
+    await dm("start here");
+    await settle();
+    const id = await bridge.dmConversation();
+    if (!id) throw new Error("no DM conversation");
+    await host.submit(id, { inputId: "web-1", transport: "web", text: "from the web", mode: "queue" });
+    await settle();
+    expect(fake.dms.slice(-2)).toEqual(["**You, on the web:**\nfrom the web", "answer to from the web"]);
+    await host.link(id, { owner: "studio-thread", id: "workshop" }, true);
+    policy = "local";
+    await host.submit(id, { inputId: "web-2", transport: "web", text: "secret", mode: "queue" });
+    await settle();
+    await bridge.sync(id);
+    expect(fake.dms.at(-1)).toBe(`This conversation is now private. Earlier messages here stay; nothing new from it is sent to Discord. Continue privately on the web: <${webLink(id)}>`);
+    expect(fake.dms.join("\n")).not.toContain("secret");
+    await dm("more from Discord");
+    expect(fake.dms.at(-1)).toBe(`This conversation is private, so it continues only on the web: <${webLink(id)}>. Write \`new\` to start another one here.`);
+  });
+
+  test("a send before the adapter connects is retried; an uncertain one is not repeated; no id is recorded as best-effort", async () => {
+    const { host, bridge, dm, settle, fake } = await setup();
+    fake.dmFaults = [{ delivered: false, kind: "transient", code: "disconnected" }];
+    await dm("first");
+    await settle();
+    const id = await bridge.dmConversation();
+    if (!id) throw new Error("no DM conversation");
+    expect(fake.dms).toEqual([]);
+    await bridge.sync(id);
+    expect(fake.dms).toEqual(["answer to first"]);
+    fake.dmFaults = [{ delivered: false, kind: "transient", code: "threw", detail: "socket hang up" }];
+    await dm("second");
+    await settle();
+    await bridge.sync(id);
+    expect(fake.dms).toEqual(["answer to first"]);
+    fake.dmFaults = [{ delivered: true }];
+    await dm("third");
+    await settle();
+    const records = Object.entries(await host.deliveries()).filter(([key]) => key.startsWith(`dm:out:${id}:`)).map(([, value]) => value as { state: string; messageId?: string; bestEffort?: string });
+    expect(records.map(record => record.state)).toEqual(["sent", "uncertain", "sent"]);
+    expect(records[0]?.messageId).toBeString();
+    expect(records[2]?.bestEffort).toBe("the adapter returned no message id");
   });
 });

@@ -59,6 +59,7 @@ import {
   handleAdmissionDecision,
   CF_ACCESS_EMAIL_HEADER,
   CF_ACCESS_JWT_HEADER,
+  DEFAULT_LOCAL_PRINCIPAL,
   isLoopbackBind,
   type AdmissionDecider,
   type AdmissionAuthContext,
@@ -248,6 +249,7 @@ export function startServer(
       : {}),
     ...(cfAccessVerifier ? { verifyJwt: cfAccessVerifier } : {}),
   };
+  options.conversations?.discord?.()?.setOwner([...guardBase.principals][0] ?? guardBase.localPrincipal ?? DEFAULT_LOCAL_PRINCIPAL);
 
   const stepUpSecretPath = expandTilde(
     config.governance?.stepUp?.secretPath ?? defaultStepUpSecretPath(),

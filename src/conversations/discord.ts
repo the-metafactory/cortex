@@ -3,18 +3,20 @@ import { z } from "zod";
 import type { InboundMessage, PlatformAdapter, ThreadMessage } from "../adapters/types";
 import { safeAttachmentRefs } from "../bus/brain-consumer";
 import type { DeskConversationsDiscord } from "../common/types/desk-conversations";
-import { DmPicker, type DmReplier } from "./discord-dm";
+import { DmConversations, type DmSender } from "./discord-dm";
+import { DEFAULT_LOCAL_PRINCIPAL } from "../surface/mc/api/networks-admission";
 import { ConversationError, type ConversationHost, type DiscordLink } from "./host";
 import { INPUT_KIND, type AttachmentRef, type ConversationEntry, type ConversationMeta } from "./types";
 
 type ThreadMethods = "createPrivateThread" | "privateThreadMembers" | "postToThread" | "recentThreadMessages" | "deleteThread";
-export type ThreadCapable = Pick<PlatformAdapter, "getPlatformUserId" | ThreadMethods> & Partial<DmReplier>;
+export type ThreadCapable = Pick<PlatformAdapter, "getPlatformUserId" | ThreadMethods> & Partial<DmSender>;
 export type ThreadAdapter = Pick<PlatformAdapter, "getPlatformUserId"> & Required<Pick<PlatformAdapter, ThreadMethods>>;
 export interface DiscordConversationOptions {
   host: ConversationHost;
   adapter: () => ThreadCapable | null;
   config: DeskConversationsDiscord;
   principalId: string | undefined;
+  owner?: string;
   fetch?: (url: string, init: RequestInit) => Promise<Response>;
   now?: () => Date;
   log?: (line: string) => void;
@@ -60,17 +62,21 @@ export class DiscordConversations {
   private unsubscribe: (() => void) | null = null;
   private readonly now: () => Date;
   private readonly log: (line: string) => void;
-  private readonly dm: DmPicker;
+  private readonly dm: DmConversations;
+  private owner: string;
 
   constructor(private readonly options: DiscordConversationOptions) {
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? (line => { console.log(`conversations: discord: ${line}`); });
-    this.dm = new DmPicker({
+    this.owner = options.owner ?? DEFAULT_LOCAL_PRINCIPAL;
+    this.dm = new DmConversations({
       host: options.host,
-      adapter: () => dmReplier(options.adapter()),
+      sender: () => dmSender(options.adapter()),
       principalId: options.principalId,
-      attach: id => this.attach(id),
-      threadUrl: threadId => this.threadUrl(threadId),
+      owner: () => this.owner,
+      ingest: (id, msg) => this.ingest(id, msg),
+      render: projection,
+      split: chunks,
       webLink: id => this.webLink(id),
       now: this.now,
       log: this.log,
@@ -87,6 +93,14 @@ export class DiscordConversations {
     this.unsubscribe?.();
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  async dmConversation(): Promise<string | null> {
+    return (await this.dm.current()).conversationId;
+  }
+
+  setOwner(principal: string): void {
+    this.owner = principal;
   }
 
   webLink(id: string): string {
@@ -206,9 +220,9 @@ export class DiscordConversations {
   }
 
   private async offerDm(msg: InboundMessage): Promise<boolean> {
-    if (!await this.dm.claims(msg).catch(() => false)) return false;
-    await this.serial(`dm:${msg.channelId}`, () => this.dm.handle(msg)).catch((error: unknown) => {
-      this.log(`DM conversation choice failed: ${messageOf(error)}`);
+    if (!this.dm.claims(msg)) return false;
+    await this.serial("dm", () => this.dm.handle(msg)).catch((error: unknown) => {
+      this.log(`DM message failed: ${messageOf(error)}`);
     });
     return true;
   }
@@ -273,6 +287,8 @@ export class DiscordConversations {
       if (!link.threadId) continue;
       await this.sync(id).catch((error: unknown) => { this.log(`projection of ${id} failed: ${messageOf(error)}`); });
     }
+    const dm = (await this.dm.current().catch(() => null))?.conversationId;
+    if (dm && !links.get(dm)?.threadId) await this.sync(dm).catch((error: unknown) => { this.log(`projection of ${dm} failed: ${messageOf(error)}`); });
   }
 
   sync(id: string): Promise<void> {
@@ -280,6 +296,11 @@ export class DiscordConversations {
   }
 
   private async project(id: string): Promise<void> {
+    await this.projectThread(id);
+    await this.dm.project(id);
+  }
+
+  private async projectThread(id: string): Promise<void> {
     const { host } = this.options;
     const link = await host.discordLink(id);
     const threadId = link?.threadId;
@@ -408,10 +429,10 @@ export class DiscordConversations {
   }
 }
 
-function dmReplier(adapter: ThreadCapable | null): DmReplier | null {
-  if (!adapter?.postResponse || adapter.instanceId === undefined) return null;
-  const { instanceId, postResponse } = adapter;
-  return { instanceId, postResponse: postResponse.bind(adapter) };
+function dmSender(adapter: ThreadCapable | null): DmSender | null {
+  if (!adapter?.notifyPrincipal) return null;
+  const notifyPrincipal = adapter.notifyPrincipal.bind(adapter);
+  return { notifyPrincipal };
 }
 
 function isThreadAdapter(adapter: ThreadCapable): adapter is ThreadAdapter {
