@@ -325,12 +325,12 @@ export class DiscordConversations {
     }));
     const since = Date.parse(record.at) - CLOCK_SKEW_MS;
     const candidates = recent.messages.filter((message: ThreadMessage) => message.authorId === bot && message.content === record.text && !bound.has(message.id));
+    const found = candidates.find(message => Date.parse(message.at) >= since);
+    if (found) return this.markSent(id, key, record, found.id, "found by thread readback");
     if (candidates.some(message => Number.isNaN(Date.parse(message.at)))) {
       this.log(`delivery ${key} stays uncertain: the adapter returned a message without a usable time`);
       return "uncertain";
     }
-    const found = candidates.find(message => Date.parse(message.at) >= since);
-    if (found) return this.markSent(id, key, record, found.id, "found by thread readback");
     await host.recordDelivery(key, { ...record, state: "failed", detail: "not found by thread readback; sent again" });
     await this.track(id, key, false);
     return "failed";
