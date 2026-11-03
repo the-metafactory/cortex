@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { findNode } from "../../../balance";
 import type { HostSources } from "../../../conversations/host";
-import type { ObjectRef, OperationRecord, SourceState } from "../../../conversations/types";
+import type { ObjectRef, SourceState } from "../../../conversations/types";
 import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-conversation-writer";
 import { calendarWriter } from "./calendar-conversation-writer";
 import { DESK_NOTE_WITHHELD, deskNoteWriter } from "./desk-note-conversation-writer";
@@ -10,7 +10,6 @@ import { deskWriterArgv, type DeskWriterKind } from "./desk-conversation-writer"
 import { goalWriter } from "./goal-conversation-writer";
 import type { GoalRunner } from "./goals";
 import { loadBalanceState } from "./balance-store";
-import { studioRequestId } from "./conversation-ids";
 import type { DeskOptions } from "./compose";
 import type { WriterRunner } from "./create";
 import type { ListedMail, TrashLedger } from "./mail-actions";
@@ -19,7 +18,8 @@ import type { RoutineRunner } from "./routine-command";
 import { reminderWriter } from "./reminder-conversation-writer";
 import { routineWriter } from "./routine-conversation-writer";
 import { tanaNoteReady, tanaNoteWriter } from "./tana-note-conversation-writer";
-import { REQUEST_TRAILER, spawnGit, type GitRunner } from "./studio/git";
+import { studioReadback, studioResponseWriter } from "./studio-conversation-writer";
+import type { GitRunner } from "./studio/git";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioThreadView, type StudioView } from "./studio/view";
 import type { DeskItem } from "./types";
@@ -88,14 +88,9 @@ export function conversationSources(deps: SourceDeps): HostSources {
     }
     return gone;
   };
-  const studioReadback = async (operation: OperationRecord): Promise<{ found: true; canonicalId: string } | { found: false } | null> => {
-    const dir = deps.desk()?.studio?.dir;
-    if (!dir) return null;
-    const r = await (deps.git ?? spawnGit)(["log", "-n", "1", `--grep=^${REQUEST_TRAILER}: ${studioRequestId(operation.operationId)}$`, "--format=%H"], dir);
-    if (r.code !== 0) return null;
-    const sha = r.stdout.trim();
-    return sha ? { found: true, canonicalId: sha } : { found: false };
-  };
+  const studioWriterDeps = { db: deps.db, desk: deps.desk, ...(deps.git ? { git: deps.git } : {}), ...(deps.now ? { now: deps.now } : {}) };
+  const studioCommit = studioReadback(studioWriterDeps);
+  const studioResponse = studioResponseWriter(studioWriterDeps);
   const deskItems = deps.deskItems;
   const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps), ...(deskItems ? { "balance-inbox-task": balanceInboxWriter({ ...deps, deskItems }) } : {}) };
   const routine = routineWriter({ routines: () => deps.desk()?.routines, ...(deps.runRoutine ? { run: deps.runRoutine } : {}) });
@@ -117,6 +112,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
       if (!desk?.enabled) return {};
       return {
         ...(hasBalanceState(deps.db) ? balanceWriters : {}),
+        ...(desk.studio ? { "studio-response": studioResponse } : {}),
         ...(desk.routines ? { routine } : {}),
         ...(desk.flows ? { flow } : {}),
         ...(deskWriterArgv(desk, "calendar") ? { "calendar-event": calendar } : {}),
@@ -150,6 +146,6 @@ export function conversationSources(deps: SourceDeps): HostSources {
       "balance-task": ref => Promise.resolve(balance(ref)),
       "balance-project": ref => Promise.resolve(balance(ref)),
     },
-    readbacks: { "studio-note": studioReadback, "studio-thread": studioReadback },
+    readbacks: { "studio-note": studioCommit, "studio-thread": studioCommit },
   };
 }
