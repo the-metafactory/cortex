@@ -23,7 +23,7 @@ const Desk = z.object({ today: z.array(Event), ahead: z.array(Event) });
 const Policy = z.object({ directory: z.string(), studio: z.object({ maxActive: z.number(), areas: z.array(z.object({ id: z.string(), label: z.string(), color: z.string(), policy: z.enum(["local", "cloud"]) })) }) });
 
 async function command(argv: string[], cwd: string): Promise<string> {
-  const child = Bun.spawn(argv, { cwd, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(argv, { cwd, env: process.env, stdout: "pipe", stderr: "pipe" });
   const timer = setTimeout(() => { child.kill(); }, 15_000);
   try {
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
