@@ -62,6 +62,7 @@ export interface InboundMessage {
   timestamp: Date;
   /** Escape hatch for platform-specific data (discord.js Message, MM post, etc.) */
   _native?: unknown;
+  messageId?: string;
 }
 
 /** Inbound file attachment metadata */
@@ -219,6 +220,12 @@ export type CreatePrivateThreadResult =
   | { ok: true; threadId: string }
   | { ok: false; detail: string };
 
+export type ThreadMembersResult = { ok: true; memberIds: string[] } | { ok: false; detail: string };
+export type ThreadPostResult = { ok: true; messageId: string } | { ok: false; detail: string; uncertain: boolean };
+export interface ThreadMessage { id: string; authorId: string; content: string }
+export type ThreadReadResult = { ok: true; messages: ThreadMessage[] } | { ok: false; detail: string };
+export type ThreadDeleteResult = { ok: true } | { ok: false; detail: string };
+
 /**
  * The core adapter interface. Each platform implements this.
  * Adapters are thin I/O wrappers — all pipeline logic lives in MessageRouter.
@@ -323,6 +330,10 @@ export interface PlatformAdapter {
     name: string;
     memberIds: string[];
   }): Promise<CreatePrivateThreadResult>;
+  privateThreadMembers?(threadId: string): Promise<ThreadMembersResult>;
+  postToThread?(opts: { threadId: string; text: string; nonce: string }): Promise<ThreadPostResult>;
+  recentThreadMessages?(opts: { threadId: string; limit: number }): Promise<ThreadReadResult>;
+  deleteThread?(threadId: string): Promise<ThreadDeleteResult>;
 
   /**
    * cortex#502 — resolve a LOGICAL surface address (the review-path

@@ -37,6 +37,9 @@ export const readOverview = (query: { state: "current" | "archived"; q: string; 
 export const organize = (id: string, change: Organize): Promise<{ conversation: ConversationMeta }> =>
   getJson(`${BASE}/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(change) });
 
+export const continueInDiscord = (id: string, retry = false): Promise<{ conversation: ConversationMeta }> =>
+  postJson(`${BASE}/${id}/discord`, retry ? { retry } : {});
+
 export const readSource = (source: ObjectRef, signal?: AbortSignal): Promise<SourceConversations> =>
   getJson<SourceConversations>(`${BASE}/source?${new URLSearchParams({ owner: source.owner, id: source.id }).toString()}`, signal ? { signal } : {});
 

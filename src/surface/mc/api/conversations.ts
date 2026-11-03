@@ -1,15 +1,19 @@
+import { z } from "zod";
 import { ConfirmSchema, creationFor, ProposeSchema, ReviseSchema, type Actor } from "../../../conversations/creation";
+import type { DiscordConversations } from "../../../conversations/discord";
 import { ConversationError, type ConversationHost, type HostStatus } from "../../../conversations/host";
 import { AttachmentUploadSchema, CreateConversationSchema, DraftSchema, InputRequestSchema, OrganizeSchema, OverviewQuerySchema } from "../../../conversations/types";
 import { applyStudioOutcome, AskStartSchema, ImportSchema, startFromAsk, isImported, withStudio, importStudioSession, OutcomeSchema, sourceConversations, SourceQuerySchema, StartSchema, startFromSource, type StudioConversationDeps } from "./conversation-studio";
 import { checkRebindGuard, enforceMutationAuth, type MutationGuardContext } from "./mutation-guard";
 import { DEFAULT_LOCAL_PRINCIPAL } from "./networks-admission";
 
-export type ConversationAccess = () => HostStatus | null;
+export type ConversationAccess = (() => HostStatus | null) & { discord?: () => DiscordConversations | null };
 
 const reply = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 const fail = (status: number, error: string): Response => reply(status, { ok: false, error });
 const NO_SOURCES = (): Response => fail(503, "Conversation sources are not set up on this stack.");
+const NO_DISCORD = "Discord threads are not set up for conversations on this stack.";
+const AttachSchema = z.object({ retry: z.boolean().optional() }).strict();
 const notAllowed = (allow: string): Response => new Response(null, { status: 405, headers: { Allow: allow } });
 function decoded(value: string): string | null {
   try { return decodeURIComponent(value); }
@@ -17,7 +21,7 @@ function decoded(value: string): string | null {
 }
 const PROPOSALS = /^\/api\/conversations\/([0-9a-f-]{36})\/proposals(?:\/([0-9a-f-]{36})(?:\/(confirm|check))?)?$/;
 const GRANT = /^\/api\/conversations\/grants\/(grant-[0-9a-f]{32})$/;
-const ITEM = /^\/api\/conversations\/([0-9a-f-]{36})(?:\/(inputs|entries|attachments|draft|outcome)(?:\/([^/]+))?)?$/;
+const ITEM = /^\/api\/conversations\/([0-9a-f-]{36})(?:\/(inputs|entries|attachments|draft|outcome|discord)(?:\/([^/]+))?)?$/;
 
 export function importedSessions(access: ConversationAccess | undefined): (sessionId: string) => Promise<boolean> {
   return async sessionId => {
@@ -86,6 +90,13 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
       if (!parsed.success) return fail(400, "The import request is not valid.");
       return reply(200, { ok: true, conversation: await importStudioSession(host, studio, parsed.data.sessionId, auth.principal) });
     }
+    const discord = access?.discord?.() ?? null;
+    if (url.pathname === "/api/conversations/discord/check") {
+      if (req.method !== "POST") return notAllowed("POST");
+      if (!discord) return fail(503, NO_DISCORD);
+      const check = await discord.check();
+      return reply(check.ok ? 200 : 503, { ok: check.ok, check });
+    }
     const actor: Actor = { principal: auth.principal, transport: "web" };
     const creation = await handleCreation(req, url, host, actor);
     if (creation) return creation;
@@ -100,7 +111,16 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
         return reply(200, { ok: true, conversation: await host.organize(id, parsed.data) });
       }
       if (req.method !== "GET") return notAllowed("GET, PATCH");
-      return reply(200, { ok: true, ...(await withStudio(host, id, await host.detail(id))) });
+      const detail = await withStudio(host, id, await host.detail(id));
+      return reply(200, { ok: true, ...detail, discord: discord ? await discord.state(id) : { available: false, reason: NO_DISCORD } });
+    }
+    if (part === "discord") {
+      if (req.method !== "POST" || inputId) return notAllowed("POST");
+      if (!discord) return fail(503, NO_DISCORD);
+      const parsed = AttachSchema.safeParse((await body(req)) ?? {});
+      if (!parsed.success) return fail(400, "The Discord request is not valid.");
+      const conversation = await discord.attach(id, parsed.data.retry === true);
+      return reply(200, { ok: true, conversation, discord: await discord.state(id) });
     }
     if (part === "draft") {
       if (req.method !== "PUT" || inputId) return notAllowed("PUT");

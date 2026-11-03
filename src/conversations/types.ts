@@ -94,6 +94,7 @@ export interface ConversationDetail {
   draft: string;
   pending: SubmissionView[];
   studio: { scope: "thread" | "note"; subject: string; outcome: OperationRecord | null } | null;
+  discord?: { available: boolean; url?: string; blocked?: string; reason?: string };
 }
 
 export interface SubmissionView {

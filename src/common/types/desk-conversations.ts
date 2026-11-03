@@ -24,5 +24,12 @@ export const DeskConversationsSchema = z.object({
     timeoutSeconds: z.number().int().min(10).max(1800).default(PI_DEFAULTS.timeoutSeconds),
     passEnv: z.array(z.string().regex(/^[A-Za-z_]\w*$/)).max(20).default(PI_DEFAULTS.passEnv),
   }).strict().default(PI_DEFAULTS),
+  discord: z.object({
+    channelId: z.string().regex(/^\d{5,25}$/, "mc.desk.conversations.discord.channelId must be a Discord channel id"),
+    guildId: z.string().regex(/^\d{5,25}$/, "mc.desk.conversations.discord.guildId must be a Discord guild id"),
+    webUrl: z.url({ protocol: /^https?$/ }),
+    instance: z.string().trim().min(1).max(200).optional(),
+  }).strict().optional(),
 }).strict();
+export type DeskConversationsDiscord = NonNullable<z.infer<typeof DeskConversationsSchema>["discord"]>;
 export type DeskConversations = z.infer<typeof DeskConversationsSchema>;

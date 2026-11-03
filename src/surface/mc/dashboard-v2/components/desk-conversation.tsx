@@ -1,8 +1,9 @@
+import { ApiFailure } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { SessionEnd } from "../../desk/studio/session-schema";
 import {
-  chooseOutcome, entryViews, failureText as failure, organize as organizeConversation, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel, statusLabel,
+  chooseOutcome, continueInDiscord, entryViews, failureText as failure, organize as organizeConversation, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel, statusLabel,
   type ConversationDetail, type ConversationEntry, type OperationRecord,
 } from "../lib/conversations";
 import type { Organize } from "../../../../conversations/types";
@@ -193,6 +194,28 @@ export interface WorkspaceProps {
   onOrganize: (change: Organize) => void;
 }
 
+export function DiscordStrip({ detail, onSaved }: { detail: ConversationDetail; onSaved: () => void }) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<{ text: string; retry: boolean } | null>(null);
+  const { conversation, discord } = detail;
+  if (!discord) return null;
+  const attach = (retry: boolean): void => {
+    setPending(true);
+    setError(null);
+    void continueInDiscord(conversation.id, retry).then(onSaved, (failed: unknown) => { setError({ text: failure(failed, "Discord did not take the thread. Nothing was sent."), retry: failed instanceof ApiFailure && failed.info.status === 409 }); }).finally(() => { setPending(false); });
+  };
+  const used = conversation.discord !== undefined;
+  const local = conversation.policy === "local";
+  return <div className="dcv-discord" role="group" aria-label="Discord">
+    {discord.url
+      ? <a className="desk-btn ghost" href={discord.url} target="_blank" rel="noreferrer">Open the Discord thread</a>
+      : discord.available && !local && conversation.state === "current" && <button type="button" className="desk-btn ghost" disabled={pending} onClick={() => { attach(false); }}>Continue in Discord</button>}
+    {used && local && <p className="dcv-quiet">Earlier messages stay in the Discord thread; they were not recalled. From now on this conversation stays private on the web, and Discord gets only a link back here.</p>}
+    {discord.blocked && <p className="desk-unsent" role="alert">Nothing is sent to the Discord thread: {discord.blocked}.</p>}
+    {error && <p className="desk-unsent" role="alert">{error.text}{error.retry && <button type="button" className="desk-btn" disabled={pending} onClick={() => { attach(true); }}>Create a new thread</button>}</p>}
+  </div>;
+}
+
 const IvyAnswer = memo(function IvyAnswer({ text }: { text: string }) {
   return <div className="dcv-markdown">{renderMarkdown(text)}</div>;
 });
@@ -219,6 +242,7 @@ export function WorkspaceView(c: WorkspaceProps) {
         <span>{statusLabel(conversation.activity.status)}</span>
         {archived && <span>Archived · read-only until you restore it</span>}
       </p>
+      <DiscordStrip detail={c.detail} onSaved={c.onSaved} />
     </header>
     <aside className="dcv-sources" aria-label="Linked work">
       {sources.map(source => source.state === "available"
