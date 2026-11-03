@@ -9,6 +9,7 @@ export const SETTINGS_GROUPS = [
   { id: "mail-sorting", label: "Mail sorting" },
   { id: "mail-rules", label: "Mail rules" },
   { id: "not-phishing", label: "Not phishing" },
+  { id: "graph-repositories", label: "Repositories" },
 ] as const;
 
 export type SettingsGroup = typeof SETTINGS_GROUPS[number]["id"];
