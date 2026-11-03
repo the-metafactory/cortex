@@ -1,12 +1,14 @@
+// glossary-ignore: host
 import { useEffect, useState } from "react";
 import type { GitlabListing, GraphRepository, GraphRepositoryListing } from "../../desk/graph-repositories";
+import { parseGitlabRef } from "../../desk/graph-repository-schema";
 import { loadGraphRepositories, saveGraphRepository } from "../lib/desk-graph-repositories";
 
 export const LISTING_FAILED_LINE = "The GitHub repositories could not be listed; check that gh is installed and signed in.";
 export const GITLAB_LISTING_FAILED_LINE = "The GitLab projects could not be listed; check that glab is installed and signed in.";
-export const GITLAB_SEVERAL_HOSTS_LINE = "The GitLab projects are not listed, because glab is signed in to several GitLab hosts and only one is supported yet.";
+export const gitlabHostFailedLine = (host: string): string => `The projects on ${host} could not be listed; check that glab is still signed in to it.`;
 
-const GITLAB_PENDING: GitlabListing = { ok: false, kind: "unavailable", reason: "" };
+const GITLAB_PENDING: GitlabListing = { ok: false, reason: "" };
 
 export function GraphRepositorySettings({ active }: { active: boolean }) {
   const [rows, setRows] = useState<GraphRepository[] | null>(null);
@@ -49,9 +51,20 @@ function RepositoryList({ rows, busy, onChange }: { rows: GraphRepository[]; bus
   );
 }
 
-function gitlabNotice(gitlab: GitlabListing, empty: boolean): string | null {
-  if (!gitlab.ok) return gitlab.kind === "several-hosts" ? GITLAB_SEVERAL_HOSTS_LINE : GITLAB_LISTING_FAILED_LINE;
-  return empty ? `No projects found for your GitLab account on ${gitlab.host}.` : null;
+// glossary-ignore: host
+type GitlabGroup = { host: string; notice: string | null; failed: boolean; rows: GraphRepository[] };
+
+/** One group per logged-in host, then one per other host a ticked project names, so every tick can be unticked. */
+function gitlabGroups(gitlab: GitlabListing, rows: GraphRepository[]): GitlabGroup[] {
+  const groups = new Map<string, GitlabGroup>();
+  for (const h of gitlab.ok ? gitlab.hosts : []) groups.set(h.host, { host: h.host, notice: h.ok ? null : gitlabHostFailedLine(h.host), failed: !h.ok, rows: [] });
+  for (const row of rows) {
+    const host = parseGitlabRef(row.ref)?.host ?? row.ref;
+    const group = groups.get(host) ?? { host, notice: null, failed: false, rows: [] };
+    group.rows.push(row);
+    groups.set(host, group);
+  }
+  return [...groups.values()].map((g) => (g.notice === null && g.rows.length === 0 ? { ...g, notice: `No projects found for your GitLab account on ${g.host}.` } : g));
 }
 
 export function GraphRepositoryBody({ rows, listing, gitlab, error, busy, onChange }: {
@@ -64,7 +77,7 @@ export function GraphRepositoryBody({ rows, listing, gitlab, error, busy, onChan
 }) {
   const githubRows = (rows ?? []).filter((r) => r.forge !== "gitlab");
   const gitlabRows = (rows ?? []).filter((r) => r.forge === "gitlab");
-  const gitlabLine = gitlabNotice(gitlab, gitlabRows.length === 0);
+  const groups = gitlabGroups(gitlab, gitlabRows);
   return (
     <section className="desk-set-card" aria-label="Repositories Ivy may file to">
       <h2>Repositories Ivy may file to</h2>
@@ -84,8 +97,14 @@ export function GraphRepositoryBody({ rows, listing, gitlab, error, busy, onChan
           </section>
           <section aria-label="GitLab projects">
             <h3>GitLab</h3>
-            {gitlabLine !== null && <p className="desk-set-empty" role={gitlab.ok ? undefined : "status"}>{gitlabLine}</p>}
-            {gitlabRows.length > 0 && <RepositoryList rows={gitlabRows} busy={busy} onChange={onChange} />}
+            {!gitlab.ok && <p className="desk-set-empty" role="status">{GITLAB_LISTING_FAILED_LINE}</p>}
+            {groups.map((g) => (
+              <section key={g.host} aria-label={`GitLab projects on ${g.host}`}>
+                <h4>{g.host}</h4>
+                {g.notice !== null && <p className="desk-set-empty" role={g.failed ? "status" : undefined}>{g.notice}</p>}
+                {g.rows.length > 0 && <RepositoryList rows={g.rows} busy={busy} onChange={onChange} />}
+              </section>
+            ))}
           </section>
           {error && <p className="desk-set-err" role="alert">{error}</p>}
         </>

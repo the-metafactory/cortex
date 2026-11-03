@@ -1,20 +1,29 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { GITLAB_LISTING_FAILED_LINE, GITLAB_SEVERAL_HOSTS_LINE, GraphRepositoryBody, LISTING_FAILED_LINE } from "../components/desk-graph-repositories";
+import { GITLAB_LISTING_FAILED_LINE, GraphRepositoryBody, LISTING_FAILED_LINE, gitlabHostFailedLine } from "../components/desk-graph-repositories";
 import type { GitlabListing } from "../../desk/graph-repositories";
 import { SettingsBody } from "../components/desk-settings";
 import { loadGraphRepositories, saveGraphRepository } from "../lib/desk-graph-repositories";
 
 const noop = (): void => {};
 const repo = (name: string, enabled: boolean, extra: { listed?: false } = {}) => ({ ref: `github:github.com/${name}`, label: name, forge: "github", enabled, ...extra });
-const project = (path: string, enabled: boolean, extra: { listed?: false } = {}) => ({ ref: `gitlab:gitlab.example.org/${path}`, label: path, forge: "gitlab", enabled, ...extra });
-const GITLAB_OK: GitlabListing = { ok: true, host: "gitlab.example.org" };
+const project = (path: string, enabled: boolean, extra: { listed?: false } = {}, host = "gitlab.example.org") => ({ ref: `gitlab:${host}/${path}`, label: path, forge: "gitlab", enabled, ...extra });
+const GITLAB_OK: GitlabListing = { ok: true, hosts: [{ host: "gitlab.example.org", ok: true }] };
 const body = (rows: ReturnType<typeof repo>[] | null, listing: { ok: true } | { ok: false; reason: string } = { ok: true }, error: string | null = null, gitlab: GitlabListing = GITLAB_OK) =>
   renderToStaticMarkup(<GraphRepositoryBody rows={rows} listing={listing} gitlab={gitlab} error={error} busy={false} onChange={noop} />);
 const section = (html: string, label: string): string => {
   const start = html.indexOf(`<section aria-label="${label}">`);
-  return start < 0 ? "" : html.slice(start, html.indexOf("</section>", start));
+  if (start < 0) return "";
+  const tags = /<section[\s>]|<\/section>/g;
+  tags.lastIndex = start;
+  let depth = 0;
+  for (let m = tags.exec(html); m !== null; m = tags.exec(html)) {
+    depth += m[0] === "</section>" ? -1 : 1;
+    if (depth === 0) return html.slice(start, m.index);
+  }
+  return html.slice(start);
 };
+const hostSection = (html: string, host: string): string => section(html, `GitLab projects on ${host}`);
 
 describe("the repositories panel", () => {
   it("is a Settings page of its own with the panel title", () => {
@@ -64,7 +73,7 @@ describe("the GitLab section", () => {
   });
 
   it("says in one sentence that the projects could not be listed, and leaves the GitHub section unaffected", () => {
-    const html = body([repo("jcfischer/desk", true)], { ok: true }, null, { ok: false, kind: "unavailable", reason: "glab missing" });
+    const html = body([repo("jcfischer/desk", true)], { ok: true }, null, { ok: false, reason: "glab missing" });
     expect(section(html, "GitLab projects")).toContain(GITLAB_LISTING_FAILED_LINE);
     expect(GITLAB_LISTING_FAILED_LINE.match(/\./g)).toHaveLength(1);
     expect(section(html, "GitHub repositories")).not.toContain(GITLAB_LISTING_FAILED_LINE);
@@ -72,15 +81,30 @@ describe("the GitLab section", () => {
     expect(section(html, "GitHub repositories")).toMatch(/aria-label="Allow Ivy to file to jcfischer\/desk"[^>]*checked/);
   });
 
-  it("says several GitLab hosts are not supported yet, and keeps a ticked project so it can be unticked", () => {
-    const html = body([project("g/p", true)], { ok: true }, null, { ok: false, kind: "several-hosts", reason: "a, b" });
-    expect(section(html, "GitLab projects")).toContain(GITLAB_SEVERAL_HOSTS_LINE);
-    expect(GITLAB_SEVERAL_HOSTS_LINE.match(/\./g)).toHaveLength(1);
-    expect(section(html, "GitLab projects")).toMatch(/aria-label="Allow Ivy to file to g\/p"[^>]*checked/);
+  it("shows one group per logged-in host, headed by the host name, and says in one sentence that a failing host could not be listed", () => {
+    const gitlab: GitlabListing = { ok: true, hosts: [{ host: "a.example.org", ok: true }, { host: "b.example.org", ok: true }, { host: "c.example.org", ok: false, reason: "502" }] };
+    const html = body([project("g/p", true, {}, "a.example.org"), project("team/tool", false, {}, "b.example.org"), project("g/ticked", true, {}, "c.example.org"), repo("jcfischer/desk", true)], { ok: true }, null, gitlab);
+    expect(hostSection(html, "a.example.org")).toContain("<h4>a.example.org</h4>");
+    expect(hostSection(html, "a.example.org")).toMatch(/aria-label="Allow Ivy to file to g\/p"[^>]*checked/);
+    expect(hostSection(html, "a.example.org")).not.toContain("team/tool");
+    expect(hostSection(html, "b.example.org")).toMatch(/aria-label="Allow Ivy to file to team\/tool"(?![^>]*checked)/);
+    expect(hostSection(html, "c.example.org")).toContain(gitlabHostFailedLine("c.example.org"));
+    expect(gitlabHostFailedLine("c.example.org").replaceAll("c.example.org", "").match(/\./g)).toHaveLength(1);
+    expect(hostSection(html, "c.example.org")).toMatch(/aria-label="Allow Ivy to file to g\/ticked"[^>]*checked/);
+    for (const host of ["a.example.org", "b.example.org"]) expect(hostSection(html, host)).not.toContain("could not be listed");
+    expect(html).not.toContain(GITLAB_LISTING_FAILED_LINE);
+    expect(section(html, "GitHub repositories")).toMatch(/aria-label="Allow Ivy to file to jcfischer\/desk"[^>]*checked/);
+    expect(section(html, "GitHub repositories")).not.toContain("could not be listed");
+  });
+
+  it("keeps a ticked project on a host that is not logged in, in a group of its own, so it can be unticked", () => {
+    const html = body([project("g/p", true, { listed: false }, "gitlab.com")]);
+    expect(hostSection(html, "gitlab.com")).toContain("g/p<small>not listed</small>");
+    expect(hostSection(html, "gitlab.example.org")).toContain("No projects found for your GitLab account on gitlab.example.org.");
   });
 
   it("says so when the host has no projects", () => {
-    expect(section(body([repo("jcfischer/desk", false)]), "GitLab projects")).toContain("No projects found for your GitLab account on gitlab.example.org.");
+    expect(hostSection(body([repo("jcfischer/desk", false)]), "gitlab.example.org")).toContain("No projects found for your GitLab account on gitlab.example.org.");
   });
 });
 
@@ -89,7 +113,7 @@ describe("the repository requests", () => {
     const reply = { repositories: [repo("acme/api", true), { nonsense: true }], listing: { ok: false, reason: "no gh" } };
     const seen: string[] = [];
     const fake = async (path: string, init: RequestInit) => { seen.push(`${init.method} ${path}`); return Response.json(reply); };
-    expect(await loadGraphRepositories(fake)).toEqual({ ok: true, repositories: [repo("acme/api", true)], listing: { ok: false, reason: "no gh" }, gitlab: { ok: false, kind: "unavailable", reason: "" } });
+    expect(await loadGraphRepositories(fake)).toEqual({ ok: true, repositories: [repo("acme/api", true)], listing: { ok: false, reason: "no gh" }, gitlab: { ok: false, reason: "" } });
     expect(seen).toEqual(["GET /api/desk/graph-repositories"]);
   });
 
@@ -98,10 +122,12 @@ describe("the repository requests", () => {
       const r = await loadGraphRepositories(async () => Response.json({ repositories: [], listing: { ok: true }, gitlab }));
       return r.ok ? r.gitlab : null;
     };
-    expect(await read({ ok: true, host: "gitlab.example.org" })).toEqual({ ok: true, host: "gitlab.example.org" });
-    expect(await read({ ok: false, kind: "several-hosts", reason: "a, b" })).toEqual({ ok: false, kind: "several-hosts", reason: "a, b" });
-    expect(await read({ ok: false, kind: "bogus" })).toEqual({ ok: false, kind: "unavailable", reason: "" });
-    expect(await read({ ok: true })).toEqual({ ok: false, kind: "unavailable", reason: "" });
+    const listed: GitlabListing = { ok: true, hosts: [{ host: "a.example.org", ok: true }, { host: "b.example.org", ok: false, reason: "502" }] };
+    expect(await read(listed)).toEqual(listed);
+    expect(await read({ ok: true, hosts: [{ host: "a.example.org", ok: "yes" }, { ok: true }, null, { host: "" }] })).toEqual({ ok: true, hosts: [{ host: "a.example.org", ok: false, reason: "" }] });
+    expect(await read({ ok: false, reason: "glab missing" })).toEqual({ ok: false, reason: "glab missing" });
+    expect(await read({ ok: true, host: "gitlab.example.org" })).toEqual({ ok: false, reason: "" });
+    expect(await read(undefined)).toEqual({ ok: false, reason: "" });
   });
 
   it("returns the server's reason, or one line, when the listing cannot be read", async () => {
