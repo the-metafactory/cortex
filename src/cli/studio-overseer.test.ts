@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,10 @@ import { runStudioAct } from "../surface/mc/desk/studio/writer";
 import { runOverseer } from "./studio-overseer";
 
 const cleanup: (() => Promise<void>)[] = [];
+const isHostGitConfigOverride = (key: string) => key === "GIT_CONFIG_PARAMETERS" || /^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+)$/.test(key);
+const hostGitConfigOverrides = Object.entries(process.env).filter(([key]) => isHostGitConfigOverride(key));
+beforeAll(() => { for (const [key] of hostGitConfigOverrides) Reflect.deleteProperty(process.env, key); });
+afterAll(() => { for (const [key, value] of hostGitConfigOverrides) process.env[key] = value; });
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 const thread = (tonight = false) => `---\ntype: question\nareas: [lab]\nstate: active\nopened: 2026-10-31\nthinkTonight: ${tonight}\n---\n## Question\nWhat can we test?\n## Where I stand\nOne real repository.\n## Material\n- capture: baseline\n## Ivy's notes\n## Log\n`;
 
@@ -19,7 +23,7 @@ async function rig(tonight = false, format = "sha1") {
   const calls = join(dir, ".git/calls.jsonl");
   const stub = join(dir, ".git/ranger.ts");
   await writeFile(stub, `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2))+"\\n");`);
-  const server = Bun.serve({ port: 0, fetch(request) { return Response.json(new URL(request.url).pathname.endsWith("studio") ? { directory: dir, studio: { maxActive: 5, areas: [{ id: "lab", label: "Lab", color: "blue", policy: "local" }] } } : { today: [], ahead: [] }); } });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) { return Response.json(new URL(request.url).pathname.endsWith("studio") ? { directory: dir, studio: { maxActive: 5, areas: [{ id: "lab", label: "Lab", color: "blue", policy: "local" }] } } : { today: [], ahead: [] }); } });
   cleanup.push(async () => { await server.stop(true); });
   return { dir, git, calls, config: { dir, deskUrl: `http://127.0.0.1:${server.port}`, ranger: [process.execPath, stub], staleDays: 600000 } };
 }
@@ -170,7 +174,7 @@ test("an ignored new ledger rolls back its entire proposal transaction", async (
 
 test("a HEAD change during policy lookup cannot enqueue a stale selection", async () => {
   const r = await rig(true);
-  const server = Bun.serve({ port: 0, fetch(request) {
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
     if (new URL(request.url).pathname.endsWith("studio")) {
       r.git("commit", "--allow-empty", "-qm", "Concurrent commit");
       return Response.json({ directory: r.dir, studio: { maxActive: 5, areas: [{ id: "lab", label: "Lab", color: "blue", policy: "local" }] } });
