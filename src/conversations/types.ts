@@ -1,11 +1,17 @@
 import { z } from "zod";
+import { CLOUD_LANE_ID } from "../common/types/desk-conversations";
 import { CREATABLE_TYPES, type CreatableType } from "./catalog";
 
 export const OWNER_TYPES = CREATABLE_TYPES;
 export type OwnerType = CreatableType;
 export type ConversationId = string;
 export type Policy = "local" | "cloud";
-export type ModelRoute = Policy;
+export type ModelRoute = Policy | `cloud:${string}`;
+export const ROUTE = new RegExp(`^(?:local|cloud|cloud:${CLOUD_LANE_ID})$`);
+export const isModelRoute = (value: unknown): value is ModelRoute => typeof value === "string" && ROUTE.test(value);
+export const routePolicy = (route: ModelRoute): Policy => route === "local" ? "local" : "cloud";
+export const laneName = (lane: { provider: string; model: string }): string => `${lane.provider}/${lane.model}`;
+export const routeLabel = (route: string): string => route.startsWith("cloud:") ? `${route.slice("cloud:".length)} cloud` : route;
 
 export const ObjectRefSchema = z.object({
   owner: z.enum(OWNER_TYPES),
@@ -67,8 +73,8 @@ export type AttachmentUpload = z.infer<typeof AttachmentUploadSchema>;
 export const DraftSchema = z.object({ text: z.string().max(20_000) }).strict();
 
 export const CONVERSATION_STATES = ["current", "archived"] as const;
-export const OrganizeSchema = z.object({ pinned: z.boolean().optional(), state: z.enum(CONVERSATION_STATES).optional() }).strict()
-  .refine(change => change.pinned !== undefined || change.state !== undefined);
+export const OrganizeSchema = z.object({ pinned: z.boolean().optional(), state: z.enum(CONVERSATION_STATES).optional(), cloud: z.string().regex(new RegExp(`^${CLOUD_LANE_ID}$`)).nullable().optional() }).strict()
+  .refine(change => change.pinned !== undefined || change.state !== undefined || change.cloud !== undefined);
 export type Organize = z.infer<typeof OrganizeSchema>;
 export const OverviewQuerySchema = z.object({
   state: z.enum(CONVERSATION_STATES).default("current"),
@@ -88,8 +94,12 @@ export interface OverviewRow {
 }
 export interface OverviewPage { rows: OverviewRow[]; next?: string }
 
+export interface CloudChoice { id: string; provider: string; model: string }
+export interface ModelChoices { cloud: CloudChoice[]; chosen: string | null; using: string | null }
+
 export interface ConversationDetail {
   conversation: ConversationMeta;
+  models: ModelChoices;
   sources: SourceView[];
   draft: string;
   pending: SubmissionView[];
@@ -113,6 +123,7 @@ export interface ConversationEntry {
   data?: unknown;
   at?: number;
   error?: string;
+  model?: string;
 }
 
 export const CONTINUATION_KIND = "cortex.continuation";

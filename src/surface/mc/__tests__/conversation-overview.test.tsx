@@ -172,7 +172,7 @@ describe("Ivy conversation overview view", () => {
   });
 
   test("an archived conversation opens read-only with Restore and no way to send", () => {
-    const detail: ConversationDetail = { conversation: meta({ state: "archived" }), sources: [], draft: "", pending: [], studio: null };
+    const detail: ConversationDetail = { conversation: meta({ state: "archived" }), models: { cloud: [], chosen: null, using: null }, sources: [], draft: "", pending: [], studio: null };
     const html = renderToStaticMarkup(<WorkspaceView detail={detail} entries={[]} draft="" ready busy={false} sending={false} retrying={false} error={null} onDraft={noop} onSend={noop} onRetry={noop} onLeave={noop} onSaved={noop} organizing={false} onOrganize={noop} />);
     expect(html).toContain(">Restore</button>");
     expect(html).toContain(">Unpin</button>");

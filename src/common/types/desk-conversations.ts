@@ -13,10 +13,27 @@ const LaneSchema = z.object({
   thinking: z.enum(PI_THINKING).optional(),
 }).strict();
 export type ConversationLane = z.infer<typeof LaneSchema>;
+export const LEGACY_CLOUD_ID = "cloud";
+export const CLOUD_LANE_ID = "[a-z][a-z0-9-]{0,31}";
+export const CloudLaneIdSchema = z.string().regex(new RegExp(`^${CLOUD_LANE_ID}$`), "mc.desk.conversations cloud lane id must be lower-case letters, digits and dashes");
+const CloudLaneSchema = z.object({
+  id: CloudLaneIdSchema,
+  ...LaneSchema.shape,
+}).strict();
+export type CloudLane = z.infer<typeof CloudLaneSchema>;
+const CloudSchema = z.union([
+  LaneSchema,
+  z.array(CloudLaneSchema).min(1).max(8).refine(lanes => new Set(lanes.map(lane => lane.id)).size === lanes.length, "mc.desk.conversations cloud lane ids must be unique"),
+]);
+export type CloudConfig = z.infer<typeof CloudSchema>;
+export const cloudLanes = (cloud: CloudConfig | undefined): CloudLane[] => {
+  if (!cloud) return [];
+  return Array.isArray(cloud) ? cloud : [{ id: LEGACY_CLOUD_ID, ...cloud }];
+};
 
 export const DeskConversationsSchema = z.object({
   local: LaneSchema.optional(),
-  cloud: LaneSchema.optional(),
+  cloud: CloudSchema.optional(),
   pi: z.object({
     bin: z.string().default(PI_DEFAULTS.bin),
     extensions: z.array(z.string().min(1)).max(10).optional(),

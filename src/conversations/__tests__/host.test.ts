@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { answering, scratchHosts } from "./fixtures/scratch";
+import { answering, openHost, scratchHosts } from "./fixtures/scratch";
 import { ConversationError, openConversationHost, type ConversationHost, type HostOptions } from "../host";
 import type { TurnCall, TurnRequest } from "../model";
 import type { LinkResolvers, Policy, SourceState } from "../types";
@@ -20,10 +20,7 @@ function recorder(answer: (request: TurnRequest) => Promise<string> | string = r
 }
 
 async function open(dir: string, extra: Partial<HostOptions> = {}): Promise<ConversationHost> {
-  const status = await openConversationHost({ dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local, cloud }, turns: answering(() => "ok"), ...extra });
-  if (status.state !== "ready") throw new Error(status.reason);
-  hosts.push(status.host);
-  return status.host;
+  return openHost(hosts, { dir, stack: "test", label: LABEL, expectedLabel: LABEL, lanes: { local, cloud }, turns: answering(() => "ok"), ...extra });
 }
 
 const lockOwner = (pid: number, label: string) => JSON.stringify({ pid, label, stack: "test", at: "2026-11-01T00:00:00.000Z" });

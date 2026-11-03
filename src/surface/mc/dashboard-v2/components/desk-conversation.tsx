@@ -3,10 +3,10 @@ import { renderMarkdown } from "../lib/markdown";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { SessionEnd } from "../../desk/studio/session-schema";
 import {
-  chooseOutcome, continueInDiscord, entryViews, failureText as failure, organize as organizeConversation, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel, statusLabel,
+  chooseOutcome, continueInDiscord, entryViews, failureText as failure, modelLine, organize as organizeConversation, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel, statusLabel,
   type ConversationDetail, type ConversationEntry, type OperationRecord,
 } from "../lib/conversations";
-import type { Organize } from "../../../../conversations/types";
+import { laneName, type Organize } from "../../../../conversations/types";
 import { CreationPanel } from "./desk-conversation-create";
 import "./desk-conversation.css";
 
@@ -216,6 +216,21 @@ export function DiscordStrip({ detail, onSaved }: { detail: ConversationDetail; 
   </div>;
 }
 
+export function ModelPicker({ models, disabled, onChoose }: { models: ConversationDetail["models"]; disabled: boolean; onChoose: (cloud: string | null) => void }) {
+  const line = modelLine(models);
+  const first = models.cloud[0];
+  return <div className="dcv-model" role="group" aria-label="Cloud model">
+    {line.choose
+      ? <label>Cloud model <select value={models.chosen ?? ""} disabled={disabled} onChange={e => { onChoose(e.target.value || null); }}>
+          {first && <option value="">Default · {laneName(first)}</option>}
+          {models.cloud.map(lane => <option key={lane.id} value={lane.id}>{lane.id} · {laneName(lane)}</option>)}
+          {line.missing && <option value={line.missing}>{line.missing} · no longer configured</option>}
+        </select></label>
+      : line.text && <span className="dcv-quiet">Cloud model {line.text}</span>}
+    {line.missing && <p className="desk-unsent" role="alert">The cloud model {line.missing} chosen for this conversation is no longer configured. Choose another; nothing is sent until you do, and no other model is used.</p>}
+  </div>;
+}
+
 const IvyAnswer = memo(function IvyAnswer({ text }: { text: string }) {
   return <div className="dcv-markdown">{renderMarkdown(text)}</div>;
 });
@@ -242,6 +257,7 @@ export function WorkspaceView(c: WorkspaceProps) {
         <span>{statusLabel(conversation.activity.status)}</span>
         {archived && <span>Archived · read-only until you restore it</span>}
       </p>
+      {conversation.policy === "cloud" && <ModelPicker models={c.detail.models} disabled={c.organizing || archived} onChoose={cloud => { c.onOrganize({ cloud }); }} />}
       <DiscordStrip detail={c.detail} onSaved={c.onSaved} />
     </header>
     <aside className="dcv-sources" aria-label="Linked work">

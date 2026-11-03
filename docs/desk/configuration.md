@@ -233,17 +233,41 @@ mc:
 
 `local` and `cloud` are lanes: a pi `provider` and `model`, and optional `thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`). A local-only conversation runs only on `local`. A cloud-allowed conversation uses `cloud`, or `local` when `cloud` is absent. Only you can decide which provider counts as local; Cortex does not infer it.
 
+To offer more than one cloud model, write `cloud` as a list of lanes, each with an `id` (lower-case letters, digits and dashes, unique in the list):
+
+```yaml
+mc:
+  desk:
+    conversations:
+      local: { provider: spark, model: longctx }
+      cloud:
+        - { id: codex, provider: openai-codex, model: gpt-6.1-sol }
+        - { id: claude, provider: anthropic, model: claude-opus-5-5 }
+```
+
+These rules decide which cloud model answers:
+
+- The first lane in the list is the default. New conversations, Studio conversations and Hand to Ivy use it.
+- In the conversation view, **Cloud model** chooses another lane for that conversation. The choice applies from the next turn. The record shows that the context was reconstructed for the new model.
+- A local-only conversation ignores the choice and runs only on `local`.
+- If the chosen model fails, the turn shows the failure, names the model and offers **Retry**. Cortex never switches to another model or provider on its own.
+- If the chosen lane is removed from the config, the conversation refuses new turns and says so until you choose another model.
+
+Each answer in the conversation record names the provider and model that produced it, for example `openai-codex/gpt-6.1-sol`. A single `cloud` lane keeps working unchanged; it is the only cloud model and has no choice in the view.
+
 <!-- glossary-ignore: agent -->
 `pi.bin` defaults to `pi` on the Cortex runtime's `PATH`, then `~/.local/bin/pi`. `pi.extensions` defaults to `soma.ts` in pi's agent directory (`PI_CODING_AGENT_DIR`, else `~/.pi/agent/extensions`) when that file exists. These are the only pi extensions loaded: Cortex passes `--no-extensions`, `--no-mcp` and `--no-context-files`, so installed packages, MCP servers and other extensions are not loaded inside a conversation. Without a projection, Cortex logs "no Soma projection found" at start and turns have no Soma tools.
 
 pi gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `TERM`, `TZ`, `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE` and variables starting with `PI_`, `SOMA_`, `XDG_` or `LC_` from the Cortex environment. Add the names of other variables it needs, such as a provider key variable, to `pi.passEnv`.
 
-`pi.tools` can only narrow the read-only tools `soma_context`, `read`, `grep`, `find` and `ls`. Cortex passes them as an explicit `--tools` allowlist, so write, edit, shell, web, task and routing tools, and any tool installed later, stay unavailable. A turn on the `cloud` lane gets no file read or search. Every tool call and its result is recorded in the conversation. A call to a tool outside the allowlist is recorded as refused when pi answers that the tool was not found; any other result stops the turn with an error.
+`pi.tools` can only narrow the read-only tools `soma_context`, `read`, `grep`, `find` and `ls`. Cortex passes them as an explicit `--tools` allowlist, so write, edit, shell, web, task and routing tools, and any tool installed later, stay unavailable. A turn on a cloud lane gets no file read or search. Every tool call and its result is recorded in the conversation. A call to a tool outside the allowlist is recorded as refused when pi answers that the tool was not found; any other result stops the turn with an error.
 
 pi keeps one session per conversation and lane under the stack's conversation directory (`pi-sessions`). If that session is missing, or the lane or engine changed, the next turn starts a new session with the earlier exchange from the conversation record, and the record shows that the context was reconstructed.
 
 ### Hand a mail to Ivy
 
-The same lanes and pi settings run **Hand to Ivy** on a mail card. The action is offered when `conversations` has a lane, `ask.writers.task` and at least one `ask.taskMaps` entry are set, and `mail.actions.draft` is set. It files an agent task on the first task map with the mail's sender, subject, classifier summary, link and your optional instruction, never the mail body; keep that map private. Ivy then gets one pi turn with the subject, summary and the mail's first paragraph, and answers with findings and a reply draft. A mail from a `local`-policy area runs only on the `local` lane; any other mail runs on `cloud`, or on `local` when `cloud` is absent. Suspicious mail is never handed over.
+<!-- glossary-ignore: run -->
+<!-- glossary-ignore: body -->
+The same lanes and pi settings run **Hand to Ivy** on a mail card. The action is offered when `conversations` has a lane, `ask.writers.task` and at least one `ask.taskMaps` entry are set, and `mail.actions.draft` is set. It files an agent task on the first task map with the mail's sender, subject, classifier summary, link and your optional instruction, never the mail body; keep that map private. Ivy then gets one pi turn with the subject, summary and the mail's first paragraph, and answers with findings and a reply draft. A mail from a `local`-policy area runs only on the `local` lane; any other mail runs on the default `cloud` lane, or on `local` when `cloud` is absent. Suspicious mail is never handed over.
 
 While Ivy works, the mail card shows "With Ivy since" and the time. The result arrives as a card in Catch-up: **Approve** saves the draft through `mail.actions.draft`, **Edit** opens it in the reply editor first, and **Discard** closes it. Nothing is sent. A failed turn shows its reason with **Ask Ivy again**; the hand-off is kept in `desk_mail_handoffs`. pi sessions for hand-offs live under the stack's `mail-handoff` directory. The task on the map stays open; the Desk does not close it.
