@@ -1040,7 +1040,7 @@
   },
   "src/bus/brain-consumer.ts": {
     "cortex/no-comments": {
-      "count": 200
+      "count": 199
     }
   },
   "src/bus/bus-dispatch-listener.ts": {
@@ -3769,7 +3769,7 @@
   },
   "src/runner/brain-consumer-boot.ts": {
     "cortex/no-comments": {
-      "count": 167
+      "count": 164
     }
   },
   "src/runner/budget-check.ts": {

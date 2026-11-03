@@ -301,37 +301,36 @@ export type BrainConsumerOpts =
   | BrainConsumerPerTaskOpts
   | BrainConsumerDaemonOpts;
 
+/** One pull subscription for a capability: its subject, stream and durable. */
+export interface BrainBinding {
+  pattern: string;
+  stream: string;
+  durable: string;
+  maxMessages?: number;
+  expiresMs?: number;
+  thresholdMessages?: number;
+}
+
 /**
  * Options for {@link BrainConsumer.start} when binding real JetStream pull
- * consumers. ONE subscription opens per declared capability; the caller
- * supplies a per-capability `(capability) => { pattern, stream, durable }`
- * resolver so the boot wiring owns the subject grammar + durable naming.
+ * consumers. The caller's `resolve` returns every binding for one capability
+ * (the boot path: `…brain.{capability}` for surface tasks and
+ * `…tasks.{capability}` for bus tasks, cortex#3134), so the boot wiring owns
+ * the subject grammar and durable naming. An empty list skips the capability.
  */
 export interface BrainConsumerStartOpts {
   bootRetry?: JetstreamBootRetryOptions;
-  /**
-   * Resolve the pull-subscription parameters for one capability. Returning
-   * `null` skips binding that capability (e.g. a capability with no provisioned
-   * stream). The boot path derives
-   * `local.{principal}.{stack}.tasks.{capability}` + a per-(agent,capability)
-   * durable.
-   */
-  resolve(capability: string): {
-    pattern: string;
-    stream: string;
-    durable: string;
-    maxMessages?: number;
-    expiresMs?: number;
-    thresholdMessages?: number;
-  } | null;
+  resolve(capability: string): readonly BrainBinding[];
 }
 
 /** Boot/log info per the consumer's `start()` outcome. */
 export interface BrainConsumerStartedInfo {
   agentId: string;
   capabilities: readonly string[];
-  /** Capabilities whose pull subscription actually opened on the broker. */
+  /** Capabilities whose every binding opened on the broker. */
   subscribedCapabilities: readonly string[];
+  partialCapabilities: readonly string[];
+  openedBindings: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -396,10 +395,11 @@ export class BrainConsumer {
   }
 
   /**
-   * Bind one pull subscription per declared capability. Idempotent-guarded
-   * (throws if already started). A capability whose `resolve` returns null —
-   * or whose `subscribePull` returns null (runtime dormant) — is skipped and
-   * NOT counted as subscribed, so the boot log can be honest.
+   * Bind every resolved pull subscription for each declared capability, then
+   * await all their handshakes together. Idempotent-guarded (throws if already
+   * started). A capability counts as subscribed only when ALL its bindings
+   * opened; one with no bindings, or with a binding `subscribePull` declined
+   * (runtime dormant), is NOT counted, so the boot log can be honest.
    */
   async start(opts: BrainConsumerStartOpts): Promise<BrainConsumerStartedInfo> {
     if (this.started) {
@@ -409,57 +409,55 @@ export class BrainConsumer {
     }
     this.started = true;
     const subscribedCapabilities: string[] = [];
+    const partialCapabilities: string[] = [];
+    const opened: MyelinSubscriber[] = [];
 
     for (const capability of this.agent.capabilities) {
-      const resolved = opts.resolve(capability);
-      if (resolved === null) continue;
-
-      const subscribePullOpts: {
-        bootRetry?: JetstreamBootRetryOptions;
-        pattern: string;
-        stream: string;
-        durable: string;
-        onEnvelope: (envelope: Envelope, subject: string) => Promise<AckDecision>;
-        maxMessages?: number;
-        expiresMs?: number;
-        thresholdMessages?: number;
-      } = {
-        pattern: resolved.pattern,
-        stream: resolved.stream,
-        durable: resolved.durable,
-        // Capture THIS capability so the routed task carries the right id even
-        // though one consumer serves several capabilities.
-        onEnvelope: async (envelope, subject) =>
-          this.processEnvelope(envelope, subject, null, capability),
-      };
-      if (opts.bootRetry !== undefined) subscribePullOpts.bootRetry = opts.bootRetry;
-      if (resolved.maxMessages !== undefined) {
-        subscribePullOpts.maxMessages = resolved.maxMessages;
-      }
-      if (resolved.expiresMs !== undefined) {
-        subscribePullOpts.expiresMs = resolved.expiresMs;
-      }
-      if (resolved.thresholdMessages !== undefined) {
-        subscribePullOpts.thresholdMessages = resolved.thresholdMessages;
-      }
-
-      // `subscribePull` is OPTIONAL on MyelinRuntime (the additivity constraint
-      // ReviewConsumer also honours). An undefined property or a null return
-      // means the runtime is disabled — skip, leave the capability unsubscribed.
-      const sub = this.runtime.subscribePull
-        ? this.runtime.subscribePull(subscribePullOpts)
-        : null;
-      if (sub === null) continue;
-      this.subscribers.push(sub);
-      await sub.ready;
-      subscribedCapabilities.push(capability);
+      const bindings = opts.resolve(capability);
+      const subs = bindings.map((resolved) => this.bind(capability, resolved, opts.bootRetry));
+      for (const sub of subs) if (sub !== null) opened.push(sub);
+      const openCount = subs.filter((sub) => sub !== null).length;
+      if (openCount > 0 && openCount === subs.length) subscribedCapabilities.push(capability);
+      else if (openCount > 0) partialCapabilities.push(capability);
     }
+    await Promise.all(opened.map((sub) => sub.ready));
 
     return {
       agentId: this.agent.id,
       capabilities: this.agent.capabilities,
       subscribedCapabilities,
+      partialCapabilities,
+      openedBindings: opened.length,
     };
+  }
+
+  private bind(
+    capability: string,
+    resolved: BrainBinding,
+    bootRetry: JetstreamBootRetryOptions | undefined,
+  ): MyelinSubscriber | null {
+    const { pattern, stream, durable, maxMessages, expiresMs, thresholdMessages } = resolved;
+    // `subscribePull` is OPTIONAL on MyelinRuntime (the additivity constraint
+    // ReviewConsumer also honours). An undefined property or a null return
+    // means the runtime is disabled — skip, leave the capability unsubscribed.
+    const sub = this.runtime.subscribePull
+      ? this.runtime.subscribePull({
+          pattern,
+          stream,
+          durable,
+          ...(bootRetry !== undefined && { bootRetry }),
+          ...(maxMessages !== undefined && { maxMessages }),
+          ...(expiresMs !== undefined && { expiresMs }),
+          ...(thresholdMessages !== undefined && { thresholdMessages }),
+          // Capture THIS capability so the routed task carries the right id even
+          // though one consumer serves several capabilities.
+          onEnvelope: async (envelope, subject) =>
+            this.processEnvelope(envelope, subject, null, capability),
+        })
+      : null;
+    if (sub === null) return null;
+    this.subscribers.push(sub);
+    return sub;
   }
 
   /**

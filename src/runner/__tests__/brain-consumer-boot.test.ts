@@ -24,10 +24,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import {
+  brainBindingsFor,
   wireBrainConsumers,
   type BrainBootAgent,
   type WireBrainConsumersOpts,
 } from "../brain-consumer-boot";
+import type { ProvisionJsm } from "../../bus/jetstream/provision";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type {
   EnvelopeHandler,
@@ -130,7 +132,7 @@ function agent(
 }
 
 describe("wireBrainConsumers — per-capability binding", () => {
-  test("startForAgent binds one durable per capability and pushes onto the shared brainConsumers[]", async () => {
+  test("startForAgent binds a brain. and a tasks. durable per capability and pushes onto the shared brainConsumers[]", async () => {
     const runtime = fakeRuntime();
     const brainConsumers: BrainConsumer[] = [];
     const { startForAgent } = wireBrainConsumers(
@@ -142,14 +144,125 @@ describe("wireBrainConsumers — per-capability binding", () => {
     expect(brainConsumers).toHaveLength(1);
     expect(brainConsumers[0]!.agent.id).toBe("yarrow");
 
-    expect(runtime.subscribePullCalls).toHaveLength(1);
-    expect(runtime.subscribePullCalls[0]!.pattern).toBe(
-      "local.andreas.work.brain.soc.compose.flow",
-    );
-    expect(runtime.subscribePullCalls[0]!.durable).toBe(
-      "cortex-brain-consumer-andreas-yarrow-soc-compose-flow",
-    );
-    expect(runtime.subscribePullCalls[0]!.stream).toBe("BRAIN_TASKS");
+    expect(runtime.subscribePullCalls.map(({ pattern, stream, durable }) => ({ pattern, stream, durable }))).toEqual([
+      {
+        pattern: "local.andreas.work.brain.soc.compose.flow",
+        stream: "BRAIN_TASKS",
+        durable: "cortex-brain-consumer-andreas-yarrow-soc-compose-flow",
+      },
+      {
+        pattern: "local.andreas.work.tasks.soc.compose.flow",
+        stream: "BRAIN_BUS_ANDREAS_WORK_SOC_COMPOSE_FLOW",
+        durable: "cortex-brain-consumer-andreas-yarrow-soc-compose-flow-tasks",
+      },
+    ]);
+  });
+
+  test("a bus task on tasks.{capability} reaches the brain as that capability", async () => {
+    const runtime = fakeRuntime();
+    const brainConsumers: BrainConsumer[] = [];
+    const { startForAgent } = wireBrainConsumers(baseOpts({ runtime, brainConsumers }));
+    await startForAgent(agent("helm", ["compose.judgment"]));
+    const routed: { subject: string; capability: string | undefined }[] = [];
+    brainConsumers[0]!.processEnvelope = async (_envelope, subject, _msg, capability) => {
+      routed.push({ subject, capability });
+      return { kind: "ack" } as never;
+    };
+
+    const busBinding = runtime.subscribePullCalls.find((c) => c.pattern.includes(".tasks."))!;
+    await busBinding.onEnvelope({} as Envelope, "local.andreas.work.tasks.compose.judgment", {} as never);
+
+    expect(routed).toEqual([{ subject: "local.andreas.work.tasks.compose.judgment", capability: "compose.judgment" }]);
+  });
+
+  async function helmReadyLine(capabilities: string[], declined: (pattern: string) => boolean): Promise<string | undefined> {
+    const runtime = fakeRuntime();
+    const realSubscribe = runtime.subscribePull!;
+    runtime.subscribePull = (o) => (declined(o.pattern) ? null : realSubscribe(o));
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (...a: unknown[]) => lines.push(a.join(" "));
+    try {
+      await wireBrainConsumers(baseOpts({ runtime })).startForAgent(agent("helm", capabilities));
+    } finally {
+      console.log = origLog;
+    }
+    return lines.find((l) => l.includes("brain consumer ready for agent=helm"));
+  }
+
+  test("a capability whose tasks. binding does not open is logged as partial, not subscribed", async () => {
+    const ready = await helmReadyLine(["compose.judgment"], (p) => p.includes(".tasks."));
+    expect(ready).toContain("subscribed=[]");
+    expect(ready).toContain("partial=[compose.judgment]");
+    expect(ready).not.toContain("unsubscribed=");
+  });
+
+  test("a capability with no opened binding is logged as unsubscribed, not partial", async () => {
+    const ready = await helmReadyLine(["compose.judgment", "rate.feed"], (p) => p.endsWith(".rate.feed"));
+    expect(ready).toContain("subscribed=[compose.judgment]");
+    expect(ready).toContain("unsubscribed=[rate.feed]");
+    expect(ready).not.toContain("partial=");
+  });
+
+  test("code-review.* and dev.* capabilities get no tasks. binding (CODE_REVIEW and DEV_IMPLEMENT own those subjects)", () => {
+    for (const capability of ["code-review.typescript", "dev.implement"]) {
+      const bindings = brainBindingsFor({
+        principal: "andreas",
+        stack: "work",
+        agentId: "a",
+        capability,
+        brainTasksStream: "BRAIN_TASKS",
+      });
+      expect(bindings.map((b) => b.pattern)).toEqual([`local.andreas.work.brain.${capability}`]);
+    }
+  });
+
+  test("with a JetStream manager, provisions the capability's own stream and both durables before binding", async () => {
+    const streamAdds: unknown[] = [];
+    const consumerAdds: { stream: string; durable: unknown; filter: unknown }[] = [];
+    const notFound = (): never => {
+      const err = new Error("not found");
+      (err as unknown as { api_error: { err_code: number } }).api_error = { err_code: 10059 };
+      throw err;
+    };
+    const brainJsm: ProvisionJsm = {
+      streams: {
+        info: async () => notFound(),
+        add: async (cfg) => {
+          streamAdds.push({ name: cfg.name, subjects: cfg.subjects });
+          return { config: cfg } as never;
+        },
+        update: async (_n, cfg) => ({ config: cfg }) as never,
+      },
+      consumers: {
+        info: async () => notFound(),
+        add: async (stream, cfg) => {
+          consumerAdds.push({ stream, durable: cfg.durable_name, filter: cfg.filter_subject });
+          return { config: cfg } as never;
+        },
+        update: async (_s, _d, cfg) => ({ config: cfg }) as never,
+        delete: async () => true,
+      },
+    };
+    const { startForAgent } = wireBrainConsumers(baseOpts({ brainJsm }));
+
+    await startForAgent(agent("helm", ["compose.judgment"]));
+
+    expect(streamAdds).toEqual([
+      { name: "BRAIN_BUS_ANDREAS_WORK_COMPOSE_JUDGMENT", subjects: ["local.andreas.work.tasks.compose.judgment"] },
+    ]);
+    expect(consumerAdds).toEqual([
+      {
+        stream: "BRAIN_TASKS",
+        durable: "cortex-brain-consumer-andreas-helm-compose-judgment",
+        filter: "local.andreas.work.brain.compose.judgment",
+      },
+      {
+        stream: "BRAIN_BUS_ANDREAS_WORK_COMPOSE_JUDGMENT",
+        durable: "cortex-brain-consumer-andreas-helm-compose-judgment-tasks",
+        filter: "local.andreas.work.tasks.compose.judgment",
+      },
+    ]);
   });
 
   test("a builtin/absent brain (no kind: exec) is a no-op — no consumer constructed", async () => {
