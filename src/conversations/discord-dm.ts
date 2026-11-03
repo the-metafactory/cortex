@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { InboundMessage, NotifyResult, PlatformAdapter } from "../adapters/types";
+import { DEFAULT_LOCAL_PRINCIPAL } from "../surface/mc/api/networks-admission";
 import { ConversationError, type ConversationHost } from "./host";
 import type { AttachmentRef, ConversationEntry, ConversationMeta } from "./types";
 
@@ -8,7 +9,7 @@ export interface DmConversationOptions {
   host: ConversationHost;
   sender: () => DmSender | null;
   principalId: string | undefined;
-  owner: () => string;
+  webPrincipal: () => string | null;
   ingest: (id: string, msg: InboundMessage) => Promise<AttachmentRef[]>;
   render: (entry: ConversationEntry) => string | null;
   split: (text: string) => string[];
@@ -90,7 +91,8 @@ export class DmConversations {
     if (HandledSchema.safeParse(await host.delivery(handledKey(messageId))).success) return;
     const reply = await this.run(msg, messageId).catch((error: unknown) => {
       if (error instanceof ConversationError) return `Not sent to Ivy: ${error.message}`;
-      throw error;
+      this.options.log(`DM message ${messageId} failed: ${error instanceof Error ? error.message : String(error)}`);
+      return "Not sent to Ivy: something went wrong on this stack. Send it again; the daemon log has the details.";
     });
     await host.recordDelivery(handledKey(messageId), { kind: "dm-handled", at: this.options.now().toISOString() });
     if (reply) await this.say(`reply:${messageId}`, reply);
@@ -132,10 +134,7 @@ export class DmConversations {
     if (!within(open.age, OFFER_TTL_MS) || msg.timestamp.getTime() <= Date.parse(open.offer.requestedAt)) return "Nothing changed: that list has expired. Send `conversations` for a fresh one.";
     const chosen = open.offer.rows[index - 1];
     if (!chosen) return `Nothing changed: the list has no number ${index}.`;
-    const meta = await host.meta(chosen.id).catch((error: unknown) => {
-      if (error instanceof ConversationError && error.status === 404) return null;
-      throw error;
-    });
+    const meta = await this.metaOrNull(chosen.id);
     if (!meta) return "Nothing changed: that conversation no longer exists.";
     if (meta.policy === "local") return `${PRIVATE_ROW}: <${this.options.webLink(meta.id)}>`;
     if (meta.state === "archived") {
@@ -168,17 +167,20 @@ export class DmConversations {
   private async target(msg: InboundMessage): Promise<string> {
     const { host } = this.options;
     const current = await this.current();
-    if (current.conversationId) {
-      const exists = await host.meta(current.conversationId).then(() => true, (error: unknown) => {
-        if (error instanceof ConversationError && error.status === 404) return false;
-        throw error;
-      });
-      if (exists) return current.conversationId;
-    }
+    if (current.conversationId && await this.metaOrNull(current.conversationId)) return current.conversationId;
+    const principal = this.options.webPrincipal();
+    if (!principal) throw new ConversationError(503, "this stack has more than one web principal, so a conversation started in Discord would have no clear owner. Start it on the web.");
     const title = (msg.content.trim().split("\n")[0] ?? "").slice(0, TITLE_MAX).trim() || "Discord DM";
-    const created = await host.create({ title, links: [], origin: { kind: "discord-dm" }, policy: "cloud" }, this.options.owner());
+    const created = await host.create({ title, links: [], origin: { kind: "discord-dm" }, policy: "cloud" }, principal);
     await this.setCurrent({ kind: "dm-current", conversationId: created.id, cursor: null });
     return created.id;
+  }
+
+  private async metaOrNull(id: string): Promise<ConversationMeta | null> {
+    return this.options.host.meta(id).catch((error: unknown) => {
+      if (error instanceof ConversationError && error.status === 404) return null;
+      throw error;
+    });
   }
 
   async project(id: string): Promise<void> {
@@ -237,6 +239,13 @@ export class DmConversations {
     log(`${state} DM delivery ${key}: ${result.code}${result.detail ? ` (${result.detail})` : ""}; not sent again`);
     return "done";
   }
+}
+
+export function conversationWebPrincipal(principals: ReadonlySet<string>, localPrincipal: string | undefined): string | null {
+  if (principals.size === 0) return localPrincipal ?? DEFAULT_LOCAL_PRINCIPAL;
+  if (principals.size === 1) return [...principals][0] ?? null;
+  const local = localPrincipal?.trim().toLowerCase();
+  return local && principals.has(local) ? local : null;
 }
 
 function within(age: number, limit: number): boolean {

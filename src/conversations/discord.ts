@@ -16,7 +16,7 @@ export interface DiscordConversationOptions {
   adapter: () => ThreadCapable | null;
   config: DeskConversationsDiscord;
   principalId: string | undefined;
-  owner?: string;
+  webPrincipal?: string;
   fetch?: (url: string, init: RequestInit) => Promise<Response>;
   now?: () => Date;
   log?: (line: string) => void;
@@ -63,17 +63,17 @@ export class DiscordConversations {
   private readonly now: () => Date;
   private readonly log: (line: string) => void;
   private readonly dm: DmConversations;
-  private owner: string;
+  private webPrincipal: string | null;
 
   constructor(private readonly options: DiscordConversationOptions) {
     this.now = options.now ?? (() => new Date());
     this.log = options.log ?? (line => { console.log(`conversations: discord: ${line}`); });
-    this.owner = options.owner ?? DEFAULT_LOCAL_PRINCIPAL;
+    this.webPrincipal = options.webPrincipal ?? DEFAULT_LOCAL_PRINCIPAL;
     this.dm = new DmConversations({
       host: options.host,
       sender: () => dmSender(options.adapter()),
       principalId: options.principalId,
-      owner: () => this.owner,
+      webPrincipal: () => this.webPrincipal,
       ingest: (id, msg) => this.ingest(id, msg),
       render: projection,
       split: chunks,
@@ -99,8 +99,8 @@ export class DiscordConversations {
     return (await this.dm.current()).conversationId;
   }
 
-  setOwner(principal: string): void {
-    this.owner = principal;
+  setWebPrincipal(principal: string | null): void {
+    this.webPrincipal = principal;
   }
 
   webLink(id: string): string {
@@ -297,7 +297,7 @@ export class DiscordConversations {
 
   private async project(id: string): Promise<void> {
     await this.projectThread(id);
-    await this.dm.project(id);
+    await this.serial("dm", () => this.dm.project(id));
   }
 
   private async projectThread(id: string): Promise<void> {

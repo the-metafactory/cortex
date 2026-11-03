@@ -3,7 +3,7 @@ import type { InboundMessage } from "../../adapters/types";
 import { FakeThreads } from "./fixtures/discord-threads";
 import { answering, scratchHosts } from "./fixtures/scratch";
 import { DiscordConversations } from "../discord";
-import { CLAIM_WINDOW_MS, OFFER_TTL_MS, parseDmCommand } from "../discord-dm";
+import { CLAIM_WINDOW_MS, conversationWebPrincipal, OFFER_TTL_MS, parseDmCommand } from "../discord-dm";
 import { openConversationHost, type ConversationHost } from "../host";
 import type { LinkResolvers, Policy } from "../types";
 
@@ -29,7 +29,7 @@ async function setup(resolvers?: LinkResolvers) {
   const lines: string[] = [];
   const clock = { at: new Date("2026-11-03T10:00:00Z") };
   const bridge = new DiscordConversations({ host, adapter: () => fake, config, principalId: PRINCIPAL, now: () => clock.at, log: line => { lines.push(line); } });
-  bridge.setOwner(OWNER);
+  bridge.setWebPrincipal(OWNER);
   let seq = 0;
   const dm = async (content: string, extra: Partial<InboundMessage> = {}): Promise<boolean> => {
     const msg: InboundMessage = {
@@ -183,6 +183,29 @@ describe("the principal's Discord DM is a running conversation", () => {
     expect(fake.dms.join("\n")).not.toContain("secret");
     await dm("more from Discord");
     expect(fake.dms.at(-1)).toBe(`This conversation is private, so it continues only on the web: <${webLink(id)}>. Write \`new\` to start another one here.`);
+  });
+
+  test("the web principal owning DM conversations is the only one configured, else none", async () => {
+    expect(conversationWebPrincipal(new Set(), undefined)).toBe("local-principal@loopback");
+    expect(conversationWebPrincipal(new Set(), "me@example.org")).toBe("me@example.org");
+    expect(conversationWebPrincipal(new Set(["a@example.org"]), undefined)).toBe("a@example.org");
+    expect(conversationWebPrincipal(new Set(["a@example.org", "b@example.org"]), "B@example.org")).toBe("b@example.org");
+    expect(conversationWebPrincipal(new Set(["a@example.org", "b@example.org"]), undefined)).toBeNull();
+    const { bridge, dm, fake, lines } = await setup();
+    bridge.setWebPrincipal(null);
+    expect(await dm("hello")).toBe(true);
+    expect(fake.dms.at(-1)).toBe("Not sent to Ivy: this stack has more than one web principal, so a conversation started in Discord would have no clear owner. Start it on the web.");
+    expect(await bridge.dmConversation()).toBeNull();
+    bridge.setWebPrincipal(OWNER);
+    expect(lines).toHaveLength(0);
+  });
+
+  test("an unexpected failure is answered in the DM and logged, never dropped silently", async () => {
+    const { host, dm, fake, lines } = await setup();
+    host.submit = () => Promise.reject(new Error("disk full"));
+    expect(await dm("hello")).toBe(true);
+    expect(fake.dms.at(-1)).toBe("Not sent to Ivy: something went wrong on this stack. Send it again; the daemon log has the details.");
+    expect(lines.filter(line => line.includes("disk full"))).toHaveLength(1);
   });
 
   test("a send before the adapter connects is retried; an uncertain one is not repeated; no id is recorded as best-effort", async () => {
