@@ -4,6 +4,7 @@ import type { DeskOptions } from "./compose";
 import { studioRequestId } from "./conversation-ids";
 import { readStudioMyDay } from "./studio-my-day";
 import { planAct, StudioActSchema, type ActContext, type ActPlan, type ActRefusal, type StudioAct } from "./studio/acts";
+import { CONVERSATION_NOTE_KINDS, planConversationNote, type ConversationNoteKind } from "./studio/conversation-note";
 import { REQUEST_TRAILER, spawnGit, type GitRunner } from "./studio/git";
 import { runStudioTransaction } from "./studio/writer";
 
@@ -100,6 +101,21 @@ export function studioThreadWriter(deps: StudioWriterDeps): OwnerWriter {
       const act = studioAct({ act: "open", from: "conversation", question, area, ...(park ? { park } : {}), link: request.provenance.link }, THREAD_LABELS);
       if (typeof act === "string") return act;
       return ctx => planAct(ctx, act);
+    },
+    after: refreshMyDay(deps),
+  });
+}
+
+const isNoteKind = (kind: string): kind is ConversationNoteKind => (CONVERSATION_NOTE_KINDS as readonly string[]).includes(kind);
+
+export function studioNoteWriter(deps: StudioWriterDeps): OwnerWriter {
+  return studioConversationWriter(deps, {
+    prepare: request => {
+      const { thread = "", kind = "", text = "" } = request.fields;
+      const chosen = kind.trim() || "note";
+      if (!isNoteKind(chosen)) return `${chosen} is not a note kind; use note, idea or stand.`;
+      if (!text.trim()) return "The text is empty.";
+      return ctx => planConversationNote(ctx, { thread, kind: chosen, text, via: conversationVia(request) });
     },
     after: refreshMyDay(deps),
   });

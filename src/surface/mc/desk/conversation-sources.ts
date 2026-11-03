@@ -19,7 +19,7 @@ import type { RoutineRunner } from "./routine-command";
 import { reminderWriter } from "./reminder-conversation-writer";
 import { routineWriter } from "./routine-conversation-writer";
 import { tanaNoteReady, tanaNoteWriter } from "./tana-note-conversation-writer";
-import { studioReadback, studioResponseWriter, studioThreadWriter } from "./studio-conversation-writer";
+import { studioNoteWriter, studioReadback, studioResponseWriter, studioThreadWriter } from "./studio-conversation-writer";
 import type { GitRunner } from "./studio/git";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioThreadView, type StudioView } from "./studio/view";
@@ -94,6 +94,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const studioCommit = studioReadback(studioWriterDeps);
   const studioResponse = studioResponseWriter(studioWriterDeps);
   const studioThread = studioThreadWriter(studioWriterDeps);
+  const studioNote = studioNoteWriter(studioWriterDeps);
   const deskItems = deps.deskItems;
   const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps), ...(deskItems ? { "balance-inbox-task": balanceInboxWriter({ ...deps, deskItems }) } : {}) };
   const routine = routineWriter({ routines: () => deps.desk()?.routines, ...(deps.runRoutine ? { run: deps.runRoutine } : {}) });
@@ -118,7 +119,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
       if (!desk?.enabled) return {};
       return {
         ...(hasBalanceState(deps.db) ? balanceWriters : {}),
-        ...(desk.studio ? { "studio-response": studioResponse, "studio-thread": studioThread } : {}),
+        ...(desk.studio ? { "studio-response": studioResponse, "studio-thread": studioThread, "studio-note": studioNote } : {}),
         ...(desk.routines ? { routine } : {}),
         ...(desk.flows ? { flow } : {}),
         ...(desk.somaBin ? { "graph-node": graphNode, "graph-map": graphMap } : {}),
