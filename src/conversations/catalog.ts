@@ -1,5 +1,5 @@
 export const CREATABLE_TYPES = [
-  "graph-node", "graph-map", "balance-task", "balance-project", "balance-inbox-task", "studio-thread", "studio-capture", "studio-note", "studio-outcome",
+  "graph-node", "graph-map", "balance-task", "balance-project", "balance-inbox-task", "studio-thread", "studio-capture", "studio-note", "studio-response", "studio-close",
   "flow", "routine", "calendar-event", "reminder", "soma-goal", "tana-note", "desk-note", "mail-draft",
 ] as const;
 export type CreatableType = (typeof CREATABLE_TYPES)[number];
@@ -28,7 +28,7 @@ const long = (name: string, label: string, required = false): FieldSpec => ({ na
 export const OWNER_BLOCKERS: Record<CreatableType, number> = {
   "graph-node": 3033, "graph-map": 3034,
   "balance-task": 3030, "balance-project": 3031, "balance-inbox-task": 3032,
-  "studio-thread": 3141, "studio-capture": 3142, "studio-note": 3140, "studio-outcome": 3138,
+  "studio-thread": 3141, "studio-capture": 3142, "studio-note": 3140, "studio-response": 3138, "studio-close": 3139,
   flow: 3146, routine: 3035, "calendar-event": 3036, reminder: 3037, "soma-goal": 3038, "tana-note": 3039, "desk-note": 3040, "mail-draft": 3041,
 };
 
@@ -58,8 +58,12 @@ export const CREATION_CATALOG: Record<CreatableType, CreatableSpec> = {
   "studio-note": { row: "O10", label: "Studio note, idea or stand", owner: "Studio", egress: "local", fields: [
     text("thread", "Thread", true, true), text("kind", "Kind (note, idea or stand)"), long("text", "Text", true),
   ] },
-  "studio-outcome": { row: "O11", label: "Studio response or decision", owner: "Studio", egress: "local", fields: [
-    text("thread", "Thread", true, true), long("text", "Response or outcome", true), { name: "review", label: "Review date (decisions)", kind: "date", required: false },
+  "studio-response": { row: "O11", label: "Studio response", owner: "Studio", egress: "local", fields: [
+    text("thread", "Thread", true, true), long("text", "Response", true),
+  ] },
+  "studio-close": { row: "O11", label: "Studio close", owner: "Studio", egress: "local", fields: [
+    text("thread", "Thread", true, true), text("outcome", "Outcome (decided, shipped or dropped)"), long("text", "Outcome text", true),
+    long("expect", "What you expect to happen"), { name: "reviewOn", label: "Review date", kind: "date", required: false },
   ] },
   flow: { row: "O14", label: "Flow", owner: "Pulse", egress: "local", fields: [
     text("name", "Name"), long("definition", "Flow definition", true),
