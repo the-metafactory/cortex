@@ -266,13 +266,15 @@ describe("graph node writer specifics", () => {
 describe("graph map writer specifics", () => {
   const mapRig = (allowed: string[] = [DESK]) => rig(SOMA, allowed, "graph-map");
 
-  test("without serves the argv has no --serves, and a serves value that is not a goal is refused before soma runs", async () => {
+  test("absent, empty or blank serves leaves out --serves, and a serves value that is not a goal is refused before soma runs", async () => {
     const r = await mapRig();
     await r.confirm(await r.propose(MAP));
     expect(r.soma.calls[0]).not.toContain("--serves");
+    for (const blank of ["", " "]) await r.confirm(await r.propose({ ...MAP, serves: blank }));
+    expect(r.soma.calls.map(argv => argv.includes("--serves"))).toEqual([false, false, false]);
     const serves = await r.confirm(await r.propose({ ...MAP, serves: "--repo=other/x" }));
     expect([serves.status, serves.body.error]).toEqual([409, "A map may serve only a goal written as G<n>, such as G5. Nothing was created."]);
-    expect(r.soma.calls).toHaveLength(1);
+    expect(r.soma.calls).toHaveLength(3);
   });
 
   test("a GitLab repository is passed verbatim with the project itself as --home-project", async () => {

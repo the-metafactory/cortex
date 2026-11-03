@@ -144,7 +144,7 @@ const oneOf = <T extends string>(values: readonly T[], value: string | undefined
   return (values as readonly string[]).includes(chosen) ? (chosen as T) : null;
 };
 
-interface GraphCall { verb: "add" | "chart"; parent: string | null; head: string[]; tail: string[] }
+interface GraphCall { verb: "add" | "chart"; parent: string | null; before: string[]; tail: string[] }
 interface Destination { repository: string; autonomy: (typeof GRAPH_AUTONOMIES)[number]; marker: string }
 type GraphPlan = (fields: Record<string, string>, destination: Destination) => GraphCall | CreateResult;
 
@@ -161,9 +161,10 @@ function graphWriter(deps: GraphWriterDeps, plan: GraphPlan): OwnerWriter {
     if (!autonomy) return graphFailed("A conversation may file only approve or propose nodes.");
     const call = plan(request.fields, { repository, autonomy, marker: graphMarker(request.operationId) });
     if ("state" in call) return call;
+    const head = ["graph", call.verb, ...call.before];
     if (request.signal.aborted) throw new Error("The conversation stopped waiting before soma was called.");
-    recordGraphOperation(deps.db, request.operationId, { repository, parent: call.parent, args: [...call.head, ...call.tail] }, now());
-    const result = await withBodyFile(graphBody(request.fields.body, request.provenance), file => run([somaBin, ...call.head, "--body-file", file, ...call.tail], "", ADD_TIMEOUT_MS));
+    recordGraphOperation(deps.db, request.operationId, { repository, parent: call.parent, args: [...head, ...call.tail] }, now());
+    const result = await withBodyFile(graphBody(request.fields.body, request.provenance), file => run([somaBin, ...head, "--body-file", file, ...call.tail], "", ADD_TIMEOUT_MS));
     return graphAnswer(result, call.verb);
   };
   return { create, readback: graphReadback(deps) };
@@ -180,7 +181,7 @@ export function graphNodeWriter(deps: GraphWriterDeps): OwnerWriter {
     return {
       verb: "add",
       parent,
-      head: ["graph", "add", parent, "--repo", repository, "--title", title, "--autonomy", autonomy, "--kind", kind, "--label", GRAPH_LABEL, "--checkpoint", checkpoint],
+      before: [parent, "--repo", repository, "--title", title, "--autonomy", autonomy, "--kind", kind, "--label", GRAPH_LABEL, "--checkpoint", checkpoint],
       tail: [...dependencies.flatMap(d => ["--blocked-by", d]), "--once", marker, "--json"],
     };
   });
@@ -198,8 +199,8 @@ export function graphMapWriter(deps: GraphWriterDeps): OwnerWriter {
     return {
       verb: "chart",
       parent: null,
-      head: [
-        "graph", "chart", "--repo", repository, ...(home ? ["--home-project", home] : []), "--title", title, "--autonomy", autonomy, "--checkpoint", checkpoint, "--label", GRAPH_LABEL,
+      before: [
+        "--repo", repository, ...(home ? ["--home-project", home] : []), "--title", title, "--autonomy", autonomy, "--checkpoint", checkpoint, "--label", GRAPH_LABEL,
         ...(serves ? ["--serves", serves] : []),
       ],
       tail: ["--once", marker, "--json"],
