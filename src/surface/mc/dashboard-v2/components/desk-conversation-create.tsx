@@ -124,6 +124,7 @@ function ProposalCard({ id, view, types, busy, archived, act }: { id: string; vi
           : <input aria-label={f.label} type={f.kind === "date" ? "date" : f.kind === "datetime" ? "datetime-local" : "text"} value={fields[f.name] ?? ""} disabled={!editable} onChange={e => { setFields({ ...fields, [f.name]: e.target.value }); }} />}
       </label>)}
       {capability.fixed.map(t => <p key={t.label} className="dcv-quiet"><strong>{t.label}:</strong> {t.value}</p>)}
+      {proposal.suggestion && <p className="dcv-quiet">Filer: {proposal.suggestion}</p>}
     </div>}
     {settled && <p role="status">Created {capability?.label.toLowerCase()} {view.operation?.canonicalId}{view.operation?.url ? <> · <a href={view.operation.url}>Open it</a></> : null}. It links back to this exchange.</p>}
     {editable && view.feedback === "proposed" && <div className="dcv-standing">

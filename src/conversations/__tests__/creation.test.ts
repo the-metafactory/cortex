@@ -5,7 +5,7 @@ import { fixtureOwner, type FixtureOwner } from "./fixtures/owner";
 import { CREATABLE_TYPES, CREATION_CATALOG, OWNER_BLOCKERS, type CreatableType } from "../catalog";
 import { ConversationCreation, capabilities, ProposeSchema, unavailableHere, type Actor, type CapabilityStatus, type ProposalView } from "../creation";
 import { ConversationError, openConversationHost, type ConversationHost } from "../host";
-import { CREATION_KIND, GRANT_KIND, type OwnerWriters, type Policy } from "../types";
+import { CREATION_KIND, GRANT_KIND, type OwnerWriter, type OwnerWriters, type Policy } from "../types";
 
 const LABEL = "ai.meta-factory.cortex.test";
 const lane = { provider: "test", model: "m" };
@@ -276,6 +276,46 @@ describe("conversation creation proposals", () => {
     await host.organize(id, { state: "archived" });
     await refused(creation.propose(id, { proposalId: randomUUID(), type: "graph-node", fields: node }, web), 409);
     expect(owner.effects).toHaveLength(2);
+  });
+});
+
+describe("owner suggestions at propose", () => {
+  const withSuggest = (owner: FixtureOwner, suggest: NonNullable<OwnerWriter["suggest"]>): OwnerWriters => ({ "studio-capture": { ...owner.writer, suggest } });
+  const capture = (creation: ConversationCreation, id: string, fields: Record<string, string>) =>
+    creation.propose(id, { proposalId: randomUUID(), type: "studio-capture", fields }, web);
+
+  test("asks once before revision 1 when the destination is absent, merges known fields, and revise never asks again", async () => {
+    const asked: { fields: Record<string, string>; policy: Policy }[] = [];
+    const { creation, start } = await setup(owner => withSuggest(owner, (fields, context) => {
+      asked.push({ fields, policy: context.policy });
+      return Promise.resolve({ fields: { thread: "alpha", unknown: "x" }, reason: "It is about alpha." });
+    }));
+    const id = await start("local");
+    const body = { proposalId: randomUUID(), type: "studio-capture", fields: { text: "A thought", thread: " " } };
+    const { view } = await creation.propose(id, body, web);
+    expect(view.proposal).toMatchObject({ revision: 1, fields: { text: "A thought", thread: "alpha" }, suggestion: "It is about alpha." });
+    expect(view.sentence).toBe("Create a studio capture “A thought” in thread alpha.");
+    expect(asked).toEqual([{ fields: { text: "A thought" }, policy: "local" }]);
+    expect((await creation.propose(id, body, web)).duplicate).toBe(true);
+    const cleared = await creation.revise(id, view.proposal.proposalId, { revision: 1, fields: { text: "A thought", thread: "" } }, web);
+    expect(cleared.proposal.fields.thread).toBe("");
+    expect(asked).toHaveLength(1);
+  });
+
+  test("a given destination, a throw, null or an empty reason leave the fields as proposed with no suggestion", async () => {
+    let calls = 0;
+    const answers = [() => Promise.reject(new Error("filer down")), () => Promise.resolve(null), () => Promise.resolve({ fields: { thread: "alpha" }, reason: " " })];
+    const { creation, start } = await setup(owner => withSuggest(owner, () => answers[calls++]?.() ?? Promise.resolve(null)));
+    const id = await start();
+    const given = await capture(creation, id, { text: "Given", thread: "beta" });
+    expect(given.view.proposal.fields).toEqual({ text: "Given", thread: "beta" });
+    expect(calls).toBe(0);
+    for (const text of ["Thrown", "Null", "Blank"]) {
+      const { view } = await capture(creation, id, { text });
+      expect(view.proposal.fields).toEqual({ text });
+      expect(view.proposal.suggestion).toBeUndefined();
+    }
+    expect(calls).toBe(3);
   });
 });
 

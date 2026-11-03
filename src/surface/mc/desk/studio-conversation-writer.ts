@@ -1,12 +1,16 @@
 import type { Database } from "bun:sqlite";
-import type { CreateRequest, CreateResult, OwnerReadback, OwnerWriter } from "../../../conversations/types";
+import type { CreateRequest, CreateResult, OwnerReadback, OwnerWriter, Policy, Suggestion } from "../../../conversations/types";
 import type { DeskOptions } from "./compose";
 import { studioRequestId } from "./conversation-ids";
 import { readStudioMyDay } from "./studio-my-day";
 import { planAct, StudioActSchema, type ActContext, type ActPlan, type ActRefusal, type StudioAct } from "./studio/acts";
+import { askFiler, captureId, captureInInbox, captureInThread, captureModel, filerFor, recordCaptureDone, type CaptureModel } from "./studio/capture";
 import { CONVERSATION_NOTE_KINDS, planConversationNote, type ConversationNoteKind } from "./studio/conversation-note";
 import { REQUEST_TRAILER, spawnGit, type GitRunner } from "./studio/git";
+import { oneLine } from "./studio/edit";
 import { THREAD_OUTCOMES, type ThreadOutcome } from "./studio/format";
+import { readStudioFiles } from "./studio/read";
+import { buildStudioView } from "./studio/view";
 import { runStudioTransaction } from "./studio/writer";
 
 export interface StudioWriterDeps {
@@ -20,7 +24,7 @@ export type StudioPlanner = (ctx: ActContext) => ActPlan | ActRefusal | Promise<
 
 export interface StudioWriterSpec {
   prepare: (request: CreateRequest, desk: DeskOptions) => StudioPlanner | string | Promise<StudioPlanner | string>;
-  after?: (desk: DeskOptions, request: CreateRequest, commit: string) => Promise<void>;
+  after?: (desk: DeskOptions, request: CreateRequest, commit: string, message: string) => Promise<void>;
 }
 
 const NOTHING = "Nothing was created.";
@@ -66,7 +70,7 @@ export function studioConversationWriter(deps: StudioWriterDeps, spec: StudioWri
       if (result.status >= 500) throw new Error(result.error);
       return studioFailed(result.error);
     }
-    await spec.after?.(desk, request, result.commit);
+    await spec.after?.(desk, request, result.commit, result.message);
     return { state: "created", canonicalId: result.commit };
   };
   return { create, readback: studioReadback(deps) };
@@ -137,4 +141,46 @@ export function studioCloseWriter(deps: StudioWriterDeps): OwnerWriter {
     },
     after: refreshMyDay(deps),
   });
+}
+
+const INBOX = "it goes to the Studio inbox.";
+const toInbox = (reason: string): string => `${oneLine(reason).replace(/;? ?saved in the Studio inbox\.$/i, "").replace(/[.;\s]+$/, "")}; ${INBOX}`;
+
+export interface CaptureWriterDeps extends StudioWriterDeps { model?: CaptureModel }
+
+export function studioCaptureWriter(deps: CaptureWriterDeps): OwnerWriter {
+  const clock = deps.now ?? Date.now;
+  const writer = studioConversationWriter(deps, {
+    prepare: request => {
+      const text = (request.fields.text ?? "").trim();
+      if (!text) return "The capture is empty.";
+      const slug = (request.fields.thread ?? "").trim();
+      const id = captureId(studioRequestId(request.operationId));
+      return ctx => {
+        if (!slug) return captureInInbox(ctx, id, text, { via: "conversation" }, "Saved in the Studio inbox.");
+        const thread = ctx.view.active.find(t => t.slug === slug);
+        if (!thread) return { status: 409, error: "That thread is no longer active. Nothing was created." };
+        return captureInThread(ctx, thread, id, [oneLine(text)], `Filed capture ${id} ${conversationVia(request)}`, `Filed in “${oneLine(thread.question)}”.`);
+      };
+    },
+    after: async (desk, request, _commit, message) => {
+      recordCaptureDone(deps.db, captureId(studioRequestId(request.operationId)), (request.fields.text ?? "").trim(), message, clock());
+      await refreshMyDay(deps)(desk);
+    },
+  });
+  const suggest = async (fields: Record<string, string>, context: { policy: Policy }): Promise<Suggestion | null> => {
+    const desk = deps.desk();
+    const studio = desk?.enabled ? desk.studio : undefined;
+    const text = fields.text?.trim();
+    if (!desk || !studio || !text) return null;
+    const { files, problems } = await readStudioFiles(studio.dir);
+    const active = buildStudioView(files, studio, desk.areas, problems).active;
+    const config = context.policy === "local" ? studio.filer?.local : filerFor(studio, active);
+    if (!config) return null;
+    if (active.length === 0) return { fields: {}, reason: `No thread is active; ${INBOX}` };
+    const { answer, reason } = await askFiler(config, active, text, deps.model ?? captureModel);
+    const match = answer?.match && answer.thread ? active.find(t => t.slug === answer.thread) : undefined;
+    return match ? { fields: { thread: match.slug }, reason: oneLine(reason) } : { fields: {}, reason: toInbox(reason) };
+  };
+  return { ...writer, suggest };
 }
