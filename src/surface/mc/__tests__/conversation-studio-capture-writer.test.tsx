@@ -120,6 +120,19 @@ describe("Studio capture writer", () => {
     } finally { r.repo.clean(); }
   });
 
+  test("a local conversation with no local filer gets no suggestion, never asks the other filer, and files to the inbox", async () => {
+    const other = filer(ALPHA);
+    const r = await rig({ filer: { local: false }, captureModel: other.model });
+    try {
+      const view = await r.propose({ text: "Local thought" });
+      expect(view.proposal.fields).toEqual({ text: "Local thought" });
+      expect(view.proposal.suggestion).toBeUndefined();
+      const operation = r.created(await r.confirm(view));
+      expect(inbox(r.repo.dir)).toEqual([`${captureId(studioRequestId(operation.operationId))}.md`]);
+      expect(other.asked).toHaveLength(0);
+    } finally { r.repo.clean(); }
+  });
+
   test("a local conversation asks only the local filer, also when every thread is cloud", async () => {
     const local = filer(ALPHA);
     const r = await rig({ filer: { local: false }, captureModel: local.model, areaPolicy: "cloud" });
