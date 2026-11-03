@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ConfirmSchema, creationFor, ProposeSchema, ReviseSchema, type Actor } from "../../../conversations/creation";
 import type { DiscordConversations } from "../../../conversations/discord";
-import { ConversationError, DISCORD_HISTORY_NOTICE, type ConversationHost, type HostStatus } from "../../../conversations/host";
+import { ConversationError, type ConversationHost, type HostStatus } from "../../../conversations/host";
 import { AttachmentUploadSchema, CreateConversationSchema, DraftSchema, InputRequestSchema, ObjectRefSchema, OrganizeSchema, OverviewQuerySchema } from "../../../conversations/types";
 import { applyStudioOutcome, AskStartSchema, ImportSchema, startFromAsk, isImported, withStudio, importStudioSession, OutcomeSchema, sourceConversations, SourceQuerySchema, StartSchema, startFromSource, type StudioConversationDeps } from "./conversation-studio";
 import { checkRebindGuard, enforceMutationAuth, type MutationGuardContext } from "./mutation-guard";
@@ -121,10 +121,10 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
       if (!parsed.success) return fail(400, "The link request is not valid.");
       try {
         const conversation = await host.link(id, parsed.data.ref, parsed.data.acknowledge === "discord-history");
-        await discord?.sync(id);
+        await discord?.sync(id).catch((error: unknown) => { console.error(`conversations: Discord projection after linking ${id} failed: ${error instanceof Error ? error.message : String(error)}`); });
         return reply(200, { ok: true, conversation });
       } catch (error) {
-        if (error instanceof ConversationError && error.message === DISCORD_HISTORY_NOTICE) return reply(409, { ok: false, error: error.message, notice: "discord-history" });
+        if (error instanceof ConversationError && error.code === "discord-history") return reply(409, { ok: false, error: error.message, notice: error.code });
         throw error;
       }
     }

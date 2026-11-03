@@ -80,7 +80,7 @@ describe("conversation Discord threads", () => {
   test("attach refuses local-only conversations and a failed member add, and never leaves a thread or mapping", async () => {
     const { host, bridge, fake } = await setup();
     const local = await start(host, "local");
-    expect(bridge.attach(local.id)).rejects.toMatchObject({ status: 403 });
+    await expect(bridge.attach(local.id)).rejects.toMatchObject({ status: 403 });
     expect(fake.created).toBe(0);
     const cloud = await start(host);
     fake.failMemberAdd = true;
@@ -97,7 +97,7 @@ describe("conversation Discord threads", () => {
     const { host, bridge } = await setup({ adapter: bare });
     const conversation = await start(host);
     expect(await bridge.state(conversation.id)).toEqual({ available: false, reason: "The installed Discord adapter cannot create, read and post private threads." });
-    expect(bridge.attach(conversation.id)).rejects.toMatchObject({ status: 503 });
+    await expect(bridge.attach(conversation.id)).rejects.toMatchObject({ status: 503 });
     expect(await bridge.check()).toMatchObject({ ok: false, stage: "capability" });
   });
 
@@ -272,7 +272,7 @@ describe("conversation Discord threads", () => {
     const refused = await host.link(conversation.id, local, false).catch((error: unknown) => error);
     expect(refused).toMatchObject({ status: 409, message: DISCORD_HISTORY_NOTICE });
     expect((await host.meta(conversation.id)).links).toEqual([]);
-    expect(host.link(conversation.id, { owner: "studio-thread", id: "gone" }, true)).rejects.toMatchObject({ status: 403 });
+    await expect(host.link(conversation.id, { owner: "studio-thread", id: "gone" }, true)).rejects.toMatchObject({ status: 403 });
     const linked = await host.link(conversation.id, local, true);
     expect(linked).toMatchObject({ policy: "local", links: [local] });
     expect((await host.link(conversation.id, local, true)).links).toEqual([local]);
@@ -291,7 +291,7 @@ describe("conversation Discord threads", () => {
     const conversation = await start(host);
     expect(await host.link(conversation.id, { owner: "studio-thread", id: "private" }, false)).toMatchObject({ policy: "local" });
     await host.organize(conversation.id, { state: "archived" });
-    expect(host.link(conversation.id, { owner: "studio-thread", id: "other" }, true)).rejects.toMatchObject({ status: 409 });
+    await expect(host.link(conversation.id, { owner: "studio-thread", id: "other" }, true)).rejects.toMatchObject({ status: 409 });
   });
 
   test("long answers are split under Discord's message limit", () => {

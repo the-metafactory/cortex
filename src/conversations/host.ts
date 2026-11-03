@@ -80,7 +80,7 @@ const TRANSCRIPT_CACHE = 200;
 const NEXT: Record<OperationState, OperationState[]> = { proposed: ["confirmed"], confirmed: ["running"], running: ["created", "failed", "uncertain"], uncertain: ["created", "failed"], created: [], failed: [] };
 
 export class ConversationError extends Error {
-  constructor(readonly status: 400 | 403 | 404 | 409 | 503, message: string) { super(message); }
+  constructor(readonly status: 400 | 403 | 404 | 409 | 503, message: string, readonly code?: "discord-history") { super(message); }
 }
 
 const INPUT_CONFLICT = (): ConversationError => new ConversationError(409, "That input id was already used with a different payload.");
@@ -492,7 +492,7 @@ export class ConversationHost {
       if (stored.links.length >= MAX_LINKS) throw new ConversationError(409, `A conversation links at most ${MAX_LINKS} work objects; nothing was linked.`);
       const [source] = await this.sourcesOf([ref]);
       if (source?.state !== "available") throw new ConversationError(403, `The ${ref.owner} ${ref.id} is unavailable, so nothing was linked.`);
-      if (source.policy === "local" && stored.discord?.usedAt && !acknowledged) throw new ConversationError(409, DISCORD_HISTORY_NOTICE);
+      if (source.policy === "local" && stored.discord?.usedAt && !acknowledged) throw new ConversationError(409, DISCORD_HISTORY_NOTICE, "discord-history");
       await this.update(id, s => ({ ...s, links: [...s.links, ref], policy: strictest([s.policy, source.policy]), lastAt: this.now().toISOString() }));
       return this.meta(id);
     });

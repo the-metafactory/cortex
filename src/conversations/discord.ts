@@ -105,10 +105,11 @@ export class DiscordConversations {
     await this.options.host.meta(id);
     const prefix = `${id}:`;
     return Object.entries(await this.options.host.deliveries()).flatMap(([key, raw]) => {
+      if (!key.startsWith(prefix)) return [];
       const parsed = DeliverySchema.safeParse(raw);
       if (!parsed.success || parsed.data.conversationId !== id) return [];
       const { state, at, messageId, detail } = parsed.data;
-      return [{ key: key.startsWith(prefix) ? key.slice(prefix.length) : key, state, at, ...(messageId ? { messageId } : {}), ...(detail ? { detail } : {}) }];
+      return [{ key: key.slice(prefix.length), state, at, ...(messageId ? { messageId } : {}), ...(detail ? { detail } : {}) }];
     }).sort((a, b) => a.at.localeCompare(b.at));
   }
 
