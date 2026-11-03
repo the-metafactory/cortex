@@ -20,7 +20,7 @@ export const ObjectRefSchema = z.object({
 }).strict();
 export type ObjectRef = z.infer<typeof ObjectRefSchema>;
 
-export const ORIGIN_KINDS = ["studio", "balance", "graph", "discord-dm", "web", "imported-studio-session"] as const;
+export const ORIGIN_KINDS = ["studio", "balance", "graph", "discord-dm", "discord-thread", "web", "imported-studio-session"] as const;
 export const OriginSchema = z.object({ kind: z.enum(ORIGIN_KINDS), ref: z.string().trim().min(1).max(512).optional() }).strict();
 export type Origin = z.infer<typeof OriginSchema>;
 
