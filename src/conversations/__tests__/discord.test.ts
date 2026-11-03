@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { InboundMessage } from "../../adapters/types";
-import { BOT, FakeThreads } from "./fixtures/discord-threads";
+import { BOT, FakeThreads, type PostFault } from "./fixtures/discord-threads";
 import { answering, scratchHosts } from "./fixtures/scratch";
 import { chunks, DiscordConversations, type ThreadCapable } from "../discord";
 import { ConversationError, openConversationHost, type ConversationHost } from "../host";
@@ -32,6 +32,14 @@ const inbound = (threadId: string, messageId: string | undefined, content: strin
   platform: "discord", instanceId: "pilot-discord", authorId: author, authorName: "someone", content, channelId: threadId, threadId, guildId: GUILD, isDM: false,
   authorIsPrincipal: author === PRINCIPAL, attachments: [], timestamp: new Date("2026-11-03T10:00:00Z"), ...(messageId ? { messageId } : {}), ...extra,
 });
+
+async function attachedWith(faults: PostFault[]) {
+  const ready = await setup();
+  const conversation = await start(ready.host);
+  await ready.bridge.attach(conversation.id);
+  ready.fake.faults = faults;
+  return { ...ready, conversation };
+}
 
 async function settle(host: ConversationHost, bridge: DiscordConversations, id: string): Promise<void> {
   await host.waitForIdle(id);
@@ -144,10 +152,7 @@ describe("conversation Discord threads", () => {
   });
 
   test("an uncertain send is reconciled by thread readback: found means no second copy, lost means one resend", async () => {
-    const { host, bridge, fake } = await setup();
-    const conversation = await start(host);
-    await bridge.attach(conversation.id);
-    fake.faults = ["uncertain-landed"];
+    const { host, bridge, fake, conversation } = await attachedWith(["uncertain-landed"]);
     await host.submit(conversation.id, { inputId: "web-1", transport: "web", text: "one", mode: "queue" });
     await settle(host, bridge, conversation.id);
     await bridge.sync(conversation.id);
@@ -236,10 +241,7 @@ describe("conversation Discord threads", () => {
   });
 
   test("a readback message without a usable time leaves the send uncertain instead of resending", async () => {
-    const { host, bridge, fake } = await setup();
-    const conversation = await start(host);
-    await bridge.attach(conversation.id);
-    fake.faults = ["uncertain-landed"];
+    const { host, bridge, fake, conversation } = await attachedWith(["uncertain-landed"]);
     await host.submit(conversation.id, { inputId: "web-1", transport: "web", text: "timeless", mode: "queue" });
     await host.waitForIdle(conversation.id);
     await bridge.sync(conversation.id);
