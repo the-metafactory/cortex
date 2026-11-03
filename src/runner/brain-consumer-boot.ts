@@ -687,12 +687,16 @@ export function wireBrainConsumers(
 
       const capSummary =
         started.capabilities.length > 0 ? started.capabilities.join(",") : "(none)";
-      const partial = started.capabilities.filter((c) => !started.subscribedCapabilities.includes(c));
+      const partial = started.partialCapabilities;
+      const unsubscribed = started.capabilities.filter(
+        (c) => !started.subscribedCapabilities.includes(c) && !partial.includes(c),
+      );
       if (started.openedBindings > 0) {
         console.log(
           `cortex: brain consumer ready for agent=${agent.id} kind=exec ` +
             `capabilities=[${capSummary}] subscribed=[${started.subscribedCapabilities.join(",")}] ` +
             (partial.length > 0 ? `partial=[${partial.join(",")}] ` : "") +
+            (unsubscribed.length > 0 ? `unsubscribed=[${unsubscribed.join(",")}] ` : "") +
             `gate=${opts.surfacePrincipalGate !== undefined ? "surface" : "deny-all"}`,
         );
       } else {

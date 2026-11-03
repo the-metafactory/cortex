@@ -191,6 +191,26 @@ describe("wireBrainConsumers — per-capability binding", () => {
     const ready = lines.find((l) => l.includes("brain consumer ready for agent=helm"));
     expect(ready).toContain("subscribed=[]");
     expect(ready).toContain("partial=[compose.judgment]");
+    expect(ready).not.toContain("unsubscribed=");
+  });
+
+  test("a capability with no opened binding is logged as unsubscribed, not partial", async () => {
+    const runtime = fakeRuntime();
+    const realSubscribe = runtime.subscribePull!;
+    runtime.subscribePull = (o) => (o.pattern.endsWith(".rate.feed") ? null : realSubscribe(o));
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (...a: unknown[]) => lines.push(a.join(" "));
+    try {
+      await wireBrainConsumers(baseOpts({ runtime })).startForAgent(agent("helm", ["compose.judgment", "rate.feed"]));
+    } finally {
+      console.log = origLog;
+    }
+
+    const ready = lines.find((l) => l.includes("brain consumer ready for agent=helm"));
+    expect(ready).toContain("subscribed=[compose.judgment]");
+    expect(ready).toContain("unsubscribed=[rate.feed]");
+    expect(ready).not.toContain("partial=");
   });
 
   test("code-review.* and dev.* capabilities get no tasks. binding (CODE_REVIEW and DEV_IMPLEMENT own those subjects)", () => {

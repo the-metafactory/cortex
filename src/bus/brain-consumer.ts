@@ -329,6 +329,7 @@ export interface BrainConsumerStartedInfo {
   capabilities: readonly string[];
   /** Capabilities whose every binding opened on the broker. */
   subscribedCapabilities: readonly string[];
+  partialCapabilities: readonly string[];
   openedBindings: number;
 }
 
@@ -408,13 +409,16 @@ export class BrainConsumer {
     }
     this.started = true;
     const subscribedCapabilities: string[] = [];
+    const partialCapabilities: string[] = [];
     const opened: MyelinSubscriber[] = [];
 
     for (const capability of this.agent.capabilities) {
       const bindings = opts.resolve(capability);
       const subs = bindings.map((resolved) => this.bind(capability, resolved, opts.bootRetry));
       for (const sub of subs) if (sub !== null) opened.push(sub);
-      if (bindings.length > 0 && subs.every((sub) => sub !== null)) subscribedCapabilities.push(capability);
+      const openCount = subs.filter((sub) => sub !== null).length;
+      if (openCount > 0 && openCount === subs.length) subscribedCapabilities.push(capability);
+      else if (openCount > 0) partialCapabilities.push(capability);
     }
     await Promise.all(opened.map((sub) => sub.ready));
 
@@ -422,6 +426,7 @@ export class BrainConsumer {
       agentId: this.agent.id,
       capabilities: this.agent.capabilities,
       subscribedCapabilities,
+      partialCapabilities,
       openedBindings: opened.length,
     };
   }
