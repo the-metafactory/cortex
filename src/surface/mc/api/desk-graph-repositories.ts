@@ -1,3 +1,4 @@
+// glossary-ignore: run
 import type { Database } from "bun:sqlite";
 import { isGithubRef, listGraphRepositories, setGraphRepositoryEnabled, type GraphRepositoryRunner } from "../desk/graph-repositories";
 import { runCommand } from "../desk/spawn";

@@ -1,3 +1,4 @@
+// glossary-ignore: run
 import type { Database } from "bun:sqlite";
 import { CommandTimeout, runCommand, type CommandResult } from "./spawn";
 
