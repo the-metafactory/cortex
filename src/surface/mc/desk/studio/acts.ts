@@ -8,9 +8,13 @@ import type { StudioFile, StudioFiles, StudioProposalView, StudioThreadView, Stu
 
 export const MAX_RESPONSE = 4000;
 export const MAX_OUTCOME = 2000;
+export const MAX_QUESTION = 200;
+const MAX_LINK = 500;
 
 const slug = z.string().regex(STUDIO_SLUG, "is not a thread slug");
 const words = (max: number) => z.string().trim().min(1, "is empty").max(max, `is longer than ${max} characters`);
+const areaId = z.string().regex(AREA_ID, "is not an area id");
+const yesAnswers = z.record(z.string().max(200), z.string().trim().min(1).max(300)).optional();
 
 export const StudioActSchema = z.discriminatedUnion("act", [
   z.object({ act: z.literal("spar"), thread: slug, mode: z.string().regex(/^(think|grill|other-side|red-team|first-principles|persona:[^\r\n]{1,100})$/) }),
@@ -28,14 +32,10 @@ export const StudioActSchema = z.discriminatedUnion("act", [
     expect: z.string().trim().max(500).optional(),
     reviewOn: z.string().regex(ISO_DATE, "must be a date like 2026-12-15").refine(validDate, "is not a real date").optional(),
   }),
-  z.object({
-    act: z.literal("open"),
-    from: z.enum(["proposal", "capture"]),
-    id: slug,
-    area: z.string().regex(AREA_ID, "is not an area id"),
-    park: slug.optional(),
-    answers: z.record(z.string().max(200), z.string().trim().min(1).max(300)).optional(),
-  }),
+  z.discriminatedUnion("from", [
+    z.object({ act: z.literal("open"), from: z.enum(["proposal", "capture"]), id: slug, area: areaId, park: slug.optional(), answers: yesAnswers }),
+    z.object({ act: z.literal("open"), from: z.literal("conversation"), question: words(MAX_QUESTION), area: areaId, park: slug.optional(), link: words(MAX_LINK).regex(/^[^\r\n]+$/, "must be one line"), answers: yesAnswers }),
+  ]),
 ]);
 
 export type StudioAct = z.infer<typeof StudioActSchema>;
@@ -244,12 +244,24 @@ function yesSection(ctx: Ctx, answers: Record<string, string> | undefined): { li
   };
 }
 
-function open(ctx: Ctx, act: Extract<StudioAct, { act: "open" }>): ActPlan | ActRefusal {
-  if (!ctx.view.areas.some((a) => a.id === act.area)) return refuse(400, `The Desk config lists no area ${act.area}.`);
+type OpenAct = Extract<StudioAct, { act: "open" }>;
+
+function fromConversation(act: Extract<OpenAct, { from: "conversation" }>): OpenSource {
+  return { path: "", type: "question", areas: [act.area], question: oneLine(act.question), material: [`Ivy conversation: ${act.link}`], log: `Opened from Ivy conversation ${act.link}` };
+}
+
+function openSource(ctx: Ctx, act: OpenAct): OpenSource | ActRefusal {
+  if (act.from === "conversation") return fromConversation(act);
   const proposal = act.from === "proposal" ? ctx.view.proposals.find((p) => p.id === act.id) : undefined;
   const capture = act.from === "capture" ? ctx.view.inbox.find((c) => c.id === act.id) : undefined;
   const src = proposal ? fromProposal(proposal, act.area) : capture ? fromCapture(capture, ctx.today) : null;
-  if (!src) return refuse(404, `No readable ${act.from} is called ${act.id}.`);
+  return src ?? refuse(404, `No readable ${act.from} is called ${act.id}.`);
+}
+
+function open(ctx: Ctx, act: OpenAct): ActPlan | ActRefusal {
+  if (!ctx.view.areas.some((a) => a.id === act.area)) return refuse(400, `The Desk config lists no area ${act.area}.`);
+  const src = openSource(ctx, act);
+  if (isRefusal(src)) return src;
   const areas = src.areas.length ? src.areas : [act.area];
   const name = slugFor(src.question, new Set([...allThreads(ctx.view).map((t) => t.slug), ...ctx.files.threads.map((f) => (f.path.split("/").pop() ?? "").replace(/\.md$/, ""))]));
   const parked = parkStep(ctx, act.park, quoted(src.question));
@@ -275,7 +287,8 @@ function open(ctx: Ctx, act: Extract<StudioAct, { act: "open" }>): ActPlan | Act
     "",
   ].join("\n");
   const path = `threads/${name}.md`;
-  return plan([{ path, text: body }, ...parked.writes], `Open ${name} from ${act.from} ${act.id}${parked.subject}`, `Opened ${quoted(src.question)}${parked.message}.`, [src.path]);
+  const from = act.from === "conversation" ? "an Ivy conversation" : `${act.from} ${act.id}`;
+  return plan([{ path, text: body }, ...parked.writes], `Open ${name} from ${from}${parked.subject}`, `Opened ${quoted(src.question)}${parked.message}.`, src.path ? [src.path] : []);
 }
 
 const NEEDS_OPEN_THREAD = new Set<StudioAct["act"]>(["respond", "think", "close"]);

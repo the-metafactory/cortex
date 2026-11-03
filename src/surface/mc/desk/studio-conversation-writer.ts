@@ -70,6 +70,10 @@ export function studioConversationWriter(deps: StudioWriterDeps, spec: StudioWri
   return { create, readback: studioReadback(deps) };
 }
 
+const refreshMyDay = (deps: StudioWriterDeps) => async (desk: DeskOptions): Promise<void> => {
+  await readStudioMyDay(deps.db, desk, (deps.now ?? Date.now)()).catch(() => undefined);
+};
+
 const RESPONSE_LABELS = { thread: "The thread", text: "The response" };
 const STUDIO_BUSY = "Studio is busy or unreadable. Nothing was written; retry when its files are ready.";
 
@@ -83,6 +87,20 @@ export function studioResponseWriter(deps: StudioWriterDeps): OwnerWriter {
       catch { return STUDIO_BUSY; }
       return ctx => planAct(ctx, act, conversationVia(request));
     },
-    after: async desk => { await readStudioMyDay(deps.db, desk, clock()).catch(() => undefined); },
+    after: refreshMyDay(deps),
+  });
+}
+
+const THREAD_LABELS = { question: "The question", area: "The area", park: "The thread to park", link: "The conversation link" };
+
+export function studioThreadWriter(deps: StudioWriterDeps): OwnerWriter {
+  return studioConversationWriter(deps, {
+    prepare: request => {
+      const { question = "", area = "", park } = request.fields;
+      const act = studioAct({ act: "open", from: "conversation", question, area, ...(park ? { park } : {}), link: request.provenance.link }, THREAD_LABELS);
+      if (typeof act === "string") return act;
+      return ctx => planAct(ctx, act);
+    },
+    after: refreshMyDay(deps),
   });
 }
