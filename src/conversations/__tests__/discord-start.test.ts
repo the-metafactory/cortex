@@ -54,6 +54,16 @@ describe("an @bot message in the conversation channel starts a conversation", ()
     expect(fake.texts("thread-1").filter(text => text === "answer to one start")).toHaveLength(1);
   });
 
+  test("a conversation created before its journal record was written is found by its message id, not created twice", async () => {
+    const { host, fake, post, settle } = await setup();
+    const orphan = await host.create({ title: "Half started", links: [], origin: { kind: "discord-thread", ref: "chan-msg-3" }, policy: "cloud" }, OWNER);
+    await post("Half started", { messageId: "chan-msg-3" });
+    await settle();
+    expect((await host.list()).map(meta => meta.id)).toEqual([orphan.id]);
+    expect((await host.meta(orphan.id)).discord?.threadId).toBe("thread-1");
+    expect(fake.texts("thread-1").at(-1)).toBe("answer to Half started");
+  });
+
   test("other authors, other channels, other guilds and messages inside threads are not taken", async () => {
     const { host, fake, post } = await setup();
     expect(await post("let me in", { authorId: STRANGER, authorIsPrincipal: true })).toBe(false);

@@ -230,9 +230,13 @@ export class DiscordConversations {
     return true;
   }
 
-  private async offerStart(msg: InboundMessage): Promise<boolean> {
+  private fromPrincipal(msg: InboundMessage): boolean {
     const { config, principalId } = this.options;
-    if (msg.guildId !== config.guildId || !principalId || msg.authorId !== principalId) return false;
+    return msg.guildId === config.guildId && Boolean(principalId) && msg.authorId === principalId;
+  }
+
+  private async offerStart(msg: InboundMessage): Promise<boolean> {
+    if (!this.fromPrincipal(msg)) return false;
     const messageId = msg.messageId;
     if (!messageId) {
       this.log("a conversation start in the conversation channel was not recorded: the installed Discord adapter does not carry message ids");
@@ -248,7 +252,8 @@ export class DiscordConversations {
     const { host } = this.options;
     const key = `start:${messageId}`;
     const recorded = StartSchema.safeParse(await host.delivery(key));
-    let id = recorded.success ? recorded.data.conversationId : null;
+    let id = recorded.success ? recorded.data.conversationId : (await host.list()).find(meta => meta.origin.kind === "discord-thread" && meta.origin.ref === messageId)?.id ?? null;
+    if (id && !recorded.success) await host.recordDelivery(key, { kind: "channel-start", conversationId: id, at: this.now().toISOString() });
     if (!id) {
       const principal = this.webPrincipal;
       if (!principal) {
@@ -277,8 +282,8 @@ export class DiscordConversations {
   }
 
   private async receive(id: string, threadId: string, msg: InboundMessage): Promise<void> {
-    const { host, config, principalId } = this.options;
-    if (msg.guildId !== config.guildId || !principalId || msg.authorId !== principalId) {
+    const { host } = this.options;
+    if (!this.fromPrincipal(msg)) {
       this.log(`refused a message in thread ${threadId}: the author is not this stack's verified principal`);
       return;
     }
