@@ -1,8 +1,7 @@
 import type { GraphRepository, GraphRepositoryListing } from "../../desk/graph-repositories";
+import { GRAPH_REPOSITORIES_PATH } from "../../desk/graph-repository-schema";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
-
-export const GRAPH_REPOSITORIES_URL = "/api/desk/graph-repositories";
 
 export type GraphRepositoriesResult = { ok: true; repositories: GraphRepository[]; listing: GraphRepositoryListing } | { ok: false; text: string };
 export type GraphRepositoryChange = { ok: true } | { ok: false; text: string };
@@ -25,7 +24,7 @@ async function send(path: string, init: RequestInit, fetchImpl: FetchLike): Prom
 const refusal = (res: Response, body: Record<string, unknown> | null): string => (typeof body?.error === "string" && body.error ? body.error : `Mission Control answered HTTP ${res.status}.`);
 
 export async function loadGraphRepositories(fetchImpl: FetchLike = fetch): Promise<GraphRepositoriesResult> {
-  const sent = await send(GRAPH_REPOSITORIES_URL, { method: "GET" }, fetchImpl);
+  const sent = await send(GRAPH_REPOSITORIES_PATH, { method: "GET" }, fetchImpl);
   if (typeof sent === "string") return { ok: false, text: sent };
   const { res, body } = sent;
   if (!res.ok || !Array.isArray(body?.repositories)) return { ok: false, text: refusal(res, body) };
@@ -38,7 +37,7 @@ export async function loadGraphRepositories(fetchImpl: FetchLike = fetch): Promi
 }
 
 export async function saveGraphRepository(ref: string, enabled: boolean, fetchImpl: FetchLike = fetch): Promise<GraphRepositoryChange> {
-  const sent = await send(`${GRAPH_REPOSITORIES_URL}/${encodeURIComponent(ref)}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }) }, fetchImpl);
+  const sent = await send(`${GRAPH_REPOSITORIES_PATH}/${encodeURIComponent(ref)}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }) }, fetchImpl);
   if (typeof sent === "string") return { ok: false, text: sent };
   return sent.res.ok ? { ok: true } : { ok: false, text: refusal(sent.res, sent.body) };
 }

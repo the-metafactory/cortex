@@ -39,7 +39,7 @@ export function GraphRepositoryBody({ rows, listing, error, busy, onChange }: {
   return (
     <section className="desk-set-card" aria-label="Repositories Ivy may file to">
       <h2>Repositories Ivy may file to</h2>
-      <p className="desk-set-sub">Tick the repositories where Ivy may file graph nodes and maps from a conversation. A ticked repository allows both. Ivy files nowhere that is not ticked.</p>
+      <p className="desk-set-sub">Tick the repositories where Ivy may file graph nodes and maps from a conversation. A ticked repository allows both.</p>
       {rows === null ? (
         <p className="desk-set-empty">{error ?? "Loading…"}</p>
       ) : (

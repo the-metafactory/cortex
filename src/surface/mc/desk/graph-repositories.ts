@@ -3,7 +3,7 @@ import { CommandTimeout, runCommand, type CommandResult } from "./spawn";
 
 export const GITHUB_REF_PREFIX = "github:github.com/";
 
-const GITHUB_REF = /^github:github\.com\/[^/\s]+\/[^/\s]+$/;
+const FULL_NAME = /^[^/\s]+\/[^/\s]+$/;
 const GH_TIMEOUT_MS = 30_000;
 const GH_LIST_ARGV = ["gh", "api", "--paginate", "user/repos?affiliation=owner,organization_member", "--jq", ".[].full_name"];
 
@@ -26,7 +26,7 @@ export type GraphRepositoryRunner = (argv: string[], timeoutMs: number) => Promi
 
 export const githubRef = (fullName: string): string => `${GITHUB_REF_PREFIX}${fullName}`;
 
-export const isGithubRef = (ref: string): boolean => GITHUB_REF.test(ref);
+export const isGithubRef = (ref: string): boolean => ref.startsWith(GITHUB_REF_PREFIX) && FULL_NAME.test(ref.slice(GITHUB_REF_PREFIX.length));
 
 /** True only for a ref that matches a stored row exactly: a string comparison, no normalisation. An empty table allows nothing. */
 export function isGraphRepositoryAllowed(db: Database, ref: string): boolean {
@@ -57,7 +57,7 @@ async function listGithubFullNames(run: GraphRepositoryRunner): Promise<{ ok: tr
   }
   const firstStderrLine = result.stderr.trim().split("\n")[0] ?? "";
   if (result.code !== 0) return { ok: false, reason: firstStderrLine === "" ? `gh exited with code ${result.code}` : firstStderrLine };
-  const names = result.stdout.split("\n").map((line) => line.trim()).filter((line) => /^[^/\s]+\/[^/\s]+$/.test(line));
+  const names = result.stdout.split("\n").map((line) => line.trim()).filter((line) => FULL_NAME.test(line));
   return { ok: true, names };
 }
 

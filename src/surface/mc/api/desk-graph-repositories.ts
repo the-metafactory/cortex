@@ -1,8 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { isGithubRef, listGraphRepositories, setGraphRepositoryEnabled, type GraphRepositoryRunner } from "../desk/graph-repositories";
 import { runCommand } from "../desk/spawn";
-
-export const GRAPH_REPOSITORIES_PATH = "/api/desk/graph-repositories";
+import { GRAPH_REPOSITORIES_PATH } from "../desk/graph-repository-schema";
 
 const noStore = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string): Response => Response.json({ error }, { status, headers: noStore });
