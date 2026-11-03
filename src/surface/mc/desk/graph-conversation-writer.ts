@@ -170,7 +170,7 @@ function graphWriter(deps: GraphWriterDeps, plan: GraphPlan): OwnerWriter {
   return { create, readback: graphReadback(deps) };
 }
 
-/** Files a graph node under the confirmed parent with `soma graph add --once`; it never claims or closes it. */
+/** Files the proposal under the confirmed parent with `soma graph add --once`; it never claims or closes what it files. */
 export function graphNodeWriter(deps: GraphWriterDeps): OwnerWriter {
   return graphWriter(deps, (fields, { repository, autonomy, marker }) => {
     const { parent = "", title = "", checkpoint = "" } = fields;
