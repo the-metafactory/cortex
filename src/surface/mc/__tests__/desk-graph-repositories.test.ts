@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { handleDeskGraphRepositories, type DeskGraphRepositoryDeps } from "../api/desk-graph-repositories";
-import { githubRef, isGraphRepositoryAllowed, listGraphRepositories, type GraphRepositoryRunner } from "../desk/graph-repositories";
+import { githubRef, gitlabRef, isGraphRepositoryAllowed, listGraphRepositories, type GraphRepositoryRunner } from "../desk/graph-repositories";
 import { initDatabase } from "../db/init";
 import { DEFAULT_CONFIG } from "../config";
 import { startServer } from "../server";
@@ -9,11 +9,28 @@ import { TABLE_NAMES } from "../db/schema";
 
 const NOW = Date.parse("2026-11-03T09:00:00.000Z");
 const ok = (stdout: string) => ({ code: 0, signal: null, stdout, stderr: "" });
-const gh = (stdout: string): GraphRepositoryRunner & { calls: { argv: string[]; timeoutMs: number }[] } => {
+type Reply = { code: number; signal: null; stdout: string; stderr: string } | Error;
+const GLAB_STATUS = ["glab", "auth", "status"];
+const glabList = (host: string) => ["glab", "api", "--hostname", host, "--paginate", "projects?membership=true&simple=true"];
+const loggedIn = (...hosts: string[]): Reply => ({
+  code: 1,
+  signal: null,
+  stdout: "",
+  stderr: ["gitlab.com", "  x gitlab.com: API call failed: GET https://gitlab.com/api/v4/user: 401 {message: 401 Unauthorized}", ...hosts.flatMap((h) => [h, `  ✓ Logged in to ${h} as jcfischer (/Users/x/config.yml)`, "  ✓ Token found: ****"])].join("\n"),
+});
+const projects = (...paths: string[]): Reply => ok(JSON.stringify(paths.map((p, i) => ({ id: i + 1, name: p.split("/").at(-1), path_with_namespace: p }))));
+const NO_GLAB = new Error("Executable not found in $PATH: \"glab\"");
+const forges = (replies: { gh?: Reply; glabStatus?: Reply; glab?: Reply }): GraphRepositoryRunner & { calls: { argv: string[]; timeoutMs: number }[] } => {
   const calls: { argv: string[]; timeoutMs: number }[] = [];
-  const run = Object.assign(async (argv: string[], timeoutMs: number) => { calls.push({ argv, timeoutMs }); return ok(stdout); }, { calls });
+  const run = Object.assign(async (argv: string[], timeoutMs: number) => {
+    calls.push({ argv, timeoutMs });
+    const reply = argv[0] === "gh" ? replies.gh ?? ok("") : argv[1] === "auth" ? replies.glabStatus ?? NO_GLAB : replies.glab ?? NO_GLAB;
+    if (reply instanceof Error) throw reply;
+    return reply;
+  }, { calls });
   return run;
 };
+const gh = (stdout: string) => forges({ gh: ok(stdout) });
 
 let db: Database;
 beforeEach(() => { db = initDatabase(":memory:"); });
@@ -56,8 +73,9 @@ describe("GET /api/desk/graph-repositories", () => {
         { ref: "github:github.com/zeta/last", label: "zeta/last", forge: "github", enabled: false },
       ],
       listing: { ok: true },
+      gitlab: { ok: false, kind: "unavailable", reason: "Executable not found in $PATH: \"glab\"" },
     });
-    expect(run.calls).toEqual([{ argv: ["gh", "api", "--paginate", "user/repos?affiliation=owner,organization_member", "--jq", ".[].full_name"], timeoutMs: 30_000 }]);
+    expect(run.calls[0]).toEqual({ argv: ["gh", "api", "--paginate", "user/repos?affiliation=owner,organization_member", "--jq", ".[].full_name"], timeoutMs: 30_000 });
   });
 
   it("keeps a ticked repository the listing no longer returns, marked not listed", async () => {
@@ -91,6 +109,86 @@ describe("GET /api/desk/graph-repositories", () => {
   });
 });
 
+describe("the GitLab projects in the listing", () => {
+  it("adds every project of the one logged-in host as a gitlab row, beside the GitHub rows", async () => {
+    db.query("INSERT INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run(gitlabRef("gitlab.switch.ch", "claw/crisis-simulator"), NOW);
+    const run = forges({ gh: ok("jcfischer/desk\n"), glabStatus: loggedIn("gitlab.switch.ch"), glab: projects("claw/crisis-simulator", "community-soc/detection-rules/sigma") });
+    const res = await call("/api/desk/graph-repositories", "GET", { run });
+    expect(await res.json()).toEqual({
+      repositories: [
+        { ref: "gitlab:gitlab.switch.ch/claw/crisis-simulator", label: "claw/crisis-simulator", forge: "gitlab", enabled: true },
+        { ref: "gitlab:gitlab.switch.ch/community-soc/detection-rules/sigma", label: "community-soc/detection-rules/sigma", forge: "gitlab", enabled: false },
+        { ref: "github:github.com/jcfischer/desk", label: "jcfischer/desk", forge: "github", enabled: false },
+      ],
+      listing: { ok: true },
+      gitlab: { ok: true, host: "gitlab.switch.ch" },
+    });
+    expect(run.calls.filter((c) => c.argv[0] === "glab")).toEqual([{ argv: GLAB_STATUS, timeoutMs: 30_000 }, { argv: glabList("gitlab.switch.ch"), timeoutMs: 30_000 }]);
+  });
+
+  it("lists the projects although glab auth status exits non-zero for another, failing host", async () => {
+    const view = await listGraphRepositories(db, forges({ glabStatus: loggedIn("gitlab.example.org"), glab: projects("g/p") }));
+    expect(view.gitlab).toEqual({ ok: true, host: "gitlab.example.org" });
+    expect(view.repositories.map((r) => r.ref)).toEqual(["gitlab:gitlab.example.org/g/p"]);
+  });
+
+  it("lists no project and says why when several GitLab hosts are logged in, and never asks either host", async () => {
+    db.query("INSERT INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run(gitlabRef("a.example.org", "g/p"), NOW);
+    const run = forges({ gh: ok("jcfischer/desk\n"), glabStatus: loggedIn("b.example.org", "a.example.org"), glab: projects("g/other") });
+    const view = await listGraphRepositories(db, run);
+    expect(view.gitlab).toEqual({ ok: false, kind: "several-hosts", reason: "glab is logged in to a.example.org, b.example.org" });
+    expect(view.repositories).toEqual([
+      { ref: "gitlab:a.example.org/g/p", label: "g/p", forge: "gitlab", enabled: true },
+      { ref: "github:github.com/jcfischer/desk", label: "jcfischer/desk", forge: "github", enabled: false },
+    ]);
+    expect(run.calls.some((c) => c.argv[1] === "api" && c.argv[0] === "glab")).toBe(false);
+  });
+
+  it("reports GitLab as unavailable, and leaves the GitHub rows alone, when glab is missing, not logged in or fails", async () => {
+    const notLoggedIn: Reply = { code: 1, signal: null, stdout: "", stderr: "gitlab.com\n  x gitlab.com: API call failed\n  ! No token found" };
+    const failing: Reply = { code: 1, signal: null, stdout: "", stderr: "glab: 401 Unauthorized\nmore" };
+    const cases: [Parameters<typeof forges>[0], string][] = [
+      [{}, "Executable not found in $PATH: \"glab\""],
+      [{ glabStatus: notLoggedIn }, "glab is not logged in to any GitLab host"],
+      [{ glabStatus: loggedIn("gitlab.example.org"), glab: failing }, "glab: 401 Unauthorized"],
+      [{ glabStatus: loggedIn("gitlab.example.org"), glab: ok("not json") }, "glab did not return a project list"],
+      [{ glabStatus: loggedIn("gitlab.example.org"), glab: ok("{}") }, "glab did not return a project list"],
+    ];
+    for (const [replies, reason] of cases) {
+      const view = await listGraphRepositories(db, forges({ gh: ok("jcfischer/desk\n"), ...replies }));
+      expect(view.gitlab).toEqual({ ok: false, kind: "unavailable", reason });
+      expect(view.listing).toEqual({ ok: true });
+      expect(view.repositories).toEqual([{ ref: "github:github.com/jcfischer/desk", label: "jcfischer/desk", forge: "github", enabled: false }]);
+    }
+  });
+
+  it("keeps a ticked project the listing no longer returns, marked not listed, and does not mark it while GitLab cannot be listed", async () => {
+    const ref = gitlabRef("gitlab.example.org", "gone/project");
+    db.query("INSERT INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run(ref, NOW);
+    const listed = await listGraphRepositories(db, forges({ glabStatus: loggedIn("gitlab.example.org"), glab: projects() }));
+    expect(listed.repositories).toEqual([{ ref, label: "gone/project", forge: "gitlab", enabled: true, listed: false }]);
+    const unlisted = await listGraphRepositories(db, forges({}));
+    expect(unlisted.repositories).toEqual([{ ref, label: "gone/project", forge: "gitlab", enabled: true }]);
+  });
+
+  it("skips project entries without a usable path", async () => {
+    const odd = ok(JSON.stringify([{ path_with_namespace: "g/ok" }, { path_with_namespace: "solo" }, { path_with_namespace: 7 }, null, { name: "x" }, { path_with_namespace: "g/has space" }]));
+    const view = await listGraphRepositories(db, forges({ glabStatus: loggedIn("gitlab.example.org"), glab: odd }));
+    expect(view.repositories.map((r) => r.label)).toEqual(["g/ok"]);
+  });
+
+  it("ticks a listed GitLab project, and the exact reference is then allowed", async () => {
+    const ref = gitlabRef("gitlab.switch.ch", "claw/crisis-simulator");
+    expect((await put(ref, true)).status).toBe(200);
+    expect(isGraphRepositoryAllowed(db, ref)).toBe(true);
+    for (const other of ["gitlab:gitlab.switch.ch/claw/crisis-simulator/", "gitlab:GITLAB.switch.ch/claw/crisis-simulator", "gitlab:gitlab.com/claw/crisis-simulator", "github:github.com/claw/crisis-simulator", "gitlab:gitlab.switch.ch/claw"]) {
+      expect(isGraphRepositoryAllowed(db, other)).toBe(false);
+    }
+    const view = await listGraphRepositories(db, forges({ glabStatus: loggedIn("gitlab.switch.ch"), glab: projects("claw/crisis-simulator") }));
+    expect(view.repositories).toEqual([{ ref, label: "claw/crisis-simulator", forge: "gitlab", enabled: true }]);
+  });
+});
+
 describe("PUT /api/desk/graph-repositories/<encoded ref>", () => {
   const rows = (): string[] => db.query<{ ref: string }, []>("SELECT ref FROM desk_graph_repositories ORDER BY ref").all().map((r) => r.ref);
 
@@ -118,11 +216,11 @@ describe("PUT /api/desk/graph-repositories/<encoded ref>", () => {
     expect(rows()).toEqual([ref]);
   });
 
-  it("unticks a stored row of any shape, but ticks only a GitHub repository reference", async () => {
-    db.query("INSERT INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run("gitlab:gitlab.com/g/p", NOW);
-    expect((await put("gitlab:gitlab.com/g/p", false)).status).toBe(200);
+  it("unticks a stored row of any shape, but ticks only a GitHub repository or GitLab project reference", async () => {
+    db.query("INSERT INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run("svn:example.org/x", NOW);
+    expect((await put("svn:example.org/x", false)).status).toBe(200);
     expect(rows()).toEqual([]);
-    for (const bad of ["jcfischer/desk", "github:github.com/jcfischer", "github:github.com/a/b/c", "github:github.com/a/b c", "gitlab:gitlab.com/g/p"]) {
+    for (const bad of ["jcfischer/desk", "github:github.com/jcfischer", "github:github.com/a/b/c", "github:github.com/a/b c", "gitlab:gitlab.com/p", "gitlab:/g/p", "gitlab:gitlab.com/g//p", "gitlab:gitlab.com/g/p/", "gitlab:git lab.com/g/p", "gitlab:gitlab.com/g/p q", "svn:example.org/x"]) {
       expect((await put(bad, true)).status).toBe(400);
     }
     expect(rows()).toEqual([]);
