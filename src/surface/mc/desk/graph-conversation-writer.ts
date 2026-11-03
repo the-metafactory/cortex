@@ -1,3 +1,4 @@
+// glossary-ignore: node
 import type { Database } from "bun:sqlite";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -137,6 +138,7 @@ export function graphReadback(deps: GraphWriterDeps): (operation: OperationRecor
 }
 
 const list = (value: string | undefined): string[] => (value ?? "").split(/[\s,]+/).filter(Boolean);
+const flagShaped = (value: string): boolean => value.startsWith("-");
 const oneOf = <T extends string>(values: readonly T[], value: string | undefined, fallback: T): T | null => {
   const chosen = value ?? fallback;
   return (values as readonly string[]).includes(chosen) ? (chosen as T) : null;
@@ -156,8 +158,10 @@ export function graphNodeWriter(deps: GraphWriterDeps): OwnerWriter {
     if (!autonomy) return graphFailed("A conversation may file only approve or propose nodes.");
     const kind = oneOf(GRAPH_KINDS, request.fields.kind, "grilling");
     if (!kind) return graphFailed("A conversation may file only research, grilling, prototype, task or build nodes.");
+    const dependencies = list(request.fields.dependencies);
+    if ([parent, ...dependencies].some(flagShaped)) return graphFailed("The parent and the dependencies must be node references, not options.");
     const head = ["graph", "add", parent, "--repo", repository, "--title", title, "--autonomy", autonomy, "--kind", kind, "--label", GRAPH_LABEL, "--checkpoint", checkpoint];
-    const tail = [...list(request.fields.dependencies).flatMap(d => ["--blocked-by", d]), "--once", graphMarker(request.operationId), "--json"];
+    const tail = [...dependencies.flatMap(d => ["--blocked-by", d]), "--once", graphMarker(request.operationId), "--json"];
     if (request.signal.aborted) throw new Error("The conversation stopped waiting before soma was called.");
     recordGraphOperation(deps.db, request.operationId, { repository, parent, args: [...head, ...tail] }, now());
     const result = await withBodyFile(graphBody(request.fields.body, request.provenance), file => run([somaBin, ...head, "--body-file", file, ...tail], "", ADD_TIMEOUT_MS));

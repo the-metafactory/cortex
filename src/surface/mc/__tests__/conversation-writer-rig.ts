@@ -54,7 +54,7 @@ export function conversationWriterRig(prefix: string, label: string) {
 
 export interface ConversationWriterReply { ok: boolean; error: string; proposal: ProposalView; conversation: { id: string }; types: { type: string; status: string; reason?: string; fields: { name: string }[] }[] }
 
-export interface DeskWriterReply { ok: boolean; error: string; proposal: ProposalView; conversation: { id: string }; types: { type: string; status: string; reason?: string }[] }
+export type DeskWriterReply = ConversationWriterReply;
 export interface DeskWriterCall { argv: string[]; stdin: { kind: string; requestId: string; fields: Record<string, string> } }
 interface DeskWriterSetup { prefix: string; label: string; kind: DeskWriterKind; type: string; canonicalId: string; somaBin?: string; owner?: string }
 

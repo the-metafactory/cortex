@@ -105,11 +105,19 @@ describe("graph node writer for conversation proposals", () => {
     expect(r.soma.calls.some(forbidden)).toBe(false);
   });
 
-  test("empty autonomy and kind file an approve grilling node", async () => {
+  test("absent, empty or blank autonomy and kind file an approve grilling node", async () => {
     const r = await rig();
-    await r.confirm(await r.propose(PROBE));
-    const [argv = []] = r.soma.calls;
-    expect([argv[argv.indexOf("--autonomy") + 1], argv[argv.indexOf("--kind") + 1]]).toEqual(["approve", "grilling"]);
+    for (const blank of [{} as Record<string, string>, { autonomy: "", kind: "" }, { autonomy: "  ", kind: " " }]) await r.confirm(await r.propose({ ...PROBE, ...blank }));
+    expect(r.soma.calls.map(argv => [argv[argv.indexOf("--autonomy") + 1], argv[argv.indexOf("--kind") + 1]])).toEqual(Array(3).fill(["approve", "grilling"]));
+  });
+
+  test("a parent or dependency shaped like an option is refused before soma runs", async () => {
+    const r = await rig();
+    for (const fields of [{ parent: "--autonomy=auto" } as Record<string, string>, { dependencies: "jcfischer/desk#2 --repo=other/x" }]) {
+      const refused = await r.confirm(await r.propose({ ...PROBE, ...fields }));
+      expect([refused.status, refused.body.error]).toEqual([409, "The parent and the dependencies must be node references, not options. Nothing was created."]);
+    }
+    expect(r.soma.calls).toEqual([]);
   });
 
   test("a node soma already holds under the marker is the created node, and nothing new is filed", async () => {
