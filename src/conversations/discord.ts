@@ -285,10 +285,14 @@ export class DiscordConversations {
     this.threads = threadIndex(links);
     for (const [id, link] of links) {
       if (!link.threadId) continue;
-      await this.sync(id).catch((error: unknown) => { this.log(`projection of ${id} failed: ${messageOf(error)}`); });
+      await this.syncLogged(id);
     }
     const dm = (await this.dm.current().catch(() => null))?.conversationId;
-    if (dm && !links.get(dm)?.threadId) await this.sync(dm).catch((error: unknown) => { this.log(`projection of ${dm} failed: ${messageOf(error)}`); });
+    if (dm && !links.get(dm)?.threadId) await this.syncLogged(dm);
+  }
+
+  private syncLogged(id: string): Promise<void> {
+    return this.sync(id).catch((error: unknown) => { this.log(`projection of ${id} failed: ${messageOf(error)}`); });
   }
 
   sync(id: string): Promise<void> {

@@ -18,7 +18,7 @@ export interface DmConversationOptions {
   log: (line: string) => void;
 }
 
-export const OFFER_SIZE = 5;
+const OFFER_SIZE = 5;
 export const OFFER_TTL_MS = 10 * 60_000;
 export const CLAIM_WINDOW_MS = 60 * 60_000;
 const TITLE_MAX = 80;
