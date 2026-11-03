@@ -4683,6 +4683,15 @@ export async function startCortex(
       for (const id of [...added, ...changed]) {
         const fresh = freshById.get(id);
         if (fresh === undefined) continue;
+        const pa = presenceAgentFromAgent(
+          fresh,
+          { principal: principalId, stack: derivedStack.stack },
+          stackNKeyPubForPresence,
+        );
+        if (pa !== null && presenceProducer.addAgent(pa)) {
+          emitted += 1;
+          continue;
+        }
         const caps = fresh.runtime?.capabilities ?? [];
         if (presenceProducer.publishCapabilitiesChanged(id, caps)) emitted += 1;
       }

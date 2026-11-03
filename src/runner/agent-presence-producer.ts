@@ -263,7 +263,7 @@ export interface AgentPresenceProducerOptions {
 export class AgentPresenceProducer {
   private readonly runtime: MyelinRuntime;
   private readonly source: AgentPresenceSource;
-  private readonly agents: readonly PresenceAgent[];
+  private readonly agents: PresenceAgent[];
   private readonly intervalMs: number;
   private readonly scheduler: PresenceScheduler;
   private readonly now: () => Date;
@@ -292,7 +292,7 @@ export class AgentPresenceProducer {
   constructor(opts: AgentPresenceProducerOptions) {
     this.runtime = opts.runtime;
     this.source = opts.source;
-    this.agents = opts.agents;
+    this.agents = [...opts.agents];
     this.intervalMs = opts.intervalMs ?? DEFAULT_PRESENCE_HEARTBEAT_INTERVAL_MS;
     this.scheduler = opts.scheduler ?? realScheduler;
     this.now = opts.now ?? (() => new Date());
@@ -330,6 +330,20 @@ export class AgentPresenceProducer {
     this.timer = this.scheduler.setInterval(() => {
       this.tickHeartbeats();
     }, this.intervalMs);
+  }
+
+  addAgent(agent: PresenceAgent): boolean {
+    const id = agent.identity.agent_id;
+    if (this.agentsById.has(id)) return false;
+    this.agents.push(agent);
+    this.agentsById.set(id, agent);
+    this.capabilityBaseline.set(id, new Set(agent.capabilities));
+    if (!this.started || this.stopped) return true;
+    this.publishOnline(agent);
+    this.timer ??= this.scheduler.setInterval(() => {
+      this.tickHeartbeats();
+    }, this.intervalMs);
+    return true;
   }
 
   /**
