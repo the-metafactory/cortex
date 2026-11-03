@@ -102,6 +102,7 @@ import { handleGetDeskStudio } from "./api/desk-studio";
 import { handleDeskStudioAct } from "./api/desk-studio-act";
 import { handleDeskStudioSession } from "./api/desk-studio-session";
 import { handleConversations, importedSessions, type ConversationAccess } from "./api/conversations";
+import { conversationWebPrincipal } from "../../conversations/discord-dm";
 import { conversationSources } from "./desk/conversation-sources";
 import { GoalChecks, GoalStatuses } from "./desk/goals";
 import { RulingExplainLoop, RulingLedger, rulingExplainer } from "./desk/ruling";
@@ -248,6 +249,7 @@ export function startServer(
       : {}),
     ...(cfAccessVerifier ? { verifyJwt: cfAccessVerifier } : {}),
   };
+  options.conversations?.discord?.()?.setWebPrincipal(conversationWebPrincipal(guardBase.principals, guardBase.localPrincipal));
 
   const stepUpSecretPath = expandTilde(
     config.governance?.stepUp?.secretPath ?? defaultStepUpSecretPath(),
