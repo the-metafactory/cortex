@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { OperationRecord } from "../../../conversations/types";
 import { studioRequestId } from "../desk/conversation-sources";
-import { directRequest, failureOf, operationOf, studioConversationRig } from "./studio-conversation-rig";
+import { failureOf, studioConversationRig } from "./studio-conversation-rig";
 
 const rig = studioConversationRig("conversation-studio-thread-", "studio-thread", { alpha: "active", beta: "active", gamma: "parked" });
 const SEEDED = ["alpha.md", "beta.md", "gamma.md"];
