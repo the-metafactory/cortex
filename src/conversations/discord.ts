@@ -253,7 +253,6 @@ export class DiscordConversations {
     const key = `start:${messageId}`;
     const recorded = StartSchema.safeParse(await host.delivery(key));
     let id = recorded.success ? recorded.data.conversationId : (await host.list()).find(meta => meta.origin.kind === "discord-thread" && meta.origin.ref === messageId)?.id ?? null;
-    if (id && !recorded.success) await host.recordDelivery(key, { kind: "channel-start", conversationId: id, at: this.now().toISOString() });
     if (!id) {
       const principal = this.webPrincipal;
       if (!principal) {
@@ -263,8 +262,8 @@ export class DiscordConversations {
       const title = (msg.content.trim().split("\n")[0] ?? "").slice(0, START_TITLE).trim() || "Discord conversation";
       const created = await host.create({ title, links: [], origin: { kind: "discord-thread", ref: messageId }, policy: "cloud" }, principal);
       id = created.id;
-      await host.recordDelivery(key, { kind: "channel-start", conversationId: id, at: this.now().toISOString() });
     }
+    if (!recorded.success) await host.recordDelivery(key, { kind: "channel-start", conversationId: id, at: this.now().toISOString() });
     const meta = await this.attach(id);
     const threadId = meta.discord?.threadId;
     if (!threadId) throw new Error(`conversation ${id} has no private thread after attach`);
