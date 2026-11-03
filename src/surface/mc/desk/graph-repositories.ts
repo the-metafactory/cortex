@@ -126,10 +126,10 @@ async function listGitlabProjects(run: GraphRepositoryRunner): Promise<{ listing
 }
 
 /**
- * Every GitHub repository the signed-in `gh` can see (own account and organisations) and every GitLab project of the
- * one GitLab instance `glab` is logged in to, merged with the stored ticks. A ticked repository its forge's listing does not
+ * Every GitHub repository the signed-in `gh` can see (own account and organisations) and every GitLab project `glab`
+ * can see while it is logged in to exactly one GitLab, merged with the stored ticks. A ticked repository its forge's listing does not
  * return stays in the result with `listed: false`; when a forge's listing fails, its ticked repositories are still
- * returned, so they can be unticked. Several logged-in GitLab instances list no GitLab project (fail closed).
+ * returned, so they can be unticked. Logged in to several GitLabs, no GitLab project is listed (fail closed).
  */
 export async function listGraphRepositories(db: Database, run: GraphRepositoryRunner = runCommand): Promise<GraphRepositoryView> {
   const enabled = new Set(storedRefs(db));
