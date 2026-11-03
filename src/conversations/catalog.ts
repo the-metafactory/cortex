@@ -52,7 +52,7 @@ export const CREATION_CATALOG: Record<CreatableType, CreatableSpec> = {
     text("item", "Day item", true, true), text("title", "Title"),
   ] },
   "studio-thread": { row: "O07", label: "Studio thread", owner: "Studio", egress: "local", fields: [
-    text("from", "Proposal or capture to open", true, true), text("area", "Area", true, true), text("question", "Question"),
+    text("question", "Question"), text("area", "Area", true, true), text("park", "Thread to park when all places are in use", false, true),
   ] },
   "studio-capture": { row: "O08", label: "Studio capture", owner: "Studio", egress: "local", fields: [
     long("text", "Capture", true), text("thread", "Thread (empty files it to the Studio inbox)", false, true),

@@ -12,6 +12,7 @@ import { buildThreadPage } from "../desk/studio/page";
 import { buildStudioView, type StudioArea } from "../desk/studio/view";
 import { runStudioAct, StudioWriteLock } from "../desk/studio/writer";
 import type { StudioAct } from "../desk/studio/acts";
+import { gitAt } from "./studio-conversation-rig";
 
 const AREAS: StudioArea[] = [
   { id: "work", label: "Work", color: "#2563eb", policy: "local" },
@@ -100,11 +101,7 @@ let dir: string;
 let ids = 0;
 const rid = (): string => `request-${++ids}-xyz`;
 
-function git(...args: string[]): string {
-  const r = Bun.spawnSync(["git", ...args], { cwd: dir, stdout: "pipe", stderr: "pipe" });
-  if (r.exitCode !== 0) throw new Error(r.stderr.toString());
-  return r.stdout.toString();
-}
+const git = (...args: string[]): string => gitAt(dir)(...args);
 
 function seed(active = 2): void {
   mkdirSync(join(dir, "threads"), { recursive: true });
@@ -392,5 +389,21 @@ describe("POST /api/desk/studio/act", () => {
     expect(body.ok).toBe(true);
     expect(body.commit).toMatch(/^[0-9a-f]{40}$/);
     expect(body.studio.parked.map((t) => t.slug)).toContain("alpha");
+  });
+
+  it("opens a thread from an Ivy conversation with its own question and removes nothing", async () => {
+    seed();
+    const link = "?desk=conversation&conversation=c-1";
+    const refused = await handleDeskStudioAct(post({ act: "open", from: "conversation", question: "Who owns it?", area: "lab", link: "a\nb", requestId: rid() }), runtime(true));
+    expect(refused.status).toBe(400);
+    const res = await handleDeskStudioAct(post({ act: "open", from: "conversation", question: "Who owns the spring workshop?", area: "lab", link, requestId: rid() }), runtime(true));
+    expect(res.status).toBe(200);
+    const t = parsed("who-owns-the-spring-workshop");
+    expect(t).toMatchObject({ state: "active", type: "question", areas: ["lab"] });
+    expect(t.material.map((m) => m.label)).toEqual([`Ivy conversation: ${link}`]);
+    expect(t.log[0]?.text).toBe(`Opened from Ivy conversation ${link}`);
+    expect(commits()[0]).toBe("Studio: Open who-owns-the-spring-workshop from an Ivy conversation");
+    expect(existsSync(join(dir, "inbox/lecture.md"))).toBe(true);
+    expect(existsSync(join(dir, "proposals/runs-locally.md"))).toBe(true);
   });
 });

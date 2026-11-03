@@ -86,3 +86,18 @@ export function studioResponseWriter(deps: StudioWriterDeps): OwnerWriter {
     after: async desk => { await readStudioMyDay(deps.db, desk, clock()).catch(() => undefined); },
   });
 }
+
+const THREAD_LABELS = { question: "The question", area: "The area", park: "The thread to park", link: "The conversation link" };
+
+export function studioThreadWriter(deps: StudioWriterDeps): OwnerWriter {
+  const clock = deps.now ?? Date.now;
+  return studioConversationWriter(deps, {
+    prepare: request => {
+      const { question = "", area = "", park } = request.fields;
+      const act = studioAct({ act: "open", from: "conversation", question, area, ...(park ? { park } : {}), link: request.provenance.link }, THREAD_LABELS);
+      if (typeof act === "string") return act;
+      return ctx => planAct(ctx, act);
+    },
+    after: async desk => { await readStudioMyDay(deps.db, desk, clock()).catch(() => undefined); },
+  });
+}
