@@ -782,6 +782,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 ))}
               </div>
             )}
+            <button type="button" className="desk-btn ghost" onClick={onOpenRoutines}>Routines</button>
             <button type="button" className="desk-btn ghost" onClick={onOpenSettings}>Settings</button>
           </div>
           <div className="desk-askwrap desk-askrow">
@@ -886,7 +887,6 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           proposal={proposalCard}
           preview={<CatchupPreview view={catchupView} onOpen={openCatchup} />}
           ambient={<>
-          <button className="desk-btn" type="button" onClick={onOpenRoutines}>Open Routines</button>
           <RoutinesSection view={view.routines} onChanged={onChanged} />
           <section className="desk-msec">
             <h3 className="desk-mh">Agents</h3>
