@@ -166,6 +166,12 @@ export type CreateResult =
   | { state: "created"; canonicalId: string; url?: string }
   | { state: "accepted"; receipt?: string }
   | { state: "failed"; error: string };
-export interface OwnerWriter { create: (request: CreateRequest) => Promise<CreateResult>; readback: OwnerReadback }
+export interface Suggestion { fields: Record<string, string>; reason: string }
+export interface SuggestContext { policy: Policy }
+export interface OwnerWriter {
+  create: (request: CreateRequest) => Promise<CreateResult>;
+  readback: OwnerReadback;
+  suggest?: (fields: Record<string, string>, context: SuggestContext) => Promise<Suggestion | null>;
+}
 export type OwnerWriters = Partial<Record<OwnerType, OwnerWriter>>;
 export type WithheldReasons = Partial<Record<OwnerType, string>>;

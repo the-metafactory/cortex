@@ -69,6 +69,11 @@ export function captureInThread(ctx: ActContext, thread: StudioThreadView, id: s
   return { writes: [{ path: thread.path, text: edited }], removes: [], subject: `File capture ${id} in ${thread.slug}`, message };
 }
 
+export function captureInInbox(ctx: ActContext, id: string, text: string, front: { via: string; target?: { thread: string; reason: string } }, message: string): ActPlan {
+  const head = stringify({ at: localTime(ctx.now), ...front });
+  return { writes: [{ path: `inbox/${id}.md`, text: `---\n${head}---\n\n${text.trim()}\n` }], removes: [], subject: `File capture ${id} in inbox`, message };
+}
+
 async function planCapture(ctx: ActContext, options: StudioOptions, id: string, text: string, run: CaptureModel): Promise<ActPlan | ActRefusal> {
   const { answer, reason } = await askFiler(captureFiler(options, ctx), ctx.view.active, text, run);
   const thread = ctx.view.active.find((t) => t.slug === answer?.thread);
@@ -76,11 +81,7 @@ async function planCapture(ctx: ActContext, options: StudioOptions, id: string, 
     return captureInThread(ctx, thread, id, [oneLine(text)], `Filed capture ${id}: ${oneLine(answer.reason)}`, `Filed in “${oneLine(thread.question)}”. ${oneLine(answer.reason)}`);
   }
   const target = answer?.thread && thread ? { thread: thread.slug, reason: oneLine(answer.reason) } : undefined;
-  const front = stringify({ at: localTime(ctx.now), via: "desk", ...(target ? { target } : {}) });
-  return {
-    writes: [{ path: `inbox/${id}.md`, text: `---\n${front}---\n\n${text.trim()}\n` }], removes: [],
-    subject: `File capture ${id} in inbox`, message: `Saved in the Studio inbox. ${answer ? oneLine(answer.reason) : reason}`,
-  };
+  return captureInInbox(ctx, id, text, { via: "desk", ...(target ? { target } : {}) }, `Saved in the Studio inbox. ${answer ? oneLine(answer.reason) : reason}`);
 }
 
 export interface CaptureInput {
@@ -96,12 +97,13 @@ export interface CaptureInput {
 export async function fileStudioCapture(input: CaptureInput): Promise<ActResult> {
   const id = captureId(input.requestId);
   const result = await runStudioTransaction(input, (ctx) => planCapture(ctx, input.options, id, input.text, input.model ?? captureModel));
-  if (result.ok) {
-    const now = (input.now ?? new Date()).getTime();
-    input.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'studio.capture', ?, ?, 'done', ?, ?, ?) ON CONFLICT(attempt_key) DO NOTHING")
-      .run(`studio-capture:${id}`, id, input.text, result.message, now, now);
-  }
+  if (result.ok) recordCaptureDone(input.db, id, input.text, result.message, (input.now ?? new Date()).getTime());
   return result;
+}
+
+export function recordCaptureDone(db: Database, id: string, title: string, message: string, at: number): void {
+  db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'studio.capture', ?, ?, 'done', ?, ?, ?) ON CONFLICT(attempt_key) DO NOTHING")
+    .run(`studio-capture:${id}`, id, title, message, at, at);
 }
 
 async function captureReceipt(dir: string, id: string): Promise<{ path: string; text: string } | null> {

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { CREATABLE_TYPES, CREATION_CATALOG, OWNER_BLOCKERS, SUBJECT_FIELDS, UNAVAILABLE_TYPES, isCreatable, type CreatableType, type Egress, type FieldSpec, type FixedTerm } from "./catalog";
 import { ConversationError, type ConversationHost } from "./host";
-import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateResult, type OperationRecord, type OwnerWriters, type WithheldReasons } from "./types";
+import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateResult, type OperationRecord, type OwnerWriters, type Policy, type Suggestion, type WithheldReasons } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 export type GrantScope = (typeof GRANT_SCOPES)[number];
@@ -44,6 +44,7 @@ const ProposalSchema = z.object({
   entryId: z.string().nullable(),
   requestDigest: z.string(),
   dismissed: z.boolean(),
+  suggestion: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -110,6 +111,12 @@ function missingOf(type: CreatableType | null, fields: Record<string, string>): 
   return CREATION_CATALOG[type].fields.filter(f => f.required && !present[f.name]).map(f => f.label);
 }
 
+function destinationChanged(type: CreatableType, before: Record<string, string>, after: Record<string, string>): boolean {
+  const a = clean(before);
+  const b = clean(after);
+  return CREATION_CATALOG[type].fields.some(f => f.destination && a[f.name] !== b[f.name]);
+}
+
 function onlyKnown(type: CreatableType, fields: Record<string, string>): Record<string, string> {
   const names = new Set(CREATION_CATALOG[type].fields.map(f => f.name));
   const unknown = Object.keys(fields).filter(name => !names.has(name));
@@ -122,7 +129,7 @@ function sentence(proposal: Proposal): string {
   const spec = CREATION_CATALOG[proposal.type];
   const fields = clean(proposal.fields);
   const subject = SUBJECT_FIELDS.map(name => fields[name]).find(Boolean) ?? "";
-  const where = spec.fields.filter(f => f.destination && fields[f.name]).map(f => `${f.label.toLowerCase()} ${fields[f.name] ?? ""}`);
+  const where = spec.fields.filter(f => f.destination && fields[f.name]).map(f => `${f.label.replace(/\s*\(.*\)$/, "").toLowerCase()} ${fields[f.name] ?? ""}`);
   const short = subject.length > 120 ? `${subject.slice(0, 119)}…` : subject;
   return `Create a ${spec.label.toLowerCase()}${short ? ` “${short}”` : ""}${where.length ? ` in ${where.join(", ")}` : ""}.`;
 }
@@ -239,7 +246,7 @@ export class ConversationCreation {
   }
 
   async propose(conversationId: string, body: Propose, actor: Actor): Promise<{ view: ProposalView; duplicate: boolean }> {
-    await this.gate(conversationId, actor, true);
+    const { policy } = await this.gate(conversationId, actor, true);
     const type = typeOf(body.type) ?? null;
     const fields = type ? onlyKnown(type, body.fields) : body.fields;
     const requestDigest = sha256(canonical(body));
@@ -250,12 +257,13 @@ export class ConversationCreation {
         if (known.conversationId !== conversationId || known.requestDigest !== requestDigest) throw conflict("That proposal id was already used with a different proposal.");
         return { view: await this.view(known), duplicate: true };
       }
+      const suggested = type ? await this.suggestion(type, fields, policy) : null;
       const at = this.now().toISOString();
-      const proposal: Proposal = { proposalId: body.proposalId, conversationId, type, ...(body.intent ? { intent: body.intent } : {}), fields, revision: 1, entryId: body.entryId ?? null, requestDigest, dismissed: false, createdAt: at, updatedAt: at };
+      const proposal: Proposal = { proposalId: body.proposalId, conversationId, type, ...(body.intent ? { intent: body.intent } : {}), fields: suggested ? { ...fields, ...suggested.fields } : fields, ...(suggested ? { suggestion: suggested.reason } : {}), revision: 1, entryId: body.entryId ?? null, requestDigest, dismissed: false, createdAt: at, updatedAt: at };
       await this.save(proposal);
-      await this.host.record(conversationId, `proposal:${proposal.proposalId}:1`, PROPOSAL_KIND, { proposalId: proposal.proposalId, revision: 1, type, fields, entryId: proposal.entryId });
+      await this.host.record(conversationId, `proposal:${proposal.proposalId}:1`, PROPOSAL_KIND, { proposalId: proposal.proposalId, revision: 1, type, fields: proposal.fields, entryId: proposal.entryId });
       const grant = type ? (await this.grants(actor.principal)).find(g => applies(g, conversationId, actor.principal, type)) : undefined;
-      const ready = type && this.capability(type).status === "ready" && missingOf(type, fields).length === 0;
+      const ready = type && this.capability(type).status === "ready" && missingOf(type, proposal.fields).length === 0;
       if (grant && ready) {
         await this.host.settled();
         const egress = await this.egressRefusal(conversationId, proposal);
@@ -263,6 +271,20 @@ export class ConversationCreation {
       }
       return { view: await this.view(proposal), duplicate: false };
     });
+  }
+
+  private async suggestion(type: CreatableType, fields: Record<string, string>, policy: Policy): Promise<Suggestion | null> {
+    const suggest = this.host.writers[type]?.suggest;
+    const spec = CREATION_CATALOG[type];
+    const present = clean(fields);
+    if (!suggest || spec.fields.some(f => f.destination && present[f.name])) return null;
+    try {
+      const found = await suggest(present, { policy });
+      const reason = found?.reason.trim();
+      if (!found || !reason) return null;
+      const known = Object.entries(found.fields).filter(([name, value]) => spec.fields.some(f => f.name === name) && value.trim());
+      return { fields: Object.fromEntries(known), reason };
+    } catch { return null; }
   }
 
   async revise(conversationId: string, proposalId: string, body: Revise, actor: Actor): Promise<ProposalView> {
@@ -286,7 +308,9 @@ export class ConversationCreation {
       const unchanged = type === proposal.type && proposalDigest(type, fields) === proposalDigest(proposal.type, proposal.fields);
       if (unchanged && current?.state !== "failed") return this.view(proposal);
       const revision = proposal.revision + 1;
-      const next: Proposal = { ...proposal, type, fields, revision, dismissed: false, updatedAt: this.now().toISOString() };
+      const { suggestion, ...rest } = proposal;
+      const kept = suggestion && type === proposal.type && type && !destinationChanged(type, proposal.fields, fields) ? { suggestion } : {};
+      const next: Proposal = { ...rest, ...kept, type, fields, revision, dismissed: false, updatedAt: this.now().toISOString() };
       await this.save(next);
       await this.host.record(conversationId, `proposal:${proposalId}:${revision}`, PROPOSAL_KIND, { proposalId, revision, type, fields, entryId: proposal.entryId });
       return this.view(next);

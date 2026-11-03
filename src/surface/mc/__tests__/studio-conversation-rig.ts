@@ -9,6 +9,7 @@ import { HandledLedger } from "../desk/actions";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { conversationSources, studioRequestId } from "../desk/conversation-sources";
 import { parseThreadFile } from "../desk/studio/format";
+import type { CaptureModel } from "../desk/studio/capture";
 import type { GitRunner } from "../desk/studio/git";
 import { conversationWriterRig, type ConversationWriterReply } from "./conversation-writer-rig";
 
@@ -55,7 +56,17 @@ function studioRepo(prefix: string, threads: Record<string, StudioThreadState>):
   return { dir, git, clean: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-export interface StudioRigOptions { studio?: boolean; git?: GitRunner; maxActive?: number }
+export interface StudioRigOptions {
+  studio?: boolean;
+  git?: GitRunner;
+  maxActive?: number;
+  filer?: { local: boolean };
+  captureModel?: CaptureModel;
+  areaPolicy?: "local" | "cloud";
+  policy?: "local" | "cloud";
+}
+
+const FILER = { baseUrl: "https://filer.invalid/v1", model: "filer-test", timeoutSeconds: 5, maxPerPass: 10 };
 
 export function studioConversationRig(prefix: string, type: CreatableType, threads: Record<string, StudioThreadState>) {
   const writerRig = conversationWriterRig(prefix, `ai.meta-factory.cortex.${prefix.replace(/-+$/, "")}-test`);
@@ -64,14 +75,14 @@ export function studioConversationRig(prefix: string, type: CreatableType, threa
     const db = writerRig.database();
     const desk: DeskOptions = {
       enabled: true, displayName: "", topN: 5, rangerUrl: "", sources: [],
-      areas: [{ id: "lab", label: "Lab", color: "#7c3aed", repos: [], goals: [], policy: "local" }],
-      ...(options.studio === false ? {} : { studio: { dir: repo.dir, maxActive: options.maxActive ?? 5 } }),
+      areas: [{ id: "lab", label: "Lab", color: "#7c3aed", repos: [], goals: [], policy: options.areaPolicy ?? "local" }],
+      ...(options.studio === false ? {} : { studio: { dir: repo.dir, maxActive: options.maxActive ?? 5, ...(options.filer ? { filer: { ...FILER, ...(options.filer.local ? { local: FILER } : {}) } } : {}) } }),
     };
     const runtime: DeskRuntime = { ledger: new HandledLedger(), options: desk };
     const { host, call, start, propose, confirm, check } = await writerRig.open<StudioReply>(db, runtime);
-    const sources = conversationSources({ db, desk: () => desk, ...(options.git ? { git: options.git } : {}) });
+    const sources = conversationSources({ db, desk: () => desk, ...(options.git ? { git: options.git } : {}), ...(options.captureModel ? { captureModel: options.captureModel } : {}) });
     await host.attachSources(sources);
-    const id = await start(`Synthetic ${type}`);
+    const id = await start(`Synthetic ${type}`, options.policy ?? "local");
     const submit = async (fields: Record<string, string>) => {
       const view = await propose(id, type, fields);
       return { view, reply: await confirm(id, view) };
@@ -110,8 +121,11 @@ export function studioConversationRig(prefix: string, type: CreatableType, threa
       expect(await writer().readback({ operationId: request.operationId } as OperationRecord)).toEqual({ found: true, canonicalId: commits()[0] ?? "" });
       expect(await writer().readback({ operationId: "conv-1:proposal-1:2" } as OperationRecord)).toEqual({ found: false });
     };
+    const revise = async (view: ProposalView, fields: Record<string, string>): Promise<ProposalView> =>
+      (await call("PATCH", `/api/conversations/${id}/proposals/${view.proposal.proposalId}`, { revision: view.proposal.revision, fields })).body.proposal;
     return {
-      id, repo, submit, writer, parsed, commits, created, confirmedAgain, replayed,
+      id, repo, submit, db, desk, revise,
+      propose: (fields: Record<string, string>) => propose(id, type, fields), writer, parsed, commits, created, confirmedAgain, replayed,
       confirm: (view: ProposalView) => confirm(id, view),
       check: (view: ProposalView) => check(id, view),
       threads: (): string[] => readdirSync(join(repo.dir, "threads")).sort(),
