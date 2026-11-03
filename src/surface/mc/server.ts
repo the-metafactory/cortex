@@ -81,6 +81,8 @@ import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
 import { handleGetDesk } from "./api/desk";
 import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
 import { handleDeskMail } from "./api/desk-mail";
+import { handleDeskGraphRepositories } from "./api/desk-graph-repositories";
+import { GRAPH_REPOSITORIES_PATH } from "./desk/graph-repository-schema";
 import { handleDeskMailRules } from "./api/desk-mail-rules";
 import { handleDeskDmarc } from "./api/desk-dmarc";
 import { DmarcLoop } from "./desk/mail-dmarc";
@@ -526,6 +528,8 @@ async function handleApi(
   if (pathname === "/api/desk/vips") return handleDeskVips(req, url, db);
 
   if (pathname === "/api/desk/unimportant") return handleDeskSenders(req, url, db, "unimportant");
+
+  if (pathname === GRAPH_REPOSITORIES_PATH || pathname.startsWith(`${GRAPH_REPOSITORIES_PATH}/`)) return handleDeskGraphRepositories(req, url, db);
 
   if (pathname === "/api/desk/mail") return handleDeskMail(req, db, desk);
 

@@ -61,7 +61,7 @@ describe("creation catalog", () => {
     const expected: Record<CreatableType, CapabilityStatus> = {
       "graph-node": "blocked:3033", "graph-map": "blocked:3034",
       "balance-task": "blocked:3030", "balance-project": "blocked:3031", "balance-inbox-task": "blocked:3032",
-      "studio-thread": "blocked:3029", "studio-capture": "blocked:3029", "studio-note": "blocked:3029", "studio-outcome": "blocked:3029",
+      "studio-thread": "blocked:3141", "studio-capture": "blocked:3142", "studio-note": "blocked:3140", "studio-response": "blocked:3138", "studio-close": "blocked:3139",
       flow: "blocked:3146", routine: "blocked:3035", "calendar-event": "blocked:3036", reminder: "blocked:3037",
       "soma-goal": "blocked:3038", "tana-note": "blocked:3039", "desk-note": "blocked:3040", "mail-draft": "blocked:3041",
     };
@@ -77,7 +77,7 @@ describe("creation catalog", () => {
     const byType = new Map(listed.map(c => [c.type, c.status]));
     expect(byType.get("studio-note")).toBe("ready");
     expect(byType.get("flow")).toBe("ready");
-    expect(byType.get("studio-thread")).toBe("blocked:3029");
+    expect(byType.get("studio-thread")).toBe("blocked:3141");
   });
 
   test("the blocker map names a node for exactly the creatable types", () => {

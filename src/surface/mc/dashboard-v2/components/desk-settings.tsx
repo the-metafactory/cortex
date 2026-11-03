@@ -2,6 +2,7 @@ import { SETTINGS_GROUPS, type SettingsGroup } from "../hooks/use-settings-locat
 import { CalendarSettings } from "./desk-calendar-settings";
 import { MailRuleSettings } from "./desk-mail-rules";
 import { TrustedSenderSettings } from "./desk-trusted-senders";
+import { GraphRepositorySettings } from "./desk-graph-repositories";
 import type { TrustedView } from "../../desk/mail-trust";
 import type { MailRuleView } from "../../desk/mail-rules";
 import type { DeskCalendar } from "../../desk/calendars";
@@ -226,6 +227,7 @@ export function SettingsBody({ day, group = "calendars", onGroup, vips, unimport
               <p className="desk-set-sub">Mail rules need the move command. Set mc.desk.mail.actions.move in the stack config.</p>
             </section>)}
             {panel("not-phishing", <TrustedSenderSettings initial={trusted} />)}
+            {panel("graph-repositories", <GraphRepositorySettings active={group === "graph-repositories"} />)}
           </div>
         </div>
       </main>
