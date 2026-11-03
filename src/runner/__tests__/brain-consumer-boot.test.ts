@@ -175,6 +175,24 @@ describe("wireBrainConsumers — per-capability binding", () => {
     expect(routed).toEqual([{ subject: "local.andreas.work.tasks.compose.judgment", capability: "compose.judgment" }]);
   });
 
+  test("a capability whose tasks. binding does not open is logged as partial, not subscribed", async () => {
+    const runtime = fakeRuntime();
+    const realSubscribe = runtime.subscribePull!;
+    runtime.subscribePull = (o) => (o.pattern.includes(".tasks.") ? null : realSubscribe(o));
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (...a: unknown[]) => lines.push(a.join(" "));
+    try {
+      await wireBrainConsumers(baseOpts({ runtime })).startForAgent(agent("helm", ["compose.judgment"]));
+    } finally {
+      console.log = origLog;
+    }
+
+    const ready = lines.find((l) => l.includes("brain consumer ready for agent=helm"));
+    expect(ready).toContain("subscribed=[]");
+    expect(ready).toContain("partial=[compose.judgment]");
+  });
+
   test("code-review.* and dev.* capabilities get no tasks. binding (CODE_REVIEW and DEV_IMPLEMENT own those subjects)", () => {
     for (const capability of ["code-review.typescript", "dev.implement"]) {
       const bindings = brainBindingsFor({

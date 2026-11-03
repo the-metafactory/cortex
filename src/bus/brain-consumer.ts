@@ -327,8 +327,9 @@ export interface BrainConsumerStartOpts {
 export interface BrainConsumerStartedInfo {
   agentId: string;
   capabilities: readonly string[];
-  /** Capabilities whose pull subscription actually opened on the broker. */
+  /** Capabilities whose every binding opened on the broker. */
   subscribedCapabilities: readonly string[];
+  openedBindings: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,11 +394,11 @@ export class BrainConsumer {
   }
 
   /**
-   * Bind every resolved pull subscription for each declared capability.
-   * Idempotent-guarded (throws if already started). A capability counts as
-   * subscribed when at least one of its bindings opened; one with no bindings,
-   * or whose `subscribePull` returns null (runtime dormant), is NOT counted,
-   * so the boot log can be honest.
+   * Bind every resolved pull subscription for each declared capability, then
+   * await all their handshakes together. Idempotent-guarded (throws if already
+   * started). A capability counts as subscribed only when ALL its bindings
+   * opened; one with no bindings, or with a binding `subscribePull` declined
+   * (runtime dormant), is NOT counted, so the boot log can be honest.
    */
   async start(opts: BrainConsumerStartOpts): Promise<BrainConsumerStartedInfo> {
     if (this.started) {
@@ -407,27 +408,29 @@ export class BrainConsumer {
     }
     this.started = true;
     const subscribedCapabilities: string[] = [];
+    const opened: MyelinSubscriber[] = [];
 
     for (const capability of this.agent.capabilities) {
-      let opened = false;
-      for (const resolved of opts.resolve(capability)) {
-        if (await this.bind(capability, resolved, opts.bootRetry)) opened = true;
-      }
-      if (opened) subscribedCapabilities.push(capability);
+      const bindings = opts.resolve(capability);
+      const subs = bindings.map((resolved) => this.bind(capability, resolved, opts.bootRetry));
+      for (const sub of subs) if (sub !== null) opened.push(sub);
+      if (bindings.length > 0 && subs.every((sub) => sub !== null)) subscribedCapabilities.push(capability);
     }
+    await Promise.all(opened.map((sub) => sub.ready));
 
     return {
       agentId: this.agent.id,
       capabilities: this.agent.capabilities,
       subscribedCapabilities,
+      openedBindings: opened.length,
     };
   }
 
-  private async bind(
+  private bind(
     capability: string,
     resolved: BrainBinding,
     bootRetry: JetstreamBootRetryOptions | undefined,
-  ): Promise<boolean> {
+  ): MyelinSubscriber | null {
     const { pattern, stream, durable, maxMessages, expiresMs, thresholdMessages } = resolved;
     // `subscribePull` is OPTIONAL on MyelinRuntime (the additivity constraint
     // ReviewConsumer also honours). An undefined property or a null return
@@ -447,10 +450,9 @@ export class BrainConsumer {
             this.processEnvelope(envelope, subject, null, capability),
         })
       : null;
-    if (sub === null) return false;
+    if (sub === null) return null;
     this.subscribers.push(sub);
-    await sub.ready;
-    return true;
+    return sub;
   }
 
   /**
