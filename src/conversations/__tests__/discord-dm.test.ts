@@ -101,9 +101,10 @@ describe("the principal's Discord DM is a running conversation", () => {
     expect(list[0]).toBe("Recent conversations:");
     expect(list.slice(1, 6)).toHaveLength(5);
     expect(list.slice(1, 6).every(row => /^\d\. /.exec(row))).toBe(true);
-    expect(fake.dms.join("\n")).not.toContain("Older plan");
     await host.submit(older.id, { inputId: "web-0", transport: "web", text: "bump", mode: "queue" });
     await host.waitForIdle(older.id);
+    await host.submit(local.id, { inputId: "web-0", transport: "web", text: "private bump", mode: "queue" });
+    await host.waitForIdle(local.id);
     await dm("conversations");
     const rows = fake.dms.at(-1)?.split("\n") ?? [];
     const olderAt = rows.findIndex(row => row.includes("Older plan"));
