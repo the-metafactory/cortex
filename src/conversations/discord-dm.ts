@@ -64,10 +64,14 @@ export class DmPicker {
     const command = parseDmCommand(msg.content);
     if (!command) return false;
     if (command.kind !== "pick") return true;
-    const offer = OfferSchema.safeParse(await this.options.host.delivery(offerKey(msg.channelId)));
-    if (!offer.success) return false;
-    const age = this.options.now().getTime() - Date.parse(offer.data.at);
-    return age >= 0 && age <= CLAIM_WINDOW_MS;
+    const open = await this.openOffer(msg.channelId);
+    return open !== null && within(open.age, CLAIM_WINDOW_MS);
+  }
+
+  private async openOffer(channelId: string): Promise<{ offer: Offer; age: number } | null> {
+    const parsed = OfferSchema.safeParse(await this.options.host.delivery(offerKey(channelId)));
+    if (!parsed.success) return null;
+    return { offer: parsed.data, age: this.options.now().getTime() - Date.parse(parsed.data.at) };
   }
 
   async handle(msg: InboundMessage): Promise<void> {
@@ -122,11 +126,10 @@ export class DmPicker {
 
   private async pick(msg: InboundMessage, index: number, restore: boolean): Promise<string> {
     const { host, principalId } = this.options;
-    const parsed = OfferSchema.safeParse(await host.delivery(offerKey(msg.channelId)));
-    if (!parsed.success || parsed.data.principal !== principalId || parsed.data.channelId !== msg.channelId) return `Nothing changed: there is no open list to choose from. ${HELP}`;
-    const offer = parsed.data;
-    const age = this.options.now().getTime() - Date.parse(offer.at);
-    if (!(age >= 0 && age <= OFFER_TTL_MS) || msg.timestamp.getTime() <= Date.parse(offer.requestedAt)) return "Nothing changed: that list has expired. Send `conversations` or `search <words>` for a fresh one.";
+    const open = await this.openOffer(msg.channelId);
+    if (!open || open.offer.principal !== principalId || open.offer.channelId !== msg.channelId) return `Nothing changed: there is no open list to choose from. ${HELP}`;
+    const { offer } = open;
+    if (!within(open.age, OFFER_TTL_MS) || msg.timestamp.getTime() <= Date.parse(offer.requestedAt)) return "Nothing changed: that list has expired. Send `conversations` or `search <words>` for a fresh one.";
     const chosen = offer.rows[index - 1];
     if (!chosen) return `Nothing changed: the list has no number ${index}.`;
     const meta = await host.meta(chosen.id).catch((error: unknown) => {
@@ -153,6 +156,10 @@ export class DmPicker {
     }
     await adapter.postResponse({ instanceId: msg.instanceId, channelId: msg.channelId }, text);
   }
+}
+
+function within(age: number, limit: number): boolean {
+  return age >= 0 && age <= limit;
 }
 
 function line(row: OverviewRow): string {
