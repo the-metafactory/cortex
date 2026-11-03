@@ -19,6 +19,7 @@
 // override still lands before any Discord client connects.
 
 import { resolveStudio } from "./surface/mc/desk/studio/config";
+import { DiscordConversations } from "./conversations/discord";
 import { openConversationHost, type HostStatus } from "./conversations/host";
 import { piTurns, resolvePiSettings } from "./conversations/pi";
 import { cortexStateDir } from "./common/state-path";
@@ -2600,28 +2601,36 @@ export async function startCortex(
   // bus-side router stays blind to adapter DTOs (sage round 2,
   // architecture); the shared gateway's pre-route interceptor (cortex#2524)
   // uses the SAME mapping, so the two paths cannot drift on the routing key.
+  let conversationDiscord: DiscordConversations | null = null;
   const inboundWithGateBridge =
     (adapter: PlatformAdapter, agent: Agent) =>
     (msg: InboundMessage): Promise<void> => {
-      const thread = gateRoutingThread(msg);
       const consumed = gateReplyRouter.offer(toGateReplyOffer(msg));
       if (consumed) return Promise.resolve();
-      // B-3 routing (design-bot-packs.md §6, cortex#1021): an exec-brain agent
-      // does NOT run the builtin claude-code chat pipeline (it has no CC
-      // substrate). Its inbound @-mention becomes a capability task PUBLISHED
-      // TO THE BUS on `…brain.{capability}` (the BRAIN_TASKS stream), which the
-      // brain consumer pulls — the documented "bus is the medium" contract
-      // (sage #1038 round 1). Fleet `dispatch` effects ride the bus too.
-      if (agent.runtime?.brain?.kind === "exec") {
-        // Return (not void) so the platform handler applies natural
-        // back-pressure on the publish (sage #1038 r2). The publish is cheap
-        // — a JetStream write; the long compose is decoupled on the consumer
-        // side (the brain pulls the task), so awaiting here bounds inbound
-        // publish concurrency without serialising composition.
-        return dispatchInboundToBrain(agent, msg, thread);
+      const discordConversations = conversationDiscord;
+      if (discordConversations && msg.platform === "discord" && msg.threadId) {
+        return discordConversations.offer(msg).then((taken) => (taken ? undefined : routeInbound(adapter, agent, msg)));
       }
-      return dispatchHandler.handleMessage(adapter, msg, targetAgentForDispatch(agent, configDir));
+      return routeInbound(adapter, agent, msg);
     };
+  const routeInbound = (adapter: PlatformAdapter, agent: Agent, msg: InboundMessage): Promise<void> => {
+    const thread = gateRoutingThread(msg);
+    // B-3 routing (design-bot-packs.md §6, cortex#1021): an exec-brain agent
+    // does NOT run the builtin claude-code chat pipeline (it has no CC
+    // substrate). Its inbound @-mention becomes a capability task PUBLISHED
+    // TO THE BUS on `…brain.{capability}` (the BRAIN_TASKS stream), which the
+    // brain consumer pulls — the documented "bus is the medium" contract
+    // (sage #1038 round 1). Fleet `dispatch` effects ride the bus too.
+    if (agent.runtime?.brain?.kind === "exec") {
+      // Return (not void) so the platform handler applies natural
+      // back-pressure on the publish (sage #1038 r2). The publish is cheap
+      // — a JetStream write; the long compose is decoupled on the consumer
+      // side (the brain pulls the task), so awaiting here bounds inbound
+      // publish concurrency without serialising composition.
+      return dispatchInboundToBrain(agent, msg, thread);
+    }
+    return dispatchHandler.handleMessage(adapter, msg, targetAgentForDispatch(agent, configDir));
+  };
 
   /**
    * Publish an inbound surface message to an exec-brain agent as a capability
@@ -4966,8 +4975,20 @@ export async function startCortex(
         console.log(conversationStatus.state === "ready"
           ? `cortex: conversation host ready (${conversationStatus.resumed.length} resumed, ${conversationStatus.reconciled.length} reconciled${conversationStatus.tookOver ? `, took over lock of dead pid ${conversationStatus.tookOver.pid}` : ""})`
           : `cortex: ${conversationStatus.reason}`);
+        const discordConfig = conversationConfig?.discord;
+        if (conversationStatus.state === "ready" && discordConfig) {
+          conversationDiscord = new DiscordConversations({
+            host: conversationStatus.host,
+            adapter: () => adapters.find((adapter) => adapter.platform === "discord" && (discordConfig.instance === undefined || adapter.instanceId === discordConfig.instance)) ?? null,
+            config: discordConfig,
+            principalId: options.principal?.discordId,
+          });
+          conversationDiscord.start();
+          const discordCapability = conversationDiscord.capability();
+          console.log(`cortex: conversation Discord threads under channel ${discordConfig.channelId}: ${discordCapability.ok ? "ready" : discordCapability.reason}`);
+        }
       }
-      const conversationAccess = (): HostStatus | null => conversationStatus;
+      const conversationAccess = Object.assign((): HostStatus | null => conversationStatus, { discord: () => conversationDiscord });
       mcHandle = await startMissionControl({
         conversations: conversationAccess,
         results: {
@@ -6514,6 +6535,7 @@ export async function startCortex(
       await completeAsync("vigil stop", vigilHandle?.stop());
       await completeAsync("ledger archive stop", ledgerArchive?.stop());
       await completeAsync("mc embed stop", mcHandle?.stop());
+      conversationDiscord?.stop();
       await completeAsync("conversation host close", conversationStatus?.state === "ready" ? conversationStatus.host.close() : undefined);
       completeSync("github webhook receiver stop", () => githubReceiver?.stop());
       for (let i = 0; i < adapterCleanup.length; i++) {

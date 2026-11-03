@@ -85,6 +85,7 @@ export interface InboundMessage {
 	timestamp: Date;
 	/** Escape hatch for platform-specific data (discord.js Message, MM post, etc.) */
 	_native?: unknown;
+	messageId?: string;
 }
 /** Inbound file attachment metadata */
 export interface InboundAttachment {
@@ -246,6 +247,40 @@ export type CreatePrivateThreadResult = {
 	ok: false;
 	detail: string;
 };
+export type ThreadMembersResult = {
+	ok: true;
+	memberIds: string[];
+} | {
+	ok: false;
+	detail: string;
+};
+export type ThreadPostResult = {
+	ok: true;
+	messageId: string;
+} | {
+	ok: false;
+	detail: string;
+	uncertain: boolean;
+};
+export interface ThreadMessage {
+	id: string;
+	authorId: string;
+	content: string;
+	at: string;
+}
+export type ThreadReadResult = {
+	ok: true;
+	messages: ThreadMessage[];
+} | {
+	ok: false;
+	detail: string;
+};
+export type ThreadDeleteResult = {
+	ok: true;
+} | {
+	ok: false;
+	detail: string;
+};
 /**
  * The core adapter interface. Each platform implements this.
  * Adapters are thin I/O wrappers — all pipeline logic lives in MessageRouter.
@@ -345,6 +380,17 @@ export interface PlatformAdapter {
 		name: string;
 		memberIds: string[];
 	}): Promise<CreatePrivateThreadResult>;
+	privateThreadMembers?(threadId: string): Promise<ThreadMembersResult>;
+	postToThread?(opts: {
+		threadId: string;
+		text: string;
+		nonce: string;
+	}): Promise<ThreadPostResult>;
+	recentThreadMessages?(opts: {
+		threadId: string;
+		limit: number;
+	}): Promise<ThreadReadResult>;
+	deleteThread?(threadId: string): Promise<ThreadDeleteResult>;
 	/**
 	 * cortex#502 — resolve a LOGICAL surface address (the review-path
 	 * `response_routing` shape) to a native {@link ResponseTarget}.
@@ -1061,6 +1107,15 @@ export type SurfacePlugin = AdapterPlugin | RendererPlugin;
  *
  * ## Changelog (OQ5 — plugin-author migration notes)
  *
+ * - **1.3.0** (cortex#2969) — ADDITIVE, non-breaking. `InboundMessage` gains
+ *   an optional `messageId` (the platform's own message id, the durable
+ *   delivery identity for Ivy conversations), and `PlatformAdapter` gains the
+ *   optional private-thread primitives `privateThreadMembers`, `postToThread`
+ *   (one message, nonce enforced), `recentThreadMessages` (id, author,
+ *   content and ISO creation time) and `deleteThread`.
+ *   Each resolves a result and never throws. No migration required; bundles
+ *   without them keep compiling and Cortex reports the missing capability.
+ *   Minor bump — no `sdkRange` change needed for existing plugins.
  * - **1.2.0** (cortex#2582) — ADDITIVE, non-breaking. `notifyPrincipal` takes
  *   an optional `opts?: NotifyOptions` (`{ buffer?: boolean }`, default
  *   `true`) and may resolve to a `NotifyResult` (`delivered: true` with an
@@ -1080,7 +1135,7 @@ export type SurfacePlugin = AdapterPlugin | RendererPlugin;
  *   existing plugins.
  * - **1.0.0** — initial versioned SDK barrel (cortex#1790, S5).
  */
-export declare const SURFACE_SDK_VERSION = "1.2.0";
+export declare const SURFACE_SDK_VERSION = "1.3.0";
 /**
  * cortex#1794 (S9b) — the narrow, TYPE-ONLY behavioral contract an adapter
  * uses to authorise an inbound message, in place of importing cortex's

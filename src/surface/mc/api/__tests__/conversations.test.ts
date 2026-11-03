@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Subprocess } from "bun";
 import { openConversationHost, type HostStatus } from "../../../../conversations/host";
+import { DiscordConversations } from "../../../../conversations/discord";
+import { BOT, FakeThreads } from "../../../../conversations/__tests__/fixtures/discord-threads";
 import { answering, scratchDirs } from "../../../../conversations/__tests__/fixtures/scratch";
 import { handleConversations, isStackPrincipal } from "../conversations";
 import { buildAllowedHostnames, type MutationGuardContext } from "../mutation-guard";
@@ -170,4 +172,49 @@ describe("conversation record across process restarts", () => {
     expect(after.entries.find(e => e.kind === "cortex.continuation")?.data).toMatchObject({ mode: "native-resume", engine: "pi-durable@1.4.0" });
     await stop(server, "SIGTERM");
   }, 60_000);
+});
+
+describe("conversation Discord routes", () => {
+  const principal = "111111111111111111";
+  async function withDiscord(fake: FakeThreads | null) {
+    const dir = await scratch();
+    const status = await openConversationHost({ dir, stack: "api", label: LABEL, expectedLabel: LABEL, lanes: { cloud: { provider: "test", model: "m" }, local: { provider: "test", model: "l" } }, turns: answering(() => "ok") });
+    statuses.push(status);
+    if (status.state !== "ready") throw new Error(status.reason);
+    const bridge = fake ? new DiscordConversations({ host: status.host, adapter: () => fake, config: { channelId: "3333333333333333333", guildId: "2222222222222222222", webUrl: "http://127.0.0.1:8767" }, principalId: principal, log: () => undefined }) : null;
+    const access = Object.assign(() => status, { discord: () => bridge });
+    const send = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) =>
+      handleConversations(new Request(`http://127.0.0.1:8767${path}`, { method, headers: { host: "127.0.0.1:8767", "content-type": "application/json", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), new URL(`http://127.0.0.1:8767${path}`), guard(), access);
+    return { send, status };
+  }
+
+  test("the principal checks the bot, continues a cloud conversation in Discord and sees the thread on the web", async () => {
+    const fake = new FakeThreads();
+    const { send } = await withDiscord(fake);
+    const check = await send("POST", "/api/conversations/discord/check");
+    expect(check.status).toBe(200);
+    expect(await check.json()).toMatchObject({ ok: true, check: { members: [BOT, principal], deleted: true } });
+    expect((await send("POST", "/api/conversations/discord/check", undefined, OTHER)).status).toBe(403);
+    const { conversation } = await (await send("POST", "/api/conversations", NEW)).json() as { conversation: { id: string } };
+    expect((await send("POST", `/api/conversations/${conversation.id}/discord`, undefined, OTHER)).status).toBe(403);
+    expect((await send("POST", `/api/conversations/${conversation.id}/discord`, { retry: "yes" })).status).toBe(400);
+    const attached = await send("POST", `/api/conversations/${conversation.id}/discord`);
+    expect(attached.status).toBe(200);
+    expect(await attached.json()).toMatchObject({ conversation: { discord: { threadId: "thread-2" } }, discord: { available: true, url: "https://discord.com/channels/2222222222222222222/thread-2" } });
+    const detail = await (await send("GET", `/api/conversations/${conversation.id}`)).json() as { conversation: { discord?: { threadId: string } }; discord: { url?: string } };
+    expect(detail.conversation.discord?.threadId).toBe("thread-2");
+    expect(detail.discord.url).toBe("https://discord.com/channels/2222222222222222222/thread-2");
+    const local = await (await send("POST", "/api/conversations", { ...NEW, policy: "local" })).json() as { conversation: { id: string } };
+    expect((await send("POST", `/api/conversations/${local.conversation.id}/discord`)).status).toBe(403);
+    expect(fake.created).toBe(2);
+  });
+
+  test("a stack without Discord conversations says so and creates nothing", async () => {
+    const { send } = await withDiscord(null);
+    const { conversation } = await (await send("POST", "/api/conversations", NEW)).json() as { conversation: { id: string } };
+    expect((await send("POST", "/api/conversations/discord/check")).status).toBe(503);
+    expect((await send("POST", `/api/conversations/${conversation.id}/discord`)).status).toBe(503);
+    const detail = await (await send("GET", `/api/conversations/${conversation.id}`)).json() as { discord: { available: boolean } };
+    expect(detail.discord.available).toBe(false);
+  });
 });

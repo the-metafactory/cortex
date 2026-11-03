@@ -61,6 +61,15 @@
  *
  * ## Changelog (OQ5 — plugin-author migration notes)
  *
+ * - **1.3.0** (cortex#2969) — ADDITIVE, non-breaking. `InboundMessage` gains
+ *   an optional `messageId` (the platform's own message id, the durable
+ *   delivery identity for Ivy conversations), and `PlatformAdapter` gains the
+ *   optional private-thread primitives `privateThreadMembers`, `postToThread`
+ *   (one message, nonce enforced), `recentThreadMessages` (id, author,
+ *   content and ISO creation time) and `deleteThread`.
+ *   Each resolves a result and never throws. No migration required; bundles
+ *   without them keep compiling and Cortex reports the missing capability.
+ *   Minor bump — no `sdkRange` change needed for existing plugins.
  * - **1.2.0** (cortex#2582) — ADDITIVE, non-breaking. `notifyPrincipal` takes
  *   an optional `opts?: NotifyOptions` (`{ buffer?: boolean }`, default
  *   `true`) and may resolve to a `NotifyResult` (`delivered: true` with an
@@ -80,7 +89,7 @@
  *   existing plugins.
  * - **1.0.0** — initial versioned SDK barrel (cortex#1790, S5).
  */
-export const SURFACE_SDK_VERSION = "1.2.0";
+export const SURFACE_SDK_VERSION = "1.3.0";
 
 // =============================================================================
 // Platform adapter contract (src/adapters/types.ts)
@@ -96,6 +105,12 @@ export type {
   ResponseTarget,
   OutboundFile,
   ContextMessage,
+  CreatePrivateThreadResult,
+  ThreadMembersResult,
+  ThreadPostResult,
+  ThreadMessage,
+  ThreadReadResult,
+  ThreadDeleteResult,
 } from "../adapters/types";
 
 // Local (non-re-exporting) type import — `AdapterPolicyPort` below needs
