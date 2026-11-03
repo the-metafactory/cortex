@@ -1292,20 +1292,6 @@ export class FragmentLoadError extends Error {
  * this call (ENOENT race). The directory loader skips such files; single-file
  * callers translate `null` into a clear "file disappeared" error.
  */
-/**
- * The install dir of an exec brain's pack when its fragment is a link into it.
- * arc links `agents.d/<id>.yaml` to `<install dir>/agent.yaml`, and names the
- * install dir after the repo, not the agent id (cortex#3134). Boot falls back
- * to `{arc repos dir}/{id}` when the fragment is a plain file.
- */
-export function linkedPackDir(filePath: string): string | undefined {
-  try {
-    return lstatSync(filePath).isSymbolicLink() ? dirname(realpathSync(filePath)) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function loadAgentFromFile(
   filePath: string,
   personaBaseDir: string,
@@ -1424,6 +1410,23 @@ export function loadAgentFromFile(
   }
 
   return { ...agent, persona: personaPathResolved };
+}
+
+/**
+ * The install dir of an exec brain's pack when its fragment is an arc install
+ * link: a symlink to a file named `agent.yaml`, which arc places at the root of
+ * `<install dir>`, named after the repo rather than the agent id (cortex#3134).
+ * Any other fragment, plain or linked elsewhere, gets `undefined`, so boot
+ * keeps the `{arc repos dir}/{id}` fallback.
+ */
+export function linkedPackDir(filePath: string): string | undefined {
+  try {
+    if (!lstatSync(filePath).isSymbolicLink()) return undefined;
+    const target = realpathSync(filePath);
+    return basename(target) === "agent.yaml" ? dirname(target) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function loadAgentsDirectory(dir: string, warnings?: SurfaceTokenWarning[]): Agent[] {

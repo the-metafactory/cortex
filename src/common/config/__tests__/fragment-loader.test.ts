@@ -530,6 +530,18 @@ describe("loadAgentsDirectory — exec brain pack dir (cortex#3134)", () => {
     }
   });
 
+  test("a fragment linked to a file not named agent.yaml leaves packDir unset", () => {
+    const { root, agentsDir, packDir } = layout();
+    writeFileSync(join(packDir, "helm-fragment.yaml"), EXEC_FRAGMENT);
+    symlinkSync(join(packDir, "helm-fragment.yaml"), join(agentsDir, "helm.yaml"));
+    try {
+      const [helm] = loadAgentsDirectory(agentsDir);
+      expect(helm!.runtime!.brain!.packDir).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a plain fragment file leaves packDir unset, so boot falls back to {arc repos}/{id}", () => {
     const { root, agentsDir } = layout();
     writeFileSync(join(agentsDir, "helm.yaml"), EXEC_FRAGMENT);

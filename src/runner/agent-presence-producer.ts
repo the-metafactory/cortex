@@ -327,7 +327,11 @@ export class AgentPresenceProducer {
     for (const agent of this.agents) {
       this.publishOnline(agent);
     }
-    this.timer = this.scheduler.setInterval(() => {
+    this.ensureTicker();
+  }
+
+  private ensureTicker(): void {
+    this.timer ??= this.scheduler.setInterval(() => {
       this.tickHeartbeats();
     }, this.intervalMs);
   }
@@ -340,9 +344,7 @@ export class AgentPresenceProducer {
     this.capabilityBaseline.set(id, new Set(agent.capabilities));
     if (!this.started || this.stopped) return true;
     this.publishOnline(agent);
-    this.timer ??= this.scheduler.setInterval(() => {
-      this.tickHeartbeats();
-    }, this.intervalMs);
+    this.ensureTicker();
     return true;
   }
 
