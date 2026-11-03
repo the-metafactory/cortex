@@ -8,7 +8,7 @@ import { DESK_NOTE_WITHHELD, deskNoteWriter } from "./desk-note-conversation-wri
 import { flowWriter } from "./flow-conversation-writer";
 import { deskWriterArgv, type DeskWriterKind } from "./desk-conversation-writer";
 import { goalWriter } from "./goal-conversation-writer";
-import { graphNodeWriter } from "./graph-conversation-writer";
+import { graphMapWriter, graphNodeWriter } from "./graph-conversation-writer";
 import type { GoalRunner } from "./goals";
 import { loadBalanceState } from "./balance-store";
 import type { DeskOptions } from "./compose";
@@ -97,7 +97,9 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps), ...(deskItems ? { "balance-inbox-task": balanceInboxWriter({ ...deps, deskItems }) } : {}) };
   const routine = routineWriter({ routines: () => deps.desk()?.routines, ...(deps.runRoutine ? { run: deps.runRoutine } : {}) });
   const flow = flowWriter({ flows: () => deps.desk()?.flows, ...(deps.runFlow ? { run: deps.runFlow } : {}) });
-  const graphNode = graphNodeWriter({ db: deps.db, desk: deps.desk, ...(deps.runGraph ? { run: deps.runGraph } : {}), ...(deps.now ? { now: deps.now } : {}) });
+  const graphDeps = { db: deps.db, desk: deps.desk, ...(deps.runGraph ? { run: deps.runGraph } : {}), ...(deps.now ? { now: deps.now } : {}) };
+  const graphNode = graphNodeWriter(graphDeps);
+  const graphMap = graphMapWriter(graphDeps);
   const writerDeps = (kind: DeskWriterKind) => {
     const run = deps.runWriter?.[kind];
     return { db: deps.db, desk: deps.desk, ...(run ? { run } : {}), ...(deps.now ? { now: deps.now } : {}) };
@@ -118,7 +120,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
         ...(desk.studio ? { "studio-response": studioResponse } : {}),
         ...(desk.routines ? { routine } : {}),
         ...(desk.flows ? { flow } : {}),
-        ...(desk.somaBin ? { "graph-node": graphNode } : {}),
+        ...(desk.somaBin ? { "graph-node": graphNode, "graph-map": graphMap } : {}),
         ...(deskWriterArgv(desk, "calendar") ? { "calendar-event": calendar } : {}),
         ...(deskWriterArgv(desk, "reminder") ? { reminder } : {}),
         ...(deskWriterArgv(desk, "goal") && desk.somaBin ? { "soma-goal": goal } : {}),
