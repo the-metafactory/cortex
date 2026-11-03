@@ -97,8 +97,8 @@ async function loggedInGitlabHostsIgnoringExitCode(run: GraphRepositoryRunner): 
   return { ok: true, hosts: [...hosts].sort() };
 }
 
-function parseBackToBackJsonArrays(text: string): unknown[] | null {
-  const items: unknown[] = [];
+function splitTopLevelJson(text: string): string[] | null {
+  const slices: string[] = [];
   let depth = 0;
   let inString = false;
   let escaped = false;
@@ -118,26 +118,28 @@ function parseBackToBackJsonArrays(text: string): unknown[] | null {
     } else if (c === "]" || c === "}") {
       depth--;
       if (depth < 0) return null;
-      if (depth === 0) {
-        let page: unknown;
-        try {
-          page = JSON.parse(text.slice(start, i + 1));
-        } catch (_err) {
-          return null;
-        }
-        if (!Array.isArray(page)) return null;
-        items.push(...(page as unknown[]));
-      }
+      if (depth === 0) slices.push(text.slice(start, i + 1));
     } else if (depth === 0 && !/\s/.test(c ?? "")) return null;
   }
-  return depth === 0 && !inString && start >= 0 ? items : null;
+  return depth === 0 && !inString ? slices : null;
+}
+
+function parseProjectPages(stdout: string): unknown[] | null {
+  const slices = splitTopLevelJson(stdout);
+  if (slices === null || slices.length === 0) return null;
+  try {
+    const pages = slices.map((slice): unknown => JSON.parse(slice));
+    return pages.every((page): page is unknown[] => Array.isArray(page)) ? pages.flat() : null;
+  } catch (_err) {
+    return null;
+  }
 }
 
 async function listHostProjects(run: GraphRepositoryRunner, host: string): Promise<{ ok: true; paths: string[] } | { ok: false; reason: string }> {
   const ran = await attempt(run, "glab", glabListArgv(host));
   if (!ran.ok) return ran;
   if (ran.result.code !== 0) return { ok: false, reason: firstLine(ran.result.stderr) || `glab exited with code ${ran.result.code}` };
-  const projects = parseBackToBackJsonArrays(ran.result.stdout);
+  const projects = parseProjectPages(ran.result.stdout);
   if (projects === null) return { ok: false, reason: "glab did not return a project list" };
   const paths = projects
     .map((p: unknown) => (typeof p === "object" && p !== null ? (p as Record<string, unknown>).path_with_namespace : undefined))
