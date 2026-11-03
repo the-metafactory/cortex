@@ -1,3 +1,4 @@
+// glossary-ignore: host
 import type { GitlabHostListing, GitlabListing, GraphRepository, GraphRepositoryListing } from "../../desk/graph-repositories";
 import { GRAPH_REPOSITORIES_PATH } from "../../desk/graph-repository-schema";
 

@@ -1,3 +1,4 @@
+// glossary-ignore: host
 import { useEffect, useState } from "react";
 import type { GitlabListing, GraphRepository, GraphRepositoryListing } from "../../desk/graph-repositories";
 import { parseGitlabRef } from "../../desk/graph-repository-schema";

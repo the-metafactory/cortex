@@ -23,6 +23,7 @@ export interface GraphRepository {
 
 export type GraphRepositoryListing = { ok: true } | { ok: false; reason: string };
 
+// glossary-ignore: host
 /** One logged-in GitLab host and whether its projects could be listed. */
 export type GitlabHostListing = { host: string; ok: true } | { host: string; ok: false; reason: string };
 
@@ -152,10 +153,10 @@ async function listGitlabProjects(run: GraphRepositoryRunner): Promise<{ listing
   const status = await loggedInGitlabHostsIgnoringExitCode(run);
   if (!status.ok) return { listing: { ok: false, reason: status.reason }, refs: [] };
   if (status.hosts.length === 0) return { listing: { ok: false, reason: "glab is not logged in to any GitLab host" }, refs: [] };
+  const listings = await Promise.all(status.hosts.map(async (host) => ({ host, listed: await listHostProjects(run, host) })));
   const hosts: GitlabHostListing[] = [];
   const refs: { ref: string; path: string }[] = [];
-  for (const host of status.hosts) {
-    const listed = await listHostProjects(run, host);
+  for (const { host, listed } of listings) {
     if (!listed.ok) {
       hosts.push({ host, ok: false, reason: listed.reason });
       continue;
@@ -166,6 +167,7 @@ async function listGitlabProjects(run: GraphRepositoryRunner): Promise<{ listing
   return { listing: { ok: true, hosts }, refs };
 }
 
+// glossary-ignore: host
 function listingAnswered(ref: string, github: { ok: boolean }, gitlab: GitlabListing): boolean {
   if (!ref.startsWith(GITLAB_REF_PREFIX)) return github.ok;
   if (!gitlab.ok) return false;

@@ -157,6 +157,24 @@ describe("the GitLab projects in the listing", () => {
     expect(run.calls.some((c) => c.argv.includes("gitlab.com"))).toBe(false);
   });
 
+  it("asks the hosts at the same time, so a slow host does not hold back the others", async () => {
+    const asked: string[] = [];
+    let releaseSlow = (): void => {};
+    const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    const run: GraphRepositoryRunner = async (argv) => {
+      if (argv[0] === "gh") return ok("");
+      if (argv[1] === "auth") return loggedIn("a.example.org", "b.example.org") as ReturnType<typeof ok>;
+      const host = argv[3] ?? "";
+      asked.push(host);
+      if (host === "a.example.org") await slowGate;
+      else releaseSlow();
+      return projects(`${host.split(".")[0]}/p`) as ReturnType<typeof ok>;
+    };
+    const view = await listGraphRepositories(db, run);
+    expect(asked).toEqual(["a.example.org", "b.example.org"]);
+    expect(view.repositories.map((r) => r.ref)).toEqual(["gitlab:a.example.org/a/p", "gitlab:b.example.org/b/p"]);
+  });
+
   it("reads every page that glab --paginate prints back to back", async () => {
     const page = (...paths: string[]) => JSON.stringify(paths.map((p) => ({ path_with_namespace: p, description: "a ][ b \"q\" [c]" })));
     const view = await listGraphRepositories(db, forges({ glabStatus: loggedIn("gitlab.example.org"), glab: ok(`${page("g/one", "g/two")}${page("g/three")}\n`) }));
