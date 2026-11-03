@@ -111,6 +111,12 @@ function missingOf(type: CreatableType | null, fields: Record<string, string>): 
   return CREATION_CATALOG[type].fields.filter(f => f.required && !present[f.name]).map(f => f.label);
 }
 
+function destinationChanged(type: CreatableType, before: Record<string, string>, after: Record<string, string>): boolean {
+  const a = clean(before);
+  const b = clean(after);
+  return CREATION_CATALOG[type].fields.some(f => f.destination && a[f.name] !== b[f.name]);
+}
+
 function onlyKnown(type: CreatableType, fields: Record<string, string>): Record<string, string> {
   const names = new Set(CREATION_CATALOG[type].fields.map(f => f.name));
   const unknown = Object.keys(fields).filter(name => !names.has(name));
@@ -302,7 +308,9 @@ export class ConversationCreation {
       const unchanged = type === proposal.type && proposalDigest(type, fields) === proposalDigest(proposal.type, proposal.fields);
       if (unchanged && current?.state !== "failed") return this.view(proposal);
       const revision = proposal.revision + 1;
-      const next: Proposal = { ...proposal, type, fields, revision, dismissed: false, updatedAt: this.now().toISOString() };
+      const { suggestion, ...rest } = proposal;
+      const kept = suggestion && type === proposal.type && type && !destinationChanged(type, proposal.fields, fields) ? { suggestion } : {};
+      const next: Proposal = { ...rest, ...kept, type, fields, revision, dismissed: false, updatedAt: this.now().toISOString() };
       await this.save(next);
       await this.host.record(conversationId, `proposal:${proposalId}:${revision}`, PROPOSAL_KIND, { proposalId, revision, type, fields, entryId: proposal.entryId });
       return this.view(next);

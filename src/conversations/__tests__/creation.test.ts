@@ -299,7 +299,18 @@ describe("owner suggestions at propose", () => {
     expect((await creation.propose(id, body, web)).duplicate).toBe(true);
     const cleared = await creation.revise(id, view.proposal.proposalId, { revision: 1, fields: { text: "A thought", thread: "" } }, web);
     expect(cleared.proposal.fields.thread).toBe("");
+    expect(cleared.proposal.suggestion).toBeUndefined();
     expect(asked).toHaveLength(1);
+  });
+
+  test("an edit that keeps the destination keeps the filer's reason; changing the thread drops it", async () => {
+    const { creation, start } = await setup(owner => withSuggest(owner, () => Promise.resolve({ fields: { thread: "alpha" }, reason: "It is about alpha." })));
+    const id = await start();
+    const { view } = await capture(creation, id, { text: "A thought" });
+    const edited = await creation.revise(id, view.proposal.proposalId, { revision: 1, fields: { text: "A sharper thought", thread: "alpha" } }, web);
+    expect(edited.proposal.suggestion).toBe("It is about alpha.");
+    const moved = await creation.revise(id, view.proposal.proposalId, { revision: 2, fields: { text: "A sharper thought", thread: "beta" } }, web);
+    expect(moved.proposal.suggestion).toBeUndefined();
   });
 
   test("a given destination, a throw, null or an empty reason leave the fields as proposed with no suggestion", async () => {

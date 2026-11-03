@@ -146,16 +146,17 @@ export function studioCloseWriter(deps: StudioWriterDeps): OwnerWriter {
 const INBOX = "it goes to the Studio inbox.";
 const toInbox = (reason: string): string => `${oneLine(reason).replace(/;? ?saved in the Studio inbox\.$/i, "").replace(/[.;\s]+$/, "")}; ${INBOX}`;
 
+const captureOf = (request: CreateRequest): { id: string; text: string } => ({ id: captureId(studioRequestId(request.operationId)), text: (request.fields.text ?? "").trim() });
+
 export interface CaptureWriterDeps extends StudioWriterDeps { model?: CaptureModel }
 
 export function studioCaptureWriter(deps: CaptureWriterDeps): OwnerWriter {
   const clock = deps.now ?? Date.now;
   const writer = studioConversationWriter(deps, {
     prepare: request => {
-      const text = (request.fields.text ?? "").trim();
+      const { id, text } = captureOf(request);
       if (!text) return "The capture is empty.";
       const slug = (request.fields.thread ?? "").trim();
-      const id = captureId(studioRequestId(request.operationId));
       return ctx => {
         if (!slug) return captureInInbox(ctx, id, text, { via: "conversation" }, "Saved in the Studio inbox.");
         const thread = ctx.view.active.find(t => t.slug === slug);
@@ -164,7 +165,8 @@ export function studioCaptureWriter(deps: CaptureWriterDeps): OwnerWriter {
       };
     },
     after: async (desk, request, _commit, message) => {
-      recordCaptureDone(deps.db, captureId(studioRequestId(request.operationId)), (request.fields.text ?? "").trim(), message, clock());
+      const { id, text } = captureOf(request);
+      recordCaptureDone(deps.db, id, text, message, clock());
       await refreshMyDay(deps)(desk);
     },
   });

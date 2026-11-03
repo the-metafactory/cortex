@@ -74,6 +74,7 @@ describe("Studio capture writer", () => {
       const view = await r.propose({ text: "Second thought" });
       const cleared = await r.revise(view, { text: "Second thought", thread: "" });
       expect(cleared.proposal.fields.thread).toBe("");
+      expect(cleared.proposal.suggestion).toBeUndefined();
       const operation = r.created(await r.confirm(cleared));
       const id = captureId(studioRequestId(operation.operationId));
       expect(inbox(r.repo.dir)).toEqual([`${id}.md`]);
