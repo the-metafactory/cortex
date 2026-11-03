@@ -5,7 +5,7 @@
 // `../loader` — pure function, no side effects beyond reading disk.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { useTemporaryHome } from "../../test-home";
@@ -490,3 +490,54 @@ presence:
     logChannelId: "2"
 `;
 }
+
+describe("loadAgentsDirectory — exec brain pack dir (cortex#3134)", () => {
+  const EXEC_FRAGMENT = [
+    "id: helm",
+    'displayName: "Helm"',
+    'persona: "../personas/helm.md"',
+    "trust: []",
+    "presence: {}",
+    "runtime:",
+    "  mode: in-process",
+    "  capabilities: [compose.judgment]",
+    "  brain:",
+    "    kind: exec",
+    '    run: "bun {pack}/brain/main.ts"',
+    "",
+  ].join("\n");
+
+  function layout(): { root: string; agentsDir: string; packDir: string } {
+    const root = mkdtempSync(join(tmpdir(), "agents-d-pack-"));
+    const agentsDir = join(root, "agents.d");
+    const packDir = join(root, "repos", "helm-agents");
+    mkdirSync(agentsDir);
+    mkdirSync(join(root, "personas"));
+    mkdirSync(packDir, { recursive: true });
+    writeFileSync(join(root, "personas", "helm.md"), "# helm\n");
+    writeFileSync(join(packDir, "agent.yaml"), EXEC_FRAGMENT);
+    return { root, agentsDir, packDir };
+  }
+
+  test("a fragment linked into an install dir named after the repo sets packDir to that dir", () => {
+    const { root, agentsDir, packDir } = layout();
+    symlinkSync(join(packDir, "agent.yaml"), join(agentsDir, "helm.yaml"));
+    try {
+      const [helm] = loadAgentsDirectory(agentsDir);
+      expect(helm!.runtime!.brain!.packDir).toBe(realpathSync(packDir));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a plain fragment file leaves packDir unset, so boot falls back to {arc repos}/{id}", () => {
+    const { root, agentsDir } = layout();
+    writeFileSync(join(agentsDir, "helm.yaml"), EXEC_FRAGMENT);
+    try {
+      const [helm] = loadAgentsDirectory(agentsDir);
+      expect(helm!.runtime!.brain!.packDir).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

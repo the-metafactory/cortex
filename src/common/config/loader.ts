@@ -6,7 +6,7 @@
  * platform instances, cloud endpoints, repos, and security overrides.
  */
 
-import { readFileSync, readdirSync, existsSync, statSync } from "fs";
+import { readFileSync, readdirSync, existsSync, statSync, lstatSync, realpathSync } from "fs";
 import { join, dirname, resolve, isAbsolute, basename } from "path";
 import { parse as parseYaml } from "yaml";
 import { AgentConfigSchema, DeskSchema, NetworkFileSchema, type AgentConfig, type NetworkFile } from "../types/config";
@@ -1292,6 +1292,20 @@ export class FragmentLoadError extends Error {
  * this call (ENOENT race). The directory loader skips such files; single-file
  * callers translate `null` into a clear "file disappeared" error.
  */
+/**
+ * The install dir of an exec brain's pack when its fragment is a link into it.
+ * arc links `agents.d/<id>.yaml` to `<install dir>/agent.yaml`, and names the
+ * install dir after the repo, not the agent id (cortex#3134). Boot falls back
+ * to `{arc repos dir}/{id}` when the fragment is a plain file.
+ */
+export function linkedPackDir(filePath: string): string | undefined {
+  try {
+    return lstatSync(filePath).isSymbolicLink() ? dirname(realpathSync(filePath)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function loadAgentFromFile(
   filePath: string,
   personaBaseDir: string,
@@ -1386,6 +1400,12 @@ export function loadAgentFromFile(
       `schema validation failed:\n${details}`,
       err instanceof Error ? err : undefined,
     );
+  }
+
+  const brain = agent.runtime?.brain;
+  if (brain?.kind === "exec" && brain.packDir === undefined) {
+    const packDir = linkedPackDir(filePath);
+    if (packDir !== undefined) brain.packDir = packDir;
   }
 
   // Resolve persona path: ~ FIRST (so a `~/personas/foo.md` is fully

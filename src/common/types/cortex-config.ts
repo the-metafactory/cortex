@@ -574,6 +574,7 @@ export const BrainConfigSchema = z
      * for `builtin`.
      */
     run: z.string().min(1).optional(),
+    packDir: z.string().min(1).optional(),
     /**
      * The wire protocol the brain speaks. Pinned to `cortex-brain/v1` — the
      * only protocol B-1 implements. A `z.literal` so a typo (or a future
