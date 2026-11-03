@@ -614,3 +614,48 @@ describe("FS-1 R2 — shouldFederatePresence (presence: hidden opt-out)", () => 
     expect(shouldFederatePresence({ networks: [], presence: "hidden" })).toBe(false);
   });
 });
+
+describe("AgentPresenceProducer.addAgent (cortex#3134 hot-add)", () => {
+  const AGENT_HELM: PresenceAgent = {
+    identity: { nkey_public_key: "UHHH", agent_id: "helm", assistant_name: "Helm" },
+    scope: { principal: "andreas", stack: "meta-factory" },
+    capabilities: ["compose.judgment"],
+  };
+  const agentIdOf = (e: Envelope): string => (e.payload as { identity: { agent_id: string } }).identity.agent_id;
+
+  test("an agent added after start is announced online and joins every later heartbeat", () => {
+    const runtime = recordingRuntime();
+    const sched = manualScheduler();
+    const producer = new AgentPresenceProducer({ runtime, source: SOURCE, agents: [AGENT_A], scheduler: sched });
+    producer.start();
+
+    expect(producer.addAgent(AGENT_HELM)).toBe(true);
+    sched.tick();
+
+    const online = runtime.published.filter((e) => e.type === "agent.online" && agentIdOf(e) === "helm");
+    expect(online).toHaveLength(1);
+    expect((online[0]!.payload as { capabilities: string[] }).capabilities).toEqual(["compose.judgment"]);
+    expect(runtime.published.filter((e) => e.type === "agent.heartbeat").map(agentIdOf).sort()).toEqual(["helm", "luna"]);
+  });
+
+  test("a hot-add onto an empty boot roster starts the heartbeat ticker", () => {
+    const runtime = recordingRuntime();
+    const sched = manualScheduler();
+    const producer = new AgentPresenceProducer({ runtime, source: SOURCE, agents: [], scheduler: sched });
+    producer.start();
+
+    producer.addAgent(AGENT_HELM);
+    sched.tick();
+
+    expect(runtime.published.filter((e) => e.type === "agent.heartbeat").map(agentIdOf)).toEqual(["helm"]);
+  });
+
+  test("an agent already known is not re-announced", () => {
+    const runtime = recordingRuntime();
+    const producer = new AgentPresenceProducer({ runtime, source: SOURCE, agents: [AGENT_A], scheduler: manualScheduler() });
+    producer.start();
+
+    expect(producer.addAgent(AGENT_A)).toBe(false);
+    expect(runtime.published.filter((e) => e.type === "agent.online")).toHaveLength(1);
+  });
+});

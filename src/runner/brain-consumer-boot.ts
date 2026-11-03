@@ -167,6 +167,7 @@ export interface BrainBootAgent {
       kind: "builtin" | "exec";
       /** Argv template, e.g. `"bun {pack}/brain/main.ts"`. Required for `exec`. */
       run?: string;
+      packDir?: string;
       lifecycle: "per-task" | "daemon";
       /** Env var NAMES to forward into the brain's minimal env. */
       secrets: readonly string[];
@@ -426,7 +427,7 @@ export function wireBrainConsumers(
       // §Maintainability — secret collection + persona load are extracted to
       // the module-level `collectBrainSecrets` / `loadBrainPersona` helpers so
       // this startup closure reads as a sequence of named steps.
-      const packDir = join(opts.brainPackBaseDir, agent.id);
+      const packDir = brain.packDir ?? join(opts.brainPackBaseDir, agent.id);
       const secrets = collectBrainSecrets(agent.id, brain.secrets);
 
       // Persona delivered to the brain — per-task brains receive it on each task

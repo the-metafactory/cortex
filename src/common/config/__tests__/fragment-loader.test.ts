@@ -5,7 +5,7 @@
 // `../loader` — pure function, no side effects beyond reading disk.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { useTemporaryHome } from "../../test-home";
@@ -490,3 +490,60 @@ presence:
     logChannelId: "2"
 `;
 }
+
+describe("loadAgentsDirectory — exec brain pack dir (cortex#3134)", () => {
+  const EXEC_FRAGMENT = [
+    "id: helm",
+    'displayName: "Helm"',
+    'persona: "../personas/helm.md"',
+    "trust: []",
+    "presence: {}",
+    "runtime:",
+    "  mode: in-process",
+    "  capabilities: [compose.judgment]",
+    "  brain:",
+    "    kind: exec",
+    '    run: "bun {pack}/brain/main.ts"',
+    "",
+  ].join("\n");
+
+  function packDirAfter(place: (agentsDir: string, packDir: string) => void): { packDir: string; loaded: string | undefined } {
+    const root = mkdtempSync(join(tmpdir(), "agents-d-pack-"));
+    const agentsDir = join(root, "agents.d");
+    const packDir = join(root, "repos", "helm-agents");
+    mkdirSync(agentsDir);
+    mkdirSync(join(root, "personas"));
+    mkdirSync(packDir, { recursive: true });
+    writeFileSync(join(root, "personas", "helm.md"), "# helm\n");
+    writeFileSync(join(packDir, "agent.yaml"), EXEC_FRAGMENT);
+    try {
+      place(agentsDir, packDir);
+      const [helm] = loadAgentsDirectory(agentsDir);
+      return { packDir: realpathSync(packDir), loaded: helm!.runtime!.brain!.packDir };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  test("a fragment linked into an install dir named after the repo sets packDir to that dir", () => {
+    const { packDir, loaded } = packDirAfter((agentsDir, pack) => {
+      symlinkSync(join(pack, "agent.yaml"), join(agentsDir, "helm.yaml"));
+    });
+    expect(loaded).toBe(packDir);
+  });
+
+  test("a fragment linked to a file not named agent.yaml leaves packDir unset", () => {
+    const { loaded } = packDirAfter((agentsDir, pack) => {
+      writeFileSync(join(pack, "helm-fragment.yaml"), EXEC_FRAGMENT);
+      symlinkSync(join(pack, "helm-fragment.yaml"), join(agentsDir, "helm.yaml"));
+    });
+    expect(loaded).toBeUndefined();
+  });
+
+  test("a plain fragment file leaves packDir unset, so boot falls back to {arc repos}/{id}", () => {
+    const { loaded } = packDirAfter((agentsDir) => {
+      writeFileSync(join(agentsDir, "helm.yaml"), EXEC_FRAGMENT);
+    });
+    expect(loaded).toBeUndefined();
+  });
+});

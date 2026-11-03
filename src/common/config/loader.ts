@@ -6,7 +6,7 @@
  * platform instances, cloud endpoints, repos, and security overrides.
  */
 
-import { readFileSync, readdirSync, existsSync, statSync } from "fs";
+import { readFileSync, readdirSync, existsSync, statSync, lstatSync, realpathSync } from "fs";
 import { join, dirname, resolve, isAbsolute, basename } from "path";
 import { parse as parseYaml } from "yaml";
 import { AgentConfigSchema, DeskSchema, NetworkFileSchema, type AgentConfig, type NetworkFile } from "../types/config";
@@ -1388,6 +1388,12 @@ export function loadAgentFromFile(
     );
   }
 
+  const brain = agent.runtime?.brain;
+  if (brain?.kind === "exec" && brain.packDir === undefined) {
+    const packDir = linkedPackDir(filePath);
+    if (packDir !== undefined) brain.packDir = packDir;
+  }
+
   // Resolve persona path: ~ FIRST (so a `~/personas/foo.md` is fully
   // expanded before isAbsolute check), then relative → absolute against
   // the fragment's directory. Echo B1 fix: must expand BEFORE join.
@@ -1404,6 +1410,23 @@ export function loadAgentFromFile(
   }
 
   return { ...agent, persona: personaPathResolved };
+}
+
+/**
+ * The install dir of an exec brain's pack when its fragment is an arc install
+ * link: a symlink to a file named `agent.yaml`, which arc places at the root of
+ * `<install dir>`, named after the repo rather than the agent id (cortex#3134).
+ * Any other fragment, plain or linked elsewhere, gets `undefined`, so boot
+ * keeps the `{arc repos dir}/{id}` fallback.
+ */
+export function linkedPackDir(filePath: string): string | undefined {
+  try {
+    if (!lstatSync(filePath).isSymbolicLink()) return undefined;
+    const target = realpathSync(filePath);
+    return basename(target) === "agent.yaml" ? dirname(target) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function loadAgentsDirectory(dir: string, warnings?: SurfaceTokenWarning[]): Agent[] {
