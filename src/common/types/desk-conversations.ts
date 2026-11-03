@@ -14,8 +14,10 @@ const LaneSchema = z.object({
 }).strict();
 export type ConversationLane = z.infer<typeof LaneSchema>;
 export const LEGACY_CLOUD_ID = "cloud";
+export const CLOUD_LANE_ID = "[a-z][a-z0-9-]{0,31}";
+export const CloudLaneIdSchema = z.string().regex(new RegExp(`^${CLOUD_LANE_ID}$`), "mc.desk.conversations cloud lane id must be lower-case letters, digits and dashes");
 const CloudLaneSchema = z.object({
-  id: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/, "mc.desk.conversations cloud lane id must be lower-case letters, digits and dashes"),
+  id: CloudLaneIdSchema,
   ...LaneSchema.shape,
 }).strict();
 export type CloudLane = z.infer<typeof CloudLaneSchema>;

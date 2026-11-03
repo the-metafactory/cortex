@@ -23,7 +23,9 @@ describe("the conversation's cloud model", () => {
   });
 
   it("says when the chosen model is no longer configured instead of switching", () => {
-    const html = render({ cloud: [codex, { ...claude, id: "other" }], chosen: "claude", using: null });
+    const html = render({ cloud: [codex], chosen: "claude", using: null });
+    expect(html).toContain("<select");
+    expect(html).toContain("Default · openai-codex/gpt-test");
     expect(html).toContain("claude · no longer configured");
     expect(html).toContain("no other model is used");
   });

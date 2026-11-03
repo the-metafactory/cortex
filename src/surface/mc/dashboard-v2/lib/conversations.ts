@@ -40,7 +40,7 @@ export const organize = (id: string, change: Organize): Promise<{ conversation: 
 export function modelLine(models: ConversationDetail["models"]): { choose: boolean; text: string; missing: string | null } {
   const lane = models.cloud.find(candidate => candidate.id === models.using);
   const missing = models.chosen !== null && !models.cloud.some(candidate => candidate.id === models.chosen) ? models.chosen : null;
-  return { choose: models.cloud.length > 1, text: lane ? `${lane.provider}/${lane.model}` : "", missing };
+  return { choose: models.cloud.length > 1 || missing !== null, text: lane ? `${lane.provider}/${lane.model}` : "", missing };
 }
 
 export const continueInDiscord = (id: string, retry = false): Promise<{ conversation: ConversationMeta }> =>

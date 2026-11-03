@@ -8,7 +8,7 @@ import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type 
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { z } from "zod";
 import { acquireHostLock, type LockOwner } from "./lock";
-import { cloudLanes } from "../common/types/desk-conversations";
+import { cloudLanes, type CloudLane } from "../common/types/desk-conversations";
 import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, laneName, type GateResult, type Lanes, type TurnCall, type TurnEvent } from "./model";
 import {
   AttachmentRefSchema, CONTINUATION_KIND, isModelRoute, routePolicy, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES,
@@ -284,17 +284,19 @@ export class ConversationHost {
 
   routeFor(policy: Policy, chosen?: string): ModelRoute | null {
     if (policy === "local") return this.options.lanes.local ? "local" : null;
-    const clouds = cloudLanes(this.options.lanes.cloud);
-    const cloud = clouds.find(lane => lane.id === chosen) ?? clouds[0];
+    const cloud = this.cloudLane(chosen) ?? cloudLanes(this.options.lanes.cloud)[0];
     if (cloud) return cloudRoute(cloud.id);
     return this.options.lanes.local ? "local" : null;
   }
 
+  private cloudLane(id: string | undefined): CloudLane | undefined {
+    return id === undefined ? undefined : cloudLanes(this.options.lanes.cloud).find(lane => lane.id === id);
+  }
+
   private choices(stored: Stored, effective: Policy): ModelChoices {
     const clouds = cloudLanes(this.options.lanes.cloud);
-    const chosen = stored.cloud ?? null;
-    const lane = chosen === null ? clouds[0] : clouds.find(candidate => candidate.id === chosen);
-    return { cloud: clouds.map(({ id, provider, model }) => ({ id, provider, model })), chosen, using: effective === "cloud" ? lane?.id ?? null : null };
+    const lane = stored.cloud === undefined ? clouds[0] : this.cloudLane(stored.cloud);
+    return { cloud: clouds.map(({ id, provider, model }) => ({ id, provider, model })), chosen: stored.cloud ?? null, using: effective === "cloud" ? lane?.id ?? null : null };
   }
 
   private async gate(sessionId: string | undefined, route: ModelRoute): Promise<GateResult> {
@@ -479,7 +481,7 @@ export class ConversationHost {
 
   async organize(id: string, change: Organize): Promise<ConversationMeta> {
     const { cloud } = change;
-    if (cloud && !cloudLanes(this.options.lanes.cloud).some(lane => lane.id === cloud)) throw new ConversationError(400, `No cloud model ${cloud} is configured on this stack; the conversation's model was not changed.`);
+    if (cloud && !this.cloudLane(cloud)) throw new ConversationError(400, `No cloud model ${cloud} is configured on this stack; the conversation's model was not changed.`);
     await this.update(id, stored => {
       const next: Stored = { ...stored, ...(change.pinned === undefined ? {} : { pinned: change.pinned }), ...(change.state ? { state: change.state } : {}) };
       if (cloud === undefined) return next;
@@ -614,7 +616,7 @@ export class ConversationHost {
       if (existing) return { duplicate: true, submission: await this.submissionView(request.inputId, existing) };
       if (stored.state === "archived") throw new ConversationError(409, "This conversation is archived. Restore it to continue; nothing was sent.");
       if (!route) throw new ConversationError(503, effective === "local" ? "No local model is configured. Nothing was sent; no cloud fallback is used." : "No conversation model is configured. Nothing was sent.");
-      if (effective === "cloud" && stored.cloud && !cloudLanes(this.options.lanes.cloud).some(lane => lane.id === stored.cloud)) throw new ConversationError(503, `The cloud model ${stored.cloud} chosen for this conversation is no longer configured. Choose another model; nothing was sent and no other model was used.`);
+      if (effective === "cloud" && stored.cloud && !this.cloudLane(stored.cloud)) throw new ConversationError(503, `The cloud model ${stored.cloud} chosen for this conversation is no longer configured. Choose another model; nothing was sent and no other model was used.`);
       await this.claimInput(conversation, request.inputId, sha256);
       if (route !== stored.route) {
         await conversation.configure({ model: { provider: CORTEX_PROVIDER, modelId: route } }, this.context);

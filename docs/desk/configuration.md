@@ -266,6 +266,8 @@ pi keeps one session per conversation and lane under the stack's conversation di
 
 ### Hand a mail to Ivy
 
+<!-- glossary-ignore: run -->
+<!-- glossary-ignore: body -->
 The same lanes and pi settings run **Hand to Ivy** on a mail card. The action is offered when `conversations` has a lane, `ask.writers.task` and at least one `ask.taskMaps` entry are set, and `mail.actions.draft` is set. It files an agent task on the first task map with the mail's sender, subject, classifier summary, link and your optional instruction, never the mail body; keep that map private. Ivy then gets one pi turn with the subject, summary and the mail's first paragraph, and answers with findings and a reply draft. A mail from a `local`-policy area runs only on the `local` lane; any other mail runs on the default `cloud` lane, or on `local` when `cloud` is absent. Suspicious mail is never handed over.
 
 While Ivy works, the mail card shows "With Ivy since" and the time. The result arrives as a card in Catch-up: **Approve** saves the draft through `mail.actions.draft`, **Edit** opens it in the reply editor first, and **Discard** closes it. Nothing is sent. A failed turn shows its reason with **Ask Ivy again**; the hand-off is kept in `desk_mail_handoffs`. pi sessions for hand-offs live under the stack's `mail-handoff` directory. The task on the map stays open; the Desk does not close it.
