@@ -101,7 +101,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const studioCapture = studioCaptureWriter({ ...studioWriterDeps, ...(deps.captureModel ? { model: deps.captureModel } : {}) });
   const deskItems = deps.deskItems;
   const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps), ...(deskItems ? { "balance-inbox-task": balanceInboxWriter({ ...deps, deskItems }) } : {}) };
-  const routine = routineWriter({ routines: () => deps.desk()?.routines, ...(deps.runRoutine ? { run: deps.runRoutine } : {}) });
+  const routine = routineWriter({ routines: () => deps.desk()?.routines, flows: () => deps.desk()?.flows, ...(deps.runRoutine ? { run: deps.runRoutine } : {}), ...(deps.runFlow ? { runPulse: deps.runFlow } : {}) });
   const flow = flowWriter({ flows: () => deps.desk()?.flows, ...(deps.runFlow ? { run: deps.runFlow } : {}) });
   const graphDeps = { db: deps.db, desk: deps.desk, ...(deps.runGraph ? { run: deps.runGraph } : {}), ...(deps.now ? { now: deps.now } : {}) };
   const graphNode = graphNodeWriter(graphDeps);

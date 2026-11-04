@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import type { FlowOptions } from "../../../common/types/config";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, ReadbackResult } from "../../../conversations/types";
-import { spawnWithStdin } from "./create";
+import { spawnWithStdin, type WriterRunner } from "./create";
+import { withFlowFile } from "./flow-file";
 import { reflexCommand, RoutineRefusal, RoutineSchema, type InstalledRoutine, type RoutineOptions, type RoutineRunner } from "./routine-command";
 
 export interface RoutineWriterDeps {
   routines: () => RoutineOptions | undefined;
   run?: RoutineRunner;
+  flows?: () => FlowOptions | undefined;
+  runPulse?: WriterRunner;
 }
 
 const NOTHING = "Nothing was created.";
@@ -15,6 +19,24 @@ const sentence = (text: string): string => `${text.trim().replace(/[.\s]+$/, "")
 const failed = (text: string): CreateResult => ({ state: "failed", error: `${sentence(text)} ${NOTHING}` });
 const AddReply = z.object({ id: z.string() });
 const RoutineList = z.array(RoutineSchema);
+const FlowReply = z.union([
+  z.object({ status: z.literal("found").optional(), name: z.string(), source: z.enum(["saved", "arc"]), yaml: z.string() }),
+  z.object({ status: z.literal("not-found") }),
+]);
+const unreadableFlow = (): CreateResult => failed("Pulse could not read the saved flows");
+
+async function savedFlow(name: string, options: FlowOptions, run: WriterRunner): Promise<{ yaml: string } | CreateResult> {
+  try {
+    const result = await run([...options.pulse, "flow", "show", name, "--json"], "", 5_000);
+    const reply = FlowReply.safeParse(JSON.parse(result.stdout));
+    if (!reply.success) return unreadableFlow();
+    if (reply.data.status === "not-found") return result.code === 1 ? failed(`No saved flow is named ${name}`) : unreadableFlow();
+    if (result.code !== 0 || reply.data.name !== name) return unreadableFlow();
+    return reply.data.source === "saved" ? { yaml: reply.data.yaml } : failed("Only saved flows can be attached");
+  } catch {
+    return unreadableFlow();
+  }
+}
 
 function routineSlug(name: string): string {
   const slug = name.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
@@ -49,8 +71,20 @@ export function routineWriter(deps: RoutineWriterDeps): OwnerWriter {
     if (fields.target !== options.target) return failed(`This stack creates routines only for ${options.target}`);
     const id = conversationRoutineId(fields.name ?? "", request.operationId);
     if (request.signal.aborted) throw new Error("The conversation stopped waiting before Reflex was called.");
+    const args = routineAddArgs(id, fields);
+    const add = (argv: string[]) => reflexCommand(options, argv, AddReply, run);
+    const install = async () => {
+      if (!fields.flow) return add(args);
+      const flows = deps.flows?.();
+      if (!flows) return failed("This stack has no Pulse configured for saved flows");
+      const flow = await savedFlow(fields.flow, flows, deps.runPulse ?? spawnWithStdin);
+      if ("state" in flow) return flow;
+      if (request.signal.aborted) throw new Error("The conversation stopped waiting before Reflex was called.");
+      return withFlowFile(flow.yaml, file => add([...args, "--flow-file", file]));
+    };
     try {
-      const reply = await reflexCommand(options, routineAddArgs(id, fields), AddReply, run);
+      const reply = await install();
+      if ("state" in reply) return reply;
       if (reply.id !== id) throw new Error(`Reflex answered for routine ${reply.id} instead of ${id}.`);
       return { state: "created", canonicalId: id };
     } catch (error) {

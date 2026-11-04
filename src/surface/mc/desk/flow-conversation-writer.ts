@@ -1,12 +1,10 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
 import type { FlowOptions } from "../../../common/types/config";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, ReadbackResult } from "../../../conversations/types";
 import { studioRequestId } from "./conversation-ids";
 import { spawnWithStdin, type WriterRunner } from "./create";
+import { withFlowFile } from "./flow-file";
 
 export type { FlowOptions } from "../../../common/types/config";
 
@@ -48,17 +46,6 @@ function json(stdout: string): unknown {
   }
 }
 
-async function withDefinition<T>(definition: string, use: (file: string) => Promise<T>): Promise<T> {
-  const dir = await mkdtemp(join(tmpdir(), "desk-flow-"));
-  try {
-    const file = join(dir, "flow.yaml");
-    await writeFile(file, definition.endsWith("\n") ? definition : `${definition}\n`, { mode: 0o600, flag: "wx" });
-    return await use(file);
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-
 function flowSaveArgs(options: FlowOptions, file: string, request: CreateRequest): string[] {
   const { provenance } = request;
   return [...options.pulse, "flow", "save", "--file", file, "--request-id", studioRequestId(request.operationId), "--conversation", provenance.conversationId, "--exchange", provenance.entryId ?? provenance.proposalId, "--json"];
@@ -75,7 +62,7 @@ export function flowWriter(deps: FlowWriterDeps): OwnerWriter {
     if (named === undefined) return failed("The flow definition is not a YAML mapping with a name");
     if (named !== name) return failed("The name and the flow definition's name differ");
     if (request.signal.aborted) throw new Error("The conversation stopped waiting before Pulse was called.");
-    const result = await withDefinition(definition, file => run(flowSaveArgs(options, file, request), "", SAVE_TIMEOUT_MS));
+    const result = await withFlowFile(definition.endsWith("\n") ? definition : `${definition}\n`, file => run(flowSaveArgs(options, file, request), "", SAVE_TIMEOUT_MS));
     const reply = json(result.stdout);
     const saved = Saved.safeParse(reply);
     if (result.code === 0 && saved.success) {

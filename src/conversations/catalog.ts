@@ -72,6 +72,7 @@ export const CREATION_CATALOG: Record<CreatableType, CreatableSpec> = {
   ], fixed: [{ label: "Run", value: "Saved to this stack's flows. Running it is a separate decision." }] },
   routine: { row: "O15", label: "Routine", owner: "Reflex", egress: "local", fields: [
     text("name", "Name"), text("target", "Target", true, true), text("schedule", "Schedule"), text("timezone", "Time zone"),
+    text("flow", "Saved flow (name)", false),
   ], fixed: [{ label: "Schedule", value: "Created paused. Resuming it is a separate decision." }] },
   "calendar-event": { row: "O16", label: "Calendar event", owner: "Calendar", egress: "cloud", fields: [
     text("calendar", "Calendar (empty uses the default)", false, true), text("title", "Title"), { name: "start", label: "Start", kind: "datetime", required: true }, { name: "end", label: "End", kind: "datetime", required: true }, long("notes", "Notes"),
