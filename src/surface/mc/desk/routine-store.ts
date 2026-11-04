@@ -38,9 +38,17 @@ export function recordDraftNode(db: Database, id: string, capability: string, no
 const DRAFT_LIST_LIMIT = 10;
 const DRAFT_SCAN_LIMIT = 200;
 
-export function listFiledDrafts(db: Database): RoutineProposal[] {
+export function listRoutineDrafts(db: Database): RoutineProposal[] {
   const rows = db.query<{ document: string }, [number]>("SELECT document FROM desk_routine_proposals WHERE json_extract(document, '$.draft') IS NOT NULL ORDER BY rowid DESC LIMIT ?").all(DRAFT_SCAN_LIMIT);
-  return rows.map((row) => RoutineProposalSchema.parse(JSON.parse(row.document))).filter((p) => Object.keys(p.draft?.nodes ?? {}).length > 0).slice(0, DRAFT_LIST_LIMIT);
+  return rows.map((row) => RoutineProposalSchema.parse(JSON.parse(row.document))).slice(0, DRAFT_LIST_LIMIT);
+}
+
+export function discardRoutineDraft(db: Database, id: string): RoutineResult {
+  const pending = db.query("SELECT 1 FROM desk_routine_operations WHERE resource = (SELECT routine_id FROM desk_routine_proposals WHERE id = ?) AND result IS NULL").get(id);
+  if (pending) return { ok: false, error: "An install is awaiting confirmation. Check the pending change before discarding this draft." };
+  const deleted = db.query("DELETE FROM desk_routine_proposals WHERE id = ? AND json_extract(document, '$.draft') IS NOT NULL").run(id);
+  if (deleted.changes === 0 && readRoutineProposal(db, id)) return { ok: false, error: "This proposal is not a draft." };
+  return { ok: true, message: "Routine draft discarded. Its capability build nodes are unchanged." };
 }
 
 export function readRoutineProposal(db: Database, id: string, column: "id" | "routine_id" = "id"): RoutineProposal | null {
@@ -74,7 +82,10 @@ export function pendingRoutineOperations(db: Database, options: RoutineOptions):
 }
 
 export function finishRoutineOperation(db: Database, requestId: string, result: RoutineResult): RoutineResult {
-  db.query("UPDATE desk_routine_operations SET result = ? WHERE request_id = ?").run(JSON.stringify(result), requestId);
+  db.transaction(() => {
+    db.query("UPDATE desk_routine_operations SET result = ? WHERE request_id = ?").run(JSON.stringify(result), requestId);
+    if (result.ok) db.query("UPDATE desk_routine_proposals SET document = json_remove(document, '$.draft') WHERE routine_id = (SELECT resource FROM desk_routine_operations WHERE request_id = ? AND json_extract(binding, '$.action') = 'install')").run(requestId);
+  })();
   return result;
 }
 

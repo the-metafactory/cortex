@@ -58,7 +58,7 @@ export function RoutinesSection({ view, onChanged }: { view: RoutineView | undef
           </div>
         </div></li>)}
       </ul>
-      <RoutineDrafts drafts={view.drafts} />
+      <RoutineDrafts drafts={view.drafts} onChanged={onChanged} />
     </section>
   );
 }

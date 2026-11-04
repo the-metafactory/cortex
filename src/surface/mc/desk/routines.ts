@@ -4,17 +4,17 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { validateSteps } from "pulse";
+import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import type { DeskProposal } from "./ask";
 import { spawnWithStdin } from "./create";
 import { routineSchedule } from "./routine-schedule";
 import { MissingCapabilitiesError, requireRoutineCapabilities, type RoutineCapabilities } from "./routine-providers";
 import { readDraftViews } from "./routine-draft-state";
+import { parseRoutineFlow, routineProposalCard } from "./routine-drafts";
 import { routineStepLabels } from "./routine-steps";
 import { PendingRoutineSchema, RoutineHistorySchema, RoutineSchema, RoutineRefusal, reflexCommand, runRoutineCommand, type RoutineOptions, type RoutineRunner, type RoutineView } from "./routine-command";
-import { checkRoutineOperation, claimRoutineOperation, finishRoutineOperation, pendingRoutineOperations, readRoutineOperation, readRoutineProposal, routineConfigHash, routineOperationBinding, saveRoutineProposal, type RoutineAction, type LegacyRoutineAction, type RoutineProposal, type RoutineResult } from "./routine-store";
+import { checkRoutineOperation, claimRoutineOperation, finishRoutineOperation, pendingRoutineOperations, readRoutineOperation, readRoutineProposal, routineConfigHash, routineOperationBinding, saveRoutineProposal, discardRoutineDraft, type RoutineAction, type LegacyRoutineAction, type RoutineProposal, type RoutineResult } from "./routine-store";
 import { actOnRoutineLifecycle, reconcileLifecycle } from "./routine-lifecycle";
 import { actOnRoutineSchedule, reconcileSchedule } from "./routine-schedule-editor";
 
@@ -23,7 +23,6 @@ const ComposerReply = z.discriminatedUnion("status", [
   z.object({ status: z.literal("no-match"), message: z.string() }),
   z.object({ status: z.literal("invalid"), findings: z.array(z.object({ message: z.string() })) }),
 ]);
-const FlowDocument = z.object({ name: z.string().min(1), actions: z.array(z.unknown()).min(1), input: z.record(z.string(), z.unknown()).optional() });
 const UNKNOWN = "Reflex has not confirmed the result. Refresh the Desk and retry this same action; it will not be sent twice.";
 const failure = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
@@ -38,8 +37,7 @@ export async function buildRoutineCard(db: Database, text: string, options: Rout
     if (reply.status === "no-match") return blocked(reply.message);
     if (reply.status === "invalid") return blocked(reply.findings.map((f) => f.message).join("; ") || "The composer could not produce a valid flow.");
     if (result.code !== 0) return blocked("The composer did not complete successfully.");
-    const flow = FlowDocument.parse(parseYaml(reply.yaml));
-    const steps = validateSteps(flow.actions);
+    const { flow, steps } = parseRoutineFlow(reply.yaml);
     const id = randomUUID();
     const proposal: RoutineProposal = {
       id, routineId: `desk-${id}`, title: schedule.request, request: schedule.request,
@@ -56,7 +54,7 @@ export async function buildRoutineCard(db: Database, text: string, options: Rout
       return { ...blocked(`The routine could not be prepared: ${error.message}`), capabilities: { proposalId: id, missing: error.missing, offer: options.capabilityBuild !== undefined, nodes: {} } };
     }
     saveRoutineProposal(db, proposal);
-    return { kind: "routine", label: "Routine", fields: { proposalId: id, title: proposal.title, schedule: schedule.clock === "elapsed" ? proposal.words : `${proposal.words} (${proposal.timezone})`, steps: proposal.steps }, via: "rules" };
+    return routineProposalCard(proposal, schedule.clock);
   } catch (error) {
     return blocked(`The routine could not be prepared: ${failure(error)}`);
   }
@@ -71,7 +69,7 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
   const reads = { ...options, timeoutSeconds: options.readTimeoutSeconds };
   const draftsRead = draftCapabilities ? readDraftViews(db, options, draftCapabilities, run).catch(draftsUnreadable) : Promise.resolve([]);
   const withDrafts = async (view: RoutineView): Promise<RoutineView> => {
-    const drafts = await draftsRead;
+    const drafts = (await draftsRead).filter((draft) => readRoutineProposal(db, draft.proposalId)?.draft);
     return drafts.length > 0 ? { ...view, drafts } : view;
   };
   try {
@@ -186,9 +184,9 @@ async function reconcileAndFinish(db: Database, options: RoutineOptions, request
 
 export async function actOnRoutine(db: Database, options: RoutineOptions, request: RoutineAction, now: number, run: RoutineRunner = spawnWithStdin, capabilities?: RoutineCapabilities): Promise<RoutineResult> {
   if ("revision" in request) return request.action === "delete" ? actOnRoutineRemoval(db, options, request, run) : request.action === "schedule" ? actOnRoutineSchedule(db, options, request, run) : actOnRoutineLifecycle(db, options, request, run);
+  if (request.action === "discard") return discardRoutineDraft(db, request.target);
   if (request.action === "remove") return { ok: false, error: "Open this routine in Routine workspace and confirm Delete with its current revision." };
   const proposal = request.action === "install" ? readRoutineProposal(db, request.target) : null;
-  if (proposal?.draft) return { ok: false, error: "This routine is a draft waiting for a capability. It cannot be installed yet." };
   if (request.action === "install" && (proposal?.configHash !== routineConfigHash(options))) return { ok: false, error: "Prepare this routine again before confirming it." };
   const binding = routineOperationBinding(options, request);
   const prior = readRoutineOperation(db, request.requestId);
@@ -196,10 +194,10 @@ export async function actOnRoutine(db: Database, options: RoutineOptions, reques
   const execution = proposal ?? (request.action === "auto" ? readRoutineProposal(db, request.target, "routine_id") : null);
   if (request.action === "auto" && !execution) return { ok: false, error: "The Desk cannot verify the execution capabilities of a routine authored elsewhere. Stop and Remove remain available." };
   if (execution) {
-    try { requireRoutineCapabilities(validateSteps(FlowDocument.parse(parseYaml(execution.yaml)).actions), capabilities); }
+    try { requireRoutineCapabilities(parseRoutineFlow(execution.yaml).steps, capabilities); }
     catch (error) { return { ok: false, error: failure(error) }; }
   }
-  if (proposal && now - proposal.createdAt > 86_400_000) return { ok: false, error: "This proposal has expired. Prepare the routine again." };
+  if (proposal && !proposal.draft && now - proposal.createdAt > 86_400_000) return { ok: false, error: "This proposal has expired. Prepare the routine again." };
   const view = await readRoutines(db, options, run);
   if (view.error) return { ok: false, error: view.error };
   const resource = proposal?.routineId ?? view.pending.find((p) => p.decisionId === request.target)?.blueprintId ?? request.target;
@@ -209,6 +207,7 @@ export async function actOnRoutine(db: Database, options: RoutineOptions, reques
   } else if (view.installed.some((r) => r.id === resource)) {
     return { ok: false, error: "This proposal is already installed." };
   }
+  if (proposal?.draft && !readRoutineProposal(db, proposal.id)?.draft) return { ok: false, error: "This routine draft was discarded. Refresh the Desk." };
   const claimed = claimRoutineOperation(db, request.requestId, binding, resource);
   if (!claimed) return { ok: false, error: "Another action for this routine is still awaiting confirmation. Retry that action first.", uncertain: true };
   try {
