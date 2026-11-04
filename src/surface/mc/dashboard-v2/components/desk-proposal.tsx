@@ -53,6 +53,7 @@ interface ProposalCardProps {
   onGoto: () => void;
   onFieldsChange: (fields: Record<string, unknown>) => void;
   onAlternative?: () => void;
+  cancelLabel?: string;
 }
 
 export function ProposalCard(props: ProposalCardProps) {
@@ -60,7 +61,7 @@ export function ProposalCard(props: ProposalCardProps) {
   return <StandardProposalCard {...props} />;
 }
 
-function RoutineProposal({ proposal, busy, onConfirm, onCancel }: ProposalCardProps) {
+function RoutineProposal({ proposal, busy, onConfirm, onCancel, cancelLabel = "Cancel" }: ProposalCardProps) {
   const steps = Array.isArray(proposal.fields.steps) ? proposal.fields.steps.filter((s): s is string => typeof s === "string") : [];
   return <div className="desk-row desk-propwrap"><span /><span /><div className="body">
     <article className="desk-prop" aria-label="Proposed routine" tabIndex={-1}>
@@ -72,7 +73,7 @@ function RoutineProposal({ proposal, busy, onConfirm, onCancel }: ProposalCardPr
       {proposal.capabilities && <MissingCapabilities refusal={proposal.capabilities} busy={busy} />}
       <div className="desk-acts">
         {!proposal.problem && !proposal.unwritable && <button type="button" className="desk-btn pri" disabled={busy} onClick={() => onConfirm({ proposalId: proposal.fields.proposalId })}>{busy ? "Installing…" : "Confirm"}</button>}
-        <button type="button" className="desk-btn ghost" disabled={busy} onClick={onCancel}>Cancel</button>
+        <button type="button" className="desk-btn ghost" disabled={busy} onClick={onCancel}>{cancelLabel}</button>
       </div>
     </article>
   </div></div>;

@@ -98,12 +98,12 @@ describe("a missing-capability refusal", () => {
     }
   });
 
-  it("never installs a draft, even when the capability appears later", async () => {
+  it("never installs a draft while its capability is missing", async () => {
     const refused = await buildRoutineCard(db, REQUEST, CONFIGURED, NOW, composer(AGENT_YAML), none);
     const proposalId = CapabilityRefusalSchema.parse(refused.capabilities).proposalId;
     const mutations: string[][] = [];
     const run: RoutineRunner = (argv) => { mutations.push(argv); return Promise.resolve({ code: 0, stdout: "[]", stderr: "" }); };
-    const result = await actOnRoutine(db, CONFIGURED, { action: "install", target: proposalId, requestId: "install-a-draft" }, NOW, run, () => new Set(["compose.judgment"]));
+    const result = await actOnRoutine(db, CONFIGURED, { action: "install", target: proposalId, requestId: "install-a-draft" }, NOW, run, none);
     expect(result.ok).toBe(false);
     expect(mutations).toHaveLength(0);
   });

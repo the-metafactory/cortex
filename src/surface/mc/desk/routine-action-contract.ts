@@ -5,7 +5,7 @@ import { ScheduleActionSchema } from "./routine-schedule-contract";
 
 export const LegacyRoutineActionSchema = z.object({
   requestId: z.string().regex(/^[\w-]{8,64}$/),
-  action: z.enum(["install", "remove", "auto", "stop", "approve", "deny"]),
+  action: z.enum(["install", "discard", "remove", "auto", "stop", "approve", "deny"]),
   target: z.string().min(1).max(128),
 }).strict();
 export type LegacyRoutineAction = z.infer<typeof LegacyRoutineActionSchema>;

@@ -1,3 +1,4 @@
+import type { DeskProposal } from "./ask";
 import { z } from "zod";
 
 export const CAPABILITY_MARKER_LABEL = "desk-capability";
@@ -34,7 +35,7 @@ export type BuildState =
   | { state: (typeof BUILD_STATES)[number] | "live"; reason?: string; pr?: string }
   | { state: "unknown"; error: string };
 export interface DraftNodeView { capability: string; ref: string; url: string; notStarted?: string; build: BuildState | null }
-export interface RoutineDraftView { proposalId: string; title: string; nodes: DraftNodeView[] }
+export interface RoutineDraftView { proposalId: string; title: string; nodes: DraftNodeView[]; missing: MissingCapability[]; proposal?: DeskProposal; error?: string }
 
 export const CapabilityRefusalSchema = z.object({
   proposalId: z.uuid(),

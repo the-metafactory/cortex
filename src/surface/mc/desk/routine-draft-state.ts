@@ -5,7 +5,8 @@ import { BuildStatusSchema, type BuildState, type RoutineDraftView } from "./rou
 import { runNodeCommand } from "./routine-node-command";
 import type { RoutineOptions, RoutineRunner } from "./routine-command";
 import type { RoutineCapabilities } from "./routine-providers";
-import { listFiledDrafts } from "./routine-store";
+import { retryRoutineDraft } from "./routine-drafts";
+import { listRoutineDrafts } from "./routine-store";
 
 const READ_CONCURRENCY = 4;
 const MAX_REASON = 400;
@@ -34,11 +35,10 @@ const withPresence = (build: BuildState | null, live: boolean): BuildState | nul
 
 export async function readDraftViews(db: Database, options: RoutineOptions, capabilities: RoutineCapabilities, run: RoutineRunner = spawnWithStdin): Promise<RoutineDraftView[]> {
   const build = options.capabilityBuild;
-  if (!build) return [];
-  const drafts = listFiledDrafts(db);
+  const drafts = listRoutineDrafts(db);
   const states = new Map<string, BuildState>();
-  const status = build.status;
-  if (status) {
+  const status = build?.status;
+  if (build && status) {
     const refs = [...new Set(drafts.flatMap((draft) => Object.values(draft.draft?.nodes ?? {}).map((node) => node.ref)))];
     await pooled(refs, READ_CONCURRENCY, async (ref) => { states.set(ref, await readBuildState(build, status, ref, options.readTimeoutSeconds * 1000, run)); });
   }
@@ -46,6 +46,7 @@ export async function readDraftViews(db: Database, options: RoutineOptions, capa
   return drafts.map((draft) => ({
     proposalId: draft.id,
     title: draft.title,
+    ...retryRoutineDraft(draft, options, () => present),
     nodes: Object.entries(draft.draft?.nodes ?? {}).map(([capability, { ref, url, notStarted }]) => ({
       capability, ref, url, ...(notStarted ? { notStarted } : {}),
       build: withPresence(states.get(ref) ?? null, present.has(capability)),
