@@ -46,7 +46,8 @@ export function listRoutineDrafts(db: Database): RoutineProposal[] {
 export function discardRoutineDraft(db: Database, id: string): RoutineResult {
   const pending = db.query("SELECT 1 FROM desk_routine_operations WHERE resource = (SELECT routine_id FROM desk_routine_proposals WHERE id = ?) AND result IS NULL").get(id);
   if (pending) return { ok: false, error: "An install is awaiting confirmation. Check the pending change before discarding this draft." };
-  db.query("DELETE FROM desk_routine_proposals WHERE id = ? AND json_extract(document, '$.draft') IS NOT NULL").run(id);
+  const deleted = db.query("DELETE FROM desk_routine_proposals WHERE id = ? AND json_extract(document, '$.draft') IS NOT NULL").run(id);
+  if (deleted.changes === 0 && readRoutineProposal(db, id)) return { ok: false, error: "This proposal is not a draft." };
   return { ok: true, message: "Routine draft discarded. Its capability build nodes are unchanged." };
 }
 

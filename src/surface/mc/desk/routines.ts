@@ -4,15 +4,14 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { validateSteps } from "pulse";
+import { stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import type { DeskProposal } from "./ask";
 import { spawnWithStdin } from "./create";
 import { routineSchedule } from "./routine-schedule";
 import { MissingCapabilitiesError, requireRoutineCapabilities, type RoutineCapabilities } from "./routine-providers";
 import { readDraftViews } from "./routine-draft-state";
-import { RoutineFlowDocument, routineProposalCard } from "./routine-drafts";
+import { parseRoutineFlow, routineProposalCard } from "./routine-drafts";
 import { routineStepLabels } from "./routine-steps";
 import { PendingRoutineSchema, RoutineHistorySchema, RoutineSchema, RoutineRefusal, reflexCommand, runRoutineCommand, type RoutineOptions, type RoutineRunner, type RoutineView } from "./routine-command";
 import { checkRoutineOperation, claimRoutineOperation, finishRoutineOperation, pendingRoutineOperations, readRoutineOperation, readRoutineProposal, routineConfigHash, routineOperationBinding, saveRoutineProposal, discardRoutineDraft, type RoutineAction, type LegacyRoutineAction, type RoutineProposal, type RoutineResult } from "./routine-store";
@@ -38,8 +37,7 @@ export async function buildRoutineCard(db: Database, text: string, options: Rout
     if (reply.status === "no-match") return blocked(reply.message);
     if (reply.status === "invalid") return blocked(reply.findings.map((f) => f.message).join("; ") || "The composer could not produce a valid flow.");
     if (result.code !== 0) return blocked("The composer did not complete successfully.");
-    const flow = RoutineFlowDocument.parse(parseYaml(reply.yaml));
-    const steps = validateSteps(flow.actions);
+    const { flow, steps } = parseRoutineFlow(reply.yaml);
     const id = randomUUID();
     const proposal: RoutineProposal = {
       id, routineId: `desk-${id}`, title: schedule.request, request: schedule.request,
@@ -196,7 +194,7 @@ export async function actOnRoutine(db: Database, options: RoutineOptions, reques
   const execution = proposal ?? (request.action === "auto" ? readRoutineProposal(db, request.target, "routine_id") : null);
   if (request.action === "auto" && !execution) return { ok: false, error: "The Desk cannot verify the execution capabilities of a routine authored elsewhere. Stop and Remove remain available." };
   if (execution) {
-    try { requireRoutineCapabilities(validateSteps(RoutineFlowDocument.parse(parseYaml(execution.yaml)).actions), capabilities); }
+    try { requireRoutineCapabilities(parseRoutineFlow(execution.yaml).steps, capabilities); }
     catch (error) { return { ok: false, error: failure(error) }; }
   }
   if (proposal && !proposal.draft && now - proposal.createdAt > 86_400_000) return { ok: false, error: "This proposal has expired. Prepare the routine again." };

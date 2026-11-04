@@ -9,7 +9,12 @@ import { routineConfigHash, type RoutineProposal } from "./routine-store";
 import type { RoutineOptions } from "./routine-command";
 import type { MissingCapability } from "./routine-capability-contract";
 
-export const RoutineFlowDocument = z.object({ name: z.string().min(1), actions: z.array(z.unknown()).min(1), input: z.record(z.string(), z.unknown()).optional() });
+const RoutineFlowDocument = z.object({ name: z.string().min(1), actions: z.array(z.unknown()).min(1), input: z.record(z.string(), z.unknown()).optional() });
+
+export function parseRoutineFlow(yaml: string) {
+  const flow = RoutineFlowDocument.parse(parseYaml(yaml));
+  return { flow, steps: validateSteps(flow.actions) };
+}
 
 export function routineProposalCard(proposal: RoutineProposal, clock: RoutineSchedule["clock"]): DeskProposal {
   return { kind: "routine", label: "Routine", fields: { proposalId: proposal.id, title: proposal.title, schedule: clock === "elapsed" ? proposal.words : `${proposal.words} (${proposal.timezone})`, steps: proposal.steps }, via: "rules" };
@@ -19,7 +24,7 @@ export function retryRoutineDraft(proposal: RoutineProposal, options: RoutineOpt
   try {
     if (!proposal.draft) throw new Error("This routine draft is no longer available.");
     if (proposal.configHash !== routineConfigHash(options)) throw new Error("The Desk configuration changed. Ask for the routine again.");
-    const steps = validateSteps(RoutineFlowDocument.parse(parseYaml(proposal.yaml)).actions);
+    const { steps } = parseRoutineFlow(proposal.yaml);
     requireRoutineCapabilities(steps, capabilities);
     const schedule = routineSchedule(proposal.draft.text);
     if (typeof schedule === "string") throw new Error(schedule);
