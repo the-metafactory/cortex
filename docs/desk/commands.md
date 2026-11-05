@@ -66,6 +66,18 @@ If the command exits non-zero, times out, prints invalid JSON or prints another 
 
 A routine refused for a missing capability stays a draft. The Desk does not install it, and a gate, research, targeted or federated step is never offered for building.
 
+## Capability installation commands
+
+With `capabilityBuild.pack`, `install`, `uninstall`, and `status` configured, a merged build shows **Merged, install?**. Choosing **Install** opens a confirmation. Confirming runs the configured `install` argument array, replacing `{pack}` in each argument with `capabilityBuild.pack`. The command receives no shell expansion or stdin. It runs with `routines.timeoutSeconds`.
+
+The installer must install or upgrade the pack and reload its agents before exiting 0. An Arc wrapper can choose `arc install <repository>` for the first installation and `arc upgrade <pack>` afterwards. If the pack's postinstall reloads Cortex's agents, the wrapper needs no extra reload. Otherwise, it must run `cortex agents reload`. The configured `uninstall` command must remove the pack and reload its agents.
+
+A nonzero exit shows **install failed: <reason>**, using the last nonempty line of stderr or stdout, and keeps **Install** available. Each confirmation has a durable request ID. Repeating that request returns its recorded result. A new confirmation after a failed exit creates a new attempt. If a command throws or times out, its outcome remains uncertain and the Desk refuses another install until the pack is checked. Refreshing or restarting Cortex never resends an uncertain command.
+
+An installation covers the currently merged builds across drafts for the configured pack. Commands for the same pack cannot overlap. A successful command shows **Installed, waiting for local presence**. Each capability becomes **Live** when a fresh online local agent advertises it. After 90 seconds without presence, the draft shows **installed, not in presence yet** and keeps checking. Installing the routine itself remains a separate confirmation.
+
+**Install merged capabilities** is an ordinary promotable Desk action (`capability.install`). With **Handle it yourself** enabled, the Desk checks merged drafts every 30 seconds and installs without another confirmation. Each attempt appears in **Done for you**. Successful attempts offer **Undo**, which runs the configured `uninstall` command for the whole pack, including capabilities shared by other drafts. Undo remains available after discarding or installing the routine draft. **Stop doing this on your own** restores ask-first behavior. Failed attempts remain visible and require a new manual confirmation.
+
 ## Source output
 
 A source exits 0 and prints an object with optional `events` and `items` arrays. An empty source can print `{}`. Unknown object fields are ignored. `items` currently accepts mail only. Source adapters do not declare UI actions in their output: Cortex adds actions from the item kind and configured commands.

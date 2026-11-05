@@ -58,7 +58,7 @@ export async function handleDeskAutonomy(req: Request, db: Database, runtime: De
   if (!desk?.enabled) return fail(409, "The Desk is turned off on this stack.");
   const body = (await req.json().catch(() => null)) as { action?: unknown; on?: unknown } | null;
   if (!isPromotable(body?.action) || typeof body.on !== "boolean") return fail(400, "A promotable action and on (true or false) are required.");
-  const ready = body.action === "studio.capture" ? Boolean(desk.studio) : body.action === "mail.rules" ? Boolean(desk.mailActions?.move?.length) : rangerActionsReady(desk);
+  const ready = body.action === "capability.install" ? Boolean(desk.routines?.capabilityBuild?.install) : body.action === "studio.capture" ? Boolean(desk.studio) : body.action === "mail.rules" ? Boolean(desk.mailActions?.move?.length) : rangerActionsReady(desk);
   if (!ready) return fail(409, "That action is not set up on this stack.");
   setGrant(db, body.action, body.on, now());
   if (body.on) void (body.action === "mail.rules" ? runtime?.mailRules?.kick() : runtime?.autonomy?.tick());
