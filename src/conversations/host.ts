@@ -7,11 +7,12 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type Conversation, type EntryId, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { z } from "zod";
+import { projectRevision, ToolHost, type ToolDefinition, type ToolSession } from "./tools/capabilities";
 import { acquireHostLock, type LockOwner } from "./lock";
-import { cloudLanes, type CloudLane } from "../common/types/desk-conversations";
-import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, type GateResult, type Lanes, type TurnCall, type TurnEvent } from "./model";
+import { cloudLanes, type CloudLane, type ToolsConfig } from "../common/types/desk-conversations";
+import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, type GateResult, type Lanes, type ToolSurfaceFor, type TurnCall, type TurnEvent } from "./model";
 import {
-  AttachmentRefSchema, CONTINUATION_KIND, isModelRoute, laneName, routePolicy, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES,
+  AttachmentRefSchema, CONTINUATION_KIND, isModelRoute, laneName, routePolicy, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES, TRANSPORTS,
   type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationMeta, type CreateConversation,
   type ExchangeLine, type InputRequest, type ModelChoices, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadback, type OwnerReadbacks, type OwnerType, type OwnerWriters, type WithheldReasons, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView,
 } from "./types";
@@ -53,6 +54,7 @@ const StoredSchema = z.object({
   scope: z.object({ owner: z.enum(OWNER_TYPES), data: z.record(z.string(), z.string()) }).optional(),
   titleFromSource: z.boolean().default(false),
   discord: DiscordLinkSchema.optional(),
+  toolSources: z.record(z.string(), z.object({ revision: z.string(), policy: z.enum(["local", "cloud"]) })).default({}),
 });
 type Stored = z.infer<typeof StoredSchema>;
 export type OwnerScope = NonNullable<Stored["scope"]>;
@@ -94,6 +96,7 @@ export interface HostOptions {
   expectedLabel: string;
   lanes: Lanes;
   turns: TurnCall;
+  tools?: { config: () => ToolsConfig | undefined; definitions?: readonly ToolDefinition[]; timeoutMs?: number; outputLimit?: number };
   resolvers?: LinkResolvers;
   readbacks?: OwnerReadbacks;
   now?: () => Date;
@@ -155,7 +158,7 @@ export class ConversationHost {
 
   async boot(): Promise<{ resumed: string[]; reconciled: string[] }> {
     await mkdir(this.attachmentsDir, { recursive: true });
-    const models = cortexModels(this.options.lanes, (sessionId, route) => this.gate(sessionId, route), this.options.turns, (id, event) => this.recordTurn(id, event), IVY_INSTRUCTIONS);
+    const models = cortexModels(this.options.lanes, (sessionId, route) => this.gate(sessionId, route), this.options.turns, (id, event) => this.recordTurn(id, event), IVY_INSTRUCTIONS, this.toolSurface());
     this.harness = await Harness.open(await openNodeSqliteStorage(join(this.options.dir, "durable.sqlite")), {
       models, registry: createRegistry(), settings: { retry: { maxRetries: 2, baseDelayMs: 500 } },
       onReport: (error, info) => { console.error(`conversations: engine report ${info.type}: ${error instanceof Error ? error.message : String(error)}`); },
@@ -276,7 +279,12 @@ export class ConversationHost {
   private async tighten(id: string): Promise<{ stored: Stored; effective: Policy; sources: SourceView[]; available: boolean }> {
     const current = await this.stored(id);
     const sources = await this.sourcesOf(current.links);
-    const resolved = strictest([current.policy, ...sources.flatMap(s => s.state === "available" ? [s.policy] : [])]);
+    const toolPolicies = Object.entries(current.toolSources).map(([id, source]) => {
+      const project = this.options.tools?.config()?.projects.find(project => project.id === id);
+      if (!project || projectRevision(project) !== source.revision) throw new ConversationError(403, "A previously used tool source was revoked or changed. Start a new conversation with current permissions.");
+      return strictest([project.policy, source.policy]);
+    });
+    const resolved = strictest([current.policy, ...toolPolicies, ...sources.flatMap(s => s.state === "available" ? [s.policy] : [])]);
     const stored = resolved === current.policy ? current : await this.update(id, s => ({ ...s, policy: strictest([s.policy, resolved]) }));
     const available = sources.every(s => s.state === "available");
     return { stored, effective: available ? stored.policy : "local", sources, available };
@@ -314,9 +322,36 @@ export class ConversationHost {
     }
   }
 
+  private toolSurface(): ToolSurfaceFor {
+    const tools = this.options.tools ?? { config: () => undefined };
+    const host = new ToolHost({ config: tools.config, session: id => this.toolSession(id), ...(tools.definitions ? { tools: tools.definitions } : {}), ...(tools.timeoutMs ? { timeoutMs: tools.timeoutMs } : {}), ...(tools.outputLimit ? { outputLimit: tools.outputLimit } : {}) });
+    return (id, route, record) => host.surface(id, route, record);
+  }
+
+  private async toolSession(id: string): Promise<ToolSession | null> {
+    const { stored, effective } = await this.tighten(id);
+    if (stored.state !== "current") return null;
+    const conversation = await this.conversation(stored);
+    let transport: ToolSession["transport"] | null = null;
+    for await (const entry of allEntries(conversation, { order: "descending" }, 50, this.context)) {
+      if (entry.kind !== INPUT_KIND) continue;
+      const parsed = z.object({ transport: z.enum(TRANSPORTS) }).safeParse(entry.data);
+      transport = parsed.success ? parsed.data.transport : null;
+      break;
+    }
+    if (!transport) return null;
+    const route = this.routeFor(effective, stored.cloud);
+    if (!route) return null;
+    return { principal: stored.principal, conversationId: id, transport, route, policy: effective, scope: (this.options.tools?.config()?.projects ?? []).map(project => project.id) };
+  }
+
   private async recordTurn(id: string, event: TurnEvent): Promise<void> {
     const stored = await this.stored(id);
-    if (event.kind === "tool") await this.writeEntry(stored, TOOL_ACTIVITY_KIND, event.activity);
+    if (event.kind === "tool") {
+      const source = event.activity.source;
+      if (source) await this.update(id, current => ({ ...current, policy: strictest([current.policy, source.policy]), toolSources: { ...current.toolSources, [source.id]: { revision: source.revision, policy: strictest([current.toolSources[source.id]?.policy ?? source.policy, source.policy]) } } }));
+      await this.writeEntry(stored, TOOL_ACTIVITY_KIND, event.activity);
+    }
     else await this.writeEntry(stored, CONTINUATION_KIND, { mode: "reconstructed", from: event.route, to: event.route, reason: event.reason, at: this.now().toISOString() } satisfies Continuation);
   }
 
@@ -347,7 +382,7 @@ export class ConversationHost {
       const at = this.now().toISOString();
       const policy = strictest([request.policy, ...sources.flatMap(source => source.state === "available" ? [source.policy] : [])]);
       const route = this.routeFor(policy);
-      const draft = { principal, stack: this.options.stack, title: request.title, links: request.links, policy, state: seed.state ?? "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at, draft: seed.draft ?? "", seeded: !seed.entries?.length, titleFromSource: seed.titleFromSource ?? false, ...(seed.key ? { key: seed.key } : {}), ...(seed.scope ? { scope: seed.scope } : {}) } satisfies Omit<Stored, "engineId" | "sessionId" | "route" | "inputs">;
+      const draft = { toolSources: {}, principal, stack: this.options.stack, title: request.title, links: request.links, policy, state: seed.state ?? "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at, draft: seed.draft ?? "", seeded: !seed.entries?.length, titleFromSource: seed.titleFromSource ?? false, ...(seed.key ? { key: seed.key } : {}), ...(seed.scope ? { scope: seed.scope } : {}) } satisfies Omit<Stored, "engineId" | "sessionId" | "route" | "inputs">;
       await this.engine.createConversation({
         ownership: { kind: "ownerless" },
         agent: { instructions: IVY_INSTRUCTIONS, ...(route ? { model: { provider: CORTEX_PROVIDER, modelId: route } } : {}) },

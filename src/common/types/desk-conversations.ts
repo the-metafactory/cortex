@@ -31,7 +31,24 @@ export const cloudLanes = (cloud: CloudConfig | undefined): CloudLane[] => {
   return Array.isArray(cloud) ? cloud : [{ id: LEGACY_CLOUD_ID, ...cloud }];
 };
 
+export const TOOL_OPERATIONS = ["repo.read", "forge.read", "graph.read", "web.read"] as const;
+export type ToolOperation = (typeof TOOL_OPERATIONS)[number];
+export const PROJECT_ID = "[a-z][a-z0-9-]{0,63}";
+export const ProjectSchema = z.object({
+  id: z.string().regex(new RegExp(`^${PROJECT_ID}$`), "mc.desk.conversations.tools project id must be lower-case letters, digits and dashes"),
+  root: z.string().trim().min(1).max(1024).refine(root => root.startsWith("/") || root.startsWith("~/"), "project root must be absolute or home-relative"),
+  forge: z.object({ kind: z.enum(["github", "gitlab"]), host: z.string().max(253).regex(/^[a-zA-Z0-9.-]+(?::[0-9]+)?$/).optional(), repo: z.string().max(300).regex(/^[\w.-]+(?:\/[\w.-]+)+$/).refine(repo => !repo.split("/").some(part => part === "." || part === ".."), "forge repository must identify a repository") }).strict().optional(),
+  policy: z.enum(["local", "cloud"]).default("local"),
+  operations: z.array(z.enum(TOOL_OPERATIONS)).max(TOOL_OPERATIONS.length).default([]),
+}).strict();
+export type ToolProject = z.infer<typeof ProjectSchema>;
+const ToolsSchema = z.object({
+  projects: z.array(ProjectSchema).max(50).default([]).refine(projects => new Set(projects.map(project => project.id)).size === projects.length, "mc.desk.conversations.tools project ids must be unique"),
+}).strict();
+export type ToolsConfig = z.infer<typeof ToolsSchema>;
+
 export const DeskConversationsSchema = z.object({
+  tools: ToolsSchema.optional(),
   local: LaneSchema.optional(),
   cloud: CloudSchema.optional(),
   pi: z.object({

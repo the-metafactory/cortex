@@ -72,6 +72,7 @@ describe("conversation API gates", () => {
     const again = await call(status, "POST", "/api/conversations/asks", ask);
     expect(((await again.json()) as { conversation: { id: string } }).conversation.id).toBe(conversation.id);
     expect((await status.host.list()).filter(c => c.id === conversation.id)).toHaveLength(1);
+    await status.host.waitForIdle(conversation.id);
     expect(await status.host.input(conversation.id, `desk-ask:${ask.startId}`)).toMatchObject({ status: "done", answer: expect.stringContaining("Some names") });
     const { entries } = await status.host.entries(conversation.id, 50, undefined);
     expect(entries.filter(e => e.role === "user").map(e => e.text)).toEqual([text]);

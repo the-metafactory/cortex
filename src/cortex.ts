@@ -21,7 +21,8 @@
 import { resolveStudio } from "./surface/mc/desk/studio/config";
 import { DiscordConversations } from "./conversations/discord";
 import { openConversationHost, type HostStatus } from "./conversations/host";
-import { piTurns, resolvePiSettings } from "./conversations/pi";
+import { piToolSummary, piTurns, resolvePiSettings } from "./conversations/pi";
+import { CAPABILITIES_TOOL } from "./conversations/tools/capabilities";
 import { cloudLanes } from "./common/types/desk-conversations";
 import { handoffLanes } from "./surface/mc/desk/mail-handoff";
 import { cortexStateDir } from "./common/state-path";
@@ -4972,8 +4973,9 @@ export async function startCortex(
           expectedLabel: `ai.meta-factory.cortex.${derivedStack.stack}`,
           lanes: { ...(conversationConfig?.local ? { local: conversationConfig.local } : {}), ...(conversationConfig?.cloud ? { cloud: conversationConfig.cloud } : {}) },
           turns: piTurns(pi),
+          tools: { config: () => config.mc.desk.conversations?.tools },
         });
-        console.log(`cortex: conversation turns run through pi at ${pi.bin} (${pi.extensions.length ? `projection ${pi.extensions.join(", ")}` : "no Soma projection found"}; tools ${pi.tools.join(",") || "none"}; lanes ${[conversationConfig?.local ? "local" : "", ...cloudLanes(conversationConfig?.cloud).map(lane => `cloud ${lane.id}`)].filter(Boolean).join(", ") || "none configured"})`);
+        console.log(`cortex: conversation turns run through pi at ${pi.bin} (${pi.extensions.length ? `projection ${pi.extensions.join(", ")}` : "no Soma projection found"}; ${piToolSummary(pi, [{ name: CAPABILITIES_TOOL }])}; lanes ${[conversationConfig?.local ? "local" : "", ...cloudLanes(conversationConfig?.cloud).map(lane => `cloud ${lane.id}`)].filter(Boolean).join(", ") || "none configured"})`);
         console.log(conversationStatus.state === "ready"
           ? `cortex: conversation host ready (${conversationStatus.resumed.length} resumed, ${conversationStatus.reconciled.length} reconciled${conversationStatus.tookOver ? `, took over lock of dead pid ${conversationStatus.tookOver.pid}` : ""})`
           : `cortex: ${conversationStatus.reason}`);

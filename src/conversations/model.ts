@@ -21,8 +21,13 @@ export const laneFor = (lanes: Lanes, route: ModelRoute): Lane | undefined => ro
 export type GateResult = { refused: string } | { conversationId: string; context: string | null };
 export type RouteGate = (sessionId: string | undefined, route: ModelRoute) => Promise<GateResult>;
 
-export interface ToolActivity { callId: string; tool: string; args: unknown; outcome: "done" | "error" | "refused" | "stopped"; result: string }
+export interface ToolSource { id: string; revision: string; policy: "local" | "cloud" }
+export interface ToolActivity { boundary?: "host"; source?: ToolSource; callId: string; tool: string; args: unknown; outcome: "done" | "error" | "refused" | "stopped"; result: string }
 export type TurnEvent = { kind: "tool"; activity: ToolActivity } | { kind: "reconstructed"; route: ModelRoute; reason: Exclude<ContinuationReason, "lane-changed"> };
+export interface ToolOutcome { source?: ToolSource; outcome: ToolActivity["outcome"]; text: string }
+export interface ToolSpec { name: string; description: string; schema: object }
+export interface ToolSurface { validate?: () => Promise<void>; specs: ToolSpec[]; call: (callId: string, name: string, input: unknown, signal: AbortSignal) => Promise<ToolOutcome> }
+export type ToolSurfaceFor = (conversationId: string, route: ModelRoute, record: (activity: ToolActivity) => Promise<void>) => ToolSurface;
 export interface TurnRequest {
   conversationId: string;
   route: ModelRoute;
@@ -35,6 +40,7 @@ export interface TurnRequest {
   session: string;
   signal: AbortSignal;
   activity: (activity: ToolActivity) => Promise<void>;
+  tools?: ToolSurface;
 }
 export interface TurnReply { text: string; session: string; resumed: boolean }
 export type TurnCall = (request: TurnRequest) => Promise<TurnReply>;
@@ -77,7 +83,7 @@ export function planTurn(messages: readonly Message[], route: ModelRoute): Plan 
 
 const ZERO_USAGE = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
 
-export function cortexModels(lanes: Lanes, gate: RouteGate, turn: TurnCall, record: TurnRecorder, instructions: string): MutableModels {
+export function cortexModels(lanes: Lanes, gate: RouteGate, turn: TurnCall, record: TurnRecorder, instructions: string, tools?: ToolSurfaceFor): MutableModels {
   const routed = routedLanes(lanes);
   const models: Model<string>[] = routed.map(({ route, lane }) => ({ id: route, name: `${route} (${laneName(lane)})`, api: API, provider: CORTEX_PROVIDER, baseUrl: `pi:${lane.provider}`, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, reasoning: false, contextWindow: 262_144, maxTokens: 32_768 }));
   const stream = (model: Model<string>, context: { messages: Message[] }, options?: { signal?: AbortSignal; sessionId?: string }) => {
@@ -93,13 +99,19 @@ export function cortexModels(lanes: Lanes, gate: RouteGate, turn: TurnCall, reco
         if ("refused" in gated) throw new Error(gated.refused);
         const plan = planTurn(context.messages, route);
         if (!plan.prompt) throw new Error("the turn carries no new input");
+        const surface = tools?.(gated.conversationId, route, activity => record(gated.conversationId, { kind: "tool", activity }));
+        await surface?.validate?.();
         const reply = await turn({
           conversationId: gated.conversationId, route, lane, instructions, prompt: plan.prompt, linked: gated.context,
-          history: plan.history, resume: plan.resume, session: `${gated.conversationId}.${route.replace(":", "-")}.${plan.answers}.${randomUUID().slice(0, 8)}`,
+          history: plan.history, resume: surface ? null : plan.resume, session: `${gated.conversationId}.${route.replace(":", "-")}.${plan.answers}.${randomUUID().slice(0, 8)}`,
           signal: options?.signal ?? new AbortController().signal,
           activity: activity => record(gated.conversationId, { kind: "tool", activity }),
+          ...(surface ? { tools: surface } : {}),
         });
-        const reason = reply.resumed || plan.history.length === 0 ? null : plan.reason ?? "session-missing";
+        await surface?.validate?.();
+        const released = await gate(options?.sessionId, route);
+        if ("refused" in released) throw new Error(released.refused);
+        const reason = reply.resumed || plan.history.length === 0 ? null : plan.reason ?? (surface ? "tool-policy" : "session-missing");
         if (reason && reason !== "lane-changed") await record(gated.conversationId, { kind: "reconstructed", route, reason });
         const message: AssistantMessage = { ...base, responseId: `${SESSION_PREFIX}${reply.session}`, content: [{ type: "text", text: reply.text }] };
         out.push({ type: "start", partial: { ...base } });

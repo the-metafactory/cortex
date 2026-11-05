@@ -5,7 +5,8 @@ import { join } from "node:path";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import { DeskConversationsSchema, PI_READ_TOOLS } from "../../common/types/desk-conversations";
 import { planTurn, SESSION_PREFIX, type ToolActivity, type TurnRequest } from "../model";
-import { discoverPi, piArguments, piEnvironment, piTurns, type PiSettings } from "../pi";
+import { discoverPi, piArguments, piEnvironment, piToolSummary, piTurns, resolvePiSettings, type PiSettings } from "../pi";
+import { ToolHost } from "../tools/capabilities";
 import { scratchDirs } from "./fixtures/scratch";
 
 const dirs = scratchDirs("conversations-pi-");
@@ -85,6 +86,22 @@ describe("pi turns", () => {
     const fileOnly = piArguments({ ...base, tools: ["read", "grep"] }, { route: "cloud", lane, instructions: "I" }, "s");
     expect(fileOnly).toContain("--no-tools");
     expect(fileOnly).not.toContain("--tools");
+  });
+
+  test("startup reports the same boundary tools Pi receives, including disabled configured file tools", () => {
+    const host = new ToolHost({ config: () => undefined, session: async () => null });
+    const surface = host.surface("c-1", "local", async () => undefined);
+    for (const config of [undefined, DeskConversationsSchema.parse({ pi: { tools: ["read", "grep"] } }).pi, DeskConversationsSchema.parse({ pi: { tools: [] } }).pi]) {
+      const settings = resolvePiSettings(config, "/store");
+      const summary = piToolSummary(settings, surface.specs);
+      for (const route of ["local", "cloud"] as const) {
+        const argv = piArguments(settings, { route, lane, instructions: "I", tools: surface }, "s");
+        expect(summary.split(";")[0]).toBe(`tools ${flag(argv, "--tools")}`);
+        expect(flag(argv, "--tools")).toBe(settings.tools.includes("soma_context") ? "soma_context,capabilities" : "capabilities");
+      }
+      if (settings.tools.includes("read")) expect(summary).toContain(`unscoped file tools disabled (${settings.tools.filter(tool => tool !== "soma_context").join(",")})`);
+      else expect(summary).not.toContain("disabled");
+    }
   });
 
   test("a write or shell tool that actually ran stops the turn and is recorded", async () => {

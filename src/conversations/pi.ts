@@ -3,8 +3,10 @@ import { mkdir, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { z } from "zod";
+import { piToolBridge } from "./tools/pi-bridge";
+import { activityOf } from "./tools/capabilities";
 import { PI_DEFAULTS, PI_FILE_TOOLS, type DeskConversations, type PiReadTool } from "../common/types/desk-conversations";
-import type { ChatTurn, ToolActivity, TurnCall, TurnReply, TurnRequest } from "./model";
+import type { ChatTurn, ToolActivity, ToolSpec, TurnCall, TurnReply, TurnRequest } from "./model";
 
 export interface PiSettings {
   bin: string;
@@ -60,12 +62,23 @@ export function turnTools(settings: Pick<PiSettings, "tools">, route: TurnReques
   return settings.tools.filter(tool => route === "local" || !FILE_TOOLS.includes(tool));
 }
 
-export function piArguments(settings: PiSettings, request: Pick<TurnRequest, "route" | "lane" | "instructions">, session: string): string[] {
-  const tools = turnTools(settings, request.route);
+function piTools(settings: Pick<PiSettings, "tools">, route: TurnRequest["route"], catalog?: readonly Pick<ToolSpec, "name">[]): string[] {
+  return catalog ? [...settings.tools.filter(tool => !FILE_TOOLS.includes(tool)), ...catalog.map(tool => tool.name)] : turnTools(settings, route);
+}
+
+export function piToolSummary(settings: Pick<PiSettings, "tools">, catalog: readonly Pick<ToolSpec, "name">[]): string {
+  const tools = piTools(settings, "local", catalog);
+  const disabled = settings.tools.filter(tool => FILE_TOOLS.includes(tool));
+  return `tools ${tools.join(",") || "none"}${disabled.length ? `; unscoped file tools disabled (${disabled.join(",")})` : ""}`;
+}
+
+export function piArguments(settings: PiSettings, request: Pick<TurnRequest, "route" | "lane" | "instructions" | "tools">, session: string): string[] {
+  const tools = piTools(settings, request.route, request.tools?.specs);
   return [
     "--mode", "json", "--print",
     "--session-dir", settings.sessionDir, "--session-id", session,
     "--no-extensions", ...settings.extensions.flatMap(path => ["--extension", path]),
+    ...(request.tools ? ["--extension", join(import.meta.dir, "tools", "pi-extension.ts")] : []),
     "--no-mcp", "--no-context-files", "--no-prompt-templates", "--no-themes",
     ...(tools.length > 0 ? ["--tools", tools.join(",")] : ["--no-tools"]),
     "--provider", request.lane.provider, "--model", request.lane.model,
@@ -140,7 +153,7 @@ async function feed(stdin: Bun.FileSink, text: string): Promise<Error | null> {
 
 type Answer = Extract<PiEvent, { type: "message_end" }>["message"];
 
-async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: Set<string>, request: TurnRequest, halt: (reason: string) => void): Promise<Answer | null> {
+async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: Set<string>, request: TurnRequest, halt: (reason: string) => void, bridged = new Set<string>()): Promise<Answer | null> {
   const calls = new Map<string, unknown>();
   let answer: Answer | null = null;
   for await (const line of lines(child.stdout)) {
@@ -154,7 +167,7 @@ async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: 
     const result = capped(textOf(e.result?.content));
     let outcome: ToolActivity["outcome"] = e.isError === true ? "error" : "done";
     if (!allowed.has(e.toolName)) outcome = e.isError === true && result.trim() === `Tool ${e.toolName} not found` ? "refused" : "stopped";
-    await request.activity({ callId: e.toolCallId, tool: e.toolName, args: calls.get(e.toolCallId) ?? null, outcome, result });
+    if (!bridged.has(e.toolCallId)) await request.activity(activityOf({ callId: e.toolCallId, name: e.toolName, input: calls.get(e.toolCallId) ?? null }, { outcome, text: result }));
     if (outcome === "stopped") { halt(`pi reported ${e.toolName}, which is not on the read-only tool allowlist, as run; the turn was stopped`); return null; }
   }
   return answer;
@@ -163,11 +176,17 @@ async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: 
 export function piTurns(settings: PiSettings): TurnCall {
   return async (request: TurnRequest): Promise<TurnReply> => {
     await mkdir(settings.sessionDir, { recursive: true });
-    const resumed = request.resume !== null && await sessionExists(settings.sessionDir, request.resume);
+    await request.tools?.validate?.();
+    const resumed = !request.tools && request.resume !== null && await sessionExists(settings.sessionDir, request.resume);
     const session = resumed && request.resume ? request.resume : request.session;
-    const child = spawnPi(settings, piArguments(settings, request, session));
+    let child: ReturnType<typeof spawnPi> | undefined;
     const halted: { reason: string | null } = { reason: null };
-    const halt = (reason: string): void => { halted.reason ??= reason; child.kill(); };
+    const stopped = new AbortController();
+    const signal = AbortSignal.any([request.signal, stopped.signal]);
+    const halt = (reason: string): void => { halted.reason ??= reason; stopped.abort(); child?.kill(); };
+    const bridge = request.tools ? piToolBridge(request.tools, signal, halt) : null;
+    try { child = spawnPi({ ...settings, env: { ...settings.env, ...bridge?.env } }, piArguments(settings, request, session)); }
+    catch (error) { stopped.abort(); await bridge?.close(); throw error; }
     const timer = setTimeout(() => { halt(`pi did not answer within ${settings.timeoutSeconds} seconds`); }, settings.timeoutSeconds * 1000);
     const abort = (): void => { halt("the turn was cancelled"); };
     request.signal.addEventListener("abort", abort, { once: true });
@@ -175,7 +194,8 @@ export function piTurns(settings: PiSettings): TurnCall {
     const stderr = new Response(child.stderr).text().catch(() => "");
     try {
       const fed = feed(child.stdin, piPrompt(request, resumed));
-      const answer = await readTurn(child, new Set(turnTools(settings, request.route)), request, halt);
+      const allowed = piTools(settings, request.route, request.tools?.specs);
+      const answer = await readTurn(child, new Set(allowed), request, halt, bridge?.called);
       const code = await child.exited;
       if (halted.reason) throw new Error(`${halted.reason}. ${NO_FALLBACK}`);
       if (code !== 0) {
@@ -188,8 +208,11 @@ export function piTurns(settings: PiSettings): TurnCall {
       if (answer.stopReason === "error" || answer.stopReason === "aborted") throw new Error(`pi did not answer: ${answer.errorMessage ?? answer.stopReason}. ${NO_FALLBACK}`);
       const text = textOf(answer.content).trim();
       if (!text) throw new Error(`pi sent an empty answer. ${NO_FALLBACK}`);
+      await request.tools?.validate?.();
       return { text, session, resumed };
     } finally {
+      stopped.abort();
+      await bridge?.close();
       clearTimeout(timer);
       request.signal.removeEventListener("abort", abort);
       if (child.exitCode === null) child.kill();
