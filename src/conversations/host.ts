@@ -7,7 +7,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type Conversation, type EntryId, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { z } from "zod";
-import { ToolHost, type ToolDefinition, type ToolSession, type Transport } from "./tools/capabilities";
+import { projectRevision, ToolHost, type ToolDefinition, type ToolSession } from "./tools/capabilities";
 import { acquireHostLock, type LockOwner } from "./lock";
 import { cloudLanes, type CloudLane, type ToolsConfig } from "../common/types/desk-conversations";
 import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, type GateResult, type Lanes, type ToolSurfaceFor, type TurnCall, type TurnEvent } from "./model";
@@ -54,6 +54,7 @@ const StoredSchema = z.object({
   scope: z.object({ owner: z.enum(OWNER_TYPES), data: z.record(z.string(), z.string()) }).optional(),
   titleFromSource: z.boolean().default(false),
   discord: DiscordLinkSchema.optional(),
+  toolSources: z.record(z.string(), z.object({ revision: z.string(), policy: z.enum(["local", "cloud"]) })).default({}),
 });
 type Stored = z.infer<typeof StoredSchema>;
 export type OwnerScope = NonNullable<Stored["scope"]>;
@@ -141,7 +142,6 @@ export async function openConversationHost(options: HostOptions): Promise<HostSt
 export class ConversationHost {
   private harness: Harness | null = null;
   private readonly context: Context = BACKGROUND_CONTEXT;
-  private readonly transports = new Map<string, Transport>();
   private readonly queues = new Map<string, Promise<void>>();
   private readonly transcripts = new Map<string, { head: string; lines: ExchangeLine[] }>();
   private readonly now: () => Date;
@@ -279,7 +279,12 @@ export class ConversationHost {
   private async tighten(id: string): Promise<{ stored: Stored; effective: Policy; sources: SourceView[]; available: boolean }> {
     const current = await this.stored(id);
     const sources = await this.sourcesOf(current.links);
-    const resolved = strictest([current.policy, ...sources.flatMap(s => s.state === "available" ? [s.policy] : [])]);
+    const toolPolicies = Object.entries(current.toolSources).map(([id, source]) => {
+      const project = this.options.tools?.config()?.projects.find(project => project.id === id);
+      if (!project || projectRevision(project) !== source.revision) throw new ConversationError(403, "A previously used tool source was revoked or changed. Start a new conversation with current permissions.");
+      return strictest([project.policy, source.policy]);
+    });
+    const resolved = strictest([current.policy, ...toolPolicies, ...sources.flatMap(s => s.state === "available" ? [s.policy] : [])]);
     const stored = resolved === current.policy ? current : await this.update(id, s => ({ ...s, policy: strictest([s.policy, resolved]) }));
     const available = sources.every(s => s.state === "available");
     return { stored, effective: available ? stored.policy : "local", sources, available };
@@ -317,17 +322,24 @@ export class ConversationHost {
     }
   }
 
-  private toolSurface(): ToolSurfaceFor | undefined {
-    const tools = this.options.tools;
-    if (!tools) return undefined;
+  private toolSurface(): ToolSurfaceFor {
+    const tools = this.options.tools ?? { config: () => undefined };
     const host = new ToolHost({ config: tools.config, session: id => this.toolSession(id), ...(tools.definitions ? { tools: tools.definitions } : {}), ...(tools.timeoutMs ? { timeoutMs: tools.timeoutMs } : {}), ...(tools.outputLimit ? { outputLimit: tools.outputLimit } : {}) });
     return (id, route, record) => host.surface(id, route, record);
   }
 
   private async toolSession(id: string): Promise<ToolSession | null> {
-    const transport = this.transports.get(id);
-    if (!transport) return null;
     const { stored, effective } = await this.tighten(id);
+    if (stored.state !== "current") return null;
+    const conversation = await this.conversation(stored);
+    let transport: "web" | "discord" | null = null;
+    for await (const entry of allEntries(conversation, { order: "descending" }, 50, this.context)) {
+      if (entry.kind !== INPUT_KIND) continue;
+      const parsed = z.object({ transport: z.enum(["web", "discord"]) }).safeParse(entry.data);
+      transport = parsed.success ? parsed.data.transport : null;
+      break;
+    }
+    if (!transport) return null;
     const route = this.routeFor(effective, stored.cloud);
     if (!route) return null;
     return { principal: stored.principal, conversationId: id, transport, route, policy: effective, scope: (this.options.tools?.config()?.projects ?? []).map(project => project.id) };
@@ -335,7 +347,11 @@ export class ConversationHost {
 
   private async recordTurn(id: string, event: TurnEvent): Promise<void> {
     const stored = await this.stored(id);
-    if (event.kind === "tool") await this.writeEntry(stored, TOOL_ACTIVITY_KIND, event.activity);
+    if (event.kind === "tool") {
+      const source = event.activity.source;
+      if (source) await this.update(id, current => ({ ...current, policy: strictest([current.policy, source.policy]), toolSources: { ...current.toolSources, [source.id]: { revision: source.revision, policy: strictest([current.toolSources[source.id]?.policy ?? source.policy, source.policy]) } } }));
+      await this.writeEntry(stored, TOOL_ACTIVITY_KIND, event.activity);
+    }
     else await this.writeEntry(stored, CONTINUATION_KIND, { mode: "reconstructed", from: event.route, to: event.route, reason: event.reason, at: this.now().toISOString() } satisfies Continuation);
   }
 
@@ -366,7 +382,7 @@ export class ConversationHost {
       const at = this.now().toISOString();
       const policy = strictest([request.policy, ...sources.flatMap(source => source.state === "available" ? [source.policy] : [])]);
       const route = this.routeFor(policy);
-      const draft = { principal, stack: this.options.stack, title: request.title, links: request.links, policy, state: seed.state ?? "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at, draft: seed.draft ?? "", seeded: !seed.entries?.length, titleFromSource: seed.titleFromSource ?? false, ...(seed.key ? { key: seed.key } : {}), ...(seed.scope ? { scope: seed.scope } : {}) } satisfies Omit<Stored, "engineId" | "sessionId" | "route" | "inputs">;
+      const draft = { toolSources: {}, principal, stack: this.options.stack, title: request.title, links: request.links, policy, state: seed.state ?? "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at, draft: seed.draft ?? "", seeded: !seed.entries?.length, titleFromSource: seed.titleFromSource ?? false, ...(seed.key ? { key: seed.key } : {}), ...(seed.scope ? { scope: seed.scope } : {}) } satisfies Omit<Stored, "engineId" | "sessionId" | "route" | "inputs">;
       await this.engine.createConversation({
         ownership: { kind: "ownerless" },
         agent: { instructions: IVY_INSTRUCTIONS, ...(route ? { model: { provider: CORTEX_PROVIDER, modelId: route } } : {}) },
@@ -637,7 +653,6 @@ export class ConversationHost {
       if (!route) throw new ConversationError(503, effective === "local" ? "No local model is configured. Nothing was sent; no cloud fallback is used." : "No conversation model is configured. Nothing was sent.");
       if (effective === "cloud" && stored.cloud && !this.cloudLane(stored.cloud)) throw new ConversationError(503, `The cloud model ${stored.cloud} chosen for this conversation is no longer configured. Choose another model; nothing was sent and no other model was used.`);
       await this.claimInput(conversation, request.inputId, sha256);
-      this.transports.set(id, request.transport);
       if (route !== stored.route) {
         await conversation.configure({ model: { provider: CORTEX_PROVIDER, modelId: route } }, this.context);
         if (stored.route !== null) await this.writeEntry(stored, CONTINUATION_KIND, { mode: "reconstructed", from: stored.route, to: route, at: this.now().toISOString() } satisfies Continuation);

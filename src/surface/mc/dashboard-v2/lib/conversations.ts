@@ -87,6 +87,10 @@ function toolLine(data: Record<string, unknown>): string {
   const args = record(data.args);
   const detail = TOOL_DETAIL.flatMap(key => (text(args[key]) ? [short(text(args[key]))] : [])).join(" · ");
   const named = detail ? `${tool} (${detail})` : tool;
+  if (data.boundary === "host") {
+    if (data.outcome === "refused") return `${named} was refused: ${short(text(data.result), 160)}`;
+    if (data.outcome === "stopped") return `${named} was cancelled. No result was released.`;
+  }
   if (data.outcome === "refused") return `Refused ${named}: it is not on the read-only tool allowlist, so nothing ran.`;
   if (data.outcome === "stopped") return `${named} is not on the read-only tool allowlist and may have run; the turn was stopped.`;
   if (data.outcome === "error") return `Read with ${named} failed: ${short(text(data.result).split("\n")[0] ?? "", 160)}`;
@@ -96,6 +100,7 @@ function toolLine(data: Record<string, unknown>): string {
 function continuationLine(data: Record<string, unknown>): string {
   if (data.mode === "native-resume") return "Resumed the same engine after a restart.";
   if (data.reason === "engine-changed") return "Ivy's working context was rebuilt from this conversation's record, because earlier turns came from another engine.";
+  if (data.reason === "tool-policy") return "Ivy rebuilt this turn from the conversation record to check current tool permissions.";
   if (data.reason === "session-missing") return "Ivy's earlier pi session was not found, so the working context was rebuilt from this conversation's record.";
   return `Continued with reconstructed context on the ${routeLabel(text(data.to))} model.`;
 }

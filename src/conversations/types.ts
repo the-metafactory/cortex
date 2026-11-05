@@ -137,7 +137,7 @@ export const TOOL_ACTIVITY_KIND = "cortex.tool-activity";
 export type Continuation =
   | { mode: "native-resume"; engine: string; at: string }
   | { mode: "reconstructed"; from: ModelRoute | null; to: ModelRoute; at: string; reason?: Exclude<ContinuationReason, "lane-changed"> };
-export type ContinuationReason = "lane-changed" | "engine-changed" | "session-missing";
+export type ContinuationReason = "lane-changed" | "engine-changed" | "session-missing" | "tool-policy";
 
 export const GRANT_SCOPES = ["conversation", "global"] as const;
 export const TRANSPORTS = ["web", "discord"] as const;

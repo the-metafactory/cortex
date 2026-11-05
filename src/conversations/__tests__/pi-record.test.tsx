@@ -39,6 +39,13 @@ describe("pi turns in the conversation record", () => {
     expect(entryViews(entries[2] ?? { id: "", kind: "" })[0]?.text).toBe("Refused bash: it is not on the read-only tool allowlist, so nothing ran.");
   });
 
+  test("host refusals and cancellations show their recorded reason", () => {
+    const refused = entryViews({ id: "tool", kind: "cortex.tool-activity", data: { boundary: "host", tool: "repo_read", outcome: "refused", result: "Source permissions changed. The result was withheld." } });
+    expect(refused[0]?.text).toBe("repo_read was refused: Source permissions changed. The result was withheld.");
+    const stopped = entryViews({ id: "tool", kind: "cortex.tool-activity", data: { boundary: "host", tool: "repo_read", outcome: "stopped" } });
+    expect(stopped[0]?.text).toBe("repo_read was cancelled. No result was released.");
+  });
+
   test("a failed pi turn shows an explicit failure with Retry, keeps the input and tries no other engine", async () => {
     let calls = 0;
     const turns: TurnCall = () => { calls += 1; return Promise.reject(new Error("pi was not found at /nowhere/pi. No other engine is used.")); };
@@ -57,10 +64,9 @@ describe("pi turns in the conversation record", () => {
     expect(html).toContain(">Retry</button>");
   });
 
-  test("the next turn resumes the previous pi session natively; a lost session is reconstructed and recorded", async () => {
+  test("each host turn reconstructs the durable exchange with current tool permissions", async () => {
     const seen: TurnRequest[] = [];
-    let resumes = true;
-    const turns: TurnCall = request => { seen.push(request); return Promise.resolve({ text: `answer ${seen.length}`, session: request.resume && resumes ? request.resume : request.session, resumed: Boolean(request.resume && resumes) }); };
+    const turns: TurnCall = request => { seen.push(request); return Promise.resolve({ text: `answer ${seen.length}`, session: request.session, resumed: false }); };
     const host = await open({ turns });
     const conversation = await create(host);
     for (const [i, text] of ["one", "two"].entries()) {
@@ -69,15 +75,15 @@ describe("pi turns in the conversation record", () => {
     }
     expect(seen[0]).toMatchObject({ resume: null, history: [], prompt: "one", conversationId: conversation.id, route: "cloud" });
     expect(seen[0]?.session.startsWith(`${conversation.id}.cloud.0.`)).toBe(true);
-    expect(seen[1]?.resume).toBe(seen[0]?.session);
+    expect(seen[1]?.resume).toBeNull();
+    expect(seen[1]?.session).not.toBe(seen[0]?.session);
     const kinds = async (): Promise<string[]> => (await host.entries(conversation.id, 100, undefined)).entries.map(e => e.kind);
-    expect(await kinds()).not.toContain("cortex.continuation");
-    resumes = false;
+    expect(await kinds()).toContain("cortex.continuation");
     await host.submit(conversation.id, input("in-3", "three"));
     await host.waitForIdle(conversation.id);
     expect(seen[2]?.history.map(t => t.content)).toEqual(["one", "answer 1", "two", "answer 2"]);
     const continuation = (await host.entries(conversation.id, 100, undefined)).entries.find(e => e.kind === "cortex.continuation");
-    expect(continuation?.data).toMatchObject({ mode: "reconstructed", reason: "session-missing", to: "cloud" });
-    expect(entryViews(continuation ?? { id: "", kind: "" })[0]?.text).toBe("Ivy's earlier pi session was not found, so the working context was rebuilt from this conversation's record.");
+    expect(continuation?.data).toMatchObject({ mode: "reconstructed", reason: "tool-policy", to: "cloud" });
+    expect(entryViews(continuation ?? { id: "", kind: "" })[0]?.text).toBe("Ivy rebuilt this turn from the conversation record to check current tool permissions.");
   });
 });
