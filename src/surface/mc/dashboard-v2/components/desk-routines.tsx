@@ -3,6 +3,7 @@ import { postJson } from "../lib/api";
 import type { RoutineAction, LegacyRoutineAction } from "../../desk/routine-store";
 import type { RoutineView } from "../../desk/routine-command";
 import { RoutineDrafts } from "./desk-routine-drafts";
+import { CapabilityRecovery } from "./desk-capability-recovery";
 
 type RoutineButtonProps = { children: string; onChanged: () => void; onCompleted?: (request: RoutineAction) => void; retryId?: string } & ({ request: RoutineAction; action?: never; target?: never } | { request?: never; action: LegacyRoutineAction["action"]; target: string });
 export function RoutineButton(props: RoutineButtonProps) {
@@ -40,6 +41,7 @@ export function RoutinesSection({ view, onChanged }: { view: RoutineView | undef
       <h3 className="desk-mh">Routines</h3>
       {view.error && <p role="alert">{view.error}</p>}
       <PendingRoutineChanges changes={view.changes} onChanged={onChanged} />
+      <CapabilityRecovery installs={view.capabilityInstalls} onChanged={onChanged} />
       {!view.error && view.installed.length === 0 && <p className="soft">Ask for something to happen every day, week or minute.</p>}
       <ul className="desk-sub">
         {view.pending.map((p) => <li key={p.decisionId}><div>

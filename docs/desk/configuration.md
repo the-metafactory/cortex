@@ -191,6 +191,9 @@ mc:
         template: /opt/desk/capability-brief.md
         start: [ranger, build-now, '{id}', --map, '{map}']
         status: [bun, /opt/cortex/scripts/desk-capability-status.ts, '{ref}']
+        bundle: example-capabilities
+        install: [/opt/desk/install-capabilities, '{bundle}']
+        uninstall: [/opt/desk/uninstall-capabilities, '{bundle}']
         budget:
           tokens: 200000
           invocations: 40
@@ -201,6 +204,9 @@ mc:
 
 <!-- glossary-ignore: node -->
 `start` and `status` are optional argument arrays. Each must contain `{ref}` or `{id}`, and the Desk replaces these placeholders in every argument: `{ref}` is the node reference (`owner/repo#123`), `{repo}` is `owner/repo`, `{id}` is the node number and `{map}` is `capabilityBuild.map`. With `start`, the Desk runs the command once for each node it newly filed, right after filing. With `status`, the Desk reads the build state of every filed node each time it refreshes routines. See [build start and status commands](commands.md#build-start-and-status-commands).
+
+<!-- glossary-ignore: agent -->
+`bundle`, `install`, and `uninstall` are optional as a group and require `status`. Both command arrays must contain `{bundle}`, which becomes the configured bundle name. The install command owns first installation, later upgrades, and agent reload. The uninstall command owns removal and reload. No package manager or repository is built into Cortex. See [capability installation commands](commands.md#capability-installation-commands).
 
 The composer command uses the installed Pulse composer with an explicitly configured model and trusted installed-action catalog. Reflex owns activation files and flow files. The Desk stores the reviewed proposal and supplies a private temporary flow input to Reflex. See the [routine command contract](commands.md#routines).
 

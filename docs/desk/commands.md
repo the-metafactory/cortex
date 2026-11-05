@@ -66,6 +66,23 @@ If the command exits non-zero, times out, prints invalid JSON or prints another 
 
 A routine refused for a missing capability stays a draft. The Desk does not install it, and a gate, research, targeted or federated step is never offered for building.
 
+## Capability installation commands
+
+With `capabilityBuild.bundle`, `install`, `uninstall`, and `status` configured, a merged build shows **Merged, install?**. Choosing **Install** opens a confirmation. Confirming runs the configured `install` argument array, replacing `{bundle}` in each argument with `capabilityBuild.bundle`. The command receives no shell expansion or stdin. It runs with `routines.timeoutSeconds`.
+
+<!-- glossary-ignore: agent -->
+The installer must install or upgrade the bundle and reload its agents before exiting 0. An Arc wrapper can choose `arc install <repository>` for the first installation and `arc upgrade <bundle>` afterwards. If the bundle's postinstall reloads Cortex's agents, the wrapper needs no extra reload. Otherwise, it must call `cortex agents reload`. The configured `uninstall` command must remove the bundle and reload its agents.
+
+A nonzero exit shows **install failed: <reason>**, using the last nonempty line of stderr or stdout, and keeps **Install** available. Each confirmation has a durable request ID. Repeating that request returns its recorded result. A new confirmation after a failed exit creates a new attempt. If a command throws or times out, its outcome remains uncertain and the Desk refuses another install until the bundle is checked. Refreshing or restarting Cortex never resends an uncertain command.
+
+Unconfirmed bundle commands appear under Routines, including after their draft is discarded or the stack's install configuration changes. Choose **Check bundle**, then check that the command has stopped. Choose **Confirm installed** if the bundle is installed and its definitions have reloaded, or **Confirm absent** if the bundle is absent. This records the checked outcome without executing either command. A command interrupted by a Cortex restart can be checked after the configured command timeout. A confirmation from an older command state is refused.
+
+Confirming absent retires all successful installation receipts for the bundle and removes their **Done for you** entries. An uncertain install attempt remains recorded as failed. Eligible merged drafts offer **Install** again when their configuration matches. Confirming installed restores a promoted installation's **Done for you** entry. **Undo** requires the installation's original routine configuration, including its uninstall command. If that configuration changes or is removed, the Desk refuses Undo until the original configuration is restored. Local presence still determines when a capability becomes **Live**.
+
+An installation covers the currently merged builds across drafts for the configured bundle. Commands for the same bundle cannot overlap. A successful command shows **Installed, waiting for local presence**. Each capability becomes **Live** when it appears in fresh online local presence. After 90 seconds without presence, the draft shows **installed, not in presence yet** and keeps checking. Installing the routine itself remains a separate confirmation.
+
+**Install merged capabilities** is an ordinary promotable Desk action (`capability.install`). With **Handle it yourself** enabled, the Desk checks merged drafts every 30 seconds and installs without another confirmation. Each attempt appears in **Done for you**. Successful attempts offer **Undo**, which runs the configured `uninstall` command for the whole bundle, including capabilities shared by other drafts. Undo remains available after discarding or installing the routine draft. **Stop doing this on your own** restores ask-first behavior. Failed attempts remain visible and require a new manual confirmation.
+
 ## Source output
 
 A source exits 0 and prints an object with optional `events` and `items` arrays. An empty source can print `{}`. Unknown object fields are ignored. `items` currently accepts mail only. Source adapters do not declare UI actions in their output: Cortex adds actions from the item kind and configured commands.

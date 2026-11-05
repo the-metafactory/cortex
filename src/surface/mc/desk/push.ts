@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { composeDesk, type DeskRuntime, type DeskVigilSource } from "./compose";
 import { rangerActionsReady } from "./actions";
+import { runCapabilityInstalls } from "./routine-install";
 import { runAutonomy } from "./autonomy";
 import { pushInterrupts, startInterruptLoop, type DeskTransport, type InterruptLoop } from "./interrupt";
 
@@ -30,9 +31,9 @@ const AUTONOMY_EVERY_MS = 30_000;
 
 export function startDeskAutonomy(db: Database, runtime: DeskRuntime, every = AUTONOMY_EVERY_MS): InterruptLoop | null {
   const options = runtime.options;
-  if (!rangerActionsReady(options)) return null;
-  const { rangerUrl, rangerCli: cli } = options;
+  if (!options?.enabled || !rangerActionsReady(options) && !options.routines?.capabilityBuild?.install) return null;
   return startInterruptLoop(every, async () => {
-    await runAutonomy({ db, rangerUrl, cli, ledger: runtime.ledger });
+    if (rangerActionsReady(options)) await runAutonomy({ db, rangerUrl: options.rangerUrl, cli: options.rangerCli, ledger: runtime.ledger });
+    if (options.routines) await runCapabilityInstalls(db, options.routines, runtime.routineCapabilities ?? (() => new Set()));
   });
 }

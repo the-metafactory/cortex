@@ -131,6 +131,7 @@ export const TABLE_NAMES = [
   "desk_calendars",
   "desk_calendar_identities",
   "desk_notes",
+  "desk_capability_installs",
   "desk_routine_proposals",
   "desk_routine_operations",
   "desk_routine_display",
@@ -180,6 +181,16 @@ export const SCHEMA_SQL: string[] = [
   ...SNOOZE_SQL,
   "CREATE TABLE IF NOT EXISTS desk_my_day (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
   "CREATE TABLE IF NOT EXISTS desk_balance (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",
+  `CREATE TABLE IF NOT EXISTS desk_capability_installs (
+    id TEXT PRIMARY KEY,
+    config_hash TEXT NOT NULL,
+    bundle TEXT NOT NULL,
+    refs TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('running', 'installed', 'failed', 'undoing', 'undone')),
+    error TEXT,
+    at INTEGER NOT NULL
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS desk_capability_install_running ON desk_capability_installs (bundle) WHERE state IN ('running', 'undoing')`,
   `CREATE TABLE IF NOT EXISTS desk_routine_proposals (
     id TEXT PRIMARY KEY,
     routine_id TEXT NOT NULL UNIQUE,
