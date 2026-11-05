@@ -3,9 +3,11 @@ import { z } from "zod";
 import type { RoutineResult } from "./routine-action-contract";
 import { finishBundleRemoval, readCapabilityInstall, recordInstallOutcome } from "./routine-install-store";
 
+export const CapabilityInstallId = z.string().regex(/^[\w-]{8,64}$/);
+
 export const CapabilityResolveRequestSchema = z.object({
   action: z.literal("capability.resolve"),
-  id: z.string().regex(/^[\w-]{8,64}$/),
+  id: CapabilityInstallId,
   state: z.enum(["running", "undoing"]),
   at: z.number().int().nonnegative(),
   outcome: z.enum(["installed", "absent"]),
