@@ -17,6 +17,8 @@ import { DisplayFailureAlert, RoutineDisplayChoice, useRoutineDisplay } from "./
 import { storedChoice } from "../lib/routine-display";
 import { displayEntry } from "../../desk/routine-display-contract";
 import { calendarDays } from "../lib/routine-calendar";
+import { loadSavedFlows, type SavedFlowsState } from "../lib/desk-flows";
+import { DeskSavedFlows } from "./desk-saved-flows";
 import "./desk-routine-page.css";
 export { routineStepTree } from "./desk-routine-detail";
 
@@ -30,6 +32,10 @@ export function DeskRoutineEditor({ onBack, location: current, onLocation, view,
   const go = onLocation ?? setLocal;
   const currentLocation = useRef(location); currentLocation.current = location;
   const [inventory, setInventory] = useState<RoutineInventory | null>(null);
+  const [flows, setFlows] = useState<SavedFlowsState>({ status: "checking" });
+  const flowsAvailable = flows.status === "ready" || flows.status === "error";
+  const pageTab = location.tab === "flows" && !flowsAvailable ? "schedule" : location.tab;
+  const pageTabs: RoutineTab[] = flowsAvailable ? ["schedule", "workspace", "flows"] : ["schedule", "workspace"];
   const currentInventory = useRef(inventory); currentInventory.current = inventory;
   const [details, setDetails] = useState<Record<string, RoutineDetail>>({});
   const [sessions, setSessions] = useState<Record<string, RoutineEditorSession>>({});
@@ -46,6 +52,11 @@ export function DeskRoutineEditor({ onBack, location: current, onLocation, view,
   const display = useRoutineDisplay(revision);
   const days = useMemo(() => calendarDays(location.date, location.view), [location.date, location.view]);
   const displayFailure = Object.entries(display.changes).find(([, change]) => change.error);
+  useEffect(() => {
+    const abort = new AbortController();
+    void loadSavedFlows(abort.signal).then((state) => { if (!abort.signal.aborted) setFlows(state); });
+    return () => { abort.abort(); };
+  }, [revision]);
   useEffect(() => {
     const abort = new AbortController(); setError(null);
     void getJson(endpoint, { signal: abort.signal }).then((value) => { if (!abort.signal.aborted) setInventory(RoutineInventorySchema.parse(value)); }).catch((failure: unknown) => { if (!abort.signal.aborted) setError(message(failure)); });
@@ -80,8 +91,8 @@ export function DeskRoutineEditor({ onBack, location: current, onLocation, view,
   const choose = (id: string): void => { go({ ...location, tab: "workspace", workspace: "overview", routine: id }); };
   const tabKey = (event: KeyboardEvent<HTMLButtonElement>, tab: RoutineTab): void => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault();
-    const next = event.key === "Home" ? "schedule" : event.key === "End" ? "workspace" : tab === "schedule" ? "workspace" : "schedule";
-    go({ ...location, tab: next }); tabs.current.get(next)?.focus();
+    const next = pageTabs[event.key === "Home" ? 0 : event.key === "End" ? pageTabs.length - 1 : (pageTabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : -1) + pageTabs.length) % pageTabs.length];
+    if (next) { go({ ...location, tab: next }); tabs.current.get(next)?.focus(); }
   };
   const workspaceKey = (event: KeyboardEvent<HTMLButtonElement>, tab: WorkspaceTab): void => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
@@ -102,10 +113,11 @@ export function DeskRoutineEditor({ onBack, location: current, onLocation, view,
     {(view?.pending.length ?? 0) > 0 && <section hidden={!approvalsOpen} id="routine-approvals" className="routine-approvals desk-set-card" aria-label="Pending routine approvals"><h2>Waiting for approval</h2>{view?.pending.map((p) => <div key={p.decisionId}><p>{inventory?.find((r) => r.id === p.blueprintId)?.name ?? p.blueprintId} wants to run.</p><div className="desk-acts"><RoutineButton action="approve" target={p.decisionId} onChanged={refresh}>Approve</RoutineButton><RoutineButton action="deny" target={p.decisionId} onChanged={refresh}>Deny</RoutineButton></div></div>)}</section>}
     <CapabilityRecovery installs={view?.capabilityInstalls} onChanged={refresh} />
     <PendingRoutineChanges changes={view?.changes ?? []} onChanged={refresh} onCompleted={(request) => { if (request.action === "delete") deleted(request.target, "Routine deleted and verified. Execution evidence remains in Activity."); }} />
-    <div className="routine-page-tabs" role="tablist" aria-label="Routines page">{(["schedule", "workspace"] as const).map((tab) => <button key={tab} type="button" role="tab" id={`routines-tab-${tab}`} aria-controls={`routines-panel-${tab}`} aria-selected={location.tab === tab} tabIndex={location.tab === tab ? 0 : -1} ref={(node) => { if (node) tabs.current.set(tab, node); else tabs.current.delete(tab); }} onKeyDown={(event) => { tabKey(event, tab); }} onClick={() => { go({ ...location, tab }); }}>{tab === "schedule" ? "Schedule" : "Routine workspace"}</button>)}</div>
+    <div className="routine-page-tabs" role="tablist" aria-label="Routines page">{pageTabs.map((tab) => <button key={tab} type="button" role="tab" id={`routines-tab-${tab}`} aria-controls={`routines-panel-${tab}`} aria-selected={pageTab === tab} tabIndex={pageTab === tab ? 0 : -1} ref={(node) => { if (node) tabs.current.set(tab, node); else tabs.current.delete(tab); }} onKeyDown={(event) => { tabKey(event, tab); }} onClick={() => { go({ ...location, tab }); }}>{tab === "schedule" ? "Schedule" : tab === "workspace" ? "Routine workspace" : "Saved flows"}</button>)}</div>
     {deletionNotice && <p role="status">{deletionNotice}</p>}
-    {error && <p role="alert">{error} The installed routine library is unavailable.</p>}
-    <div role="tabpanel" id="routines-panel-schedule" aria-labelledby="routines-tab-schedule" hidden={location.tab !== "schedule"}><DeskRoutineAttention days={days} timezone={location.timezone} revision={revision} view={view} inventory={inventory} inventoryError={Boolean(error)} active={pageActive && location.tab === "schedule"} onOpen={(id, tab) => { go({ ...location, tab: "workspace", workspace: tab, routine: id }); }} onChanged={refresh} />{display.error && <p role="status">Display preferences are unavailable: {display.error} Every scheduled start is shown.</p>}{displayFailure && <DisplayFailureAlert routineId={displayFailure[0]} name={inventory?.find((r) => r.id === displayFailure[0])?.name ?? displayFailure[0]} change={displayFailure[1]} onRetry={display.change} onKeep={display.dismiss} />}<DeskRoutineCalendar location={location} onLocation={go} inventory={inventory} revision={revision} onSelect={choose} background={display.preferences?.background} automatic={display.preferences?.automatic} onDisplay={display.preferences ? display.change : undefined} /></div>
+    {flowsAvailable && <div role="tabpanel" id="routines-panel-flows" aria-labelledby="routines-tab-flows" hidden={pageTab !== "flows"}><DeskSavedFlows state={flows} /></div>}
+    {error && pageTab !== "flows" && <p role="alert">{error} The installed routine library is unavailable.</p>}
+    <div role="tabpanel" id="routines-panel-schedule" aria-labelledby="routines-tab-schedule" hidden={pageTab !== "schedule"}><DeskRoutineAttention days={days} timezone={location.timezone} revision={revision} view={view} inventory={inventory} inventoryError={Boolean(error)} active={pageActive && pageTab === "schedule"} onOpen={(id, tab) => { go({ ...location, tab: "workspace", workspace: tab, routine: id }); }} onChanged={refresh} />{display.error && <p role="status">Display preferences are unavailable: {display.error} Every scheduled start is shown.</p>}{displayFailure && <DisplayFailureAlert routineId={displayFailure[0]} name={inventory?.find((r) => r.id === displayFailure[0])?.name ?? displayFailure[0]} change={displayFailure[1]} onRetry={display.change} onKeep={display.dismiss} />}<DeskRoutineCalendar location={location} onLocation={go} inventory={inventory} revision={revision} onSelect={choose} background={display.preferences?.background} automatic={display.preferences?.automatic} onDisplay={display.preferences ? display.change : undefined} /></div>
     <div role="tabpanel" id="routines-panel-workspace" aria-labelledby="routines-tab-workspace" hidden={location.tab !== "workspace"}>
       {!inventory && !error && <p role="status">Reading installed routines…</p>}{inventory?.length === 0 && <p>No installed routines were returned by the configured owner.</p>}
       <div className="desk-routine-layout"><nav aria-label="Installed routines"><h2>Your routines <small>{inventory?.length ?? "…"}</small></h2><label className="routine-library-search">Find a routine<input value={search} onChange={(event) => { setSearch(event.target.value); }} type="search" /></label><ul className="routine-library-list" ref={library}>{entries.map((r) => <li key={r.id}><button type="button" className="routine-library-button" aria-current={selected === r.id ? "page" : undefined} onClick={() => { choose(r.id); }}>{r.name ?? r.id}</button><small>{r.schedule} · {r.timezone ?? "Owner local timezone"}<br />{!r.runtimeConfirmed ? "Scheduling state unconfirmed · " : r.paused && r.policy !== "disabled" ? "Paused · " : ""}{r.policy === "auto" ? "Automatic" : r.policy === "disabled" ? "Disabled · handling policy unknown" : "Approval required"}{r.readOnly ? r.capabilities.editSchedule || r.capabilities.pause ? " · Flow read-only" : " · Read-only" : ""}</small></li>)}</ul>{inventory && inventory.length > 0 && entries.length === 0 && <p>No routines match this search.</p>}</nav><div className="routine-workspace-detail">

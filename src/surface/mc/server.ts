@@ -4,6 +4,8 @@ import { WaitingTasks } from "./desk/sources/waiting";
 import { handleDeskMyDay } from "./api/desk-my-day";
 import { handleDeskCalendars } from "./api/desk-calendars";
 import { handleDeskRoutines } from "./api/desk-routines";
+import { handleDeskFlows } from "./api/desk-flows";
+import { DESK_FLOWS_PATH } from "./desk/saved-flow-contract";
 import { handleDeskRoutineCapability } from "./api/desk-routine-capability";
 import { handleDeskRoutineOccurrences } from "./api/desk-routine-occurrences";
 import { handleDeskRoutineDisplay } from "./api/desk-routine-display";
@@ -492,11 +494,12 @@ async function handleApi(
   const { pathname } = url;
   if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });
 
-  if (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname)) {
+  const deskFlowsRead = pathname === DESK_FLOWS_PATH || pathname.startsWith(`${DESK_FLOWS_PATH}/`);
+  if (deskFlowsRead || (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname))) {
     const rebindDenial = checkRebindGuard(req, guard);
     if (rebindDenial) return rebindDenial;
   }
-  if (isIdentityGatedMutation(req.method, pathname) || requiresStepUp(req.method, pathname)) {
+  if (deskFlowsRead || isIdentityGatedMutation(req.method, pathname) || requiresStepUp(req.method, pathname)) {
     const authResult = await enforceMutationAuth(req, guard);
     if (authResult instanceof Response) return authResult;
   }
@@ -558,6 +561,7 @@ async function handleApi(
 
   if (pathname === "/api/desk/create") return handleDeskCreate(req, db, desk, { routineCapabilities: () => localRoutineCapabilities(agentPresence) });
   if (pathname === "/api/desk/routines") return handleDeskRoutines(req, db, desk, undefined, () => localRoutineCapabilities(agentPresence));
+  if (deskFlowsRead) return handleDeskFlows(req, desk);
   if (pathname === "/api/desk/routine-capability") return handleDeskRoutineCapability(req, db, desk);
   if (pathname === "/api/desk/routine-history") return handleDeskRoutineEvidence(req, db, desk);
   if (pathname === "/api/desk/routine-log") return handleDeskRoutineEvidence(req, db, desk, true);

@@ -154,3 +154,7 @@
 .routine-display-choice label small{grid-column:2;font-size:12px;color:var(--mute)}
 .routine-display-choice p{margin:0;font-size:12px}
 @media(max-width:700px){.routine-attention-row small{margin-left:0;width:100%}.routine-background-row .desk-btn{white-space:normal;text-align:left}}
+.saved-flow-list{list-style:none;padding:0;margin:16px 0;display:grid;gap:12px}
+.saved-flow-row{min-width:0;overflow-wrap:anywhere}
+.saved-flow-row h3{margin-top:0;font-size:16px}
+.saved-flow-yaml{max-height:560px;overflow:auto;padding:16px;background:#f5f6f8;border-radius:8px;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
