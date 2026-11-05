@@ -5,15 +5,15 @@ import { listGrants } from "./autonomy";
 import { spawnWithStdin } from "./create";
 import { readDraftViews } from "./routine-draft-state";
 import { CAPABILITY_INSTALL, finishBundleRemoval, readCapabilityInstall, latestCapabilityInstall, recordInstallOutcome } from "./routine-install-store";
-import { CapabilityResolveRequestSchema, resolveCapabilityInstall } from "./routine-install-resolution";
+import { CapabilityInstallId, CapabilityResolveRequestSchema, resolveCapabilityInstall } from "./routine-install-resolution";
 import { runRoutineCommand, type RoutineOptions, type RoutineRunner } from "./routine-command";
 import type { RoutineResult } from "./routine-action-contract";
 import type { RoutineCapabilities } from "./routine-providers";
 import { readRoutineProposal, routineConfigHash } from "./routine-store";
 
 export const CapabilityInstallRequestSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal(CAPABILITY_INSTALL), requestId: z.string().regex(/^[\w-]{8,64}$/), proposalId: z.uuid(), capability: z.string().min(1).max(200) }).strict(),
-  z.object({ action: z.literal("capability.uninstall"), id: z.string().regex(/^[\w-]{8,64}$/) }).strict(),
+  z.object({ action: z.literal(CAPABILITY_INSTALL), requestId: CapabilityInstallId, proposalId: z.uuid(), capability: z.string().min(1).max(200) }).strict(),
+  z.object({ action: z.literal("capability.uninstall"), id: CapabilityInstallId }).strict(),
   CapabilityResolveRequestSchema,
 ]);
 export type CapabilityInstallRequest = z.infer<typeof CapabilityInstallRequestSchema>;
@@ -46,14 +46,14 @@ export async function actOnCapabilityInstall(db: Database, options: RoutineOptio
     const locked = db.query("UPDATE OR IGNORE desk_capability_installs SET state = 'undoing', error = NULL, at = ? WHERE id = ? AND state = 'installed'").run(startedAt, request.id).changes;
     if (!locked) return pending();
     const result = await bundleCommand(options, build.uninstall, install.bundle, run);
-    db.transaction(() => {
+    return db.transaction((): RoutineResult => {
       const current = readCapabilityInstall(db, request.id);
-      if (current?.state !== "undoing" || current.at !== startedAt) return;
+      if (current?.state !== "undoing" || current.at !== startedAt) return pending();
       if (result.ok) {
         finishBundleRemoval(db, install.bundle);
       } else db.query("UPDATE desk_capability_installs SET state = ?, error = ? WHERE id = ?").run(result.uncertain ? "undoing" : "installed", result.error, request.id);
+      return result.ok ? { ok: true, message: "Bundle uninstalled." } : result;
     })();
-    return result.ok ? { ok: true, message: "Bundle uninstalled." } : result;
   }
   const proposal = readRoutineProposal(db, request.proposalId);
   if (!proposal?.draft || proposal.configHash !== hash) return refused("The routine draft or its configuration changed. Ask for the routine again.");
