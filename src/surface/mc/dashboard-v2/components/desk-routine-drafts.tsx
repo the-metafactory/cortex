@@ -27,8 +27,8 @@ export function BuildStateLine({ node }: { node: DraftNodeView }) {
     <strong>{node.capability}</strong>
     {build && <>: {node.canInstall ? "Merged, install?" : buildStateText(build)}</>}
     {node.install?.state === "failed" && <> · install failed: {node.install.error}</>}
-    {node.install?.state === "running" && <> · Installing; waiting for the pack command to confirm</>}
-    {node.install?.state === "undoing" && <> · Uninstalling; waiting for the pack command to confirm</>}
+    {node.install?.state === "running" && <> · Installing; waiting for the bundle command to confirm</>}
+    {node.install?.state === "undoing" && <> · Uninstalling; waiting for the bundle command to confirm</>}
     {node.install?.state === "installed" && build?.state !== "live" && <> · {node.presenceLate ? "installed, not in presence yet" : "Installed, waiting for local presence"}</>}
     {pr && <> ({prLabel(pr)})</>}
     {node.notStarted && <> · Not started: {node.notStarted}</>}
@@ -57,7 +57,7 @@ function InstallCapability({ draft, node, onChanged }: { draft: RoutineDraftView
     finally { inFlight.current = false; setBusy(false); }
   };
   return <div>
-    {confirm ? <><p>Install the configured capability pack and reload its agents?</p><button className="desk-btn desk-btn--primary" type="button" disabled={busy} onClick={() => { void install(); }}>Confirm install</button><button className="desk-btn" type="button" disabled={busy} onClick={() => setConfirm(false)}>Cancel</button></>
+    {confirm ? <><p>Install the configured capability bundle and reload its agents?</p><button className="desk-btn desk-btn--primary" type="button" disabled={busy} onClick={() => { void install(); }}>Confirm install</button><button className="desk-btn" type="button" disabled={busy} onClick={() => setConfirm(false)}>Cancel</button></>
       : <button className="desk-btn desk-btn--primary" type="button" disabled={busy} onClick={() => setConfirm(true)}>Install</button>}
     {error && <p role="alert">{error}</p>}
   </div>;

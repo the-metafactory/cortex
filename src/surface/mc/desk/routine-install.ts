@@ -4,14 +4,13 @@ import { oneLine } from "./actions";
 import { listGrants } from "./autonomy";
 import { spawnWithStdin } from "./create";
 import { readDraftViews } from "./routine-draft-state";
-import { CAPABILITY_INSTALL, finishPackRemoval, readCapabilityInstall, latestCapabilityInstall } from "./routine-install-store";
+import { CAPABILITY_INSTALL, finishBundleRemoval, readCapabilityInstall, latestCapabilityInstall, recordInstallOutcome } from "./routine-install-store";
 import { CapabilityResolveRequestSchema, resolveCapabilityInstall } from "./routine-install-resolution";
 import { runRoutineCommand, type RoutineOptions, type RoutineRunner } from "./routine-command";
 import type { RoutineResult } from "./routine-action-contract";
 import type { RoutineCapabilities } from "./routine-providers";
 import { readRoutineProposal, routineConfigHash } from "./routine-store";
 
-export { CAPABILITY_INSTALL } from "./routine-install-store";
 export const CapabilityInstallRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal(CAPABILITY_INSTALL), requestId: z.string().regex(/^[\w-]{8,64}$/), proposalId: z.uuid(), capability: z.string().min(1).max(200) }).strict(),
   z.object({ action: z.literal("capability.uninstall"), id: z.string().regex(/^[\w-]{8,64}$/) }).strict(),
@@ -19,40 +18,42 @@ export const CapabilityInstallRequestSchema = z.discriminatedUnion("action", [
 ]);
 export type CapabilityInstallRequest = z.infer<typeof CapabilityInstallRequestSchema>;
 const refused = (error: string): RoutineResult => ({ ok: false, error });
-const pending = (): RoutineResult => ({ ok: false, error: "The pack command has not confirmed its result. Check the pack before trying again.", uncertain: true });
+const pending = (): RoutineResult => ({ ok: false, error: "The bundle command has not confirmed its result. Check the bundle before trying again.", uncertain: true });
 
-async function packCommand(options: RoutineOptions, argv: string[], pack: string, run: RoutineRunner): Promise<RoutineResult> {
+async function bundleCommand(options: RoutineOptions, argv: string[], bundle: string, run: RoutineRunner): Promise<RoutineResult> {
   try {
-    const result = await runRoutineCommand(run, argv.map((arg) => arg.replaceAll("{pack}", pack)), options.timeoutSeconds * 1000);
-    return result.code === 0 ? { ok: true, message: "Pack command completed." } : refused(oneLine(result.stderr || result.stdout, `exit code ${result.code}`));
+    const result = await runRoutineCommand(run, argv.map((arg) => arg.replaceAll("{bundle}", bundle)), options.timeoutSeconds * 1000);
+    return result.code === 0 ? { ok: true, message: "Bundle command completed." } : refused(oneLine(result.stderr || result.stdout, `exit code ${result.code}`));
   } catch (error) {
-    return { ok: false, error: oneLine(error instanceof Error ? error.message : String(error), "The pack command did not finish."), uncertain: true };
+    return { ok: false, error: oneLine(error instanceof Error ? error.message : String(error), "The bundle command did not finish."), uncertain: true };
   }
 }
 
-export async function actOnCapabilityInstall(db: Database, options: RoutineOptions, request: CapabilityInstallRequest, capabilities: RoutineCapabilities, run: RoutineRunner = spawnWithStdin, now: () => number = Date.now, automatic = false): Promise<RoutineResult> {
+interface CapabilityInstallRuntime { run?: RoutineRunner; now?: () => number; automatic?: boolean }
+
+export async function actOnCapabilityInstall(db: Database, options: RoutineOptions, request: CapabilityInstallRequest, capabilities: RoutineCapabilities, { run = spawnWithStdin, now = Date.now, automatic = false }: CapabilityInstallRuntime = {}): Promise<RoutineResult> {
   if (request.action === "capability.resolve") return resolveCapabilityInstall(db, request, options.timeoutSeconds * 1000, now());
   const build = options.capabilityBuild;
-  if (!build?.install || !build.uninstall || !build.pack) return refused("Installing capabilities is not set up on this stack.");
-  const pack = build.pack;
+  if (!build?.install || !build.uninstall || !build.bundle) return refused("Installing capabilities is not set up on this stack.");
+  const bundle = build.bundle;
   const hash = routineConfigHash(options);
   if (request.action === "capability.uninstall") {
     const install = readCapabilityInstall(db, request.id);
-    if (install?.config_hash !== hash) return refused("The installation or its configuration changed. Check the installed pack.");
-    if (install.state === "undone") return { ok: true, message: "Pack already uninstalled." };
+    if (install?.config_hash !== hash) return refused("The installation or its configuration changed. Check the installed bundle.");
+    if (install.state === "undone") return { ok: true, message: "Bundle already uninstalled." };
     if (install.state !== "installed") return pending();
     const startedAt = now();
     const locked = db.query("UPDATE OR IGNORE desk_capability_installs SET state = 'undoing', error = NULL, at = ? WHERE id = ? AND state = 'installed'").run(startedAt, request.id).changes;
     if (!locked) return pending();
-    const result = await packCommand(options, build.uninstall, install.pack, run);
+    const result = await bundleCommand(options, build.uninstall, install.bundle, run);
     db.transaction(() => {
       const current = readCapabilityInstall(db, request.id);
       if (current?.state !== "undoing" || current.at !== startedAt) return;
       if (result.ok) {
-        finishPackRemoval(db, install.pack);
+        finishBundleRemoval(db, install.bundle);
       } else db.query("UPDATE desk_capability_installs SET state = ?, error = ? WHERE id = ?").run(result.uncertain ? "undoing" : "installed", result.error, request.id);
     })();
-    return result.ok ? { ok: true, message: "Pack uninstalled." } : result;
+    return result.ok ? { ok: true, message: "Bundle uninstalled." } : result;
   }
   const proposal = readRoutineProposal(db, request.proposalId);
   if (!proposal?.draft || proposal.configHash !== hash) return refused("The routine draft or its configuration changed. Ask for the routine again.");
@@ -61,7 +62,7 @@ export async function actOnCapabilityInstall(db: Database, options: RoutineOptio
   const previous = readCapabilityInstall(db, request.requestId);
   if (previous) {
     if (previous.config_hash !== hash || !z.array(z.string()).parse(JSON.parse(previous.refs)).includes(ref)) return refused("This request id belongs to a different installation.");
-    if (previous.state === "installed") return { ok: true, message: "Pack installed; waiting for local presence." };
+    if (previous.state === "installed") return { ok: true, message: "Bundle installed; waiting for local presence." };
     if (previous.state === "failed") return refused(`install failed: ${previous.error}`);
     return pending();
   }
@@ -71,18 +72,16 @@ export async function actOnCapabilityInstall(db: Database, options: RoutineOptio
   if (automatic && !listGrants(db).has(CAPABILITY_INSTALL)) return refused("The Desk will ask before installing capabilities.");
   const refs = [...new Set(drafts.filter((draft) => readRoutineProposal(db, draft.proposalId)?.configHash === hash).flatMap((draft) => draft.nodes.filter((entry) => entry.canInstall && entry.build?.state === "merged").map((entry) => entry.ref)))];
   const claimed = db.transaction(() => {
-    const inserted = db.query("INSERT OR IGNORE INTO desk_capability_installs (id, config_hash, pack, refs, state, at) VALUES (?, ?, ?, ?, 'running', ?)").run(request.requestId, hash, pack, JSON.stringify(refs), now()).changes;
-    if (inserted && automatic) db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'running', ?, ?)").run(`capability-install:${request.requestId}`, CAPABILITY_INSTALL, request.requestId, `Install ${pack}`, now(), now());
+    const inserted = db.query("INSERT OR IGNORE INTO desk_capability_installs (id, config_hash, bundle, refs, state, at) VALUES (?, ?, ?, ?, 'running', ?)").run(request.requestId, hash, bundle, JSON.stringify(refs), now()).changes;
+    if (inserted && automatic) db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'running', ?, ?)").run(`capability-install:${request.requestId}`, CAPABILITY_INSTALL, request.requestId, `Install ${bundle}`, now(), now());
     return inserted;
   })();
   if (!claimed) return pending();
-  const result = await packCommand(options, build.install, pack, run);
-  db.transaction(() => {
-    const updated = db.query("UPDATE desk_capability_installs SET state = ?, error = ?, at = ? WHERE id = ? AND state = 'running'").run(result.ok ? "installed" : result.uncertain ? "running" : "failed", result.ok ? null : result.error, now(), request.requestId).changes;
-    if (!updated) return;
-    if (automatic) db.query("UPDATE desk_done SET status = ?, message = ?, updated_at = ? WHERE attempt_key = ?").run(result.ok ? "done" : "failed", result.ok ? `Installed ${pack}; waiting for local presence.` : `install failed: ${result.error}`, now(), `capability-install:${request.requestId}`);
+  const result = await bundleCommand(options, build.install, bundle, run);
+  return db.transaction(() => {
+    if (readCapabilityInstall(db, request.requestId)?.state !== "running") return pending();
+    return recordInstallOutcome(db, request.requestId, result, now());
   })();
-  return result.ok ? { ok: true, message: `Installed ${pack}; waiting for local presence.` } : { ...result, error: `install failed: ${result.error}` };
 }
 
 export async function runCapabilityInstalls(db: Database, options: RoutineOptions, capabilities: RoutineCapabilities, run: RoutineRunner = spawnWithStdin, now: () => number = Date.now): Promise<void> {
@@ -91,6 +90,6 @@ export async function runCapabilityInstalls(db: Database, options: RoutineOption
   const drafts = await readDraftViews(db, options, capabilities, run);
   for (const draft of drafts) for (const node of draft.nodes) {
     if (!node.canInstall || latestCapabilityInstall(db, hash, node.ref)) continue;
-    await actOnCapabilityInstall(db, options, { action: CAPABILITY_INSTALL, requestId: crypto.randomUUID(), proposalId: draft.proposalId, capability: node.capability }, capabilities, run, now, true);
+    await actOnCapabilityInstall(db, options, { action: CAPABILITY_INSTALL, requestId: crypto.randomUUID(), proposalId: draft.proposalId, capability: node.capability }, capabilities, { run, now, automatic: true });
   }
 }

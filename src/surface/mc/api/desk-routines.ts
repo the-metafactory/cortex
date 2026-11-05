@@ -14,7 +14,7 @@ export async function handleDeskRoutines(req: Request, db: Database, runtime: De
   const body: unknown = await req.json().catch(() => null);
   const install = CapabilityInstallRequestSchema.safeParse(body);
   if (install.success) {
-    const result = await actOnCapabilityInstall(db, options.routines, install.data, capabilities ?? (() => new Set()), run);
+    const result = await actOnCapabilityInstall(db, options.routines, install.data, capabilities ?? (() => new Set()), { run });
     await runtime?.routineRead?.afterWrite(db, options.routines);
     return Response.json(result, { status: result.ok ? 200 : 409, headers });
   }

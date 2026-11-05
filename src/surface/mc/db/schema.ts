@@ -184,13 +184,13 @@ export const SCHEMA_SQL: string[] = [
   `CREATE TABLE IF NOT EXISTS desk_capability_installs (
     id TEXT PRIMARY KEY,
     config_hash TEXT NOT NULL,
-    pack TEXT NOT NULL,
+    bundle TEXT NOT NULL,
     refs TEXT NOT NULL,
     state TEXT NOT NULL CHECK(state IN ('running', 'installed', 'failed', 'undoing', 'undone')),
     error TEXT,
     at INTEGER NOT NULL
   )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS desk_capability_install_running ON desk_capability_installs (pack) WHERE state IN ('running', 'undoing')`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS desk_capability_install_running ON desk_capability_installs (bundle) WHERE state IN ('running', 'undoing')`,
   `CREATE TABLE IF NOT EXISTS desk_routine_proposals (
     id TEXT PRIMARY KEY,
     routine_id TEXT NOT NULL UNIQUE,

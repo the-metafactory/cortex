@@ -9,7 +9,7 @@ export type PromotableAction = (typeof PROMOTABLE)[number];
 export const isPromotable = (id: unknown): id is PromotableAction => PROMOTABLE.includes(id as PromotableAction);
 
 export const PROMOTABLE_LABELS: Record<PromotableAction, { label: string; note: string }> = {
-  "capability.install": { label: "Install merged capabilities", note: "Each pack installation shows here with Undo, which uninstalls the pack." },
+  "capability.install": { label: "Install merged capabilities", note: "Each bundle installation shows here with Undo, which uninstalls the bundle." },
   "studio.capture": { label: "File thoughts in the Studio", note: "Each capture shows its reason and can be undone." },
   "mail.rules": { label: "Handle mail by the rules you approved", note: "Each mail shows here with Undo. A pass that would handle many mails at once asks first." },
   "ranger.retry": {
