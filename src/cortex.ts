@@ -4972,6 +4972,7 @@ export async function startCortex(
           expectedLabel: `ai.meta-factory.cortex.${derivedStack.stack}`,
           lanes: { ...(conversationConfig?.local ? { local: conversationConfig.local } : {}), ...(conversationConfig?.cloud ? { cloud: conversationConfig.cloud } : {}) },
           turns: piTurns(pi),
+          ...(conversationConfig?.tools ? { tools: { config: () => config.mc.desk.conversations?.tools } } : {}),
         });
         console.log(`cortex: conversation turns run through pi at ${pi.bin} (${pi.extensions.length ? `projection ${pi.extensions.join(", ")}` : "no Soma projection found"}; tools ${pi.tools.join(",") || "none"}; lanes ${[conversationConfig?.local ? "local" : "", ...cloudLanes(conversationConfig?.cloud).map(lane => `cloud ${lane.id}`)].filter(Boolean).join(", ") || "none configured"})`);
         console.log(conversationStatus.state === "ready"

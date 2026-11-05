@@ -7,9 +7,10 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type Conversation, type EntryId, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { z } from "zod";
+import { ToolHost, type ToolDefinition, type ToolSession, type Transport } from "./tools/capabilities";
 import { acquireHostLock, type LockOwner } from "./lock";
-import { cloudLanes, type CloudLane } from "../common/types/desk-conversations";
-import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, type GateResult, type Lanes, type TurnCall, type TurnEvent } from "./model";
+import { cloudLanes, type CloudLane, type ToolsConfig } from "../common/types/desk-conversations";
+import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, type GateResult, type Lanes, type ToolSurfaceFor, type TurnCall, type TurnEvent } from "./model";
 import {
   AttachmentRefSchema, CONTINUATION_KIND, isModelRoute, laneName, routePolicy, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES,
   type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationMeta, type CreateConversation,
@@ -94,6 +95,7 @@ export interface HostOptions {
   expectedLabel: string;
   lanes: Lanes;
   turns: TurnCall;
+  tools?: { config: () => ToolsConfig | undefined; definitions?: readonly ToolDefinition[]; timeoutMs?: number; outputLimit?: number };
   resolvers?: LinkResolvers;
   readbacks?: OwnerReadbacks;
   now?: () => Date;
@@ -139,6 +141,7 @@ export async function openConversationHost(options: HostOptions): Promise<HostSt
 export class ConversationHost {
   private harness: Harness | null = null;
   private readonly context: Context = BACKGROUND_CONTEXT;
+  private readonly transports = new Map<string, Transport>();
   private readonly queues = new Map<string, Promise<void>>();
   private readonly transcripts = new Map<string, { head: string; lines: ExchangeLine[] }>();
   private readonly now: () => Date;
@@ -155,7 +158,7 @@ export class ConversationHost {
 
   async boot(): Promise<{ resumed: string[]; reconciled: string[] }> {
     await mkdir(this.attachmentsDir, { recursive: true });
-    const models = cortexModels(this.options.lanes, (sessionId, route) => this.gate(sessionId, route), this.options.turns, (id, event) => this.recordTurn(id, event), IVY_INSTRUCTIONS);
+    const models = cortexModels(this.options.lanes, (sessionId, route) => this.gate(sessionId, route), this.options.turns, (id, event) => this.recordTurn(id, event), IVY_INSTRUCTIONS, this.toolSurface());
     this.harness = await Harness.open(await openNodeSqliteStorage(join(this.options.dir, "durable.sqlite")), {
       models, registry: createRegistry(), settings: { retry: { maxRetries: 2, baseDelayMs: 500 } },
       onReport: (error, info) => { console.error(`conversations: engine report ${info.type}: ${error instanceof Error ? error.message : String(error)}`); },
@@ -312,6 +315,22 @@ export class ConversationHost {
     } catch (error) {
       return { refused: error instanceof Error ? error.message : String(error) };
     }
+  }
+
+  private toolSurface(): ToolSurfaceFor | undefined {
+    const tools = this.options.tools;
+    if (!tools) return undefined;
+    const host = new ToolHost({ config: tools.config, session: id => this.toolSession(id), ...(tools.definitions ? { tools: tools.definitions } : {}), ...(tools.timeoutMs ? { timeoutMs: tools.timeoutMs } : {}), ...(tools.outputLimit ? { outputLimit: tools.outputLimit } : {}) });
+    return (id, route, record) => host.surface(id, route, record);
+  }
+
+  private async toolSession(id: string): Promise<ToolSession | null> {
+    const transport = this.transports.get(id);
+    if (!transport) return null;
+    const { stored, effective } = await this.tighten(id);
+    const route = this.routeFor(effective, stored.cloud);
+    if (!route) return null;
+    return { principal: stored.principal, conversationId: id, transport, route, policy: effective, scope: (this.options.tools?.config()?.projects ?? []).map(project => project.id) };
   }
 
   private async recordTurn(id: string, event: TurnEvent): Promise<void> {
@@ -618,6 +637,7 @@ export class ConversationHost {
       if (!route) throw new ConversationError(503, effective === "local" ? "No local model is configured. Nothing was sent; no cloud fallback is used." : "No conversation model is configured. Nothing was sent.");
       if (effective === "cloud" && stored.cloud && !this.cloudLane(stored.cloud)) throw new ConversationError(503, `The cloud model ${stored.cloud} chosen for this conversation is no longer configured. Choose another model; nothing was sent and no other model was used.`);
       await this.claimInput(conversation, request.inputId, sha256);
+      this.transports.set(id, request.transport);
       if (route !== stored.route) {
         await conversation.configure({ model: { provider: CORTEX_PROVIDER, modelId: route } }, this.context);
         if (stored.route !== null) await this.writeEntry(stored, CONTINUATION_KIND, { mode: "reconstructed", from: stored.route, to: route, at: this.now().toISOString() } satisfies Continuation);
