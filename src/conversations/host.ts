@@ -12,7 +12,7 @@ import { acquireHostLock, type LockOwner } from "./lock";
 import { cloudLanes, type CloudLane, type ToolsConfig } from "../common/types/desk-conversations";
 import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, type GateResult, type Lanes, type ToolSurfaceFor, type TurnCall, type TurnEvent } from "./model";
 import {
-  AttachmentRefSchema, CONTINUATION_KIND, isModelRoute, laneName, routePolicy, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES,
+  AttachmentRefSchema, CONTINUATION_KIND, isModelRoute, laneName, routePolicy, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES, TRANSPORTS,
   type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationMeta, type CreateConversation,
   type ExchangeLine, type InputRequest, type ModelChoices, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadback, type OwnerReadbacks, type OwnerType, type OwnerWriters, type WithheldReasons, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView,
 } from "./types";
@@ -332,10 +332,10 @@ export class ConversationHost {
     const { stored, effective } = await this.tighten(id);
     if (stored.state !== "current") return null;
     const conversation = await this.conversation(stored);
-    let transport: "web" | "discord" | null = null;
+    let transport: ToolSession["transport"] | null = null;
     for await (const entry of allEntries(conversation, { order: "descending" }, 50, this.context)) {
       if (entry.kind !== INPUT_KIND) continue;
-      const parsed = z.object({ transport: z.enum(["web", "discord"]) }).safeParse(entry.data);
+      const parsed = z.object({ transport: z.enum(TRANSPORTS) }).safeParse(entry.data);
       transport = parsed.success ? parsed.data.transport : null;
       break;
     }
