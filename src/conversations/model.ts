@@ -21,7 +21,7 @@ export const laneFor = (lanes: Lanes, route: ModelRoute): Lane | undefined => ro
 export type GateResult = { refused: string } | { conversationId: string; context: string | null };
 export type RouteGate = (sessionId: string | undefined, route: ModelRoute) => Promise<GateResult>;
 
-export interface ToolSource { id: string; revision: string; policy: "local" | "cloud" }
+export interface ToolSource { id: string; revision: string; policy: "local" | "cloud"; registry?: string }
 export interface ToolActivity { boundary?: "host"; source?: ToolSource; callId: string; tool: string; args: unknown; outcome: "done" | "error" | "refused" | "stopped"; result: string }
 export type TurnEvent = { kind: "tool"; activity: ToolActivity } | { kind: "reconstructed"; route: ModelRoute; reason: Exclude<ContinuationReason, "lane-changed"> };
 export interface ToolOutcome { source?: ToolSource; outcome: ToolActivity["outcome"]; text: string }
