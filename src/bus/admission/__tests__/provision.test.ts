@@ -75,12 +75,35 @@ describe("admissionBucketName", () => {
 
 describe("provisionAdmissionKv", () => {
   test.each([
-    { state: "without boot retries", attempts: 1, delays: [], exhausted: false },
-    { state: "within the boot budget", attempts: 3, delays: [1_000, 2_000], exhausted: false },
-    { state: "after budget exhaustion", attempts: 1, delays: [], exhausted: true },
-    { state: "after the shared deadline", attempts: 1, delays: [], exhausted: true },
-    { state: "exhausting the boot budget", attempts: 2, delays: [1_000], exhausted: true },
-  ])("peek $state", async ({ state, attempts, delays, exhausted }) => {
+    {
+      state: "without boot retries",
+      useBootRetry: false, maxAttempts: 2, preExhausted: false, deadline: undefined,
+      attempts: 1, delays: [], exhausted: false, warnsOnContinue: true,
+    },
+    {
+      state: "within the boot budget",
+      useBootRetry: true, maxAttempts: 3, preExhausted: false, deadline: undefined,
+      attempts: 3, delays: [1_000, 2_000], exhausted: false, warnsOnContinue: false,
+    },
+    {
+      state: "after budget exhaustion",
+      useBootRetry: true, maxAttempts: 2, preExhausted: true, deadline: undefined,
+      attempts: 1, delays: [], exhausted: true, warnsOnContinue: true,
+    },
+    {
+      state: "after the shared deadline",
+      useBootRetry: true, maxAttempts: 2, preExhausted: false, deadline: 0,
+      attempts: 1, delays: [], exhausted: true, warnsOnContinue: true,
+    },
+    {
+      state: "exhausting the boot budget",
+      useBootRetry: true, maxAttempts: 2, preExhausted: false, deadline: undefined,
+      attempts: 2, delays: [1_000], exhausted: true, warnsOnContinue: true,
+    },
+  ])("peek $state", async ({
+    useBootRetry, maxAttempts, preExhausted, deadline,
+    attempts, delays, exhausted, warnsOnContinue,
+  }) => {
     let elapsed = 0;
     let calls = 0;
     const sleep = mock(async (ms: number) => { elapsed += ms; });
@@ -89,12 +112,11 @@ describe("provisionAdmissionKv", () => {
     const bootRetry = createJetstreamBootRetryOptions({
       now: () => elapsed,
       sleep,
-      maxAttempts: 2,
+      maxAttempts,
       log: { warn: () => { throw new Error("provision log should take precedence"); } },
     });
-    if (state === "within the boot budget") bootRetry.maxAttempts = 3;
-    if (state === "after budget exhaustion") bootRetry.budget!.exhausted = true;
-    if (state === "after the shared deadline") bootRetry.budget!.deadline = 0;
+    bootRetry.budget!.exhausted = preExhausted;
+    bootRetry.budget!.deadline = deadline;
     const jsm = stubJsm(["KV_admission_synthetic_default"]);
     const info = jsm.streams.info;
     jsm.streams.info = async (name) => {
@@ -107,7 +129,7 @@ describe("provisionAdmissionKv", () => {
       openKv,
       bucket: "admission_synthetic_default",
       log,
-      ...(state !== "without boot retries" && { bootRetry }),
+      ...(useBootRetry && { bootRetry }),
     });
     expect(result).toEqual({ outcome: "exists", kv: stubKv });
     expect(calls).toBe(attempts);
@@ -116,7 +138,7 @@ describe("provisionAdmissionKv", () => {
     expect(openKv).toHaveBeenCalledTimes(1);
     expect(openKv).toHaveBeenCalledWith("admission_synthetic_default");
     expect(warnings.some((line) => line.includes("continuing to KV open")))
-      .toBe(state !== "within the boot budget");
+      .toBe(warnsOnContinue);
   });
 
   test("reports 'created' when the backing stream did not pre-exist", async () => {
