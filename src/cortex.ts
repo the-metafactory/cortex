@@ -2323,7 +2323,7 @@ export async function startCortex(
   if (reviewJsm !== null) {
     try {
       const outcome = await provisionReviewStream({
-          bootRetry,
+        bootRetry,
         jsm: reviewJsm,
         name: reviewStream,
         subjects: reviewStreamSubjects,
@@ -3924,6 +3924,7 @@ export async function startCortex(
     }
     const openKv = runtime.kvBucket?.bind(runtime);
     const provisionedAdmission = await provisionAdmissionKv({
+      bootRetry,
       jsm: admissionJsm,
       openKv: async (bucket) =>
         openKv !== undefined
