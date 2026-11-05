@@ -132,11 +132,15 @@ describe("repository file dispatch on real checkouts", () => {
 
   test("case variants retain exclusions and nested source policy", async () => {
     const r = await fixture();
-    for (const path of ["EXCLUDED/note.txt", "RESTRICTED/note.txt"]) {
+    for (const [path, status] of [
+      ["EXCLUDED/note.txt", "denied"],
+      ["EXCLUDED/missing.txt", "denied"],
+      ["RESTRICTED/note.txt", existsSync(join(r.root, "RESTRICTED/note.txt")) ? "denied" : "missing"],
+    ] as const) {
       const result = await r.call("repo_read", { path });
       expect(result.text).not.toContain(PRIVATE);
       expect(body(result).disclosedBytes).toBe(0);
-      expect(body(result).status).toBe(existsSync(join(r.root, path)) ? "denied" : "missing");
+      expect(body(result).status).toBe(status);
     }
     r.config.projects[0]!.exclude = ["ExClUdEd"];
     const excluded = await r.call("repo_read", { path: "excluded/note.txt" });
