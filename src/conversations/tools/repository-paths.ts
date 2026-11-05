@@ -1,21 +1,23 @@
 import { constants, closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync, statSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import type { ToolProject } from "../../common/types/desk-conversations";
-import { routePolicy } from "../types";
-import { localSourcePolicy, type ToolContext } from "./capabilities";
+import type { Policy } from "../types";
+import { sourcePolicyRefusal, type ToolContext } from "./capabilities";
 
 export type FileStatus = "denied" | "missing" | "unreadable" | "binary" | "truncated";
 export class RepositoryFailure extends Error {
   constructor(readonly status: FileStatus, readonly reason: string) { super(reason); }
 }
 export const FILE_BYTES = 256 * 1024;
-export const within = (root: string, path: string): boolean => path === root || path.startsWith(`${root}/`);
+const within = (root: string, path: string): boolean => path === root || path.startsWith(`${root}/`);
 const sameFile = (a: Stats, b: Stats): boolean => a.dev === b.dev && a.ino === b.ino;
-export const relativeInput = (path: string): boolean => !isAbsolute(path) && !path.includes("\\") && !path.includes("\0") && !path.split("/").includes("..");
-const protectedPath = (path: string): boolean => path.split("/").some(part => /^(?:\.git|\.worktrees|node_modules|\.ssh|\.aws|\.gnupg|\.config|\.claude|\.kube|\.docker)$/i.test(part) || /^(?:\.env(?:\..*)?|\.npmrc|\.netrc|\.pypirc|(?:secrets?|private|credentials)(?:[._-].*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?)$/i.test(part) || /\.(?:pem|key|p12|pfx)$/i.test(part));
-const excluded = (project: ToolProject, path: string): boolean => protectedPath(path) || (project.exclude ?? []).some(prefix => path === prefix || path.startsWith(`${prefix}/`));
-const permitted = (context: ToolContext, project: ToolProject): boolean => context.session.scope.includes(project.id) && project.operations.includes("repo.read") && (project.policy === "cloud" || localSourcePolicy(project.policy) && context.session.policy === "local" && routePolicy(context.session.route) === "local" && context.session.transport === "web");
+const relativeInput = (path: string): boolean => !isAbsolute(path) && !path.includes("\\") && !path.includes("\0") && !path.split("/").includes("..");
+const protectedPath = (path: string): boolean => path.split("/").some(part => /^(?:\.git|\.worktrees|node_modules|\.ssh|\.aws|\.gnupg|\.config|\.claude|\.kube|\.docker)$/i.test(part) || /^(?:\.env(?:\..*)?|\.envrc|\.npmrc|\.netrc|\.pypirc|(?:secrets?|private|credentials)(?:[._-].*)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?)$/i.test(part) || /\.(?:env|pem|key|p12|pfx)$/i.test(part));
+const protectedRoot = (path: string): boolean => protectedPath(process.platform === "darwin" ? path.replace(/^\/private\/(?=(?:tmp|var)(?:\/|$))/, "/") : path);
+const excluded = (project: ToolProject, path: string): boolean => protectedPath(path) || (project.exclude ?? []).some(prefix => within(prefix.toLowerCase(), path.toLowerCase()));
+const permitted = (context: ToolContext, project: ToolProject): boolean => context.session.scope.includes(project.id) && project.operations.includes("repo.read") && !sourcePolicyRefusal(context.session, project);
 const configuredRoot = (project: ToolProject): string => project.root.startsWith("~/") ? join(homedir(), project.root.slice(2)) : project.root;
 
 export function fileFailure(error: unknown): RepositoryFailure {
@@ -24,22 +26,24 @@ export function fileFailure(error: unknown): RepositoryFailure {
   return code === "ENOENT" || code === "ENOTDIR" ? new RepositoryFailure("missing", "path-not-found") : new RepositoryFailure("unreadable", "filesystem-unavailable");
 }
 
-export interface CheckedPath { absolute: string; path: string; stat: Stats }
+interface CheckedPath { absolute: string; path: string; stat: Stats }
 export class RepositoryPaths {
   readonly root: string;
   readBytes = 0;
+  policy: Policy;
   private readonly rootStat: Stats;
   private readonly boundaries: { project: ToolProject; root: string }[];
   private readonly checked = new Map<string, CheckedPath>();
 
   constructor(private readonly context: ToolContext, private readonly project: ToolProject) {
     if (!permitted(context, project)) throw new RepositoryFailure("denied", "source-policy");
-    this.root = realpathSync(configuredRoot(project));
-    if (protectedPath(basename(configuredRoot(project))) || protectedPath(basename(this.root))) throw new RepositoryFailure("denied", "excluded-root");
+    this.policy = project.policy;
+    this.root = realpathSync.native(configuredRoot(project));
+    if (protectedRoot(configuredRoot(project)) || protectedRoot(this.root)) throw new RepositoryFailure("denied", "excluded-root");
     this.rootStat = statSync(this.root);
     if (!this.rootStat.isDirectory()) throw new RepositoryFailure("unreadable", "root-not-directory");
     this.boundaries = context.projects.flatMap(other => {
-      try { return [{ project: other, root: realpathSync(configuredRoot(other)) }]; }
+      try { return [{ project: other, root: realpathSync.native(configuredRoot(other)) }]; }
       catch (error) {
         if (fileFailure(error).status === "missing") return [{ project: other, root: resolve(configuredRoot(other)) }];
         throw new RepositoryFailure("denied", "source-boundary-unavailable");
@@ -49,26 +53,36 @@ export class RepositoryPaths {
 
   validateRoot(): void {
     this.context.signal.throwIfAborted();
-    if (realpathSync(configuredRoot(this.project)) !== this.root || !sameFile(statSync(this.root), this.rootStat)) throw new RepositoryFailure("denied", "root-changed");
+    if (realpathSync.native(configuredRoot(this.project)) !== this.root || !sameFile(statSync(this.root), this.rootStat)) throw new RepositoryFailure("denied", "root-changed");
     for (const boundary of this.boundaries) {
       try {
-        if (realpathSync(configuredRoot(boundary.project)) !== boundary.root) throw new RepositoryFailure("denied", "source-root-changed");
+        if (realpathSync.native(configuredRoot(boundary.project)) !== boundary.root) throw new RepositoryFailure("denied", "source-root-changed");
       } catch (error) {
         if (fileFailure(error).status !== "missing") throw error;
       }
     }
   }
 
-  validate(): void {
+  async validate(): Promise<void> {
     this.validateRoot();
-    for (const path of this.checked.keys()) this.check(path);
+    let count = 0;
+    for (const path of this.checked.keys()) {
+      if (count++ % 100 === 0) {
+        await setImmediate();
+        this.context.signal.throwIfAborted();
+      }
+      this.check(path);
+    }
+    this.validateRoot();
   }
 
   private checkScope(absolute: string): void {
     if (!within(this.root, absolute)) throw new RepositoryFailure("denied", "outside-project");
     if (excluded(this.project, relative(this.root, absolute))) throw new RepositoryFailure("denied", "excluded-path");
     for (const boundary of this.boundaries) {
-      if (within(boundary.root, absolute) && (!permitted(this.context, boundary.project) || excluded(boundary.project, relative(boundary.root, absolute)))) throw new RepositoryFailure("denied", "source-policy");
+      if (!within(boundary.root, absolute)) continue;
+      if (!permitted(this.context, boundary.project) || excluded(boundary.project, relative(boundary.root, absolute))) throw new RepositoryFailure("denied", "source-policy");
+      if (boundary.project.policy === "local") this.policy = "local";
     }
     const parts = relative(this.root, absolute).split("/");
     let parent = this.root;
@@ -90,7 +104,7 @@ export class RepositoryPaths {
     if (!relativeInput(path)) throw new RepositoryFailure("denied", "relative-path-required");
     const requested = resolve(this.root, path);
     this.checkScope(requested);
-    const absolute = realpathSync(requested);
+    const absolute = realpathSync.native(requested);
     this.checkScope(absolute);
     const checked = { absolute, path: relative(this.root, absolute) || ".", stat: statSync(absolute) };
     const previous = this.checked.get(path);
@@ -110,7 +124,7 @@ export class RepositoryPaths {
       if (before.size > FILE_BYTES) throw new RepositoryFailure("truncated", "file-size-limit");
       if (before.size > remainingBytes) throw new RepositoryFailure("truncated", "read-byte-limit");
       if (!sameFile(this.check(path).stat, before)) throw new RepositoryFailure("denied", "file-changed");
-      const buffer = Buffer.alloc(Math.min(FILE_BYTES, remainingBytes) + 1);
+      const buffer = Buffer.alloc(Math.min(FILE_BYTES, remainingBytes, before.size) + 1);
       let bytes = 0;
       while (bytes < buffer.length) {
         this.context.signal.throwIfAborted();

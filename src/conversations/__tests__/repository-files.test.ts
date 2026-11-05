@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -45,12 +46,12 @@ describe("repository file dispatch on real checkouts", () => {
   test("reads working files with canonical citations and content provenance without git execution", async () => {
     const r = await fixture();
     const read = body(await r.call("repo_read", { path: "src/beacon.ts", startLine: 2, lines: 1 }));
-    expect(read).toMatchObject({ status: "truncated", provenance: { source: "working-tree", revision: null }, results: [{ path: "src/beacon.ts", line: 2, text: PUBLIC, provenance: { bytes: Buffer.byteLength(`first line\n${PUBLIC}\nlast line\n`) } }] });
+    expect(read).toMatchObject({ status: "truncated", provenance: { source: "working-tree", revision: null }, results: [{ path: "src/beacon.ts", lines: [{ line: 2, text: PUBLIC }], provenance: { bytes: Buffer.byteLength(`first line\n${PUBLIC}\nlast line\n`) } }] });
     expect(read.results[0].provenance.sha256).toMatch(/^[a-f0-9]{64}$/);
-    expect(body(await r.call("repo_read", { path: "safe-alias.ts" })).results[1]).toMatchObject({ path: "src/beacon.ts", line: 2 });
+    expect(body(await r.call("repo_read", { path: "safe-alias.ts" })).results[0]).toMatchObject({ path: "src/beacon.ts", lines: [{ line: 1 }, { line: 2 }, { line: 3 }] });
     await writeFile(join(r.root, "src/beacon.ts"), "changed working content\n");
     const changed = body(await r.call("repo_read", { path: "src/beacon.ts" }));
-    expect(changed.results[0].text).toBe("changed working content");
+    expect(changed.results[0].lines[0].text).toBe("changed working content");
     expect(changed.results[0].provenance.sha256).not.toBe(read.results[0].provenance.sha256);
     expect(await readFile(join(r.root, "src/beacon.ts"), "utf8")).toBe("changed working content\n");
   });
@@ -60,8 +61,8 @@ describe("repository file dispatch on real checkouts", () => {
     expect(body(await r.call("repo_list", { path: "src" })).results).toEqual([{ path: "src/beacon.ts", kind: "file" }]);
     expect(body(await r.call("repo_find", { query: "beacon.ts" })).results).toContainEqual({ path: "src/beacon.ts", kind: "file" });
     const search = await r.call("repo_search", { query: "SYNTHETICBEACON", caseSensitive: false });
-    expect(body(search).results).toContainEqual(expect.objectContaining({ path: "src/beacon.ts", line: 2, text: PUBLIC }));
-    expect(body(search).results).toContainEqual({ path: ".env", status: "denied", reason: "excluded-path" });
+    expect(body(search).results).toContainEqual(expect.objectContaining({ path: "src/beacon.ts", lines: [{ line: 2, text: PUBLIC, truncated: false }] }));
+    expect(body(search).skipped).toContainEqual({ path: ".env", status: "denied", reason: "excluded-path" });
     expect(search.text).not.toContain(PRIVATE);
     expect(body(await r.call("repo_search", { path: "src", query: ".*" })).results).toEqual([]);
     expect((await r.call("repo_search", { query: "x", command: "cat /etc/passwd" })).outcome).toBe("refused");
@@ -93,8 +94,78 @@ describe("repository file dispatch on real checkouts", () => {
     }
     Object.assign(r.session, { route: "local", policy: "local", transport: "web" });
     expect((await r.call("repo_read", { project: "restricted", path: "note.txt" })).text).toContain(PRIVATE);
+    expect((await r.call("repo_read", { path: "restricted/note.txt" })).source).toMatchObject({ id: "sample", policy: "local" });
     r.config.projects[0]!.policy = "unknown" as "cloud";
     expect((await r.call("repo_read", { path: "src/beacon.ts" })).outcome).toBe("refused");
+  });
+
+  test("skipped files cannot exhaust search match slots or stop traversal", async () => {
+    const r = await fixture();
+    await mkdir(join(r.root, "mixed"));
+    for (let i = 0; i < 45; i++) await writeFile(join(r.root, "mixed", `binary-${i}.png`), Buffer.from([0, 1, 255]));
+    await writeFile(join(r.root, "mixed", "symbol.ts"), PUBLIC);
+    const result = body(await r.call("repo_search", { path: "mixed", query: "syntheticBeacon", limit: 1 }));
+    expect(result.results).toContainEqual(expect.objectContaining({ path: "mixed/symbol.ts", lines: [{ line: 1, text: PUBLIC, truncated: false }] }));
+    expect(result.results).toHaveLength(1);
+    expect(result.skippedCount).toBe(45);
+    expect(result.skipped.length).toBeLessThanOrEqual(40);
+    expect(result.reasons).toContain("skipped-limit");
+    expect(result.reasons).not.toContain("result-limit");
+  });
+
+  test("file provenance is shared across the documented default and maximum read ranges", async () => {
+    const r = await fixture();
+    await writeFile(join(r.root, "short-lines.txt"), "short\n".repeat(220));
+    for (const lines of [undefined, 200]) {
+      const result = body(await r.call("repo_read", { path: "short-lines.txt", ...(lines ? { lines } : {}) }));
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].lines).toHaveLength(lines ?? 100);
+      expect(result.results[0].provenance.sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(result.reasons).toEqual(["line-range"]);
+      expect(result.disclosedBytes).toBe((lines ?? 100) * 5);
+    }
+    await writeFile(join(r.root, "long-lines.txt"), `${"x".repeat(1000)}\n`.repeat(20));
+    const output = body(await r.call("repo_read", { path: "long-lines.txt" }));
+    expect(output.reasons).toEqual(["output-limit"]);
+    expect(output.results[0].lines.length).toBeLessThan(20);
+  });
+
+  test("case variants retain exclusions and nested source policy", async () => {
+    const r = await fixture();
+    for (const path of ["EXCLUDED/note.txt", "RESTRICTED/note.txt"]) {
+      const result = await r.call("repo_read", { path });
+      expect(result.text).not.toContain(PRIVATE);
+      expect(body(result).disclosedBytes).toBe(0);
+      expect(body(result).status).toBe(existsSync(join(r.root, path)) ? "denied" : "missing");
+    }
+    r.config.projects[0]!.exclude = ["ExClUdEd"];
+    const excluded = await r.call("repo_read", { path: "excluded/note.txt" });
+    expect(excluded.outcome).toBe("refused");
+    expect(body(excluded).disclosedBytes).toBe(0);
+    const nestedAlias = join(r.root, "RESTRICTED");
+    if (existsSync(join(nestedAlias, "note.txt"))) {
+      r.config.projects[1]!.root = nestedAlias;
+      expect((await r.call("repo_read", { path: "restricted/note.txt" })).outcome).toBe("refused");
+    }
+  });
+
+  test("environment variants and roots below protected directories cannot expose file bytes", async () => {
+    const r = await fixture();
+    for (const name of ["prod.env", ".envrc", ".env.production"]) {
+      await writeFile(join(r.root, name), PRIVATE);
+      const result = await r.call("repo_read", { path: name });
+      expect(result.outcome).toBe("refused");
+      expect(body(result).disclosedBytes).toBe(0);
+    }
+    for (const path of [".config/provider", ".git/hooks", "private/nested"]) {
+      const root = join(r.root, path);
+      await mkdir(root, { recursive: true });
+      await writeFile(join(root, "note.txt"), PRIVATE);
+      r.config.projects[0]!.root = root;
+      const result = await r.call("repo_read", { path: "note.txt" });
+      expect(result.outcome).toBe("refused");
+      expect(body(result).disclosedBytes).toBe(0);
+    }
   });
 
   test("canonical configured roots work through aliases but protected roots cannot be registered around exclusions", async () => {
@@ -138,7 +209,7 @@ describe("repository file dispatch on real checkouts", () => {
     } finally { await chmod(join(r.root, "unreadable.txt"), 0o600); }
     const lines = body(await r.call("repo_read", { path: "lines.txt", lines: 200 }));
     expect(lines.truncated).toBe(true);
-    expect(lines.results[0].text.length).toBe(1000);
+    expect(lines.results[0].lines[0].text.length).toBe(1000);
     expect((await r.call("repo_read", { path: "lines.txt", lines: 201 })).outcome).toBe("refused");
     expect(body(await r.call("repo_search", { query: "line", limit: 1 })).truncated).toBe(true);
     const controller = new AbortController();
@@ -200,7 +271,7 @@ describe("repository file dispatch on real checkouts", () => {
       outcomes.push(await request.tools!.call("escape", "repo_read", { project: "sample", path: "../outside.txt" }, request.signal));
       outcomes.push(await request.tools!.call("local", "repo_read", { project: "restricted", path: "note.txt" }, request.signal));
       const hit = body(found).results[0];
-      return `${hit.path}:${hit.line}: ${hit.text}`;
+      return `${hit.path}:${hit.lines[0].line}: ${hit.lines[0].text}`;
     }) });
     const conversation = await host.create({ title: "Find the synthetic symbol", links: [], origin: { kind: "web" }, policy: "cloud" }, "synthetic-principal");
     await host.submit(conversation.id, { inputId: "probe", transport: "web", text: "Find syntheticBeacon and cite its lines.", mode: "queue" });

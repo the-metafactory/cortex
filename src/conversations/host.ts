@@ -55,7 +55,7 @@ const StoredSchema = z.object({
   scope: z.object({ owner: z.enum(OWNER_TYPES), data: z.record(z.string(), z.string()) }).optional(),
   titleFromSource: z.boolean().default(false),
   discord: DiscordLinkSchema.optional(),
-  toolSources: z.record(z.string(), z.object({ revision: z.string(), policy: z.enum(["local", "cloud"]), registry: z.string().optional() })).default({}),
+  toolSources: z.record(z.string(), z.object({ revision: z.string(), policy: z.enum(["local", "cloud"]), projectRegistryRevision: z.string().optional() })).default({}),
 });
 type Stored = z.infer<typeof StoredSchema>;
 export type OwnerScope = NonNullable<Stored["scope"]>;
@@ -282,7 +282,7 @@ export class ConversationHost {
     const sources = await this.sourcesOf(current.links);
     const toolPolicies = Object.entries(current.toolSources).map(([id, source]) => {
       const project = this.options.tools?.config()?.projects.find(project => project.id === id);
-      if (!project || projectRevision(project) !== source.revision || source.registry && source.registry !== registryRevision(this.options.tools?.config())) throw new ConversationError(403, "A previously used tool source was revoked or changed. Start a new conversation with current permissions.");
+      if (!project || projectRevision(project) !== source.revision || source.projectRegistryRevision && source.projectRegistryRevision !== registryRevision(this.options.tools?.config())) throw new ConversationError(403, "A previously used tool source was revoked or changed. Start a new conversation with current permissions.");
       return strictest([project.policy, source.policy]);
     });
     const resolved = strictest([current.policy, ...toolPolicies, ...sources.flatMap(s => s.state === "available" ? [s.policy] : [])]);
@@ -350,7 +350,7 @@ export class ConversationHost {
     const stored = await this.stored(id);
     if (event.kind === "tool") {
       const source = event.activity.source;
-      if (source) await this.update(id, current => ({ ...current, policy: strictest([current.policy, source.policy]), toolSources: { ...current.toolSources, [source.id]: { ...current.toolSources[source.id], revision: source.revision, policy: strictest([current.toolSources[source.id]?.policy ?? source.policy, source.policy]), ...(source.registry ? { registry: source.registry } : {}) } } }));
+      if (source) await this.update(id, current => ({ ...current, policy: strictest([current.policy, source.policy]), toolSources: { ...current.toolSources, [source.id]: { ...current.toolSources[source.id], revision: source.revision, policy: strictest([current.toolSources[source.id]?.policy ?? source.policy, source.policy]), ...(source.projectRegistryRevision ? { projectRegistryRevision: source.projectRegistryRevision } : {}) } } }));
       await this.writeEntry(stored, TOOL_ACTIVITY_KIND, event.activity);
     }
     else await this.writeEntry(stored, CONTINUATION_KIND, { mode: "reconstructed", from: event.route, to: event.route, reason: event.reason, at: this.now().toISOString() } satisfies Continuation);
