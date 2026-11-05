@@ -81,7 +81,7 @@ export class ToolHost {
   }
 
   specs(): ToolSpec[] {
-    return [...this.tools.values()].map(tool => ({ name: tool.name, description: tool.description, schema: z.toJSONSchema(tool.input) }));
+    return [...this.tools.values()].map(tool => ({ name: tool.name, description: tool.description, schema: z.toJSONSchema(tool.input, { io: "input" }) }));
   }
 
   surface(conversationId: string, route: ModelRoute, record: (activity: ToolActivity) => Promise<void>): ToolSurface {

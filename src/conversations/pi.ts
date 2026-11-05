@@ -6,7 +6,7 @@ import { z } from "zod";
 import { piToolBridge } from "./tools/pi-bridge";
 import { activityOf } from "./tools/capabilities";
 import { PI_DEFAULTS, PI_FILE_TOOLS, type DeskConversations, type PiReadTool } from "../common/types/desk-conversations";
-import type { ChatTurn, ToolActivity, TurnCall, TurnReply, TurnRequest } from "./model";
+import type { ChatTurn, ToolActivity, ToolSpec, TurnCall, TurnReply, TurnRequest } from "./model";
 
 export interface PiSettings {
   bin: string;
@@ -62,12 +62,18 @@ export function turnTools(settings: Pick<PiSettings, "tools">, route: TurnReques
   return settings.tools.filter(tool => route === "local" || !FILE_TOOLS.includes(tool));
 }
 
-function activeTools(settings: Pick<PiSettings, "tools">, request: Pick<TurnRequest, "route" | "tools">): string[] {
-  return request.tools ? [...settings.tools.filter(tool => !FILE_TOOLS.includes(tool)), ...request.tools.specs.map(tool => tool.name)] : turnTools(settings, request.route);
+function piTools(settings: Pick<PiSettings, "tools">, route: TurnRequest["route"], catalog?: readonly Pick<ToolSpec, "name">[]): string[] {
+  return catalog ? [...settings.tools.filter(tool => !FILE_TOOLS.includes(tool)), ...catalog.map(tool => tool.name)] : turnTools(settings, route);
+}
+
+export function piToolSummary(settings: Pick<PiSettings, "tools">, catalog: readonly Pick<ToolSpec, "name">[]): string {
+  const tools = piTools(settings, "local", catalog);
+  const disabled = settings.tools.filter(tool => FILE_TOOLS.includes(tool));
+  return `tools ${tools.join(",") || "none"}${disabled.length ? `; unscoped file tools disabled (${disabled.join(",")})` : ""}`;
 }
 
 export function piArguments(settings: PiSettings, request: Pick<TurnRequest, "route" | "lane" | "instructions" | "tools">, session: string): string[] {
-  const tools = activeTools(settings, request);
+  const tools = piTools(settings, request.route, request.tools?.specs);
   return [
     "--mode", "json", "--print",
     "--session-dir", settings.sessionDir, "--session-id", session,
@@ -188,7 +194,7 @@ export function piTurns(settings: PiSettings): TurnCall {
     const stderr = new Response(child.stderr).text().catch(() => "");
     try {
       const fed = feed(child.stdin, piPrompt(request, resumed));
-      const allowed = activeTools(settings, request);
+      const allowed = piTools(settings, request.route, request.tools?.specs);
       const answer = await readTurn(child, new Set(allowed), request, halt, bridge?.called);
       const code = await child.exited;
       if (halted.reason) throw new Error(`${halted.reason}. ${NO_FALLBACK}`);

@@ -51,7 +51,9 @@ A cloud-allowed source works on either model lane. A local-only source requires 
 
 Durable activity includes tool identity, bounded arguments, outcome, bounded result, and the permitted source's identity and registration revision. Previously read source policies participate in the conversation's strictest policy after restart. Tightening a used source to local prevents subsequent cloud requests and Discord delivery. Removing a used source or changing its checkout, forge identity, or operations refuses history forwarding. A new conversation is required for the changed scope. Restoring a source to cloud never loosens an already local conversation.
 
-Host conversations reconstruct Pi sessions from the durable exchange on each turn. They do not resume tool results cached in an earlier Pi session. The host loads only configured extensions and the conversation bridge, disables ambient MCP and context discovery, and removes unscoped built-in file tools. Existing `pi.tools` configurations still parse. Soma context remains subject to its existing tool setting and policy.
+The Cortex runtime reconstructs Pi sessions from the durable exchange on each turn. It does not resume tool results cached in an earlier Pi session. It loads only configured extensions and the conversation bridge, and disables ambient MCP and context discovery.
+
+The built-in `read`, `grep`, `find`, and `ls` tools are disabled on both model lanes, including when configured in `pi.tools` or when no `tools` block exists. Startup reports the effective tool catalog and names the disabled settings. Existing configurations keep their `soma_context` setting and policy. This foundation provides project discovery only; repository reads require a source tool implementation and an explicit project registration.
 
 ## Probe evidence
 

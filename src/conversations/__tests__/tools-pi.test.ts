@@ -39,6 +39,10 @@ describe("installed Pi conversation host boundary", () => {
       await host.submit(local.id, input("local"));
       await host.waitForIdle(local.id);
       expect((await host.input(local.id, "local")).status).toBe("done");
+      const localActivities = (await host.entries(local.id, 100, undefined)).entries.filter(entry => entry.kind === "cortex.tool-activity").map(entry => entry.data);
+      expect(localActivities).toContainEqual(expect.objectContaining({ callId: "local-cap", outcome: "done", result: expect.stringContaining('"project":"private"') }));
+      expect(localActivities).toContainEqual(expect.objectContaining({ callId: "local-cap", result: expect.stringContaining('"project":"public"') }));
+      expect(provider.requests[0]?.tools?.map(tool => tool.function.name).sort()).toEqual(["capabilities", "repo_read"]);
       expect(JSON.stringify(provider.requests)).toContain(PRIVATE);
       const fake = new FakeThreads();
       const discord = new DiscordConversations({ host, adapter: () => fake, principalId: RIG.principal, config: { channelId: RIG.channel, guildId: RIG.guild, webUrl: RIG.web }, log: () => undefined });
@@ -64,6 +68,8 @@ describe("installed Pi conversation host boundary", () => {
       expect(cloudRequests[0]?.tools?.map(tool => tool.function.name).sort()).toEqual(["capabilities", "repo_read"]);
       const entries = (await host.entries(cloud.id, 100, undefined)).entries;
       const activities = entries.filter(entry => entry.kind === "cortex.tool-activity").map(entry => entry.data);
+      expect(activities).toContainEqual(expect.objectContaining({ callId: "cloud-cap", outcome: "done", result: expect.stringContaining('"project":"public"') }));
+      expect(activities).not.toContainEqual(expect.objectContaining({ callId: "cloud-cap", result: expect.stringContaining('"project":"private"') }));
       expect(activities).toContainEqual(expect.objectContaining({ callId: "hidden-read", outcome: "refused" }));
       expect(activities).toContainEqual(expect.objectContaining({ callId: "invalid-read", outcome: "error" }));
       expect(activities).toContainEqual(expect.objectContaining({ tool: "bash", outcome: "refused" }));
