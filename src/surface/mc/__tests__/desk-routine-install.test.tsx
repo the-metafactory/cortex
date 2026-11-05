@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { renderToStaticMarkup } from "react-dom/server";
 import { initDatabase } from "../db/init";
-import { buildRoutineCard } from "../desk/routines";
+import { buildRoutineCard, readRoutines } from "../desk/routines";
 import { buildRoutineCapabilities } from "../desk/routine-capability";
 import { CapabilityRefusalSchema } from "../desk/routine-capability-contract";
 import { readDraftViews } from "../desk/routine-draft-state";
@@ -16,6 +16,7 @@ import { handleDeskRoutines } from "../api/desk-routines";
 import { handleDeskAutonomy } from "../api/desk-action";
 import { RoutineDrafts } from "../dashboard-v2/components/desk-routine-drafts";
 import { DoneForYou } from "../dashboard-v2/components/desk-view";
+import { RoutinesSection } from "../dashboard-v2/components/desk-routines";
 import { RoutineOptionsSchema, type RoutineOptions } from "../../../common/types/desk-routines";
 import type { RoutineRunner } from "../desk/routine-command";
 import { startServer } from "../server";
@@ -131,6 +132,86 @@ describe("installing a merged capability pack", () => {
     expect(h.calls).toHaveLength(1);
   });
 
+  it("resolves an uncertain install through a confirmed outcome and releases the pack for another attempt", async () => {
+    h.setInstall(() => Promise.reject(new Error("installer disconnected")));
+    await actOnCapabilityInstall(db, OPTIONS, request(), none, h.run, () => NOW);
+    const resolve = { action: "capability.resolve", id: "install-request-1", state: "running", at: NOW, outcome: "absent" };
+    expect((await handleDeskRoutines(post(resolve), db, runtime(), h.run, none)).status).toBe(200);
+    expect(readCapabilityInstall(db, resolve.id)?.state).toBe("failed");
+    expect(await html()).toContain(">Install</button>");
+    h.setInstall(() => ok());
+    expect((await actOnCapabilityInstall(db, OPTIONS, request("install-request-2"), none, h.run)).ok).toBe(true);
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it("keeps recovery visible after draft discard and config changes, and restores promoted Undo after confirming installed", async () => {
+    setGrant(db, "capability.install", true, NOW);
+    h.setInstall(() => Promise.reject(new Error("installer disconnected")));
+    await runCapabilityInstalls(db, OPTIONS, none, h.run, () => NOW);
+    const install = readDone(db, NOW)[0];
+    if (!install) throw new Error("No installation was recorded");
+    discardRoutineDraft(db, proposalId);
+    const changed = { ...OPTIONS, capabilityBuild: undefined };
+    const view = await readRoutines(db, changed, h.run, none);
+    expect(view.drafts).toBeUndefined();
+    expect(view.capabilityInstalls).toMatchObject([{ id: install.itemKey, state: "running", error: "installer disconnected" }]);
+    const page = renderToStaticMarkup(<RoutinesSection view={view} onChanged={() => undefined} />);
+    expect(page).toContain("example-pack: Install outcome unconfirmed: installer disconnected");
+    expect(page).toContain(">Check pack</button>");
+    const result = await actOnCapabilityInstall(db, changed, { action: "capability.resolve", id: install.itemKey, state: "running", at: NOW, outcome: "installed" }, none, h.run, () => NOW + 1000);
+    expect(result.ok).toBe(true);
+    expect(readDone(db, NOW)[0]?.status).toBe("done");
+    expect((await readRoutines(db, changed, h.run, none)).capabilityInstalls).toBeUndefined();
+    h.setInstall(() => ok());
+    expect((await actOnCapabilityInstall(db, OPTIONS, { action: "capability.uninstall", id: install.itemKey }, none, h.run)).ok).toBe(true);
+    expect(h.calls).toEqual([["install-pack", "example-pack"], ["uninstall-pack", "example-pack"]]);
+  });
+
+  it("resolves uncertain Undo as installed for a retry, then absent for pack-wide cleanup", async () => {
+    setGrant(db, "capability.install", true, NOW);
+    await runCapabilityInstalls(db, OPTIONS, none, h.run, () => NOW);
+    h.setRef("example/maps#22");
+    await draft();
+    await runCapabilityInstalls(db, OPTIONS, none, h.run, () => NOW + 1);
+    const done = readDone(db, NOW);
+    expect(done).toHaveLength(2);
+    const id = done[0]?.itemKey;
+    if (!id) throw new Error("No installation was recorded");
+    h.setInstall(() => Promise.reject(new Error("uninstaller disconnected")));
+    const undo = { action: "capability.uninstall" as const, id };
+    expect(await actOnCapabilityInstall(db, OPTIONS, undo, none, h.run, () => NOW + 2)).toMatchObject({ uncertain: true });
+    const resolve = { action: "capability.resolve" as const, id, state: "undoing" as const, at: NOW + 2, outcome: "installed" as const };
+    expect((await actOnCapabilityInstall(db, OPTIONS, resolve, none, h.run, () => NOW + 3)).ok).toBe(true);
+    expect(readCapabilityInstall(db, id)?.state).toBe("installed");
+    await actOnCapabilityInstall(db, OPTIONS, undo, none, h.run, () => NOW + 4);
+    expect((await actOnCapabilityInstall(db, OPTIONS, resolve, none, h.run)).ok).toBe(false);
+    expect(readCapabilityInstall(db, id)?.state).toBe("undoing");
+    expect((await actOnCapabilityInstall(db, OPTIONS, { ...resolve, at: NOW + 4, outcome: "absent" }, none, h.run)).ok).toBe(true);
+    expect(done.every((entry) => readCapabilityInstall(db, entry.itemKey)?.state === "undone")).toBe(true);
+    expect(readDone(db, NOW)).toHaveLength(0);
+    expect(h.calls).toHaveLength(4);
+    h.setInstall(() => ok());
+    expect((await actOnCapabilityInstall(db, OPTIONS, request("install-after-undo"), none, h.run)).ok).toBe(true);
+  });
+
+  it("waits for active commands, recovers interrupted commands after the deadline, and rejects stale confirmations", async () => {
+    const started = Promise.withResolvers<boolean>();
+    const command = Promise.withResolvers<Awaited<ReturnType<RoutineRunner>>>();
+    h.setInstall(() => { started.resolve(true); return command.promise; });
+    const installing = actOnCapabilityInstall(db, OPTIONS, request(), none, h.run, () => NOW);
+    await started.promise;
+    const resolve = { action: "capability.resolve" as const, id: "install-request-1", state: "running" as const, at: NOW, outcome: "installed" as const };
+    expect((await actOnCapabilityInstall(db, OPTIONS, resolve, none, h.run, () => NOW + 999)).ok).toBe(false);
+    expect((await actOnCapabilityInstall(db, OPTIONS, { ...resolve, at: NOW - 1 }, none, h.run, () => NOW + 1000)).ok).toBe(false);
+    expect((await actOnCapabilityInstall(db, OPTIONS, resolve, none, h.run, () => NOW + 1000)).ok).toBe(true);
+    command.resolve({ code: 1, stdout: "", stderr: "late result" });
+    await installing;
+    expect(readCapabilityInstall(db, resolve.id)?.state).toBe("installed");
+    expect((await actOnCapabilityInstall(db, OPTIONS, { ...resolve, outcome: "absent" }, none, h.run)).ok).toBe(false);
+    expect(h.calls).toHaveLength(1);
+    expect((await views(() => new Set(["compose.judgment"])))[0]?.nodes[0]?.build?.state).toBe("live");
+  });
+
   it("asks by default, promotes without Ranger, and shows Done for you with Undo that uninstalls after draft discard", async () => {
     await runCapabilityInstalls(db, OPTIONS, none, h.run);
     expect(h.calls).toHaveLength(0);
@@ -221,16 +302,21 @@ describe("installing a merged capability pack", () => {
   });
 
   it("gates install, Undo and promotion by identity and origin without step-up", async () => {
+    h.setInstall(() => Promise.reject(new Error("installer disconnected")));
+    await actOnCapabilityInstall(db, OPTIONS, request(), none, h.run, () => NOW);
     const ctx = startServer({ ...DEFAULT_CONFIG, port: 0, governance: { principals: ["principal@example.com"] } }, db, { desk: runtime().options });
     const base = `http://localhost:${ctx.server.port}`;
     try {
-      for (const [path, body] of [["routines", request()], ["routines", { action: "capability.uninstall", id: "install-request-1" }], ["autonomy", { action: "capability.install", on: true }]] as const) {
+      for (const [path, body] of [["routines", request()], ["routines", { action: "capability.uninstall", id: "install-request-1" }], ["routines", { action: "capability.resolve", id: "install-request-1", state: "running", at: NOW, outcome: "installed" }], ["autonomy", { action: "capability.install", on: true }]] as const) {
         const send = (email: string, origin = base) => fetch(`${base}/api/desk/${path}`, { method: "POST", headers: { "content-type": "application/json", origin, "Cf-Access-Authenticated-User-Email": email }, body: JSON.stringify(body) });
         expect((await send("unlisted@example.com")).status).toBe(403);
         expect((await send("principal@example.com", "https://evil.example")).status).toBe(403);
       }
       const allowed = await fetch(`${base}/api/desk/autonomy`, { method: "POST", headers: { "content-type": "application/json", origin: base, "Cf-Access-Authenticated-User-Email": "principal@example.com" }, body: JSON.stringify({ action: "capability.install", on: true }) });
       expect(allowed.status).toBe(200);
+      const resolved = await fetch(`${base}/api/desk/routines`, { method: "POST", headers: { "content-type": "application/json", origin: base, "Cf-Access-Authenticated-User-Email": "principal@example.com" }, body: JSON.stringify({ action: "capability.resolve", id: "install-request-1", state: "running", at: NOW, outcome: "installed" }) });
+      expect(resolved.status).toBe(200);
+      expect(readCapabilityInstall(db, "install-request-1")?.state).toBe("installed");
     } finally { ctx.stop(true); }
   });
 });

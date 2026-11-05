@@ -11,6 +11,7 @@ import { spawnWithStdin } from "./create";
 import { routineSchedule } from "./routine-schedule";
 import { MissingCapabilitiesError, requireRoutineCapabilities, type RoutineCapabilities } from "./routine-providers";
 import { readDraftViews } from "./routine-draft-state";
+import { pendingCapabilityInstalls } from "./routine-install-store";
 import { parseRoutineFlow, routineProposalCard } from "./routine-drafts";
 import { routineStepLabels } from "./routine-steps";
 import { PendingRoutineSchema, RoutineHistorySchema, RoutineSchema, RoutineRefusal, reflexCommand, runRoutineCommand, type RoutineOptions, type RoutineRunner, type RoutineView } from "./routine-command";
@@ -70,7 +71,8 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
   const draftsRead = draftCapabilities ? readDraftViews(db, options, draftCapabilities, run).catch(draftsUnreadable) : Promise.resolve([]);
   const withDrafts = async (view: RoutineView): Promise<RoutineView> => {
     const drafts = (await draftsRead).filter((draft) => readRoutineProposal(db, draft.proposalId)?.draft);
-    return drafts.length > 0 ? { ...view, drafts } : view;
+    const capabilityInstalls = pendingCapabilityInstalls(db);
+    return { ...view, ...(drafts.length > 0 ? { drafts } : {}), ...(capabilityInstalls.length > 0 ? { capabilityInstalls } : {}) };
   };
   try {
     const [installed, pending, history] = await Promise.all([

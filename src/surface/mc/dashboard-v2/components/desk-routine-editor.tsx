@@ -7,6 +7,7 @@ import { RoutineDetailPage, newRoutineEditorSession, type RoutineEditorSession }
 import { DeskRoutineCalendar } from "./desk-routine-calendar";
 import { RoutineCreation } from "./desk-routine-create";
 import { RoutineButton, PendingRoutineChanges } from "./desk-routines";
+import { CapabilityRecovery } from "./desk-capability-recovery";
 import { RoutineScheduleEditor, newScheduleSession, type ScheduleSession } from "./desk-routine-schedule";
 import { RoutineLifecycleEditor, newLifecycleSession, type LifecycleSession } from "./desk-routine-lifecycle";
 import { RoutineDelete, newDeleteSession, type DeleteSession } from "./desk-routine-delete";
@@ -99,6 +100,7 @@ export function DeskRoutineEditor({ onBack, location: current, onLocation, view,
     {activityOpen && pageActive && <RoutineActivity revision={revision} onClose={() => { setActivityOpen(false); }} />}
     <RoutineCreation open={newRoutine} onClose={() => { setNewRoutine(false); }} onCreated={refresh} />
     {(view?.pending.length ?? 0) > 0 && <section hidden={!approvalsOpen} id="routine-approvals" className="routine-approvals desk-set-card" aria-label="Pending routine approvals"><h2>Waiting for approval</h2>{view?.pending.map((p) => <div key={p.decisionId}><p>{inventory?.find((r) => r.id === p.blueprintId)?.name ?? p.blueprintId} wants to run.</p><div className="desk-acts"><RoutineButton action="approve" target={p.decisionId} onChanged={refresh}>Approve</RoutineButton><RoutineButton action="deny" target={p.decisionId} onChanged={refresh}>Deny</RoutineButton></div></div>)}</section>}
+    <CapabilityRecovery installs={view?.capabilityInstalls} onChanged={refresh} />
     <PendingRoutineChanges changes={view?.changes ?? []} onChanged={refresh} onCompleted={(request) => { if (request.action === "delete") deleted(request.target, "Routine deleted and verified. Execution evidence remains in Activity."); }} />
     <div className="routine-page-tabs" role="tablist" aria-label="Routines page">{(["schedule", "workspace"] as const).map((tab) => <button key={tab} type="button" role="tab" id={`routines-tab-${tab}`} aria-controls={`routines-panel-${tab}`} aria-selected={location.tab === tab} tabIndex={location.tab === tab ? 0 : -1} ref={(node) => { if (node) tabs.current.set(tab, node); else tabs.current.delete(tab); }} onKeyDown={(event) => { tabKey(event, tab); }} onClick={() => { go({ ...location, tab }); }}>{tab === "schedule" ? "Schedule" : "Routine workspace"}</button>)}</div>
     {deletionNotice && <p role="status">{deletionNotice}</p>}

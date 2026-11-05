@@ -4,16 +4,18 @@ import { oneLine } from "./actions";
 import { listGrants } from "./autonomy";
 import { spawnWithStdin } from "./create";
 import { readDraftViews } from "./routine-draft-state";
-import { readCapabilityInstall, latestCapabilityInstall } from "./routine-install-store";
+import { CAPABILITY_INSTALL, finishPackRemoval, readCapabilityInstall, latestCapabilityInstall } from "./routine-install-store";
+import { CapabilityResolveRequestSchema, resolveCapabilityInstall } from "./routine-install-resolution";
 import { runRoutineCommand, type RoutineOptions, type RoutineRunner } from "./routine-command";
 import type { RoutineResult } from "./routine-action-contract";
 import type { RoutineCapabilities } from "./routine-providers";
 import { readRoutineProposal, routineConfigHash } from "./routine-store";
 
-export const CAPABILITY_INSTALL = "capability.install";
+export { CAPABILITY_INSTALL } from "./routine-install-store";
 export const CapabilityInstallRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal(CAPABILITY_INSTALL), requestId: z.string().regex(/^[\w-]{8,64}$/), proposalId: z.uuid(), capability: z.string().min(1).max(200) }).strict(),
   z.object({ action: z.literal("capability.uninstall"), id: z.string().regex(/^[\w-]{8,64}$/) }).strict(),
+  CapabilityResolveRequestSchema,
 ]);
 export type CapabilityInstallRequest = z.infer<typeof CapabilityInstallRequestSchema>;
 const refused = (error: string): RoutineResult => ({ ok: false, error });
@@ -29,6 +31,7 @@ async function packCommand(options: RoutineOptions, argv: string[], pack: string
 }
 
 export async function actOnCapabilityInstall(db: Database, options: RoutineOptions, request: CapabilityInstallRequest, capabilities: RoutineCapabilities, run: RoutineRunner = spawnWithStdin, now: () => number = Date.now, automatic = false): Promise<RoutineResult> {
+  if (request.action === "capability.resolve") return resolveCapabilityInstall(db, request, options.timeoutSeconds * 1000, now());
   const build = options.capabilityBuild;
   if (!build?.install || !build.uninstall || !build.pack) return refused("Installing capabilities is not set up on this stack.");
   const pack = build.pack;
@@ -38,13 +41,15 @@ export async function actOnCapabilityInstall(db: Database, options: RoutineOptio
     if (install?.config_hash !== hash) return refused("The installation or its configuration changed. Check the installed pack.");
     if (install.state === "undone") return { ok: true, message: "Pack already uninstalled." };
     if (install.state !== "installed") return pending();
-    const locked = db.query("UPDATE OR IGNORE desk_capability_installs SET state = 'undoing' WHERE id = ? AND state = 'installed'").run(request.id).changes;
+    const startedAt = now();
+    const locked = db.query("UPDATE OR IGNORE desk_capability_installs SET state = 'undoing', error = NULL, at = ? WHERE id = ? AND state = 'installed'").run(startedAt, request.id).changes;
     if (!locked) return pending();
     const result = await packCommand(options, build.uninstall, install.pack, run);
     db.transaction(() => {
+      const current = readCapabilityInstall(db, request.id);
+      if (current?.state !== "undoing" || current.at !== startedAt) return;
       if (result.ok) {
-        db.query("UPDATE desk_capability_installs SET state = 'undone', error = NULL WHERE pack = ? AND state IN ('installed', 'undoing')").run(install.pack);
-        db.query("DELETE FROM desk_done WHERE action = ? AND item_key IN (SELECT id FROM desk_capability_installs WHERE pack = ? AND state = 'undone')").run(CAPABILITY_INSTALL, install.pack);
+        finishPackRemoval(db, install.pack);
       } else db.query("UPDATE desk_capability_installs SET state = ?, error = ? WHERE id = ?").run(result.uncertain ? "undoing" : "installed", result.error, request.id);
     })();
     return result.ok ? { ok: true, message: "Pack uninstalled." } : result;
@@ -73,7 +78,8 @@ export async function actOnCapabilityInstall(db: Database, options: RoutineOptio
   if (!claimed) return pending();
   const result = await packCommand(options, build.install, pack, run);
   db.transaction(() => {
-    db.query("UPDATE desk_capability_installs SET state = ?, error = ?, at = ? WHERE id = ?").run(result.ok ? "installed" : result.uncertain ? "running" : "failed", result.ok ? null : result.error, now(), request.requestId);
+    const updated = db.query("UPDATE desk_capability_installs SET state = ?, error = ?, at = ? WHERE id = ? AND state = 'running'").run(result.ok ? "installed" : result.uncertain ? "running" : "failed", result.ok ? null : result.error, now(), request.requestId).changes;
+    if (!updated) return;
     if (automatic) db.query("UPDATE desk_done SET status = ?, message = ?, updated_at = ? WHERE attempt_key = ?").run(result.ok ? "done" : "failed", result.ok ? `Installed ${pack}; waiting for local presence.` : `install failed: ${result.error}`, now(), `capability-install:${request.requestId}`);
   })();
   return result.ok ? { ok: true, message: `Installed ${pack}; waiting for local presence.` } : { ...result, error: `install failed: ${result.error}` };
