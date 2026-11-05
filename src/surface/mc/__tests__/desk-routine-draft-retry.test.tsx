@@ -61,7 +61,7 @@ describe("retrying saved routine capability drafts", () => {
   let backend: ReturnType<typeof owner>;
   let runtime: DeskRuntime;
   const read = () => readRoutines(db, OPTIONS, backend.run, () => capabilities);
-  const act = (action: "install" | "discard", requestId = `retry-${action}-request`) => handleDeskRoutines(new Request("http://localhost/api/desk/routines", { method: "POST", body: JSON.stringify({ action, target: proposalId, requestId }) }), db, runtime, backend.run, () => capabilities);
+  const act = (action: "install" | "discard", requestId = `retry-${action}-request`, run = backend.run) => handleDeskRoutines(new Request("http://localhost/api/desk/routines", { method: "POST", body: JSON.stringify({ action, target: proposalId, requestId }) }), db, runtime, run, () => capabilities);
 
   beforeEach(async () => {
     db = initDatabase(":memory:"); capabilities = new Set(); backend = owner();
@@ -193,7 +193,7 @@ describe("retrying saved routine capability drafts", () => {
       if (argv[2] === "list") { started(); await blocked; }
       return backend.run(argv, stdin, timeoutMs);
     };
-    const confirming = handleDeskRoutines(new Request("http://localhost/api/desk/routines", { method: "POST", body: JSON.stringify({ action: "install", target: proposalId, requestId: "discard-racing-install" }) }), db, runtime, delayed, () => capabilities);
+    const confirming = act("install", "discard-racing-install", delayed);
     await reading;
     expect((await act("discard")).status).toBe(200);
     release();
