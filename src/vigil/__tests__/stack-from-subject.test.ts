@@ -1,3 +1,4 @@
+// glossary-ignore: agent, run, subscriber
 import { expect, mock, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
@@ -70,6 +71,38 @@ test("counts every mismatch and logs only once per producer across live and repl
   expect(applied).toBe(1);
   expect(sourceStackMismatchCount("ranger")).toBe(before + 3);
   expect(log.warn).toHaveBeenCalledTimes(before === 0 ? 1 : 0);
+});
+
+test("a rolled-back delivery does not count a source mismatch before retry", () => {
+  using db = initDatabase(":memory:");
+  const base = goal("work");
+  const envelope = { ...base, payload: { ...base.payload, producer: "rollback-probe" } };
+  const log = { warn: mock((_line: string) => {}) };
+  const before = sourceStackMismatchCount("rollback-probe");
+  db.run("CREATE TRIGGER fail_vigil BEFORE INSERT ON vigil_subjects BEGIN SELECT RAISE(ABORT, 'db failure'); END");
+  expect(() => ingestLedgerEnvelope(db, envelope, SUBJECT, ENDED_AT, { log })).toThrow("db failure");
+  expect(sourceStackMismatchCount("rollback-probe")).toBe(before);
+  expect(log.warn).not.toHaveBeenCalled();
+  db.run("DROP TRIGGER fail_vigil");
+  ingestLedgerEnvelope(db, envelope, SUBJECT, ENDED_AT, { log });
+  expect(sourceStackMismatchCount("rollback-probe")).toBe(before + 1);
+  expect(log.warn).toHaveBeenCalledTimes(1);
+});
+
+test("a replay rollback after ingest does not count the mismatch before retry", async () => {
+  using db = initDatabase(":memory:");
+  const first = oldRows(db, "work");
+  const envelope = { ...first, payload: { ...first.payload, producer: "replay-rollback-probe" } };
+  const before = sourceStackMismatchCount("replay-rollback-probe");
+  const ledger = await recordedVigilLedger([{ envelope, subject: SUBJECT }]);
+  db.run("CREATE TRIGGER fail_reconnect BEFORE INSERT ON vigil_subject_stack_moves BEGIN SELECT RAISE(ABORT, 'reconnect failure'); END");
+  expect(await replayLedger({ ...ledger, db })).toBeNull();
+  expect(sourceStackMismatchCount("replay-rollback-probe")).toBe(before);
+  expect(getVigilSubject(db, "state:goal:default:G1")).toBeNull();
+  expect(ledger.log.warn).toHaveBeenCalledWith(expect.stringContaining("reconnect failure"));
+  db.run("DROP TRIGGER fail_reconnect");
+  expect(await replayLedger({ ...ledger, db })).toBe(1);
+  expect(sourceStackMismatchCount("replay-rollback-probe")).toBe(before + 1);
 });
 
 test("startup rebuilds source-keyed rows, resolves obsolete stale attention and keeps digest free of it", async () => {

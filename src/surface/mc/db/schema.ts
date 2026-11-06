@@ -312,6 +312,8 @@ export const SCHEMA_SQL: string[] = [
     CHECK((subject_kind = 'run' AND vocab IS NULL) OR
       (subject_kind = 'state' AND vocab IS NOT NULL AND vocab IN ('goal','escalation','check','unknown')))
   )`,
+  "CREATE INDEX IF NOT EXISTS idx_vigil_subjects_run_ref ON vigil_subjects(run_kind, ref)",
+  "CREATE INDEX IF NOT EXISTS idx_vigil_subjects_vocab_ref ON vigil_subjects(vocab, ref)",
   `CREATE TABLE IF NOT EXISTS vigil_events (
     id TEXT PRIMARY KEY,
     subject_key TEXT NOT NULL REFERENCES vigil_subjects(subject_key),

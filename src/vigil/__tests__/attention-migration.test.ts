@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
 import { SCHEMA_SQL, REBUILD_MIGRATIONS } from "../../surface/mc/db/schema";
 import { listVigilEvents, type VigilEventRow } from "../db";
-import { ingestLedgerEnvelope, DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestFromSourceStack, DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 test.each([false, true])("old attention CHECK (state_change=%s) widens once, retaining rows, timestamps, indexes and foreign keys", (hasStateChange) => {
   using file = temporaryVigilDatabaseFile("vigil-attention-");
@@ -15,7 +15,7 @@ test.each([false, true])("old attention CHECK (state_change=%s) widens once, ret
     old.run(hasStateChange ? previous : previous.replace(",'state_change'", ""));
   }
   const envelope = ledgerEnvelope();
-  ingestLedgerEnvelope(old, envelope, ENDED_AT, { replay: true });
+  ingestFromSourceStack(old, envelope, ENDED_AT, { replay: true });
   const event: VigilEventRow = {
     id: crypto.randomUUID(), event_kind: "transition", created_at: ENDED_AT,
     severity: null, attention_id: null, route: null, delivery: "pending",
@@ -96,7 +96,7 @@ test("route and delivery migrate once, preserving historical events without a se
   using file = temporaryVigilDatabaseFile("vigil-routing-");
   const { path } = file;
   const old = initDatabase(path);
-  ingestLedgerEnvelope(old, ledgerEnvelope(), ENDED_AT);
+  ingestFromSourceStack(old, ledgerEnvelope(), ENDED_AT);
   old.run("ALTER TABLE vigil_events DROP COLUMN route");
   old.run("ALTER TABLE vigil_events DROP COLUMN delivery");
   const historical = old.query<Omit<VigilEventRow, "route" | "delivery">, []>("SELECT * FROM vigil_events").all();
@@ -119,7 +119,7 @@ test("route and delivery migrate once, preserving historical events without a se
   const reopened = initDatabase(path);
   try {
     expect(listVigilEvents(reopened, KEY)).toEqual(events);
-    ingestLedgerEnvelope(reopened, ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000);
+    ingestFromSourceStack(reopened, ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000);
     expect(listVigilEvents(reopened, KEY)[1]).toMatchObject({ route: "digest", delivery: "pending" });
   } finally { reopened.close(); }
 });

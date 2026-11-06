@@ -11,7 +11,7 @@ import { applyVigilAttention } from "../attention";
 import { getVigilSubject, listVigilEvents, writeVigilTransition } from "../db";
 import { subjectClass, vigilSeverity, type SubjectClass } from "../policy";
 import { sweepStale } from "../staleness";
-import { ingestLedgerEnvelope, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
+import { ingestFromSourceStack, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
 
 describe("Vigil attention", () => {
   let db: Database;
@@ -39,27 +39,27 @@ describe("Vigil attention", () => {
 
   test("one row opens, updates, resolves and reopens with event attribution", () => {
     const first = ledgerEnvelope();
-    const delta = ingestLedgerEnvelope(db, first, ENDED_AT);
+    const delta = ingestFromSourceStack(db, first, ENDED_AT);
     expect(delta).toEqual({ opened: [{ id, stackId: "default", kind: "state_change", severity: "normal", status: "open", workItemId: null, sessionId: null }], resolved: [] });
     expect(listVigilEvents(db, KEY)[0]).toMatchObject({ severity: "normal", attention_id: id });
     const original = db.query("SELECT rowid, created_at FROM attention_items WHERE id = ?").get(id);
-    expect(ingestLedgerEnvelope(db, first, ENDED_AT + 1)).toEqual({ opened: [], resolved: [] });
-    expect(ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "cancelled", ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000)).toEqual({ opened: [], resolved: [] });
+    expect(ingestFromSourceStack(db, first, ENDED_AT + 1)).toEqual({ opened: [], resolved: [] });
+    expect(ingestFromSourceStack(db, ledgerEnvelope({ outcome: "cancelled", ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000)).toEqual({ opened: [], resolved: [] });
     expect(db.query("SELECT rowid, created_at FROM attention_items WHERE id = ?").get(id)).toEqual(original);
-    const better = ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:02:05Z" }), ENDED_AT + 120_000);
+    const better = ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:02:05Z" }), ENDED_AT + 120_000);
     expect(better.resolved).toEqual([{ ...delta.opened[0]!, status: "resolved", resolution: "archived" }]);
     expect(getAttentionItem(db, id)?.status).toBe("resolved");
     expect(listVigilEvents(db, KEY)[2]).toMatchObject({ severity: null, attention_id: id });
-    expect(ingestLedgerEnvelope(db, ledgerEnvelope({ ended_at: "2026-10-12T10:03:05Z" }), ENDED_AT + 180_000).opened).toHaveLength(1);
+    expect(ingestFromSourceStack(db, ledgerEnvelope({ ended_at: "2026-10-12T10:03:05Z" }), ENDED_AT + 180_000).opened).toHaveLength(1);
     expect(db.query("SELECT count(*) AS n FROM attention_items").get()).toEqual({ n: 1 });
   });
 
   test("escalation severity updates the same row from needs-principal to overdue", () => {
     const subject = "the-metafactory/soma#604";
     const key = `state:escalation:default:${subject}`;
-    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", state: { subject, value: "needs-principal" } }), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", state: { subject, value: "needs-principal" } }), ENDED_AT);
     const before = db.query("SELECT rowid, created_at FROM attention_items WHERE id = ?").get(`att:vigil:${key}`);
-    const delta = ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", state: { subject, value: "overdue" }, ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000);
+    const delta = ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", state: { subject, value: "overdue" }, ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000);
     expect(delta).toEqual({ opened: [], resolved: [] });
     expect(getAttentionItem(db, `att:vigil:${key}`)?.severity).toBe("high");
     expect(db.query("SELECT rowid, created_at FROM attention_items WHERE id = ?").get(`att:vigil:${key}`)).toEqual(before);
@@ -67,7 +67,7 @@ describe("Vigil attention", () => {
   });
 
   test("better with no open item writes nothing", () => {
-    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded" }), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded" }), ENDED_AT);
     const event = writeVigilTransition(db, { subject_key: KEY, from_value: "failed", to_value: "succeeded", direction: "better", run_id: "better", occurred_at: ENDED_AT }, ENDED_AT);
     const changes = db.query("SELECT total_changes() AS n").get();
     expect(applyVigilAttention(db, event, "default")).toEqual({ opened: [], resolved: [] });
@@ -76,13 +76,13 @@ describe("Vigil attention", () => {
   });
 
   test("a new worsening after dismissal reopens the subject", () => {
-    ingestLedgerEnvelope(db, ledgerEnvelope(), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope(), ENDED_AT);
     dismissAttentionItem(db, id);
-    expect(ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "cancelled", ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000).opened).toHaveLength(1);
+    expect(ingestFromSourceStack(db, ledgerEnvelope({ outcome: "cancelled", ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000).opened).toHaveLength(1);
   });
 
   test("staleness projects job and goal changes, repeated sweeps do not reopen", () => {
-    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", serves: { goal: "G5" }, ran: { kind: "job", ref: "sensor" }, state: { subject: "G5", value: "on-track" } }), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", serves: { goal: "G5" }, ran: { kind: "job", ref: "sensor" }, state: { subject: "G5", value: "on-track" } }), ENDED_AT);
     const delta = sweepStale(db, ENDED_AT + 52 * 3_600_000 + 1, {});
     expect(delta.opened).toHaveLength(2);
     expect(delta.opened.every((item) => item.severity === "high")).toBe(true);
@@ -90,18 +90,18 @@ describe("Vigil attention", () => {
   });
 
   test("replay projects no attention and a projection failure rolls back the entire ingest", () => {
-    expect(ingestLedgerEnvelope(db, ledgerEnvelope(), ENDED_AT, { replay: true })).toEqual({ opened: [], resolved: [] });
+    expect(ingestFromSourceStack(db, ledgerEnvelope(), ENDED_AT, { replay: true })).toEqual({ opened: [], resolved: [] });
     expect(listVigilEvents(db, KEY)).toEqual([]);
     expect(getAttentionItem(db, id)).toBeNull();
     db.run("CREATE TRIGGER fail_attention BEFORE INSERT ON attention_items BEGIN SELECT RAISE(ABORT, 'attention failure'); END");
     const before = getVigilSubject(db, KEY);
-    expect(() => ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "cancelled", ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000)).toThrow("attention failure");
+    expect(() => ingestFromSourceStack(db, ledgerEnvelope({ outcome: "cancelled", ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000)).toThrow("attention failure");
     expect(getVigilSubject(db, KEY)).toEqual(before);
     expect(listVigilEvents(db, KEY)).toEqual([]);
   });
 
   test("MC lists and renders an unlinked Vigil item and reconciliation leaves it open", async () => {
-    ingestLedgerEnvelope(db, ledgerEnvelope(), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope(), ENDED_AT);
     expect(reconcileAttention(db, { stackId: "default" }).resolved).toEqual([]);
     const entries = getAttentionQueue(db);
     expect(await (await handleListAttention(db)).json()).toEqual({ attention: entries });

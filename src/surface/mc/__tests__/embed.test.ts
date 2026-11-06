@@ -5,7 +5,7 @@ import { join, dirname } from "path";
 import { tmpdir } from "os";
 
 import { startMissionControl, type MissionControlHandle } from "../embed";
-import { ingestLedgerEnvelope, ledgerEnvelope, ENDED_AT } from "../../../vigil/__tests__/fixtures";
+import { ingestFromSourceStack, ledgerEnvelope, ENDED_AT } from "../../../vigil/__tests__/fixtures";
 
 /**
  * MC-I1.S1 (ADR-0005) — in-process Mission Control embed.
@@ -97,7 +97,7 @@ describe("startMissionControl (embed)", () => {
       configPath: writeMcYaml(), dbPath: join(tmpDir, "mc.db"),
       vigil: { enabled: true, resolveGoalWording: () => "Example goal", cadence: { [key]: 3_600_000 } },
     });
-    ingestLedgerEnvelope(handle.db, ledgerEnvelope({
+    ingestFromSourceStack(handle.db, ledgerEnvelope({
       ran: { kind: "job", ref: "harness-gate" }, serves: { goal: "G1" },
     }), ENDED_AT);
     const response = await fetch(`http://127.0.0.1:${handle.port}/api/vigil/subjects`);
@@ -120,7 +120,7 @@ describe("startMissionControl (embed)", () => {
       vigil: { enabled: true },
     });
     const ref = "soma:outputs/example.md";
-    ingestLedgerEnvelope(handle.db, ledgerEnvelope({ outcome: "succeeded", result_ref: ref }), ENDED_AT);
+    ingestFromSourceStack(handle.db, ledgerEnvelope({ outcome: "succeeded", result_ref: ref }), ENDED_AT);
     const attention = await (await fetch(`http://127.0.0.1:${handle.port}/api/attention`)).json();
     expect(attention.attention[0].link.label).toBe("Example result");
     const response = await fetch(`http://127.0.0.1:${handle.port}/results/${encodeURIComponent(ref)}`);

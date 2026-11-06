@@ -2,7 +2,7 @@
 import type { Database } from "bun:sqlite";
 import { executionRunFinishedSubject, validateExecutionRunFinished, type ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
 import type { Envelope } from "../bus/myelin/envelope-validator";
-import { confirmSubjectStack, resetUnverifiedSubject, getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition, type VigilEventRow } from "./db";
+import { resetUnverifiedSubject, getVigilSubject, isNewObservation, writeVigilSubject, writeVigilTransition, type VigilEventRow, type VigilSubjectRow } from "./db";
 import type { AttentionDelta } from "../surface/mc/attention-notify";
 import { ingestResult } from "./results";
 import { ingestRefAttention, type VigilIngestOpts } from "./ref-attention";
@@ -37,7 +37,7 @@ export function sourceStackMismatchCount(producer: string): number {
   return sourceStackMismatches.get(producer) ?? 0;
 }
 
-function countSourceStackMismatch(envelope: Envelope, stack: string, log: Pick<Console, "warn">): void {
+export function countSourceStackMismatch(envelope: Envelope, stack: string, log: Pick<Console, "warn">): void {
   if (envelope.source.split(".")[1] === stack) return;
   const producer = String(envelope.payload.producer);
   const count = sourceStackMismatchCount(producer);
@@ -72,14 +72,13 @@ export function ledgerEnvelopeError(envelope: Envelope, subject: string): string
  * dedupes on its own; all writes commit atomically. `replay` (rebuild from
  * LEDGER, see `replay.ts`) updates both rows the same way and writes no Vigil event.
  */
-export function ingestLedgerEnvelope(db: Database, envelope: Envelope, subject: string, now: number, opts: Omit<VigilIngestOpts, "sourceStack"> & { log?: Pick<Console, "warn"> } = {}): AttentionDelta {
+export function ingestLedgerEnvelope(db: Database, envelope: Envelope, subject: string, now: number, opts: Omit<VigilIngestOpts, "sourceStack"> & { log?: Pick<Console, "warn">; deferSourceStackMismatch?: boolean } = {}): AttentionDelta {
   const payload = envelope.payload as unknown as ExecutionRunFinishedPayload;
   const observation: LedgerObservation = {
     goal_id: payload.serves?.goal ?? null, producer: payload.producer, stack: stackOfEnvelope(subject),
     last_run_id: payload.run_id, last_ended_at: Date.parse(payload.ended_at), last_seen_at: now,
   };
-  countSourceStackMismatch(envelope, observation.stack, opts.log ?? console);
-  return db.transaction(() => {
+  const delta = db.transaction(() => {
     const subjectKeys = [runHealthKey(payload, observation.stack), ...(payload.state
       ? [stateSubjectKey(vocabularyOf(payload.state.value), observation.stack, payload.state.subject)] : [])];
     const resetKeys = new Set(opts.replay ? subjectKeys.filter((key) => resetUnverifiedSubject(db, key)) : []);
@@ -96,16 +95,22 @@ export function ingestLedgerEnvelope(db: Database, envelope: Envelope, subject: 
       const subject = getVigilSubject(db, key);
       const prior = previous[index];
       if (subject?.last_run_id !== payload.run_id || !isNewObservation(prior ?? null, payload.run_id, observation.last_ended_at)) continue;
-      const direction = resetKeys.has(key) ? subject.healthy ? "better" : "worse" : subject.subject_kind === "state"
-        ? stateDirection(vocabularyOf(subject.value), prior?.value ?? null, subject.value)
-        : prior?.value === subject.value ? null : subject.healthy ? "better" : "worse";
+      const direction = replayDirection(subject, prior ?? null, resetKeys.has(key));
       if (direction) applyVigilAttention(db, {
         id: "", subject_key: key, to_value: subject.value, direction,
       }, opts.localStackId ?? "default", { replay: true, now: observation.last_ended_at });
     }
-    for (const key of subjectKeys) confirmSubjectStack(db, key);
     return applyVigilTransitions(db, events.filter((event) => event !== null), opts.localStackId ?? "default");
   }).immediate();
+  if (!opts.deferSourceStackMismatch) countSourceStackMismatch(envelope, observation.stack, opts.log ?? console);
+  return delta;
+}
+
+function replayDirection(subject: VigilSubjectRow, prior: VigilSubjectRow | null, wasReset: boolean): "better" | "worse" | null {
+  if (wasReset) return subject.healthy ? "better" : "worse";
+  if (subject.subject_kind === "state") return stateDirection(vocabularyOf(subject.value), prior?.value ?? null, subject.value);
+  if (prior?.value === subject.value) return null;
+  return subject.healthy ? "better" : "worse";
 }
 
 function updateRunHealthSubject(

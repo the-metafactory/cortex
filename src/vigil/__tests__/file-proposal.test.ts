@@ -7,7 +7,7 @@ import { DEFAULT_CONFIG } from "../../surface/mc/config";
 import { startServer } from "../../surface/mc/server";
 import { flushVigilResolutions } from "../resolution";
 import { runProposalCommand, type ProposalFilingOptions, type ProposalCommandRunner } from "../file-proposal";
-import { ingestLedgerEnvelope, ENDED_AT, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestFromSourceStack, ENDED_AT, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 const REF = "soma:proposals/proposal.md";
 const ID = `att:vigil:proposal:${REF}`;
@@ -22,7 +22,7 @@ const options = (over: ProposalFilingOptions = {}): ProposalFilingOptions => ({
 let db: Database;
 
 function seed(database = db) {
-  ingestLedgerEnvelope(database, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [REF] }), ENDED_AT);
+  ingestFromSourceStack(database, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [REF] }), ENDED_AT);
 }
 
 beforeEach(() => { db = initDatabase(":memory:"); seed(); });

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { VIGIL_ATTENTION_RESOLVED_TYPE, validateVigilAttentionResolved } from "@the-metafactory/myelin";
 import type { Envelope } from "../../../bus/myelin/envelope-validator";
-import { ingestLedgerEnvelope, ENDED_AT, ledgerEnvelope } from "../../../vigil/__tests__/fixtures";
+import { ingestFromSourceStack, ENDED_AT, ledgerEnvelope } from "../../../vigil/__tests__/fixtures";
 import { LEDGER_REPLAY_HANDLERS } from "../../../vigil/replay";
 import { readSomaOutput } from "../../../vigil/soma-output";
 import { DEFAULT_CONFIG } from "../config";
@@ -24,7 +24,7 @@ let published: { envelope: Envelope; subject: string }[];
 let publish: ReturnType<typeof mock<(envelope: Envelope, subject: string) => Promise<void>>>;
 
 function seed(ref = REF, target = db): void {
-  ingestLedgerEnvelope(target, ledgerEnvelope({ outcome: "succeeded", result_ref: ref }), ENDED_AT);
+  ingestFromSourceStack(target, ledgerEnvelope({ outcome: "succeeded", result_ref: ref }), ENDED_AT);
 }
 
 function openRef(ref = REF, init?: RequestInit): Promise<Response> {
@@ -252,7 +252,7 @@ function openProposal(ref = PROPOSAL, init?: RequestInit): Promise<Response> {
 function seedProposal(): void {
   mkdirSync(join(home, "proposals"));
   writeFileSync(join(home, "proposals", "first.md"), "# Private proposal title\nPrivate **proposal body**\n<script>alert(1)</script>\n[bad](javascript:alert(1))");
-  ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [PROPOSAL] }), ENDED_AT);
+  ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [PROPOSAL] }), ENDED_AT);
 }
 
 test("proposal markdown is sanitized and fresh, opening never resolves or copies content to MC or LEDGER", async () => {

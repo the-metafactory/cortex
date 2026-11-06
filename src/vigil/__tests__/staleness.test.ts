@@ -4,7 +4,7 @@ import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilSubject, listVigilEvents } from "../db";
 import { DEFAULT_CADENCE_MS, effectiveCadenceMs, sweepStale } from "../staleness";
-import { ingestLedgerEnvelope, DELIVERY_DEFAULTS, ENDED_AT, ledgerEnvelope } from "./fixtures";
+import { ingestFromSourceStack, DELIVERY_DEFAULTS, ENDED_AT, ledgerEnvelope } from "./fixtures";
 
 const JOB_KEY = "run:job:default:harness-gate";
 const GOAL_KEY = "state:goal:default:G1";
@@ -17,7 +17,7 @@ describe("Vigil staleness", () => {
   afterEach(() => db.close());
 
   test("default cadence is 26 hours and only strictly beyond twice it goes stale", () => {
-    ingestLedgerEnvelope(db, job(), ENDED_AT);
+    ingestFromSourceStack(db, job(), ENDED_AT);
     // Cadence comes from cortex config, never the legacy observation column.
     db.query("UPDATE vigil_subjects SET cadence_ms = 1 WHERE subject_key = ?").run(JOB_KEY);
     const before = getVigilSubject(db, JOB_KEY)!;
@@ -42,7 +42,7 @@ describe("Vigil staleness", () => {
   });
 
   test("goal state goes stale and a fresh envelope recovers both job and goal", () => {
-    ingestLedgerEnvelope(db, ledgerEnvelope({
+    ingestFromSourceStack(db, ledgerEnvelope({
       ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded",
       state: { subject: "G1", value: "on-track" },
     }), ENDED_AT);
@@ -55,7 +55,7 @@ describe("Vigil staleness", () => {
     sweepStale(db, DEADLINE + 2, {});
     expect(listVigilEvents(db, GOAL_KEY)).toHaveLength(1);
 
-    ingestLedgerEnvelope(db, ledgerEnvelope({
+    ingestFromSourceStack(db, ledgerEnvelope({
       ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded",
       state: { subject: "G1", value: "on-track" },
       ended_at: new Date(DEADLINE + 3).toISOString(),
@@ -70,8 +70,8 @@ describe("Vigil staleness", () => {
   });
 
   test("per-subject overrides use milliseconds and other subjects keep the default", () => {
-    ingestLedgerEnvelope(db, job(), ENDED_AT);
-    ingestLedgerEnvelope(db, ledgerEnvelope({
+    ingestFromSourceStack(db, job(), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope({
       outcome: "succeeded", state: { subject: "G1", value: "on-track" },
     }), ENDED_AT);
     const cadence = { [JOB_KEY]: 3_600_000 };
@@ -87,7 +87,7 @@ describe("Vigil staleness", () => {
   });
 
   test("goal cadence overrides are keyed by the full subject key", () => {
-    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", state: { subject: "G1", value: "on-track" } }), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", state: { subject: "G1", value: "on-track" } }), ENDED_AT);
     const cadence = { [GOAL_KEY]: 1 };
     sweepStale(db, ENDED_AT + 2, cadence);
     expect(getVigilSubject(db, GOAL_KEY)?.value).toBe("on-track");
@@ -97,10 +97,10 @@ describe("Vigil staleness", () => {
 
   test("node, algorithm, dispatch, flow and non-goal vocabularies never go stale, even with overrides", () => {
     for (const kind of ["node", "algorithm", "dispatch", "flow"] as const) {
-      ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind, ref: "test" }, outcome: "succeeded" }), ENDED_AT);
+      ingestFromSourceStack(db, ledgerEnvelope({ ran: { kind, ref: "test" }, outcome: "succeeded" }), ENDED_AT);
     }
     for (const value of ["resolved", "ok", "custom-value"]) {
-      ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", state: { subject: "test", value } }), ENDED_AT);
+      ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", state: { subject: "test", value } }), ENDED_AT);
     }
     const before = db.query("SELECT * FROM vigil_subjects ORDER BY subject_key").all();
     const subjects = db.query<{ subject_key: string }, []>("SELECT subject_key FROM vigil_subjects").all();
@@ -115,7 +115,7 @@ describe("Vigil staleness", () => {
   });
 
   test("an already-failed job still writes a worse transition when it goes stale", () => {
-    ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" } }), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" } }), ENDED_AT);
     sweepStale(db, DEADLINE + 1, {});
     expect(getVigilSubject(db, JOB_KEY)).toMatchObject({ value: "stale", healthy: 0 });
     expect(listVigilEvents(db, JOB_KEY)).toHaveLength(2);
@@ -123,15 +123,15 @@ describe("Vigil staleness", () => {
   });
 
   test("the envelope end time controls silence, refreshed even by a repeated healthy value", () => {
-    ingestLedgerEnvelope(db, job(), DEADLINE + 1);
+    ingestFromSourceStack(db, job(), DEADLINE + 1);
     // Receipt time does not grant an old envelope another two cadences.
     sweepStale(db, DEADLINE + 1, {});
     expect(getVigilSubject(db, JOB_KEY)?.value).toBe("stale");
-    ingestLedgerEnvelope(db, ledgerEnvelope({
+    ingestFromSourceStack(db, ledgerEnvelope({
       ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded",
       ended_at: new Date(DEADLINE + 2).toISOString(),
     }), DEADLINE + 2);
-    ingestLedgerEnvelope(db, ledgerEnvelope({
+    ingestFromSourceStack(db, ledgerEnvelope({
       ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded",
       ended_at: new Date(DEADLINE + 100).toISOString(),
     }), DEADLINE + 100);
@@ -141,8 +141,8 @@ describe("Vigil staleness", () => {
   });
 
   test("a transition write failure rolls back the entire sweep", () => {
-    ingestLedgerEnvelope(db, job(), ENDED_AT);
-    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", state: { subject: "G1", value: "on-track" } }), ENDED_AT);
+    ingestFromSourceStack(db, job(), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", state: { subject: "G1", value: "on-track" } }), ENDED_AT);
     db.run(`CREATE TRIGGER reject_stale BEFORE INSERT ON vigil_events
       WHEN NEW.subject_key = 'state:goal:default:G1' BEGIN SELECT RAISE(ABORT, 'event failure'); END`);
     expect(() => sweepStale(db, DEADLINE + 1, {})).toThrow("event failure");

@@ -6,7 +6,7 @@ import { initDatabase } from "../../surface/mc/db/init";
 import { TABLE_NAMES } from "../../surface/mc/db/schema";
 import { getAttentionItem, listOpenAttention, setAttentionItemStatus } from "../../surface/mc/db/attention";
 import { REF_ATTENTION_TTL_MS, type VigilRefRow } from "../ref-attention";
-import { ingestLedgerEnvelope, ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestFromSourceStack, ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 const REF = "soma:proposals/first.md";
 const id = (ref = REF) => `att:vigil:proposal:${ref}`;
@@ -22,7 +22,7 @@ afterEach(() => { db.close(); file[Symbol.dispose](); });
 
 function report(overrides: Parameters<typeof ledgerEnvelope>[0] = {}, opts: { replay?: boolean } = {}) {
   const envelope = ledgerEnvelope({ outcome: "succeeded", proposal_refs: [REF], ...overrides });
-  const delta = ingestLedgerEnvelope(db, envelope, Date.parse(String(envelope.payload.ended_at)), opts);
+  const delta = ingestFromSourceStack(db, envelope, Date.parse(String(envelope.payload.ended_at)), opts);
   return { envelope, delta };
 }
 
@@ -36,7 +36,7 @@ test("two new refs open low proposal items once without notifications or budget"
   const second = "soma:proposals/second.md";
   const { envelope, delta } = report({ ran: { kind: "job", ref: "triage" }, proposal_refs: [REF, second] });
   expect(delta).toEqual({ opened: [], resolved: [] });
-  ingestLedgerEnvelope(db, envelope, ENDED_AT + 1000);
+  ingestFromSourceStack(db, envelope, ENDED_AT + 1000);
   expect(listOpenAttention(db)).toHaveLength(2);
   for (const ref of [REF, second]) {
     expect(getAttentionItem(db, id(ref))).toEqual({
@@ -55,7 +55,7 @@ test("only newer observations update open refs and keep the original producer", 
   expect(proposal()).toMatchObject({ ran_ref: "triage", version: 2, updated_at: ENDED_AT + 1000, expires_at: ENDED_AT + 1000 + REF_ATTENTION_TTL_MS });
   expect(db.query<{ updated_at: number }, [string]>("SELECT updated_at FROM attention_items WHERE id = ?").get(id())!.updated_at).toBeGreaterThan(0);
   const snapshot = proposal();
-  ingestLedgerEnvelope(db, envelope, ENDED_AT + 2000);
+  ingestFromSourceStack(db, envelope, ENDED_AT + 2000);
   report({ run_id: "older", ended_at: later(500) });
   report({ run_id: "later", ended_at: later(2000) });
   expect(proposal()).toEqual(snapshot);
@@ -63,10 +63,10 @@ test("only newer observations update open refs and keep the original producer", 
 
 test("missing proposal refs or unsuccessful runs do not create proposal metadata", () => {
   const missing = ledgerEnvelope({ outcome: "succeeded" });
-  ingestLedgerEnvelope(db, missing, ENDED_AT);
+  ingestFromSourceStack(db, missing, ENDED_AT);
   const failed = ledgerEnvelope();
   failed.payload.proposal_refs = [REF];
-  ingestLedgerEnvelope(db, failed, ENDED_AT);
+  ingestFromSourceStack(db, failed, ENDED_AT);
   expect(db.query("SELECT * FROM vigil_proposals").all()).toEqual([]);
   expect(listOpenAttention(db).filter((item) => item.kind === "proposal")).toEqual([]);
 });
@@ -117,7 +117,7 @@ test("one envelope with more than 20 refs is capped deterministically, including
   expect(getAttentionItem(db, id(refs[0]))).toMatchObject({ resolution: "archived" });
   expect(getAttentionItem(db, id(refs[1]))).toMatchObject({ resolution: "archived" });
   const snapshot = db.query("SELECT * FROM vigil_proposals ORDER BY proposal_ref").all();
-  ingestLedgerEnvelope(db, envelope, ENDED_AT + 1000, { replay: true });
+  ingestFromSourceStack(db, envelope, ENDED_AT + 1000, { replay: true });
   expect(db.query("SELECT * FROM vigil_proposals ORDER BY proposal_ref").all()).toEqual(snapshot);
   expect(db.query("SELECT * FROM vigil_events").all()).toEqual([]);
 });
