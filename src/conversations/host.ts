@@ -316,6 +316,14 @@ export class ConversationHost {
     return { policy: strictest([current.policy, ...toolPolicies, ...Object.values(current.historySources), ...workPolicies, ...sources.flatMap(s => s.state === "available" ? [s.policy] : [])]), sources, available: sources.every(s => s.state === "available") };
   }
 
+  private async listable(id: string): Promise<{ stored: Stored; effective: Policy; sources: SourceView[]; available: boolean }> {
+    try { return await this.tighten(id); }
+    catch (error) {
+      if (!(error instanceof ConversationError) || error.status !== 403) throw error;
+      return { stored: await this.stored(id), effective: "local", sources: [], available: false };
+    }
+  }
+
   private async tighten(id: string): Promise<{ stored: Stored; effective: Policy; sources: SourceView[]; available: boolean }> {
     const current = await this.stored(id);
     const own = await this.ownPrivacy(current);
@@ -564,7 +572,7 @@ export class ConversationHost {
     const rows: ConversationMeta[] = [];
     for (const [id, listed] of Object.entries(await this.directory())) {
       if (linked && !listed.links.some(linked)) continue;
-      const { stored, effective, available } = await this.tighten(id);
+      const { stored, effective, available } = await this.listable(id);
       rows.push(this.view(id, stored, working, effective, available));
     }
     return rows.sort((a, b) => b.activity.lastAt.localeCompare(a.activity.lastAt));
@@ -594,7 +602,7 @@ export class ConversationHost {
   private async overviewRow(id: string, listed: Stored, terms: string[], working: Set<number>): Promise<OverviewRow | null> {
     const found = terms.length > 0 ? await this.searchHit(id, listed, terms) : null;
     if (found === false) return null;
-    const { stored, effective, sources, available } = await this.tighten(id);
+    const { stored, effective, sources, available } = await this.listable(id);
     const meta = this.view(id, stored, working, effective, available);
     if (found && !found.matches(meta.title)) return null;
     const latest = found ? found.lines.at(-1) : await this.latestLine(stored);

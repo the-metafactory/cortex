@@ -55,6 +55,25 @@ describe("durable conversation tool authorization", () => {
     expect(called).toBe(true);
   });
 
+  test("a revoked source closes only its own conversation: the lists still answer and show it as local-only", async () => {
+    const config = registry();
+    const host = await open(config, async request => (await request.tools!.call("call", "repo_read", { project: "public" }, request.signal)).text);
+    const revoked = await create(host, "cloud");
+    const untouched = await create(host, "cloud");
+    await host.submit(revoked.id, input("one"));
+    await host.waitForIdle(revoked.id);
+    config.projects.splice(0, 1);
+
+    const listed = await host.list();
+    expect(listed.find(row => row.id === revoked.id)).toMatchObject({ policy: "local" });
+    expect(listed.find(row => row.id === untouched.id)).toMatchObject({ policy: "cloud" });
+    const { rows } = await host.overview({ state: "current", q: "", limit: 25 });
+    expect(rows.map(row => row.conversation.id).sort()).toEqual([revoked.id, untouched.id].sort());
+    expect(rows.find(row => row.conversation.id === revoked.id)?.conversation).toMatchObject({ policy: "local" });
+    await expect(host.submit(revoked.id, input("two"))).rejects.toThrow("revoked or changed");
+    await expect(host.detail(revoked.id)).rejects.toThrow("revoked or changed");
+  });
+
   test("revoking a previously read source blocks history forwarding", async () => {
     const config = registry();
     let calls = 0;
