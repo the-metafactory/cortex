@@ -64,7 +64,7 @@ const sameRepo = (a: string, b: string): boolean => a.toLowerCase() === b.toLowe
 
 export function githubTarget(project: ToolProject): Target | string {
   const forge = project.forge;
-  if (!forge || forge.kind !== "github") return "this source has no configured GitHub repository";
+  if (forge?.kind !== "github") return "this source has no configured GitHub repository";
   const host = (forge.host ?? DEFAULT_HOST).toLowerCase();
   const parts = forge.repo.split("/");
   const [owner, name] = parts;
