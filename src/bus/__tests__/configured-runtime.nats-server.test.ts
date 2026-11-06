@@ -65,13 +65,13 @@ test.skipIf(executable === null)("configured runtime coexists with an observer a
       await expect(publishOnSubject(value.envelope, subject)).rejects.toThrow("subject outside pinned stack");
     }
     await expect(publishOnSubject({ ...value.envelope, sovereignty: { ...value.envelope.sovereignty, classification: "federated" } }, "local.synthetic.work.tasks.synthetic")).rejects.toThrow("refuses non-local classification");
+    for (const type of ["tasks.x\r\nPUB public.outside 0\r\n", "tasks.*", "tasks..invalid"]) {
+      await expect(runtime.publish({ ...value.envelope, type })).rejects.toThrow("subject outside pinned stack");
+      await expect(publishDurable({ ...value.envelope, type }, { expectedStream: "SYNTHETIC", timeoutMs: 100 })).rejects.toMatchObject({ kind: "unroutable", message: expect.stringContaining("configured local bus policy refused envelope") });
+    }
     await expect(publishDurable({ ...value.envelope, sovereignty: { ...value.envelope.sovereignty, classification: "federated" } }, { expectedStream: "SYNTHETIC" })).rejects.toBeInstanceOf(MyelinDurablePublishError);
     await expect(publishDurable({ ...value.envelope, source: "synthetic.other.helper" }, { expectedStream: "SYNTHETIC" })).rejects.toMatchObject({ kind: "unroutable" });
     await expect(publishOnSubject({ ...value.envelope, source: "synthetic.other.helper" }, "local.synthetic.work.tasks.synthetic")).rejects.toThrow("source outside pinned stack");
-    for (const type of ["tasks.x\r\nPUB public.outside 0\r\n", "tasks.*", "tasks..invalid"]) {
-      await expect(runtime.publish({ ...value.envelope, type })).rejects.toThrow("subject outside pinned stack");
-      await expect(publishDurable({ ...value.envelope, type }, { expectedStream: "SYNTHETIC", timeoutMs: 100 })).rejects.toMatchObject({ kind: "unroutable" });
-    }
     const addressedSubject = "local.synthetic.work.tasks.@did-synthetic:helper";
     const addressed = observer.subscribe(addressedSubject);
     await observer.flush();
