@@ -382,7 +382,7 @@ This is **the single load-bearing contract** between cortex#237 and pilot. Witho
 
 Every reply uses `request.correlation_id ?? request.id`.
 
-- When the request carries `correlation_id`, [RFC-0007 §8.2](https://github.com/the-metafactory/myelin/blob/main/specs/rfc/rfc-0007-transport-and-reliability.md#82-context-specific-defaulting) governs: a reply MUST preserve that value. This includes Pulse agent-provider requests.
+- When the request carries `correlation_id`, [RFC-0007 §8.2](https://github.com/the-metafactory/myelin/blob/main/specs/rfc/rfc-0007-transport-and-reliability.md#82-context-specific-defaulting) governs: a reply MUST preserve that value. This includes requests from Pulse’s `MyelinAgentProvider`.
 - When the request omits `correlation_id`, this consumer's §5 contract (ratified in cortex#248 §4.2.1) governs: use the request envelope's `id`. Pilot publishes this shape and continues to match on that id.
 
 The former unconditional request-id rule in this section applied Pilot's fallback to all requests. RFC-0007 §8.2 takes precedence when the inbound field is present. This change does not alter Pilot's wire format.
@@ -397,7 +397,7 @@ Same correlation_id MUST be set on:
 
 ### §5.2 The mechanism
 
-The consumer and pipeline use `reviewReplyCorrelationId(request)` from `src/bus/review-events.ts` to select the reply correlation when the envelope arrives. All subsequent emissions for this task use that value, including the reviewer heartbeat. `safePublish` checks each verdict and lifecycle envelope against the same selector before local or federated publication. A mismatch is logged and the envelope is not published. The selection is derived from each received envelope rather than stored outside it.
+The consumer and pipeline use `reviewReplyCorrelationId(request)` from `src/bus/review-events.ts` to select the reply correlation when the envelope arrives. All subsequent emissions for this task use that value, including the reviewer heartbeat. `safePublish` checks each verdict and lifecycle envelope against the same selector before local or federated publication. A mismatch is logged and the envelope is not published. `safePublish` catches the error and processing continues: a rejected verdict is followed by `dispatch.task.completed` and an `ack`; a rejected failure still returns the decision for its reason. The guard does not trigger redelivery. The selection is derived from each received envelope rather than stored outside it.
 
 Concretely, the per-envelope handler in `review-consumer.ts` looks like:
 
@@ -426,6 +426,7 @@ async handleEnvelope(envelope: Envelope, subject: string): Promise<void> {
   await this.runtime.publish(createReviewVerdictEvent({
     source: this.source,
     correlationId,        // ← THE CONTRACT
+    requestId: envelope.id,
     verdict: pipelineResult.verdict,
     payload: pipelineResult,
   }));
@@ -442,6 +443,8 @@ async handleEnvelope(envelope: Envelope, subject: string): Promise<void> {
 }
 ```
 
+**Signed request identity.** The verdict builder requires a separate `requestId`, which both the CC and Sage pipelines take from `request.id`. It stamps this value as `payload.request_id`, inside Myelin’s signed payload. The top-level `correlation_id` is excluded from the signature and can differ from `request_id`. Pilot sends no inbound correlation, so its `payload.request_id === awaited correlationId` check still binds to the request envelope’s id. A caller-supplied correlation cannot change that signed request identity.
+
 **The two id spaces.** Lifecycle builders default to `taskId` when no correlation is supplied. The review consumer always supplies the selected reply correlation. The internal `taskId` stays separate from the caller's correlation key.
 
 The `taskId` field still exists on the envelope payload (per the existing `DispatchTaskCommonOpts` shape) — it's the cortex-internal task UUID for stitching the lifecycle within cortex. Surfaces that already join on `taskId` (worklog-manager, agent-team) keep working; surfaces that join on `correlation_id` (pilot's verdict subscriber) get the right key.
@@ -456,12 +459,18 @@ The only edge case is **the crashed consumer emitted `dispatch.task.started` and
 
 ### §5.4 Witness in test
 
-A Pulse agent-provider probe on a temporary loopback NATS server confirms that the provider matches the consumer's refusal on the inbound correlation. A native Pulse 0.34.0 request still cannot reach a verdict: Pulse wraps review fields in `payload.input`, while `parseReviewRequestPayload` reads top-level PR fields. It returns `cant_do` with `payload validation failed (missing/invalid repo or pr)`. Input-format support is a separate prerequisite for the live verdict probe. Correlation alone does not establish that end-to-end result.
+The test `Pulse provider matches the nested-input refusal on its task correlation` in `src/bus/__tests__/review-consumer.test.ts` connects the installed Pulse `MyelinAgentProvider` to the consumer through Pulse’s `InMemoryAgentTransport` and an injected publisher. It asserts that the request id differs from the task correlation, the consumer returns `cant_do` for the nested input, and Pulse matches that failure instead of reporting "nobody took this task". Reproduce it with:
+
+```sh
+bun run test src/bus/__tests__/review-consumer.test.ts --test-name-pattern 'Pulse provider matches'
+```
+
+This fixture verifies reply matching, not a live verdict. Pulse 0.34.0 wraps review fields in `payload.input`, while `parseReviewRequestPayload` reads top-level PR fields. A native request therefore receives `payload validation failed (missing/invalid repo or pr)`. The one-off live routine verdict probe remains unverified until the input formats interoperate.
 
 `src/bus/__tests__/review-consumer.test.ts` covers the contract explicitly:
 
-- **Test 1:** Drive the consumer with and without an inbound `correlation_id`. Capture local and federated emissions. Assert the exact reply sequence and selected correlation for verdict, redelivery, prose completion, reviewer spawn failure, pre-pipeline refusal, and unexpected pipeline failure.
-- **Test 1a:** Inject mismatched verdict and failure envelopes for both request shapes. Assert that publication rejects them and logs the mismatch.
+- **Test 1:** Drive the consumer with and without an inbound `correlation_id`. Capture local and federated emissions. Assert the exact reply sequence, selected correlation, and signed verdict request identity for verdict, redelivery, prose completion, reviewer spawn failure, pre-pipeline refusal, and unexpected pipeline failure.
+- **Test 1a:** Inject mismatched verdict and failure envelopes for both request shapes. Assert that publication rejects them and logs the mismatch, then assert the remaining emissions and acknowledgement decision.
 - **Test 2:** Two parallel requests with `id = A` and `id = B`. Capture emissions. Assert all `A`-derived emissions carry `correlation_id = A` and all `B`-derived carry `B`. No cross-talk.
 - **Test 3:** Simulate consumer crash after `started`-emit but before `completed`-emit (cancel the in-flight promise). Manually re-deliver the same envelope. Assert the survivor's emissions all carry the same `correlation_id = X`.
 
@@ -508,6 +517,7 @@ export interface ReviewVerdictPayload {
 export interface CreateReviewVerdictEventOpts {
   source: SystemEventSource;
   correlationId: string;
+  requestId: string;
   classification?: Classification;  // defaults to "local"
   payload: ReviewVerdictPayload;
 }
@@ -530,7 +540,7 @@ Same posture as `dispatch.task.*` (per `bus/dispatch-events.ts` `defaultDispatch
 `src/bus/__tests__/review-events.test.ts` covers:
 
 - Each of the three verdict kinds builds an envelope with the right `type` and subject-suffix-equivalent payload discriminator.
-- `correlation_id` is set on the envelope iff `correlationId` is provided.
+- `correlation_id` carries the required `correlationId`; the signed `payload.request_id` carries the independently required `requestId`.
 - The cortex#248 payload contract is enforced field-by-field (required vs optional, types, semantic constraints like `verdict ∈ enum`).
 - Builder throws (or returns a validation error) when `type` and `payload.verdict` disagree.
 

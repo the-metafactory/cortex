@@ -366,6 +366,7 @@ export interface CreateReviewVerdictEventOpts {
    * REQUIRED — Pilot's `subscribe-verdict` filters on this value.
    */
   correlationId: string;
+  requestId: string;
   /**
    * Optional sovereignty classification. Defaults to `"local"`.
    * Federated reviews opt into `"federated"`; mirrors the
@@ -420,17 +421,7 @@ export function createReviewVerdictEvent(
     sovereignty: defaultReviewSovereignty(opts.source, opts.classification),
     correlationId: opts.correlationId,
     payload: {
-      // compass#95 (replay-fix) — SIGNED request binding. The top-level
-      // `correlation_id` is the verdict↔request binding pilot filters on, but
-      // myelin's canonical signing set EXCLUDES `correlation_id`
-      // (`identity/canonicalize.ts` — "mutable without invalidating signature").
-      // So a genuinely-signed verdict could be replayed with only its
-      // `correlation_id` rewritten and still verify (pilot#178 adversarial
-      // finding). Stamping the request id INTO the payload — which IS covered by
-      // the signature — gives pilot a cryptographically-bound field to assert
-      // against (`payload.request_id === awaited correlationId`), closing the
-      // replay-rebind.
-      request_id: opts.correlationId,
+      request_id: opts.requestId,
       repo: opts.payload.repo,
       pr: opts.payload.pr,
       reviewer: opts.payload.reviewer,

@@ -485,6 +485,7 @@ export async function runReviewPipeline(
     envelope = createReviewVerdictEvent({
       source: opts.source,
       kind: parsed.value.verdict,
+      requestId: opts.requestEnvelope.id,
       correlationId,
       // cortex#502 — echo logical routing onto the verdict (primary reply).
       ...(opts.responseRouting !== undefined && {

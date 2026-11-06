@@ -168,6 +168,29 @@ function makeFederatedPipelineOpts(): ReviewPipelineOpts {
 // ---------------------------------------------------------------------------
 
 describe("cortex#331 Phase 1 — makeSageReviewRunner", () => {
+  for (const suppliedCorrelation of [false, true]) {
+    for (const outcome of ["verdict", "failed"] as const) {
+      test(`${outcome} preserves request identity with supplied correlation=${suppliedCorrelation}`, async () => {
+        const pipeline = makePipelineOpts();
+        const expectedCorrelation = suppliedCorrelation
+          ? "00000000-0000-4000-8000-000000000001" : pipeline.requestEnvelope.id;
+        if (suppliedCorrelation) pipeline.requestEnvelope.correlation_id = expectedCorrelation;
+        const runner = makeSageReviewRunner({
+          which: whichSuccess,
+          spawn: makeRecordingSpawn(makeSpawnResult(withBlock("Reviewed.", SAMPLE_BLOCK), "", 0)).fn,
+          ...(outcome === "failed" && { which: whichMissing }),
+        });
+        const result = await runner(pipeline);
+        expect(result.kind).toBe(outcome);
+        if (result.kind === "completed") throw new Error("expected an envelope");
+        expect(result.envelope.correlation_id).toBe(expectedCorrelation);
+        if (result.kind === "verdict") {
+          expect(result.envelope.payload).toMatchObject({ request_id: pipeline.requestEnvelope.id });
+        }
+      });
+    }
+  }
+
   test("happy path: sage exit 0 + stdout → verdict envelope with summary=stdout, correlation_id=requestEnvelope.id", async () => {
     // cortex#402 — guard the argv pin against an ambient SAGE_SUBSTRATE
     // env value. Before #402 the env var was inert; after #402 a
