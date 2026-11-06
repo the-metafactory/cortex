@@ -22,7 +22,13 @@ const SearchInput = z.object({ query: z.string().trim().min(1).max(200), state: 
 const ReadInput = z.object({ conversation: z.uuid(), entry: z.number().int().positive().optional(), after: z.number().int().min(0).default(0), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(6000).default(6000) }).strict();
 const denied = (): string => JSON.stringify({ status: "unavailable", message: "No accessible conversation was found. It may be missing, deleted or denied." });
 const conversationCitation = (id: string): string => `?desk=conversation&conversation=${encodeURIComponent(id)}`;
-const redactedJson = (value: unknown): string => JSON.stringify(value, (_key, leaf: unknown) => typeof leaf === "string" ? redactToolText(leaf) : leaf);
+const redactRecord = (value: unknown): unknown => {
+  if (typeof value === "string") return redactToolText(value);
+  if (Array.isArray(value)) return value.map(redactRecord);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, leaf]) => [redactToolText(key), redactRecord(leaf)]));
+  return value;
+};
+const redactedJson = (value: unknown): string => JSON.stringify(redactRecord(value));
 const entryCitation = (id: string, entry: string): string => `/api/conversations/${encodeURIComponent(id)}/entries/${entry}`;
 const dateOf = (entry: EntryRecord): string | null => {
   for (const message of entry.model ?? []) {

@@ -132,7 +132,7 @@ describe("owner-backed history through model tool dispatch", () => {
   test.each(["\n", "\t", "\r"])("credential redaction precedes snippets and record windows with %j whitespace while the original stays intact", async whitespace => {
     const secret = `ghp_${"a".repeat(40)}`;
     const bearer = "synthetic-bearer-token";
-    const data = { text: `credential evidence:${whitespace}${secret}`, nested: { authorization: `Bearer${whitespace}${bearer}` } };
+    const data = { text: `credential evidence:${whitespace}${secret}`, [secret]: true, nested: { authorization: `Bearer${whitespace}${bearer}`, items: [{ [`Bearer${whitespace}${bearer}`]: `Bearer${whitespace}${bearer}` }] } };
     let completed = false;
     let target = "";
     let entry = 0;
@@ -147,14 +147,14 @@ describe("owner-backed history through model tool dispatch", () => {
       const windows: string[] = [];
       let offset = 0;
       do {
-        const result = body(await request.tools!.call(`window-${offset}`, "conversation_read", { conversation: target, entry, offset, limit: 127 }, request.signal));
+        const result = body(await request.tools!.call(`window-${offset}`, "conversation_read", { conversation: target, entry, offset, limit: 7 }, request.signal));
         expect(result.redacted).toBe(true);
         windows.push(result.record);
         offset = result.nextOffset;
       } while (offset !== null);
       expect(windows.join("")).not.toContain(secret);
       expect(windows.join("")).not.toContain(bearer);
-      expect(JSON.parse(windows.join("")).data).toEqual({ text: `credential evidence:${whitespace}[redacted]`, nested: { authorization: "[redacted]" } });
+      expect(JSON.parse(windows.join("")).data).toEqual({ text: `credential evidence:${whitespace}[redacted]`, "[redacted]": true, nested: { authorization: "[redacted]", items: [{ "[redacted]": "[redacted]" }] } });
       expect(JSON.parse(windows.join("")).model[0].content).toBe(`credential message:${whitespace}[redacted]`);
       expect(await host.entry(target, entry)).toEqual(original);
       completed = true;
