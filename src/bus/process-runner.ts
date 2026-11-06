@@ -158,7 +158,7 @@ export const ProcessSpecSchema = z.object({
    * the child, plus the PULSE connection variables, USER/LOGNAME and fire-owned MF metadata.
    * PULSE_NATS_CREDS is always passed when set, including with `env: []`:
    * the allow-list does NOT deny bus access under that credential's permissions.
-   * Run only trusted specs; see docs/process-runner.md for the contract.
+   * Execute only trusted specs; see docs/process-runner.md for the contract.
    * When set, unrelated cortex secrets (webhook tokens, LLM keys) are excluded. When
    * OMITTED, the child inherits cortex's FULL environment — convenient for a
    * trusted spec that needs many vars (build-journal needs claude / wrangler /
