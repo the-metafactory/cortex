@@ -95,6 +95,7 @@ function makeVerdict(opts: { correlationId?: string } = {}): Envelope {
   return createReviewVerdictEvent({
     source: SOURCE,
     kind: "changes-requested",
+    requestId: opts.correlationId ?? CORRELATION,
     correlationId: opts.correlationId ?? CORRELATION,
     payload: {
       repo: "the-metafactory/cortex",

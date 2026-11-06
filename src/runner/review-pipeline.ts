@@ -15,9 +15,7 @@
  * Anchors:
  *   - `docs/design-capability-dispatch-review-consumer.md` §4.5 — skill
  *     stdout contract (the fenced JSON block).
- *   - §5 — correlation_id contract (the verdict envelope's `correlation_id`
- *     is the REQUEST envelope's `id`; the failed-envelope wrapper takes
- *     `correlationId` explicitly for the same reason).
+ *   - §5 — correlation_id contract.
  *   - §6 — verdict envelope shape (cortex#248 §4.2.1 payload contract).
  *   - §7 — nak taxonomy (cortex#249 `DispatchTaskFailedReason`) and the
  *     mapping table this module implements.
@@ -83,6 +81,7 @@
 import type { Classification, Envelope } from "../bus/myelin/envelope-validator";
 import {
   createReviewTaskFailedEvent,
+  reviewReplyCorrelationId,
   createReviewVerdictEvent,
   type DispatchTaskFailedReason,
   type ReviewEventSource,
@@ -115,8 +114,7 @@ import {
  * `kind: "verdict"` carries the `review.verdict.<kind>` envelope built via
  * PR-2's `createReviewVerdictEvent`. `kind: "failed"` carries the
  * `dispatch.task.failed` envelope built via PR-2's
- * `createReviewTaskFailedEvent`. Either way the envelope's `correlation_id`
- * is the request envelope's `id` (load-bearing pilot contract per §5).
+ * `createReviewTaskFailedEvent`.
  *
  * PR-6's consumer pattern-matches on `result.kind` to decide whether to
  * also publish a `dispatch.task.completed` (verdict path) or to skip
@@ -164,13 +162,7 @@ export type ReviewPolicyCheck = (
 export interface ReviewPipelineOpts {
   /**
    * The original request envelope (the inbound
-   * `tasks.code-review.<flavor>` envelope). Used for two things:
-   *   1. `envelope.id` is the correlation_id stamped on every emitted
-   *      envelope (§5.1).
-   *   2. The envelope's `source` is read by the consumer for the
-   *      lifecycle envelopes; we don't read it here — but accepting the
-   *      whole envelope (not just the payload) is the cleaner shape for
-   *      future fields (sovereignty echo, signed_by chain).
+   * `tasks.code-review.<flavor>` envelope).
    */
   requestEnvelope: Envelope;
   /**
@@ -294,7 +286,7 @@ export interface ReviewPipelineOpts {
 export async function runReviewPipeline(
   opts: ReviewPipelineOpts,
 ): Promise<ReviewPipelineResult> {
-  const correlationId = opts.requestEnvelope.id;
+  const correlationId = reviewReplyCorrelationId(opts.requestEnvelope);
   const startedAt = new Date();
 
   // §7.2 — pre-CC policy gate. Caller-injected; dormant when omitted.
@@ -493,6 +485,7 @@ export async function runReviewPipeline(
     envelope = createReviewVerdictEvent({
       source: opts.source,
       kind: parsed.value.verdict,
+      requestId: opts.requestEnvelope.id,
       correlationId,
       // cortex#502 — echo logical routing onto the verdict (primary reply).
       ...(opts.responseRouting !== undefined && {
@@ -528,10 +521,6 @@ export async function runReviewPipeline(
 /**
  * Build the failed envelope with a consistent fingerprint:
  *   - `taskId` is a fresh UUID (cortex-internal lifecycle key per §5.2).
- *   - `correlationId` is the request envelope's `id` (load-bearing
- *     pilot contract per §5.2 — passed explicitly, NOT defaulted to
- *     `taskId`, because `dispatch-events.ts:160` would default to the
- *     wrong id space).
  *   - `failedAt` is `Date.now()` at the point of failure.
  *
  * Single chokepoint so the §5.2 contract can't drift between branches.

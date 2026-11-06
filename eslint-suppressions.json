@@ -1330,7 +1330,7 @@
   },
   "src/bus/review-events.ts": {
     "cortex/no-comments": {
-      "count": 76
+      "count": 65
     }
   },
   "src/bus/sovereignty-gate.ts": {
