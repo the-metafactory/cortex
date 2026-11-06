@@ -421,21 +421,13 @@ const modelFields = (path: string) => ({
   baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), `${path}.baseUrl must use https unless it is a loopback address`).optional(),
   model: z.string().min(1).optional(),
   command: z.array(z.string().min(1)).min(1).optional(),
+  commandFormat: z.enum(["prompt", "messages"]).optional(),
+  sourcePolicy: z.enum(AREA_POLICIES).optional(),
   apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
   apiKeyFile: z.string().min(1).optional(),
   caFile: z.string().min(1).optional(),
   timeoutSeconds: z.number().int().min(1).max(120).default(30),
 });
-
-const StudioFilerEndpointSchema = z.object({
-  baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), "use https unless loopback"),
-  model: z.string().min(1),
-  apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
-  apiKeyFile: z.string().min(1).optional(),
-  caFile: z.string().min(1).optional(),
-  timeoutSeconds: z.number().int().min(1).max(120).default(30),
-  maxPerPass: z.number().int().min(1).max(100).default(10),
-}).refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "set apiKeyEnv or apiKeyFile, not both");
 
 const endpointSchema = (path: string, timeoutSeconds: number) => z.object({
   baseUrl: z.url().refine((u) => u.startsWith("https://") || isLoopbackSideband(u), `${path}.baseUrl must use https unless it is a loopback address`),
@@ -446,16 +438,34 @@ const endpointSchema = (path: string, timeoutSeconds: number) => z.object({
   timeoutSeconds: z.number().int().min(1).max(120).default(timeoutSeconds),
 }).refine((c) => !(c.apiKeyEnv && c.apiKeyFile), `${path}: set apiKeyEnv or apiKeyFile, not both`);
 
+function jsonModelSchema(path: string, timeoutSeconds: number) {
+  const command = z.object({
+    command: z.array(z.string().min(1)).min(1),
+    sourcePolicy: z.enum(AREA_POLICIES).default("local"),
+    apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
+    apiKeyFile: z.string().min(1).optional(),
+    timeoutSeconds: z.number().int().min(1).max(180).default(timeoutSeconds),
+    baseUrl: z.never().optional(),
+    model: z.never().optional(),
+    caFile: z.never().optional(),
+  }).refine((c) => !(c.apiKeyEnv && c.apiKeyFile), `${path}: set apiKeyEnv or apiKeyFile, not both`);
+  return z.union([endpointSchema(path, timeoutSeconds).safeExtend({ command: z.never().optional(), sourcePolicy: z.enum(AREA_POLICIES).optional() }), command]);
+}
+
 const EmbedderEndpointSchema = endpointSchema("mc.desk.mail.embedder", 10);
-const DigestEndpointSchema = endpointSchema("mc.desk.mail.digest.model", 60);
-const WaitingEndpointSchema = endpointSchema("mc.desk.mail.waiting.model", 60);
+const StudioFilerAccessSchema = jsonModelSchema("mc.desk.studio.filer", 30).and(z.object({ maxPerPass: z.number().int().min(1).max(100).default(10) }));
+const StudioFilerSchema = StudioFilerAccessSchema.and(z.object({ local: StudioFilerAccessSchema.optional() })).refine(config => config.local?.sourcePolicy !== "cloud", "A local model slot cannot declare cloud access");
+const DigestAccessSchema = jsonModelSchema("mc.desk.mail.digest.model", 60);
+const DigestModelSchema = DigestAccessSchema.and(z.object({ local: DigestAccessSchema.optional() })).refine(config => config.local?.sourcePolicy !== "cloud", "A local model slot cannot declare cloud access");
+const WaitingAccessSchema = jsonModelSchema("mc.desk.mail.waiting.model", 60);
+const WaitingModelSchema = WaitingAccessSchema.and(z.object({ local: WaitingAccessSchema.optional() })).refine(config => config.local?.sourcePolicy !== "cloud", "A local model slot cannot declare cloud access");
 
 export const DeskMailWaitingSchema = z.object({
   windowDays: z.number().int().min(1).max(90).default(14),
   afterDays: z.number().int().min(0).max(30).default(4),
   snoozeDays: z.number().int().min(1).max(30).default(2),
   maxPerPass: z.number().int().min(1).max(100).default(10),
-  model: WaitingEndpointSchema.safeExtend({ local: WaitingEndpointSchema.optional() }).optional(),
+  model: WaitingModelSchema.optional(),
 });
 
 const clockTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, "a time as HH:MM");
@@ -562,7 +572,7 @@ export const DeskSchema = z.object({
   studio: z
     .object({
       dir: z.string().min(1),
-      filer: StudioFilerEndpointSchema.safeExtend({ local: StudioFilerEndpointSchema.optional() }).optional(),
+      filer: StudioFilerSchema.optional(),
       maxActive: z.number().int().min(1).max(20).default(5),
       personas: z.array(z.string().trim().min(1).max(100).regex(/^[^\r\n]+$/)).max(20).optional(),
       yesFilter: z.array(z.string().trim().min(1).max(200)).min(1).max(12).optional(),
@@ -596,7 +606,7 @@ export const DeskSchema = z.object({
   mail: z
     .object({
       classifier: z
-        .object({ ...modelFields("mc.desk.mail.classifier"), timeoutSeconds: z.number().int().min(1).max(180).default(30), maxPerPass: z.number().int().min(1).max(100).default(10) })
+        .object({ ...modelFields("mc.desk.mail.classifier"), timeoutSeconds: z.number().int().min(1).max(180).default(30), maxPerPass: z.number().int().min(1).max(100).default(10), sourcePolicy: z.enum(AREA_POLICIES).default("cloud") })
         .refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.mail.classifier: set apiKeyEnv or apiKeyFile, not both")
         .refine(hasOneClassifierForm, CLASSIFIER_FORM_ERROR)
         .refine((c) => !(c.command && c.caFile), "mc.desk.mail.classifier.caFile belongs to the endpoint form; pass a CA to the command in its argv")
@@ -645,7 +655,7 @@ export const DeskSchema = z.object({
       digest: z
         .object({
           at: z.iso.time({ precision: -1 }).default("07:00"),
-          model: DigestEndpointSchema.safeExtend({ local: DigestEndpointSchema.optional() }).optional(),
+          model: DigestModelSchema.optional(),
         })
         .optional(),
       unsubscribe: z

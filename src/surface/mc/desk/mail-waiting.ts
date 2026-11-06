@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
-import { chatJson, readApiKey, type EndpointAccess, type KeyReader } from "./classify";
+import { modelJson, modelPaths, classifierLabel, readApiKey, type ModelConfig, type KeyReader } from "./classify";
 import { logMailDecision, senderDomain, type MailFeatures, type MailLogAction } from "./mail-log";
 import type { ListedMail } from "./mail-actions";
 import { plural } from "./mail-sweep";
@@ -420,13 +420,13 @@ export function readWaitingAnswer(answer: unknown): WaitingAnswer | null {
   return { asks, ...(topic ? { topic } : {}), ...(asks && ask ? { ask } : {}) };
 }
 
-export type WaitingRunner = (access: EndpointAccess, request: WaitingRequest) => Promise<unknown>;
+export type WaitingRunner = (access: ModelConfig, request: WaitingRequest) => Promise<unknown>;
 
 export const chatWaitingRunner = (fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): WaitingRunner => (access, request) =>
-  chatJson(access, fetchImpl, readKey, "waiting model", 200)([{ role: "system", content: WAITING_PROMPT }, { role: "user", content: JSON.stringify(request) }], access.timeoutSeconds * 1000);
+  modelJson(access, fetchImpl, readKey, "waiting model", 200)([{ role: "system", content: WAITING_PROMPT }, { role: "user", content: JSON.stringify(request) }], access.timeoutSeconds * 1000);
 
 /** The model a sent mail may go to: a local-policy area's mail only to the local model; null when there is none. */
-export function waitingAccess(model: WaitingModel, local: boolean): EndpointAccess | null {
+export function waitingAccess(model: WaitingModel, local: boolean): ModelConfig | null {
   const { local: localModel, ...main } = model;
   return local ? localModel ?? null : main;
 }
@@ -476,16 +476,12 @@ export class WaitingClassifier {
       }
       this.retryAt.delete(s.id);
       db.query("UPDATE desk_mail_waiting SET asks = ?, topic = COALESCE(?, topic), ask = ?, detected_by = ? WHERE message_id = ? AND detected_by = 'heuristic'")
-        .run(answer.asks ? 1 : 0, answer.topic ?? null, answer.ask ?? null, `model:${access.model}`, s.id);
+        .run(answer.asks ? 1 : 0, answer.topic ?? null, answer.ask ?? null, `model:${classifierLabel(access)}`, s.id);
     }
     for (const [id, at] of this.retryAt) if (at <= now) this.retryAt.delete(id);
   }
 }
 
 export function resolveWaiting(config: WaitingConfig, expand: (path: string) => string): WaitingConfig {
-  const model = config.model;
-  if (!model) return config;
-  const paths = <T extends EndpointAccess>(access: T): T => ({ ...access, ...(access.apiKeyFile ? { apiKeyFile: expand(access.apiKeyFile) } : {}), ...(access.caFile ? { caFile: expand(access.caFile) } : {}) });
-  const { local, ...main } = model;
-  return { ...config, model: { ...paths(main), ...(local ? { local: paths(local) } : {}) } };
+  return { ...config, ...(config.model ? { model: modelPaths(config.model, expand) } : {}) };
 }

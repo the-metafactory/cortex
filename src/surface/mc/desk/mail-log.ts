@@ -138,6 +138,7 @@ const lowered = (v: string | undefined): string | undefined => {
 };
 
 export interface MailLogQuery {
+  sourceIds?: ReadonlySet<string>;
   since?: number;
   sender?: string;
   senderDomain?: string;
@@ -151,6 +152,7 @@ export interface MailLogQuery {
 export function queryMailLog(db: Database, q: MailLogQuery = {}): MailLogEntry[] {
   const filters: [string, string | number | undefined][] = [
     ["created_at >= ?", q.since],
+    ["source_id IN (SELECT value FROM json_each(?))", q.sourceIds ? JSON.stringify([...q.sourceIds]) : undefined],
     ["sender = ?", lowered(q.sender)],
     ["sender_domain = ?", lowered(q.senderDomain)],
     ["list_id = ?", q.listId === "" ? undefined : q.listId],

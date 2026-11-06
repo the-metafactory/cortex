@@ -225,10 +225,10 @@ export class MailSimilarity {
     return { neighbours: this.config?.neighbours ?? DEFAULT_SIMILARITY.neighbours, windowDays: this.config?.windowDays ?? DEFAULT_SIMILARITY.windowDays };
   }
 
-  load(db: Database, now: number): SimilarityContext {
+  load(db: Database, now: number, sourceIds?: ReadonlySet<string>): SimilarityContext {
     const { neighbours, windowDays } = this.limits;
     purgeVectors(db, now - windowDays * DAY_MS);
-    const entries = latestDecisions(queryMailLog(db, { since: now - windowDays * DAY_MS, actions: LEARNED_ACTIONS, limit: 5000 }));
+    const entries = latestDecisions(queryMailLog(db, { since: now - windowDays * DAY_MS, actions: LEARNED_ACTIONS, limit: 5000, sourceIds }));
     const hashes = new Map(entries.map((e) => [e, textHash(mailText(e))]));
     const hashOf = (e: MailLogEntry): string => hashes.get(e) ?? textHash(mailText(e));
     const fallback = (mail: MailText, note: string): SimilarDecisions => ({ basis: "sender", neighbours: senderDecisions(mail, others(entries, mail), neighbours), note });

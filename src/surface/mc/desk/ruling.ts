@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { fetchIssueOrPr, isGitHubFetchError } from "../adapters/github/fetch";
-import { chatJson, commandJson, isCommand, readApiKey, type CommandRunner, type KeyReader, type ModelConfig } from "./classify";
-import { runCommand } from "./spawn";
+import { modelJson, commandJson, isCommand, readApiKey, type CommandRunner, type KeyReader, type ModelConfig } from "./classify";
+import { runModelCommand } from "./spawn";
 import { rangerItemKey, type RangerNeedsYou, type RangerState } from "./sources/ranger";
 import { retryable } from "./actions";
 import { DAY_MS } from "./time";
@@ -161,14 +161,14 @@ export async function explainRuling(entry: RangerNeedsYou, nodeBody: string | nu
 }
 
 /** The configured explainer: a command that prints the answer as JSON, or a chat endpoint, as mail classification has. */
-export function rulingExplainer(config: ModelConfig, fetchImpl: typeof fetch = fetch, run: CommandRunner = runCommand, readKey: KeyReader = readApiKey): RulingExplainer {
+export function rulingExplainer(config: ModelConfig, fetchImpl: typeof fetch = fetch, run: CommandRunner = runModelCommand, readKey: KeyReader = readApiKey): RulingExplainer {
   const label = "ruling explainer";
   const timeoutMs = config.timeoutSeconds * 1000;
-  if (isCommand(config)) {
+  if (isCommand(config) && config.commandFormat !== "messages") {
     const runJson = commandJson(config, run, readKey, label);
     return (prompt) => runJson(prompt, timeoutMs);
   }
-  const chat = chatJson(config, fetchImpl, readKey, label, RULING_MAX_TOKENS);
+  const chat = modelJson(config, fetchImpl, readKey, label, RULING_MAX_TOKENS, run);
   return (prompt) => chat([{ role: "system", content: RULING_PROMPT }, { role: "user", content: prompt }], timeoutMs);
 }
 

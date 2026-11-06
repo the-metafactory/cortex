@@ -1,3 +1,4 @@
+import { classifierLabel } from "../desk/classify";
 import { draftWasRecorded } from "../desk/studio/session-draft";
 import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
@@ -68,7 +69,7 @@ test("whole-thread summary can propose a stand without adopting it", async () =>
 
 test("strictest current policy picks the model and the session never loses its local privacy pin", async () => {
   const r = rig(); await r.start(); const models: string[] = [];
-  const model: SessionModel = async (config, prompt) => { models.push(config.model); expect(prompt.context).toBe(""); return result; };
+  const model: SessionModel = async (config, prompt) => { models.push(classifierLabel(config)); expect(prompt.context).toBe(""); return result; };
   await r.say(model); r.options.areas.splice(0, 1, { id: "lab", label: "Lab", color: "", repos: [], goals: [], policy: "local" }); await r.say(model);
   r.options.areas.splice(0, 1, { id: "lab", label: "Lab", color: "", repos: [], goals: [], policy: "cloud" }); await r.say(model);
   expect(models).toEqual(["cloud-model", "local-model", "local-model"]);
