@@ -148,7 +148,7 @@ Minimizing alone does not stop listening. A suspended AudioContext, stale proces
 | `apiKeyEnv` | absent | Environment variable containing the key. Mutually exclusive with `apiKeyFile`. |
 | `apiKeyFile` | absent | File containing the key. Mutually exclusive with `apiKeyEnv`. |
 | `caFile` | absent | PEM CA file for the endpoint form. For a command, pass its CA option in `command` instead. |
-| `timeoutSeconds` | `30` | Integer from 1 to 120. Timeout per classification. |
+| `timeoutSeconds` | `30` | Integer from 1 to 180. Timeout per classification. |
 | `maxPerPass` | `10` | Integer from 1 to 100. Maximum unclassified mail items processed per pass. |
 
 A configured key reaches a command as `DESK_CLASSIFIER_KEY`. A classifier failure leaves rule-based ranking in place and permits another attempt after ten minutes. The command form can return summaries and evidence in addition to a category. See [Mail classifiers](commands.md#mail-classifiers).
