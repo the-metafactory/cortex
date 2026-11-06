@@ -9,6 +9,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { z } from "zod";
 import { projectRevision, ToolHost, type ToolDefinition, type ToolSession } from "./tools/capabilities";
 import type { HistoryConversation, HistoryOwner } from "./tools/conversation-history";
+import type { WorkOwner, WorkReaders } from "./tools/work-context";
 import { acquireHostLock, type LockOwner } from "./lock";
 import { cloudLanes, type CloudLane, type ToolsConfig } from "../common/types/desk-conversations";
 import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, type GateResult, type Lanes, type ToolSurfaceFor, type TurnCall, type TurnEvent } from "./model";
@@ -57,6 +58,7 @@ const StoredSchema = z.object({
   discord: DiscordLinkSchema.optional(),
   toolSources: z.record(z.string(), z.object({ revision: z.string(), policy: z.enum(["local", "cloud"]) })).default({}),
   historySources: z.record(z.string(), z.enum(["local", "cloud"])).default({}),
+  workSources: z.record(z.string(), z.enum(["local", "cloud"])).default({}),
 });
 type Stored = z.infer<typeof StoredSchema>;
 export type OwnerScope = NonNullable<Stored["scope"]>;
@@ -105,7 +107,7 @@ export interface HostOptions {
   alive?: (pid: number) => boolean;
   pid?: number;
 }
-export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters; withheld?: WithheldReasons }
+export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters; withheld?: WithheldReasons; readers?: WorkReaders }
 export type HostStatus = { state: "ready"; host: ConversationHost; tookOver: LockOwner | null; resumed: string[]; reconciled: string[] } | { state: "unavailable"; reason: string };
 
 const strictest = (policies: Policy[]): Policy => policies.includes("local") ? "local" : "cloud";
@@ -278,6 +280,19 @@ export class ConversationHost {
     return Promise.all(links.map(ref => this.resolve(ref)));
   }
 
+  private async workPolicies(current: Stored): Promise<Policy[]> {
+    const readers = this.sources.readers ?? {};
+    const policies: Policy[] = [];
+    for (const [key, recorded] of Object.entries(current.workSources)) {
+      const at = key.indexOf(":");
+      const reader = readers[key.slice(0, at) as keyof WorkReaders];
+      const now = reader ? await reader.read(key.slice(at + 1)).catch((): null => null) : null;
+      if (now?.state === "unavailable" && now.reason === "unauthorized") throw new ConversationError(403, "Previously retrieved related work is no longer authorized. Start a new conversation with current permissions.");
+      policies.push(recorded, ...(now?.state === "available" ? [now.object.policy] : []));
+    }
+    return policies;
+  }
+
   private async ownPrivacy(current: Stored): Promise<{ policy: Policy; sources: SourceView[]; available: boolean }> {
     const sources = await this.sourcesOf(current.links);
     const toolPolicies = Object.entries(current.toolSources).map(([id, source]) => {
@@ -285,7 +300,8 @@ export class ConversationHost {
       if (!project || projectRevision(project) !== source.revision) throw new ConversationError(403, "A previously used tool source was revoked or changed. Start a new conversation with current permissions.");
       return strictest([project.policy, source.policy]);
     });
-    return { policy: strictest([current.policy, ...toolPolicies, ...Object.values(current.historySources), ...sources.flatMap(s => s.state === "available" ? [s.policy] : [])]), sources, available: sources.every(s => s.state === "available") };
+    const workPolicies = await this.workPolicies(current);
+    return { policy: strictest([current.policy, ...toolPolicies, ...Object.values(current.historySources), ...workPolicies, ...sources.flatMap(s => s.state === "available" ? [s.policy] : [])]), sources, available: sources.every(s => s.state === "available") };
   }
 
   private async tighten(id: string): Promise<{ stored: Stored; effective: Policy; sources: SourceView[]; available: boolean }> {
@@ -345,7 +361,7 @@ export class ConversationHost {
 
   private toolSurface(): ToolSurfaceFor {
     const tools = this.options.tools ?? { config: () => undefined };
-    const host = new ToolHost({ config: tools.config, session: id => this.toolSession(id), history: this.historyOwner(), ...(tools.definitions ? { tools: tools.definitions } : {}), ...(tools.timeoutMs ? { timeoutMs: tools.timeoutMs } : {}), ...(tools.outputLimit ? { outputLimit: tools.outputLimit } : {}) });
+    const host = new ToolHost({ config: tools.config, session: id => this.toolSession(id), history: this.historyOwner(), work: this.workOwner(), ...(tools.definitions ? { tools: tools.definitions } : {}), ...(tools.timeoutMs ? { timeoutMs: tools.timeoutMs } : {}), ...(tools.outputLimit ? { outputLimit: tools.outputLimit } : {}) });
     return (id, route, record) => host.surface(id, route, record);
   }
 
@@ -392,6 +408,20 @@ export class ConversationHost {
         }
         signal.throwIfAborted();
         if (ids.length) await this.update(session.conversationId, current => ({ ...current, policy: strictest([current.policy, ...Object.values(sources)]), historySources: { ...current.historySources, ...sources } }));
+        return true;
+      },
+    };
+  }
+
+  private workOwner(): WorkOwner {
+    return {
+      readers: () => this.sources.readers ?? {},
+      now: () => this.now().getTime(),
+      remember: async (session, objects, signal) => {
+        const sources: Record<string, Policy> = {};
+        for (const object of objects) sources[`${object.kind}:${object.id}`] = object.policy;
+        signal.throwIfAborted();
+        if (objects.length) await this.update(session.conversationId, current => ({ ...current, policy: strictest([current.policy, ...Object.values(sources)]), workSources: { ...current.workSources, ...sources } }));
         return true;
       },
     };
@@ -451,7 +481,7 @@ export class ConversationHost {
       const at = this.now().toISOString();
       const policy = strictest([request.policy, ...sources.flatMap(source => source.state === "available" ? [source.policy] : [])]);
       const route = this.routeFor(policy);
-      const draft = { toolSources: {}, historySources: {}, principal, stack: this.options.stack, title: request.title, links: request.links, policy, state: seed.state ?? "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at, draft: seed.draft ?? "", seeded: !seed.entries?.length, titleFromSource: seed.titleFromSource ?? false, ...(seed.key ? { key: seed.key } : {}), ...(seed.scope ? { scope: seed.scope } : {}) } satisfies Omit<Stored, "engineId" | "sessionId" | "route" | "inputs">;
+      const draft = { toolSources: {}, historySources: {}, workSources: {}, principal, stack: this.options.stack, title: request.title, links: request.links, policy, state: seed.state ?? "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at, draft: seed.draft ?? "", seeded: !seed.entries?.length, titleFromSource: seed.titleFromSource ?? false, ...(seed.key ? { key: seed.key } : {}), ...(seed.scope ? { scope: seed.scope } : {}) } satisfies Omit<Stored, "engineId" | "sessionId" | "route" | "inputs">;
       await this.engine.createConversation({
         ownership: { kind: "ownerless" },
         agent: { instructions: IVY_INSTRUCTIONS, ...(route ? { model: { provider: CORTEX_PROVIDER, modelId: route } } : {}) },
