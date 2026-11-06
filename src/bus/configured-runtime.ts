@@ -1,4 +1,4 @@
-import type { Envelope } from "./myelin/envelope-validator";
+import { deriveNatsSubject, type Envelope } from "./myelin/envelope-validator";
 import { connect } from "nats";
 import { expandTilde, loadConfigWithAgents } from "../common/config/loader";
 import { enforceChmod600 } from "../common/config/file-permissions";
@@ -51,16 +51,20 @@ export async function startConfiguredMyelinRuntime(configPath: string, options: 
   }
   const publishOnSubject = runtime.publishOnSubject?.bind(runtime);
   const publishDurable = runtime.publishDurable?.bind(runtime);
+  const assertSubject = (subject: string): void => {
+    if (!subject.startsWith(`local.${derived.principal}.${derived.stack}.`) || !subject.split(".").every((token) => /^[A-Za-z0-9_@:-]+$/.test(token))) throw new Error("configured local bus subject outside pinned stack");
+  };
   const assertLocal = (envelope: Envelope): void => {
     if (envelope.sovereignty.classification !== "local") throw new Error("configured local bus refuses non-local classification");
     if (!envelope.source.startsWith(`${derived.principal}.${derived.stack}.`)) throw new Error("configured local bus source outside pinned stack");
+    assertSubject(deriveNatsSubject(envelope, derived.stack));
   };
   return {
     ...runtime,
     publish: async (envelope) => { assertLocal(envelope); await runtime.publish(envelope); },
     ...(publishOnSubject ? { publishOnSubject: async (envelope, subject) => {
       assertLocal(envelope);
-      if (!subject.startsWith(`local.${derived.principal}.${derived.stack}.`) || !subject.split(".").every((token) => /^[A-Za-z0-9_@:-]+$/.test(token))) throw new Error("configured local bus subject outside pinned stack");
+      assertSubject(subject);
       await publishOnSubject(envelope, subject);
     } } satisfies Pick<MyelinRuntime, "publishOnSubject"> : {}),
     ...(publishDurable ? { publishDurable: async (envelope, publishOptions) => {

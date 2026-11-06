@@ -61,12 +61,27 @@ test.skipIf(executable === null)("configured runtime coexists with an observer a
     const publishOnSubject = runtime.publishOnSubject?.bind(runtime);
     const publishDurable = runtime.publishDurable?.bind(runtime);
     if (!publishOnSubject || !publishDurable) throw new Error("native publish methods absent");
-    for (const subject of ["public.outside", "local.synthetic.work.tasks.*", "local.synthetic.work.tasks.", "local.synthetic.work.tasks..invalid", "local.synthetic.work.tasks.bad token", "local.synthetic.work.tasks.bad\r\nPUB public.outside 0\r\n"]) {
+    for (const subject of ["public.outside", "local.synthetic.workx.tasks.synthetic", "local.synthetic.work.tasks.*", "local.synthetic.work.tasks.", "local.synthetic.work.tasks..invalid", "local.synthetic.work.tasks.bad token", "local.synthetic.work.tasks.bad\r\nPUB public.outside 0\r\n"]) {
       await expect(publishOnSubject(value.envelope, subject)).rejects.toThrow("subject outside pinned stack");
     }
     await expect(publishOnSubject({ ...value.envelope, sovereignty: { ...value.envelope.sovereignty, classification: "federated" } }, "local.synthetic.work.tasks.synthetic")).rejects.toThrow("refuses non-local classification");
     await expect(publishDurable({ ...value.envelope, sovereignty: { ...value.envelope.sovereignty, classification: "federated" } }, { expectedStream: "SYNTHETIC" })).rejects.toBeInstanceOf(MyelinDurablePublishError);
     await expect(publishDurable({ ...value.envelope, source: "synthetic.other.helper" }, { expectedStream: "SYNTHETIC" })).rejects.toMatchObject({ kind: "unroutable" });
+    await expect(publishOnSubject({ ...value.envelope, source: "synthetic.other.helper" }, "local.synthetic.work.tasks.synthetic")).rejects.toThrow("source outside pinned stack");
+    for (const type of ["tasks.x\r\nPUB public.outside 0\r\n", "tasks.*", "tasks..invalid"]) {
+      await expect(runtime.publish({ ...value.envelope, type })).rejects.toThrow("subject outside pinned stack");
+      await expect(publishDurable({ ...value.envelope, type }, { expectedStream: "SYNTHETIC", timeoutMs: 100 })).rejects.toMatchObject({ kind: "unroutable" });
+    }
+    const addressedSubject = "local.synthetic.work.tasks.@did-synthetic:helper";
+    const addressed = observer.subscribe(addressedSubject);
+    await observer.flush();
+    const addressReceive = (async () => { for await (const message of addressed) return message.data; return null; })();
+    await publishOnSubject(value.envelope, addressedSubject);
+    const addressBytes = await Promise.race([addressReceive, Bun.sleep(2000).then(() => null)]);
+    if (!addressBytes) throw new Error("addressed signed publish absent");
+    const addressEnvelope = safeDecodeEnvelope(addressBytes, undefined);
+    if (!addressEnvelope) throw new Error("addressed envelope invalid");
+    addressed.unsubscribe();
     const receive = (async () => { for await (const message of sub) return message.data; return null; })();
     await runtime.publish(value.envelope);
     const bytes = await Promise.race([receive, Bun.sleep(2000).then(() => null)]);
@@ -77,6 +92,7 @@ test.skipIf(executable === null)("configured runtime coexists with an observer a
     if (!publicKey) throw new Error("synthetic key invalid");
     const identities = createInMemoryRegistry(); identities.add({ id: "did:mf:synthetic-work", network: "synthetic", public_key: publicKey, type: "service", created_at: new Date().toISOString() });
     expect((await verifyEnvelopeIdentity(received, identities)).status).toBe("verified");
+    expect((await verifyEnvelopeIdentity(addressEnvelope, identities)).status).toBe("verified");
     expect(observer.isClosed()).toBe(false);
     sub.unsubscribe();
     await runtime.stop(); runtime = undefined; await observer.drain(); observer = undefined;
