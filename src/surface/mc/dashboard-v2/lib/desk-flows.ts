@@ -2,7 +2,7 @@ import { DESK_FLOWS_PATH, SavedFlowDefinitionSchema, SavedFlowsSchema, type Save
 import { ApiFailure, getJson } from "./api";
 
 export type SavedFlowsState = { status: "checking" } | { status: "unconfigured" } | { status: "ready"; flows: SavedFlow[] } | { status: "error"; error: string };
-export const flowReadError = (error: unknown): string => error instanceof Error ? error.message : "Mission Control could not read the saved flows.";
+export const flowReadError = (error: unknown): string => error instanceof ApiFailure ? error.message : "Mission Control could not read the saved flows.";
 
 export async function loadSavedFlows(signal: AbortSignal, read = getJson): Promise<SavedFlowsState> {
   try { return { status: "ready", flows: SavedFlowsSchema.parse(await read(DESK_FLOWS_PATH, { signal })).flows }; }
@@ -16,4 +16,12 @@ export async function loadSavedFlowDefinition(name: string, signal: AbortSignal,
   const definition = SavedFlowDefinitionSchema.parse(await read(`${DESK_FLOWS_PATH}/${encodeURIComponent(name)}`, { signal }));
   if (definition.name !== name) throw new Error("Mission Control returned a different saved flow.");
   return definition;
+}
+
+export type ShownFlowsState = Extract<SavedFlowsState, { status: "ready" | "error" }>;
+export const flowsShown = (flows: SavedFlowsState): flows is ShownFlowsState => flows.status === "ready" || flows.status === "error";
+
+export function routinePageTabs(flows: SavedFlowsState): { flowsAvailable: boolean; tabs: Array<"schedule" | "workspace" | "flows"> } {
+  const flowsAvailable = flowsShown(flows);
+  return { flowsAvailable, tabs: flowsAvailable ? ["schedule", "workspace", "flows"] : ["schedule", "workspace"] };
 }

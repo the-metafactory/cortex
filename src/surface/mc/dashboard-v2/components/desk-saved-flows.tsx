@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { SavedFlow, SavedFlowDefinition } from "../../desk/saved-flow-contract";
-import { flowReadError, loadSavedFlowDefinition, type SavedFlowsState } from "../lib/desk-flows";
+import { flowReadError, loadSavedFlowDefinition, type ShownFlowsState } from "../lib/desk-flows";
 import { formatRelativeTime } from "../lib/agents-display";
 
 export type FlowDefinitionState = { status: "closed" | "loading" } | { status: "ready"; definition: SavedFlowDefinition } | { status: "error"; error: string };
@@ -26,9 +26,7 @@ function SavedFlowEntry({ flow, now }: { flow: SavedFlow; now: number }) {
   return <SavedFlowRow flow={flow} now={now} state={state} onToggle={toggle} />;
 }
 
-export function DeskSavedFlows({ state, now = Date.now() }: { state: SavedFlowsState; now?: number }) {
-  if (state.status === "checking") return <p role="status">Reading saved flows…</p>;
-  if (state.status === "unconfigured") return null;
+export function DeskSavedFlows({ state, now = Date.now() }: { state: ShownFlowsState; now?: number }) {
   if (state.status === "error") return <p role="alert">{state.error}</p>;
   return <section aria-label="Saved flows"><h2>Saved flows</h2>{state.flows.length === 0 ? <p>No saved flows yet. Ask Ivy to make a flow in a conversation.</p> : <ul className="saved-flow-list">{state.flows.map((flow) => <SavedFlowEntry key={`${flow.name}:${flow.sha256}:${flow.savedAt}`} flow={flow} now={now} />)}</ul>}</section>;
 }

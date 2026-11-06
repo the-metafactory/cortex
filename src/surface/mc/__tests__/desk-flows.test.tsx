@@ -8,7 +8,7 @@ import { DESK_FLOWS_PATH, type SavedFlow } from "../desk/saved-flow-contract";
 import { DeskSavedFlows, SavedFlowRow } from "../dashboard-v2/components/desk-saved-flows";
 import { DeskRoutineEditor } from "../dashboard-v2/components/desk-routine-editor";
 import { defaultRoutinesLocation, readRoutinesLocation, routinesSearch } from "../dashboard-v2/hooks/use-routines-location";
-import { loadSavedFlowDefinition, loadSavedFlows } from "../dashboard-v2/lib/desk-flows";
+import { loadSavedFlowDefinition, flowsShown, loadSavedFlows, routinePageTabs, type ShownFlowsState } from "../dashboard-v2/lib/desk-flows";
 import { ApiFailure, type getJson } from "../dashboard-v2/lib/api";
 import { initDatabase } from "../db/init";
 import { DEFAULT_CONFIG } from "../config";
@@ -30,6 +30,8 @@ const apiRead = (run: WriterRunner): typeof getJson => async <T,>(path: string):
   if (!response.ok) throw new ApiFailure({ status: response.status, message: body.error ?? "Read failed." });
   return body as T;
 };
+
+const shown = (state: Parameters<typeof flowsShown>[0]): ShownFlowsState => { if (!flowsShown(state)) throw new Error("flows are not shown"); return state; };
 
 describe("Desk saved flows", () => {
   it("lists only saved flows newest first and renders names, saved dates and conversation provenance", async () => {
@@ -77,7 +79,7 @@ describe("Desk saved flows", () => {
       const seam = runner(reply, code);
       const state = await loadSavedFlows(new AbortController().signal, apiRead(seam.run));
       expect(state).toEqual({ status: "error", error: "Pulse could not read the saved flows." });
-      const html = renderToStaticMarkup(<DeskSavedFlows state={state} />);
+      const html = renderToStaticMarkup(<DeskSavedFlows state={shown(state)} />);
       expect(html).toContain('role="alert"');
       expect(html).toContain("Pulse could not read the saved flows.");
       expect(html).not.toContain("No saved flows yet");
@@ -115,7 +117,7 @@ describe("Desk saved flows", () => {
 
   it("renders the empty state only after a successful empty list", async () => {
     const state = await loadSavedFlows(new AbortController().signal, apiRead(runner({ status: "ok", flows: [] }).run));
-    expect(renderToStaticMarkup(<DeskSavedFlows state={state} />)).toContain("No saved flows yet. Ask Ivy to make a flow in a conversation.");
+    expect(renderToStaticMarkup(<DeskSavedFlows state={shown(state)} />)).toContain("No saved flows yet. Ask Ivy to make a flow in a conversation.");
   });
 
   it("returns 404 without configuration, hides the tab, and does not call Pulse", async () => {
@@ -131,10 +133,22 @@ describe("Desk saved flows", () => {
     const read: typeof getJson = () => Promise.reject(new ApiFailure({ status: 404, message: "Saved flows are not configured on this stack." }));
     const state = await loadSavedFlows(new AbortController().signal, read);
     expect(state).toEqual({ status: "unconfigured" });
-    expect(renderToStaticMarkup(<DeskSavedFlows state={state} />)).toBe("");
+    expect(routinePageTabs(state)).toEqual({ flowsAvailable: false, tabs: ["schedule", "workspace"] });
     const html = renderToStaticMarkup(<DeskRoutineEditor onBack={() => undefined} location={{ ...defaultRoutinesLocation(), tab: "flows" }} />);
     expect(html).not.toContain('id="routines-tab-flows"');
     expect(html).toContain('id="routines-tab-schedule"');
+  });
+
+  it("offers the Saved flows tab only when flows are ready or failed", () => {
+    expect(routinePageTabs({ status: "checking" }).tabs).toEqual(["schedule", "workspace"]);
+    expect(routinePageTabs({ status: "unconfigured" }).tabs).toEqual(["schedule", "workspace"]);
+    expect(routinePageTabs({ status: "ready", flows: [] }).tabs).toEqual(["schedule", "workspace", "flows"]);
+    expect(routinePageTabs({ status: "error", error: "x" }).tabs).toEqual(["schedule", "workspace", "flows"]);
+  });
+
+  it("shows a readable sentence, not parser output, when the response body is malformed", async () => {
+    const state = await loadSavedFlows(new AbortController().signal, (() => Promise.resolve({ flows: "nope" })) as typeof getJson);
+    expect(state).toEqual({ status: "error", error: "Mission Control could not read the saved flows." });
   });
 
   it("round trips the flows tab without losing the existing routine workspace", () => {
