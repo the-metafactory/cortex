@@ -43,6 +43,8 @@ inherited from cortex. Unset parent variables are omitted.
 
 For the generic routine-file process and its configured path boundary, see [Run routine files through Pulse](pulse-flow-process.md).
 
+`CORTEX_PROCESS_FAILURE_FILE` names a file the child may write one line to, saying why it failed. The runner adds that line to the `reason` on `system.bus.process`, and the Desk shows it on the routine's history. Write only what the principal may read there.
+
 ## Execution input snapshots
 
 A spec can declare `snapshot_inputs: {flow: /absolute/routines/flows}`.

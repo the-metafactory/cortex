@@ -6,6 +6,7 @@ import { snapshotProcessInputs } from "../../bus/process-input-snapshot";
 import { Command } from "commander";
 import { InMemoryAgentTransport } from "pulse";
 import { loadProcessSpec, resolveArgv } from "../../bus/process-runner";
+import { CORTEX_PROCESS_FAILURE_FILE } from "../../bus/process-env";
 import { registerPulseFlowCommand } from "../../cli/cortex/commands/pulse-flow";
 import { executeRoutineFlow, readActionInventory, readRoutineFlow, requireFlowProviders } from "../pulse-flow";
 
@@ -192,6 +193,24 @@ describe("routine flow execution", () => {
     await writeFile(join(f.selected, "action.json"), JSON.stringify({ name: "A_WRONG", description: "wrong" }));
     await expect(executeRoutineFlow(f)).rejects.toThrow("name mismatch");
     expect(await Bun.file(f.sentinel).exists()).toBe(false);
+  });
+
+  test("a CLI failure is stated in the file the process runner named", async () => {
+    const root = await mkdtemp(join(tmpdir(), "pulse-flow-failure-"));
+    roots.push(root);
+    const file = join(root, "failure");
+    const command = new Command();
+    registerPulseFlowCommand(command, { env: { [CORTEX_PROCESS_FAILURE_FILE]: file } });
+    const previous = process.exitCode;
+    const stderr = process.stderr.write;
+    try {
+      process.stderr.write = () => true;
+      await command.parseAsync(["node", "cortex", "pulse-flow", "--flows-dir", "relative", "--flow", "relative", "--catalog-file", "relative"]);
+    } finally {
+      process.stderr.write = stderr;
+      process.exitCode = previous;
+    }
+    expect(await readFile(file, "utf8")).toContain("absolute");
   });
 
   test("CLI failures are a single diagnostic line and a failing exit status", async () => {

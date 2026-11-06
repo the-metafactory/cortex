@@ -557,6 +557,9 @@ export type Presence = z.infer<typeof PresenceSchema>;
  *   - `maxRestarts` — daemon supervision restart cap. Accepted + documented;
  *                    unused until B-2 (per-task brains never restart).
  */
+/** Stays under the 20-minute JetStream ack_wait, so a killed brain is reported before the task is redelivered. */
+export const MAX_BRAIN_TASK_TIMEOUT_MS = 19 * 60 * 1000;
+
 export const BrainConfigSchema = z
   .object({
     /**
@@ -608,6 +611,7 @@ export const BrainConfigSchema = z
      * this is what the brain may REQUEST of the fleet.
      */
     dispatch_capabilities: z.array(z.string().min(1)).default([]),
+    timeout_ms: z.number().int().positive().max(MAX_BRAIN_TASK_TIMEOUT_MS).optional(),
     /**
      * Daemon supervision restart cap (§7.4): cortex restarts a crashed daemon
      * brain up to this many times, then marks the agent degraded (the restart

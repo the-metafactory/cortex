@@ -173,6 +173,7 @@ export interface BrainBootAgent {
       secrets: readonly string[];
       /** The manifest ALLOW-LIST for `dispatch` effects. */
       dispatch_capabilities: readonly string[];
+      timeout_ms?: number;
       /** Daemon supervision restart cap (`lifecycle: daemon` only). */
       maxRestarts: number;
       /**
@@ -611,7 +612,12 @@ export function wireBrainConsumers(
         opts.daemonBrainHosts.push(daemonHost);
         consumer = new BrainConsumer({ ...baseConsumerOpts, daemonHost });
       } else {
-        const runBrainTask = makeExecBrainRunner({ run: brain.run, packDir, secrets });
+        const runBrainTask = makeExecBrainRunner({
+          run: brain.run,
+          packDir,
+          secrets,
+          ...(brain.timeout_ms !== undefined && { timeoutMs: brain.timeout_ms }),
+        });
         consumer = new BrainConsumer({ ...baseConsumerOpts, runBrainTask });
       }
       opts.brainConsumers.push(consumer);
