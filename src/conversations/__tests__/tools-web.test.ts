@@ -41,7 +41,7 @@ function rig(options: { web?: ToolsConfig["web"]; policy?: "cloud" | "local"; dn
   };
   const base = config();
   const tools = createWebTools({
-    config: () => options.web === undefined && !("web" in options) ? base : { ...base, ...(options.web ? { web: options.web } : {}), ...(options.web === undefined && "web" in options ? { web: undefined } : {}) } as ToolsConfig,
+    config: () => options.web === undefined && !("web" in options) ? base : { ...base, ...(options.web ? { web: options.web } : {}), ...(options.web === undefined && "web" in options ? { web: undefined } : {}) },
     request: request => { searches.push(request); return Promise.resolve((options.search ?? (() => ({ status: 200, body: JSON.stringify({ results: [{ title: "Bun docs", url: "https://bun.sh/docs#top", content: "Runtime" }, { title: "bad", url: "javascript:alert(1)" }] }) })))(request)); },
     resolve: host => { resolved.push(host); const found = dns[host]; return found ? Promise.resolve(found) : Promise.reject(new Error("NXDOMAIN")); },
     transport, env: options.env ?? {}, now: () => NOW,
