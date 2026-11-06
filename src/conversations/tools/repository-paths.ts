@@ -34,6 +34,7 @@ export class RepositoryPaths {
   private readonly rootStat: Stats;
   private readonly boundaries: { project: ToolProject; root: string }[];
   private readonly checked = new Map<string, CheckedPath>();
+  private readonly historical = new Set<string>();
 
   constructor(private readonly context: ToolContext, private readonly project: ToolProject) {
     if (!permitted(context, project)) throw new RepositoryFailure("denied", "source-policy");
@@ -73,15 +74,18 @@ export class RepositoryPaths {
       }
       this.check(path);
     }
+    for (const path of this.historical) this.checkHistorical(path);
     this.validateRoot();
   }
 
-  private checkScope(absolute: string): void {
+  private checkScope(absolute: string, historical = false): void {
     if (!within(this.root, absolute)) throw new RepositoryFailure("denied", "outside-project");
     if (excluded(this.project, relative(this.root, absolute))) throw new RepositoryFailure("denied", "excluded-path");
     for (const boundary of this.boundaries) {
-      if (!within(boundary.root, absolute)) continue;
-      if (!permitted(this.context, boundary.project) || excluded(boundary.project, relative(boundary.root, absolute))) throw new RepositoryFailure("denied", "source-policy");
+      const scopedRoot = historical ? boundary.root.toLowerCase() : boundary.root;
+      const scopedPath = historical ? absolute.toLowerCase() : absolute;
+      if (!within(scopedRoot, scopedPath)) continue;
+      if (!permitted(this.context, boundary.project) || excluded(boundary.project, relative(scopedRoot, scopedPath))) throw new RepositoryFailure("denied", "source-policy");
       if (boundary.project.policy === "local") this.policy = "local";
     }
     const parts = relative(this.root, absolute).split("/");
@@ -97,6 +101,24 @@ export class RepositoryPaths {
       }
       throw new RepositoryFailure("denied", "nested-checkout");
     }
+  }
+
+  checkHistorical(path: string): void {
+    this.validateRoot();
+    if (!relativeInput(path)) throw new RepositoryFailure("denied", "relative-path-required");
+    this.checkScope(resolve(this.root, path), true);
+    let parent = this.root;
+    for (const part of path.split("/")) {
+      parent = join(parent, part);
+      try {
+        const stat = lstatSync(parent);
+        if (stat.isSymbolicLink()) throw new RepositoryFailure("denied", "symlink-path");
+        this.checkScope(realpathSync.native(parent), true);
+      } catch (error) {
+        if (fileFailure(error).status !== "missing") throw error;
+      }
+    }
+    this.historical.add(path);
   }
 
   check(path: string): CheckedPath {
