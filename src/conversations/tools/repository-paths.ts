@@ -99,6 +99,24 @@ export class RepositoryPaths {
     }
   }
 
+  permit(path: string): void {
+    if (!relativeInput(path)) throw new RepositoryFailure("denied", "relative-path-required");
+    this.checkScope(resolve(this.root, path));
+  }
+
+  sourceOf(absolute: string): { project: string; path: string } | null {
+    let real: string;
+    try { real = realpathSync.native(absolute); }
+    catch (error) {
+      if (fileFailure(error).status === "missing") return null;
+      throw new RepositoryFailure("denied", "source-boundary-unavailable");
+    }
+    const covering = this.boundaries.filter(boundary => within(boundary.root, real));
+    if (!covering.length || covering.some(boundary => !permitted(this.context, boundary.project) || excluded(boundary.project, relative(boundary.root, real)))) return null;
+    const nearest = covering.reduce((best, boundary) => boundary.root.length > best.root.length ? boundary : best);
+    return { project: nearest.project.id, path: relative(nearest.root, real) || "." };
+  }
+
   check(path: string): CheckedPath {
     this.validateRoot();
     if (!relativeInput(path)) throw new RepositoryFailure("denied", "relative-path-required");

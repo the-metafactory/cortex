@@ -79,6 +79,26 @@ Repository reads bind their durable source record to the complete project regist
 
 Structured results distinguish `ok`, `denied`, `missing`, `unreadable`, `binary`, and `truncated`. Oversized files disclose no text. Binary and invalid UTF-8 files disclose no text. `skipped` reports up to 40 skipped entries within a separate budget of 2,000 UTF-16 code units. `skippedCount` counts all encountered skips. Skips consume no match slots and cannot stop traversal. `truncated` and `reasons` identify line, depth, byte, entry, output, and skipped-report limits. `disclosedBytes` counts returned file text before the Cortex runtime's credential redaction. Denied results contain zero file text bytes. Cancellation uses the Cortex runtime's `stopped` outcome and releases no partial content.
 
+## Repository Git tools
+
+A project with `repo.read` also gets five read-only Git tools. Each runs a fixed Git command with no shell, and the model supplies only a project ID and validated values.
+
+| Tool | Additional input | Result |
+| --- | --- | --- |
+| `git_status` | none | Branch, head, upstream, ahead and behind counts, remotes, `tracked` and `untracked` changes |
+| `git_worktrees` | none | Worktrees inside permitted sources |
+| `git_log` | `ref`, `path`, `limit`, `skip` | Commit `sha`, author, date and subject |
+| `git_show` | `ref`, `path`, `offset`, `limit` | Commit message, changed files and patch window |
+| `git_diff` | `scope`, `base`, `head`, `path`, `offset`, `limit` | Changed files and patch window |
+
+Every result carries `provenance.head` and `provenance.branch`. `git_diff` and `git_show` set `source` to `working-tree`, `index` or `committed`, so a reader can tell uncommitted from committed evidence. Untracked files appear only in `git_status`. A patch window holds up to 12,000 characters, and `nextOffset` continues it.
+
+**Scope.** The project root must be the top of its checkout, or the result is `not-a-repository`. Changed paths go through the same exclusion, nested checkout and overlapping source checks as file reads, one path at a time. A refused path is left out of the patch and counted in `withheldPaths`. Worktrees outside the permitted sources are counted in `withheldWorktrees`. Commit messages are not path-scoped, so a subject can name an excluded file. User information and query strings are removed from remote URLs.
+
+**Execution.** Git runs with a fixed environment and without system or user configuration. It takes no optional locks, so reads leave the index, refs and working files unchanged. A repository's own configuration cannot run a helper: `core.fsmonitor`, `core.hooksPath`, signature display, external diff and textconv are overridden on every command, and each configured filter and diff driver command is blanked. Revisions are resolved to a commit first, so an input cannot act as an option.
+
+`status` is `ok`, `truncated`, `denied`, `missing`, `unreadable`, `git-missing`, `not-a-repository`, `invalid-ref`, `timeout` or `unsafe-config`.
+
 ## Probe evidence
 
 Execute the focused probes on the machine that runs the Cortex runtime:
