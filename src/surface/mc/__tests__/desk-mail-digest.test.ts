@@ -1,3 +1,4 @@
+import { classifierLabel } from "../desk/classify";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { handleDeskMail } from "../api/desk-mail";
@@ -103,12 +104,12 @@ describe("flags", () => {
     const topics: DigestTopic[] = [...TOPICS, { kind: "thread", name: "Work secret", local: true }];
     const cloud = flagPlan({ ...MAIN }, g, topics, new Set(["work-mail"]));
     if (typeof cloud !== "object") throw new Error(cloud);
-    expect(cloud.access.model).toBe("cloud");
+    expect(classifierLabel(cloud.access)).toBe("cloud");
     expect(cloud.members.map((m) => m.id)).toEqual(["p"]);
     expect(cloud.topics.map((t) => t.name)).toEqual(["Desk routing", "Publish one post a week"]);
     const local = flagPlan({ ...MAIN, local: LOCAL }, g, topics, new Set(["work-mail"]));
     if (typeof local !== "object") throw new Error(local);
-    expect([local.access.model, local.members.map((m) => m.id), local.topics.length]).toEqual(["local", ["p", "w"], 3]);
+    expect([classifierLabel(local.access), local.members.map((m) => m.id), local.topics.length]).toEqual(["local", ["p", "w"], 3]);
     expect(flagPlan({ ...MAIN }, g, topics, new Set(["work-mail", "personal-mail"]))).toBe("local-only");
     expect(flagPlan({ ...MAIN }, g, [], new Set())).toBe("no-topics");
   });
@@ -144,9 +145,12 @@ describe("flags", () => {
     const topics = digestTopics({ active: [{ question: "How should Desk routing work?", policy: "local" }] }, () => ({ outline }), [{ text: "G5 weekly post" }], NOW);
     expect(topics).toEqual([
       { kind: "thread", name: "How should Desk routing work?", local: true },
-      { kind: "focus", name: "Desk", local: false },
-      { kind: "goal", name: "G5 weekly post", local: false },
+      { kind: "focus", name: "Desk", local: true },
+      { kind: "goal", name: "G5 weekly post", local: true },
     ]);
+    const scoped = { title: "Root", children: [{ id: "area:personal", title: "Personal", children: [{ title: "Garden", focusMonth: "2026-11", children: [] }] }, { id: "area:work", title: "Work", children: [{ title: "COMPANY_FOCUS_SENTINEL", focusMonth: "2026-11", children: [] }] }] };
+    const scopedTopics = digestTopics(null, () => ({ outline: scoped }), [{ text: "Personal goal", local: false }, { text: "Unknown goal" }], NOW, new Set(["personal"]));
+    expect(scopedTopics).toEqual([{ kind: "focus", name: "Garden", local: false }, { kind: "focus", name: "COMPANY_FOCUS_SENTINEL", local: true }, { kind: "goal", name: "Personal goal", local: false }, { kind: "goal", name: "Unknown goal", local: true }]);
     expect(digestTopics(null, () => { throw new Error("unreadable"); }, [], NOW)).toEqual([]);
   });
 });
