@@ -72,7 +72,7 @@ export function ledgerEnvelopeError(envelope: Envelope, subject: string): string
  * dedupes on its own; all writes commit atomically. `replay` (rebuild from
  * LEDGER, see `replay.ts`) updates both rows the same way and writes no Vigil event.
  */
-export function ingestLedgerEnvelope(db: Database, envelope: Envelope, subject: string, now: number, opts: Omit<VigilIngestOpts, "sourceStack"> & { log?: Pick<Console, "warn">; deferSourceStackMismatch?: boolean } = {}): AttentionDelta {
+export function ingestLedgerEnvelope(db: Database, envelope: Envelope, subject: string, now: number, opts: Omit<VigilIngestOpts, "sourceStack"> & { log?: Pick<Console, "warn"> } = {}): AttentionDelta {
   const payload = envelope.payload as unknown as ExecutionRunFinishedPayload;
   const observation: LedgerObservation = {
     goal_id: payload.serves?.goal ?? null, producer: payload.producer, stack: stackOfEnvelope(subject),
@@ -102,7 +102,7 @@ export function ingestLedgerEnvelope(db: Database, envelope: Envelope, subject: 
     }
     return applyVigilTransitions(db, events.filter((event) => event !== null), opts.localStackId ?? "default");
   }).immediate();
-  if (!opts.deferSourceStackMismatch) countSourceStackMismatch(envelope, observation.stack, opts.log ?? console);
+  if (!opts.replay) countSourceStackMismatch(envelope, observation.stack, opts.log ?? console);
   return delta;
 }
 

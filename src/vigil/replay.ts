@@ -85,7 +85,7 @@ export async function replayLedger(opts: {
     // A throw reaches onError and the delivery is NAK'ed for redelivery.
     const stack = stackOfEnvelope(subject);
     db.transaction(() => {
-      ingestLedgerEnvelope(db, envelope, subject, now(), { replay: true, log, deferSourceStackMismatch: true });
+      ingestLedgerEnvelope(db, envelope, subject, now(), { replay: true });
       reconnectReplayedEvents(db, envelope.payload as unknown as ExecutionRunFinishedPayload, stack);
     })();
     countSourceStackMismatch(envelope, stack, log);
