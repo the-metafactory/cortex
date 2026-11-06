@@ -156,7 +156,13 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
       return reply(operation.state === "created" ? 200 : operation.state === "failed" ? 409 : 202, { ok: operation.state === "created", operation, ...(operation.state === "failed" ? { error: operation.history.at(-1)?.detail ?? "The outcome was not saved." } : {}) });
     }
     if (part === "entries") {
-      if (req.method !== "GET" || inputId) return notAllowed("GET");
+      if (req.method !== "GET") return notAllowed("GET");
+      if (inputId) {
+        if (!/^[1-9][0-9]*$/.test(inputId)) return fail(400, "The entry ID must be a positive safe integer.");
+        if ((await host.principalOf(id)).trim().toLowerCase() !== auth.principal.trim().toLowerCase()) return fail(404, "No such retained entry exists in this conversation.");
+        const entry = await host.entry(id, Number(inputId));
+        return entry ? reply(200, { ok: true, entry }) : fail(404, "No such retained entry exists in this conversation.");
+      }
       const limit = Number(url.searchParams.get("limit") ?? "100");
       if (!Number.isInteger(limit) || limit < 1 || limit > 500) return fail(400, "The limit must be between 1 and 500.");
       return reply(200, { ok: true, ...(await host.entries(id, limit, url.searchParams.get("cursor") ?? undefined)) });

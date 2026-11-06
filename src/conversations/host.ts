@@ -8,6 +8,7 @@ import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type 
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { z } from "zod";
 import { projectRevision, ToolHost, type ToolDefinition, type ToolSession } from "./tools/capabilities";
+import type { HistoryConversation, HistoryOwner } from "./tools/conversation-history";
 import { acquireHostLock, type LockOwner } from "./lock";
 import { cloudLanes, type CloudLane, type ToolsConfig } from "../common/types/desk-conversations";
 import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, type GateResult, type Lanes, type ToolSurfaceFor, type TurnCall, type TurnEvent } from "./model";
@@ -55,6 +56,7 @@ const StoredSchema = z.object({
   titleFromSource: z.boolean().default(false),
   discord: DiscordLinkSchema.optional(),
   toolSources: z.record(z.string(), z.object({ revision: z.string(), policy: z.enum(["local", "cloud"]) })).default({}),
+  historySources: z.record(z.string(), z.enum(["local", "cloud"])).default({}),
 });
 type Stored = z.infer<typeof StoredSchema>;
 export type OwnerScope = NonNullable<Stored["scope"]>;
@@ -276,18 +278,37 @@ export class ConversationHost {
     return Promise.all(links.map(ref => this.resolve(ref)));
   }
 
-  private async tighten(id: string): Promise<{ stored: Stored; effective: Policy; sources: SourceView[]; available: boolean }> {
-    const current = await this.stored(id);
+  private async ownPrivacy(current: Stored): Promise<{ policy: Policy; sources: SourceView[]; available: boolean }> {
     const sources = await this.sourcesOf(current.links);
     const toolPolicies = Object.entries(current.toolSources).map(([id, source]) => {
       const project = this.options.tools?.config()?.projects.find(project => project.id === id);
       if (!project || projectRevision(project) !== source.revision) throw new ConversationError(403, "A previously used tool source was revoked or changed. Start a new conversation with current permissions.");
       return strictest([project.policy, source.policy]);
     });
-    const resolved = strictest([current.policy, ...toolPolicies, ...sources.flatMap(s => s.state === "available" ? [s.policy] : [])]);
+    return { policy: strictest([current.policy, ...toolPolicies, ...Object.values(current.historySources), ...sources.flatMap(s => s.state === "available" ? [s.policy] : [])]), sources, available: sources.every(s => s.state === "available") };
+  }
+
+  private async tighten(id: string): Promise<{ stored: Stored; effective: Policy; sources: SourceView[]; available: boolean }> {
+    const current = await this.stored(id);
+    const own = await this.ownPrivacy(current);
+    const policies = [own.policy];
+    const seen = new Set([id]);
+    const pending = Object.keys(current.historySources);
+    while (pending.length) {
+      const target = pending.pop();
+      if (target === undefined) continue;
+      if (seen.has(target)) continue;
+      seen.add(target);
+      const source = await this.findStored(target);
+      if (source?.principal !== current.principal) throw new ConversationError(403, "Previously retrieved conversation evidence is no longer authorized. Start a new conversation with current permissions.");
+      const privacy = await this.ownPrivacy(source);
+      if (!privacy.available) throw new ConversationError(403, "Previously retrieved conversation evidence is no longer authorized. Start a new conversation with current permissions.");
+      policies.push(privacy.policy);
+      pending.push(...Object.keys(source.historySources));
+    }
+    const resolved = strictest(policies);
     const stored = resolved === current.policy ? current : await this.update(id, s => ({ ...s, policy: strictest([s.policy, resolved]) }));
-    const available = sources.every(s => s.state === "available");
-    return { stored, effective: available ? stored.policy : "local", sources, available };
+    return { stored, effective: own.available ? stored.policy : "local", sources: own.sources, available: own.available };
   }
 
   routeFor(policy: Policy, chosen?: string): ModelRoute | null {
@@ -324,8 +345,56 @@ export class ConversationHost {
 
   private toolSurface(): ToolSurfaceFor {
     const tools = this.options.tools ?? { config: () => undefined };
-    const host = new ToolHost({ config: tools.config, session: id => this.toolSession(id), ...(tools.definitions ? { tools: tools.definitions } : {}), ...(tools.timeoutMs ? { timeoutMs: tools.timeoutMs } : {}), ...(tools.outputLimit ? { outputLimit: tools.outputLimit } : {}) });
+    const host = new ToolHost({ config: tools.config, session: id => this.toolSession(id), history: this.historyOwner(), ...(tools.definitions ? { tools: tools.definitions } : {}), ...(tools.timeoutMs ? { timeoutMs: tools.timeoutMs } : {}), ...(tools.outputLimit ? { outputLimit: tools.outputLimit } : {}) });
     return (id, route, record) => host.surface(id, route, record);
+  }
+
+  private async findStored(id: string): Promise<Stored | null> {
+    try { return await this.stored(id); }
+    catch (error) {
+      if (error instanceof ConversationError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
+  private async historyAccess(id: string, session: ToolSession): Promise<HistoryConversation | null> {
+    const current = await this.findStored(id);
+    if (current?.principal !== session.principal || id === session.conversationId) return null;
+    try {
+      const { stored, effective, available } = await this.tighten(id);
+      if (!available || stored.principal !== session.principal || effective === "local" && (session.transport !== "web" || session.route !== "local" || session.policy !== "local")) return null;
+      return { id, title: stored.title, state: stored.state, policy: effective, createdAt: stored.createdAt };
+    } catch (error) {
+      if (error instanceof ConversationError && (error.status === 403 || error.status === 404)) return null;
+      throw error;
+    }
+  }
+
+  private historyOwner(): HistoryOwner {
+    return {
+      access: (id, session) => this.historyAccess(id, session),
+      list: async session => {
+        const visible: HistoryConversation[] = [];
+        for (const [id, stored] of Object.entries(await this.directory()).sort(([a], [b]) => a.localeCompare(b))) {
+          if (stored.principal !== session.principal) continue;
+          const allowed = await this.historyAccess(id, session);
+          if (allowed) visible.push(allowed);
+        }
+        return visible;
+      },
+      entries: async (id, after, limit) => (await (await this.conversation(await this.stored(id))).entries({ order: "ascending", minEntryId: (after + 1) as EntryId }, limit, undefined, this.context)).items,
+      remember: async (session, ids, signal) => {
+        const sources: Record<string, Policy> = {};
+        for (const id of ids) {
+          const allowed = await this.historyAccess(id, session);
+          if (!allowed) return false;
+          sources[id] = allowed.policy;
+        }
+        signal.throwIfAborted();
+        if (ids.length) await this.update(session.conversationId, current => ({ ...current, policy: strictest([current.policy, ...Object.values(sources)]), historySources: { ...current.historySources, ...sources } }));
+        return true;
+      },
+    };
   }
 
   private async toolSession(id: string): Promise<ToolSession | null> {
@@ -382,7 +451,7 @@ export class ConversationHost {
       const at = this.now().toISOString();
       const policy = strictest([request.policy, ...sources.flatMap(source => source.state === "available" ? [source.policy] : [])]);
       const route = this.routeFor(policy);
-      const draft = { toolSources: {}, principal, stack: this.options.stack, title: request.title, links: request.links, policy, state: seed.state ?? "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at, draft: seed.draft ?? "", seeded: !seed.entries?.length, titleFromSource: seed.titleFromSource ?? false, ...(seed.key ? { key: seed.key } : {}), ...(seed.scope ? { scope: seed.scope } : {}) } satisfies Omit<Stored, "engineId" | "sessionId" | "route" | "inputs">;
+      const draft = { toolSources: {}, historySources: {}, principal, stack: this.options.stack, title: request.title, links: request.links, policy, state: seed.state ?? "current", pinned: false, lastAt: at, origin: request.origin, createdAt: at, draft: seed.draft ?? "", seeded: !seed.entries?.length, titleFromSource: seed.titleFromSource ?? false, ...(seed.key ? { key: seed.key } : {}), ...(seed.scope ? { scope: seed.scope } : {}) } satisfies Omit<Stored, "engineId" | "sessionId" | "route" | "inputs">;
       await this.engine.createConversation({
         ownership: { kind: "ownerless" },
         agent: { instructions: IVY_INSTRUCTIONS, ...(route ? { model: { provider: CORTEX_PROVIDER, modelId: route } } : {}) },
@@ -739,6 +808,14 @@ export class ConversationHost {
       throw error;
     });
     return { entries: page.items.map(toEntry), ...(page.next ? { next: Buffer.from(JSON.stringify(page.next)).toString("base64url") } : {}) };
+  }
+
+  async entry(id: string, entryId: number): Promise<EntryRecord | null> {
+    if (!Number.isSafeInteger(entryId) || entryId < 1) throw new ConversationError(400, "The entry ID must be a positive safe integer.");
+    const { stored } = await this.tighten(id);
+    const page = await (await this.conversation(stored)).entries({ order: "ascending", minEntryId: entryId as EntryId, maxEntryId: entryId as EntryId }, 1, undefined, this.context);
+    await this.tighten(id);
+    return page.items[0] ?? null;
   }
 
   async readback(operation: OperationRecord): Promise<ReadbackResult> {
