@@ -4,7 +4,7 @@ import { expandTilde, loadConfigWithAgents } from "../common/config/loader";
 import { enforceChmod600 } from "../common/config/file-permissions";
 import { buildStackEnvelopeSignerFromConfig } from "./configured-signer";
 import { deriveStackId } from "../common/types/cortex-config";
-import { startMyelinRuntime, type MyelinRuntime, type MyelinRuntimeOptions } from "./myelin/runtime";
+import { startMyelinRuntime, MyelinDurablePublishError, type MyelinRuntime, type MyelinRuntimeOptions } from "./myelin/runtime";
 
 const LOCAL_BUS_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 export interface ConfiguredMyelinRuntimeOptions {
@@ -60,10 +60,13 @@ export async function startConfiguredMyelinRuntime(configPath: string, options: 
     publish: async (envelope) => { assertLocal(envelope); await runtime.publish(envelope); },
     ...(publishOnSubject ? { publishOnSubject: async (envelope, subject) => {
       assertLocal(envelope);
-      if (!subject.startsWith(`local.${derived.principal}.${derived.stack}.`)) throw new Error("configured local bus subject outside pinned stack");
+      if (!subject.startsWith(`local.${derived.principal}.${derived.stack}.`) || !subject.split(".").every((token) => /^[A-Za-z0-9_@:-]+$/.test(token))) throw new Error("configured local bus subject outside pinned stack");
       await publishOnSubject(envelope, subject);
     } } satisfies Pick<MyelinRuntime, "publishOnSubject"> : {}),
-    ...(publishDurable ? { publishDurable: async (envelope, publishOptions) => { assertLocal(envelope); return await publishDurable(envelope, publishOptions); } } satisfies Pick<MyelinRuntime, "publishDurable"> : {}),
+    ...(publishDurable ? { publishDurable: async (envelope, publishOptions) => {
+      try { assertLocal(envelope); } catch (error) { throw new MyelinDurablePublishError("unroutable", envelope.id, "configured local bus policy refused envelope", { cause: error }); }
+      return await publishDurable(envelope, publishOptions);
+    } } satisfies Pick<MyelinRuntime, "publishDurable"> : {}),
   };
 
 }

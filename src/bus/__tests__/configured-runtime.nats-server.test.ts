@@ -10,6 +10,7 @@ import { createInMemoryRegistry, verifyEnvelopeIdentity } from "@the-metafactory
 import { safeDecodeEnvelope } from "@the-metafactory/myelin/envelope";
 import { startConfiguredMyelinRuntime } from "../configured-runtime";
 import { nkeyToBase64Pubkey } from "../verify-signed-by-chain";
+import { MyelinDurablePublishError } from "../myelin/runtime";
 import { validateEnvelope } from "../myelin/envelope-validator";
 
 const executable = Bun.which("nats-server");
@@ -57,6 +58,15 @@ test.skipIf(executable === null)("configured runtime coexists with an observer a
     if (!value.ok) throw new Error("fixture envelope invalid");
     await expect(runtime.publish({ ...value.envelope, sovereignty: { ...value.envelope.sovereignty, classification: "federated" } })).rejects.toThrow("refuses non-local classification");
     await expect(runtime.publish({ ...value.envelope, source: "synthetic.other.helper" })).rejects.toThrow("source outside pinned stack");
+    const publishOnSubject = runtime.publishOnSubject?.bind(runtime);
+    const publishDurable = runtime.publishDurable?.bind(runtime);
+    if (!publishOnSubject || !publishDurable) throw new Error("native publish methods absent");
+    for (const subject of ["public.outside", "local.synthetic.work.tasks.*", "local.synthetic.work.tasks.", "local.synthetic.work.tasks..invalid", "local.synthetic.work.tasks.bad token", "local.synthetic.work.tasks.bad\r\nPUB public.outside 0\r\n"]) {
+      await expect(publishOnSubject(value.envelope, subject)).rejects.toThrow("subject outside pinned stack");
+    }
+    await expect(publishOnSubject({ ...value.envelope, sovereignty: { ...value.envelope.sovereignty, classification: "federated" } }, "local.synthetic.work.tasks.synthetic")).rejects.toThrow("refuses non-local classification");
+    await expect(publishDurable({ ...value.envelope, sovereignty: { ...value.envelope.sovereignty, classification: "federated" } }, { expectedStream: "SYNTHETIC" })).rejects.toBeInstanceOf(MyelinDurablePublishError);
+    await expect(publishDurable({ ...value.envelope, source: "synthetic.other.helper" }, { expectedStream: "SYNTHETIC" })).rejects.toMatchObject({ kind: "unroutable" });
     const receive = (async () => { for await (const message of sub) return message.data; return null; })();
     await runtime.publish(value.envelope);
     const bytes = await Promise.race([receive, Bun.sleep(2000).then(() => null)]);

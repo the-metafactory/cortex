@@ -22,9 +22,9 @@ if (scenario === "missing-file") unlinkSync(join(dir, "synthetic.creds"));
 if (scenario === "public-creds") chmodSync(join(dir, "synthetic.creds"), 0o644);
 const calls: unknown[] = [];
 let stopped = false;
-mock.module("../myelin/runtime", () => ({ startMyelinRuntime: async (config: unknown, options: unknown) => {
+mock.module("../myelin/runtime", () => ({ MyelinDurablePublishError: class extends Error {}, startMyelinRuntime: async (config: unknown, options: unknown) => {
   calls.push({ config, options });
-  return { enabled: !["disabled", "stop-rejects"].includes(scenario), stop: async () => { stopped = true; if (scenario === "stop-rejects") throw new Error("synthetic stop failure"); } };
+  return { publish: async () => {}, publishOnSubject: async () => {}, publishDurable: async () => ({ stream: "SYNTHETIC", seq: 1, duplicate: false }), enabled: !["disabled", "stop-rejects"].includes(scenario), stop: async () => { stopped = true; if (scenario === "stop-rejects") throw new Error("synthetic stop failure"); } };
 } }));
 const config = {
   claude: { timeoutMs: 120000 },
