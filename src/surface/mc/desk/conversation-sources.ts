@@ -25,6 +25,7 @@ import type { GitRunner } from "./studio/git";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioThreadView, type StudioView } from "./studio/view";
 import type { DeskItem } from "./types";
+import { workReaders } from "./work-readers";
 
 const FRESH_MS = 5_000;
 const gone: SourceState = { state: "unavailable", reason: "gone" };
@@ -134,6 +135,9 @@ export function conversationSources(deps: SourceDeps): HostSources {
         ...(deskWriterArgv(desk, "note") ? {} : { "desk-note": deskNote }),
         ...(mailDraft && mailDraftReady(desk) ? { "mail-draft": mailDraft } : {}),
       };
+    },
+    get readers() {
+      return workReaders({ db: deps.db, desk: deps.desk, studioView, now, ...(deps.deskItems ? { deskItems: deps.deskItems } : {}) });
     },
     get withheld() {
       return deskWriterArgv(deps.desk(), "note") ? { "desk-note": DESK_NOTE_WITHHELD } : {};
