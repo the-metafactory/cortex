@@ -7,16 +7,14 @@ import type { ConversationHost, HostOptions } from "../host";
 import type { ToolOutcome, TurnRequest } from "../model";
 import { DECISION_KIND, type Policy, type SourceState } from "../types";
 import { answering, openHost, scratchHosts } from "./fixtures/scratch";
+import { toolBody } from "./fixtures/tool-body";
 import { fixtureOwner } from "./fixtures/owner";
 
 const { dirs, hosts } = scratchHosts("conversation-history-");
 const lane = { provider: "fixture", model: "model" };
 const at = "2026-11-02T12:00:00.000Z";
 const principal = "synthetic-principal";
-const body = (outcome: ToolOutcome): Record<string, any> => {
-  expect(outcome.outcome).toBe("done");
-  return JSON.parse(outcome.text.slice(outcome.text.indexOf("\n") + 1, outcome.text.lastIndexOf("\n</tool-result>"))) as Record<string, any>;
-};
+const body = toolBody;
 const input = (id: string, transport: "web" | "discord" = "web") => ({ inputId: id, transport, text: "Find earlier evidence.", mode: "queue" as const });
 async function open(answer: (request: TurnRequest) => Promise<string>, extra: Partial<HostOptions> = {}) {
   return openHost(hosts, { dir: await dirs.make(), stack: "test", label: "test", expectedLabel: "test", lanes: { local: lane, cloud: lane }, turns: answering(answer), now: () => new Date(at), ...extra });
