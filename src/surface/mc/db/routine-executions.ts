@@ -3,12 +3,14 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { RoutineDecision, RoutineExecution, RoutineLogFile } from "../desk/routine-evidence-contract";
 
+const FAILURE_REASON_CHARS = 600;
 const eventSchema = z.object({
   envelope_id: z.uuid(), timestamp: z.iso.datetime({ offset: true }), payload: z.string().max(2000),
 });
 const payloadSchema = z.object({
   decision_id: z.uuid(), correlation_id: z.uuid(), outcome: z.enum(["started", "completed", "failed"]),
   process: z.string().min(1).max(100).regex(/^[a-z0-9][a-z0-9-]*$/), started_at: z.iso.datetime({ offset: true }),
+  reason: z.string().max(FAILURE_REASON_CHARS).nullish(),
 });
 export type ProcessAuditEvent = { id: string; at: string } & z.infer<typeof payloadSchema>;
 export interface ProcessAuditRead { events: ProcessAuditEvent[]; complete: boolean }
@@ -23,7 +25,8 @@ export function readProcessAudit(db: Database, scope: { principal: string; stack
       'correlation_id', substr(json_extract(payload, '$.correlation_id'), 1, 100),
       'outcome', substr(json_extract(payload, '$.outcome'), 1, 100),
       'process', substr(json_extract(payload, '$.process'), 1, 101),
-      'started_at', substr(json_extract(payload, '$.started_at'), 1, 100)
+      'started_at', substr(json_extract(payload, '$.started_at'), 1, 100),
+      'reason', substr(json_extract(payload, '$.reason'), 1, ${FAILURE_REASON_CHARS})
     ) ELSE NULL END AS payload FROM observability_events
     WHERE type = 'system.bus.process' AND origin_kind = 'local' AND json_valid(payload)
     AND json_extract(payload, '$.__cortexProcessSubject') = ?
@@ -44,6 +47,8 @@ export function readProcessAudit(db: Database, scope: { principal: string; stack
   }
   return { events, complete: valid && rows.length <= 2000 };
 }
+
+const sanitizeReason = (reason: string): string => reason.replace(/[\p{Cc}\p{Cf}]+/gu, " ").trim();
 
 export function processExecution(decision: RoutineDecision, audit: ProcessAuditRead, now: number): RoutineExecution {
   if (decision.decision !== "fired") return { kind: "not-started", reason: "This is an approval or decision record, not an execution." };
@@ -68,6 +73,7 @@ export function processExecution(decision: RoutineDecision, audit: ProcessAuditR
     state: end ? end.outcome === "completed" ? "succeeded" : "failed" : "running",
     freshness: !end && now - Date.parse(startedAt) > 20 * 60000 ? "stale" : "recorded", startedAt,
     endedAt: end?.at ?? null, durationMs: end ? Date.parse(end.at) - Date.parse(startedAt) : null, files,
+    ...(end?.outcome === "failed" && end.reason ? { failureReason: sanitizeReason(end.reason) } : {}),
   };
 }
 

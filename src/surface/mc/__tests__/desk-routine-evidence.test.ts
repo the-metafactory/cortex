@@ -49,6 +49,22 @@ describe("routine execution evidence", () => {
     expect(result.status).toBe(200);
   });
 
+  it("states a failed run's reason on the record, and keeps it out of the redacted audit file", async () => {
+    event("started"); event("failed", { reason: "timeout-900000ms: nobody\u0007took this task" });
+    const history = await readRoutineEvidence(db, options, { limit: 25 }, scope, run);
+    const execution = history.records[0]?.execution;
+    expect(execution).toMatchObject({ kind: "observed", state: "failed", failureReason: "timeout-900000ms: nobody took this task" });
+    if (execution?.kind !== "observed") throw new Error("Expected execution");
+    const log = await handleDeskRoutineEvidence(new Request(logUrl(execution.executionId, { download: "1" })), db, runtime, true, run);
+    expect(await log.text()).not.toContain("nobody");
+  });
+
+  it("a completed run carries no failure reason", async () => {
+    event("started"); event("completed");
+    const history = await readRoutineEvidence(db, options, { limit: 25 }, scope, run);
+    expect(history.records[0]?.execution).not.toHaveProperty("failureReason");
+  });
+
   it("correlates owner audit IDs and exposes a bounded redacted audit file after definition deletion", async () => {
     event("completed"); event("started");
     const history = await readRoutineEvidence(db, options, { limit: 25 }, scope, run);

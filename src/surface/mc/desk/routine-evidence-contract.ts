@@ -35,6 +35,7 @@ export const RoutineExecutionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("observed"), owner: z.literal("cortex-process"), executionId: z.string().regex(/^[a-f0-9]{64}$/),
     state: z.enum(["running", "succeeded", "failed"]), freshness: z.enum(["recorded", "stale"]), startedAt: instant,
     endedAt: instant.nullable(), durationMs: z.number().nonnegative().nullable(), files: z.array(RoutineLogFileSchema),
+    failureReason: z.string().optional(),
   }),
 ]);
 export type RoutineExecution = z.infer<typeof RoutineExecutionSchema>;

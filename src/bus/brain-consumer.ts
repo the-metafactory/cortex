@@ -487,7 +487,7 @@ export class BrainConsumer {
     // re-runs cleanly on redelivery. Kept in the signature for parity + B-2.
     void msg;
 
-    const correlationId = envelope.id;
+    const correlationId = envelope.correlation_id ?? envelope.id;
 
     // 1. Backpressure (§5 "Backpressure is host-side"). Over the ceiling →
     //    publish a `not_now` failed envelope + nak with a retry hint. An
