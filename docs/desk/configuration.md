@@ -296,11 +296,16 @@ pi keeps one session per conversation and lane under the stack's conversation di
 
 ### Communication tools
 
+<!-- glossary-ignore: host -->
+<!-- glossary-ignore: message -->
+<!-- glossary-ignore: owner -->
+<!-- glossary-ignore: data -->
+
 Conversations discover the principal's installed communication tools through `communication_discover` and read them through `communication_read`. The tools exist only when the host registers connectors (`HostSources.communications`); a connector is a trusted host registration, not something the model or a message can add.
 
 A connector declares its service, family (`email`, `calendar`, `reminders`, `discord`, `mattermost` or any other id), the explicitly configured scopes (accounts, mailboxes, calendars, reminder lists, workspaces, channels) with a `cloud` or `local` policy each, the read operations with their input schemas, and the actions it can only propose. Discovery always lists the five required families. A family with no connector reports `not-installed` and names the owner build still needed. A connector that is installed but signed out reports `not-authenticated` and advertises no operations.
 
-Each read checks the owner's `authorize(principal, scope)` and the scope policy before the call, and again before the result is released; a revoked grant or a policy change in between withholds the result. Local-only scopes are invisible to cloud models and to Discord, and reading one tightens the conversation to local-only. Results are bounded (20 items, 2000 characters per text), redacted, fenced as untrusted data and carry `observedAt`, `freshness`, `next` and `truncated`. Statuses are `ok`, `no-match`, `stale`, `denied`, `not-installed`, `not-authenticated` and `provider-failure`; connector error text is never passed on.
+Each read checks the owner's `authorize(principal, scope)` and the scope policy before the call, and again before the result is released; a revoked grant or a policy change in between withholds the result. Local-only scopes are invisible to cloud models and to Discord, and reading one tightens the conversation to local-only. Results are bounded (a connector returns at most 20 items per page and a larger page is refused; overflow stays behind `next`; 2000 characters per text), redacted, fenced as untrusted data and carry `observedAt`, `freshness`, `next` and `truncated`. Statuses are `ok`, `no-match`, `stale`, `denied`, `not-installed`, `not-authenticated` and `provider-failure`; connector error text is never passed on.
 
 Sending, inviting or changing data stays with the creation tools: `creation_propose` prepares an editable proposal (for example a `mail-draft`) and the principal confirms it. An action whose owner has no operation shows `unavailable` with its follow-up. No connector ships in-tree; each owner adapter is a separate build.
 

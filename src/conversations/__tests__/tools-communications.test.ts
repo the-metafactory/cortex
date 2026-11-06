@@ -134,8 +134,14 @@ describe("communication reads", () => {
     expect((await r.call("communication_read", { connector: "mail", scope: "main", operation: "search", input: { query: "x", argv: ["rm"] } })).json.status).toBe("invalid-input");
   });
 
-  test("pages with a cursor, bounds items and long text, and redacts credentials", async () => {
-    const f = fixture("mail", "email", { page: () => ({ items: Array.from({ length: 30 }, (_, i) => ({ id: `m${i}`, body: i === 0 ? `${"x".repeat(5000)} ghp_${"a".repeat(30)}` : "short" })), next: "cursor-2", observedAt: NOW }) });
+  test("refuses a page larger than the item bound instead of skipping its overflow", async () => {
+    const f = fixture("mail", "email", { page: () => ({ items: Array.from({ length: 30 }, (_, i) => ({ id: `m${i}` })), next: "cursor-2", observedAt: NOW }) });
+    const { json } = await rig([f]).call("communication_read", { connector: "mail", scope: "main", operation: "search", input: { query: "x" } });
+    expect(json.status).toBe("provider-failure");
+  });
+
+  test("pages with a cursor, bounds long text, and redacts credentials", async () => {
+    const f = fixture("mail", "email", { page: () => ({ items: Array.from({ length: 20 }, (_, i) => ({ id: `m${i}`, body: i === 0 ? `${"x".repeat(5000)} ghp_${"a".repeat(30)}` : "short" })), next: "cursor-2", observedAt: NOW }) });
     const { json, out } = await rig([f]).call("communication_read", { connector: "mail", scope: "main", operation: "search", input: { query: "x", cursor: "cursor-1" } });
     expect(json.items).toHaveLength(20);
     expect(json).toMatchObject({ next: "cursor-2", truncated: true });

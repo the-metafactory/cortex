@@ -99,7 +99,8 @@ export function communicationTools(owner: CommunicationOwner): ToolDefinition[] 
       const input = raw as z.infer<typeof DiscoverInput>;
       const connectors = reachable(owner, session);
       const families = [...new Set([...REQUIRED_FAMILIES, ...connectors.map(connector => connector.family)])].filter(family => input.family === undefined || family === input.family);
-      const rows = await Promise.all(families.map(async family => {
+      const pageFamilies = families.slice(input.offset, input.offset + input.limit);
+      const rows = await Promise.all(pageFamilies.map(async family => {
         const mine = connectors.filter(connector => connector.family === family);
         if (!mine.length) return { family, services: [], availability: "not-installed", reason: "No connector for this family is registered with the stack. Implementing one is a follow-up owner build." };
         const services = await Promise.all(mine.map(async connector => {
@@ -114,8 +115,7 @@ export function communicationTools(owner: CommunicationOwner): ToolDefinition[] 
         return { family, services, availability: services.some(service => service.availability === "available") ? "available" : services[0]?.availability ?? "not-installed", reason: null };
       }));
       signal.throwIfAborted();
-      const page = rows.slice(input.offset, input.offset + input.limit);
-      return JSON.stringify({ families: page, next: input.offset + input.limit < rows.length ? input.offset + input.limit : null });
+      return JSON.stringify({ families: rows, next: input.offset + input.limit < families.length ? input.offset + input.limit : null });
     },
   };
 
@@ -150,15 +150,15 @@ export function communicationTools(owner: CommunicationOwner): ToolDefinition[] 
       const after = find();
       const unchanged = after?.connector.id === before.connector.id && after.scope.policy === before.scope.policy;
       if (!after || !unchanged || !await after.connector.authorize(session.principal, after.scope.id).catch(() => false)) return fail("denied");
-      const items = z.array(ItemSchema).safeParse(page.items.slice(0, MAX_ITEMS));
-      if (!items.success || !Number.isFinite(page.observedAt)) return fail("provider-failure");
+      const items = z.array(ItemSchema).safeParse(page.items);
+      if (page.items.length > MAX_ITEMS || !items.success || !Number.isFinite(page.observedAt)) return fail("provider-failure");
       if (!await owner.remember(session, { connector: after.connector.id, scope: after.scope.id, policy: after.scope.policy }, signal)) return fail("denied");
       const stale = owner.now() - page.observedAt > STALE_AFTER_MS;
       return JSON.stringify({
         status: items.data.length === 0 ? "no-match" : stale ? "stale" : "ok",
         connector: after.connector.id, service: after.connector.service, scope: after.scope.id, operation: operation.id,
         items: items.data.map(item => bound(item)), next: page.next === null ? null : redactToolText(page.next).slice(0, 512),
-        observedAt: new Date(page.observedAt).toISOString(), freshness: stale ? "stale" : "fresh", truncated: page.items.length > MAX_ITEMS, untrusted: true,
+        observedAt: new Date(page.observedAt).toISOString(), freshness: stale ? "stale" : "fresh", truncated: page.next !== null, untrusted: true,
       });
     },
   };
