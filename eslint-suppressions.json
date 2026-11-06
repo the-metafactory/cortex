@@ -1931,11 +1931,6 @@
       "count": 14
     }
   },
-  "src/cli/cortex/commands/network-ping-signer.ts": {
-    "cortex/no-comments": {
-      "count": 13
-    }
-  },
   "src/cli/cortex/commands/network-ports.ts": {
     "cortex/no-comments": {
       "count": 57
