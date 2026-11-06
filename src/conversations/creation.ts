@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { CREATABLE_TYPES, CREATION_CATALOG, OWNER_BLOCKERS, SUBJECT_FIELDS, UNAVAILABLE_TYPES, isCreatable, type CreatableType, type Egress, type FieldSpec, type FixedTerm } from "./catalog";
-import { ConversationError, type ConversationHost } from "./host";
+import type { ConversationHost } from "./host";
+import { ConversationError } from "./errors";
 import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateResult, type OperationRecord, type OwnerWriters, type Policy, type Suggestion, type WithheldReasons } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
