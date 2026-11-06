@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { ConsumerInfo, StreamInfo } from "nats";
 import { bootOrDie, startCortex } from "../../cortex";
 import { AgentConfigSchema } from "../../common/types/config";
-import { NatsConfigSchema } from "../../common/types/cortex-config";
+import { NatsConfigSchema, PolicySchema } from "../../common/types/cortex-config";
 import { hermeticBootPaths } from "../../common/test-utils";
 import {
   JetstreamBootTimeoutError,
@@ -21,6 +21,16 @@ import type { MyelinSubscriber } from "../myelin/subscriber";
 import { ReflexActivationListener, inMemoryReflexDedup } from "../reflex-activation-listener";
 
 const timeout = () => Object.assign(new Error("TIMEOUT"), { code: "TIMEOUT" });
+
+function bootRuntime(overrides: Partial<MyelinRuntime>): MyelinRuntime {
+  return {
+    enabled: true,
+    publish: async () => {},
+    onEnvelope: () => ({ unregister: () => {} }),
+    stop: async () => {},
+    ...overrides,
+  };
+}
 
 function retryClock() {
   let elapsed = 0;
@@ -74,18 +84,14 @@ describe("JetStream boot retry", () => {
       ready: state === "serial outage" ? Promise.reject(timeout()) : Promise.resolve(),
       stop: async () => {},
     }) as MyelinSubscriber);
-    const runtime: MyelinRuntime = {
-      enabled: true,
-      publish: async () => {},
-      onEnvelope: () => ({ unregister: () => {} }),
-      stop: async () => {},
+    const runtime = bootRuntime({
       subscribePull: bind,
       jetstreamManager: async () => {
         calls++;
         if (state !== "recovered" || calls === 1) throw timeout();
         return jsm;
       },
-    };
+    });
     try {
       const config = AgentConfigSchema.parse({ agent: { name: "synthetic", displayName: "Synthetic" }, claude: {} });
       const handle = await startCortex(config, {
@@ -118,6 +124,48 @@ describe("JetStream boot retry", () => {
         await handle.stop();
       }
       expect(handle.lastShutdownAbandoned).toEqual([]);
+    } finally {
+      rmSync(agentsDir, { recursive: true, force: true });
+    }
+  });
+
+  test.each([180_000, 1])("admission peek uses the shared %dms Cortex boot budget", async (maxElapsedMs) => {
+    const agentsDir = mkdtempSync(join(tmpdir(), "synthetic-admission-boot-"));
+    const jsm = provisioningManager();
+    const clock = retryClock();
+    const info = jsm.streams.info;
+    let peeks = 0;
+    jsm.streams.info = mock(async () => {
+      if (++peeks <= 2) throw timeout();
+      return info();
+    });
+    const openKv = mock(async () => null);
+    const runtime = bootRuntime({
+      jetstreamManager: async () => jsm,
+      kvBucket: openKv,
+    });
+    try {
+      const handle = await startCortex(
+        AgentConfigSchema.parse({ agent: { name: "synthetic", displayName: "Synthetic" }, claude: {} }),
+        {
+          injectRuntime: runtime,
+          jetstreamBootRetry: { ...clock.options, maxElapsedMs },
+          policy: PolicySchema.parse({ admission: {} }),
+          agentsDir,
+          ...hermeticBootPaths(),
+          principal: { id: "synthetic" },
+          disableConfigWatcher: true,
+          disableDashboard: true,
+          disableOutboundPoller: true,
+        },
+      );
+      try {
+        expect(peeks).toBe(maxElapsedMs === 1 ? 1 : 3);
+        expect(clock.delays).toEqual(maxElapsedMs === 1 ? [] : [1_000, 2_000]);
+        expect(openKv).toHaveBeenCalledTimes(1);
+      } finally {
+        await handle.stop();
+      }
     } finally {
       rmSync(agentsDir, { recursive: true, force: true });
     }
@@ -265,11 +313,7 @@ describe("JetStream boot retry", () => {
     let managerCalls = 0;
     let bindCalls = 0;
     let stopped = 0;
-    const runtime: MyelinRuntime = {
-      enabled: true,
-      publish: async () => {},
-      onEnvelope: () => ({ unregister: () => {} }),
-      stop: async () => {},
+    const runtime = bootRuntime({
       jetstreamManager: async () => {
         if (++managerCalls <= 2 && stage === "manager") throw timeout();
         return jsm;
@@ -281,7 +325,7 @@ describe("JetStream boot retry", () => {
           stop: async () => { stopped++; },
         } as MyelinSubscriber;
       },
-    };
+    });
     const bridge = new ReflexActivationListener({
       runtime,
       source: { principal: "synthetic", agent: "cortex", instance: "test" },
