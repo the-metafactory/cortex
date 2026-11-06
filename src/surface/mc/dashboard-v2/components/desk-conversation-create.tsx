@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { SUBJECT_FIELDS } from "../../../../conversations/catalog";
+import { SUBJECT_FIELDS, usesBalanceDestinationPicker } from "../../../../conversations/catalog";
 import { proposalLinks } from "../../../../conversations/links";
 import { failureText } from "../lib/conversations";
 import { check, confirm, feedbackLabel, propose, readCapabilities, readCreation, revise, revoke, type Capability, type CreationView, type GrantScope, type ProposalView } from "../lib/conversation-creation";
@@ -83,7 +83,7 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
 function ProposalCard({ id, view, types, busy, archived, act }: { id: string; view: ProposalView; types: Capability[]; busy: boolean; archived: boolean; act: Act }) {
   const { proposal, capability } = view;
   const links = proposalLinks(view);
-  const balanceProposal = proposal.type === "balance-task" || proposal.type === "balance-project";
+  const balanceProposal = usesBalanceDestinationPicker(proposal.type);
   const [fields, setFields] = useState<Record<string, string>>(proposal.fields);
   const [type, setType] = useState<string>(proposal.type ?? "");
   const [standing, setStanding] = useState(false);

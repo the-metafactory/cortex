@@ -6,6 +6,8 @@ import type { ToolDefinition, ToolSession } from "./capabilities";
 
 export type CreationOwner = Pick<ConversationCreation, "capabilities" | "propose" | "revise" | "check" | "list">;
 
+const READ_PAGE_SIZE = 3;
+const page = <T>(items: T[], offset: number, limit: number) => ({ items: items.slice(offset, offset + limit), next: offset + limit < items.length ? offset + limit : null });
 const DiscoverInput = z.object({ type: z.string().max(64).optional(), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(5).default(5) }).strict();
 const ProposeInput = ProposeSchema.omit({ entryId: true });
 const ReviseInput = ReviseSchema.extend({ proposalId: z.uuid() });
@@ -32,7 +34,8 @@ export function proposalTools(owner: CreationOwner): ToolDefinition[] {
       run: (raw) => {
         const input = raw as z.infer<typeof DiscoverInput>;
         const types = owner.capabilities().filter(type => input.type === undefined || type.type === input.type);
-        return Promise.resolve(JSON.stringify({ types: types.slice(input.offset, input.offset + input.limit), next: input.offset + input.limit < types.length ? input.offset + input.limit : null, ...(input.type !== undefined && types.length === 0 ? { status: "unavailable", message: "This type is not in the creation catalog. Nothing was created." } : {}) }));
+        const { items, next } = page(types, input.offset, input.limit);
+        return Promise.resolve(JSON.stringify({ types: items, next, ...(input.type !== undefined && types.length === 0 ? { status: "unavailable", message: "This type is not in the creation catalog. Nothing was created." } : {}) }));
       },
     },
     {
@@ -65,7 +68,8 @@ export function proposalTools(owner: CreationOwner): ToolDefinition[] {
         const input = raw as z.infer<typeof ReadInput>;
         if (input.proposalId) return resultOf(await owner.check(session.conversationId, input.proposalId, actorOf(session)));
         const { proposals } = await owner.list(session.conversationId, actorOf(session));
-        return { proposals: proposals.slice(input.offset, input.offset + 3).map(resultOf), next: input.offset + 3 < proposals.length ? input.offset + 3 : null };
+        const { items, next } = page(proposals, input.offset, READ_PAGE_SIZE);
+        return { proposals: items.map(resultOf), next };
       }),
     },
   ];
