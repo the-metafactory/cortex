@@ -819,6 +819,13 @@ export const AgentRuntimeSchema = z.object({
   // the legacy looseness (their subjects are built by the review path's own
   // fixed taxonomy, not raw manifest text).
   const brain = rt.brain;
+  if (brain?.timeout_ms !== undefined && (brain.kind !== "exec" || brain.lifecycle === "daemon")) {
+    ctx.addIssue({
+      code: "custom",
+      message: "agent.runtime.brain.timeout_ms applies only to a per-task exec brain",
+      path: ["brain", "timeout_ms"],
+    });
+  }
   if (brain?.kind !== "exec") return;
   rt.capabilities.forEach((cap, i) => {
     if (!CAPABILITY_ID_REGEX.test(cap)) {
@@ -832,13 +839,6 @@ export const AgentRuntimeSchema = z.object({
       });
     }
   });
-  if (brain.timeout_ms !== undefined && brain.lifecycle === "daemon") {
-    ctx.addIssue({
-      code: "custom",
-      message: "agent.runtime.brain.timeout_ms applies only to a per-task brain; a daemon brain has no task timeout",
-      path: ["brain", "timeout_ms"],
-    });
-  }
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Zod superRefine still sees hand-written configs while defaults are being applied.
   (brain.dispatch_capabilities ?? []).forEach((cap, i) => {
     if (!CAPABILITY_ID_REGEX.test(cap)) {
