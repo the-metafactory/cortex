@@ -442,7 +442,7 @@ describe("AgentRuntimeSchema.brain (Bot Packs B-1)", () => {
     expect(BrainConfigSchema.parse({ ...brain, timeout_ms: 630_000 }).timeout_ms).toBe(630_000);
     expect(BrainConfigSchema.parse(brain).timeout_ms).toBeUndefined();
     expect(BrainConfigSchema.safeParse({ ...brain, timeout_ms: 20 * 60 * 1000 }).success).toBe(false);
-    const daemon = AgentRuntimeSchema.safeParse({ capabilities: ["compose.judgment"], brain: { ...brain, lifecycle: "daemon", timeout_ms: 1000 } });
+    const daemon = AgentRuntimeSchema.safeParse({ mode: "standalone", capabilities: ["compose.judgment"], brain: { ...brain, lifecycle: "daemon", timeout_ms: 1000 } });
     expect(daemon.success).toBe(false);
     expect(daemon.error?.issues.map((issue) => issue.message).join(" ")).toContain("per-task");
   });
