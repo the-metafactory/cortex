@@ -1027,3 +1027,25 @@ describe("startCortex — AgentState ReplayPending on activation (cortex#1720 S2
     expect(handle.agentRegistry.getAll().map((a) => a.id)).toEqual(["luna"]);
   });
 });
+
+
+test("adding a task receiver warns that scoped task subscriptions require restart", async () => {
+  const runtime = createRecordingRuntime();
+  const subjects: string[] = [];
+  runtime.subscribe = async (pattern) => { subjects.push(pattern); return null; };
+  writeFragment("initial-worker", ["chat"]);
+  const handle = await bootWatcherless(runtime);
+  const warnings: string[] = [];
+  const previousWarn = console.warn;
+  console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+  try {
+    writeFragment("new-worker", ["chat"]);
+    await handle.reloadAgents("cli");
+    expect(warnings.some((line) => line.includes("restart Cortex before dispatching to updated agents"))).toBe(true);
+    expect(subjects.filter((subject) => subject.includes(".tasks."))).toEqual([
+      "local.test-op.default.tasks.@did-mf-initial-worker.>",
+    ]);
+  } finally {
+    console.warn = previousWarn;
+  }
+});

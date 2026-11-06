@@ -1831,6 +1831,7 @@ async function handleDispatchEnvelope(
     envelope,
     payload,
     subject,
+    receivingAgentId,
   );
   if (recipientMismatch !== null) {
     trace(
@@ -2704,6 +2705,7 @@ function validateCanonicalTaskRecipient(
   envelope: Envelope,
   payload: DispatchTaskReceivedPayload,
   subject: string | undefined,
+  receivingAgentId: string | undefined,
 ): string | null {
   if (subject === undefined) return null;
   const parts = subject.split(".");
@@ -2737,6 +2739,9 @@ function validateCanonicalTaskRecipient(
   }
   if (payload.agent_id !== targetAgentId) {
     return `payload.agent_id ${payload.agent_id} does not match envelope target agent ${targetAgentId}`;
+  }
+  if (receivingAgentId !== undefined && receivingAgentId !== targetAgentId) {
+    return `receiving agent ${receivingAgentId} does not match envelope target agent ${targetAgentId}`;
   }
 
   return null;
