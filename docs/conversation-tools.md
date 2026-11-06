@@ -74,3 +74,40 @@ A project with `forge.kind: github` and the `forge.read` operation gets six read
 Before every read the tool re-checks the configured host and `owner/name`, and refuses if the repository now resolves to another name. Every returned URL must lie inside the configured repository. Search text cannot name another `repo:`, `org:` or `user:` scope. Linked content in other repositories is never fetched.
 
 Results carry `fetchedAt`, canonical URLs and, for pull requests, the head SHA. `status` is one of `ok`, `login-required`, `permission-denied`, `not-found`, `rate-limited`, `provider-failure`, `identity-mismatch`, `head-changed` or `invalid-source`. A diff or check read whose pull request head moved during the read is withheld as `head-changed`. The check `rollup` is `passing` only when every run and status was read and finished successfully; otherwise it is `failing`, `pending`, `incomplete`, `stale` or `none`. Pages are bounded; `nextPage` and `nextOffset` continue. `github_checks` pages check runs with `page` and commit statuses with `statusPage`; a commit status `targetUrl` outside the repository is returned as `null`.
+
+## Web search and page reads
+
+A project with the `web.read` operation gets two tools: `web_search` and `web_fetch`. The stack configures them under `mc.desk.conversations.tools.web`. Nothing is hardwired to a paid service and Cortex creates no account or key.
+
+```yaml
+web:
+  search:
+    kind: searxng          # or brave
+    url: http://127.0.0.1:8888
+    policy: local          # local or cloud; defaults to cloud
+    apiKeyEnv: SEARCH_API_KEY   # optional; the name of an environment variable, never the key
+  limits:                  # all optional
+    maxResults: 5
+    maxBytes: 1000000
+    maxRedirects: 5
+    timeoutSeconds: 15
+    maxChars: 12000
+```
+
+Without `web.search`, `web_search` is listed as `dependency-missing` and a call returns an error naming the missing setting. `web_fetch` needs no provider. A missing credential variable is reported as `provider-unavailable`.
+
+**Egress policy.** A `cloud` search provider receives query text, so a local-only conversation is refused before any request. A `local` provider serves both policies. `web_fetch` reveals the address to an outside site, so a local-only conversation cannot use it. The host re-checks this on every call and before releasing a result.
+
+**Search results** carry `rank`, `title`, `url`, `snippet`, the provider kind and `retrievedAt`. Non-http(s) links are dropped and counted in `omittedInvalid`.
+
+**Fetch results** carry the final `url` (fragment removed), `requestedUrl`, `title`, `contentType`, `retrievedAt`, the extracted `text` window, `totalChars`, `nextOffset` and `truncated: { bytes, characters }`. Pass `offset` to read the next window. `status` is `ok`, `invalid-url`, `denied-target`, `dns-failure`, `too-many-redirects`, `invalid-redirect`, `http-error`, `unsupported-media-type`, `unsupported-encoding`, `binary-content`, `network-error` or `timeout`.
+
+**What the fetcher refuses.** Only `http` and `https` on ports 80, 443, 8080 and 8443; no embedded credentials; no `localhost`, single-label, `.local`, `.internal` or similar names. Loopback, private, link-local (including the metadata address), carrier-grade NAT, multicast, documentation, ULA and IPv4-mapped, NAT64 and 6to4 forms of those are refused. A host is resolved once; if any answer is nonpublic the whole host is refused, and the validated address is the one connected to, with the connected peer checked again. Each redirect is validated the same way and the count is bounded. Requests carry no cookies, authorization or host credentials and ask for an uncompressed body. Only text, HTML, Markdown, JSON, XML and CSV are read, the body is cut at `maxBytes`, and a text-labelled body with NUL bytes is refused as binary. A cancelled turn aborts the request, including a pending DNS lookup, and the time limit covers the lookup too.
+
+<!-- glossary-ignore: host -->
+<!-- glossary-ignore: body -->
+<!-- glossary-ignore: data -->
+<!-- glossary-ignore: run -->
+Page and search text is untrusted data. It sits inside the fenced result, cannot change permissions, tool definitions or standing authority, and is never followed as instructions.
+
+Tests drive both tools through the conversation host with controlled DNS, transport and provider fixtures: `bun run test src/conversations/__tests__/tools-web.test.ts`. The live probe (a cloud-allowed throwaway conversation reading a public documentation page, loopback and redirect denial, and a local-only query that never reaches the provider) needs a deployed stack with a configured provider and has not been run from this build.
