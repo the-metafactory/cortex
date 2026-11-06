@@ -71,10 +71,15 @@ describe("the classifier config", () => {
     expect(parse({ command: ["desk-classify-mail"], timeoutSeconds: 180 })).toBe(true);
     expect(parse({ command: ["desk-classify-mail"], timeoutSeconds: 181 })).toBe(false);
     expect(parse({ command: ["desk-classify-mail"], timeoutSeconds: 0 })).toBe(false);
+    expect(parse({ baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 180 })).toBe(true);
     const defaults = McSchema.parse({ desk: { mail: { classifier: { command: ["desk-classify-mail"] } } } });
     expect(defaults.desk.mail.classifier?.timeoutSeconds).toBe(30);
     expect(McSchema.safeParse({ desk: { mail: { waiting: { model: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 121 } } } } }).success).toBe(false);
     expect(McSchema.safeParse({ desk: { mail: { digest: { model: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 121 } } } } }).success).toBe(false);
+    expect(McSchema.safeParse({ desk: { mail: { waiting: { model: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 120 } } } } }).success).toBe(true);
+    expect(McSchema.safeParse({ desk: { mail: { digest: { model: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 120 } } } } }).success).toBe(true);
+    expect(McSchema.safeParse({ desk: { ruling: { explainer: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 120 } } } }).success).toBe(true);
+    expect(McSchema.safeParse({ desk: { ruling: { explainer: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 121 } } } }).success).toBe(false);
   });
 
   it("keeps the CA file to the endpoint form", () => {
@@ -145,6 +150,24 @@ describe("the extra answer fields", () => {
 });
 
 describe("a pass through the command", () => {
+  it("waits ten minutes from each failure before retrying a slow pass", async () => {
+    let clock = NOW;
+    let calls = 0;
+    const c = new MailClassifier({ ...COMMAND, maxPerPass: 4, timeoutSeconds: 180 }, async () => {
+      calls++;
+      clock += 150_000;
+      throw new Error("research timeout");
+    }, quiet, () => clock);
+    const items = [mail("slow1"), mail("slow2"), mail("slow3"), mail("slow4")];
+    await c.kick(db, { now: NOW, mail: items, events: [], vips: [] });
+    expect(calls).toBe(4);
+    await c.kick(db, { now: clock, mail: items, events: [], vips: [] });
+    expect(calls).toBe(4);
+    clock = NOW + 750_000;
+    await c.kick(db, { now: clock, mail: items, events: [], vips: [] });
+    expect(calls).toBe(5);
+  });
+
   it("sends the mail's account and the mail corrections, and caches the extra fields", async () => {
     const seen: ClassifierRequest[] = [];
     const c = new MailClassifier(COMMAND, async (req) => {
