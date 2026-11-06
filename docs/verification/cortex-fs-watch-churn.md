@@ -1,4 +1,10 @@
+<!-- glossary-ignore: node, host, run -->
 # Native watcher churn evidence (node #2604)
+
+The suites this gate covers are skipped, not passing, on a macOS host where
+the probe measures event loss. On such a host the 17 affected native watcher
+tests report as skipped and the full run stays green because of the skip. The
+change keeps a full run honest about that; it does not restore the events.
 
 Measured on 2026-10-17, Darwin 25.6.0 arm64, Bun 1.4.2
 (`744846f84`), base `ef0161b9`. Commands ran on the plain host with
@@ -32,12 +38,15 @@ results are not plain-host evidence.
 
 ## Reusable reproduction and suite gate
 
-`scripts/probe-fs-watch-churn.ts` has only Node built-in imports. To run it
-outside cortex:
+`src/common/fs-watch-churn-probe.ts` has only Node built-in imports, and
+`scripts/probe-fs-watch-churn.ts` is a thin command line wrapper over it. To
+run both outside cortex:
 
 ```sh
-cp scripts/probe-fs-watch-churn.ts /tmp/cortex-watch-churn.ts
-bun /tmp/cortex-watch-churn.ts
+mkdir -p /tmp/cortex-watch-churn/scripts /tmp/cortex-watch-churn/src/common
+cp scripts/probe-fs-watch-churn.ts /tmp/cortex-watch-churn/scripts/
+cp src/common/fs-watch-churn-probe.ts /tmp/cortex-watch-churn/src/common/
+bun /tmp/cortex-watch-churn/scripts/probe-fs-watch-churn.ts
 ```
 
 Exit 0 means all measured writes arrived; exit 1 means the measurement found
