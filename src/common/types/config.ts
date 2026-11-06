@@ -596,7 +596,7 @@ export const DeskSchema = z.object({
   mail: z
     .object({
       classifier: z
-        .object({ ...modelFields("mc.desk.mail.classifier"), maxPerPass: z.number().int().min(1).max(100).default(10) })
+        .object({ ...modelFields("mc.desk.mail.classifier"), timeoutSeconds: z.number().int().min(1).max(180).default(30), maxPerPass: z.number().int().min(1).max(100).default(10) })
         .refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.mail.classifier: set apiKeyEnv or apiKeyFile, not both")
         .refine(hasOneClassifierForm, CLASSIFIER_FORM_ERROR)
         .refine((c) => !(c.command && c.caFile), "mc.desk.mail.classifier.caFile belongs to the endpoint form; pass a CA to the command in its argv")
