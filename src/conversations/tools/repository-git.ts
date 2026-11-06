@@ -29,7 +29,7 @@ interface Change { path: string; index: string; workingTree: string; tracked: bo
 interface Commit { revision: string; parents: string[]; committedAt: string; subject: string; paths: string[] }
 
 const scrub = (text: string): string => redactToolText(text).replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+|\b[^\s/@:<>"']+@[^\s/:<>"']+:[^\s<>"']+/gi, value => {
-  if (!value.includes("://")) return "[redacted-remote]";
+  if (!value.includes("://") || /:\/\/[^\s/]*@/.test(value)) return "[redacted-remote]";
   try {
     const url = new URL(value);
     if (url.username || url.password || url.search || url.hash) return `${url.protocol}//${url.host}/[redacted-remote]`;

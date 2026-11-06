@@ -58,6 +58,7 @@ export class GitReader {
     } catch { throw new GitFailure("git-missing"); }
     const budget = { bytes: 0 };
     const cap = this.options.maxBytes ?? COMMAND_BYTES;
+    const overBudget = (): boolean => budget.bytes > cap || this.bytes > TOTAL_BYTES;
     const read = async (stream: ReadableStream<Uint8Array>, retain: boolean): Promise<string> => {
       const chunks: Uint8Array[] = [];
       const reader = stream.getReader();
@@ -67,11 +68,11 @@ export class GitReader {
           if (next.done) break;
           budget.bytes += next.value.length;
           this.bytes += next.value.length;
-          if (budget.bytes > cap || this.bytes > TOTAL_BYTES) proc.kill("SIGKILL");
+          if (overBudget()) proc.kill("SIGKILL");
           else if (retain) chunks.push(next.value);
         }
       } finally { reader.releaseLock(); }
-      if (budget.bytes > cap || this.bytes > TOTAL_BYTES) return "";
+      if (overBudget()) return "";
       try { return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)); }
       catch { throw new GitFailure("non-utf8-git-output"); }
     };
@@ -81,7 +82,7 @@ export class GitReader {
     try {
       const [text, , code] = await Promise.all([read(proc.stdout, true), read(proc.stderr, false), proc.exited]);
       this.checkSignal();
-      if (budget.bytes > cap || this.bytes > TOTAL_BYTES) throw new GitFailure("output-limit");
+      if (overBudget()) throw new GitFailure("output-limit");
       return { code, text };
     } catch (error) {
       proc.kill("SIGKILL");

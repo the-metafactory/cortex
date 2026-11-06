@@ -97,6 +97,21 @@ describe("conversation Git reads", () => {
     expectNoPrivate(result);
   });
 
+  test.each([",", "?next="])("credential URLs joined to a plain URL by %s cannot hide credentials", async separator => {
+    const r = await fixture();
+    const joined = `https://public.example.invalid/a${separator}https://synthetic-user:synthetic-password@git.example.invalid/x`;
+    await writeFile(join(r.root, "beacon.txt"), `${joined}\n`);
+    const diff = toolBody(await r.call("diff", { path: "beacon.txt" }));
+    expect(diff.diff).toContain("[redacted-remote]");
+    expectNoPrivate(diff);
+    await directGit(r.root, ["add", "beacon.txt"]);
+    await directGit(r.root, ["commit", "--quiet", "-m", `Synthetic remote ${joined}`]);
+    const shown = toolBody(await r.call("show", { path: "beacon.txt" }));
+    expect(shown.diff).toContain("[redacted-remote]");
+    expect(shown.commit.subject).toContain("[redacted-remote]");
+    expectNoPrivate(shown);
+  });
+
   test("file to directory replacements never widen a patch to excluded or local-only descendants", async () => {
     const r = await fixture();
     await writeFile(join(r.root, "config"), "synthetic public config\n");
