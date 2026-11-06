@@ -155,9 +155,9 @@ describe("turn authority and safe failure", () => {
       let ran = 0;
       const r = rig([readTool({ run: () => { ran++; return Promise.resolve("x"); } })]);
       const surface = r.host.surface("c", "cloud", activity => { r.seen.push(activity); return Promise.resolve(); });
-      await surface.validate!();
+      await surface.validate();
       change(r);
-      await expect(surface.validate!()).rejects.toThrow("changed");
+      await expect(surface.validate()).rejects.toThrow("changed");
       expect((await surface.call("stale", "repo_read", { project: "alpha", path: "x" }, new AbortController().signal)).outcome).toBe("refused");
       expect(ran).toBe(0);
     }

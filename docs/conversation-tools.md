@@ -154,6 +154,7 @@ Without `web.search`, `web_search` is listed as `dependency-missing` and a call 
 <!-- glossary-ignore: body -->
 <!-- glossary-ignore: data -->
 <!-- glossary-ignore: run -->
+<!-- glossary-ignore: path -->
 Page and search text is untrusted data. It sits inside the fenced result, cannot change permissions, tool definitions or standing authority, and is never followed as instructions.
 
 Tests drive both tools through the conversation host with controlled DNS, transport and provider fixtures: `bun run test src/conversations/__tests__/tools-web.test.ts`. The live probe (a cloud-allowed throwaway conversation reading a public documentation page, loopback and redirect denial, and a local-only query that never reaches the provider) needs a deployed stack with a configured provider and has not been run from this build.
