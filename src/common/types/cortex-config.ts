@@ -525,6 +525,9 @@ export type Presence = z.infer<typeof PresenceSchema>;
  *   - `persona` is a path to platform-neutral markdown
  *   - `roles` is the maximum capability set; presences may restrict, never widen
  */
+/** Stays under the 20-minute JetStream ack_wait, so a killed brain is reported before the task is redelivered. */
+export const MAX_BRAIN_TASK_TIMEOUT_MS = 19 * 60 * 1000;
+
 /**
  * Bot Packs B-1 (`docs/design-bot-packs.md` §4) — the `brain:` block on an
  * agent's `runtime`. Declares WHO computes the function from inbound events to
@@ -608,6 +611,7 @@ export const BrainConfigSchema = z
      * this is what the brain may REQUEST of the fleet.
      */
     dispatch_capabilities: z.array(z.string().min(1)).default([]),
+    timeout_ms: z.number().int().positive().max(MAX_BRAIN_TASK_TIMEOUT_MS).optional(),
     /**
      * Daemon supervision restart cap (§7.4): cortex restarts a crashed daemon
      * brain up to this many times, then marks the agent degraded (the restart
@@ -815,6 +819,13 @@ export const AgentRuntimeSchema = z.object({
   // the legacy looseness (their subjects are built by the review path's own
   // fixed taxonomy, not raw manifest text).
   const brain = rt.brain;
+  if (brain?.timeout_ms !== undefined && (brain.kind !== "exec" || brain.lifecycle === "daemon")) {
+    ctx.addIssue({
+      code: "custom",
+      message: "agent.runtime.brain.timeout_ms applies only to a per-task exec brain",
+      path: ["brain", "timeout_ms"],
+    });
+  }
   if (brain?.kind !== "exec") return;
   rt.capabilities.forEach((cap, i) => {
     if (!CAPABILITY_ID_REGEX.test(cap)) {

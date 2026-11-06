@@ -55,6 +55,7 @@ import { studioBriefing } from "./studio/overseer";
 
 export interface DeskRuntime {
   waitingTasks?: Pick<WaitingTasks, "read">;
+  routineCapabilities?: import("./routine-providers").RoutineCapabilities;
   routineRead?: RoutineReadLoop;
   options?: DeskOptions;
   ledger: HandledLedger;
@@ -321,7 +322,7 @@ export async function composeDesk(
     voice: voiceView(desk.voice),
     chime: rules.chime,
     notifications: rules.notifications,
-    autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio), canMove),
+    autonomy: buildAutonomy(db, done, rangerActions, Boolean(desk.studio), canMove, Boolean(desk.routines?.capabilityBuild?.install)),
     ...(canMove ? { mailRules: ruleViews(db), mailSweeps: sweeps.map(sweepView) } : {}),
     mailTrusted: trustedViews(db),
     ...(desk.mailDigest && canMove ? { mailDigests: digests.map((g) => withUnsubscribe(digestView(g, desk.mailDigest?.model ? digestFlags.get(g.id) : null), unsubscribe)) } : {}),
@@ -403,21 +404,21 @@ function withAutonomyNotes(items: DeskItem[], done: DoneEntry[], now: number): D
   });
 }
 
-const OWN_LINE = ["studio.capture", "mail.move", "mail.rule", "mail.sweep", TRUST_DONE];
+const OWN_LINE = ["studio.capture", "mail.move", "mail.rule", "mail.sweep", TRUST_DONE, "capability.install"];
 
-function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, studio: boolean, canMove: boolean): DeskView["autonomy"] {
+function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, studio: boolean, canMove: boolean, canInstall: boolean): DeskView["autonomy"] {
   const grants = listGrants(db);
   const shown = done.filter((d) => d.status !== "running").slice(0, 10);
   const ruleOf = rulesOfRuns(db, shown.filter((d) => d.action.startsWith("mail.rule")).map((d) => d.itemKey));
   const on = new Set(listRules(db).filter((r) => r.on).map((r) => r.id));
-  const ready = (a: string): boolean => a === "studio.capture" ? studio : a === "mail.rules" ? canMove && (grants.has(a) || on.size > 0) : rangerActions;
+  const ready = (a: string): boolean => a === "capability.install" ? canInstall : a === "studio.capture" ? studio : a === "mail.rules" ? canMove && (grants.has(a) || on.size > 0) : rangerActions;
   return {
     types: PROMOTABLE.filter(ready).map((action) => ({ action, ...PROMOTABLE_LABELS[action], on: grants.has(action) })),
     done: shown.map((d) => {
       const rule = ruleOf.get(d.itemKey);
       return {
         key: d.attemptKey,
-        ...(OWN_LINE.some((a) => d.action.startsWith(a)) ? { action: d.action, ...(OWN_LINE.includes(d.action) ? { undo: d.itemKey } : {}) } : {}),
+        ...(OWN_LINE.some((a) => d.action.startsWith(a)) ? { action: d.action, ...(OWN_LINE.includes(d.action) && (d.action !== "capability.install" || d.status === "done") ? { undo: d.itemKey } : {}) } : {}),
         ...(rule && on.has(rule) ? { stop: rule } : {}),
         title: d.title, message: d.message ?? "", at: d.createdAt, ok: d.status === "done",
       };

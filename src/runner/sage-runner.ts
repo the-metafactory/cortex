@@ -85,6 +85,7 @@ import { configHomeSpawnEnv, type SubstrateId } from "../common/substrates/confi
 import {
   createReviewTaskFailedEvent,
   createReviewVerdictEvent,
+  reviewReplyCorrelationId,
 } from "../bus/review-events";
 import type { ReviewVerdictKind } from "../bus/review-events";
 import {
@@ -222,7 +223,7 @@ export function makeSageReviewRunner(
   const explicitBin = opts.sageBin;
 
   return async (pipeline: ReviewPipelineOpts): Promise<ReviewPipelineResult> => {
-    const correlationId = pipeline.requestEnvelope.id;
+    const correlationId = reviewReplyCorrelationId(pipeline.requestEnvelope);
     const startedAt = new Date();
 
     // Coerce the payload — review-consumer already validated the shape
@@ -505,6 +506,7 @@ function verdict(
   const envelope: Envelope = createReviewVerdictEvent({
     source,
     kind: decision,
+    requestId: pipeline.requestEnvelope.id,
     correlationId,
     // compass#99 F12 (wire-2) — federated sage verdicts declare federated
     // sovereignty so the emitted envelope matches the `federated.*` subject the

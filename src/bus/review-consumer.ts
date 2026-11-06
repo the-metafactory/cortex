@@ -13,8 +13,7 @@
  *       §2.3 — ack/nak/term semantics + redelivery aborted-emit.
  *       §3   — capability-to-agent routing.
  *       §4   — per-envelope pipeline overview.
- *       §5   — correlation_id contract (request envelope id, threaded
- *              through every emitted envelope).
+ *       §5   — correlation_id contract.
  *       §7   — failure taxonomy + the four-way nak mapping.
  *       §8   — lifecycle envelope co-emission ordering.
  *      §10.1 — PR-6 row (this PR's scope).
@@ -79,6 +78,7 @@ import type { MyelinSubscriber } from "./myelin/subscriber";
 import type { AckDecision } from "./myelin/subscriber";
 import {
   createReviewTaskFailedEvent,
+  reviewReplyCorrelationId,
   isReviewFlavor,
   type DispatchTaskFailedReason,
   type ReviewEventSource,
@@ -713,7 +713,7 @@ export class ReviewConsumer {
           source: this.source,
           taskId: crypto.randomUUID(),
           agentId: this.agent.id,
-          correlationId: envelope.id,
+          correlationId: reviewReplyCorrelationId(envelope),
           startedAt: this.clock(),
           abortedAt: this.clock(),
           reason: `redelivery (attempt ${deliveryCount})`,
@@ -721,6 +721,7 @@ export class ReviewConsumer {
           ...(classification !== undefined && { classification }),
         }),
         "dispatch.task.aborted",
+        envelope,
         requester,
       );
       // Note: we continue with pipeline processing. The aborted envelope
@@ -953,12 +954,13 @@ export class ReviewConsumer {
         source: this.source,
         taskId: crypto.randomUUID(),
         agentId: this.agent.id,
-        correlationId: envelope.id,
+        correlationId: reviewReplyCorrelationId(envelope),
         startedAt,
         ...(responseRouting !== undefined && { responseRouting }),
         ...(classification !== undefined && { classification }),
       }),
       "dispatch.task.started",
+      envelope,
       requester,
     );
 
@@ -1143,7 +1145,9 @@ export class ReviewConsumer {
         // pipeline calls `stop()` on the returned handle after
         // `session.wait()` resolves (or rejects).
         onSessionSpawned: (session) =>
-          this.attachHeartbeatToSession(session, envelope.id),
+          this.attachHeartbeatToSession(
+            session, reviewReplyCorrelationId(envelope),
+          ),
       };
       result = await this.pipelineRunner(pipelineOpts);
     } catch (err) {
@@ -1170,13 +1174,13 @@ export class ReviewConsumer {
       // §8.2 — verdict FIRST, then dispatch.task.completed. Pilot's
       // "first matching event wins" treats the verdict as the primary
       // signal and `completed` as the crash-resilience close.
-      await this.safePublish(result.envelope, "review.verdict.*", requester);
+      await this.safePublish(result.envelope, "review.verdict.*", envelope, requester);
       await this.safePublish(
         createDispatchTaskCompletedEvent({
           source: this.source,
           taskId: crypto.randomUUID(),
           agentId: this.agent.id,
-          correlationId: envelope.id,
+          correlationId: reviewReplyCorrelationId(envelope),
           startedAt,
           completedAt: this.clock(),
           resultSummary: extractSummary(result.envelope),
@@ -1184,6 +1188,7 @@ export class ReviewConsumer {
           ...(classification !== undefined && { classification }),
         }),
         "dispatch.task.completed",
+        envelope,
         requester,
       );
       return { kind: "ack" };
@@ -1206,7 +1211,7 @@ export class ReviewConsumer {
           source: this.source,
           taskId: crypto.randomUUID(),
           agentId: this.agent.id,
-          correlationId: envelope.id,
+          correlationId: reviewReplyCorrelationId(envelope),
           startedAt,
           completedAt: this.clock(),
           resultSummary: firstLine(result.presentation),
@@ -1215,6 +1220,7 @@ export class ReviewConsumer {
           ...(classification !== undefined && { classification }),
         }),
         "dispatch.task.completed",
+        envelope,
         requester,
       );
       return { kind: "ack" };
@@ -1222,7 +1228,7 @@ export class ReviewConsumer {
 
     // result.kind === "failed" — publish the failed envelope and pick
     // the JetStream control per the four-way nak taxonomy (§7).
-    await this.safePublish(result.envelope, "dispatch.task.failed", requester);
+    await this.safePublish(result.envelope, "dispatch.task.failed", envelope, requester);
     return failedReasonToAckDecision(reasonOf(result.envelope));
   }
 
@@ -1232,8 +1238,6 @@ export class ReviewConsumer {
    * payload, no capability match, concurrency gate). Pipeline-internal
    * failures publish the envelope PR-5 returned.
    *
-   * Threads `correlation_id = envelope.id` per §5.2; the cortex-internal
-   * `taskId` is a fresh UUID purely for lifecycle stitching.
    */
   private async publishFailed(
     request: Envelope,
@@ -1250,7 +1254,7 @@ export class ReviewConsumer {
       source: this.source,
       taskId: crypto.randomUUID(),
       agentId: this.agent.id,
-      correlationId: request.id,
+      correlationId: reviewReplyCorrelationId(request),
       startedAt: now,
       failedAt: now,
       errorSummary,
@@ -1261,7 +1265,7 @@ export class ReviewConsumer {
       ...(responseRouting !== undefined && { responseRouting }),
       ...(classification !== undefined && { classification }),
     });
-    await this.safePublish(failed, "dispatch.task.failed", requester);
+    await this.safePublish(failed, "dispatch.task.failed", request, requester);
   }
 
   /**
@@ -1269,12 +1273,6 @@ export class ReviewConsumer {
    * empty catch blocks". A failed publish is operationally noisy but
    * must not crash the consumer or prevent the per-envelope handler
    * from returning an `AckDecision`.
-   *
-   * Defensive assertion (`correlation_id MUST equal request envelope's
-   * id`) is the per-task-spec belt-and-braces gate. The pipeline + our
-   * own builders should already satisfy this; the assertion catches
-   * regressions early rather than producing orphan envelopes pilot
-   * silently fails to filter.
    *
    * **SINGLE PUBLISH PATH (cortex#340).** Every lifecycle + verdict
    * envelope ReviewConsumer emits routes through this method —
@@ -1300,9 +1298,16 @@ export class ReviewConsumer {
   private async safePublish(
     envelope: Envelope,
     label: string,
+    request: Envelope,
     requester?: FederatedRequester,
   ): Promise<void> {
     try {
+      const expectedCorrelationId = reviewReplyCorrelationId(request);
+      if (envelope.correlation_id !== expectedCorrelationId) {
+        throw new Error(
+          `reply correlation mismatch: expected ${expectedCorrelationId}, received ${envelope.correlation_id}`,
+        );
+      }
       if (requester !== undefined && this.runtime.publishOnSubject !== undefined) {
         // ADR 0001 — federated subject carries the REQUESTER's identity
         // (`{principal}.{stack}`), NEVER a network id. `deriveSubject` builds

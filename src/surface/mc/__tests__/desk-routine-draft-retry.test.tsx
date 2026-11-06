@@ -12,10 +12,12 @@ import { handleDeskRoutines } from "../api/desk-routines";
 import { HandledLedger } from "../desk/actions";
 import type { DeskRuntime } from "../desk/compose";
 
-const OPTIONS: RoutineOptions = { composer: ["compose-retry"], reflex: ["retry-owner"], target: "@example/pulse-flow", timeZone: "Europe/Zurich", timeoutSeconds: 1, readTimeoutSeconds: 0.1 };
+const OPTIONS: RoutineOptions = { composer: ["compose-retry"], reflex: ["retry-owner"], target: "@example/pulse-flow", timeZone: "Europe/Zurich", timeoutSeconds: 1, composeTimeoutSeconds: 1, readTimeoutSeconds: 0.1 };
 const NOW = Date.parse("2026-11-04T10:00:00Z");
 const YAML = `name: F_RETRY
 input:
+  request: hello
+  scenario: hello
   text: hello
 actions:
   - agent:
@@ -61,7 +63,7 @@ describe("retrying saved routine capability drafts", () => {
   let backend: ReturnType<typeof owner>;
   let runtime: DeskRuntime;
   const read = () => readRoutines(db, OPTIONS, backend.run, () => capabilities);
-  const act = (action: "install" | "discard", requestId = `retry-${action}-request`) => handleDeskRoutines(new Request("http://localhost/api/desk/routines", { method: "POST", body: JSON.stringify({ action, target: proposalId, requestId }) }), db, runtime, backend.run, () => capabilities);
+  const act = (action: "install" | "discard", requestId = `retry-${action}-request`, run = backend.run) => handleDeskRoutines(new Request("http://localhost/api/desk/routines", { method: "POST", body: JSON.stringify({ action, target: proposalId, requestId }) }), db, runtime, run, () => capabilities);
 
   beforeEach(async () => {
     db = initDatabase(":memory:"); capabilities = new Set(); backend = owner();
@@ -193,7 +195,7 @@ describe("retrying saved routine capability drafts", () => {
       if (argv[2] === "list") { started(); await blocked; }
       return backend.run(argv, stdin, timeoutMs);
     };
-    const confirming = handleDeskRoutines(new Request("http://localhost/api/desk/routines", { method: "POST", body: JSON.stringify({ action: "install", target: proposalId, requestId: "discard-racing-install" }) }), db, runtime, delayed, () => capabilities);
+    const confirming = act("install", "discard-racing-install", delayed);
     await reading;
     expect((await act("discard")).status).toBe(200);
     release();

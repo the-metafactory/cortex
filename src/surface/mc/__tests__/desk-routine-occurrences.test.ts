@@ -5,7 +5,7 @@ import { HandledLedger } from "../desk/actions";
 import type { DeskRuntime } from "../desk/compose";
 import type { RoutineRunner } from "../desk/routine-command";
 
-const options = { reflex: ["owner-wrapper", "--configured-stack"], composer: ["compose"], target: "@test/pulse-flow", timeZone: "UTC", timeoutSeconds: 120, readTimeoutSeconds: 1 };
+const options = { reflex: ["owner-wrapper", "--configured-stack"], composer: ["compose"], target: "@test/pulse-flow", timeZone: "UTC", timeoutSeconds: 120, composeTimeoutSeconds: 120, readTimeoutSeconds: 1 };
 const scope = { principal: "test", stack: "default" };
 const runtime: DeskRuntime = { ledger: new HandledLedger(), options: { routineScope: scope, enabled: true, displayName: "Test", topN: 5, rangerUrl: "", areas: [], sources: [], routines: options } };
 const query = { start: "2026-11-01T00:00:00Z", end: "2026-11-02T00:00:00Z", timezone: "Europe/Zurich", limit: 2 };

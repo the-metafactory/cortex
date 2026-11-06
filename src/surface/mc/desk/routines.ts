@@ -11,6 +11,7 @@ import { spawnWithStdin } from "./create";
 import { routineSchedule } from "./routine-schedule";
 import { MissingCapabilitiesError, requireRoutineCapabilities, type RoutineCapabilities } from "./routine-providers";
 import { readDraftViews } from "./routine-draft-state";
+import { pendingCapabilityInstalls } from "./routine-install-store";
 import { parseRoutineFlow, routineProposalCard } from "./routine-drafts";
 import { routineStepLabels } from "./routine-steps";
 import { PendingRoutineSchema, RoutineHistorySchema, RoutineSchema, RoutineRefusal, reflexCommand, runRoutineCommand, type RoutineOptions, type RoutineRunner, type RoutineView } from "./routine-command";
@@ -23,8 +24,16 @@ const ComposerReply = z.discriminatedUnion("status", [
   z.object({ status: z.literal("no-match"), message: z.string() }),
   z.object({ status: z.literal("invalid"), findings: z.array(z.object({ message: z.string() })) }),
 ]);
+const TOP_LEVEL_INPUT = /^input:.*\n?(?:[ \t]+.*\n?|\n)*/m;
 const UNKNOWN = "Reflex has not confirmed the result. Refresh the Desk and retry this same action; it will not be sent twice.";
 const failure = (error: unknown): string => error instanceof Error ? error.message : String(error);
+
+function withRequestFields(yaml: string, fixed: Record<string, unknown> | undefined, request: string): string {
+  const input = { request, scenario: request, text: request, ...fixed };
+  if (fixed && Object.keys(fixed).length === Object.keys(input).length) return yaml;
+  const stepsWithTheirCommentAnnotations = yaml.replace(TOP_LEVEL_INPUT, "").trimEnd();
+  return `${stepsWithTheirCommentAnnotations}\n${stringifyYaml({ input })}`;
+}
 
 export async function buildRoutineCard(db: Database, text: string, options: RoutineOptions | undefined, now: number, run: RoutineRunner = spawnWithStdin, capabilities?: RoutineCapabilities): Promise<DeskProposal> {
   const blocked = (problem: string): DeskProposal => ({ kind: "routine", label: "Routine", fields: { title: text }, problem, unwritable: true, via: "rules" });
@@ -32,17 +41,18 @@ export async function buildRoutineCard(db: Database, text: string, options: Rout
   const schedule = routineSchedule(text);
   if (typeof schedule === "string") return blocked(schedule);
   try {
-    const result = await runRoutineCommand(run, [...options.composer, "--request", schedule.request, "--json"], options.timeoutSeconds * 1000);
+    const result = await runRoutineCommand(run, [...options.composer, "--request", schedule.request, "--json"], options.composeTimeoutSeconds * 1000);
     const reply = ComposerReply.parse(JSON.parse(result.stdout));
     if (reply.status === "no-match") return blocked(reply.message);
     if (reply.status === "invalid") return blocked(reply.findings.map((f) => f.message).join("; ") || "The composer could not produce a valid flow.");
     if (result.code !== 0) return blocked("The composer did not complete successfully.");
-    const { flow, steps } = parseRoutineFlow(reply.yaml);
+    const yaml = withRequestFields(reply.yaml, parseRoutineFlow(reply.yaml).flow.input, schedule.request);
+    const { steps } = parseRoutineFlow(yaml);
     const id = randomUUID();
     const proposal: RoutineProposal = {
       id, routineId: `desk-${id}`, title: schedule.request, request: schedule.request,
       schedule: schedule.expression, words: schedule.words, timezone: schedule.clock === "elapsed" ? "UTC" : options.timeZone,
-      yaml: flow.input ? reply.yaml : `${reply.yaml}\n${stringifyYaml({ input: { request: schedule.request, scenario: schedule.request, text: schedule.request } })}`,
+      yaml,
       steps: routineStepLabels(steps),
       configHash: routineConfigHash(options), createdAt: now,
     };
@@ -70,7 +80,8 @@ export async function readRoutines(db: Database, options: RoutineOptions, run: R
   const draftsRead = draftCapabilities ? readDraftViews(db, options, draftCapabilities, run).catch(draftsUnreadable) : Promise.resolve([]);
   const withDrafts = async (view: RoutineView): Promise<RoutineView> => {
     const drafts = (await draftsRead).filter((draft) => readRoutineProposal(db, draft.proposalId)?.draft);
-    return drafts.length > 0 ? { ...view, drafts } : view;
+    const capabilityInstalls = pendingCapabilityInstalls(db);
+    return { ...view, ...(drafts.length > 0 ? { drafts } : {}), ...(capabilityInstalls.length > 0 ? { capabilityInstalls } : {}) };
   };
   try {
     const [installed, pending, history] = await Promise.all([

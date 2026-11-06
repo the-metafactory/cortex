@@ -1,9 +1,9 @@
 # Process handler
 
-The reflex bridge's `process` handler runs a deployment-controlled spec from
+The reflex bridge's `process` handler executes a stack-controlled spec from
 the processes directory: `$CORTEX_PROCESSES_DIR` when set, otherwise the
 `processes/` directory beside the stack's config file. Specs must be trusted:
-their commands run with cortex's operating-system permissions.
+their commands execute with cortex's operating-system permissions.
 
 ## Environment contract
 
@@ -23,10 +23,10 @@ that credential's permissions. The allow-list excludes unrelated secrets such
 as webhook tokens and LLM keys; it is not a sandbox or a bus-access boundary.
 There is no per-spec opt-out for the listed Pulse settings.
 
-This is the intentional contract of
-[node #2559](https://github.com/the-metafactory/cortex/issues/2559), implementing
+The intentional
+[serves and Pulse environment contract](https://github.com/the-metafactory/cortex/issues/2559) implements
 [the Vigil contract](https://github.com/the-metafactory/soma/issues/787) (Q21,
-Q23): the spawned runner needs its bus connection to report the execution run.
+Q23): the spawned runner needs its bus connection to report the execution outcome.
 Earlier allow-list documentation promised exclusion of bus credentials; that
 guarantee no longer applies to the listed Pulse variables. Their actual NATS
 permissions come from the credential provisioned for Pulse.
@@ -42,6 +42,8 @@ envelope's sibling `payload.serves`, and `MF_CORRELATION_ID` from its
 inherited from cortex. Unset parent variables are omitted.
 
 For the generic routine-file process and its configured path boundary, see [Run routine files through Pulse](pulse-flow-process.md).
+
+`CORTEX_PROCESS_FAILURE_FILE` names a file the child may write one line to, saying why it failed. The runner adds that line to the `reason` on `system.bus.process`, and the Desk shows it on the routine's history. Write only what the principal may read there.
 
 ## Execution input snapshots
 

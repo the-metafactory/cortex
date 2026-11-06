@@ -34,7 +34,8 @@ export const BuildStatusSchema = z.object({
 export type BuildState =
   | { state: (typeof BUILD_STATES)[number] | "live"; reason?: string; pr?: string }
   | { state: "unknown"; error: string };
-export interface DraftNodeView { capability: string; ref: string; url: string; notStarted?: string; build: BuildState | null }
+export interface CapabilityInstallView { id: string; bundle: string; state: "running" | "installed" | "failed" | "undoing" | "undone"; error: string | null; at: number }
+export interface DraftNodeView { capability: string; ref: string; url: string; notStarted?: string; build: BuildState | null; install?: CapabilityInstallView; canInstall?: boolean; presenceLate?: boolean }
 export interface RoutineDraftView { proposalId: string; title: string; nodes: DraftNodeView[]; missing: MissingCapability[]; proposal?: DeskProposal; error?: string }
 
 export const CapabilityRefusalSchema = z.object({

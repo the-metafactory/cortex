@@ -1,7 +1,8 @@
+// glossary-ignore: run
 import type { Database } from "bun:sqlite";
 import type { StreamInfo } from "nats";
 import type { ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
-import { confirmSubjectStack, unverifiedVigilSubjects, getVigilSubject, writeVigilSubject, type VigilSubjectRow } from "./db";
+import { confirmSubjectStack, unverifiedVigilSubjects, getVigilSubject, isOlderObservation, moveVigilEvents, writeVigilSubject, type VigilSubjectRow } from "./db";
 import { stateSubjectKey, vocabularyOf } from "./state-subject";
 import { runHealthKey } from "./ingest";
 import { applyVigilAttention } from "./attention";
@@ -12,15 +13,13 @@ export function hasLegacyVigilSubjects(db: Database): boolean {
 }
 
 export function reconnectReplayedEvents(db: Database, payload: ExecutionRunFinishedPayload, stack: string): void {
-  for (const row of unverifiedVigilSubjects(db)) {
-    const matches = row.subject_kind === "run"
-      ? row.run_kind === payload.ran.kind && row.ref === payload.ran.ref
-      : payload.state && row.vocab === vocabularyOf(payload.state.value) && row.ref === payload.state.subject;
-    if (!matches) continue;
+  for (const row of unverifiedVigilSubjects(db, {
+    ran: payload.ran,
+    state: payload.state ? { vocab: vocabularyOf(payload.state.value), ref: payload.state.subject } : undefined,
+  })) {
     const newKey = row.subject_kind === "run" ? runHealthKey(payload, stack)
       : stateSubjectKey(row.vocab ?? "unknown", stack, row.ref);
-    db.query("UPDATE vigil_events SET subject_key = ?, attention_id = CASE WHEN attention_id IS NULL THEN NULL ELSE ? END WHERE subject_key = ? AND run_id = ?")
-      .run(newKey, `att:vigil:${newKey}`, row.subject_key, payload.run_id);
+    moveVigilEvents(db, row.subject_key, newKey, payload.run_id);
     if (row.last_run_id === payload.run_id) {
       db.query(`INSERT OR REPLACE INTO vigil_subject_stack_moves (old_key, new_key, expected_run_id, expected_ended_at)
         VALUES (?, ?, ?, ?)`).run(row.subject_key, newKey, row.last_run_id, row.last_ended_at);
@@ -69,8 +68,7 @@ export function finishStackScopedReplay(db: Database, retainedSince: number, loc
     const historyAgedOut = !mapped && row.last_ended_at < retainedSince;
     if (isLocalChannelCheck(row) || historyAgedOut) {
       const prior = getVigilSubject(db, scopedKey);
-      if (!prior || prior.last_ended_at < row.last_ended_at
-        || (prior.last_ended_at === row.last_ended_at && prior.last_run_id < row.last_run_id)) {
+      if (!prior || isOlderObservation(prior, row)) {
         writeVigilSubject(db, { ...row, stack: localStack, subject_key: scopedKey }, row.updated_at);
         db.query("UPDATE vigil_subjects SET cadence_ms = ? WHERE subject_key = ?").run(row.cadence_ms, scopedKey);
       }
@@ -80,8 +78,7 @@ export function finishStackScopedReplay(db: Database, retainedSince: number, loc
       throw new Error("Vigil stack replay requires complete LEDGER history");
     }
     const rebuilt = getVigilSubject(db, scopedKey);
-    if (!rebuilt || rebuilt.last_ended_at < row.last_ended_at
-      || (rebuilt.last_ended_at === row.last_ended_at && rebuilt.last_run_id < row.last_run_id)) {
+    if (!rebuilt || isOlderObservation(rebuilt, row)) {
       throw new Error("Vigil stack replay requires complete LEDGER history");
     }
     const oldId = `att:vigil:${row.subject_key}`;
@@ -91,8 +88,7 @@ export function finishStackScopedReplay(db: Database, retainedSince: number, loc
       applyVigilAttention(db, { id: "", subject_key: scopedKey, to_value: rebuilt.value,
         direction: rebuilt.healthy ? "better" : "worse" }, localStack, { replay: true });
     }
-    db.query("UPDATE vigil_events SET subject_key = ?, attention_id = CASE WHEN attention_id IS NULL THEN NULL ELSE ? END WHERE subject_key = ?")
-      .run(scopedKey, `att:vigil:${scopedKey}`, row.subject_key);
+    moveVigilEvents(db, row.subject_key, scopedKey);
     db.query(`UPDATE vigil_text_receipts SET subject_key =
       (SELECT subject_key FROM vigil_events WHERE vigil_events.id = vigil_text_receipts.event_id)
       WHERE subject_key = ? AND EXISTS (SELECT 1 FROM vigil_events WHERE vigil_events.id = vigil_text_receipts.event_id)`)

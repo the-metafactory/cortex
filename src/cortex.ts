@@ -23,6 +23,10 @@ import { DiscordConversations } from "./conversations/discord";
 import { openConversationHost, type HostStatus } from "./conversations/host";
 import { piToolSummary, piTurns, resolvePiSettings } from "./conversations/pi";
 import { CAPABILITIES_TOOL } from "./conversations/tools/capabilities";
+import { createGithubTools } from "./conversations/tools/github";
+import { repositoryFileTools } from "./conversations/tools/repository-files";
+import { createRepositoryGitTools } from "./conversations/tools/repository-git";
+import { createWebTools } from "./conversations/tools/web";
 import { cloudLanes } from "./common/types/desk-conversations";
 import { handoffLanes } from "./surface/mc/desk/mail-handoff";
 import { cortexStateDir } from "./common/state-path";
@@ -4974,7 +4978,7 @@ export async function startCortex(
           expectedLabel: `ai.meta-factory.cortex.${derivedStack.stack}`,
           lanes: { ...(conversationConfig?.local ? { local: conversationConfig.local } : {}), ...(conversationConfig?.cloud ? { cloud: conversationConfig.cloud } : {}) },
           turns: piTurns(pi),
-          tools: { config: () => config.mc.desk.conversations?.tools },
+          tools: { config: () => config.mc.desk.conversations?.tools, definitions: [...repositoryFileTools, ...createRepositoryGitTools(), ...createGithubTools(), ...createWebTools({ config: () => config.mc.desk.conversations?.tools })] },
         });
         console.log(`cortex: conversation turns run through pi at ${pi.bin} (${pi.extensions.length ? `projection ${pi.extensions.join(", ")}` : "no Soma projection found"}; ${piToolSummary(pi, [{ name: CAPABILITIES_TOOL }])}; lanes ${[conversationConfig?.local ? "local" : "", ...cloudLanes(conversationConfig?.cloud).map(lane => `cloud ${lane.id}`)].filter(Boolean).join(", ") || "none configured"})`);
         console.log(conversationStatus.state === "ready"

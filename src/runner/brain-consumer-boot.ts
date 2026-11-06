@@ -79,7 +79,7 @@ import {
   provisionReviewStream,
   type ProvisionJsm,
 } from "../bus/jetstream/provision";
-import { makeExecBrainRunner } from "../brain/exec-brain-runner";
+import { makeExecBrainRunner, type MakeExecBrainRunnerOpts } from "../brain/exec-brain-runner";
 import {
   DaemonBrainHost,
   type ComposeFn,
@@ -173,6 +173,7 @@ export interface BrainBootAgent {
       secrets: readonly string[];
       /** The manifest ALLOW-LIST for `dispatch` effects. */
       dispatch_capabilities: readonly string[];
+      timeout_ms?: number;
       /** Daemon supervision restart cap (`lifecycle: daemon` only). */
       maxRestarts: number;
       /**
@@ -611,7 +612,7 @@ export function wireBrainConsumers(
         opts.daemonBrainHosts.push(daemonHost);
         consumer = new BrainConsumer({ ...baseConsumerOpts, daemonHost });
       } else {
-        const runBrainTask = makeExecBrainRunner({ run: brain.run, packDir, secrets });
+        const runBrainTask = makeExecBrainRunner(execRunnerOptions({ run: brain.run, timeout_ms: brain.timeout_ms }, packDir, secrets));
         consumer = new BrainConsumer({ ...baseConsumerOpts, runBrainTask });
       }
       opts.brainConsumers.push(consumer);
@@ -737,6 +738,14 @@ const BUS_TASK_FAMILIES_OWNED_ELSEWHERE = new Set(["code-review", "dev"]);
  * `…tasks.{capability}` durable on a stream of its own for bus tasks, such as
  * a Pulse routine step addressed by capability.
  */
+export function execRunnerOptions(
+  brain: { run: string; timeout_ms?: number | undefined },
+  packDir: string,
+  secrets: Record<string, string>,
+): MakeExecBrainRunnerOpts {
+  return { run: brain.run, packDir, secrets, ...(brain.timeout_ms !== undefined && { timeoutMs: brain.timeout_ms }) };
+}
+
 export function brainBindingsFor(o: {
   principal: string;
   stack: string;

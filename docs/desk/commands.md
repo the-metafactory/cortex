@@ -66,6 +66,23 @@ If the command exits non-zero, times out, prints invalid JSON or prints another 
 
 A routine refused for a missing capability stays a draft. The Desk does not install it, and a gate, research, targeted or federated step is never offered for building.
 
+## Capability installation commands
+
+With `capabilityBuild.bundle`, `install`, `uninstall`, and `status` configured, a merged build shows **Merged, install?**. Choosing **Install** opens a confirmation. Confirming runs the configured `install` argument array, replacing `{bundle}` in each argument with `capabilityBuild.bundle`. The command receives no shell expansion or stdin. It runs with `routines.timeoutSeconds`.
+
+<!-- glossary-ignore: agent -->
+The installer must install or upgrade the bundle and reload its agents before exiting 0. An Arc wrapper can choose `arc install <repository>` for the first installation and `arc upgrade <bundle>` afterwards. If the bundle's postinstall reloads Cortex's agents, the wrapper needs no extra reload. Otherwise, it must call `cortex agents reload`. The configured `uninstall` command must remove the bundle and reload its agents.
+
+A nonzero exit shows **install failed: <reason>**, using the last nonempty line of stderr or stdout, and keeps **Install** available. Each confirmation has a durable request ID. Repeating that request returns its recorded result. A new confirmation after a failed exit creates a new attempt. If a command throws or times out, its outcome remains uncertain and the Desk refuses another install until the bundle is checked. Refreshing or restarting Cortex never resends an uncertain command.
+
+Unconfirmed bundle commands appear under Routines, including after their draft is discarded or the stack's install configuration changes. Choose **Check bundle**, then check that the command has stopped. Choose **Confirm installed** if the bundle is installed and its definitions have reloaded, or **Confirm absent** if the bundle is absent. This records the checked outcome without executing either command. A command interrupted by a Cortex restart can be checked after the configured command timeout. A confirmation from an older command state is refused.
+
+Confirming absent retires all successful installation receipts for the bundle and removes their **Done for you** entries. An uncertain install attempt remains recorded as failed. Eligible merged drafts offer **Install** again when their configuration matches. Confirming installed restores a promoted installation's **Done for you** entry. **Undo** requires the installation's original routine configuration, including its uninstall command. If that configuration changes or is removed, the Desk refuses Undo until the original configuration is restored. Local presence still determines when a capability becomes **Live**.
+
+An installation covers the currently merged builds across drafts for the configured bundle. Commands for the same bundle cannot overlap. A successful command shows **Installed, waiting for local presence**. Each capability becomes **Live** when it appears in fresh online local presence. After 90 seconds without presence, the draft shows **installed, not in presence yet** and keeps checking. Installing the routine itself remains a separate confirmation.
+
+**Install merged capabilities** is an ordinary promotable Desk action (`capability.install`). With **Handle it yourself** enabled, the Desk checks merged drafts every 30 seconds and installs without another confirmation. Each attempt appears in **Done for you**. Successful attempts offer **Undo**, which runs the configured `uninstall` command for the whole bundle, including capabilities shared by other drafts. Undo remains available after discarding or installing the routine draft. **Stop doing this on your own** restores ask-first behavior. Failed attempts remain visible and require a new manual confirmation.
+
 ## Source output
 
 A source exits 0 and prints an object with optional `events` and `items` arrays. An empty source can print `{}`. Unknown object fields are ignored. `items` currently accepts mail only. Source adapters do not declare UI actions in their output: Cortex adds actions from the item kind and configured commands.
@@ -160,17 +177,29 @@ It exits 0 and prints `{ "kind": "reminder", "fields": { "text": "Stretch", "due
 
 ### Routed parsers
 
-Optional `ask.routing.permitted` enables the version 1 routed result contract. It lists `claude`, `codex`, and `pi`, with no duplicates. An empty list permits none. The configured parser command must support this contract, such as `desk-parse --routing-config /path/to/routing.json` from cortex-desk-adapters. Provider commands, models, Ranger configuration, and timeouts belong in that adapter's configuration.
+Optional `ask.routing.permitted` enables the version 1 routed result contract. It lists `codex` and `pi`, with no duplicates. An empty list permits none. Claude is not a Desk parser provider. Remove `claude` from existing Desk routing permissions and the adapter's configured providers before upgrading. The configured parser command must support this contract, such as `desk-parse --routing-config /path/to/routing.json` from cortex-desk-adapters. Provider commands, models, Ranger configuration, and timeouts belong in that adapter's configuration.
 
 `POST /api/desk/ask` accepts optional `area` and `routing.permitted` restrictions alongside `text`. The browser sends the selected area for text and voice requests. Before invocation, Cortex intersects configured permissions with request restrictions and the selected area's policy. A local area permits only `pi`; the principal must configure that adapter with a local endpoint. Unknown areas and malformed restrictions are rejected before parsing. A local request on a legacy parser is refused. With All selected, no area restriction applies.
 
 Parser stdin adds `routing: { permitted: [...] }`. The adapter intersects these permissions with its own configuration and delegates selection to Ranger. Cortex does not implement quota thresholds or select providers.
 
-The parser result adds `routing`, with `version: 1`, `kind: selected`, `provider`, `reason`, `attempted`, `candidates`, `fallbackReasons`, and `capabilityExclusions`. `reason` is `most-headroom` or `pi-fallback`. Candidates carry Ranger's provider eligibility reasons. A dispatch-time quota failure appears in `fallbackReasons` as `{ provider, reason: "quota-exhausted" }`. The validated metadata reaches `proposal.routing`, and the card displays the selected provider and reasons.
+The parser result adds `routing`, with `version: 1`, `kind: selected`, `provider`, `reason`, `attempted`, `candidates`, `fallbackReasons`, and `capabilityExclusions`. `reason` is `most-headroom` or `pi-fallback`. Candidates retain Ranger's three-provider eligibility evidence, including the excluded Claude candidate. Removing Claude from the configured providers does not remove its candidate entry. Ranger reports `not-configured` when its `selection.substrates` excludes Claude, or `not-permitted` when the request excludes it. Only Codex and Pi can be selected or attempted. Every attempt must be permitted by the request, including attempts reported in unavailable results. A dispatch-time quota failure appears in `fallbackReasons` as `{ provider, reason: "quota-exhausted" }` for an attempted provider. The validated metadata reaches `proposal.routing`, and the card displays the selected provider and reasons.
 
 An unavailable result has `kind: none` and `routing.kind: unavailable`, with a reason and the same evidence arrays. Cortex returns HTTP 503 with a plain explanation and routing diagnostics. Invalid or missing routed output also returns HTTP 503 and never falls back to rules. Proposal fields and task-map membership are validated independently. Routed proposals always require confirmation, including captures with an existing automatic-capture grant.
 
 Without `ask.routing`, legacy parser output and rules fallback remain supported. Output that includes routing metadata is validated even in legacy mode.
+
+The [contract fixtures](../../src/surface/mc/__tests__/__fixtures__/desk-parser-contract.json) capture actual parser and Ranger CLI output, with both configured for Codex and Pi only. They record the source revisions and cover eligible Codex, exhausted Codex, dispatch-time quota fallback, and no permitted alternative. The Desk handler tests replay these results through the browser request helper and check that parsing creates nothing.
+
+To regenerate the fixtures, pass source checkouts with their dependencies installed:
+
+```sh
+bun scripts/probe-desk-parser-contract.ts \
+	--adapter /path/to/cortex-desk-adapters \
+	--ranger /path/to/ranger > /tmp/desk-parser-contract.json
+```
+
+The probe requires unchanged tracked source files. It uses temporary configuration, a temporary Ranger journal with controlled usage readings, and fake provider commands. It checks candidate evidence, tools-disabled flags, attempt order, and unchanged prompts across fallback. It removes its temporary state when finished. Compare the output with the fixtures before replacing them. This checks the installed command contract without contacting a model or changing live configuration.
 
 A writer runs only after confirmation. Its stdin contains `kind`, `fields`, and `requestId`:
 

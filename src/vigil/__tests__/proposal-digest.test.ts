@@ -8,7 +8,7 @@ import { initDatabase } from "../../surface/mc/db/init";
 import { TABLE_NAMES } from "../../surface/mc/db/schema";
 import { buildDigest, sendDigest } from "../digest";
 import { writeVigilTransition } from "../db";
-import { ingestLedgerEnvelope, ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestFromSourceStack, ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 const DAY = 86400000;
 const REF = "soma:proposals/first.md";
@@ -32,13 +32,13 @@ afterEach(() => { db.close(); fixture[Symbol.dispose](); });
 function report(offset = 0, refs = [REF], replay = false) {
   const ended_at = new Date(ENDED_AT + offset).toISOString();
   const envelope = ledgerEnvelope({ outcome: "succeeded", proposal_refs: refs, ended_at });
-  ingestLedgerEnvelope(db, envelope, ENDED_AT + offset, { replay });
+  ingestFromSourceStack(db, envelope, ENDED_AT + offset, { replay });
 }
 const options = (offset = 0) => ({ db, now: ENDED_AT + offset, somaHome: home, resultBaseUrl: "https://mc.example.test/" });
 
 test("new proposals use fresh file titles before waiting results and persist no content in MC or ledger", async () => {
   report();
-  ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", result_ref: "soma:outputs/result.md" }), ENDED_AT);
+  ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", result_ref: "soma:outputs/result.md" }), ENDED_AT);
   const expected = "proposals\nPrivate proposal title — https://mc.example.test/proposals/soma%3Aproposals%2Ffirst.md\nwaiting for your answer: 1 proposals, oldest 0d\nwaiting for you\nWaiting result";
   expect(await buildDigest(options())).toContain(expected);
   const response = await handleListAttention(db, options());
@@ -117,7 +117,7 @@ test("failed arrival delivery stays pending and an arrival during delivery waits
 });
 
 test("proposal overflow trims whole lines without displacing higher priority sections", async () => {
-  ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", state: { subject: "G1", value: "on-track" } }), ENDED_AT, { replay: true });
+  ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", state: { subject: "G1", value: "on-track" } }), ENDED_AT, { replay: true });
   const event = writeVigilTransition(db, {
     subject_key: "state:goal:default:G1", from_value: "on-track", to_value: "off-track", direction: "worse", run_id: "worse", occurred_at: ENDED_AT,
   }, ENDED_AT);

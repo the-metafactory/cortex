@@ -148,7 +148,7 @@ Minimizing alone does not stop listening. A suspended AudioContext, stale proces
 | `apiKeyEnv` | absent | Environment variable containing the key. Mutually exclusive with `apiKeyFile`. |
 | `apiKeyFile` | absent | File containing the key. Mutually exclusive with `apiKeyEnv`. |
 | `caFile` | absent | PEM CA file for the endpoint form. For a command, pass its CA option in `command` instead. |
-| `timeoutSeconds` | `30` | Integer from 1 to 120. Timeout per classification. |
+| `timeoutSeconds` | `30` | Integer from 1 to 180. Timeout per classification. |
 | `maxPerPass` | `10` | Integer from 1 to 100. Maximum unclassified mail items processed per pass. |
 
 A configured key reaches a command as `DESK_CLASSIFIER_KEY`. A classifier failure leaves rule-based ranking in place and permits another attempt after ten minutes. The command form can return summaries and evidence in addition to a category. See [Mail classifiers](commands.md#mail-classifiers).
@@ -174,10 +174,11 @@ mc:
       target: "@example/pulse-flow"
       timeZone: Europe/Zurich
       timeoutSeconds: 120
+      composeTimeoutSeconds: 900
       readTimeoutSeconds: 3
 ```
 
-`composer` and `reflex` are nonempty argument arrays. `target` names the configured principal's `pulse-flow` process. `timeZone` is an IANA timezone. `timeoutSeconds` accepts integers from 1 to 300 and bounds composition and writes. `readTimeoutSeconds` accepts numbers from 0.01 to 5 and bounds state reads separately. The Desk refreshes routine state in the background.
+`composer` and `reflex` are nonempty argument arrays. `target` names the configured principal's `pulse-flow` process. `timeZone` is an IANA timezone. `timeoutSeconds` accepts integers from 1 to 300 and bounds writes. `composeTimeoutSeconds` accepts integers from 1 to 1800 and defaults to 900. It bounds composing a routine, which can take a read of the delivery plus three attempts on a slow local model, and the card then says the routine command timed out. It also bounds a routine edit, though `scripts/desk-compose.ts` holds one edit call to 600 s, and an edit that runs out reports that the model could not prepare a valid edit. A killed compose does not stop a local model's reply: `mlx_lm.server` writes a non-streaming reply only when it is done, so it keeps generating to its length limit. `readTimeoutSeconds` accepts numbers from 0.01 to 5 and bounds state reads separately. The Desk refreshes routine state in the background.
 
 `capabilityBuild` is optional. Without it, a routine refused for a missing capability shows the missing capability and the steps that need it, and offers no action. With it, the refusal offers **Build this capability**.
 
@@ -191,6 +192,9 @@ mc:
         template: /opt/desk/capability-brief.md
         start: [ranger, build-now, '{id}', --map, '{map}']
         status: [bun, /opt/cortex/scripts/desk-capability-status.ts, '{ref}']
+        bundle: example-capabilities
+        install: [/opt/desk/install-capabilities, '{bundle}']
+        uninstall: [/opt/desk/uninstall-capabilities, '{bundle}']
         budget:
           tokens: 200000
           invocations: 40
@@ -201,6 +205,9 @@ mc:
 
 <!-- glossary-ignore: node -->
 `start` and `status` are optional argument arrays. Each must contain `{ref}` or `{id}`, and the Desk replaces these placeholders in every argument: `{ref}` is the node reference (`owner/repo#123`), `{repo}` is `owner/repo`, `{id}` is the node number and `{map}` is `capabilityBuild.map`. With `start`, the Desk runs the command once for each node it newly filed, right after filing. With `status`, the Desk reads the build state of every filed node each time it refreshes routines. See [build start and status commands](commands.md#build-start-and-status-commands).
+
+<!-- glossary-ignore: agent -->
+`bundle`, `install`, and `uninstall` are optional as a group and require `status`. Both command arrays must contain `{bundle}`, which becomes the configured bundle name. The install command owns first installation, later upgrades, and agent reload. The uninstall command owns removal and reload. No package manager or repository is built into Cortex. See [capability installation commands](commands.md#capability-installation-commands).
 
 The composer command uses the installed Pulse composer with an explicitly configured model and trusted installed-action catalog. Reflex owns activation files and flow files. The Desk stores the reviewed proposal and supplies a private temporary flow input to Reflex. See the [routine command contract](commands.md#routines).
 
@@ -286,6 +293,21 @@ pi gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `TERM
 `pi.tools` can only narrow the read-only tools `soma_context`, `read`, `grep`, `find` and `ls`. Cortex passes them as an explicit `--tools` allowlist, so write, edit, shell, web, task and routing tools, and any tool installed later, stay unavailable. A turn on a cloud lane gets no file read or search. Every tool call and its result is recorded in the conversation. A call to a tool outside the allowlist is recorded as refused when pi answers that the tool was not found; any other result stops the turn with an error.
 
 pi keeps one session per conversation and lane under the stack's conversation directory (`pi-sessions`). If that session is missing, or the lane or engine changed, the next turn starts a new session with the earlier exchange from the conversation record, and the record shows that the context was reconstructed.
+
+### Communication tools
+
+<!-- glossary-ignore: host -->
+<!-- glossary-ignore: message -->
+<!-- glossary-ignore: owner -->
+<!-- glossary-ignore: data -->
+
+Conversations discover the principal's installed communication tools through `communication_discover` and read them through `communication_read`. The tools exist only when the host registers connectors (`HostSources.communications`); a connector is a trusted host registration, not something the model or a message can add.
+
+A connector declares its service, family (`email`, `calendar`, `reminders`, `discord`, `mattermost` or any other id), the explicitly configured scopes (accounts, mailboxes, calendars, reminder lists, workspaces, channels) with a `cloud` or `local` policy each, the read operations with their input schemas, and the actions it can only propose. Discovery always lists the five required families. A family with no connector reports `not-installed` and names the owner build still needed. A connector that is installed but signed out reports `not-authenticated` and advertises no operations.
+
+Each read checks the owner's `authorize(principal, scope)` and the scope policy before the call, and again before the result is released; a revoked grant or a policy change in between withholds the result. Local-only scopes are invisible to cloud models and to Discord, and reading one tightens the conversation to local-only. Results are bounded (a connector returns at most 20 items per page and a larger page is refused; overflow stays behind `next`; 2000 characters per text), redacted, fenced as untrusted data and carry `observedAt`, `freshness`, `next` and `truncated`. Statuses are `ok`, `no-match`, `stale`, `denied`, `not-installed`, `not-authenticated` and `provider-failure`; connector error text is never passed on.
+
+Sending, inviting or changing data stays with the creation tools: `creation_propose` prepares an editable proposal (for example a `mail-draft`) and the principal confirms it. An action whose owner has no operation shows `unavailable` with its follow-up. No connector ships in-tree; each owner adapter is a separate build.
 
 ### Hand a mail to Ivy
 

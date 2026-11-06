@@ -6,7 +6,7 @@ import { budgetDay } from "../budget";
 import { channelKey, channelValue, recordChannel } from "../channels";
 import { getVigilTextsSpent, listVigilEvents, markVigilReplayStarted, rebuildVigilBudget, recordVigilTextDelivered, writeVigilTransition, type VigilEventRow } from "../db";
 import { buildDigest, maybeSendDigest, sendDigest, type SendDigestOptions } from "../digest";
-import { ingestLedgerEnvelope, initVigilGoalDatabase, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestFromSourceStack, initVigilGoalDatabase, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 const NOW = Date.parse("2026-10-12T07:00:00+02:00");
 const KEY = "state:goal:default:G1";
@@ -246,7 +246,7 @@ test("timestamp migrations preserve old rows and survive repeated initialization
   using file = temporaryVigilDatabaseFile("vigil-digest-");
   let stored = initDatabase(file.path);
   try {
-    ingestLedgerEnvelope(stored, ledgerEnvelope({ state: { subject: "G1", value: "at-risk" } }), NOW);
+    ingestFromSourceStack(stored, ledgerEnvelope({ state: { subject: "G1", value: "at-risk" } }), NOW);
     recordVigilTextDelivered(stored, budgetDay(NOW));
     stored.run("ALTER TABLE vigil_events DROP COLUMN digested_at");
     stored.run("ALTER TABLE vigil_budget DROP COLUMN digest_at");

@@ -3,10 +3,12 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   abandonedRunRoots,
+  bunSpawnSyncHangWarning,
   CLAUDE_CREDENTIAL_PATHS,
   HERMETIC_HOME_ENV,
   hermeticTestEnv,
   runRootName,
+  TEST_TIMEOUT_MS,
 } from "./lib/test-home";
 
 function isAlive(pid: number): boolean {
@@ -17,6 +19,9 @@ function isAlive(pid: number): boolean {
     return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }
+
+const hangWarning = bunSpawnSyncHangWarning(Bun.version);
+if (hangWarning) console.error(hangWarning);
 
 const base = existsSync("/tmp") ? realpathSync("/tmp") : tmpdir();
 function removeIfOwned(path: string): void {
@@ -42,7 +47,7 @@ for (const relative of CLAUDE_CREDENTIAL_PATHS) {
   symlinkSync(source, join(home, relative));
 }
 
-const child = Bun.spawn(["bun", "test", ...process.argv.slice(2)], {
+const child = Bun.spawn(["bun", "test", `--timeout=${TEST_TIMEOUT_MS}`, ...process.argv.slice(2)], {
   env: hermeticTestEnv(process.env, { home, tmp }),
   stdio: ["inherit", "inherit", "inherit"],
 });

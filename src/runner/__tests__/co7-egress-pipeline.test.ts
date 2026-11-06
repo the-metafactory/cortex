@@ -56,6 +56,7 @@ function verdictResult(presentation: string, summary = "ok"): ReviewPipelineResu
   const envelope = createReviewVerdictEvent({
     source,
     kind: "commented",
+    requestId: "req-123",
     correlationId: "req-123",
     payload,
   });

@@ -30,7 +30,8 @@ import {
   type BrainConsumerOpts,
   type PrincipalGate,
 } from "../brain-consumer";
-import type { Envelope } from "../myelin/envelope-validator";
+import { InMemoryAgentTransport, MyelinAgentProvider } from "pulse";
+import { validateEnvelope, type Envelope } from "../myelin/envelope-validator";
 import type { EnvelopeHandler, MyelinRuntime } from "../myelin/runtime";
 import type { SystemEventSource } from "../system-events";
 import type {
@@ -415,6 +416,18 @@ describe("BrainConsumer — happy path", () => {
     expect(completed.length).toBe(1);
     expect(completed[0]?.correlation_id).toBe(env.id);
     expect((completed[0]?.payload as { result_summary?: string }).result_summary).toBe("done");
+  });
+
+  test("every lifecycle envelope preserves an inbound correlation_id (RFC-0007 §8)", async () => {
+    const runtime = createRecordingRuntime();
+    const inbound = crypto.randomUUID();
+    const env = { ...makeTaskEnvelope(), correlation_id: inbound };
+    const consumer = new BrainConsumer(baseOpts({ runtime, runBrainTask: stubRunner(completeResult(inbound, "done")) }));
+
+    await consumer.processEnvelope(env, "subj", null, "soc.compose.flow");
+
+    expect(published(runtime, "dispatch.task.started")[0]?.correlation_id).toBe(inbound);
+    expect(published(runtime, "dispatch.task.completed")[0]?.correlation_id).toBe(inbound);
   });
 
   test("the brain's task event carries the envelope's sovereignty (cortex#3134)", async () => {
@@ -1218,5 +1231,42 @@ describe("brain-consumer — daemon host (B-2)", () => {
     expect(JSON.stringify(failed?.payload)).toMatch(/brain crashed/);
     void decision;
     await consumer.stop();
+  });
+});
+
+describe("BrainConsumer — a Pulse routine step over the bus (cortex#3134)", () => {
+  test("the provider's task passes the validator, and the provider resolves on the answer", async () => {
+    const transport = new InMemoryAgentTransport();
+    const runtime = createRecordingRuntime();
+    const answering = {
+      ...runtime,
+      async publish(envelope: Envelope) {
+        await runtime.publish(envelope);
+        await transport.publish(`local.jc.default.${envelope.type}`, JSON.stringify(envelope));
+      },
+    };
+    const consumer = new BrainConsumer(baseOpts({
+      runtime: answering,
+      runBrainTask: stubRunner(completeResult("task", "Heute: drei Artikel.")),
+    }));
+    const dropped: string[] = [];
+    await transport.subscribe("local.jc.default.tasks.>", (subject, data) => {
+      const validated = validateEnvelope(JSON.parse(data));
+      if (!validated.ok) {
+        dropped.push(validated.errors.map((e) => e.message ?? "").join("; "));
+        return;
+      }
+      void consumer.processEnvelope(validated.envelope, subject, null, "compose.judgment");
+    });
+    const provider = new MyelinAgentProvider({ transport, principal: "jc", stack: "default", claimTimeoutMs: 1000 });
+
+    const result = await provider.dispatch({
+      capability: "compose.judgment",
+      prompt: "Summarize",
+      sovereignty: { model_class: "local-only", frontier_ok: false, data_residency: "CH" },
+    });
+
+    expect(dropped).toEqual([]);
+    expect(result).toMatchObject({ status: "completed", output: "Heute: drei Artikel." });
   });
 });

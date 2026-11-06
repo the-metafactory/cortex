@@ -25,6 +25,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import {
   brainBindingsFor,
+  execRunnerOptions,
   wireBrainConsumers,
   type BrainBootAgent,
   type WireBrainConsumersOpts,
@@ -752,5 +753,12 @@ describe("wireBrainConsumers — EBH-6b sovereignty.enforce threading (cortex#23
     // mismatched request would have been denied (term) before ever reaching
     // the shutdown guard below it.
     expect(decision.kind).toBe("nak");
+  });
+});
+
+describe("execRunnerOptions", () => {
+  test("hands the manifest's task timeout to the runner, and leaves its default otherwise", () => {
+    expect(execRunnerOptions({ run: "bun main.ts", timeout_ms: 630_000 }, "/pack", {})).toMatchObject({ timeoutMs: 630_000 });
+    expect(execRunnerOptions({ run: "bun main.ts" }, "/pack", {})).not.toHaveProperty("timeoutMs");
   });
 });

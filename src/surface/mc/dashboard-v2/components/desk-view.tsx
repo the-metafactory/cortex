@@ -1,3 +1,4 @@
+import { submitCapabilityInstall } from "../lib/desk-capability-install";
 import { CatchupPreview, DeskCatchUp } from "./desk-catch-up";
 import { catchupSearch, clearedCatchup } from "../hooks/use-catchup-location";
 import { scrollBelowDesk } from "../lib/desk-scroll";
@@ -421,7 +422,15 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     setSweep({ group: s, target });
   };
 
-  const undoBy: Record<string, (id: string) => Promise<void>> = { "mail.move": undoMove, "mail.rule": undoRuleRun, "mail.sweep": undoSweep, "mail.trust": undoTrust };
+  const undoCapabilityInstall = async (id: string): Promise<void> => {
+    try {
+      const result = await submitCapabilityInstall({ action: "capability.uninstall", id });
+      setNote(result.ok ? result.message : result.error);
+      onChanged();
+    } catch (error) { setNote(error instanceof Error ? error.message : "The uninstall command did not answer."); }
+  };
+
+  const undoBy: Record<string, (id: string) => Promise<void>> = { "capability.install": undoCapabilityInstall, "mail.move": undoMove, "mail.rule": undoRuleRun, "mail.sweep": undoSweep, "mail.trust": undoTrust };
   const undoDone = (id: string, action?: string): void => void (undoBy[action ?? ""] ?? undoCapture)(id);
 
   const blockDomain = async (r: Receipt): Promise<void> => {

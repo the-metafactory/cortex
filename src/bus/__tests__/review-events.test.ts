@@ -198,6 +198,7 @@ describe("createReviewVerdictEvent", () => {
     const env = createReviewVerdictEvent({
       source: SOURCE,
       kind: "changes-requested",
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       payload,
     });
@@ -231,6 +232,7 @@ describe("createReviewVerdictEvent", () => {
     const env = createReviewVerdictEvent({
       source: SOURCE,
       kind: "approved",
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       payload: makeVerdictPayload({
         verdict: "approved",
@@ -248,6 +250,7 @@ describe("createReviewVerdictEvent", () => {
     const env = createReviewVerdictEvent({
       source: SOURCE,
       kind: "commented",
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       payload: makeVerdictPayload({
         verdict: "commented",
@@ -267,12 +270,14 @@ describe("createReviewVerdictEvent", () => {
     const env1 = createReviewVerdictEvent({
       source: SOURCE,
       kind: "approved",
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       payload: makeVerdictPayload({ verdict: "approved" }),
     });
     const env2 = createReviewVerdictEvent({
       source: SOURCE,
       kind: "commented",
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       payload: makeVerdictPayload({ verdict: "commented" }),
     });
@@ -282,10 +287,11 @@ describe("createReviewVerdictEvent", () => {
     expect(env1.id).not.toBe(env2.id);
   });
 
-  test("compass#95 (replay-fix) — payload carries request_id == correlationId, and it is inside the SIGNED canonical bytes", () => {
+  test("compass#95 (replay-fix) — Pilot request id stays inside the SIGNED canonical bytes", () => {
     const env = createReviewVerdictEvent({
       source: SOURCE,
       kind: "approved",
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       payload: makeVerdictPayload({ verdict: "approved" }),
     });
@@ -307,10 +313,29 @@ describe("createReviewVerdictEvent", () => {
     expect(canonical).not.toContain("correlation_id");
   });
 
+  test("caller correlation cannot rebind the signed request identity", () => {
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+    const env = createReviewVerdictEvent({
+      source: SOURCE,
+      kind: "approved",
+      requestId: REQUEST_ENVELOPE_ID,
+      correlationId,
+      payload: makeVerdictPayload({ verdict: "approved" }),
+    });
+    expect(env.correlation_id).toBe(correlationId);
+    expect(env.payload).toMatchObject({ request_id: REQUEST_ENVELOPE_ID });
+    const canonical = new TextDecoder().decode(
+      canonicalizeForSigning(env as unknown as Parameters<typeof canonicalizeForSigning>[0]),
+    );
+    expect(canonical).toContain(`"request_id":"${REQUEST_ENVELOPE_ID}"`);
+    expect(canonical).not.toContain(correlationId);
+  });
+
   test("each invocation returns a fresh UUID id", () => {
     const opts = {
       source: SOURCE,
       kind: "approved" as const,
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       payload: makeVerdictPayload({ verdict: "approved" as const }),
     };
@@ -324,6 +349,7 @@ describe("createReviewVerdictEvent", () => {
       createReviewVerdictEvent({
         source: SOURCE,
         kind: "approved",
+        requestId: REQUEST_ENVELOPE_ID,
         correlationId: REQUEST_ENVELOPE_ID,
         payload: makeVerdictPayload({ verdict: "commented" }),
       }),
@@ -334,6 +360,7 @@ describe("createReviewVerdictEvent", () => {
     const env = createReviewVerdictEvent({
       source: SOURCE,
       kind: "approved",
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       classification: "federated",
       payload: makeVerdictPayload({ verdict: "approved" }),
@@ -347,6 +374,7 @@ describe("createReviewVerdictEvent", () => {
     const env = createReviewVerdictEvent({
       source: SOURCE,
       kind: "changes-requested",
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       payload: makeVerdictPayload({
         verdict: "changes-requested",
@@ -363,6 +391,7 @@ describe("createReviewVerdictEvent", () => {
     const env = createReviewVerdictEvent({
       source: SOURCE,
       kind: "approved",
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       responseRouting: {
         surface: "discord",
@@ -383,6 +412,7 @@ describe("createReviewVerdictEvent", () => {
     const env = createReviewVerdictEvent({
       source: SOURCE,
       kind: "commented",
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       responseRouting: { surface: "discord", channel: "cortex" },
       payload: makeVerdictPayload({ verdict: "commented" }),
@@ -397,6 +427,7 @@ describe("createReviewVerdictEvent", () => {
     const env = createReviewVerdictEvent({
       source: SOURCE,
       kind: "approved",
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       payload: makeVerdictPayload({ verdict: "approved" }),
     });
@@ -408,6 +439,7 @@ describe("createReviewVerdictEvent", () => {
       createReviewVerdictEvent({
         source: SOURCE,
         kind: "approved",
+        requestId: REQUEST_ENVELOPE_ID,
         correlationId: REQUEST_ENVELOPE_ID,
         responseRouting: { surface: "discord", channel: "cortex" },
         payload: makeVerdictPayload({ verdict: "commented" }),
@@ -569,6 +601,7 @@ describe("type-level envelope shape conformance", () => {
     const verdict: Envelope = createReviewVerdictEvent({
       source: SOURCE,
       kind: "approved",
+      requestId: REQUEST_ENVELOPE_ID,
       correlationId: REQUEST_ENVELOPE_ID,
       payload: makeVerdictPayload({ verdict: "approved" }),
     });

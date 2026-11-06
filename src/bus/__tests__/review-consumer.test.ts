@@ -31,7 +31,7 @@
  * stub's `published[]` array and the consumer's returned `AckDecision`.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type { Envelope } from "../myelin/envelope-validator";
 import type {
   EnvelopeHandler,
@@ -66,6 +66,8 @@ import type {
   ReviewPipelineResult,
 } from "../../runner/review-pipeline";
 import type { CCSessionFactory } from "../../substrates/claude-code/harness";
+import { CCSession } from "../../runner/cc-session";
+import { InMemoryAgentTransport, MyelinAgentProvider } from "pulse";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -285,6 +287,7 @@ function buildVerdictEnvelope(
   return createReviewVerdictEvent({
     source: SOURCE,
     kind: verdict,
+    requestId: request.id,
     correlationId: request.id,
     payload: {
       repo: PAYLOAD.repo,
@@ -323,6 +326,211 @@ function buildFailedEnvelope(
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+function repliesFor(
+  runtime: ReturnType<typeof createRecordingRuntime>,
+  federated: boolean,
+): Envelope[] {
+  return federated
+    ? runtime.publishedOnSubject.map(({ envelope }) => envelope)
+    : runtime.published;
+}
+
+type CorrelationOutcome = "verdict" | "redelivery" | "prose" | "spawn-failure" | "refusal" | "throw";
+
+const correlationScenarios: Record<CorrelationOutcome, {
+  flavor: ReviewFlavor;
+  deliveryCount: number;
+  expectedTypes: string[];
+  decision: AckDecision["kind"];
+  response?: string;
+  spawnFailure?: boolean;
+  pipelineRunner?: ReviewConsumerOpts["pipelineRunner"];
+}> = {
+  verdict: {
+    flavor: "typescript", deliveryCount: 1, decision: "ack",
+    expectedTypes: ["dispatch.task.started", "review.verdict.approved", "dispatch.task.completed"],
+  },
+  redelivery: {
+    flavor: "typescript", deliveryCount: 2, decision: "ack",
+    expectedTypes: ["dispatch.task.aborted", "dispatch.task.started", "review.verdict.approved", "dispatch.task.completed"],
+  },
+  prose: {
+    flavor: "typescript", deliveryCount: 1, decision: "ack",
+    expectedTypes: ["dispatch.task.started", "dispatch.task.completed"],
+    response: "Reviewed the throwaway change.",
+  },
+  "spawn-failure": {
+    flavor: "typescript", deliveryCount: 1, decision: "nak", spawnFailure: true,
+    expectedTypes: ["dispatch.task.started", "dispatch.task.failed"],
+  },
+  refusal: {
+    flavor: "python", deliveryCount: 1, decision: "term",
+    expectedTypes: ["dispatch.task.failed"],
+  },
+  throw: {
+    flavor: "typescript", deliveryCount: 1, decision: "nak",
+    expectedTypes: ["dispatch.task.started", "dispatch.task.failed"],
+    pipelineRunner: async () => { throw new Error("pipeline unavailable"); },
+  },
+};
+
+describe("ReviewConsumer reply correlation — RFC-0007 §8.2 and consumer §5", () => {
+  test("Pulse provider matches the nested-input refusal on its task correlation", async () => {
+    const transport = new InMemoryAgentTransport();
+    const runtime = createRecordingRuntime();
+    const recordedPublish = runtime.publish;
+    runtime.publish = async (reply) => {
+      await recordedPublish(reply);
+      await transport.publish(`local.example.default.${reply.type}`, JSON.stringify(reply));
+    };
+    const consumer = new ReviewConsumer(baseOpts({ runtime }));
+    const requests: Envelope[] = [];
+    const deliveries: Promise<AckDecision>[] = [];
+    const unsubscribe = await transport.subscribe("local.example.default.tasks.>", (subject, data) => {
+      const request = JSON.parse(data) as Envelope;
+      requests.push(request);
+      deliveries.push(consumer.processEnvelope(request, subject, null));
+    });
+    try {
+      const provider = new MyelinAgentProvider({
+        transport, principal: "example", claimTimeoutMs: 1000,
+      });
+      const result = await provider.dispatch({
+        capability: "code-review.typescript", prompt: "Review a throwaway change.",
+        input: { repo: "example/repo", pr: 1 },
+      }, { signal: AbortSignal.timeout(3000) });
+      await Promise.all(deliveries);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.id).not.toBe(result.task_id);
+      expect(requests[0]!.correlation_id).toBe(result.task_id);
+      expect(result.status).toBe("failed");
+      expect(result.error).not.toContain("nobody took this task");
+      expect(runtime.published.map(({ type }) => type)).toEqual(["dispatch.task.failed"]);
+      expect(runtime.published[0]!.correlation_id).toBe(result.task_id);
+      expect(runtime.published[0]!.payload).toMatchObject({
+        reason: { kind: "cant_do", detail: expect.stringContaining("payload validation failed") },
+      });
+    } finally {
+      await unsubscribe();
+    }
+  });
+  for (const suppliedCorrelation of [false, true]) {
+    test(`heartbeat uses ${suppliedCorrelation ? "inbound correlation" : "Pilot request id"}`, async () => {
+      const request = makeRequest();
+      const expectedCorrelation = suppliedCorrelation
+        ? "00000000-0000-4000-8000-000000000001" : request.id;
+      if (suppliedCorrelation) request.correlation_id = expectedCorrelation;
+      const runtime = createRecordingRuntime();
+      const consumer = new ReviewConsumer(baseOpts({
+        runtime,
+        ccSessionFactory: (opts) => {
+          const session = new CCSession(opts);
+          session.start = () => session;
+          session.wait = async () => ({
+            success: true, response: "Reviewed.", exitCode: 0, durationMs: 1,
+          });
+          return session;
+        },
+      }));
+      await consumer.processEnvelope(request, "local.metafactory.tasks.code-review.typescript", null);
+      expect(runtime.published.map(({ type }) => type)).toEqual([
+        "dispatch.task.started", "system.agent.heartbeat", "dispatch.task.completed",
+      ]);
+      for (const reply of runtime.published) expect(reply.correlation_id).toBe(expectedCorrelation);
+    });
+  }
+  for (const federated of [false, true]) {
+    for (const suppliedCorrelation of [false, true]) {
+      const route = federated ? "federated" : "local";
+      const correlationShape = suppliedCorrelation ? "inbound correlation" : "Pilot request id";
+      const subject = `${route}.metafactory.${federated ? "meta-factory." : ""}tasks.code-review`;
+      for (const [outcome, scenario] of Object.entries(correlationScenarios)) {
+        test(`${route} ${outcome}, ${correlationShape}`, async () => {
+          const runtime = createRecordingRuntime();
+          const { flavor } = scenario;
+          const request = federated
+            ? makeFederatedRequest(REQUESTER_IDENTITY, flavor)
+            : makeRequest(flavor);
+          const expectedCorrelation = suppliedCorrelation
+            ? "00000000-0000-4000-8000-000000000001"
+            : request.id;
+          if (suppliedCorrelation) request.correlation_id = expectedCorrelation;
+          const response = scenario.response ?? [
+            "```json",
+            JSON.stringify(buildVerdictEnvelope(request, "approved").payload),
+            "```",
+          ].join("\n");
+          const consumer = new ReviewConsumer(baseOpts({
+            runtime,
+            federated,
+            ...(federated && { federatedNetworks: [makeNetwork()] }),
+            ccSessionFactory: () => {
+              if (scenario.spawnFailure) throw new Error("reviewer unavailable");
+              return {
+                start() {
+                  return this;
+                },
+                async wait() {
+                  return {
+                    success: true, response, exitCode: 0,
+                    durationMs: 1, sessionId: "correlation-probe",
+                  };
+                },
+              };
+            },
+            ...(scenario.pipelineRunner && { pipelineRunner: scenario.pipelineRunner }),
+          }));
+
+          const decision = await consumer.processEnvelope(
+            request, `${subject}.${flavor}`,
+            makeJsMsg(scenario.deliveryCount),
+          );
+          const replies = repliesFor(runtime, federated);
+          expect(replies.map(({ type }) => type)).toEqual(scenario.expectedTypes);
+          expect(decision.kind).toBe(scenario.decision);
+          for (const reply of replies) {
+            expect(reply.correlation_id).toBe(expectedCorrelation);
+            if (reply.type.startsWith("review.verdict.")) {
+              expect(reply.payload).toMatchObject({ request_id: request.id });
+            }
+          }
+        });
+      }
+      for (const terminal of ["verdict", "failed"] as const) {
+        test(`${route} rejects a mismatched ${terminal}, ${correlationShape}`, async () => {
+          const runtime = createRecordingRuntime();
+          const request = federated ? makeFederatedRequest() : makeRequest();
+          if (suppliedCorrelation) request.correlation_id = "00000000-0000-4000-8000-000000000001";
+          const wrongReply = terminal === "verdict"
+            ? buildVerdictEnvelope(request, "approved")
+            : buildFailedEnvelope(request, { kind: "cant_do", detail: "probe" }, "probe");
+          wrongReply.correlation_id = suppliedCorrelation ? request.id : "00000000-0000-4000-8000-000000000002";
+          const consumer = new ReviewConsumer(baseOpts({
+            runtime,
+            federated,
+            ...(federated && { federatedNetworks: [makeNetwork()] }),
+            pipelineRunner: fixedPipeline(() => ({ kind: terminal, envelope: wrongReply })),
+          }));
+          const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+          try {
+            const decision = await consumer.processEnvelope(request, `${subject}.typescript`, null);
+            const replies = repliesFor(runtime, federated);
+            expect(decision.kind).toBe(terminal === "verdict" ? "ack" : "term");
+            expect(replies.map(({ type }) => type)).toEqual(terminal === "verdict"
+              ? ["dispatch.task.started", "dispatch.task.completed"]
+              : ["dispatch.task.started"]);
+            expect(replies.some(({ id }) => id === wrongReply.id)).toBe(false);
+            expect(replies[0]?.type).toBe("dispatch.task.started");
+            expect(stderr).toHaveBeenCalledWith(expect.stringContaining("reply correlation mismatch"));
+          } finally {
+            stderr.mockRestore();
+          }
+        });
+      }
+    }
+  }
+});
 
 describe("ReviewConsumer.processEnvelope — cortex#237 PR-6", () => {
   test("1. valid request → pipeline invoked → verdict published → AckDecision is `ack`", async () => {
@@ -1263,6 +1471,7 @@ describe("ReviewConsumer — response_routing echo (cortex#502)", () => {
           envelope: createReviewVerdictEvent({
             source: SOURCE,
             kind: "approved",
+            requestId: opts.requestEnvelope.id,
             correlationId: opts.requestEnvelope.id,
             ...(opts.responseRouting !== undefined && {
               responseRouting: opts.responseRouting,
@@ -1378,6 +1587,7 @@ describe("ReviewConsumer — response_routing echo (cortex#502)", () => {
           envelope: createReviewVerdictEvent({
             source: SOURCE,
             kind: "approved",
+            requestId: opts.requestEnvelope.id,
             correlationId: opts.requestEnvelope.id,
             ...(opts.responseRouting !== undefined && {
               responseRouting: opts.responseRouting,
@@ -1422,6 +1632,7 @@ describe("ReviewConsumer — response_routing echo (cortex#502)", () => {
           envelope: createReviewVerdictEvent({
             source: SOURCE,
             kind: "approved",
+            requestId: opts.requestEnvelope.id,
             correlationId: opts.requestEnvelope.id,
             ...(opts.responseRouting !== undefined && {
               responseRouting: opts.responseRouting,
@@ -1644,6 +1855,7 @@ describe("ReviewConsumer — federated mode (cortex#686, ADR 0002)", () => {
             envelope: createReviewVerdictEvent({
               source: SOURCE,
               kind: "commented",
+              requestId: request.id,
               correlationId: request.id,
               ...(opts.classification !== undefined && {
                 classification: opts.classification,

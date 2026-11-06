@@ -42,6 +42,7 @@ import {
   WebhookOutRendererSchema,
   isFederatedSubjectInOwnScope,
   ownFederatedSubjectScopePrefix,
+  BrainConfigSchema,
 } from "../cortex-config";
 
 // =============================================================================
@@ -434,6 +435,16 @@ describe("AgentRuntimeSchema.brain (Bot Packs B-1)", () => {
       expect(parsed.mode).toBe(fx.mode as "in-process" | "standalone");
       expect(parsed.capabilities).toEqual(fx.capabilities as string[]);
     }
+  });
+
+  test("an exec brain may declare its task timeout, kept under the JetStream ack_wait", () => {
+    const brain = { kind: "exec", run: "bun main.ts" };
+    expect(BrainConfigSchema.parse({ ...brain, timeout_ms: 630_000 }).timeout_ms).toBe(630_000);
+    expect(BrainConfigSchema.parse(brain).timeout_ms).toBeUndefined();
+    expect(BrainConfigSchema.safeParse({ ...brain, timeout_ms: 20 * 60 * 1000 }).success).toBe(false);
+    const daemon = AgentRuntimeSchema.safeParse({ mode: "standalone", capabilities: ["compose.judgment"], brain: { ...brain, lifecycle: "daemon", timeout_ms: 1000 } });
+    expect(daemon.success).toBe(false);
+    expect(daemon.error?.issues.map((issue) => issue.message).join(" ")).toContain("per-task");
   });
 
   test("brain defaults: kind=builtin, protocol=cortex-brain/v1, lifecycle=per-task, secrets=[], dispatch_capabilities=[], maxRestarts=3, compose=false", () => {

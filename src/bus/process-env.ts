@@ -5,11 +5,12 @@ import type { FiredActivation } from "./reflex-activation-listener";
 
 /**
  * Pulse connection settings bypass the spec allow-list, including PULSE_NATS_CREDS,
- * so the child can report its run on the bus. Node #2559 fixes this as the exact
- * output for an allow-listed spec (acceptance criteria, "Child env"), and keeps
+ * so the child can report its execution outcome on the bus. The contract in
+ * #2559 requires this exact output for an allow-listed spec (acceptance criteria,
+ * "Child env"), and keeps
  * the spec schema out of scope, so there is no per-spec opt-in or opt-out. An env
  * allow-list therefore does not isolate a process from that credential's
- * permissions. Only run trusted specs. See docs/process-runner.md.
+ * permissions. Only execute trusted specs. See docs/process-runner.md.
  */
 export const PULSE_ENV_KEYS = [
   "PULSE_PRINCIPAL",
@@ -28,6 +29,8 @@ export const IDENTITY_ENV_KEYS = ["USER", "LOGNAME"] as const;
 export const MF_SERVES_GOAL = "MF_SERVES_GOAL";
 export const MF_SERVES_NODE = "MF_SERVES_NODE";
 export const MF_CORRELATION_ID = "MF_CORRELATION_ID";
+/** A file the child may write one line to, saying why it failed; the runner adds that to the failure reason it reports. */
+export const CORTEX_PROCESS_FAILURE_FILE = "CORTEX_PROCESS_FAILURE_FILE";
 
 /** Fire metadata keys: set only from the activation, never inherited. */
 const FIRE_ENV_KEYS: ReadonlySet<string> = new Set([MF_SERVES_GOAL, MF_SERVES_NODE, MF_CORRELATION_ID]);

@@ -185,6 +185,7 @@ describe("the classification pass", () => {
   });
 
   it("leaves a failed or invalid answer uncached and retries it only after a pause", async () => {
+    let clock = NOW;
     const answers: (() => Promise<unknown>)[] = [
       () => Promise.reject(new Error("timed out after 5 s")),
       () => Promise.resolve({ category: "meeting", meetingKey: "cal:x:nope", reason: "x" }),
@@ -192,14 +193,16 @@ describe("the classification pass", () => {
     ];
     let calls = 0;
     const logged: string[] = [];
-    const c = new MailClassifier(CONFIG, () => answers[calls++]?.() ?? Promise.reject(new Error("no more")), (m) => logged.push(m));
+    const c = new MailClassifier(CONFIG, () => answers[calls++]?.() ?? Promise.reject(new Error("no more")), (m) => logged.push(m), () => clock);
     const one = await c.kick(db, input([mail("a", "A"), mail("b", "B", { receivedAt: at("07:00") })]));
     expect(one).toMatchObject({ classified: 0, failed: 2 });
     expect(readClassifications(db, ["a", "b"]).size).toBe(0);
     expect(logged).toContain("desk: mail classifier: timed out after 5 s");
-    await c.kick(db, input([mail("a", "A")], NOW + 60_000));
+    clock = NOW + 60_000;
+    await c.kick(db, input([mail("a", "A")], clock));
     expect(calls).toBe(2);
-    await c.kick(db, input([mail("a", "A")], NOW + 11 * 60_000));
+    clock = NOW + 11 * 60_000;
+    await c.kick(db, input([mail("a", "A")], clock));
     expect(readClassifications(db, ["a"]).get("a")?.category).toBe("fyi");
   });
 });

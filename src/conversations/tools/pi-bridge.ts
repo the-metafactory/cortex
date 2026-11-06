@@ -15,8 +15,8 @@ export function piToolBridge(surface: ToolSurface, signal: AbortSignal, halt: (r
       const path = new URL(request.url).pathname;
       try {
         if (signal.aborted) return new Response(null, { status: 410 });
-        if (request.method === "GET" && path === "/catalog") { await surface.validate?.(); return Response.json(surface.specs); }
-        if (request.method === "GET" && path === "/check") { await surface.validate?.(); return Response.json({ allowed: true }); }
+        if (request.method === "GET" && path === "/catalog") { await surface.validate(); return Response.json(surface.specs); }
+        if (request.method === "GET" && path === "/check") { await surface.validate(); return Response.json({ allowed: true }); }
         if (request.method !== "POST" || path !== "/call") return new Response(null, { status: 404 });
         const raw = await request.text();
         if (raw.length > MAX_INPUT_BYTES) return new Response(null, { status: 413 });
