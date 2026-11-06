@@ -29,6 +29,13 @@ const page = (all: WorkObject[], query: string, limit: number, offset: number) =
 const reader = (all: () => Promise<WorkObject[]>, one: (id: string) => Promise<WorkRead>): WorkReader => ({
   search: async (query, limit, offset) => page(await all(), query, limit, offset),
   read: one,
+  readMany: async ids => {
+    const fresh = await all();
+    return Promise.all(ids.map(async (id): Promise<WorkRead> => {
+      const object = fresh.find(o => o.id === id);
+      return object ? { state: "available", object } : one(id);
+    }));
+  },
 });
 
 export function workReaders(deps: WorkReaderDeps): WorkReaders {
@@ -112,5 +119,5 @@ export function workReaders(deps: WorkReaderDeps): WorkReaders {
 
 function balanceObject(kind: WorkKind, node: OutlineNode, area: { id: string; label: string; policy?: Policy }, at: number): WorkObject {
   const facts = [node.note, node.dueDate ? `Due ${node.dueDate}` : "", `${node.children.length ? "Project" : "Task"} in ${area.label}`].filter(Boolean);
-  return { kind, id: node.id, title: node.title, status: node.done ? "done" : "open", policy: area.policy ?? "cloud", area: area.label, url: `?desk=balance&node=${encodeURIComponent(node.id)}`, observedAt: at, summary: facts.join("\n") };
+  return { kind, id: node.id, title: node.title, status: node.done ? "done" : "open", policy: area.policy ?? "cloud", area: area.label, url: `?desk=balance&balance-item=${encodeURIComponent(node.id)}`, observedAt: at, summary: facts.join("\n") };
 }

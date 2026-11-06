@@ -23,7 +23,10 @@ export type WorkRead = { state: "available"; object: WorkObject } | { state: "un
 export interface WorkReader {
   search: (query: string, limit: number, offset: number) => Promise<{ items: WorkObject[]; more: boolean }>;
   read: (id: string) => Promise<WorkRead>;
+  readMany?: (ids: readonly string[]) => Promise<WorkRead[]>;
 }
+export const readEach = (reader: WorkReader, ids: readonly string[]): Promise<WorkRead[]> =>
+  reader.readMany ? reader.readMany(ids) : Promise.all(ids.map(id => reader.read(id)));
 export type WorkReaders = Partial<Record<WorkKind, WorkReader>>;
 export interface WorkOwner {
   readers: () => WorkReaders;
@@ -65,15 +68,21 @@ export function workContextTools(owner: WorkOwner): ToolDefinition[] {
         if (!reader) continue;
         signal.throwIfAborted();
         const page = await reader.search(input.query, input.limit + 1, input.offset);
-        const allowed = page.items.filter(object => object.kind === kind && mayRelease(session, object.policy));
-        more ||= page.more || allowed.length > input.limit;
-        found.push(...allowed.slice(0, input.limit));
+        const allowed = page.items.slice(0, input.limit).filter(object => object.kind === kind && mayRelease(session, object.policy));
+        more ||= page.more || page.items.length > input.limit;
+        found.push(...allowed);
       }
       const items = found.slice(0, input.limit * kinds.length);
-      for (const object of items) {
+      for (const { kind, reader } of kinds) {
+        const mine = items.filter(object => object.kind === kind);
+        if (!reader || !mine.length) continue;
         signal.throwIfAborted();
-        const again = await readers[object.kind]?.read(object.id);
-        if (again?.state !== "available" || again.object.policy !== object.policy || !mayRelease(session, again.object.policy)) return unavailable();
+        const again = await readEach(reader, mine.map(object => object.id));
+        const changed = mine.some((object, at) => {
+          const now = again[at];
+          return now?.state !== "available" || now.object.policy !== object.policy || !mayRelease(session, now.object.policy);
+        });
+        if (changed) return unavailable();
       }
       if (!await owner.remember(session, items, signal)) return unavailable();
       const next = more ? { offset: input.offset + input.limit } : null;

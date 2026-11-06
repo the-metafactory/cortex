@@ -77,7 +77,7 @@ describe("work context tools over the real Studio, Balance and Desk owner reads"
     const reader = await run(host, "local");
     expect(result.found.status).toBe("ok");
     expect(result.found.results.map((r: any) => `${r.kind}:${r.id}`).sort()).toEqual(["balance-task:task-wing", "desk-item:item-lab", "studio-thread:wing"]);
-    expect(result.taskRead).toMatchObject({ status: "ok", object: { id: "task-wing", status: "open", area: "Lab", freshness: "fresh", url: "?desk=balance&node=task-wing" } });
+    expect(result.taskRead).toMatchObject({ status: "ok", object: { id: "task-wing", status: "open", area: "Lab", freshness: "fresh", url: "?desk=balance&balance-item=task-wing" } });
     expect(result.threadRead.object.url).toBe("?desk=studio&thread=wing");
     expect(result.threadRead.object.observedAt).toMatch(/^\d{4}-/);
     expect(JSON.stringify(loadBalanceState(db))).toBe(before);
@@ -172,6 +172,33 @@ describe("work context tools over the real Studio, Balance and Desk owner reads"
     expect(seen[0]?.outcome).toBe("refused");
     expect(seen[0]?.text).toContain("withheld");
     expect(JSON.stringify(seen)).not.toContain("Buy tea");
+  });
+
+  test("a cloud conversation pages without repeating a result when earlier rows are hidden", async () => {
+    const pages: string[][] = [];
+    const { host } = await rig(async (_request, call) => {
+      let offset = 0;
+      for (let turn = 0; turn < 3 && offset !== null; turn++) {
+        const page = await call("work_search", { query: "", kinds: ["balance-task"], limit: 1, offset });
+        pages.push(page.results.map((r: any) => r.id));
+        offset = page.next?.offset ?? null;
+      }
+      return "ok";
+    });
+    await run(host, "cloud");
+    expect(pages.flat()).toEqual([...new Set(pages.flat())]);
+    expect(pages.flat()).toContain("task-tea");
+  });
+
+  test("retained work whose owner reader is gone stops the conversation", async () => {
+    const { host } = await rig(async (_request, call) => {
+      await call("work_read", { kind: "desk-item", id: "item-home" });
+      return "ok";
+    });
+    const id = await run(host, "cloud");
+    const sources = conversationSources({ db: databases[0]!, desk: () => undefined });
+    await host.attachSources({ ...sources, readers: {} });
+    await expect(host.submit(id, { inputId: randomUUID(), transport: "web", text: "Again.", mode: "queue" })).rejects.toThrow(/no longer authorized/);
   });
 
   test("a project and its tasks are listed by kind with their own status", async () => {

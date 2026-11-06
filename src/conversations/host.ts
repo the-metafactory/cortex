@@ -9,7 +9,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { z } from "zod";
 import { projectRevision, ToolHost, type ToolDefinition, type ToolSession } from "./tools/capabilities";
 import type { HistoryConversation, HistoryOwner } from "./tools/conversation-history";
-import type { WorkOwner, WorkReaders } from "./tools/work-context";
+import { readEach, type WorkOwner, type WorkReaders } from "./tools/work-context";
 import { acquireHostLock, type LockOwner } from "./lock";
 import { cloudLanes, type CloudLane, type ToolsConfig } from "../common/types/desk-conversations";
 import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, type GateResult, type Lanes, type ToolSurfaceFor, type TurnCall, type TurnEvent } from "./model";
@@ -282,13 +282,24 @@ export class ConversationHost {
 
   private async workPolicies(current: Stored): Promise<Policy[]> {
     const readers = this.sources.readers ?? {};
-    const policies: Policy[] = [];
+    const denied = new ConversationError(403, "Previously retrieved related work is no longer authorized. Start a new conversation with current permissions.");
+    const byKind = new Map<string, { id: string; recorded: Policy }[]>();
     for (const [key, recorded] of Object.entries(current.workSources)) {
       const at = key.indexOf(":");
-      const reader = readers[key.slice(0, at) as keyof WorkReaders];
-      const now = reader ? await reader.read(key.slice(at + 1)).catch((): null => null) : null;
-      if (now?.state === "unavailable" && now.reason === "unauthorized") throw new ConversationError(403, "Previously retrieved related work is no longer authorized. Start a new conversation with current permissions.");
-      policies.push(recorded, ...(now?.state === "available" ? [now.object.policy] : []));
+      const kind = key.slice(0, at);
+      byKind.set(kind, [...(byKind.get(kind) ?? []), { id: key.slice(at + 1), recorded }]);
+    }
+    const policies: Policy[] = [];
+    for (const [kind, entries] of byKind) {
+      const reader = readers[kind as keyof WorkReaders];
+      if (!reader) throw denied;
+      const now = await readEach(reader, entries.map(e => e.id)).catch((): null => null);
+      if (!now) throw denied;
+      entries.forEach((entry, at) => {
+        const result = now[at];
+        if (result?.state === "unavailable" && result.reason === "unauthorized") throw denied;
+        policies.push(entry.recorded, ...(result?.state === "available" ? [result.object.policy] : []));
+      });
     }
     return policies;
   }
