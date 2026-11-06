@@ -160,3 +160,5 @@ export {
 export type { GateFloorContext, GateFloorDecision } from "./gate-floor";
 export type { Offering, OfferScope } from "../common/types/offering";
 export type { SigningMode } from "../common/security-posture";
+
+export { startConfiguredMyelinRuntime, type ConfiguredMyelinRuntimeOptions } from "./configured-runtime";
