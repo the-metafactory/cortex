@@ -154,18 +154,20 @@ describe("web_fetch through the conversation boundary", () => {
 describe("web_fetch cancellation", () => {
   test("a pending DNS lookup is aborted by cancellation", async () => {
     const base = config();
+    let lookups = 0;
     const tools = createWebTools({
       config: () => base, request: () => Promise.reject(new Error("unused")),
-      resolve: () => new Promise<ResolvedAddress[]>(() => undefined),
+      resolve: () => { lookups += 1; return new Promise<ResolvedAddress[]>(() => undefined); },
       transport: () => Promise.reject(new Error("no route")), env: {}, now: () => NOW,
     });
     const session = (): Promise<ToolSession | null> => Promise.resolve({ principal: "p", conversationId: "c", transport: "web", route: "cloud", policy: "cloud", scope: ["docs"] });
     const host = new ToolHost({ config: () => base, session, tools });
     const surface = host.surface("c", "cloud", () => Promise.resolve());
     const controller = new AbortController();
-    const pending = surface.call("id", "web_fetch", { url: "https://docs.example/a" }, controller.signal);
+    const pending = surface.call("id", "web_fetch", { project: "docs", url: "https://docs.example/a" }, controller.signal);
     setTimeout(() => controller.abort(), 20);
     const outcome = await Promise.race([pending.then(() => "settled", () => "settled"), new Promise<string>(r => setTimeout(() => r("hung"), 2000))]);
+    expect(lookups).toBe(1);
     expect(outcome).toBe("settled");
   });
 });
