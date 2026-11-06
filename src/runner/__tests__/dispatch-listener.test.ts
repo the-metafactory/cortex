@@ -4448,7 +4448,7 @@ test("Reflex prompt task reaches its scoped API receiver without a Claude sessio
     runtime: r.runtime,
     source: SOURCE,
     receivingAgentId: "cortex",
-    subjects: [directTaskSubject("metafactory", "did:mf:cortex")],
+    subjects: [directTaskSubject("metafactory", "did:mf:cortex", "fixture")],
     agentRuntimesById: runtimes,
     inferenceRegistry: registry,
     ccSessionFactory: cc.factory,
@@ -4460,9 +4460,11 @@ test("Reflex prompt task reaches its scoped API receiver without a Claude sessio
       activation: { target: "@fixture/probe", payload: {}, decisionId: "fixture-decision", correlationId: TASK_ID, classification: "local" },
       target: { target: "@fixture/probe", assistant: "cortex", capability: "chat.local", prompt: "Return the fixture response" },
       reEmitPrincipal: "metafactory",
+      reEmitStack: "fixture",
       source: SOURCE,
       systemDid: "did:mf:cortex",
     });
+    expect(built.subject).toBe("local.metafactory.fixture.tasks.@did-mf-cortex.chat.local");
     r.trigger(built.envelope, built.subject);
     await settle(() => r.published);
     const completed = r.published.filter((event) => event.type === "dispatch.task.completed");
@@ -4475,7 +4477,7 @@ test("Reflex prompt task reaches its scoped API receiver without a Claude sessio
     expect(cc.optsCaptured).toHaveLength(0);
     r.published.length = 0;
     for (const capability of ["code-review.typescript", "dev.implement"]) {
-      r.trigger(makeReceivedEnvelope(), taskSubject("metafactory", capability));
+      r.trigger(makeReceivedEnvelope(), taskSubject("metafactory", capability, "fixture"));
     }
     await settle(() => r.published, { minObserveMs: 250 });
     expect(r.published).toEqual([]);

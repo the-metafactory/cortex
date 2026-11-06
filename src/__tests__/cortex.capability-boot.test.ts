@@ -565,3 +565,29 @@ test("headless builtin task receivers each get their own subject without an exec
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+
+test("zero registered agents retain the legacy wildcard listener at boot", async () => {
+  const runtime = createRecordingRuntime();
+  const patterns: string[] = [];
+  runtime.subscribe = async (pattern) => { patterns.push(pattern); return null; };
+  const directory = mkdtempSync(join(tmpdir(), "cortex-legacy-receiver-"));
+  const handle = await startCortex(minimalConfig(), {
+    ...hermeticBootPaths(),
+    disableConfigWatcher: true,
+    disableDashboard: true,
+    disableOutboundPoller: true,
+    agentsDir: directory,
+    injectRuntime: runtime,
+    inlineAgents: [],
+    principal: { id: "fixture-principal" },
+  });
+  try {
+    expect(patterns.filter((pattern) => pattern.includes(".tasks."))).toEqual([
+      "local.fixture-principal.default.tasks.*.>",
+    ]);
+  } finally {
+    await handle.stop();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
