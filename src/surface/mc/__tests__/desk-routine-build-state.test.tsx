@@ -15,7 +15,7 @@ import { RoutineReadLoop } from "../desk/routine-read";
 const START = ["builder", "build-now", "{id}", "--map", "{map}"];
 const STATUS = ["status-command", "{ref}"];
 const BUILD = { writer: ["capability-writer"], map: "example/maps#12", start: START, status: STATUS, budget: { tokens: 200_000, invocations: 40, minutes: 60 } };
-const OPTIONS: RoutineOptions = { composer: ["composer"], reflex: ["reflex"], target: "@example/pulse-flow", timeZone: "Europe/Zurich", timeoutSeconds: 10, readTimeoutSeconds: 1, capabilityBuild: BUILD };
+const OPTIONS: RoutineOptions = { composer: ["composer"], reflex: ["reflex"], target: "@example/pulse-flow", timeZone: "Europe/Zurich", timeoutSeconds: 10, composeTimeoutSeconds: 10, readTimeoutSeconds: 1, capabilityBuild: BUILD };
 const NOW = Date.parse("2026-11-03T12:00:00Z");
 const YAML = "name: F_AGENT\nactions:\n  - agent:\n      name: derive\n      capability: compose.judgment\n      prompt: 'Judge {text}'\n      collect: result\n";
 const TWO_YAML = `${YAML}  - agent:\n      name: second\n      capability: review.adversarial\n      prompt: 'Attack {result}'\n      collect: ruling\n`;

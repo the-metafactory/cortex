@@ -21,7 +21,8 @@ export const RoutineProposalSchema = z.object({
   draft: RoutineDraftSchema.optional(),
 });
 export type RoutineProposal = z.infer<typeof RoutineProposalSchema>;
-export const routineConfigHash = (options: RoutineOptions): string => createHash("sha256").update(JSON.stringify(options)).digest("hex");
+/** How long composing may take says nothing about what a confirmed routine does, so changing it leaves drafts and pending operations valid. */
+export const routineConfigHash = ({ composeTimeoutSeconds: _waitOnly, ...bindingOptions }: RoutineOptions): string => createHash("sha256").update(JSON.stringify(bindingOptions)).digest("hex");
 
 export function saveRoutineProposal(db: Database, proposal: RoutineProposal): void {
   db.query("INSERT INTO desk_routine_proposals (id, routine_id, document) VALUES (?, ?, ?)").run(proposal.id, proposal.routineId, JSON.stringify(proposal));

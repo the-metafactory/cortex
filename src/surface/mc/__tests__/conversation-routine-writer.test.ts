@@ -15,7 +15,7 @@ const REFLEX = ["reflex-bin"];
 const PULSE = ["pulse-bin", "--stack", "test"];
 const writerRig = conversationWriterRig("conversation-routine-", "ai.meta-factory.cortex.routine-writer-test");
 
-const routineOptions: RoutineOptions = { composer: ["composer-bin"], reflex: REFLEX, target: TARGET, timeZone: "Europe/Zurich", timeoutSeconds: 5, readTimeoutSeconds: 1 };
+const routineOptions: RoutineOptions = { composer: ["composer-bin"], reflex: REFLEX, target: TARGET, timeZone: "Europe/Zurich", timeoutSeconds: 5, composeTimeoutSeconds: 5, readTimeoutSeconds: 1 };
 const refusal = (code: string, message: string): WriterResult => ({ code: 1, stdout: JSON.stringify({ error: { code, message } }), stderr: "" });
 const ok = (data: unknown): WriterResult => ({ code: 0, stdout: JSON.stringify(data), stderr: "" });
 

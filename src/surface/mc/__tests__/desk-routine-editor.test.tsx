@@ -7,7 +7,7 @@ import { HandledLedger } from "../desk/actions";
 import type { DeskRuntime } from "../desk/compose";
 import { DeskRoutineEditor } from "../dashboard-v2/components/desk-routine-editor";
 
-const runtime: DeskRuntime = { ledger: new HandledLedger(), options: { enabled: true, displayName: "Test", topN: 5, rangerUrl: "", areas: [], sources: [], routines: { reflex: ["reflex"], composer: ["compose"], target: "@test/pulse-flow", timeZone: "UTC", timeoutSeconds: 10, readTimeoutSeconds: 1 } } };
+const runtime: DeskRuntime = { ledger: new HandledLedger(), options: { enabled: true, displayName: "Test", topN: 5, rangerUrl: "", areas: [], sources: [], routines: { reflex: ["reflex"], composer: ["compose"], target: "@test/pulse-flow", timeZone: "UTC", timeoutSeconds: 10, composeTimeoutSeconds: 10, readTimeoutSeconds: 1 } } };
 const path = ["actions", 0, "retry", "attempts"];
 function fixture() {
   let detail: RoutineDetail = { id: "example", revision: "a".repeat(64), writable: true, reason: "", flow: { name: "F_EXAMPLE", steps: [{ path: ["actions", 0], action: "retry", purpose: "Sequence", parameters: [{ name: "attempts", kind: "literal", value: 2 }], editable: [{ name: "attempts", type: "number", minimum: 1 }], reason: "Retry contract" }] } };
