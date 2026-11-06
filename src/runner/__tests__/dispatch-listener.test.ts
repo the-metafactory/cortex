@@ -3698,8 +3698,6 @@ describe("dispatch-listener — stage tracing (cortex#492)", () => {
 describe("createDispatchListener — S2 per-agent subject isolation (cortex#1160)", () => {
   test("two scoped listeners: a tasks.@B.chat envelope routes to B only, not A", async () => {
     const r = recordingRuntime();
-    // Each listener subscribes to its OWN agent subtree — exactly what the
-    // boot loop builds for chatCapableAgents.length >= 2.
     const subjectA = directTaskSubject("metafactory", "did:mf:agent-a");
     const subjectB = directTaskSubject("metafactory", "did:mf:agent-b");
     const facA = fakeFactory(SUCCESS_RESULT);
@@ -3790,16 +3788,11 @@ describe("createDispatchListener — S2 per-agent subject isolation (cortex#1160
     await listenerA.stop();
   });
 
-  test("single chat-capable agent path stays on the wildcard (byte-identical regression)", async () => {
-    // The boot loop's `else` branch (<=1 chat-capable agent) omits `subjects`,
-    // so the listener falls back to the canonical wildcard `tasks.*.>` —
-    // identical to pre-S2. This pins that default so the single-agent stack
-    // never silently narrows.
+  test("listener without explicit subjects retains the legacy wildcard default", async () => {
     const r = recordingRuntime();
     const listener = createDispatchListener({
       runtime: r.runtime,
       source: SOURCE,
-      receivingAgentId: "luna",
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
     expect(listener.subjects).toEqual(["local.metafactory.tasks.*.>"]);
@@ -4474,7 +4467,9 @@ test("Reflex prompt task reaches its scoped API receiver without a Claude sessio
     await settle(() => r.published);
     const completed = r.published.filter((event) => event.type === "dispatch.task.completed");
     expect(completed).toHaveLength(1);
-    expect(completed[0]?.correlation_id).toBe(built.envelope.payload.task_id);
+    const taskId = built.envelope.payload.task_id;
+    if (typeof taskId !== "string") throw new Error("Reflex task has no string task ID");
+    expect(completed[0]?.correlation_id).toBe(taskId);
     expect(completed[0]?.payload.chat_response).toBe("fixture-api-response");
     expect(server.requests).toHaveLength(1);
     expect(cc.optsCaptured).toHaveLength(0);
@@ -4482,7 +4477,7 @@ test("Reflex prompt task reaches its scoped API receiver without a Claude sessio
     for (const capability of ["code-review.typescript", "dev.implement"]) {
       r.trigger(makeReceivedEnvelope(), taskSubject("metafactory", capability));
     }
-    await settleDrop(() => r.published);
+    await settle(() => r.published, { minObserveMs: 250 });
     expect(r.published).toEqual([]);
     expect(server.requests).toHaveLength(1);
     expect(cc.optsCaptured).toHaveLength(0);

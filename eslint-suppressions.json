@@ -3573,7 +3573,7 @@
   },
   "src/runner/__tests__/dispatch-listener.test.ts": {
     "cortex/no-comments": {
-      "count": 563
+      "count": 557
     }
   },
   "src/runner/__tests__/dm-trust-chain.test.ts": {
