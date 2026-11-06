@@ -163,6 +163,18 @@ describe("github read tools through the conversation boundary", () => {
     expect(await rollup(checkRoutes([run("a", "success")], 1, { total_count: 1, state: "failure", statuses: [{ context: "ci", state: "failure" }] }))).toBe("failing");
   });
 
+  test("commit statuses paginate and drop off-repository target URLs", async () => {
+    const entries = Array.from({ length: 30 }, (_, n) => ({ context: `ci-${n}`, state: "success", target_url: n === 0 ? "https://evil.example/x" : `${URL_BASE}/runs/${n}` }));
+    const routes = checkRoutes([run("a", "success")], 1, { total_count: 45, state: "success", statuses: entries });
+    const first = body((await rig(routes).call("github_checks", { project: "alpha", pr: 7 })).text) as { rollup: string; readAll: boolean; commitStatuses: { nextPage: number | null; entries: { targetUrl: string | null }[] } };
+    expect(first.rollup).toBe("incomplete");
+    expect(first.readAll).toBe(false);
+    expect(first.commitStatuses.nextPage).toBe(2);
+    expect(first.commitStatuses.entries[0]?.targetUrl).toBeNull();
+    const second = body((await rig(routes).call("github_checks", { project: "alpha", pr: 7, statusPage: 2 })).text) as { commitStatuses: { page: number } };
+    expect(second.commitStatuses.page).toBe(2);
+  });
+
   test("checks for a pull request whose head moved are withheld, not reported as current", async () => {
     let heads = 0;
     const routes = checkRoutes([run("a", "success")]);

@@ -48,7 +48,7 @@ const SearchInput = z.object({
 const ItemInput = z.object({ project: Project, number: Number_, page: Page }).strict();
 const DiscussionInput = z.object({ project: Project, number: Number_ }).strict();
 const DiffInput = z.object({ project: Project, number: Number_, offset: z.number().int().min(0).max(50_000_000).default(0), limit: z.number().int().min(1).max(DIFF_PAGE).default(DIFF_PAGE) }).strict();
-const ChecksInput = z.object({ project: Project, pr: Number_.optional(), sha: z.string().regex(SHA).optional(), page: Page }).strict().refine(input => (input.pr === undefined) !== (input.sha === undefined), "give exactly one of pr or sha");
+const ChecksInput = z.object({ project: Project, pr: Number_.optional(), sha: z.string().regex(SHA).optional(), page: Page, statusPage: Page }).strict().refine(input => (input.pr === undefined) !== (input.sha === undefined), "give exactly one of pr or sha");
 
 const clip = (text: unknown, limit: number): string => {
   const value = typeof text === "string" ? text : "";
@@ -249,7 +249,7 @@ export function createGithubTools(options: GithubToolOptions = {}): ToolDefiniti
     }
     const [runs, statuses] = await Promise.all([
       get(target, repoPath(target, `/commits/${sha}/check-runs`), { per_page: 30, page: input.page }),
-      get(target, repoPath(target, `/commits/${sha}/status`), { per_page: 30 }),
+      get(target, repoPath(target, `/commits/${sha}/status`), { per_page: 30, page: input.statusPage }),
     ]);
     if (!runs.ok) return failed(target, runs);
     if (!statuses.ok) return failed(target, statuses);
@@ -266,7 +266,7 @@ export function createGithubTools(options: GithubToolOptions = {}): ToolDefiniti
     const totalRuns = num(runData.total_count) ?? runEntries.length;
     const totalStatuses = num(statusData.total_count) ?? statusEntries.length;
     const readAllRuns = input.page === 1 && runEntries.length >= totalRuns;
-    const readAllStatuses = statusEntries.length >= totalStatuses;
+    const readAllStatuses = input.statusPage === 1 && statusEntries.length >= totalStatuses;
     const failing = runEntries.some(run => FAILING_CONCLUSIONS.has(str(run.conclusion) ?? "")) || ["failure", "error"].includes(str(statusData.state) ?? "") && totalStatuses > 0;
     const pending = runEntries.some(run => str(run.status) !== "completed") || str(statusData.state) === "pending" && totalStatuses > 0;
     const allPassing = runEntries.every(run => str(run.status) === "completed" && PASSING_CONCLUSIONS.has(str(run.conclusion) ?? ""));
@@ -274,7 +274,7 @@ export function createGithubTools(options: GithubToolOptions = {}): ToolDefiniti
     return outcome(target, "ok", {
       url, headSha: sha, rollup, readAll: readAllRuns && readAllStatuses,
       checkRuns: { total: totalRuns, page: input.page, nextPage: runEntries.length === 30 && input.page < 20 ? input.page + 1 : null, entries: runEntries.map(run => ({ name: clip(run.name, 200), status: str(run.status), conclusion: str(run.conclusion), startedAt: str(run.started_at), completedAt: str(run.completed_at), url: belongs(target, run.html_url) ? str(run.html_url) : null, headSha: str(run.head_sha) })) },
-      commitStatuses: { total: totalStatuses, state: totalStatuses > 0 ? str(statusData.state) : null, entries: statusEntries.map(entry => ({ context: clip(entry.context, 200), state: str(entry.state), updatedAt: str(entry.updated_at), targetUrl: str(entry.target_url) })) },
+      commitStatuses: { total: totalStatuses, page: input.statusPage, nextPage: statusEntries.length === 30 && input.statusPage < 20 ? input.statusPage + 1 : null, state: totalStatuses > 0 ? str(statusData.state) : null, entries: statusEntries.map(entry => ({ context: clip(entry.context, 200), state: str(entry.state), updatedAt: str(entry.updated_at), targetUrl: belongs(target, entry.target_url) ? str(entry.target_url) : null })) },
     });
   });
 
