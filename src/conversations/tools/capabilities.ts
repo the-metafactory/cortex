@@ -4,6 +4,7 @@ import { PROJECT_ID, type ToolOperation, type ToolProject, type ToolsConfig } fr
 import type { ToolActivity, ToolOutcome, ToolSpec, ToolSurface } from "../model";
 import { routePolicy, TRANSPORTS, type ModelRoute, type Policy } from "../types";
 import { conversationHistoryTools, type HistoryOwner } from "./conversation-history";
+import { proposalTools, type CreationOwner } from "./proposals";
 import { redactToolText as redact } from "./output";
 import { workContextTools, type WorkOwner } from "./work-context";
 
@@ -21,6 +22,7 @@ export interface ToolSession {
   route: ModelRoute;
   policy: Policy;
   scope: readonly string[];
+  entryId?: string;
 }
 type SessionLookup = (conversationId: string) => Promise<ToolSession | null>;
 export interface ToolContext { project: ToolProject | null; session: ToolSession; signal: AbortSignal }
@@ -41,6 +43,7 @@ export interface ToolHostOptions {
   timeoutMs?: number;
   outputLimit?: number;
   history?: HistoryOwner;
+  creation?: CreationOwner;
   work?: WorkOwner;
 }
 const ProjectId = z.string().regex(new RegExp(`^${PROJECT_ID}$`));
@@ -78,7 +81,7 @@ export class ToolHost {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.outputLimit = options.outputLimit ?? DEFAULT_OUTPUT_LIMIT;
     const extensions = options.tools ?? [];
-    const definitions = [this.capabilitiesTool(), ...(options.history ? conversationHistoryTools(options.history) : []), ...(options.work ? workContextTools(options.work) : []), ...extensions];
+    const definitions = [this.capabilitiesTool(), ...(options.history ? conversationHistoryTools(options.history) : []), ...(options.work ? workContextTools(options.work) : []), ...(options.creation ? proposalTools(options.creation) : []), ...extensions];
     if (definitions.some(tool => !/^[a-z][a-z0-9_]{0,63}$/.test(tool.name)) || new Set(definitions.map(tool => tool.name)).size !== definitions.length) throw new Error("Tool names must be unique catalog identifiers.");
     if (extensions.some(tool => tool.operation === null)) throw new Error("Source tools must declare a permitted operation.");
     this.tools = new Map(definitions.map(tool => [tool.name, tool]));

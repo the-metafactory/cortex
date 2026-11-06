@@ -14,6 +14,7 @@ import { toolProvider } from "./fixtures/tool-provider";
 const { dirs, hosts } = scratchHosts("conversation-tools-pi-");
 const realPi = discoverPi();
 const PRIVATE = "LOCAL_ONLY_SYNTHETIC_MARKER";
+const HOST_TOOLS = ["capabilities", "conversation_read", "conversation_search", "creation_capabilities", "creation_propose", "creation_read_result", "creation_revise", "repo_read", "work_read", "work_search"];
 const call = (id: string, name: string, input: object) => ({ id, name, input });
 const input = (inputId: string) => ({ inputId, transport: "web" as const, mode: "queue" as const, text: "Investigate the synthetic project." });
 const read = (run: ToolDefinition["run"]): ToolDefinition => ({ name: "repo_read", description: "Read the configured synthetic project's fixture.", operation: "repo.read", input: z.object({ project: z.string() }).strict(), run });
@@ -42,7 +43,7 @@ describe("installed Pi conversation host boundary", () => {
       const localActivities = (await host.entries(local.id, 100, undefined)).entries.filter(entry => entry.kind === "cortex.tool-activity").map(entry => entry.data);
       expect(localActivities).toContainEqual(expect.objectContaining({ callId: "local-cap", outcome: "done", result: expect.stringContaining('"project":"private"') }));
       expect(localActivities).toContainEqual(expect.objectContaining({ callId: "local-cap", result: expect.stringContaining('"project":"public"') }));
-      expect(provider.requests[0]?.tools?.map(tool => tool.function.name).sort()).toEqual(["capabilities", "conversation_read", "conversation_search", "repo_read", "work_read", "work_search"]);
+      expect(provider.requests[0]?.tools?.map(tool => tool.function.name).sort()).toEqual(HOST_TOOLS);
       expect(JSON.stringify(provider.requests)).toContain(PRIVATE);
       const fake = new FakeThreads();
       const discord = new DiscordConversations({ host, adapter: () => fake, principalId: RIG.principal, config: { channelId: RIG.channel, guildId: RIG.guild, webUrl: RIG.web }, log: () => undefined });
@@ -65,7 +66,7 @@ describe("installed Pi conversation host boundary", () => {
       expect(cloudRequests.every(request => request.model === "cloud")).toBe(true);
       expect(JSON.stringify(cloudRequests)).not.toContain(PRIVATE);
       expect(JSON.stringify(cloudRequests)).toContain("PUBLIC_SYNTHETIC_MARKER");
-      expect(cloudRequests[0]?.tools?.map(tool => tool.function.name).sort()).toEqual(["capabilities", "conversation_read", "conversation_search", "repo_read", "work_read", "work_search"]);
+      expect(cloudRequests[0]?.tools?.map(tool => tool.function.name).sort()).toEqual(HOST_TOOLS);
       const entries = (await host.entries(cloud.id, 100, undefined)).entries;
       const activities = entries.filter(entry => entry.kind === "cortex.tool-activity").map(entry => entry.data);
       expect(activities).toContainEqual(expect.objectContaining({ callId: "cloud-cap", outcome: "done", result: expect.stringContaining('"project":"public"') }));

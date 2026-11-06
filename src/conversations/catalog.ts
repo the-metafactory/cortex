@@ -4,6 +4,9 @@ export const CREATABLE_TYPES = [
 ] as const;
 export type CreatableType = (typeof CREATABLE_TYPES)[number];
 
+export const usesBalanceDestinationPicker = (type: CreatableType | null): boolean => type === "balance-task" || type === "balance-project";
+export const hasBalanceLink = (type: CreatableType | null): boolean => usesBalanceDestinationPicker(type) || type === "balance-inbox-task";
+
 export type Egress = "local" | "cloud";
 export interface FieldSpec {
   name: string;
