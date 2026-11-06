@@ -186,14 +186,14 @@ describe("repository file dispatch on real checkouts", () => {
     for (const revoke of [(r: Awaited<ReturnType<typeof fixture>>) => { r.session.scope = []; }, (r: Awaited<ReturnType<typeof fixture>>) => { r.config.projects[0]!.exclude = ["src"]; }]) {
       const r = await fixture();
       const surface = r.surface();
-      await surface.validate!();
+      await surface.validate();
       const pending = surface.call("revoke", "repo_read", { project: "sample", path: "src/beacon.ts" }, new AbortController().signal);
       revoke(r);
       const result = await pending;
       expect(result.outcome).toBe("refused");
       expect(result.text).not.toContain(PUBLIC);
       expect(JSON.stringify(r.seen)).not.toContain(PUBLIC);
-      await expect(surface.validate!()).rejects.toThrow("changed");
+      await expect(surface.validate()).rejects.toThrow("changed");
     }
   });
 
