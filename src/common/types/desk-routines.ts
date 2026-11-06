@@ -19,12 +19,15 @@ export const CapabilityBuildSchema = z.object({
 }).refine((build) => !build.install && !build.uninstall && !build.bundle || Boolean(build.install && build.uninstall && build.bundle && build.status), "bundle, install, uninstall and status must be configured together");
 export type CapabilityBuildOptions = z.infer<typeof CapabilityBuildSchema>;
 
+export const ROUTINE_COMPOSE_TIMEOUT_SECONDS = 900;
+
 export const RoutineOptionsSchema = z.object({
   composer: z.array(z.string().min(1)).min(1),
   reflex: z.array(z.string().min(1)).min(1),
   target: z.string().regex(/^@[\w.-]+\/pulse-flow$/),
   timeZone: z.string().refine((s) => { try { new Intl.DateTimeFormat("en", { timeZone: s }); return true; } catch { return false; } }),
   timeoutSeconds: z.number().int().min(1).max(300).default(120),
+  composeTimeoutSeconds: z.number().int().min(1).max(1800).default(ROUTINE_COMPOSE_TIMEOUT_SECONDS),
   readTimeoutSeconds: z.number().min(0.01).max(5).default(3),
   capabilityBuild: CapabilityBuildSchema.optional(),
 });

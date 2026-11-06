@@ -11,7 +11,7 @@ import { readRoutineEvidence } from "../desk/routine-evidence";
 import { insertObservabilityEvent } from "../db/observability";
 
 const scope = { principal: "test", stack: "default" };
-const options = { reflex: ["configured-owner"], composer: ["compose"], target: "@test/pulse-flow", timeZone: "UTC", timeoutSeconds: 120, readTimeoutSeconds: 1 };
+const options = { reflex: ["configured-owner"], composer: ["compose"], target: "@test/pulse-flow", timeZone: "UTC", timeoutSeconds: 120, composeTimeoutSeconds: 120, readTimeoutSeconds: 1 };
 const runtime: DeskRuntime = { ledger: new HandledLedger(), options: { routineScope: scope, enabled: true, displayName: "Test", topN: 5, rangerUrl: "", areas: [], sources: [], routines: options } };
 const id = crypto.randomUUID();
 const correlation = crypto.randomUUID();

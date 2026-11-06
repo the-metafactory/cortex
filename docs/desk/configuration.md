@@ -174,10 +174,11 @@ mc:
       target: "@example/pulse-flow"
       timeZone: Europe/Zurich
       timeoutSeconds: 120
+      composeTimeoutSeconds: 900
       readTimeoutSeconds: 3
 ```
 
-`composer` and `reflex` are nonempty argument arrays. `target` names the configured principal's `pulse-flow` process. `timeZone` is an IANA timezone. `timeoutSeconds` accepts integers from 1 to 300 and bounds composition and writes. `readTimeoutSeconds` accepts numbers from 0.01 to 5 and bounds state reads separately. The Desk refreshes routine state in the background.
+`composer` and `reflex` are nonempty argument arrays. `target` names the configured principal's `pulse-flow` process. `timeZone` is an IANA timezone. `timeoutSeconds` accepts integers from 1 to 300 and bounds writes. `composeTimeoutSeconds` accepts integers from 1 to 1800 and defaults to 900. It bounds composing and editing a routine, which can take a read of the delivery plus three attempts on a slow local model. The card then says the composer timed out. The local model keeps generating until it reaches its token limit, because a non-streaming request is not cancelled by the client leaving. `readTimeoutSeconds` accepts numbers from 0.01 to 5 and bounds state reads separately. The Desk refreshes routine state in the background.
 
 `capabilityBuild` is optional. Without it, a routine refused for a missing capability shows the missing capability and the steps that need it, and offers no action. With it, the refusal offers **Build this capability**.
 

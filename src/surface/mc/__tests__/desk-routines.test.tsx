@@ -7,7 +7,9 @@ import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { initDatabase } from "../db/init";
 import { buildRoutineCard, actOnRoutine, readRoutines } from "../desk/routines";
-import { readRoutineProposal } from "../desk/routine-store";
+import { readRoutineProposal, routineConfigHash } from "../desk/routine-store";
+import { parse as parseYaml } from "yaml";
+import { ROUTINE_COMPOSE_TIMEOUT_SECONDS, RoutineOptionsSchema } from "../../../common/types/desk-routines";
 import type { InstalledRoutine, PendingRoutine, RoutineOptions, RoutineRunner } from "../desk/routine-command";
 import { routineRequest, routineSchedule } from "../desk/routine-schedule";
 import { handleDeskAsk, handleDeskCreate } from "../api/desk-ask";
@@ -23,7 +25,7 @@ import { validateSteps } from "pulse";
 import type { AgentPresenceSnapshotRecord } from "../api/agents";
 import { routineStepLabels } from "../desk/routine-steps";
 
-const OPTIONS: RoutineOptions = { composer: ["composer"], reflex: ["reflex"], target: "@example/pulse-flow", timeZone: "Europe/Zurich", timeoutSeconds: 10, readTimeoutSeconds: 1 };
+const OPTIONS: RoutineOptions = { composer: ["composer"], reflex: ["reflex"], target: "@example/pulse-flow", timeZone: "Europe/Zurich", timeoutSeconds: 10, composeTimeoutSeconds: 10, readTimeoutSeconds: 1 };
 const YAML = "name: F_READ\nactions:\n  - A_EXTRACT_URLS # sovereignty: D, residency: CH\n";
 const NOW = Date.parse("2026-10-31T12:00:00Z");
 const answer = (value: unknown, code = 0) => ({ code, stdout: JSON.stringify(value), stderr: "" });
@@ -95,6 +97,27 @@ describe("Desk routines", () => {
     expect(typeof routineSchedule("every 23 hours, read")).toBe("string");
     expect(routineSchedule("every 30 minutes, read")).toMatchObject({ expression: "*/30 * * * *" });
     expect(routineSchedule("every 12 hours, read")).toMatchObject({ expression: "0 */12 * * *" });
+  });
+
+  it("keeps a value the composer fixed in the flow's input beside the request a run's prompts read", async () => {
+    const s = seam();
+    const fixed = "name: F_READ\nactions:\n  - A_EXTRACT_URLS # sovereignty: D, residency: CH\ninput:\n  limit: 150\n  note: |\n    two\n    lines\n";
+    s.compose({ status: "complete", yaml: fixed });
+    const card = await buildRoutineCard(db, "every Friday at 17:00, extract URLs from https://example.com", OPTIONS, NOW, s.run);
+    const proposal = readRoutineProposal(db, String(card.fields.proposalId));
+    expect(proposal?.yaml).toContain("- A_EXTRACT_URLS # sovereignty: D, residency: CH");
+    expect(parseYaml(proposal?.yaml ?? "")).toMatchObject({ input: { limit: 150, note: "two\nlines\n", scenario: "extract URLs from https://example.com", text: "extract URLs from https://example.com", request: "extract URLs from https://example.com" } });
+    expect(proposal?.yaml.match(/^input:/gm)).toHaveLength(1);
+  });
+
+  it("gives the composer its own time, longer than a write's, and a change of it leaves drafts valid", async () => {
+    const timeouts: number[] = [];
+    const run: RoutineRunner = (_argv, _stdin, timeoutMs) => { timeouts.push(timeoutMs); return Promise.resolve(answer({ status: "no-match", message: "no" })); };
+    await buildRoutineCard(db, "every Friday at 17:00, extract URLs from https://example.com", { ...OPTIONS, timeoutSeconds: 10, composeTimeoutSeconds: 900 }, NOW, run);
+    expect(timeouts).toEqual([900_000]);
+    expect(routineConfigHash({ ...OPTIONS, composeTimeoutSeconds: 900 })).toBe(routineConfigHash({ ...OPTIONS, composeTimeoutSeconds: 1200 }));
+    expect(routineConfigHash({ ...OPTIONS, timeoutSeconds: 11 })).not.toBe(routineConfigHash(OPTIONS));
+    expect(RoutineOptionsSchema.parse({ composer: ["c"], reflex: ["r"], target: "@example/pulse-flow", timeZone: "UTC" }).composeTimeoutSeconds).toBe(ROUTINE_COMPOSE_TIMEOUT_SECONDS);
   });
 
   it("stores a real composer preview and preserves annotations through Reflex transient input", async () => {

@@ -25,7 +25,7 @@ import { submitCapabilityInstall } from "../dashboard-v2/lib/desk-capability-ins
 import { startDeskAutonomy } from "../desk/push";
 
 const OPTIONS: RoutineOptions = {
-  composer: ["composer"], reflex: ["reflex"], target: "@example/pulse-flow", timeZone: "UTC", timeoutSeconds: 1, readTimeoutSeconds: 0.1,
+  composer: ["composer"], reflex: ["reflex"], target: "@example/pulse-flow", timeZone: "UTC", timeoutSeconds: 1, composeTimeoutSeconds: 1, readTimeoutSeconds: 0.1,
   capabilityBuild: { writer: ["writer"], map: "example/maps#12", status: ["status", "{ref}"], bundle: "example-bundle", install: ["install-bundle", "{bundle}"], uninstall: ["uninstall-bundle", "{bundle}"], budget: { tokens: 1000, invocations: 10, minutes: 5 } },
 };
 const YAML = "name: F_AGENT\nactions:\n  - agent:\n      name: judge\n      capability: compose.judgment\n      prompt: Judge\n      collect: result\n";
