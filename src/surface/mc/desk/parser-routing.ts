@@ -3,18 +3,22 @@ import { z } from "zod";
 import { ParserProviderSchema } from "../../../common/types/desk-parser";
 
 const reason = z.string().trim().min(1).max(200);
+const RangerCandidateProviderSchema = z.enum(["claude", ...ParserProviderSchema.options]);
 const evidence = {
   version: z.literal(1),
-  attempted: z.array(ParserProviderSchema).max(3).refine((v) => new Set(v).size === v.length),
-  candidates: z.array(z.object({ substrate: ParserProviderSchema, reason: z.enum(["not-configured", "not-permitted", "already-attempted", "parser-incapable", "missing-reading", "stale-reading", "capped", "quota-ineligible", "eligible"]) }).strict()).max(3).refine((v) => new Set(v.map((c) => c.substrate)).size === v.length),
-  fallbackReasons: z.array(z.object({ provider: ParserProviderSchema, reason: z.literal("quota-exhausted") }).strict()).max(3),
-  capabilityExclusions: z.array(z.object({ provider: ParserProviderSchema, reason }).strict()).max(3),
+  attempted: z.array(ParserProviderSchema).max(2).refine((v) => new Set(v).size === v.length),
+  candidates: z.array(z.object({ substrate: RangerCandidateProviderSchema, reason: z.enum(["not-configured", "not-permitted", "already-attempted", "parser-incapable", "missing-reading", "stale-reading", "capped", "quota-ineligible", "eligible"]) }).strict()).max(3).refine((v) => new Set(v.map((c) => c.substrate)).size === v.length),
+  fallbackReasons: z.array(z.object({ provider: ParserProviderSchema, reason: z.literal("quota-exhausted") }).strict()).max(2).refine((v) => new Set(v.map((c) => c.provider)).size === v.length),
+  capabilityExclusions: z.array(z.object({ provider: RangerCandidateProviderSchema, reason }).strict()).max(3),
 };
 
 export const ParserRoutingSchema = z.discriminatedUnion("kind", [
   z.object({ ...evidence, kind: z.literal("selected"), provider: ParserProviderSchema, reason: z.enum(["most-headroom", "pi-fallback"]) }).strict(),
   z.object({ ...evidence, kind: z.literal("unavailable"), reason }).strict(),
 ]).superRefine((v, ctx) => {
+  if (v.fallbackReasons.some((f) => !v.attempted.includes(f.provider) || (v.kind === "selected" && f.provider === v.provider))) {
+    ctx.addIssue({ code: "custom", message: "inconsistent fallback attempts" });
+  }
   if (v.kind === "selected" && (v.candidates.length !== 3 || v.attempted.at(-1) !== v.provider || !v.candidates.some((c) => c.substrate === v.provider && c.reason === "eligible") || (v.reason === "pi-fallback") !== (v.provider === "pi"))) {
     ctx.addIssue({ code: "custom", message: "inconsistent selected provider" });
   }
@@ -36,7 +40,7 @@ const causes: Record<string, string> = {
 };
 
 export function parserRoutingNotice(routing: ParserRouting): string {
-  const reasons = new Map<z.infer<typeof ParserProviderSchema>, string>(routing.candidates.filter((c) => c.reason !== "eligible" && c.reason !== "already-attempted").map((c) => [c.substrate, c.reason]));
+  const reasons = new Map<z.infer<typeof RangerCandidateProviderSchema>, string>(routing.candidates.filter((c) => c.substrate !== "claude" && c.reason !== "eligible" && c.reason !== "already-attempted").map((c) => [c.substrate, c.reason]));
   for (const fallback of routing.fallbackReasons) reasons.set(fallback.provider, fallback.reason);
   const why = [...reasons].map(([provider, cause]) => `${names[provider]} ${causes[cause] ?? "is unavailable"}`).join("; ");
   if (routing.kind === "selected") return `Answered by ${names[routing.provider]}.${why ? ` ${why}.` : ""}`;

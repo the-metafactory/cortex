@@ -1,0 +1,160 @@
+{
+  "sources": {
+    "adapter": "44becf007b8def2d3964d3cf03bc591e15382f83",
+    "ranger": "a4041ee0ccf39d213abb96c2013dafd6070b8bd8"
+  },
+  "cases": [
+    {
+      "name": "Codex eligible",
+      "permitted": [
+        "codex",
+        "pi"
+      ],
+      "output": {
+        "kind": "note",
+        "fields": {
+          "text": "Probe"
+        },
+        "routing": {
+          "version": 1,
+          "kind": "selected",
+          "provider": "codex",
+          "reason": "most-headroom",
+          "attempted": [
+            "codex"
+          ],
+          "candidates": [
+            {
+              "substrate": "claude",
+              "reason": "not-configured"
+            },
+            {
+              "substrate": "codex",
+              "reason": "eligible"
+            },
+            {
+              "substrate": "pi",
+              "reason": "eligible"
+            }
+          ],
+          "fallbackReasons": [],
+          "capabilityExclusions": []
+        }
+      }
+    },
+    {
+      "name": "Codex exhausted to Pi",
+      "permitted": [
+        "codex",
+        "pi"
+      ],
+      "output": {
+        "kind": "note",
+        "fields": {
+          "text": "Probe"
+        },
+        "routing": {
+          "version": 1,
+          "kind": "selected",
+          "provider": "pi",
+          "reason": "pi-fallback",
+          "attempted": [
+            "pi"
+          ],
+          "candidates": [
+            {
+              "substrate": "claude",
+              "reason": "not-configured"
+            },
+            {
+              "substrate": "codex",
+              "reason": "capped"
+            },
+            {
+              "substrate": "pi",
+              "reason": "eligible"
+            }
+          ],
+          "fallbackReasons": [],
+          "capabilityExclusions": []
+        }
+      }
+    },
+    {
+      "name": "Codex quota failure to Pi",
+      "permitted": [
+        "codex",
+        "pi"
+      ],
+      "output": {
+        "kind": "note",
+        "fields": {
+          "text": "Probe"
+        },
+        "routing": {
+          "version": 1,
+          "kind": "selected",
+          "provider": "pi",
+          "reason": "pi-fallback",
+          "attempted": [
+            "codex",
+            "pi"
+          ],
+          "candidates": [
+            {
+              "substrate": "claude",
+              "reason": "not-configured"
+            },
+            {
+              "substrate": "codex",
+              "reason": "already-attempted"
+            },
+            {
+              "substrate": "pi",
+              "reason": "eligible"
+            }
+          ],
+          "fallbackReasons": [
+            {
+              "provider": "codex",
+              "reason": "quota-exhausted"
+            }
+          ],
+          "capabilityExclusions": []
+        }
+      }
+    },
+    {
+      "name": "no permitted alternative",
+      "permitted": [
+        "codex"
+      ],
+      "output": {
+        "kind": "none",
+        "reason": "Parser unavailable: no-eligible-substrate",
+        "routing": {
+          "version": 1,
+          "kind": "unavailable",
+          "reason": "no-eligible-substrate",
+          "attempted": [],
+          "candidates": [
+            {
+              "substrate": "claude",
+              "reason": "not-configured"
+            },
+            {
+              "substrate": "codex",
+              "reason": "capped"
+            },
+            {
+              "substrate": "pi",
+              "reason": "not-permitted"
+            }
+          ],
+          "fallbackReasons": [],
+          "capabilityExclusions": []
+        }
+      }
+    }
+  ]
+}

@@ -256,7 +256,7 @@ export async function parseWithCommand(argv: string[], request: ParserRequest, r
     if (!checked.success) return invalid();
     routing = checked.data;
     if (routing.kind === "unavailable" && answer.kind !== "none") return invalid();
-    if (routing.kind === "selected" && request.routing && (!ParserPermissionsSchema.safeParse(request.routing).success || !request.routing.permitted.includes(routing.provider))) return invalid();
+    if (request.routing && (!ParserPermissionsSchema.safeParse(request.routing).success || routing.attempted.some((provider) => !request.routing?.permitted.includes(provider)))) return invalid();
   }
   if (routing && answer.kind === "none" && !answer.reason?.trim()) return invalid();
   if (answer.kind === "none") return { kind: "none", reason: answer.reason?.trim().length ? answer.reason.trim().slice(0, 200) : NO_MATCH, ...(routing ? { routing } : {}) };
