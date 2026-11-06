@@ -1,4 +1,4 @@
-import { copyFile, lstat, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -54,7 +54,7 @@ export class GitReader {
     const location = original ? ["-C", this.root] : [`--git-dir=${this.scratch}`, `--work-tree=${this.root}`];
     let proc;
     try {
-      proc = Bun.spawn([this.binary, "--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...location, ...args], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      proc = Bun.spawn([this.binary, "--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...location, ...args], { cwd: this.root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     } catch { throw new GitFailure("git-missing"); }
     const budget = { bytes: 0 };
     const cap = this.options.maxBytes ?? COMMAND_BYTES;
@@ -101,6 +101,8 @@ export class GitReader {
     await writeFile(join(this.scratch, "config"), format === "sha256" ? "[core]\nrepositoryformatversion=1\n[extensions]\nobjectFormat=sha256\n" : "[core]\nrepositoryformatversion=0\n");
     await copyFile(join(gitDir, "HEAD"), join(this.scratch, "HEAD"));
     for (const name of ["objects", "refs", "packed-refs", "shallow"]) await this.linkIfPresent(join(common, name), join(this.scratch, name));
+    await mkdir(join(this.scratch, "info"));
+    await this.linkIfPresent(join(common, "info", "exclude"), join(this.scratch, "info", "exclude"));
     const index = join(gitDir, "index");
     try {
       if ((await lstat(index)).size > 16 * 1024 * 1024) throw new GitFailure("index-size-limit");

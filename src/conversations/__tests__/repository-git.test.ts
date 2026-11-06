@@ -73,14 +73,124 @@ describe("conversation Git reads", () => {
     expectNoPrivate(result);
   });
 
+  test("redaction preserves JSON structure and final email-like filenames and patch lines", async () => {
+    const r = await fixture();
+    await writeFile(join(r.root, "icon@2x.png"), "synthetic icon\n");
+    await directGit(r.root, ["add", "icon@2x.png"]);
+    await directGit(r.root, ["commit", "--quiet", "-m", "Synthetic icon"]);
+    const history = toolBody(await r.call("log", { path: "icon@2x.png", limit: 1 }));
+    expect(history.commits[0].paths).toEqual(["icon@2x.png"]);
+    expect(history.scanned).toBe(1);
+    await writeFile(join(r.root, "icon@2x.png"), "a@b.example.invalid\n");
+    const diff = toolBody(await r.call("diff", { path: "icon@2x.png" }));
+    expect(diff.diff).toContain("+a@b.example.invalid\n");
+    expect(diff.untrackedIncluded).toBe(false);
+    expect(diff.truncated).toBe(false);
+  });
+
+  test("plain URLs before credential URLs on separate patch lines cannot hide credentials", async () => {
+    const r = await fixture();
+    await writeFile(join(r.root, "beacon.txt"), "https://public.example.invalid/a\nhttps://synthetic-user:synthetic-password@git.example.invalid/x\nsynthetic-user@git.example.invalid:synthetic-token/project\n");
+    const result = toolBody(await r.call("diff", { path: "beacon.txt" }));
+    expect(result.diff).toContain("https://public.example.invalid/a");
+    expect(result.diff).toContain("[redacted-remote]");
+    expectNoPrivate(result);
+  });
+
+  test("file to directory replacements never widen a patch to excluded or local-only descendants", async () => {
+    const r = await fixture();
+    await writeFile(join(r.root, "config"), "synthetic public config\n");
+    await directGit(r.root, ["add", "config"]);
+    await directGit(r.root, ["commit", "--quiet", "-m", "Synthetic config file"]);
+    const from = (await directGit(r.root, ["rev-parse", "HEAD"])).trim();
+    await rm(join(r.root, "config"));
+    await mkdir(join(r.root, "config", "private"), { recursive: true });
+    await writeFile(join(r.root, "config", ".env"), "SYNTHETIC_ENV_SECRET\n");
+    await writeFile(join(r.root, "config", "private", "note.txt"), "SYNTHETIC_LOCAL_ONLY\n");
+    await symlink("SYNTHETIC_EXCLUDED", join(r.root, "config", "link"));
+    await writeFile(join(r.root, "config", "public.txt"), "synthetic public descendant\n");
+    r.config.projects.push({ id: "nested-private", root: join(r.root, "config", "private"), policy: "local", operations: ["repo.read"] });
+    await directGit(r.root, ["add", "config"]);
+    const before = await snapshot(r.root);
+    for (const kind of ["working", "staged"]) {
+      const result = toolBody(await r.call("diff", { kind, path: "config" }));
+      expect(result.diff).toContain("synthetic public descendant");
+      expect(result.paths).toEqual(["config/public.txt"]);
+      expectNoPrivate(result);
+    }
+    expect(await snapshot(r.root)).toEqual(before);
+    await directGit(r.root, ["commit", "--quiet", "-m", "Synthetic config directory"]);
+    const committed = await snapshot(r.root);
+    const shown = toolBody(await r.call("show", { path: "config" }));
+    expect(shown.commit.paths).toEqual(["config/public.txt"]);
+    expect(shown.diff).toContain("synthetic public descendant");
+    expectNoPrivate(shown);
+    for (const refs of [{ from, to: "HEAD" }, { from: "HEAD", to: from }]) {
+      const diff = toolBody(await r.call("diff", { kind: "committed", ...refs }));
+      expect(diff.paths).not.toContain("config");
+      expectNoPrivate(diff);
+    }
+    expect(await snapshot(r.root)).toEqual(committed);
+  });
+
+  test("status preserves info excludes while configured excludes files and global settings stay isolated", async () => {
+    const r = await fixture();
+    await directGit(r.root, ["commit", "--quiet", "-am", "Synthetic clean tracked state"]);
+    await rm(join(r.root, "untracked.txt"));
+    await writeFile(join(r.root, ".git", "info", "exclude"), "info-ignored.txt\n");
+    await writeFile(join(r.root, "info-ignored.txt"), "synthetic info ignored\n");
+    expect(await directGit(r.root, ["status", "--porcelain"])).toBe("");
+    const before = await snapshot(r.root);
+    expect(toolBody(await r.call("status"))).toMatchObject({ clean: true, changes: [] });
+    expect(await snapshot(r.root)).toEqual(before);
+    const excludes = join(r.dir, "extra-excludes");
+    await writeFile(excludes, "configured-ignored.txt\n");
+    await appendFile(join(r.root, ".git", "config"), `\n[core]\nexcludesFile = ${excludes}\n`);
+    await writeFile(join(r.root, "configured-ignored.txt"), "synthetic configured ignore\n");
+    expect(await directGit(r.root, ["status", "--porcelain"])).toBe("");
+    const configured = await snapshot(r.root);
+    expect(toolBody(await r.call("status"))).toMatchObject({ clean: false, changes: [{ path: "configured-ignored.txt", tracked: false, index: "?", workingTree: "?" }] });
+    expect(await snapshot(r.root)).toEqual(configured);
+  });
+
+  test("repository-relative reads are independent of the Cortex process directory", async () => {
+    const r = await fixture();
+    await mkdir(join(r.root, "subdir"));
+    const cwd = process.cwd();
+    try {
+      process.chdir(join(r.root, "subdir"));
+      const diff = toolBody(await r.call("diff", { path: "beacon.txt" }));
+      expect(diff.diff).toContain("+unstaged change");
+      expect(diff.paths).toEqual(["beacon.txt"]);
+    } finally { process.chdir(cwd); }
+  });
+
+  test("a truncated log stops before the first oversized commit instead of returning older evidence after a gap", async () => {
+    const r = await fixture();
+    for (let i = 0; i < 90; i++) await writeFile(join(r.root, `${"long-name".repeat(17)}-${i}.txt`), "synthetic bounded history\n");
+    await directGit(r.root, ["add", "."]);
+    await directGit(r.root, ["commit", "--quiet", "-m", "Synthetic oversized summary"]);
+    await appendFile(join(r.root, "beacon.txt"), "latest synthetic change\n");
+    await directGit(r.root, ["commit", "--quiet", "-am", "Synthetic latest change"]);
+    const history = toolBody(await r.call("log", { limit: 4 }));
+    expect(history.status).toBe("truncated");
+    expect(history.commits.map((item: { subject: string }) => item.subject)).toEqual(["Synthetic latest change"]);
+    expect(history.scanned).toBe(2);
+  });
+
   test("ambient Git environment cannot redirect a project or enable executable helpers", async () => {
     const r = await fixture();
     const marker = await hostileGit(r.root, r.dir);
-    const injected = { GIT_DIR: join(r.dir, "absent"), GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: join(r.dir, "helper"), GIT_EXTERNAL_DIFF: join(r.dir, "helper") };
+    const global = join(r.dir, "global-config");
+    const excludes = join(r.dir, "global-excludes");
+    await writeFile(excludes, "untracked.txt\n");
+    await writeFile(global, `[core]\nexcludesFile = ${excludes}\n`);
+    const injected = { GIT_DIR: join(r.dir, "absent"), GIT_CONFIG_GLOBAL: global, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: join(r.dir, "helper"), GIT_EXTERNAL_DIFF: join(r.dir, "helper") };
     const previous = new Map(Object.keys(injected).map(key => [key, process.env[key]]));
     try {
       Object.assign(process.env, injected);
       expect(toolBody(await r.call("head")).provenance.revision).toBe(r.head);
+      expect(toolBody(await r.call("status")).changes).toContainEqual({ path: "untracked.txt", tracked: false, index: "?", workingTree: "?" });
       expect((await r.call("diff")).outcome).toBe("done");
       await expect(access(marker)).rejects.toThrow();
     } finally {
@@ -182,6 +292,18 @@ describe("conversation Git reads", () => {
     expect((await r.call("diff")).text).toContain('"status":"output-limit"');
     await rm(join(r.root, ".git"), { recursive: true });
     expect((await r.call("status")).text).toContain('"status":"unreadable-repository"');
+  });
+
+  test("the raw change bound includes excluded files and withholds the whole oversized read", async () => {
+    const r = await fixture();
+    for (let i = 0; i < 101; i++) await writeFile(join(r.root, "excluded", `bounded-${i}.txt`), "SYNTHETIC_EXCLUDED\n");
+    await directGit(r.root, ["add", "excluded"]);
+    const before = await snapshot(r.root);
+    const result = await r.call("diff", { kind: "staged" });
+    expect(result.outcome).toBe("error");
+    expect(result.text).toContain('"status":"path-limit","disclosedBytes":0');
+    expectNoPrivate(result);
+    expect(await snapshot(r.root)).toEqual(before);
   });
 
   test("timeout reports an error and cancellation terminates the child without releasing partial results", async () => {

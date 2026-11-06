@@ -5,7 +5,7 @@ import type { ToolsConfig } from "../../../common/types/desk-conversations";
 
 export async function directGit(root: string, args: string[]): Promise<string> {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
-  const proc = Bun.spawn(["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", root, ...args], { env: { ...env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "Synthetic Principal", GIT_AUTHOR_EMAIL: "principal@example.invalid", GIT_COMMITTER_NAME: "Synthetic Principal", GIT_COMMITTER_EMAIL: "principal@example.invalid", GIT_OPTIONAL_LOCKS: "0" }, stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-C", root, ...args], { env: { ...env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_AUTHOR_NAME: "Synthetic Principal", GIT_AUTHOR_EMAIL: "principal@example.invalid", GIT_COMMITTER_NAME: "Synthetic Principal", GIT_COMMITTER_EMAIL: "principal@example.invalid", GIT_OPTIONAL_LOCKS: "0" }, stdout: "pipe", stderr: "pipe" });
   const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
   if (code !== 0) throw new Error(err);
   return out;

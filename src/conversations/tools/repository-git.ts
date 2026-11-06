@@ -1,6 +1,4 @@
 import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { z } from "zod/v4";
 import type { ToolOutcome } from "../model";
 import type { ToolContext, ToolDefinition } from "./capabilities";
@@ -30,7 +28,7 @@ interface Args { project: string; ref?: string; path?: string; limit?: number; k
 interface Change { path: string; index: string; workingTree: string; tracked: boolean }
 interface Commit { revision: string; parents: string[]; committedAt: string; subject: string; paths: string[] }
 
-const scrub = (text: string): string => redactToolText(text).replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+|\b[^\s/@:]+@[^\s/:]+:[^\s<>"']+/gi, value => {
+const scrub = (text: string): string => redactToolText(text).replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s<>"']+|\b[^\s/@:<>"']+@[^\s/:<>"']+:[^\s<>"']+/gi, value => {
   if (!value.includes("://")) return "[redacted-remote]";
   try {
     const url = new URL(value);
@@ -73,16 +71,22 @@ class GitEvidence {
     const records = raw.split("\0");
     if (records.pop() !== "") throw new GitFailure("unreadable-git-output");
     const paths: string[] = [];
+    const rawPaths: string[] = [];
     for (let i = 0; i < records.length; i += 2) {
       const header = records[i]?.trim();
       const path = records[i + 1];
       const match = header?.match(/^:([0-7]{6}) ([0-7]{6}) [0-9a-f]+ [0-9a-f]+ [A-Z]$/);
       if (!match || path === undefined) throw new GitFailure("unreadable-git-output");
+      rawPaths.push(path);
+      if (rawPaths.length > 100) throw new GitFailure("path-limit");
       if (!SAFE_MODE.has(match[1] ?? "") || !SAFE_MODE.has(match[2] ?? "")) { this.omitted++; continue; }
       if (this.permitted(path)) paths.push(path);
     }
-    if (paths.length > 100) throw new GitFailure("path-limit");
-    return paths;
+    return paths.filter(path => {
+      if (!rawPaths.some(other => other.startsWith(`${path}/`))) return true;
+      this.omitted++;
+      return false;
+    });
   }
 }
 
@@ -129,8 +133,7 @@ async function inspect(operation: Operation, args: Args, context: ToolContext, g
       for (const project of context.projects) {
         try {
           const paths = new RepositoryPaths(context, project);
-          const root = project.root.startsWith("~/") ? join(homedir(), project.root.slice(2)) : project.root;
-          if (realpathSync.native(location) !== realpathSync.native(root)) continue;
+          if (realpathSync.native(location) !== realpathSync.native(paths.root)) continue;
           paths.validateRoot();
           if (paths.policy === "local") evidence.paths.policy = "local";
           const item = { project: project.id, path: ".", revision: fields.find(field => field.startsWith("HEAD "))?.slice(5) ?? null, branch: fields.find(field => field.startsWith("branch "))?.slice(7) ?? null, detached: fields.includes("detached"), bare: fields.includes("bare") };
@@ -150,11 +153,15 @@ async function inspect(operation: Operation, args: Args, context: ToolContext, g
     const limit = args.limit ?? 10;
     const candidates = (await git.read(["log", "--first-parent", "--no-notes", "--format=%H", `--max-count=${limit + 1}`, revision, ...pathArgs(args.path)])).trim().split("\n").filter(Boolean);
     const commits: Commit[] = [];
+    let scanned = 0;
     for (const candidate of candidates.slice(0, limit)) {
+      scanned++;
       const item = await commit(git, evidence, sha(candidate), args.path);
-      if (item && evidence.reserve(item)) commits.push(item);
+      if (!item) continue;
+      if (!evidence.reserve(item)) break;
+      commits.push(item);
     }
-    return { provenance: { source: "committed", revision }, commits, scanned: Math.min(candidates.length, limit), hasMore: candidates.length > limit };
+    return { provenance: { source: "committed", revision }, commits, scanned, hasMore: candidates.length > scanned };
   }
   if (operation === "show") {
     const revision = await resolveRef(git, args.ref ?? "HEAD");
@@ -186,7 +193,7 @@ export function createRepositoryGitTools(options: GitReadOptions = {}): ToolDefi
         const result = await inspect(operation, input as Args, context, git, evidence);
         await paths.validate();
         sourcePolicy = paths.policy;
-        const text = scrub(JSON.stringify({ status: evidence.truncated ? "truncated" : "ok", project: (input as Args).project, ...result, omitted: evidence.omitted, truncated: evidence.truncated }));
+        const text = JSON.stringify({ status: evidence.truncated ? "truncated" : "ok", project: (input as Args).project, ...result, omitted: evidence.omitted, truncated: evidence.truncated }, (_key, value: unknown) => typeof value === "string" ? scrub(value) : value);
         if (text.length > 16_000) throw new GitFailure("output-limit");
         return { outcome: "done", sourcePolicy, text };
       } catch (error) {
