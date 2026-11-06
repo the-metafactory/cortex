@@ -57,11 +57,18 @@ describe("durable conversation tool authorization", () => {
 
   test("a revoked source closes only its own conversation: the lists still answer and show it as local-only", async () => {
     const config = registry();
-    const host = await open(config, async request => (await request.tools!.call("call", "repo_read", { project: "public" }, request.signal)).text);
+    let bound = false;
+    const host = await open(config, async request => {
+      if (bound) return "SYNTHETIC_PRIVATE_CONTENT echoed without a tool";
+      bound = true;
+      return (await request.tools!.call("call", "repo_read", { project: "public" }, request.signal)).text;
+    });
     const revoked = await create(host, "cloud");
     const untouched = await create(host, "cloud");
     await host.submit(revoked.id, input("one"));
     await host.waitForIdle(revoked.id);
+    await host.submit(untouched.id, input("two"));
+    await host.waitForIdle(untouched.id);
     config.projects.splice(0, 1);
 
     const listed = await host.list();
@@ -69,7 +76,12 @@ describe("durable conversation tool authorization", () => {
     expect(listed.find(row => row.id === untouched.id)).toMatchObject({ policy: "cloud" });
     const { rows } = await host.overview({ state: "current", q: "", limit: 25 });
     expect(rows.map(row => row.conversation.id).sort()).toEqual([revoked.id, untouched.id].sort());
-    expect(rows.find(row => row.conversation.id === revoked.id)?.conversation).toMatchObject({ policy: "local" });
+    const row = rows.find(candidate => candidate.conversation.id === revoked.id);
+    expect(row).toMatchObject({ conversation: { policy: "local" }, latest: null, match: null, linked: [] });
+    expect(JSON.stringify(rows)).toContain("SYNTHETIC_PRIVATE_CONTENT");
+    expect(JSON.stringify(row)).not.toContain("SYNTHETIC_PRIVATE_CONTENT");
+    expect((await host.overview({ state: "current", q: "SYNTHETIC_PRIVATE_CONTENT", limit: 25 })).rows.map(found => found.conversation.id)).not.toContain(revoked.id);
+    expect((await host.overview({ state: "current", q: "Synthetic", limit: 25 })).rows.map(found => found.conversation.id)).toContain(revoked.id);
     await expect(host.submit(revoked.id, input("two"))).rejects.toThrow("revoked or changed");
     await expect(host.detail(revoked.id)).rejects.toThrow("revoked or changed");
   });
