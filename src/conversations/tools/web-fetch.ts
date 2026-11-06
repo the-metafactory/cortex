@@ -48,7 +48,8 @@ const HTML_TYPES = new Set(["text/html", "application/xhtml+xml"]);
 const URL_LIMIT = 2048;
 const MAX_ADDRESSES = 4;
 const BINARY_SNIFF = 4096;
-const SKIPPED_ELEMENTS = new Set(["script", "style", "noscript", "template", "svg", "iframe", "object", "embed"]);
+const SKIPPED_ELEMENTS = new Set(["script", "style", "noscript", "template", "svg", "iframe", "object"]);
+const VOID_SKIPPED_ELEMENTS = new Set(["embed"]);
 const BLOCK_ELEMENTS = new Set(["p", "div", "br", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "table", "section", "article", "pre", "blockquote", "hr", "header", "footer", "main", "aside", "nav", "dt", "dd", "dl", "figure", "figcaption", "form", "details", "summary"]);
 const NAMED_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: "\"", apos: "'", nbsp: " ", ndash: "-", mdash: "-", hellip: "...", copy: "(c)" };
 const NONPUBLIC_NAME = /(?:^|\.)(?:localhost|local|internal|localdomain|lan|home|corp|intranet|arpa)$/;
@@ -249,10 +250,11 @@ export function htmlToText(html: string): { title: string | null; text: string }
       const closing = next === "/";
       const name = /^[a-z][a-z0-9-]*/.exec(lower.slice(open + (closing ? 2 : 1), open + 40))?.[0] ?? "";
       index = close + 1;
+      if (!closing && VOID_SKIPPED_ELEMENTS.has(name)) continue;
       if (!closing && (SKIPPED_ELEMENTS.has(name) || name === "title")) {
         const end = lower.indexOf(`</${name}`, index);
         const stop = end === -1 ? html.length : end;
-        if (name === "title" && title === null) title = tidy(decodeEntities(html.slice(index, stop)).replace(/<[^>]*>/g, "")) || null;
+        if (name === "title" && title === null) title = tidy(stripTags(decodeEntities(html.slice(index, stop)))) || null;
         const finish = end === -1 ? -1 : tagEnd(html, end + 2);
         index = finish === -1 ? html.length : finish + 1;
       } else if (BLOCK_ELEMENTS.has(name)) out.push("\n");
@@ -263,6 +265,29 @@ export function htmlToText(html: string): { title: string | null; text: string }
   }
   return { title, text: tidy(decodeEntities(out.join(""))) };
 }
+
+const stripTags = (text: string): string => {
+  const out: string[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const open = text.indexOf("<", index);
+    if (open === -1) { out.push(text.slice(index)); break; }
+    out.push(text.slice(index, open));
+    const close = text.indexOf(">", open);
+    if (close === -1) { out.push(text.slice(open)); break; }
+    index = close + 1;
+  }
+  return out.join("");
+};
+
+const abortError = (signal: AbortSignal): Error => signal.reason instanceof Error ? signal.reason : new Error("The request was aborted.");
+
+const raceAbort = <T>(work: Promise<T>, signal: AbortSignal): Promise<T> => new Promise<T>((resolve, reject) => {
+  if (signal.aborted) { reject(abortError(signal)); return; }
+  const onAbort = (): void => { reject(abortError(signal)); };
+  signal.addEventListener("abort", onAbort, { once: true });
+  work.then(resolve, reject).finally(() => { signal.removeEventListener("abort", onAbort); });
+});
 
 const charsetOf = (contentType: string): string => {
   const label = /charset\s*=\s*"?([\w:.-]+)"?/i.exec(contentType)?.[1]?.toLowerCase() ?? "utf-8";
@@ -278,13 +303,13 @@ export function createPublicFetcher(options: PublicFetcherOptions): (rawUrl: str
   const transport = options.transport ?? nodeTransport;
   const now = options.now ?? (() => new Date());
 
-  const validate = async (url: URL): Promise<{ ok: true; addresses: ResolvedAddress[] } | { ok: false; status: FetchStatus; message: string }> => {
+  const validate = async (url: URL, signal: AbortSignal): Promise<{ ok: true; addresses: ResolvedAddress[] } | { ok: false; status: FetchStatus; message: string }> => {
     const refusal = refuseTarget(url);
     if (refusal) return { ok: false, status: "denied-target", message: refusal };
     const host = literalHost(url.hostname);
     if (isIP(host) !== 0) return { ok: true, addresses: [{ address: host, family: isIP(host) === 6 ? 6 : 4 }] };
     let addresses: ResolvedAddress[];
-    try { addresses = await resolve(host); }
+    try { addresses = await raceAbort(Promise.resolve(resolve(host)), signal); }
     catch (_err) { return { ok: false, status: "dns-failure", message: "The host name did not resolve." }; }
     if (addresses.length === 0) return { ok: false, status: "dns-failure", message: "The host name did not resolve." };
     if (!addresses.every(entry => isPublicAddress(entry.address))) return { ok: false, status: "denied-target", message: "The host resolves to a loopback, private, link-local, metadata or otherwise nonpublic address. The whole host is refused." };
@@ -318,7 +343,7 @@ export function createPublicFetcher(options: PublicFetcherOptions): (rawUrl: str
     try {
       for (;;) {
         current.hash = "";
-        const checked = await validate(current);
+        const checked = await validate(current, signal);
         signal.throwIfAborted();
         if (!checked.ok) return fail(redirects > 0 && checked.status === "denied-target" ? "invalid-redirect" : checked.status, redirects > 0 ? `A redirect led to a refused target. ${checked.message}` : checked.message, { redirects });
         const response = await connect(current, checked.addresses, signal);

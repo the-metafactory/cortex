@@ -151,6 +151,25 @@ describe("web_fetch through the conversation boundary", () => {
   });
 });
 
+describe("web_fetch cancellation", () => {
+  test("a pending DNS lookup is aborted by cancellation", async () => {
+    const base = config();
+    const tools = createWebTools({
+      config: () => base, request: () => Promise.reject(new Error("unused")),
+      resolve: () => new Promise<ResolvedAddress[]>(() => undefined),
+      transport: () => Promise.reject(new Error("no route")), env: {}, now: () => NOW,
+    });
+    const session = (): Promise<ToolSession | null> => Promise.resolve({ principal: "p", conversationId: "c", transport: "web", route: "cloud", policy: "cloud", scope: ["docs"] });
+    const host = new ToolHost({ config: () => base, session, tools });
+    const surface = host.surface("c", "cloud", () => Promise.resolve());
+    const controller = new AbortController();
+    const pending = surface.call("id", "web_fetch", { url: "https://docs.example/a" }, controller.signal);
+    setTimeout(() => controller.abort(), 20);
+    const outcome = await Promise.race([pending.then(() => "settled", () => "settled"), new Promise<string>(r => setTimeout(() => r("hung"), 2000))]);
+    expect(outcome).toBe("settled");
+  });
+});
+
 describe("web_search through the conversation boundary", () => {
   test("returns ranked cited results from the configured provider and drops non-http links", async () => {
     const r = rig();
@@ -220,6 +239,13 @@ describe("address policy", () => {
 });
 
 describe("html extraction", () => {
+  test("treats embed as a void element and strips titles in linear time", () => {
+    expect(htmlToText("<embed src=\"m.pdf\"><p>Documentation</p>").text).toBe("Documentation");
+    const started = Date.now();
+    const title = htmlToText(`<title>${"<".repeat(100_000)}</title>x`).title;
+    expect(title?.length).toBeGreaterThan(0);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
   test("drops unclosed and nested active content in linear time", () => {
     const hostile = "<script>".repeat(50_000) + "visible";
     const started = Date.now();
