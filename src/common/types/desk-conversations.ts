@@ -40,6 +40,7 @@ export const ProjectSchema = z.object({
   forge: z.object({ kind: z.enum(["github", "gitlab"]), host: z.string().max(253).regex(/^[a-zA-Z0-9.-]+(?::[0-9]+)?$/).optional(), repo: z.string().max(300).regex(/^[\w.-]+(?:\/[\w.-]+)+$/).refine(repo => !repo.split("/").some(part => part === "." || part === ".."), "forge repository must identify a repository") }).strict().optional(),
   policy: z.enum(["local", "cloud"]).default("local"),
   operations: z.array(z.enum(TOOL_OPERATIONS)).max(TOOL_OPERATIONS.length).default([]),
+  exclude: z.array(z.string().min(1).max(512).refine(path => !path.startsWith("/") && !path.includes("\\") && !path.split("/").some(part => part === ".." || part === "." || part === "") && !path.includes("\0"), "excluded paths must be project-relative file or directory prefixes")).max(100).optional(),
 }).strict();
 export type ToolProject = z.infer<typeof ProjectSchema>;
 export const WEB_LIMIT_DEFAULTS = { maxResults: 5, maxBytes: 1_000_000, maxRedirects: 5, timeoutSeconds: 15, maxChars: 12_000 };
