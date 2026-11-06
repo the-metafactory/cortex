@@ -21,7 +21,8 @@ const Position = z.object({ conversation: z.number().int().min(0), after: z.numb
 const SearchInput = z.object({ query: z.string().trim().min(1).max(200), state: z.enum(["current", "archived", "all"]).default("all"), cursor: Position.optional() }).strict();
 const ReadInput = z.object({ conversation: z.uuid(), entry: z.number().int().positive().optional(), after: z.number().int().min(0).default(0), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(6000).default(6000) }).strict();
 const denied = (): string => JSON.stringify({ status: "unavailable", message: "No accessible conversation was found. It may be missing, deleted or denied." });
-export const conversationCitation = (id: string): string => `?desk=conversation&conversation=${encodeURIComponent(id)}`;
+const conversationCitation = (id: string): string => `?desk=conversation&conversation=${encodeURIComponent(id)}`;
+const redactedJson = (value: unknown): string => JSON.stringify(value, (_key, leaf: unknown) => typeof leaf === "string" ? redactToolText(leaf) : leaf);
 const entryCitation = (id: string, entry: string): string => `/api/conversations/${encodeURIComponent(id)}/entries/${entry}`;
 const dateOf = (entry: EntryRecord): string | null => {
   for (const message of entry.model ?? []) {
@@ -57,7 +58,7 @@ export function conversationHistoryTools(owner: HistoryOwner): ToolDefinition[] 
           consumed++;
           budget--;
           after = Number(entry.id);
-          const text = redactToolText(JSON.stringify({ model: entry.model, data: entry.data }));
+          const text = redactedJson({ model: entry.model, data: entry.data });
           const haystack = `${conversation.title}\n${text}`.toLowerCase();
           if (terms.every(term => haystack.includes(term))) {
             const position = Math.max(0, text.toLowerCase().indexOf(terms[0] ?? input.query) - 80);
@@ -87,7 +88,7 @@ export function conversationHistoryTools(owner: HistoryOwner): ToolDefinition[] 
       if (!await owner.remember(session, [conversation.id], signal)) return denied();
       if (!entry || input.entry !== undefined && Number(entry.id) !== input.entry) return JSON.stringify({ status: "entry-not-found", conversation: { ...conversation, url: conversationCitation(conversation.id) }, message: "No such retained entry exists in this conversation." });
       const original = JSON.stringify(entry);
-      const record = redactToolText(original);
+      const record = redactedJson(entry);
       if (input.offset > record.length) return JSON.stringify({ status: "invalid-offset", totalCharacters: record.length });
       const end = Math.min(record.length, input.offset + input.limit);
       return JSON.stringify({ status: "ok", ...sourceOf(conversation, entry), format: "durable-entry-json", redacted: record !== original, offset: input.offset, totalCharacters: record.length, nextOffset: end < record.length ? end : null, nextEntryAfter: Number(entry.id), record: record.slice(input.offset, end) });

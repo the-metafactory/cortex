@@ -129,30 +129,45 @@ describe("owner-backed history through model tool dispatch", () => {
     await turn(host, (await create(host, "Reader")).id);
   });
 
-  test("credential redaction precedes snippet and record windows while the original stays intact", async () => {
+  test.each(["\n", "\t", "\r"])("credential redaction precedes snippets and record windows with %j whitespace while the original stays intact", async whitespace => {
     const secret = `ghp_${"a".repeat(40)}`;
+    const bearer = "synthetic-bearer-token";
+    const data = { text: `credential evidence:${whitespace}${secret}`, nested: { authorization: `Bearer${whitespace}${bearer}` } };
+    let completed = false;
     let target = "";
     let entry = 0;
     const host = await open(async request => {
+      const search = body(await request.tools!.call("search", "conversation_search", { query: "credential evidence" }, request.signal));
+      expect(search.status).toBe("ok");
+      expect(search.matches).toHaveLength(1);
+      expect(search.matches[0].entry.id).toBe(String(entry));
+      expect(search.matches[0].snippet).toContain("[redacted]");
+      expect(JSON.stringify(search)).not.toContain(secret);
+      expect(JSON.stringify(search)).not.toContain(bearer);
       const windows: string[] = [];
       let offset = 0;
       do {
-        const result = body(await request.tools!.call(`window-${offset}`, "conversation_read", { conversation: target, entry, offset, limit: 7 }, request.signal));
+        const result = body(await request.tools!.call(`window-${offset}`, "conversation_read", { conversation: target, entry, offset, limit: 127 }, request.signal));
         expect(result.redacted).toBe(true);
         windows.push(result.record);
         offset = result.nextOffset;
       } while (offset !== null);
       expect(windows.join("")).not.toContain(secret);
-      expect(JSON.parse(windows.join("")).data.secret).toBe("[redacted]");
-      expect((await host.entry(target, entry))?.data).toEqual({ secret });
+      expect(windows.join("")).not.toContain(bearer);
+      expect(JSON.parse(windows.join("")).data).toEqual({ text: `credential evidence:${whitespace}[redacted]`, nested: { authorization: "[redacted]" } });
+      expect(JSON.parse(windows.join("")).model[0].content).toBe(`credential message:${whitespace}[redacted]`);
+      expect(await host.entry(target, entry)).toEqual(original);
+      completed = true;
       return "Redacted evidence read.";
     });
-    target = (await create(host, "Synthetic credentials")).id;
-    await host.record(target, "credential", "synthetic.evidence", { secret });
+    target = (await host.create({ title: "Synthetic credentials", policy: "cloud", links: [], origin: { kind: "web" } }, principal, { entries: [{ kind: "synthetic.evidence", data, messages: [{ role: "user", text: `credential message:${whitespace}${secret}`, at: Date.parse(at) }] }] })).id;
     entry = Number(await host.latestEntryId(target));
+    const original = await host.entry(target, entry);
     const reader = await create(host, "Reader");
     await turn(host, reader.id);
+    expect(completed).toBe(true);
     expect(JSON.stringify(await host.entries(reader.id, 100, undefined))).not.toContain(secret);
+    expect(JSON.stringify(await host.entries(reader.id, 100, undefined))).not.toContain(bearer);
   });
 
   test.each([
@@ -291,20 +306,30 @@ describe("owner-backed history through model tool dispatch", () => {
   });
 
   test("retrieving a conversation's grant record does not transfer its standing action authority", async () => {
+    let source = "";
+    let retrieved = false;
     const host = await open(async request => {
-      body(await request.tools!.call("grant-record", "conversation_search", { query: "grantId" }, request.signal));
+      const search = body(await request.tools!.call("grant-record", "conversation_search", { query: "granted" }, request.signal));
+      expect(search.status).toBe("ok");
+      const citation = search.matches.find((match: { conversation: { id: string }; entry: { kind: string } }) => match.conversation.id === source && match.entry.kind === "cortex.grant");
+      expect(citation).toBeDefined();
+      const read = body(await request.tools!.call("read-grant", "conversation_read", { conversation: source, entry: Number(citation.entry.id) }, request.signal));
+      expect(read.status).toBe("ok");
+      expect(JSON.parse(read.record).data).toMatchObject({ scope: "conversation", action: "granted", type: "desk-note" });
+      retrieved = true;
       return "Read evidence only.";
     });
     const owner = fixtureOwner();
     await host.attachSources({ resolvers: {}, readbacks: {}, writers: { "desk-note": owner.writer } });
     const creation = new ConversationCreation(host);
     const actor = { principal, transport: "web" as const };
-    const source = (await create(host, "Source authority")).id;
+    source = (await create(host, "Source authority")).id;
     const proposed = await creation.propose(source, { proposalId: randomUUID(), type: "desk-note", fields: { text: "Synthetic note" } }, actor);
     await creation.confirm(source, proposed.view.proposal.proposalId, { revision: proposed.view.proposal.revision, digest: proposed.view.digest, grant: { scope: "conversation" } }, actor);
     expect(owner.effects).toHaveLength(1);
     const reader = await create(host, "Reader");
     await turn(host, reader.id);
+    expect(retrieved).toBe(true);
     const next = await creation.propose(reader.id, { proposalId: randomUUID(), type: "desk-note", fields: { text: "Still needs confirmation" } }, actor);
     expect(next.view.feedback).toBe("proposed");
     expect(owner.effects).toHaveLength(1);
