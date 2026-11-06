@@ -2,9 +2,11 @@
  * F-6 downstream — notify.discord code handler tests.
  *
  * Axes:
- *  1. parseIssueActivation — extracts repo/number/title/url/action; rejects
- *     non-objects / payloads without a repo.
- *  2. renderIssueMessage — formats; truncates over the Discord cap.
+ *  1. parseGithubActivation — extracts repo/kind/number/title/url/action from an
+ *     `issues` OR `pull_request` payload; rejects non-objects / payloads without
+ *     a repo.
+ *  2. renderActivationMessage — formats (New issue / New PR); truncates over the
+ *     Discord cap.
  *  3. createDiscordNotifier handler — known repo → webhook POST (with
  *     allowed_mentions:{parse:[]}) + `posted` visibility; unknown repo →
  *     `skipped` (returns, no throw); unparseable → `skipped`; a failed POST
@@ -20,8 +22,8 @@ import type { DiscordNotifyTarget } from "../../common/types/cortex-config";
 import type { FiredActivation } from "../reflex-activation-listener";
 import {
   createDiscordNotifier,
-  parseIssueActivation,
-  renderIssueMessage,
+  parseGithubActivation,
+  renderActivationMessage,
   type WebhookPostResult,
 } from "../notify-discord";
 
@@ -34,6 +36,13 @@ const ISSUE = {
   action: "opened",
   issue: { number: 42, title: "Bug: thing broke", html_url: "https://github.com/jc/reflex/issues/42" },
   repository: { full_name: "jc/reflex" },
+};
+
+const PR = {
+  action: "opened",
+  pull_request: { number: 7, title: "Add widget", html_url: "https://github.com/jc/reflex/pull/7" },
+  repository: "jc/reflex", // flat full_name — the github_hmac shape reflex-edge fires
+  github_event: "pull_request",
 };
 
 function activation(payload: unknown): FiredActivation {
@@ -77,18 +86,29 @@ const lastNotify = (published: Envelope[]) =>
 
 // ===========================================================================
 
-describe("parseIssueActivation", () => {
+describe("parseGithubActivation", () => {
   test("extracts repo + issue fields", () => {
-    expect(parseIssueActivation(ISSUE)).toEqual({
+    expect(parseGithubActivation(ISSUE)).toEqual({
       repo: "jc/reflex",
+      kind: "issue",
       number: 42,
       title: "Bug: thing broke",
       url: "https://github.com/jc/reflex/issues/42",
       action: "opened",
     });
   });
+  test("extracts repo + PR fields from a pull_request payload (kind=pr)", () => {
+    expect(parseGithubActivation(PR)).toEqual({
+      repo: "jc/reflex",
+      kind: "pr",
+      number: 7,
+      title: "Add widget",
+      url: "https://github.com/jc/reflex/pull/7",
+      action: "opened",
+    });
+  });
   test("accepts the flat `repository` string reflex-edge fires (github_hmac)", () => {
-    const r = parseIssueActivation({
+    const r = parseGithubActivation({
       action: "opened",
       issue: { number: 7, title: "t", html_url: "u" },
       repository: "the-metafactory/cortex", // flat full_name, not nested
@@ -97,29 +117,49 @@ describe("parseIssueActivation", () => {
     expect(r?.repo).toBe("the-metafactory/cortex");
     expect(r?.number).toBe(7);
   });
+  test("non-object issue (null / string) + pull_request present → kind=pr (no PR data under a `New issue` label)", () => {
+    for (const junkIssue of [null, "x", 0]) {
+      const r = parseGithubActivation({
+        action: "opened",
+        issue: junkIssue, // not a usable object → treated as absent
+        pull_request: { number: 3, title: "PR", html_url: "https://github.com/jc/reflex/pull/3" },
+        repository: "jc/reflex",
+      });
+      expect(r?.kind).toBe("pr");
+      expect(r?.number).toBe(3);
+      expect(renderActivationMessage(r!)).toContain("New PR");
+    }
+  });
   test("non-object / missing repo → undefined", () => {
-    expect(parseIssueActivation("nope")).toBeUndefined();
-    expect(parseIssueActivation(null)).toBeUndefined();
-    expect(parseIssueActivation({ issue: { number: 1 } })).toBeUndefined();
+    expect(parseGithubActivation("nope")).toBeUndefined();
+    expect(parseGithubActivation(null)).toBeUndefined();
+    expect(parseGithubActivation({ issue: { number: 1 } })).toBeUndefined();
   });
 });
 
-describe("renderIssueMessage", () => {
+describe("renderActivationMessage", () => {
   test("formats ref + title + url", () => {
-    const msg = renderIssueMessage(parseIssueActivation(ISSUE)!);
+    const msg = renderActivationMessage(parseGithubActivation(ISSUE)!);
     expect(msg).toContain("jc/reflex#42");
     expect(msg).toContain("Bug: thing broke");
     expect(msg).toContain("https://github.com/jc/reflex/issues/42");
   });
+  test("labels a PR activation `New PR` (not `New issue`)", () => {
+    const msg = renderActivationMessage(parseGithubActivation(PR)!);
+    expect(msg).toContain("New PR");
+    expect(msg).not.toContain("New issue");
+    expect(msg).toContain("jc/reflex#7");
+    expect(msg).toContain("https://github.com/jc/reflex/pull/7");
+  });
   test("truncates over the Discord cap", () => {
-    const msg = renderIssueMessage(
-      parseIssueActivation({ repository: { full_name: "a/b" }, issue: { number: 1, title: "x".repeat(5000) } })!,
+    const msg = renderActivationMessage(
+      parseGithubActivation({ repository: { full_name: "a/b" }, issue: { number: 1, title: "x".repeat(5000) } })!,
     );
     expect(msg.length).toBeLessThanOrEqual(1900);
   });
   test("escapes Discord markdown in untrusted titles (masked-link/format injection)", () => {
-    const msg = renderIssueMessage(
-      parseIssueActivation({
+    const msg = renderActivationMessage(
+      parseGithubActivation({
         repository: { full_name: "a/b" },
         issue: { number: 1, title: "[click](https://evil.example) **bold** `code`" },
       })!,
@@ -144,6 +184,21 @@ describe("createDiscordNotifier", () => {
     const body = JSON.parse(poster.calls[0]!.body);
     expect(body.content).toContain("jc/reflex#42");
     expect(body.allowed_mentions).toEqual({ parse: [] });
+    expect(lastNotify(ctrl.published)?.outcome).toBe("posted");
+  });
+
+  test("PR activation → POST with a `New PR` content line", async () => {
+    const ctrl = fakeRuntime();
+    const poster = recordingPoster();
+    const handler = createDiscordNotifier({ runtime: ctrl.runtime, source: SOURCE, targets: TARGETS, env: ENV, post: poster.post });
+
+    await handler(activation(PR));
+    await flush();
+
+    expect(poster.calls).toHaveLength(1);
+    const body = JSON.parse(poster.calls[0]!.body);
+    expect(body.content).toContain("New PR");
+    expect(body.content).toContain("jc/reflex#7");
     expect(lastNotify(ctrl.published)?.outcome).toBe("posted");
   });
 

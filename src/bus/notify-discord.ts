@@ -21,10 +21,10 @@
  *
  * ## Trust
  *
- * `activation.payload` is the webhook-controlled GitHub `issues` body — DATA,
- * never instructions (there is no LLM here). We extract typed fields only and
- * send `allowed_mentions: { parse: [] }` so an issue title containing
- * `@everyone` / `@here` / role mentions cannot ping the channel.
+ * `activation.payload` is the webhook-controlled GitHub `issues` / `pull_request`
+ * body — DATA, never instructions (there is no LLM here). We extract typed
+ * fields only and send `allowed_mentions: { parse: [] }` so an issue/PR title
+ * containing `@everyone` / `@here` / role mentions cannot ping the channel.
  */
 
 import type { DiscordNotifyTarget } from "../common/types/cortex-config";
@@ -60,9 +60,11 @@ const defaultPoster: WebhookPoster = async (url, body) => {
   return { ok: res.ok, status: res.status };
 };
 
-/** Typed view of the GitHub `issues` webhook fields we render. */
-export interface ParsedIssueActivation {
+/** Typed view of the GitHub `issues` / `pull_request` webhook fields we render. */
+export interface ParsedGithubActivation {
   repo: string;
+  /** Which GitHub object the fields came from — drives the message label. */
+  kind: "issue" | "pr";
   number: number | undefined;
   title: string | undefined;
   url: string | undefined;
@@ -91,7 +93,7 @@ export interface DiscordNotifierOpts {
 }
 
 /**
- * Extract the repo + issue fields from a fired activation payload.
+ * Extract the repo + issue/PR fields from a fired activation payload.
  *
  * Two `repository` shapes are accepted:
  *  - **flat string** — what reflex-edge's `github_hmac` source fires: it injects
@@ -100,14 +102,20 @@ export interface DiscordNotifierOpts {
  *    github_hmac branch: `repository: repo?.full_name`). Verified on the live
  *    deploy — a signed impulse fired `…payload:{repository:"owner/repo",…}`.
  *    e.g. `"repository":"owner/repo"`.
- *  - **nested `{full_name}`** — the raw GitHub `issues` webhook shape (fallback
- *    for a bus/manual source that forwards the body verbatim).
+ *  - **nested `{full_name}`** — the raw GitHub webhook shape (fallback for a
+ *    bus/manual source that forwards the body verbatim).
+ *
+ * The issue-vs-PR object is chosen by presence: an `issues` delivery carries a
+ * top-level `issue`; a `pull_request` delivery carries a top-level
+ * `pull_request` (both with `number`/`title`/`html_url`). `issue` wins if both
+ * are somehow present. When neither is present the fields are undefined but the
+ * activation still routes on `repo`.
  *
  * Returns undefined when the repo can't be determined (nothing to route on).
  */
-export function parseIssueActivation(
+export function parseGithubActivation(
   payload: unknown,
-): ParsedIssueActivation | undefined {
+): ParsedGithubActivation | undefined {
   if (payload === null || typeof payload !== "object") return undefined;
   const p = payload as Record<string, unknown>;
   const repository = p.repository;
@@ -119,14 +127,25 @@ export function parseIssueActivation(
         ? (repository as { full_name: string }).full_name
         : undefined;
   if (repo === undefined || repo.length === 0) return undefined;
-  const issue = p.issue as
-    | { number?: unknown; title?: unknown; html_url?: unknown }
-    | undefined;
+  type GithubNode = { number?: unknown; title?: unknown; html_url?: unknown };
+  const asNode = (v: unknown): GithubNode | undefined =>
+    typeof v === "object" && v !== null ? (v as GithubNode) : undefined;
+  const issue = asNode(p.issue);
+  const pr = asNode(p.pull_request);
+  // A usable *object* picks both the fields AND the label — an `issues` delivery
+  // carries an `issue` object, a `pull_request` delivery a `pull_request` object.
+  // Anything non-object (null / string / absent) is treated as not-present for
+  // both, so `issue` only wins the (never-seen) tie when it is a real object —
+  // PR data is never rendered under a `New issue` heading.
+  const usePr = issue === undefined && pr !== undefined;
+  const node = usePr ? pr : issue;
+  const kind: "issue" | "pr" = usePr ? "pr" : "issue";
   return {
     repo,
-    number: typeof issue?.number === "number" ? issue.number : undefined,
-    title: typeof issue?.title === "string" ? issue.title : undefined,
-    url: typeof issue?.html_url === "string" ? issue.html_url : undefined,
+    kind,
+    number: typeof node?.number === "number" ? node.number : undefined,
+    title: typeof node?.title === "string" ? node.title : undefined,
+    url: typeof node?.html_url === "string" ? node.html_url : undefined,
     action: typeof p.action === "string" ? p.action : undefined,
   };
 }
@@ -143,20 +162,21 @@ export function escapeDiscordMarkdown(text: string): string {
   return text.replace(/[\\*_~`|>[\]()]/g, "\\$&");
 }
 
-/** Render the Discord message `content` for an issue activation. */
-export function renderIssueMessage(issue: ParsedIssueActivation): string {
+/** Render the Discord message `content` for an issue/PR activation. */
+export function renderActivationMessage(event: ParsedGithubActivation): string {
   const ref =
-    issue.number !== undefined ? `${issue.repo}#${issue.number}` : issue.repo;
-  const title = escapeDiscordMarkdown(issue.title ?? "(no title)");
-  const head = `🟢 New issue **${ref}** — ${title}`;
-  const body = issue.url !== undefined ? `${head}\n${issue.url}` : head;
+    event.number !== undefined ? `${event.repo}#${event.number}` : event.repo;
+  const title = escapeDiscordMarkdown(event.title ?? "(no title)");
+  const label = event.kind === "pr" ? "New PR" : "New issue";
+  const head = `🟢 ${label} **${ref}** — ${title}`;
+  const body = event.url !== undefined ? `${head}\n${event.url}` : head;
   // Discord content cap is 2000 chars; keep well under.
   return body.length > 1900 ? `${body.slice(0, 1897)}...` : body;
 }
 
 /**
  * Build the `notify.discord` handler. The returned function:
- *  - parses the issue + resolves repo → webhook URL; on no-repo (unparseable
+ *  - parses the issue/PR + resolves repo → webhook URL; on no-repo (unparseable
  *    payload) or no-mapping (no env binding resolved at startup) it emits a
  *    `skipped` visibility and RETURNS. Re-firing within THIS process won't help
  *    (bindings resolve once at construction); fixing the env/config and
@@ -218,8 +238,8 @@ export function createDiscordNotifier(opts: DiscordNotifierOpts): ReflexActivati
   };
 
   return async (activation) => {
-    const issue = parseIssueActivation(activation.payload);
-    if (issue === undefined) {
+    const event = parseGithubActivation(activation.payload);
+    if (event === undefined) {
       log.warn(
         `notify-discord: activation ${activation.decisionId} has no resolvable repo — skipped`,
       );
@@ -229,30 +249,30 @@ export function createDiscordNotifier(opts: DiscordNotifierOpts): ReflexActivati
     // Exact repo mapping first, then the `"*"` catch-all (one webhook for every
     // repo — pairs with an org-level GitHub webhook). An exact entry overrides
     // the catch-all.
-    const webhookUrl = webhookByRepo.get(issue.repo) ?? webhookByRepo.get("*");
+    const webhookUrl = webhookByRepo.get(event.repo) ?? webhookByRepo.get("*");
     if (webhookUrl === undefined) {
-      log.warn(`notify-discord: no webhook configured for repo "${issue.repo}" (no catch-all) — skipped`);
-      emit("skipped", activation, issue.repo, "no-webhook-for-repo");
+      log.warn(`notify-discord: no webhook configured for repo "${event.repo}" (no catch-all) — skipped`);
+      emit("skipped", activation, event.repo, "no-webhook-for-repo");
       return;
     }
     const body = JSON.stringify({
-      content: renderIssueMessage(issue),
-      // Untrusted issue text must never ping the channel.
+      content: renderActivationMessage(event),
+      // Untrusted issue/PR text must never ping the channel.
       allowed_mentions: { parse: [] },
     });
     let res: WebhookPostResult;
     try {
       res = await post(webhookUrl, body);
     } catch (err) {
-      emit("failed", activation, issue.repo, errMsg(err));
+      emit("failed", activation, event.repo, errMsg(err));
       // Transient — throw so the bridge does not mark the Decision id as seen.
       throw err instanceof Error ? err : new Error(String(err));
     }
     if (!res.ok) {
-      emit("failed", activation, issue.repo, `http-${res.status}`);
-      throw new Error(`discord webhook POST for "${issue.repo}" returned HTTP ${res.status}`);
+      emit("failed", activation, event.repo, `http-${res.status}`);
+      throw new Error(`discord webhook POST for "${event.repo}" returned HTTP ${res.status}`);
     }
-    emit("posted", activation, issue.repo);
+    emit("posted", activation, event.repo);
   };
 }
 
