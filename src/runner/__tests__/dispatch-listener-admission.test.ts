@@ -58,11 +58,13 @@ const TERMINAL_TYPES = new Set([
   "system.access.denied",
 ]);
 
+const TERMINAL_DEADLINE_MS = 15_000;
+
 /** Wait for a terminal envelope (same de-flake rationale as the sibling
  * suite, cortex#771): the pipeline's end is observable, never a fixed sleep. */
 async function settle(
   published: () => readonly Envelope[],
-  { minObserveMs = 250, idleMs = 25 }: { minObserveMs?: number; idleMs?: number } = {},
+  { minObserveMs = TERMINAL_DEADLINE_MS, idleMs = 25 }: { minObserveMs?: number; idleMs?: number } = {},
 ): Promise<void> {
   const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 2));
   const hasTerminal = () => published().some((e) => TERMINAL_TYPES.has(e.type));

@@ -82,12 +82,11 @@ const TASK_ID = "11111111-1111-4111-8111-111111111111";
  * terminal lets any same-turn trailing envelope (e.g. the `failed` that pairs a
  * `denied`) land so the following assertion sees the complete set.
  *
- * For DROP tests (which publish nothing by design) there is no terminal to wait
- * for, so `settle` falls back to a bounded observation window: it waits long
- * enough that the synchronously-scheduled verify/policy path has demonstrably
- * run and produced nothing. `minObserveMs` is deliberately generous so the
- * off-thread verify crypto on a loaded runner completes inside it — a drop is
- * only concluded after the pipeline has had real time to (not) produce.
+ * DROP tests publish nothing by design, so there is no terminal to wait for:
+ * `settleDrop` observes for a bounded window and the test asserts nothing came.
+ * Too short a window on a loaded runner can only let a drop test pass; it cannot
+ * fail one. An accepted dispatch gets the long deadline instead, because a 250ms
+ * window failed one on a host at load 39 (it took 425ms).
  *
  * No per-test counts, nothing serialized: a saturated event loop just means the
  * terminal envelope arrives a few ms later and `settle` waits for it.
@@ -99,11 +98,14 @@ const TERMINAL_TYPES = new Set([
   "system.access.denied",
 ]);
 
+const ACCEPTED_TERMINAL_DEADLINE_MS = 15_000;
+const DROP_OBSERVATION_WINDOW_MS = 250;
+
 async function settle(
   published: () => readonly Envelope[],
   {
     idleMs = 25,
-    minObserveMs = 250,
+    minObserveMs = ACCEPTED_TERMINAL_DEADLINE_MS,
   }: { idleMs?: number; minObserveMs?: number } = {},
 ): Promise<void> {
   const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 2));
@@ -111,9 +113,8 @@ async function settle(
 
   // Wait UP TO `minObserveMs` for a terminal envelope. `minObserveMs` is the
   // grace in which the off-thread chain-verify/re-sign/policy crypto must
-  // produce a terminal if the dispatch is accepted; it is sized to dwarf that
-  // crypto even on a loaded runner. A drop publishes nothing, so it simply
-  // exhausts this window.
+  // produce a terminal if the dispatch is accepted; a test that sees none
+  // within it fails on its own assertions.
   const observeUntil = Date.now() + minObserveMs;
   while (Date.now() < observeUntil && !hasTerminal()) {
     await tick();
@@ -121,13 +122,15 @@ async function settle(
 
   // Terminal seen → drain a short idle window so any same-turn trailing
   // envelope (e.g. the `failed` that pairs a `denied`) also lands before the
-  // caller asserts. No terminal → it's a drop; we already observed long enough
-  // to be sure nothing was produced.
+  // caller asserts.
   if (hasTerminal()) {
     const until = Date.now() + idleMs;
     while (Date.now() < until) await tick();
   }
 }
+
+const settleDrop = (published: () => readonly Envelope[]): Promise<void> =>
+  settle(published, { minObserveMs: DROP_OBSERVATION_WINDOW_MS });
 
 /**
  * Canonical Tasks-Domain chat subject for cortex (`@did-mf-cortex`). Shared
@@ -1314,7 +1317,7 @@ describe("dispatch-listener — malformed payload", () => {
       payload: { task_id: TASK_ID, agent_id: "cortex" }, // no prompt
     };
     r.trigger(malformed, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await settle(() => r.published);
+    await settleDrop(() => r.published);
 
     expect(r.published).toHaveLength(0);
   });
@@ -1345,7 +1348,7 @@ describe("dispatch-listener — malformed payload", () => {
       payload: { agent_id: "cortex", prompt: "x" },
     };
     r.trigger(malformed, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await settle(() => r.published);
+    await settleDrop(() => r.published);
 
     expect(r.published).toHaveLength(0);
   });
@@ -1382,7 +1385,7 @@ describe("dispatch-listener — malformed payload", () => {
       payload: { task_id: "not-a-uuid", agent_id: "cortex", prompt: "x" },
     };
     r.trigger(malformed, CANONICAL_CORTEX_CHAT_SUBJECT);
-    await settle(() => r.published);
+    await settleDrop(() => r.published);
 
     expect(r.published).toHaveLength(0);
     expect(optsCaptured).toHaveLength(0);
@@ -1432,7 +1435,7 @@ describe("dispatch-listener — start/stop", () => {
     await listener.stop();
 
     r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
-    await settle(() => r.published);
+    await settleDrop(() => r.published);
 
     expect(r.published).toHaveLength(0);
   });
@@ -1470,7 +1473,7 @@ describe("dispatch-listener — subject filtering", () => {
 
     // Same envelope, different subject — should not match
     r.trigger(makeReceivedEnvelope(), "local.othermetafactory.tasks.@did-mf-cortex.chat");
-    await settle(() => r.published);
+    await settleDrop(() => r.published);
 
     expect(r.published).toHaveLength(0);
   });
@@ -3491,7 +3494,7 @@ describe("dispatch-listener — stage tracing (cortex#492)", () => {
       makeReceivedEnvelope(),
       "local.someoneelse.tasks.@did-mf-other.chat",
     );
-    await settle(() => r.published);
+    await settleDrop(() => r.published);
 
     expect(traceStages(r.published)).toEqual(["received", "subject-rejected"]);
     const rejected = traceEnvelopes(r.published).find(
@@ -3752,7 +3755,7 @@ describe("createDispatchListener — S2 per-agent subject isolation (cortex#1160
       makeReceivedEnvelope({ agent_id: "agent-b" }),
       "local.metafactory.tasks.@did-mf-agent-b.chat",
     );
-    await settle(() => r.published);
+    await settleDrop(() => r.published);
 
     // A never spawned and published nothing (a clean drop).
     expect(facA.optsCaptured).toHaveLength(0);
@@ -4011,7 +4014,7 @@ describe("dispatch-listener — M3 payload encryption (cortex#1241, ADR-0019)", 
     });
     await listener.start();
     r.trigger(fedReceived(), FED_SUBJECT); // CLEARTEXT on a `required` network
-    await settle(() => r.published);
+    await settleDrop(() => r.published);
 
     const stages = traceStages(r.published);
     expect(stages).toContain("payload-decrypt-rejected");
@@ -4037,7 +4040,7 @@ describe("dispatch-listener — M3 payload encryption (cortex#1241, ADR-0019)", 
     });
     await listener.start();
     r.trigger(sealed, FED_SUBJECT);
-    await settle(() => r.published);
+    await settleDrop(() => r.published);
 
     const stages = traceStages(r.published);
     expect(stages).toContain("payload-decrypt-rejected");

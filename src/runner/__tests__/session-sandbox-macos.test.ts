@@ -751,6 +751,9 @@ describeWithSandboxExec("MacosSbplSandbox — spawn() mode gating", () => {
   }, 15_000);
 });
 
+const DENIED_READ_INTERVAL_MS = 250;
+const DENIAL_DELIVERY_DEADLINE_MS = 20_000;
+
 describeWithSandboxExec("MacosSbplSandbox — denial observation end-to-end (real sandbox-exec + log stream)", () => {
   test("a real denied read under audit mode is observed via denials()", async () => {
     // realpathSync immediately — same E3-shaped `/var` → `/private/var`
@@ -761,9 +764,8 @@ describeWithSandboxExec("MacosSbplSandbox — denial observation end-to-end (rea
     try {
       const sandbox = new MacosSbplSandbox();
       const profile = baseProfile({ mode: "audit" });
-      // Spawn a session that (after a short delay, to clear log-stream's
-      // measured ~1s startup latency — module doc) attempts to read the
-      // denied ~/.ssh fixture file, using the profile's OWN generated text
+      // Spawn a session that keeps attempting to read the denied ~/.ssh
+      // fixture file until a denial is observed, using the profile's OWN generated text
       // by constructing the argv the way spawn() itself would, but with a
       // homeDir override — spawn() doesn't take opts for homeDir, so this
       // test drives generateMacosSbplProfile + sandbox-exec directly and
@@ -775,14 +777,7 @@ describeWithSandboxExec("MacosSbplSandbox — denial observation end-to-end (rea
       writeFileSync(profilePath, generated.text);
 
       const target = join(fixtureHome, ".ssh", "id_ed25519");
-      // 2500ms — the module doc's measured ~1s `log stream` startup latency
-      // plus headroom. This test flaked at 1200ms under load (other tests'
-      // recently-spawned sandbox-exec/log processes appear to add jitter to
-      // unified-log delivery) — this is the SAME observability gap the
-      // module doc discloses, not a new one; the wider margin is a test
-      // robustness fix, not evidence the underlying enforcement is delayed
-      // (SBPL enforcement itself is not delayed — only the LOG ENTRY is).
-      const script = `setTimeout(() => { try { require("fs").readFileSync(${JSON.stringify(target)}); } catch (e) { } }, 2500);`;
+      const script = `setInterval(() => { try { require("fs").readFileSync(${JSON.stringify(target)}); } catch (e) { } }, ${DENIED_READ_INTERVAL_MS});`;
 
       const logProc = Bun.spawn(
         ["sandbox-exec", "-f", profilePath, "bun", "-e", script],
@@ -816,16 +811,12 @@ describeWithSandboxExec("MacosSbplSandbox — denial observation end-to-end (rea
         } catch { /* stream closed on abort — expected */ }
       })();
 
-      await logProc.exited;
-      // Wait AFTER the subject process has exited — the log entry for a
-      // denial that happened right before exit can still be in-flight through
-      // the unified-log pipeline (module doc's observability gap). Bounded
-      // poll, not a fixed grace: a loaded host delivered it after >1.5s
-      // (node #2576).
-      const logDeadline = Date.now() + 10_000;
+      const logDeadline = Date.now() + DENIAL_DELIVERY_DEADLINE_MS;
       while (observed.length === 0 && Date.now() < logDeadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
+      logProc.kill(9);
+      await logProc.exited;
       denialAbort.abort();
       await tail;
 
