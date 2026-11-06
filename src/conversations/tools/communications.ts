@@ -148,7 +148,8 @@ export function communicationTools(owner: CommunicationOwner): ToolDefinition[] 
       }
       signal.throwIfAborted();
       const after = find();
-      if (!after || after.connector.id !== before.connector.id || after.scope.policy !== before.scope.policy || !await after.connector.authorize(session.principal, after.scope.id).catch(() => false)) return fail("denied");
+      const unchanged = after?.connector.id === before.connector.id && after.scope.policy === before.scope.policy;
+      if (!after || !unchanged || !await after.connector.authorize(session.principal, after.scope.id).catch(() => false)) return fail("denied");
       const items = z.array(ItemSchema).safeParse(page.items.slice(0, MAX_ITEMS));
       if (!items.success || !Number.isFinite(page.observedAt)) return fail("provider-failure");
       if (!await owner.remember(session, { connector: after.connector.id, scope: after.scope.id, policy: after.scope.policy }, signal)) return fail("denied");
