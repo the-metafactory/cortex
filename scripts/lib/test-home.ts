@@ -3,6 +3,12 @@ export const HOST_HOME_OPT_IN_ENV = "CORTEX_TEST_HOST_HOME";
 export const RUN_TMP_ENV = "CORTEX_TEST_TMPDIR";
 export const RUN_ROOT_PREFIX = "ctr-";
 
+/** Bun's default per-test limit is 5000 ms, and it ignores a bunfig `[test] timeout`. Passed as `--timeout` so it reaches parallel workers. */
+export const TEST_TIMEOUT_MS = 20_000;
+
+/** First Bun with https://github.com/oven-sh/bun/pull/44581: before it, Bun.spawnSync can spin forever once a child has exited. */
+export const FIRST_BUN_WITHOUT_SPAWN_SYNC_HANG = "1.4.3";
+
 /** Linked into the temp home so tests that spawn a real `claude` stay logged in: the macOS keychain, or Linux's credentials file. */
 export const CLAUDE_CREDENTIAL_PATHS = ["Library/Keychains", ".claude/.credentials.json"];
 
@@ -53,6 +59,14 @@ export function checkTestTmp(env: NodeJS.ProcessEnv, tmpdir: string): TestEnvVer
       `bun test is writing temp files to ${tmpdir}, which outlives the run, so leftovers pile up until the disk fills ` +
       "(cortex#3006). Run `bun run test [args]` instead: scripts/test.ts gives each run its own TMPDIR and removes it.",
   };
+}
+
+export function bunSpawnSyncHangWarning(version: string): string | null {
+  if (Bun.semver.order(version, FIRST_BUN_WITHOUT_SPAWN_SYNC_HANG) >= 0) return null;
+  return (
+    `warning: Bun ${version} can hang a test worker at 100% CPU inside Bun.spawnSync, leaving the run stuck until something kills it ` +
+    `(oven-sh/bun#44581). Run bun upgrade to get ${FIRST_BUN_WITHOUT_SPAWN_SYNC_HANG} or later.`
+  );
 }
 
 export function runRootName(pid: number): string {

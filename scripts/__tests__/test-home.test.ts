@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   abandonedRunRoots,
+  bunSpawnSyncHangWarning,
   checkTestHome,
   checkTestTmp,
   HERMETIC_HOME_ENV,
@@ -9,6 +12,7 @@ import {
   HOST_HOME_OPT_IN_ENV,
   RUN_TMP_ENV,
   runRootName,
+  TEST_TIMEOUT_MS,
 } from "../lib/test-home";
 
 describe("hermeticTestEnv", () => {
@@ -104,4 +108,40 @@ describe("abandonedRunRoots", () => {
   test("ignores names that are not run roots", () => {
     expect(abandonedRunRoots(["ctr-notapid-aB3dE9", "cortex-test-home-aB3dE9", "ctr-200-short"], isAlive)).toEqual([]);
   });
+});
+
+describe("bunSpawnSyncHangWarning", () => {
+  test("warns on a Bun with the spawnSync hang and names the upstream fix and the remedy", () => {
+    const warning = bunSpawnSyncHangWarning("1.4.2");
+    expect(warning).toContain("oven-sh/bun#44581");
+    expect(warning).toContain("bun upgrade");
+  });
+
+  test("stays quiet from the first fixed Bun on", () => {
+    expect(bunSpawnSyncHangWarning("1.4.3")).toBeNull();
+    expect(bunSpawnSyncHangWarning("1.5.0")).toBeNull();
+  });
+});
+
+describe("the runner's per-test limit", () => {
+  const BUN_DEFAULT_TIMEOUT_MS = 5000;
+  const SLOW_TEST_MS = BUN_DEFAULT_TIMEOUT_MS + 500;
+
+  test.each([[[]], [["--parallel"]]] as string[][][])(
+    "a test slower than Bun's default still passes with runner args %j",
+    async (args) => {
+      expect(SLOW_TEST_MS).toBeLessThan(TEST_TIMEOUT_MS);
+      const dir = mkdtempSync(join(tmpdir(), "runner-timeout-"));
+      try {
+        const slow = join(dir, "slow.test.ts");
+        writeFileSync(slow, `import { test } from "bun:test";\ntest("slow", () => Bun.sleep(${SLOW_TEST_MS}));\n`);
+        const run = Bun.spawn(["bun", "scripts/test.ts", ...args, slow], { stdout: "pipe", stderr: "pipe" });
+        const [stdout, stderr, exitCode] = await Promise.all([new Response(run.stdout).text(), new Response(run.stderr).text(), run.exited]);
+        expect({ exitCode, output: `${stdout}${stderr}` }).toMatchObject({ exitCode: 0, output: expect.stringContaining("1 pass") });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
 });
