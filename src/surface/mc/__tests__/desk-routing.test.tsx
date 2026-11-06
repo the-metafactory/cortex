@@ -7,10 +7,11 @@ import { HandledLedger } from "../desk/actions";
 import type { DeskRuntime } from "../desk/compose";
 import { setGrant } from "../desk/autonomy";
 import { listOpenNotes } from "../desk/notes";
-import { parserRoutingNotice, parserUnavailable, type SelectedParserRouting } from "../desk/parser-routing";
+import { ParserRoutingSchema, parserRoutingNotice, parserUnavailable, type SelectedParserRouting } from "../desk/parser-routing";
 import { askDesk, createFromProposal } from "../dashboard-v2/lib/desk-ask";
 import { ProposalCard } from "../dashboard-v2/components/desk-proposal";
 import { McSchema } from "../../../common/types/config";
+import adapterContract from "./__fixtures__/desk-parser-contract.json";
 
 const selection = (provider: "codex" | "pi", unavailable: "capped" | "missing-reading" | "stale-reading" = "capped"): SelectedParserRouting => ({
   version: 1, kind: "selected", provider, reason: provider === "pi" ? "pi-fallback" : "most-headroom",
@@ -153,12 +154,12 @@ describe("routed command bar", () => {
   });
 
   for (const legacy of [false, true]) {
-    for (const evidence of [
-      { ...selection("codex"), provider: "claude", attempted: ["claude"], candidates: selection("codex").candidates.map((c) => ({ ...c, reason: c.substrate === "claude" ? "eligible" : "not-permitted" })) },
-      { ...selection("codex"), attempted: ["claude", "codex"], fallbackReasons: [{ provider: "claude", reason: "quota-exhausted" }] },
-      { ...parserUnavailable("no-eligible-substrate"), attempted: ["claude"] },
+    for (const { name, evidence } of [
+      { name: "selected Claude", evidence: { ...selection("codex"), provider: "claude", attempted: ["claude"], candidates: selection("codex").candidates.map((c) => ({ ...c, reason: c.substrate === "claude" ? "eligible" : "not-permitted" })) } },
+      { name: "Claude quota fallback", evidence: { ...selection("codex"), attempted: ["claude", "codex"], fallbackReasons: [{ provider: "claude", reason: "quota-exhausted" }] } },
+      { name: "unavailable after Claude attempt", evidence: { ...parserUnavailable("no-eligible-substrate"), attempted: ["claude"] } },
     ]) {
-      it(`refuses Claude selection or attempt evidence in ${legacy ? "legacy" : "routed"} parsing`, async () => {
+      it(`refuses ${name} in ${legacy ? "legacy" : "routed"} parsing`, async () => {
         const desk = runtime();
         if (legacy && desk.options?.ask) delete desk.options.ask.routing;
         const res = await handleDeskAsk(request({ text: "note Probe" }), desk, { runParser: () => Promise.resolve(JSON.stringify({ kind: evidence.kind === "selected" ? "note" : "none", fields: { text: "Probe" }, reason: "Unavailable", routing: evidence })) });
@@ -166,6 +167,35 @@ describe("routed command bar", () => {
         expect(await res.json()).toMatchObject({ routing: { kind: "unavailable", reason: "invalid-output" } });
       });
     }
+  }
+
+  for (const fixture of adapterContract.cases) {
+    it(`accepts real adapter evidence with Claude unconfigured: ${fixture.name}`, async () => {
+      const routing = ParserRoutingSchema.parse(fixture.output.routing);
+      const db = initDatabase(":memory:");
+      try {
+        const paths: string[] = [];
+        const answer = await askDesk("note Probe", (path, init) => {
+          paths.push(path);
+          const body: unknown = JSON.parse(z.string().parse(init.body));
+          return handleDeskAsk(request({ ...z.object({ text: z.string() }).parse(body), routing: { permitted: fixture.permitted } }), runtime(), {
+            runParser: () => Promise.resolve(JSON.stringify(fixture.output)),
+            runWriter: () => Promise.reject(new Error("must not write")),
+          }, db);
+        });
+        expect(answer.ok).toBe(routing.kind === "selected");
+        if (answer.ok) {
+          if (routing.kind !== "selected") throw new Error("Expected an unavailable response");
+          expect(answer.proposal.routing).toEqual(routing);
+          expect(answer.proposal.automatic).toBeUndefined();
+          expect(answer.proposal.fields).toEqual({ text: "Probe" });
+        } else {
+          expect(answer.text).toContain("No permitted provider is available");
+        }
+        expect(paths).toEqual(["/api/desk/ask"]);
+        expect(listOpenNotes(db)).toHaveLength(0);
+      } finally { db.close(); }
+    });
   }
 
   for (const selected of [false, true]) {
