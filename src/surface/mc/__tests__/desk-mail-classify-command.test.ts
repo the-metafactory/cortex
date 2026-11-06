@@ -151,7 +151,7 @@ describe("the extra answer fields", () => {
 
 describe("a pass through the command", () => {
   it("waits ten minutes from each failure before retrying a slow pass", async () => {
-    let clock = NOW;
+    let clock = NOW + 30_000;
     let calls = 0;
     const c = new MailClassifier({ ...COMMAND, maxPerPass: 4, timeoutSeconds: 180 }, async () => {
       calls++;
@@ -164,6 +164,9 @@ describe("a pass through the command", () => {
     await c.kick(db, { now: clock, mail: items, events: [], vips: [] });
     expect(calls).toBe(4);
     clock = NOW + 750_000;
+    await c.kick(db, { now: clock, mail: items, events: [], vips: [] });
+    expect(calls).toBe(4);
+    clock = NOW + 780_000;
     await c.kick(db, { now: clock, mail: items, events: [], vips: [] });
     expect(calls).toBe(5);
   });
