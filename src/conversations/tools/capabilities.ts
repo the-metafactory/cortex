@@ -29,6 +29,7 @@ export interface ToolDefinition {
   operation: ToolOperation | null;
   input: z.ZodType<object>;
   dependency?: (project: ToolProject) => string | null;
+  gate?: (session: ToolSession) => string | null;
   provider?: (project: ToolProject) => Promise<string | null>;
   run: (input: object, context: ToolContext) => Promise<string>;
 }
@@ -133,6 +134,8 @@ export class ToolHost {
     if (!project.operations.includes(tool.operation)) return { availability: "denied", reason: `${tool.operation} is not permitted for this source` };
     const sourcePolicy = this.sourcePolicyRefusal(session, project);
     if (sourcePolicy) return { availability: "denied", reason: sourcePolicy };
+    const gated = tool.gate?.(session) ?? null;
+    if (gated) return { availability: "denied", reason: gated };
     const missing = tool.dependency?.(project) ?? null;
     if (missing) return { availability: "dependency-missing", reason: missing };
     const down = signal.aborted ? "the check was cancelled" : await tool.provider?.(project).catch(() => "The provider could not be reached. Check its configured connection.") ?? null;
@@ -179,6 +182,8 @@ export class ToolHost {
     if (!project.operations.includes(tool.operation)) return refuse(`${tool.operation} is not permitted for this source.`);
     const policyRefusal = this.sourcePolicyRefusal(session, project);
     if (policyRefusal) return refuse(policyRefusal);
+    const gated = tool.gate?.(session) ?? null;
+    if (gated) return refuse(gated);
     return { project: structuredClone(project), session };
   }
 
