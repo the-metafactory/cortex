@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 export type WorkspaceTab = "overview" | "schedule" | "flow" | "executions";
-export type RoutineTab = "schedule" | "workspace";
+export type RoutineTab = "schedule" | "workspace" | "flows";
 export type CalendarView = "day" | "week" | "month";
 export interface RoutinesLocation {
   tab: RoutineTab; workspace?: WorkspaceTab; routine: string | null; view: CalendarView; date: string; timezone: string;
@@ -29,7 +29,8 @@ export function readRoutinesLocation(search: string): RoutinesLocation | null {
   const policy = p.get("routine-policy");
   const timezone = p.get("routine-timezone") ?? defaults.timezone;
   const workspace = p.get("routine-workspace");
-  return { workspace: workspace === "schedule" || workspace === "flow" || workspace === "executions" ? workspace : "overview", tab: p.get("routines") === "workspace" ? "workspace" : "schedule", routine: p.get("routine") ?? null,
+  const tab = p.get("routines");
+  return { workspace: workspace === "schedule" || workspace === "flow" || workspace === "executions" ? workspace : "overview", tab: tab === "workspace" || tab === "flows" ? tab : "schedule", routine: p.get("routine") ?? null,
     view: view === "day" || view === "month" ? view : "week", date: calendarDate(p.get("routine-date")) ?? defaults.date,
     timezone: validTimezone(timezone) ? timezone : defaults.timezone, policy: policy === "approval" || policy === "auto" ? policy : "all", showPaused: p.get("routine-paused") === "1" };
 }
