@@ -67,6 +67,16 @@ describe("the classifier config", () => {
     expect(() => toClassifierConfig({ model: "m", timeoutSeconds: 30, maxPerPass: 10 })).toThrow("set either command, or baseUrl and model");
   });
 
+  it("allows a bounded longer command budget without changing other model limits", () => {
+    expect(parse({ command: ["desk-classify-mail"], timeoutSeconds: 180 })).toBe(true);
+    expect(parse({ command: ["desk-classify-mail"], timeoutSeconds: 181 })).toBe(false);
+    expect(parse({ command: ["desk-classify-mail"], timeoutSeconds: 0 })).toBe(false);
+    const defaults = McSchema.parse({ desk: { mail: { classifier: { command: ["desk-classify-mail"] } } } });
+    expect(defaults.desk.mail.classifier?.timeoutSeconds).toBe(30);
+    expect(McSchema.safeParse({ desk: { mail: { waiting: { model: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 121 } } } } }).success).toBe(false);
+    expect(McSchema.safeParse({ desk: { mail: { digest: { model: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 121 } } } } }).success).toBe(false);
+  });
+
   it("keeps the CA file to the endpoint form", () => {
     expect(parse({ command: ["desk-classify-mail"], caFile: "/ca.pem" })).toBe(false);
     expect(parse({ command: ["desk-classify-mail"], apiKeyFile: "~/.key", timeoutSeconds: 75 })).toBe(true);
