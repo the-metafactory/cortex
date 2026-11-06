@@ -48,7 +48,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFileSync, rmSync } from "node:fs";
+import { closeSync, openSync, readSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -409,11 +409,16 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
 }
 
 const STATED_FAILURE_CHARS = 500;
+const STATED_FAILURE_READ_BYTES = 4096;
 
 function takeStatedFailure(file: string): string | undefined {
   try {
-    const text = readFileSync(file, "utf-8");
+    const fd = openSync(file, "r");
+    const bytes = Buffer.alloc(STATED_FAILURE_READ_BYTES);
+    const length = readSync(fd, bytes, 0, bytes.length, 0);
+    closeSync(fd);
     rmSync(file, { force: true });
+    const text = bytes.toString("utf-8", 0, length);
     return text.replace(/\s+/g, " ").trim().slice(0, STATED_FAILURE_CHARS) || undefined;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;

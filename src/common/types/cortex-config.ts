@@ -525,6 +525,9 @@ export type Presence = z.infer<typeof PresenceSchema>;
  *   - `persona` is a path to platform-neutral markdown
  *   - `roles` is the maximum capability set; presences may restrict, never widen
  */
+/** Stays under the 20-minute JetStream ack_wait, so a killed brain is reported before the task is redelivered. */
+export const MAX_BRAIN_TASK_TIMEOUT_MS = 19 * 60 * 1000;
+
 /**
  * Bot Packs B-1 (`docs/design-bot-packs.md` §4) — the `brain:` block on an
  * agent's `runtime`. Declares WHO computes the function from inbound events to
@@ -557,9 +560,6 @@ export type Presence = z.infer<typeof PresenceSchema>;
  *   - `maxRestarts` — daemon supervision restart cap. Accepted + documented;
  *                    unused until B-2 (per-task brains never restart).
  */
-/** Stays under the 20-minute JetStream ack_wait, so a killed brain is reported before the task is redelivered. */
-export const MAX_BRAIN_TASK_TIMEOUT_MS = 19 * 60 * 1000;
-
 export const BrainConfigSchema = z
   .object({
     /**
@@ -832,6 +832,13 @@ export const AgentRuntimeSchema = z.object({
       });
     }
   });
+  if (brain.timeout_ms !== undefined && brain.lifecycle === "daemon") {
+    ctx.addIssue({
+      code: "custom",
+      message: "agent.runtime.brain.timeout_ms applies only to a per-task brain; a daemon brain has no task timeout",
+      path: ["brain", "timeout_ms"],
+    });
+  }
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Zod superRefine still sees hand-written configs while defaults are being applied.
   (brain.dispatch_capabilities ?? []).forEach((cap, i) => {
     if (!CAPABILITY_ID_REGEX.test(cap)) {

@@ -29,7 +29,7 @@ export const IDENTITY_ENV_KEYS = ["USER", "LOGNAME"] as const;
 export const MF_SERVES_GOAL = "MF_SERVES_GOAL";
 export const MF_SERVES_NODE = "MF_SERVES_NODE";
 export const MF_CORRELATION_ID = "MF_CORRELATION_ID";
-/** A file the child may write one line to, saying why it failed; the runner adds that to the run's failure reason. */
+/** A file the child may write one line to, saying why it failed; the runner adds that to the failure reason it reports. */
 export const CORTEX_PROCESS_FAILURE_FILE = "CORTEX_PROCESS_FAILURE_FILE";
 
 /** Fire metadata keys: set only from the activation, never inherited. */
