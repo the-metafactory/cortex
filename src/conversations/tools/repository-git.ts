@@ -6,7 +6,7 @@ import { redactToolText } from "./output";
 import { GitFailure, GitReader, type GitReadOptions } from "./repository-git-runner";
 import { fileFailure, RepositoryFailure, RepositoryPaths } from "./repository-paths";
 
-const Ref = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*(?:[~^][0-9]{0,3}){0,4}$/).refine(ref => !ref.includes("..") && !ref.includes("//") && !ref.endsWith("/") && !ref.includes("/../"));
+const Ref = z.string().min(1).max(200).regex(/^[A-Za-z0-9][A-Za-z0-9._/-]*(?:[~^][0-9]{0,3}){0,4}$/).refine(ref => !ref.includes("..") && !ref.includes("//") && !ref.endsWith("/"));
 const hasControl = (text: string, allowWhitespace: boolean): boolean => {
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);

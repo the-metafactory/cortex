@@ -5,7 +5,7 @@ import { join } from "node:path";
 export class GitFailure extends Error {
   constructor(readonly status: string) { super(status); }
 }
-export interface GitReadOptions { binary?: string; timeoutMs?: number; maxBytes?: number }
+export interface GitReadOptions { binary?: string; timeoutMs?: number }
 interface GitResult { code: number; text: string }
 const COMMAND_BYTES = 256 * 1024;
 const TOTAL_BYTES = 2 * 1024 * 1024;
@@ -16,7 +16,7 @@ export class GitReader {
   private readonly binary: string;
   private readonly signal: AbortSignal;
   private readonly timeout: AbortSignal;
-  private constructor(private readonly scratch: string, private readonly root: string, signal: AbortSignal, private readonly options: GitReadOptions) {
+  private constructor(private readonly scratch: string, private readonly root: string, signal: AbortSignal, options: GitReadOptions) {
     const binary = options.binary ?? Bun.which("git");
     if (!binary) throw new GitFailure("git-missing");
     this.binary = binary;
@@ -57,8 +57,7 @@ export class GitReader {
       proc = Bun.spawn([this.binary, "--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...location, ...args], { cwd: this.root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
     } catch { throw new GitFailure("git-missing"); }
     const budget = { bytes: 0 };
-    const cap = this.options.maxBytes ?? COMMAND_BYTES;
-    const overBudget = (): boolean => budget.bytes > cap || this.bytes > TOTAL_BYTES;
+    const overBudget = (): boolean => budget.bytes > COMMAND_BYTES || this.bytes > TOTAL_BYTES;
     const read = async (stream: ReadableStream<Uint8Array>, retain: boolean): Promise<string> => {
       const chunks: Uint8Array[] = [];
       const reader = stream.getReader();
