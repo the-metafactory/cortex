@@ -2,13 +2,13 @@ import { expect, test } from "bun:test";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilTextsSpent, listVigilEvents, type VigilEventRow } from "../db";
 import { flushTexts } from "../flush";
-import { ingestLedgerEnvelope, DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestFromSourceStack, DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 test("delivery columns migrate without losing rows and retries survive reopening", async () => {
   using file = temporaryVigilDatabaseFile("vigil-delivery-");
   const { path } = file;
   const old = initDatabase(path);
-  ingestLedgerEnvelope(old, ledgerEnvelope({ serves: { goal: "G1" } }), ENDED_AT);
+  ingestFromSourceStack(old, ledgerEnvelope({ serves: { goal: "G1" } }), ENDED_AT);
   const columns = ["held_reason", "sent_at", "via", "attempts", "last_error", "transient_failures"];
   for (const column of columns) old.run(`ALTER TABLE vigil_events DROP COLUMN ${column}`);
   const historical = old.query<Omit<VigilEventRow, keyof typeof DELIVERY_DEFAULTS>, []>("SELECT * FROM vigil_events").all();

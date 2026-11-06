@@ -20,7 +20,7 @@ import { startVigil } from "../index";
 import { replayLedger } from "../replay";
 import { flushVigilResolutions, resolveVigilAttention } from "../resolution";
 import { vigilSystemPattern } from "../delivery-receipt";
-import { ingestLedgerEnvelope, KEY, ledgerEnvelope } from "./fixtures";
+import { ingestFromSourceStack, KEY, ledgerEnvelope } from "./fixtures";
 
 const REPLAY = "cortex-vigil-replay-jc";
 const LIVE = "cortex-vigil-jc";
@@ -153,7 +153,7 @@ describe("Vigil LEDGER replay", () => {
     const report = async (overrides: Parameters<typeof ledgerEnvelope>[0]) => {
       const envelope = ledgerEnvelope(overrides);
       recorded.push(envelope);
-      ingestLedgerEnvelope(live, envelope, Date.parse(String(envelope.payload.ended_at)));
+      ingestFromSourceStack(live, envelope, Date.parse(String(envelope.payload.ended_at)));
       await flushVigilResolutions(live, ledger);
     };
     try {
@@ -251,7 +251,7 @@ describe("Vigil LEDGER replay", () => {
     await h.publish();
     const now = Date.parse("2026-10-16T10:00:00Z");
     const key = "state:goal:default:G1";
-    ingestLedgerEnvelope(db, ledgerEnvelope({ state: { subject: "G1", value: "on-track" } }), now, { replay: true });
+    ingestFromSourceStack(db, ledgerEnvelope({ state: { subject: "G1", value: "on-track" } }), now, { replay: true });
     const queue = () => writeVigilTransition(db, {
       subject_key: key, from_value: "on-track", to_value: "off-track", direction: "worse",
       run_id: crypto.randomUUID(), occurred_at: now,
@@ -356,7 +356,7 @@ describe("Vigil LEDGER replay", () => {
       outcome: "succeeded", ended_at: "2026-10-12T10:02:00.000Z",
       state: { subject: "watched", value: values[2] },
     });
-    ingestLedgerEnvelope(db, live, Date.parse("2026-10-12T10:03:00.000Z"));
+    ingestFromSourceStack(db, live, Date.parse("2026-10-12T10:03:00.000Z"));
     expect(getVigilSubject(db, stateKey)).toMatchObject({ value: values[2], healthy, last_run_id: live.payload.run_id });
     expect(listVigilEvents(db, stateKey)).toEqual([expect.objectContaining({
       from_value: values[1], to_value: values[2], direction, run_id: live.payload.run_id,
@@ -486,7 +486,7 @@ describe("Vigil startup replay", () => {
   test("a non-empty table runs no replay", async () => {
     const h = ledgerHarness();
     await h.publish(ledgerEnvelope());
-    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded" }), 100);
+    ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded" }), 100);
     const handle = await startVigil({ config: config(), db, runtime: h.runtime, principal: "jc", stack: "default", log: quietLog() });
     expect(h.calls.map((c) => c.durable)).toEqual([LIVE]);
     expect(h.added.map((cfg) => cfg.durable_name)).toEqual([LIVE]);

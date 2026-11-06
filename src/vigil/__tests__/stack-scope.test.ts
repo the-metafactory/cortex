@@ -1,3 +1,4 @@
+// glossary-ignore: run
 import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,6 +9,7 @@ import { AgentConfigSchema } from "../../common/types/config";
 import { initDatabase } from "../../surface/mc/db/init";
 import { handleListVigilSubjects } from "../../surface/mc/api/vigil";
 import { getAttentionItem } from "../../surface/mc/db/attention";
+import { ingestLedgerEnvelope } from "../ingest";
 import { budgetDay } from "../budget";
 import { channelKey, recordChannel } from "../channels";
 import { getVigilSubject, getVigilTextsSpent, isVigilReplayPending, listVigilEvents, recordVigilTextReceipt, writeVigilSubject, type VigilSubjectRow } from "../db";
@@ -19,7 +21,7 @@ import { replayLedger } from "../replay";
 import { renderResult, somaGoalWording } from "../result-render";
 import { pendingResults } from "../results";
 import { emptyLedgerWarning, hasLegacyVigilSubjects } from "../stack-scope";
-import { ingestLedgerEnvelope, ENDED_AT, fakeTickScheduler, ledgerEnvelope, recordedVigilLedger } from "./fixtures";
+import { ingestFromSourceStack, ENDED_AT, fakeTickScheduler, ledgerEnvelope, recordedVigilLedger } from "./fixtures";
 
 const goal = (stack: string, value = "off-track") => ledgerEnvelope({
   outcome: "succeeded", serves: { goal: "G1" }, state: { subject: "G1", value },
@@ -39,6 +41,7 @@ function makeLegacy(db: Database) {
       db.query("UPDATE vigil_events SET subject_key = ?, attention_id = ? WHERE subject_key = ?").run(old, `att:vigil:${old}`, row.subject_key);
       db.query("UPDATE OR REPLACE attention_items SET id = ? WHERE id = ?").run(`att:vigil:${old}`, `att:vigil:${row.subject_key}`);
       db.query("DELETE FROM vigil_subjects WHERE subject_key = ?").run(row.subject_key);
+      db.query("DELETE FROM vigil_subject_stack_sources WHERE subject_key IN (?, ?)").run(old, row.subject_key);
     }
   })();
 }
@@ -46,10 +49,10 @@ function makeLegacy(db: Database) {
 test("identical goal and run refs remain separate across received subject stacks and attention IDs", () => {
   using db = initDatabase(":memory:");
   const first = ledgerEnvelope({ outcome: "succeeded", state: { subject: "G1", value: "off-track" } });
-  ingestLedgerEnvelope(db, first, ENDED_AT);
+  ingestLedgerEnvelope(db, first, "local.jc.default.execution.run.finished", ENDED_AT);
   const original = getVigilSubject(db, "state:goal:default:G1");
-  const work = goal("work", "at-risk");
-  ingestLedgerEnvelope(db, work, ENDED_AT + 1);
+  const work = goal("default", "at-risk");
+  ingestLedgerEnvelope(db, work, "local.jc.work.execution.run.finished", ENDED_AT + 1);
   expect(getVigilSubject(db, "state:goal:default:G1")).toEqual(original);
   expect(getVigilSubject(db, "state:goal:work:G1")).toMatchObject({ value: "at-risk", stack: "work" });
   expect(getVigilSubject(db, "run:flow:default:daily-sweep")?.last_run_id).toBe(String(first.payload.run_id));
@@ -79,7 +82,7 @@ test("configured homes resolve goal wording separately in texts, digest and Watc
     const config = AgentConfigSchema.parse({ claude: {}, agent: { name: "example", displayName: "Example" }, vigil: { soma_homes: homes } });
     const resolver = createVigilDeliveryPorts({ config: config.vigil, adapters: [] }).resolveGoalWording!;
     for (const stack of ["default", "work", "unconfigured"]) {
-      ingestLedgerEnvelope(db, goal(stack, "at-risk"), ENDED_AT);
+      ingestFromSourceStack(db, goal(stack, "at-risk"), ENDED_AT);
       db.query("UPDATE vigil_events SET delivery = 'held' WHERE subject_key = ?").run(`state:goal:${stack}:G1`);
       const subject = getVigilSubject(db, `state:goal:${stack}:G1`)!;
       const text = await createVigilRenderer({ resolveGoalWording: resolver })({ from_value: null, to_value: subject.value }, subject);
@@ -96,7 +99,7 @@ test("configured homes resolve goal wording separately in texts, digest and Watc
     expect(await somaGoalWording(homes)("../G1", "default")).toBeNull();
     expect(db.query("SELECT * FROM vigil_subjects").all().some((s) => JSON.stringify(s).includes("wording"))).toBe(false);
     const resultEnvelope = ledgerEnvelope({ outcome: "succeeded", serves: { goal: "G1" }, result_ref: "soma:outputs/report.md" }, "work");
-    ingestLedgerEnvelope(db, resultEnvelope, ENDED_AT);
+    ingestFromSourceStack(db, resultEnvelope, ENDED_AT);
     expect(await renderResult(pendingResults(db)[0]!, { resolveGoalWording: resolver })).toContain("work wording");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -105,7 +108,7 @@ test("configured homes resolve goal wording separately in texts, digest and Watc
 
 test("delivery receipts carry the stack-scoped subject key", async () => {
   using db = initDatabase(":memory:");
-  ingestLedgerEnvelope(db, goal("work"), ENDED_AT);
+  ingestFromSourceStack(db, goal("work"), ENDED_AT);
   const receipts: unknown[] = [];
   await flushTexts({ db, principal: "jc", now: ENDED_AT, send: async () => ({ delivered: true, messageId: "sent" }),
     publish: async (envelope) => { receipts.push(envelope.payload); } });
@@ -117,8 +120,8 @@ test("replay replaces collided legacy subjects, reconnects events and preserves 
   const personal = goal("default");
   const work = ledgerEnvelope({ outcome: "succeeded", serves: { goal: "G1" }, state: { subject: "G1", value: "at-risk" },
     ended_at: new Date(ENDED_AT + 1000).toISOString() }, "work");
-  ingestLedgerEnvelope(db, personal, ENDED_AT);
-  ingestLedgerEnvelope(db, work, ENDED_AT + 1000);
+  ingestFromSourceStack(db, personal, ENDED_AT);
+  ingestFromSourceStack(db, work, ENDED_AT + 1000);
   makeLegacy(db);
   const event = listVigilEvents(db, "state:goal:G1")[0]!;
   recordVigilTextReceipt(db, { event_id: event.id, subject_key: "state:goal:G1", budget_day: budgetDay(ENDED_AT) });
@@ -142,7 +145,7 @@ test("replay replaces collided legacy subjects, reconnects events and preserves 
 test("startup replays populated legacy rows and subsequent starts skip the migration", async () => {
   using db = initDatabase(":memory:");
   const envelope = goal("default");
-  ingestLedgerEnvelope(db, envelope, ENDED_AT);
+  ingestFromSourceStack(db, envelope, ENDED_AT);
   recordChannel(db, "email-channel", "regressed", ENDED_AT);
   makeLegacy(db);
   const ledger = await recordedLedger([envelope, goal("work")]);
@@ -165,7 +168,7 @@ const laterRun = (offsetMs: number) => ledgerEnvelope({
 
 test("a legacy subject missing inside LEDGER retention refuses migration and leaves old rows for retry", async () => {
   using db = initDatabase(":memory:");
-  ingestLedgerEnvelope(db, goal("work"), ENDED_AT);
+  ingestFromSourceStack(db, goal("work"), ENDED_AT);
   makeLegacy(db);
   const ledger = await recordedLedger([laterRun(-1000)]);
   expect(await replayLedger({ ...ledger, db })).toBeNull();
@@ -175,7 +178,7 @@ test("a legacy subject missing inside LEDGER retention refuses migration and lea
 
 test("a legacy subject whose LEDGER history aged out keeps its row under the local stack and Vigil starts", async () => {
   using db = initDatabase(":memory:");
-  ingestLedgerEnvelope(db, goal("work"), ENDED_AT);
+  ingestFromSourceStack(db, goal("work"), ENDED_AT);
   makeLegacy(db);
   const warnings: string[] = [];
   const ledger = await recordedLedger([laterRun(86_400_000)]);
@@ -198,7 +201,7 @@ test("a legacy subject whose LEDGER history aged out keeps its row under the loc
 
 test("an empty LEDGER treats every legacy subject as aged out", async () => {
   using db = initDatabase(":memory:");
-  ingestLedgerEnvelope(db, goal("work"), ENDED_AT);
+  ingestFromSourceStack(db, goal("work"), ENDED_AT);
   makeLegacy(db);
   const warnings: string[] = [];
   const ledger = await recordedLedger([]);

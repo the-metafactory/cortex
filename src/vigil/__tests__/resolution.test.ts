@@ -9,7 +9,7 @@ import { validateVigilAttentionResolved } from "@the-metafactory/myelin";
 import { expireRefAttention, REF_ATTENTION_TTL_MS } from "../ref-attention";
 import { readResult } from "../result-read";
 import { flushVigilResolutions, replayVigilResolution, resolveVigilAttention } from "../resolution";
-import { ingestLedgerEnvelope, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
+import { ingestFromSourceStack, ENDED_AT, KEY, ledgerEnvelope, temporaryVigilDatabaseFile } from "./fixtures";
 
 let db: Database;
 beforeEach(() => { db = initDatabase(":memory:"); });
@@ -30,7 +30,7 @@ function publisher() {
 }
 
 function refs() {
-  ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", result_ref: result, proposal_refs: [proposal] }), ENDED_AT);
+  ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", result_ref: result, proposal_refs: [proposal] }), ENDED_AT);
 }
 
 test("principal actions and result reads each publish one validated metadata-only resolution", async () => {
@@ -53,7 +53,7 @@ test("principal actions and result reads each publish one validated metadata-onl
 
 test.each(["result", "proposal", "state_change"] as const)("dismiss of Vigil %s uses one durable resolution", async (kind) => {
   refs();
-  ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "failed" } }), ENDED_AT);
+  ingestFromSourceStack(db, ledgerEnvelope({ ran: { kind: "job", ref: "failed" } }), ENDED_AT);
   const id = kind === "result" ? resultId : kind === "proposal" ? proposalId : "att:vigil:run:job:default:failed";
   expect((await handleAttentionLifecycle(db, id, "dismiss")).status).toBe(200);
   expect((await handleAttentionLifecycle(db, id, "dismiss")).status).toBe(404);
@@ -68,10 +68,10 @@ test.each(["result", "proposal", "state_change"] as const)("dismiss of Vigil %s 
 
 test("expiry, supersession, proposal cap and recovery all use the shared resolution outbox", async () => {
   refs();
-  ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", result_ref: "soma:outputs/new.md", ended_at: "2026-10-12T10:00:06Z" }), ENDED_AT + 1000);
-  ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: Array.from({ length: 20 }, (_, n) => `soma:proposals/${n}.md`), ended_at: "2026-10-12T10:00:07Z" }), ENDED_AT + 2000);
-  ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "recovery" } }), ENDED_AT);
-  ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "recovery" }, outcome: "succeeded", ended_at: "2026-10-12T10:00:08Z" }), ENDED_AT + 3000);
+  ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", result_ref: "soma:outputs/new.md", ended_at: "2026-10-12T10:00:06Z" }), ENDED_AT + 1000);
+  ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: Array.from({ length: 20 }, (_, n) => `soma:proposals/${n}.md`), ended_at: "2026-10-12T10:00:07Z" }), ENDED_AT + 2000);
+  ingestFromSourceStack(db, ledgerEnvelope({ ran: { kind: "job", ref: "recovery" } }), ENDED_AT);
+  ingestFromSourceStack(db, ledgerEnvelope({ ran: { kind: "job", ref: "recovery" }, outcome: "succeeded", ended_at: "2026-10-12T10:00:08Z" }), ENDED_AT + 3000);
   expireRefAttention(db, ENDED_AT + REF_ATTENTION_TTL_MS + 4000);
   expireRefAttention(db, ENDED_AT + REF_ATTENTION_TTL_MS + 5000);
   const ledger = publisher();
@@ -107,7 +107,7 @@ test("an outbox write failure rolls back the resolution", async () => {
 test("pending publications survive reopening the DB and concurrent retries reuse one identity", async () => {
   using file = temporaryVigilDatabaseFile("resolution-outbox-");
   const persistent = initDatabase(file.path);
-  ingestLedgerEnvelope(persistent, ledgerEnvelope({ outcome: "succeeded", result_ref: result }), ENDED_AT);
+  ingestFromSourceStack(persistent, ledgerEnvelope({ outcome: "succeeded", result_ref: result }), ENDED_AT);
   resolveVigilAttention(persistent, resultId, "read", { now: ENDED_AT });
   const ledger = publisher();
   ledger.publish.mockImplementationOnce(async (envelope) => { ledger.published.push(envelope); throw new Error("offline"); });
@@ -128,7 +128,7 @@ test("reopened attention has independent pending receipts and replay deduplicate
   const second = ledgerEnvelope({ outcome: "cancelled", ended_at: "2026-10-12T10:00:06Z" });
   const id = `att:vigil:${KEY}`;
   for (const envelope of [first, second]) {
-    ingestLedgerEnvelope(db, envelope, ENDED_AT);
+    ingestFromSourceStack(db, envelope, ENDED_AT);
     expect(resolveVigilAttention(db, id, "dismissed", { now: ENDED_AT })).toBe(true);
   }
   const ledger = publisher();
@@ -144,9 +144,9 @@ test("reopened attention has independent pending receipts and replay deduplicate
   expect(firstResolution!.payload).toEqual(secondResolution!.payload);
   const rebuilt = initDatabase(":memory:");
   try {
-    ingestLedgerEnvelope(rebuilt, first, ENDED_AT, { replay: true });
+    ingestFromSourceStack(rebuilt, first, ENDED_AT, { replay: true });
     replayVigilResolution(rebuilt, firstResolution!);
-    ingestLedgerEnvelope(rebuilt, second, ENDED_AT, { replay: true });
+    ingestFromSourceStack(rebuilt, second, ENDED_AT, { replay: true });
     expect(getAttentionItem(rebuilt, id)?.status).toBe("open");
     replayVigilResolution(rebuilt, firstResolution!);
     expect(getAttentionItem(rebuilt, id)?.status).toBe("open");
@@ -168,9 +168,9 @@ test("composite-key receipts migrate losslessly and allow another occurrence of 
     ran_ref TEXT NOT NULL, resolved_at TEXT NOT NULL, filed TEXT,
     published INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (key, resolution)
   )`);
-  ingestLedgerEnvelope(old, ledgerEnvelope({ ran: { kind: "job", ref: "proposal-source" }, outcome: "succeeded", proposal_refs: [proposal] }), ENDED_AT);
+  ingestFromSourceStack(old, ledgerEnvelope({ ran: { kind: "job", ref: "proposal-source" }, outcome: "succeeded", proposal_refs: [proposal] }), ENDED_AT);
   resolveVigilAttention(old, proposalId, "approved", { now: ENDED_AT, filed: "example/repo#12" });
-  ingestLedgerEnvelope(old, ledgerEnvelope(), ENDED_AT);
+  ingestFromSourceStack(old, ledgerEnvelope(), ENDED_AT);
   resolveVigilAttention(old, `att:vigil:${KEY}`, "dismissed", { now: ENDED_AT });
   old.query("UPDATE vigil_attention_resolutions SET published = 1 WHERE attention_id = ?").run(proposalId);
   const original = old.query("SELECT * FROM vigil_attention_resolutions ORDER BY rowid").all();
@@ -182,7 +182,7 @@ test("composite-key receipts migrate losslessly and allow another occurrence of 
       expect(migrated.query("EXPLAIN QUERY PLAN SELECT * FROM vigil_attention_resolutions WHERE published = 0 ORDER BY rowid").all())
         .toEqual([expect.objectContaining({ detail: expect.stringContaining("idx_vigil_attention_resolutions_published") })]);
       if (n === 1) {
-        ingestLedgerEnvelope(migrated, ledgerEnvelope({ outcome: "cancelled", ended_at: "2026-10-12T10:00:06Z" }), ENDED_AT);
+        ingestFromSourceStack(migrated, ledgerEnvelope({ outcome: "cancelled", ended_at: "2026-10-12T10:00:06Z" }), ENDED_AT);
         resolveVigilAttention(migrated, `att:vigil:${KEY}`, "dismissed", { now: ENDED_AT });
         const ledger = publisher();
         await flushVigilResolutions(migrated, ledger);

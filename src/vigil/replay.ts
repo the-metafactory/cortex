@@ -8,7 +8,7 @@ import type { EnvelopeHandler, MyelinSubscriber } from "../bus/myelin/subscriber
 import { LEDGER_STREAM, isNotFoundError, provisionPullConsumer, type ProvisionLog } from "../bus/jetstream/provision";
 import type { ProvisionJsm } from "../bus/jetstream/types";
 import { clearVigilReplay, markVigilReplayStarted, rebuildVigilBudget, stageVigilTextReceipt } from "./db";
-import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, ingestLedgerEnvelope, ledgerEnvelopeError, stackOfEnvelope } from "./ingest";
+import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, countSourceStackMismatch, ingestLedgerEnvelope, ledgerEnvelopeError, stackOfEnvelope } from "./ingest";
 import { emptyLedgerWarning, finishStackScopedReplay, ledgerRetention, reconnectReplayedEvents } from "./stack-scope";
 import type { ExecutionRunFinishedPayload } from "@the-metafactory/myelin";
 import { textSentReceiptSchema, VIGIL_TEXT_SENT_TYPE } from "./delivery-receipt";
@@ -83,10 +83,12 @@ export async function replayLedger(opts: {
       return { kind: "ack" };
     }
     // A throw reaches onError and the delivery is NAK'ed for redelivery.
+    const stack = stackOfEnvelope(subject);
     db.transaction(() => {
-      ingestLedgerEnvelope(db, envelope, subject, now(), { replay: true, log });
-      reconnectReplayedEvents(db, envelope.payload as unknown as ExecutionRunFinishedPayload, stackOfEnvelope(subject));
+      ingestLedgerEnvelope(db, envelope, subject, now(), { replay: true });
+      reconnectReplayedEvents(db, envelope.payload as unknown as ExecutionRunFinishedPayload, stack);
     })();
+    countSourceStackMismatch(envelope, stack, log);
     applied += 1;
     return { kind: "ack" };
   };

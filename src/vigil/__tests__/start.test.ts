@@ -17,7 +17,7 @@ import { budgetDay } from "../budget";
 import { REF_ATTENTION_TTL_MS } from "../ref-attention";
 import { getVigilSubject, listVigilEvents } from "../db";
 import { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER, startVigil } from "../index";
-import { ingestLedgerEnvelope, ENDED_AT, KEY, SUBJECT, fakeTickScheduler, flushTick, ledgerEnvelope } from "./fixtures";
+import { ingestFromSourceStack, ENDED_AT, KEY, SUBJECT, fakeTickScheduler, flushTick, ledgerEnvelope } from "./fixtures";
 
 function config(vigil = true, mc = true) {
   return AgentConfigSchema.parse({ claude: {}, agent: { name: "ivy", displayName: "Ivy" }, vigil: { enabled: vigil }, mc: { enabled: mc } });
@@ -62,9 +62,9 @@ describe("Vigil startup and delivery", () => {
   test("tick silently expires proposals seven days after their last update", async () => {
     const ref = "soma:proposals/triage.md";
     const id = `att:vigil:proposal:${ref}`;
-    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [ref] }), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [ref] }), ENDED_AT);
     const updateAt = ENDED_AT + 1000;
-    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [ref], ended_at: new Date(updateAt).toISOString() }), updateAt);
+    ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [ref], ended_at: new Date(updateAt).toISOString() }), updateAt);
     const h = pullRuntime(createFakeJetStream());
     const scheduler = fakeTickScheduler();
     const send = mock(async () => ({ delivered: true as const, messageId: "unused" }));
@@ -108,7 +108,7 @@ describe("Vigil startup and delivery", () => {
       await flushTick();
       expect(publish.mock.calls.map(([envelope]) => envelope.type)).toEqual(["system.attention.opened", "system.attention.resolved"]);
       expect(publish.mock.calls[0]?.[0]).toMatchObject({ source: "jc.cortex.local", payload: { attention: { id: `att:vigil:${KEY}`, kind: "state_change", severity: "normal", stack_id: "default", session_id: null, work_item_id: null }, deep_link_url: null } });
-      ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "old-job" }, outcome: "succeeded", started_at: "2026-10-09T10:00:00Z", ended_at: "2026-10-09T10:00:05Z" }), ENDED_AT);
+      ingestFromSourceStack(db, ledgerEnvelope({ ran: { kind: "job", ref: "old-job" }, outcome: "succeeded", started_at: "2026-10-09T10:00:00Z", ended_at: "2026-10-09T10:00:05Z" }), ENDED_AT);
       scheduler.tick();
       await flushTick();
       expect(publish.mock.calls[2]?.[0]).toMatchObject({ type: "system.attention.opened", payload: { attention: { id: "att:vigil:run:job:default:old-job", severity: "normal" } } });
@@ -206,7 +206,7 @@ describe("Vigil startup and delivery", () => {
   test("a failed resolution publish stays resolved and retries once on the next tick", async () => {
     const ref = "soma:proposals/retry.md";
     const id = `att:vigil:proposal:${ref}`;
-    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [ref] }), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded", proposal_refs: [ref] }), ENDED_AT);
     const scheduler = fakeTickScheduler();
     const h = pullRuntime(createFakeJetStream());
     const published: import("../../bus/myelin/envelope-validator").Envelope[] = [];
@@ -231,8 +231,8 @@ describe("Vigil startup and delivery", () => {
   test("startup sweeps with configured cadence, ticks every five minutes and cancels on stop", async () => {
     const jobKey = "run:job:default:harness-gate";  // glossary-ignore: run
     const otherKey = "run:job:default:daily-check";  // glossary-ignore: run
-    ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded" }), ENDED_AT);
-    ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "daily-check" }, outcome: "succeeded" }), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded" }), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope({ ran: { kind: "job", ref: "daily-check" }, outcome: "succeeded" }), ENDED_AT);
     const cfg = config();
     cfg.vigil.cadence = { [jobKey]: 3_600_000 };
     const scheduler = fakeTickScheduler();
@@ -262,7 +262,7 @@ describe("Vigil startup and delivery", () => {
 
   test("a sweep failure is logged and the next scheduled sweep still runs", async () => {
     const jobKey = "run:job:default:harness-gate";  // glossary-ignore: run
-    ingestLedgerEnvelope(db, ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded" }), ENDED_AT);
+    ingestFromSourceStack(db, ledgerEnvelope({ ran: { kind: "job", ref: "harness-gate" }, outcome: "succeeded" }), ENDED_AT);
     db.run("CREATE TRIGGER fail_sweep BEFORE UPDATE ON vigil_subjects BEGIN SELECT RAISE(ABORT, 'sweep failure'); END");
     const scheduler = fakeTickScheduler();
     const log = { info: mock((_msg: string) => {}), warn: mock((_msg: string) => {}) };
@@ -325,7 +325,7 @@ describe("Vigil startup and delivery", () => {
     await provisionLedgerStream({ jsm: fake.jsm, principal: "jc" });
     fake.publish(SUBJECT);
     // A non-empty table skips replay (covered in replay.test.ts).
-    ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
+    ingestFromSourceStack(db, ledgerEnvelope(), 100);
     const h = pullRuntime(fake);
     const handle = await startVigil({ config: config(), db, runtime: h.runtime, principal: "jc", stack: "default" });
     expect(fake.pull(LEDGER_STREAM, "cortex-vigil-jc")).toEqual([]);
@@ -339,7 +339,7 @@ describe("Vigil startup and delivery", () => {
     { proposal_refs: ["soma:proposals/first.md", "soma:proposals/second.md"] },
     { result_ref: "soma:results/daily-sweep.md", proposal_refs: ["soma:proposals/first.md"] },
   ])("succeeded run with %j ACKs and records run state without invalid warnings", async (refs) => {
-    ingestLedgerEnvelope(db, ledgerEnvelope(), 50);
+    ingestFromSourceStack(db, ledgerEnvelope(), 50);
     const envelope = ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:05.000Z" });
     Object.assign(envelope.payload, refs);
     const h = pullRuntime(createFakeJetStream(), [envelope]);
@@ -370,7 +370,7 @@ describe("Vigil startup and delivery", () => {
     { field: "result_ref", value: "soma:results/daily-sweep.md" },
     { field: "proposal_refs", value: ["soma:proposals/first.md"] },
   ])("failed run with $field logs invalid and ACKs without changing state", async ({ field, value }) => {
-    ingestLedgerEnvelope(db, ledgerEnvelope({ outcome: "succeeded" }), 50);
+    ingestFromSourceStack(db, ledgerEnvelope({ outcome: "succeeded" }), 50);
     const prior = getVigilSubject(db, KEY);
     const envelope = ledgerEnvelope({ ended_at: "2026-10-12T10:01:05.000Z" });
     Object.assign(envelope.payload, { [field]: value });
