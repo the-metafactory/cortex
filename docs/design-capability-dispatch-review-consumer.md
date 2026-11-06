@@ -249,10 +249,10 @@ This is the meat of the consumer. Each inbound `tasks.code-review.<flavor>` enve
 ```
 1. MyelinSubscriber receives valid envelope on `local.{org}.tasks.code-review.<flavor>`
 2. Extract { repo, pr, reviewer, feature, cycle, note } from payload — validate
-3. Stash `envelope.id` as the correlation_id for downstream emissions
+3. Select `envelope.correlation_id ?? envelope.id` as the correlation_id for downstream emissions (§5).
 4. Choose target agent for this capability (look up cortex.yaml capability table)
 5. Run preconditions (capability match, sovereignty, compliance, load) — see §7 nak handling
-6. Emit `dispatch.task.started` lifecycle envelope (correlation_id = request envelope.id)
+6. Emit `dispatch.task.started` lifecycle envelope (correlation_id = selected reply correlation (§5))
 7. Construct a CC session prompt:
    - Persona prefix (Echo's persona.md)
    - Skill invocation: "use the code-review skill to review owner/repo#N"
@@ -264,7 +264,7 @@ This is the meat of the consumer. Each inbound `tasks.code-review.<flavor>` enve
    - Skill returns a structured verdict object (parsed from CC session output)
 9. Construct `review.verdict.{kind}` envelope per cortex#248 payload contract
    - Subject suffix matches verdict.kind ("approved" / "changes-requested" / "commented")
-   - correlation_id = stashed request envelope.id (from step 3)
+   - correlation_id = selected reply correlation (from step 3)
    - Payload: { repo, pr, reviewer, verdict, summary, github_review_id, github_review_url, submitted_at, commit_id, findings, inline_comments }
 10. Emit `review.verdict.*` envelope
 11. Emit `dispatch.task.completed` co-emitted with the verdict (architecture §7.3 lifecycle)
@@ -380,9 +380,15 @@ This is **the single load-bearing contract** between cortex#237 and pilot. Witho
 
 ### §5.1 The contract (per cortex#248 §4.2.1)
 
-The verdict envelope's `correlation_id` field MUST equal the **request envelope's `id`** (the envelope that asked for the review, i.e. the inbound `tasks.code-review.<flavor>` envelope). This is the canonical contract per the cortex#248 ratification.
+Every reply uses `request.correlation_id ?? request.id`.
+
+- When the request carries `correlation_id`, [RFC-0007 §8.2](https://github.com/the-metafactory/myelin/blob/main/specs/rfc/rfc-0007-transport-and-reliability.md#82-context-specific-defaulting) governs: a reply MUST preserve that value. This includes Pulse agent-provider requests.
+- When the request omits `correlation_id`, this consumer's §5 contract (ratified in cortex#248 §4.2.1) governs: use the request envelope's `id`. Pilot publishes this shape and continues to match on that id.
+
+The former unconditional request-id rule in this section applied Pilot's fallback to all requests. RFC-0007 §8.2 takes precedence when the inbound field is present. This change does not alter Pilot's wire format.
 
 Same correlation_id MUST be set on:
+- `dispatch.task.aborted` (emitted before processing a redelivery)
 - `dispatch.task.started` (emitted at pipeline start)
 - Every `dispatch.task.progress` (emitted per lens)
 - `dispatch.task.completed` (emitted at terminal)
@@ -391,13 +397,13 @@ Same correlation_id MUST be set on:
 
 ### §5.2 The mechanism
 
-The consumer stashes the request envelope's `id` in a per-task closure when the envelope arrives. All subsequent emissions for this task close over the stashed id. The stash lifecycle is: born on envelope receipt, dies when the terminal envelope (completed / failed / aborted) is acked.
+The consumer and pipeline use `reviewReplyCorrelationId(request)` from `src/bus/review-events.ts` to select the reply correlation when the envelope arrives. All subsequent emissions for this task use that value, including the reviewer heartbeat. `safePublish` checks each verdict and lifecycle envelope against the same selector before local or federated publication. A mismatch is logged and the envelope is not published. The selection is derived from each received envelope rather than stored outside it.
 
 Concretely, the per-envelope handler in `review-consumer.ts` looks like:
 
 ```
 async handleEnvelope(envelope: Envelope, subject: string): Promise<void> {
-  const requestEnvelopeId = envelope.id;
+  const correlationId = envelope.correlation_id ?? envelope.id;
   const payload = parseReviewRequestPayload(envelope);
   if (payload === null) {
     await this.emitNak(envelope, "cant_do", "payload validation failed");
@@ -405,7 +411,6 @@ async handleEnvelope(envelope: Envelope, subject: string): Promise<void> {
   }
 
   const taskId = crypto.randomUUID();  // new UUID for the dispatch.task lifecycle
-  const correlationId = requestEnvelopeId;  // load-bearing: not the taskId, the request envelope id
 
   // started, progress, completed all use correlationId
   await this.runtime.publish(createDispatchTaskStartedEvent({
@@ -437,23 +442,26 @@ async handleEnvelope(envelope: Envelope, subject: string): Promise<void> {
 }
 ```
 
-**Note on the dual id space.** `dispatch.task.*` envelopes today use `taskId` as their correlation key (per `bus/dispatch-events.ts`'s `correlation_id ?? taskId` invariant — line 160). For the code-review pipeline, we override that default: the lifecycle envelopes use the *request envelope's* id, not a fresh task UUID. This is the right call because pilot is correlating against the request envelope it published — pilot has no knowledge of the cortex-side `taskId`. The two id spaces are reconciled in the consumer by always passing `correlationId: requestEnvelopeId` explicitly.
+**The two id spaces.** Lifecycle builders default to `taskId` when no correlation is supplied. The review consumer always supplies the selected reply correlation. The internal `taskId` stays separate from the caller's correlation key.
 
 The `taskId` field still exists on the envelope payload (per the existing `DispatchTaskCommonOpts` shape) — it's the cortex-internal task UUID for stitching the lifecycle within cortex. Surfaces that already join on `taskId` (worklog-manager, agent-team) keep working; surfaces that join on `correlation_id` (pilot's verdict subscriber) get the right key.
 
 ### §5.3 The contract MUST hold across crashes
 
-If the consumer crashes between emitting `dispatch.task.started` (with the right correlation_id) and emitting the terminal envelope, JetStream's redelivery semantics will re-deliver the request envelope to a competing consumer. The new consumer's pipeline must use the *same* request envelope id as the correlation_id — i.e. correlation_id is derived from the *received envelope*, never persisted out-of-band.
+If the consumer crashes between emitting `dispatch.task.started` (with the right correlation_id) and emitting the terminal envelope, JetStream's redelivery semantics will re-deliver the request envelope to a competing consumer. The new consumer's pipeline must use the *same* selected reply correlation as the correlation_id — i.e. correlation_id is derived from the *received envelope*, never persisted out-of-band.
 
-This is naturally satisfied by §5.2's "born on envelope receipt" stash lifecycle. There is no risk of "the crashed consumer's task A becomes the survivor's task B with a different correlation_id" — the JetStream redelivery hands the same envelope (same `id`) to the survivor, and §5.2 picks the correlation_id deterministically from `envelope.id`.
+This is naturally satisfied by §5.2's "born on envelope receipt" stash lifecycle. There is no risk of "the crashed consumer's task A becomes the survivor's task B with a different correlation_id" — the JetStream redelivery hands the same envelope (same `id`) to the survivor, and §5.2 picks the correlation_id deterministically from `envelope.correlation_id ?? envelope.id`.
 
 The only edge case is **the crashed consumer emitted `dispatch.task.started` and the survivor also emits one** — pilot sees two `started` envelopes for the same correlation_id. This is fine: pilot's spec (`design-pilot-restructure.md` §4.6) says "first matching verdict wins"; the lifecycle envelopes are advisory. Pilot's subscriber only terminates on a verdict envelope or `dispatch.task.completed/failed`; duplicate `started` is benign.
 
 ### §5.4 Witness in test
 
-`src/runner/__tests__/review-consumer.test.ts` covers the contract explicitly:
+A Pulse agent-provider probe on a temporary loopback NATS server confirms that the provider matches the consumer's refusal on the inbound correlation. A native Pulse 0.34.0 request still cannot reach a verdict: Pulse wraps review fields in `payload.input`, while `parseReviewRequestPayload` reads top-level PR fields. It returns `cant_do` with `payload validation failed (missing/invalid repo or pr)`. Input-format support is a separate prerequisite for the live verdict probe. Correlation alone does not establish that end-to-end result.
 
-- **Test 1:** Publish a `tasks.code-review.typescript` envelope with `id = X`. Capture all emissions. Assert every emitted envelope has `correlation_id == X`.
+`src/bus/__tests__/review-consumer.test.ts` covers the contract explicitly:
+
+- **Test 1:** Drive the consumer with and without an inbound `correlation_id`. Capture local and federated emissions. Assert the exact reply sequence and selected correlation for verdict, redelivery, prose completion, reviewer spawn failure, pre-pipeline refusal, and unexpected pipeline failure.
+- **Test 1a:** Inject mismatched verdict and failure envelopes for both request shapes. Assert that publication rejects them and logs the mismatch.
 - **Test 2:** Two parallel requests with `id = A` and `id = B`. Capture emissions. Assert all `A`-derived emissions carry `correlation_id = A` and all `B`-derived carry `B`. No cross-talk.
 - **Test 3:** Simulate consumer crash after `started`-emit but before `completed`-emit (cancel the in-flight promise). Manually re-deliver the same envelope. Assert the survivor's emissions all carry the same `correlation_id = X`.
 
@@ -468,7 +476,7 @@ The only edge case is **the crashed consumer emitted `dispatch.task.started` and
 The `review.verdict.*` envelope is a different beast:
 - It is emitted by the *review consumer*, not by a webhook tap. The source is `{principal}.cortex.local` (cortex's `SystemEventSource` triple), not `{principal}.gh-webhook.relay`.
 - Its payload is the structured review verdict per cortex#248 §4.2.1, not a GitHub webhook event.
-- Its correlation_id is the request envelope id (the load-bearing pilot contract per §5), not the GitHub delivery id.
+- Its correlation_id is the selected reply correlation (§5).
 
 A shared builder would conflate two different envelope domains. **We add a new domain helper: `src/bus/review-events.ts`** mirroring the shape of `dispatch-events.ts`. The skeleton uses `bus/envelope-builder.ts:buildBaseEnvelope` underneath (same as dispatch-events, system-events, github-events all do).
 
@@ -499,7 +507,7 @@ export interface ReviewVerdictPayload {
 
 export interface CreateReviewVerdictEventOpts {
   source: SystemEventSource;
-  correlationId: string;  // request envelope's id, per §5
+  correlationId: string;
   classification?: Classification;  // defaults to "local"
   payload: ReviewVerdictPayload;
 }
@@ -632,7 +640,7 @@ If the verdict publish fails (e.g. transient NATS hiccup) but the `completed` pu
 
 ### §8.3 Lifecycle envelopes' `correlation_id` matches the verdict's
 
-All five lifecycle envelopes carry the SAME `correlation_id` (the request envelope's id, per §5). Pilot's subscription pattern is `local.{org}.review.verdict.>` ∪ `local.{org}.dispatch.task.completed` ∪ `local.{org}.dispatch.task.failed`; the correlation_id filter is the join key across both subject domains.
+All lifecycle envelopes carry the same selected reply `correlation_id` (§5). Pilot's subscription pattern is `local.{org}.review.verdict.>` ∪ `local.{org}.dispatch.task.completed` ∪ `local.{org}.dispatch.task.failed`; the correlation_id filter is the join key across both subject domains.
 
 ### §8.4 The `dispatch.task.completed` payload's `result_summary`
 

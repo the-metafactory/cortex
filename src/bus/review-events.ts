@@ -26,14 +26,6 @@
  *   - `timestamp` is the helper-call time. Domain-specific moments
  *     (`submitted_at`) live in payload.
  *   - `source` is the dotted `{principal}.{agent}.{instance}` per the schema.
- *   - `correlation_id` semantics differ per envelope family:
- *       - Request envelopes: no correlation_id (the envelope's `id` is the
- *         correlation root that the verdict envelope echoes — per §5.1).
- *       - Verdict envelopes: REQUIRED, equals the request envelope's `id`
- *         (the single load-bearing pilot contract per §5.1).
- *       - Failed envelopes: per `dispatch-events.ts` semantics — defaults
- *         to `task_id` unless the caller passes the request envelope's id
- *         explicitly (which the review-consumer does per §5.2).
  *   - `sovereignty` defaults to local-only / NZ / max_hop=0 / frontier_ok=false /
  *     model_class=local-only — same posture as `dispatch.task.*`. Verdicts
  *     reveal PR metadata + reviewer findings; default keeps them principal-local.
@@ -84,6 +76,10 @@ import { buildSource, type SystemEventSource } from "./system-events";
 // `DispatchEventSource` pattern in `dispatch-events.ts`. Callers in the
 // review consumer / pilot import from one place.
 export type ReviewEventSource = SystemEventSource;
+
+export function reviewReplyCorrelationId(request: Envelope): string {
+  return request.correlation_id ?? request.id;
+}
 
 /**
  * Default sovereignty for `tasks.code-review.*` and `review.verdict.*`
@@ -284,7 +280,7 @@ export type ReviewVerdictKind =
  * behavioural changes — only the subject and the `correlation_id` are new.
  *
  * **compass#95 (replay-fix) — emitted `request_id`.** The wire payload
- * additionally carries `request_id` (the request envelope's id), stamped by
+ * additionally carries `request_id`, stamped by
  * {@link createReviewVerdictEvent} from `opts.correlationId`. It is a
  * SIGNED request-binding pilot asserts against to defeat replay-rebind (see
  * the builder). It is NOT a caller input on this interface — the builder is
@@ -367,9 +363,7 @@ export interface CreateReviewVerdictEventOpts {
    */
   kind: ReviewVerdictKind;
   /**
-   * The request envelope's `id`. REQUIRED — this is the single
-   * load-bearing pilot contract per §5.1. Pilot's `subscribe-verdict`
-   * filters on this value.
+   * REQUIRED — Pilot's `subscribe-verdict` filters on this value.
    */
   correlationId: string;
   /**
@@ -408,11 +402,6 @@ export interface CreateReviewVerdictEventOpts {
  * but render as "commented" — principal-visible inconsistency). Fail
  * loud at the producer instead.
  *
- * **Correlation:** the verdict envelope's `correlation_id` is the
- * REQUEST envelope's `id` (NOT a fresh task UUID). See §5.1 for the
- * load-bearing contract; see §5.2 for the mechanism (the consumer
- * stashes the request envelope's id in a per-task closure).
- *
  * @throws `Error` if `opts.kind !== opts.payload.verdict`.
  */
 export function createReviewVerdictEvent(
@@ -440,8 +429,7 @@ export function createReviewVerdictEvent(
       // finding). Stamping the request id INTO the payload — which IS covered by
       // the signature — gives pilot a cryptographically-bound field to assert
       // against (`payload.request_id === awaited correlationId`), closing the
-      // replay-rebind. Sourced from `opts.correlationId` (the request envelope's
-      // id) so it can never drift from the top-level correlation_id.
+      // replay-rebind.
       request_id: opts.correlationId,
       repo: opts.payload.repo,
       pr: opts.payload.pr,
@@ -491,11 +479,6 @@ export function createReviewVerdictEvent(
  * existing `policy_denied` discriminator — see `DispatchTaskFailedReason`
  * in `dispatch-events.ts`.
  *
- * **Correlation_id reminder:** per §5.2 the review consumer MUST pass
- * the request envelope's `id` as `correlationId`, NOT rely on the
- * `correlation_id ?? taskId` default in `dispatch-events.ts`. Pilot's
- * `wait-for-verdict` filters on the request envelope id; using a fresh
- * task UUID here would orphan the failed envelope from pilot's filter.
  */
 export type CreateReviewTaskFailedEventOpts = DispatchTaskFailedOpts;
 
