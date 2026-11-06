@@ -7,7 +7,7 @@ import type { SubjectClass } from "../policy";
 import { createVigilRenderer } from "../render";
 import { routeFor, type VigilRoute } from "../routing";
 import { sweepStale } from "../staleness";
-import { ingestLedgerEnvelope, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
+import { ingestFromSourceStack, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
 
 const WORSE_ROUTES: [SubjectClass, string, VigilRoute][] = [
   ["goal", "off-track", "text"],
@@ -27,7 +27,7 @@ describe("Vigil route classification", () => {
   test.each(WORSE_ROUTES)("%s to %s routes worse transitions to %s at write time", (classification, to, route) => {
     expect(routeFor(classification, to, "worse")).toBe(route);
     const state = classification === "run" || classification === "goal-sensor" ? undefined : { subject: "G1", value: to };
-    ingestLedgerEnvelope(db, ledgerEnvelope({
+    ingestFromSourceStack(db, ledgerEnvelope({
       outcome: "failed", ...(state ? { state } : {}),
       ...(classification === "goal-sensor" ? { serves: { goal: "G1" } } : {}),
     }), ENDED_AT, { replay: true });
@@ -47,7 +47,7 @@ describe("Vigil route classification", () => {
   });
 
   test("live ingest classifies changes and rendering leaves stored rows free of goal wording", async () => {
-    const observe = (value: string, minute: number) => ingestLedgerEnvelope(db, ledgerEnvelope({
+    const observe = (value: string, minute: number) => ingestFromSourceStack(db, ledgerEnvelope({
       outcome: "succeeded", serves: { goal: "G1" }, state: { subject: "G1", value },
       ended_at: new Date(ENDED_AT + minute * 60_000).toISOString(),
     }), ENDED_AT + minute * 60_000);
@@ -74,7 +74,7 @@ describe("Vigil route classification", () => {
       ["escalation", ["needs-principal", "overdue", "resolved"], ["digest", "text", "digest"]],
       ["check", ["regressed", "ok"], ["digest", "digest"]],
     ] as const) {
-      values.forEach((value, i) => ingestLedgerEnvelope(db, ledgerEnvelope({
+      values.forEach((value, i) => ingestFromSourceStack(db, ledgerEnvelope({
         outcome: "succeeded", state: { subject: vocab, value },
         ended_at: new Date(ENDED_AT + i * 60_000).toISOString(),
       }), ENDED_AT + i * 60_000));
@@ -87,7 +87,7 @@ describe("Vigil route classification", () => {
       ["sensor", { goal: "G1" }, { subject: "G1", value: "on-track" }],
       ["plain", undefined, undefined],
     ] as const) {
-      ingestLedgerEnvelope(db, ledgerEnvelope({
+      ingestFromSourceStack(db, ledgerEnvelope({
         outcome: "succeeded", ran: { kind: "job", ref },
         ...(serves ? { serves } : {}), ...(state ? { state } : {}),
       }), ENDED_AT);

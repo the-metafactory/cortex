@@ -216,6 +216,25 @@ resolve_stack_agent_config_path() {
   fi
 }
 
+# Print "<bun dir>:" when the template's PATH omits the resolved bun directory,
+# or nothing when it is already listed (cortex#3211). The daemon starts through
+# `env bun`, so a PATH without that directory exits 127.
+#
+# Args:
+#   $1 TEMPLATE — plist template carrying the PATH value
+#   $2 BUN_PATH — pre-resolved bun binary path
+missing_bun_dir_entry() {
+  local template="$1"
+  local bun_dir listed
+  bun_dir="$(dirname "$2")"
+  listed="$(sed -n '/<key>PATH<\/key>/{n;s|.*<string>\(.*\)</string>.*|\1|p;}' "${template}")"
+  listed="${listed//__HOME__/${HOME}}"
+  case ":${listed}:" in
+    *":${bun_dir}:"*) ;;
+    *) printf '%s:' "${bun_dir}" ;;
+  esac
+}
+
 # Discover all stack slugs under CONFIG_DIR. Prints one slug per line, sorted,
 # deduplicated. Never includes the relay daemon.
 #
@@ -392,8 +411,11 @@ render_stack_plist() {
   # the render is interrupted — launchd would then load garbage. Render to a
   # same-dir temp and `mv` (atomic rename within one filesystem) so the
   # installed plist only ever transitions whole-old → whole-new.
+  local bun_dir_entry
+  bun_dir_entry="$(missing_bun_dir_entry "${src}" "${bun_path}")"
   sed -e "s|__CORTEX_DIR__|${cortex_dir}|g" \
       -e "s|__BUN_PATH__|${bun_path}|g" \
+      -e "s|__HOME__/bin:/usr/local/bin|__HOME__/bin:${bun_dir_entry}/usr/local/bin|" \
       -e "s|__HOME__|${HOME}|g" \
       -e "s|__STACK_SLUG__|${slug}|g" \
       -e "s|__CONFIG_PATH__|${config_yaml}|g" \

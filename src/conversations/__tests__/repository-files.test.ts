@@ -269,7 +269,7 @@ describe("repository file dispatch on real checkouts", () => {
   test("default conversation integration searches and cites a symbol, records refusals with no disclosed private bytes", async () => {
     const r = await fixture();
     const outcomes: ToolOutcome[] = [];
-    const host = await openHost(hosts, { dir: join(r.dir, "conversation"), stack: "test", label: "test", expectedLabel: "test", lanes: { cloud: { provider: "synthetic", model: "cloud" } }, tools: { config: () => r.config }, turns: answering(async request => {
+    const host = await openHost(hosts, { dir: join(r.dir, "conversation"), stack: "test", label: "test", expectedLabel: "test", lanes: { cloud: { provider: "synthetic", model: "cloud" } }, tools: { config: () => r.config, definitions: repositoryFileTools }, turns: answering(async request => {
       const found = await request.tools!.call("find", "repo_search", { project: "sample", path: "src", query: "syntheticBeacon" }, request.signal);
       outcomes.push(found);
       outcomes.push(await request.tools!.call("escape", "repo_read", { project: "sample", path: "../outside.txt" }, request.signal));
@@ -292,7 +292,7 @@ describe("repository file dispatch on real checkouts", () => {
     const r = await fixture();
     r.config.projects[1]!.policy = "cloud";
     let requests = 0;
-    const options = { dir: join(r.dir, "history"), stack: "test", label: "test", expectedLabel: "test", lanes: { cloud: { provider: "synthetic", model: "cloud" } }, tools: { config: () => r.config }, turns: answering(async request => {
+    const options = { dir: join(r.dir, "history"), stack: "test", label: "test", expectedLabel: "test", lanes: { cloud: { provider: "synthetic", model: "cloud" } }, tools: { config: () => r.config, definitions: repositoryFileTools }, turns: answering(async request => {
       requests++;
       return (await request.tools!.call("read", "repo_read", { project: "sample", path: "restricted/note.txt" }, request.signal)).text;
     }) };

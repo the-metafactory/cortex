@@ -47,13 +47,16 @@
  *    only — they cannot throw; the next scheduled fire re-runs them.)
  */
 
+import { randomUUID } from "node:crypto";
+import { closeSync, openSync, readSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { snapshotProcessInputs } from "./process-input-snapshot";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import type { MyelinRuntime } from "./myelin/runtime";
-import { buildProcessEnv } from "./process-env";
+import { buildProcessEnv, CORTEX_PROCESS_FAILURE_FILE } from "./process-env";
 import type {
   FiredActivation,
   ReflexActivationHandler,
@@ -158,7 +161,7 @@ export const ProcessSpecSchema = z.object({
    * the child, plus the PULSE connection variables, USER/LOGNAME and fire-owned MF metadata.
    * PULSE_NATS_CREDS is always passed when set, including with `env: []`:
    * the allow-list does NOT deny bus access under that credential's permissions.
-   * Run only trusted specs; see docs/process-runner.md for the contract.
+   * Execute only trusted specs; see docs/process-runner.md for the contract.
    * When set, unrelated cortex secrets (webhook tokens, LLM keys) are excluded. When
    * OMITTED, the child inherits cortex's FULL environment — convenient for a
    * trusted spec that needs many vars (build-journal needs claude / wrangler /
@@ -275,6 +278,8 @@ export function resolveArgv(spec: ProcessSpec, payload: Record<string, unknown>)
   return interpolateArgv(spec, resolveParameters(spec, payload));
 }
 
+type RunOutcome = { ok: true } | { ok: false; reason: string };
+
 export interface ProcessRunnerOpts {
   runtime: MyelinRuntime;
   source: SystemEventSource;
@@ -364,7 +369,12 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
     log.info(`process-runner: running "${processName}" → ${spec.argv.join(" ")} (decision ${activation.decisionId})`);
     emit("started", processName, activation, startedAt);
 
-    const childEnv = buildProcessEnv({ spec, activation, parentEnv: process.env });
+    const failureFile = join(tmpdir(), `cortex-process-failure-${randomUUID()}`);
+    const childEnv = { ...buildProcessEnv({ spec, activation, parentEnv: process.env }), [CORTEX_PROCESS_FAILURE_FILE]: failureFile };
+    const withStatedFailure = (result: RunOutcome): RunOutcome => {
+      const stated = takeStatedFailure(failureFile);
+      return result.ok || stated === undefined ? result : { ok: false, reason: `${result.reason}: ${stated}` };
+    };
 
     let proc: SpawnedProc;
     try {
@@ -380,6 +390,7 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
       // background; report via visibility only (the handler already returned, so
       // a failure can't re-fire — the next scheduled fire re-runs the job).
       void superviseRun(proc, spec.timeout_ms, sigkillGraceMs)
+        .then(withStatedFailure)
         .then((r) => { emit(r.ok ? "completed" : "failed", processName, activation, startedAt, r.ok ? undefined : r.reason); })
         .catch((err: unknown) => { log.error(`process-runner: detached supervise threw: ${errMsg(err)}`); })
         .finally(cleanup);
@@ -388,13 +399,32 @@ export function createProcessRunner(opts: ProcessRunnerOpts): ReflexActivationHa
 
     // Synchronous: the bridge awaits, and a failure THROWS so the Decision is
     // left un-marked (re-fireable).
-    const result = await superviseRun(proc, spec.timeout_ms, sigkillGraceMs).finally(cleanup);
+    const result = withStatedFailure(await superviseRun(proc, spec.timeout_ms, sigkillGraceMs).finally(cleanup));
     if (!result.ok) {
       emit("failed", processName, activation, startedAt, result.reason);
       throw new Error(`process "${processName}" failed: ${result.reason} (decision ${activation.decisionId})`);
     }
     emit("completed", processName, activation, startedAt);
   };
+}
+
+const STATED_FAILURE_CHARS = 500;
+const STATED_FAILURE_READ_BYTES = 4096;
+
+function takeStatedFailure(file: string): string | undefined {
+  try {
+    const fd = openSync(file, "r");
+    const bytes = Buffer.alloc(STATED_FAILURE_READ_BYTES);
+    const length = readSync(fd, bytes, 0, bytes.length, 0);
+    closeSync(fd);
+    rmSync(file, { force: true });
+    const text = bytes.toString("utf-8", 0, length);
+    return text.replace(/\s+/g, " ").trim().slice(0, STATED_FAILURE_CHARS) || undefined;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    process.stderr.write(`process-runner: stated failure unreadable: ${errMsg(err)}\n`);
+    return undefined;
+  }
 }
 
 export async function runBoundedProcess(
@@ -417,7 +447,7 @@ async function superviseRun(
   timeoutMs: number,
   sigkillGraceMs: number,
   acceptExitAfterTimeout = true,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
+): Promise<RunOutcome> {
   // A holder object (not a bare `let`) so the watchdog's async mutation is
   // visible to readers below — and so static analysis doesn't treat the flag as
   // a provable constant.

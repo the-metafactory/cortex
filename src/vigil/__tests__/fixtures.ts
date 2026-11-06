@@ -1,4 +1,4 @@
-// glossary-ignore: run
+// glossary-ignore: run, subscriber
 import { createEnvelope, createExecutionRunFinished, type ExecutionRunFinishedPayloadInput } from "@the-metafactory/myelin";
 import { expect, mock } from "bun:test";
 import type { Database } from "bun:sqlite";
@@ -32,7 +32,7 @@ export async function expectNoVigilTextDelivery(db: Database) {
 
 export function initVigilGoalDatabase() {
   const db = initDatabase(":memory:");
-  ingestLedgerEnvelope(db, ledgerEnvelope({ state: { subject: "G1", value: "on-track" } }), ENDED_AT, { replay: true });
+  ingestFromSourceStack(db, ledgerEnvelope({ state: { subject: "G1", value: "on-track" } }), ENDED_AT, { replay: true });
   return db;
 }
 
@@ -82,7 +82,7 @@ export function ledgerEnvelope(overrides: Partial<ExecutionRunFinishedPayloadInp
   return createEnvelope({ ...event.input, sovereignty: SOVEREIGNTY });
 }
 
-export function ingestLedgerEnvelope(
+export function ingestFromSourceStack(
   db: Database, envelope: Envelope, now: number, opts: Parameters<typeof ingestReceivedLedgerEnvelope>[4] = {},
 ) {
   return ingestReceivedLedgerEnvelope(db, envelope, deriveNatsSubject(envelope, envelope.source.split(".")[1] ?? "default"), now, opts);

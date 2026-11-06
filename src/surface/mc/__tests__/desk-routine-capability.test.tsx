@@ -17,7 +17,7 @@ import { DEFAULT_CONFIG } from "../config";
 import { RoutineOptionsSchema } from "../../../common/types/desk-routines";
 
 const BUILD = { writer: ["capability-writer"], map: "example/maps#12", budget: { tokens: 200_000, invocations: 40, minutes: 60 } };
-const BASE: RoutineOptions = { composer: ["composer"], reflex: ["reflex"], target: "@example/pulse-flow", timeZone: "Europe/Zurich", timeoutSeconds: 10, readTimeoutSeconds: 1 };
+const BASE: RoutineOptions = { composer: ["composer"], reflex: ["reflex"], target: "@example/pulse-flow", timeZone: "Europe/Zurich", timeoutSeconds: 10, composeTimeoutSeconds: 10, readTimeoutSeconds: 1 };
 const CONFIGURED: RoutineOptions = { ...BASE, capabilityBuild: BUILD };
 const NOW = Date.parse("2026-11-03T12:00:00Z");
 const AGENT_YAML = "name: F_AGENT\nactions:\n  - agent:\n      name: derive\n      capability: compose.judgment\n      prompt: 'Judge {text}'\n      sovereignty:\n        model_class: local-only\n        frontier_ok: false\n        data_residency: CH\n      collect: result\n";

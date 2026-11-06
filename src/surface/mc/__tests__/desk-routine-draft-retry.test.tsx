@@ -12,10 +12,12 @@ import { handleDeskRoutines } from "../api/desk-routines";
 import { HandledLedger } from "../desk/actions";
 import type { DeskRuntime } from "../desk/compose";
 
-const OPTIONS: RoutineOptions = { composer: ["compose-retry"], reflex: ["retry-owner"], target: "@example/pulse-flow", timeZone: "Europe/Zurich", timeoutSeconds: 1, readTimeoutSeconds: 0.1 };
+const OPTIONS: RoutineOptions = { composer: ["compose-retry"], reflex: ["retry-owner"], target: "@example/pulse-flow", timeZone: "Europe/Zurich", timeoutSeconds: 1, composeTimeoutSeconds: 1, readTimeoutSeconds: 0.1 };
 const NOW = Date.parse("2026-11-04T10:00:00Z");
 const YAML = `name: F_RETRY
 input:
+  request: hello
+  scenario: hello
   text: hello
 actions:
   - agent:

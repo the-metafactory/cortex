@@ -43,7 +43,25 @@ export const ProjectSchema = z.object({
   exclude: z.array(z.string().min(1).max(512).refine(path => !path.startsWith("/") && !path.includes("\\") && !path.split("/").some(part => part === ".." || part === "." || part === "") && !path.includes("\0"), "excluded paths must be project-relative file or directory prefixes")).max(100).optional(),
 }).strict();
 export type ToolProject = z.infer<typeof ProjectSchema>;
+export const WEB_LIMIT_DEFAULTS = { maxResults: 5, maxBytes: 1_000_000, maxRedirects: 5, timeoutSeconds: 15, maxChars: 12_000 };
+const WebSchema = z.object({
+  search: z.object({
+    kind: z.enum(["searxng", "brave"]),
+    url: z.string().max(500).refine(value => /^https?:\/\/[^\s/]+(?:\/\S*)?$/.test(value), "mc.desk.conversations.tools.web.search.url must be an http(s) URL"),
+    policy: z.enum(["local", "cloud"]).default("cloud"),
+    apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).max(100).optional(),
+  }).strict().optional(),
+  limits: z.object({
+    maxResults: z.number().int().min(1).max(10).default(WEB_LIMIT_DEFAULTS.maxResults),
+    maxBytes: z.number().int().min(10_000).max(5_000_000).default(WEB_LIMIT_DEFAULTS.maxBytes),
+    maxRedirects: z.number().int().min(0).max(10).default(WEB_LIMIT_DEFAULTS.maxRedirects),
+    timeoutSeconds: z.number().int().min(1).max(60).default(WEB_LIMIT_DEFAULTS.timeoutSeconds),
+    maxChars: z.number().int().min(500).max(40_000).default(WEB_LIMIT_DEFAULTS.maxChars),
+  }).strict().default(WEB_LIMIT_DEFAULTS),
+}).strict();
+export type WebConfig = z.infer<typeof WebSchema>;
 const ToolsSchema = z.object({
+  web: WebSchema.optional(),
   projects: z.array(ProjectSchema).max(50).default([]).refine(projects => new Set(projects.map(project => project.id)).size === projects.length, "mc.desk.conversations.tools project ids must be unique"),
 }).strict();
 export type ToolsConfig = z.infer<typeof ToolsSchema>;

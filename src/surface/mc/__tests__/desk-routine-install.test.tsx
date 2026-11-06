@@ -25,7 +25,7 @@ import { submitCapabilityInstall } from "../dashboard-v2/lib/desk-capability-ins
 import { startDeskAutonomy } from "../desk/push";
 
 const OPTIONS: RoutineOptions = {
-  composer: ["composer"], reflex: ["reflex"], target: "@example/pulse-flow", timeZone: "UTC", timeoutSeconds: 1, readTimeoutSeconds: 0.1,
+  composer: ["composer"], reflex: ["reflex"], target: "@example/pulse-flow", timeZone: "UTC", timeoutSeconds: 1, composeTimeoutSeconds: 1, readTimeoutSeconds: 0.1,
   capabilityBuild: { writer: ["writer"], map: "example/maps#12", status: ["status", "{ref}"], bundle: "example-bundle", install: ["install-bundle", "{bundle}"], uninstall: ["uninstall-bundle", "{bundle}"], budget: { tokens: 1000, invocations: 10, minutes: 5 } },
 };
 const YAML = "name: F_AGENT\nactions:\n  - agent:\n      name: judge\n      capability: compose.judgment\n      prompt: Judge\n      collect: result\n";
@@ -240,6 +240,39 @@ describe("installing a merged capability bundle", () => {
     expect((await actOnCapabilityInstall(db, OPTIONS, { ...resolve, outcome: "absent" }, none, { run: h.run })).ok).toBe(false);
     expect(h.calls).toHaveLength(1);
     expect((await views(() => new Set(["compose.judgment"])))[0]?.nodes[0]?.build?.state).toBe("live");
+  });
+
+  it.each(["installed", "absent"] as const)("returns uncertainty when late Undo success follows a confirmed %s outcome", async (outcome) => {
+    await actOnCapabilityInstall(db, OPTIONS, request(), none, { run: h.run, now: () => NOW });
+    const command = Promise.withResolvers<Awaited<ReturnType<RoutineRunner>>>();
+    h.setInstall(() => command.promise);
+    const id = "install-request-1";
+    const undoing = actOnCapabilityInstall(db, OPTIONS, { action: "capability.uninstall", id }, none, { run: h.run, now: () => NOW + 1 });
+    expect((await actOnCapabilityInstall(db, OPTIONS, { action: "capability.resolve", id, state: "undoing", at: NOW + 1, outcome }, none, { now: () => NOW + 1001 })).ok).toBe(true);
+    const confirmed = readCapabilityInstall(db, id);
+    command.resolve({ code: 0, stdout: "", stderr: "" });
+    expect(await undoing).toMatchObject({ ok: false, uncertain: true });
+    expect(readCapabilityInstall(db, id)).toEqual(confirmed);
+  });
+
+  it("keeps a newer Undo attempt pending when the earlier command succeeds late", async () => {
+    await actOnCapabilityInstall(db, OPTIONS, request(), none, { run: h.run, now: () => NOW });
+    const first = Promise.withResolvers<Awaited<ReturnType<RoutineRunner>>>();
+    const second = Promise.withResolvers<Awaited<ReturnType<RoutineRunner>>>();
+    const undo = { action: "capability.uninstall" as const, id: "install-request-1" };
+    h.setInstall(() => first.promise);
+    const earlier = actOnCapabilityInstall(db, OPTIONS, undo, none, { run: h.run, now: () => NOW + 1 });
+    expect((await actOnCapabilityInstall(db, OPTIONS, { action: "capability.resolve", id: undo.id, state: "undoing", at: NOW + 1, outcome: "installed" }, none, { now: () => NOW + 1001 })).ok).toBe(true);
+    h.setInstall(() => second.promise);
+    const newer = actOnCapabilityInstall(db, OPTIONS, undo, none, { run: h.run, now: () => NOW + 1002 });
+    const pending = readCapabilityInstall(db, undo.id);
+    expect(pending).toMatchObject({ state: "undoing", at: NOW + 1002 });
+    first.resolve({ code: 0, stdout: "", stderr: "" });
+    expect(await earlier).toMatchObject({ ok: false, uncertain: true });
+    expect(readCapabilityInstall(db, undo.id)).toEqual(pending);
+    second.resolve({ code: 0, stdout: "", stderr: "" });
+    expect(await newer).toEqual({ ok: true, message: "Bundle uninstalled." });
+    expect(readCapabilityInstall(db, undo.id)?.state).toBe("undone");
   });
 
   it("asks by default, promotes without Ranger, and shows Done for you with Undo that uninstalls after draft discard", async () => {

@@ -559,10 +559,10 @@ export class MailClassifier {
         if (similar) answer = { ...answer, precedents: precedentsOf(similar) };
         saveClassification(db, m.id, answer, this.model, input.now);
         if (answer.commitment) this.retryAt.delete(m.id);
-        else this.retryAt.set(m.id, input.now + RETRY_AFTER_MS);
+        else this.retryAt.set(m.id, this.clock() + RETRY_AFTER_MS);
         result.classified += 1;
       } else {
-        this.retryAt.set(m.id, input.now + RETRY_AFTER_MS);
+        this.retryAt.set(m.id, this.clock() + RETRY_AFTER_MS);
         result.failed += 1;
         this.log(`desk: mail classifier: ${problem}`);
       }

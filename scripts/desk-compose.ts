@@ -2,13 +2,16 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { Command } from "commander";
 import { z } from "zod";
-import { composeFlow, chatModelLLM, OpenAICompatibleChatModel, type CatalogEntry } from "pulse";
+import { composeFlow, chatModelLLM, OpenAICompatibleChatModel, type CatalogEntry, type ComposeFlowOptions } from "pulse";
 import { spawnWithStdin, type WriterRunner } from "../src/surface/mc/desk/create";
 import { RoutineDetailSchema, RoutineEditProposalSchema } from "../src/surface/mc/desk/routine-editor-contract";
 
+export const COMPOSE_MAX_TOKENS = 12000;
+export const COMPOSE_CALL_TIMEOUT_MS = 600_000;
+
 const inventorySchema = z.object({ packages: z.array(z.object({ name: z.string(), type: z.string(), status: z.string(), installPath: z.string() })) });
 const field = z.looseObject({ type: z.string(), required: z.boolean().optional() });
-const actionSchema = z.object({ name: z.string(), description: z.string(), input: z.record(z.string(), field).default({}), output: z.record(z.string(), field).default({}), requires: z.array(z.string()).optional(), tags: z.array(z.string()).optional() });
+const actionSchema = z.object({ name: z.string(), description: z.string(), input: z.record(z.string(), field).default({}), output: z.record(z.string(), field).default({}), requires: z.array(z.string()).optional(), tags: z.array(z.string()).optional(), effect: z.enum(["read", "write"]).optional() });
 
 export async function loadDeskRoutineCatalog(file: string): Promise<CatalogEntry[]> {
   if (!isAbsolute(file)) throw new Error("The trusted catalog snapshot path must be absolute.");
@@ -25,10 +28,15 @@ export async function loadDeskRoutineCatalog(file: string): Promise<CatalogEntry
   return [...catalog.values()].filter((entry) => !entry.requires?.includes("llm") && !entry.requires?.includes("agent"));
 }
 
+/** The Desk holds a routine to the delivery its request names: a request the catalog cannot deliver gets a card that says so. */
+export function composeDeskRoutine(request: string, catalog: CatalogEntry[], llm: ComposeFlowOptions["llm"]) {
+  return composeFlow(request, { catalog, llm, holdToDelivery: true });
+}
+
 export async function forwardRoutineEdit(options: { pulseBin: string; modelUrl: string; model: string; apiKeyEnv: string; request: string; routineEdit: string }, run: WriterRunner = spawnWithStdin) {
   if (options.routineEdit.length > 262144 || options.request.length > 2000) throw new Error("The routine edit request exceeds its size limit.");
   const view = RoutineDetailSchema.shape.flow.unwrap().parse(JSON.parse(options.routineEdit));
-  const result = await run([options.pulseBin, "compose", "--request", options.request, "--routine-edit", JSON.stringify(view), "--model-url", options.modelUrl, "--model", options.model, "--api-key-env", options.apiKeyEnv, "--json"], "", 120000);
+  const result = await run([options.pulseBin, "compose", "--request", options.request, "--routine-edit", JSON.stringify(view), "--model-url", options.modelUrl, "--model", options.model, "--api-key-env", options.apiKeyEnv, "--json"], "", COMPOSE_CALL_TIMEOUT_MS);
   if (result.code !== 0) throw new Error("The configured routine model could not prepare a valid edit.");
   if (result.stdout.length > 65536) throw new Error("The routine model proposal exceeds its size limit.");
   let raw: unknown;
@@ -58,8 +66,8 @@ if (import.meta.main) {
     } else {
     const catalog = await loadDeskRoutineCatalog(options.catalogFile);
     if (catalog.length === 0) throw new Error("The trusted snapshot contains no executable actions.");
-    const llm = chatModelLLM(new OpenAICompatibleChatModel({ baseUrl: options.modelUrl, model: options.model, apiKeyEnv: options.apiKeyEnv, label: "desk-compose" }));
-    const result = await composeFlow(options.request, { catalog, llm });
+    const llm = chatModelLLM(new OpenAICompatibleChatModel({ baseUrl: options.modelUrl, model: options.model, apiKeyEnv: options.apiKeyEnv, label: "desk-compose", maxTokens: COMPOSE_MAX_TOKENS, timeoutMs: COMPOSE_CALL_TIMEOUT_MS }));
+    const result = await composeDeskRoutine(options.request, catalog, llm);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     if (result.status !== "complete") process.exitCode = 1;
     }

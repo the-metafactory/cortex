@@ -177,17 +177,29 @@ It exits 0 and prints `{ "kind": "reminder", "fields": { "text": "Stretch", "due
 
 ### Routed parsers
 
-Optional `ask.routing.permitted` enables the version 1 routed result contract. It lists `claude`, `codex`, and `pi`, with no duplicates. An empty list permits none. The configured parser command must support this contract, such as `desk-parse --routing-config /path/to/routing.json` from cortex-desk-adapters. Provider commands, models, Ranger configuration, and timeouts belong in that adapter's configuration.
+Optional `ask.routing.permitted` enables the version 1 routed result contract. It lists `codex` and `pi`, with no duplicates. An empty list permits none. Claude is not a Desk parser provider. Remove `claude` from existing Desk routing permissions and the adapter's configured providers before upgrading. The configured parser command must support this contract, such as `desk-parse --routing-config /path/to/routing.json` from cortex-desk-adapters. Provider commands, models, Ranger configuration, and timeouts belong in that adapter's configuration.
 
 `POST /api/desk/ask` accepts optional `area` and `routing.permitted` restrictions alongside `text`. The browser sends the selected area for text and voice requests. Before invocation, Cortex intersects configured permissions with request restrictions and the selected area's policy. A local area permits only `pi`; the principal must configure that adapter with a local endpoint. Unknown areas and malformed restrictions are rejected before parsing. A local request on a legacy parser is refused. With All selected, no area restriction applies.
 
 Parser stdin adds `routing: { permitted: [...] }`. The adapter intersects these permissions with its own configuration and delegates selection to Ranger. Cortex does not implement quota thresholds or select providers.
 
-The parser result adds `routing`, with `version: 1`, `kind: selected`, `provider`, `reason`, `attempted`, `candidates`, `fallbackReasons`, and `capabilityExclusions`. `reason` is `most-headroom` or `pi-fallback`. Candidates carry Ranger's provider eligibility reasons. A dispatch-time quota failure appears in `fallbackReasons` as `{ provider, reason: "quota-exhausted" }`. The validated metadata reaches `proposal.routing`, and the card displays the selected provider and reasons.
+The parser result adds `routing`, with `version: 1`, `kind: selected`, `provider`, `reason`, `attempted`, `candidates`, `fallbackReasons`, and `capabilityExclusions`. `reason` is `most-headroom` or `pi-fallback`. Candidates retain Ranger's three-provider eligibility evidence, including the excluded Claude candidate. Removing Claude from the configured providers does not remove its candidate entry. Ranger reports `not-configured` when its `selection.substrates` excludes Claude, or `not-permitted` when the request excludes it. Only Codex and Pi can be selected or attempted. Every attempt must be permitted by the request, including attempts reported in unavailable results. A dispatch-time quota failure appears in `fallbackReasons` as `{ provider, reason: "quota-exhausted" }` for an attempted provider. The validated metadata reaches `proposal.routing`, and the card displays the selected provider and reasons.
 
 An unavailable result has `kind: none` and `routing.kind: unavailable`, with a reason and the same evidence arrays. Cortex returns HTTP 503 with a plain explanation and routing diagnostics. Invalid or missing routed output also returns HTTP 503 and never falls back to rules. Proposal fields and task-map membership are validated independently. Routed proposals always require confirmation, including captures with an existing automatic-capture grant.
 
 Without `ask.routing`, legacy parser output and rules fallback remain supported. Output that includes routing metadata is validated even in legacy mode.
+
+The [contract fixtures](../../src/surface/mc/__tests__/__fixtures__/desk-parser-contract.json) capture actual parser and Ranger CLI output, with both configured for Codex and Pi only. They record the source revisions and cover eligible Codex, exhausted Codex, dispatch-time quota fallback, and no permitted alternative. The Desk handler tests replay these results through the browser request helper and check that parsing creates nothing.
+
+To regenerate the fixtures, pass source checkouts with their dependencies installed:
+
+```sh
+bun scripts/probe-desk-parser-contract.ts \
+	--adapter /path/to/cortex-desk-adapters \
+	--ranger /path/to/ranger > /tmp/desk-parser-contract.json
+```
+
+The probe requires unchanged tracked source files. It uses temporary configuration, a temporary Ranger journal with controlled usage readings, and fake provider commands. It checks candidate evidence, tools-disabled flags, attempt order, and unchanged prompts across fallback. It removes its temporary state when finished. Compare the output with the fixtures before replacing them. This checks the installed command contract without contacting a model or changing live configuration.
 
 A writer runs only after confirmation. Its stdin contains `kind`, `fields`, and `requestId`:
 

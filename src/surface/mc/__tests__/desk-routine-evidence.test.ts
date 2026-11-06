@@ -11,7 +11,7 @@ import { readRoutineEvidence } from "../desk/routine-evidence";
 import { insertObservabilityEvent } from "../db/observability";
 
 const scope = { principal: "test", stack: "default" };
-const options = { reflex: ["configured-owner"], composer: ["compose"], target: "@test/pulse-flow", timeZone: "UTC", timeoutSeconds: 120, readTimeoutSeconds: 1 };
+const options = { reflex: ["configured-owner"], composer: ["compose"], target: "@test/pulse-flow", timeZone: "UTC", timeoutSeconds: 120, composeTimeoutSeconds: 120, readTimeoutSeconds: 1 };
 const runtime: DeskRuntime = { ledger: new HandledLedger(), options: { routineScope: scope, enabled: true, displayName: "Test", topN: 5, rangerUrl: "", areas: [], sources: [], routines: options } };
 const id = crypto.randomUUID();
 const correlation = crypto.randomUUID();
@@ -47,6 +47,22 @@ describe("routine execution evidence", () => {
     const routineId = "a".repeat(1000);
     const result = await handleDeskRoutineEvidence(new Request(historyUrl), db, runtime, false, () => response({ ...page, records: [{ ...record, routineId, routineName: routineId, nameSource: "identifier" }] }));
     expect(result.status).toBe(200);
+  });
+
+  it("states a failed run's reason on the record, and keeps it out of the redacted audit file", async () => {
+    event("started"); event("failed", { reason: "timeout-900000ms: nobody\u0007took this task" });
+    const history = await readRoutineEvidence(db, options, { limit: 25 }, scope, run);
+    const execution = history.records[0]?.execution;
+    expect(execution).toMatchObject({ kind: "observed", state: "failed", failureReason: "timeout-900000ms: nobody took this task" });
+    if (execution?.kind !== "observed") throw new Error("Expected execution");
+    const log = await handleDeskRoutineEvidence(new Request(logUrl(execution.executionId, { download: "1" })), db, runtime, true, run);
+    expect(await log.text()).not.toContain("nobody");
+  });
+
+  it("a completed run carries no failure reason", async () => {
+    event("started"); event("completed");
+    const history = await readRoutineEvidence(db, options, { limit: 25 }, scope, run);
+    expect(history.records[0]?.execution).not.toHaveProperty("failureReason");
   });
 
   it("correlates owner audit IDs and exposes a bounded redacted audit file after definition deletion", async () => {

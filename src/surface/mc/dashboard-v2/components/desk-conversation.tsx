@@ -287,7 +287,7 @@ export function WorkspaceView(c: WorkspaceProps) {
       <p className="dcv-quiet">{archived ? "This conversation is archived. Restore it to continue with the same history; opening it never resumes it." : c.busy ? "Ivy is working. Queue waits for the current turn; Use this now joins at Ivy's next safe point and never interrupts a running change." : "Your unsent draft is saved here. Leave keeps the conversation; nothing ends."}</p>
       {c.error && <p className="desk-unsent" role="alert">{c.error}</p>}
     </form>
-    <CreationPanel id={conversation.id} archived={archived} revision={count} seed={{ entryId: said?.id ?? null, text: said?.text ?? "" }} />
+    <CreationPanel id={conversation.id} archived={archived} revision={c.entries.at(-1)?.id ?? ""} seed={{ entryId: said?.id ?? null, text: said?.text ?? "" }} />
     {studio && !archived && <StudioOutcome id={conversation.id} studio={studio} onSaved={c.onSaved} />}
   </section>;
 }

@@ -106,18 +106,21 @@ export type VigilObservation = Omit<VigilSubjectRow, "cadence_ms" | "updated_at"
 
 /** Upsert keeps `cadence_ms` and the key-derived columns of an existing row. */
 export function writeVigilSubject(db: Database, row: VigilObservation, now: number): void {
-  db.query(`INSERT INTO vigil_subjects
-    (subject_key, subject_kind, vocab, ref, value, healthy, goal_id, producer, stack,
-     run_kind, last_run_id, last_ended_at, last_seen_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(subject_key) DO UPDATE SET
-      value = excluded.value, healthy = excluded.healthy, goal_id = excluded.goal_id,
-      producer = excluded.producer, stack = excluded.stack, run_kind = excluded.run_kind,
-      last_run_id = excluded.last_run_id, last_ended_at = excluded.last_ended_at,
-      last_seen_at = excluded.last_seen_at, updated_at = excluded.updated_at`).run(
-    row.subject_key, row.subject_kind, row.vocab, row.ref, row.value, row.healthy, row.goal_id,
-    row.producer, row.stack, row.run_kind, row.last_run_id, row.last_ended_at, row.last_seen_at, now,
-  );
+  db.transaction(() => {
+    db.query(`INSERT INTO vigil_subjects
+      (subject_key, subject_kind, vocab, ref, value, healthy, goal_id, producer, stack,
+       run_kind, last_run_id, last_ended_at, last_seen_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(subject_key) DO UPDATE SET
+        value = excluded.value, healthy = excluded.healthy, goal_id = excluded.goal_id,
+        producer = excluded.producer, stack = excluded.stack, run_kind = excluded.run_kind,
+        last_run_id = excluded.last_run_id, last_ended_at = excluded.last_ended_at,
+        last_seen_at = excluded.last_seen_at, updated_at = excluded.updated_at`).run(
+      row.subject_key, row.subject_kind, row.vocab, row.ref, row.value, row.healthy, row.goal_id,
+      row.producer, row.stack, row.run_kind, row.last_run_id, row.last_ended_at, row.last_seen_at, now,
+    );
+    confirmSubjectStack(db, row.subject_key);
+  })();
 }
 
 export function writeVigilTransition(
@@ -164,8 +167,22 @@ export function markVigilTextSent(db: Database, id: string, via: "dm" | "email",
 export function isNewObservation(prior: Pick<VigilSubjectRow, "last_run_id" | "last_ended_at"> | null, runId: string, endedAt: number): boolean {
   if (!prior) return true;
   if (runId === prior.last_run_id) return false;
-  if (endedAt !== prior.last_ended_at) return endedAt > prior.last_ended_at;
-  return runId > prior.last_run_id;
+  return isOlderObservation(prior, { last_run_id: runId, last_ended_at: endedAt });
+}
+
+export function isOlderObservation(
+  prior: Pick<VigilSubjectRow, "last_run_id" | "last_ended_at">,
+  next: Pick<VigilSubjectRow, "last_run_id" | "last_ended_at">,
+): boolean {
+  if (prior.last_ended_at !== next.last_ended_at) return prior.last_ended_at < next.last_ended_at;
+  return prior.last_run_id < next.last_run_id;
+}
+
+export function moveVigilEvents(db: Database, oldKey: string, newKey: string, runId?: string): void {
+  const filter = runId === undefined ? "" : " AND run_id = ?";
+  const params = [newKey, `att:vigil:${newKey}`, oldKey, ...(runId === undefined ? [] : [runId])];
+  db.query(`UPDATE vigil_events SET subject_key = ?, attention_id = CASE WHEN attention_id IS NULL THEN NULL ELSE ? END
+    WHERE subject_key = ?${filter}`).run(...params);
 }
 
 /** True when any subject row exists — an empty table triggers LEDGER replay. */
@@ -191,9 +208,16 @@ export function clearVigilReplay(db: Database): void {
   db.query("DELETE FROM vigil_replay WHERE id = 1").run();
 }
 
-export function unverifiedVigilSubjects(db: Database): VigilSubjectRow[] {
-  return db.query<VigilSubjectRow, []>(`SELECT * FROM vigil_subjects
-    WHERE subject_key NOT IN (SELECT subject_key FROM vigil_subject_stack_sources)`).all();
+const UNVERIFIED = "subject_key NOT IN (SELECT subject_key FROM vigil_subject_stack_sources)";
+
+export function unverifiedVigilSubjects(db: Database, match?: {
+  ran: { kind: string; ref: string };
+  state?: { vocab: string; ref: string };
+}): VigilSubjectRow[] {
+  if (!match) return db.query<VigilSubjectRow, []>(`SELECT * FROM vigil_subjects WHERE ${UNVERIFIED}`).all();
+  return db.query<VigilSubjectRow, [string, string, string | null, string | null]>(`SELECT * FROM vigil_subjects
+    WHERE ((subject_kind = 'run' AND run_kind = ? AND ref = ?) OR (subject_kind = 'state' AND vocab = ? AND ref = ?))
+    AND ${UNVERIFIED}`).all(match.ran.kind, match.ran.ref, match.state?.vocab ?? null, match.state?.ref ?? null);
 }
 
 export function confirmSubjectStack(db: Database, key: string): void {
@@ -203,7 +227,7 @@ export function confirmSubjectStack(db: Database, key: string): void {
 export function resetUnverifiedSubject(db: Database, key: string): boolean {
   db.query(`INSERT OR IGNORE INTO vigil_subject_stack_moves (old_key, new_key, expected_run_id, expected_ended_at)
     SELECT subject_key, subject_key, last_run_id, last_ended_at FROM vigil_subjects WHERE subject_key = ?
-    AND subject_key NOT IN (SELECT subject_key FROM vigil_subject_stack_sources)`).run(key);
+    AND ${UNVERIFIED}`).run(key);
   return db.query(`UPDATE vigil_subjects SET last_run_id = '', last_ended_at = -1 WHERE subject_key = ?
-    AND subject_key NOT IN (SELECT subject_key FROM vigil_subject_stack_sources)`).run(key).changes > 0;
+    AND ${UNVERIFIED}`).run(key).changes > 0;
 }
