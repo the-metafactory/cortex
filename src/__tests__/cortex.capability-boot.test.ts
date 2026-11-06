@@ -35,7 +35,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { AgentConfigSchema, type AgentConfig } from "../common/types/config";
-import type { Agent, AgentRuntime } from "../common/types/cortex-config";
+import { AgentSchema, type Agent, type AgentRuntime } from "../common/types/cortex-config";
 import { startCortex } from "../cortex";
 import { hermeticBootPaths } from "../common/test-utils";
 import { CAPABILITY_REGISTERED_EVENT_TYPE } from "../bus";
@@ -533,4 +533,61 @@ describe("startCortex — capability-registry boot wiring (cortex#237 PR-7)", ()
     expect(firstAgentId).toBe(secondAgentId);
     expect(runtimeA.published[0]!.id).not.toBe(runtimeB.published[0]!.id);
   });
+});
+
+
+test("headless builtin task receivers each get their own subject without an exec or wildcard receiver", async () => {
+  const runtime = createRecordingRuntime();
+  const patterns: string[] = [];
+  runtime.subscribe = async (pattern) => { patterns.push(pattern); return null; };
+  const directory = mkdtempSync(join(tmpdir(), "cortex-api-receiver-"));
+  const api = makeAgent("local-worker", ["chat.local"]);
+  api.runtime = { substrate: "api-agent", mode: "in-process", capabilities: ["chat.local"], inferenceProfile: "fixture-local" };
+  const exec = makeAgent("exec-worker", ["fixture.tick"]);
+  exec.runtime = AgentSchema.parse({ ...exec, runtime: { mode: "in-process", capabilities: ["fixture.tick"], brain: { kind: "exec", run: "fixture-brain", lifecycle: "per-task" } } }).runtime;
+  const handle = await startCortex(minimalConfig(), {
+    ...hermeticBootPaths(),
+    disableConfigWatcher: true,
+    disableDashboard: true,
+    disableOutboundPoller: true,
+    agentsDir: directory,
+    injectRuntime: runtime,
+    inlineAgents: [makeAgent("review-worker", []), api, exec],
+    principal: { id: "fixture-principal" },
+  });
+  try {
+    expect(patterns.filter((pattern) => pattern.includes(".tasks."))).toEqual([
+      "local.fixture-principal.default.tasks.@did-mf-review-worker.>",
+      "local.fixture-principal.default.tasks.@did-mf-local-worker.>",
+    ]);
+  } finally {
+    await handle.stop();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("zero registered agents retain the legacy wildcard listener at boot", async () => {
+  const runtime = createRecordingRuntime();
+  const patterns: string[] = [];
+  runtime.subscribe = async (pattern) => { patterns.push(pattern); return null; };
+  const directory = mkdtempSync(join(tmpdir(), "cortex-legacy-receiver-"));
+  const handle = await startCortex(minimalConfig(), {
+    ...hermeticBootPaths(),
+    disableConfigWatcher: true,
+    disableDashboard: true,
+    disableOutboundPoller: true,
+    agentsDir: directory,
+    injectRuntime: runtime,
+    inlineAgents: [],
+    principal: { id: "fixture-principal" },
+  });
+  try {
+    expect(patterns.filter((pattern) => pattern.includes(".tasks."))).toEqual([
+      "local.fixture-principal.default.tasks.*.>",
+    ]);
+  } finally {
+    await handle.stop();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
