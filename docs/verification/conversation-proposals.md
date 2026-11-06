@@ -29,3 +29,12 @@ The repeatable dispatch tests are in
 They cover preview, editing, confirmation, duplicate delivery, scoped grants,
 revocation, identity refusal, timeout, restart and uncertain owner readback.
 The installed-Pi test uses a synthetic provider and skips when Pi is absent.
+
+The repository check after merging `origin/main` passed lint, duplication,
+typecheck, vocabulary, SDK, shippable hygiene, XDG and up-to-date gates. The
+initial suite required updating the installed-Pi test's expected tool list.
+A test-gate retry then encountered an unchanged `desk-action.test.ts` marker
+read returning an empty string; that test passed 100 focused repetitions on an
+untouched `origin/main` archive. No change was made to that test.
+The final `bun scripts/check.ts test` run passed: 14,258 passed, 30 skipped,
+201 marked todo and zero failures across 862 files.
