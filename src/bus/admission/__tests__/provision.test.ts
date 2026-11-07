@@ -4,7 +4,8 @@
  * NON-FATAL unavailable path that hands the gate its degraded posture.
  */
 
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
+import { createJetstreamBootRetryOptions } from "../../jetstream/boot-retry";
 import type { ProvisionJsm, ProvisionKv } from "../../jetstream/types";
 import { admissionBucketName, provisionAdmissionKv } from "../provision";
 
@@ -73,6 +74,73 @@ describe("admissionBucketName", () => {
 });
 
 describe("provisionAdmissionKv", () => {
+  test.each([
+    {
+      state: "without boot retries",
+      useBootRetry: false, maxAttempts: 2, preExhausted: false, deadline: undefined,
+      attempts: 1, delays: [], exhausted: false, warnsOnContinue: true,
+    },
+    {
+      state: "within the boot budget",
+      useBootRetry: true, maxAttempts: 3, preExhausted: false, deadline: undefined,
+      attempts: 3, delays: [1_000, 2_000], exhausted: false, warnsOnContinue: false,
+    },
+    {
+      state: "after budget exhaustion",
+      useBootRetry: true, maxAttempts: 2, preExhausted: true, deadline: undefined,
+      attempts: 1, delays: [], exhausted: true, warnsOnContinue: true,
+    },
+    {
+      state: "after the shared deadline",
+      useBootRetry: true, maxAttempts: 2, preExhausted: false, deadline: 0,
+      attempts: 1, delays: [], exhausted: true, warnsOnContinue: true,
+    },
+    {
+      state: "exhausting the boot budget",
+      useBootRetry: true, maxAttempts: 2, preExhausted: false, deadline: undefined,
+      attempts: 2, delays: [1_000], exhausted: true, warnsOnContinue: true,
+    },
+  ])("peek $state", async ({
+    useBootRetry, maxAttempts, preExhausted, deadline,
+    attempts, delays, exhausted, warnsOnContinue,
+  }) => {
+    let elapsed = 0;
+    let calls = 0;
+    const sleep = mock(async (ms: number) => { elapsed += ms; });
+    const warnings: string[] = [];
+    const log = { info: () => {}, warn: (line: string) => { warnings.push(line); } };
+    const bootRetry = createJetstreamBootRetryOptions({
+      now: () => elapsed,
+      sleep,
+      maxAttempts,
+      log: { warn: () => { throw new Error("provision log should take precedence"); } },
+    });
+    bootRetry.budget!.exhausted = preExhausted;
+    bootRetry.budget!.deadline = deadline;
+    const jsm = stubJsm(["KV_admission_synthetic_default"]);
+    const info = jsm.streams.info;
+    jsm.streams.info = async (name) => {
+      if (++calls <= 2) throw Object.assign(new Error("TIMEOUT"), { code: "TIMEOUT" });
+      return info(name);
+    };
+    const openKv = mock(async () => stubKv);
+    const result = await provisionAdmissionKv({
+      jsm,
+      openKv,
+      bucket: "admission_synthetic_default",
+      log,
+      ...(useBootRetry && { bootRetry }),
+    });
+    expect(result).toEqual({ outcome: "exists", kv: stubKv });
+    expect(calls).toBe(attempts);
+    expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([...delays]);
+    expect(bootRetry.budget!.exhausted).toBe(exhausted);
+    expect(openKv).toHaveBeenCalledTimes(1);
+    expect(openKv).toHaveBeenCalledWith("admission_synthetic_default");
+    expect(warnings.some((line) => line.includes("continuing to KV open")))
+      .toBe(warnsOnContinue);
+  });
+
   test("reports 'created' when the backing stream did not pre-exist", async () => {
     const result = await provisionAdmissionKv({
       jsm: stubJsm([]),

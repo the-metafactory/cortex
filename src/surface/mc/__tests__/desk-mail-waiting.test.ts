@@ -1,3 +1,4 @@
+import { classifierLabel } from "../desk/classify";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { handleDeskMail } from "../api/desk-mail";
@@ -181,7 +182,7 @@ describe("waiting model", () => {
   it("stores the model's verdict, topic and ask; a local-policy source without a local model stays with the heuristic", async () => {
     const seen: string[] = [];
     const run: WaitingRunner = async (access, request) => {
-      seen.push(`${access.model}:${request.subject}`);
+      seen.push(`${classifierLabel(access)}:${request.subject}`);
       return request.subject === "Venue quote" ? { asks: true, topic: "catering in the quote", ask: "You asked whether the quote includes catering." } : { asks: false };
     };
     const readings = [reading([sent("s1"), sent("s2", { subject: "Party", text: "Can you believe it?" })]), reading([sent("w1", { subject: "Budget", text: "Please confirm." })], [], "work-mail")];

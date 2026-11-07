@@ -1,3 +1,4 @@
+import { classifierLabel } from "../desk/classify";
 import { readStudioMyDay } from "../desk/studio-my-day";
 import { SessionAnswerSchema, SessionRequestSchema, StudioSessionSchema, type StudioSession } from "../desk/studio/session-schema";
 import type { Database } from "bun:sqlite";
@@ -103,9 +104,9 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     if (!thread || thread.state === "closed") return fail(409, "The thread is unavailable. Your exchange is retained.", session);
     if (thread.policy === "local") session.policy = "local";
     const endpoint = sessionEndpoint(options, { ...thread, policy: session.policy });
-    const turn = prior ?? { id: request.turn, text: request.text, answer: null, model: endpoint?.model ?? "unavailable", policy: session.policy };
+    const turn = prior ?? { id: request.turn, text: request.text, answer: null, model: endpoint ? classifierLabel(endpoint) : "unavailable", policy: session.policy };
     if (!prior) session.turns.push(turn);
-    turn.policy = session.policy; turn.model = endpoint?.model ?? "unavailable";
+    turn.policy = session.policy; turn.model = endpoint ? classifierLabel(endpoint) : "unavailable";
     save(db, dir, session);
     if (!endpoint) return fail(503, session.policy === "local" ? "The local model is not configured. Your text is saved; no cloud fallback was used." : "A Studio model is not configured. Your text is saved.", session);
     try {

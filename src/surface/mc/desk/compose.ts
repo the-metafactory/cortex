@@ -220,14 +220,30 @@ export async function composeDesk(
   const corrections = readCorrections(db);
   const activeCorrections = corrections.ok ? corrections.corrections : [];
   const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
-  const localAreas = new Set(desk.areas.filter((a) => a.policy === "local").map((a) => a.id));
-  const localSources = new Set(readings.filter((r) => r.area !== null && localAreas.has(r.area)).map((r) => r.id));
-  if (classifier) void classifier.kick(db, { now, mail: mail.filter((m) => !ruleBound.has(m.id)), events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(db) });
+  const { myDay, studio } = await readStudioDesk(db, desk, now);
+  const cloudAreas = new Set(desk.areas.filter((a) => a.policy === "cloud").map((a) => a.id));
+  const cloudSources = new Set(readings.filter((r) => r.area !== null && cloudAreas.has(r.area)).map((r) => r.id));
+  const localSources = new Set(readings.filter((r) => !cloudSources.has(r.id)).map((r) => r.id));
+  if (classifier) {
+    const sourceIds = desk.mailClassifier?.sourcePolicy === "local" ? new Set(readings.map((r) => r.id)) : cloudSources;
+    const permittedMail = mail.filter((m) => sourceIds.has(m.sourceId));
+    const senders = new Set(permittedMail.map((m) => m.from.address.toLowerCase()));
+    const permittedSender = (address: string): boolean => { const lower = address.toLowerCase(); return senders.has(lower) || (lower.startsWith("@") && [...senders].some(sender => sender.endsWith(lower))); };
+    void classifier.kick(db, {
+      now, sourceIds,
+      notes: (studio?.active ?? []).filter((thread) => thread.policy === "cloud").flatMap((thread) => thread.notes.filter((note) => note.status !== "dismissed").map((note) => ({ sourcePolicy: "cloud" as const, areas: thread.areas, id: `studio:${thread.slug}:${note.at}`, name: thread.question, text: note.text.slice(0, 600) }))).slice(0, 30),
+      mail: permittedMail.filter((m) => !ruleBound.has(m.id)),
+      events: events.filter((event) => sourceIds.has(event.sourceId)),
+      vips: vips.filter((v) => permittedSender(v.address)).map((v) => v.address),
+      unimportant: unimportant.filter(permittedSender),
+      corrections: mailCorrections(db, sourceIds),
+    });
+  }
   const classified = classifier ? readClassifications(db, mail.map((m) => m.id)) : undefined;
   const offerable = [...mail.filter((m) => m.unread), ...(mailGroups?.digests.groups ?? []).flatMap((g) => g.members)];
   const flagged = new Set([...readClassifications(db, offerable.map((m) => m.id))].filter(([, c]) => c.suspicious === true).map(([id]) => id));
   const unsubscribe = unsubscribeOffers(db, offerable, offerContext(db, desk.mailUnsubscribe, suspicion, flagged));
-  const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null) : null;
+  const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null, desk.mailClassifier.sourcePolicy === "local" ? 0 : mail.filter((item) => !cloudSources.has(item.sourceId)).length) : null;
   const yesFilter = await mailYesFilter(db, desk, now);
   const notes = listOpenNotes(db);
   const reminders = notes.filter((n) => n.kind === "reminder" && n.dueAt !== null);
@@ -249,7 +265,7 @@ export async function composeDesk(
   const rangerActions = rangerActionsReady(desk);
   const rulingActions = rangerActions && Boolean(desk.somaBin);
   const goalActions = goalActionsFor(desk.goals, subjects, deps.goalChecks, now);
-  const explanations = ranger && deps.rulingExplain ? await deps.rulingExplain.explain(ranger.needsYou) : undefined;
+  const explanations = ranger && deps.rulingExplain ? await deps.rulingExplain.explain(desk.rulingExplainer?.sourcePolicy === "cloud" ? ranger.needsYou.filter(entry => { const owners = desk.areas.filter(area => areaFor([area], entry.repo, null) !== null); return owners.length > 0 && owners.every(area => area.policy === "cloud"); }) : ranger.needsYou) : undefined;
   const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
     .filter((item) => goalListed(goalStatuses, item.goal));
   const rulesConfig = desk.mailRules ?? DEFAULT_MAIL_RULES;
@@ -285,9 +301,8 @@ export async function composeDesk(
   const mailLog = mailLogFor(db, unbundled.filter(i => i.kind === "mail").map(i => mailIdOf(i.key)));
   const items = unbundled.map(item => item.kind === "mail" ? withMailLog({ ...item, mailDecision: readMailDecision(db, item.source, mailIdOf(item.key)) }, mailLog, now) : item);
 
-  const { myDay, studio } = await readStudioDesk(db, desk, now);
   const digests = mailGroups?.digests.groups ?? [];
-  if (deps.digestFlagger && digests.length > 0) void deps.digestFlagger.kick(db, digests, digestTopics(studio, () => loadBalanceState(db), buildGoals(subjects), now), localSources, now);
+  if (deps.digestFlagger && digests.length > 0) void deps.digestFlagger.kick(db, digests, digestTopics(studio, () => loadBalanceState(db), buildGoals(subjects).map((goal) => { const areas = desk.areas.filter((area) => area.goals.includes(goal.id)); return { ...goal, local: areas.length === 0 || areas.some((area) => area.policy !== "cloud") }; }), now, cloudAreas), localSources, now);
   const digestFlags = readDigestFlags(db, digests.map((g) => g.id));
   const moved = movedKeys(db);
   const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => ({ ...i, todoFingerprint: sourceIdentity(i) }));
@@ -340,8 +355,8 @@ function unreadableLine(r: SourceReading): string {
 
 const CORRECTED_SAYING: Partial<Record<string, string>> = { "not bulk": "; it is not bulk", matters: "; it matters" };
 
-function mailCorrections(db: Database): ClassifierCorrection[] {
-  return queryMailLog(db, { where: "correction", limit: MAX_CORRECTIONS }).map((e) => {
+function mailCorrections(db: Database, sourceIds: ReadonlySet<string>): ClassifierCorrection[] {
+  return queryMailLog(db, { where: "correction", limit: MAX_CORRECTIONS, sourceIds }).map((e) => {
     const action = learnedAction(e.action);
     return { kind: "mail", source: e.sender, mode: action ?? e.action, label: `“${e.subject ?? "(no subject)"}” from ${e.sender}: the person ${action ? WOULD[action] : `chose ${e.action}`}${CORRECTED_SAYING[e.category ?? ""] ?? ""}` };
   });

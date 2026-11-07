@@ -93,6 +93,7 @@ function buildVerdictEnvelope(request: Envelope): Envelope {
   return createReviewVerdictEvent({
     source: SOURCE,
     kind: "approved",
+    requestId: request.id,
     correlationId: request.id,
     payload: {
       repo: VALID_PAYLOAD.repo,

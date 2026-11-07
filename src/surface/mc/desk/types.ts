@@ -1,6 +1,6 @@
 import type { MyDayView } from "./my-day";
 import type { DeskCalendar } from "./calendars";
-import type { EndpointConfig } from "./classify";
+import type { ClassifierConfig } from "./classify";
 import type { RulingExplanation } from "./ruling";
 import type { DeskVoice } from "./voice";
 import type { AREA_POLICIES } from "../../../common/types/config";
@@ -18,7 +18,7 @@ export type AreaPolicy = (typeof AREA_POLICIES)[number];
 
 export interface StudioOptions {
   dir: string;
-  filer?: EndpointConfig & { local?: EndpointConfig };
+  filer?: ClassifierConfig & { local?: ClassifierConfig };
   maxActive: number;
   yesFilter?: string[];
   personas?: string[];
@@ -183,8 +183,8 @@ export interface DeskView {
 }
 
 export type DeskMailClassifier =
-  | { kind: "endpoint"; host: string; model: string; keyNeeded: boolean; keyFound: boolean }
-  | { kind: "command"; command: string; keyNeeded: boolean; keyFound: boolean };
+  | { kind: "endpoint"; host: string; model: string; keyNeeded: boolean; keyFound: boolean; heldMail?: number }
+  | { kind: "command"; command: string; keyNeeded: boolean; keyFound: boolean; heldMail?: number };
 
 export interface DeskAutonomy {
   types: { action: string; label: string; note: string; on: boolean }[];

@@ -19,8 +19,8 @@
  */
 
 import type { ProvisionJsm, ProvisionKv } from "../jetstream/types";
-import { isNotFoundError } from "../jetstream/provision";
-import { retryJetstreamBootStep } from "../jetstream/boot-retry";
+import { isNotFoundError, withProvisionRetry } from "../jetstream/provision";
+import type { JetstreamBootRetryOptions } from "../jetstream/boot-retry";
 
 /**
  * Build the per-(principal, stack) admission bucket name (myelin admission
@@ -37,6 +37,7 @@ export function admissionBucketName(principal: string, stack: string): string {
 export type ProvisionAdmissionOutcome = "created" | "exists" | "unavailable";
 
 export interface ProvisionAdmissionKvOpts {
+  bootRetry?: JetstreamBootRetryOptions;
   /**
    * Narrow JSM handle (from `runtime.jetstreamManager()`), or `null` when the
    * runtime is disabled / the manager could not be resolved. Only used to
@@ -76,7 +77,11 @@ export async function provisionAdmissionKv(
   if (opts.jsm !== null) {
     try {
       const jsm = opts.jsm;
-      await retryJetstreamBootStep(`admission KV peek ${opts.bucket}`, () => jsm.streams.info(`KV_${opts.bucket}`), { log });
+      await withProvisionRetry(
+        `admission KV peek ${opts.bucket}`,
+        opts,
+        () => jsm.streams.info(`KV_${opts.bucket}`),
+      );
       preExisting = true;
     } catch (err) {
       if (isNotFoundError(err)) {

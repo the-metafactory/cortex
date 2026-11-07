@@ -298,7 +298,7 @@ import { createInferenceRegistry } from "./substrates/api-agent/provider-factori
 // canonical myelin subject builder so the subscribe-side pattern matches the
 // `dispatch-source-publisher` emit side byte-for-byte.
 import { directTaskSubject } from "@the-metafactory/myelin/subjects";
-import { chatCapableAgents } from "./runner/chat-capable-agents";
+import { taskCapableAgents } from "./runner/task-capable-agents";
 // G-1114.B.2 — live agent-presence producer (online/heartbeat/offline) wired
 // into boot. G-1114.B.3 — the runtime registry subscriber it feeds.
 import {
@@ -2327,7 +2327,7 @@ export async function startCortex(
   if (reviewJsm !== null) {
     try {
       const outcome = await provisionReviewStream({
-          bootRetry,
+        bootRetry,
         jsm: reviewJsm,
         name: reviewStream,
         subjects: reviewStreamSubjects,
@@ -3844,54 +3844,7 @@ export async function startCortex(
   // under the surface-router's 5s render-timeout. See
   // `src/runner/dispatch-listener.ts` file-header docblock for the
   // executor-vs-renderer rationale.
-  // S2 (cortex#1160) — per-agent builtin chat dispatch listeners.
-  //
-  // The builtin chat path is `createDispatchListener`: it consumes
-  // `tasks.@{agent}.chat` envelopes off the bus and spawns a CC session. The
-  // PERSONA / identity it runs under is NOT carried on the listener — it rides
-  // the envelope payload (`agent_id`, `agent_name`, the persona-baked `prompt`)
-  // stamped on the EMIT side by the per-agent `DispatchHandler.handleMessage`
-  // (S1 routes each adapter instance to its matched agent via
-  // `agentByDiscordToken`). So the only per-agent state a listener carries is
-  // (a) its `receivingAgentId` trust anchor and (b) its subscribed subject.
-  //
-  // Pre-S2 a SINGLE listener was constructed bound to `firstAgent.id`,
-  // subscribing to the default wildcard `tasks.*.>`. The wildcard caught EVERY
-  // agent's tasks subtree, but the handler does NOT filter inbound `agent_id`
-  // against `receivingAgentId` — so a second presence agent (Pier, installed as
-  // an agents.d fragment per S1) had an adapter that published
-  // `tasks.@pier.chat` but no listener consuming it on a per-agent subject →
-  // silence (epic #1158 Gap 2).
-  //
-  // The fix constructs one listener per CHAT-CAPABLE agent: an agent in
-  // `mergedAgents` with a platform `presence` (the surfaces it can be
-  // @-mentioned on) AND a builtin brain (NOT `runtime.brain.kind === "exec"` —
-  // those route via `BrainConsumer`). Headless agents (`presence: {}` —
-  // approver/dev/release) get NONE; they run via the dispatch-listener as
-  // bus-only workers but are never @-mentioned on a surface.
-  //
-  // **Double-delivery safety.** Because the handler does NOT filter by
-  // `agent_id`, N listeners ALL subscribing to the shared wildcard `tasks.*.>`
-  // would each process every agent's envelope → N-fold double-spawn. So when
-  // there are 2+ chat-capable agents, each listener subscribes to its OWN
-  // scoped subtree `local.{principal}.{stack}.tasks.@{enc-did}.>` (built via
-  // the canonical `directTaskSubject`, byte-matching the emit side) — the
-  // runtime fan-out delivers an agent's envelopes ONLY to that agent's
-  // listener. No subject overlap ⇒ no double-delivery.
-  //
-  // **Single-agent byte-identity (non-negotiable).** When there is AT MOST one
-  // chat-capable agent, we construct exactly ONE listener bound to
-  // `firstAgent.id` with the subject OMITTED — i.e. the default wildcard
-  // `tasks.*.>` — wiring byte-identical to pre-S2. This covers the common
-  // single-inline-agent stack (Luna-only), a legacy flat `bot.yaml` (no
-  // `agents[]` ⇒ `firstAgent` undefined ⇒ the existing no-listener guard), AND
-  // a headless-only multi-agent stack (dev-loop): none gain a spurious extra
-  // chat listener.
-  // S2 (cortex#1160) — the chat-capable set: an enabled platform presence AND a
-  // builtin (non-exec) brain. `isExecBrainAgent` is the SAME predicate the
-  // brain-hosting path uses, injected so the rule can't drift. Pure helper in
-  // `runner/chat-capable-agents.ts` so boot + tests share one definition.
-  const chatAgents = chatCapableAgents(mergedAgents, isExecBrainAgent);
+  const taskAgents = taskCapableAgents(mergedAgents, isExecBrainAgent);
   // Per-agent listeners; `start()`/`stop()`-ed as a set (mirrors how
   // `reviewConsumers` / `brainConsumers` are tracked + drained).
   const dispatchListeners: DispatchListener[] = [];
@@ -3928,6 +3881,7 @@ export async function startCortex(
     }
     const openKv = runtime.kvBucket?.bind(runtime);
     const provisionedAdmission = await provisionAdmissionKv({
+      bootRetry,
       jsm: admissionJsm,
       openKv: async (bucket) =>
         openKv !== undefined
@@ -4095,41 +4049,27 @@ export async function startCortex(
     // admission stage is skipped entirely (CO-4 inertness).
     ...(admissionGate !== undefined && { admissionGate }),
   };
-  if (chatAgents.length >= 2) {
-    // Multi-agent: each chat-capable agent gets its OWN listener on its OWN
-    // scoped subtree subject so the runtime never fans the same envelope to
-    // two listeners.
-    for (const agent of chatAgents) {
-      const agentChatSubject = directTaskSubject(
-        principalId,
-        `did:mf:${agent.id}`,
-        derivedStack.stack,
-      );
-      const listener = createDispatchListener({
-        ...sharedDispatchListenerOpts,
-        receivingAgentId: agent.id,
-        subjects: [agentChatSubject],
-        // Disambiguate stderr/audit log prefixes per agent.
-        adapterId: `runner-dispatch-listener-${agent.id}`,
-      });
-      dispatchListeners.push(listener);
-      console.log(
-        `cortex: dispatch-listener started — receivingAgentId=${agent.id} ` +
-          `subject=${agentChatSubject}`,
-      );
-    }
-  } else {
-    // At-most-one chat-capable agent → exactly ONE listener, wiring
-    // byte-identical to pre-S2: bound to `firstAgent.id` (the existing
-    // `mergedAgents[0]` fallback, or undefined → the no-receivingAgentId
-    // path) with the default wildcard `tasks.*.>` subscription (subject
-    // OMITTED). Legacy flat bot.yaml (`firstAgent` undefined) keeps the
-    // historical no-op-receiver behaviour.
+  for (const agent of taskAgents) {
+    const agentTaskSubject = directTaskSubject(
+      principalId,
+      `did:mf:${agent.id}`,
+      derivedStack.stack,
+    );
     const listener = createDispatchListener({
       ...sharedDispatchListenerOpts,
-      ...(firstAgent !== undefined && { receivingAgentId: firstAgent.id }),
+      receivingAgentId: agent.id,
+      subjects: [agentTaskSubject],
+      // Disambiguate stderr/audit log prefixes per agent.
+      adapterId: `runner-dispatch-listener-${agent.id}`,
     });
     dispatchListeners.push(listener);
+    console.log(
+      `cortex: dispatch-listener started — receivingAgentId=${agent.id} ` +
+        `subject=${agentTaskSubject}`,
+    );
+  }
+  if (mergedAgents.length === 0) {
+    dispatchListeners.push(createDispatchListener(sharedDispatchListenerOpts));
   }
   for (const listener of dispatchListeners) {
     await listener.start();
@@ -4633,6 +4573,13 @@ export async function startCortex(
     liveFragmentAgents = [...freshFragments];
     liveMergedAgents = freshMerged;
     agentRegistry = AgentRegistry.fromAgents(freshMerged);
+    const freshTaskAgents = taskCapableAgents(freshMerged, isExecBrainAgent);
+    if (freshTaskAgents.length !== taskAgents.length || freshTaskAgents.some((agent) => {
+      const bootAgent = taskAgents.find((prior) => prior.id === agent.id);
+      return bootAgent === undefined || !agentsEqual(bootAgent, agent);
+    })) {
+      console.warn("cortex: task receiver configuration changed; restart Cortex before dispatching to updated agents");
+    }
     agentGeneration += 1;
 
     // ── cortex#1720 S1 — scaffold-on-activation for added + changed agents. ──

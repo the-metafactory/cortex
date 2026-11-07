@@ -1330,7 +1330,7 @@
   },
   "src/bus/review-events.ts": {
     "cortex/no-comments": {
-      "count": 76
+      "count": 65
     }
   },
   "src/bus/sovereignty-gate.ts": {
@@ -1929,11 +1929,6 @@
   "src/cli/cortex/commands/network-ping-ports.ts": {
     "cortex/no-comments": {
       "count": 14
-    }
-  },
-  "src/cli/cortex/commands/network-ping-signer.ts": {
-    "cortex/no-comments": {
-      "count": 13
     }
   },
   "src/cli/cortex/commands/network-ports.ts": {
@@ -3183,7 +3178,7 @@
       "count": 3
     },
     "cortex/no-comments": {
-      "count": 3008
+      "count": 2952
     }
   },
   "src/gateway/__tests__/binding-resolver.test.ts": {
@@ -3526,11 +3521,6 @@
       "count": 37
     }
   },
-  "src/runner/__tests__/chat-capable-agents.test.ts": {
-    "cortex/no-comments": {
-      "count": 7
-    }
-  },
   "src/runner/__tests__/co7-egress-pipeline.test.ts": {
     "cortex/no-comments": {
       "count": 4
@@ -3578,7 +3568,7 @@
   },
   "src/runner/__tests__/dispatch-listener.test.ts": {
     "cortex/no-comments": {
-      "count": 563
+      "count": 557
     }
   },
   "src/runner/__tests__/dm-trust-chain.test.ts": {
@@ -3788,11 +3778,6 @@
     },
     "cortex/no-comments": {
       "count": 266
-    }
-  },
-  "src/runner/chat-capable-agents.ts": {
-    "cortex/no-comments": {
-      "count": 2
     }
   },
   "src/runner/claude-invoker.ts": {
