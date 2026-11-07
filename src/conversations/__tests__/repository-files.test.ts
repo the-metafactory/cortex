@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, opendir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 import type { ToolsConfig } from "../../common/types/desk-conversations";
@@ -42,7 +42,148 @@ async function fixture() {
   return { dir, root, privateRoot, config, session, seen, surface, call };
 }
 
+async function useCheckout(r: Awaited<ReturnType<typeof fixture>>, name: string): Promise<string> {
+  const root = join(r.dir, name);
+  await mkdir(root);
+  r.config.projects[0]!.root = root;
+  return root;
+}
+
 describe("repository file dispatch on real checkouts", () => {
+  for (const kind of ["binary", "oversized"] as const) test(`search does not suggest retrying ${kind} files`, async () => {
+    const r = await fixture();
+    const path = join(r.root, "src", "skipped.dat");
+    await writeFile(path, kind === "binary" ? Buffer.from([0, 1, 255]) : "x".repeat(FILE_BYTES + 1));
+    const result = body(await r.call("repo_search", { path: "src", query: "absent" }));
+    expect(result.skipped).toContainEqual(expect.objectContaining({ path: "src/skipped.dat", status: kind === "oversized" ? "truncated" : kind }));
+    expect(result.coverage).toMatchObject({ inventoryComplete: true, inventoriedFiles: 2, searchedFiles: 1, pendingFiles: 0, retryPaths: [], retryFiles: [] });
+    expect(result.coverage.guidance).toBeUndefined();
+  });
+
+  test("policy exclusions do not make the permitted inventory incomplete even when skip details overflow", async () => {
+    const r = await fixture();
+    for (let index = 0; index < 45; index++) await writeFile(join(r.root, `.env.synthetic-${index}`), PRIVATE);
+    const result = body(await r.call("repo_search", { query: "absent" }));
+    expect(result.skippedCount).toBeGreaterThan(40);
+    expect(result.reasons).toContain("skipped-limit");
+    expect(result.coverage).toMatchObject({ inventoryComplete: true, inventoriedFiles: 1, searchedFiles: 1, pendingFiles: 0, retryPaths: [], retryFiles: [] });
+    expect(result.coverage.guidance).toBeUndefined();
+  });
+
+  test("unreadable directories still mark the inventory incomplete", async () => {
+    const r = await fixture();
+    await chmod(join(r.root, "src"), 0);
+    try {
+      const result = body(await r.call("repo_search", { query: "absent" }));
+      expect(result.skipped).toContainEqual({ path: "src", status: "denied", reason: "checkout-boundary-unavailable" });
+      expect(result.coverage.inventoryComplete).toBe(false);
+      expect(result.coverage.guidance).toContain("repo_list");
+    } finally { await chmod(join(r.root, "src"), 0o700); }
+  });
+
+  test("a file larger than the remaining read budget stays pending for a narrower search", async () => {
+    const r = await fixture();
+    const root = await useCheckout(r, "remaining-budget-checkout");
+    for (let index = 0; index < 8; index++) await writeFile(join(root, `artifact-${index}`), "n".repeat(240 * 1024));
+    await mkdir(join(root, "src"));
+    const ending = `\n${PUBLIC}\n`;
+    await writeFile(join(root, "src", "source.ts"), "n".repeat(FILE_BYTES - Buffer.byteLength(ending)) + ending);
+    const result = body(await r.call("repo_search", { query: "syntheticBeacon" }));
+    expect(result.reasons).toContain("read-byte-limit");
+    expect(result.coverage).toMatchObject({ searchedFiles: 8, pendingFiles: 1, retryPaths: ["src"], readBytes: 8 * 240 * 1024 });
+    const narrowed = body(await r.call("repo_search", { path: "src", query: "syntheticBeacon" }));
+    expect(narrowed.results).toContainEqual(expect.objectContaining({ path: "src/source.ts", lines: [{ line: 2, text: PUBLIC, truncated: false }] }));
+    expect(narrowed.coverage.pendingFiles).toBe(0);
+  });
+
+  for (const nested of [false, true]) test(`root search reaches source text after large ${nested ? "directories" : "files"}`, async () => {
+    const r = await fixture();
+    const root = await useCheckout(r, "budget-checkout");
+    for (let index = 0; index < 12; index++) {
+      const path = join(root, `artifact-${index}`);
+      if (nested) await mkdir(path);
+      await writeFile(nested ? join(path, "data.txt") : path, "n".repeat(FILE_BYTES));
+    }
+    const entries: string[] = [];
+    for await (const entry of await opendir(root)) entries.push(entry.name);
+    const target = nested ? `${entries.at(-1)!}/source.ts` : entries.at(-1)!;
+    await writeFile(join(root, target), `first line\n${PUBLIC}\n`);
+    const result = body(await r.call("repo_search", { query: "syntheticBeacon" }));
+    expect(result.results).toContainEqual(expect.objectContaining({ path: target, lines: [{ line: 2, text: PUBLIC, truncated: false }] }));
+  });
+
+  test("budget coverage gives a working narrower search when equally large files cannot all be searched", async () => {
+    const r = await fixture();
+    const root = await useCheckout(r, "coverage-checkout");
+    for (let index = 0; index < 12; index++) {
+      const dir = join(root, `shard-${String(index).padStart(2, "0")}`);
+      await mkdir(dir);
+      const ending = index === 11 ? `\n${PUBLIC}\n` : "\nno match\n";
+      await writeFile(join(dir, "source.ts"), "n".repeat(FILE_BYTES - Buffer.byteLength(ending)) + ending);
+    }
+    const result = body(await r.call("repo_search", { query: "syntheticBeacon" }));
+    expect(result).toMatchObject({ status: "truncated", results: [], reasons: ["read-byte-limit"], coverage: {
+      path: ".", order: "small-files-first", entriesVisited: 25, entryLimit: 2_000, inventoryComplete: true,
+      inventoriedFiles: 12, searchedFiles: 8, pendingFiles: 4, readBytes: 2 * 1024 * 1024, readByteLimit: 2 * 1024 * 1024,
+      retryPathsTruncated: false,
+    } });
+    expect(result.coverage.retryPaths).toContain("shard-11");
+    expect(result.coverage.guidance).toContain("repo_search");
+    expect(result.coverage.guidance).toContain("repo_list");
+    const narrowed = body(await r.call("repo_search", { path: "shard-11", query: "syntheticBeacon" }));
+    const direct = body(await r.call("repo_read", { path: "shard-11/source.ts", startLine: 2, lines: 1 }));
+    expect(narrowed.results[0]).toEqual(direct.results[0]);
+    expect(narrowed.coverage).toMatchObject({ inventoriedFiles: 1, searchedFiles: 1, pendingFiles: 0, readBytes: FILE_BYTES });
+  });
+
+  test("entry-limited inventories still search collected files and report unknown tree coverage", async () => {
+    const r = await fixture();
+    const root = await useCheckout(r, "entry-checkout");
+    await Promise.all(Array.from({ length: 2_010 }, (_, index) => writeFile(join(root, `source-${index}.ts`), PUBLIC)));
+    const partial = body(await r.call("repo_search", { query: "absent" }));
+    expect(partial.reasons).toContain("entry-limit");
+    expect(partial.coverage).toMatchObject({ entriesVisited: 2_000, inventoryComplete: false, inventoriedFiles: 1_999, searchedFiles: 1_999, pendingFiles: 0 });
+    expect(partial.coverage.guidance).toContain("repo_list");
+    const matches = body(await r.call("repo_search", { query: "syntheticBeacon", limit: 1 }));
+    expect(matches.results).toHaveLength(1);
+    expect(matches.results[0].lines[0]).toMatchObject({ line: 1, text: PUBLIC });
+    expect(matches.coverage.readBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+  });
+
+  test("budget exhaustion among root files suggests direct reads instead of repeating the root search", async () => {
+    const r = await fixture();
+    for (let index = 0; index < 12; index++) await writeFile(join(r.root, `flat-${String(index).padStart(2, "0")}.ts`), "n".repeat(FILE_BYTES));
+    const ending = `\n${PUBLIC}\n`;
+    await writeFile(join(r.root, "flat-11.ts"), "n".repeat(FILE_BYTES - Buffer.byteLength(ending)) + ending);
+    const result = body(await r.call("repo_search", { query: "syntheticBeacon" }));
+    expect(result.coverage.retryPaths).not.toContain(".");
+    expect(result.coverage.retryFiles).toContain("flat-11.ts");
+    expect(result.coverage.guidance).toContain("repo_read");
+    const direct = body(await r.call("repo_read", { path: "flat-11.ts", startLine: 2, lines: 1 }));
+    expect(direct.results[0].lines).toEqual([{ line: 2, text: PUBLIC, truncated: false }]);
+  });
+
+  test("partial search output and retry metadata stay bounded", async () => {
+    const r = await fixture();
+    const root = await useCheckout(r, "bounded-checkout");
+    for (let index = 0; index < 24; index++) {
+      const dir = join(root, `shard-${index}-${"a".repeat(220)}`);
+      await mkdir(dir);
+      await writeFile(join(dir, "source.ts"), "n".repeat(FILE_BYTES));
+    }
+    const outcome = await r.call("repo_search", { query: "absent" });
+    const partial = body(outcome);
+    expect(partial.coverage).toMatchObject({ inventoriedFiles: 24, searchedFiles: 8, pendingFiles: 16, retryPathsTruncated: true });
+    expect(partial.coverage.retryPaths.length).toBeLessThanOrEqual(12);
+    expect(JSON.stringify(partial.coverage.retryPaths).length).toBeLessThanOrEqual(2_002);
+    expect(outcome.text.length).toBeLessThan(20_000);
+    await writeFile(join(root, "matches.ts"), `${"syntheticBeacon".repeat(60)}\n`.repeat(100));
+    const output = body(await r.call("repo_search", { query: "syntheticBeacon", limit: 100 }));
+    expect(output.reasons).toContain("output-limit");
+    expect(output.results[0].lines.length).toBeLessThan(100);
+    expect(output.coverage.pendingFiles).toBeGreaterThan(0);
+  });
+
   test("reads working files with canonical citations and content provenance without git execution", async () => {
     const r = await fixture();
     const read = body(await r.call("repo_read", { path: "src/beacon.ts", startLine: 2, lines: 1 }));
@@ -65,6 +206,9 @@ describe("repository file dispatch on real checkouts", () => {
     expect(body(search).skipped).toContainEqual({ path: ".env", status: "denied", reason: "excluded-path" });
     expect(search.text).not.toContain(PRIVATE);
     expect(body(await r.call("repo_search", { path: "src", query: ".*" })).results).toEqual([]);
+    const excluded = body(await r.call("repo_search", { path: "excluded", query: PRIVATE }));
+    expect(excluded).toMatchObject({ status: "denied", disclosedBytes: 0 });
+    expect(excluded.coverage).toBeUndefined();
     expect((await r.call("repo_search", { query: "x", command: "cat /etc/passwd" })).outcome).toBe("refused");
   });
 
@@ -261,6 +405,8 @@ describe("repository file dispatch on real checkouts", () => {
     await writeFile(join(r.root, "src", "deep", "deep.txt"), PUBLIC);
     const shallow = body(await r.call("repo_search", { path: "src", depth: 0, query: "syntheticBeacon" }));
     expect(shallow.reasons).toContain("depth-limit");
+    expect(shallow.coverage).toMatchObject({ inventoryComplete: false, searchedFiles: 1 });
+    expect(shallow.coverage.guidance).toContain("repo_list");
     expect(shallow.results.every((item: { path: string }) => item.path !== "src/deep/deep.txt")).toBe(true);
     for (let i = 0; i < 12; i++) await writeFile(join(r.root, "src", `budget-${i}.txt`), "n".repeat(FILE_BYTES));
     expect(body(await r.call("repo_search", { path: "src", query: "absent" })).reasons).toContain("read-byte-limit");
