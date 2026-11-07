@@ -6,7 +6,7 @@ import { mailYesFilter, readMailDecision } from "./mail-yes-filter";
 import { calendarsOnly, invitationDecisions, invitationView, withoutAnsweredRead, type InvitationsConfig, type InvitationView } from "./mail-invitation";
 import { readStudioDesk } from "./studio-my-day";
 import { movedKeys, sourceIdentity } from "./my-day";
-import { calendarSetting, discoverCalendars, type ReturnedCalendars } from "./calendars";
+import { calendarName, calendarSetting, discoverCalendars, type ReturnedCalendars } from "./calendars";
 import { calendarAvailability } from "./calendar-availability";
 import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
@@ -445,8 +445,9 @@ function returnedCalendars(reading: SourceReading): ReturnedCalendars[] {
   const coverage = reading.calendarCoverage;
   const trustworthy = reading.error === null && reading.problems.length === 0 && reading.dropped === 0 && coverage?.status === "complete" && coverage.calendars.length > 0;
   if (!trustworthy) return [];
-  const withEvents = reading.events.flatMap(event => event.calendarId ? [event.calendarId] : []);
-  return [{ source: reading.id, calendarIds: [...coverage.calendars.map(calendar => calendar.id), ...withEvents] }];
+  const withIds = reading.events.flatMap(event => event.calendarId ? [event.calendarId] : []);
+  const namedOnly = reading.events.flatMap(event => event.calendarId ? [] : [calendarName({ ...event, sourceId: reading.id })]);
+  return [{ source: reading.id, calendarIds: [...coverage.calendars.map(calendar => calendar.id), ...withIds], names: namedOnly }];
 }
 
 type CalendarEvent = SourceEvent & { area: string | null; sourceId: string; color?: string };

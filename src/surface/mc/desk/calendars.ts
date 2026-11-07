@@ -21,7 +21,7 @@ type IdentityRow = CalendarRow & { calendarId: string; legacyName: string; retir
 type SavedPreference = Pick<CalendarRow, "enabled" | "color">;
 
 /** Every calendar one source's complete reading returned. Only such a reading can retire a row. */
-export interface ReturnedCalendars { source: string; calendarIds: string[] }
+export interface ReturnedCalendars { source: string; calendarIds: string[]; names: string[] }
 
 export const calendarKey = (source: string, name: string, calendarId?: string): string => JSON.stringify(calendarId === undefined ? [source, name] : [source, "id", calendarId]);
 export const calendarName = (event: CalendarEvent): string => event.calendar ?? event.sourceId;
@@ -46,7 +46,7 @@ export function calendarSetting(settings: Map<string, DeskCalendar>, event: Cale
 }
 
 function retireUnreturned(db: Database, returned: ReturnedCalendars, now: number): void {
-  db.query("UPDATE desk_calendar_identities SET retired_at = ? WHERE source = ? AND retired_at IS NULL AND calendar_id NOT IN (SELECT value FROM json_each(?))").run(now, returned.source, JSON.stringify(returned.calendarIds));
+  db.query("UPDATE desk_calendar_identities SET retired_at = ? WHERE source = ? AND retired_at IS NULL AND calendar_id NOT IN (SELECT value FROM json_each(?)) AND name NOT IN (SELECT value FROM json_each(?))").run(now, returned.source, JSON.stringify(returned.calendarIds), JSON.stringify(returned.names));
 }
 
 export function discoverCalendars(db: Database, events: CalendarEvent[], returned: ReturnedCalendars[] = [], now = Date.now()): Map<string, DeskCalendar> {

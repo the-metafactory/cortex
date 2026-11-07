@@ -54,6 +54,14 @@ describe("Desk calendar retirement", () => {
     expect(ids(db)).toContain("old");
   });
 
+  it("keeps an event that names its calendar without an id visible, and its row", async () => {
+    changeCalendar(db, { source: "one", name: "Home", calendarId: "older", enabled: true });
+    const start = new Date(NOW + 300000).toISOString();
+    const desk = await read(db, JSON.stringify({ capabilities: ["calendar"], events: [{ id: "a", title: "Meeting", start, calendar: "Home" }], calendarCoverage: { ...coverage(["other"]), calendars: [{ id: "other", name: "Other" }] } }));
+    expect(desk.today.map(entry => entry.title)).toEqual(["Meeting"]);
+    expect(ids(db)).toEqual(expect.arrayContaining(["older", "old", "newest"]));
+  });
+
   it("retires nothing on a partial, empty, failed or coverage-less reading", async () => {
     const before = listCalendars(db);
     for (const output of [reading(["newest"], "partial"), reading([]), new Error("reader is down"), JSON.stringify({ capabilities: ["calendar"], events: [] })]) {
