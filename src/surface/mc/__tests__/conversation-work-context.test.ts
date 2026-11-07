@@ -1,3 +1,4 @@
+import type { StudioEvidenceInput } from "../../../conversations/tools/studio-evidence";
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
@@ -212,4 +213,52 @@ describe("work context tools over the real Studio, Balance and Desk owner reads"
     expect(seen.projects.results.map((r: any) => r.id)).toEqual(["project-glider"]);
     expect(seen.tail).toMatchObject({ status: "ok", object: { id: "task-tail", area: "Lab" } });
   });
+});
+
+test.each([["cloud", "web"], ["local", "discord"], ["cloud", "discord"]] as const)("Studio evidence respects %s policy over %s and prevents a thread argument bypassing global evidence restrictions", async (policy, transport) => {
+  const results: Record<string, any>[] = [];
+  const { host } = await rig(async (_request, call) => {
+    results.push(await call("studio_evidence", { scope: "notes", thread: "wing" }));
+    results.push(await call("studio_evidence", { scope: "overseer", thread: "garden" }));
+    results.push(await call("studio_evidence", { scope: "selections", thread: "garden", run: "11111111-1111-4111-8111-111111111111" }));
+    results.push(await call("studio_evidence", { scope: "history", thread: "garden" }));
+    results.push(await call("studio_evidence", { scope: "notes", thread: "garden", limit: 1 }));
+    return "Inspected.";
+  });
+  await run(host, policy, transport);
+  for (const result of results.slice(0, 4)) expect(result.status).toBe("unauthorized");
+  expect(["ok", "empty"]).toContain(results[4]?.status);
+});
+
+test("Studio evidence retains owner authorization and withholds a policy change before release", async () => {
+  let result: Record<string, any> = {};
+  const { host } = await rig(async (_request, call) => {
+    result = await call("studio_evidence", { scope: "notes", thread: "garden" });
+    return "Inspected.";
+  });
+  const id = await run(host, "cloud");
+  expect(["ok", "empty"]).toContain(result.status);
+  await host.attachSources(conversationSources({ db: databases.at(-1)!, desk: () => undefined }));
+  await expect(host.submit(id, { inputId: randomUUID(), transport: "web", text: "Continue", mode: "queue" })).rejects.toThrow(/no longer authorized/);
+});
+
+test("Studio evidence releases no data when a source tightens during the read", async () => {
+  let result: Record<string, any> = {};
+  let tightened = false;
+  const { host } = await rig(async (_request, call) => {
+    result = await call("studio_evidence", { scope: "notes", thread: "garden" });
+    return "Inspected.";
+  }, { wrap: sources => ({ ...sources, get readers() {
+    const readers = sources.readers!;
+    const inner = readers["studio-thread"]!;
+    return { ...readers, "studio-thread": { ...inner, readMany: undefined, evidence: async (input: StudioEvidenceInput) => {
+      const evidence = await inner.evidence!(input); tightened = true; return evidence;
+    }, read: async (id: string) => {
+      const read = await inner.read(id);
+      return tightened && read.state === "available" ? { ...read, object: { ...read.object, policy: "local" as const } } : read;
+    } } };
+  } }) });
+  await run(host, "cloud");
+  expect(result.status).toBe("unauthorized");
+  expect(JSON.stringify(result)).not.toContain("content");
 });

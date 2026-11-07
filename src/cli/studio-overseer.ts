@@ -1,3 +1,4 @@
+import { newOverseerRun, saveOverseerRun } from "../surface/mc/desk/studio/overseer-audit";
 import { existsSync, lstatSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -9,7 +10,7 @@ import { readCommittedStudioFiles } from "../surface/mc/desk/studio/committed";
 import { buildStudioView } from "../surface/mc/desk/studio/view";
 import { acquireStudioLock } from "../surface/mc/desk/studio/write-lock";
 import { THEME_LEDGER_PATH, proposalProvenance, readThemeLedger, type ThemeLedger, type ThemeLedgerSnapshot } from "../surface/mc/desk/studio/overseer-ledger";
-import { recurringThemes, selectThinking, type ThemeProposal } from "../surface/mc/desk/studio/overseer";
+import { recurringThemes, considerThinking, type ThemeProposal } from "../surface/mc/desk/studio/overseer";
 
 export const OverseerConfig = z.object({
   dir: z.string().min(1),
@@ -85,10 +86,18 @@ async function persistProposals(input: { dir: string; pending: ThemeProposal[]; 
   return input.pending.map(theme => theme.id);
 }
 
-export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = new Date()): Promise<{ queued: string[]; proposals: string[] }> {
+export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = new Date(), watch = false): Promise<{ queued: string[]; proposals: string[] }> {
   const dir = await realpath(config.dir);
+  const audit = newOverseerRun(now);
+  audit.schedule = { mode: watch ? "watch" : "manual", intervalMs: watch ? 15 * 60_000 : null, pollMs: watch ? 5000 : null, enabledAtObservation: watch ? true : null };
+  audit.staleDays = config.staleDays;
+  await saveOverseerRun(dir, audit);
   const release = await acquireStudioLock(dir);
-  if (!release) throw new Error("Another Studio writer holds the lock");
+  if (!release) {
+    audit.status = "failed"; audit.failure = "Another Studio writer holds the lock"; audit.endedAt = new Date().toISOString();
+    await saveOverseerRun(dir, audit);
+    throw new Error(audit.failure);
+  }
   try {
     const git = (args: string[]) => command(["git", ...args], dir);
     if (await git(["status", "--porcelain", "--untracked-files=all"])) throw new Error("Studio has uncommitted changes; overseer deferred");
@@ -128,7 +137,14 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
     const pending = themes.filter(theme => !studio.proposals.some(proposal => proposal.id === theme.id));
     const today = now.toISOString().slice(0, 10);
     const queued = new Map(Object.entries(previous?.queued ?? {}));
-    const selections = selectThinking({ studio, now: now.getTime(), staleDays: config.staleDays, changedAt, newMaterial, events: [...desk.today, ...desk.ahead] }).filter(selection => queued.get(selection.thread) !== today);
+    const considered = considerThinking({ studio, now: now.getTime(), staleDays: config.staleDays, changedAt, newMaterial, events: [...desk.today, ...desk.ahead] });
+    audit.selections = considered.map(row => {
+      const reason = pending.length ? "Deferred while recurring-theme proposals are committed" : queued.get(row.thread) === today ? "Already queued today" : row.reason;
+      const selected = row.selected && queued.get(row.thread) !== today && !pending.length;
+      return { thread: row.thread, selected, reason, jobUuid: null, jobId: null, enqueue: "not-requested" as const };
+    });
+    const selections = audit.selections.filter(row => row.selected).map(row => ({ thread: row.thread, trigger: row.reason }));
+    await saveOverseerRun(dir, audit);
     const unchanged = async (): Promise<void> => {
       if (await git(["rev-parse", "HEAD"]) !== head || await git(["status", "--porcelain", "--untracked-files=all"])) throw new Error("Studio changed during overseer scan; deferred");
       if ((await readThemeLedger(dir, head)).text !== ledger.text) throw new Error("Studio theme provenance changed during scan; deferred");
@@ -137,6 +153,8 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
     };
     await unchanged();
     const proposals = await persistProposals({ dir, pending, now, git, ledger, provenance, head, unchanged });
+    audit.proposals = proposals;
+    await saveOverseerRun(dir, audit);
     const save = async (): Promise<void> => {
       const state = { head: await git(["rev-parse", "HEAD"]), material: Object.fromEntries(material), queued: Object.fromEntries(queued), pendingMaterial: [...newMaterial], changedAt: Object.fromEntries(changedAt) };
       await writeFile(`${statePath}.tmp`, JSON.stringify(state), { mode: 0o600 });
@@ -144,14 +162,45 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
     };
     const enqueued: string[] = [];
     if (!pending.length) for (const selection of selections) {
-      await command([...config.ranger, "job", "enqueue", "ivy-think", "--param", `thread=${selection.thread}`, "--param", `trigger=${selection.trigger}`], dir);
+      const evidence = audit.selections.find(item => item.thread === selection.thread);
+      if (!evidence) throw new Error("Selected thread has no audit record");
+      evidence.enqueue = "pending";
+      await saveOverseerRun(dir, audit);
+      try {
+        const receipt = z.object({ runId: z.number().int().positive(), queued: z.boolean() }).parse(JSON.parse(await command([...config.ranger, "job", "enqueue", "ivy-think", "--param", `thread=${selection.thread}`, "--param", `trigger=${selection.trigger}`], dir)));
+        evidence.jobId = receipt.runId;
+        evidence.created = receipt.queued;
+        evidence.enqueue = "confirmed";
+        try {
+          const queue = z.object({ directory: z.string(), runs: z.array(z.object({ id: z.number(), runUuid: z.uuid(), params: z.object({ thread: z.string() }) })) }).parse(JSON.parse(await command([...config.ranger, "job", "list", "--studio"], dir)));
+          if (await realpath(queue.directory) !== dir) throw new Error("Ranger receipt belongs to another Studio directory");
+          const job = queue.runs.find(job => job.id === receipt.runId && job.params.thread === selection.thread);
+          if (!job) throw new Error("Ranger did not expose the queued job UUID");
+          evidence.jobUuid = job.runUuid;
+        } catch (error) {
+          evidence.provenanceFailure = error instanceof Error ? error.message : String(error);
+        }
+        await saveOverseerRun(dir, audit);
+      } catch (error) {
+        evidence.enqueue = "uncertain";
+        throw error;
+      }
       queued.set(selection.thread, today);
       newMaterial.delete(selection.thread);
       enqueued.push(selection.thread);
       await save();
     }
     await save();
+    audit.status = "succeeded";
+    audit.endedAt = new Date().toISOString();
+    await saveOverseerRun(dir, audit);
     return { queued: enqueued, proposals };
+  } catch (error) {
+    audit.status = "failed";
+    audit.failure = error instanceof Error ? error.message : String(error);
+    audit.endedAt = new Date().toISOString();
+    await saveOverseerRun(dir, audit);
+    throw error;
   } finally { await release(); }
 }
 
@@ -159,7 +208,7 @@ if (import.meta.main) {
   const path = process.argv[2];
   if (!path) throw new Error("Usage: bun studio-overseer.ts <config.yaml> [--watch-studio]");
   const config = OverseerConfig.parse(parse(await readFile(path, "utf8")));
-  const scan = async (): Promise<boolean> => { try { process.stdout.write(`${JSON.stringify(await runOverseer(config))}\n`); return true; } catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); if (!process.argv.includes("--watch-studio")) process.exitCode = 1; return false; } };
+  const scan = async (): Promise<boolean> => { try { process.stdout.write(`${JSON.stringify(await runOverseer(config, new Date(), process.argv.includes("--watch-studio")))}\n`); return true; } catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); if (!process.argv.includes("--watch-studio")) process.exitCode = 1; return false; } };
   await scan();
   if (process.argv.includes("--watch-studio")) {
     let running = false;

@@ -1,3 +1,4 @@
+import type { StudioEvidence, StudioEvidenceInput } from "./studio-evidence";
 import { z } from "zod/v4";
 import { routePolicy, type Policy } from "../types";
 import type { ToolDefinition, ToolSession } from "./capabilities";
@@ -21,6 +22,7 @@ export interface WorkObject {
 }
 export type WorkRead = { state: "available"; object: WorkObject } | { state: "unavailable"; reason: "gone" | "unauthorized" };
 export interface WorkReader {
+  evidence?: (input: StudioEvidenceInput) => Promise<StudioEvidence>;
   search: (query: string, limit: number, offset: number) => Promise<{ items: WorkObject[]; more: boolean }>;
   read: (id: string) => Promise<WorkRead>;
   readMany?: (ids: readonly string[]) => Promise<WorkRead[]>;

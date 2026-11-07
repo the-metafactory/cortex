@@ -1,3 +1,5 @@
+import { OVERSEER_WORK_ID } from "../../../conversations/tools/studio-evidence";
+import { readStudioEvidence } from "./studio/evidence";
 import type { Database } from "bun:sqlite";
 import { findNode } from "../../../balance";
 import type { OutlineNode } from "../../../balance/core/types";
@@ -101,6 +103,7 @@ export function workReaders(deps: WorkReaderDeps): WorkReaders {
   const studioOne = async (id: string): Promise<WorkRead> => {
     const desk = deps.desk();
     if (!desk || !deps.studioView(desk)) return NOT_AUTHORIZED;
+    if (id === OVERSEER_WORK_ID) return { state: "available", object: { kind: "studio-thread", id, title: "Studio overseer evidence", status: "evidence", summary: "Scheduling evidence does not prove completed thinking", policy: "local", area: null, url: "?desk=studio", observedAt: deps.now() } };
     const object = (await studio()).find(o => o.id === id);
     return object ? { state: "available", object } : GONE;
   };
@@ -110,7 +113,26 @@ export function workReaders(deps: WorkReaderDeps): WorkReaders {
     const object = (await items()).find(o => o.id === id);
     return object ? { state: "available", object } : GONE;
   };
-  if (deps.desk()?.studio) readers["studio-thread"] = reader(studio, studioOne);
+  if (deps.desk()?.studio) readers["studio-thread"] = {
+    ...reader(studio, studioOne),
+    evidence: async input => {
+      const desk = deps.desk();
+      const view = desk ? await deps.studioView(desk) : null;
+      if (!desk?.enabled || !desk.studio || !view) return { data: { status: "unavailable" }, sources: [] };
+      const threads = [...view.active, ...view.parked, ...view.closed];
+      const thread = threads.find(thread => thread.slug === input.thread);
+      if (input.thread && !thread) return { data: { status: "gone" }, sources: [] };
+      const data = await readStudioEvidence(desk, input, thread);
+      const objects = await studio();
+      const sources = input.scope === "selections" && !thread ? objects : objects.filter(object => object.id === thread?.slug);
+      if ("policy" in data && data.policy === "local") {
+        const restricted = await studioOne(OVERSEER_WORK_ID);
+        if (restricted.state !== "available") return { data: { status: "unauthorized" }, sources: [] };
+        sources.push(restricted.object);
+      }
+      return { data, sources };
+    },
+  };
   readers["balance-task"] = reader(() => Promise.resolve(balance("balance-task")()), balanceOne("balance-task"));
   readers["balance-project"] = reader(() => Promise.resolve(balance("balance-project")()), balanceOne("balance-project"));
   if (deps.deskItems) readers["desk-item"] = reader(items, itemOne);

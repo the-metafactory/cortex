@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runStudioAct } from "../surface/mc/desk/studio/writer";
+import { overseerRunIds, readOverseerRun } from "../surface/mc/desk/studio/overseer-audit";
 import { runOverseer } from "./studio-overseer";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -13,6 +14,19 @@ afterAll(() => { for (const [key, value] of hostGitConfigOverrides) process.env[
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 const thread = (tonight = false) => `---\ntype: question\nareas: [lab]\nstate: active\nopened: 2026-10-31\nthinkTonight: ${tonight}\n---\n## Question\nWhat can we test?\n## Where I stand\nOne real repository.\n## Material\n- capture: baseline\n## Ivy's notes\n## Log\n`;
 
+const fixtureJobUuid = "11111111-1111-4111-8111-111111111111";
+const rangerStub = (calls: string, dir: string, gate?: string): string => `import { appendFileSync, existsSync, readFileSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args.includes("list")) {
+  const queued = JSON.parse(readFileSync(${JSON.stringify(calls)}, "utf8").trim().split("\\n").at(-1));
+  const thread = queued.find(arg => arg.startsWith("thread=")).slice(7);
+  console.log(JSON.stringify({directory:${JSON.stringify(dir)},runs:[{id:1,runUuid:${JSON.stringify(fixtureJobUuid)},params:{thread}}]}));
+} else {
+  appendFileSync(${JSON.stringify(calls)},JSON.stringify(args)+"\\n");
+  if (args.includes("thread=beta") && ${JSON.stringify(gate ?? "")} && existsSync(${JSON.stringify(gate ?? "")})) process.exit(1);
+  console.log(JSON.stringify({runId:1,queued:true}));
+}`;
+
 async function rig(tonight = false, format = "sha1") {
   const dir = await mkdtemp(join(tmpdir(), "overseer-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
@@ -22,7 +36,7 @@ async function rig(tonight = false, format = "sha1") {
   git("init", "-q", `--object-format=${format}`); git("config", "user.name", "Fixture"); git("config", "user.email", "fixture@example.invalid"); git("add", "."); git("commit", "-qm", "fixture");
   const calls = join(dir, ".git/calls.jsonl");
   const stub = join(dir, ".git/ranger.ts");
-  await writeFile(stub, `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2))+"\\n");`);
+  await writeFile(stub, rangerStub(calls, dir));
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) { return Response.json(new URL(request.url).pathname.endsWith("studio") ? { directory: dir, studio: { maxActive: 5, areas: [{ id: "lab", label: "Lab", color: "blue", policy: "local" }] } } : { today: [], ahead: [] }); } });
   cleanup.push(async () => { await server.stop(true); });
   return { dir, git, calls, config: { dir, deskUrl: `http://127.0.0.1:${server.port}`, ranger: [process.execPath, stub], staleDays: 600000 } };
@@ -229,7 +243,7 @@ test("a later enqueue failure preserves earlier successful daily checkpoints", a
  r.git("add", "."); r.git("commit", "-qm", "second tonight thread");
  const gate=join(r.dir,".git/fail-beta");
  await writeFile(gate,"fail");
- await writeFile(join(r.dir,".git/ranger.ts"), `import { appendFileSync, existsSync } from "node:fs"; const args=process.argv.slice(2); appendFileSync(${JSON.stringify(r.calls)},JSON.stringify(args)+"\\n"); if(args.includes("thread=beta")&&existsSync(${JSON.stringify(gate)}))process.exit(1);`);
+ await writeFile(join(r.dir,".git/ranger.ts"), rangerStub(r.calls, r.dir, gate));
  await expect(runOverseer(r.config)).rejects.toThrow("command failed");
  await rm(gate);
  expect((await runOverseer(r.config)).queued).toEqual(["beta"]);
@@ -326,4 +340,30 @@ test("rollback preserves a provenance file replaced by a manual symlink", async 
  await expect(runOverseer(r.config)).rejects.toThrow("concurrent edit");
  expect(await readFile(join(r.dir,".git/manual-ledger.json"),"utf8")).toContain("one");
  expect(r.git("status","--porcelain")).not.toBe("");
+});
+
+
+test("audit distinguishes scheduling success, skips and a failed partial scan", async () => {
+  const r = await rig(true);
+  await runOverseer(r.config);
+  await runOverseer(r.config);
+  const ids = await overseerRunIds(r.dir);
+  expect(ids).toHaveLength(2);
+  const first = await readOverseerRun(r.dir, ids[0]!);
+  expect(first).toMatchObject({ status: "succeeded", endedAt: expect.any(String), selections: [{ thread: "alpha", selected: true, enqueue: "confirmed", jobId: 1, jobUuid: fixtureJobUuid, created: true }] });
+  expect(await readOverseerRun(r.dir, ids[1]!)).toMatchObject({ selections: [{ selected: false, reason: "Already queued today", enqueue: "not-requested" }] });
+  await writeFile(join(r.dir, "threads/alpha.md"), "uncommitted");
+  await expect(runOverseer(r.config)).rejects.toThrow("uncommitted");
+  const failed = await readOverseerRun(r.dir, (await overseerRunIds(r.dir)).at(-1)!);
+  expect(failed).toMatchObject({ status: "failed", endedAt: expect.any(String), failure: expect.stringContaining("uncommitted") });
+});
+
+test("unavailable UUID readback preserves a confirmed enqueue and its daily checkpoint", async () => {
+  const r = await rig(true);
+  await writeFile(join(r.dir, ".git/ranger.ts"), `if (process.argv.includes("list")) process.exit(1);\n${rangerStub(r.calls, r.dir)}`);
+  expect(await runOverseer(r.config)).toEqual({ queued: ["alpha"], proposals: [] });
+  const audit = await readOverseerRun(r.dir, (await overseerRunIds(r.dir))[0]!);
+  expect(audit).toMatchObject({ status: "succeeded", selections: [{ enqueue: "confirmed", jobId: 1, jobUuid: null, provenanceFailure: expect.any(String) }] });
+  expect(await runOverseer(r.config)).toEqual({ queued: [], proposals: [] });
+  expect((await readFile(r.calls, "utf8")).trim().split("\n")).toHaveLength(1);
 });

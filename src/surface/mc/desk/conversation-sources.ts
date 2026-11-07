@@ -62,14 +62,15 @@ export interface SourceDeps {
 }
 
 export function conversationSources(deps: SourceDeps): HostSources {
-  let cached: { at: number; dir: string; view: Promise<StudioView> } | null = null;
+  let cached: { at: number; dir: string; policyStamp: string; view: Promise<StudioView> } | null = null;
   const now = deps.now ?? Date.now;
   const studioView = (desk: DeskOptions): Promise<StudioView> | null => {
     const studio = desk.studio;
     if (!desk.enabled || !studio) return null;
-    if (cached?.dir === studio.dir && now() - cached.at < FRESH_MS) return cached.view;
+    const policyStamp = JSON.stringify(desk.areas);
+    if (cached?.dir === studio.dir && cached.policyStamp === policyStamp && now() - cached.at < FRESH_MS) return cached.view;
     const view = readStudioFiles(studio.dir).then(({ files, problems }) => buildStudioView(files, studio, desk.areas, problems));
-    cached = { at: now(), dir: studio.dir, view };
+    cached = { at: now(), dir: studio.dir, policyStamp, view };
     view.catch(() => { if (cached?.view === view) cached = null; });
     return view;
   };

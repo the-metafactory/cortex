@@ -14,7 +14,7 @@ import { toolProvider } from "./fixtures/tool-provider";
 const { dirs, hosts } = scratchHosts("conversation-tools-pi-");
 const realPi = discoverPi();
 const PRIVATE = "LOCAL_ONLY_SYNTHETIC_MARKER";
-const HOST_TOOLS = ["capabilities", "conversation_read", "conversation_search", "creation_capabilities", "creation_propose", "creation_read_result", "creation_revise", "repo_read", "work_read", "work_search"];
+const HOST_TOOLS = ["capabilities", "conversation_read", "conversation_search", "creation_capabilities", "creation_propose", "creation_read_result", "creation_revise", "repo_read", "studio_evidence", "work_read", "work_search"];
 const call = (id: string, name: string, input: object) => ({ id, name, input });
 const input = (inputId: string) => ({ inputId, transport: "web" as const, mode: "queue" as const, text: "Investigate the synthetic project." });
 const read = (run: ToolDefinition["run"]): ToolDefinition => ({ name: "repo_read", description: "Read the configured synthetic project's fixture.", operation: "repo.read", input: z.object({ project: z.string() }).strict(), run });

@@ -8,15 +8,16 @@ import type { StudioView } from "./view";
 export interface ThinkSelection { thread: string; trigger: string }
 export interface ThemeProposal { id: string; question: string; area: string; reason: string; captures: string[] }
 
-export function selectThinking(input: { studio: StudioView; now: number; staleDays?: number; changedAt: ReadonlyMap<string, number>; newMaterial: ReadonlySet<string>; events: DeskEvent[] }): ThinkSelection[] {
+export function considerThinking(input: { studio: StudioView; now: number; staleDays?: number; changedAt: ReadonlyMap<string, number>; newMaterial: ReadonlySet<string>; events: DeskEvent[] }): { thread: string; selected: boolean; reason: string }[] {
   const { studio, now } = input;
   const today = new Date(now).toISOString().slice(0, 10);
   const dayStart = Date.parse(`${today}T00:00:00Z`);
-  const selected: ThinkSelection[] = [];
-  for (const thread of [...studio.active, ...studio.closed]) {
-    if (thread.notes.some(note => !note.sample && Date.parse(note.at) >= dayStart && Date.parse(note.at) < dayStart + 86_400_000)) continue;
+  const selected: { thread: string; selected: boolean; reason: string }[] = [];
+  for (const thread of [...studio.active, ...studio.parked, ...studio.closed]) {
+    if (thread.notes.some(note => !note.sample && Date.parse(note.at) >= dayStart && Date.parse(note.at) < dayStart + 86_400_000)) { selected.push({ thread: thread.slug, selected: false, reason: "Already has a note today" }); continue; }
+    if (thread.state === "parked") { selected.push({ thread: thread.slug, selected: false, reason: "Thread is parked" }); continue; }
     const dueReview = thread.outcome === "decided" && thread.reviewOn !== undefined && thread.reviewOn <= today;
-    if (thread.state === "closed" && !dueReview) continue;
+    if (thread.state === "closed" && !dueReview) { selected.push({ thread: thread.slug, selected: false, reason: "Closed without a due decision review" }); continue; }
     const triggers: string[] = [];
     if (dueReview) triggers.push(`Decision review due ${thread.reviewOn}`);
     if (thread.state === "active") {
@@ -27,9 +28,13 @@ export function selectThinking(input: { studio: StudioView; now: number; staleDa
       const changed = input.changedAt.get(thread.slug);
       if (changed !== undefined && now - changed >= (input.staleDays ?? 6) * 86_400_000) triggers.push(`Unchanged for ${input.staleDays ?? 6} days`);
     }
-    if (triggers.length) selected.push({ thread: thread.slug, trigger: triggers.join("; ").slice(0, 2000) });
+    selected.push({ thread: thread.slug, selected: triggers.length > 0, reason: triggers.length ? triggers.join("; ").slice(0, 2000) : "No thinking trigger matched" });
   }
   return selected;
+}
+
+export function selectThinking(input: Parameters<typeof considerThinking>[0]): ThinkSelection[] {
+  return considerThinking(input).filter(row => row.selected).map(row => ({ thread: row.thread, trigger: row.reason }));
 }
 
 const STOP_WORDS = new Set("about after again also and are been before being but can could for from have into its more need new our should some than that the their them then there these they this those through tonight want was were what when where which will with would you your".split(" "));

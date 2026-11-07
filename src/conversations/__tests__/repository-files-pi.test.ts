@@ -52,7 +52,7 @@ describe("installed Pi repository conversation probe", () => {
         expect(JSON.stringify(requests)).toContain('syntheticBeacon');
         expect(JSON.stringify(requests)).not.toContain(PRIVATE);
         expect(JSON.stringify(entries)).not.toContain(PRIVATE);
-        expect(requests[0]?.tools?.map(tool => tool.function.name).sort()).toEqual(["capabilities", "conversation_read", "conversation_search", "creation_capabilities", "creation_propose", "creation_read_result", "creation_revise", "repo_find", "repo_list", "repo_read", "repo_search", "work_read", "work_search"]);
+        expect(requests[0]?.tools?.map(tool => tool.function.name).sort()).toEqual(["capabilities", "conversation_read", "conversation_search", "creation_capabilities", "creation_propose", "creation_read_result", "creation_revise", "repo_find", "repo_list", "repo_read", "repo_search", "studio_evidence", "work_read", "work_search"]);
       }
     } finally { await host.close(); hosts.splice(hosts.indexOf(host), 1); await provider.close(); }
   }, 60_000);
