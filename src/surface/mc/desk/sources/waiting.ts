@@ -3,7 +3,7 @@ import { githubRef } from "../ruling";
 import { safeHttpUrl, type RangerState } from "./ranger";
 
 export type WaitingTask =
-  | { kind: "open" | "closed"; title: string; question: string | null; url: string }
+  | { kind: "open" | "closed"; title: string; question: string | null; url: string; body?: string }
   | { kind: "unavailable"; reason: string };
 
 export const TASK_UNAVAILABLE: WaitingTask = { kind: "unavailable", reason: "Source status could not be checked." };
@@ -43,7 +43,7 @@ export async function readWaitingTask(ref: string, fetchIssue: typeof fetchIssue
   if (!parsed || !Number.isSafeInteger(parsed.number)) return TASK_UNAVAILABLE;
   const result = await fetchIssue(parsed, { timeoutMs: 4000 });
   if ("kind" in result || (result.state !== "open" && result.state !== "closed") || !result.title.trim()) return TASK_UNAVAILABLE;
-  return { kind: result.state, title: result.title, question: questionSummary(result.body), url: safeHttpUrl(result.html_url) ?? `https://github.com/${repo}/issues/${id}` };
+  return { kind: result.state, title: result.title, question: questionSummary(result.body), body: result.body ?? "", url: safeHttpUrl(result.html_url) ?? `https://github.com/${repo}/issues/${id}` };
 }
 
 export class WaitingTasks {

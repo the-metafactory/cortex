@@ -125,7 +125,7 @@ describe("waiting source reads", () => {
       calls.push(ref);
       return { type: "issue", state: "open", title: "Choose a hull", labels: [], body: "## Question\n\nShould we use the ring?", html_url: "https://github.com/example/game/issues/12" };
     };
-    expect(await readWaitingTask("example/game#12", read)).toEqual(source("open", "Choose a hull", "Should we use the ring?"));
+    expect(await readWaitingTask("example/game#12", read)).toEqual({ ...source("open", "Choose a hull", "Should we use the ring?"), body: "## Question\n\nShould we use the ring?" });
     for (const ref of ["bad/repo/extra#12", "example/game#-1", "example/game#12;touch /tmp/no", "example/game#9007199254740993"]) {
       expect((await readWaitingTask(ref, read)).kind).toBe("unavailable");
     }

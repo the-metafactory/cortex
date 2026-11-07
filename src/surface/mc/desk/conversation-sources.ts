@@ -1,3 +1,4 @@
+import { grillingSource, type GrillingReads } from "./grilling-conversation";
 import type { Database } from "bun:sqlite";
 import { findNode } from "../../../balance";
 import type { HostSources } from "../../../conversations/host";
@@ -43,6 +44,7 @@ export function studioThreadOf(view: StudioView, slug: string): StudioThreadView
 }
 
 export interface SourceDeps {
+  grillingReads?: GrillingReads;
   db: Database;
   desk: () => DeskOptions | undefined;
   git?: GitRunner;
@@ -143,6 +145,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
       return deskWriterArgv(deps.desk(), "note") ? { "desk-note": DESK_NOTE_WITHHELD } : {};
     },
     resolvers: {
+      "graph-node": ref => grillingSource(deps.desk(), ref, deps.grillingReads),
       "studio-thread": async ref => {
         const read = await thread(ref.id);
         if ("missing" in read) return read.missing;
