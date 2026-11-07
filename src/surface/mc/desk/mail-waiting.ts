@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { modelJson, modelPaths, classifierLabel, readApiKey, type ModelConfig, type KeyReader } from "./classify";
-import { LOCAL_CONTENT, NOT_LOCAL_CONTENT, type LocalSources, type Provenance } from "./source-boundary";
+import { LOCAL_CONTENT, NOT_LOCAL_CONTENT, type LocalSources, type PromptContent } from "./source-boundary";
 import { logMailDecision, senderDomain, type MailFeatures, type MailLogAction } from "./mail-log";
 import type { ListedMail } from "./mail-actions";
 import { plural } from "./mail-sweep";
@@ -421,10 +421,10 @@ export function readWaitingAnswer(answer: unknown): WaitingAnswer | null {
   return { asks, ...(topic ? { topic } : {}), ...(asks && ask ? { ask } : {}) };
 }
 
-export type WaitingRunner = (access: ModelConfig, request: WaitingRequest, provenance: Provenance) => Promise<unknown>;
+export type WaitingRunner = (access: ModelConfig, request: WaitingRequest, content: PromptContent) => Promise<unknown>;
 
-export const chatWaitingRunner = (fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): WaitingRunner => (access, request, provenance) =>
-  modelJson(access, fetchImpl, readKey, "waiting model", 200)([{ role: "system", content: WAITING_PROMPT }, { role: "user", content: JSON.stringify(request) }], access.timeoutSeconds * 1000, provenance);
+export const chatWaitingRunner = (fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): WaitingRunner => (access, request, content) =>
+  modelJson(access, fetchImpl, readKey, "waiting model", 200)([{ role: "system", content: WAITING_PROMPT }, { role: "user", content: JSON.stringify(request) }], access.timeoutSeconds * 1000, content);
 
 /** The model a sent mail may go to: a local-policy area's mail only to the local model; null when there is none. */
 export function waitingAccess(model: WaitingModel, local: boolean): ModelConfig | null {

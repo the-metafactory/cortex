@@ -95,7 +95,7 @@ export function classifierLines(c: DeskMailClassifier | null): string[] {
   if (!c) return ["The Desk sorts inbox mail by the words it shares with your meetings. Set mc.desk.mail.classifier in the stack config to let a model sort it."];
   const key = !c.keyNeeded ? "It needs no API key." : c.keyFound ? "Its API key was found." : "Its API key was not found, so the Desk sorts mail by shared words until it is.";
   const who = c.kind === "command" ? `A command sorts your inbox mail: ${c.command}.` : `A model sorts your inbox mail: ${c.model} at ${c.host}.`;
-  return [who, key, ...(c.localModel ? [`Mail from local-policy sources goes to ${c.localModel} on this machine, without research tools.`] : []), ...(c.heldMail ? [`${c.heldMail} mail ${c.heldMail === 1 ? "item stays" : "items stay"} with the rules because their sources require a local model or have no cloud-approved area.`] : []), "Change it in the stack config."];
+  return [who, key, ...(c.localModel ? [`Mail from local-policy sources goes to ${c.localModel}, the configured local route, without research tools.`] : []), ...(c.localProblem ? [`The local mail model is not answering, so that mail stays with the rules: ${c.localProblem}`] : []), ...(c.heldMail ? [`${c.heldMail} mail ${c.heldMail === 1 ? "item stays" : "items stay"} with the rules because their sources require a local model or have no cloud-approved area.`] : []), "Change it in the stack config."];
 }
 
 interface SenderCardText {

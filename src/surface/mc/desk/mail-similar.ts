@@ -1,4 +1,4 @@
-import { mailProvenance, NOTHING_LEAVES, routeOf, type LocalSources } from "./source-boundary";
+import { contentFrom, NOTHING_LEAVES, routeOf, type LocalSources } from "./source-boundary";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { MissingKey, PREDICTED_ACTIONS, readApiKey, SIMILARITY_BASES, type KeyReader, type MailPrecedent, type MailPrecedents, type PredictedAction } from "./classify";
@@ -238,7 +238,7 @@ export class MailSimilarity {
     if (!config) return { similar: (mail) => Promise.resolve(fallback(mail, NO_EMBEDDER_NOTE)) };
     if (routeOf(config) === "cloud") {
       const everySource = sourceIds ? [...sourceIds] : entries.map((entry) => entry.sourceId);
-      if (mailProvenance(localSources, everySource).local) return { similar: (mail) => Promise.resolve(fallback(mail, EMBEDDER_LOCAL_NOTE)) };
+      if (contentFrom(localSources, everySource).local) return { similar: (mail) => Promise.resolve(fallback(mail, EMBEDDER_LOCAL_NOTE)) };
     }
     const stores = new Map<string, Map<string, Float32Array>>();
     const storeFor = (access: EmbedderAccess): Map<string, Float32Array> => {
@@ -275,6 +275,7 @@ export class MailSimilarity {
     let checked: Promise<boolean> | undefined;
     return {
       similar: async (mail) => {
+        if (routeOf(config) === "cloud" && contentFrom(localSources, [mail.sourceId]).local) return fallback(mail, EMBEDDER_LOCAL_NOTE);
         checked ??= ready(config);
         const ok = await checked;
         if (!ok || now < this.downUntil) return fallback(mail, EMBEDDER_DOWN_NOTE);

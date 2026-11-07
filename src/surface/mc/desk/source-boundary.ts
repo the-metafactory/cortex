@@ -16,15 +16,15 @@ export interface LocalSources {
 }
 
 /** What a model prompt is made of. Only this module's helpers build one, so every dispatch states its content. */
-export interface Provenance {
+export interface PromptContent {
   readonly local: boolean;
 }
 
 /** Content with no mail in it: a Ranger ruling, a cloud-policy Studio thread. */
-export const NOT_LOCAL_CONTENT: Provenance = Object.freeze({ local: false });
+export const NOT_LOCAL_CONTENT: PromptContent = Object.freeze({ local: false });
 
 /** Content that must stay on this machine, for a reason the caller already knows. */
-export const LOCAL_CONTENT: Provenance = Object.freeze({ local: true });
+export const LOCAL_CONTENT: PromptContent = Object.freeze({ local: true });
 
 const CLOUD_CLIENTS = new Set(["codex", "claude", "desk-codex-json", "desk-codex-json.ts"]);
 const CLOUD_CLIENT_FLAGS = new Set(["--codex", "--claude"]);
@@ -42,21 +42,21 @@ export function routeOf(config: RouteInput): ModelRouteKind {
 }
 
 /** The configured mail and calendar sources that may reach a cloud model; every other source stays local. */
-export function sourceBoundary(config: { areas: readonly { id: string; policy?: ModelRouteKind }[]; sources: readonly { id: string; area?: string | null }[] }): LocalSources & { cloudSources: ReadonlySet<string> } {
+export function sourceBoundary(config: { areas: readonly { id: string; policy?: ModelRouteKind }[]; sources: readonly { id: string; area?: string | null }[] }): LocalSources {
   const cloudAreas = new Set(config.areas.filter((area) => area.policy === "cloud").map((area) => area.id));
   const cloudSources = new Set(config.sources.filter((source) => typeof source.area === "string" && cloudAreas.has(source.area)).map((source) => source.id));
-  return { cloudSources, has: (sourceId) => !cloudSources.has(sourceId) };
+  return { has: (sourceId) => !cloudSources.has(sourceId) };
 }
 
 export const NOTHING_LEAVES: LocalSources = { has: () => true };
 
-/** The provenance of a prompt built from these sources. A missing source, or no named source at all, counts as local. */
-export function mailProvenance(localSources: LocalSources, sourceIds: readonly (string | null | undefined)[]): Provenance {
+/** The content of a prompt built from these sources. A missing source, or no named source at all, counts as local. */
+export function contentFrom(localSources: LocalSources, sourceIds: readonly (string | null | undefined)[]): PromptContent {
   if (sourceIds.length === 0) return LOCAL_CONTENT;
   return sourceIds.some((id) => !id || localSources.has(id)) ? LOCAL_CONTENT : NOT_LOCAL_CONTENT;
 }
 
-export const combined = (...parts: readonly Provenance[]): Provenance => (parts.some((part) => part.local) ? LOCAL_CONTENT : NOT_LOCAL_CONTENT);
+export const combined = (...parts: readonly PromptContent[]): PromptContent => (parts.some((part) => part.local) ? LOCAL_CONTENT : NOT_LOCAL_CONTENT);
 
 export class CloudRouteRefused extends Error {
   constructor(label: string) {
@@ -66,6 +66,6 @@ export class CloudRouteRefused extends Error {
 }
 
 /** The one check before any Desk model call. It throws for local content on a cloud route. */
-export function assertRoute(route: ModelRouteKind, provenance: Provenance, label: string): void {
-  if (provenance.local && route === "cloud") throw new CloudRouteRefused(label);
+export function assertRoute(route: ModelRouteKind, content: PromptContent, label: string): void {
+  if (content.local && route === "cloud") throw new CloudRouteRefused(label);
 }

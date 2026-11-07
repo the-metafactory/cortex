@@ -183,8 +183,8 @@ export interface DeskView {
 }
 
 export type DeskMailClassifier =
-  | { kind: "endpoint"; host: string; model: string; keyNeeded: boolean; keyFound: boolean; heldMail?: number; localModel?: string }
-  | { kind: "command"; command: string; keyNeeded: boolean; keyFound: boolean; heldMail?: number; localModel?: string };
+  | { kind: "endpoint"; host: string; model: string; keyNeeded: boolean; keyFound: boolean; heldMail?: number; localModel?: string; localProblem?: string }
+  | { kind: "command"; command: string; keyNeeded: boolean; keyFound: boolean; heldMail?: number; localModel?: string; localProblem?: string };
 
 export interface DeskAutonomy {
   types: { action: string; label: string; note: string; on: boolean }[];

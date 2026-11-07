@@ -7,11 +7,11 @@ import type { SourceReading } from "./sources/command";
 import { askFiler, captureId, captureInThread, captureModel, filerFor, type CaptureModel } from "./studio/capture";
 import { localTime, oneLine, safeBody } from "./studio/edit";
 import { readStudioFiles } from "./studio/read";
-import { buildStudioView, effectivePolicy, type StudioArea } from "./studio/view";
+import { buildStudioView, type StudioArea } from "./studio/view";
 import { runStudioTransaction, type ActResult } from "./studio/writer";
 import type { ActContext, ActPlan, ActRefusal } from "./studio/acts";
 import type { StudioOptions } from "./types";
-import { LOCAL_CONTENT, NOT_LOCAL_CONTENT } from "./source-boundary";
+import { LOCAL_CONTENT, contentFrom, NOT_LOCAL_CONTENT, type LocalSources } from "./source-boundary";
 
 export const MAX_MAIL_REASON = 200;
 
@@ -34,6 +34,7 @@ export interface MailForStudio {
 }
 
 export interface MailStudioDeps {
+  localSources: LocalSources;
   options: StudioOptions;
   areas: readonly StudioArea[];
   db: Database;
@@ -83,7 +84,6 @@ const bodyText = (item: MailForStudio, includeText: boolean): string | null => {
 
 export const WORK_MAIL_NO_THREAD = "This mail must stay on this machine, so it can only go to a local-policy thread.";
 
-const isLocalMail = (item: MailForStudio, areas: readonly StudioArea[]): boolean => item.area === null || effectivePolicy([item.area], areas).policy !== "cloud";
 
 export async function proposeMailThread(item: MailForStudio, deps: MailStudioDeps): Promise<MailStudioProposal> {
   const { files, problems } = await readStudioFiles(deps.options.dir);
@@ -91,8 +91,8 @@ export async function proposeMailThread(item: MailForStudio, deps: MailStudioDep
   const threads = view.active;
   const listed = threads.map((t) => ({ slug: t.slug, question: oneLine(t.question) }));
   const canIncludeText = Boolean(item.mail.firstParagraph?.trim());
-  if (threads.length === 0) return { thread: null, reason: "No thread is active; it goes to the Studio inbox.", threads: listed, canIncludeText };
-  const localMail = isLocalMail(item, deps.areas);
+  const localMail = contentFrom(deps.localSources, [item.mail.sourceId]).local;
+  if (threads.length === 0) return { thread: null, reason: localMail ? WORK_MAIL_NO_THREAD : "No thread is active; it goes to the Studio inbox.", threads: listed, canIncludeText };
   const offered = localMail ? threads.filter((t) => t.policy === "local") : threads;
   if (localMail && offered.length === 0) return { thread: null, reason: WORK_MAIL_NO_THREAD, threads: [], canIncludeText };
   const access = localMail ? deps.options.filer?.local : filerFor(deps.options, threads);
@@ -121,7 +121,7 @@ export async function addMailToStudio(item: MailForStudio, input: AddMailInput, 
   const id = captureId(input.requestId);
   const now = deps.now ?? new Date();
   const features = mailFeatures(deps.db, item.mail);
-  const result = await runStudioTransaction({ options: deps.options, areas: deps.areas, requestId: input.requestId, now }, (ctx) => planMail(ctx, item, input, id, isLocalMail(item, deps.areas)));
+  const result = await runStudioTransaction({ options: deps.options, areas: deps.areas, requestId: input.requestId, now }, (ctx) => planMail(ctx, item, input, id, contentFrom(deps.localSources, [item.mail.sourceId]).local));
   if (!result.ok || result.replayed) return result;
   const at = now.getTime();
   deps.db.query("INSERT INTO desk_done (attempt_key, action, item_key, title, status, message, created_at, updated_at) VALUES (?, 'studio.capture', ?, ?, 'done', ?, ?, ?) ON CONFLICT(attempt_key) DO NOTHING")

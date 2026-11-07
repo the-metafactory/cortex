@@ -14,11 +14,11 @@ Cortex filters mail, calendar, sender lists, corrections, similarity examples, S
 
 ## The source boundary
 
-`src/surface/mc/desk/source-boundary.ts` holds the one check every Desk model call crosses. `chatJson`, `commandJson` and the mail hand-off owner take a `Provenance` and call `assertRoute` before they read a key, send a request or spawn a process. `routeOf` decides where a configuration sends its prompts: a command is local only when it declares `sourcePolicy: local` and names no known cloud client, and an endpoint is local when it declares so or sits on loopback with no declaration. A non-loopback endpoint in a `.local` slot must now set `sourcePolicy: local`.
+`src/surface/mc/desk/source-boundary.ts` holds the one check every Desk model call crosses. `chatJson`, `commandJson` and the mail hand-off owner take a `PromptContent` and call `assertRoute` before they read a key, send a request or spawn a process. `routeOf` decides where a configuration sends its prompts: a command is local only when it declares `sourcePolicy: local` and names no known cloud client, and an endpoint is local when it declares so or sits on loopback with no declaration. A non-loopback endpoint or a command in a `.local` slot must now set `sourcePolicy: local`; nothing defaults to it.
 
 `sourceBoundary` reads `areas` and `sources` from configuration. A source is cloud-approved only when it names an area whose policy is `cloud`. A source it does not know is local. A prompt with no named source is local too. Local content on a cloud route throws `CloudRouteRefused`, with no model call.
 
-Set `mc.desk.mail.classifier.local` to classify local-policy mail on a local model, one message at a time and without research tools. The main classifier keeps the cloud-approved sources. Without the slot, local-policy mail stays with the rules and Settings reports how much.
+Set `mc.desk.mail.classifier.local` to classify local-policy mail on a local model, one mail at a time and without research tools. The main classifier keeps the cloud-approved sources. Without the slot, local-policy mail stays with the rules and Settings reports how much.
 
 Work mail is not handed to Ivy, because a hand-off files a task on a shared map. It may go only to a local-policy Studio thread, not to a cloud thread and not to the Studio inbox.
 

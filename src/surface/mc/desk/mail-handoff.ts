@@ -1,4 +1,4 @@
-import { assertRoute, mailProvenance, NOTHING_LEAVES, type LocalSources } from "./source-boundary";
+import { assertRoute, contentFrom, NOTHING_LEAVES, type LocalSources } from "./source-boundary";
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -185,7 +185,7 @@ export async function handMailToIvy(item: MailForStudio, input: HandInput, deps:
   if (busy && busy.state !== "failed") return refuse(409, busy.state === "working" ? "Ivy is already working on this mail." : "Ivy's draft for this mail is waiting for you in Catch-up.");
   const map = deps.maps[0];
   if (!map || !deps.writers.task?.length) return refuse(409, "Agent tasks are not set up on this stack, so the Desk cannot hand mail to Ivy.");
-  if (mailProvenance(deps.localSources, [item.mail.sourceId]).local) return refuse(409, WORK_MAIL_NO_HANDOFF);
+  if (contentFrom(deps.localSources, [item.mail.sourceId]).local) return refuse(409, WORK_MAIL_NO_HANDOFF);
   const routed = handoffRoute(deps.lanes);
   if ("refused" in routed) return refuse(409, routed.refused);
   const asked = input.instruction?.trim().slice(0, MAX_INSTRUCTION) ?? "";
@@ -314,7 +314,7 @@ export function readHandoffAnswer(text: string): { findings: string[]; reply: st
 /** The production owner: one pi turn with the Soma projection and read-only tools on the hand-off's lane. */
 export function piHandoffOwner(turns: TurnCall, lanes: HandoffLanes, localSources: LocalSources = NOTHING_LEAVES): HandoffOwner {
   return async (job) => {
-    assertRoute(job.route, mailProvenance(localSources, [job.sourceId]), "hand-off model lane");
+    assertRoute(job.route, contentFrom(localSources, [job.sourceId]), "hand-off model lane");
     const lane = lanes[job.route];
     if (!lane) throw new Error(`The ${job.route} model lane is no longer set up.`);
     const reply = await turns({

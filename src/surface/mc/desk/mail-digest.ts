@@ -13,7 +13,7 @@ import type { ListedMail } from "./mail-actions";
 import type { SourceMail, SourceReading } from "./sources/command";
 import { DAY_MS, localDay } from "./time";
 import { isVip } from "./vips";
-import { combined, LOCAL_CONTENT, mailProvenance, NOT_LOCAL_CONTENT, type LocalSources, type Provenance } from "./source-boundary";
+import { combined, LOCAL_CONTENT, contentFrom, NOT_LOCAL_CONTENT, type LocalSources, type PromptContent } from "./source-boundary";
 import { snoozedIds, withoutSnoozed } from "./mail-snooze";
 
 export { DIGEST_SQL, type DigestConfig, type DigestModel } from "./mail-digest-schema";
@@ -284,10 +284,10 @@ export function readDigestFlags(db: Database, digestIds: readonly string[]): Map
   return new Map(rows.map((r) => [r.digest_id, { stamp: r.stamp, flags: JSON.parse(r.flags) as DigestFlag[], ...(r.skipped ? { skipped: r.skipped } : {}) }]));
 }
 
-export type FlagRunner = (access: ModelConfig, request: FlagRequest, provenance: Provenance) => Promise<unknown>;
+export type FlagRunner = (access: ModelConfig, request: FlagRequest, content: PromptContent) => Promise<unknown>;
 
-export const chatFlagRunner = (fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): FlagRunner => (access, request, provenance) =>
-  modelJson(access, fetchImpl, readKey, "digest model", 400)([{ role: "system", content: DIGEST_PROMPT }, { role: "user", content: JSON.stringify(request) }], access.timeoutSeconds * 1000, provenance);
+export const chatFlagRunner = (fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): FlagRunner => (access, request, content) =>
+  modelJson(access, fetchImpl, readKey, "digest model", 400)([{ role: "system", content: DIGEST_PROMPT }, { role: "user", content: JSON.stringify(request) }], access.timeoutSeconds * 1000, content);
 
 export interface FlagPlan {
   access: ModelConfig;
@@ -347,8 +347,8 @@ export class DigestFlagger {
             topics: plan.topics.map(({ kind, name }) => ({ kind, name })),
             items: plan.members.map((m, i) => ({ item: i + 1, from: senderOf(m), subject: m.subject, text: (m.firstParagraph ?? "").slice(0, 600) })),
           };
-          const provenance = combined(mailProvenance(localSources, plan.members.map((m) => m.sourceId)), plan.topics.some((t) => t.local) ? LOCAL_CONTENT : NOT_LOCAL_CONTENT);
-          flags = readFlags(await this.run(plan.access, request, provenance), plan.members, plan.topics);
+          const content = combined(contentFrom(localSources, plan.members.map((m) => m.sourceId)), plan.topics.some((t) => t.local) ? LOCAL_CONTENT : NOT_LOCAL_CONTENT);
+          flags = readFlags(await this.run(plan.access, request, content), plan.members, plan.topics);
         } catch (err) {
           this.retryAt.set(`${group.id}:${stamp}`, now + RETRY_MS);
           this.log(`desk: digest flags: ${err instanceof Error ? err.message : String(err)}`);

@@ -139,7 +139,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     const studio = runtime.options.studio;
     if (!studio) return fail(409, "The Studio is not set up on this stack.");
     const item = mailForStudio(db, runtime.sourceCache?.cached() ?? [], mail);
-    const studioDeps = { options: studio, areas: runtime.options.areas, db, now: new Date(now), ...(deps.captureModel ? { model: deps.captureModel } : {}) };
+    const studioDeps = { localSources: sourceBoundary(runtime.options), options: studio, areas: runtime.options.areas, db, now: new Date(now), ...(deps.captureModel ? { model: deps.captureModel } : {}) };
     if (body.action === "studio.propose") return Response.json({ ok: true, proposal: await proposeMailThread(item, studioDeps) }, { headers: noStore });
     const { requestId, thread, reason, includeText } = body;
     const added = await addMailToStudio(item, { requestId, thread, includeText, ...(reason ? { reason } : {}) }, studioDeps);

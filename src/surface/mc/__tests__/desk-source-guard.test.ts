@@ -6,8 +6,10 @@ import { join } from "node:path";
 import { z } from "zod/v4";
 import { communicationTools, type CommunicationConnector, type CommunicationOwner } from "../../../conversations/tools/communications";
 import type { ToolSession } from "../../../conversations/tools/capabilities";
+import { McSchema } from "../../../common/types/config";
 import { initDatabase } from "../db/init";
-import { chatClassifier, classifierRunner, commandClassifier, MailClassifier, modelJson, readClassifications, type ClassifierRequest, type CommandConfig, type CommandRunner } from "../desk/classify";
+import { seedStudioRepo } from "./__fixtures__/studio-git";
+import { chatClassifier, classifierRunner, classifierStatus, commandClassifier, MailClassifier, modelJson, readClassifications, type ClassifierRequest, type CommandConfig, type CommandRunner } from "../desk/classify";
 import { composeDesk, type DeskOptions } from "../desk/compose";
 import { chatFlagRunner, DigestFlagger, readDigestFlags } from "../desk/mail-digest";
 import { handMailToIvy, piHandoffOwner, WORK_MAIL_NO_HANDOFF } from "../desk/mail-handoff";
@@ -15,9 +17,9 @@ import { EMBEDDER_LOCAL_NOTE, MailSimilarity } from "../desk/mail-similar";
 import { proposeMailThread, WORK_MAIL_NO_THREAD, type MailForStudio } from "../desk/mail-studio";
 import type { SweepGroup, SweepMember } from "../desk/mail-sweep";
 import { chatWaitingRunner, recordWaiting, WaitingClassifier } from "../desk/mail-waiting";
-import { CloudRouteRefused, LOCAL_CONTENT, mailProvenance, NOT_LOCAL_CONTENT, NOTHING_LEAVES, routeOf, sourceBoundary } from "../desk/source-boundary";
+import { CloudRouteRefused, LOCAL_CONTENT, contentFrom, NOT_LOCAL_CONTENT, NOTHING_LEAVES, routeOf, sourceBoundary } from "../desk/source-boundary";
 import { SourceCache, type SourceMail, type SourceReading, type SourceSent } from "../desk/sources/command";
-import { sessionModel, sessionProvenance } from "../desk/studio/session";
+import { sessionModel, sessionContent } from "../desk/studio/session";
 
 const NOW = Date.parse("2026-11-07T09:00:00.000Z");
 const AREAS = [
@@ -67,11 +69,11 @@ describe("the source boundary", () => {
   });
 
   it("marks a prompt local when any source is local, missing, or when no source is named", () => {
-    expect(mailProvenance(boundary, ["personal-mail"]).local).toBe(false);
-    expect(mailProvenance(boundary, ["personal-mail", "work-mail"]).local).toBe(true);
-    expect(mailProvenance(boundary, ["personal-mail", null]).local).toBe(true);
-    expect(mailProvenance(boundary, []).local).toBe(true);
-    expect(mailProvenance(NOTHING_LEAVES, ["personal-mail"]).local).toBe(true);
+    expect(contentFrom(boundary, ["personal-mail"]).local).toBe(false);
+    expect(contentFrom(boundary, ["personal-mail", "work-mail"]).local).toBe(true);
+    expect(contentFrom(boundary, ["personal-mail", null]).local).toBe(true);
+    expect(contentFrom(boundary, []).local).toBe(true);
+    expect(contentFrom(NOTHING_LEAVES, ["personal-mail"]).local).toBe(true);
   });
 
   it("calls a route local only on a declaration or on loopback, and never for a known cloud client", () => {
@@ -82,6 +84,30 @@ describe("the source boundary", () => {
     expect(routeOf({ command: ["local-model"], sourcePolicy: "local" })).toBe("local");
     expect(routeOf({ command: ["local-model"] })).toBe("cloud");
     for (const command of [["/opt/bin/codex"], ["helper", "--codex", "/x"], ["/a/desk-codex-json.ts", "--model", "m"]]) expect(routeOf({ command, sourcePolicy: "local" })).toBe("cloud");
+  });
+});
+
+describe("the configuration schema", () => {
+  const parsedLocal = (local: object) => McSchema.parse({ desk: { mail: { classifier: { command: ["cloud-helper"], sourcePolicy: "cloud", local } } } }).desk.mail.classifier?.local;
+
+  it("does not declare an undeclared remote endpoint or command in a local slot local", () => {
+    const remote = parsedLocal({ baseUrl: "https://llm.example.org/v1", model: "m" });
+    if (!remote) throw new Error("no local slot");
+    expect(routeOf(remote)).toBe("cloud");
+    const wrapper = parsedLocal({ command: ["some-wrapper"] });
+    if (!wrapper) throw new Error("no local slot");
+    expect(routeOf(wrapper)).toBe("cloud");
+    const digest = McSchema.parse({ desk: { mail: { digest: { model: { command: ["helper"], local: { command: ["some-wrapper"] } } } } } }).desk.mail.digest?.model?.local;
+    if (!digest) throw new Error("no local slot");
+    expect(routeOf(digest)).toBe("cloud");
+  });
+
+  it("keeps a loopback endpoint local, refuses a cloud declaration and an empty slot", () => {
+    const loopback = parsedLocal({ baseUrl: "http://127.0.0.1:8081/v1", model: "m" });
+    if (!loopback) throw new Error("no local slot");
+    expect(routeOf(loopback)).toBe("local");
+    expect(() => parsedLocal({ baseUrl: "https://llm.example.org/v1", model: "m", sourcePolicy: "cloud" })).toThrow();
+    expect(() => parsedLocal({})).toThrow();
   });
 });
 
@@ -164,7 +190,7 @@ describe("a fake codex is never spawned for work mail", () => {
   });
 
   it("in a Studio session on a local thread", async () => {
-    await expect(sessionModel({ ...codexModel(), maxPerPass: 1 }, { question: SECRET, stand: "", subject: "", context: "", exchange: [] }, sessionProvenance({ policy: "local" }))).rejects.toThrow(CloudRouteRefused);
+    await expect(sessionModel({ ...codexModel(), maxPerPass: 1 }, { question: SECRET, stand: "", subject: "", context: "", exchange: [] }, sessionContent({ policy: "local" }))).rejects.toThrow(CloudRouteRefused);
     expect(spawned()).toBe(false);
   });
 });
@@ -189,28 +215,30 @@ describe("mail hand-off and Studio", () => {
     expect(turns).toBe(0);
   });
 
-  it("keeps work mail away from cloud threads when it proposes one", async () => {
-    const seen: string[] = [];
+  it("tells work mail it has nowhere to go when only cloud threads are active, without asking a model", async () => {
+    let asked = 0;
     const proposed = await proposeMailThread(item("work-mail", "office"), {
-      options: { dir: join(dir, "missing-studio"), maxActive: 5, filer: { ...codexModel(), maxPerPass: 1 } }, areas: AREAS, db,
-      model: (_config, request) => { seen.push(...request.threads.map((t) => t.slug)); return Promise.resolve({ thread: null, match: false, reason: "no" }); },
+      localSources: boundary, options: { dir: seedStudioRepo("desk-source-guard-studio-", { garden: "---\ntype: question\nareas: [home]\nstate: active\nopened: 2026-10-31\n---\n\n## Question\n\nWhat grows?\n\n## Where I stand\n\nStill deciding.\n" }), maxActive: 5, filer: { ...codexModel(), maxPerPass: 1 } }, areas: AREAS, db,
+      model: () => { asked += 1; return Promise.resolve({ thread: null, match: false, reason: "no" }); },
     });
-    expect(proposed.threads).toEqual([]);
-    expect(seen).toEqual([]);
+    expect(proposed).toMatchObject({ thread: null, threads: [], reason: WORK_MAIL_NO_THREAD });
+    expect(asked).toBe(0);
     expect(spawned()).toBe(false);
-    expect(WORK_MAIL_NO_THREAD).toContain("local-policy thread");
   });
 });
 
 describe("mail similarity", () => {
-  it("does not embed local mail with a cloud embedder and says why", async () => {
-    let calls = 0;
-    const similarity = new MailSimilarity({ baseUrl: "https://embed.example.org/v1", model: "m", timeoutSeconds: 1, threshold: 0.5, neighbours: 5, windowDays: 30, maxPerPass: 8 }, async () => { calls += 1; return [[1]]; }, () => undefined);
-    const context = similarity.load(db, NOW, new Set(["work-mail"]), boundary);
-    const found = await context.similar({ messageId: "w1", sourceId: "work-mail", sender: "a@example.org", listId: null, subject: SECRET, summary: SECRET });
-    expect(found.note).toBe(EMBEDDER_LOCAL_NOTE);
-    expect(calls).toBe(0);
-  });
+  const remoteEmbedder = (onEmbed: () => void) => new MailSimilarity({ baseUrl: "https://embed.example.org/v1", model: "m", timeoutSeconds: 1, threshold: 0.5, neighbours: 5, windowDays: 30, maxPerPass: 8 }, (_a, texts) => { onEmbed(); return Promise.resolve(texts.map(() => [1])); }, () => undefined);
+  const workProbe = { messageId: "w1", sourceId: "work-mail", sender: "a@example.org", listId: null, subject: SECRET, summary: SECRET };
+
+  for (const [loaded, sources] of [["local", ["work-mail"]], ["cloud-approved", ["personal-mail"]]] as const) {
+    it(`does not embed local mail with a cloud embedder when the loaded sources are ${loaded}, and says why`, async () => {
+      let calls = 0;
+      const found = await remoteEmbedder(() => { calls += 1; }).load(db, NOW, new Set(sources), boundary).similar(workProbe);
+      expect(found.note).toBe(EMBEDDER_LOCAL_NOTE);
+      expect(calls).toBe(0);
+    });
+  }
 
   it("embeds work mail on a loopback embedder", async () => {
     let calls = 0;
@@ -243,6 +271,21 @@ describe("Ivy's communications connector", () => {
 });
 
 describe("routing per source on the Desk", () => {
+  it("shows a local model that stops answering in the classifier status, until it answers again", async () => {
+    const config = { baseUrl: "http://127.0.0.1:8081/v1", model: "local-model", timeoutSeconds: 5, maxPerPass: 5, sourcePolicy: "local" as const };
+    let answering = false;
+    const fake = (async () => {
+      if (!answering) throw new Error("connection refused");
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ category: "fyi", reason: "News." }) } }] });
+    }) as unknown as typeof fetch;
+    const local = new MailClassifier(config, chatClassifier(config, fake, async () => null), () => undefined);
+    await local.kick(db, { now: NOW, mail: [{ ...mail("w1"), sourceId: "work-mail" }], events: [], vips: [], localSources: boundary });
+    expect(classifierStatus({ ...codexModel(), maxPerPass: 1 }, false, 0, config, local.problem)).toMatchObject({ localModel: "local-model", localProblem: "connection refused" });
+    answering = true;
+    await local.kick(db, { now: NOW, mail: [{ ...mail("w2"), sourceId: "work-mail" }], events: [], vips: [], localSources: boundary });
+    expect(local.problem).toBeNull();
+  });
+
   it("sends work mail to the local model and personal mail to the cloud command, and neither to the other", async () => {
     const items: Record<string, SourceMail[]> = { work: [mail("w1")], personal: [mail("p1", { account: "personal", firstParagraph: "personal text", subject: "personal subject" })] };
     const localPrompts: string[] = [];

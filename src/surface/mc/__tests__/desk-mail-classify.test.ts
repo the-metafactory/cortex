@@ -253,7 +253,7 @@ describe("composeDesk with a classifier", () => {
     expect(classifierLines(view.mailClassifier ?? null)[0]).toBe("A command sorts your inbox mail: desk-classify-mail.ts.");
   });
 
-  it("holds local and unknown provenance out of every cloud classifier context", async () => {
+  it("holds local and unknown content out of every cloud classifier context", async () => {
     const command = { command: ["classifier"], timeoutSeconds: 5, maxPerPass: 10 };
     const seen: ClassifierRequest[] = [];
     const c = new MailClassifier(command, async (req) => { seen.push(req); return { category: "fyi", reason: "Personal fixture." }; }, quiet, () => NOW, new MailSimilarity(undefined));

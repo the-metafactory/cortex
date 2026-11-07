@@ -259,7 +259,7 @@ export async function composeDesk(
   const offerable = [...mail.filter((m) => m.unread), ...(mailGroups?.digests.groups ?? []).flatMap((g) => g.members)];
   const flagged = new Set([...readClassifications(db, offerable.map((m) => m.id))].filter(([, c]) => c.suspicious === true).map(([id]) => id));
   const unsubscribe = unsubscribeOffers(db, offerable, offerContext(db, desk.mailUnsubscribe, suspicion, flagged));
-  const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null, desk.mailClassifier.sourcePolicy === "local" || localClassifier ? 0 : mail.filter((item) => !cloudSources.has(item.sourceId)).length, desk.mailClassifier.local) : null;
+  const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null, desk.mailClassifier.sourcePolicy === "local" || localClassifier ? 0 : mail.filter((item) => !cloudSources.has(item.sourceId)).length, desk.mailClassifier.local, localClassifier?.problem) : null;
   const yesFilter = await mailYesFilter(db, desk, now);
   const notes = listOpenNotes(db);
   const reminders = notes.filter((n) => n.kind === "reminder" && n.dueAt !== null);
