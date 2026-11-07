@@ -12,7 +12,7 @@ import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
-import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoName, type AreaRule, type GoalActionsInput } from "./rank";
+import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoIsCloud, repoName, type AreaRule, type GoalActionsInput } from "./rank";
 import { DAY_MS, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceMail, type SourceReading } from "./sources/command";
 import { listSenders, listVips } from "./vips";
@@ -54,6 +54,7 @@ import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type G
 import { studioBriefing } from "./studio/overseer";
 
 export interface DeskRuntime {
+  conversations?: () => boolean;
   waitingTasks?: Pick<WaitingTasks, "read">;
   routineCapabilities?: import("./routine-providers").RoutineCapabilities;
   routineRead?: RoutineReadLoop;
@@ -128,6 +129,7 @@ export interface DeskVigilSource {
 }
 
 export interface ComposeDeps {
+  conversations?: boolean;
   waitingTasks?: Pick<WaitingTasks, "read">;
   routineRead?: RoutineReadLoop;
   runRoutine?: RoutineRunner;
@@ -265,8 +267,8 @@ export async function composeDesk(
   const rangerActions = rangerActionsReady(desk);
   const rulingActions = rangerActions && Boolean(desk.somaBin);
   const goalActions = goalActionsFor(desk.goals, subjects, deps.goalChecks, now);
-  const explanations = ranger && deps.rulingExplain ? await deps.rulingExplain.explain(desk.rulingExplainer?.sourcePolicy === "cloud" ? ranger.needsYou.filter(entry => { const owners = desk.areas.filter(area => areaFor([area], entry.repo, null) !== null); return owners.length > 0 && owners.every(area => area.policy === "cloud"); }) : ranger.needsYou) : undefined;
-  const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
+  const explanations = ranger && deps.rulingExplain ? await deps.rulingExplain.explain(desk.rulingExplainer?.sourcePolicy === "cloud" ? ranger.needsYou.filter(entry => repoIsCloud(desk.areas, entry.repo)) : ranger.needsYou) : undefined;
+  const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, conversations: deps.conversations, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
     .filter((item) => goalListed(goalStatuses, item.goal));
   const rulesConfig = desk.mailRules ?? DEFAULT_MAIL_RULES;
   const ruleCards = canMove ? [...heldItems(listRules(db), rulesConfig), ...proposalItems(proposeRules(db, now, rulesConfig, vipSet), now)] : [];

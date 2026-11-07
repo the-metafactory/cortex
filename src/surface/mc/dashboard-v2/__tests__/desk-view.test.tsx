@@ -236,6 +236,16 @@ describe("DeskBody when the next meeting is hours away", () => {
 });
 
 describe("the folded rest", () => {
+  it("keeps blocked and failed agent items beyond the day limit visible", () => {
+    const blocked = item(50, { kind: "agent-blocked" });
+    const failed = item(51, { kind: "agent-failed" });
+    const selection = selectItems({ ...view, items: [...view.items, blocked, failed] }, "all", new Set());
+    expect(selection.needsYou.map(item => item.key)).toContain(blocked.key);
+    expect(selection.needsYou.map(item => item.key)).toContain(failed.key);
+    expect(selection.rest.map(item => item.key)).not.toContain(blocked.key);
+    expect(selection.rest.map(item => item.key)).not.toContain(failed.key);
+  });
+
   const decisions = [6, 7, 8].map((n) => item(n, { key: `ranger:example/app#${n}`, kind: "decision", title: `Decision ${n} waits.`, score: 10 - n }));
   const withRest: DeskViewModel = { ...view, items: [...view.items, ...decisions] };
 

@@ -206,6 +206,18 @@ export function entryProblems(root: string, error: z.ZodError): string[] {
   return error.issues.map((issue) => `${fieldPath(root, issue.path)}: ${issue.message}`);
 }
 
+const occurrenceIdentity = (event: SourceEvent): string => JSON.stringify([event.calendarId ?? null, event.id, Date.parse(event.start)]);
+
+function oneEntryPerOccurrence(events: SourceEvent[]): SourceEvent[] {
+  const seen = new Set<string>();
+  return events.filter(event => {
+    const identity = occurrenceIdentity(event);
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
 export function parseSourceOutput(stdout: string): ParsedSource {
   let body: unknown;
   try {
@@ -248,7 +260,7 @@ export function parseSourceOutput(stdout: string): ParsedSource {
   const listed = Array.isArray(items) ? items : undefined;
   const mail = listed ? keep("items", listed.filter((e) => !isSent(e)), SourceMailSchema) : keep("items", items, SourceMailSchema);
   const sent = listed ? keep("sent items", listed.filter(isSent), SourceSentSchema) : [];
-  return { events: keep("events", events, SourceEventSchema), mail, sent, dropped, problems, ...(capabilities ? { capabilities } : {}), ...(calendarCoverage ? { calendarCoverage } : {}) };
+  return { events: oneEntryPerOccurrence(keep("events", events, SourceEventSchema)), mail, sent, dropped, problems, ...(capabilities ? { capabilities } : {}), ...(calendarCoverage ? { calendarCoverage } : {}) };
 }
 
 export type CommandRunner = (argv: string[], timeoutMs: number) => Promise<string>;

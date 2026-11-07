@@ -1,3 +1,4 @@
+import { rangerAttention } from "../../desk/rank";
 import { DestinationPicker } from "./desk-destination-picker";
 import { scrollBelowDesk } from "../lib/desk-scroll";
 import type { OutlineNode } from "../../../../balance";
@@ -398,7 +399,7 @@ export function DeskCatchUp({
       )}
       <div className="catchup-stream">
         {active && top?.({ digests, sweeps })}
-        {active && shown.map((item, index) => (
+        {active && <RangerAttentionList items={shown} limit={view.topN} selected={location.card} renderItem={(item, index) => (
           <article
             key={item.key}
             data-catchup-card={item.key}
@@ -431,7 +432,7 @@ export function DeskCatchUp({
               </button>
             </footer>
           </article>
-        ))}
+        )} />}
       </div>
       {shown.length === 0 && groupCount === 0 && (
         <section className="catchup-empty">
@@ -459,3 +460,11 @@ function contains(node: OutlineNode, id: string): boolean {
 }
 export const catchupHref = (key: string | null): string =>
   catchupSearch(typeof window === "undefined" ? "" : window.location.search, clearedCatchup(key));
+
+export function RangerAttentionList({ items, limit, selected, renderItem }: { items: DeskItem[]; limit: number; selected: string | null; renderItem: (item: DeskItem, index: number) => ReactNode }) {
+  const { visible, groups } = rangerAttention(items, limit);
+  return <>{visible.map(renderItem)}{groups.map(group => <details key={group.key} open={group.items.some(item => item.key === selected)} className="catchup-ranger-map">
+    <summary>{group.items.length} more decisions and questions in {group.label}</summary>
+    {group.items.map(renderItem)}
+  </details>)}</>;
+}

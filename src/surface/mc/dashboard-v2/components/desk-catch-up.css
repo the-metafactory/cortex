@@ -12,6 +12,8 @@
 .catchup-types button[aria-pressed="true"] { background: #e8eee8; color: #253b2c; }
 .catchup-areas button span { display: inline-block; height: 7px; width: 7px; border-radius: 50%; margin-right: 7px; }
 .catchup-stream { display: grid; gap: 18px; margin-top: 24px; }
+.catchup-ranger-map > summary { padding: 12px 16px; border: 1px solid #dce3de; border-radius: 8px; cursor: pointer; }
+.catchup-ranger-map > .catchup-card { margin-top: 18px; }
 .catchup-search { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; margin: 20px 0; }
 .catchup-search label { display: grid; gap: 6px; font-size: 13px; }
 .catchup-search label:has(input) { flex: 1; min-width: min(240px, 100%); }
