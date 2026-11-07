@@ -79,6 +79,7 @@ export interface DeskCorrection {
 }
 
 export interface DeskItem {
+  rangerMap?: { key: string; label: string };
   attention?: "action" | "update";
   dueAt?: string;
   sourceRevision?: string;

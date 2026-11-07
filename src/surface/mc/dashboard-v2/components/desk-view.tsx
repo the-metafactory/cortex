@@ -14,7 +14,7 @@ import { DeskTimeFirst } from "./desk-time-first";
 import { StudioSessionPanel, useStudioSession, type StartDiscussion } from "./desk-studio-session";
 import { ConversationsArea } from "./desk-conversations";
 import { useStartConversation } from "./desk-source-conversations";
-import { failureText, startFromAsk } from "../lib/conversations";
+import { failureText, startFromAsk, startGrilling } from "../lib/conversations";
 import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -444,6 +444,22 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     if (result.ok) onChanged();
   };
 
+  const grill = async (item: DeskItem): Promise<void> => {
+    if (inFlight.current.has(item.key)) return;
+    inFlight.current.add(item.key);
+    setSending(current => new Map(current).set(item.key, "ranger.grill"));
+    try {
+      const { conversation } = await startGrilling(item.detail.refs[0] ?? "");
+      setDetail(null);
+      openConversation(conversation.id);
+    } catch (error) {
+      setCardNote(item.key, { text: failureText(error, "The conversation could not open. Try again to return to the same conversation.") });
+    } finally {
+      inFlight.current.delete(item.key);
+      setSending(current => { const next = new Map(current); next.delete(item.key); return next; });
+    }
+  };
+
   const run = (item: DeskItem, a: DeskAction): void => {
     const goal = item.goal ?? "";
     setCardNote(item.key, null);
@@ -455,6 +471,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       setDetail((d) => (d?.key === item.key ? null : d));
       void doneNote(a.target, item.key);
     }
+    else if (a.id === "ranger.grill" && a.wired) void grill(item);
     else if (a.id === "ranger.rule" && a.wired) openRuling(item);
     else if (a.id.startsWith("ranger.") && a.wired) void send(item, a);
     else if (a.id === "goal.check" && a.wired && item.goal) void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }), keepVisible: true });
@@ -1352,7 +1369,7 @@ const CHECK_POLL_MS = 3000;
 
 const isWaitingAction = (id: string): id is `waiting.${WaitingOp}` => WAITING_OPS.some((op) => id === `waiting.${op}`);
 
-const BUSY_LABEL: Record<string, string> = { "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "invite.accept": "Sending…", "invite.decline": "Sending…", "invite.propose": "Reading calendars…", "mail.report": "Reporting…", "mail.trust": "Saving…", "mail.studio": "Adding…", "mail.ivy": "Handing over…", "ivy.approve": "Saving draft…", "ivy.discard": "Discarding…", "ivy.retry": "Asking again…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "mail.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
+const BUSY_LABEL: Record<string, string> = { "ranger.grill": "Opening…", "goal.check": "Checking…", "goal.pause": "Pausing…", "mail.seen": "Deleting…", "mail.trash": "Deleting…", "mail.archive": "Archiving…", "mail.spam": "Moving to Junk…", "mail.unimportant": "Saving…", "mail.draft": "Saving draft…", "invite.accept": "Sending…", "invite.decline": "Sending…", "invite.propose": "Reading calendars…", "mail.report": "Reporting…", "mail.trust": "Saving…", "mail.studio": "Adding…", "mail.ivy": "Handing over…", "ivy.approve": "Saving draft…", "ivy.discard": "Discarding…", "ivy.retry": "Asking again…", "mail.unsubscribe": "Unsubscribing…", "mail.unsubscribe.rule": "Adding the rule…", "waiting.snooze": "Snoozing…", "mail.snooze": "Snoozing…", "waiting.done": "Saving…", "waiting.no-answer": "Saving…", "waiting.expect": "Saving…", "ranger.rule": "Recording…" };
 
 const CONFIRM_LABEL: Record<string, string> = { "goal.pause": "Yes, pause it", "mail.trust": "Yes, it is not phishing", "mail.trash": "Yes, move it to Trash", "mail.spam": "Yes, move it to Junk" };
 const CONFIRM_TARGET: Record<string, (target: string) => string> = { "mail.unsubscribe": (host) => `Yes, unsubscribe via ${host}`, "mail.unsubscribe.page": (host) => `Yes, open ${host}` };
