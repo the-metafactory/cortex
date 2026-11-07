@@ -11,7 +11,7 @@ import { readDone } from "../desk/autonomy";
 import { saveClassification } from "../desk/classify";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
 import { queryMailLog } from "../desk/mail-log";
-import { mailLine } from "../desk/mail-studio";
+import { WORK_MAIL_NO_THREAD, mailLine } from "../desk/mail-studio";
 import type { CaptureModel, CaptureRequest } from "../desk/studio/capture";
 import { parseThreadFile } from "../desk/studio/format";
 import { SourceCache, type SourceMail } from "../desk/sources/command";
@@ -95,11 +95,19 @@ describe("Add a mail to a Studio thread", () => {
     expect(result.json.proposal).toMatchObject({ thread: null });
   });
 
-  it("lets a mail from a local-policy area go to any active thread", async () => {
+  it("keeps a mail from a local-policy area to local threads, and out of cloud threads and the inbox", async () => {
+    const before = git("rev-parse", "HEAD");
     const { json } = await act({ action: "studio.propose", key: "mail:h1" });
-    expect((json.proposal as { threads: { slug: string }[] }).threads.map((t) => t.slug)).toEqual(["engines", "home"]);
-    expect((await act({ action: "studio.add", key: "mail:h1", requestId: "req-local-1", thread: "engines", includeText: false })).status).toBe(200);
-    expect(readThread("engines")).toContain("Mail from nan@example.org");
+    expect((json.proposal as { threads: { slug: string }[] }).threads.map((t) => t.slug)).toEqual(["home"]);
+    for (const thread of ["engines", null]) {
+      const refused = await act({ action: "studio.add", key: "mail:h1", requestId: `req-local-${thread}`, thread, includeText: false });
+      expect(refused.status).toBe(409);
+      expect(String(refused.json.error)).toBe(WORK_MAIL_NO_THREAD);
+    }
+    expect(git("rev-parse", "HEAD")).toBe(before);
+    expect(readThread("engines")).not.toContain("Mail from nan@example.org");
+    expect((await act({ action: "studio.add", key: "mail:h1", requestId: "req-local-home", thread: "home", includeText: false })).status).toBe(200);
+    expect(readThread("home")).toContain("Mail from nan@example.org");
   });
 
   it("files the summary, sender, date and link in the proposed thread, without the body, and logs it", async () => {

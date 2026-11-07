@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { modelJson, modelPaths, classifierLabel, readApiKey, type ModelConfig, type KeyReader } from "./classify";
+import { LOCAL_CONTENT, NOT_LOCAL_CONTENT, type LocalSources, type PromptContent } from "./source-boundary";
 import { logMailDecision, senderDomain, type MailFeatures, type MailLogAction } from "./mail-log";
 import type { ListedMail } from "./mail-actions";
 import { plural } from "./mail-sweep";
@@ -420,10 +421,10 @@ export function readWaitingAnswer(answer: unknown): WaitingAnswer | null {
   return { asks, ...(topic ? { topic } : {}), ...(asks && ask ? { ask } : {}) };
 }
 
-export type WaitingRunner = (access: ModelConfig, request: WaitingRequest) => Promise<unknown>;
+export type WaitingRunner = (access: ModelConfig, request: WaitingRequest, content: PromptContent) => Promise<unknown>;
 
-export const chatWaitingRunner = (fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): WaitingRunner => (access, request) =>
-  modelJson(access, fetchImpl, readKey, "waiting model", 200)([{ role: "system", content: WAITING_PROMPT }, { role: "user", content: JSON.stringify(request) }], access.timeoutSeconds * 1000);
+export const chatWaitingRunner = (fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): WaitingRunner => (access, request, content) =>
+  modelJson(access, fetchImpl, readKey, "waiting model", 200)([{ role: "system", content: WAITING_PROMPT }, { role: "user", content: JSON.stringify(request) }], access.timeoutSeconds * 1000, content);
 
 /** The model a sent mail may go to: a local-policy area's mail only to the local model; null when there is none. */
 export function waitingAccess(model: WaitingModel, local: boolean): ModelConfig | null {
@@ -447,11 +448,11 @@ export class WaitingClassifier {
     private readonly log: (message: string) => void = console.error,
   ) {}
 
-  kick(db: Database, readings: readonly SourceReading[], localSources: ReadonlySet<string>, now: number, maxPerPass: number = DEFAULT_WAITING.maxPerPass): Promise<void> {
+  kick(db: Database, readings: readonly SourceReading[], localSources: LocalSources, now: number, maxPerPass: number = DEFAULT_WAITING.maxPerPass): Promise<void> {
     return this.flight.run(() => this.pass(db, readings, localSources, now, maxPerPass), (message) => { this.log(`desk: waiting model: ${message}`); });
   }
 
-  private async pass(db: Database, readings: readonly SourceReading[], localSources: ReadonlySet<string>, now: number, maxPerPass: number): Promise<void> {
+  private async pass(db: Database, readings: readonly SourceReading[], localSources: LocalSources, now: number, maxPerPass: number): Promise<void> {
     const sent = new Map(readings.flatMap((r) => (r.sent ?? []).map((s) => [s.id, { s, local: localSources.has(r.id) }] as const)));
     const pending = db
       .query<{ message_id: string }, []>("SELECT message_id FROM desk_mail_waiting WHERE detected_by = 'heuristic' AND state = 'open' ORDER BY sent_at DESC")
@@ -462,10 +463,10 @@ export class WaitingClassifier {
         return found && access && (this.retryAt.get(r.message_id) ?? 0) <= now ? [{ ...found, access }] : [];
       })
       .slice(0, maxPerPass);
-    for (const { s, access } of pending) {
+    for (const { s, access, local } of pending) {
       let answer: WaitingAnswer | null = null;
       try {
-        answer = readWaitingAnswer(await this.run(access, { subject: s.subject, to: s.to.map(nameOf), text: s.text ?? "" }));
+        answer = readWaitingAnswer(await this.run(access, { subject: s.subject, to: s.to.map(nameOf), text: s.text ?? "" }, local ? LOCAL_CONTENT : NOT_LOCAL_CONTENT));
         if (!answer) this.log("desk: waiting model: the model sent an answer the Desk does not accept");
       } catch (err) {
         this.log(`desk: waiting model: ${err instanceof Error ? err.message : String(err)}`);

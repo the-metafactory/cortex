@@ -441,7 +441,7 @@ const endpointSchema = (path: string, timeoutSeconds: number) => z.object({
 function jsonModelSchema(path: string, timeoutSeconds: number) {
   const command = z.object({
     command: z.array(z.string().min(1)).min(1),
-    sourcePolicy: z.enum(AREA_POLICIES).default("local"),
+    sourcePolicy: z.enum(AREA_POLICIES).optional(),
     apiKeyEnv: z.string().regex(/^[A-Za-z_]\w*$/).optional(),
     apiKeyFile: z.string().min(1).optional(),
     timeoutSeconds: z.number().int().min(1).max(180).default(timeoutSeconds),
@@ -451,6 +451,12 @@ function jsonModelSchema(path: string, timeoutSeconds: number) {
   }).refine((c) => !(c.apiKeyEnv && c.apiKeyFile), `${path}: set apiKeyEnv or apiKeyFile, not both`);
   return z.union([endpointSchema(path, timeoutSeconds).safeExtend({ command: z.never().optional(), sourcePolicy: z.enum(AREA_POLICIES).optional() }), command]);
 }
+
+const LocalClassifierSchema = z
+  .object({ ...modelFields("mc.desk.mail.classifier.local"), timeoutSeconds: z.number().int().min(1).max(180).default(30), maxPerPass: z.number().int().min(1).max(100).default(1), sourcePolicy: z.literal("local", "A local model slot cannot declare cloud access").optional() })
+  .refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.mail.classifier.local: set apiKeyEnv or apiKeyFile, not both")
+  .refine(hasOneClassifierForm, "mc.desk.mail.classifier.local: set either baseUrl and model, or command")
+  .refine((c) => !(c.command && c.caFile), "mc.desk.mail.classifier.local.caFile belongs to the endpoint form; pass a CA to the command in its argv");
 
 const EmbedderEndpointSchema = endpointSchema("mc.desk.mail.embedder", 10);
 const StudioFilerAccessSchema = jsonModelSchema("mc.desk.studio.filer", 30).and(z.object({ maxPerPass: z.number().int().min(1).max(100).default(10) }));
@@ -606,7 +612,7 @@ export const DeskSchema = z.object({
   mail: z
     .object({
       classifier: z
-        .object({ ...modelFields("mc.desk.mail.classifier"), timeoutSeconds: z.number().int().min(1).max(180).default(30), maxPerPass: z.number().int().min(1).max(100).default(10), sourcePolicy: z.enum(AREA_POLICIES).default("cloud") })
+        .object({ ...modelFields("mc.desk.mail.classifier"), timeoutSeconds: z.number().int().min(1).max(180).default(30), maxPerPass: z.number().int().min(1).max(100).default(10), sourcePolicy: z.enum(AREA_POLICIES).default("cloud"), local: LocalClassifierSchema.optional() })
         .refine((c) => !(c.apiKeyEnv && c.apiKeyFile), "mc.desk.mail.classifier: set apiKeyEnv or apiKeyFile, not both")
         .refine(hasOneClassifierForm, CLASSIFIER_FORM_ERROR)
         .refine((c) => !(c.command && c.caFile), "mc.desk.mail.classifier.caFile belongs to the endpoint form; pass a CA to the command in its argv")

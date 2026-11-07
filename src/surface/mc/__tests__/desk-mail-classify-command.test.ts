@@ -1,3 +1,4 @@
+import { NOT_LOCAL_CONTENT } from "../desk/source-boundary";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
@@ -97,7 +98,7 @@ describe("the command form", () => {
       calls.push({ argv, timeoutMs, stdin, ...(env ? { env } : {}) });
       return { code: 0, signal: null, stdout: "{\"category\":\"bulk\",\"reason\":\"A newsletter.\"}\n", stderr: "" };
     };
-    const answer = await commandClassifier({ ...COMMAND, apiKeyFile: "/key" }, run, async () => "sk-test")(REQUEST, 75_000);
+    const answer = await commandClassifier({ ...COMMAND, apiKeyFile: "/key" }, run, async () => "sk-test")(REQUEST, 75_000, NOT_LOCAL_CONTENT);
     expect(answer).toEqual({ category: "bulk", reason: "A newsletter." });
     expect(calls[0]?.argv).toEqual(COMMAND.command);
     expect(calls[0]?.timeoutMs).toBe(75_000);
@@ -108,24 +109,24 @@ describe("the command form", () => {
 
   it("runs without an extra environment when no key is configured", async () => {
     let seen: Record<string, string | undefined> | undefined = { x: "y" };
-    await commandClassifier(COMMAND, async (_a, _t, _s, env) => { seen = env; return { code: 0, signal: null, stdout: "{}", stderr: "" }; }, async () => null)(REQUEST, 1000);
+    await commandClassifier(COMMAND, async (_a, _t, _s, env) => { seen = env; return { code: 0, signal: null, stdout: "{}", stderr: "" }; }, async () => null)(REQUEST, 1000, NOT_LOCAL_CONTENT);
     expect(seen).toBeUndefined();
   });
 
   it("fails with the command's last stderr line, a kill, a timeout or a missing JSON answer", async () => {
     const cmd = COMMAND;
     const noKey = async () => null;
-    await expect(commandClassifier(cmd, async () => ({ code: 2, signal: null, stdout: "", stderr: "debug\ndesk-classify-mail: the gateway is unreachable\n" }), noKey)(REQUEST, 1000))
+    await expect(commandClassifier(cmd, async () => ({ code: 2, signal: null, stdout: "", stderr: "debug\ndesk-classify-mail: the gateway is unreachable\n" }), noKey)(REQUEST, 1000, NOT_LOCAL_CONTENT))
       .rejects.toThrow("the classifier command desk-classify-mail.ts exited 2: desk-classify-mail: the gateway is unreachable");
-    await expect(commandClassifier(cmd, async () => ({ code: 0, signal: "SIGKILL", stdout: "", stderr: "" }), noKey)(REQUEST, 1000))
+    await expect(commandClassifier(cmd, async () => ({ code: 0, signal: "SIGKILL", stdout: "", stderr: "" }), noKey)(REQUEST, 1000, NOT_LOCAL_CONTENT))
       .rejects.toThrow("was killed by SIGKILL");
-    await expect(commandClassifier(cmd, ok("not json"), noKey)(REQUEST, 1000)).rejects.toThrow("printed no JSON answer");
-    await expect(commandClassifier({ ...cmd, apiKeyEnv: "UNSET" }, ok("{}"), noKey)(REQUEST, 1000)).rejects.toThrow("the classifier key was not found");
+    await expect(commandClassifier(cmd, ok("not json"), noKey)(REQUEST, 1000, NOT_LOCAL_CONTENT)).rejects.toThrow("printed no JSON answer");
+    await expect(commandClassifier({ ...cmd, apiKeyEnv: "UNSET" }, ok("{}"), noKey)(REQUEST, 1000, NOT_LOCAL_CONTENT)).rejects.toThrow("the classifier key was not found");
   });
 
   it("kills a command that outlives its timeout", async () => {
     const started = Date.now();
-    await expect(commandClassifier({ ...COMMAND, command: ["sleep", "5"] }, runCommand, async () => null)(REQUEST, 300))
+    await expect(commandClassifier({ ...COMMAND, command: ["sleep", "5"] }, runCommand, async () => null)(REQUEST, 300, NOT_LOCAL_CONTENT))
       .rejects.toThrow("the classifier command sleep timed out after 0 s");
     expect(Date.now() - started).toBeLessThan(3000);
   });

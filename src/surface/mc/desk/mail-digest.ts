@@ -13,6 +13,7 @@ import type { ListedMail } from "./mail-actions";
 import type { SourceMail, SourceReading } from "./sources/command";
 import { DAY_MS, localDay } from "./time";
 import { isVip } from "./vips";
+import { combined, LOCAL_CONTENT, contentFrom, NOT_LOCAL_CONTENT, type LocalSources, type PromptContent } from "./source-boundary";
 import { snoozedIds, withoutSnoozed } from "./mail-snooze";
 
 export { DIGEST_SQL, type DigestConfig, type DigestModel } from "./mail-digest-schema";
@@ -283,10 +284,10 @@ export function readDigestFlags(db: Database, digestIds: readonly string[]): Map
   return new Map(rows.map((r) => [r.digest_id, { stamp: r.stamp, flags: JSON.parse(r.flags) as DigestFlag[], ...(r.skipped ? { skipped: r.skipped } : {}) }]));
 }
 
-export type FlagRunner = (access: ModelConfig, request: FlagRequest) => Promise<unknown>;
+export type FlagRunner = (access: ModelConfig, request: FlagRequest, content: PromptContent) => Promise<unknown>;
 
-export const chatFlagRunner = (fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): FlagRunner => (access, request) =>
-  modelJson(access, fetchImpl, readKey, "digest model", 400)([{ role: "system", content: DIGEST_PROMPT }, { role: "user", content: JSON.stringify(request) }], access.timeoutSeconds * 1000);
+export const chatFlagRunner = (fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): FlagRunner => (access, request, content) =>
+  modelJson(access, fetchImpl, readKey, "digest model", 400)([{ role: "system", content: DIGEST_PROMPT }, { role: "user", content: JSON.stringify(request) }], access.timeoutSeconds * 1000, content);
 
 export interface FlagPlan {
   access: ModelConfig;
@@ -299,7 +300,7 @@ export interface FlagPlan {
  * items and topics; without a local model, that area's mail and local topics are left out and the rest goes to the
  * main model.
  */
-export function flagPlan(model: DigestModel, group: SweepGroup, topics: readonly DigestTopic[], localSources: ReadonlySet<string>): FlagPlan | FlagSkip {
+export function flagPlan(model: DigestModel, group: SweepGroup, topics: readonly DigestTopic[], localSources: LocalSources): FlagPlan | FlagSkip {
   const isLocal = (m: SweepMember): boolean => localSources.has(m.sourceId);
   const anyLocal = group.members.some(isLocal) || topics.some((t) => t.local);
   const { local, ...main } = model;
@@ -329,11 +330,11 @@ export class DigestFlagger {
     private readonly log: (message: string) => void = console.error,
   ) {}
 
-  kick(db: Database, groups: readonly SweepGroup[], topics: readonly DigestTopic[], localSources: ReadonlySet<string>, now: number): Promise<void> {
+  kick(db: Database, groups: readonly SweepGroup[], topics: readonly DigestTopic[], localSources: LocalSources, now: number): Promise<void> {
     return this.flight.run(() => this.pass(db, groups, topics, localSources, now), (message) => { this.log(`desk: digest flags: ${message}`); });
   }
 
-  private async pass(db: Database, groups: readonly SweepGroup[], topics: readonly DigestTopic[], localSources: ReadonlySet<string>, now: number): Promise<void> {
+  private async pass(db: Database, groups: readonly SweepGroup[], topics: readonly DigestTopic[], localSources: LocalSources, now: number): Promise<void> {
     const known = readDigestFlags(db, groups.map((g) => g.id));
     for (const group of groups) {
       const plan = flagPlan(this.model, group, topics, localSources);
@@ -346,7 +347,8 @@ export class DigestFlagger {
             topics: plan.topics.map(({ kind, name }) => ({ kind, name })),
             items: plan.members.map((m, i) => ({ item: i + 1, from: senderOf(m), subject: m.subject, text: (m.firstParagraph ?? "").slice(0, 600) })),
           };
-          flags = readFlags(await this.run(plan.access, request), plan.members, plan.topics);
+          const content = combined(contentFrom(localSources, plan.members.map((m) => m.sourceId)), plan.topics.some((t) => t.local) ? LOCAL_CONTENT : NOT_LOCAL_CONTENT);
+          flags = readFlags(await this.run(plan.access, request, content), plan.members, plan.topics);
         } catch (err) {
           this.retryAt.set(`${group.id}:${stamp}`, now + RETRY_MS);
           this.log(`desk: digest flags: ${err instanceof Error ? err.message : String(err)}`);

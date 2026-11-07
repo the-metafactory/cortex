@@ -201,7 +201,7 @@ import { startCockpitRefreshLoop, type CockpitRefreshLoop } from "./surface/mc/r
 import { startMissionControl, type MissionControlHandle } from "./surface/mc/embed";
 import { commandTransport, discordTransport } from "./surface/mc/desk/transports";
 import { expandGoalPaths } from "./surface/mc/desk/goals";
-import { toClassifierConfig, toModelConfig } from "./surface/mc/desk/classify";
+import { toClassifierConfig, toModelConfig, type ClassifierConfigInput } from "./surface/mc/desk/classify";
 import { resolveVoice } from "./surface/mc/desk/voice";
 import { accessPaths } from "./surface/mc/desk/mail-similar";
 import { resolveDigest } from "./surface/mc/desk/mail-digest";
@@ -444,6 +444,12 @@ import { formatConfigLoadError } from "./common/config/validate-on-write";
 // and re-exported here so existing importers of `pidFileFor` from `cortex.ts`
 // (tests, the lifecycle commands below) are unaffected.
 export { pidFileFor };
+
+const classifierWithPaths = (config: ClassifierConfigInput): ReturnType<typeof toClassifierConfig> => toClassifierConfig({
+  ...config,
+  ...(config.apiKeyFile ? { apiKeyFile: expandTilde(config.apiKeyFile) } : {}),
+  ...(config.caFile ? { caFile: expandTilde(config.caFile) } : {}),
+});
 
 /**
  * cortex#400 — derive the per-agent CC session opts handed to the
@@ -4987,11 +4993,10 @@ export async function startCortex(
           goals: expandGoalPaths(config.mc.desk.goals, expandTilde),
           ...(config.mc.desk.mail.classifier
             ? {
-                mailClassifier: toClassifierConfig({
-                  ...config.mc.desk.mail.classifier,
-                  ...(config.mc.desk.mail.classifier.apiKeyFile ? { apiKeyFile: expandTilde(config.mc.desk.mail.classifier.apiKeyFile) } : {}),
-                  ...(config.mc.desk.mail.classifier.caFile ? { caFile: expandTilde(config.mc.desk.mail.classifier.caFile) } : {}),
-                }),
+                mailClassifier: {
+                  ...classifierWithPaths(config.mc.desk.mail.classifier),
+                  ...(config.mc.desk.mail.classifier.local ? { local: classifierWithPaths(config.mc.desk.mail.classifier.local) } : {}),
+                },
               }
             : {}),
           ...(config.mc.desk.mail.embedder ? { mailEmbedder: accessPaths(config.mc.desk.mail.embedder, expandTilde) } : {}),
