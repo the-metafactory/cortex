@@ -521,7 +521,6 @@ export class MailClassifier {
     return classifierLabel(this.config);
   }
 
-  /** Why the latest attempt failed, or null once one succeeds. */
   get problem(): string | null {
     return this.latestProblem;
   }
