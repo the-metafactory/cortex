@@ -572,8 +572,9 @@ export class ConversationHost {
     const rows: ConversationMeta[] = [];
     for (const [id, listed] of Object.entries(await this.directory())) {
       if (linked && !listed.links.some(linked)) continue;
-      const { stored, effective, available } = await this.listable(id);
-      rows.push(this.view(id, stored, working, effective, available));
+      const { stored, effective, available, refused } = await this.listable(id);
+      const meta = this.view(id, stored, working, effective, available);
+      rows.push(refused ? { ...meta, links: [] } : meta);
     }
     return rows.sort((a, b) => b.activity.lastAt.localeCompare(a.activity.lastAt));
   }

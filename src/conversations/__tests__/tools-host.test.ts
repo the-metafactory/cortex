@@ -62,8 +62,8 @@ describe("durable conversation tool authorization", () => {
       if (bound) return "SYNTHETIC_PRIVATE_CONTENT echoed without a tool";
       bound = true;
       return (await request.tools!.call("call", "repo_read", { project: "public" }, request.signal)).text;
-    });
-    const revoked = await create(host, "cloud");
+    }, { resolvers: { "studio-thread": () => Promise.resolve({ state: "available", policy: "cloud", title: "Thread" }) } });
+    const revoked = await host.create({ title: "Synthetic", links: [{ owner: "studio-thread", id: "thread-a" }], origin: { kind: "web" }, policy: "cloud" }, "synthetic-principal");
     const untouched = await create(host, "cloud");
     await host.submit(revoked.id, input("one"));
     await host.waitForIdle(revoked.id);
@@ -72,7 +72,7 @@ describe("durable conversation tool authorization", () => {
     config.projects.splice(0, 1);
 
     const listed = await host.list();
-    expect(listed.find(row => row.id === revoked.id)).toMatchObject({ policy: "local" });
+    expect(listed.find(row => row.id === revoked.id)).toMatchObject({ policy: "local", links: [] });
     expect(listed.find(row => row.id === untouched.id)).toMatchObject({ policy: "cloud" });
     const { rows } = await host.overview({ state: "current", q: "", limit: 25 });
     expect(rows.map(row => row.conversation.id).sort()).toEqual([revoked.id, untouched.id].sort());
