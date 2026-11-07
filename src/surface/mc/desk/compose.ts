@@ -52,7 +52,7 @@ import type { RoutineReadLoop } from "./routine-read";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
 import { studioBriefing } from "./studio/overseer";
-import { sourceBoundary } from "./source-boundary";
+import { routeOf, sourceBoundary } from "./source-boundary";
 
 export interface DeskRuntime {
   waitingTasks?: Pick<WaitingTasks, "read">;
@@ -147,6 +147,8 @@ export interface ComposeDeps {
   waitingClassifier?: WaitingClassifier;
   mailHandoff?: MailHandoffWorker;
 }
+
+const localRouteCovers = (config: NonNullable<DeskOptions["mailClassifier"]>): boolean => routeOf(config.local ?? config) === "local";
 
 export const CORRECTIONS_UNREADABLE = "The Desk could not read your ranking corrections, so it ranks by its base rules alone.";
 
@@ -259,7 +261,7 @@ export async function composeDesk(
   const offerable = [...mail.filter((m) => m.unread), ...(mailGroups?.digests.groups ?? []).flatMap((g) => g.members)];
   const flagged = new Set([...readClassifications(db, offerable.map((m) => m.id))].filter(([, c]) => c.suspicious === true).map(([id]) => id));
   const unsubscribe = unsubscribeOffers(db, offerable, offerContext(db, desk.mailUnsubscribe, suspicion, flagged));
-  const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null, desk.mailClassifier.sourcePolicy === "local" || localClassifier ? 0 : mail.filter((item) => !cloudSources.has(item.sourceId)).length, desk.mailClassifier.local, localClassifier?.problem) : null;
+  const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null, localRouteCovers(desk.mailClassifier) ? 0 : mail.filter((item) => !cloudSources.has(item.sourceId)).length, desk.mailClassifier.local, localClassifier?.problem) : null;
   const yesFilter = await mailYesFilter(db, desk, now);
   const notes = listOpenNotes(db);
   const reminders = notes.filter((n) => n.kind === "reminder" && n.dueAt !== null);

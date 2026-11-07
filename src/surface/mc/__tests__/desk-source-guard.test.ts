@@ -83,7 +83,8 @@ describe("the source boundary", () => {
     expect(routeOf({ baseUrl: "http://127.0.0.1:8081/v1", sourcePolicy: "cloud" })).toBe("cloud");
     expect(routeOf({ command: ["local-model"], sourcePolicy: "local" })).toBe("local");
     expect(routeOf({ command: ["local-model"] })).toBe("cloud");
-    for (const command of [["/opt/bin/codex"], ["helper", "--codex", "/x"], ["/a/desk-codex-json.ts", "--model", "m"]]) expect(routeOf({ command, sourcePolicy: "local" })).toBe("cloud");
+    expect(routeOf({ command: ["/opt/codex-tools/local-model"], sourcePolicy: "local" })).toBe("local");
+    for (const command of [["/opt/bin/codex"], ["helper", "--codex", "/x"], ["helper", "--codex=/x"], ["sh", "-c", "codex exec"], ["/a/desk-codex-json.ts", "--model", "m"]]) expect(routeOf({ command, sourcePolicy: "local" })).toBe("cloud");
   });
 });
 
@@ -130,6 +131,13 @@ describe("the model dispatch", () => {
     expect({ spawns, keys }).toEqual({ spawns: 0, keys: 0 });
     expect(await modelJson(config, fetch, async () => "k", "model", 600, run)(messages, 1000, NOT_LOCAL_CONTENT)).toEqual({});
     expect(spawns).toBe(1);
+  });
+
+  it("tells a command the route the guard enforced, not a default", async () => {
+    let stdin = "";
+    const run: CommandRunner = async (_argv, _timeout, input) => { stdin = input; return { code: 0, signal: null, stdout: "{}", stderr: "" }; };
+    await modelJson({ command: ["undeclared"], timeoutSeconds: 1 }, fetch, async () => null, "model", 600, run)(messages, 1000, NOT_LOCAL_CONTENT);
+    expect((JSON.parse(stdin) as { sourcePolicy: string }).sourcePolicy).toBe("cloud");
   });
 
   it("refuses work mail in both classifier transports", async () => {

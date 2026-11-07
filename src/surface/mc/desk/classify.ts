@@ -358,7 +358,7 @@ export function chatJson(config: EndpointAccess, fetchImpl: typeof fetch = fetch
 export function modelJson(config: ModelConfig, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey, label = "model", maxTokens = 600, run: CommandRunner = runModelCommand): ModelCall {
   if (!isCommand(config)) return chatJson(config, fetchImpl, readKey, label, maxTokens);
   const command = commandJson(config, run, readKey, label);
-  return (messages, timeoutMs, promptContent) => command(JSON.stringify({ sourcePolicy: config.sourcePolicy ?? "local", messages }), timeoutMs, promptContent);
+  return (messages, timeoutMs, promptContent) => command(JSON.stringify({ sourcePolicy: routeOf(config), messages }), timeoutMs, promptContent);
 }
 
 export function modelIdentity(config: ModelConfig): string {

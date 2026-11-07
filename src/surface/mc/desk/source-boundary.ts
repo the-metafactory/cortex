@@ -1,4 +1,3 @@
-import { basename } from "node:path";
 import { isLoopbackSideband } from "../../../common/sideband/loopback";
 
 export type ModelRouteKind = "cloud" | "local";
@@ -15,7 +14,7 @@ export interface LocalSources {
   has(sourceId: string): boolean;
 }
 
-/** What a model prompt is made of. Only this module's helpers build one, so every dispatch states its content. */
+/** Whether a model prompt holds content that must stay on this machine. Every dispatch states one. */
 export interface PromptContent {
   readonly local: boolean;
 }
@@ -26,10 +25,9 @@ export const NOT_LOCAL_CONTENT: PromptContent = Object.freeze({ local: false });
 /** Content that must stay on this machine, for a reason the caller already knows. */
 export const LOCAL_CONTENT: PromptContent = Object.freeze({ local: true });
 
-const CLOUD_CLIENTS = new Set(["codex", "claude", "desk-codex-json", "desk-codex-json.ts"]);
-const CLOUD_CLIENT_FLAGS = new Set(["--codex", "--claude"]);
+const CLOUD_CLIENT = /(?:^|[\s/=-])(?:codex|claude|desk-codex-json)(?:\.[a-z]+)?(?:[\s=]|$)/;
 
-const namesCloudClient = (command: readonly string[]): boolean => command.some((arg) => CLOUD_CLIENT_FLAGS.has(arg) || CLOUD_CLIENTS.has(basename(arg)));
+const namesCloudClient = (command: readonly string[]): boolean => command.some((arg) => CLOUD_CLIENT.test(arg));
 
 /**
  * Where a model configuration sends its prompts. A command is local only when it is declared local and names no known
