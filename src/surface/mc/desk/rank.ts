@@ -29,6 +29,7 @@ export interface RankInput {
   ranger: RangerState | null;
   areas: AreaRule[];
   rangerActions?: boolean;
+  conversations?: boolean;
   rulingActions?: boolean;
   hidden?: ReadonlySet<string>;
   goalActions?: GoalActionsInput;
@@ -127,7 +128,7 @@ export function rankItems(input: RankInput): DeskItem[] {
       : task?.kind === "open" ? {
         ...item,
         title: `"${task.title}" needs you.`,
-        why: `${task.question ?? item.question?.condition ?? item.question?.reason ?? QUESTION_UNAVAILABLE} In ${repoName(ref.split("#")[0] ?? ref)}.`,
+        why: item.kind === "grilling" && !input.conversations ? item.why : `${task.question ?? item.question?.condition ?? item.question?.reason ?? QUESTION_UNAVAILABLE} In ${repoName(ref.split("#")[0] ?? ref)}.`,
         detail: { ...item.detail, links: issueLinks(task.url) },
       } : item;
     if (!items.has(item.key)) items.set(item.key, enriched);
@@ -211,7 +212,7 @@ const MAP_NODE_RULES: { rule: MapNodeRule; nodes: (m: RangerMap) => RangerMapNod
       title: (t) => `An agent wants to settle a question with you: "${t}"`,
       why: (repo) => `It blocks work in ${repo} until you have talked it through.`,
       primary: action("ranger.grill", "Start the grilling", "primary", false),
-      wired: () => false,
+      wired: () => true,
     },
   },
 ];
@@ -222,18 +223,19 @@ export function approvalBlocked(map: RangerMap, node: RangerMapNode): string | n
   return "Ranger does not take an approval for it here. Look first to see what it needs.";
 }
 
-function rangerMapItems({ ranger, areas, rangerActions = false }: RankInput, add: Add): void {
+function rangerMapItems({ ranger, areas, rangerActions = false, conversations = false }: RankInput, add: Add): void {
   for (const map of ranger?.maps ?? []) {
     for (const { rule, nodes } of MAP_NODE_RULES) {
       for (const node of nodes(map)) {
         const ref = `${map.repo}#${node.id}`;
         const blocked = rule.kind === "decision" && rangerActions ? approvalBlocked(map, node) : null;
+        const grilling = rule.kind === "grilling";
         add({
-          key: rangerItemKey(ref), kind: rule.kind, source: "ranger", area: areaFor(areas, map.repo, null), urgency: rule.urgency,
+          key: rangerItemKey(ref), kind: rule.kind, source: "ranger", rangerMap: { key: map.key, label: map.repo }, area: areaFor(areas, map.repo, null), urgency: rule.urgency,
           title: rule.title(node.title),
-          why: blocked ?? rule.why(repoName(map.repo)),
+          why: grilling && !conversations ? "Conversations are not set up on this stack." : blocked ?? rule.why(repoName(map.repo)),
           score: rule.score,
-          actions: blocked ? [{ ...LOOK, role: "primary" }, LATER] : [{ ...rule.primary, wired: rangerActions && rule.wired(map, node) }, LOOK, LATER],
+          actions: blocked ? [{ ...LOOK, role: "primary" }, LATER] : [{ ...rule.primary, wired: grilling ? conversations : rangerActions && rule.wired(map, node) }, LOOK, LATER],
           detail: { summary: node.title, history: [], refs: [ref, map.key], links: issueLinks(node.url) },
         });
       }
@@ -556,4 +558,27 @@ function suspiciousItem(m: MailInput["mail"][number], reasons: ReturnType<typeof
 function escalationUrl(ref: string): string | undefined {
   const parts = /^(?:github:github\.com\/)?([\w.-]+\/[\w.-]+)#([1-9]\d*)$/.exec(ref);
   return parts ? `https://github.com/${parts[1]}/issues/${parts[2]}` : undefined;
+}
+
+export interface RangerAttentionGroup {
+  key: string;
+  label: string;
+  items: DeskItem[];
+}
+
+export function rangerAttention(items: DeskItem[], limit: number): { visible: DeskItem[]; groups: RangerAttentionGroup[] } {
+  const visible: DeskItem[] = [];
+  const groups = new Map<string, RangerAttentionGroup>();
+  let count = 0;
+  for (const item of items) {
+    if (item.source !== "ranger" || (item.kind !== "decision" && item.kind !== "grilling") || count++ < limit) {
+      visible.push(item);
+      continue;
+    }
+    const key = item.rangerMap?.key ?? item.detail.refs[1] ?? item.source;
+    const group = groups.get(key) ?? { key, label: item.rangerMap?.label ?? key, items: [] };
+    group.items.push(item);
+    groups.set(key, group);
+  }
+  return { visible, groups: [...groups.values()] };
 }
