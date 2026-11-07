@@ -5,6 +5,7 @@ import { failureText } from "../lib/conversations";
 import { check, confirm, feedbackLabel, propose, readCapabilities, readCreation, revise, revoke, type Capability, type CreationView, type GrantScope, type ProposalView } from "../lib/conversation-creation";
 
 import { ConversationDestination } from "./desk-conversation-destination";
+import { ConversationBalanceTask, useConversationBalanceTasks, type ConversationBalanceTasks } from "./desk-conversation-balance-task";
 
 const QUICK = ["graph-node", "balance-task", "routine", "flow"] as const;
 const SETTLING_MS = 3_000;
@@ -59,11 +60,12 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
     void act(() => propose(id, { proposalId: crypto.randomUUID(), ...(type ? { type } : { intent: "card" }), fields: title ? { [subject]: title } : {}, ...(seed.entryId ? { entryId: seed.entryId } : {}) }), "The proposal was not saved. Try again; nothing was created.");
   };
   const proposals = view?.proposals ?? [];
+  const balance = useConversationBalanceTasks(proposals.filter(p => p.proposal.type === "balance-task" && p.operation?.state === "created").map(p => p.operation?.canonicalId ?? "").join("\0"));
   const grants = view?.grants ?? [];
   const active = grants.filter(g => !g.revokedAt);
   const revoked = grants.length - active.length;
   return <section className="dcv-create" aria-label="Create from this exchange">
-    {proposals.map(p => <ProposalCard key={p.proposal.proposalId} id={id} view={p} types={creatable} busy={busy} archived={archived} act={act} />)}
+    {proposals.map(p => <ProposalCard key={p.proposal.proposalId} id={id} view={p} types={creatable} busy={busy} archived={archived} act={act} balance={balance} />)}
     {!archived && <div className="dcv-acts" role="group" aria-label="Create from this exchange">
       <span className="dcv-quiet">Create from this exchange:</span>
       {QUICK.map(type => { const t = byType.get(type); return t ? <button key={type} type="button" className="desk-btn" disabled={busy} onClick={() => { start(type); }}>{t.label}</button> : null; })}
@@ -80,7 +82,7 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
   </section>;
 }
 
-function ProposalCard({ id, view, types, busy, archived, act }: { id: string; view: ProposalView; types: Capability[]; busy: boolean; archived: boolean; act: Act }) {
+function ProposalCard({ id, view, types, busy, archived, act, balance }: { id: string; view: ProposalView; types: Capability[]; busy: boolean; archived: boolean; act: Act; balance: ConversationBalanceTasks }) {
   const { proposal, capability } = view;
   const links = proposalLinks(view);
   const balanceProposal = usesBalanceDestinationPicker(proposal.type);
@@ -94,6 +96,7 @@ function ProposalCard({ id, view, types, busy, archived, act }: { id: string; vi
   const open = view.feedback === "proposed" || view.feedback === "unavailable" || view.feedback === "choose" || view.feedback === "failed";
   const editable = open && !archived;
   const settled = view.operation?.state === "created";
+  const savedBalanceTask = settled && proposal.type === "balance-task";
   const save = (): Promise<ProposalView> => revise(id, proposal.proposalId, { revision: proposal.revision, fields });
   const doConfirm = (): void => void act(async () => {
     const current = dirty ? await save() : view;
@@ -119,7 +122,7 @@ function ProposalCard({ id, view, types, busy, archived, act }: { id: string; vi
       </select></label>
       <button type="button" className="desk-btn" disabled={busy || !type} onClick={() => void act(() => revise(id, proposal.proposalId, { revision: proposal.revision, type }), "The choice was not saved. Try again.")}>Use this type</button>
     </div>}
-    {capability && view.feedback !== "choose" && <div className="dcv-fields">
+    {capability && view.feedback !== "choose" && !savedBalanceTask && <div className="dcv-fields">
       {balanceProposal && <ConversationDestination fields={fields} onChange={setFields} disabled={!editable || busy} project={proposal.type === "balance-task"} />}
       {capability.fields.filter(f => !(balanceProposal && (f.name === "area" || f.name === "project"))).map(f => <label key={f.name}>{f.label}{f.required ? "" : " (optional)"}{f.destination ? " · destination" : ""}
         {f.kind === "long"
@@ -129,6 +132,7 @@ function ProposalCard({ id, view, types, busy, archived, act }: { id: string; vi
       {capability.fixed.map(t => <p key={t.label} className="dcv-quiet"><strong>{t.label}:</strong> {t.value}</p>)}
       {proposal.suggestion && <p className="dcv-quiet">Filer: {proposal.suggestion}</p>}
     </div>}
+    {savedBalanceTask && <ConversationBalanceTask id={view.operation?.canonicalId} balance={balance} />}
     {settled && <p role="status">Created {capability?.label.toLowerCase()} {view.operation?.canonicalId}{links.object ? <> · <a href={links.object}>Open it</a></> : null}. It links back to this exchange.</p>}
     {editable && view.feedback === "proposed" && <div className="dcv-standing">
       <label><input type="checkbox" checked={standing} onChange={e => { setStanding(e.target.checked); }} /> Allow future {capability?.label.toLowerCase()} creation without asking</label>

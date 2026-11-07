@@ -107,7 +107,7 @@ export function TaskDetails({ id, entry, day, editor, choices, titled = true, co
   </div>;
 }
 
-function TaskSummary({ node, entry, day, titled, busy, onEdit }: { node: OutlineNode; entry: TaskEntry | undefined; day: MyDayView; titled: boolean; busy: boolean; onEdit: () => void }) {
+export function TaskSummary({ node, entry, day, titled, busy, onEdit }: { node: OutlineNode; entry: TaskEntry | undefined; day: MyDayView; titled: boolean; busy: boolean; onEdit: () => void }) {
   const details = balanceDetails(node, day.date);
   return <section className="dtd-summary" aria-label="Saved task details">
     {titled && <h2>{node.title}</h2>}
