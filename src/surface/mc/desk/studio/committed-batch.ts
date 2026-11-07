@@ -40,12 +40,17 @@ export function decodeCommittedBatch(bytes: Buffer, objects: readonly CommittedO
 export async function readCommittedBatch(dir: string, objects: readonly CommittedObject[]): Promise<Buffer[]> {
   const size = objects.reduce((total, object) => total + object.size, 0);
   if (!objects.length || objects.length > COMMITTED_BATCH_FILES || size > COMMITTED_BATCH_BYTES || objects.some(object => !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(object.oid) || !Number.isSafeInteger(object.size) || object.size < 0 || object.size > STUDIO_MAX_FILE_BYTES)) throw new Error("Studio committed batch exceeds its input limits");
+  const stdout = await readBoundedGit(dir, ["cat-file", "--batch"], size + objects.length * 128, objects.map(object => object.oid).join("\n") + "\n");
+  return decodeCommittedBatch(stdout, objects);
+}
+
+export async function readBoundedGit(dir: string, args: string[], limit: number, stdin?: string): Promise<Buffer> {
   const env: Record<string, string> = {};
   for (const key of ["PATH", "HOME", "USER", "LOGNAME", "LANG", "TMPDIR", "SHELL"]) if (process.env[key] !== undefined) env[key] = process.env[key];
-  const proc = Bun.spawn(["git", "-C", dir, "cat-file", "--batch"], { env, stdin: new Blob([objects.map(object => object.oid).join("\n") + "\n"]), stdout: "pipe", stderr: "pipe", timeout: 15000 });
+  const proc = Bun.spawn(["git", "-C", dir, ...args], { env, stdin: stdin === undefined ? "ignore" : new Blob([stdin]), stdout: "pipe", stderr: "pipe", timeout: 15000 });
   try {
-    const [stdout, , code] = await Promise.all([boundedOutput(proc.stdout, size + objects.length * 128), boundedOutput(proc.stderr, 65536), proc.exited]);
+    const [stdout, , code] = await Promise.all([boundedOutput(proc.stdout, limit), boundedOutput(proc.stderr, 65536), proc.exited]);
     if (code !== 0) throw new Error("Studio committed batch lookup failed; overseer deferred");
-    return decodeCommittedBatch(stdout, objects);
+    return stdout;
   } finally { proc.kill(); await proc.exited; }
 }
