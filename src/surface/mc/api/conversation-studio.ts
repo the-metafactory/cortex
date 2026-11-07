@@ -104,7 +104,7 @@ export async function startFromSource(host: ConversationHost, deps: StudioConver
     return host.create({ title: clip(resolved.title), links: [source], origin: { kind: "balance", ref: source.id }, policy: resolved.policy }, principal, { key, titleFromSource: true });
   }
   if (source.owner === "graph-node") {
-    const text = `Help me talk through this question: ${resolved.title}\n\n${resolved.context ?? ""}\n\nPrepare proposals for my confirmation. Starting this conversation changes nothing on the graph.`;
+    const text = "Help me talk through the linked Ranger question. Prepare proposals for my confirmation. Starting this conversation changes nothing on the graph.";
     return host.create({ title: clip(resolved.title), links: [source], origin: { kind: "graph", ref: source.id }, policy: resolved.policy }, principal, {
       key: `ranger-grilling:${source.id}`, titleFromSource: true,
       entries: [{ kind: INPUT_KIND, data: { text }, messages: [{ role: "user", text, at: (deps.now?.() ?? new Date()).getTime() }] }],

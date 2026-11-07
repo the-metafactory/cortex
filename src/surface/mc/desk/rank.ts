@@ -74,6 +74,11 @@ export function areaFor(areas: AreaRule[], repo: string | null, goalId: string |
   return null;
 }
 
+export function repoIsCloud(areas: AreaRule[], repo: string): boolean {
+  const owners = areas.filter(area => areaFor([area], repo, null) !== null);
+  return owners.length > 0 && owners.every(area => area.policy === "cloud");
+}
+
 export function goalShort(wording: string | null): string {
   if (!wording) return "A goal without a description";
   const head = (wording.split(/[:.;]/)[0] ?? wording).trim();
@@ -191,7 +196,7 @@ interface MapNodeRule {
   title: (title: string) => string;
   why: (repo: string) => string;
   primary: DeskAction;
-  wired: (map: RangerMap, node: RangerMapNode) => boolean;
+  wired: (input: RankInput, map: RangerMap, node: RangerMapNode) => boolean;
 }
 
 const MAP_NODE_RULES: { rule: MapNodeRule; nodes: (m: RangerMap) => RangerMapNode[] }[] = [
@@ -202,7 +207,7 @@ const MAP_NODE_RULES: { rule: MapNodeRule; nodes: (m: RangerMap) => RangerMapNod
       title: (t) => `"${t}" waits for your go-ahead.`,
       why: (repo) => `Agents in ${repo} will not start it without you.`,
       primary: action("ranger.approve", "Approve", "primary", false),
-      wired: approvable,
+      wired: (input, map, node) => Boolean(input.rangerActions) && approvable(map, node),
     },
   },
   {
@@ -212,7 +217,7 @@ const MAP_NODE_RULES: { rule: MapNodeRule; nodes: (m: RangerMap) => RangerMapNod
       title: (t) => `An agent wants to settle a question with you: "${t}"`,
       why: (repo) => `It blocks work in ${repo} until you have talked it through.`,
       primary: action("ranger.grill", "Start the grilling", "primary", false),
-      wired: () => true,
+      wired: input => Boolean(input.conversations),
     },
   },
 ];
@@ -223,7 +228,8 @@ export function approvalBlocked(map: RangerMap, node: RangerMapNode): string | n
   return "Ranger does not take an approval for it here. Look first to see what it needs.";
 }
 
-function rangerMapItems({ ranger, areas, rangerActions = false, conversations = false }: RankInput, add: Add): void {
+function rangerMapItems(input: RankInput, add: Add): void {
+  const { ranger, areas, rangerActions = false, conversations = false } = input;
   for (const map of ranger?.maps ?? []) {
     for (const { rule, nodes } of MAP_NODE_RULES) {
       for (const node of nodes(map)) {
@@ -235,7 +241,7 @@ function rangerMapItems({ ranger, areas, rangerActions = false, conversations = 
           title: rule.title(node.title),
           why: grilling && !conversations ? "Conversations are not set up on this stack." : blocked ?? rule.why(repoName(map.repo)),
           score: rule.score,
-          actions: blocked ? [{ ...LOOK, role: "primary" }, LATER] : [{ ...rule.primary, wired: grilling ? conversations : rangerActions && rule.wired(map, node) }, LOOK, LATER],
+          actions: blocked ? [{ ...LOOK, role: "primary" }, LATER] : [{ ...rule.primary, wired: rule.wired(input, map, node) }, LOOK, LATER],
           detail: { summary: node.title, history: [], refs: [ref, map.key], links: issueLinks(node.url) },
         });
       }
