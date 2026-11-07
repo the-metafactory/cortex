@@ -18,6 +18,10 @@ const SKIPPED_CHARS = 2_000;
 const SKIPPED_LIMIT = 40;
 const ENTRY_LIMIT = 2_000;
 const TOTAL_BYTES = 2 * 1024 * 1024;
+const RETRY_ENTRY_LIMIT = 12;
+const RETRY_CHARS_LIMIT = 2_000;
+const RETRY_PATH_LIMIT = 512;
+const INVENTORY_EXCLUSIONS = new Set(["excluded-path", "source-policy", "outside-project", "nested-checkout"]);
 type ReadArgs = z.infer<typeof ReadInput>;
 type QueryArgs = z.infer<typeof QueryInput>;
 type Walk = { operation: "list"; args: z.infer<typeof ListInput> } | { operation: "find"; args: QueryArgs };
@@ -145,21 +149,22 @@ function walkPolicy(request: Walk, collector: ResultCollector): WalkPolicy {
   };
 }
 
-async function walk(root: string, policy: WalkPolicy, paths: RepositoryPaths, collector: ResultCollector, context: ToolContext): Promise<number> {
+async function walk(root: string, policy: WalkPolicy, paths: RepositoryPaths, collector: ResultCollector, context: ToolContext): Promise<{ entriesVisited: number; inventoryComplete: boolean }> {
   if (!paths.check(root).stat.isDirectory()) throw new RepositoryFailure("unreadable", "directory-required");
   let entries = 0;
   let entryLimited = false;
+  let inventoryComplete = true;
   const stopped = (): boolean => collector.isLimited() || entryLimited;
   const visit = async (path: string, depth: number): Promise<void> => {
     await setImmediate();
     context.signal.throwIfAborted();
     if (stopped()) return;
-    if (entries >= ENTRY_LIMIT) { entryLimited = true; collector.truncate("entry-limit"); return; }
+    if (entries >= ENTRY_LIMIT) { entryLimited = true; inventoryComplete = false; collector.truncate("entry-limit"); return; }
     entries++;
     try {
       const checked = paths.check(path);
       if (checked.stat.isDirectory()) {
-        if (!policy.enters(checked, depth)) return;
+        if (!policy.enters(checked, depth)) { inventoryComplete = false; return; }
         const dir = await opendir(checked.absolute);
         for await (const entry of dir) {
           if (stopped()) break;
@@ -169,24 +174,44 @@ async function walk(root: string, policy: WalkPolicy, paths: RepositoryPaths, co
       else policy.onFile(path, checked);
     } catch (error) {
       context.signal.throwIfAborted();
-      collector.skip(path, fileFailure(error));
+      const failure = fileFailure(error);
+      if (failure.status !== "denied" || !INVENTORY_EXCLUSIONS.has(failure.reason)) inventoryComplete = false;
+      collector.skip(path, failure);
     }
   };
   await visit(root, 0);
-  return entries;
+  return { entriesVisited: entries, inventoryComplete };
+}
+
+function addRetryHints(coverage: SearchCoverage, pending: ReadonlySet<string>, scope: string): void {
+  let retryChars = 0;
+  for (const file of pending) {
+    const directory = dirname(file);
+    const directFile = directory === scope;
+    const path = directFile ? file : directory;
+    const retries = directFile ? coverage.retryFiles : coverage.retryPaths;
+    if (retries.includes(path)) continue;
+    const cost = JSON.stringify(path).length + 1;
+    if (coverage.retryPaths.length + coverage.retryFiles.length >= RETRY_ENTRY_LIMIT || retryChars + cost > RETRY_CHARS_LIMIT || path.length > RETRY_PATH_LIMIT) {
+      if (directFile) coverage.retryFilesTruncated = true;
+      else coverage.retryPathsTruncated = true;
+      continue;
+    }
+    retries.push(path);
+    retryChars += cost;
+  }
 }
 
 async function search(args: QueryArgs, paths: RepositoryPaths, collector: ResultCollector, context: ToolContext): Promise<void> {
   const candidates = new Map<string, { path: string; bytes: number }>();
-  const entriesVisited = await walk(args.path, {
+  const inventory = await walk(args.path, {
     enters: belowDepth(args, collector),
     onFile(path, checked) {
       if (!candidates.has(checked.path)) candidates.set(checked.path, { path, bytes: checked.stat.size });
     },
   }, paths, collector, context);
   const coverage: SearchCoverage = {
-    path: args.path, order: "small-files-first", entriesVisited, entryLimit: ENTRY_LIMIT,
-    inventoryComplete: !collector.result.truncated && collector.result.skippedCount === 0,
+    path: args.path, order: "small-files-first", ...inventory, entryLimit: ENTRY_LIMIT,
     inventoriedFiles: candidates.size, searchedFiles: 0, pendingFiles: candidates.size,
     readBytes: 0, readByteLimit: TOTAL_BYTES, retryPaths: [], retryFiles: [], retryPathsTruncated: false, retryFilesTruncated: false,
   };
@@ -203,28 +228,14 @@ async function search(args: QueryArgs, paths: RepositoryPaths, collector: Result
       }
     } catch (error) {
       context.signal.throwIfAborted();
-      collector.skip(file.path, fileFailure(error));
+      const failure = fileFailure(error);
+      collector.skip(file.path, failure);
+      if (failure.reason !== "read-byte-limit") pending.delete(canonical);
     }
   }
   coverage.pendingFiles = pending.size;
   coverage.readBytes = paths.readBytes;
-  const scope = paths.check(args.path).path;
-  let retryChars = 0;
-  for (const file of pending) {
-    const directory = dirname(file);
-    const directFile = directory === scope;
-    const path = directFile ? file : directory;
-    const retries = directFile ? coverage.retryFiles : coverage.retryPaths;
-    if (retries.includes(path)) continue;
-    const cost = JSON.stringify(path).length + 1;
-    if (coverage.retryPaths.length + coverage.retryFiles.length >= 12 || retryChars + cost > 2_000 || path.length > 512) {
-      if (directFile) coverage.retryFilesTruncated = true;
-      else coverage.retryPathsTruncated = true;
-      continue;
-    }
-    retries.push(path);
-    retryChars += cost;
-  }
+  addRetryHints(coverage, pending, paths.check(args.path).path);
   if (pending.size || !coverage.inventoryComplete) coverage.guidance = "Search is partial. Retry repo_search in directories from retryPaths, or repo_read files from retryFiles. Use repo_list at the requested path to discover other directories, or repo_find then repo_read for a known filename. Counts cover only inventoried permitted files, not the entire tree.";
   collector.result.coverage = coverage;
 }
