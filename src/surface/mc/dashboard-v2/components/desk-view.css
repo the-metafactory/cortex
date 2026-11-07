@@ -294,3 +294,10 @@
 @media(max-width:600px){.desk-set-main{padding:24px 14px 60px}.desk-set-layout{grid-template-columns:105px minmax(0,1fr);gap:12px}.desk-set-tabs button{padding:10px 7px;font-size:13px}.desk-set-card{padding:16px 12px}.desk-set-list li{flex-wrap:wrap}.desk-set-add{flex-wrap:wrap}.desk-set-add input{width:100%}.desk-settings .desk-top-in{padding:0 14px}.desk-settings .desk-btn{white-space:normal}}
 
 .desk-set-limits{display:grid;gap:20px;margin:24px 0}.desk-set-limits label{display:grid;grid-template-columns:90px minmax(60px,180px) 2ch;align-items:center;gap:12px;font-size:14px}.desk-set-limits input{min-width:0;width:100%;accent-color:var(--ink)}
+
+.desk-repository-search{display:grid;gap:6px;margin-bottom:12px;font-size:14px;color:var(--ink2)}
+.desk-repository-search input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+.desk-repository-group{margin:16px 0;padding:12px;border:1px solid var(--line2);border-radius:8px}
+.desk-repository-group h4,.desk-repository-group h5{margin:0 0 8px;font-size:15px;overflow-wrap:anywhere}
+.desk-repository-group .desk-calendar-toggle{overflow-wrap:anywhere}
+.desk-repository-group>.desk-calendar-toggle small{display:block;color:var(--mute);font-size:13px}
