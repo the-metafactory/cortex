@@ -62,6 +62,17 @@ describe("Desk calendar retirement", () => {
     expect(ids(db)).toEqual(expect.arrayContaining(["older", "old", "newest"]));
   });
 
+  it("restores the newest row when a name-only event arrives for a retired name", async () => {
+    const otherOnly = { ...coverage(["other"]), calendars: [{ id: "other", name: "Other" }] };
+    await read(db, JSON.stringify({ capabilities: ["calendar"], events: [], calendarCoverage: otherOnly }));
+    expect(ids(db)).toEqual(["other"]);
+    const start = new Date(NOW + 300000).toISOString();
+    const desk = await read(db, JSON.stringify({ capabilities: ["calendar"], events: [{ id: "a", title: "Meeting", start, calendar: "Home" }], calendarCoverage: otherOnly }));
+    expect(desk.today.map(entry => entry.title)).toEqual(["Meeting"]);
+    expect(ids(db)).toEqual(expect.arrayContaining(["newest", "other"]));
+    expect(ids(db)).not.toContain("older");
+  });
+
   it("retires nothing on a partial, empty, failed or coverage-less reading", async () => {
     const before = listCalendars(db);
     for (const output of [reading(["newest"], "partial"), reading([]), new Error("reader is down"), JSON.stringify({ capabilities: ["calendar"], events: [] })]) {

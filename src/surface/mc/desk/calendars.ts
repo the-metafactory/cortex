@@ -53,6 +53,7 @@ export function discoverCalendars(db: Database, events: CalendarEvent[], returne
   const insert = db.query("INSERT INTO desk_calendars (source, name, enabled, color) VALUES (?, ?, 1, '#2563eb') ON CONFLICT(source, name) DO NOTHING");
   const identity = db.query("INSERT INTO desk_calendar_identities (source, calendar_id, name, legacy_name, enabled, color) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source, calendar_id) DO UPDATE SET name = excluded.name, retired_at = NULL");
   const newestSameName = db.query<SavedPreference, [string, string]>("SELECT enabled, color FROM desk_calendar_identities WHERE source = ? AND name = ? ORDER BY rowid DESC LIMIT 1");
+  const restoreNewest = db.query("UPDATE desk_calendar_identities SET retired_at = NULL WHERE retired_at IS NOT NULL AND rowid = (SELECT MAX(rowid) FROM desk_calendar_identities WHERE source = ?1 AND name = ?2)");
   const discovered = new Set<string>();
   for (const event of events) {
     const name = calendarName(event);
@@ -62,7 +63,10 @@ export function discoverCalendars(db: Database, events: CalendarEvent[], returne
     if (event.calendarId) {
       const saved = newestSameName.get(event.sourceId, name) ?? db.query<SavedPreference, [string, string]>("SELECT enabled, color FROM desk_calendars WHERE source = ? AND name = ?").get(event.sourceId, name);
       identity.run(event.sourceId, event.calendarId, name, name, saved?.enabled ?? 1, saved?.color ?? "#2563eb");
-    } else insert.run(event.sourceId, name);
+    } else {
+      insert.run(event.sourceId, name);
+      restoreNewest.run(event.sourceId, name);
+    }
   }
   for (const reading of returned) retireUnreturned(db, reading, now);
   return new Map(listCalendars(db).map((c) => [calendarKey(c.source, c.name, c.calendarId), c]));
