@@ -14,12 +14,12 @@ const OTHER = { "cf-access-authenticated-user-email": "someone-else@example.inva
 const { dirs, hosts } = scratchHosts("conversation-creation-");
 
 const guard = (): MutationGuardContext => ({ isLoopback: true, allowedHostnames: buildAllowedHostnames("127.0.0.1"), listenPort: 8767, principals: new Set() });
-async function rig() {
+async function rig(balance = false) {
   const owner = fixtureOwner();
   const status = await openConversationHost({ dir: await dirs.make(), stack: "api", label: LABEL, expectedLabel: LABEL, lanes: { cloud: { provider: "test", model: "m" } }, turns: answering(() => "ok") });
   if (status.state !== "ready") throw new Error(status.reason);
   hosts.push(status.host);
-  await status.host.attachSources({ resolvers: {}, readbacks: {}, writers: { "graph-node": owner.writer, routine: owner.writer } });
+  await status.host.attachSources({ resolvers: {}, readbacks: {}, writers: { "graph-node": owner.writer, routine: owner.writer, ...(balance ? { "balance-task": owner.writer } : {}) } });
   const raw = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<Response> =>
     handleConversations(new Request(`http://127.0.0.1:8767${path}`, { method, headers: { host: "127.0.0.1:8767", "content-type": "application/json", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), new URL(`http://127.0.0.1:8767${path}`), guard(), () => status);
   const call = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: Reply }> => {
@@ -106,6 +106,30 @@ describe("conversation creation API", () => {
     expect(html).toContain("Parent project");
     expect(html).toContain("unavailable here");
     expect(html).not.toContain('aria-label="Area" type="text"');
+  });
+
+  test("reopened created Balance tasks hide creation fields while unsubmitted and retryable proposals retain them", async () => {
+    const { call, id } = await rig(true);
+    const { body: caps } = await call("GET", "/api/conversations/capabilities");
+    const made = await call("POST", `/api/conversations/${id}/proposals`, { proposalId: randomUUID(), type: "balance-task", fields: { title: "Make a paper glider", area: "work" } });
+    const proposed = made.body.proposal;
+    if (!proposed) throw new Error("Missing Balance proposal");
+    const render = (proposals: ProposalView[]): string => renderToStaticMarkup(<CreationSection id={id} archived={false} types={caps.types ?? []} view={{ proposals, grants: [] }} error={null} busy={false} seed={{ entryId: null, text: "" }} act={() => Promise.resolve()} />);
+    expect(render([proposed])).toContain('aria-label="Title"');
+    expect(render([proposed])).toContain("Confirm creation");
+    for (const feedback of ["failed", "uncertain", "accepted"] as const) {
+      const html = render([{ ...proposed, feedback }]);
+      expect(html).toContain('aria-label="Title"');
+      expect(html).toContain(feedback === "failed" ? "Try again" : ">Check</button>");
+    }
+    await call("POST", `/api/conversations/${id}/proposals/${proposed.proposal.proposalId}/confirm`, { revision: proposed.proposal.revision, digest: proposed.digest });
+    const reopened = await call("GET", `/api/conversations/${id}/proposals`);
+    const html = render(reopened.body.proposals ?? []);
+    expect(html).toContain("Balance task · created");
+    expect(html).toContain("Loading saved Balance task");
+    expect(html).not.toContain('aria-label="Title"');
+    expect(html).not.toContain("Loading Balance destinations");
+    expect(html).not.toContain("Confirm creation");
   });
 
 });
