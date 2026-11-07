@@ -367,3 +367,27 @@ test("unavailable UUID readback preserves a confirmed enqueue and its daily chec
   expect(await runOverseer(r.config)).toEqual({ queued: [], proposals: [] });
   expect((await readFile(r.calls, "utf8")).trim().split("\n")).toHaveLength(1);
 });
+
+test("proposal deferral preserves the real reasons for parked and untriggered threads", async () => {
+  const r = await rig(true);
+  await writeFile(join(r.dir, "threads/parked.md"), thread(true).replace("state: active", "state: parked"));
+  await writeFile(join(r.dir, "threads/quiet.md"), thread(false));
+  await mkdir(join(r.dir, "inbox"));
+  for (const id of ["one", "two", "three"]) await writeFile(join(r.dir, `inbox/${id}.md`), `---\nat: 2026-11-01T12:00:00Z\nvia: fixture\n---\nOrchard planting ${id}\n`);
+  r.git("add", "."); r.git("commit", "-qm", "Recurring captures and skipped threads");
+  await runOverseer(r.config);
+  const audit = await readOverseerRun(r.dir, (await overseerRunIds(r.dir))[0]!);
+  expect(audit.selections.find(row => row.thread === "alpha")).toMatchObject({ selected: false, reason: "Deferred while recurring-theme proposals are committed" });
+  expect(audit.selections.find(row => row.thread === "parked")).toMatchObject({ selected: false, reason: "Thread is parked" });
+  expect(audit.selections.find(row => row.thread === "quiet")).toMatchObject({ selected: false, reason: "No thinking trigger matched" });
+});
+
+test("an exit-zero enqueue with an unreadable receipt still preserves the daily checkpoint", async () => {
+  const r = await rig(true);
+  await writeFile(join(r.dir, ".git/ranger.ts"), rangerStub(r.calls, r.dir).replace("console.log(JSON.stringify({runId:1,queued:true}));", 'console.log("Accepted without a receipt");'));
+  expect(await runOverseer(r.config)).toEqual({ queued: ["alpha"], proposals: [] });
+  const audit = await readOverseerRun(r.dir, (await overseerRunIds(r.dir))[0]!);
+  expect(audit).toMatchObject({ status: "succeeded", selections: [{ enqueue: "command-succeeded", jobId: null, jobUuid: null, provenanceFailure: expect.any(String) }] });
+  expect(await runOverseer(r.config)).toEqual({ queued: [], proposals: [] });
+  expect((await readFile(r.calls, "utf8")).trim().split("\n")).toHaveLength(1);
+});

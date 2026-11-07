@@ -1,4 +1,4 @@
-import { newOverseerRun, saveOverseerRun } from "../surface/mc/desk/studio/overseer-audit";
+import { newOverseerRun, saveOverseerRun, type OverseerRun } from "../surface/mc/desk/studio/overseer-audit";
 import { existsSync, lstatSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -86,6 +86,26 @@ async function persistProposals(input: { dir: string; pending: ThemeProposal[]; 
   return input.pending.map(theme => theme.id);
 }
 
+async function readJobUuid(config: z.infer<typeof OverseerConfig>, dir: string, thread: string, runId: number): Promise<string> {
+  const queue = z.object({ directory: z.string(), runs: z.array(z.object({ id: z.number(), runUuid: z.uuid(), params: z.object({ thread: z.string() }) })) }).parse(JSON.parse(await command([...config.ranger, "job", "list", "--studio"], dir)));
+  if (await realpath(queue.directory) !== dir) throw new Error("Ranger receipt belongs to another Studio directory");
+  const job = queue.runs.find(job => job.id === runId && job.params.thread === thread);
+  if (!job) throw new Error("Ranger did not expose the queued job UUID");
+  return job.runUuid;
+}
+
+async function bindThinkingReceipt(config: z.infer<typeof OverseerConfig>, dir: string, evidence: OverseerRun["selections"][number], stdout: string): Promise<void> {
+  try {
+    const receipt = z.object({ runId: z.number().int().positive(), queued: z.boolean() }).parse(JSON.parse(stdout));
+    evidence.jobId = receipt.runId;
+    evidence.created = receipt.queued;
+    evidence.jobUuid = await readJobUuid(config, dir, evidence.thread, receipt.runId);
+  } catch (error) {
+    if (evidence.jobId === null) evidence.enqueue = "command-succeeded";
+    evidence.provenanceFailure = error instanceof Error ? error.message : String(error);
+  }
+}
+
 export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = new Date(), watch = false): Promise<{ queued: string[]; proposals: string[] }> {
   const dir = await realpath(config.dir);
   const audit = newOverseerRun(now);
@@ -139,11 +159,10 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
     const queued = new Map(Object.entries(previous?.queued ?? {}));
     const considered = considerThinking({ studio, now: now.getTime(), staleDays: config.staleDays, changedAt, newMaterial, events: [...desk.today, ...desk.ahead] });
     audit.selections = considered.map(row => {
-      const reason = pending.length ? "Deferred while recurring-theme proposals are committed" : queued.get(row.thread) === today ? "Already queued today" : row.reason;
+      const reason = !row.selected ? row.reason : pending.length ? "Deferred while recurring-theme proposals are committed" : queued.get(row.thread) === today ? "Already queued today" : row.reason;
       const selected = row.selected && queued.get(row.thread) !== today && !pending.length;
       return { thread: row.thread, selected, reason, jobUuid: null, jobId: null, enqueue: "not-requested" as const };
     });
-    const selections = audit.selections.filter(row => row.selected).map(row => ({ thread: row.thread, trigger: row.reason }));
     await saveOverseerRun(dir, audit);
     const unchanged = async (): Promise<void> => {
       if (await git(["rev-parse", "HEAD"]) !== head || await git(["status", "--porcelain", "--untracked-files=all"])) throw new Error("Studio changed during overseer scan; deferred");
@@ -161,34 +180,23 @@ export async function runOverseer(config: z.infer<typeof OverseerConfig>, now = 
       await rename(`${statePath}.tmp`, statePath);
     };
     const enqueued: string[] = [];
-    if (!pending.length) for (const selection of selections) {
-      const evidence = audit.selections.find(item => item.thread === selection.thread);
-      if (!evidence) throw new Error("Selected thread has no audit record");
+    for (const evidence of audit.selections.filter(row => row.selected)) {
       evidence.enqueue = "pending";
       await saveOverseerRun(dir, audit);
+      let stdout: string;
       try {
-        const receipt = z.object({ runId: z.number().int().positive(), queued: z.boolean() }).parse(JSON.parse(await command([...config.ranger, "job", "enqueue", "ivy-think", "--param", `thread=${selection.thread}`, "--param", `trigger=${selection.trigger}`], dir)));
-        evidence.jobId = receipt.runId;
-        evidence.created = receipt.queued;
-        evidence.enqueue = "confirmed";
-        try {
-          const queue = z.object({ directory: z.string(), runs: z.array(z.object({ id: z.number(), runUuid: z.uuid(), params: z.object({ thread: z.string() }) })) }).parse(JSON.parse(await command([...config.ranger, "job", "list", "--studio"], dir)));
-          if (await realpath(queue.directory) !== dir) throw new Error("Ranger receipt belongs to another Studio directory");
-          const job = queue.runs.find(job => job.id === receipt.runId && job.params.thread === selection.thread);
-          if (!job) throw new Error("Ranger did not expose the queued job UUID");
-          evidence.jobUuid = job.runUuid;
-        } catch (error) {
-          evidence.provenanceFailure = error instanceof Error ? error.message : String(error);
-        }
-        await saveOverseerRun(dir, audit);
+        stdout = await command([...config.ranger, "job", "enqueue", "ivy-think", "--param", `thread=${evidence.thread}`, "--param", `trigger=${evidence.reason}`], dir);
       } catch (error) {
         evidence.enqueue = "uncertain";
         throw error;
       }
-      queued.set(selection.thread, today);
-      newMaterial.delete(selection.thread);
-      enqueued.push(selection.thread);
+      evidence.enqueue = "confirmed";
+      queued.set(evidence.thread, today);
+      newMaterial.delete(evidence.thread);
+      enqueued.push(evidence.thread);
       await save();
+      await bindThinkingReceipt(config, dir, evidence, stdout);
+      await saveOverseerRun(dir, audit);
     }
     await save();
     audit.status = "succeeded";

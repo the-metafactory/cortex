@@ -120,3 +120,21 @@ test("a receipt for an already queued job is an association and does not invent 
   await saveOverseerRun(r.dir, r.audit);
   expect(await r.read({ scope: "notes", thread: "alpha", run: r.audit.id })).toMatchObject({ items: [{ job: jobId, run: null, provenance: "missing-overseer-provenance" }] });
 });
+
+test("a null scan receipt never attributes a note without a job UUID", async () => {
+  const r = await rig();
+  r.audit.selections[0]!.jobUuid = null;
+  r.audit.selections[0]!.created = false;
+  await saveOverseerRun(r.dir, r.audit);
+  delete r.thread.notes[0]!.run;
+  expect(await r.read({ scope: "notes", thread: "alpha", run: r.audit.id })).toMatchObject({ status: "empty", items: [] });
+  expect(await r.read({ scope: "notes", thread: "alpha" })).toMatchObject({ items: [{ job: null, provenance: "missing-job-provenance" }] });
+});
+
+test("unavailable and pruned job policies restrict notes to local even on a cloud thread", async () => {
+  const r = await rig();
+  r.job.policy = "local";
+  expect(await r.read({ scope: "notes", thread: "alpha" })).toMatchObject({ policy: "local" });
+  expect(await r.read({ scope: "notes", thread: "alpha" }, async () => ({ code: 1, stdout: "", stderr: "offline" }))).toMatchObject({ policy: "local", items: [{ run: r.audit.id }] });
+  expect(await r.read({ scope: "notes", thread: "alpha" }, async () => ({ code: 0, stdout: JSON.stringify({ directory: r.dir, dailyRuns: { local: 5, cloud: 5 }, runs: [] }), stderr: "" }))).toMatchObject({ policy: "local", items: [{ run: r.audit.id }] });
+});

@@ -262,3 +262,17 @@ test("Studio evidence releases no data when a source tightens during the read", 
   expect(result.status).toBe("unauthorized");
   expect(JSON.stringify(result)).not.toContain("content");
 });
+
+test("cloud tool calls cannot release notes whose execution policy is unavailable", async () => {
+  let result: Record<string, any> = {};
+  const { host, studioDir } = await rig(async (_request, call) => {
+    result = await call("studio_evidence", { scope: "notes", thread: "garden" });
+    return "Checked.";
+  });
+  const path = join(studioDir, "threads/garden.md");
+  const content = await Bun.file(path).text();
+  writeFileSync(path, content + "\n## Ivy's notes\n### 2026-11-02T12:00:00Z\ntrigger: fixture\nmodel: fixture\nrun: 11111111-1111-4111-8111-111111111111\n\nLOCAL_JOB_PRIVATE_NOTE\n");
+  const id = await run(host, "cloud");
+  expect(result.status).toBe("unauthorized");
+  expect(JSON.stringify(await host.entries(id, 100, undefined))).not.toContain("LOCAL_JOB_PRIVATE_NOTE");
+});

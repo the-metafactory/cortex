@@ -5,7 +5,6 @@ import { relatesTo } from "./relates";
 import type { StudioCapture, StudioThread } from "./format";
 import type { StudioView } from "./view";
 
-export interface ThinkSelection { thread: string; trigger: string }
 export interface ThemeProposal { id: string; question: string; area: string; reason: string; captures: string[] }
 
 export function considerThinking(input: { studio: StudioView; now: number; staleDays?: number; changedAt: ReadonlyMap<string, number>; newMaterial: ReadonlySet<string>; events: DeskEvent[] }): { thread: string; selected: boolean; reason: string }[] {
@@ -31,10 +30,6 @@ export function considerThinking(input: { studio: StudioView; now: number; stale
     selected.push({ thread: thread.slug, selected: triggers.length > 0, reason: triggers.length ? triggers.join("; ").slice(0, 2000) : "No thinking trigger matched" });
   }
   return selected;
-}
-
-export function selectThinking(input: Parameters<typeof considerThinking>[0]): ThinkSelection[] {
-  return considerThinking(input).filter(row => row.selected).map(row => ({ thread: row.thread, trigger: row.reason }));
 }
 
 const STOP_WORDS = new Set("about after again also and are been before being but can could for from have into its more need new our should some than that the their them then there these they this those through tonight want was were what when where which will with would you your".split(" "));

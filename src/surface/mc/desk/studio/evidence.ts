@@ -9,7 +9,7 @@ import { readThinking } from "./thinking";
 import type { RangerRunner } from "../actions";
 import type { StudioThreadView } from "./view";
 
-export const threadUrl = (slug: string): string => `?desk=studio&thread=${encodeURIComponent(slug)}`;
+const threadUrl = (slug: string): string => `?desk=studio&thread=${encodeURIComponent(slug)}`;
 const chunk = (text: string, offset: number) => {
   let content = text.slice(offset, offset + 6000);
   while (JSON.stringify(content).length > 6002) content = content.slice(0, Math.ceil(content.length / 2));
@@ -55,7 +55,7 @@ export async function readStudioEvidence(desk: DeskOptions, input: StudioEvidenc
     const thinking = input.scope === "history" ? { kind: "unavailable" as const, reason: "Queue evidence is not needed for history" } : await readThinking(dir, desk.rangerCli, runners.ranger);
     const jobs = thinking.kind === "ready" ? thinking.runs.filter(job => job.params.thread === thread.slug) : [];
     const audit = input.run ? await readOverseerRun(dir, input.run) : null;
-    const receipts = new Set(audit?.selections.filter(row => row.thread === thread.slug).map(row => row.jobUuid));
+    const receipts = new Set(audit?.selections.filter(row => row.thread === thread.slug).flatMap(row => row.jobUuid ? [row.jobUuid] : []));
     const matchesRun = (job: (typeof jobs)[number]) => !audit || receipts.has(job.runUuid);
     if (input.scope === "jobs") {
       if (thinking.kind === "unavailable") return unavailable(thinking.reason);
@@ -63,19 +63,19 @@ export async function readStudioEvidence(desk: DeskOptions, input: StudioEvidenc
       const selected = page(filtered, input);
       const rows = await Promise.all(selected.items.map(async job => {
         const provenance = await originatingRun(dir, thread.slug, job.runUuid);
-        return { job: job.runUuid, jobId: job.id ?? null, run: provenance.run, provenance: provenance.status, status: job.status, failure: job.reason, queuedAt: job.queuedAt ?? null, startedAt: job.startedAt, endedAt: job.finishedAt ?? null, agent: job.substrate ?? null, notes: thread.notes.filter(note => note.run === job.runUuid).slice(0, 2).map(note => ({ at: note.at, url: `${url}#note-${note.at}` })), notesNext: thread.notes.filter(note => note.run === job.runUuid).length > 2 ? { scope: "notes", thread: thread.slug, job: job.runUuid, offset: 2 } : null, output: thread.notes.some(note => note.run === job.runUuid) ? "note-recorded" : job.status === "succeeded" ? "missing-note" : "not-completed", url };
+        return { job: job.runUuid, jobId: job.id ?? null, run: provenance.run, provenance: provenance.status, status: job.status, failure: job.reason, queuedAt: job.queuedAt ?? null, startedAt: job.startedAt, endedAt: job.finishedAt ?? null, substrate: job.substrate ?? null, notes: thread.notes.filter(note => note.run === job.runUuid).slice(0, 2).map(note => ({ at: note.at, url: `${url}#note-${note.at}` })), notesNext: thread.notes.filter(note => note.run === job.runUuid).length > 2 ? { scope: "notes", thread: thread.slug, job: job.runUuid, offset: 2 } : null, output: thread.notes.some(note => note.run === job.runUuid) ? "note-recorded" : job.status === "succeeded" ? "missing-note" : "not-completed", url };
       }));
-      return { ...base, policy: selected.items.some(job => job.policy === "local") ? "local" : thread.policy, status: filtered.length ? "ok" : "empty", items: rows, next: selected.next };
+      return { ...base, policy: selected.items.some(job => job.policy !== "cloud") ? "local" : thread.policy, status: filtered.length ? "ok" : "empty", items: rows, next: selected.next };
     }
     if (input.scope === "notes") {
-      const notes = thread.notes.filter(note => (!input.job || note.run === input.job) && (!audit || receipts.has(note.run ?? null)));
+      const notes = thread.notes.filter(note => (!input.job || note.run === input.job) && (!audit || note.run !== undefined && receipts.has(note.run)));
       const selected = page(notes, input);
       const rows = await Promise.all(selected.items.map(async note => {
         const job = jobs.find(job => job.runUuid === note.run);
         const provenance = await originatingRun(dir, thread.slug, note.run);
-        return { at: note.at, status: note.status, kind: note.kind, sample: note.sample, model: note.model, author: null, agent: job?.substrate ?? null, agentEvidence: job ? "Ranger records execution substrate, not an authenticated assistant identity" : "Job evidence is unavailable", authorEvidence: "The note format records a model but no authenticated author", job: note.run ?? null, run: provenance.run, provenance: !note.run ? "missing-job-provenance" : provenance.status, thread: thread.slug, url: `${url}#note-${note.at}`, threadUrl: url, ...chunk(note.text, input.contentOffset) };
+        return { at: note.at, status: note.status, kind: note.kind, sample: note.sample, model: note.model, author: null, substrate: job?.substrate ?? null, substrateEvidence: job ? "Ranger records execution substrate, not an authenticated assistant identity" : "Job evidence is unavailable", authorEvidence: "The note format records a model but no authenticated author", job: note.run ?? null, run: provenance.run, provenance: !note.run ? "missing-job-provenance" : provenance.status, thread: thread.slug, url: `${url}#note-${note.at}`, threadUrl: url, ...chunk(note.text, input.contentOffset) };
       }));
-      return { ...base, policy: selected.items.some(note => jobs.some(job => job.runUuid === note.run && job.policy === "local")) ? "local" : thread.policy, status: notes.length ? "ok" : "empty", queueEvidence: thinking.kind, items: rows, next: selected.next, coverage: "Unattributed notes remain unattributed; read without a run filter to inspect missing provenance" };
+      return { ...base, policy: selected.items.some(note => !jobs.some(job => job.runUuid === note.run && job.policy === "cloud")) ? "local" : thread.policy, status: notes.length ? "ok" : "empty", queueEvidence: thinking.kind, items: rows, next: selected.next, coverage: "Unattributed notes remain unattributed; read without a run filter to inspect missing provenance" };
     }
     const revision = (await gitEvidence(dir, ["rev-parse", "--verify", input.revision ?? "HEAD"])).trim();
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(revision)) return unavailable("Committed thread history is unavailable");

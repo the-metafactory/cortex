@@ -6,12 +6,12 @@ import { z } from "zod";
 import { spawnGit } from "./git";
 import { STUDIO_MAX_FILE_BYTES } from "./read";
 
-const Selection = z.object({ thread: z.string(), selected: z.boolean(), reason: z.string(), jobUuid: z.uuid().nullable(), provenanceFailure: z.string().optional(), jobId: z.number().nullable(), created: z.boolean().optional(), enqueue: z.enum(["not-requested", "pending", "confirmed", "uncertain"]) });
+const Selection = z.object({ thread: z.string(), selected: z.boolean(), reason: z.string(), jobUuid: z.uuid().nullable(), provenanceFailure: z.string().optional(), jobId: z.number().nullable(), created: z.boolean().optional(), enqueue: z.enum(["not-requested", "pending", "confirmed", "command-succeeded", "uncertain"]) });
 export const OverseerRun = z.object({ id: z.uuid(), startedAt: z.string(), endedAt: z.string().nullable(), status: z.enum(["running", "succeeded", "failed"]), failure: z.string().nullable(), schedule: z.object({ mode: z.enum(["watch", "manual"]), intervalMs: z.number().nullable(), pollMs: z.number().nullable(), enabledAtObservation: z.boolean().nullable() }).optional(), staleDays: z.number().optional(), selections: z.array(Selection), proposals: z.array(z.string()) });
 export type OverseerRun = z.infer<typeof OverseerRun>;
 export const newOverseerRun = (now: Date): OverseerRun => ({ id: randomUUIDv7(), startedAt: now.toISOString(), endedAt: null, status: "running", failure: null, selections: [], proposals: [] });
 
-export async function auditDirectory(dir: string): Promise<string> {
+async function auditDirectory(dir: string): Promise<string> {
   const result = await spawnGit(["rev-parse", "--path-format=absolute", "--git-path", "studio-overseer-runs"], dir);
   if (result.code !== 0) throw new Error("Studio overseer evidence storage is unavailable");
   return result.stdout.trim();
@@ -39,9 +39,9 @@ async function readAuditFile(path: string): Promise<unknown> {
   try {
     const info = await file.stat();
     if (!info.isFile() || info.size > STUDIO_MAX_FILE_BYTES) throw new Error("Overseer evidence exceeds the read limit or is not a regular file");
-    const bytes = Buffer.alloc(STUDIO_MAX_FILE_BYTES + 1);
+    const bytes = Buffer.alloc(info.size + 1);
     const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
-    if (bytesRead > STUDIO_MAX_FILE_BYTES) throw new Error("Overseer evidence exceeds the read limit");
+    if (bytesRead > info.size || bytesRead > STUDIO_MAX_FILE_BYTES) throw new Error("Overseer evidence exceeds the read limit");
     return JSON.parse(bytes.subarray(0, bytesRead).toString("utf8"));
   } finally { await file.close(); }
 }
