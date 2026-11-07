@@ -112,8 +112,7 @@ function readFile(path: string, paths: RepositoryPaths, collector: ResultCollect
   }
 }
 
-function matchesQuery(args: Walk["args"], text: string): boolean {
-  if (!("query" in args)) return true;
+function matchesQuery(args: z.infer<typeof QueryInput>, text: string): boolean {
   return args.caseSensitive ? text.includes(args.query) : text.toLowerCase().includes(args.query.toLowerCase());
 }
 
@@ -134,8 +133,9 @@ function walkPolicy(request: Walk, paths: RepositoryPaths, collector: ResultColl
     },
     onFile(_path, checked) { collector.entry({ path: checked.path, kind: "file" }); },
   };
-  const enters = belowDepth(request.args, collector);
-  const matches = (text: string): boolean => matchesQuery(request.args, text);
+  const args = request.args;
+  const enters = belowDepth(args, collector);
+  const matches = (text: string): boolean => matchesQuery(args, text);
   if (request.operation === "find") return {
     enters,
     onFile(_path, checked) { if (matches(checked.path)) collector.entry({ path: checked.path, kind: "file" }); },
