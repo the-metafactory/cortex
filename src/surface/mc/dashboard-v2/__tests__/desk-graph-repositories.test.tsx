@@ -1,18 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { GITLAB_LISTING_FAILED_LINE, GraphRepositoryBody, LISTING_FAILED_LINE, gitlabHostFailedLine } from "../components/desk-graph-repositories";
+import { GITLAB_LISTING_FAILED_LINE, GraphRepositoryBody, LISTING_FAILED_LINE, gitlabHostFailedLine, repositoryGroups } from "../components/desk-graph-repositories";
 import type { GitlabListing } from "../../desk/graph-repositories";
 import { SettingsBody } from "../components/desk-settings";
-import { loadGraphRepositories, saveGraphRepository } from "../lib/desk-graph-repositories";
+import { loadGraphRepositories, saveGraphRepository, saveGraphRepositories } from "../lib/desk-graph-repositories";
 
-const noop = (): void => {};
+const noop = (): void => undefined;
 const repo = (name: string, enabled: boolean, extra: { listed?: false } = {}) => ({ ref: `github:github.com/${name}`, label: name, forge: "github", enabled, ...extra });
 const project = (path: string, enabled: boolean, extra: { listed?: false } = {}, host = "gitlab.example.org") => ({ ref: `gitlab:${host}/${path}`, label: path, forge: "gitlab", enabled, ...extra });
 const GITLAB_OK: GitlabListing = { ok: true, hosts: [{ host: "gitlab.example.org", ok: true }] };
 const body = (rows: ReturnType<typeof repo>[] | null, listing: { ok: true } | { ok: false; reason: string } = { ok: true }, error: string | null = null, gitlab: GitlabListing = GITLAB_OK) =>
   renderToStaticMarkup(<GraphRepositoryBody rows={rows} listing={listing} gitlab={gitlab} error={error} busy={false} onChange={noop} />);
 const section = (html: string, label: string): string => {
-  const start = html.indexOf(`<section aria-label="${label}">`);
+  const start = html.indexOf(`<section aria-label="${label}"`);
   if (start < 0) return "";
   const tags = /<section[\s>]|<\/section>/g;
   tags.lastIndex = start;
@@ -27,7 +27,7 @@ const hostSection = (html: string, host: string): string => section(html, `GitLa
 
 describe("the repositories panel", () => {
   it("is a Settings page of its own with the panel title", () => {
-    const none = { rows: [], note: null, onAdd: async () => true, onRemove: noop };
+    const none = { rows: [], note: null, onAdd: () => Promise.resolve(true), onRemove: noop };
     const html = renderToStaticMarkup(<SettingsBody group="graph-repositories" vips={none} unimportant={none} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} />);
     expect(html).toContain('aria-selected="true" aria-controls="settings-panel-graph-repositories" tabindex="0"');
     expect(html).toContain("<h2>Repositories Ivy may file to</h2>");
@@ -112,14 +112,14 @@ describe("the repository requests", () => {
   it("reads the listing", async () => {
     const reply = { repositories: [repo("acme/api", true), { nonsense: true }], listing: { ok: false, reason: "no gh" } };
     const seen: string[] = [];
-    const fake = async (path: string, init: RequestInit) => { seen.push(`${init.method} ${path}`); return Response.json(reply); };
+    const fake = (path: string, init: RequestInit) => { seen.push(`${init.method} ${path}`); return Promise.resolve(Response.json(reply)); };
     expect(await loadGraphRepositories(fake)).toEqual({ ok: true, repositories: [repo("acme/api", true)], listing: { ok: false, reason: "no gh" }, gitlab: { ok: false, reason: "" } });
     expect(seen).toEqual(["GET /api/desk/graph-repositories"]);
   });
 
   it("reads the GitLab listing", async () => {
     const read = async (gitlab: unknown) => {
-      const r = await loadGraphRepositories(async () => Response.json({ repositories: [], listing: { ok: true }, gitlab }));
+      const r = await loadGraphRepositories(() => Promise.resolve(Response.json({ repositories: [], listing: { ok: true }, gitlab })));
       return r.ok ? r.gitlab : null;
     };
     const listed: GitlabListing = { ok: true, hosts: [{ host: "a.example.org", ok: true }, { host: "b.example.org", ok: false, reason: "502" }] };
@@ -131,17 +131,84 @@ describe("the repository requests", () => {
   });
 
   it("returns the server's reason, or one line, when the listing cannot be read", async () => {
-    expect(await loadGraphRepositories(async () => Response.json({ error: "denied" }, { status: 403 }))).toEqual({ ok: false, text: "denied" });
-    expect(await loadGraphRepositories(async () => new Response("{}", { status: 500 }))).toEqual({ ok: false, text: "Mission Control answered HTTP 500." });
-    expect(await loadGraphRepositories(async () => { throw new Error("offline"); })).toEqual({ ok: false, text: "Mission Control did not answer: offline" });
+    expect(await loadGraphRepositories(() => Promise.resolve(Response.json({ error: "denied" }, { status: 403 })))).toEqual({ ok: false, text: "denied" });
+    expect(await loadGraphRepositories(() => Promise.resolve(new Response("{}", { status: 500 })))).toEqual({ ok: false, text: "Mission Control answered HTTP 500." });
+    expect(await loadGraphRepositories(() => Promise.reject(new Error("offline")))).toEqual({ ok: false, text: "Mission Control did not answer: offline" });
   });
 
   it("saves a tick with the reference encoded into the path", async () => {
     const seen: { path: string; method: string | undefined; body: unknown }[] = [];
-    const fake = async (path: string, init: RequestInit) => { seen.push({ path, method: init.method, body: JSON.parse(String(init.body)) }); return Response.json({}); };
+    const fake = (path: string, init: RequestInit) => { seen.push({ path, method: init.method, body: JSON.parse(typeof init.body === "string" ? init.body : "") }); return Promise.resolve(Response.json({})); };
     expect(await saveGraphRepository("github:github.com/jcfischer/desk", true, fake)).toEqual({ ok: true });
     expect(seen).toEqual([{ path: "/api/desk/graph-repositories/github%3Agithub.com%2Fjcfischer%2Fdesk", method: "PUT", body: { enabled: true } }]);
-    expect(await saveGraphRepository("x", false, async () => Response.json({ error: "no" }, { status: 400 }))).toEqual({ ok: false, text: "no" });
-    expect(await saveGraphRepository("x", false, async () => { throw new Error("offline"); })).toEqual({ ok: false, text: "Mission Control did not answer: offline" });
+    expect(await saveGraphRepository("x", false, () => Promise.resolve(Response.json({ error: "no" }, { status: 400 })))).toEqual({ ok: false, text: "no" });
+    expect(await saveGraphRepository("x", false, () => Promise.reject(new Error("offline")))).toEqual({ ok: false, text: "Mission Control did not answer: offline" });
+  });
+});
+
+
+describe("repository organisation selection", () => {
+  it("offers search and groups canonical owners while keeping each forge and host separate", () => {
+    const html = body([repo("alpha/api", true), repo("alpha/web", false), repo("beta/tool", false), project("alpha/api", false, {}, "a.example.org"), project("alpha/sub/tool", true, {}, "b.example.org")]);
+    expect(html).toContain('type="search"');
+    const github = section(html, "GitHub organisation alpha");
+    expect(github).toContain('aria-label="Select all repositories in alpha on GitHub"');
+    expect(github).toContain('aria-checked="mixed"');
+    expect(github).toContain("Select all 2 repositories");
+    expect(github).not.toContain("beta/tool");
+    expect(section(html, "GitLab a.example.org organisation alpha")).toContain("alpha/api");
+    expect(section(html, "GitLab b.example.org organisation alpha")).toContain("alpha/sub/tool");
+    expect(html).toContain("including those hidden by search");
+  });
+  it("filters live by name, owner or reference without shrinking the organisation selection scope", () => {
+    const api = repo("alpha/api", true);
+    const tool = repo("beta/tool", true);
+    const rows = [api, repo("alpha/web", false), tool];
+    const found = repositoryGroups(rows, " API ");
+    expect(found.map(group => [group.owner, group.visible.map(row => row.ref)])).toEqual([["alpha", [api.ref]]]);
+    expect(found[0]?.rows).toEqual(rows.slice(0, 2));
+    expect(repositoryGroups(rows, "ALPHA")[0]?.visible).toEqual(rows.slice(0, 2));
+    expect(repositoryGroups(rows, "github.com/beta")[0]?.visible).toEqual([tool]);
+    expect(repositoryGroups(rows, "missing")).toEqual([]);
+    expect(repositoryGroups(rows, "").flatMap(group => group.visible)).toEqual(rows);
+    expect(rows.map(row => row.enabled)).toEqual([true, false, true]);
+  });
+  it("uses the canonical namespace for nested GitLab projects and keeps unlisted saved repositories", () => {
+    const gone = repo("gone/tool", true, { listed: false });
+    const rows = [project("alpha/sub/tool", true), project("alpha/api", false), gone];
+    expect(repositoryGroups(rows, "alpha")[0]).toMatchObject({ owner: "alpha", rows: rows.slice(0, 2) });
+    expect(repositoryGroups(rows, "gone")[0]?.visible).toEqual([gone]);
+  });
+  it("serializes group saves, reports only persisted rows and keeps going after a partial failure", async () => {
+    const refs = ["github:github.com/alpha/api", "github:github.com/alpha/web", "github:github.com/alpha/tool"] as const;
+    const saved: string[] = [];
+    const calls: string[] = [];
+    let pending = 0;
+    let maxPending = 0;
+    const result = await saveGraphRepositories([...refs, refs[0]], true, ref => { saved.push(ref); }, async path => {
+      pending++;
+      maxPending = Math.max(pending, maxPending);
+      const ref = decodeURIComponent(path.slice(path.lastIndexOf("/") + 1));
+      calls.push(ref);
+      if (ref === refs[1]) expect(saved).toEqual([refs[0]]);
+      await Promise.resolve();
+      pending--;
+      return ref === refs[1] ? Response.json({ error: "Save refused" }, { status: 503 }) : Response.json({});
+    });
+    expect(calls).toEqual([...refs]);
+    expect(maxPending).toBe(1);
+    expect(saved).toEqual([refs[0], refs[2]]);
+    expect(result).toEqual({ ok: false, text: `1 of 3 repository changes could not be saved. ${refs[1]}: Save refused` });
+  });
+  it("persists deselection and leaves transport failures unconfirmed", async () => {
+    const changed: string[] = [];
+    expect(await saveGraphRepositories(["github:github.com/alpha/api"], false, ref => { changed.push(ref); }, (_path, init) => {
+      expect(JSON.parse(typeof init.body === "string" ? init.body : "")).toEqual({ enabled: false });
+      return Promise.resolve(Response.json({}));
+    })).toEqual({ ok: true });
+    expect(changed).toEqual(["github:github.com/alpha/api"]);
+    const result = await saveGraphRepositories(["github:github.com/alpha/web"], true, ref => { changed.push(ref); }, () => Promise.reject(new Error("Offline")));
+    expect(result.ok).toBe(false);
+    expect(changed).toEqual(["github:github.com/alpha/api"]);
   });
 });
