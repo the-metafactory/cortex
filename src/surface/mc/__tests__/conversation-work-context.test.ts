@@ -1,4 +1,5 @@
 import type { StudioEvidenceInput } from "../../../conversations/tools/studio-evidence";
+import { newOverseerRun, saveOverseerRun } from "../desk/studio/overseer-audit";
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
@@ -275,4 +276,33 @@ test("cloud tool calls cannot release notes whose execution policy is unavailabl
   const id = await run(host, "cloud");
   expect(result.status).toBe("unauthorized");
   expect(JSON.stringify(await host.entries(id, 100, undefined))).not.toContain("LOCAL_JOB_PRIVATE_NOTE");
+});
+
+
+test.each([["cloud", "web"], ["local", "discord"], ["cloud", "discord"]] as const)("%s over %s can inspect status metadata without releasing local failure details", async (policy, transport) => {
+  let result: Record<string, any> = {};
+  const { host, studioDir } = await rig(async (_request, call) => {
+    result = await call("studio_evidence", { scope: "overseer", limit: 1 });
+    return "Read status metadata.";
+  });
+  const git = Bun.spawnSync(["git", "init", "-q", studioDir]);
+  expect(git.exitCode).toBe(0);
+  const audit = newOverseerRun(new Date());
+  audit.status = "failed"; audit.endedAt = new Date().toISOString(); audit.failure = "LOCAL_PRIVATE_FAILURE in a restricted thread";
+  await saveOverseerRun(studioDir, audit);
+  const id = await run(host, policy, transport);
+  expect(result).toMatchObject({ status: "ok", runs: [{ id: audit.id, status: "failed", failureRestricted: true }] });
+  expect(JSON.stringify(result)).not.toContain("LOCAL_PRIVATE_FAILURE");
+  expect(JSON.stringify(await host.entries(id, 100, undefined))).not.toContain("LOCAL_PRIVATE_FAILURE");
+});
+
+test("a Studio policy denial explains the restriction and required conversation context", async () => {
+  let result: Record<string, any> = {};
+  const { host } = await rig(async (_request, call) => {
+    result = await call("studio_evidence", { scope: "notes", thread: "wing" });
+    return "Checked access.";
+  });
+  await run(host, "cloud");
+  expect(result).toMatchObject({ status: "unauthorized", code: "local-web-required", reason: expect.any(String), requiredAccess: { transport: "web", conversationPolicy: "local", modelPolicy: "local" }, currentAccess: { transport: "web", conversationPolicy: "cloud", modelPolicy: "cloud" }, nextStep: expect.stringMatching(/local.*web/i) });
+  expect(JSON.stringify(result)).not.toContain("LOCALWING");
 });
