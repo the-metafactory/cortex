@@ -1,3 +1,4 @@
+import { sourceBoundary } from "../desk/source-boundary";
 import { z } from "zod";
 import { CommitmentSchema, decisionReceipt, MailDecisionSchema, mailYesFilter, saveDecisionDraft } from "../desk/mail-yes-filter";
 import { calendarsOnly, freeSlots, INVITE_REPLIES, proposalBody, replyToInvitation } from "../desk/mail-invitation";
@@ -128,7 +129,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     const readings = runtime.sourceCache?.cached() ?? [];
     const suspicious = mailSuspicion(db, mail, runtime.options.mailOwnDomains).length > 0;
     const handed = await handMailToIvy(mailForStudio(db, readings, mail), { requestId: body.requestId, instruction: body.instruction ?? null, suspicious }, {
-      db, writers: ask.writers, maps: ask.taskMaps, lanes: runtime.options.mailHandoff.lanes, run: deps.run ?? spawnWithStdin, now, timeoutMs: ask.timeoutSeconds * 1000,
+      localSources: sourceBoundary(runtime.options), db, writers: ask.writers, maps: ask.taskMaps, lanes: runtime.options.mailHandoff.lanes, run: deps.run ?? spawnWithStdin, now, timeoutMs: ask.timeoutSeconds * 1000,
     });
     if (handed.ok) void worker.kick(db, deps.now ?? Date.now);
     return answer(handed);

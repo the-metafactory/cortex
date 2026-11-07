@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { fetchIssueOrPr, isGitHubFetchError } from "../adapters/github/fetch";
 import { modelJson, commandJson, isCommand, readApiKey, type CommandRunner, type KeyReader, type ModelConfig } from "./classify";
+import { NOT_LOCAL_CONTENT } from "./source-boundary";
 import { runModelCommand } from "./spawn";
 import { rangerItemKey, type RangerNeedsYou, type RangerState } from "./sources/ranger";
 import { retryable } from "./actions";
@@ -166,10 +167,10 @@ export function rulingExplainer(config: ModelConfig, fetchImpl: typeof fetch = f
   const timeoutMs = config.timeoutSeconds * 1000;
   if (isCommand(config) && config.commandFormat !== "messages") {
     const runJson = commandJson(config, run, readKey, label);
-    return (prompt) => runJson(prompt, timeoutMs);
+    return (prompt) => runJson(prompt, timeoutMs, NOT_LOCAL_CONTENT);
   }
   const chat = modelJson(config, fetchImpl, readKey, label, RULING_MAX_TOKENS, run);
-  return (prompt) => chat([{ role: "system", content: RULING_PROMPT }, { role: "user", content: prompt }], timeoutMs);
+  return (prompt) => chat([{ role: "system", content: RULING_PROMPT }, { role: "user", content: prompt }], timeoutMs, NOT_LOCAL_CONTENT);
 }
 
 export type NodeBodyReader = (repo: string, nodeId: string) => Promise<string | null>;

@@ -1,3 +1,4 @@
+import { NOT_LOCAL_CONTENT } from "../desk/source-boundary";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { rmSync } from "node:fs";
 import { seedStudioRepo } from "./__fixtures__/studio-git";
@@ -302,7 +303,7 @@ describe("the OpenAI-compatible provider", () => {
       return Response.json({ choices: [{ message: { content: "```json\n{\"category\":\"bulk\",\"reason\":\"A newsletter.\"}\n```" } }] });
     }) as unknown as typeof fetch;
     const run = chatClassifier({ ...CONFIG, baseUrl: "https://llm.example/v1/", apiKeyEnv: "K" }, fake, async () => "sk-test");
-    expect(await run(request, 1000)).toEqual({ category: "bulk", reason: "A newsletter." });
+    expect(await run(request, 1000, NOT_LOCAL_CONTENT)).toEqual({ category: "bulk", reason: "A newsletter." });
     expect(calls[0]?.url).toBe("https://llm.example/v1/chat/completions");
     expect((calls[0]?.init.headers as Record<string, string>).authorization).toBe("Bearer sk-test");
     const body = JSON.parse(calls[0]?.init.body as string) as { model: string; messages: { content: string }[] };
@@ -322,11 +323,11 @@ describe("the OpenAI-compatible provider", () => {
       return Response.json({ choices: [{ message: { content: "{\"category\":\"fyi\",\"reason\":\"News.\"}" } }] });
     }) as unknown as typeof fetch;
     try {
-      await chatClassifier({ ...CONFIG, caFile: ca }, fake, async () => null)(request, 1000);
+      await chatClassifier({ ...CONFIG, caFile: ca }, fake, async () => null)(request, 1000, NOT_LOCAL_CONTENT);
       expect(tls).toEqual({ ca: "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n" });
-      await chatClassifier(CONFIG, fake, async () => null)(request, 1000);
+      await chatClassifier(CONFIG, fake, async () => null)(request, 1000, NOT_LOCAL_CONTENT);
       expect(tls).toBeUndefined();
-      await expect(chatClassifier({ ...CONFIG, caFile: `${ca}.missing` }, fake, async () => null)(request, 1000)).rejects.toThrow(`the classifier CA file could not be read: ${ca}.missing`);
+      await expect(chatClassifier({ ...CONFIG, caFile: `${ca}.missing` }, fake, async () => null)(request, 1000, NOT_LOCAL_CONTENT)).rejects.toThrow(`the classifier CA file could not be read: ${ca}.missing`);
     } finally {
       await Bun.file(ca).delete();
     }
@@ -335,9 +336,9 @@ describe("the OpenAI-compatible provider", () => {
   it("refuses to call without a configured key, and reports an HTTP error", async () => {
     let called = false;
     const fake = (async () => { called = true; return new Response("no", { status: 401 }); }) as unknown as typeof fetch;
-    await expect(chatClassifier({ ...CONFIG, apiKeyFile: "/nope" }, fake, async () => null)(request, 1000)).rejects.toThrow("the classifier key was not found");
+    await expect(chatClassifier({ ...CONFIG, apiKeyFile: "/nope" }, fake, async () => null)(request, 1000, NOT_LOCAL_CONTENT)).rejects.toThrow("the classifier key was not found");
     expect(called).toBe(false);
-    await expect(chatClassifier(CONFIG, fake, async () => null)(request, 1000)).rejects.toThrow("HTTP 401");
+    await expect(chatClassifier(CONFIG, fake, async () => null)(request, 1000, NOT_LOCAL_CONTENT)).rejects.toThrow("HTTP 401");
   });
 });
 

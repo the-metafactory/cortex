@@ -52,6 +52,7 @@ import type { RoutineReadLoop } from "./routine-read";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
 import { studioBriefing } from "./studio/overseer";
+import { sourceBoundary } from "./source-boundary";
 
 export interface DeskRuntime {
   waitingTasks?: Pick<WaitingTasks, "read">;
@@ -65,6 +66,7 @@ export interface DeskRuntime {
   goalChecks?: GoalChecks;
   goalStatuses?: GoalStatuses;
   mailClassifier?: MailClassifier;
+  localMailClassifier?: MailClassifier;
   rulingExplain?: RulingExplainLoop;
   rulings?: RulingLedger;
   mailRules?: MailRuleLoop;
@@ -102,7 +104,7 @@ export interface DeskOptions {
   ask?: DeskAskOptions;
   interruptions?: InterruptRules;
   goals?: DeskGoalOptions;
-  mailClassifier?: ClassifierConfig;
+  mailClassifier?: ClassifierConfig & { local?: ClassifierConfig };
   rulingExplainer?: ModelConfig;
   mailActions?: MailActionsConfig;
   mailLog?: { retentionDays: number };
@@ -139,6 +141,7 @@ export interface ComposeDeps {
   goalChecks?: GoalChecks;
   goalStatuses?: GoalStatuses;
   mailClassifier?: MailClassifier;
+  localMailClassifier?: MailClassifier;
   rulingExplain?: RulingExplainLoop;
   digestFlagger?: DigestFlagger;
   waitingClassifier?: WaitingClassifier;
@@ -220,17 +223,30 @@ export async function composeDesk(
   const corrections = readCorrections(db);
   const activeCorrections = corrections.ok ? corrections.corrections : [];
   const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
+  const localClassifier = desk.mailClassifier?.local ? deps.localMailClassifier : undefined;
   const { myDay, studio } = await readStudioDesk(db, desk, now);
   const cloudAreas = new Set(desk.areas.filter((a) => a.policy === "cloud").map((a) => a.id));
-  const cloudSources = new Set(readings.filter((r) => r.area !== null && cloudAreas.has(r.area)).map((r) => r.id));
-  const localSources = new Set(readings.filter((r) => !cloudSources.has(r.id)).map((r) => r.id));
+  const boundary = sourceBoundary(desk);
+  const cloudSources = new Set(readings.filter((r) => !boundary.has(r.id)).map((r) => r.id));
+  const localSources = boundary;
+  if (localClassifier) {
+    const sourceIds = new Set(readings.filter((r) => boundary.has(r.id)).map((r) => r.id));
+    void localClassifier.kick(db, {
+      now, sourceIds, localSources,
+      mail: mail.filter((m) => sourceIds.has(m.sourceId) && !ruleBound.has(m.id)),
+      events: events.filter((event) => sourceIds.has(event.sourceId)),
+      vips: vips.map((v) => v.address),
+      unimportant,
+      corrections: mailCorrections(db, sourceIds),
+    });
+  }
   if (classifier) {
     const sourceIds = desk.mailClassifier?.sourcePolicy === "local" ? new Set(readings.map((r) => r.id)) : cloudSources;
     const permittedMail = mail.filter((m) => sourceIds.has(m.sourceId));
     const senders = new Set(permittedMail.map((m) => m.from.address.toLowerCase()));
     const permittedSender = (address: string): boolean => { const lower = address.toLowerCase(); return senders.has(lower) || (lower.startsWith("@") && [...senders].some(sender => sender.endsWith(lower))); };
     void classifier.kick(db, {
-      now, sourceIds,
+      now, sourceIds, localSources,
       notes: (studio?.active ?? []).filter((thread) => thread.policy === "cloud").flatMap((thread) => thread.notes.filter((note) => note.status !== "dismissed").map((note) => ({ sourcePolicy: "cloud" as const, areas: thread.areas, id: `studio:${thread.slug}:${note.at}`, name: thread.question, text: note.text.slice(0, 600) }))).slice(0, 30),
       mail: permittedMail.filter((m) => !ruleBound.has(m.id)),
       events: events.filter((event) => sourceIds.has(event.sourceId)),
@@ -239,11 +255,11 @@ export async function composeDesk(
       corrections: mailCorrections(db, sourceIds),
     });
   }
-  const classified = classifier ? readClassifications(db, mail.map((m) => m.id)) : undefined;
+  const classified = classifier || localClassifier ? readClassifications(db, mail.map((m) => m.id)) : undefined;
   const offerable = [...mail.filter((m) => m.unread), ...(mailGroups?.digests.groups ?? []).flatMap((g) => g.members)];
   const flagged = new Set([...readClassifications(db, offerable.map((m) => m.id))].filter(([, c]) => c.suspicious === true).map(([id]) => id));
   const unsubscribe = unsubscribeOffers(db, offerable, offerContext(db, desk.mailUnsubscribe, suspicion, flagged));
-  const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null, desk.mailClassifier.sourcePolicy === "local" ? 0 : mail.filter((item) => !cloudSources.has(item.sourceId)).length) : null;
+  const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null, desk.mailClassifier.sourcePolicy === "local" || localClassifier ? 0 : mail.filter((item) => !cloudSources.has(item.sourceId)).length, desk.mailClassifier.local) : null;
   const yesFilter = await mailYesFilter(db, desk, now);
   const notes = listOpenNotes(db);
   const reminders = notes.filter((n) => n.kind === "reminder" && n.dueAt !== null);

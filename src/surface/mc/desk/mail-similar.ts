@@ -1,3 +1,4 @@
+import { mailProvenance, NOTHING_LEAVES, routeOf, type LocalSources } from "./source-boundary";
 import type { Database } from "bun:sqlite";
 import { z } from "zod";
 import { MissingKey, PREDICTED_ACTIONS, readApiKey, SIMILARITY_BASES, type KeyReader, type MailPrecedent, type MailPrecedents, type PredictedAction } from "./classify";
@@ -199,6 +200,7 @@ export const accessPaths = <T extends EmbedderAccess>(access: T, expand: (path: 
 export const vectorModel = (access: EmbedderAccess): string => `${access.baseUrl.replace(/\/+$/, "")}#${access.model}`;
 
 export const NO_EMBEDDER_NOTE = "matched by sender and mailing list, because no embedder is set up";
+export const EMBEDDER_LOCAL_NOTE = "matched by sender and mailing list, because this mail may not reach a cloud embedder";
 export const EMBEDDER_DOWN_NOTE = "matched by sender and mailing list, because the embedder did not answer";
 
 const BATCH = 32;
@@ -225,7 +227,7 @@ export class MailSimilarity {
     return { neighbours: this.config?.neighbours ?? DEFAULT_SIMILARITY.neighbours, windowDays: this.config?.windowDays ?? DEFAULT_SIMILARITY.windowDays };
   }
 
-  load(db: Database, now: number, sourceIds?: ReadonlySet<string>): SimilarityContext {
+  load(db: Database, now: number, sourceIds?: ReadonlySet<string>, localSources: LocalSources = NOTHING_LEAVES): SimilarityContext {
     const { neighbours, windowDays } = this.limits;
     purgeVectors(db, now - windowDays * DAY_MS);
     const entries = latestDecisions(queryMailLog(db, { since: now - windowDays * DAY_MS, actions: LEARNED_ACTIONS, limit: 5000, sourceIds }));
@@ -234,6 +236,10 @@ export class MailSimilarity {
     const fallback = (mail: MailText, note: string): SimilarDecisions => ({ basis: "sender", neighbours: senderDecisions(mail, others(entries, mail), neighbours), note });
     const config = this.config;
     if (!config) return { similar: (mail) => Promise.resolve(fallback(mail, NO_EMBEDDER_NOTE)) };
+    if (routeOf(config) === "cloud") {
+      const everySource = sourceIds ? [...sourceIds] : entries.map((entry) => entry.sourceId);
+      if (mailProvenance(localSources, everySource).local) return { similar: (mail) => Promise.resolve(fallback(mail, EMBEDDER_LOCAL_NOTE)) };
+    }
     const stores = new Map<string, Map<string, Float32Array>>();
     const storeFor = (access: EmbedderAccess): Map<string, Float32Array> => {
       const model = vectorModel(access);

@@ -1,3 +1,4 @@
+import { NOT_LOCAL_CONTENT } from "../desk/source-boundary";
 import { describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,9 +24,9 @@ describe("Desk command models", () => {
   it("passes explicit system and user messages through stdin and validates stdout JSON", async () => {
     const command = [process.execPath, "-e", 'const body=await Bun.stdin.json(); console.log(JSON.stringify({system:body.messages[0].content,user:JSON.parse(body.messages[1].content)}));'];
     const call = modelJson({ command, timeoutSeconds: 5 });
-    expect(await call([{ role: "system", content: "Scope fixture" }, { role: "user", content: '{"personal":true}' }], 1000)).toEqual({ system: "Scope fixture", user: { personal: true } });
+    expect(await call([{ role: "system", content: "Scope fixture" }, { role: "user", content: '{"personal":true}' }], 1000, NOT_LOCAL_CONTENT)).toEqual({ system: "Scope fixture", user: { personal: true } });
     const invalid = modelJson({ command: [process.execPath, "-e", 'console.log("not JSON")'], timeoutSeconds: 5 });
-    await expect(invalid([{ role: "user", content: "synthetic" }], 1000)).rejects.toThrow("JSON");
+    await expect(invalid([{ role: "user", content: "synthetic" }], 1000, NOT_LOCAL_CONTENT)).rejects.toThrow("JSON");
   });
 
   it("preserves raw ruling command stdin and opts native helpers into message envelopes", async () => {

@@ -4987,11 +4987,22 @@ export async function startCortex(
           goals: expandGoalPaths(config.mc.desk.goals, expandTilde),
           ...(config.mc.desk.mail.classifier
             ? {
-                mailClassifier: toClassifierConfig({
-                  ...config.mc.desk.mail.classifier,
-                  ...(config.mc.desk.mail.classifier.apiKeyFile ? { apiKeyFile: expandTilde(config.mc.desk.mail.classifier.apiKeyFile) } : {}),
-                  ...(config.mc.desk.mail.classifier.caFile ? { caFile: expandTilde(config.mc.desk.mail.classifier.caFile) } : {}),
-                }),
+                mailClassifier: {
+                  ...toClassifierConfig({
+                    ...config.mc.desk.mail.classifier,
+                    ...(config.mc.desk.mail.classifier.apiKeyFile ? { apiKeyFile: expandTilde(config.mc.desk.mail.classifier.apiKeyFile) } : {}),
+                    ...(config.mc.desk.mail.classifier.caFile ? { caFile: expandTilde(config.mc.desk.mail.classifier.caFile) } : {}),
+                  }),
+                  ...(config.mc.desk.mail.classifier.local
+                    ? {
+                        local: toClassifierConfig({
+                          ...config.mc.desk.mail.classifier.local,
+                          ...(config.mc.desk.mail.classifier.local.apiKeyFile ? { apiKeyFile: expandTilde(config.mc.desk.mail.classifier.local.apiKeyFile) } : {}),
+                          ...(config.mc.desk.mail.classifier.local.caFile ? { caFile: expandTilde(config.mc.desk.mail.classifier.local.caFile) } : {}),
+                        }),
+                      }
+                    : {}),
+                },
               }
             : {}),
           ...(config.mc.desk.mail.embedder ? { mailEmbedder: accessPaths(config.mc.desk.mail.embedder, expandTilde) } : {}),

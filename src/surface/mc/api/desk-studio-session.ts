@@ -7,7 +7,7 @@ import type { DeskRuntime } from "../desk/compose";
 import { readStudioFiles } from "../desk/studio/read";
 import { buildStudioView } from "../desk/studio/view";
 import { runStudioAct, runStudioTransaction } from "../desk/studio/writer";
-import { composerDraft, planSessionEnd, sessionEndpoint, sessionModel, sessionPrompt, sessionSubject, sessionThread, type SessionModel } from "../desk/studio/session";
+import { composerDraft, planSessionEnd, sessionEndpoint, sessionModel, sessionPrompt, sessionProvenance, sessionSubject, sessionThread, type SessionModel } from "../desk/studio/session";
 
 const queues = new WeakMap<Database, Map<string, Promise<void>>>();
 const answer = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -110,7 +110,7 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     save(db, dir, session);
     if (!endpoint) return fail(503, session.policy === "local" ? "The local model is not configured. Your text is saved; no cloud fallback was used." : "A Studio model is not configured. Your text is saved.", session);
     try {
-      turn.answer = SessionAnswerSchema.parse(await (deps.model ?? sessionModel)(endpoint, sessionPrompt(session, thread)));
+      turn.answer = SessionAnswerSchema.parse(await (deps.model ?? sessionModel)(endpoint, sessionPrompt(session, thread), sessionProvenance(thread)));
       save(db, dir, session);
       return answer(200, { ok: true, session });
     } catch {
