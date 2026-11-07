@@ -128,15 +128,14 @@ export function rankItems(input: RankInput): DeskItem[] {
     if (task?.kind === "closed") return;
     if (item.source === "ranger" && listedTasks.has(rangerItemKey(ref))) return;
     if (item.source === "ranger") listedTasks.add(rangerItemKey(ref));
-    const enriched = task?.kind === "unavailable"
-      ? { ...item, why: `${item.why} ${task.reason}` }
-      : task?.kind === "open" ? {
-        ...item,
-        title: `"${task.title}" needs you.`,
-        why: item.kind === "grilling" && !input.conversations ? item.why : `${task.question ?? item.question?.condition ?? item.question?.reason ?? QUESTION_UNAVAILABLE} In ${repoName(ref.split("#")[0] ?? ref)}.`,
-        detail: { ...item.detail, links: issueLinks(task.url) },
-      } : item;
-    if (!items.has(item.key)) items.set(item.key, enriched);
+    const enriched = task?.kind === "open" ? {
+      ...item,
+      title: `"${task.title}" needs you.`,
+      why: `${task.question ?? item.question?.condition ?? item.question?.reason ?? QUESTION_UNAVAILABLE} In ${repoName(ref.split("#")[0] ?? ref)}.`,
+      detail: { ...item.detail, links: issueLinks(task.url) },
+    } : item;
+    const why = item.kind === "grilling" && !input.conversations ? "Conversations are not set up on this stack." : enriched.why;
+    if (!items.has(item.key)) items.set(item.key, { ...enriched, why: task?.kind === "unavailable" ? `${why} ${task.reason}` : why });
   };
   rangerNeedsYouItems(input, add);
   rangerMapItems(input, add);
@@ -229,17 +228,16 @@ export function approvalBlocked(map: RangerMap, node: RangerMapNode): string | n
 }
 
 function rangerMapItems(input: RankInput, add: Add): void {
-  const { ranger, areas, rangerActions = false, conversations = false } = input;
+  const { ranger, areas, rangerActions = false } = input;
   for (const map of ranger?.maps ?? []) {
     for (const { rule, nodes } of MAP_NODE_RULES) {
       for (const node of nodes(map)) {
         const ref = `${map.repo}#${node.id}`;
         const blocked = rule.kind === "decision" && rangerActions ? approvalBlocked(map, node) : null;
-        const grilling = rule.kind === "grilling";
         add({
           key: rangerItemKey(ref), kind: rule.kind, source: "ranger", rangerMap: { key: map.key, label: map.repo }, area: areaFor(areas, map.repo, null), urgency: rule.urgency,
           title: rule.title(node.title),
-          why: grilling && !conversations ? "Conversations are not set up on this stack." : blocked ?? rule.why(repoName(map.repo)),
+          why: blocked ?? rule.why(repoName(map.repo)),
           score: rule.score,
           actions: blocked ? [{ ...LOOK, role: "primary" }, LATER] : [{ ...rule.primary, wired: rule.wired(input, map, node) }, LOOK, LATER],
           detail: { summary: node.title, history: [], refs: [ref, map.key], links: issueLinks(node.url) },

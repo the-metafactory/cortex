@@ -47,8 +47,14 @@ describe("Ranger attention cap", () => {
   test("grilling needs conversations, independently of Ranger execution configuration", () => {
     expect(ranked().find(i => i.kind === "grilling")?.actions[0]?.wired).toBe(true);
     const items = rankItems({ now: 0, subjects: [], ranger: state(), areas: [], rangerActions: true, waitingTasks: new Map([["example/app#51", { kind: "open", title: "Current source title", question: "A source question?", url: "https://example.test/51" }]]) });
-    const grilling = items.find(i => i.kind === "grilling");
+    const grilling = items.find(i => i.key === "ranger:example/app#51");
     expect(grilling?.actions[0]).toMatchObject({ id: "ranger.grill", wired: false });
     expect(grilling?.why).toBe("Conversations are not set up on this stack.");
+  });
+
+  test.each([false, true])("grilling preserves source uncertainty with conversations configured: %s", conversations => {
+    const items = rankItems({ now: 0, subjects: [], ranger: state(), areas: [], conversations, waitingTasks: new Map([["example/app#51", { kind: "unavailable", reason: "The source could not be reached." }]]) });
+    const grilling = items.find(i => i.key === "ranger:example/app#51");
+    expect(grilling?.why).toBe(`${conversations ? "It blocks work in app until you have talked it through." : "Conversations are not set up on this stack."} The source could not be reached.`);
   });
 });
