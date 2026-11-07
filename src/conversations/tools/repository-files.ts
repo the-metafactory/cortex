@@ -24,6 +24,8 @@ interface Line { line: number; text: string; truncated: boolean }
 interface FileItem { path: string; provenance: { source: "working-tree"; sha256: string; bytes: number; modifiedAt: string }; lines: Line[] }
 interface Entry { path: string; kind: "directory" | "file" }
 interface Skipped { path: string; status: FileStatus; reason: string }
+type Checked = ReturnType<RepositoryPaths["check"]>;
+interface WalkPolicy { enters(checked: Checked, depth: number): boolean; onFile(path: string, checked: Checked): void }
 interface Result { status: "ok" | FileStatus; project: string; provenance: { source: "working-tree"; revision: null }; disclosedBytes: number; truncated: boolean; reasons: string[]; results: (FileItem | Entry)[]; skipped: Skipped[]; skippedCount: number }
 
 class ResultCollector {
@@ -110,10 +112,47 @@ function readFile(path: string, paths: RepositoryPaths, collector: ResultCollect
   }
 }
 
-async function walk(request: Walk, paths: RepositoryPaths, collector: ResultCollector, context: ToolContext): Promise<void> {
-  if (!paths.check(request.args.path).stat.isDirectory()) throw new RepositoryFailure("unreadable", "directory-required");
-  const matches = request.operation === "list" ? () => true : (text: string): boolean => request.args.caseSensitive ? text.includes(request.args.query) : text.toLowerCase().includes(request.args.query.toLowerCase());
+function matchesQuery(args: z.infer<typeof QueryInput>, text: string): boolean {
+  return args.caseSensitive ? text.includes(args.query) : text.toLowerCase().includes(args.query.toLowerCase());
+}
+
+function belowDepth(args: z.infer<typeof QueryInput>, collector: ResultCollector): WalkPolicy["enters"] {
+  return (_checked, depth) => {
+    if (depth <= args.depth) return true;
+    collector.truncate("depth-limit");
+    return false;
+  };
+}
+
+function walkPolicy(request: Walk, paths: RepositoryPaths, collector: ResultCollector): WalkPolicy {
+  if (request.operation === "list") return {
+    enters(checked, depth) {
+      if (depth === 0) return true;
+      collector.entry({ path: checked.path, kind: "directory" });
+      return false;
+    },
+    onFile(_path, checked) { collector.entry({ path: checked.path, kind: "file" }); },
+  };
+  const args = request.args;
+  const enters = belowDepth(args, collector);
+  const matches = (text: string): boolean => matchesQuery(args, text);
+  if (request.operation === "find") return {
+    enters,
+    onFile(_path, checked) { if (matches(checked.path)) collector.entry({ path: checked.path, kind: "file" }); },
+  };
   const searched = new Set<string>();
+  return {
+    enters,
+    onFile(path, checked) {
+      if (searched.has(checked.path)) return;
+      searched.add(checked.path);
+      readFile(path, paths, collector, { matches });
+    },
+  };
+}
+
+async function walk(root: string, policy: WalkPolicy, paths: RepositoryPaths, collector: ResultCollector, context: ToolContext): Promise<void> {
+  if (!paths.check(root).stat.isDirectory()) throw new RepositoryFailure("unreadable", "directory-required");
   let entries = 0;
   const visit = async (path: string, depth: number): Promise<void> => {
     await setImmediate();
@@ -123,26 +162,20 @@ async function walk(request: Walk, paths: RepositoryPaths, collector: ResultColl
     try {
       const checked = paths.check(path);
       if (checked.stat.isDirectory()) {
-        if (request.operation === "list" && depth > 0) { collector.entry({ path: checked.path, kind: "directory" }); return; }
-        if (request.operation !== "list" && depth > request.args.depth) { collector.truncate("depth-limit"); return; }
+        if (!policy.enters(checked, depth)) return;
         const dir = await opendir(checked.absolute);
         for await (const entry of dir) {
           if (collector.isLimited()) break;
           await visit(join(path, entry.name), depth + 1);
         }
       } else if (!checked.stat.isFile()) throw new RepositoryFailure("unreadable", "not-regular-file");
-      else if (request.operation === "search") {
-        if (searched.has(checked.path)) return;
-        searched.add(checked.path);
-        readFile(path, paths, collector, { matches });
-      }
-      else if (matches(checked.path)) collector.entry({ path: checked.path, kind: "file" });
+      else policy.onFile(path, checked);
     } catch (error) {
       context.signal.throwIfAborted();
       collector.skip(path, fileFailure(error));
     }
   };
-  await visit(request.args.path, 0);
+  await visit(root, 0);
 }
 
 async function execute(args: { project: string }, limit: number, context: ToolContext, run: (paths: RepositoryPaths, collector: ResultCollector) => Promise<void>): Promise<ToolOutcome> {
@@ -179,7 +212,7 @@ function read(input: object, context: ToolContext): Promise<ToolOutcome> {
 }
 
 function query(request: Walk, context: ToolContext): Promise<ToolOutcome> {
-  return execute(request.args, request.args.limit, context, (paths, collector) => walk(request, paths, collector, context));
+  return execute(request.args, request.args.limit, context, (paths, collector) => walk(request.args.path, walkPolicy(request, paths, collector), paths, collector, context));
 }
 
 export const repositoryFileTools: readonly ToolDefinition[] = ([
