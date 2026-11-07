@@ -85,7 +85,7 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
   </>;
 }
 
-export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = () => {}, onOpenRoutines, onChanged = () => {} }: { view: DeskViewModel; error: string | null; onOpenSettings?: () => void; onOpenRoutines?: () => void; onChanged?: () => void } & DeskViewProps) {
+export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = () => undefined, onOpenRoutines, onChanged = () => undefined }: { view: DeskViewModel; error: string | null; onOpenSettings?: () => void; onOpenRoutines?: () => void; onChanged?: () => void } & DeskViewProps) {
   const [planItem, setPlanItem] = useState<DeskItem | null>(null);
   const [area, setArea] = useState(ALL_AREAS);
   const [snoozed, setSnoozed] = useState<Set<string>>(() => new Set());
@@ -103,13 +103,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [cardNotes, setCardNotes] = useState<ReadonlyMap<string, CardNote>>(() => new Map());
   const setCardNote = (key: string, cardNote: CardNote | null): void =>
-    setCardNotes((m) => {
+    { setCardNotes((m) => {
       if (!cardNote && !m.has(key)) return m;
       const copy = new Map(m);
       if (cardNote) copy.set(key, cardNote);
       else copy.delete(key);
       return copy;
-    });
+    }); };
   const [sending, setSending] = useState<ReadonlyMap<string, string>>(() => new Map());
   const inFlight = useRef(new Set<string>());
   const [confirming, setConfirming] = useState<{ key: string; action: string } | null>(null);
@@ -120,13 +120,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const [handoffAsk, setHandoffAsk] = useState<HandoffAsk | null>(null);
   const [snoozeAsk, setSnoozeAsk] = useState<SnoozeAsk | null>(null);
   const setRuling = (key: string, next: (d: RulingDraft | undefined) => RulingDraft | null): void =>
-    setRulings((m) => {
+    { setRulings((m) => {
       const draft = next(m.get(key));
       const copy = new Map(m);
       if (draft) copy.set(key, draft);
       else copy.delete(key);
       return copy;
-    });
+    }); };
   const [askText, setAskText] = useState("");
   const [asking, setAsking] = useState(false);
   const [proposal, setProposal] = useState<{ p: DeskProposal; said: string; requestId: string; fields: Record<string, unknown> } | null>(null);
@@ -147,7 +147,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     if (place.mode !== "conversation") cameFrom.current = place;
     go({ mode: "conversation", thread: null, conversation: id });
   };
-  const leaveConversation = (): void => go(cameFrom.current ?? { mode: "conversation", thread: null, conversation: null });
+  const leaveConversation = (): void => { go(cameFrom.current ?? { mode: "conversation", thread: null, conversation: null }); };
   const openCatchup = (key: string | null): void => {
     const search = catchupSearch(window.location.search, clearedCatchup(key));
     window.history.pushState(null, "", `${window.location.pathname}${search}${window.location.hash}`);
@@ -168,13 +168,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const timed = view.today.filter((e) => e.kind !== "all-day");
   const pastAll = timed.filter((e) => e.at <= view.generatedAt && inArea(e));
   const stopped = pastAll.filter((e) => e.kind === "agent-stop");
+  const firstStopped = stopped[0];
   const past = pastAll.filter((e) => e.kind !== "agent-stop");
   const ghost = proposal ? ghostEvent({ ...proposal.p, fields: proposal.fields }) : null;
   const upcomingGhost = ghost !== null && ghost.at > view.generatedAt ? ghost : null;
   const ghostToday = upcomingGhost !== null && upcomingGhost.at < startOfDay(view.generatedAt) + DAY_MS;
   const withGhost = (list: DeskEvent[], include: boolean): DeskEvent[] => (upcomingGhost && include ? [...list, upcomingGhost].sort((a, b) => a.at - b.at) : list);
   const laterReal = timed.filter((e) => e.at > view.generatedAt && inArea(e));
-  const nextMeeting = laterReal.find((e) => e.kind === "meeting");
   const later = withGhost(laterReal, ghostToday);
   const ahead = withGhost(view.ahead.filter(inArea), !ghostToday);
 
@@ -204,7 +204,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   useEffect(() => {
     if (!checking) return;
     const t = setInterval(onChanged, CHECK_POLL_MS);
-    return () => clearInterval(t);
+    return () => { clearInterval(t); };
   }, [checking, onChanged]);
 
   const openedMail = detail?.kind === "mail" ? detail.key : null;
@@ -218,7 +218,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       if (e.key === "Escape") setDetail(null);
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); };
   }, [detail]);
 
   useEffect(() => {
@@ -229,7 +229,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => { window.removeEventListener("keydown", onKey); };
   }, []);
 
   const ask = async (): Promise<void> => {
@@ -343,14 +343,14 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
   useEffect(() => {
     if (!note) return;
-    const t = setTimeout(() => setNote(null), 3500);
-    return () => clearTimeout(t);
+    const t = setTimeout(() => { setNote(null); }, 3500);
+    return () => { clearTimeout(t); };
   }, [note]);
 
   useEffect(() => {
     if (!receipt) return;
-    const t = setTimeout(() => setReceipt(null), RECEIPT_MS);
-    return () => clearTimeout(t);
+    const t = setTimeout(() => { setReceipt(null); }, RECEIPT_MS);
+    return () => { clearTimeout(t); };
   }, [receipt]);
 
   const undoMove = async (id: string): Promise<void> => {
@@ -477,9 +477,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     else if (a.id === "goal.check" && a.wired && item.goal) void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }), keepVisible: true });
     else if (a.id === "goal.pause" && item.goal) confirmFirst(item, a, () => void send(item, a, { request: () => submitGoalAction({ action: a.id, goal }) }));
     else if (a.id === "mail.seen") move(item, a, "trash");
-    else if (a.id === "mail.trash") confirmFirst(item, a, () => move(item, a, "trash"));
+    else if (a.id === "mail.trash") confirmFirst(item, a, () => { move(item, a, "trash"); });
     else if (a.id === "mail.archive") move(item, a, "archive");
-    else if (a.id === "mail.spam") confirmFirst(item, a, () => move(item, a, "junk"));
+    else if (a.id === "mail.spam") confirmFirst(item, a, () => { move(item, a, "junk"); });
     else if (a.id === "mail.draft" && item.reply) openReply(item);
     else if (a.id === "invite.accept" || a.id === "invite.decline") answerInvite(item, a.id === "invite.accept" ? "accept" : "decline");
     else if (a.id === "invite.propose") proposeTimes(item);
@@ -748,8 +748,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       rank={idx + 1}
       area={item.area ? areaById.get(item.area) : undefined}
       event={item.eventKey ? view.today.find((e) => e.key === item.eventKey) : undefined}
-      onOpen={() => setDetail(item)}
-      onAction={(a) => run(item, a)}
+      onOpen={() => { setDetail(item); }}
+      onAction={(a) => { run(item, a); }}
       sending={busyWith(item)}
       onFocusEvent={focusEvent}
       onCorrect={(mode) => void correct(item.kind, item.source, mode)}
@@ -782,9 +782,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       now={view.generatedAt}
       busy={creating}
       onConfirm={(fields) => void confirm(fields)}
-      onCancel={() => setProposal(null)}
-      onGoto={() => focusEvent(GHOST_KEY)}
-      onFieldsChange={(fields) => setProposal((cur) => (cur ? { ...cur, fields } : cur))}
+      onCancel={() => { setProposal(null); }}
+      onGoto={() => { focusEvent(GHOST_KEY); }}
+      onFieldsChange={(fields) => { setProposal((cur) => (cur ? { ...cur, fields } : cur)); }}
       {...(alternative ? { onAlternative: () => void startTalk(proposal.requestId, alternative.fields, proposal.said) } : {})}
     />
   );
@@ -800,9 +800,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           <div className="desk-topr">
             {!inStudio && !inBalance && !inCatchup && !inConversation && view.areas.length > 0 && (
               <div className="desk-seg" role="tablist" aria-label="Area">
-                <button type="button" role="tab" aria-selected={area === ALL_AREAS} onClick={() => setArea(ALL_AREAS)}>All</button>
+                <button type="button" role="tab" aria-selected={area === ALL_AREAS} onClick={() => { setArea(ALL_AREAS); }}>All</button>
                 {view.areas.map((a) => (
-                  <button key={a.id} type="button" role="tab" aria-selected={area === a.id} onClick={() => setArea(a.id)}>
+                  <button key={a.id} type="button" role="tab" aria-selected={area === a.id} onClick={() => { setArea(a.id); }}>
                     <AreaDot area={a} />{a.label}
                   </button>
                 ))}
@@ -827,7 +827,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 placeholder="capture…, remind me…, note…, ask an agent to…, schedule…"
                 value={askText}
                 disabled={asking}
-                onChange={(e) => setAskText(e.target.value)}
+                onChange={(e) => { setAskText(e.target.value); }}
               />
               {voice.wakeConfigured && <WakeSwitch state={voice.wakeState} blocked={voice.wakeBlocked} onToggle={voice.toggleWake} assistantName={voice.wakeName} />}
               {voice.available && <MicButton phase={voice.state.phase} onStart={voice.start} onStop={voice.stop} />}
@@ -842,17 +842,17 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       <StudioSessionPanel controls={discussion} voice={view.voice} location={`${place.mode}:${place.thread ?? ""}`} onContinue={(sessionId) => void starter.open(sessionId)} />
       {starter.error && <p className="desk-unsent" role="alert">{starter.error}</p>}
       {inConversation && <ConversationsArea selected={place.conversation ?? null} onOpen={openConversation} onLeave={leaveConversation} />}
-      {inStudio && studio && <DeskStudio studio={studio} thread={place.thread} day={view} onDiscuss={discuss} onConversation={openConversation} onOpenThread={(slug) => go({ mode: "studio", thread: slug })} />}
+      {inStudio && <DeskStudio studio={studio} thread={place.thread} day={view} onDiscuss={discuss} onConversation={openConversation} onOpenThread={(slug) => { go({ mode: "studio", thread: slug }); }} />}
       {inStudio && (
         <div className="dst">
           {proposalCard}
           <DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => void stopRule(rule)} onPromote={(action, on) => void promote(action, on)} />
         </div>
       )}
-      {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
+      {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => { go({ mode: "studio", thread: slug }); }} onConversation={openConversation} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
       <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={({ digests, sweeps }) => <><MailSweeps sweeps={sweeps} onPreview={openSweep} /><MailDigests digests={digests} busy={sweeping} onMove={openSweep} onKeep={(key) => void keepDigest(key)} onOpen={noteMailOpened} onUnsubscribe={(key, ask) => void unsubscribeDigest(key, ask)} /></>} />
       <div className="desk-grid tf-shell" hidden={inStudio || inBalance || inCatchup || inConversation}>
-        <DeskTimeFirst selectedArea={area} day={view.myDay} calendar={view.calendarAvailability} now={view.generatedAt} areas={view.areas} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation}
+        <DeskTimeFirst selectedArea={area} day={view.myDay} calendar={view.calendarAvailability} now={view.generatedAt} areas={view.areas} onChanged={onChanged} onThread={(slug) => { go({ mode: "studio", thread: slug }); }} onConversation={openConversation}
           before={<>
           <section className="desk-lead">
             <p><strong>{brief.greeting}</strong> {brief.lines.join(" ")}</p>
@@ -878,13 +878,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
           {(past.length > 0 || stopped.length > 0) && (
             <ol className="desk-tl desk-past">
-              {stopped.length > 0 && (
+              {firstStopped && (
                 <li className="desk-ev">
-                  <time>{clock(stopped[0]!.at)}</time>
+                  <time>{clock(firstStopped.at)}</time>
                   <span className="desk-pin" />
                   <span>
-                    <button type="button" className="desk-dhead" onClick={() => setOpenStopped((o) => !o)} aria-expanded={openStopped}>
-                      <b>{stopped.length === 1 ? "An agent stopped" : `${stopped.length} agents stopped`}</b> since {clock(stopped[0]!.at)}
+                    <button type="button" className="desk-dhead" onClick={() => { setOpenStopped((o) => !o); }} aria-expanded={openStopped}>
+                      <b>{stopped.length === 1 ? "An agent stopped" : `${stopped.length} agents stopped`}</b> since {clock(firstStopped.at)}
                       <span className={`desk-chev${openStopped ? " open" : ""}`}>›</span>
                     </button>
                   </span>
@@ -916,7 +916,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
           <RoutinesSection view={view.routines} onChanged={onChanged} />
           <section className="desk-msec">
             <h3 className="desk-mh">Agents</h3>
-            <button type="button" className="desk-mline" onClick={() => setOpenAgents((o) => !o)} aria-expanded={openAgents}>
+            <button type="button" className="desk-mline" onClick={() => { setOpenAgents((o) => !o); }} aria-expanded={openAgents}>
               {view.agents.working.length > 0 && <span className="desk-pulse" />}
               {view.agents.line}
               <span className={`desk-chev${openAgents ? " open" : ""}`}>›</span>
@@ -978,17 +978,17 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
       <div className="desk-scrim" onClick={() => { setDetail(null); if (!sweeping) setSweep(null); }} />
       <aside className="desk-panel" aria-hidden={!detail && !sweep} aria-label="Details">
-        {sweep && !detailItem && <SweepPreview key={`${sweep.group.id}:${sweep.target}`} sweep={sweep.group} target={sweep.target} busy={sweeping} onConfirm={(keys) => void confirmSweep(sweep.group, keys, sweep.target)} onCancel={() => setSweep(null)} />}
+        {sweep && !detailItem && <SweepPreview key={`${sweep.group.id}:${sweep.target}`} sweep={sweep.group} target={sweep.target} busy={sweeping} onConfirm={(keys) => void confirmSweep(sweep.group, keys, sweep.target)} onCancel={() => { setSweep(null); }} />}
         {detailItem && (
-          <DetailPanel item={shown(detailItem)} area={detailItem.area ? areaById.get(detailItem.area)?.label : undefined} onClose={() => setDetail(null)} onAction={(a) => run(detailItem, a)} onShowEvent={showEvent} sending={busyWith(detailItem)}>
+          <DetailPanel item={shown(detailItem)} area={detailItem.area ? areaById.get(detailItem.area)?.label : undefined} onClose={() => { setDetail(null); }} onAction={(a) => { run(detailItem, a); }} onShowEvent={showEvent} sending={busyWith(detailItem)}>
             {detailRuling?.open && (
               <RulingBox
                 item={detailItem}
                 draft={detailRuling}
                 sending={busyWith(detailItem) === "ranger.rule"}
-                onChange={(text) => setRuling(detailItem.key, (r) => (r ? { ...r, text } : null))}
-                onConfirm={() => confirmRuling(detailItem, detailRuling)}
-                onCancel={() => setRuling(detailItem.key, (r) => cancelRuling(r ?? null))}
+                onChange={(text) => { setRuling(detailItem.key, (r) => (r ? { ...r, text } : null)); }}
+                onConfirm={() => { confirmRuling(detailItem, detailRuling); }}
+                onCancel={() => { setRuling(detailItem.key, (r) => cancelRuling(r ?? null)); }}
               />
             )}
             {detailItem.mailDecision && <RecordedMailDecision decision={detailItem.mailDecision} />}
@@ -997,31 +997,31 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 view={detailItem.invitation}
                 ask={inviteAsk?.key === detailItem.key ? inviteAsk : null}
                 sending={busyWith(detailItem) === "invite.accept" || busyWith(detailItem) === "invite.decline"}
-                onNothing={(nothing) => setInviteAsk((q) => (q?.key === detailItem.key ? { ...q, nothing, requestId: crypto.randomUUID() } : q))}
+                onNothing={(nothing) => { setInviteAsk((q) => (q?.key === detailItem.key ? { ...q, nothing, requestId: crypto.randomUUID() } : q)); }}
                 onConfirm={() => { if (inviteAsk?.key === detailItem.key) confirmInvite(detailItem, inviteAsk); }}
-                onCancel={() => setInviteAsk(null)}
+                onCancel={() => { setInviteAsk(null); }}
               />
             )}
             {detailItem.yesFilter && (detailItem.invitation?.canReply
-              ? <MailYesFilterBox filter={detailItem.yesFilter} selected={inviteAsk?.key === detailItem.key ? inviteAsk.commitment : undefined} canDraft={false} canChoose disabled={busyWith(detailItem) === "invite.accept"} onChoose={commitment => setInviteAsk(q => ({ ...(q?.key === detailItem.key ? q : newInviteAsk(detailItem.key)), commitment, requestId: crypto.randomUUID() }))} onDecline={() => answerInvite(detailItem, "decline")} />
-              : <MailYesFilterBox filter={detailItem.yesFilter} selected={replyDraft?.key === detailItem.key ? replyDraft.commitment : undefined} canDraft={Boolean(detailItem.reply)} disabled={busyWith(detailItem) === "mail.draft"} onChoose={commitment => setReplyDraft(r => ({ ...(r?.key === detailItem.key ? r : newReplyDraft(detailItem.key)), commitment, requestId: crypto.randomUUID() }))} onDecline={() => setReplyDraft(r => prepareDeclineDraft(r?.key === detailItem.key ? r : newReplyDraft(detailItem.key)))} />)}
+              ? <MailYesFilterBox filter={detailItem.yesFilter} selected={inviteAsk?.key === detailItem.key ? inviteAsk.commitment : undefined} canDraft={false} canChoose disabled={busyWith(detailItem) === "invite.accept"} onChoose={commitment => { setInviteAsk(q => ({ ...(q?.key === detailItem.key ? q : newInviteAsk(detailItem.key)), commitment, requestId: crypto.randomUUID() })); }} onDecline={() => { answerInvite(detailItem, "decline"); }} />
+              : <MailYesFilterBox filter={detailItem.yesFilter} selected={replyDraft?.key === detailItem.key ? replyDraft.commitment : undefined} canDraft={Boolean(detailItem.reply)} disabled={busyWith(detailItem) === "mail.draft"} onChoose={commitment => { setReplyDraft(r => ({ ...(r?.key === detailItem.key ? r : newReplyDraft(detailItem.key)), commitment, requestId: crypto.randomUUID() })); }} onDecline={() => { setReplyDraft(r => prepareDeclineDraft(r?.key === detailItem.key ? r : newReplyDraft(detailItem.key))); }} />)}
             {studioPick?.key === detailItem.key && (
               <MailStudioBox
                 pick={studioPick}
                 sending={busyWith(detailItem) === "mail.studio"}
-                onChoose={(thread) => setStudioPick((p) => (p?.key === detailItem.key ? { ...p, thread } : p))}
-                onIncludeText={(includeText) => setStudioPick((p) => (p?.key === detailItem.key ? { ...p, includeText } : p))}
-                onConfirm={() => confirmStudio(detailItem, studioPick)}
-                onCancel={() => setStudioPick(null)}
+                onChoose={(thread) => { setStudioPick((p) => (p?.key === detailItem.key ? { ...p, thread } : p)); }}
+                onIncludeText={(includeText) => { setStudioPick((p) => (p?.key === detailItem.key ? { ...p, includeText } : p)); }}
+                onConfirm={() => { confirmStudio(detailItem, studioPick); }}
+                onCancel={() => { setStudioPick(null); }}
               />
             )}
             {handoffAsk?.key === detailItem.key && (
               <MailHandoffBox
                 ask={handoffAsk}
                 sending={busyWith(detailItem) === "mail.ivy"}
-                onChange={(instruction) => setHandoffAsk((h) => (h?.key === detailItem.key ? { ...h, instruction } : h))}
-                onConfirm={() => confirmHandoff(detailItem, handoffAsk)}
-                onCancel={() => setHandoffAsk(null)}
+                onChange={(instruction) => { setHandoffAsk((h) => (h?.key === detailItem.key ? { ...h, instruction } : h)); }}
+                onConfirm={() => { confirmHandoff(detailItem, handoffAsk); }}
+                onCancel={() => { setHandoffAsk(null); }}
               />
             )}
             {snoozeAsk?.key === detailItem.key && (
@@ -1030,9 +1030,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 now={view.generatedAt}
                 meetings={snoozeMeetings([...view.today, ...view.ahead], view.generatedAt)}
                 sending={busyWith(detailItem) === "mail.snooze"}
-                onChange={(next) => setSnoozeAsk((s) => (s?.key === detailItem.key ? { ...s, ...next } : s))}
-                onChoose={(until) => confirmSnooze(detailItem, until)}
-                onCancel={() => setSnoozeAsk(null)}
+                onChange={(next) => { setSnoozeAsk((s) => (s?.key === detailItem.key ? { ...s, ...next } : s)); }}
+                onChoose={(until) => { confirmSnooze(detailItem, until); }}
+                onCancel={() => { setSnoozeAsk(null); }}
               />
             )}
             {replyDraft?.key === detailItem.key && detailItem.reply && (
@@ -1041,9 +1041,9 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
                 reply={detailItem.reply}
                 draft={replyDraft}
                 sending={busyWith(detailItem) === "mail.draft"}
-                onChange={(text) => setReplyDraft((r) => (r?.key === detailItem.key ? { ...r, text, requestId: crypto.randomUUID() } : r))}
-                onConfirm={() => confirmReply(detailItem, replyDraft)}
-                onCancel={() => setReplyDraft(null)}
+                onChange={(text) => { setReplyDraft((r) => (r?.key === detailItem.key ? { ...r, text, requestId: crypto.randomUUID() } : r)); }}
+                onConfirm={() => { confirmReply(detailItem, replyDraft); }}
+                onCancel={() => { setReplyDraft(null); }}
               />
             )}
           </DetailPanel>
@@ -1117,7 +1117,7 @@ const EVIDENCE_KIND: Record<DeskEvidence["kind"], string> = { event: "Meeting", 
 export function EvidenceLink({ evidence, onShowEvent }: { evidence: DeskEvidence; onShowEvent: (key: string) => void }) {
   const label = <><span className="k">{EVIDENCE_KIND[evidence.kind]}</span>{evidence.title}</>;
   const { eventKey, url } = evidence;
-  if (eventKey) return <button type="button" onClick={() => onShowEvent(eventKey)}>{label}<span className="go">↑</span></button>;
+  if (eventKey) return <button type="button" onClick={() => { onShowEvent(eventKey); }}>{label}<span className="go">↑</span></button>;
   if (url && deskLinkMode(url)) return <DeskLink url={url}>{label}<span className="go">↗</span></DeskLink>;
   return <span>{label}</span>;
 }
@@ -1127,7 +1127,7 @@ export function RestGroups({ groups, active, onOpen }: { groups: DeskFoldedGroup
     <ul className="desk-sub">
       {groups.map((g) => (
         <li key={g.kind}>
-          <button type="button" className="desk-group" aria-pressed={active === g.kind} onClick={() => onOpen(active === g.kind ? null : g.kind)}>
+          <button type="button" className="desk-group" aria-pressed={active === g.kind} onClick={() => { onOpen(active === g.kind ? null : g.kind); }}>
             <span className="n">{g.count}</span><div>{g.label}<small>{g.example}</small></div>
           </button>
         </li>
@@ -1210,11 +1210,11 @@ export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending
         <div className="desk-acts">
           {item.actions.map((a) => <ActionButton key={a.id} action={a} onRun={onAction} sending={sending} />)}
           {event && (
-            <button type="button" className="desk-chip" onClick={() => onFocusEvent(event.key)}>
+            <button type="button" className="desk-chip" onClick={() => { onFocusEvent(event.key); }}>
               {clock(event.at)} today ↑
             </button>
           )}
-          <ItemMenu current={item.correction} onCorrect={onCorrect} {...(onCorrectMail ? { onCorrectMail } : {})} onTodo={() => onAction({ id: "todo", label: "Plan this", role: "secondary", wired: true })} />
+          <ItemMenu current={item.correction} onCorrect={onCorrect} {...(onCorrectMail ? { onCorrectMail } : {})} onTodo={() => { onAction({ id: "todo", label: "Plan this", role: "secondary", wired: true }); }} />
         </div>
       </div>
     </article>
@@ -1236,7 +1236,7 @@ export function CorrectionNote({ note, onRetry }: { note: CardNote; onRetry?: (r
   return (
     <div className={`desk-corrected${retry ? " failed" : ""}`} role="status">
       <span>{note.text}</span>
-      {retry && onRetry && <button type="button" className="desk-btn" onClick={() => onRetry(retry)}>Retry the move</button>}
+      {retry && onRetry && <button type="button" className="desk-btn" onClick={() => { onRetry(retry); }}>Retry the move</button>}
     </div>
   );
 }
@@ -1304,7 +1304,7 @@ export function ItemMenu({ current, onCorrect, onCorrectMail, onTodo, open: star
   };
   return (
     <span className="desk-more" ref={root}>
-      <button type="button" className="desk-btn desk-rank-btn" aria-label={onCorrectMail ? MAIL_MENU_LABEL : RANKING_LABEL} title={onCorrectMail ? MAIL_MENU_LABEL : RANKING_LABEL} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>⋯</button>
+      <button type="button" className="desk-btn desk-rank-btn" aria-label={onCorrectMail ? MAIL_MENU_LABEL : RANKING_LABEL} title={onCorrectMail ? MAIL_MENU_LABEL : RANKING_LABEL} aria-haspopup="menu" aria-expanded={open} onClick={() => { setOpen((o) => !o); }}>⋯</button>
       {open && (
         <span className="desk-menu" role="menu">
           {onTodo && <button type="button" role="menuitem" onClick={() => { setOpen(false); onTodo(); }}>→ todo</button>}
@@ -1313,9 +1313,9 @@ export function ItemMenu({ current, onCorrect, onCorrectMail, onTodo, open: star
                 <button key={m.said} type="button" role="menuitem" onClick={() => { setOpen(false); onCorrectMail(m.said); }}>{m.label}</button>
               ))
             : MENU.filter((m) => m.mode !== current).map((m) => (
-                <button key={m.mode} type="button" role="menuitem" onClick={() => pick(m.mode)}>{m.label}</button>
+                <button key={m.mode} type="button" role="menuitem" onClick={() => { pick(m.mode); }}>{m.label}</button>
               ))}
-          {current && !onCorrectMail && <button type="button" role="menuitem" onClick={() => pick(null)}>Rank by the base rules again</button>}
+          {current && !onCorrectMail && <button type="button" role="menuitem" onClick={() => { pick(null); }}>Rank by the base rules again</button>}
         </span>
       )}
     </span>
@@ -1331,7 +1331,7 @@ export function RankingSection({ corrections, onUndo }: { corrections: DeskCorre
         {corrections.map((c) => (
           <li key={`${c.kind}:${c.source}`}>
             <span>{CORRECTION_TAG[c.mode]}: {c.label}</span>
-            <button type="button" aria-label={`Undo "${CORRECTION_TAG[c.mode]}" for ${c.label}`} title="Undo" onClick={() => onUndo(c)}>×</button>
+            <button type="button" aria-label={`Undo "${CORRECTION_TAG[c.mode]}" for ${c.label}`} title="Undo" onClick={() => { onUndo(c); }}>×</button>
           </li>
         ))}
       </ul>
@@ -1390,32 +1390,11 @@ export function ActionButton({ action, onRun, sending }: { action: DeskAction; o
       disabled={!action.wired || sending !== null}
       aria-busy={busy}
       title={action.wired ? undefined : "Not connected yet"}
-      onClick={() => onRun(action)}
+      onClick={() => { onRun(action); }}
     >
       {busy ? BUSY_LABEL[action.id] ?? "Sending…" : action.label}
     </button>
   );
-}
-
-const MEETING_LEAD_MINUTES = 180;
-
-const needsYouLine = (count: number): string => `${count === 1 ? "One thing needs" : `${count} things need`} you, most important first.`;
-
-const minutesUntil = (view: DeskViewModel, next: DeskEvent | undefined): number => (next ? Math.round((next.at - view.generatedAt) / 60_000) : Infinity);
-
-function nowHeading(view: DeskViewModel, count: number, next: DeskEvent | undefined): string {
-  if (!canSee(view)) return "The Desk cannot see anything yet.";
-  const minutes = minutesUntil(view, next);
-  if (next && minutes <= MEETING_LEAD_MINUTES) {
-    return `You have ${minutes < 60 ? `${minutes} minutes` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`} before your ${clock(next.at)}.`;
-  }
-  return count === 0 ? "You're clear." : needsYouLine(count);
-}
-
-function nowSubline(view: DeskViewModel, count: number, rest: number, next: DeskEvent | undefined): string {
-  const lead = minutesUntil(view, next) <= MEETING_LEAD_MINUTES && canSee(view) && count > 0 ? needsYouLine(count) : "";
-  const tail = rest > 0 ? `${rest} more can wait; they are in the margin.` : "";
-  return [lead, tail].filter(Boolean).join(" ");
 }
 
 export function AheadStrip({ events }: { events: DeskEvent[] }) {
@@ -1445,7 +1424,7 @@ export function AheadStrip({ events }: { events: DeskEvent[] }) {
 
 const ownLine = (d: DeskViewModel["autonomy"]["done"][number]): boolean => d.action !== undefined;
 
-export function DoneForYou({ autonomy, onPromote, onUndo, onStop, routines, onChanged = () => {} }: { autonomy: DeskViewModel["autonomy"]; onPromote: (action: string, on: boolean) => void; onUndo?: (id: string, action?: string) => void; onStop?: (rule: string) => void; routines?: DeskViewModel["routines"]; onChanged?: () => void }) {
+export function DoneForYou({ autonomy, onPromote, onUndo, onStop, routines, onChanged = () => undefined }: { autonomy: DeskViewModel["autonomy"]; onPromote: (action: string, on: boolean) => void; onUndo?: (id: string, action?: string) => void; onStop?: (rule: string) => void; routines?: DeskViewModel["routines"]; onChanged?: () => void }) {
   if (autonomy.types.length === 0 && autonomy.done.length === 0 && !routines?.done.length) return null;
   const anyOn = autonomy.types.some((t) => t.on);
   return (
@@ -1456,8 +1435,8 @@ export function DoneForYou({ autonomy, onPromote, onUndo, onStop, routines, onCh
         {autonomy.done.map((d) => (
           <li key={d.key} className={d.ok ? undefined : "failed"}>
             <div>{ownLine(d) ? d.title : d.ok ? `Retried "${d.title}"` : `Could not retry "${d.title}"`}<small>{ownLine(d) ? d.message : d.ok ? `at ${clock(d.at)}` : d.message}</small>
-              {d.undo && onUndo && <button type="button" className="desk-btn" onClick={() => onUndo(d.undo ?? "", d.action)}>Undo</button>}
-              {d.stop && onStop && <button type="button" className="desk-btn ghost" onClick={() => onStop(d.stop ?? "")}>Stop doing this</button>}
+              {d.undo && onUndo && <button type="button" className="desk-btn" onClick={() => { onUndo(d.undo ?? "", d.action); }}>Undo</button>}
+              {d.stop && onStop && <button type="button" className="desk-btn ghost" onClick={() => { onStop(d.stop ?? ""); }}>Stop doing this</button>}
             </div>
           </li>
         ))}
@@ -1467,7 +1446,7 @@ export function DoneForYou({ autonomy, onPromote, onUndo, onStop, routines, onCh
             <div>
               {t.label}
               <small>{t.on ? `The Desk does this on its own. ${t.note}` : "The Desk asks you first."}</small>
-              <button type="button" className="desk-btn desk-promote" onClick={() => onPromote(t.action, !t.on)}>
+              <button type="button" className="desk-btn desk-promote" onClick={() => { onPromote(t.action, !t.on); }}>
                 {t.on ? "Stop doing this on your own" : "Handle this yourself"}
               </button>
             </div>
