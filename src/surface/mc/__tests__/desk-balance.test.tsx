@@ -305,12 +305,14 @@ describe("Balance through the real My day owner", () => {
     return view();
   };
   const between = (html: string, from: string, to: string): string => html.slice(html.indexOf(from), html.indexOf(to, html.indexOf(from)));
-  test("the Day page shows the selected task's full Balance details in its main column, once", async () => {
+  test("the Day page shows compact saved Balance details with explicit editing in its main column", async () => {
     const day = { ...(await selectFirst()), sources: [{ taskId: "first", key: "mail:probe", fingerprint: "probe", kind: "mail", url: "message://%3Cprobe%40example.org%3E" }] };
     const html = renderToStaticMarkup(createElement(DeskTimeFirst, { day, now: NOW, before: null, after: null, proposal: null, preview: null, ambient: null, areas: desk.areas, onChanged: () => undefined, onThread: () => undefined, onConversation: () => undefined }));
     const main = between(html, "class=\"tf-current\"", "class=\"tf-contract\"");
-    for (const part of ["<h2>first</h2>", "Work / project", "Bring the signed form", "value=\"2026-11-05\"", "aria-label=\"Balance estimate minutes\"", "<a href=\"message://%3Cprobe%40example.org%3E\">Open in Mail</a>", "+ Add subtask", "Move…", "Mark complete", "Save changes", ">Done</button>", ">Not today</button>", ">Use recommendation</button>", ">Choose another</a>"]) expect(main).toContain(part);
-    expect(main.split("aria-label=\"Balance notes\"")).toHaveLength(2);
+    for (const part of ["<h2>first</h2>", "Work / project", "Bring the signed form", "dateTime=\"2026-11-05\"", "Saved task details", "<a href=\"message://%3Cprobe%40example.org%3E\">Open in Mail</a>", "+ Add subtask", "Move…", "Mark complete", ">Edit</button>", ">Done</button>", ">Not today</button>", ">Use recommendation</button>", ">Choose another</a>"]) expect(main).toContain(part);
+    expect(main).not.toContain("aria-label=\"Balance notes\"");
+    expect(main).not.toContain("Save changes");
+    expect(main).not.toContain("<form");
     const side = between(html, "aria-label=\"Selected task context\"", "</section>");
     expect(side).toContain("Open task in Balance");
     expect(side).not.toContain("Bring the signed form");
