@@ -161,3 +161,6 @@ export function statusLabel(status: ConversationMeta["activity"]["status"]): str
   if (status === "working") return "Ivy is working";
   return status === "waiting" ? "Waiting for you" : "Ready to continue";
 }
+
+export const startGrilling = (id: string): Promise<{ conversation: ConversationMeta }> =>
+  postJson(`${BASE}/starts`, { startId: crypto.randomUUID(), source: { owner: "graph-node", id } });
