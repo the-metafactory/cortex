@@ -591,6 +591,7 @@ export class MailClassifier {
         if (err instanceof MissingKey) {
           if (!this.keyMissing) this.log(`desk: mail classifier: ${err.message}`);
           this.keyMissing = true;
+          this.latestProblem = err.message;
           return result;
         }
         problem = err instanceof Error ? err.message : String(err);

@@ -89,10 +89,9 @@ export async function proposeMailThread(item: MailForStudio, deps: MailStudioDep
   const { files, problems } = await readStudioFiles(deps.options.dir);
   const view = buildStudioView(files, deps.options, deps.areas, problems);
   const threads = view.active;
-  const listed = threads.map((t) => ({ slug: t.slug, question: oneLine(t.question) }));
   const canIncludeText = Boolean(item.mail.firstParagraph?.trim());
   const localMail = contentFrom(deps.localSources, [item.mail.sourceId]).local;
-  if (threads.length === 0) return { thread: null, reason: localMail ? WORK_MAIL_NO_THREAD : "No thread is active; it goes to the Studio inbox.", threads: listed, canIncludeText };
+  if (threads.length === 0) return { thread: null, reason: localMail ? WORK_MAIL_NO_THREAD : "No thread is active; it goes to the Studio inbox.", threads: [], canIncludeText };
   const offered = localMail ? threads.filter((t) => t.policy === "local") : threads;
   if (localMail && offered.length === 0) return { thread: null, reason: WORK_MAIL_NO_THREAD, threads: [], canIncludeText };
   const access = localMail ? deps.options.filer?.local : filerFor(deps.options, threads);
