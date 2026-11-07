@@ -852,7 +852,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
       {inBalance && (view.myDay ? <DeskBalance day={view.myDay} view={view} foreground={foreground} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation} /> : <p role="status">Your Balance outline is unavailable. Refresh the Desk to retry.</p>)}
       <DeskCatchUp view={catchupView} renderItem={itemRow} done={<DoneForYou routines={view.routines} onChanged={onChanged} autonomy={view.autonomy} onUndo={undoDone} onStop={(rule) => { void stopRule(rule); }} onPromote={(action, on) => void promote(action, on)} />} onChanged={onChanged} active={inCatchup} planItem={planItem} top={({ digests, sweeps }) => <><MailSweeps sweeps={sweeps} onPreview={openSweep} /><MailDigests digests={digests} busy={sweeping} onMove={openSweep} onKeep={(key) => void keepDigest(key)} onOpen={noteMailOpened} onUnsubscribe={(key, ask) => void unsubscribeDigest(key, ask)} /></>} />
       <div className="desk-grid tf-shell" hidden={inStudio || inBalance || inCatchup || inConversation}>
-        <DeskTimeFirst day={view.myDay} calendar={view.calendarAvailability} now={view.generatedAt} areas={view.areas} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation}
+        <DeskTimeFirst selectedArea={area} day={view.myDay} calendar={view.calendarAvailability} now={view.generatedAt} areas={view.areas} onChanged={onChanged} onThread={(slug) => go({ mode: "studio", thread: slug })} onConversation={openConversation}
           before={<>
           <section className="desk-lead">
             <p><strong>{brief.greeting}</strong> {brief.lines.join(" ")}</p>

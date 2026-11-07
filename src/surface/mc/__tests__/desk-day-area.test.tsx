@@ -16,7 +16,7 @@ describe("Day priorities area", () => {
   const { db } = dayDatabase(seed);
   const render = (selectedArea: string): string => {
     const day = readMyDay(db(), { ...desk, areas }, NOW);
-    const html = renderToStaticMarkup(<DeskTimeFirst {...{ selectedArea }} day={day} now={NOW} before={null} after={null} proposal={null} preview={null} ambient={null} areas={areas} onChanged={() => {}} onThread={() => {}} />);
+    const html = renderToStaticMarkup(<DeskTimeFirst {...{ selectedArea }} day={day} now={NOW} before={null} after={null} proposal={null} preview={null} ambient={null} areas={areas} onChanged={() => undefined} onThread={() => undefined} />);
     return html.slice(html.indexOf('id="today-priorities"'), html.indexOf('</aside>'));
   };
   it("filters by area identity when two areas share the same label", () => {
