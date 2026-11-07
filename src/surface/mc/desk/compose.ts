@@ -6,7 +6,7 @@ import { mailYesFilter, readMailDecision } from "./mail-yes-filter";
 import { calendarsOnly, invitationDecisions, invitationView, withoutAnsweredRead, type InvitationsConfig, type InvitationView } from "./mail-invitation";
 import { readStudioDesk } from "./studio-my-day";
 import { movedKeys, sourceIdentity } from "./my-day";
-import { calendarSetting, discoverCalendars } from "./calendars";
+import { calendarName, calendarSetting, discoverCalendars, type ReturnedCalendars } from "./calendars";
 import { calendarAvailability } from "./calendar-availability";
 import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
@@ -203,7 +203,7 @@ export async function composeDesk(
   const unreadable = readings.filter((r) => r.problems.length > 0).map(unreadableLine);
   const reportedEvents = readings.flatMap((r) => r.events.map((e) => ({ ...e, area: r.area, sourceId: r.id })));
   const calendarNames = readings.flatMap(reading => reading.calendarCoverage?.calendars.map(calendar => ({ sourceId: reading.id, calendar: calendar.name, calendarId: calendar.id })) ?? []);
-  const calendars = discoverCalendars(db, [...reportedEvents, ...calendarNames]);
+  const calendars = discoverCalendars(db, [...reportedEvents, ...calendarNames], readings.flatMap(returnedCalendars), now);
   const events = reportedEvents.flatMap((e) => {
     const setting = calendarSetting(calendars, e);
     return setting?.enabled ? [{ ...e, calendar: setting.name, color: setting.color }] : [];
@@ -459,6 +459,15 @@ function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, 
       };
     }),
   };
+}
+
+function returnedCalendars(reading: SourceReading): ReturnedCalendars[] {
+  const coverage = reading.calendarCoverage;
+  const trustworthy = reading.error === null && reading.problems.length === 0 && reading.dropped === 0 && coverage?.status === "complete" && coverage.calendars.length > 0;
+  if (!trustworthy) return [];
+  const withIds = reading.events.flatMap(event => event.calendarId ? [event.calendarId] : []);
+  const namedOnly = reading.events.flatMap(event => event.calendarId ? [] : [calendarName({ ...event, sourceId: reading.id })]);
+  return [{ source: reading.id, calendarIds: [...coverage.calendars.map(calendar => calendar.id), ...withIds], names: namedOnly }];
 }
 
 type CalendarEvent = SourceEvent & { area: string | null; sourceId: string; color?: string };
