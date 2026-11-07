@@ -59,9 +59,10 @@ describe("durable conversation tool authorization", () => {
     const config = registry();
     let bound = false;
     const host = await open(config, async request => {
-      if (bound) return "SYNTHETIC_PRIVATE_CONTENT echoed without a tool";
+      if (bound) return "SYNTHETIC_UNTOUCHED_TRANSCRIPT";
       bound = true;
-      return (await request.tools!.call("call", "repo_read", { project: "public" }, request.signal)).text;
+      await request.tools!.call("call", "repo_read", { project: "public" }, request.signal);
+      return "SYNTHETIC_REVOKED_TRANSCRIPT";
     }, { resolvers: { "studio-thread": () => Promise.resolve({ state: "available", policy: "cloud", title: "Thread" }) } });
     const revoked = await host.create({ title: "Synthetic", links: [{ owner: "studio-thread", id: "thread-a" }], origin: { kind: "web" }, policy: "cloud" }, "synthetic-principal");
     const untouched = await create(host, "cloud");
@@ -69,6 +70,8 @@ describe("durable conversation tool authorization", () => {
     await host.waitForIdle(revoked.id);
     await host.submit(untouched.id, input("two"));
     await host.waitForIdle(untouched.id);
+    const search = async (q: string) => (await host.overview({ state: "current", q, limit: 25 })).rows.map(found => found.conversation.id);
+    expect(await search("SYNTHETIC_REVOKED_TRANSCRIPT")).toEqual([revoked.id]);
     config.projects.splice(0, 1);
 
     const listed = await host.list();
@@ -78,10 +81,10 @@ describe("durable conversation tool authorization", () => {
     expect(rows.map(row => row.conversation.id).sort()).toEqual([revoked.id, untouched.id].sort());
     const row = rows.find(candidate => candidate.conversation.id === revoked.id);
     expect(row).toMatchObject({ conversation: { policy: "local" }, latest: null, match: null, linked: [] });
-    expect(JSON.stringify(rows)).toContain("SYNTHETIC_PRIVATE_CONTENT");
-    expect(JSON.stringify(row)).not.toContain("SYNTHETIC_PRIVATE_CONTENT");
-    expect((await host.overview({ state: "current", q: "SYNTHETIC_PRIVATE_CONTENT", limit: 25 })).rows.map(found => found.conversation.id)).not.toContain(revoked.id);
-    expect((await host.overview({ state: "current", q: "Synthetic", limit: 25 })).rows.map(found => found.conversation.id)).toContain(revoked.id);
+    expect(JSON.stringify(rows)).toContain("SYNTHETIC_UNTOUCHED_TRANSCRIPT");
+    expect(JSON.stringify(rows)).not.toContain("SYNTHETIC_REVOKED_TRANSCRIPT");
+    expect(await search("SYNTHETIC_REVOKED_TRANSCRIPT")).toEqual([]);
+    expect(await search("Synthetic")).toContain(revoked.id);
     await expect(host.submit(revoked.id, input("two"))).rejects.toThrow("revoked or changed");
     await expect(host.detail(revoked.id)).rejects.toThrow("revoked or changed");
   });
