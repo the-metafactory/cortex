@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { StudioEvidenceInput } from "../../../../conversations/tools/studio-evidence";
+import type { StudioEvidenceInput, StudioEvidenceAccess } from "../../../../conversations/tools/studio-evidence";
 import type { DeskOptions } from "../compose";
 import { RoutineSchema, reflexCommand, type RoutineRunner } from "../routine-command";
 import { readBoundedGit } from "./committed-batch";
@@ -30,9 +30,10 @@ async function schedule(desk: DeskOptions, run?: RoutineRunner): Promise<object>
   }
 }
 
-export async function readStudioEvidence(desk: DeskOptions, input: StudioEvidenceInput, thread?: StudioThreadView, runners: { ranger?: RangerRunner; routine?: RoutineRunner } = {}): Promise<object> {
+export async function readStudioEvidence(desk: DeskOptions, input: StudioEvidenceInput, thread?: StudioThreadView, options: { ranger?: RangerRunner; routine?: RoutineRunner; access?: StudioEvidenceAccess } = {}): Promise<object> {
   if (!desk.studio) return unavailable("Studio is not configured");
   const dir = desk.studio.dir;
+  const access = options.access ?? { local: false };
   const base = { observedAt: new Date().toISOString(), interpretation: "Evidence only. Later activity does not establish usefulness or causation." };
   try {
     if (input.scope === "overseer") {
@@ -40,9 +41,10 @@ export async function readStudioEvidence(desk: DeskOptions, input: StudioEvidenc
       const selected = page(ids.reverse(), input);
       const runs = await Promise.all(selected.items.map(async id => {
         const run = await readOverseerRun(dir, id);
-        return { id: run.id, startedAt: run.startedAt, endedAt: run.endedAt, status: run.status, failure: run.failure, thinkingCompleted: null, runtimeSchedule: run.schedule ? { ...run.schedule, observedAt: run.startedAt, currentEnabled: null, nextRun: null } : null, staleDays: run.staleDays ?? null, url: "?desk=studio", meaning: "Scan status records scheduling, not completed thinking", selections: { run: run.id, scope: "selections" } };
+        const restricted = Boolean(run.failure && !access.local);
+        return { id: run.id, startedAt: run.startedAt, endedAt: run.endedAt, status: run.status, failure: restricted ? "Scan failed; raw failure details require local web access" : run.failure, failureRestricted: restricted, thinkingCompleted: null, runtimeSchedule: run.schedule ? { ...run.schedule, observedAt: run.startedAt, currentEnabled: null, nextRun: null } : null, staleDays: run.staleDays ?? null, url: "?desk=studio", meaning: "Scan status records scheduling, not completed thinking", selections: { run: run.id, scope: "selections" } };
       }));
-      return { ...base, status: ids.length ? "ok" : "empty", schedule: await schedule(desk, runners.routine), runs, runEvidence: ids.length ? "recorded" : "unavailable", next: selected.next, coverage: "Only instrumented scans are recorded. A running scan with no end may have stopped. Older scans and external process liveness are unavailable." };
+      return { ...base, policy: access.local ? "local" : "cloud", view: access.local ? "full" : "status-metadata", status: ids.length ? "ok" : "empty", schedule: await schedule(desk, options.routine), runs, runEvidence: ids.length ? "recorded" : "unavailable", next: selected.next, coverage: "Only instrumented scans are recorded. A running scan with no end may have stopped. Older scans and external process liveness are unavailable." };
     }
     if (input.scope === "selections") {
       if (!input.run) return unavailable("A recorded overseer run ID is required");
@@ -52,7 +54,7 @@ export async function readStudioEvidence(desk: DeskOptions, input: StudioEvidenc
     }
     if (!thread) return unavailable("The thread could not be read");
     const url = threadUrl(thread.slug);
-    const thinking = input.scope === "history" ? { kind: "unavailable" as const, reason: "Queue evidence is not needed for history" } : await readThinking(dir, desk.rangerCli, runners.ranger);
+    const thinking = input.scope === "history" ? { kind: "unavailable" as const, reason: "Queue evidence is not needed for history" } : await readThinking(dir, desk.rangerCli, options.ranger);
     const jobs = thinking.kind === "ready" ? thinking.runs.filter(job => job.params.thread === thread.slug) : [];
     const audit = input.run ? await readOverseerRun(dir, input.run) : null;
     const receipts = new Set(audit?.selections.filter(row => row.thread === thread.slug).flatMap(row => row.jobUuid ? [row.jobUuid] : []));
