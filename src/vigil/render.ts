@@ -4,12 +4,12 @@ import { subjectClass } from "./policy";
 
 export interface VigilRendererOptions {
   resolveGoalWording?: GoalWordingResolver;
-  warn?: (message: string) => void;
+  warn?: (warning: string) => void;
 }
 
 export function createVigilRenderer(options: VigilRendererOptions = {}) {
   const resolve = options.resolveGoalWording ?? idOnlyGoalWording;
-  const warn = options.warn ?? ((message: string) => { process.stderr.write(`${message}\n`); });
+  const warn = options.warn ?? ((warning: string) => { process.stderr.write(`${warning}\n`); });
   let warned = false;
 
   async function goalWording(goalId: string, stack: string): Promise<string> {
