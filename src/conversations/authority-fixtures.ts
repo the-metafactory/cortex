@@ -1,3 +1,5 @@
+import { syntheticWriterPlan, syntheticWriterSteps } from "./domain-adapters/operations/writer-fixtures";
+import { writerLease } from "./domain-adapters/operations/writer-authority";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -32,7 +34,7 @@ export async function authorityRig(extra: Partial<HostOptions> = {}, conversatio
     policy: async () => { await hooks.policy?.(); return structuredClone(policy); },
     writer: async checked => hooks.writer ? hooks.writer() : canonicalWire(checked) === canonicalWire(lease),
     restrictions: new Map([["synthetic-restriction-resolver", record => hooks.restriction ? hooks.restriction(record) : Promise.resolve(record)]]),
-    connectors: new Map([[connection.connectorId, { authorizeConnection: current => Promise.resolve({ version: 1, available: hooks.credentialsAvailable !== false && current.credentialHandle === "synthetic-credential-handle" && canonicalWire(current.accountScope) === canonicalWire({ account: "synthetic-account", resource: "area-example" }), revision: "synthetic-credential-1" }), support: { ...support, cancellation: "best-effort", operationLookup: "historical" },
+    connectors: new Map([[connection.connectorId, { writerOwner: "synthetic-owner", authorizeConnection: current => Promise.resolve({ version: 1, available: hooks.credentialsAvailable !== false && current.credentialHandle === "synthetic-credential-handle" && canonicalWire(current.accountScope) === canonicalWire({ account: "synthetic-account", resource: "area-example" }), revision: "synthetic-credential-1" }), support: { ...support, cancellation: "best-effort", operationLookup: "historical" },
       dispatch: async (request, signal) => { calls.dispatch++; calls.signals.push(signal); return hooks.dispatch ? hooks.dispatch(request) : resultFixture({ ...approval, authority: request.authority }, requireValue(attempt), "succeeded"); },
       cancel: (_request, signal) => { calls.cancel++; calls.signals.push(signal); return Promise.resolve(resultFixture(approval, requireValue(attempt), "succeeded")); },
       lookup: async () => { calls.lookup++; return hooks.lookup ? hooks.lookup() : { lifecycleVersion: "1.0.0", operationId: approval.operationId, checkedAt: AT, result: { kind: "unknown", reason: { code: "synthetic_unknown", message: "No historical evidence." } } }; },
@@ -53,6 +55,9 @@ export async function authorityRig(extra: Partial<HostOptions> = {}, conversatio
   approval.snapshot.digest = snapshotDigest(approval.snapshot);
   const sink: ReleaseSink = { kind: "web", conversationId };
   for (const item of [sink, { kind: "discord" as const, conversationId }, { kind: "model" as const, conversationId, route: "cloud" }]) sinks.set(canonicalWire(item), async value => { calls.sends.push(value); await hooks.sink?.(); });
+  const writerPlan = syntheticWriterPlan({ stack: principal.stack, owner: "synthetic-owner", adapterId: approval.snapshot.adapterId, connectionId: approval.snapshot.connectionId, capabilityId: approval.snapshot.capabilityId });
+  const writer = await host.lifecycleWriters().begin(writerPlan, 0);
+  Object.assign(lease, writerLease(await host.lifecycleWriters().resume(writer.bindingKey, syntheticWriterSteps())));
   let service = host.lifecycleAuthority(registry, bindings);
   await service.publishHostRecord({ kind: "principal", value: principal }, 0);
   await service.publishHostRecord({ kind: "connection", value: connection }, 0);

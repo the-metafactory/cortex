@@ -1,3 +1,4 @@
+import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
 import { AuthorityPublication } from "./authority-publication";
 import { authorityHash } from "./authority-records";
 import { createHash, randomUUID } from "node:crypto";
@@ -204,12 +205,14 @@ export class ConversationHost {
     return new OperationJournalStore(this.engine, registry, this.context);
   }
 
+  lifecycleWriters(): WriterAuthority { return new WriterAuthority(this.engine, this.authorityPublication, this.context); }
+
   lifecycleAuthority(registry: DomainAdapterRegistry, bindings: AuthorityBindings): AuthorityMediator {
     if (this.authorityService) {
       if (this.authorityService.registry !== registry || this.authorityService.bindings !== bindings) throw new Error("Authority bindings are already registered for this host.");
       return this.authorityService.mediator;
     }
-    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision());
+    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters());
     this.authorityService = { registry, bindings, mediator };
     return mediator;
   }
@@ -320,7 +323,21 @@ export class ConversationHost {
     return run;
   }
 
-  get writers(): OwnerWriters { return this.sources.writers ?? {}; }
+  get writers(): OwnerWriters {
+    const writers: OwnerWriters = {};
+    for (const owner of OWNER_TYPES) {
+      const writer = this.sources.writers?.[owner];
+      if (!writer) continue;
+      writers[owner] = { readback: writer.readback.bind(writer), ...(writer.suggest ? { suggest: writer.suggest.bind(writer) } : {}), create: async request => {
+        const entered = await this.authorityPublication.run(async () => {
+          if (!await this.lifecycleWriters().legacyOwnerAllowed(this.options.stack, owner)) return { denied: true as const };
+          return { pending: writer.create(request) };
+        });
+        return "denied" in entered ? { state: "failed", error: "Legacy owner mutation is disabled by the durable writer fence. Resume the explicit verified cutover." } : entered.pending;
+      } };
+    }
+    return writers;
+  }
 
   get withheld(): WithheldReasons { return this.sources.withheld ?? {}; }
 
