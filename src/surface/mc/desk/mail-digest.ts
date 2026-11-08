@@ -1,11 +1,11 @@
 import type { Database } from "bun:sqlite";
-import { chatJson, readApiKey, readClassifications, type EndpointAccess, type KeyReader, type MailClassification } from "./classify";
+import { modelJson, modelIdentity, modelPaths, classifierLabel, readApiKey, readClassifications, type ModelConfig, type KeyReader, type MailClassification } from "./classify";
 import { isDmarcReportMail } from "./mail-dmarc";
 import type { DigestConfig, DigestModel } from "./mail-digest-schema";
 import { logMailDecision, mailFeatures } from "./mail-log";
 import { movedTarget, refuse } from "./mail-move";
 import { digestedIds } from "./mail-rules";
-import { accessPaths, textHash } from "./mail-similar";
+import { textHash } from "./mail-similar";
 import { SingleFlight } from "./single-flight";
 import { suspicionContext, suspicionOf, type SuspicionContext } from "./mail-suspicion";
 import { byAge, commonArea, listSweeps, plural, senderOf, sweepContext, sweepView, SWEEP_LIMITS, type MailSweepView, type SweepGroup, type SweepMember, type SweepOptions } from "./mail-sweep";
@@ -13,6 +13,7 @@ import type { ListedMail } from "./mail-actions";
 import type { SourceMail, SourceReading } from "./sources/command";
 import { DAY_MS, localDay } from "./time";
 import { isVip } from "./vips";
+import { combined, LOCAL_CONTENT, contentFrom, NOT_LOCAL_CONTENT, type LocalSources, type PromptContent } from "./source-boundary";
 import { snoozedIds, withoutSnoozed } from "./mail-snooze";
 
 export { DIGEST_SQL, type DigestConfig, type DigestModel } from "./mail-digest-schema";
@@ -172,14 +173,17 @@ export function listDigests(db: Database, readings: readonly SourceReading[], ct
 }
 
 interface TopicOutline {
+  id?: string;
   title: string;
   done?: boolean;
   focusMonth?: string;
   children: TopicOutline[];
 }
 
-const focusProjects = (node: TopicOutline, month: string): string[] =>
-  [...(node.focusMonth === month && !node.done ? [node.title] : []), ...node.children.flatMap((c) => focusProjects(c, month))];
+const focusProjects = (node: TopicOutline, month: string, cloudAreas: ReadonlySet<string>, local = true): { name: string; local: boolean }[] => {
+  const scoped = node.id?.startsWith("area:") ? !cloudAreas.has(node.id.slice(5)) : local;
+  return [...(node.focusMonth === month && !node.done ? [{ name: node.title, local: scoped }] : []), ...node.children.flatMap((child) => focusProjects(child, month, cloudAreas, scoped))];
+};
 
 const topicName = (text: string): string => {
   const line = text.replace(/\s+/g, " ").trim();
@@ -198,14 +202,15 @@ function readOutline(balance: () => { outline: TopicOutline } | null): TopicOutl
 export function digestTopics(
   studio: { active: readonly { question: string; policy: string }[] } | null,
   balance: () => { outline: TopicOutline } | null,
-  goals: readonly { text: string }[],
+  goals: readonly { text: string; local?: boolean }[],
   now: number,
+  cloudAreas: ReadonlySet<string> = new Set(),
 ): DigestTopic[] {
   const outline = readOutline(balance);
   const topics: DigestTopic[] = [
-    ...(studio?.active ?? []).map((t): DigestTopic => ({ kind: "thread", name: topicName(t.question), local: t.policy === "local" })),
-    ...(outline ? focusProjects(outline, localDay(now).slice(0, 7)) : []).map((title): DigestTopic => ({ kind: "focus", name: topicName(title), local: false })),
-    ...goals.map((g): DigestTopic => ({ kind: "goal", name: topicName(g.text), local: false })),
+    ...(studio?.active ?? []).map((t): DigestTopic => ({ kind: "thread", name: topicName(t.question), local: t.policy !== "cloud" })),
+    ...(outline ? focusProjects(outline, localDay(now).slice(0, 7), cloudAreas) : []).map((project): DigestTopic => ({ kind: "focus", name: topicName(project.name), local: project.local })),
+    ...goals.map((g): DigestTopic => ({ kind: "goal", name: topicName(g.text), local: g.local !== false })),
   ];
   return topics.filter((t, i) => t.name.length > 0 && topics.findIndex((x) => x.name.toLowerCase() === t.name.toLowerCase()) === i);
 }
@@ -279,13 +284,13 @@ export function readDigestFlags(db: Database, digestIds: readonly string[]): Map
   return new Map(rows.map((r) => [r.digest_id, { stamp: r.stamp, flags: JSON.parse(r.flags) as DigestFlag[], ...(r.skipped ? { skipped: r.skipped } : {}) }]));
 }
 
-export type FlagRunner = (access: EndpointAccess, request: FlagRequest) => Promise<unknown>;
+export type FlagRunner = (access: ModelConfig, request: FlagRequest, content: PromptContent) => Promise<unknown>;
 
-export const chatFlagRunner = (fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): FlagRunner => (access, request) =>
-  chatJson(access, fetchImpl, readKey, "digest model", 400)([{ role: "system", content: DIGEST_PROMPT }, { role: "user", content: JSON.stringify(request) }], access.timeoutSeconds * 1000);
+export const chatFlagRunner = (fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): FlagRunner => (access, request, content) =>
+  modelJson(access, fetchImpl, readKey, "digest model", 400)([{ role: "system", content: DIGEST_PROMPT }, { role: "user", content: JSON.stringify(request) }], access.timeoutSeconds * 1000, content);
 
 export interface FlagPlan {
-  access: EndpointAccess;
+  access: ModelConfig;
   members: SweepMember[];
   topics: DigestTopic[];
 }
@@ -295,7 +300,7 @@ export interface FlagPlan {
  * items and topics; without a local model, that area's mail and local topics are left out and the rest goes to the
  * main model.
  */
-export function flagPlan(model: DigestModel, group: SweepGroup, topics: readonly DigestTopic[], localSources: ReadonlySet<string>): FlagPlan | FlagSkip {
+export function flagPlan(model: DigestModel, group: SweepGroup, topics: readonly DigestTopic[], localSources: LocalSources): FlagPlan | FlagSkip {
   const isLocal = (m: SweepMember): boolean => localSources.has(m.sourceId);
   const anyLocal = group.members.some(isLocal) || topics.some((t) => t.local);
   const { local, ...main } = model;
@@ -310,7 +315,7 @@ export function flagPlan(model: DigestModel, group: SweepGroup, topics: readonly
 }
 
 export const flagStamp = (plan: FlagPlan | FlagSkip): string =>
-  typeof plan === "object" ? textHash(JSON.stringify([plan.access.baseUrl, plan.access.model, plan.members.map((m) => m.id), plan.topics.map((t) => [t.kind, t.name])])) : plan;
+  typeof plan === "object" ? textHash(JSON.stringify([modelIdentity(plan.access), plan.members.map((m) => m.id), plan.topics.map((t) => [t.kind, t.name])])) : plan;
 
 const RETRY_MS = 5 * 60_000;
 
@@ -325,11 +330,11 @@ export class DigestFlagger {
     private readonly log: (message: string) => void = console.error,
   ) {}
 
-  kick(db: Database, groups: readonly SweepGroup[], topics: readonly DigestTopic[], localSources: ReadonlySet<string>, now: number): Promise<void> {
+  kick(db: Database, groups: readonly SweepGroup[], topics: readonly DigestTopic[], localSources: LocalSources, now: number): Promise<void> {
     return this.flight.run(() => this.pass(db, groups, topics, localSources, now), (message) => { this.log(`desk: digest flags: ${message}`); });
   }
 
-  private async pass(db: Database, groups: readonly SweepGroup[], topics: readonly DigestTopic[], localSources: ReadonlySet<string>, now: number): Promise<void> {
+  private async pass(db: Database, groups: readonly SweepGroup[], topics: readonly DigestTopic[], localSources: LocalSources, now: number): Promise<void> {
     const known = readDigestFlags(db, groups.map((g) => g.id));
     for (const group of groups) {
       const plan = flagPlan(this.model, group, topics, localSources);
@@ -342,7 +347,8 @@ export class DigestFlagger {
             topics: plan.topics.map(({ kind, name }) => ({ kind, name })),
             items: plan.members.map((m, i) => ({ item: i + 1, from: senderOf(m), subject: m.subject, text: (m.firstParagraph ?? "").slice(0, 600) })),
           };
-          flags = readFlags(await this.run(plan.access, request), plan.members, plan.topics);
+          const content = combined(contentFrom(localSources, plan.members.map((m) => m.sourceId)), plan.topics.some((t) => t.local) ? LOCAL_CONTENT : NOT_LOCAL_CONTENT);
+          flags = readFlags(await this.run(plan.access, request, content), plan.members, plan.topics);
         } catch (err) {
           this.retryAt.set(`${group.id}:${stamp}`, now + RETRY_MS);
           this.log(`desk: digest flags: ${err instanceof Error ? err.message : String(err)}`);
@@ -351,7 +357,7 @@ export class DigestFlagger {
       }
       this.retryAt.delete(`${group.id}:${stamp}`);
       db.query("INSERT INTO desk_mail_digest_flags (digest_id, stamp, model, flags, skipped, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(digest_id) DO UPDATE SET stamp = excluded.stamp, model = excluded.model, flags = excluded.flags, skipped = excluded.skipped, created_at = excluded.created_at")
-        .run(group.id, stamp, typeof plan === "object" ? plan.access.model : "", JSON.stringify(flags), typeof plan === "object" ? null : plan, now);
+        .run(group.id, stamp, typeof plan === "object" ? classifierLabel(plan.access) : "", JSON.stringify(flags), typeof plan === "object" ? null : plan, now);
     }
     for (const [key, at] of this.retryAt) if (at <= now) this.retryAt.delete(key);
     db.query("DELETE FROM desk_mail_digest_flags WHERE created_at < ?").run(now - DIGEST_LIMITS.keptDays * DAY_MS);
@@ -359,8 +365,5 @@ export class DigestFlagger {
 }
 
 export function resolveDigest(config: DigestConfig, expand: (path: string) => string): DigestConfig {
-  const model = config.model;
-  if (!model) return config;
-  const { local, ...main } = model;
-  return { ...config, model: { ...accessPaths(main, expand), ...(local ? { local: accessPaths(local, expand) } : {}) } };
+  return { ...config, ...(config.model ? { model: modelPaths(config.model, expand) } : {}) };
 }

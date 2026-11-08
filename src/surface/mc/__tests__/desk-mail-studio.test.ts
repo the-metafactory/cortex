@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
-import { readFileSync, readdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { gitIn, seedStudioRepo } from "./__fixtures__/studio-git";
 import { initDatabase } from "../db/init";
@@ -11,11 +11,11 @@ import { readDone } from "../desk/autonomy";
 import { saveClassification } from "../desk/classify";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
 import { queryMailLog } from "../desk/mail-log";
-import { mailLine } from "../desk/mail-studio";
+import { WORK_MAIL_NO_THREAD, mailLine } from "../desk/mail-studio";
 import type { CaptureModel, CaptureRequest } from "../desk/studio/capture";
 import { parseThreadFile } from "../desk/studio/format";
 import { SourceCache, type SourceMail } from "../desk/sources/command";
-import type { EndpointConfig } from "../desk/classify";
+import type { ClassifierConfig } from "../desk/classify";
 
 const NOW = Date.parse("2026-11-02T09:00:00.000Z");
 const CLOUD = { baseUrl: "https://filer.example.org/v1", model: "cloud-filer", timeoutSeconds: 5, maxPerPass: 10 };
@@ -31,7 +31,7 @@ const mail = (id: string, over: Partial<SourceMail> = {}): SourceMail => ({
 let dir: string;
 let db: Database;
 let runtime: DeskRuntime;
-let calls: { config: EndpointConfig; request: CaptureRequest }[];
+let calls: { config: ClassifierConfig; request: CaptureRequest }[];
 let answer: unknown;
 const model: CaptureModel = async (config, request) => { calls.push({ config, request }); return answer; };
 const post = (body: unknown): Request => new Request("http://localhost/api/desk/mail", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -72,7 +72,7 @@ describe("Add a mail to a Studio thread", () => {
     const { status, json } = await act({ action: "studio.propose", key: "mail:w1" });
     expect(status).toBe(200);
     expect(json.proposal).toEqual({ thread: "engines", reason: "It is about what engines make.", threads: [{ slug: "engines", question: "What can engines make?" }, { slug: "home", question: "How do we live at home?" }], canIncludeText: true });
-    expect(calls[0]?.config.model).toBe("local-filer");
+    expect(calls[0]?.config).toMatchObject({ model: "local-filer" });
     expect(calls[0]?.request.capture).toContain("Ada describes a weaving engine.");
     expect(calls[0]?.request.capture).not.toContain("Second line of the body");
     expect(readdirSync(dir)).not.toContain("inbox");
@@ -84,11 +84,30 @@ describe("Add a mail to a Studio thread", () => {
     expect(json.proposal).toMatchObject({ thread: null, reason: "Only loosely related." });
   });
 
-  it("lets a mail from a local-policy area go to any active thread", async () => {
+  it("does not send local or unknown mail to a cloud filer even with only cloud threads", async () => {
+    const desk = runtime.options;
+    if (!desk?.studio?.filer) throw new Error("no Studio fixture");
+    writeFileSync(join(dir, "threads/home.md"), readThread("home").replace("areas: [private]", "areas: [lab]"));
+    desk.studio.filer.local = undefined;
+    const result = await act({ action: "studio.propose", key: "mail:h1" });
+    expect(result.status).toBe(200);
+    expect(calls).toHaveLength(0);
+    expect(result.json.proposal).toMatchObject({ thread: null });
+  });
+
+  it("keeps a mail from a local-policy area to local threads, and out of cloud threads and the inbox", async () => {
+    const before = git("rev-parse", "HEAD");
     const { json } = await act({ action: "studio.propose", key: "mail:h1" });
-    expect((json.proposal as { threads: { slug: string }[] }).threads.map((t) => t.slug)).toEqual(["engines", "home"]);
-    expect((await act({ action: "studio.add", key: "mail:h1", requestId: "req-local-1", thread: "engines", includeText: false })).status).toBe(200);
-    expect(readThread("engines")).toContain("Mail from nan@example.org");
+    expect((json.proposal as { threads: { slug: string }[] }).threads.map((t) => t.slug)).toEqual(["home"]);
+    for (const thread of ["engines", null]) {
+      const refused = await act({ action: "studio.add", key: "mail:h1", requestId: `req-local-${thread}`, thread, includeText: false });
+      expect(refused.status).toBe(409);
+      expect(String(refused.json.error)).toBe(WORK_MAIL_NO_THREAD);
+    }
+    expect(git("rev-parse", "HEAD")).toBe(before);
+    expect(readThread("engines")).not.toContain("Mail from nan@example.org");
+    expect((await act({ action: "studio.add", key: "mail:h1", requestId: "req-local-home", thread: "home", includeText: false })).status).toBe(200);
+    expect(readThread("home")).toContain("Mail from nan@example.org");
   });
 
   it("files the summary, sender, date and link in the proposed thread, without the body, and logs it", async () => {

@@ -163,7 +163,7 @@ export type OperationRecord = z.infer<typeof OperationRecordSchema>;
 
 export type SourceState =
   | { state: "available"; policy: Policy; title: string; context?: string; url?: string }
-  | { state: "unavailable"; reason: "gone" | "unauthorized" };
+  | { state: "unavailable"; reason: "gone" | "unauthorized" | "unreadable" };
 export type SourceView = { ref: ObjectRef } & SourceState;
 export type LinkResolver = (ref: ObjectRef) => Promise<SourceState>;
 export type LinkResolvers = Partial<Record<OwnerType, LinkResolver>>;

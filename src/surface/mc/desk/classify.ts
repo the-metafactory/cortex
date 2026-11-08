@@ -3,7 +3,8 @@ import { basename } from "node:path";
 import { z } from "zod";
 import { CLASSIFIER_FORM_ERROR } from "../../../common/types/config";
 import { oneLine } from "./actions";
-import { CommandTimeout, runCommand, type CommandResult } from "./spawn";
+import { assertRoute, contentFrom, NOTHING_LEAVES, routeOf, type LocalSources, type PromptContent } from "./source-boundary";
+import { CommandTimeout, runModelCommand, type CommandResult } from "./spawn";
 import type { SourceEvent, SourceMail } from "./sources/command";
 import type { DeskCorrection, DeskMailClassifier } from "./types";
 import { DAY_MS } from "./time";
@@ -59,6 +60,8 @@ export interface MailClassification {
 }
 
 interface ModelAccess {
+  commandFormat?: "prompt" | "messages";
+  sourcePolicy?: "cloud" | "local";
   apiKeyEnv?: string;
   apiKeyFile?: string;
   timeoutSeconds: number;
@@ -92,7 +95,9 @@ export interface ModelConfigInput extends ModelAccess {
   caFile?: string;
 }
 
-export type ClassifierConfigInput = ModelConfigInput & { maxPerPass: number };
+export type ClassifierConfigInput = ModelConfigInput & { maxPerPass: number; sourcePolicy?: "local" | "cloud" };
+
+export type ModelCall = (messages: { role: "system" | "user"; content: string }[], timeoutMs: number, promptContent: PromptContent) => Promise<unknown>;
 
 export function toModelConfig(input: ModelConfigInput, formError: string): ModelConfig {
   const { baseUrl, model, command, caFile, ...common } = input;
@@ -106,7 +111,7 @@ export function toClassifierConfig(input: ClassifierConfigInput): ClassifierConf
   return { ...toModelConfig(model, CLASSIFIER_FORM_ERROR), maxPerPass };
 }
 
-export const isCommand = (config: ModelConfig): config is CommandAccess => "command" in config;
+export const isCommand = (config: ModelConfig): config is CommandAccess => "command" in config && Array.isArray(config.command);
 
 export interface ClassifierCorrection {
   kind: DeskCorrection["kind"];
@@ -126,9 +131,19 @@ export interface ClassifierExample {
   weight: number;
 }
 
+export interface ClassifierNote {
+  sourcePolicy: "cloud";
+  areas: string[];
+  id: string;
+  name: string;
+  text: string;
+}
+
 export interface ClassifierRequest {
-  mail: { id: string; from: SourceMail["from"]; subject: string; firstParagraph: string; receivedAt: string; account?: string };
-  meetings: { key: string; title: string; start: string }[];
+  sourcePolicy?: "local" | "cloud";
+  notes?: ClassifierNote[];
+  mail: { id: string; sourceId?: string; from: SourceMail["from"]; subject: string; firstParagraph: string; receivedAt: string; account?: string };
+  meetings: { key: string; title: string; start: string; sourceId?: string; sourcePolicy?: "cloud" | "local" }[];
   vips: string[];
   unimportant: string[];
   corrections: ClassifierCorrection[];
@@ -136,7 +151,7 @@ export interface ClassifierRequest {
   examplesBasis: SimilarityBasis;
 }
 
-export type ClassifierRunner = (request: ClassifierRequest, timeoutMs: number) => Promise<unknown>;
+export type ClassifierRunner = (request: ClassifierRequest, timeoutMs: number, promptContent: PromptContent) => Promise<unknown>;
 
 export type ClassifierEvent = SourceEvent & { sourceId: string };
 export type ClassifierMail = SourceMail & { sourceId: string };
@@ -317,10 +332,11 @@ async function readCa(path: string, label: string): Promise<string> {
   }
 }
 
-export function chatJson(config: EndpointAccess, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey, label = "classifier", maxTokens = 600): (messages: { role: "system" | "user"; content: string }[], timeoutMs: number) => Promise<unknown> {
+export function chatJson(config: EndpointAccess, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey, label = "classifier", maxTokens = 600): ModelCall {
   const url = `${config.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const wantsKey = needsKey(config);
-  return async (messages, timeoutMs) => {
+  return async (messages, timeoutMs, promptContent) => {
+    assertRoute(routeOf(config), promptContent, label);
     const key = await readKey(config);
     if (wantsKey && !key) throw new MissingKey(`the ${label} key was not found`);
     const ca = config.caFile ? await readCa(config.caFile, label) : null;
@@ -339,17 +355,32 @@ export function chatJson(config: EndpointAccess, fetchImpl: typeof fetch = fetch
   };
 }
 
+export function modelJson(config: ModelConfig, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey, label = "model", maxTokens = 600, run: CommandRunner = runModelCommand): ModelCall {
+  if (!isCommand(config)) return chatJson(config, fetchImpl, readKey, label, maxTokens);
+  const command = commandJson(config, run, readKey, label);
+  return (messages, timeoutMs, promptContent) => command(JSON.stringify({ sourcePolicy: routeOf(config), messages }), timeoutMs, promptContent);
+}
+
+export function modelIdentity(config: ModelConfig): string {
+  return isCommand(config) ? JSON.stringify(config.command) : JSON.stringify([config.baseUrl, config.model]);
+}
+
+export function modelPaths<T extends ModelConfig & { local?: ModelConfig }>(config: T, expand: (path: string) => string): T {
+  return { ...config, ...(config.local ? { local: modelPaths(config.local, expand) } : {}), ...(config.apiKeyFile ? { apiKeyFile: expand(config.apiKeyFile) } : {}), ...(!isCommand(config) && config.caFile ? { caFile: expand(config.caFile) } : {}), ...(isCommand(config) ? { command: config.command.map((arg, index) => index === 0 || arg.startsWith("~/") ? expand(arg) : arg) } : {}) };
+}
+
 export function chatClassifier(config: EndpointConfig, fetchImpl: typeof fetch = fetch, readKey: KeyReader = readApiKey): ClassifierRunner {
   const run = chatJson(config, fetchImpl, readKey);
-  return (request, timeoutMs) => run(buildMessages(request), timeoutMs);
+  return (request, timeoutMs, promptContent) => run(buildMessages(request), timeoutMs, promptContent);
 }
 
 export type CommandRunner = (argv: string[], timeoutMs: number, stdin: string, env?: Record<string, string | undefined>) => Promise<CommandResult>;
 
-export function commandJson(config: CommandAccess, run: CommandRunner = runCommand, readKey: KeyReader = readApiKey, label = "classifier"): (prompt: string, timeoutMs: number) => Promise<unknown> {
+export function commandJson(config: CommandAccess, run: CommandRunner = runModelCommand, readKey: KeyReader = readApiKey, label = "classifier"): (prompt: string, timeoutMs: number, promptContent: PromptContent) => Promise<unknown> {
   const wantsKey = needsKey(config);
   const name = basename(config.command[0] ?? "");
-  return async (prompt, timeoutMs) => {
+  return async (prompt, timeoutMs, promptContent) => {
+    assertRoute(routeOf(config), promptContent, label);
     const key = await readKey(config);
     if (wantsKey && !key) throw new MissingKey(`the ${label} key was not found`);
     let result: CommandResult;
@@ -369,17 +400,17 @@ export function commandJson(config: CommandAccess, run: CommandRunner = runComma
   };
 }
 
-export function commandClassifier(config: CommandConfig, run: CommandRunner = runCommand, readKey: KeyReader = readApiKey): ClassifierRunner {
+export function commandClassifier(config: CommandConfig, run: CommandRunner = runModelCommand, readKey: KeyReader = readApiKey): ClassifierRunner {
   const runJson = commandJson(config, run, readKey);
-  return (request, timeoutMs) => runJson(JSON.stringify(request), timeoutMs);
+  return (request, timeoutMs, promptContent) => runJson(JSON.stringify(request), timeoutMs, promptContent);
 }
 
 export const classifierRunner = (config: ClassifierConfig): ClassifierRunner => (isCommand(config) ? commandClassifier(config) : chatClassifier(config));
 
-export const classifierLabel = (config: ClassifierConfig): string => (isCommand(config) ? basename(config.command[0] ?? "command") : config.model);
+export const classifierLabel = (config: ModelConfig): string => (isCommand(config) ? basename(config.command[0] ?? "command") : config.model);
 
-export function classifierStatus(config: ClassifierConfig, keyFound: boolean): DeskMailClassifier {
-  const key = { keyNeeded: needsKey(config), keyFound };
+export function classifierStatus(config: ClassifierConfig, keyFound: boolean, heldMail = 0, local?: ClassifierConfig, localProblem?: string | null): DeskMailClassifier {
+  const key = { keyNeeded: needsKey(config), keyFound, ...(heldMail ? { heldMail } : {}), ...(local ? { localModel: classifierLabel(local) } : {}), ...(localProblem ? { localProblem } : {}) };
   if (isCommand(config)) return { kind: "command", command: classifierLabel(config), ...key };
   const host = URL.canParse(config.baseUrl) ? new URL(config.baseUrl).host : config.baseUrl;
   return { kind: "endpoint", host, model: config.model, ...key };
@@ -450,6 +481,9 @@ export function saveUnimportant(db: Database, id: string, now: number): void {
 }
 
 export interface ClassifyInput {
+  localSources?: LocalSources;
+  notes?: ClassifierNote[];
+  sourceIds?: ReadonlySet<string>;
   now: number;
   mail: ClassifierMail[];
   events: ClassifierEvent[];
@@ -473,6 +507,7 @@ export class MailClassifier {
   private running: Promise<PassResult> | null = null;
   private keyMissing = false;
   private readonly retryAt = new Map<string, number>();
+  private latestProblem: string | null = null;
 
   constructor(
     private readonly config: ClassifierConfig,
@@ -484,6 +519,10 @@ export class MailClassifier {
 
   get model(): string {
     return classifierLabel(this.config);
+  }
+
+  get problem(): string | null {
+    return this.latestProblem;
   }
 
   kick(db: Database, input: ClassifyInput): Promise<PassResult> {
@@ -525,14 +564,17 @@ export class MailClassifier {
     db.query("DELETE FROM desk_mail_classes WHERE classified_at < ?").run(input.now - KEEP_MS);
     const unimportant = input.unimportant ?? [];
     const corrections = (input.corrections ?? []).slice(0, MAX_CORRECTIONS);
-    const meetings = upcomingMeetings(input.events, input.now, CLASSIFY_WINDOW_MS).map((e) => ({ key: eventKey(e), title: e.title, start: e.start }));
+    const meetings = upcomingMeetings(input.events, input.now, CLASSIFY_WINDOW_MS).map((e) => ({ key: eventKey(e), title: e.title, start: e.start, sourceId: e.sourceId, sourcePolicy: this.config.sourcePolicy ?? "cloud" }));
     const keys = new Set(meetings.map((m) => m.key));
     const pending = this.pending(db, input);
-    const similarity = pending.length > 0 && this.similarity ? this.similarity.load(db, input.now) : undefined;
+    const localSources = input.localSources ?? NOTHING_LEAVES;
+    const similarity = pending.length > 0 && this.similarity ? this.similarity.load(db, input.now, input.sourceIds, localSources) : undefined;
     for (const m of pending) {
       const similar = await this.similarTo(similarity, m);
       const request: ClassifierRequest = {
-        mail: { id: m.id, from: m.from, subject: m.subject, firstParagraph: m.firstParagraph ?? "", receivedAt: m.receivedAt, ...(m.account ? { account: m.account } : {}) },
+        sourcePolicy: this.config.sourcePolicy ?? "cloud",
+        ...(input.notes ? { notes: input.notes } : {}),
+        mail: { id: m.id, sourceId: m.sourceId, from: m.from, subject: m.subject, firstParagraph: m.firstParagraph ?? "", receivedAt: m.receivedAt, ...(m.account ? { account: m.account } : {}) },
         meetings,
         vips: input.vips,
         unimportant,
@@ -544,25 +586,27 @@ export class MailClassifier {
       let answer: MailClassification | null = null;
       let problem = "the classifier sent an answer the Desk does not accept";
       try {
-        answer = validateAnswer(await this.run(request, this.config.timeoutSeconds * 1000), keys, isCommand(this.config));
+        answer = validateAnswer(await this.run(request, this.config.timeoutSeconds * 1000, contentFrom(localSources, [m.sourceId, ...meetings.map((meeting) => meeting.sourceId)])), keys, isCommand(this.config));
       } catch (err) {
         if (err instanceof MissingKey) {
           if (!this.keyMissing) this.log(`desk: mail classifier: ${err.message}`);
           this.keyMissing = true;
+          this.latestProblem = err.message;
           return result;
         }
         problem = err instanceof Error ? err.message : String(err);
       }
       this.keyMissing = false;
       result.ms.push(this.clock() - started);
+      this.latestProblem = answer ? null : problem;
       if (answer) {
         if (similar) answer = { ...answer, precedents: precedentsOf(similar) };
         saveClassification(db, m.id, answer, this.model, input.now);
         if (answer.commitment) this.retryAt.delete(m.id);
-        else this.retryAt.set(m.id, input.now + RETRY_AFTER_MS);
+        else this.retryAt.set(m.id, this.clock() + RETRY_AFTER_MS);
         result.classified += 1;
       } else {
-        this.retryAt.set(m.id, input.now + RETRY_AFTER_MS);
+        this.retryAt.set(m.id, this.clock() + RETRY_AFTER_MS);
         result.failed += 1;
         this.log(`desk: mail classifier: ${problem}`);
       }

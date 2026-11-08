@@ -156,12 +156,12 @@ describe("the similarity module", () => {
     expect(tries).toBe(1);
   });
 
-  it("embeds every area's mail with the configured endpoint, also a remote one", async () => {
+  it("embeds cloud-approved mail with the configured endpoint, also a remote one", async () => {
     const remote: EmbedderConfig = { ...EMBEDDER, baseUrl: "https://embed.example/v1" };
     logMailDecision(db, features("a", { sourceId: "home-mail", subject: "Quarterly zebra census results" }), "archive", "desk", NOW - 1000);
     logMailDecision(db, features("b"), "archive", "desk", NOW - 1000);
     const fake = fakeEmbed();
-    const ctx = new MailSimilarity(remote, fake.embed, quiet).load(db, NOW);
+    const ctx = new MailSimilarity(remote, fake.embed, quiet).load(db, NOW, undefined, { has: () => false });
     expect(await ctx.similar({ ...probe, sourceId: "home-mail" })).toMatchObject({ basis: "content" });
     expect((await ctx.similar(probe)).neighbours.map((n) => n.entry.messageId).sort()).toEqual(["a", "b"]);
     expect(fake.calls.every((call) => call.access.baseUrl === "https://embed.example/v1")).toBe(true);

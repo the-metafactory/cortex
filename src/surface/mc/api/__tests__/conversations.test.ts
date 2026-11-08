@@ -42,6 +42,7 @@ describe("conversation API gates", () => {
     expect((await call(status, "GET", `/api/conversations/${conversation.id}`)).status).toBe(200);
     expect((await call(status, "GET", `/api/conversations/${conversation.id}`, undefined, OTHER)).status).toBe(403);
     expect((await call(status, "GET", `/api/conversations/${conversation.id}/entries`, undefined, OTHER)).status).toBe(403);
+    expect((await call(status, "GET", `/api/conversations/${conversation.id}/entries/1`, undefined, OTHER)).status).toBe(403);
     expect((await call(status, "POST", `/api/conversations/${conversation.id}/inputs`, say("in-1", "x"), OTHER)).status).toBe(403);
     expect((await call(status, "GET", `/api/conversations/${conversation.id}`, undefined, { host: "rebound.example:8767" })).status).toBe(403);
     expect((await call(status, "POST", `/api/conversations/${conversation.id}/inputs`, { inputId: "in-1" })).status).toBe(400);
@@ -56,6 +57,34 @@ describe("conversation API gates", () => {
     expect(unavailable.status).toBe(503);
     expect(await unavailable.json()).toEqual({ ok: false, error: "Conversations unavailable: store held by 42/ai.meta-factory.cortex.default" });
     expect((await call(null, "GET", "/api/conversations")).status).toBe(503);
+  });
+
+  test("an entry citation reads the exact retained record and cannot read an entry from another conversation", async () => {
+    const status = await openConversationHost({ dir: await scratch(), stack: "api", label: LABEL, expectedLabel: LABEL, lanes: { cloud: { provider: "test", model: "m" } }, turns: answering(() => "ok") });
+    statuses.push(status);
+    if (status.state !== "ready") throw new Error("host not ready");
+    const host = status.host;
+    const owner = "local-principal@loopback";
+    const request = { title: "Synthetic entry citation", origin: { kind: "web" as const }, policy: "cloud" as const, links: [] };
+    const conversation = await host.create(request, owner);
+    const other = await host.create(request, owner);
+    const foreign = await host.create(request, "another-principal");
+    await host.record(foreign.id, "foreign", "synthetic.evidence", { text: "Foreign evidence" });
+    const foreignId = await host.latestEntryId(foreign.id);
+    expect((await call(status, "GET", `/api/conversations/${foreign.id}/entries/${foreignId}`)).status).toBe(404);
+    await host.record(conversation.id, "evidence", "synthetic.evidence", { text: "Original evidence", nested: { intact: true } });
+    const id = await host.latestEntryId(conversation.id);
+    const path = `/api/conversations/${conversation.id}/entries/${id}`;
+    const response = await call(status, "GET", path);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true, entry: await host.entry(conversation.id, id!) });
+    expect((await call(status, "GET", `/api/conversations/${other.id}/entries/${id}`)).status).toBe(404);
+    expect((await call(status, "GET", `/api/conversations/${conversation.id}/entries/1.2`)).status).toBe(400);
+    expect((await call(status, "GET", `/api/conversations/${conversation.id}/entries/9007199254740992`)).status).toBe(400);
+    expect((await call(status, "POST", path)).status).toBe(405);
+    expect((await call(status, "GET", path, undefined, { host: "rebound.example:8767" })).status).toBe(403);
+    await host.organize(conversation.id, { state: "archived" });
+    expect((await call(status, "GET", path)).status).toBe(200);
   });
 
   test("a command-bar question starts one conversation, sends the typed text first and Ivy answers; a retry opens the same one", async () => {

@@ -1,6 +1,17 @@
 import { Option, type Command } from "commander";
+import { writeFileSync } from "node:fs";
 import { MyelinAgentProvider, NatsAgentTransport, type AgentTransport, type NatsAgentTransportOptions } from "pulse";
+import { CORTEX_PROCESS_FAILURE_FILE } from "../../../bus/process-env";
 import { executeRoutineFlow, readActionInventory, readRoutineFlow } from "../../../runner/pulse-flow";
+
+function stateFailure(file: string | undefined, line: string): void {
+  if (!file) return;
+  try {
+    writeFileSync(file, line, { mode: 0o600 });
+  } catch (error) {
+    process.stderr.write(`pulse-flow: failure reason unwritten: ${error instanceof Error ? error.message : String(error)}\n`);
+  }
+}
 
 export function registerPulseFlowCommand(program: Command, dependencies: {
   connect?: (options: NatsAgentTransportOptions) => Promise<AgentTransport & { close: () => Promise<void> }>;
@@ -35,7 +46,9 @@ export function registerPulseFlowCommand(program: Command, dependencies: {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        process.stderr.write(`pulse-flow: ${message.replace(/[\r\n]+/g, " ")}\n`);
+        const line = message.replace(/[\r\n]+/g, " ");
+        process.stderr.write(`pulse-flow: ${line}\n`);
+        stateFailure((dependencies.env ?? process.env)[CORTEX_PROCESS_FAILURE_FILE], line);
         process.exitCode = 1;
       }
     });

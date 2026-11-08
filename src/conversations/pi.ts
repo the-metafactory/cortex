@@ -176,7 +176,7 @@ async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: 
 export function piTurns(settings: PiSettings): TurnCall {
   return async (request: TurnRequest): Promise<TurnReply> => {
     await mkdir(settings.sessionDir, { recursive: true });
-    await request.tools?.validate?.();
+    await request.tools?.validate();
     const resumed = !request.tools && request.resume !== null && await sessionExists(settings.sessionDir, request.resume);
     const session = resumed && request.resume ? request.resume : request.session;
     let child: ReturnType<typeof spawnPi> | undefined;
@@ -208,7 +208,7 @@ export function piTurns(settings: PiSettings): TurnCall {
       if (answer.stopReason === "error" || answer.stopReason === "aborted") throw new Error(`pi did not answer: ${answer.errorMessage ?? answer.stopReason}. ${NO_FALLBACK}`);
       const text = textOf(answer.content).trim();
       if (!text) throw new Error(`pi sent an empty answer. ${NO_FALLBACK}`);
-      await request.tools?.validate?.();
+      await request.tools?.validate();
       return { text, session, resumed };
     } finally {
       stopped.abort();

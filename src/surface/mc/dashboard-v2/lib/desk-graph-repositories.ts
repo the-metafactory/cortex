@@ -57,3 +57,14 @@ export async function saveGraphRepository(ref: string, enabled: boolean, fetchIm
   if (typeof sent === "string") return { ok: false, text: sent };
   return sent.res.ok ? { ok: true } : { ok: false, text: refusal(sent.res, sent.body) };
 }
+
+export async function saveGraphRepositories(refs: readonly string[], enabled: boolean, onSaved: (ref: string) => void, fetchImpl: FetchLike = fetch): Promise<GraphRepositoryChange> {
+  const unique = [...new Set(refs)];
+  const failures: string[] = [];
+  for (const ref of unique) {
+    const result = await saveGraphRepository(ref, enabled, fetchImpl);
+    if (result.ok) onSaved(ref);
+    else failures.push(`${ref}: ${result.text}`);
+  }
+  return failures.length ? { ok: false, text: `${failures.length} of ${unique.length} repository changes could not be saved. ${failures.join(" ")}` } : { ok: true };
+}

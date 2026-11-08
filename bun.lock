@@ -16,15 +16,17 @@
         "@xyflow/react": "^12.10.2",
         "ajv": "^8.20.0",
         "ajv-formats": "^3.0.1",
+        "canonicalize": "5.1.0",
         "chokidar": "^5.0.0",
         "commander": "^14.0.3",
         "elkjs": "^0.11.1",
         "hono": "4.12.10",
         "libsodium-wrappers": "^0.8.4",
         "nats": "^2.29.3",
-        "pulse": "https://github.com/the-metafactory/pulse.git#v0.33.0",
+        "pulse": "https://github.com/the-metafactory/pulse.git#v0.34.1",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
+        "semver": "7.8.0",
         "yaml": "^2.8.3",
         "zod": "^4.3.6",
       },
@@ -34,6 +36,7 @@
         "@types/libsodium-wrappers": "^0.8.2",
         "@types/react": "^19.2.14",
         "@types/react-dom": "^19.2.3",
+        "@types/semver": "7.7.1",
         "dts-bundle-generator": "^9",
         "eslint": "^10.3.0",
         "jscpd": "4.0.5",
@@ -251,6 +254,8 @@
 
     "@types/sarif": ["@types/sarif@2.1.7", "", {}, "sha512-kRz0VEkJqWLf1LLVN4pT1cg1Z9wAuvI6L97V3m2f5B76Tg8d413ddvLBPTEHAZJlnn4XSvu0FkZtViCQGVyrXQ=="],
 
+    "@types/semver": ["@types/semver@7.7.1", "", {}, "sha512-FmgJfu+MOcQ370SD0ev7EI8TlCAfKYU+B4m5T3yXc1CiRN94g/SZPtsCkk506aUDtlMnFZvasDwHHUcZUEaYuA=="],
+
     "@typescript-eslint/eslint-plugin": ["@typescript-eslint/eslint-plugin@8.59.3", "", { "dependencies": { "@eslint-community/regexpp": "^4.12.2", "@typescript-eslint/scope-manager": "8.59.3", "@typescript-eslint/type-utils": "8.59.3", "@typescript-eslint/utils": "8.59.3", "@typescript-eslint/visitor-keys": "8.59.3", "ignore": "^7.0.5", "natural-compare": "^1.4.0", "ts-api-utils": "^2.5.0" }, "peerDependencies": { "@typescript-eslint/parser": "^8.59.3", "eslint": "^8.57.0 || ^9.0.0 || ^10.0.0", "typescript": ">=4.8.4 <6.1.0" } }, "sha512-PwFvSKsXGShKGW6n5bZOhGHEcCZXM8HofLK9fNsEwZXzFRjoY+XT1Vsf1zgyXdwTr0ZYz1/2tkZ0DBTT9jZjhw=="],
 
     "@typescript-eslint/parser": ["@typescript-eslint/parser@8.59.3", "", { "dependencies": { "@typescript-eslint/scope-manager": "8.59.3", "@typescript-eslint/types": "8.59.3", "@typescript-eslint/typescript-estree": "8.59.3", "@typescript-eslint/visitor-keys": "8.59.3", "debug": "^4.4.3" }, "peerDependencies": { "eslint": "^8.57.0 || ^9.0.0 || ^10.0.0", "typescript": ">=4.8.4 <6.1.0" } }, "sha512-HPwA+hVkfcriajbNvTmZv4VRauibay+cWArYUYq7u7W7PmGShMxbPxLvrwDme55a6d5alG3nrYfhyJ/G28XlLg=="],
@@ -318,6 +323,8 @@
     "call-bind-apply-helpers": ["call-bind-apply-helpers@1.0.2", "", { "dependencies": { "es-errors": "^1.3.0", "function-bind": "^1.1.2" } }, "sha512-Sp1ablJ0ivDkSzjcaJdxEunN5/XvksFJ2sMBFfq6x0ryhQV/2b/KwFe21cMpmHtPOSij8K99/wSfoEuTObmuMQ=="],
 
     "call-bound": ["call-bound@1.0.4", "", { "dependencies": { "call-bind-apply-helpers": "^1.0.2", "get-intrinsic": "^1.3.0" } }, "sha512-+ys997U96po4Kx/ABpBCqhA9EuxJaQWDQg7295H4hBphv3IZg0boBKuwYpt4YXp6MZ5AmZQnU/tyMTlRpaSejg=="],
+
+    "canonicalize": ["canonicalize@5.1.0", "", { "bin": { "canonicalize": "bin/canonicalize.js" } }, "sha512-bab9+WefZljqQ8jT0qRwVmTyzAUU63K97QIQD3agynIBrb6sa5M2eAy8Hv8K3p4V9+ONVYZKtGYl4Dg+/5Gumw=="],
 
     "character-parser": ["character-parser@2.2.0", "", { "dependencies": { "is-regex": "^1.0.3" } }, "sha512-+UqJQjFEFaTAs3bNsF2j2kEN1baG/zghZbdqoYEDxGZtJo9LBzl1A+m0D4n3qKx8N2FNv8/Xp6yV9mQmBuptaw=="],
 
@@ -641,7 +648,7 @@
 
     "pug-walk": ["pug-walk@2.0.0", "", {}, "sha512-yYELe9Q5q9IQhuvqsZNwA5hfPkMJ8u92bQLIMcsMxf/VADjNtEYptU+inlufAFYcWdHlwNfZOEnOOQrZrcyJCQ=="],
 
-    "pulse": ["pulse@github:the-metafactory/pulse#932ebb1", { "dependencies": { "@the-metafactory/myelin": "https://github.com/the-metafactory/myelin.git#v0.9.0", "commander": "^12.0.0", "nats": "^2.29.3", "yaml": "^2.8.3", "zod": "^3.22.0" }, "bin": { "pulse": "src/cli.ts" } }, "the-metafactory-pulse-932ebb1", "sha512-4apDF6Te9MUeFFV0g/3rlVq4tcMuYu7QdKtRGkChdvO1nkIW+uEp1RAAhs6s4dxtwrCdQmAyMgaI8ibBbqBqUw=="],
+    "pulse": ["pulse@github:the-metafactory/pulse#ca76fe5", { "dependencies": { "@the-metafactory/myelin": "https://github.com/the-metafactory/myelin.git#v0.9.0", "commander": "^12.0.0", "nats": "^2.29.3", "yaml": "^2.8.3", "zod": "^3.22.0" }, "bin": { "pulse": "src/cli.ts" } }, "the-metafactory-pulse-ca76fe5", "sha512-KzEPu6TXi5RM4vPpg3JYFgVP6paghb47RigumRWkTw0R8EAgKUJGRR/ZMPi6xLcfbUS/A5xQ0oiJC8zuHceddg=="],
 
     "pump": ["pump@3.0.4", "", { "dependencies": { "end-of-stream": "^1.1.0", "once": "^1.3.1" } }, "sha512-VS7sjc6KR7e1ukRFhQSY5LM2uBWAUPiOPa/A3mkKmiMwSmRFUITt0xuj+/lesgnCv+dPIEYlkzrcyXgquIHMcA=="],
 

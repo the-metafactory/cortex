@@ -5,6 +5,7 @@ import { currentGap, type CalendarAvailability, type CalendarGap, type CalendarI
 import { nextTask, projectContext, reorderVisible } from "../../desk/time-first";
 import { balanceDestinations } from "../../desk/balance-destinations";
 import type { DeskArea } from "../../desk/types";
+import { ALL_AREAS } from "../../desk/present";
 import { BalanceAddForm, balanceEntries, TaskDetails, TaskMessageBanner, useBalanceEditor, type TaskAdding } from "./desk-task-details";
 import { useMyDay } from "../hooks/use-my-day";
 import { balanceItemSearch } from "../hooks/use-balance-location";
@@ -23,6 +24,7 @@ interface TimeFirstProps {
   preview: ReactNode;
   ambient: ReactNode;
   areas: DeskArea[];
+  selectedArea?: string;
   onChanged: () => void;
   onThread: (slug: string) => void;
   onConversation?: (id: string) => void;
@@ -55,7 +57,7 @@ export function DeskTimeFirst(props: TimeFirstProps) {
   return <TimeFirstDay {...props} day={props.day} />;
 }
 
-function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, ambient, areas, onChanged, onThread, onConversation }: Omit<TimeFirstProps, "day"> & { day: MyDayView }) {
+function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, ambient, areas, selectedArea = ALL_AREAS, onChanged, onThread, onConversation }: Omit<TimeFirstProps, "day"> & { day: MyDayView }) {
   const changes = useMyDay(day, onChanged);
   const { current, busy, change, retryable } = changes;
   const gap = currentGap(calendar ?? { sources: [], events: [] }, now);
@@ -72,7 +74,10 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, am
   const context = selected ? projectContext(current.outline, selected.task.id) : null;
   const priorities = useRef<HTMLElement>(null);
   const showPriorities: MouseEventHandler<HTMLAnchorElement> = event => { event.preventDefault(); scrollBelowDesk(priorities.current); };
-  const items = draft ? draft.ids.flatMap(id => { const item = current.items.find(value => value.task.id === id); return item ? [item] : []; }) : current.items;
+  const inArea = (item: TodayItem): boolean => selectedArea === ALL_AREAS || item.areaId === `area:${selectedArea}`;
+  const items = (draft ? draft.ids.flatMap(id => { const item = current.items.find(value => value.task.id === id); return item ? [item] : []; }) : current.items).filter(inArea);
+  const alternates = current.alternates.filter(inArea);
+  const areaLabel = areas.find(area => area.id === selectedArea)?.label ?? "this area";
   const choose = (id: string | null) => void change({ op: "select", id, revision: current.revision });
   const move = (id: string, direction: -1 | 1) => { setDraft(value => value ? { ...value, ids: reorderVisible(value.ids, items.map(item => item.task.id), id, direction) } : value); };
   const saveOrder = () => draft ? change({ op: "reorder", revision: draft.revision, ids: draft.ids }, () => { setDraft(null); }) : Promise.resolve(false);
@@ -104,8 +109,8 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, am
           <details><summary>Why this task</summary><p>{selected.trace}</p></details>
           <div className="tf-actions"><TaskActions item={selected} changes={changes} disabled={draft !== null || retryable || editor.busy} />{selection.kind === "manual" && <button type="button" className="desk-btn ghost" disabled={busy || retryable || draft !== null} onClick={() => { choose(null); }}>Use recommendation</button>}<a className="desk-btn ghost" href="#today-priorities" onClick={showPriorities}>Choose another</a></div>
           <TaskMessageBanner message={editor.message} busy={editor.busy || locked} onUndo={receipt => void editor.change({ op: "undo", receipt })} />
-          {entry && <TaskDetails titled={false} locked={locked} id={selected.task.id} entry={entry} day={current} editor={editor} choices={choices} onRefresh={onChanged} onAdd={parent => { setAdding({ parent, title: "", revision: current.revision, date: current.date }); }} onMoved={() => undefined} onThread={onThread} {...(onConversation ? { onConversation } : {})}>
-            {adding && adding.parent === selected.task.id && <BalanceAddForm adding={adding} choices={choices} busy={editor.busy || locked} heading="Add subtask" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) setAdding(null); }); }} />}
+          {entry && <TaskDetails compact titled={false} locked={locked} id={selected.task.id} entry={entry} day={current} editor={editor} choices={choices} onRefresh={onChanged} onAdd={parent => { setAdding({ parent, title: "", revision: current.revision, date: current.date }); }} onMoved={() => undefined} onThread={onThread} {...(onConversation ? { onConversation } : {})}>
+            {adding?.parent === selected.task.id && <BalanceAddForm adding={adding} choices={choices} busy={editor.busy || locked} heading="Add subtask" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) setAdding(null); }); }} />}
           </TaskDetails>}
         </> : <><h2>Choose what works for you</h2><p>{recommendation.kind === "none" ? recommendation.reason : "Your priorities are available alongside the timeline."}</p><a className="desk-btn" href="#today-priorities" onClick={showPriorities}>See today's priorities</a></>}
       </section>}
@@ -117,11 +122,11 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, am
         <header><h2>Today's priorities</h2>{current.phase === "started" && !draft && <button type="button" className="desk-btn ghost" disabled={busy || retryable} onClick={() => { setDraft({ revision: current.revision, ids: [...current.work.confirmedIds] }); }}>Reshuffle</button>}</header>
         <p>{draft ? "Preview order. Confirm to save it." : "Your saved order · Choose freely"}</p>
         {current.studioStatus === "unavailable" && <p role="status">Studio files are busy or unreadable. Showing the last saved outline.</p>}
-        {!items.length && <p>No actionable tasks in this day. Add or reopen one in Balance.</p>}
+        {!items.length && <p>{selectedArea === ALL_AREAS ? "No actionable tasks in this day. Add or reopen one in Balance." : `No priorities in ${areaLabel} today. Choose All to see your other priorities.`}</p>}
         <ol>{items.map((item, index) => <li key={item.task.id}>
           <button type="button" className="tf-choice" aria-pressed={selected?.task.id === item.task.id} disabled={busy || retryable || draft !== null || current.phase === "closed"} onClick={() => { choose(item.task.id); }}><span className="tf-rank">{index + 1}</span><span><strong>{item.task.title}</strong><small>{item.areaTitle} · {item.task.estimateMinutes === undefined ? "Estimate unknown" : `${item.task.estimateMinutes} min`}{selected?.task.id === item.task.id ? " · Selected" : ""}</small></span></button>
           {draft && <div className="tf-order"><button type="button" className="desk-btn ghost" disabled={busy || retryable || index === 0} aria-label={`Move ${item.task.title} up`} onClick={() => { move(item.task.id, -1); }}>↑</button><button type="button" className="desk-btn ghost" disabled={busy || retryable || index === items.length - 1} aria-label={`Move ${item.task.title} down`} onClick={() => { move(item.task.id, 1); }}>↓</button></div>}
-          {current.phase === "proposed" && <><button type="button" className="desk-btn ghost tf-swap" disabled={busy || retryable} onClick={() => { setSwap(swap === item.task.id ? null : item.task.id); }}>Swap</button>{swap === item.task.id && <div className="tf-alternates"><p>Choose an engine alternate</p>{current.alternates.map(alternate => <button key={alternate.task.id} type="button" className="desk-btn" disabled={busy || retryable} onClick={() => void change({ op: "draft", ids: current.items.map(value => value.task.id === item.task.id ? alternate.task.id : value.task.id) }, () => { setSwap(null); })}>{alternate.task.title}</button>)}{!current.alternates.length && <p>No other task is available today.</p>}</div>}</>}
+          {current.phase === "proposed" && <><button type="button" className="desk-btn ghost tf-swap" disabled={busy || retryable} onClick={() => { setSwap(swap === item.task.id ? null : item.task.id); }}>Swap</button>{swap === item.task.id && <div className="tf-alternates"><p>Choose an engine alternate</p>{alternates.map(alternate => <button key={alternate.task.id} type="button" className="desk-btn" disabled={busy || retryable} onClick={() => void change({ op: "draft", ids: current.items.map(value => value.task.id === item.task.id ? alternate.task.id : value.task.id) }, () => { setSwap(null); })}>{alternate.task.title}</button>)}{!alternates.length && <p>{selectedArea === ALL_AREAS ? "No other task is available today." : `No other task is available in ${areaLabel} today.`}</p>}</div>}</>}
         </li>)}</ol>
         {draft && <div className="tf-actions"><button type="button" className="desk-btn pri" disabled={busy || retryable} onClick={() => void saveOrder()}>Confirm reshuffle</button><button type="button" className="desk-btn ghost" disabled={busy || retryable} onClick={() => { setDraft(null); }}>Cancel reshuffle</button></div>}
         <p>Choosing what fits now leaves your overall priorities unchanged.</p>

@@ -24,7 +24,7 @@ import { createSession } from "../db/sessions";
 import { insertEvent, EVENTS_LIST_MAX_LIMIT } from "../db/events";
 import { _resetDispatchDebounceForTests } from "../api/handlers";
 import * as shouldNotifyModule from "../notifications/should-notify";
-import { ingestLedgerEnvelope, ledgerEnvelope, ENDED_AT } from "../../../vigil/__tests__/fixtures";
+import { ingestFromSourceStack, ledgerEnvelope, ENDED_AT } from "../../../vigil/__tests__/fixtures";
 
 const catStandInForClaude: SpawnFn = () =>
   Bun.spawn(["cat"], {
@@ -97,7 +97,7 @@ describe("GET /api/vigil/subjects", () => {
     t = await setup({ vigil: {
       enabled: true, resolveGoalWording: () => "Example goal", cadence: { [key]: 3_600_000 },
     } });
-    ingestLedgerEnvelope(t.db, ledgerEnvelope({
+    ingestFromSourceStack(t.db, ledgerEnvelope({
       ran: { kind: "job", ref: "harness-gate" }, serves: { goal: "G1" },
     }), ENDED_AT);
     const before = t.db.query("SELECT total_changes() AS changes").get();
@@ -111,7 +111,7 @@ describe("GET /api/vigil/subjects", () => {
 
   it.each([undefined, { enabled: false }])("returns a disabled empty response when Vigil is not enabled (%j)", async (vigil) => {
     t = await setup({ vigil });
-    ingestLedgerEnvelope(t.db, ledgerEnvelope(), ENDED_AT);
+    ingestFromSourceStack(t.db, ledgerEnvelope(), ENDED_AT);
     const response = await fetch(`${t.baseUrl}/api/vigil/subjects`);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ subjects: [], enabled: false });
@@ -128,11 +128,11 @@ describe("GET /api/vigil/subjects", () => {
     });
     const siblingDb = initDatabase(join(t.tmpDir, "share", "work", "mission-control.db"));
     try {
-      ingestLedgerEnvelope(siblingDb, ledgerEnvelope({ serves: { goal: "G2" } }), ENDED_AT);
+      ingestFromSourceStack(siblingDb, ledgerEnvelope({ serves: { goal: "G2" } }), ENDED_AT);
     } finally {
       siblingDb.close();
     }
-    ingestLedgerEnvelope(t.db, ledgerEnvelope({ serves: { goal: "G1" } }), ENDED_AT);
+    ingestFromSourceStack(t.db, ledgerEnvelope({ serves: { goal: "G1" } }), ENDED_AT);
     const response = await fetch(`${t.baseUrl}/api/vigil/subjects`);
     expect(response.status).toBe(200);
     expect((await response.json()).subjects).toHaveLength(1);

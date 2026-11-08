@@ -27,3 +27,8 @@
 @media (max-width: 760px) { .dtd .dbl-pair { grid-template-columns: minmax(0, 1fr); } }
 .dbl-message { border: 1px solid #d8e3d8; border-radius: 8px; padding: 14px; font-size: 12px; line-height: 1.6; background: #f6faf5; overflow-wrap: anywhere; }
 .dbl-message.error { border-color: #e1c6b7; background: #fff8f2; }
+
+.dtd-summary dl { display: flex; flex-wrap: wrap; gap: 10px 24px; margin: 12px 0; font-size: 12px; }
+.dtd-summary dt { color: #78837b; font-size: 11px; margin-bottom: 3px; }
+.dtd-summary dd { margin: 0; }
+.dtd-note { white-space: pre-wrap; font-size: 13px; line-height: 1.6; }

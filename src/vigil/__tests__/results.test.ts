@@ -11,7 +11,7 @@ import { handleListVigilSubjects } from "../../surface/mc/api/vigil";
 import { buildDigest, sendDigest } from "../digest";
 import { renderResult, somaGoalWording } from "../result-render";
 import { expireResults, pendingResults, RESULT_TTL_MS, type VigilResultRow } from "../results";
-import { ingestLedgerEnvelope, ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope } from "./fixtures";
+import { ingestFromSourceStack, ENDED_AT, expectNoVigilTextDelivery, ledgerEnvelope } from "./fixtures";
 
 const REF = "soma:outputs/weekly.md";
 const id = (ref = REF) => `att:vigil:result:${ref}`;
@@ -31,7 +31,7 @@ function report(overrides: Parameters<typeof ledgerEnvelope>[0] = {}, options: {
   const payload = { outcome: "succeeded" as const, result_ref: REF as string | undefined, ...overrides };
   if (payload.result_ref === undefined) delete payload.result_ref;
   const envelope = ledgerEnvelope(payload);
-  const delta = ingestLedgerEnvelope(db, envelope, Date.parse(String(envelope.payload.ended_at)), options);
+  const delta = ingestFromSourceStack(db, envelope, Date.parse(String(envelope.payload.ended_at)), options);
   return { envelope, delta };
 }
 const result = (ref = REF) => db.query<VigilResultRow, [string]>("SELECT * FROM vigil_results WHERE result_ref = ?").get(ref)!;
@@ -44,7 +44,7 @@ test("arrival without a goal opens one low result, records creator, dedupes and 
   expect(delta).toEqual({ opened: [], resolved: [] });
   expect(getAttentionItem(db, id())).toMatchObject({ kind: "result", severity: "low", status: "open" });
   expect(result()).toMatchObject({ ran_ref: "daily-sweep", goal_id: null, version: 1, expires_at: ENDED_AT + RESULT_TTL_MS });
-  ingestLedgerEnvelope(db, envelope, ENDED_AT + 1000);
+  ingestFromSourceStack(db, envelope, ENDED_AT + 1000);
   expect(listOpenAttention(db)).toHaveLength(1);
   expect(result().version).toBe(1);
   await expectNoVigilTextDelivery(db);
@@ -60,7 +60,7 @@ test("same ref updates once, preserves creator across jobs and restarts expiry",
   report({ serves: { goal: "G1" } });
   await sendDigest({ ...options(), send: sender() });
   const { envelope } = report({ ran: { kind: "job", ref: "append-drafts" }, serves: { goal: "G1" }, ended_at: later(1000) });
-  ingestLedgerEnvelope(db, envelope, ENDED_AT + 2000);
+  ingestFromSourceStack(db, envelope, ENDED_AT + 2000);
   expect(result()).toMatchObject({ ran_ref: "daily-sweep", version: 2, digested_version: 1, expires_at: ENDED_AT + 1000 + RESULT_TTL_MS });
   expect(await buildDigest(options())).toContain("Private goal wording — updated: Private file title");
   expireResults(db, ENDED_AT + RESULT_TTL_MS);
@@ -97,7 +97,7 @@ test("read and dismiss use resolution column and remain closed when run envelope
     const ref = `soma:outputs/${action}.md`;
     const { envelope } = report({ result_ref: ref, ran: { kind: "job", ref: action } });
     expect((await handleAttentionLifecycle(db, id(ref), action)).status).toBe(200);
-    ingestLedgerEnvelope(db, envelope, ENDED_AT + 5000, { replay: true });
+    ingestFromSourceStack(db, envelope, ENDED_AT + 5000, { replay: true });
     expect((await handleAttentionLifecycle(db, id(ref), "resolve")).status).toBe(404);
     expect(getAttentionItem(db, id(ref))).toMatchObject({ status: action === "resolve" ? "resolved" : "dismissed", resolution });
   }

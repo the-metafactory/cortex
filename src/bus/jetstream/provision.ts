@@ -103,7 +103,7 @@ export interface ProvisionLog {
   warn: (msg: string) => void;
 }
 
-function withProvisionRetry<T>(
+export function withProvisionRetry<T>(
   step: string,
   opts: { bootRetry?: JetstreamBootRetryOptions; log?: ProvisionLog },
   action: () => Promise<T>,

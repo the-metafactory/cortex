@@ -7,6 +7,11 @@ import type { StudioView } from "./view";
 
 const RunSchema = z.object({
   runUuid: z.uuid(),
+  id: z.number().int().optional(),
+  queuedAt: z.string().optional(),
+  finishedAt: z.string().nullable().optional(),
+  substrate: z.string().nullable().optional(),
+  result: z.string().nullable().optional(),
   params: z.object({ thread: z.string(), mode: z.string().optional(), requestId: z.string().optional() }),
   status: z.enum(["queued", "running", "succeeded", "failed"]),
   reason: z.string().nullable(),

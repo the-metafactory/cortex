@@ -1,4 +1,7 @@
+import { NOT_LOCAL_CONTENT } from "../desk/source-boundary";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { rmSync } from "node:fs";
+import { seedStudioRepo } from "./__fixtures__/studio-git";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
@@ -22,6 +25,8 @@ import {
 } from "../desk/classify";
 import { classifierLines } from "../dashboard-v2/components/desk-settings";
 import { setCorrection } from "../desk/corrections";
+import { parseThreadFile } from "../desk/studio/format";
+import { MailSimilarity } from "../desk/mail-similar";
 import { logMailDecision } from "../desk/mail-log";
 import { McSchema } from "../../../common/types/config";
 import type { EvidenceLinks } from "../desk/mail-triage";
@@ -135,8 +140,9 @@ describe("the classification pass", () => {
     await c.kick(db, input([NEWSLETTER, read]));
     expect(seen).toHaveLength(2);
     expect(seen[0]).toEqual({
-      mail: { id: "n1", from: NEWSLETTER.from, subject: NEWSLETTER.subject, firstParagraph: "Hello.", receivedAt: NEWSLETTER.receivedAt },
-      meetings: [{ key: KUNDEN_KEY, title: KUNDEN.title, start: KUNDEN.start }],
+      sourcePolicy: "cloud",
+      mail: { id: "n1", from: NEWSLETTER.from, subject: NEWSLETTER.subject, sourceId: "work-mail", firstParagraph: "Hello.", receivedAt: NEWSLETTER.receivedAt },
+      meetings: [{ key: KUNDEN_KEY, title: KUNDEN.title, start: KUNDEN.start, sourceId: "work-calendar", sourcePolicy: "cloud" }],
       vips: ["boss@example.org"],
       unimportant: [],
       corrections: [],
@@ -185,6 +191,7 @@ describe("the classification pass", () => {
   });
 
   it("leaves a failed or invalid answer uncached and retries it only after a pause", async () => {
+    let clock = NOW;
     const answers: (() => Promise<unknown>)[] = [
       () => Promise.reject(new Error("timed out after 5 s")),
       () => Promise.resolve({ category: "meeting", meetingKey: "cal:x:nope", reason: "x" }),
@@ -192,24 +199,26 @@ describe("the classification pass", () => {
     ];
     let calls = 0;
     const logged: string[] = [];
-    const c = new MailClassifier(CONFIG, () => answers[calls++]?.() ?? Promise.reject(new Error("no more")), (m) => logged.push(m));
+    const c = new MailClassifier(CONFIG, () => answers[calls++]?.() ?? Promise.reject(new Error("no more")), (m) => logged.push(m), () => clock);
     const one = await c.kick(db, input([mail("a", "A"), mail("b", "B", { receivedAt: at("07:00") })]));
     expect(one).toMatchObject({ classified: 0, failed: 2 });
     expect(readClassifications(db, ["a", "b"]).size).toBe(0);
     expect(logged).toContain("desk: mail classifier: timed out after 5 s");
-    await c.kick(db, input([mail("a", "A")], NOW + 60_000));
+    clock = NOW + 60_000;
+    await c.kick(db, input([mail("a", "A")], clock));
     expect(calls).toBe(2);
-    await c.kick(db, input([mail("a", "A")], NOW + 11 * 60_000));
+    clock = NOW + 11 * 60_000;
+    await c.kick(db, input([mail("a", "A")], clock));
     expect(readClassifications(db, ["a"]).get("a")?.category).toBe("fyi");
   });
 });
 
 describe("composeDesk with a classifier", () => {
   const DESK: DeskOptions = {
-    enabled: true, displayName: "Ada", topN: 5, rangerUrl: "", areas: [],
+    enabled: true, displayName: "Ada", topN: 5, rangerUrl: "", areas: [{ id: "fixture", label: "Fixture", color: "", policy: "cloud", repos: [], goals: [] }],
     sources: [
-      { id: "work-calendar", command: ["cal"], everySeconds: 300, timeoutSeconds: 5 },
-      { id: "work-mail", command: ["mail"], everySeconds: 300, timeoutSeconds: 5 },
+      { id: "work-calendar", area: "fixture", command: ["cal"], everySeconds: 300, timeoutSeconds: 5 },
+      { id: "work-mail", area: "fixture", command: ["mail"], everySeconds: 300, timeoutSeconds: 5 },
     ],
     mailClassifier: { ...CONFIG, apiKeyEnv: "DESK_TEST_KEY_THAT_IS_UNSET" },
   };
@@ -244,6 +253,31 @@ describe("composeDesk with a classifier", () => {
     expect(classifierLines(view.mailClassifier ?? null)[0]).toBe("A command sorts your inbox mail: desk-classify-mail.ts.");
   });
 
+  it("holds local and unknown content out of every cloud classifier context", async () => {
+    const command = { command: ["classifier"], timeoutSeconds: 5, maxPerPass: 10 };
+    const seen: ClassifierRequest[] = [];
+    const c = new MailClassifier(command, async (req) => { seen.push(req); return { category: "fyi", reason: "Personal fixture." }; }, quiet, () => NOW, new MailSimilarity(undefined));
+    const areas = [ { id: "personal", label: "Personal", color: "", policy: "cloud" as const, repos: [], goals: [] }, { id: "company", label: "Company", color: "", policy: "local" as const, repos: [], goals: [] } ];
+    const sources = [ ["personal-mail", "personal"], ["work-mail", "company"], ["unknown-mail", null], ["personal-calendar", "personal"], ["work-calendar", "company"] ].map(([id, area]) => ({ id: id ?? "", ...(area ? { area } : {}), command: [id ?? ""], everySeconds: 300, timeoutSeconds: 5 }));
+    const scopedRunner: CommandRunner = async ([id]) => JSON.stringify(id?.endsWith("calendar") ? { events: [{ ...KUNDEN, id: id, title: id === "personal-calendar" ? "Personal gathering" : "COMPANY_CALENDAR_SENTINEL" }] } : { items: [{ ...NEWSLETTER, id: id, account: id, subject: id === "personal-mail" ? "Personal fixture" : "COMPANY_MAIL_SENTINEL" }] });
+    for (const sourceId of ["personal-mail", "work-mail", null]) logMailDecision(db, { messageId: `history-${sourceId}`, account: sourceId, sourceId, sender: "news@grimm.example", senderDomain: "grimm.example", listId: null, category: "fyi", subject: sourceId === "personal-mail" ? "Personal history" : "COMPANY_HISTORY_SENTINEL", summary: null }, "kept", "correction", NOW - 1000);
+    const noteThread = (area: string, text: string) => `---\ntype: question\nareas: [${area}]\nstate: active\nopened: 2026-10-31\n---\n\n## Question\n\n${area} question\n\n## Where I stand\n\nExploring.\n\n## Ivy’s notes\n\n### 2026-10-31T08:00:00Z\ntrigger: synthetic\nmodel: fixture\n\n${text}\n`;
+    expect(parseThreadFile("threads/personal.md", noteThread("personal", "Personal note"))).toMatchObject({ ok: true, value: { notes: [{ text: "Personal note" }] } });
+    const dir = seedStudioRepo("cloud-scope-", { personal: noteThread("personal", "Personal note"), company: noteThread("company", "COMPANY_NOTE_SENTINEL"), unknown: noteThread("unknown", "COMPANY_UNKNOWN_NOTE_SENTINEL") });
+    try { await composeDesk(db, { ...DESK, areas, sources, studio: { dir, maxActive: 5 }, mailClassifier: command }, undefined, { now: NOW, sourceCache: new SourceCache(scopedRunner), mailClassifier: c }); }
+    finally { rmSync(dir, { recursive: true, force: true }); }
+    await c.kick(db, { now: NOW, mail: [], events: [], vips: [] });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.sourcePolicy).toBe("cloud");
+    expect(seen[0]?.mail.account).toBe("personal-mail");
+    expect(seen[0]?.meetings).toHaveLength(1);
+    expect(seen[0]?.notes).toHaveLength(1);
+    expect(seen[0]?.notes?.[0]?.areas).toEqual(["personal"]);
+    expect(seen[0]?.corrections).toHaveLength(1);
+    expect(seen[0]?.examples).toHaveLength(1);
+    expect(JSON.stringify(seen)).not.toContain("COMPANY_");
+  });
+
   it("ignores cached classifications when no classifier is configured", async () => {
     const c = new MailClassifier(CONFIG, async () => ({ category: "action", reason: "Do it." }), quiet);
     await c.kick(db, { now: NOW, mail: [{ ...NEWSLETTER }], events: [], vips: [] });
@@ -269,7 +303,7 @@ describe("the OpenAI-compatible provider", () => {
       return Response.json({ choices: [{ message: { content: "```json\n{\"category\":\"bulk\",\"reason\":\"A newsletter.\"}\n```" } }] });
     }) as unknown as typeof fetch;
     const run = chatClassifier({ ...CONFIG, baseUrl: "https://llm.example/v1/", apiKeyEnv: "K" }, fake, async () => "sk-test");
-    expect(await run(request, 1000)).toEqual({ category: "bulk", reason: "A newsletter." });
+    expect(await run(request, 1000, NOT_LOCAL_CONTENT)).toEqual({ category: "bulk", reason: "A newsletter." });
     expect(calls[0]?.url).toBe("https://llm.example/v1/chat/completions");
     expect((calls[0]?.init.headers as Record<string, string>).authorization).toBe("Bearer sk-test");
     const body = JSON.parse(calls[0]?.init.body as string) as { model: string; messages: { content: string }[] };
@@ -289,11 +323,11 @@ describe("the OpenAI-compatible provider", () => {
       return Response.json({ choices: [{ message: { content: "{\"category\":\"fyi\",\"reason\":\"News.\"}" } }] });
     }) as unknown as typeof fetch;
     try {
-      await chatClassifier({ ...CONFIG, caFile: ca }, fake, async () => null)(request, 1000);
+      await chatClassifier({ ...CONFIG, caFile: ca }, fake, async () => null)(request, 1000, NOT_LOCAL_CONTENT);
       expect(tls).toEqual({ ca: "-----BEGIN CERTIFICATE-----\nTEST\n-----END CERTIFICATE-----\n" });
-      await chatClassifier(CONFIG, fake, async () => null)(request, 1000);
+      await chatClassifier(CONFIG, fake, async () => null)(request, 1000, NOT_LOCAL_CONTENT);
       expect(tls).toBeUndefined();
-      await expect(chatClassifier({ ...CONFIG, caFile: `${ca}.missing` }, fake, async () => null)(request, 1000)).rejects.toThrow(`the classifier CA file could not be read: ${ca}.missing`);
+      await expect(chatClassifier({ ...CONFIG, caFile: `${ca}.missing` }, fake, async () => null)(request, 1000, NOT_LOCAL_CONTENT)).rejects.toThrow(`the classifier CA file could not be read: ${ca}.missing`);
     } finally {
       await Bun.file(ca).delete();
     }
@@ -302,9 +336,9 @@ describe("the OpenAI-compatible provider", () => {
   it("refuses to call without a configured key, and reports an HTTP error", async () => {
     let called = false;
     const fake = (async () => { called = true; return new Response("no", { status: 401 }); }) as unknown as typeof fetch;
-    await expect(chatClassifier({ ...CONFIG, apiKeyFile: "/nope" }, fake, async () => null)(request, 1000)).rejects.toThrow("the classifier key was not found");
+    await expect(chatClassifier({ ...CONFIG, apiKeyFile: "/nope" }, fake, async () => null)(request, 1000, NOT_LOCAL_CONTENT)).rejects.toThrow("the classifier key was not found");
     expect(called).toBe(false);
-    await expect(chatClassifier(CONFIG, fake, async () => null)(request, 1000)).rejects.toThrow("HTTP 401");
+    await expect(chatClassifier(CONFIG, fake, async () => null)(request, 1000, NOT_LOCAL_CONTENT)).rejects.toThrow("HTTP 401");
   });
 });
 

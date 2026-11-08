@@ -20,8 +20,12 @@
 
 import { describe, expect, test } from "bun:test";
 import { createUser } from "@nats-io/nkeys";
+import { InferenceConfigSchema } from "../../common/types/cortex-config";
+import { createInferenceRegistry } from "../../substrates/api-agent/provider-factories";
+import { startFakeStreamingServer } from "../../providers/__tests__/fake-streaming-server";
 import { signEnvelope } from "@the-metafactory/myelin/identity";
-import { directTaskSubject } from "@the-metafactory/myelin/subjects";
+import { directTaskSubject, taskSubject } from "@the-metafactory/myelin/subjects";
+import { buildReflexDispatch } from "../../bus/reflex-activation-listener";
 import type { Envelope } from "../../bus/myelin/envelope-validator";
 import type { MyelinRuntime } from "../../bus/myelin/runtime";
 import { createSurfaceRouter, type SurfaceRouter } from "../../bus/surface-router";
@@ -1183,6 +1187,28 @@ describe("dispatch-listener — failure paths", () => {
     expect((r.published[0]?.payload.reason as { kind?: string } | undefined)?.kind).toBe(
       "cant_do",
     );
+  });
+
+  test("canonical task for another bound receiver fails before any harness starts", async () => {
+    const r = recordingRuntime();
+    const cc = fakeFactory(SUCCESS_RESULT);
+    const listener = createDispatchListener({
+      runtime: r.runtime,
+      source: SOURCE,
+      receivingAgentId: "review-worker",
+      ccSessionFactory: cc.factory,
+      policyEngine: engineGranting(["dispatch.cortex"]),
+    });
+    await listener.start();
+    try {
+      r.trigger(makeReceivedEnvelope(), CANONICAL_CORTEX_CHAT_SUBJECT);
+      await settle(() => r.published);
+      expect(cc.optsCaptured).toHaveLength(0);
+      expect(r.published.map((event) => event.type)).toEqual(["dispatch.task.failed"]);
+      expect(r.published[0]?.payload.error_summary).toContain("receiving agent");
+    } finally {
+      await listener.stop();
+    }
   });
 
   test("non-zero exit code → started → failed", async () => {
@@ -3672,8 +3698,6 @@ describe("dispatch-listener — stage tracing (cortex#492)", () => {
 describe("createDispatchListener — S2 per-agent subject isolation (cortex#1160)", () => {
   test("two scoped listeners: a tasks.@B.chat envelope routes to B only, not A", async () => {
     const r = recordingRuntime();
-    // Each listener subscribes to its OWN agent subtree — exactly what the
-    // boot loop builds for chatCapableAgents.length >= 2.
     const subjectA = directTaskSubject("metafactory", "did:mf:agent-a");
     const subjectB = directTaskSubject("metafactory", "did:mf:agent-b");
     const facA = fakeFactory(SUCCESS_RESULT);
@@ -3764,16 +3788,11 @@ describe("createDispatchListener — S2 per-agent subject isolation (cortex#1160
     await listenerA.stop();
   });
 
-  test("single chat-capable agent path stays on the wildcard (byte-identical regression)", async () => {
-    // The boot loop's `else` branch (<=1 chat-capable agent) omits `subjects`,
-    // so the listener falls back to the canonical wildcard `tasks.*.>` —
-    // identical to pre-S2. This pins that default so the single-agent stack
-    // never silently narrows.
+  test("listener without explicit subjects retains the legacy wildcard default", async () => {
     const r = recordingRuntime();
     const listener = createDispatchListener({
       runtime: r.runtime,
       source: SOURCE,
-      receivingAgentId: "luna",
       ccSessionFactory: fakeFactory(SUCCESS_RESULT).factory,
     });
     expect(listener.subjects).toEqual(["local.metafactory.tasks.*.>"]);
@@ -4409,4 +4428,63 @@ describe("dispatch-listener — GitHub credential containment (cortex#2406)", ()
 
     await listener.stop();
   });
+});
+
+
+test("Reflex prompt task reaches its scoped API receiver without a Claude session", async () => {
+  const server = startFakeStreamingServer();
+  const frame = { choices: [{ index: 0, delta: { content: "fixture-api-response" }, finish_reason: "stop" }], usage: { prompt_tokens: 7, completion_tokens: 3 } };
+  server.enqueue({ headers: { "content-type": "text/event-stream" }, chunks: [{ data: `data: ${JSON.stringify(frame)}\n\ndata: [DONE]\n\n` }] });
+  const registry = createInferenceRegistry(InferenceConfigSchema.parse({
+    providers: { fixture: { protocol: "openai-chat-completions", baseUrl: `${server.url}/v1`, apiKey: "env:FIXTURE_KEY" } },
+    profiles: { local: { provider: "fixture", model: "fixture-model", modelClass: "local-only", dataResidency: "NZ" } },
+  }), { env: { FIXTURE_KEY: "fixture-only" } });
+  const r = recordingRuntime();
+  const cc = fakeFactory(SUCCESS_RESULT);
+  const runtimes = new Map<string, NonNullable<Agent["runtime"]>>([
+    ["cortex", { substrate: "api-agent", mode: "in-process", capabilities: ["chat.local"], inferenceProfile: "local" }],
+  ]);
+  const listener = createDispatchListener({
+    runtime: r.runtime,
+    source: SOURCE,
+    receivingAgentId: "cortex",
+    subjects: [directTaskSubject("metafactory", "did:mf:cortex", "fixture")],
+    agentRuntimesById: runtimes,
+    inferenceRegistry: registry,
+    ccSessionFactory: cc.factory,
+    policyEngine: engineGranting(["dispatch.cortex"]),
+  });
+  await listener.start();
+  try {
+    const built = buildReflexDispatch({
+      activation: { target: "@fixture/probe", payload: {}, decisionId: "fixture-decision", correlationId: TASK_ID, classification: "local" },
+      target: { target: "@fixture/probe", assistant: "cortex", capability: "chat.local", prompt: "Return the fixture response" },
+      reEmitPrincipal: "metafactory",
+      reEmitStack: "fixture",
+      source: SOURCE,
+      systemDid: "did:mf:cortex",
+    });
+    expect(built.subject).toBe("local.metafactory.fixture.tasks.@did-mf-cortex.chat.local");
+    r.trigger(built.envelope, built.subject);
+    await settle(() => r.published);
+    const completed = r.published.filter((event) => event.type === "dispatch.task.completed");
+    expect(completed).toHaveLength(1);
+    const taskId = built.envelope.payload.task_id;
+    if (typeof taskId !== "string") throw new Error("Reflex task has no string task ID");
+    expect(completed[0]?.correlation_id).toBe(taskId);
+    expect(completed[0]?.payload.chat_response).toBe("fixture-api-response");
+    expect(server.requests).toHaveLength(1);
+    expect(cc.optsCaptured).toHaveLength(0);
+    r.published.length = 0;
+    for (const capability of ["code-review.typescript", "dev.implement"]) {
+      r.trigger(makeReceivedEnvelope(), taskSubject("metafactory", capability, "fixture"));
+    }
+    await settle(() => r.published, { minObserveMs: 250 });
+    expect(r.published).toEqual([]);
+    expect(server.requests).toHaveLength(1);
+    expect(cc.optsCaptured).toHaveLength(0);
+  } finally {
+    await listener.stop();
+    await server.stop();
+  }
 });

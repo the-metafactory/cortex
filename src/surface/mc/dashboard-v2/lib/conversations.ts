@@ -87,14 +87,15 @@ function toolLine(data: Record<string, unknown>): string {
   const args = record(data.args);
   const detail = TOOL_DETAIL.flatMap(key => (text(args[key]) ? [short(text(args[key]))] : [])).join(" · ");
   const named = detail ? `${tool} (${detail})` : tool;
+  const action = tool === "creation_propose" || tool === "creation_revise" ? "Used" : "Read with";
   if (data.boundary === "host") {
     if (data.outcome === "refused") return `${named} was refused: ${short(text(data.result), 160)}`;
     if (data.outcome === "stopped") return `${named} was cancelled. No result was released.`;
   }
   if (data.outcome === "refused") return `Refused ${named}: it is not on the read-only tool allowlist, so nothing ran.`;
   if (data.outcome === "stopped") return `${named} is not on the read-only tool allowlist and may have run; the turn was stopped.`;
-  if (data.outcome === "error") return `Read with ${named} failed: ${short(text(data.result).split("\n")[0] ?? "", 160)}`;
-  return `Read with ${named}.`;
+  if (data.outcome === "error") return `${action} ${named} failed: ${short(text(data.result).split("\n")[0] ?? "", 160)}`;
+  return `${action} ${named}.`;
 }
 
 function continuationLine(data: Record<string, unknown>): string {
@@ -123,7 +124,8 @@ export function entryViews(entry: ConversationEntry): EntryView[] {
   }
   if (entry.kind === PROPOSAL_KIND) {
     const revision = typeof data.revision === "number" ? data.revision : 1;
-    return [{ kind: "activity", text: revision > 1 ? `Proposal edited (revision ${revision}). Nothing is created until it is confirmed.` : `Proposed ${text(data.type) || "a creation; type and destination still to choose"}. Nothing is created until it is confirmed.` }];
+    const change = revision > 1 ? `Proposal edited (revision ${revision}).` : `Proposed ${text(data.type) || "a creation; type and destination still to choose"}.`;
+    return [{ kind: "activity", text: `${change} Creation requires your confirmation or an existing standing permission.` }];
   }
   if (entry.kind === CREATION_KIND) {
     const authority = record(data.authority);
@@ -159,3 +161,6 @@ export function statusLabel(status: ConversationMeta["activity"]["status"]): str
   if (status === "working") return "Ivy is working";
   return status === "waiting" ? "Waiting for you" : "Ready to continue";
 }
+
+export const startGrilling = (id: string): Promise<{ conversation: ConversationMeta }> =>
+  postJson(`${BASE}/starts`, { startId: crypto.randomUUID(), source: { owner: "graph-node", id } });

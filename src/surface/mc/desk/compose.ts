@@ -6,13 +6,13 @@ import { mailYesFilter, readMailDecision } from "./mail-yes-filter";
 import { calendarsOnly, invitationDecisions, invitationView, withoutAnsweredRead, type InvitationsConfig, type InvitationView } from "./mail-invitation";
 import { readStudioDesk } from "./studio-my-day";
 import { movedKeys, sourceIdentity } from "./my-day";
-import { calendarSetting, discoverCalendars } from "./calendars";
+import { calendarName, calendarSetting, discoverCalendars, type ReturnedCalendars } from "./calendars";
 import { calendarAvailability } from "./calendar-availability";
 import type { Database } from "bun:sqlite";
 import type { GoalWordingResolver } from "../../../vigil/goal-wording";
 import type { VigilCadence } from "../../../vigil/staleness";
 import { listVigilSubjects, type VigilSubjectView } from "../../../vigil/subjects-view";
-import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoName, type AreaRule, type GoalActionsInput } from "./rank";
+import { ago, areaFor, goalShort, isRegressedGoalCheck, mailItems, parsedOr, rankItems, repoIsCloud, repoName, type AreaRule, type GoalActionsInput } from "./rank";
 import { DAY_MS, startOfDay } from "./time";
 import { SourceCache, type DeskSourceConfig, type SourceEvent, type SourceMail, type SourceReading } from "./sources/command";
 import { listSenders, listVips } from "./vips";
@@ -52,8 +52,10 @@ import type { RoutineReadLoop } from "./routine-read";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
 import { studioBriefing } from "./studio/overseer";
+import { routeOf, sourceBoundary } from "./source-boundary";
 
 export interface DeskRuntime {
+  conversations?: () => boolean;
   waitingTasks?: Pick<WaitingTasks, "read">;
   routineCapabilities?: import("./routine-providers").RoutineCapabilities;
   routineRead?: RoutineReadLoop;
@@ -65,6 +67,7 @@ export interface DeskRuntime {
   goalChecks?: GoalChecks;
   goalStatuses?: GoalStatuses;
   mailClassifier?: MailClassifier;
+  localMailClassifier?: MailClassifier;
   rulingExplain?: RulingExplainLoop;
   rulings?: RulingLedger;
   mailRules?: MailRuleLoop;
@@ -102,7 +105,7 @@ export interface DeskOptions {
   ask?: DeskAskOptions;
   interruptions?: InterruptRules;
   goals?: DeskGoalOptions;
-  mailClassifier?: ClassifierConfig;
+  mailClassifier?: ClassifierConfig & { local?: ClassifierConfig };
   rulingExplainer?: ModelConfig;
   mailActions?: MailActionsConfig;
   mailLog?: { retentionDays: number };
@@ -128,6 +131,7 @@ export interface DeskVigilSource {
 }
 
 export interface ComposeDeps {
+  conversations?: boolean;
   waitingTasks?: Pick<WaitingTasks, "read">;
   routineRead?: RoutineReadLoop;
   runRoutine?: RoutineRunner;
@@ -139,11 +143,14 @@ export interface ComposeDeps {
   goalChecks?: GoalChecks;
   goalStatuses?: GoalStatuses;
   mailClassifier?: MailClassifier;
+  localMailClassifier?: MailClassifier;
   rulingExplain?: RulingExplainLoop;
   digestFlagger?: DigestFlagger;
   waitingClassifier?: WaitingClassifier;
   mailHandoff?: MailHandoffWorker;
 }
+
+const localRouteCovers = (config: NonNullable<DeskOptions["mailClassifier"]>): boolean => routeOf(config.local ?? config) === "local";
 
 export const CORRECTIONS_UNREADABLE = "The Desk could not read your ranking corrections, so it ranks by its base rules alone.";
 
@@ -196,7 +203,7 @@ export async function composeDesk(
   const unreadable = readings.filter((r) => r.problems.length > 0).map(unreadableLine);
   const reportedEvents = readings.flatMap((r) => r.events.map((e) => ({ ...e, area: r.area, sourceId: r.id })));
   const calendarNames = readings.flatMap(reading => reading.calendarCoverage?.calendars.map(calendar => ({ sourceId: reading.id, calendar: calendar.name, calendarId: calendar.id })) ?? []);
-  const calendars = discoverCalendars(db, [...reportedEvents, ...calendarNames]);
+  const calendars = discoverCalendars(db, [...reportedEvents, ...calendarNames], readings.flatMap(returnedCalendars), now);
   const events = reportedEvents.flatMap((e) => {
     const setting = calendarSetting(calendars, e);
     return setting?.enabled ? [{ ...e, calendar: setting.name, color: setting.color }] : [];
@@ -220,14 +227,43 @@ export async function composeDesk(
   const corrections = readCorrections(db);
   const activeCorrections = corrections.ok ? corrections.corrections : [];
   const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
-  const localAreas = new Set(desk.areas.filter((a) => a.policy === "local").map((a) => a.id));
-  const localSources = new Set(readings.filter((r) => r.area !== null && localAreas.has(r.area)).map((r) => r.id));
-  if (classifier) void classifier.kick(db, { now, mail: mail.filter((m) => !ruleBound.has(m.id)), events, vips: vips.map((v) => v.address), unimportant, corrections: mailCorrections(db) });
-  const classified = classifier ? readClassifications(db, mail.map((m) => m.id)) : undefined;
+  const localClassifier = desk.mailClassifier?.local ? deps.localMailClassifier : undefined;
+  const { myDay, studio } = await readStudioDesk(db, desk, now);
+  const cloudAreas = new Set(desk.areas.filter((a) => a.policy === "cloud").map((a) => a.id));
+  const boundary = sourceBoundary(desk);
+  const cloudSources = new Set(readings.filter((r) => !boundary.has(r.id)).map((r) => r.id));
+  const localSources = boundary;
+  if (localClassifier) {
+    const sourceIds = new Set(readings.filter((r) => boundary.has(r.id)).map((r) => r.id));
+    void localClassifier.kick(db, {
+      now, sourceIds, localSources,
+      mail: mail.filter((m) => sourceIds.has(m.sourceId) && !ruleBound.has(m.id)),
+      events: events.filter((event) => sourceIds.has(event.sourceId)),
+      vips: vips.map((v) => v.address),
+      unimportant,
+      corrections: mailCorrections(db, sourceIds),
+    });
+  }
+  if (classifier) {
+    const sourceIds = desk.mailClassifier?.sourcePolicy === "local" ? new Set(readings.map((r) => r.id)) : cloudSources;
+    const permittedMail = mail.filter((m) => sourceIds.has(m.sourceId));
+    const senders = new Set(permittedMail.map((m) => m.from.address.toLowerCase()));
+    const permittedSender = (address: string): boolean => { const lower = address.toLowerCase(); return senders.has(lower) || (lower.startsWith("@") && [...senders].some(sender => sender.endsWith(lower))); };
+    void classifier.kick(db, {
+      now, sourceIds, localSources,
+      notes: (studio?.active ?? []).filter((thread) => thread.policy === "cloud").flatMap((thread) => thread.notes.filter((note) => note.status !== "dismissed").map((note) => ({ sourcePolicy: "cloud" as const, areas: thread.areas, id: `studio:${thread.slug}:${note.at}`, name: thread.question, text: note.text.slice(0, 600) }))).slice(0, 30),
+      mail: permittedMail.filter((m) => !ruleBound.has(m.id)),
+      events: events.filter((event) => sourceIds.has(event.sourceId)),
+      vips: vips.filter((v) => permittedSender(v.address)).map((v) => v.address),
+      unimportant: unimportant.filter(permittedSender),
+      corrections: mailCorrections(db, sourceIds),
+    });
+  }
+  const classified = classifier || localClassifier ? readClassifications(db, mail.map((m) => m.id)) : undefined;
   const offerable = [...mail.filter((m) => m.unread), ...(mailGroups?.digests.groups ?? []).flatMap((g) => g.members)];
   const flagged = new Set([...readClassifications(db, offerable.map((m) => m.id))].filter(([, c]) => c.suspicious === true).map(([id]) => id));
   const unsubscribe = unsubscribeOffers(db, offerable, offerContext(db, desk.mailUnsubscribe, suspicion, flagged));
-  const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null) : null;
+  const mailClassifier = desk.mailClassifier ? classifierStatus(desk.mailClassifier, (await readApiKey(desk.mailClassifier)) !== null, localRouteCovers(desk.mailClassifier) ? 0 : mail.filter((item) => !cloudSources.has(item.sourceId)).length, desk.mailClassifier.local, localClassifier?.problem) : null;
   const yesFilter = await mailYesFilter(db, desk, now);
   const notes = listOpenNotes(db);
   const reminders = notes.filter((n) => n.kind === "reminder" && n.dueAt !== null);
@@ -249,8 +285,8 @@ export async function composeDesk(
   const rangerActions = rangerActionsReady(desk);
   const rulingActions = rangerActions && Boolean(desk.somaBin);
   const goalActions = goalActionsFor(desk.goals, subjects, deps.goalChecks, now);
-  const explanations = ranger && deps.rulingExplain ? await deps.rulingExplain.explain(ranger.needsYou) : undefined;
-  const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
+  const explanations = ranger && deps.rulingExplain ? await deps.rulingExplain.explain(desk.rulingExplainer?.sourcePolicy === "cloud" ? ranger.needsYou.filter(entry => repoIsCloud(desk.areas, entry.repo)) : ranger.needsYou) : undefined;
+  const ranked = rankItems({ now, subjects, ranger, waitingTasks, areas: desk.areas, conversations: deps.conversations, rangerActions, rulingActions, hidden: filtered?.hidden, goalActions, ...(explanations ? { explanations } : {}) })
     .filter((item) => goalListed(goalStatuses, item.goal));
   const rulesConfig = desk.mailRules ?? DEFAULT_MAIL_RULES;
   const ruleCards = canMove ? [...heldItems(listRules(db), rulesConfig), ...proposalItems(proposeRules(db, now, rulesConfig, vipSet), now)] : [];
@@ -285,9 +321,8 @@ export async function composeDesk(
   const mailLog = mailLogFor(db, unbundled.filter(i => i.kind === "mail").map(i => mailIdOf(i.key)));
   const items = unbundled.map(item => item.kind === "mail" ? withMailLog({ ...item, mailDecision: readMailDecision(db, item.source, mailIdOf(item.key)) }, mailLog, now) : item);
 
-  const { myDay, studio } = await readStudioDesk(db, desk, now);
   const digests = mailGroups?.digests.groups ?? [];
-  if (deps.digestFlagger && digests.length > 0) void deps.digestFlagger.kick(db, digests, digestTopics(studio, () => loadBalanceState(db), buildGoals(subjects), now), localSources, now);
+  if (deps.digestFlagger && digests.length > 0) void deps.digestFlagger.kick(db, digests, digestTopics(studio, () => loadBalanceState(db), buildGoals(subjects).map((goal) => { const areas = desk.areas.filter((area) => area.goals.includes(goal.id)); return { ...goal, local: areas.length === 0 || areas.some((area) => area.policy !== "cloud") }; }), now, cloudAreas), localSources, now);
   const digestFlags = readDigestFlags(db, digests.map((g) => g.id));
   const moved = movedKeys(db);
   const dayItems = items.filter(i => !moved.has(sourceIdentity(i))).map(i => ({ ...i, todoFingerprint: sourceIdentity(i) }));
@@ -340,8 +375,8 @@ function unreadableLine(r: SourceReading): string {
 
 const CORRECTED_SAYING: Partial<Record<string, string>> = { "not bulk": "; it is not bulk", matters: "; it matters" };
 
-function mailCorrections(db: Database): ClassifierCorrection[] {
-  return queryMailLog(db, { where: "correction", limit: MAX_CORRECTIONS }).map((e) => {
+function mailCorrections(db: Database, sourceIds: ReadonlySet<string>): ClassifierCorrection[] {
+  return queryMailLog(db, { where: "correction", limit: MAX_CORRECTIONS, sourceIds }).map((e) => {
     const action = learnedAction(e.action);
     return { kind: "mail", source: e.sender, mode: action ?? e.action, label: `“${e.subject ?? "(no subject)"}” from ${e.sender}: the person ${action ? WOULD[action] : `chose ${e.action}`}${CORRECTED_SAYING[e.category ?? ""] ?? ""}` };
   });
@@ -424,6 +459,15 @@ function buildAutonomy(db: Database, done: DoneEntry[], rangerActions: boolean, 
       };
     }),
   };
+}
+
+function returnedCalendars(reading: SourceReading): ReturnedCalendars[] {
+  const coverage = reading.calendarCoverage;
+  const trustworthy = reading.error === null && reading.problems.length === 0 && reading.dropped === 0 && coverage?.status === "complete" && coverage.calendars.length > 0;
+  if (!trustworthy) return [];
+  const withIds = reading.events.flatMap(event => event.calendarId ? [event.calendarId] : []);
+  const namedOnly = reading.events.flatMap(event => event.calendarId ? [] : [calendarName({ ...event, sourceId: reading.id })]);
+  return [{ source: reading.id, calendarIds: [...coverage.calendars.map(calendar => calendar.id), ...withIds], names: namedOnly }];
 }
 
 type CalendarEvent = SourceEvent & { area: string | null; sourceId: string; color?: string };

@@ -1,30 +1,30 @@
 import { expect, test } from "bun:test";
 import { parseThreadFile, parseProposalFile } from "./format";
 import { buildStudioView } from "./view";
-import { recurringThemes, selectThinking, studioBriefing } from "./overseer";
+import { recurringThemes, considerThinking, studioBriefing } from "./overseer";
 import { stringify } from "yaml";
 
 const now = Date.parse("2026-11-01T01:00:00Z");
 const areas = [{ id: "lab", label: "Lab", color: "blue", policy: "local" as const }];
 const file = (slug: string, front: Record<string, unknown> = {}, material = "") => ({ path: `threads/${slug}.md`, text: `---\n${stringify({ type: "question", areas: ["lab"], state: "active", opened: "2026-10-01", ...front })}---\n## Question\nHow shall we plan the design meeting?\n## Where I stand\nTesting first.\n## Material\n${material}\n## Ivy's notes\n## Log\n` });
 const view = (threads = [file("alpha")]) => buildStudioView({ threads, inbox: [], proposals: [] }, { dir: "/fixture", maxActive: 5 }, areas);
-const select = (studio = view(), extra = {}) => selectThinking({ studio, now, changedAt: new Map(), newMaterial: new Set<string>(), events: [], ...extra });
+const select = (studio = view(), extra = {}) => considerThinking({ studio, now, changedAt: new Map(), newMaterial: new Set<string>(), events: [], ...extra }).filter(row => row.selected);
 
 test("clock selectors cover stale default/config, think tonight and committed Material", () => {
-  expect(select(view(), { changedAt: new Map([["alpha", now - 6 * 86_400_000]]) })[0]?.trigger).toContain("6 days");
+  expect(select(view(), { changedAt: new Map([["alpha", now - 6 * 86_400_000]]) })[0]?.reason).toContain("6 days");
   expect(select(view(), { staleDays: 7, changedAt: new Map([["alpha", now - 6 * 86_400_000]]) })).toEqual([]);
-  expect(select(view([file("alpha", { thinkTonight: true })]))[0]?.trigger).toBe("Asked to think tonight");
-  expect(select(view(), { newMaterial: new Set(["alpha"]) })[0]?.trigger).toBe("New Material committed");
+  expect(select(view([file("alpha", { thinkTonight: true })]))[0]?.reason).toBe("Asked to think tonight");
+  expect(select(view(), { newMaterial: new Set(["alpha"]) })[0]?.reason).toBe("New Material committed");
 });
 
 test("due decided outcome qualifies; future, shipped, dropped and parked do not", () => {
-  expect(select(view([file("alpha", { state: "closed", outcome: "decided", reviewOn: "2026-11-01" })]))[0]?.trigger).toContain("Decision review due");
+  expect(select(view([file("alpha", { state: "closed", outcome: "decided", reviewOn: "2026-11-01" })]))[0]?.reason).toContain("Decision review due");
   for (const front of [{ state: "closed", outcome: "decided", reviewOn: "2026-11-02" }, { state: "closed", outcome: "shipped", reviewOn: "2026-10-01" }, { state: "parked", thinkTonight: true }]) expect(select(view([file("alpha", front)]))).toEqual([]);
 });
 
 test("only related events starting in next 24 hours select a thread", () => {
   const event = { key: "cal:one", at: now + 86_400_000, title: "Design meeting", area: "lab", kind: "meeting" as const };
-  expect(select(view(), { events: [event] })[0]?.trigger).toContain("Design meeting");
+  expect(select(view(), { events: [event] })[0]?.reason).toContain("Design meeting");
   expect(select(view(), { events: [{ ...event, at: event.at + 1 }] })).toEqual([]);
   expect(select(view(), { events: [{ ...event, title: "Unrelated" }] })).toEqual([]);
 });

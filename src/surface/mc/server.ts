@@ -120,6 +120,7 @@ import { ClientMailLog } from "./desk/mail-client-log";
 import { DEFAULT_MAIL_LOG_RETENTION_DAYS } from "./desk/mail-log";
 import { startDeskAutonomy, startDeskPushes } from "./desk/push";
 import { MailClassifier } from "./desk/classify";
+import { sourceBoundary } from "./desk/source-boundary";
 import type { DeskTransport } from "./desk/interrupt";
 import { handleListVigilSubjects, type VigilSubjectsOptions } from "./api/vigil";
 import { handleResult, type ResultRouteOptions } from "./results";
@@ -229,7 +230,7 @@ export function startServer(
   } : undefined);
   const deskRecentWrites = new RecentCalendarWrites();
   const routineCapabilities = () => localRoutineCapabilities(options.agentPresence?.() ?? null);
-  const deskRuntime: DeskRuntime = { routineCapabilities, waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(routineCapabilities), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(deskDmarc ? { dmarc: deskDmarc } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}), ...(options.desk?.mailDigest?.model ? { digestFlagger: new DigestFlagger(options.desk.mailDigest.model) } : {}), ...(options.desk?.mailWaiting?.model ? { waitingClassifier: new WaitingClassifier(options.desk.mailWaiting.model) } : {}), ...(options.desk?.mailHandoff ? { mailHandoff: new MailHandoffWorker(piHandoffOwner(piTurns(options.desk.mailHandoff.pi), options.desk.mailHandoff.lanes), undefined, taskCloser(options.desk.ask, spawnWithStdin)) } : {}) };
+  const deskRuntime: DeskRuntime = { conversations: () => options.conversations?.()?.state === "ready", routineCapabilities, waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(routineCapabilities), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(deskDmarc ? { dmarc: deskDmarc } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.mailClassifier?.local ? { localMailClassifier: new MailClassifier(options.desk.mailClassifier.local, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}), ...(options.desk?.mailDigest?.model ? { digestFlagger: new DigestFlagger(options.desk.mailDigest.model) } : {}), ...(options.desk?.mailWaiting?.model ? { waitingClassifier: new WaitingClassifier(options.desk.mailWaiting.model) } : {}), ...(options.desk?.mailHandoff ? { mailHandoff: new MailHandoffWorker(piHandoffOwner(piTurns(options.desk.mailHandoff.pi), options.desk.mailHandoff.lanes, sourceBoundary(options.desk)), undefined, taskCloser(options.desk.ask, spawnWithStdin)) } : {}) };
   const conversationHost = options.conversations?.();
   if (conversationHost?.state === "ready") void conversationHost.host.attachSources(conversationSources({ db, desk: () => deskRuntime.options, deskItems: () => currentDayItems(db, deskRuntime, deskVigil(options)), listedMail: key => findListedMail(deskRuntime.sourceCache?.cached() ?? [], key), ledger: deskRuntime.ledger }));
   const maxClients = config.ws.maxClients;
@@ -335,6 +336,7 @@ export function startServer(
       }
 
       if (url.pathname.startsWith("/api/")) {
+        if (req.method === "POST" && ["/api/desk/studio/session", "/api/desk/mail"].includes(url.pathname)) server.timeout(req, 180);
         if (req.method === "POST" && ["/api/desk/ask", "/api/desk/create", "/api/desk/routines", "/api/desk/routine-capability", "/api/desk/routine-editor"].includes(url.pathname)) server.timeout(req, 0);
         if (req.method === "POST" && /^\/api\/attention\/[^/]+\/resolve$/.test(url.pathname)) {
           server.timeout(req, 0);

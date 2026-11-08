@@ -1,3 +1,4 @@
+import { grillingSource, type GrillingReads } from "./grilling-conversation";
 import type { Database } from "bun:sqlite";
 import { findNode } from "../../../balance";
 import type { HostSources } from "../../../conversations/host";
@@ -25,6 +26,7 @@ import type { GitRunner } from "./studio/git";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioThreadView, type StudioView } from "./studio/view";
 import type { DeskItem } from "./types";
+import { workReaders } from "./work-readers";
 
 const FRESH_MS = 5_000;
 const gone: SourceState = { state: "unavailable", reason: "gone" };
@@ -42,6 +44,7 @@ export function studioThreadOf(view: StudioView, slug: string): StudioThreadView
 }
 
 export interface SourceDeps {
+  grillingReads?: GrillingReads;
   db: Database;
   desk: () => DeskOptions | undefined;
   git?: GitRunner;
@@ -59,14 +62,15 @@ export interface SourceDeps {
 }
 
 export function conversationSources(deps: SourceDeps): HostSources {
-  let cached: { at: number; dir: string; view: Promise<StudioView> } | null = null;
+  let cached: { at: number; dir: string; policyStamp: string; view: Promise<StudioView> } | null = null;
   const now = deps.now ?? Date.now;
   const studioView = (desk: DeskOptions): Promise<StudioView> | null => {
     const studio = desk.studio;
     if (!desk.enabled || !studio) return null;
-    if (cached?.dir === studio.dir && now() - cached.at < FRESH_MS) return cached.view;
+    const policyStamp = JSON.stringify(desk.areas);
+    if (cached?.dir === studio.dir && cached.policyStamp === policyStamp && now() - cached.at < FRESH_MS) return cached.view;
     const view = readStudioFiles(studio.dir).then(({ files, problems }) => buildStudioView(files, studio, desk.areas, problems));
-    cached = { at: now(), dir: studio.dir, view };
+    cached = { at: now(), dir: studio.dir, policyStamp, view };
     view.catch(() => { if (cached?.view === view) cached = null; });
     return view;
   };
@@ -135,10 +139,14 @@ export function conversationSources(deps: SourceDeps): HostSources {
         ...(mailDraft && mailDraftReady(desk) ? { "mail-draft": mailDraft } : {}),
       };
     },
+    get readers() {
+      return workReaders({ db: deps.db, desk: deps.desk, studioView, now, ...(deps.deskItems ? { deskItems: deps.deskItems } : {}) });
+    },
     get withheld() {
       return deskWriterArgv(deps.desk(), "note") ? { "desk-note": DESK_NOTE_WITHHELD } : {};
     },
     resolvers: {
+      "graph-node": ref => grillingSource(deps.desk(), ref, deps.grillingReads),
       "studio-thread": async ref => {
         const read = await thread(ref.id);
         if ("missing" in read) return read.missing;

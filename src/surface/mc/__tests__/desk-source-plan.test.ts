@@ -274,7 +274,7 @@ it("proposes only existing parents with routing permissions covering all catalog
       timeoutSeconds: 30,
       writers: {},
       taskMaps: [],
-      routing: { permitted: ["claude", "pi"] },
+      routing: { permitted: ["codex", "pi"] },
     },
   };
   day.outline.children.push({

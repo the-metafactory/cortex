@@ -1,3 +1,4 @@
+import { classifierLabel } from "../desk/classify";
 import { readStudioMyDay } from "../desk/studio-my-day";
 import { SessionAnswerSchema, SessionRequestSchema, StudioSessionSchema, type StudioSession } from "../desk/studio/session-schema";
 import type { Database } from "bun:sqlite";
@@ -6,7 +7,7 @@ import type { DeskRuntime } from "../desk/compose";
 import { readStudioFiles } from "../desk/studio/read";
 import { buildStudioView } from "../desk/studio/view";
 import { runStudioAct, runStudioTransaction } from "../desk/studio/writer";
-import { composerDraft, planSessionEnd, sessionEndpoint, sessionModel, sessionPrompt, sessionSubject, sessionThread, type SessionModel } from "../desk/studio/session";
+import { composerDraft, planSessionEnd, sessionEndpoint, sessionModel, sessionPrompt, sessionContent, sessionSubject, sessionThread, type SessionModel } from "../desk/studio/session";
 
 const queues = new WeakMap<Database, Map<string, Promise<void>>>();
 const answer = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
@@ -103,13 +104,13 @@ export async function handleDeskStudioSession(req: Request, db: Database, runtim
     if (!thread || thread.state === "closed") return fail(409, "The thread is unavailable. Your exchange is retained.", session);
     if (thread.policy === "local") session.policy = "local";
     const endpoint = sessionEndpoint(options, { ...thread, policy: session.policy });
-    const turn = prior ?? { id: request.turn, text: request.text, answer: null, model: endpoint?.model ?? "unavailable", policy: session.policy };
+    const turn = prior ?? { id: request.turn, text: request.text, answer: null, model: endpoint ? classifierLabel(endpoint) : "unavailable", policy: session.policy };
     if (!prior) session.turns.push(turn);
-    turn.policy = session.policy; turn.model = endpoint?.model ?? "unavailable";
+    turn.policy = session.policy; turn.model = endpoint ? classifierLabel(endpoint) : "unavailable";
     save(db, dir, session);
     if (!endpoint) return fail(503, session.policy === "local" ? "The local model is not configured. Your text is saved; no cloud fallback was used." : "A Studio model is not configured. Your text is saved.", session);
     try {
-      turn.answer = SessionAnswerSchema.parse(await (deps.model ?? sessionModel)(endpoint, sessionPrompt(session, thread)));
+      turn.answer = SessionAnswerSchema.parse(await (deps.model ?? sessionModel)(endpoint, sessionPrompt(session, thread), sessionContent(thread)));
       save(db, dir, session);
       return answer(200, { ok: true, session });
     } catch {

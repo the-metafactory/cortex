@@ -13,14 +13,14 @@
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync, unlinkSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, rmSync, unlinkSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Envelope } from "../myelin/envelope-validator";
 import type { MyelinRuntime } from "../myelin/runtime";
 import type { FiredActivation } from "../reflex-activation-listener";
 import type { ReflexTarget } from "../../common/types/cortex-config";
-import { buildProcessEnv } from "../process-env";
+import { buildProcessEnv, CORTEX_PROCESS_FAILURE_FILE } from "../process-env";
 import {
   createProcessRunner,
   loadProcessSpec,
@@ -280,7 +280,7 @@ describe("createProcessRunner", () => {
         const spec = { ...SPEC, env };
         for (const serves of [{ goal: "G1", node: "n1" }, { goal: "G1" }, undefined]) {
           const act = { ...activation({}), serves, correlationId: serves ? "c1" : undefined };
-          const expected = buildProcessEnv({ spec, activation: act, parentEnv: process.env });
+          const expected = { ...buildProcessEnv({ spec, activation: act, parentEnv: process.env }), [CORTEX_PROCESS_FAILURE_FILE]: expect.stringContaining("cortex-process-failure-") };
           const sp = fakeSpawn({ exitCode: 0 });
           await createProcessRunner({ runtime: fakeRuntime().runtime, source: SOURCE, processesDir: "/x", loadSpec: () => spec, spawn: sp.spawn })(act, target());
           await flush();
@@ -312,6 +312,35 @@ describe("createProcessRunner", () => {
     await handler(activation({ days: 7, process: "evil", argv: ["rm", "-rf", "/"] }), target({ process: "build-journal" }));
     await flush();
     expect(seen).toEqual(["build-journal"]);
+  });
+
+  test("a failed child's stated reason joins the failure reason, and its file is removed", async () => {
+    const { runtime, published } = fakeRuntime();
+    const written: string[] = [];
+    const spawn: Spawn = (_cmd, options) => {
+      const file = options.env[CORTEX_PROCESS_FAILURE_FILE]!;
+      written.push(file);
+      writeFileSync(file, "Step failed:\n  nobody took this task");
+      return { exited: Promise.resolve(1), kill: () => {} };
+    };
+    const handler = createProcessRunner({ runtime, source: SOURCE, processesDir: "/unused", loadSpec: () => SPEC, spawn });
+    await expect(handler(activation({}), target())).rejects.toThrow(/nobody took this task/);
+    await flush();
+    expect(last(published)!.reason).toBe("exit-1: Step failed: nobody took this task");
+    expect(existsSync(written[0]!)).toBe(false);
+  });
+
+  test("a child that succeeds keeps no failure reason", async () => {
+    const { runtime, published } = fakeRuntime();
+    const spawn: Spawn = (_cmd, options) => {
+      writeFileSync(options.env[CORTEX_PROCESS_FAILURE_FILE]!, "ignored");
+      return { exited: Promise.resolve(0), kill: () => {} };
+    };
+    const handler = createProcessRunner({ runtime, source: SOURCE, processesDir: "/unused", loadSpec: () => SPEC, spawn });
+    await handler(activation({}), target());
+    await flush();
+    expect(outcomes(published)).toEqual(["started", "completed"]);
+    expect(last(published)!.reason).toBeUndefined();
   });
 
   test("non-zero exit → failed + throws", async () => {

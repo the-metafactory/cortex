@@ -1,3 +1,4 @@
+import { classifierLabel } from "../desk/classify";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -79,10 +80,10 @@ describe("Studio capture filing", () => {
     expect((await file(async () => { called = true; return {}; })).ok).toBe(true);
     expect(called).toBe(false);
     options.filer = { ...ENDPOINT, local: { ...ENDPOINT, model: "local-test" } };
-    await file(async (config) => { expect(config.model).toBe("local-test"); return { thread: "studio", reason: "Fits locally." }; });
+    await file(async (config) => { expect(classifierLabel(config)).toBe("local-test"); return { thread: "studio", reason: "Fits locally." }; });
     writeFileSync(join(dir, "threads/studio.md"), thread("unknown"));
     git("commit", "-am", "unknown area");
-    await file(async (config) => { expect(config.model).toBe("local-test"); return { thread: null, reason: "No fit." }; });
+    await file(async (config) => { expect(classifierLabel(config)).toBe("local-test"); return { thread: null, reason: "No fit." }; });
   });
 
   it("Undo removes only its material and preserves a later response in a new commit", async () => {

@@ -63,7 +63,7 @@ describe("ranking corrections", () => {
   it("keeps items of a kind and source marked always show this in the top list", async () => {
     setCorrection(db, "grilling", "ranger", "always", NOW);
     const view = await compose();
-    expect(top(view)).toEqual(["grilling", "goal"]);
+    expect(top(view)).toEqual(["grilling", "goal", "agent-failed"]);
   });
 
   it("changes only the source it was made for, and never mail, which is corrected per mail", () => {

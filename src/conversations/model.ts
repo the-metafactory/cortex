@@ -3,7 +3,7 @@ import type { AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
 import { createModels, createProvider, type MutableModels } from "@earendil-works/pi-ai/models";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { cloudLanes, LEGACY_CLOUD_ID, type CloudConfig, type ConversationLane } from "../common/types/desk-conversations";
-import { laneName, type ContinuationReason, type ModelRoute } from "./types";
+import { laneName, type ContinuationReason, type ModelRoute, type Policy } from "./types";
 
 export const CORTEX_PROVIDER = "cortex";
 const API = "cortex-chat";
@@ -21,12 +21,12 @@ export const laneFor = (lanes: Lanes, route: ModelRoute): Lane | undefined => ro
 export type GateResult = { refused: string } | { conversationId: string; context: string | null };
 export type RouteGate = (sessionId: string | undefined, route: ModelRoute) => Promise<GateResult>;
 
-export interface ToolSource { id: string; revision: string; policy: "local" | "cloud" }
+export interface ToolSource { id: string; revision: string; policy: "local" | "cloud"; projectRegistryRevision?: string }
 export interface ToolActivity { boundary?: "host"; source?: ToolSource; callId: string; tool: string; args: unknown; outcome: "done" | "error" | "refused" | "stopped"; result: string }
 export type TurnEvent = { kind: "tool"; activity: ToolActivity } | { kind: "reconstructed"; route: ModelRoute; reason: Exclude<ContinuationReason, "lane-changed"> };
-export interface ToolOutcome { source?: ToolSource; outcome: ToolActivity["outcome"]; text: string }
+export interface ToolOutcome { source?: ToolSource; sourcePolicy?: Policy; outcome: ToolActivity["outcome"]; text: string }
 export interface ToolSpec { name: string; description: string; schema: object }
-export interface ToolSurface { validate?: () => Promise<void>; specs: ToolSpec[]; call: (callId: string, name: string, input: unknown, signal: AbortSignal) => Promise<ToolOutcome> }
+export interface ToolSurface { validate: () => Promise<void>; specs: ToolSpec[]; call: (callId: string, name: string, input: unknown, signal: AbortSignal) => Promise<ToolOutcome> }
 export type ToolSurfaceFor = (conversationId: string, route: ModelRoute, record: (activity: ToolActivity) => Promise<void>) => ToolSurface;
 export interface TurnRequest {
   conversationId: string;
@@ -100,7 +100,7 @@ export function cortexModels(lanes: Lanes, gate: RouteGate, turn: TurnCall, reco
         const plan = planTurn(context.messages, route);
         if (!plan.prompt) throw new Error("the turn carries no new input");
         const surface = tools?.(gated.conversationId, route, activity => record(gated.conversationId, { kind: "tool", activity }));
-        await surface?.validate?.();
+        await surface?.validate();
         const reply = await turn({
           conversationId: gated.conversationId, route, lane, instructions, prompt: plan.prompt, linked: gated.context,
           history: plan.history, resume: surface ? null : plan.resume, session: `${gated.conversationId}.${route.replace(":", "-")}.${plan.answers}.${randomUUID().slice(0, 8)}`,
@@ -108,7 +108,7 @@ export function cortexModels(lanes: Lanes, gate: RouteGate, turn: TurnCall, reco
           activity: activity => record(gated.conversationId, { kind: "tool", activity }),
           ...(surface ? { tools: surface } : {}),
         });
-        await surface?.validate?.();
+        await surface?.validate();
         const released = await gate(options?.sessionId, route);
         if ("refused" in released) throw new Error(released.refused);
         const reason = reply.resumed || plan.history.length === 0 ? null : plan.reason ?? (surface ? "tool-policy" : "session-missing");

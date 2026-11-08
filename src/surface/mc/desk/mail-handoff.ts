@@ -1,3 +1,4 @@
+import { assertRoute, contentFrom, NOTHING_LEAVES, type LocalSources } from "./source-boundary";
 import type { Database } from "bun:sqlite";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -123,7 +124,9 @@ export function handoffsByMail(rows: readonly HandoffRow[]): Map<string, Handoff
   return out;
 }
 
-/** Which model lane reads this mail: the cloud lane, else the local one, whatever the mail's area. */
+export const WORK_MAIL_NO_HANDOFF = "This mail must stay on this machine, and a hand-off files a task on a shared map, so the Desk does not hand it to Ivy.";
+
+/** Which model lane reads personal mail: the cloud lane, else the local one. Work mail never gets this far. */
 export function handoffRoute(lanes: HandoffLanes): { route: Policy; lane: ConversationLane } | { refused: string } {
   if (lanes.cloud) return { route: "cloud", lane: lanes.cloud };
   if (lanes.local) return { route: "local", lane: lanes.local };
@@ -153,6 +156,7 @@ export function handoffTask(item: MailForStudio, instruction: string | null, map
 }
 
 export interface HandDeps {
+  localSources: LocalSources;
   db: Database;
   writers: DeskWriters;
   maps: readonly AskMap[];
@@ -181,6 +185,7 @@ export async function handMailToIvy(item: MailForStudio, input: HandInput, deps:
   if (busy && busy.state !== "failed") return refuse(409, busy.state === "working" ? "Ivy is already working on this mail." : "Ivy's draft for this mail is waiting for you in Catch-up.");
   const map = deps.maps[0];
   if (!map || !deps.writers.task?.length) return refuse(409, "Agent tasks are not set up on this stack, so the Desk cannot hand mail to Ivy.");
+  if (contentFrom(deps.localSources, [item.mail.sourceId]).local) return refuse(409, WORK_MAIL_NO_HANDOFF);
   const routed = handoffRoute(deps.lanes);
   if ("refused" in routed) return refuse(409, routed.refused);
   const asked = input.instruction?.trim().slice(0, MAX_INSTRUCTION) ?? "";
@@ -202,6 +207,7 @@ export async function handMailToIvy(item: MailForStudio, input: HandInput, deps:
 const handedMessage = (row: HandoffRow, map?: string): string => `Handed to Ivy as ${row.taskId}${map ? ` on ${map}` : ""}. Ivy's findings and reply draft come back here as a card.`;
 
 export interface HandoffJob {
+  sourceId: string;
   id: string;
   route: Policy;
   from: string;
@@ -224,7 +230,7 @@ export interface HandoffAnswer {
 export type HandoffOwner = (job: HandoffJob) => Promise<HandoffAnswer>;
 
 const jobOf = (row: HandoffRow): HandoffJob => ({
-  id: row.id, route: row.route, from: senderOf(row.fromName, row.fromAddress), subject: row.subject, receivedAt: row.receivedAt,
+  sourceId: row.sourceId, id: row.id, route: row.route, from: senderOf(row.fromName, row.fromAddress), subject: row.subject, receivedAt: row.receivedAt,
   summary: row.summary, text: row.text, url: row.url, instruction: row.instruction, task: row.taskId,
 });
 
@@ -306,8 +312,9 @@ export function readHandoffAnswer(text: string): { findings: string[]; reply: st
 }
 
 /** The production owner: one pi turn with the Soma projection and read-only tools on the hand-off's lane. */
-export function piHandoffOwner(turns: TurnCall, lanes: HandoffLanes): HandoffOwner {
+export function piHandoffOwner(turns: TurnCall, lanes: HandoffLanes, localSources: LocalSources = NOTHING_LEAVES): HandoffOwner {
   return async (job) => {
+    assertRoute(job.route, contentFrom(localSources, [job.sourceId]), "hand-off model lane");
     const lane = lanes[job.route];
     if (!lane) throw new Error(`The ${job.route} model lane is no longer set up.`);
     const reply = await turns({

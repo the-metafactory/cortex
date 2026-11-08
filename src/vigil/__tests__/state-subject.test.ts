@@ -4,7 +4,7 @@ import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getVigilSubject, listVigilEvents } from "../db";
 import { STALE_VALUE, STATE_VOCABULARIES, stateDirection, stateRank, vocabularyOf } from "../state-subject";
-import { ingestLedgerEnvelope, DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
+import { ingestFromSourceStack, DELIVERY_DEFAULTS, ENDED_AT, KEY, ledgerEnvelope } from "./fixtures";
 
 describe("state registry", () => {
   test.each([
@@ -68,7 +68,7 @@ describe("Vigil state-subject ingest", () => {
     const envelope = ledgerEnvelope({
       state: { subject, value }, ended_at: new Date(ENDED_AT + t * 60_000).toISOString(), ...overrides,
     });
-    ingestLedgerEnvelope(db, envelope, 100 * t);
+    ingestFromSourceStack(db, envelope, 100 * t);
     return envelope;
   }
 
@@ -156,7 +156,7 @@ describe("Vigil state-subject ingest", () => {
     const first = report("G1", "at-risk");
     const prior = getVigilSubject(db, key);
     const events = listVigilEvents(db, key);
-    ingestLedgerEnvelope(db, first, 900);
+    ingestFromSourceStack(db, first, 900);
     report("G1", "on-track", { run_id: String(first.payload.run_id) });
     report("G1", "on-track", { ended_at: new Date(ENDED_AT).toISOString() });
     expect(getVigilSubject(db, key)).toEqual(prior);
@@ -172,13 +172,13 @@ describe("Vigil state-subject ingest", () => {
     const b = ledgerEnvelope({ run_id: "run-b", ended_at: endedAt, state: { subject: "G1", value: "on-track" } });
     for (const [order, directions] of [[[a, b], ["worse", "better"]], [[b, a], []]] as const) {
       db.run("DELETE FROM vigil_events"); db.run("DELETE FROM vigil_subjects");
-      order.forEach((envelope, i) => ingestLedgerEnvelope(db, envelope, 100 * (i + 1)));
+      order.forEach((envelope, i) => ingestFromSourceStack(db, envelope, 100 * (i + 1)));
       expect(getVigilSubject(db, key)).toMatchObject({ value: "on-track", healthy: 1, last_run_id: "run-b" });
       expect(listVigilEvents(db, key).map((e) => e.direction)).toEqual([...directions]);
       const prior = getVigilSubject(db, key);
       const events = listVigilEvents(db, key);
       [a, b, a, b].forEach((envelope, i) => {
-        ingestLedgerEnvelope(db, envelope, 300 + 100 * i);
+        ingestFromSourceStack(db, envelope, 300 + 100 * i);
         expect(getVigilSubject(db, key)).toEqual(prior);
         expect(listVigilEvents(db, key)).toEqual(events);
       });
@@ -210,7 +210,7 @@ describe("Vigil state-subject ingest", () => {
   });
 
   test("an envelope without state touches no state row", () => {
-    ingestLedgerEnvelope(db, ledgerEnvelope(), 100);
+    ingestFromSourceStack(db, ledgerEnvelope(), 100);
     expect(db.query("SELECT subject_key FROM vigil_subjects WHERE subject_kind = 'state'").all()).toEqual([]);
   });
 });

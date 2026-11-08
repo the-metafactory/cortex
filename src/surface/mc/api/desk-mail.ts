@@ -1,3 +1,4 @@
+import { sourceBoundary } from "../desk/source-boundary";
 import { z } from "zod";
 import { CommitmentSchema, decisionReceipt, MailDecisionSchema, mailYesFilter, saveDecisionDraft } from "../desk/mail-yes-filter";
 import { calendarsOnly, freeSlots, INVITE_REPLIES, proposalBody, replyToInvitation } from "../desk/mail-invitation";
@@ -128,7 +129,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     const readings = runtime.sourceCache?.cached() ?? [];
     const suspicious = mailSuspicion(db, mail, runtime.options.mailOwnDomains).length > 0;
     const handed = await handMailToIvy(mailForStudio(db, readings, mail), { requestId: body.requestId, instruction: body.instruction ?? null, suspicious }, {
-      db, writers: ask.writers, maps: ask.taskMaps, lanes: runtime.options.mailHandoff.lanes, run: deps.run ?? spawnWithStdin, now, timeoutMs: ask.timeoutSeconds * 1000,
+      localSources: sourceBoundary(runtime.options), db, writers: ask.writers, maps: ask.taskMaps, lanes: runtime.options.mailHandoff.lanes, run: deps.run ?? spawnWithStdin, now, timeoutMs: ask.timeoutSeconds * 1000,
     });
     if (handed.ok) void worker.kick(db, deps.now ?? Date.now);
     return answer(handed);
@@ -138,7 +139,7 @@ export async function handleDeskMail(req: Request, db: Database, runtime: DeskRu
     const studio = runtime.options.studio;
     if (!studio) return fail(409, "The Studio is not set up on this stack.");
     const item = mailForStudio(db, runtime.sourceCache?.cached() ?? [], mail);
-    const studioDeps = { options: studio, areas: runtime.options.areas, db, now: new Date(now), ...(deps.captureModel ? { model: deps.captureModel } : {}) };
+    const studioDeps = { localSources: sourceBoundary(runtime.options), options: studio, areas: runtime.options.areas, db, now: new Date(now), ...(deps.captureModel ? { model: deps.captureModel } : {}) };
     if (body.action === "studio.propose") return Response.json({ ok: true, proposal: await proposeMailThread(item, studioDeps) }, { headers: noStore });
     const { requestId, thread, reason, includeText } = body;
     const added = await addMailToStudio(item, { requestId, thread, includeText, ...(reason ? { reason } : {}) }, studioDeps);

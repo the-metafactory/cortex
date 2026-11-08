@@ -1,3 +1,4 @@
+import { NOT_LOCAL_CONTENT } from "../desk/source-boundary";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../db/init";
@@ -67,6 +68,21 @@ describe("the classifier config", () => {
     expect(() => toClassifierConfig({ model: "m", timeoutSeconds: 30, maxPerPass: 10 })).toThrow("set either command, or baseUrl and model");
   });
 
+  it("allows a bounded longer command budget without changing other model limits", () => {
+    expect(parse({ command: ["desk-classify-mail"], timeoutSeconds: 180 })).toBe(true);
+    expect(parse({ command: ["desk-classify-mail"], timeoutSeconds: 181 })).toBe(false);
+    expect(parse({ command: ["desk-classify-mail"], timeoutSeconds: 0 })).toBe(false);
+    expect(parse({ baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 180 })).toBe(true);
+    const defaults = McSchema.parse({ desk: { mail: { classifier: { command: ["desk-classify-mail"] } } } });
+    expect(defaults.desk.mail.classifier?.timeoutSeconds).toBe(30);
+    expect(McSchema.safeParse({ desk: { mail: { waiting: { model: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 121 } } } } }).success).toBe(false);
+    expect(McSchema.safeParse({ desk: { mail: { digest: { model: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 121 } } } } }).success).toBe(false);
+    expect(McSchema.safeParse({ desk: { mail: { waiting: { model: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 120 } } } } }).success).toBe(true);
+    expect(McSchema.safeParse({ desk: { mail: { digest: { model: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 120 } } } } }).success).toBe(true);
+    expect(McSchema.safeParse({ desk: { ruling: { explainer: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 120 } } } }).success).toBe(true);
+    expect(McSchema.safeParse({ desk: { ruling: { explainer: { baseUrl: "http://127.0.0.1:8080/v1", model: "local", timeoutSeconds: 121 } } } }).success).toBe(false);
+  });
+
   it("keeps the CA file to the endpoint form", () => {
     expect(parse({ command: ["desk-classify-mail"], caFile: "/ca.pem" })).toBe(false);
     expect(parse({ command: ["desk-classify-mail"], apiKeyFile: "~/.key", timeoutSeconds: 75 })).toBe(true);
@@ -82,7 +98,7 @@ describe("the command form", () => {
       calls.push({ argv, timeoutMs, stdin, ...(env ? { env } : {}) });
       return { code: 0, signal: null, stdout: "{\"category\":\"bulk\",\"reason\":\"A newsletter.\"}\n", stderr: "" };
     };
-    const answer = await commandClassifier({ ...COMMAND, apiKeyFile: "/key" }, run, async () => "sk-test")(REQUEST, 75_000);
+    const answer = await commandClassifier({ ...COMMAND, apiKeyFile: "/key" }, run, async () => "sk-test")(REQUEST, 75_000, NOT_LOCAL_CONTENT);
     expect(answer).toEqual({ category: "bulk", reason: "A newsletter." });
     expect(calls[0]?.argv).toEqual(COMMAND.command);
     expect(calls[0]?.timeoutMs).toBe(75_000);
@@ -93,24 +109,24 @@ describe("the command form", () => {
 
   it("runs without an extra environment when no key is configured", async () => {
     let seen: Record<string, string | undefined> | undefined = { x: "y" };
-    await commandClassifier(COMMAND, async (_a, _t, _s, env) => { seen = env; return { code: 0, signal: null, stdout: "{}", stderr: "" }; }, async () => null)(REQUEST, 1000);
+    await commandClassifier(COMMAND, async (_a, _t, _s, env) => { seen = env; return { code: 0, signal: null, stdout: "{}", stderr: "" }; }, async () => null)(REQUEST, 1000, NOT_LOCAL_CONTENT);
     expect(seen).toBeUndefined();
   });
 
   it("fails with the command's last stderr line, a kill, a timeout or a missing JSON answer", async () => {
     const cmd = COMMAND;
     const noKey = async () => null;
-    await expect(commandClassifier(cmd, async () => ({ code: 2, signal: null, stdout: "", stderr: "debug\ndesk-classify-mail: the gateway is unreachable\n" }), noKey)(REQUEST, 1000))
+    await expect(commandClassifier(cmd, async () => ({ code: 2, signal: null, stdout: "", stderr: "debug\ndesk-classify-mail: the gateway is unreachable\n" }), noKey)(REQUEST, 1000, NOT_LOCAL_CONTENT))
       .rejects.toThrow("the classifier command desk-classify-mail.ts exited 2: desk-classify-mail: the gateway is unreachable");
-    await expect(commandClassifier(cmd, async () => ({ code: 0, signal: "SIGKILL", stdout: "", stderr: "" }), noKey)(REQUEST, 1000))
+    await expect(commandClassifier(cmd, async () => ({ code: 0, signal: "SIGKILL", stdout: "", stderr: "" }), noKey)(REQUEST, 1000, NOT_LOCAL_CONTENT))
       .rejects.toThrow("was killed by SIGKILL");
-    await expect(commandClassifier(cmd, ok("not json"), noKey)(REQUEST, 1000)).rejects.toThrow("printed no JSON answer");
-    await expect(commandClassifier({ ...cmd, apiKeyEnv: "UNSET" }, ok("{}"), noKey)(REQUEST, 1000)).rejects.toThrow("the classifier key was not found");
+    await expect(commandClassifier(cmd, ok("not json"), noKey)(REQUEST, 1000, NOT_LOCAL_CONTENT)).rejects.toThrow("printed no JSON answer");
+    await expect(commandClassifier({ ...cmd, apiKeyEnv: "UNSET" }, ok("{}"), noKey)(REQUEST, 1000, NOT_LOCAL_CONTENT)).rejects.toThrow("the classifier key was not found");
   });
 
   it("kills a command that outlives its timeout", async () => {
     const started = Date.now();
-    await expect(commandClassifier({ ...COMMAND, command: ["sleep", "5"] }, runCommand, async () => null)(REQUEST, 300))
+    await expect(commandClassifier({ ...COMMAND, command: ["sleep", "5"] }, runCommand, async () => null)(REQUEST, 300, NOT_LOCAL_CONTENT))
       .rejects.toThrow("the classifier command sleep timed out after 0 s");
     expect(Date.now() - started).toBeLessThan(3000);
   });
@@ -135,6 +151,27 @@ describe("the extra answer fields", () => {
 });
 
 describe("a pass through the command", () => {
+  it("waits ten minutes from each failure before retrying a slow pass", async () => {
+    let clock = NOW + 30_000;
+    let calls = 0;
+    const c = new MailClassifier({ ...COMMAND, maxPerPass: 4, timeoutSeconds: 180 }, async () => {
+      calls++;
+      clock += 150_000;
+      throw new Error("research timeout");
+    }, quiet, () => clock);
+    const items = [mail("slow1"), mail("slow2"), mail("slow3"), mail("slow4")];
+    await c.kick(db, { now: NOW, mail: items, events: [], vips: [] });
+    expect(calls).toBe(4);
+    await c.kick(db, { now: clock, mail: items, events: [], vips: [] });
+    expect(calls).toBe(4);
+    clock = NOW + 750_000;
+    await c.kick(db, { now: clock, mail: items, events: [], vips: [] });
+    expect(calls).toBe(4);
+    clock = NOW + 780_000;
+    await c.kick(db, { now: clock, mail: items, events: [], vips: [] });
+    expect(calls).toBe(5);
+  });
+
   it("sends the mail's account and the mail corrections, and caches the extra fields", async () => {
     const seen: ClassifierRequest[] = [];
     const c = new MailClassifier(COMMAND, async (req) => {

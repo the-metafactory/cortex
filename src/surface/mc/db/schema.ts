@@ -312,6 +312,8 @@ export const SCHEMA_SQL: string[] = [
     CHECK((subject_kind = 'run' AND vocab IS NULL) OR
       (subject_kind = 'state' AND vocab IS NOT NULL AND vocab IN ('goal','escalation','check','unknown')))
   )`,
+  "CREATE INDEX IF NOT EXISTS idx_vigil_subjects_run_ref ON vigil_subjects(run_kind, ref)",
+  "CREATE INDEX IF NOT EXISTS idx_vigil_subjects_vocab_ref ON vigil_subjects(vocab, ref)",
   `CREATE TABLE IF NOT EXISTS vigil_events (
     id TEXT PRIMARY KEY,
     subject_key TEXT NOT NULL REFERENCES vigil_subjects(subject_key),
@@ -1207,6 +1209,7 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
       `CREATE INDEX IF NOT EXISTS idx_observability_origin ON observability_events(origin_kind, origin_peer)`,
     ],
   },
+  { table: "desk_calendar_identities", column: "retired_at", ddl: "ALTER TABLE desk_calendar_identities ADD COLUMN retired_at INTEGER" },
   { table: "desk_mail_classes", column: "details", ddl: "ALTER TABLE desk_mail_classes ADD COLUMN details TEXT" },
   { table: "desk_mail_moves", column: "correction_id", ddl: "ALTER TABLE desk_mail_moves ADD COLUMN correction_id INTEGER" },
   ...HANDOFF_COLUMNS,
