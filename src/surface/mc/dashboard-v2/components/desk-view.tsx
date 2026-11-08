@@ -58,7 +58,7 @@ interface DeskViewProps {
 type DayTarget = { kind: "event"; key: string } | { kind: "proposal" };
 
 export function DeskView(props: DeskViewProps) {
-  if (process.env.NODE_ENV !== "production" && new URLSearchParams(location.search).get("desk") === "adapter-ui-prototype") return <DeskAdapterUiPrototype />;
+  if (process.env.NODE_ENV !== "production" && typeof location !== "undefined" && new URLSearchParams(location.search).get("desk") === "adapter-ui-prototype") return <DeskAdapterUiPrototype />;
   return <LiveDeskView {...props} />;
 }
 
