@@ -134,9 +134,20 @@ describe("attention storage (E.1)", () => {
     expect(getAttentionItem(db, "att-1")).toMatchObject({ status: "resolved", resolution: "approved" });
     expect(setAttentionItemStatus(db, "ghost", "resolved", "expired")).toBe(false);
     expect(dismissAttentionItem(db, "att-1")).toBe(true);
-    expect(getAttentionItem(db, "att-1")).toMatchObject({ status: "dismissed", resolution: "approved" });
+    expect(getAttentionItem(db, "att-1")).toMatchObject({ status: "dismissed", resolution: null });
     expect(setAttentionItemStatus(db, "att-1", "open", null)).toBe(true);
     expect(listOpenAttention(db)[0]).toMatchObject({ status: "open", resolution: null });
+  });
+
+  it("re-upserting an item without a resolution keeps the stored one", () => {
+    const db = freshDb();
+    upsertAttentionItem(db, att({ kind: "proposal", workItemId: null }));
+    setAttentionItemStatus(db, "att-1", "resolved", "approved");
+    const { resolution: _omitted, ...withoutResolution } = att({ kind: "proposal", workItemId: null, status: "resolved" });
+    upsertAttentionItem(db, withoutResolution);
+    expect(getAttentionItem(db, "att-1")).toMatchObject({ status: "resolved", resolution: "approved" });
+    upsertAttentionItem(db, att({ kind: "proposal", workItemId: null, status: "open", resolution: null }));
+    expect(getAttentionItem(db, "att-1")?.resolution).toBeNull();
   });
 
   it("FK SET NULL: deleting the linked work item clears the link, keeps the item", () => {

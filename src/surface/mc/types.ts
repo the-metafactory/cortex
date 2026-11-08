@@ -381,19 +381,22 @@ export interface WorkItem {
 
 // --- Attention (G-1113.E — design §6 / §7.4) ---
 
-export type AttentionKind =
-  | "input_needed"
-  | "permission"
-  | "review"
-  | "state_change"
-  | "proposal"
-  | "result"
-  | "failed_dispatch"
-  | "stale"
-  | "blocked";
+export const ATTENTION_KINDS = [
+  "input_needed",
+  "permission",
+  "review",
+  "failed_dispatch",
+  "stale",
+  "blocked",
+  "state_change",
+  "proposal",
+  "result",
+] as const;
+export type AttentionKind = (typeof ATTENTION_KINDS)[number];
 export type AttentionSeverity = "low" | "normal" | "high" | "critical";
 export type AttentionStatus = "open" | "resolved" | "dismissed";
-export type AttentionResolution = "approved" | "dismissed" | "expired" | "superseded" | "read" | "archived";
+export const ATTENTION_RESOLUTIONS = ["approved", "dismissed", "expired", "superseded", "read", "archived"] as const;
+export type AttentionResolution = (typeof ATTENTION_RESOLUTIONS)[number];
 
 /**
  * One item in the cross-cutting attention queue (design §6 / §7.4) — something
