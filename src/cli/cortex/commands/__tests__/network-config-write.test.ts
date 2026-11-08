@@ -58,22 +58,18 @@ describe("writeNetworksGuarded", () => {
 
   test("a re-write's backup carries the file's actual mode (0600 once key-clamped), never a bare-default 0644", () => {
     writeFileSync(path, "policy:\n  federated:\n    networks: []\n");
-    writeNetworksGuarded(path, [net()], { backupLabel: "rotate-key" }); // clamps to 0600 (key present)
+    writeNetworksGuarded(path, [net()], { backupLabel: "install-key" });
     expect(statSync(path).mode & 0o777).toBe(0o600);
 
-    // A second write (e.g. key rotation) — the file is ALREADY 0600 and
-    // already carries a real payload_key; its backup is a snapshot of that
-    // key-bearing file taken BEFORE this write, and must inherit the same
-    // 0600, not the umask-default a bare `writeFileSync(backupPath, text)`
-    // would otherwise leave it at.
     const rotated = net({ payload_key: Buffer.alloc(32, 1).toString("base64"), payload_key_id: "metafactory/k3" });
     writeNetworksGuarded(path, [rotated], { backupLabel: "rotate-key" });
 
     const backups = readdirSync(tmp).filter((f) => f.includes(".pre-rotate-key-") && f.endsWith(".bak"));
-    expect(backups.length).toBeGreaterThanOrEqual(1);
-    for (const b of backups) {
-      expect(statSync(join(tmp, b)).mode & 0o777).toBe(0o600);
-    }
+    expect(backups.length).toBe(1);
+    const backupPath = join(tmp, backups[0]!);
+    expect(statSync(backupPath).mode & 0o777).toBe(0o600);
+    expect(readNetworksFromConfig(backupPath)[0]!.payload_key).toBe(FAKE_K);
+    expect(readNetworksFromConfig(backupPath)[0]!.payload_key_id).toBe("metafactory/k2");
   });
 
   test("REFUSES a malformed (wrong-length) payload_key BEFORE any fs mutation", () => {
