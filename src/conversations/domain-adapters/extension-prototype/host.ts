@@ -5,7 +5,7 @@ import { canonicalSchema } from "../schema-validation";
 import { ApprovedSnapshotSchema, DispatchRequestSchema, ObjectReadbackSchema, OwnerResultSchema, OwnerSupportSchema } from "../operations/types";
 import type { ObjectReference, SchemaRef } from "../types";
 import { ReadResponseSchema, type DraftingBinding, type PackagedConnector, type ReadBinding } from "./contract";
-import { containedFile, loadPackages, type LoadedPackage, type LoadResult } from "./loader";
+import { containedFile, inspectPackage, loadPackages, type LoadedPackage, type LoadResult } from "./loader";
 
 type Json = unknown;
 type Fields = Record<string, Json>;
@@ -38,6 +38,7 @@ export const draftDigest = (draft: Pick<Draft, "capabilityId" | "fields">): stri
 export class ExtensionHost {
   state: State;
   loaded!: LoadResult;
+  readonly startedAt = new Date().toISOString();
   private readonly continuations = new Map<string, { adapterId: string; capabilityId: string; revision: number; input: Json; cursor: string; expires: number }>();
   private readonly statePath: string;
   readonly packagesRoot: string;
@@ -359,19 +360,30 @@ export class ExtensionHost {
   }
 
   listSamples(): string[] { return existsSync(this.samplesRoot) ? [...new Bun.Glob("*/desk-adapter.json").scanSync(this.samplesRoot)].map(path => path.split("/")[0] ?? "").sort() : []; }
-  install(sample: string): void { if (!this.listSamples().includes(sample)) return; mkdirSync(this.packagesRoot, { recursive: true }); cpSync(join(this.samplesRoot, sample), join(this.packagesRoot, sample), { recursive: true, verbatimSymlinks: true }); this.save(); }
-  approvePackage(packageId: string, releaseDigest: string): void { this.state.approvals[packageId] = releaseDigest; this.save(); }
+  install(sample: string): void { if (!this.listSamples().includes(sample)) return; mkdirSync(this.packagesRoot, { recursive: true }); cpSync(join(this.samplesRoot, sample), join(this.packagesRoot, sample), { recursive: true, verbatimSymlinks: true }); this.loaded.diagnostics = [...this.loaded.diagnostics.filter(entry => entry.dir !== sample), inspectPackage(this.packagesRoot, sample, new Set(this.loaded.active.map(entry => entry.manifest.declaration.adapterId)))]; this.save(); }
+  approvePackage(packageId: string, releaseDigest: string): boolean {
+    const known = this.loaded.diagnostics.some(entry => entry.state === "awaiting-approval" && entry.packageId === packageId && entry.releaseDigest === releaseDigest);
+    if (!known) return false;
+    this.state.approvals[packageId] = releaseDigest;
+    this.save();
+    return true;
+  }
 
-  remove(sample: string): void {
+  remove(sample: string): boolean {
     const diagnostic = this.loaded.diagnostics.find(entry => entry.dir === sample);
     const loaded = this.loaded.active.find(entry => this.dirOf(entry) === sample);
     if (diagnostic?.packageId) delete this.state.approvals[diagnostic.packageId];
+    const needsRestart = !!loaded || diagnostic?.code === "duplicate_adapter";
     if (loaded) {
       this.state.fenced[sample] = true;
       const connection = this.state.connections[loaded.manifest.declaration.adapterId];
       if (connection) { connection.enabled = false; connection.revision += 1; }
-    } else rmSync(join(this.packagesRoot, sample), { recursive: true, force: true });
+    } else {
+      rmSync(join(this.packagesRoot, sample), { recursive: true, force: true });
+      this.loaded.diagnostics = this.loaded.diagnostics.filter(entry => entry.dir !== sample);
+    }
     this.save();
+    return needsRestart;
   }
 
   async connect(adapterId: string, accountScope: Record<string, unknown>, configuration: Record<string, unknown>): Promise<void> {
@@ -428,6 +440,6 @@ export class ExtensionHost {
   }
 
   diagnostics(): Record<string, Json> {
-    return { ownerCalls: this.state.ownerCalls, deniedAttempts: this.state.deniedAttempts, frameIncidents: this.state.frameIncidents, projectionRows: Object.keys(this.state.projection).length, evidenceEntries: Object.keys(this.state.evidence).length, quarantined: this.state.quarantined, packages: this.loaded.diagnostics };
+    return { startedAt: this.startedAt, ownerCalls: this.state.ownerCalls, deniedAttempts: this.state.deniedAttempts, frameIncidents: this.state.frameIncidents, projectionRows: Object.keys(this.state.projection).length, evidenceEntries: Object.keys(this.state.evidence).length, quarantined: this.state.quarantined, packages: this.loaded.diagnostics };
   }
 }

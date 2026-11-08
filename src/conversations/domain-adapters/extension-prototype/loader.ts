@@ -57,6 +57,18 @@ async function stage(dir: string, manifest: PackageManifest, releaseDigest: stri
   return { manifest, dir, releaseDigest, connectors, bindings: created.bindings as LoadedPackage["bindings"] };
 }
 
+export function inspectPackage(root: string, name: string, claimedAdapters: Set<string>): PackageDiagnostic {
+  const dir = join(root, name);
+  try {
+    const { manifest, releaseDigest } = verifiedManifest(dir);
+    const base = { dir: name, packageId: manifest.packageId, releaseDigest, packageVersion: manifest.packageVersion, label: manifest.declaration.label };
+    if (claimedAdapters.has(manifest.declaration.adapterId)) return { ...base, state: "unavailable", code: "duplicate_adapter", message: "Another installed package claims the same adapter identity; neither is used." };
+    return { ...base, state: "awaiting-approval", message: "Approve this exact release before Desk runs its code." };
+  } catch (error) {
+    return { dir: name, packageId: name, state: "unavailable", code: error instanceof Refused ? error.code : "load_failed", message: error instanceof Refused ? error.message : "The package could not be read." };
+  }
+}
+
 export async function loadPackages(root: string, approvals: Record<string, string>): Promise<LoadResult> {
   const registry = new DomainAdapterRegistry();
   const diagnostics: PackageDiagnostic[] = [];

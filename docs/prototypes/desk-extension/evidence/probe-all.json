@@ -1,22 +1,26 @@
 {
  "origin": "http://127.0.0.1:33594",
  "phase": "all",
- "at": "2026-11-08T14:59:07.056Z",
- "passed": 62,
+ "at": "2026-11-08T15:28:53.745Z",
+ "passed": 64,
  "failed": 0,
  "checks": [
   {
-   "name": "install alone runs nothing",
+   "name": "install verifies the package without restarting or running its code",
    "pass": true
   },
   {
-   "name": "restart stops at approval and adapter code has not run",
+   "name": "no restart control exists",
    "pass": true
   },
   {
    "name": "an unapproved adapter offers no draft",
    "pass": true,
    "detail": "Nothing connected here can make that yet. You can add one under Adapters."
+  },
+  {
+   "name": "approval activates the release automatically",
+   "pass": true
   },
   {
    "name": "observation reaches Day as a generic adapter item",
@@ -31,6 +35,7 @@
    "name": "a repeated delivery adds no duplicate row or evidence",
    "pass": true,
    "detail": {
+    "startedAt": "2026-11-08T15:28:22.138Z",
     "ownerCalls": 0,
     "deniedAttempts": 0,
     "frameIncidents": [],
@@ -146,7 +151,7 @@
    "detail": "Reading listWorkCrash-safe receiptsReceipts across a crash are worth coming back to. The piece I read explains why. It also explains the lookup path.WorthrereadTagsreliability, receipts✓ Added to Reading listThe saved result is preserved, but its current details are unavailable."
   },
   {
-   "name": "remove fences immediately",
+   "name": "remove applies automatically and physically removes the package",
    "pass": true
   },
   {
@@ -164,11 +169,11 @@
    "pass": true
   },
   {
-   "name": "restart physically removes the package",
+   "name": "re-adding needs approval again",
    "pass": true
   },
   {
-   "name": "re-adding needs approval again",
+   "name": "approval activates the release automatically",
    "pass": true
   },
   {
@@ -241,6 +246,10 @@
    "name": "duplicate-identity is refused before approval or execution",
    "pass": true,
    "detail": "duplicate_adapter"
+  },
+  {
+   "name": "installing a duplicate does not disturb the running adapter until the next activation",
+   "pass": true
   },
   {
    "name": "duplicate identity disables both claimants, by name not by search order",
@@ -335,8 +344,9 @@
   }
  ],
  "diagnostics": {
+  "startedAt": "2026-11-08T15:28:48.852Z",
   "ownerCalls": 3,
-  "deniedAttempts": 27,
+  "deniedAttempts": 17,
   "frameIncidents": [
    "sample.hostile: forged-or-unknown:action:execute",
    "sample.crash: no-handshake",

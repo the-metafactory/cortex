@@ -49,13 +49,12 @@ The frame's CSP allows scripts and styles only from its own asset path, plus inl
 bun scripts/prototype-desk-extension.ts --fresh --port <port> --state <dir> --samples <dir containing your package directory>
 ```
 
-Under Adapters: Install, restart, approve, restart, Connect. The package identity and digest appear only after the first restart. `sample` is the package's directory name. The JSON API a script can use, all POST with an `Origin` header equal to the server origin:
+Under Adapters: Install, approve, Connect. Install verifies the package without running it; approving restarts Desk automatically. `sample` is the package's directory name. The JSON API a script can use, all POST with an `Origin` header equal to the server origin:
 
 | Path | Body |
 | --- | --- |
 | `/api/adapters/install` | `{ sample }` |
-| `/api/adapters/approve` | `{ packageId, releaseDigest }`, both from `GET /api/view` `adapters[]` |
-| `/api/adapters/restart` | `{}`, then wait about 3 s |
+| `/api/adapters/approve` | `{ packageId, releaseDigest }`, both from `GET /api/view` `adapters[]`; Desk then restarts, so wait about 3 s |
 | `/api/adapters/connect` | `{ adapterId }` |
 | `/api/say` | `{ text }`, for example `find X` or `Turn this into a <label>` |
 | `/api/draft/edit` | `{ id, revision, changes }`, where `changes` is `{ fieldName: value }` |

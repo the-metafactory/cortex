@@ -124,17 +124,17 @@ function Day({ view, run }: { view: View; run: Run }) {
     <ul className="dep-day">{view.day.map(item => <li key={item.key} data-kind={item.kind} data-adapter={item.adapter ?? ""}><div className="dep-day-source">{item.source}{item.area ? ` · ${item.area}` : ""}</div><strong>{item.title}</strong>{item.why && <p>{item.why}</p>}{item.due && <small>Due {item.due}</small>}{item.stale && <small className="dcp-update"> May be out of date</small>}</li>)}</ul></section>;
 }
 
-function Adapters({ view, run, restart }: { view: View; run: Run; restart: () => void }) {
-  return <section aria-label="Adapters"><div className="dcp-heading dep-row"><h1>Adapters</h1><button type="button" data-restart onClick={restart}>Restart Desk</button></div>
+function Adapters({ view, run }: { view: View; run: Run }) {
+  return <section aria-label="Adapters"><div className="dcp-heading dep-row"><h1>Adapters</h1></div>
     <ul className="dep-adapters">{view.adapters.map(adapter => <li key={adapter.sample} data-sample={adapter.sample} data-state={adapter.removing ? "removing" : adapter.state ?? (adapter.installed ? "installed" : "absent")}>
       <div className="dep-row"><strong>{adapter.label ?? adapter.sample}</strong><div className="dep-buttons">
         {!adapter.installed && <button type="button" data-do="install" onClick={() => { void run("/api/adapters/install", { sample: adapter.sample }); }}>Install</button>}
-        {adapter.state === "awaiting-approval" && !adapter.approved && <button type="button" data-do="approve" onClick={() => { void run("/api/adapters/approve", { packageId: adapter.packageId, releaseDigest: adapter.releaseDigest }); }}>Approve this release</button>}
+        {adapter.state === "awaiting-approval" && <button type="button" data-do="approve" onClick={() => { void run("/api/adapters/approve", { packageId: adapter.packageId, releaseDigest: adapter.releaseDigest }); }}>Approve this release</button>}
         {adapter.state === "active" && !adapter.removing && !adapter.connection?.enabled && <button type="button" data-do="connect" onClick={() => { void run("/api/adapters/connect", { adapterId: adapter.adapterId }); }}>Connect</button>}
         {adapter.state === "active" && !adapter.removing && adapter.connection?.enabled && <button type="button" data-do="disconnect" onClick={() => { void run("/api/adapters/disconnect", { adapterId: adapter.adapterId }); }}>Disconnect</button>}
         {adapter.installed && !adapter.removing && <button type="button" data-do="remove" onClick={() => { void run("/api/adapters/remove", { sample: adapter.sample }); }}>Remove</button>}
       </div></div>
-      {adapter.removing ? <p className="dcp-note">Removed from Desk. Saved results stay; its files go at the next restart.</p> : adapter.installed && !adapter.loadedThisRun ? <p className="dcp-note">Installed. Nothing runs until you approve it and restart Desk.</p> : adapter.state === "awaiting-approval" ? <p className="dcp-note">{adapter.approved ? "Approved. Restart Desk to start it." : adapter.message}</p> : adapter.state === "unavailable" ? <p className="dcp-error" data-code={adapter.code}>{adapter.message}</p> : null}
+      {adapter.state === "awaiting-approval" ? <p className="dcp-note">{adapter.message}</p> : adapter.state === "unavailable" ? <p className="dcp-error" data-code={adapter.code}>{adapter.message}</p> : null}
       {adapter.connection?.enabled && adapter.connection.destinations.length > 0 && <table className="dep-scope"><thead><tr><th>Place</th><th>Read</th><th>Add</th></tr></thead><tbody>{adapter.connection.destinations.map((place: any) => <tr key={place.id} data-place={place.label}><td>{place.label}</td>{(["read", "write"] as const).map(kind => <td key={kind}><input type="checkbox" aria-label={`${kind} ${place.label}`} checked={place[kind]} onChange={event => { void run("/api/adapters/destination", { adapterId: adapter.adapterId, id: place.id, kind, allowed: event.target.checked }); }} /></td>)}</tr>)}</tbody></table>}
     </li>)}</ul></section>;
 }
@@ -145,18 +145,19 @@ function App() {
   const [restarting, setRestarting] = useState(false);
   const load = useCallback(async () => { const response = await fetch("/api/view"); setView(await response.json() as View); }, []);
   useEffect(() => { void load(); }, [load]);
-  const run: Run = useCallback(async (path, body) => { const response = await fetch(path, { method: "POST", body: JSON.stringify(body ?? {}) }); if (response.ok) setView(await response.json() as View); }, []);
-  const restart = () => {
+  const run: Run = useCallback(async (path, body) => {
+    const response = await fetch(path, { method: "POST", body: JSON.stringify(body ?? {}) });
+    if (!response.ok) return;
+    const answer = await response.json() as View & { restarting?: boolean };
+    if (!answer.restarting) { setView(answer); return; }
     setRestarting(true);
-    void fetch("/api/adapters/restart", { method: "POST", body: "{}" }).finally(() => {
-      const wait = () => { setTimeout(() => { void load().then(() => { setRestarting(false); }, wait); }, 300); };
-      wait();
-    });
-  };
+    const wait = () => { setTimeout(() => { void load().then(() => { setRestarting(false); }, wait); }, 300); };
+    wait();
+  }, [load]);
   if (!view) return <p className="dep-loading">Loading…</p>;
   return <div className="dcp" data-extension-prototype data-restarting={restarting}>
     <header className="dcp-top"><span className="dcp-brand"><span className="desk-mark" />Desk</span><nav className="dep-nav">{(["conversation", "day", "adapters"] as const).map(name => <button type="button" key={name} aria-current={pane === name ? "page" : undefined} onClick={() => { setPane(name); }}>{name === "conversation" ? "Conversation" : name === "day" ? "Day" : "Adapters"}</button>)}</nav><span className="dcp-sample">Sample data</span></header>
-    <main className="dcp-main">{restarting ? <p role="status">Restarting Desk…</p> : pane === "conversation" ? <Conversation view={view} run={run} /> : pane === "day" ? <Day view={view} run={run} /> : <Adapters view={view} run={run} restart={restart} />}</main>
+    <main className="dcp-main">{restarting ? <p role="status">Applying the change…</p> : pane === "conversation" ? <Conversation view={view} run={run} /> : pane === "day" ? <Day view={view} run={run} /> : <Adapters view={view} run={run} />}</main>
   </div>;
 }
 

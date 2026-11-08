@@ -36,6 +36,7 @@ const common = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff
 const parentPolicy = `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src ${origin}/adapter-assets/; object-src 'none'; base-uri 'none'; form-action 'none'`;
 const framePolicy = (digest: string): string => `default-src 'none'; script-src ${origin}/adapter-assets/${digest}/; style-src ${origin}/adapter-assets/${digest}/ 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; frame-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`;
 const json = (value: unknown): Response => Response.json(value, { headers: common });
+const managedRestart = (): Response => { setTimeout(() => process.exit(RESTART), 50); return json({ restarting: true }); };
 
 Bun.serve({ hostname: "127.0.0.1", port, idleTimeout: 60, async fetch(request) {
   const url = new URL(request.url);
@@ -51,12 +52,12 @@ Bun.serve({ hostname: "127.0.0.1", port, idleTimeout: 60, async fetch(request) {
     case "/api/refresh": await host.poll(); return json(host.view());
     case "/api/frame-incident": host.frameIncident(body.adapterId, body.reason); return json({ ok: true });
     case "/api/adapters/install": host.install(body.sample); return json(host.view());
-    case "/api/adapters/approve": host.approvePackage(body.packageId, body.releaseDigest); return json(host.view());
-    case "/api/adapters/remove": host.remove(body.sample); return json(host.view());
+    case "/api/adapters/approve": return host.approvePackage(body.packageId, body.releaseDigest) ? managedRestart() : new Response("Unknown release", { status: 409, headers: common });
+    case "/api/adapters/remove": return host.remove(body.sample) ? managedRestart() : json(host.view());
     case "/api/adapters/connect": await host.connect(body.adapterId, { account: "prototype-account" }, {}); return json(host.view());
     case "/api/adapters/disconnect": host.disconnect(body.adapterId); return json(host.view());
     case "/api/adapters/destination": host.setDestination(body.adapterId, body.id, body.kind, body.allowed); return json(host.view());
-    case "/api/adapters/restart": setTimeout(() => process.exit(RESTART), 50); return json({ restarting: true });
+    case "/__prototype/restart": return managedRestart();
     case "/__prototype/diagnostics": return json({ ...host.diagnostics(), syntheticReceiverRequests: received });
     default:
   }

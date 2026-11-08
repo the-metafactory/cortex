@@ -11,7 +11,7 @@ bun install --frozen-lockfile
 bun scripts/prototype-desk-extension.ts --fresh --port 33594
 ```
 
-Open <http://127.0.0.1:33594/>. Under Adapters: Install, Restart Desk, Approve this release, Restart Desk, Connect. Then try the sentences below. All data is synthetic, with no provider, credential or account.
+Open <http://127.0.0.1:33594/>. Under Adapters: Install, Approve this release, Connect. Approving and removing restart Desk for you. Then try the sentences below. All data is synthetic, with no provider, credential or account.
 
 | Adapter | Try |
 | --- | --- |
@@ -20,7 +20,9 @@ Open <http://127.0.0.1:33594/>. Under Adapters: Install, Restart Desk, Approve t
 | `plant-care`, written without seeing the host | `I bought a monstera for the study.`, then `Turn this into a plant` |
 | `tide-tables`, read-only, no custom view | `find spring`; `Turn this into a tide` |
 | `routing`, a schema the shared editor cannot represent | `Turn this into a route` |
-| `broken-*`, `duplicate-identity`, `crashing-view`, `hostile-view` | Install and restart: each is refused, or falls back to the safe rendering |
+| `broken-digest`, `broken-format`, `broken-symlink`, `duplicate-identity` | Install: refused without running any code |
+| `broken-throws`, `broken-mismatch` | Install, approve: unavailable, and other adapters keep working |
+| `crashing-view`, `hostile-view` | Install, approve, Connect, `find Prop`: falls back to the safe rendering |
 
 Clear a Read or Add box under Adapters to see a denied destination. Remove takes an adapter out at once and keeps saved receipts.
 
@@ -44,13 +46,14 @@ Clear a Read or Add box under Adapters to see a denied destination. Remove takes
 | F5 | `registerConnector(capabilityId, connection => connector)` | `OwnerSupport` names a connection, but module registration happens before any connection exists | #3309, #3321 |
 | F6 | Stop requiring a registry handler for `action` capabilities | Actions dispatch through the connector, so every package ships a dead throwing stub. Merged registry change. | #3299 follow-up, #3309 |
 | F7 | Pin the drafting field hint vocabulary: `role`, `resolveWith`, `widget` | The approved binding names field hints but not their meanings | #3318 |
-| F8 | Verify manifests at install, without running code | Approval needs the release digest, and this prototype only learns it at restart, forcing an extra restart | #3321, #3324 |
+| F8 | Verify manifests at install, without running code | Approval needs the release digest; the first version of this prototype learned it only at restart. Implemented here. | #3321, #3324 |
 | F9 | Define what `readbackCapabilityId` must point to | The blind author had to guess; the prototype never checks it | #3310 |
+| F11 | No manual restart: Approve and Remove each trigger the managed activation; Install never does | Principal ruling on acceptance. A person should not operate restarts. Installation still restarts nothing. | #3321, #3324, #3313 |
 | F10 | Default query results to host rendering; mount a custom view for an opened object | One sandboxed frame per result item is heavy: one conversation mounted 8 | #3326, #3329 |
 
 ## Edits the real Desk still needs
 
-None of these branches on an adapter's domain. No existing file differs from main on this branch, because the prototype runs in its own shell.
+None of these branches on an adapter's domain. No existing source file differs from main on this branch, because the prototype runs in its own shell.
 
 | Core seam | Edit | Evidence |
 | --- | --- | --- |

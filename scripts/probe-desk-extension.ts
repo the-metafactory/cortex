@@ -27,8 +27,8 @@ page.on("pageerror", error => pageErrors.push(error.message));
 
 const pane = (name: string) => page.getByRole("navigation").getByRole("button", { name, exact: true }).click();
 const row = (sample: string) => page.locator(`[data-sample="${sample}"]`);
-const act = async (sample: string, action: string): Promise<void> => { await row(sample).locator(`[data-do="${action}"]`).click(); await page.waitForTimeout(150); };
-const restart = async (): Promise<void> => { await pane("Adapters"); await page.locator("[data-restart]").click(); await page.waitForTimeout(600); await page.locator("[data-restarting=false]").waitFor({ timeout: 20_000 }); await page.waitForSelector("[data-sample]"); };
+const act = async (sample: string, action: string): Promise<void> => { await row(sample).locator(`[data-do="${action}"]`).click(); await page.waitForTimeout(action === "approve" || action === "remove" ? 500 : 150); await page.locator("[data-restarting=false]").waitFor({ timeout: 20_000 }); await page.waitForSelector("[data-sample]"); };
+const restart = async (): Promise<void> => { await page.evaluate(() => fetch("/__prototype/restart", { method: "POST", body: "{}" })); await page.waitForTimeout(2500); await page.reload(); await page.waitForSelector("[data-extension-prototype]"); await pane("Adapters"); await page.waitForSelector("[data-sample]"); };
 const stateOf = (sample: string) => row(sample).getAttribute("data-state");
 const say = async (text: string): Promise<void> => { await pane("Conversation"); await page.getByLabel("Message Ivy").fill(text); await page.getByRole("button", { name: "Send message" }).click(); await page.waitForTimeout(350); };
 const lastIvy = async (): Promise<string> => (await page.locator(".dcp-ivy p").last().textContent()) ?? "";
@@ -37,9 +37,7 @@ const adapterFrames = (adapterId: string): Promise<Frame[]> => page.locator(`ifr
 const bringUp = async (sample: string, connect = true): Promise<void> => {
   await pane("Adapters");
   await act(sample, "install");
-  await restart();
   await act(sample, "approve");
-  await restart();
   if (connect) await act(sample, "connect");
 };
 const dayText = async (): Promise<string> => { await pane("Day"); return (await page.locator(".dep-day").textContent()) ?? ""; };
@@ -49,10 +47,10 @@ await page.waitForSelector("[data-extension-prototype]");
 
 if (phase === "all" || phase === "a") {
   await pane("Adapters");
+  const startedBefore = (await diagnostics()).startedAt;
   await act("reading-list", "install");
-  check("install alone runs nothing", (await diagnostics()).packages.length === 0 && (await row("reading-list").textContent())?.includes("Nothing runs until") === true);
-  await restart();
-  check("restart stops at approval and adapter code has not run", await stateOf("reading-list") === "awaiting-approval");
+  check("install verifies the package without restarting or running its code", (await diagnostics()).startedAt === startedBefore && await stateOf("reading-list") === "awaiting-approval" && await row("reading-list").locator('[data-do="approve"]').count() === 1);
+  check("no restart control exists", await page.getByRole("button", { name: /restart/i }).count() === 0);
   await say("Turn this into an article");
   check("an unapproved adapter offers no draft", (await lastIvy()).includes("Nothing connected"), await lastIvy());
   await bringUp2("reading-list");
@@ -160,16 +158,14 @@ if (phase === "all" || phase === "a") {
   await shot("missing-object");
   await pane("Adapters");
   await act("reading-list", "remove");
-  check("remove fences immediately", await stateOf("reading-list") === "removing");
+  check("remove applies automatically and physically removes the package", !existsSync(join(state, "packages/reading-list")) && await stateOf("reading-list") === "absent");
   const dayRemoved = await dayText();
   check("remove takes the adapter off Day at once", !dayRemoved.includes("Receipts that survive"), dayRemoved);
   await say("find crash");
   check("remove takes the adapter out of queries at once", (await lastIvy()).includes("Nothing connected"), await lastIvy());
   check("remove keeps the saved receipt", (await page.locator('article[aria-label="Saved article"]').first().textContent())?.includes("Crash-safe receipts") === true);
-  await restart();
-  check("restart physically removes the package", !existsSync(join(state, "packages/reading-list")) && await stateOf("reading-list") === "absent");
+  await pane("Adapters");
   await act("reading-list", "install");
-  await restart();
   check("re-adding needs approval again", await stateOf("reading-list") === "awaiting-approval");
   await bringUp2("reading-list");
   check("re-adding brings the capability back", (await dayText()).includes("Receipts that survive"));
@@ -225,13 +221,13 @@ if (phase === "all" || phase === "b") {
   for (const [sample, code] of [["broken-digest", "digest_mismatch"], ["broken-format", "unsupported_manifest"], ["broken-symlink", "path_escape"], ["duplicate-identity", "duplicate_adapter"]] as const) {
     await pane("Adapters");
     await act(sample, "install");
-    await restart();
     const observed = await row(sample).locator("[data-code]").getAttribute("data-code").catch(() => null);
     check(`${sample} is refused before approval or execution`, observed === code, observed);
     if (sample === "duplicate-identity") {
+      check("installing a duplicate does not disturb the running adapter until the next activation", await stateOf("reading-list") === "active");
+      await restart();
       check("duplicate identity disables both claimants, by name not by search order", await stateOf("reading-list") === "unavailable" && await row("reading-list").locator("[data-code]").getAttribute("data-code") === "duplicate_adapter");
       await act(sample, "remove");
-      await restart();
       check("removing the duplicate restores the original", await stateOf("reading-list") === "active");
     }
   }
@@ -280,7 +276,8 @@ process.exit(checks.every(entry => entry.pass) ? 0 : 1);
 
 async function bringUp2(sample: string): Promise<void> {
   await pane("Adapters");
+  const started = (await diagnostics()).startedAt;
   await act(sample, "approve");
-  await restart();
+  check("approval activates the release automatically", (await diagnostics()).startedAt !== started && await stateOf(sample) === "active");
   await act(sample, "connect");
 }
