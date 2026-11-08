@@ -1,3 +1,5 @@
+// glossary-ignore: node, path, listener, data
+import { runIsolated } from "../../src/common/run-isolated";
 import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 
@@ -7,6 +9,7 @@ function measure(mode: "delivered" | "lost" | "close-lost" | "late" | "io-error"
     import * as fs from "node:fs";
     import { basename } from "node:path";
     const { writeFileSync, mkdtempSync, existsSync } = fs;
+    const mode = ${JSON.stringify(mode)};
     const active = new Map();
     let root;
     let target;
@@ -17,22 +20,22 @@ function measure(mode: "delivered" | "lost" | "close-lost" | "late" | "io-error"
       watch: (dir, _options, listener) => {
         active.set(dir, listener);
         if (basename(dir) === "target") target = dir;
-        if (basename(dir) === "other") disturbed = ${JSON.stringify(mode)} !== "close-lost";
+        if (basename(dir) === "other") disturbed = mode !== "close-lost";
         return { close() {
           active.delete(dir);
           if (basename(dir) === "other") disturbed = true;
         } };
       },
       writeFileSync: (path, data) => {
-        if (${JSON.stringify(mode)} === "io-error" && disturbed) throw new Error("fixture write denied");
+        if (mode === "io-error" && disturbed) throw new Error("fixture write denied");
         writeFileSync(path, data);
-        if (["lost", "close-lost"].includes(${JSON.stringify(mode)}) && disturbed) return;
+        if (["lost", "close-lost"].includes(mode) && disturbed) return;
         const listener = active.get(target);
-        const delay = ${JSON.stringify(mode)} === "late" && disturbed ? 40 : 0;
+        const delay = mode === "late" && disturbed ? 40 : 0;
         setTimeout(() => listener("rename", basename(path)), delay);
       },
     }));
-    const { probeFsWatchChurn } = await import(${JSON.stringify(fileURLToPath(new URL("../probe-fs-watch-churn.ts", import.meta.url)))});
+    const { probeFsWatchChurn } = await import(${JSON.stringify(fileURLToPath(new URL("../../src/common/fs-watch-churn-probe.ts", import.meta.url)))});
     let result;
     try {
       result = await probeFsWatchChurn({ watcherCount: 2, trials: 2, settleMs: 0, timeoutMs: 20, graceMs: 80 });
@@ -41,13 +44,9 @@ function measure(mode: "delivered" | "lost" | "close-lost" | "late" | "io-error"
     }
     console.log(JSON.stringify({ result, active: active.size, exists: existsSync(root) }));
   `;
-  const child = Bun.spawnSync([process.execPath, "--eval", source], {
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 5000,
-  });
-  expect({ code: child.exitCode, stderr: child.stderr.toString() }).toEqual({ code: 0, stderr: "" });
-  const measured = JSON.parse(child.stdout.toString());
+  const child = runIsolated(source);
+  expect({ code: child.exitCode, stderr: child.stderr }).toEqual({ code: 0, stderr: "" });
+  const measured = JSON.parse(child.stdout);
   expect(measured.active).toBe(0);
   expect(measured.exists).toBe(false);
   return measured.result;

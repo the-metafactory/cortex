@@ -1,3 +1,4 @@
+<!-- glossary-ignore: node -->
 # macOS suite evidence (work-graph node #2576)
 
 The follow-up [native watcher churn evidence](cortex-fs-watch-churn.md) for

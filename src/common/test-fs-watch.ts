@@ -3,7 +3,7 @@ import { describe } from "bun:test";
 import { mkdtempSync, rmSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { probeFsWatchChurn } from "../../scripts/probe-fs-watch-churn";
+import { probeFsWatchChurn } from "./fs-watch-churn-probe";
 
 const PROBE_TIMEOUT_MS = 10_000;
 
