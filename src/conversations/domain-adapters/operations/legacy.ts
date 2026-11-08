@@ -67,7 +67,7 @@ export function previewLegacyOperation(raw: LegacySource, mapping?: LegacyContex
   if (!record.owner.startsWith("balance-") && !record.owner.startsWith("studio-") && !record.owner.startsWith("graph-") && record.owner !== "flow") issues.push("legacy_owner_identity_mapping_missing");
   const evidence = { source, context, issues };
   const ownerRequestId = record.owner.startsWith("balance-") ? operationUuid(record.operationId) : record.owner.startsWith("studio-") || record.owner.startsWith("graph-") || record.owner === "flow" ? studioRequestId(record.operationId) : record.operationId;
-  return { ...evidence, sourceDigest: hash(evidence), state: record.state === "created" && validCanonical && issues.length === 0 ? "succeeded" : "uncertain", dispatchAllowed: false, retryAllowed: false, ownerRequestId };
+  return { ...evidence, sourceDigest: hash(evidence), state: record.state === "created" && validCanonical ? "succeeded" : "uncertain", dispatchAllowed: false, retryAllowed: false, ownerRequestId };
 }
 
 export async function importLegacyOperation(store: OperationJournalStore, source: LegacySource, mapping: LegacyContext | undefined, importedAt: string): Promise<StoredOperation> {
@@ -110,8 +110,9 @@ export function projectLegacyOperation(raw: unknown, binding?: Pick<LegacyContex
   }
   if ("kind" in journal.snapshot) throw new UpgradeRequired();
   const snapshot = journal.snapshot;
+  if (binding?.owner !== "balance-task" || binding.adapterId !== "balance" || binding.capabilityId !== "balance.task.create") throw new UpgradeRequired();
   const approval = journal.events.find(item => item.event.kind === "approved");
-  if (approval?.event.kind !== "approved" || snapshot.capabilityId !== binding?.capabilityId || snapshot.adapterId !== binding.adapterId || snapshot.connectionId !== binding.connectionId) throw new UpgradeRequired();
+  if (approval?.event.kind !== "approved" || snapshot.capabilityId !== binding.capabilityId || snapshot.adapterId !== binding.adapterId || snapshot.connectionId !== binding.connectionId) throw new UpgradeRequired();
   const states: Partial<Record<OperationJournal["state"], OperationRecord["state"]>> = { confirmed: "confirmed", dispatching: "running", pending: "running", uncertain: "uncertain" };
   let state = states[journal.state];
   let canonicalId: string | undefined;

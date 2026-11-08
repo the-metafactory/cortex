@@ -133,3 +133,28 @@ test("legacy-only and preapproval projections require an upgraded reader rather 
     expect(evidence.kind === "legacy" ? evidence.source.record.state : null).toBe(state);
   }
 });
+
+
+test("F1 historical completed success survives missing or changed mapping context without execution eligibility", async () => {
+  for (const edited of [false, true]) {
+    const host = await open();
+    const source = legacyFixture();
+    if (edited) {
+      source.proposal.revision++;
+      source.proposal.fields.title = "Edited after completion";
+    }
+    const imported = await importLegacyOperation(host.journal, source, edited ? legacyContext(source) : undefined, AT);
+    expect(imported.journal.state).toBe("succeeded");
+    expect(imported.retryBlocked).toBe(true);
+    expect(() => projectLegacyOperation(imported)).toThrow(UpgradeRequired);
+    const evidence = readOperationEvidence(imported);
+    expect(evidence.kind === "legacy" ? evidence.source.record.state : null).toBe("created");
+    expect(evidence.kind === "legacy" ? evidence.issues.length : 0).toBeGreaterThan(0);
+  }
+});
+
+test("lifecycle projection rejects an owner label forged onto a supported capability", async () => {
+  const host = await open();
+  const lifecycle = await host.journal.approve(approvalFixture());
+  expect(() => projectLegacyOperation(lifecycle, { owner: "graph-node", adapterId: "balance", connectionId: "connection-example", capabilityId: "balance.task.create" })).toThrow(UpgradeRequired);
+});
