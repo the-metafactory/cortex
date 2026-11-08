@@ -306,6 +306,20 @@ export class AuthorityMediator {
     return resolved;
   }
 
+  async preflight(context: HostContext, operationId: string, supplied: Authority, lease: WriterLease, purpose: "mutation" | "cancellation", cancelId?: string): Promise<{ kind: "allowed" } | Denial> {
+    try {
+      const checkedLease = parseWire(LeaseSchema, lease);
+      const stored = await this.journal.read(operationId);
+      if (!stored || "kind" in stored.journal.snapshot) return denied("review-again");
+      const snapshot = stored.journal.snapshot;
+      const resolved = await this.mutationCheck(context, stored, supplied, purpose, cancelId);
+      if (!await this.bindings.writer(checkedLease, snapshot)) return denied("operator-cutover");
+      const connector = this.connectors.get(resolved.connection.connectorId);
+      const bound = connector?.support.adapterId === snapshot.adapterId && connector.support.connectionId === snapshot.connectionId && connector.support.capabilityId === snapshot.capabilityId && connector.support.declarationId === resolved.connection.executionBindingRef;
+      return bound ? { kind: "allowed" } : denied();
+    } catch (error) { return denied(error instanceof Error ? "review-again" : "retry-later"); }
+  }
+
   async dispatch(context: HostContext, raw: DispatchRequest, lease: WriterLease): Promise<{ kind: "admitted" } | Denial> {
     return this.invokeMutation(context, raw, lease, "dispatch");
   }
