@@ -59,11 +59,16 @@ function headRecord(state: AuthorityState, kind: HostRecord["kind"], id: string)
   const record = state.records[`${kind}:${id}`]?.at(-1);
   return record?.kind === kind ? record.value : undefined;
 }
-interface ReadOptions { ref?: ObjectReference; validate?: (value: Json) => boolean; observed?: ObservedRead; signal?: AbortSignal }
+interface ReadOptions { ref?: ObjectReference; validate?: (value: Json) => boolean; observed?: ObservedRead; signal?: AbortSignal; scopes?: ReadScope[] }
+export type ReadScope = Pick<ApprovedSnapshot, "capabilityId" | "destinations"> & Partial<Pick<ApprovedSnapshot, "sources" | "policy">>
+type HostScope = Required<ReadScope>
+const hostScopesOf = (scopes: readonly ReadScope[] = []): HostScope[] => scopes.map(scope => ({ capabilityId: scope.capabilityId, destinations: scope.destinations, sources: scope.sources ?? [], policy: scope.policy ?? "local" }))
 interface Resolved { binding: AuthenticatedBinding; principal: PrincipalBinding; connection: ConnectionRecord; restrictions: RestrictionRecord[]; policy: PolicyInputs; vector: Json; policyRevision: string; revision: string; heads: Record<string, number> }
 interface Basis { kind: "confirmation"; confirmationId: string } 
 interface GrantBasis { kind: "grant"; grantId: string }
 type ApprovalInput = Omit<Approval, "authority" | "at">;
+
+const HOST_DATA_SUBJECT = "host-data";
 
 export class AuthorityMediator {
   private readonly contexts = new WeakMap<HostContext, AuthenticatedBinding>();
@@ -136,7 +141,7 @@ export class AuthorityMediator {
     return authorityHash({ revision, host: this.hostRevision(), publication: this.publication.head });
   }
 
-  private async resolve(context: HostContext, connectionId: string, snapshot?: ApprovedSnapshot, readRef?: ObjectReference, readRestrictionRef?: string): Promise<Resolved> {
+  private async resolve(context: HostContext, connectionId: string, snapshot?: ApprovedSnapshot, readRef?: ObjectReference, readRestrictionRef?: string, hostScopes: readonly HostScope[] = []): Promise<Resolved> {
     const revision = this.currentRevision();
     const binding = this.bound(context);
     const authenticated = await this.bindings.authenticate(binding.authenticatedSessionRef);
@@ -154,7 +159,7 @@ export class AuthorityMediator {
     const host = await this.hostPolicy(binding.conversationId);
     if (host.principal !== principal.principal || host.stack !== principal.stack) throw new Error("Conversation identity mismatch.");
     if (snapshot && (snapshot.provenance.conversationId !== binding.conversationId || snapshot.connectionId !== connectionId || snapshot.adapterId !== connection.adapterId)) throw new Error("Snapshot binding mismatch.");
-    const sources = [...(snapshot?.sources ?? [])];
+    const sources = [...(snapshot?.sources ?? []), ...hostScopes.flatMap(scope => scope.sources)];
     if (readRef) {
       const records = Object.values(state.records).map(values => values.at(-1)).filter(record => record?.kind === "restriction" && canonicalWire(record.value.source) === canonicalWire(readRef));
       if (records.length !== 1 || records[0]?.kind !== "restriction" || readRestrictionRef !== undefined && records[0].value.restrictionRef !== readRestrictionRef) throw new Error("Current object provenance is unavailable.");
@@ -186,8 +191,9 @@ export class AuthorityMediator {
     return denied(recovery);
   }
 
-  private readable(resolved: Resolved, snapshot?: ApprovedSnapshot): boolean {
-    return resolved.policy.operationVisible && resolved.policy.readsAllowed && (!snapshot || resolved.connection.readCapabilityIds.includes(snapshot.capabilityId) && withinLimits(resolved.connection.readDestinations, snapshot.destinations));
+  private readable(resolved: Resolved, snapshot?: ReadScope, scopes: ReadScope[] = []): boolean {
+    const inScope = (scope: ReadScope): boolean => resolved.connection.readCapabilityIds.includes(scope.capabilityId) && withinLimits(resolved.connection.readDestinations, scope.destinations);
+    return resolved.policy.operationVisible && resolved.policy.readsAllowed && (!snapshot || inScope(snapshot)) && scopes.every(inScope);
   }
 
   private basis(state: AuthorityState, resolved: Resolved, operationId: string, snapshot: ApprovedSnapshot, basis: Basis | GrantBasis, purpose: "mutation" | "cancellation", cancelId?: string): Authority["basis"] {
@@ -413,9 +419,10 @@ export class AuthorityMediator {
     });
   }
 
-  private sinkAllowed(resolved: Resolved, snapshot: ApprovedSnapshot | undefined, sink: ReleaseSink): boolean {
+  private sinkAllowed(resolved: Resolved, snapshot: ApprovedSnapshot | undefined, sink: ReleaseSink, hostScopes: readonly HostScope[] = []): boolean {
+    const anyLocal = snapshot?.policy === "local" || hostScopes.some(scope => scope.policy === "local");
     const b = resolved.binding;
-    return !b.maintenance && sink.kind === b.audience && sink.conversationId === b.conversationId && (sink.kind !== "model" || sink.route === b.route) && (sink.kind !== "view" || sink.viewId === b.viewId) && resolved.policy.releaseAllowed && resolved.policy.allowedAudiences.includes(sink.kind) && this.readable(resolved, snapshot) && resolved.restrictions.every(record => record.audiences.includes(sink.kind)) && !(resolved.restrictions.some(record => record.egress === "local") && resolved.policy.conversationPolicy === "cloud") && !((resolved.policy.conversationPolicy === "local" || snapshot?.policy === "local" || resolved.restrictions.some(record => record.egress === "local")) && (sink.kind === "discord" || sink.kind === "model" && sink.route !== "local"));
+    return !b.maintenance && sink.kind === b.audience && sink.conversationId === b.conversationId && (sink.kind !== "model" || sink.route === b.route) && (sink.kind !== "view" || sink.viewId === b.viewId) && resolved.policy.releaseAllowed && resolved.policy.allowedAudiences.includes(sink.kind) && this.readable(resolved, snapshot, [...hostScopes]) && resolved.restrictions.every(record => record.audiences.includes(sink.kind)) && !(resolved.restrictions.some(record => record.egress === "local") && resolved.policy.conversationPolicy === "cloud") && !((resolved.policy.conversationPolicy === "local" || anyLocal || resolved.restrictions.some(record => record.egress === "local")) && (sink.kind === "discord" || sink.kind === "model" && sink.route !== "local"));
   }
 
   async release(context: HostContext, evidenceRef: string, rawSink: ReleaseSink): Promise<ReleaseProjection<Json>> {
@@ -428,13 +435,13 @@ export class AuthorityMediator {
         const evidence = state.evidence[evidenceRef];
         if (!evidence?.releasable || evidence.readRef && !evidence.readRestrictionRef) return withheld();
         const snapshot = evidence.snapshot ? validateSnapshot(this.registry, evidence.snapshot) : undefined;
-        const resolved = await this.resolve(context, evidence.connectionId, snapshot, evidence.readRef, evidence.readRestrictionRef);
-        if (accountBinding(resolved.connection) !== evidence.accountBindingDigest || evidence.readRef && !this.readbackAllowed(resolved, evidence.readRef) || !this.sinkAllowed(resolved, snapshot, sink)) return withheld(resolved.policy.operationVisible);
+        const resolved = await this.resolve(context, evidence.connectionId, snapshot, evidence.readRef, evidence.readRestrictionRef, evidence.hostScopes);
+        if (accountBinding(resolved.connection) !== evidence.accountBindingDigest || evidence.readRef && !this.readbackAllowed(resolved, evidence.readRef) || !this.sinkAllowed(resolved, snapshot, sink, evidence.hostScopes)) return withheld(resolved.policy.operationVisible);
         const send = this.sinks.get(canonicalWire(sink));
         if (!send) return withheld(resolved.policy.operationVisible);
         const decision = await this.commit(state => this.decision(state, resolved, "release", evidenceRef, json({ kind: "read" }), snapshot));
-        const final = await this.resolve(context, evidence.connectionId, snapshot, evidence.readRef, evidence.readRestrictionRef);
-        if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || evidence.readRef && !this.readbackAllowed(final, evidence.readRef) || !this.sinkAllowed(final, snapshot, sink)) return withheld(final.policy.operationVisible);
+        const final = await this.resolve(context, evidence.connectionId, snapshot, evidence.readRef, evidence.readRestrictionRef, evidence.hostScopes);
+        if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || evidence.readRef && !this.readbackAllowed(final, evidence.readRef) || !this.sinkAllowed(final, snapshot, sink, evidence.hostScopes)) return withheld(final.policy.operationVisible);
         pending = send(structuredClone(evidence.value));
         return { kind: "released" as const, value: structuredClone(evidence.value), decisionRef: decision.decisionRef };
       });
@@ -508,6 +515,11 @@ export class AuthorityMediator {
     } catch { observed.projection = withheld(); return observed; }
   }
 
+  async projectHostData(context: HostContext, connectionId: string, sink: ReleaseSink, derive: () => Promise<Json>, scopes: ReadScope[] = []): Promise<ReleaseProjection<Json>> {
+    try { return await this.read(context, connectionId, undefined, sink, () => derive(), { scopes }); }
+    catch { return withheld(); }
+  }
+
   private readbackAllowed(resolved: Resolved, ref: ObjectReference): boolean {
     const connector = this.connectors.get(resolved.connection.connectorId);
     const capability = connector?.readbackCapabilityId ? this.registry.capability(connector.readbackCapabilityId) : undefined;
@@ -534,19 +546,20 @@ export class AuthorityMediator {
     } catch { observed.projection = withheld(); return observed; }
   }
 
-  private async read(context: HostContext, connectionId: string, snapshot: ApprovedSnapshot | undefined, sink: ReleaseSink, fetch: (connector: TrustedConnector) => Promise<Json>, { ref, validate, observed, signal }: ReadOptions = {}): Promise<ReleaseProjection<Json>> {
+  private async read(context: HostContext, connectionId: string, snapshot: ApprovedSnapshot | undefined, sink: ReleaseSink, fetch: (connector: TrustedConnector) => Promise<Json>, { ref, validate, observed, signal, scopes }: ReadOptions = {}): Promise<ReleaseProjection<Json>> {
+    const hostScopes = hostScopesOf(scopes);
     let pending: Promise<Json> | undefined;
     let readAccount: string | undefined;
     let readRestrictionRef: string | undefined;
     const outcome = await this.exclusive(async () => {
       const publicationHead = this.publication.head;
-      const resolved = await this.resolve(context, connectionId, snapshot, ref);
-      if (!this.readable(resolved, snapshot) || ref && (!this.readbackAllowed(resolved, ref) || !this.sinkAllowed(resolved, snapshot, sink))) return withheld(resolved.policy.operationVisible);
+      const resolved = await this.resolve(context, connectionId, snapshot, ref, undefined, hostScopes);
+      if (!this.readable(resolved, snapshot, scopes) || ref && (!this.readbackAllowed(resolved, ref) || !this.sinkAllowed(resolved, snapshot, sink))) return withheld(resolved.policy.operationVisible);
       const connector = this.connectors.get(resolved.connection.connectorId);
       if (!connector) return withheld();
-      await this.commit(state => this.decision(state, resolved, "read", snapshot?.digest ?? canonicalWire(ref), json({ kind: "read" }), snapshot));
-      const final = await this.resolve(context, connectionId, snapshot, ref);
-      if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || ref && (!this.readbackAllowed(final, ref) || !this.sinkAllowed(final, snapshot, sink)) || !this.readable(final, snapshot)) return withheld(final.policy.operationVisible);
+      await this.commit(state => this.decision(state, resolved, "read", snapshot?.digest ?? (ref ? canonicalWire(ref) : HOST_DATA_SUBJECT), json({ kind: "read" }), snapshot));
+      const final = await this.resolve(context, connectionId, snapshot, ref, undefined, hostScopes);
+      if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || ref && (!this.readbackAllowed(final, ref) || !this.sinkAllowed(final, snapshot, sink)) || !this.readable(final, snapshot, scopes)) return withheld(final.policy.operationVisible);
       readAccount = accountBinding(final.connection);
       readRestrictionRef = ref ? final.restrictions.find(record => canonicalWire(record.source) === canonicalWire(ref))?.restrictionRef : undefined;
       if (ref && !readRestrictionRef) return withheld();
@@ -564,7 +577,7 @@ export class AuthorityMediator {
     catch { releasable = INVALID_READBACK_IS_NOT_RELEASABLE; }
     const reference = await this.exclusive(() => this.commit(state => {
       const reference = randomUUID();
-      state.evidence[reference] = { connectionId, snapshot: snapshot ? json(snapshot) : null, value, releasable, accountBindingDigest, ...(ref ? { readRef: ref, readRestrictionRef } : {}) };
+      state.evidence[reference] = { connectionId, snapshot: snapshot ? json(snapshot) : null, value, releasable, accountBindingDigest, ...(ref ? { readRef: ref, readRestrictionRef } : {}), ...(hostScopes.length ? { hostScopes: json(hostScopes) as never } : {}) };
       return reference;
     }));
     if (signal?.aborted) return withheld();

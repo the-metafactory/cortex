@@ -8,7 +8,7 @@ import { AuthoritySchema, JournalEventSchema, OperationJournalSchema, OwnerSuppo
 import { canonicalWire, validateResultPayload, validateSnapshot } from "./validation";
 
 const ACTIVE = new Set(["dispatching", "pending", "uncertain"]);
-const StoreDoc = defineDocFamily<{ record: JsonObject | null }, string>({ kind: "cortex.lifecycle-operation", version: 1, scope: "session", family: true, initial: () => ({ record: null }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
+export const StoreDoc = defineDocFamily<{ record: JsonObject | null }, string>({ kind: "cortex.lifecycle-operation", version: 1, scope: "session", family: true, initial: () => ({ record: null }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 const budgets = z.object({ startedAt: z.iso.datetime(), deadlineAt: z.iso.datetime(), lookupCount: z.number().int().nonnegative().max(3), redispatchCount: z.number().int().nonnegative().max(1), lastObservedAt: z.iso.datetime(), dedupValidUntil: z.iso.datetime().optional() }).strict();
 export const StoredSchema = z.object({
   format: z.literal("desk-operation-journal/1"), revision: z.number().int().positive(), journal: OperationJournalSchema,
