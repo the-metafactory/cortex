@@ -10,7 +10,7 @@ import { canonicalWire, validateResultPayload, validateSnapshot } from "./valida
 const ACTIVE = new Set(["dispatching", "pending", "uncertain"]);
 const StoreDoc = defineDocFamily<{ record: JsonObject | null }, string>({ kind: "cortex.lifecycle-operation", version: 1, scope: "session", family: true, initial: () => ({ record: null }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 const budgets = z.object({ startedAt: z.iso.datetime(), deadlineAt: z.iso.datetime(), lookupCount: z.number().int().nonnegative().max(3), redispatchCount: z.number().int().nonnegative().max(1), lastObservedAt: z.iso.datetime(), dedupValidUntil: z.iso.datetime().optional() }).strict();
-const StoredSchema = z.object({
+export const StoredSchema = z.object({
   format: z.literal("desk-operation-journal/1"), revision: z.number().int().positive(), journal: OperationJournalSchema,
   cancelRequested: z.boolean(), retryBlocked: z.boolean(), quarantine: z.array(z.object({ at: z.iso.datetime(), code: z.string(), raw: z.json() }).strict()),
   budgets: budgets.nullable(), outbox: z.array(z.object({ key: z.string(), event: JournalEventSchema, delivered: z.boolean() }).strict()),
@@ -45,6 +45,24 @@ export class OperationJournalStore {
         return stored;
       }
       const stored: StoredOperation = { format: "desk-operation-journal/1", revision: 1, journal, cancelRequested: false, retryBlocked: false, quarantine: [], budgets: null, outbox: [] };
+      doc.record = jsonObject(stored);
+      return stored;
+    }, this.context);
+  }
+
+  async importLegacy(journal: OperationJournal): Promise<StoredOperation> {
+    const checked = parseWire(OperationJournalSchema, journal);
+    const event = checked.events[0];
+    requireState(checked.sequence === 1 && checked.events.length === 1 && event?.sequence === 1 && event.event.kind === "legacy-import" && "kind" in checked.snapshot && ["succeeded", "uncertain"].includes(checked.state), "Legacy import requires isolated legacy evidence and no approval.");
+    return this.engine.commit(async tx => {
+      const doc = await tx.doc(StoreDoc, checked.operationId, checked.operationId);
+      if (doc.record) {
+        const stored = StoredSchema.parse(doc.record);
+        const prior = stored.journal.events[0];
+        requireState(prior?.event.kind === "legacy-import" && event?.event.kind === "legacy-import" && prior.event.sourceDigest === event.event.sourceDigest && canonicalWire(prior.event.rawRecord) === canonicalWire(event.event.rawRecord) && stored.journal.ownerRequestId === checked.ownerRequestId && stored.journal.state === checked.state, "Legacy import source changed; review is required.");
+        return stored;
+      }
+      const stored: StoredOperation = { format: "desk-operation-journal/1", revision: 1, journal: checked, cancelRequested: false, retryBlocked: true, quarantine: [], budgets: null, outbox: [] };
       doc.record = jsonObject(stored);
       return stored;
     }, this.context);
