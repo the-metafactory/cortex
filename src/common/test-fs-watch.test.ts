@@ -1,3 +1,5 @@
+// glossary-ignore: node, listener
+import { runIsolated } from "./run-isolated";
 import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 
@@ -18,7 +20,7 @@ test("native suite gate reports a measured churn loss after first-event delivery
         queueMicrotask(() => notify("rename", "probe"));
       },
     }));
-    mock.module(${JSON.stringify(fileURLToPath(new URL("../../scripts/probe-fs-watch-churn.ts", import.meta.url)))}, () => ({
+    mock.module(${JSON.stringify(fileURLToPath(new URL("./fs-watch-churn-probe.ts", import.meta.url)))}, () => ({
       probeFsWatchChurn: async () => ({
         usable: false,
         reason: "control 1/1; 0/1 churn writes; https://github.com/oven-sh/bun/issues/44385",
@@ -27,15 +29,11 @@ test("native suite gate reports a measured churn loss after first-event delivery
     const { fsWatchProbe } = await import(${JSON.stringify(fileURLToPath(new URL("./test-fs-watch.ts", import.meta.url)))});
     console.log(JSON.stringify(fsWatchProbe));
   `;
-  const result = Bun.spawnSync([process.execPath, "--eval", script], {
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 5000,
-  });
+  const result = runIsolated(script);
   expect(result.exitCode).toBe(0);
-  expect(JSON.parse(result.stdout.toString()).usable).toBe(false);
-  expect(result.stderr.toString()).toContain("control 1/1; 0/1 churn writes");
-  expect(result.stderr.toString()).toContain("https://github.com/oven-sh/bun/issues/44385");
+  expect(JSON.parse(result.stdout).usable).toBe(false);
+  expect(result.stderr).toContain("control 1/1; 0/1 churn writes");
+  expect(result.stderr).toContain("https://github.com/oven-sh/bun/issues/44385");
 });
 
 test("native watch probe cleans up and rejects an interval write error", () => {
@@ -63,13 +61,9 @@ test("native watch probe cleans up and rejects an interval write error", () => {
       console.log(JSON.stringify({ message: error.message, writes, closed, exists: existsSync(dir) }));
     }
   `;
-  const result = Bun.spawnSync([process.execPath, "--eval", script], {
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: 5_000,
-  });
+  const result = runIsolated(script);
   expect(result.exitCode).toBe(0);
-  expect(JSON.parse(result.stdout.toString())).toEqual({
+  expect(JSON.parse(result.stdout)).toEqual({
     message: "interval fixture write denied",
     writes: 2,
     closed: true,

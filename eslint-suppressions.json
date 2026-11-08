@@ -1497,7 +1497,7 @@
   },
   "src/cli/cortex/commands/__tests__/network-config-write.test.ts": {
     "cortex/no-comments": {
-      "count": 22
+      "count": 16
     }
   },
   "src/cli/cortex/commands/__tests__/network-create.test.ts": {

@@ -1,4 +1,62 @@
+<!-- glossary-ignore: node, host, run, path, listener, data -->
 # Native watcher churn evidence (node #2604)
+
+The suites this gate covers are skipped, not passing, on a macOS host where
+the probe measures event loss. On such a host the 17 affected native watcher
+tests report as skipped and the full run stays green because of the skip. The
+change keeps a full run honest about that; it does not restore the events.
+
+## Review dispositions for node #2683
+
+These dispositions follow the order of the 18 findings in Sage round 1 on
+PR #2681, reviewed at `969d58f81cd8f412e0dcd84fc12f725fa8df6663`.
+The implementation is on the assigned branch; merge and the
+`review-findings-2604-969d58f8` close checkpoint remain supervisor work.
+
+| Finding | Disposition | Evidence or reason |
+| --- | --- | --- |
+| F1: `src/common` imports the probe from `scripts/` | Fixed | `fs-watch-churn-probe.ts` lives in `src/common`; the gate imports it locally and the script is a CLI wrapper. |
+| F2: Probe startup cost | Declined | The probe already stops at the first missing write, including either open or close loss. Keep the measured 1,000-watcher, eight-trial, 1,000 ms settling configuration: no host evidence here supports shorter settling or fewer trials. A runtime-version cache would reuse a capability measurement across changing OS load and sandbox permissions, potentially enabling assertions without a current measurement or retaining stale skips. Passing environments still pay the existing startup cost. |
+| F3: Repeated measurement string | Fixed | Both outcomes use `churnSummary()`; only the missing-event outcome adds its suffix. |
+| F4: Repeated fixture mode interpolation | Fixed | The generated fixture declares `const mode` once and uses it in each mock branch. |
+| F5: Duplicated child-process harness | Fixed | Both suites use `src/common/run-isolated.ts` for execution and decoded output. |
+| F6: Headline implies restored delivery | Fixed | The headline describes churn evidence; the opening explicitly states that skipped assertions do not establish restored delivery. The macOS evidence document links using the same wording. |
+| F7: `node` in churn evidence | Fixed | The document's glossary directive marks work-graph references and runtime names as intentional technical uses. |
+| F8: `host` in churn evidence | Fixed | The directive preserves the distinction between the physical test host and the worker sandbox; neither names a Cortex runtime. |
+| F9: `run` in churn evidence | Fixed | The directive preserves test-command execution terminology; these measurements are not Cortex Sessions. |
+| F10: `node` in macOS evidence | Fixed | That document's directive marks work-graph references as intentional. |
+| F11: `node` in churn tests | Fixed | The suite's directive preserves the `node:` built-in module specifier. |
+| F12: `path` in churn tests | Fixed | The directive marks filesystem paths as intentional; these are not bus Subjects. |
+| F13: `listener` in churn tests | Fixed | The directive marks filesystem callbacks as intentional; these are not Render targets. |
+| F14: `data` in churn tests | Fixed | The directive marks file contents as intentional; these are not envelope Payloads. |
+| F15: `node` in the probe script | Fixed | The shared implementation's directive covers its `node:` imports; the CLI wrapper retains the directive too. |
+| F16: `path` in the probe script | Fixed | The shared implementation's directive covers its `node:path` import after extraction. |
+| F17: `node` in gate tests | Fixed | The suite's directive preserves `node:` built-in module specifiers. |
+| F18: `listener` in gate tests | Fixed | The suite's directive marks filesystem callbacks as intentional. |
+
+Focused revalidation on 2026-11-08, Bun 1.4.4, used `bun run test` with
+the two probe regression suites, config and fragment watcher suites, and
+`cortex.agents-reload.test.ts`: **38 pass, 17 skip, 0 fail**. The shared
+first-event probe received zero events during 197 writes within its 10 s
+deadline; these skips provide no native watcher coverage. All seven
+deterministic probe regressions passed. Log: `/tmp/cortex-2683-focused.log`.
+
+The single final `bun run check` exited 1: **14,556 pass, 71 skip, 201 todo,
+1 fail** across 882 test files. Lint, duplication, typecheck, vocabulary,
+SDK, shippable hygiene, XDG and branch freshness passed. The failure was
+`history preserves recorded authors, subsequent decisions and next steps
+without causal claims` at `src/surface/mc/desk/studio/evidence.test.ts:72`:
+the fixture expects Git author `Fixture`, but inherited Git author environment
+variables override its repository-local fixture identity. The same file
+failed identically in focused checks on both this branch and an archived
+`origin/main` at `be06d8768345b88e23bf3dcca6241614360dafdf`
+(**10 pass, 1 fail** each). The Studio implementation and test files are
+unchanged from that base. No workaround was applied. This is not a green
+full check; the worker SOP leaves this baseline failure to the supervisor.
+Logs: `/tmp/cortex-2683-check.log`, `/tmp/cortex-2683-head-evidence.log`,
+`/tmp/cortex-2683-base-evidence.log`.
+
+## Original measurement provenance
 
 Measured on 2026-10-17, Darwin 25.6.0 arm64, Bun 1.4.2
 (`744846f84`), base `ef0161b9`. Commands ran on the plain host with
@@ -32,12 +90,15 @@ results are not plain-host evidence.
 
 ## Reusable reproduction and suite gate
 
-`scripts/probe-fs-watch-churn.ts` has only Node built-in imports. To run it
-outside cortex:
+`src/common/fs-watch-churn-probe.ts` has only Node built-in imports, and
+`scripts/probe-fs-watch-churn.ts` is a thin command line wrapper over it. To
+run both outside cortex:
 
 ```sh
-cp scripts/probe-fs-watch-churn.ts /tmp/cortex-watch-churn.ts
-bun /tmp/cortex-watch-churn.ts
+mkdir -p /tmp/cortex-watch-churn/scripts /tmp/cortex-watch-churn/src/common
+cp scripts/probe-fs-watch-churn.ts /tmp/cortex-watch-churn/scripts/
+cp src/common/fs-watch-churn-probe.ts /tmp/cortex-watch-churn/src/common/
+bun /tmp/cortex-watch-churn/scripts/probe-fs-watch-churn.ts
 ```
 
 Exit 0 means all measured writes arrived; exit 1 means the measurement found
