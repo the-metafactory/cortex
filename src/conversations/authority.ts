@@ -1,3 +1,4 @@
+import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
 import { AuthorityPublication } from "./authority-publication";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -19,6 +20,7 @@ export interface Denial { kind: "denied"; reason: BoundaryError; recovery: "auth
 export type AuthorityCheck = { kind: "allowed"; authority: Authority } | Denial;
 export type ReleaseProjection<T> = { kind: "released"; value: T; decisionRef: string } | { kind: "withheld"; reason: BoundaryError; recovery: Denial["recovery"] };
 export interface TrustedConnector {
+  writerOwner: string;
   authorizeConnection(connection: ConnectionRecord): Promise<{ version: 1; available: boolean; revision: string }>;
   support: OwnerSupport;
   dispatch(request: DispatchRequest, signal: AbortSignal): Promise<unknown>;
@@ -68,10 +70,10 @@ export class AuthorityMediator {
   private readonly active = new Map<string, { controller: AbortController; heads: Set<string> }>();
   private readonly journal: OperationJournalStore;
 
-  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly registry: DomainAdapterRegistry, private readonly bindings: AuthorityBindings, private readonly hostPolicy: (id: string) => Promise<HostPolicyState>, private readonly context: Context, private readonly now: () => Date, private readonly publication: AuthorityPublication, private readonly hostRevision: () => string) {
+  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly registry: DomainAdapterRegistry, private readonly bindings: AuthorityBindings, private readonly hostPolicy: (id: string) => Promise<HostPolicyState>, private readonly context: Context, private readonly now: () => Date, private readonly publication: AuthorityPublication, private readonly hostRevision: () => string, private readonly writers: WriterAuthority) {
     this.journal = new OperationJournalStore(engine, registry, context);
     this.connectors = new Map([...bindings.connectors].map(([key, connector]) => [key, Object.freeze({
-      support: parseWire(OwnerSupportSchema, connector.support), authorizeConnection: connector.authorizeConnection.bind(connector), dispatch: connector.dispatch.bind(connector),
+      writerOwner: connector.writerOwner, support: parseWire(OwnerSupportSchema, connector.support), authorizeConnection: connector.authorizeConnection.bind(connector), dispatch: connector.dispatch.bind(connector),
       ...(connector.cancel ? { cancel: connector.cancel.bind(connector) } : {}), ...(connector.lookup ? { lookup: connector.lookup.bind(connector) } : {}), ...(connector.readback ? { readback: connector.readback.bind(connector), readbackCapabilityId: connector.readbackCapabilityId } : {}),
     })]));
     this.sinks = new Map(bindings.sinks);
@@ -345,6 +347,7 @@ export class AuthorityMediator {
         if (!await this.bindings.writer(checkedLease, snapshot)) return denied("operator-cutover");
         const final = await this.resolve(context, snapshot.connectionId, snapshot);
         if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || !this.canMutate(final, snapshot)) return denied();
+        if (!await this.writers.admits(checkedLease, final.principal.stack, connector.writerOwner, snapshot) || publicationHead !== this.publication.head) return denied("operator-cutover");
         const cancel = connector.cancel?.bind(connector);
         const controller = new AbortController();
         this.active.set(key, { controller, heads: new Set(Object.keys(resolved.heads)) });
