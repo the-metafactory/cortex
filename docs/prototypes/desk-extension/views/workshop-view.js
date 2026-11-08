@@ -1,0 +1,31 @@
+let port;
+let identity;
+const root = document.querySelector("main");
+const send = (type, extra = {}) => port.postMessage({ type, ...identity, ...extra });
+const colours = { low: "#15803d", medium: "#b45309", high: "#b91c1c" };
+const put = (parent, tag, text, style) => { const element = document.createElement(tag); if (text !== undefined) element.textContent = text; if (style) element.style.cssText = style; parent.append(element); return element; };
+const render = ({ projection }) => {
+  document.body.style.cssText = "margin:0;font:13px/1.5 ui-monospace,Menlo,monospace;color:#e5e7eb;background:#1f2937";
+  root.replaceChildren();
+  const object = projection.object;
+  const ticket = put(root, "article", undefined, "padding:16px 18px");
+  ticket.dataset.customView = "workshop";
+  const head = put(ticket, "div", undefined, "display:flex;justify-content:space-between;gap:10px;font-size:11px");
+  put(head, "span", "REPAIR TICKET");
+  put(head, "span", (object.severity ?? "unrated").toUpperCase(), `padding:1px 8px;border-radius:3px;color:white;background:${colours[object.severity] ?? "#4b5563"}`);
+  put(ticket, "h1", object.fault, "font-size:17px;margin:10px 0 6px;color:white");
+  if (object.detail) put(ticket, "p", object.detail, "margin:0 0 10px");
+  const facts = put(ticket, "div", undefined, "display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:#9ca3af");
+  if (object.hours !== undefined) put(facts, "span", `⏱ ${object.hours} h`);
+  if (object.neededBy) put(facts, "span", `by ${object.neededBy}`);
+  if (object.parts?.length) put(facts, "span", `parts: ${object.parts.join(", ")}`);
+  send("resize", { height: Math.ceil(document.documentElement.scrollHeight) });
+};
+window.addEventListener("message", event => {
+  if (event.source !== parent || port || event.data?.type !== "desk:init" || event.data.protocol !== "1.0.0" || event.ports.length !== 1) return;
+  port = event.ports[0];
+  identity = { instance: event.data.instance, release: event.data.release, protocol: event.data.protocol };
+  port.onmessage = message => { if (message.data?.type === "host:projection") render(message.data); };
+  port.start();
+  send("ready");
+});

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 const manifest = JSON.parse(readFileSync(new URL("./desk-adapter.json", import.meta.url), "utf8"));
 const adapterId = manifest.declaration.adapterId;
-const OWNER = {"objectType":"article","destination":{"field":"shelf","type":"shelf","places":[{"id":"shelf-work","name":"Work"},{"id":"shelf-private","name":"Private"}]},"textFields":["title","summary"],"seed":[{"id":"a1","place":"shelf-work","title":"Receipts that survive a crash","summary":"How an owner lookup settles an unknown outcome.","rating":"reread","revisit":"in-days:1","tags":["reliability"]},{"id":"a2","place":"shelf-work","title":"Crash-only software revisited","summary":"Restart as the only recovery path.","rating":"read","tags":["reliability"]},{"id":"a3","place":"shelf-work","title":"Idempotency keys in practice","summary":"Where crash retries duplicate work.","rating":"skim","tags":["api"]},{"id":"a4","place":"shelf-private","title":"A private crash diary","summary":"This belongs on a shelf the connection may lose.","rating":"skim","revisit":"in-days:1","tags":["personal"]}],"extra":null,"ignoresScope":true};
+const OWNER = {"objectType":"article","destination":{"field":"shelf","type":"shelf","places":[{"id":"shelf-work","name":"Work"},{"id":"shelf-private","name":"Private"}]},"textFields":["title","summary"],"seed":[{"id":"a1","place":"shelf-work","title":"Receipts that survive a crash","summary":"How an owner lookup settles an unknown outcome.","rating":"reread","revisit":"in-days:1","tags":["reliability"]},{"id":"a2","place":"shelf-work","title":"Crash-only software revisited","summary":"Restart as the only recovery path.","rating":"read","tags":["reliability"]},{"id":"a3","place":"shelf-work","title":"Idempotency keys in practice","summary":"Where crash retries duplicate work.","rating":"skim","tags":["api"]},{"id":"a4","place":"shelf-private","title":"A private crash diary","summary":"This belongs on a shelf the connection may lose.","rating":"skim","revisit":"in-days:1","tags":["personal"]}],"extra":null,"ignoresScope":true,"lie":false};
 const PAGE = 2;
 const created = new Map();
 const refOf = (connectionId, objectType, canonicalId) => ({ adapterId, connectionId, objectType, canonicalId });
@@ -40,7 +40,7 @@ const connector = connection => ({
 export function createDeskAdapter(host) {
   const search = (rows, type) => (input, context) => {
     const needle = String(input.text ?? "").toLowerCase();
-    const matched = inScope(rows(), context).filter(row => !needle || JSON.stringify(row).toLowerCase().includes(needle));
+    const matched = (type === OWNER.objectType ? inScope(rows(), context) : rows()).filter(row => !needle || JSON.stringify(row).toLowerCase().includes(needle));
     const start = context.continuation ? Number(context.continuation.slice(7)) : 0;
     return page(matched, type, context, start, PAGE);
   };
@@ -53,5 +53,5 @@ export function createDeskAdapter(host) {
     handlers[actionId] = () => { throw new Error("Actions run through the registered connector."); };
     host.registerConnector(actionId, connector);
   }
-  return { declaration: manifest.declaration, bindings: { handlers, observations } };
+  return { declaration: OWNER.lie ? { ...manifest.declaration, label: "Something else" } : manifest.declaration, bindings: { handlers, observations } };
 }

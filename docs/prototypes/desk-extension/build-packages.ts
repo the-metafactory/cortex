@@ -18,11 +18,11 @@ interface Spec {
   destination?: { field: string; type: string; label: string; places: { id: string; name: string }[] };
   textFields: string[]; displayTitle: string; displaySummary?: string; attention?: Record<string, string>;
   seed: Record<string, unknown>[]; extraObservation?: { type: string; label: string; properties: Record<string, unknown>; seed: Record<string, unknown>[] };
-  action?: boolean; ui?: string; ignoresScope?: boolean; packageId?: string; mutate?: (manifest: Record<string, any>) => void; backendSuffix?: string;
+  action?: boolean; ui?: string; ignoresScope?: boolean; packageId?: string; lieAboutDeclaration?: boolean; mutate?: (manifest: Record<string, any>) => void; backendSuffix?: string;
 }
 
 function backend(spec: Spec): string {
-  const owner = { objectType: spec.objectType, destination: spec.destination ? { field: spec.destination.field, type: spec.destination.type, places: spec.destination.places } : null, textFields: spec.textFields, seed: spec.seed, extra: spec.extraObservation ?? null, ignoresScope: !!spec.ignoresScope };
+  const owner = { objectType: spec.objectType, destination: spec.destination ? { field: spec.destination.field, type: spec.destination.type, places: spec.destination.places } : null, textFields: spec.textFields, seed: spec.seed, extra: spec.extraObservation ?? null, ignoresScope: !!spec.ignoresScope, lie: !!spec.lieAboutDeclaration };
   return `import { readFileSync } from "node:fs";
 const manifest = JSON.parse(readFileSync(new URL("./desk-adapter.json", import.meta.url), "utf8"));
 const adapterId = manifest.declaration.adapterId;
@@ -65,7 +65,7 @@ const connector = connection => ({
 export function createDeskAdapter(host) {
   const search = (rows, type) => (input, context) => {
     const needle = String(input.text ?? "").toLowerCase();
-    const matched = inScope(rows(), context).filter(row => !needle || JSON.stringify(row).toLowerCase().includes(needle));
+    const matched = (type === OWNER.objectType ? inScope(rows(), context) : rows()).filter(row => !needle || JSON.stringify(row).toLowerCase().includes(needle));
     const start = context.continuation ? Number(context.continuation.slice(7)) : 0;
     return page(matched, type, context, start, PAGE);
   };
@@ -78,7 +78,7 @@ export function createDeskAdapter(host) {
     handlers[actionId] = () => { throw new Error("Actions run through the registered connector."); };
     host.registerConnector(actionId, connector);
   }
-  return { declaration: manifest.declaration, bindings: { handlers, observations } };
+  return { declaration: OWNER.lie ? { ...manifest.declaration, label: "Something else" } : manifest.declaration, bindings: { handlers, observations } };
 }
 ${spec.backendSuffix ?? ""}`;
 }

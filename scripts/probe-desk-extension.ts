@@ -20,7 +20,9 @@ const context = await browser.newContext({ viewport: { width: 1180, height: 900 
 const page = await context.newPage();
 const external: string[] = [];
 const pageErrors: string[] = [];
+const blockedByBrowser: { url: string; error: string; frame: boolean }[] = [];
 page.on("request", request => { const url = new URL(request.url()); if (url.origin !== origin && url.protocol.startsWith("http")) external.push(request.url()); });
+page.on("requestfailed", request => { const url = new URL(request.url()); if (url.origin !== origin && url.protocol.startsWith("http")) blockedByBrowser.push({ url: request.url(), error: request.failure()?.errorText ?? "unknown", frame: request.frame() !== page.mainFrame() }); });
 page.on("pageerror", error => pageErrors.push(error.message));
 
 const pane = (name: string) => page.getByRole("navigation").getByRole("button", { name, exact: true }).click();
@@ -232,6 +234,7 @@ if (phase === "all" || phase === "b") {
   check("other adapters still work with broken packages installed", (await dayText()).includes("Bench grinder overheats"));
 
   for (const sample of ["crashing-view", "hostile-view"]) await bringUp(sample);
+  const ownerCallsBeforeHostile = (await diagnostics()).ownerCalls;
   await say("find Prop");
   await page.waitForTimeout(3200);
   const groups = page.locator('[data-group^="sample.crash"], [data-group^="sample.hostile"]');
@@ -239,7 +242,7 @@ if (phase === "all" || phase === "b") {
   const after = await diagnostics();
   check("host recorded the crashing and hostile view incidents", after.frameIncidents.some((entry: string) => entry.startsWith("sample.crash")) && after.frameIncidents.some((entry: string) => entry.startsWith("sample.hostile")), after.frameIncidents);
   check("hostile frame's beacons reached nothing", after.syntheticReceiverRequests.length === 0, after.syntheticReceiverRequests);
-  check("hostile frame caused no owner call", after.ownerCalls === (await diagnostics()).ownerCalls);
+  check("hostile frame caused no owner call", after.ownerCalls === ownerCallsBeforeHostile, { before: ownerCallsBeforeHostile, after: after.ownerCalls });
   check("hostile frame could not touch the parent", await page.evaluate(() => document.body.dataset.prototypeViolation === undefined));
   await shot("fallback-views");
   const mobile = await context.newPage();
@@ -252,9 +255,13 @@ if (phase === "all" || phase === "b") {
   await mobile.close();
 }
 
-check("no external requests from the parent page", external.length === 0, external);
-check("no page errors", pageErrors.length === 0, pageErrors);
+const reachedNetwork = external.filter(url => !blockedByBrowser.some(entry => entry.url === url && entry.frame && /csp/i.test(entry.error)));
+check("every external attempt came from a frame and the browser's CSP blocked it", reachedNetwork.length === 0, { external, blockedByBrowser });
+check("the receiver saw no request at all", (await diagnostics()).syntheticReceiverRequests.length === 0, (await diagnostics()).syntheticReceiverRequests);
+const unexpectedErrors = pageErrors.filter(message => message !== "This view fails before its handshake.");
+check("the only page error is the crashing fixture's own", unexpectedErrors.length === 0, pageErrors);
 writeFileSync(join(output, `probe-${phase}.json`), `${JSON.stringify({ origin, phase, at: new Date().toISOString(), passed: checks.filter(entry => entry.pass).length, failed: checks.filter(entry => !entry.pass).length, checks, diagnostics: await diagnostics() }, null, 1)}\n`);
+console.log("external attempts", JSON.stringify({ external, blockedByBrowser }));
 await browser.close();
 console.log(`${checks.filter(entry => entry.pass).length} passed, ${checks.filter(entry => !entry.pass).length} failed`);
 process.exit(checks.every(entry => entry.pass) ? 0 : 1);

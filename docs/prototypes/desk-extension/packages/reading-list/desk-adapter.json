@@ -6,7 +6,7 @@
  "domainContractVersion": "1.0.0",
  "backend": {
   "entry": "backend.mjs",
-  "sha256": "dba92a3b5fbdffc2a893f3d1cac864990f8cebf7104b29dc1c178a9c91f4bd26"
+  "sha256": "2ef51505e0b198a141d15c07bd52d309fcb88a47b566d69e32830498c28b1141"
  },
  "declaration": {
   "adapterId": "sample.reading",
