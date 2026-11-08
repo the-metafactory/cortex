@@ -3,7 +3,7 @@ import { HandledLedger } from "../desk/actions";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
 import { conversationSources } from "../desk/conversation-sources";
 import { WriterTimeout, type WriterResult, type WriterRunner } from "../desk/create";
-import type { ListedMail } from "../desk/mail-actions";
+import { resolveListedMail, type ListedMail } from "../desk/mail-actions";
 import { conversationWriterRig, type DeskWriterReply } from "./conversation-writer-rig";
 
 const DRAFT = ["desk-mail-draft"];
@@ -28,7 +28,7 @@ async function rig(opts: { draft?: string[] | null; listed?: ListedMail[]; polic
     calls.push({ argv, stdin: JSON.parse(stdin) as Record<string, unknown> });
     return answer();
   };
-  await r.host.attachSources(conversationSources({ db, desk: () => options, listedMail: key => listed.find(m => `mail:${m.id}` === key) ?? null, ledger: runtime.ledger, runMailDraft: run }));
+  await r.host.attachSources(conversationSources({ db, desk: () => options, lookupMail: key => resolveListedMail(listed.map(({ sourceId, ...mail }) => ({ id: sourceId, area: null, events: [], mail: [mail], readAt: 0, error: null, dropped: 0, problems: [] })), key), ledger: runtime.ledger, runMailDraft: run }));
   const id = await r.start("Synthetic mail draft", opts.policy ?? "cloud");
   const propose = (fields: Record<string, string> = { mail: KEY, body: REPLY }) => r.propose(id, "mail-draft", fields);
   const submit = async (fields?: Record<string, string>) => {
