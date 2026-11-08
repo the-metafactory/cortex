@@ -97,6 +97,16 @@ export class ManagedWriterSupervisor {
   }
 }
 
+function liveKnownPids(known: readonly number[]): number[] {
+  return known.filter(pid => {
+    try { process.kill(pid, 0); return true; }
+    catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ESRCH") return false;
+      throw error;
+    }
+  });
+}
+
 export function localSupervisorPlatform(cgroupRoot = "/sys/fs/cgroup"): SupervisorPlatform {
   const run: SupervisorPlatform["run"] = async argv => {
     const child = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe", signal: AbortSignal.timeout(10_000) });
@@ -112,10 +122,7 @@ export function localSupervisorPlatform(cgroupRoot = "/sys/fs/cgroup"): Supervis
       if (rows.some(row => row.length !== 3)) throw new Error("Launchd inventory is malformed.");
       const matching = rows.filter(row => row[2] === entry.label);
       const pids = matching.flatMap(row => row[0] && /^\d+$/.test(row[0]) ? [Number(row[0])] : []);
-      for (const pid of entry.pids) {
-        try { process.kill(pid, 0); pids.push(pid); }
-        catch (error) { if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) throw error; }
-      }
+      pids.push(...liveKnownPids(entry.pids));
       return { pids, jobs: matching.map(row => row[2] ?? entry.label) };
     }
     if (entry.kind === "unmanaged") throw new Error("Unmanaged process inventory is unavailable.");
@@ -140,7 +147,7 @@ export function localSupervisorPlatform(cgroupRoot = "/sys/fs/cgroup"): Supervis
     const rows = pending.stdout.trim() ? pending.stdout.trim().split("\n").map(line => line.trim().split(/\s+/)) : [];
     if (rows.some(row => row.length < 4)) throw new Error("Systemd pending job inspection is malformed.");
     const jobs = rows.filter(row => row[1] === entry.label).map(row => row[0] ?? entry.label);
-    return { pids: [...pids, ...entry.pids.filter(pid => { try { process.kill(pid, 0); return true; } catch (error) { if (error instanceof Error && "code" in error && error.code === "ESRCH") return false; throw error; } })], jobs };
+    return { pids: [...pids, ...liveKnownPids(entry.pids)], jobs };
   };
   return { run, pids: async entry => (await inspect(entry)).pids, jobs: async entry => (await inspect(entry)).jobs };
 }
