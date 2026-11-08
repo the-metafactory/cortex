@@ -1,3 +1,4 @@
+// glossary-ignore: node, path, agent
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";

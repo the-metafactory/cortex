@@ -473,7 +473,7 @@ neither a work item nor a session. Both target fields may be null, yielding
 open until a better transition resolves them or the principal dismisses them.
 This follows the [Vigil contract](https://github.com/the-metafactory/soma/issues/787)
 (Q9, Q10 and [Q38](https://github.com/the-metafactory/soma/issues/787#issuecomment-6126301493))
-and [node #2563](https://github.com/the-metafactory/cortex/issues/2563).
+and [node #2563](https://github.com/the-metafactory/cortex/issues/2563). <!-- glossary-ignore: node -->
 A deep link to the Vigil watching view is deferred. Other attention producers
 must still resolve or dismiss an open item when deletion clears its last target.
 

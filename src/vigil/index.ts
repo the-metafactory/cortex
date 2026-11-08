@@ -1,4 +1,4 @@
-// glossary-ignore: subscriber, run
+// glossary-ignore: subscriber, run, instance, agent
 import type { Database } from "bun:sqlite";
 import { executionRunFinishedPattern } from "@the-metafactory/myelin";
 import { DeliverPolicy } from "nats";
@@ -22,7 +22,7 @@ import { expireRefAttention } from "./ref-attention";
 import { maybeSendDigest } from "./digest";
 import { flushVigilResolutions } from "./resolution";
 
-import { publishReconcileDelta } from "../surface/mc/attention-notify";
+import { createAttentionNotifier } from "./attention-notifier";
 
 export { LEDGER_ACK_WAIT_NS, LEDGER_MAX_DELIVER };
 
@@ -104,20 +104,7 @@ export async function startVigil(opts: {
   const flushResolutions = () => publishResolution
     ? flushVigilResolutions(db, { principal: opts.principal, stack: opts.stack, publish: publishResolution })
     : Promise.resolve();
-  let notifications = Promise.resolve();
-  const publishDelta = (delta: Parameters<typeof publishReconcileDelta>[0]) => {
-    if (!publish || (delta.opened.length === 0 && delta.resolved.length === 0)) return notifications;
-    notifications = notifications.then(async () => {
-      try {
-        await publishReconcileDelta(delta, {
-          source: { principal: opts.principal, agent: "cortex", instance: "local" },
-        }, publish);
-      } catch (err) {
-        log.warn(`vigil: attention notification failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    });
-    return notifications;
-  };
+  const notifier = createAttentionNotifier({ publish, principal: opts.principal, log });
   const onEnvelope: EnvelopeHandler = (envelope, subject) => {
     const invalid = ledgerEnvelopeError(envelope, subject);
     if (invalid !== null) {
@@ -125,7 +112,7 @@ export async function startVigil(opts: {
       return { kind: "ack" };
     }
     // A throw here reaches onError, and the delivery is NAK'ed for redelivery.
-    void publishDelta(ingestLedgerEnvelope(db, envelope, subject, now(), { localStackId: opts.stack, log }));
+    void notifier.publish(ingestLedgerEnvelope(db, envelope, subject, now(), { localStackId: opts.stack, log }));
     void flushResolutions();
     return { kind: "ack" };
   };
@@ -147,7 +134,7 @@ export async function startVigil(opts: {
     run: async () => {
       const tickNow = now();
       expireRefAttention(db, tickNow);
-      await publishDelta(sweepStale(db, tickNow, opts.config.vigil.cadence, opts.stack));
+      await notifier.publish(sweepStale(db, tickNow, opts.config.vigil.cadence, opts.stack));
       await flushResolutions();
       if (publish) await flushTexts({
         db, principal: opts.principal, stack: opts.stack, now: tickNow, publish,
@@ -168,7 +155,7 @@ export async function startVigil(opts: {
     stop: () => stopping ??= (async () => {
       await tick.stop();
       await pull.stop();
-      await notifications;
+      await notifier.drain();
       await flushResolutions();
     })(),
   };
