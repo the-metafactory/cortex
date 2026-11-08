@@ -42,7 +42,7 @@ test("throwing and rejecting resolvers fall back and warn once per flush rendere
     async () => { throw new Error("private goal wording"); },
   ]) {
     const warnings: string[] = [];
-    const options = { resolveGoalWording, warn: (message: string) => { warnings.push(message); } };
+    const options = { resolveGoalWording, warn: (warning: string) => { warnings.push(warning); } };
     const render = createVigilRenderer(options);
     expect(await Promise.all([render(change, goal), render(change, goal)])).toEqual([
       "Vigil: goal G1 — on-track → off-track", "Vigil: goal G1 — on-track → off-track",
