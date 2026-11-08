@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { StudioEvidenceInput } from "../../../../conversations/tools/studio-evidence";
+import type { StudioEvidenceInput, StudioEvidenceAccess } from "../../../../conversations/tools/studio-evidence";
 import type { DeskOptions } from "../compose";
 import { RoutineSchema, reflexCommand, type RoutineRunner } from "../routine-command";
 import { readBoundedGit } from "./committed-batch";
@@ -30,7 +30,7 @@ async function schedule(desk: DeskOptions, run?: RoutineRunner): Promise<object>
   }
 }
 
-export async function readStudioEvidence(desk: DeskOptions, input: StudioEvidenceInput, thread?: StudioThreadView, runners: { ranger?: RangerRunner; routine?: RoutineRunner } = {}): Promise<object> {
+export async function readStudioEvidence(desk: DeskOptions, input: StudioEvidenceInput, thread?: StudioThreadView, runners: { ranger?: RangerRunner; routine?: RoutineRunner } = {}, access: StudioEvidenceAccess = { local: false }): Promise<object> {
   if (!desk.studio) return unavailable("Studio is not configured");
   const dir = desk.studio.dir;
   const base = { observedAt: new Date().toISOString(), interpretation: "Evidence only. Later activity does not establish usefulness or causation." };
@@ -40,9 +40,9 @@ export async function readStudioEvidence(desk: DeskOptions, input: StudioEvidenc
       const selected = page(ids.reverse(), input);
       const runs = await Promise.all(selected.items.map(async id => {
         const run = await readOverseerRun(dir, id);
-        return { id: run.id, startedAt: run.startedAt, endedAt: run.endedAt, status: run.status, failure: run.failure, thinkingCompleted: null, runtimeSchedule: run.schedule ? { ...run.schedule, observedAt: run.startedAt, currentEnabled: null, nextRun: null } : null, staleDays: run.staleDays ?? null, url: "?desk=studio", meaning: "Scan status records scheduling, not completed thinking", selections: { run: run.id, scope: "selections" } };
+        return { id: run.id, startedAt: run.startedAt, endedAt: run.endedAt, status: run.status, failure: run.failure && !access.local ? "Scan failed; raw failure details require local web access" : run.failure, failureRestricted: Boolean(run.failure && !access.local), thinkingCompleted: null, runtimeSchedule: run.schedule ? { ...run.schedule, observedAt: run.startedAt, currentEnabled: null, nextRun: null } : null, staleDays: run.staleDays ?? null, url: "?desk=studio", meaning: "Scan status records scheduling, not completed thinking", selections: { run: run.id, scope: "selections" } };
       }));
-      return { ...base, status: ids.length ? "ok" : "empty", schedule: await schedule(desk, runners.routine), runs, runEvidence: ids.length ? "recorded" : "unavailable", next: selected.next, coverage: "Only instrumented scans are recorded. A running scan with no end may have stopped. Older scans and external process liveness are unavailable." };
+      return { ...base, policy: access.local ? "local" : "cloud", view: access.local ? "full" : "status-metadata", status: ids.length ? "ok" : "empty", schedule: await schedule(desk, runners.routine), runs, runEvidence: ids.length ? "recorded" : "unavailable", next: selected.next, coverage: "Only instrumented scans are recorded. A running scan with no end may have stopped. Older scans and external process liveness are unavailable." };
     }
     if (input.scope === "selections") {
       if (!input.run) return unavailable("A recorded overseer run ID is required");

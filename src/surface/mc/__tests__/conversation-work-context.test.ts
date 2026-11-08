@@ -216,7 +216,7 @@ describe("work context tools over the real Studio, Balance and Desk owner reads"
   });
 });
 
-test.each([["cloud", "web"], ["local", "discord"], ["cloud", "discord"]] as const)("Studio evidence respects %s policy over %s and prevents a thread argument bypassing global evidence restrictions", async (policy, transport) => {
+test.each([["cloud", "web"], ["local", "discord"], ["cloud", "discord"]] as const)("Studio evidence respects %s policy over %s while allowing safe status metadata", async (policy, transport) => {
   const results: Record<string, any>[] = [];
   const { host } = await rig(async (_request, call) => {
     results.push(await call("studio_evidence", { scope: "notes", thread: "wing" }));
@@ -227,7 +227,8 @@ test.each([["cloud", "web"], ["local", "discord"], ["cloud", "discord"]] as cons
     return "Inspected.";
   });
   await run(host, policy, transport);
-  for (const result of results.slice(0, 4)) expect(result.status).toBe("unauthorized");
+  for (const result of [results[0], results[2], results[3]]) expect(result).toMatchObject({ status: "unauthorized", code: "local-web-required", reason: expect.any(String) });
+  expect(results[1]?.status).toBe("unavailable");
   expect(["ok", "empty"]).toContain(results[4]?.status);
 });
 
@@ -291,6 +292,7 @@ test.each([["cloud", "web"], ["local", "discord"], ["cloud", "discord"]] as cons
   audit.status = "failed"; audit.endedAt = new Date().toISOString(); audit.failure = "LOCAL_PRIVATE_FAILURE in a restricted thread";
   await saveOverseerRun(studioDir, audit);
   const id = await run(host, policy, transport);
+  expect((await host.meta(id)).policy).toBe(policy);
   expect(result).toMatchObject({ status: "ok", runs: [{ id: audit.id, status: "failed", failureRestricted: true }] });
   expect(JSON.stringify(result)).not.toContain("LOCAL_PRIVATE_FAILURE");
   expect(JSON.stringify(await host.entries(id, 100, undefined))).not.toContain("LOCAL_PRIVATE_FAILURE");
@@ -305,4 +307,30 @@ test("a Studio policy denial explains the restriction and required conversation 
   await run(host, "cloud");
   expect(result).toMatchObject({ status: "unauthorized", code: "local-web-required", reason: expect.any(String), requiredAccess: { transport: "web", conversationPolicy: "local", modelPolicy: "local" }, currentAccess: { transport: "web", conversationPolicy: "cloud", modelPolicy: "cloud" }, nextStep: expect.stringMatching(/local.*web/i) });
   expect(JSON.stringify(result)).not.toContain("LOCALWING");
+});
+
+
+test("local web reads preserve raw scan failures under retained private-source authorization", async () => {
+  let result: Record<string, any> = {};
+  const { host, studioDir } = await rig(async (_request, call) => {
+    result = await call("studio_evidence", { scope: "overseer", limit: 1 });
+    return "Read private scan details.";
+  });
+  expect(Bun.spawnSync(["git", "init", "-q", studioDir]).exitCode).toBe(0);
+  const audit = newOverseerRun(new Date());
+  audit.status = "failed"; audit.failure = "LOCAL_PRIVATE_FAILURE"; audit.endedAt = new Date().toISOString();
+  await saveOverseerRun(studioDir, audit);
+  const id = await run(host, "local");
+  expect(result).toMatchObject({ policy: "local", view: "full", runs: [{ failure: "LOCAL_PRIVATE_FAILURE", failureRestricted: false }] });
+  expect((await host.meta(id)).policy).toBe("local");
+});
+
+test("model arguments cannot request private metadata release", async () => {
+  let result: ToolOutcome | undefined;
+  const { host } = await rig(async request => {
+    result = await request.tools!.call("forged-release", "studio_evidence", { scope: "overseer", local: true }, request.signal);
+    return "Checked arguments.";
+  });
+  await run(host, "cloud");
+  expect(result).toMatchObject({ outcome: "refused", text: expect.stringContaining("Invalid input") });
 });
