@@ -18,7 +18,7 @@ const failedRequests: string[] = [];
 page.on("pageerror", error => pageErrors.push(error.message));
 page.on("requestfailed", request => failedRequests.push(`${request.url()} ${request.failure()?.errorText}`));
 const ensure = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
-const state = async () => JSON.parse(await page.locator("[data-prototype-state]").innerText()) as { adapter: string; stage: string; bridge: string; drafts: Record<string, Record<string, string>>; dirty: Record<string, boolean>; syntheticOwnerWrites: number; externalOwnerWrites: number; events: string[] };
+const state = async () => JSON.parse(await page.locator("[data-prototype-state]").innerText()) as { adapter: string; stage: string; bridge: string; instance: string; drafts: Record<string, Record<string, string>>; dirty: Record<string, boolean>; syntheticOwnerWrites: number; externalOwnerWrites: number; events: string[] };
 const waitState = async (predicate: (value: Awaited<ReturnType<typeof state>>) => boolean, message: string) => { for (let attempt = 0; attempt < 50; attempt++) { if (predicate(await state())) return; await page.waitForTimeout(100); } throw new Error(message); };
 await page.goto(`${origin}/?desk=adapter-ui-prototype&variant=A`);
 await page.getByRole("heading", { name: "Investigate receipt preservation", exact: true }).waitFor();
@@ -71,7 +71,7 @@ await page.getByLabel("Adapter", { exact: true }).selectOption("graph");
 await waitState(value => value.bridge === "ready", "Graph frame did not remount");
 ensure((await state()).drafts.graph?.title === "Frame edited title", "Frame edit lost after remount");
 console.log("Custom graph/Balance editing passed; testing boundary");
-const remount = async () => { await page.getByRole("button", { name: "Remount renderer", exact: true }).click(); await waitState(value => value.bridge === "ready", "Remount failed"); };
+const remount = async () => { const previous = (await state()).instance; await page.getByRole("button", { name: "Remount renderer", exact: true }).click(); await waitState(value => value.bridge === "ready" && value.instance !== previous, "Remount failed"); };
 await page.getByText("Boundary probes", { exact: true }).click();
 for (const attack of ["parent", "fetch", "image", "worker", "ambient"]) {
   await page.getByRole("button", { name: `Probe ${attack}`, exact: true }).click();
@@ -83,7 +83,7 @@ ensure(observed.events.some(event => event.includes("connect-src")), "Fetch CSP 
 ensure(observed.events.some(event => event.includes("img-src")), "Image CSP enforcement not observed");
 ensure(observed.events.some(event => event.startsWith("worker:") && event.includes("blocked")), "Worker boundary denial not observed");
 ensure(observed.events.some(event => event.includes("Ambient")), "Ambient forged event not ignored");
-for (const attack of ["wrong-generation", "unknown-event", "cyclic-payload", "bigint-payload", "renderer-error", "self-navigation"]) {
+for (const attack of ["wrong-generation", "unknown-event", "prototype-event", "constructor-event", "proto-event", "array-payload", "cyclic-payload", "bigint-payload", "renderer-error", "self-navigation"]) {
   await remount();
   await page.getByRole("button", { name: `Probe ${attack}`, exact: true }).click();
   await waitState(value => value.bridge === "closed", `${attack} did not close bridge/fallback`);
@@ -98,7 +98,7 @@ observed = await state();
 const network = await (await fetch(`${origin}/__prototype-network`)).json() as { syntheticReceiverRequests: string[] };
 ensure(network.syntheticReceiverRequests.length === 0, "A synthetic exfiltration request reached the second origin");
 ensure(pageErrors.length === 0, `Unexpected browser errors:${pageErrors.join(";")}`);
-await writeFile(join(output, "probe.json"), JSON.stringify({ passed: true, browserVersion: browser.version(), cases: ["three desktop/mobile layouts", "dirty draft retained", "host validation", "explicit synthetic confirmation once", "real isolated graph and Balance frames", "current generation binding", "unknown event rejection", "parent DOM denial", "fetch/image CSP and worker denial", "ambient message ignored", "self-navigation frame-source containment", "renderer fallback", "loading/unavailable"], finalState: observed, network, failedRequests, pageErrors, limitation: "Chromium synthetic local-origin candidate evidence only; not a complete no-egress or hosted authentication proof. No real protected data or credentials admitted." }, null, 2));
+await writeFile(join(output, "probe.json"), JSON.stringify({ passed: true, browserVersion: browser.version(), cases: ["three desktop/mobile layouts", "dirty draft retained", "host validation", "explicit synthetic confirmation once", "real isolated graph and Balance frames", "current generation binding", "unknown/inherited event and array rejection", "parent DOM denial", "fetch/image CSP and worker denial", "ambient message ignored", "self-navigation frame-source containment", "renderer fallback", "loading/unavailable"], finalState: observed, network, failedRequests, pageErrors, limitation: "Chromium synthetic local-origin candidate evidence only; not a complete no-egress or hosted authentication proof. No real protected data or credentials admitted." }, null, 2));
 console.log(`Prototype browser probe passed; evidence:${output}`);
 
 } finally { await browser.close(); }

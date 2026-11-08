@@ -12,7 +12,7 @@ Run `bun run prototype:desk-adapter-ui` and open `http://127.0.0.1:33590/?desk=a
 
 Choose Work graph or Balance and either the host schema fallback or isolated custom module. Summary, detail, editor, selected-scope query result, proposed action and saved receipt share one host model. Edit a field, switch adapter/view/variant and return: the dirty draft remains. Empty a required title and request review: host validation blocks it. Only the host's explicit confirmation increments the synthetic owner counter. Saved results are adapter-scoped; reopening does not repeat that call. No real object exists.
 
-The custom module runs inside a real `sandbox="allow-scripts"` frame without same-origin privilege, receives a host-created MessageChannel and synthetic projection after the matched handshake, and proposes candidate `draft:change`, `host:navigate` and `action:propose` events. It has no execute/confirm event. Host validation closes a mismatched generation, unknown event or malformed cyclic/BigInt payload and retains the draft in the schema fallback. Remount creates a fresh bridge instance. Loading, unavailable, renderer failure, light/dark host theme and mobile layouts are inspectable.
+The custom module runs inside a real `sandbox="allow-scripts"` frame without same-origin privilege, receives a host-created MessageChannel and synthetic projection after the matched handshake, and proposes candidate `draft:change`, `host:navigate` and `action:propose` events. It has no execute/confirm event. Host validation closes a mismatched generation, unknown/inherited event, array or malformed cyclic/BigInt payload and retains the draft in the schema fallback. Remount creates a fresh bridge instance. Loading, unavailable, renderer failure, light/dark host theme and mobile layouts are inspectable.
 
 ## Browser evidence
 
@@ -22,7 +22,7 @@ The custom module runs inside a real `sandbox="allow-scripts"` frame without sam
 bun --no-env-file scripts/probe-desk-adapter-ui.ts --browser /tmp/cortex-3290-browser/chrome-headless-shell --out /tmp/cortex-3290-browser-evidence
 ```
 
-The receiver at localhost port33591 deliberately allows an uncredentialed response; the browser boundary, not a Playwright route abort or CORS, must prevent delivery. Fetch/image CSP violations were observed; parent DOM and worker construction were denied by opaque-origin rules. Self-navigation is constrained by parent frame-source policy. The receiver saw zero requests. Ambient frame messages did not become authority. Wrong-generation/unknown/cyclic/BigInt events and renderer failures closed the bridge. The explicit synthetic save happened once; external owner calls remained zero.
+The receiver at localhost port33591 deliberately allows an uncredentialed response; the browser boundary, not a Playwright route abort or CORS, must prevent delivery. Fetch/image CSP violations were observed; parent DOM and worker construction were denied by opaque-origin rules. Self-navigation is constrained by parent frame-source policy. The receiver saw zero requests. Ambient frame messages did not become authority. Wrong-generation/unknown/constructor/__proto__/toString/array/cyclic/BigInt events and renderer failures closed the bridge. The explicit synthetic save happened once; external owner calls remained zero.
 
 ## Limits and decision still needed
 
