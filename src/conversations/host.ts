@@ -1,5 +1,6 @@
 import { OperationBridge, type SupportLookup } from "./domain-adapters/operations/dispatch";
 import { OperationReconciler } from "./domain-adapters/operations/reconciliation";
+import { BatchReceiptReader, BatchReceiptStore } from "./domain-adapters/operations/batches";
 import { ObjectReader } from "./domain-adapters/operations/readback";
 import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
 import { AuthorityPublication } from "./authority-publication";
@@ -226,6 +227,12 @@ export class ConversationHost {
 
   lifecycleReconciler(registry: DomainAdapterRegistry, bindings: AuthorityBindings, bridge: OperationBridge, supportFor: SupportLookup): OperationReconciler {
     return new OperationReconciler({ journal: this.lifecycleJournal(registry), authority: this.lifecycleAuthority(registry, bindings), bridge, supportFor, now: this.now });
+  }
+
+  lifecycleBatches(): BatchReceiptStore { return new BatchReceiptStore(this.engine, this.context); }
+
+  lifecycleBatchReader(registry: DomainAdapterRegistry, bindings: AuthorityBindings): BatchReceiptReader {
+    return new BatchReceiptReader(this.lifecycleBatches(), this.lifecycleAuthority(registry, bindings));
   }
 
   lifecycleReader(registry: DomainAdapterRegistry, bindings: AuthorityBindings): ObjectReader {

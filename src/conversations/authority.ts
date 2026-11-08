@@ -65,6 +65,8 @@ interface Basis { kind: "confirmation"; confirmationId: string }
 interface GrantBasis { kind: "grant"; grantId: string }
 type ApprovalInput = Omit<Approval, "authority" | "at">;
 
+const HOST_DATA_SUBJECT = "host-data";
+
 export class AuthorityMediator {
   private readonly contexts = new WeakMap<HostContext, AuthenticatedBinding>();
   private readonly connectors: Map<string, TrustedConnector>;
@@ -508,6 +510,11 @@ export class AuthorityMediator {
     } catch { observed.projection = withheld(); return observed; }
   }
 
+  async projectHostData(context: HostContext, connectionId: string, sink: ReleaseSink, derive: () => Promise<Json>): Promise<ReleaseProjection<Json>> {
+    try { return await this.read(context, connectionId, undefined, sink, () => derive()); }
+    catch { return withheld(); }
+  }
+
   private readbackAllowed(resolved: Resolved, ref: ObjectReference): boolean {
     const connector = this.connectors.get(resolved.connection.connectorId);
     const capability = connector?.readbackCapabilityId ? this.registry.capability(connector.readbackCapabilityId) : undefined;
@@ -544,7 +551,7 @@ export class AuthorityMediator {
       if (!this.readable(resolved, snapshot) || ref && (!this.readbackAllowed(resolved, ref) || !this.sinkAllowed(resolved, snapshot, sink))) return withheld(resolved.policy.operationVisible);
       const connector = this.connectors.get(resolved.connection.connectorId);
       if (!connector) return withheld();
-      await this.commit(state => this.decision(state, resolved, "read", snapshot?.digest ?? canonicalWire(ref), json({ kind: "read" }), snapshot));
+      await this.commit(state => this.decision(state, resolved, "read", snapshot?.digest ?? (ref ? canonicalWire(ref) : HOST_DATA_SUBJECT), json({ kind: "read" }), snapshot));
       const final = await this.resolve(context, connectionId, snapshot, ref);
       if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || ref && (!this.readbackAllowed(final, ref) || !this.sinkAllowed(final, snapshot, sink)) || !this.readable(final, snapshot)) return withheld(final.policy.operationVisible);
       readAccount = accountBinding(final.connection);
