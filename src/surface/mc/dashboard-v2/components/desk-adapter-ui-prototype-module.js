@@ -32,6 +32,7 @@ const probe = async attack => {
   } else if (attack === "ambient") parent.postMessage({ type: "action:execute", fields: current.fields }, "*");
   else if (attack === "wrong-generation") port.postMessage({ type: "draft:change", ...identity, release: "generation-b", name: "title", value: "Forged replacement" });
   else if (attack === "unknown-event") send("action:execute", { fields: current.fields });
+  else if (attack === "duplicate-ready") send("ready");
   else if (attack === "prototype-event") send("toString");
   else if (attack === "constructor-event") send("constructor");
   else if (attack === "proto-event") send("__proto__");

@@ -20,6 +20,30 @@ page.on("requestfailed", request => failedRequests.push(`${request.url()} ${requ
 const ensure = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
 const state = async () => JSON.parse(await page.locator("[data-prototype-state]").innerText()) as { adapter: string; stage: string; bridge: string; instance: string; drafts: Record<string, Record<string, string>>; dirty: Record<string, boolean>; syntheticOwnerWrites: number; externalOwnerWrites: number; events: string[] };
 const waitState = async (predicate: (value: Awaited<ReturnType<typeof state>>) => boolean, message: string) => { for (let attempt = 0; attempt < 50; attempt++) { if (predicate(await state())) return; await page.waitForTimeout(100); } throw new Error(message); };
+for (const kind of ["draft:change", "action:propose", "host:navigate"]) {
+  const attackPage = await browser.newPage();
+  const bootstrapKeys: string[][] = [];
+  attackPage.on("console", message => { if (message.text().startsWith("PROTOTYPE_BOOTSTRAP_KEYS:")) bootstrapKeys.push(JSON.parse(message.text().slice("PROTOTYPE_BOOTSTRAP_KEYS:".length)) as string[]); });
+  await attackPage.addInitScript(({ kind }) => {
+    const original = MessagePort.prototype.postMessage;
+    window.addEventListener("message", event => { if (window !== parent && event.data?.type === "desk:init") console.log(`PROTOTYPE_BOOTSTRAP_KEYS:${JSON.stringify(Object.keys(event.data))}`); });
+    MessagePort.prototype.postMessage = function(message, transfer) {
+      if (window !== parent && message?.type === "ready") {
+        const attack = { ...message, type: kind, ...(kind === "draft:change" ? { name: "title", value: "Changed before ready" } : kind === "host:navigate" ? { stage: "editor" } : {}) };
+        return Reflect.apply(original, this, [attack, transfer]);
+      }
+      return Reflect.apply(original, this, [message, transfer]);
+    };
+  }, { kind });
+  await attackPage.goto(`${origin}/?desk=adapter-ui-prototype&variant=A`);
+  await attackPage.getByLabel("Renderer", { exact: true }).selectOption("custom");
+  await attackPage.waitForTimeout(1200);
+  const attacked = JSON.parse(await attackPage.locator("[data-prototype-state]").innerText()) as Awaited<ReturnType<typeof state>>;
+  ensure(bootstrapKeys.length === 1 && JSON.stringify(bootstrapKeys[0]?.sort()) === JSON.stringify(["type", "instance", "release", "protocol", "attackOrigin"].sort()), "Initial packet carried projected data or unexpected context");
+  ensure(attacked.bridge === "closed" && attacked.drafts.graph?.title === "Investigate receipt preservation" && !attacked.dirty.graph && attacked.stage === "summary" && attacked.syntheticOwnerWrites === 0, `Pre-ready ${kind} mutated host state`);
+  await attackPage.close();
+}
+console.log("Data-free bootstrap and pre-ready edit/proposal/navigation rejection passed");
 await page.goto(`${origin}/?desk=adapter-ui-prototype&variant=A`);
 await page.getByRole("heading", { name: "Investigate receipt preservation", exact: true }).waitFor();
 for (const variant of ["A", "B", "C"]) {
@@ -83,7 +107,7 @@ ensure(observed.events.some(event => event.includes("connect-src")), "Fetch CSP 
 ensure(observed.events.some(event => event.includes("img-src")), "Image CSP enforcement not observed");
 ensure(observed.events.some(event => event.startsWith("worker:") && event.includes("blocked")), "Worker boundary denial not observed");
 ensure(observed.events.some(event => event.includes("Ambient")), "Ambient forged event not ignored");
-for (const attack of ["wrong-generation", "unknown-event", "prototype-event", "constructor-event", "proto-event", "array-payload", "cyclic-payload", "bigint-payload", "renderer-error", "self-navigation"]) {
+for (const attack of ["wrong-generation", "unknown-event", "duplicate-ready", "prototype-event", "constructor-event", "proto-event", "array-payload", "cyclic-payload", "bigint-payload", "renderer-error", "self-navigation"]) {
   await remount();
   await page.getByRole("button", { name: `Probe ${attack}`, exact: true }).click();
   await waitState(value => value.bridge === "closed", `${attack} did not close bridge/fallback`);
@@ -98,7 +122,7 @@ observed = await state();
 const network = await (await fetch(`${origin}/__prototype-network`)).json() as { syntheticReceiverRequests: string[] };
 ensure(network.syntheticReceiverRequests.length === 0, "A synthetic exfiltration request reached the second origin");
 ensure(pageErrors.length === 0, `Unexpected browser errors:${pageErrors.join(";")}`);
-await writeFile(join(output, "probe.json"), JSON.stringify({ passed: true, browserVersion: browser.version(), cases: ["three desktop/mobile layouts", "dirty draft retained", "host validation", "explicit synthetic confirmation once", "real isolated graph and Balance frames", "current generation binding", "unknown/inherited event and array rejection", "parent DOM denial", "fetch/image CSP and worker denial", "ambient message ignored", "self-navigation frame-source containment", "renderer fallback", "loading/unavailable"], finalState: observed, network, failedRequests, pageErrors, limitation: "Chromium synthetic local-origin candidate evidence only; not a complete no-egress or hosted authentication proof. No real protected data or credentials admitted." }, null, 2));
+await writeFile(join(output, "probe.json"), JSON.stringify({ passed: true, browserVersion: browser.version(), cases: ["three desktop/mobile layouts", "dirty draft retained", "host validation", "explicit synthetic confirmation once", "real isolated graph and Balance frames", "current generation binding", "data-free bootstrap and pre-ready rejection", "unknown/inherited event and array rejection", "parent DOM denial", "fetch/image CSP and worker denial", "ambient message ignored", "self-navigation frame-source containment", "renderer fallback", "loading/unavailable"], finalState: observed, network, failedRequests, pageErrors, limitation: "Chromium synthetic local-origin candidate evidence only; not a complete no-egress or hosted authentication proof. No real protected data or credentials admitted." }, null, 2));
 console.log(`Prototype browser probe passed; evidence:${output}`);
 
 } finally { await browser.close(); }
