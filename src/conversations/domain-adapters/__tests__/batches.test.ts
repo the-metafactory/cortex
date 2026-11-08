@@ -216,3 +216,18 @@ test("an item whose source restriction is no longer readable withholds the whole
   await rig.service.publishHostRecord({ kind: "restriction", value: { ...rig.objectRestriction, revision: "2", readScope: [] } }, 1);
   expect((await reader.read(rig.context, batchId, rig.sink)).kind).toBe("withheld");
 });
+
+test("an item capability revoked while the batch is being derived withholds it at release", async () => {
+  const rig = await rigged();
+  const built = await build(rig, ["succeeded"]);
+  const scopes = await rig.host.lifecycleBatches().itemScopes(built.batchId);
+  const previous = Number(rig.connection.connectionRevision);
+  const outcome = await rig.service.projectHostData(rig.context, rig.connection.connectionId, rig.sink, async () => {
+    rig.connection.connectionRevision = String(previous + 1);
+    rig.connection.readCapabilityIds = rig.connection.readCapabilityIds.filter(id => id !== rig.approval.snapshot.capabilityId);
+    await rig.service.publishHostRecord({ kind: "connection", value: rig.connection }, previous);
+    return { derived: true };
+  }, scopes);
+  expect(outcome.kind).toBe("withheld");
+  expect(rig.calls.sends).toHaveLength(0);
+});

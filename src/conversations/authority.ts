@@ -61,8 +61,8 @@ function headRecord(state: AuthorityState, kind: HostRecord["kind"], id: string)
 }
 interface ReadOptions { ref?: ObjectReference; validate?: (value: Json) => boolean; observed?: ObservedRead; signal?: AbortSignal; scopes?: ReadScope[] }
 export type ReadScope = Pick<ApprovedSnapshot, "capabilityId" | "destinations"> & Partial<Pick<ApprovedSnapshot, "sources" | "policy">>
-type HostScope = Required<Pick<ReadScope, "sources" | "policy">>
-const hostScopesOf = (scopes: readonly ReadScope[] = []): HostScope[] => scopes.flatMap(scope => scope.sources || scope.policy ? [{ sources: scope.sources ?? [], policy: scope.policy ?? "local" }] : [])
+type HostScope = Required<ReadScope>
+const hostScopesOf = (scopes: readonly ReadScope[] = []): HostScope[] => scopes.map(scope => ({ capabilityId: scope.capabilityId, destinations: scope.destinations, sources: scope.sources ?? [], policy: scope.policy ?? "local" }))
 interface Resolved { binding: AuthenticatedBinding; principal: PrincipalBinding; connection: ConnectionRecord; restrictions: RestrictionRecord[]; policy: PolicyInputs; vector: Json; policyRevision: string; revision: string; heads: Record<string, number> }
 interface Basis { kind: "confirmation"; confirmationId: string } 
 interface GrantBasis { kind: "grant"; grantId: string }
@@ -422,7 +422,7 @@ export class AuthorityMediator {
   private sinkAllowed(resolved: Resolved, snapshot: ApprovedSnapshot | undefined, sink: ReleaseSink, hostScopes: readonly HostScope[] = []): boolean {
     const anyLocal = snapshot?.policy === "local" || hostScopes.some(scope => scope.policy === "local");
     const b = resolved.binding;
-    return !b.maintenance && sink.kind === b.audience && sink.conversationId === b.conversationId && (sink.kind !== "model" || sink.route === b.route) && (sink.kind !== "view" || sink.viewId === b.viewId) && resolved.policy.releaseAllowed && resolved.policy.allowedAudiences.includes(sink.kind) && this.readable(resolved, snapshot) && resolved.restrictions.every(record => record.audiences.includes(sink.kind)) && !(resolved.restrictions.some(record => record.egress === "local") && resolved.policy.conversationPolicy === "cloud") && !((resolved.policy.conversationPolicy === "local" || anyLocal || resolved.restrictions.some(record => record.egress === "local")) && (sink.kind === "discord" || sink.kind === "model" && sink.route !== "local"));
+    return !b.maintenance && sink.kind === b.audience && sink.conversationId === b.conversationId && (sink.kind !== "model" || sink.route === b.route) && (sink.kind !== "view" || sink.viewId === b.viewId) && resolved.policy.releaseAllowed && resolved.policy.allowedAudiences.includes(sink.kind) && this.readable(resolved, snapshot, [...hostScopes]) && resolved.restrictions.every(record => record.audiences.includes(sink.kind)) && !(resolved.restrictions.some(record => record.egress === "local") && resolved.policy.conversationPolicy === "cloud") && !((resolved.policy.conversationPolicy === "local" || anyLocal || resolved.restrictions.some(record => record.egress === "local")) && (sink.kind === "discord" || sink.kind === "model" && sink.route !== "local"));
   }
 
   async release(context: HostContext, evidenceRef: string, rawSink: ReleaseSink): Promise<ReleaseProjection<Json>> {
