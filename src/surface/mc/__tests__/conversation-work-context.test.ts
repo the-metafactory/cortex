@@ -261,7 +261,7 @@ test("Studio evidence releases no data when a source tightens during the read", 
     } } };
   } }) });
   await run(host, "cloud");
-  expect(result.status).toBe("unauthorized");
+  expect(result).toMatchObject({ status: "unauthorized", code: "source-authorization-changed", reason: expect.any(String), nextStep: expect.any(String) });
   expect(JSON.stringify(result)).not.toContain("content");
 });
 
@@ -280,17 +280,21 @@ test("cloud tool calls cannot release notes whose execution policy is unavailabl
 });
 
 
+async function seedFailedRun(studioDir: string, failure: string) {
+  expect(Bun.spawnSync(["git", "init", "-q", studioDir]).exitCode).toBe(0);
+  const audit = newOverseerRun(new Date());
+  audit.status = "failed"; audit.failure = failure; audit.endedAt = new Date().toISOString();
+  await saveOverseerRun(studioDir, audit);
+  return audit;
+}
+
 test.each([["cloud", "web"], ["local", "discord"], ["cloud", "discord"]] as const)("%s over %s can inspect status metadata without releasing local failure details", async (policy, transport) => {
   let result: Record<string, any> = {};
   const { host, studioDir } = await rig(async (_request, call) => {
     result = await call("studio_evidence", { scope: "overseer", limit: 1 });
     return "Read status metadata.";
   });
-  const git = Bun.spawnSync(["git", "init", "-q", studioDir]);
-  expect(git.exitCode).toBe(0);
-  const audit = newOverseerRun(new Date());
-  audit.status = "failed"; audit.endedAt = new Date().toISOString(); audit.failure = "LOCAL_PRIVATE_FAILURE in a restricted thread";
-  await saveOverseerRun(studioDir, audit);
+  const audit = await seedFailedRun(studioDir, "LOCAL_PRIVATE_FAILURE in a restricted thread");
   const id = await run(host, policy, transport);
   expect((await host.meta(id)).policy).toBe(policy);
   expect(result).toMatchObject({ status: "ok", runs: [{ id: audit.id, status: "failed", failureRestricted: true }] });
@@ -316,10 +320,7 @@ test("local web reads preserve raw scan failures under retained private-source a
     result = await call("studio_evidence", { scope: "overseer", limit: 1 });
     return "Read private scan details.";
   });
-  expect(Bun.spawnSync(["git", "init", "-q", studioDir]).exitCode).toBe(0);
-  const audit = newOverseerRun(new Date());
-  audit.status = "failed"; audit.failure = "LOCAL_PRIVATE_FAILURE"; audit.endedAt = new Date().toISOString();
-  await saveOverseerRun(studioDir, audit);
+  await seedFailedRun(studioDir, "LOCAL_PRIVATE_FAILURE");
   const id = await run(host, "local");
   expect(result).toMatchObject({ policy: "local", view: "full", runs: [{ failure: "LOCAL_PRIVATE_FAILURE", failureRestricted: false }] });
   expect((await host.meta(id)).policy).toBe("local");

@@ -1,4 +1,4 @@
-import { OVERSEER_WORK_ID, STUDIO_PRIVATE_WORK_ID } from "../../../conversations/tools/studio-evidence";
+import { OVERSEER_WORK_ID, STUDIO_PRIVATE_WORK_ID, studioEvidenceAccessChanged } from "../../../conversations/tools/studio-evidence";
 import { readStudioEvidence } from "./studio/evidence";
 import type { Database } from "bun:sqlite";
 import { findNode } from "../../../balance";
@@ -122,12 +122,12 @@ export function workReaders(deps: WorkReaderDeps): WorkReaders {
       const threads = [...view.active, ...view.parked, ...view.closed];
       const thread = input.scope === "overseer" ? undefined : threads.find(thread => thread.slug === input.thread);
       if (input.scope !== "overseer" && input.thread && !thread) return { data: { status: "gone" }, sources: [] };
-      const data = await readStudioEvidence(desk, input, thread, {}, access);
+      const data = await readStudioEvidence(desk, input, thread, { access });
       const objects = await studio();
       const sources = input.scope === "selections" && !thread ? objects : objects.filter(object => object.id === thread?.slug);
       if ("policy" in data && data.policy === "local") {
         const restricted = await studioOne(STUDIO_PRIVATE_WORK_ID);
-        if (restricted.state !== "available") return { data: { status: "unauthorized" }, sources: [] };
+        if (restricted.state !== "available") return { data: studioEvidenceAccessChanged(), sources: [] };
         sources.push(restricted.object);
       }
       return { data, sources };
