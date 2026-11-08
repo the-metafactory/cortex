@@ -4,6 +4,7 @@ import { authorityRig } from "../../authority-fixtures";
 import { BatchReceiptError, legacyBatchProjection, summarizeBatch, type BatchReadOutcome } from "../operations/batches";
 import { AT, approvalFixture, attemptFixture, eventFixture, support } from "../operations/fixtures";
 import { ownerResult } from "../operations/dispatch-fixtures";
+import { snapshotDigest } from "../operations/validation";
 import type { OperationState, OwnerResult } from "../operations/types";
 
 type Rig = Awaited<ReturnType<typeof authorityRig>>;
@@ -199,4 +200,19 @@ test("internal derivation confers no access and legacy clients are told to upgra
   expect((await rig.host.lifecycleBatches().derive(built.batchId)).receipt.summary).toBe("succeeded");
   expect(rig.calls.sends).toHaveLength(0);
   expect(legacyBatchProjection()).toMatchObject({ route: "upgrade-required", reason: { code: "upgrade_required" } });
+});
+
+test("an item whose source restriction is no longer readable withholds the whole batch", async () => {
+  const rig = await rigged();
+  const batchId = randomUUID();
+  const operationId = `${batchId}:op-0`;
+  await rig.host.lifecycleBatches().register({ batchId, connectionId: rig.connection.connectionId, items: [{ itemId: "item-0", operationId }] });
+  const base = approvalFixture(operationId);
+  const { digest: _digest, ...rest } = base.snapshot;
+  const snapshot = { ...rest, sources: [{ ref: rig.objectRestriction.source, restrictionRef: rig.objectRestriction.restrictionRef }] };
+  await rig.host.lifecycleJournal(rig.registry).approve({ ...base, snapshot: { ...snapshot, digest: snapshotDigest(snapshot) }, links: { batchId, itemId: "item-0" } });
+  const reader = rig.host.lifecycleBatchReader(rig.registry, rig.bindings);
+  expect((await reader.read(rig.context, batchId, rig.sink)).kind).toBe("released");
+  await rig.service.publishHostRecord({ kind: "restriction", value: { ...rig.objectRestriction, revision: "2", readScope: [] } }, 1);
+  expect((await reader.read(rig.context, batchId, rig.sink)).kind).toBe("withheld");
 });

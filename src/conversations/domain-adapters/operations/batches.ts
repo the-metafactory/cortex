@@ -94,7 +94,7 @@ export class BatchReceiptStore {
       const doc = await this.engine.snapshot(StoreDoc, item.operationId, this.context);
       const stored = doc?.record ? StoredSchema.parse(doc.record) : null;
       checkItem(index, item, stored);
-      if (stored && !("kind" in stored.journal.snapshot)) scopes.push({ capabilityId: stored.journal.snapshot.capabilityId, destinations: stored.journal.snapshot.destinations });
+      if (stored && !("kind" in stored.journal.snapshot)) { const { capabilityId, destinations, sources, policy } = stored.journal.snapshot; scopes.push({ capabilityId, destinations, sources, policy }); }
     }
     return scopes;
   }
