@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, stat } from "node:fs/promises";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import { acquireHostLock } from "../conversations/lock";
 import { compareWriterVersions, WriterImplementationSchema, type WriterRecord } from "../conversations/domain-adapters/operations/writer-authority";
@@ -19,6 +19,14 @@ async function resolveRelativeImport(from: string, specifier: string): Promise<s
   for (const candidate of bases) for (const suffix of RESOLVE_SUFFIXES) if (await isFile(candidate + suffix)) return candidate + suffix;
   throw new Error(`Managed executable import ${specifier} from ${from} cannot be resolved; implementation digest refused.`);
 }
+async function resolveImport(from: string, specifier: string): Promise<string[]> {
+  if (specifier.startsWith(".")) return [await resolveRelativeImport(from, specifier)];
+  if (/^(node|bun):/.test(specifier) || specifier === "bun") return [];
+  let resolved: string;
+  try { resolved = Bun.resolveSync(specifier, dirname(from)); }
+  catch (error) { throw new Error(`Managed executable package import ${specifier} from ${from} cannot be resolved; implementation digest refused.`, { cause: error }); }
+  return isAbsolute(resolved) ? [resolved] : [];
+}
 export async function implementationDigest(entryPath: string): Promise<string> {
   const files = new Map<string, Uint8Array>();
   const pending = [entryPath];
@@ -28,7 +36,7 @@ export async function implementationDigest(entryPath: string): Promise<string> {
     files.set(path, bytes);
     if (!SOURCE_EXTENSIONS.has(extname(path))) continue;
     const transpiler = new Bun.Transpiler({ loader: extname(path).includes("x") ? "tsx" : extname(path).includes("t") ? "ts" : "js" });
-    for (const imported of transpiler.scanImports(new TextDecoder().decode(bytes).replace(/^#![^\n]*/, ""))) if (imported.path.startsWith(".")) pending.push(await resolveRelativeImport(path, imported.path));
+    for (const imported of transpiler.scanImports(new TextDecoder().decode(bytes).replace(/^#![^\n]*/, ""))) pending.push(...await resolveImport(path, imported.path));
   }
   const sorted = [...files.entries()].sort(([a], [b]) => a.localeCompare(b));
   const [[, entryBytes] = []] = sorted;

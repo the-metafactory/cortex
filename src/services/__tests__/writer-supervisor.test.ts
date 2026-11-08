@@ -151,6 +151,21 @@ test("implementation digest changes when an imported module changes while the en
   expect(await implementationDigest(fixture.approved)).toBe(fixture.plan.implementation.sha256);
 });
 
+test("implementation digest follows bare package imports and refuses unresolvable ones", async () => {
+  const fixture = await rig();
+  const pkg = join(fixture.home, "node_modules", "synthetic-writer-pkg");
+  await mkdir(pkg, { recursive: true });
+  await writeFile(join(pkg, "package.json"), '{"name":"synthetic-writer-pkg","main":"index.js"}');
+  await writeFile(join(pkg, "index.js"), "module.exports = 1;\n");
+  const entry = join(fixture.home, "pkg-entry.ts");
+  await writeFile(entry, 'import "synthetic-writer-pkg";\nimport "node:fs";\n');
+  const before = await implementationDigest(entry);
+  await writeFile(join(pkg, "index.js"), "module.exports = 2;\n");
+  expect(await implementationDigest(entry)).not.toBe(before);
+  await writeFile(entry, 'import "synthetic-missing-pkg";\n');
+  await expect(implementationDigest(entry)).rejects.toThrow("cannot be resolved");
+});
+
 test("implementation digest scans an executable with a shebang header and still follows its imports", async () => {
   const fixture = await rig();
   const entry = join(fixture.home, "shebang-entry.ts");

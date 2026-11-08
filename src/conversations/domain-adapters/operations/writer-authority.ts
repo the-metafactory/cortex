@@ -47,6 +47,7 @@ export function compareWriterVersions(a: string, b: string): number {
 export const writerLease = (record: WriterRecord): WriterLease => ({ bindingKey: record.bindingKey, epoch: record.epoch, instanceId: record.instanceId, supervisorReceiptRef: record.receipt?.receiptRef ?? "unverified" });
 export class WriterConflict extends Error {}
 const requireWriter = (condition: boolean, reason: string): void => { if (!condition) throw new WriterConflict(reason); };
+const receiptCoversInventory = (receipt: z.infer<typeof SupervisorReceiptSchema>, record: WriterRecord): boolean => receipt.inventoryRef === record.plan.inventoryRef && canonicalWire([...receipt.stoppedLabels].sort()) === canonicalWire(record.plan.entries.map(item => item.label).sort());
 
 export class WriterAuthority {
   constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly publication: AuthorityPublication, private readonly context: Context = BACKGROUND_CONTEXT) {}
@@ -112,7 +113,7 @@ export class WriterAuthority {
         }
         case "verify": {
           const receipt = SupervisorReceiptSchema.parse(await steps.verify(record));
-          requireWriter(receipt.inventoryRef === record.plan.inventoryRef && canonicalWire([...receipt.stoppedLabels].sort()) === canonicalWire(record.plan.entries.map(item => item.label).sort()), "Supervisor evidence does not cover the complete retired inventory.");
+          requireWriter(receiptCoversInventory(receipt, record), "Supervisor evidence does not cover the complete retired inventory.");
           next.receipt = receipt; next.phase = "stopped"; next.stage = "import"; break;
         }
         case "import": {
@@ -126,7 +127,7 @@ export class WriterAuthority {
           next.epoch++; next.phase = "disabled"; next.stage = "enable"; break;
         case "enable": {
           const receipt = SupervisorReceiptSchema.parse(await steps.verify(record));
-          requireWriter(receipt.inventoryRef === record.plan.inventoryRef && canonicalWire([...receipt.stoppedLabels].sort()) === canonicalWire(record.plan.entries.map(item => item.label).sort()), "Retired supervisor evidence changed.");
+          requireWriter(receiptCoversInventory(receipt, record), "Retired supervisor evidence changed.");
           requireWriter(canonicalWire(ImportWatermarkSchema.parse(await steps.watermark(record))) === canonicalWire(record.watermark), "Durable importer watermark changed before activation.");
           await steps.prepare(record);
           next.commands.push(...checkedCommands(await steps.enable(record)));
