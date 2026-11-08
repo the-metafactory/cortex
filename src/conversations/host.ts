@@ -9,6 +9,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { z } from "zod";
 import { OperationJournalStore } from "./domain-adapters/operations/journal";
 import type { DomainAdapterRegistry } from "./domain-adapters/registry";
+import { AuthorityMediator, type AuthorityBindings, type HostPolicyState } from "./authority";
 import { creationFor } from "./creation";
 import { ConversationError } from "./errors";
 export { ConversationError } from "./errors";
@@ -148,6 +149,7 @@ export async function openConversationHost(options: HostOptions): Promise<HostSt
 
 export class ConversationHost {
   private harness: Harness | null = null;
+  private authorityService: { registry: DomainAdapterRegistry; bindings: AuthorityBindings; mediator: AuthorityMediator } | null = null;
   private readonly context: Context = BACKGROUND_CONTEXT;
   private readonly queues = new Map<string, Promise<void>>();
   private readonly transcripts = new Map<string, { head: string; lines: ExchangeLine[] }>();
@@ -197,6 +199,61 @@ export class ConversationHost {
 
   lifecycleJournal(registry: DomainAdapterRegistry): OperationJournalStore {
     return new OperationJournalStore(this.engine, registry, this.context);
+  }
+
+  lifecycleAuthority(registry: DomainAdapterRegistry, bindings: AuthorityBindings): AuthorityMediator {
+    if (this.authorityService) {
+      if (this.authorityService.registry !== registry || this.authorityService.bindings !== bindings) throw new Error("Authority bindings are already registered for this host.");
+      return this.authorityService.mediator;
+    }
+    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now);
+    this.authorityService = { registry, bindings, mediator };
+    return mediator;
+  }
+
+  private async lifecyclePolicy(id: string): Promise<HostPolicyState> {
+    const { stored, effective, available } = await this.tighten(id);
+    if (!available) throw new ConversationError(403, "Current source policy is unavailable.");
+    return {
+      principal: stored.principal, stack: stored.stack, policy: effective,
+      tool: asJson({ config: this.options.tools?.config() ?? null, sources: stored.toolSources }),
+      communication: asJson({ sources: stored.communicationSources, connectors: (this.sources.communications?.() ?? []).map(connector => ({ id: connector.id, service: connector.service, family: connector.family, operations: connector.operations, actions: connector.actions, scopes: connector.scopes() })) }),
+      link: asJson({ links: stored.links, sources: await this.sourcesOf(stored.links) }), work: asJson(await this.lifecycleWorkInputs(stored)), history: asJson(await this.lifecycleHistoryInputs(id)),
+    };
+  }
+
+  private async lifecycleWorkInputs(stored: Stored): Promise<object[]> {
+    const result: object[] = [];
+    for (const [key, recorded] of Object.entries(stored.workSources)) {
+      const at = key.indexOf(":");
+      const kind = key.slice(0, at);
+      const reader = this.sources.readers?.[kind as keyof WorkReaders];
+      const current = reader ? await reader.read(key.slice(at + 1)) : null;
+      if (current?.state !== "available") throw new ConversationError(403, "Current work policy is unavailable.");
+      result.push({ kind, id: current.object.id, area: current.object.area, policy: current.object.policy, recorded });
+    }
+    return result;
+  }
+
+  private async lifecycleHistoryInputs(id: string): Promise<object[]> {
+    const result: object[] = [];
+    const seen = new Set<string>();
+    const pending = [id];
+    while (pending.length) {
+      const next = pending.pop();
+      if (next === undefined) continue;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      const source = await this.stored(next);
+      for (const key of Object.keys(source.communicationSources)) {
+        const [connectorId, scopeId] = key.split("\u0000");
+        const connector = this.sources.communications?.().find(item => item.id === connectorId);
+        if (!connector || !scopeId || !await connector.authorize(source.principal, scopeId)) throw new ConversationError(403, "Current communication policy is unavailable.");
+      }
+      result.push({ conversationId: next, principal: source.principal, policy: source.policy, links: await this.sourcesOf(source.links), tool: source.toolSources, work: await this.lifecycleWorkInputs(source), communication: source.communicationSources, history: source.historySources });
+      pending.push(...Object.keys(source.historySources));
+    }
+    return result;
   }
 
   private async directory(): Promise<Record<string, Stored>> {
