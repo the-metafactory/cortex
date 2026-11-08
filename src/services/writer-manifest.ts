@@ -22,8 +22,7 @@ async function resolveRelativeImport(from: string, specifier: string): Promise<s
 export async function implementationDigest(entryPath: string): Promise<string> {
   const files = new Map<string, Uint8Array>();
   const pending = [entryPath];
-  while (pending.length) {
-    const path = pending.pop()!;
+  for (let path = pending.pop(); path !== undefined; path = pending.pop()) {
     if (files.has(path)) continue;
     const bytes = await readFile(path);
     files.set(path, bytes);
@@ -31,9 +30,11 @@ export async function implementationDigest(entryPath: string): Promise<string> {
     const transpiler = new Bun.Transpiler({ loader: extname(path).includes("x") ? "tsx" : extname(path).includes("t") ? "ts" : "js" });
     for (const imported of transpiler.scanImports(new TextDecoder().decode(bytes))) if (imported.path.startsWith(".")) pending.push(await resolveRelativeImport(path, imported.path));
   }
-  if (files.size === 1) return executableDigest(files.get(entryPath)!);
+  const sorted = [...files.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const [[, entryBytes] = []] = sorted;
+  if (sorted.length === 1 && entryBytes) return executableDigest(entryBytes);
   const hash = createHash("sha256");
-  for (const path of [...files.keys()].sort()) hash.update(`${path}\0${executableDigest(files.get(path)!)}\n`);
+  for (const [path, bytes] of sorted) hash.update(`${path}\0${executableDigest(bytes)}\n`);
   return hash.digest("hex");
 }
 export async function readWriterManifest(root: string): Promise<WriterManifest> { return WriterManifestSchema.parse(JSON.parse(await readFile(join(root, "manifest.json"), "utf8"))); }

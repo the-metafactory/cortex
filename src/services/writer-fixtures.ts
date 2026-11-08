@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile, mkdir, rm, symlink } from "node:fs/promises";
+import { mkdtemp, writeFile, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuthorityPublication } from "../conversations/authority-publication";
