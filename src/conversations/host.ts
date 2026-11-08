@@ -1,3 +1,4 @@
+import { OperationBridge, type SupportLookup } from "./domain-adapters/operations/dispatch";
 import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
 import { AuthorityPublication } from "./authority-publication";
 import { authorityHash } from "./authority-records";
@@ -215,6 +216,10 @@ export class ConversationHost {
     const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters());
     this.authorityService = { registry, bindings, mediator };
     return mediator;
+  }
+
+  lifecycleBridge(registry: DomainAdapterRegistry, bindings: AuthorityBindings, supportFor: SupportLookup, waitMs?: number, maxOutstandingCalls?: number): OperationBridge {
+    return new OperationBridge({ journal: this.lifecycleJournal(registry), authority: this.lifecycleAuthority(registry, bindings), writers: this.lifecycleWriters(), supportFor, now: this.now, ...(waitMs === undefined ? {} : { waitMs }), ...(maxOutstandingCalls === undefined ? {} : { maxOutstandingCalls }) });
   }
 
   private lifecyclePolicyRevision(): string {
