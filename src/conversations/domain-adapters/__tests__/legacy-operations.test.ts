@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { z } from "zod";
 import { defineDoc } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { graphMarker } from "../../../surface/mc/desk/graph-conversation-writer";
@@ -7,8 +9,9 @@ import { AT, attemptFixture, eventFixture, support, approvalFixture, registryFix
 import { importLegacyOperation, previewLegacyOperation, projectLegacyOperation, readOperationEvidence, UpgradeRequired } from "../operations/legacy";
 import { OperationJournalStore } from "../operations/journal";
 import { legacyContext, legacyFixture } from "../operations/legacy-fixtures";
+import { canonicalWire } from "../operations/validation";
 
-import { journalStoreTestFixture } from "./journal-store";
+import { expectLegacyReviewRequired, journalStoreTestFixture } from "./journal-store";
 
 const { hosts, open } = journalStoreTestFixture();
 const ids = (id: string) => [operationUuid(id), studioRequestId(id), graphMarker(id)];
@@ -144,10 +147,7 @@ test("F1 historical completed success survives missing or changed mapping contex
       source.proposal.fields.title = "Edited after completion";
     }
     const imported = await importLegacyOperation(host.journal, source, edited ? legacyContext(source) : undefined, AT);
-    expect(imported.journal.state).toBe("succeeded");
-    expect(imported.retryBlocked).toBe(true);
-    expect(() => projectLegacyOperation(imported)).toThrow(UpgradeRequired);
-    const evidence = readOperationEvidence(imported);
+    const evidence = expectLegacyReviewRequired(imported);
     expect(evidence.kind === "legacy" ? evidence.source.record.state : null).toBe("created");
     expect(evidence.kind === "legacy" ? evidence.issues.length : 0).toBeGreaterThan(0);
   }
@@ -157,4 +157,75 @@ test("lifecycle projection rejects an owner label forged onto a supported capabi
   const host = await open();
   const lifecycle = await host.journal.approve(approvalFixture());
   expect(() => projectLegacyOperation(lifecycle, { owner: "graph-node", adapterId: "balance", connectionId: "connection-example", capabilityId: "balance.task.create" })).toThrow(UpgradeRequired);
+});
+
+test("legacy conversion rejects unsupported capabilities and mismatched destination and canonical references", async () => {
+  const source = legacyFixture();
+  const context = legacyContext(source);
+  const area = context.destinations[0]!;
+  const canonical = context.canonicalReference!;
+  for (const mapping of [
+    { ...context, capabilityId: "arbitrary.unsupported" },
+    { ...context, owner: "graph-node" as const },
+    { ...context, adapterId: "another-adapter" },
+    { ...context, canonicalReference: { ...canonical, objectType: "project" } },
+    { ...context, canonicalReference: { ...canonical, canonicalId: "different-task" } },
+    { ...context, destinations: [{ ...area, objectType: "project" }] },
+    { ...context, destinations: [{ ...area, canonicalId: "different-area" }] },
+    { ...context, destinations: [] },
+    { ...context, destinations: [area, { ...area, objectType: "project", canonicalId: "extra-project" }] },
+    { ...context, destinations: [area, area] },
+  ]) {
+    const host = await open();
+    const before = JSON.stringify(source);
+    expect(previewLegacyOperation(source, mapping).issues.length).toBeGreaterThan(0);
+    const imported = await importLegacyOperation(host.journal, source, mapping, AT);
+    const evidence = expectLegacyReviewRequired(imported);
+    expect(evidence.kind === "legacy" ? evidence.source : null).toEqual(source);
+    expect(JSON.stringify(source)).toBe(before);
+  }
+});
+
+test("Balance task conversion binds exact area and optional project fields without normalizing legacy edits", async () => {
+  const source = legacyFixture();
+  source.proposal.fields.project = "project-example";
+  const context = legacyContext(source);
+  const project = { ...context.destinations[0]!, objectType: "project", canonicalId: "project-example" };
+  const complete = { ...context, destinations: [project, ...context.destinations] };
+  expect(previewLegacyOperation(source, context).issues.length).toBeGreaterThan(0);
+  expect(previewLegacyOperation(source, complete).issues).toEqual([]);
+  const host = await open();
+  expect(projectLegacyOperation(await importLegacyOperation(host.journal, source, complete, AT))).toEqual(source.record);
+  source.proposal.fields.project = " project-example ";
+  const ambiguous = { ...complete, fields: structuredClone(source.proposal.fields) };
+  expect(previewLegacyOperation(source, ambiguous).issues.length).toBeGreaterThan(0);
+});
+
+test("unsupported owner conversions retain evidence and request identities without a legacy DTO projection", async () => {
+  const source = legacyFixture();
+  source.record.owner = "studio-note";
+  source.proposal.type = "studio-note";
+  const context = { ...legacyContext(source), owner: "studio-note" as const, adapterId: "studio", capabilityId: "studio.note.create" };
+  expect(previewLegacyOperation(source, context).issues).toContain("legacy_capability_mapping_unsupported");
+  const host = await open();
+  const imported = await importLegacyOperation(host.journal, source, context, AT);
+  expect(imported.journal.ownerRequestId).toBe(studioRequestId(source.record.operationId));
+  expect(imported.journal.state).toBe("succeeded");
+  expect(() => projectLegacyOperation(imported)).toThrow(UpgradeRequired);
+  expect(readOperationEvidence(imported)).toMatchObject({ kind: "legacy", source });
+});
+
+test("readers revalidate persisted mappings whose old import marker did not report conversion issues", async () => {
+  const source = legacyFixture();
+  const context = { ...legacyContext(source), capabilityId: "arbitrary.unsupported" };
+  const host = await open();
+  const imported = await importLegacyOperation(host.journal, source, context, AT);
+  const event = imported.journal.events[0]!.event;
+  if (event.kind !== "legacy-import") throw new Error("Legacy import event required.");
+  const rawRecord = z.json().parse({ source, context, issues: [] });
+  event.rawRecord = rawRecord;
+  event.sourceDigest = createHash("sha256").update(canonicalWire(rawRecord)).digest("hex");
+  expect(readOperationEvidence(imported)).toMatchObject({ kind: "legacy", issues: ["legacy_capability_mapping_unsupported"] });
+  expect(() => projectLegacyOperation(imported)).toThrow(UpgradeRequired);
+  expect(event.rawRecord).toEqual(rawRecord);
 });

@@ -24,6 +24,8 @@ export interface LegacyContext {
   destinations: ObjectReference[];
   canonicalReference?: ObjectReference;
 }
+type LegacyBinding = Pick<LegacyContext, "owner" | "adapterId" | "connectionId" | "capabilityId">;
+const isBalanceTaskBinding = (binding: LegacyBinding | undefined): boolean => binding?.owner === "balance-task" && binding.adapterId === "balance" && binding.capabilityId === "balance.task.create";
 const ContextSchema = z.object({ owner: OperationRecordSchema.shape.owner, adapterId: z.string().min(1), connectionId: z.string().min(1), capabilityId: z.string().min(1), fields: z.record(z.string(), z.string()), destinations: z.array(ObjectReferenceSchema), canonicalReference: ObjectReferenceSchema.optional() }).strict();
 const SourceSchema = z.object({ proposal: ProposalSchema, record: OperationRecordSchema, ownerReceipts: z.json(), createResult: z.discriminatedUnion("state", [z.object({ state: z.literal("created"), canonicalId: z.string(), url: z.string().optional() }).strict(), z.object({ state: z.literal("accepted"), receipt: z.string().optional() }).strict(), z.object({ state: z.literal("failed"), error: z.string() }).strict()]).optional(), readback: z.union([z.object({ found: z.literal(true), canonicalId: z.string(), url: z.string().optional() }).strict(), z.object({ found: z.literal(false) }).strict(), z.null()]).optional() }).strict();
 const ImportEvidenceSchema = z.object({ source: SourceSchema, context: ContextSchema.nullable(), issues: z.array(z.string()) }).strict();
@@ -41,6 +43,19 @@ export interface LegacyPreview {
   dispatchAllowed: false;
   retryAllowed: false;
   ownerRequestId: string;
+}
+
+function conversionIssues(source: LegacySource, context: LegacyContext): string[] {
+  if (source.record.owner !== "balance-task" || !isBalanceTaskBinding(context)) return ["legacy_capability_mapping_unsupported"];
+  const fields = source.proposal.fields;
+  const destinations = ["area", "project"].flatMap(objectType => {
+    const canonicalId = fields[objectType];
+    return canonicalId ? [{ adapterId: context.adapterId, connectionId: context.connectionId, objectType, canonicalId }] : [];
+  });
+  const issues: string[] = [];
+  if (!fields.area || destinations.some(ref => ref.canonicalId.trim() !== ref.canonicalId) || canonicalWire(context.destinations.map(canonicalWire).sort()) !== canonicalWire(destinations.map(canonicalWire).sort())) issues.push("legacy_destination_ambiguous");
+  if (context.canonicalReference && (context.canonicalReference.objectType !== "task" || context.canonicalReference.canonicalId !== source.record.canonicalId)) issues.push("legacy_canonical_mapping_unsupported");
+  return issues;
 }
 
 export function previewLegacyOperation(raw: LegacySource, mapping?: LegacyContext): LegacyPreview {
@@ -61,6 +76,7 @@ export function previewLegacyOperation(raw: LegacySource, mapping?: LegacyContex
     const refs = [...context.destinations, ...(context.canonicalReference ? [context.canonicalReference] : [])];
     if (!context.destinations.length || refs.some(ref => ref.adapterId !== context.adapterId || ref.connectionId !== context.connectionId)) issues.push("legacy_destination_ambiguous");
     if (record.state === "created" && (!context.canonicalReference || context.canonicalReference.canonicalId !== canonical)) issues.push("legacy_canonical_mapping_missing");
+    issues.push(...conversionIssues(source, context));
   }
   if (source.createResult?.state === "created" && source.createResult.canonicalId !== canonical) issues.push("legacy_result_identity_conflict");
   if (source.readback?.found && source.readback.canonicalId !== canonical) issues.push("legacy_readback_identity_conflict");
@@ -86,7 +102,8 @@ export function readOperationEvidence(raw: unknown): OperationEvidence {
       parseWire(ImportEvidenceSchema, entry.event.rawRecord);
       const evidence = structuredClone(entry.event.rawRecord) as unknown as z.infer<typeof ImportEvidenceSchema>;
       if (hash(entry.event.rawRecord) !== entry.event.sourceDigest) throw new UpgradeRequired();
-      return { kind: "legacy", ...evidence, lifecycle: parsed, dispatchAllowed: false, retryAllowed: false };
+      const issues = [...new Set([...evidence.issues, ...previewLegacyOperation(evidence.source, evidence.context ?? undefined).issues])];
+      return { kind: "legacy", ...evidence, issues, lifecycle: parsed, dispatchAllowed: false, retryAllowed: false };
     }
     return { kind: "lifecycle", lifecycle: parsed };
   } catch (error) {
@@ -96,7 +113,7 @@ export function readOperationEvidence(raw: unknown): OperationEvidence {
   }
 }
 
-export function projectLegacyOperation(raw: unknown, binding?: Pick<LegacyContext, "owner" | "adapterId" | "connectionId" | "capabilityId">): OperationRecord {
+export function projectLegacyOperation(raw: unknown, binding?: LegacyBinding): OperationRecord {
   const evidence = readOperationEvidence(raw);
   if (evidence.kind === "upgrade-required") throw new UpgradeRequired();
   if (evidence.kind === "legacy-only") throw new UpgradeRequired();
@@ -110,7 +127,7 @@ export function projectLegacyOperation(raw: unknown, binding?: Pick<LegacyContex
   }
   if ("kind" in journal.snapshot) throw new UpgradeRequired();
   const snapshot = journal.snapshot;
-  if (binding?.owner !== "balance-task" || binding.adapterId !== "balance" || binding.capabilityId !== "balance.task.create") throw new UpgradeRequired();
+  if (!binding || !isBalanceTaskBinding(binding)) throw new UpgradeRequired();
   const approval = journal.events.find(item => item.event.kind === "approved");
   if (approval?.event.kind !== "approved" || snapshot.capabilityId !== binding.capabilityId || snapshot.adapterId !== binding.adapterId || snapshot.connectionId !== binding.connectionId) throw new UpgradeRequired();
   const states: Partial<Record<OperationJournal["state"], OperationRecord["state"]>> = { confirmed: "confirmed", dispatching: "running", pending: "running", uncertain: "uncertain" };
@@ -121,7 +138,7 @@ export function projectLegacyOperation(raw: unknown, binding?: Pick<LegacyContex
     const result = success?.event.kind === "owner-result" ? success.event.response.result : undefined;
     if (result?.kind !== "succeeded" || result.evidence.refs.length !== 1) throw new UpgradeRequired();
     const ref = result.evidence.refs[0];
-    if (ref?.adapterId !== binding.adapterId || ref.connectionId !== binding.connectionId) throw new UpgradeRequired();
+    if (ref?.adapterId !== binding.adapterId || ref.connectionId !== binding.connectionId || ref.objectType !== "task") throw new UpgradeRequired();
     canonicalId = ref.canonicalId;
     state = "created";
   }
