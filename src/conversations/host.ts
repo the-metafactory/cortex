@@ -1,3 +1,5 @@
+import { AuthorityPublication } from "./authority-publication";
+import { authorityHash } from "./authority-records";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -152,6 +154,7 @@ export class ConversationHost {
   private authorityService: { registry: DomainAdapterRegistry; bindings: AuthorityBindings; mediator: AuthorityMediator } | null = null;
   private readonly context: Context = BACKGROUND_CONTEXT;
   private readonly queues = new Map<string, Promise<void>>();
+  private readonly authorityPublication = new AuthorityPublication();
   private readonly transcripts = new Map<string, { head: string; lines: ExchangeLine[] }>();
   private readonly now: () => Date;
   private sources: HostSources;
@@ -206,13 +209,17 @@ export class ConversationHost {
       if (this.authorityService.registry !== registry || this.authorityService.bindings !== bindings) throw new Error("Authority bindings are already registered for this host.");
       return this.authorityService.mediator;
     }
-    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now);
+    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision());
     this.authorityService = { registry, bindings, mediator };
     return mediator;
   }
 
+  private lifecyclePolicyRevision(): string {
+    return authorityHash(asJson({ tool: this.options.tools?.config() ?? null, communication: (this.sources.communications?.() ?? []).map(connector => ({ id: connector.id, service: connector.service, family: connector.family, operations: connector.operations, actions: connector.actions, scopes: connector.scopes() })) }));
+  }
+
   private async lifecyclePolicy(id: string): Promise<HostPolicyState> {
-    const { stored, effective, available } = await this.tighten(id);
+    const { stored, effective, available } = await this.tighten(id, false);
     if (!available) throw new ConversationError(403, "Current source policy is unavailable.");
     return {
       principal: stored.principal, stack: stored.stack, policy: effective,
@@ -268,14 +275,14 @@ export class ConversationHost {
   }
 
   private async update(id: string, change: (stored: Stored) => Stored): Promise<Stored> {
-    const next = await this.engine.commit(async tx => {
+    const next = await this.authorityPublication.publish(() => this.engine.commit(async tx => {
       const doc = await tx.doc(DirectoryDoc);
       const current = doc.conversations[id];
       if (!current) return null;
       const changed = change(StoredSchema.parse(current));
       doc.conversations[id] = asJson(changed);
       return changed;
-    }, this.context);
+    }, this.context));
     if (!next) throw new ConversationError(404, "That conversation was not found on this stack.");
     return next;
   }
@@ -299,9 +306,13 @@ export class ConversationHost {
     finally { resolve(undefined); if (this.queues.get(id) === promise) this.queues.delete(id); }
   }
 
+  publishLifecyclePolicy<T>(change: () => Promise<T>): Promise<T> {
+    return this.authorityPublication.publish(change);
+  }
+
   attachSources(sources: HostSources): Promise<string[]> {
-    this.sources = sources;
-    const run = this.reconciling.then(() => this.reconcile()).catch((error: unknown): string[] => {
+    const publication = this.authorityPublication.publish(() => { this.sources = sources; return Promise.resolve(); });
+    const run = this.reconciling.then(() => publication).then(() => this.reconcile()).catch((error: unknown): string[] => {
       console.error(`conversations: reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
       return [];
     });
@@ -387,7 +398,7 @@ export class ConversationHost {
     }
   }
 
-  private async tighten(id: string): Promise<{ stored: Stored; effective: Policy; sources: SourceView[]; available: boolean }> {
+  private async tighten(id: string, persist = true): Promise<{ stored: Stored; effective: Policy; sources: SourceView[]; available: boolean }> {
     const current = await this.stored(id);
     const own = await this.ownPrivacy(current);
     const policies = [own.policy];
@@ -406,7 +417,7 @@ export class ConversationHost {
       pending.push(...Object.keys(source.historySources));
     }
     const resolved = strictest(policies);
-    const stored = resolved === current.policy ? current : await this.update(id, s => ({ ...s, policy: strictest([s.policy, resolved]) }));
+    const stored = resolved === current.policy ? current : persist ? await this.update(id, s => ({ ...s, policy: strictest([s.policy, resolved]) })) : { ...current, policy: strictest([current.policy, resolved]) };
     return { stored, effective: own.available ? stored.policy : "local", sources: own.sources, available: own.available };
   }
 

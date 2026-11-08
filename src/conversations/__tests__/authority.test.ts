@@ -2,7 +2,14 @@ import { afterEach, expect, spyOn, test } from "bun:test";
 import { OperationJournalStore } from "../domain-adapters/operations/journal";
 import { authorityRig } from "../authority-fixtures";
 
-const rigs: Awaited<ReturnType<typeof authorityRig>>[] = [];
+type AuthorityRig = Awaited<ReturnType<typeof authorityRig>>;
+type PreparedRequest = Awaited<ReturnType<AuthorityRig["prepare"]>>;
+const rigs: AuthorityRig[] = [];
+async function expectNoDispatch(rig: AuthorityRig, request: PreparedRequest): Promise<void> {
+  expect((await rig.service.dispatch(rig.context, request, rig.lease)).kind).toBe("denied");
+  expect(rig.calls.dispatch).toBe(0);
+}
+
 afterEach(async () => { for (const rig of rigs.splice(0)) await rig.close(); });
 
 test("confirmation and approval persist atomically and duplicate delivery reopens the same protected records", async () => {
@@ -361,4 +368,94 @@ test("current connector credential resolution denies dispatch and cancellation w
   expect((await rig.service.cancel(rig.context, { lifecycleVersion: "1.0.0", operationId: request.operationId, cancelId, authority: cancellation.authority, requestedAt: "2026-11-01T00:00:00.000Z" }, rig.lease)).kind).toBe("denied");
   expect(rig.calls.dispatch).toBe(0);
   expect(rig.calls.cancel).toBe(0);
+});
+
+test("policy changed during the final lease verifier denies connector admission", async () => {
+  const rig = await authorityRig(); rigs.push(rig);
+  const request = await rig.prepare();
+  let checks = 0;
+  rig.hooks.writer = async () => { if (++checks === 2) rig.policy.writesAllowed = false; return true; };
+  await expectNoDispatch(rig, request);
+});
+
+test("object readback requires its registered query capability and object type before fetch and release", async () => {
+  const rig = await authorityRig(); rigs.push(rig);
+  for (const readCapabilityIds of [[], [rig.approval.snapshot.capabilityId], ["balance.unregistered.read"]]) {
+    const revision = Number(rig.connection.connectionRevision) + 1;
+    Object.assign(rig.connection, { connectionRevision: String(revision), readCapabilityIds });
+    await rig.service.publishHostRecord({ kind: "connection", value: rig.connection }, revision - 1);
+    expect((await rig.service.readback(rig.context, { lifecycleVersion: "1.0.0", ref: rig.approval.snapshot.destinations[0]! }, rig.sink)).kind).toBe("withheld");
+  }
+  expect(rig.calls.readback).toBe(0);
+  expect(rig.calls.sends).toHaveLength(0);
+});
+
+test("readback rejects unregistered schema versions and invalid object values while retaining private evidence", async () => {
+  const rig = await authorityRig(); rigs.push(rig);
+  const ref = rig.approval.snapshot.destinations[0]!;
+  for (const result of [
+    { kind: "present", schemaRef: { schemaId: "unregistered.schema", version: "999.0.0" }, value: { unexpected: "unvalidated" }, links: [] },
+    { kind: "present", schemaRef: { schemaId: "balance.area", version: "2.0.0" }, value: ref, links: [] },
+    { kind: "present", schemaRef: { schemaId: "balance.area", version: "1.0.0" }, value: { unexpected: "unvalidated" }, links: [] },
+  ]) {
+    rig.hooks.readback = async () => ({ lifecycleVersion: "1.0.0", ref, checkedAt: "2026-11-01T00:00:00.000Z", provenance: { adapterId: "balance", connectionId: ref.connectionId, evidenceId: crypto.randomUUID() }, result });
+    expect((await rig.service.readback(rig.context, { lifecycleVersion: "1.0.0", ref }, rig.sink)).kind).toBe("withheld");
+  }
+  expect(rig.calls.sends).toHaveLength(0);
+  expect(Object.values((await rig.service.inspectHostRecords()).evidence)).toHaveLength(3);
+  expect(Object.values((await rig.service.inspectHostRecords()).evidence).every(item => !item.releasable)).toBe(true);
+});
+
+test("host policy publication requested during final validation invalidates admission before the queued change", async () => {
+  const rig = await authorityRig(); rigs.push(rig);
+  const request = await rig.prepare();
+  let publication: Promise<unknown> | undefined;
+  let checks = 0;
+  rig.hooks.writer = async () => {
+    if (++checks === 2) { publication = rig.host.organize(request.snapshot.provenance.conversationId, { pinned: true }); await publication; }
+    return true;
+  };
+  expect((await rig.service.dispatch(rig.context, request, rig.lease)).kind).toBe("denied");
+  await publication;
+  expect(rig.calls.dispatch).toBe(0);
+  expect((await rig.host.detail(request.snapshot.provenance.conversationId)).conversation.pinned).toBe(true);
+});
+
+test("actual tool configuration changed during the last policy callback cannot enter a connector", async () => {
+  const config = { projects: [{ id: "synthetic", root: "/tmp/synthetic-authority", policy: "local" as const, operations: ["repo.read" as const] }] };
+  const rig = await authorityRig({ tools: { config: () => config, definitions: [] } }); rigs.push(rig);
+  const request = await rig.prepare();
+  let checks = 0;
+  rig.hooks.policy = async () => { if (++checks === 3) config.projects = []; };
+  await expectNoDispatch(rig, request);
+});
+
+test("object read capability revoked after fetch blocks release and a valid pinned object can be released", async () => {
+  const rig = await authorityRig(); rigs.push(rig);
+  const ref = rig.approval.snapshot.destinations[0]!;
+  const result = { lifecycleVersion: "1.0.0", ref, checkedAt: "2026-11-01T00:00:00.000Z", provenance: { adapterId: "balance", connectionId: ref.connectionId, evidenceId: "synthetic-valid-object" }, result: { kind: "present", schemaRef: { schemaId: "balance.area", version: "1.0.0" }, value: ref, links: [] } };
+  rig.hooks.readback = async () => result;
+  expect((await rig.service.readback(rig.context, { lifecycleVersion: "1.0.0", ref }, rig.sink)).kind).toBe("released");
+  rig.calls.sends.splice(0);
+  rig.hooks.readback = async () => {
+    await rig.service.publishHostRecord({ kind: "connection", value: { ...rig.connection, connectionRevision: "2", readCapabilityIds: [] } }, 1);
+    return result;
+  };
+  expect((await rig.service.readback(rig.context, { lifecycleVersion: "1.0.0", ref }, rig.sink)).kind).toBe("withheld");
+  expect(rig.calls.sends).toHaveLength(0);
+});
+
+test("registered query capability cannot authorize an undeclared object type", async () => {
+  const rig = await authorityRig(); rigs.push(rig);
+  const ref = { ...rig.approval.snapshot.destinations[0]!, objectType: "undeclared-object" };
+  await rig.service.publishHostRecord({ kind: "connection", value: { ...rig.connection, connectionRevision: "2", readDestinations: [ref] } }, 1);
+  expect((await rig.service.readback(rig.context, { lifecycleVersion: "1.0.0", ref }, rig.sink)).kind).toBe("withheld");
+  expect(rig.calls.readback).toBe(0);
+});
+
+test("unavailable synchronous policy publication head denies without entering a connector", async () => {
+  const rig = await authorityRig(); rigs.push(rig);
+  const request = await rig.prepare();
+  rig.bindings.currentRevision = () => "";
+  await expectNoDispatch(rig, request);
 });

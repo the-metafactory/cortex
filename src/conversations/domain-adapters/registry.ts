@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { satisfies, validRange } from "semver";
-import { AdapterDeclarationSchema, BoundaryErrorSchema, InputRequestSchema, type AdapterBindings, type AdapterDeclaration, type Availability, type CapabilityDeclaration, type CapabilityDiscovery, type DeclaredCapability, type Result } from "./types";
+import { AdapterDeclarationSchema, BoundaryErrorSchema, InputRequestSchema, type AdapterBindings, type AdapterDeclaration, type Availability, type CapabilityDeclaration, type CapabilityDiscovery, type DeclaredCapability, type Result, type SchemaRef } from "./types";
 import { canonicalSchema, failure, jsonBoundCode, SchemaBundle, schemaKey, success, validatePayload } from "./schema-validation";
 
 export const DOMAIN_ADAPTER_CONTRACT_VERSION = "1.0.0";
@@ -127,6 +127,16 @@ export class DomainAdapterRegistry {
     if (!validate) return failure("incompatible_schema", "The exact pinned input schema is not supported.");
     const checked = validatePayload(validate, parsed.data.input, "invalid_input");
     return checked.ok ? success({ input: checked.value, context }) : checked;
+  }
+
+  validateObject(adapterId: string, objectType: string, ref: SchemaRef, value: unknown): Result<unknown> {
+    const adapter = this.adapters.get(adapterId);
+    const object = adapter?.declaration.objectTypes.find(item => item.objectType === objectType);
+    if (!adapter || !object || schemaKey(object.schemaRef) !== schemaKey(ref)) return failure("incompatible_schema", "The exact pinned object schema is unavailable.");
+    try { canonicalSchema(value); }
+    catch (error) { return failure("invalid_output", "Object exceeds supported JSON bounds.", [{ path: "", code: jsonBoundCode(error), message: "Supply a bounded JSON object." }]); }
+    const validate = adapter.bundle.validator(object.schemaRef);
+    return validate ? validatePayload(validate, value, "invalid_output") : failure("incompatible_schema", "Object schema is unavailable.");
   }
 
   validateOutput(capabilityId: string, output: unknown): Result<unknown> { return this.validateResponse(capabilityId, output, false); }

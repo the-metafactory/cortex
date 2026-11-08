@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openConversationHost, type ConversationHost, type HostOptions } from "./host";
+import { authorityHash } from "./authority-records";
 import { type AuthorityBindings, type WriterLease } from "./authority";
 import type { ConnectionRecord, PolicyInputs, PrincipalBinding, ReleaseSink } from "./authority-records";
 import { AT, approvalFixture, eventFixture, registryFixture, resultFixture, support } from "./domain-adapters/operations/fixtures";
@@ -16,7 +17,7 @@ export async function authorityRig(extra: Partial<HostOptions> = {}) {
   const registry = registryFixture();
   const principal: PrincipalBinding = { version: 1, principalRef: randomUUID(), principal: "principal-example", stack: "test", identityBindingRevision: "1", status: "active" };
   const approval = approvalFixture();
-  const connection: ConnectionRecord = { version: 1, status: "active", connectionId: approval.snapshot.connectionId, adapterId: "balance", principalRef: principal.principalRef, connectionRevision: "1", credentialHandle: "synthetic-credential-handle", accountScope: { account: "synthetic-account", resource: "area-example" }, readCapabilityIds: [approval.snapshot.capabilityId], writeCapabilityIds: [approval.snapshot.capabilityId], readDestinations: approval.snapshot.destinations, writeDestinations: approval.snapshot.destinations, connectorId: "synthetic-connector", executionBindingRef: support.declarationId, registryRevision: "registry-1" };
+  const connection: ConnectionRecord = { version: 1, status: "active", connectionId: approval.snapshot.connectionId, adapterId: "balance", principalRef: principal.principalRef, connectionRevision: "1", credentialHandle: "synthetic-credential-handle", accountScope: { account: "synthetic-account", resource: "area-example" }, readCapabilityIds: [approval.snapshot.capabilityId, "balance.object.read"], writeCapabilityIds: [approval.snapshot.capabilityId], readDestinations: approval.snapshot.destinations, writeDestinations: approval.snapshot.destinations, connectorId: "synthetic-connector", executionBindingRef: support.declarationId, registryRevision: "registry-1" };
   const policy: PolicyInputs = { version: 1, contextRevision: "context-1", areaId: "area-example", conversationPolicy: "local", tool: {}, communication: {}, link: {}, work: {}, history: {}, registryRevision: "registry-1", executionBindingRevision: support.declarationId, operationVisible: true, readsAllowed: true, writesAllowed: true, releaseAllowed: true, allowedAudiences: ["web", "discord", "model", "view"] };
   const lease: WriterLease = { bindingKey: "synthetic-binding", epoch: 1, instanceId: "synthetic-instance", supervisorReceiptRef: "synthetic-supervisor" };
   const calls = { dispatch: 0, cancel: 0, lookup: 0, readback: 0, sends: [] as Json[], signals: [] as AbortSignal[] };
@@ -25,6 +26,7 @@ export async function authorityRig(extra: Partial<HostOptions> = {}) {
   let attempt: Attempt | undefined;
   const sinks = new Map<string, (value: Json) => Promise<void>>();
   const bindings: AuthorityBindings = {
+    currentRevision: () => authorityHash({ policy, sessionEnabled: hooks.sessionEnabled ?? true, credentialsAvailable: hooks.credentialsAvailable ?? true, lease }),
     authenticate: sessionRef => Promise.resolve(hooks.sessionEnabled === false ? null : sessionRef === "authenticated-session" ? { principal: principal.principal, stack: principal.stack, conversationId, authenticatedSessionRef: sessionRef, transport: "web", audience: "web", expiresAt: "2026-12-01T00:00:00.000Z", maintenance: false } : sessionRef === "discord-session" ? { principal: principal.principal, stack: principal.stack, conversationId, authenticatedSessionRef: sessionRef, transport: "discord", audience: "discord", expiresAt: "2026-12-01T00:00:00.000Z", maintenance: false } : null),
     policy: async () => { await hooks.policy?.(); return structuredClone(policy); },
     writer: async checked => hooks.writer ? hooks.writer() : canonicalWire(checked) === canonicalWire(lease),
@@ -33,7 +35,7 @@ export async function authorityRig(extra: Partial<HostOptions> = {}) {
       dispatch: async (request, signal) => { calls.dispatch++; calls.signals.push(signal); return hooks.dispatch ? hooks.dispatch(request) : resultFixture({ ...approval, authority: request.authority }, requireValue(attempt), "succeeded"); },
       cancel: (_request, signal) => { calls.cancel++; calls.signals.push(signal); return Promise.resolve(resultFixture(approval, requireValue(attempt), "succeeded")); },
       lookup: async () => { calls.lookup++; return hooks.lookup ? hooks.lookup() : { lifecycleVersion: "1.0.0", operationId: approval.operationId, checkedAt: AT, result: { kind: "unknown", reason: { code: "synthetic_unknown", message: "No historical evidence." } } }; },
-      readback: async request => { calls.readback++; return hooks.readback ? hooks.readback() : { lifecycleVersion: "1.0.0", ref: request.ref, checkedAt: AT, provenance: { adapterId: "balance", connectionId: connection.connectionId, evidenceId: "synthetic-read" }, result: { kind: "unknown", reason: { code: "synthetic_unknown", message: "Current object unknown." } } }; },
+      readbackCapabilityId: "balance.object.read", readback: async request => { calls.readback++; return hooks.readback ? hooks.readback() : { lifecycleVersion: "1.0.0", ref: request.ref, checkedAt: AT, provenance: { adapterId: "balance", connectionId: connection.connectionId, evidenceId: "synthetic-read" }, result: { kind: "unknown", reason: { code: "synthetic_unknown", message: "Current object unknown." } } }; },
     }]]), sinks,
   };
   async function open(): Promise<ConversationHost> {
