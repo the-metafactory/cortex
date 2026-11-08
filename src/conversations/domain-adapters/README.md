@@ -24,6 +24,8 @@ It prints discovery, an invalid title with `/title`, a pinned-version mismatch a
 
 ## Inactive writer cutover
 
+<!-- glossary-ignore: host, owner, instance, message, run, path -->
+
 `ConversationHost.lifecycleWriters()` owns `cortex.writer-authority/1` in the
 configured host durable store. `begin(plan, expectedRevision)` is an explicit
 principal-only invocation; it immediately fences lifecycle admission and the

@@ -28,7 +28,7 @@ export async function implementationDigest(entryPath: string): Promise<string> {
     files.set(path, bytes);
     if (!SOURCE_EXTENSIONS.has(extname(path))) continue;
     const transpiler = new Bun.Transpiler({ loader: extname(path).includes("x") ? "tsx" : extname(path).includes("t") ? "ts" : "js" });
-    for (const imported of transpiler.scanImports(new TextDecoder().decode(bytes))) if (imported.path.startsWith(".")) pending.push(await resolveRelativeImport(path, imported.path));
+    for (const imported of transpiler.scanImports(new TextDecoder().decode(bytes).replace(/^#![^\n]*/, ""))) if (imported.path.startsWith(".")) pending.push(await resolveRelativeImport(path, imported.path));
   }
   const sorted = [...files.entries()].sort(([a], [b]) => a.localeCompare(b));
   const [[, entryBytes] = []] = sorted;

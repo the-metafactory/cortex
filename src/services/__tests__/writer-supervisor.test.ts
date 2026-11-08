@@ -151,6 +151,17 @@ test("implementation digest changes when an imported module changes while the en
   expect(await implementationDigest(fixture.approved)).toBe(fixture.plan.implementation.sha256);
 });
 
+test("implementation digest scans an executable with a shebang header and still follows its imports", async () => {
+  const fixture = await rig();
+  const entry = join(fixture.home, "shebang-entry.ts");
+  const dependency = join(fixture.home, "shebang-dependency.ts");
+  await writeFile(entry, '#!/usr/bin/env bun\nimport "./shebang-dependency";\n');
+  await writeFile(dependency, "export const route = 1;\n");
+  const before = await implementationDigest(entry);
+  await writeFile(dependency, "export const route = 2;\n");
+  expect(await implementationDigest(entry)).not.toBe(before);
+});
+
 test("launcher passes through a stack with no enrolled writer binding but refuses an enrolled stack's retired executable", async () => {
   const fixture = await rig();
   const begun = await fixture.writers.begin(fixture.plan, 0);
