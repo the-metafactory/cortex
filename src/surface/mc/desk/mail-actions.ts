@@ -38,8 +38,7 @@ export const AMBIGUOUS_ACCOUNT_REFUSAL = "This Message-ID is listed under more t
 export function resolveListedMail(readings: SourceReading[], itemKey: string): ListedMailLookup {
   const hits: ListedMail[] = [];
   for (const r of readings) {
-    const m = r.mail.find((x) => `mail:${x.id}` === itemKey);
-    if (m) hits.push({ ...m, sourceId: r.id });
+    for (const m of r.mail) if (`mail:${m.id}` === itemKey) hits.push({ ...m, sourceId: r.id });
   }
   const [first] = hits;
   if (!first) return { ok: false, reason: "unlisted", error: "The Desk no longer lists this mail." };

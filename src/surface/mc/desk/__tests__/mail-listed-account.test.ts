@@ -40,6 +40,11 @@ describe("a Message-ID listed under more than one account", () => {
     expect(findListedMail(two, KEY)).toBeNull();
   });
 
+  it("refuses when both accounts sit in one reading", () => {
+    const one = [reading("a", [mail("work"), mail("home")])];
+    expect(resolveListedMail(one, KEY)).toEqual({ ok: false, reason: "ambiguous", error: AMBIGUOUS_ACCOUNT_REFUSAL });
+  });
+
   it("refuses every Desk mail action and runs no command", async () => {
     const rt = await runtimeWith(two);
     const r = recorder();
