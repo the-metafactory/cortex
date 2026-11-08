@@ -48,7 +48,7 @@ export function upsertAttentionItem(db: Database, item: AttentionItem): void {
        kind = excluded.kind,
        severity = excluded.severity,
        status = excluded.status,
-       resolution = excluded.resolution,
+       resolution = CASE WHEN ? THEN excluded.resolution ELSE attention_items.resolution END,
        updated_at = unixepoch()`
   ).run(
     item.id,
@@ -58,7 +58,8 @@ export function upsertAttentionItem(db: Database, item: AttentionItem): void {
     item.kind,
     item.severity,
     item.status,
-    item.resolution ?? null
+    item.resolution ?? null,
+    item.resolution !== undefined ? 1 : 0
   );
 }
 
@@ -89,7 +90,10 @@ export function listOpenAttention(db: Database): AttentionItem[] {
   return rows.map(rowToAttentionItem);
 }
 
-/** Lifecycle transition to a terminal state. Returns true if a row changed. */
+/**
+ * Lifecycle transition (terminal states, or back to open). `resolution`
+ * undefined keeps the stored value; null clears it. Returns true if a row changed.
+ */
 export function setAttentionItemStatus(
   db: Database,
   id: string,
@@ -111,5 +115,5 @@ export function resolveAttentionItem(db: Database, id: string): boolean {
 
 /** Mark an item dismissed (the principal chose to clear it without action). */
 export function dismissAttentionItem(db: Database, id: string): boolean {
-  return setAttentionItemStatus(db, id, "dismissed", getAttentionItem(db, id)?.kind === "result" ? "dismissed" : undefined);
+  return setAttentionItemStatus(db, id, "dismissed", getAttentionItem(db, id)?.kind === "result" ? "dismissed" : null);
 }

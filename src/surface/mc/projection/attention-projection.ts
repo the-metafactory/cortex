@@ -43,21 +43,12 @@ import type {
   AttentionKind,
   AttentionSeverity,
 } from "../types";
+import { ATTENTION_KINDS } from "../types";
 
 /** The federated-attention id namespace — disjoint from the local reconciler's. */
 export const FEDERATED_ATTENTION_PREFIX = "att:fed:";
 
-const ATTENTION_KINDS = new Set<AttentionKind>([
-  "input_needed",
-  "permission",
-  "review",
-  "state_change",
-  "proposal",
-  "result",
-  "failed_dispatch",
-  "stale",
-  "blocked",
-]);
+const ATTENTION_KIND_SET: ReadonlySet<string> = new Set(ATTENTION_KINDS);
 const ATTENTION_SEVERITIES = new Set<AttentionSeverity>([
   "low",
   "normal",
@@ -171,7 +162,7 @@ function asString(value: unknown): string | null {
 }
 
 function asKind(value: unknown): AttentionKind | null {
-  return typeof value === "string" && ATTENTION_KINDS.has(value as AttentionKind)
+  return typeof value === "string" && ATTENTION_KIND_SET.has(value)
     ? (value as AttentionKind)
     : null;
 }

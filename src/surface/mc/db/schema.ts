@@ -1,3 +1,4 @@
+import { ATTENTION_KINDS, ATTENTION_RESOLUTIONS } from "../types";
 import { MAIL_LOG_SQL, MAIL_VECTORS_SQL } from "../desk/mail-log-schema";
 import { MAIL_RULES_SQL } from "../desk/mail-rules-schema";
 import { SWEEP_SQL } from "../desk/mail-sweep-schema";
@@ -13,11 +14,13 @@ import { HANDOFF_COLUMNS, HANDOFF_SQL } from "../desk/mail-handoff-schema";
 import { INVITATIONS_SQL } from "../desk/mail-invitation-schema";
 import { SNOOZE_SQL } from "../desk/mail-snooze-schema";
 
+const sqlList = (values: readonly string[]): string => values.map((value) => `'${value}'`).join(",");
+
 function vigilResolutionsTableSql(table: string): string {
   return `CREATE TABLE IF NOT EXISTS ${table} (
     key TEXT NOT NULL,
     kind TEXT NOT NULL,
-    resolution TEXT NOT NULL CHECK(resolution IN ('approved','dismissed','expired','superseded','read','archived')),
+    resolution TEXT NOT NULL CHECK(resolution IN (${sqlList(ATTENTION_RESOLUTIONS)})),
     attention_id TEXT NOT NULL,
     stack_id TEXT NOT NULL,
     id TEXT NOT NULL PRIMARY KEY,
@@ -68,13 +71,13 @@ function attentionItemsTableSql(tableName: string): string {
     work_item_id TEXT REFERENCES work_items(id) ON DELETE SET NULL,
     session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
     kind TEXT NOT NULL
-      CHECK(kind IN ('input_needed','permission','review','failed_dispatch','stale','blocked','state_change','proposal','result')),
+      CHECK(kind IN (${sqlList(ATTENTION_KINDS)})),
     severity TEXT NOT NULL DEFAULT 'normal'
       CHECK(severity IN ('low','normal','high','critical')),
     status TEXT NOT NULL DEFAULT 'open'
       CHECK(status IN ('open','resolved','dismissed')),
     resolution TEXT
-      CHECK(resolution IN ('approved','dismissed','expired','superseded','read','archived')),
+      CHECK(resolution IN (${sqlList(ATTENTION_RESOLUTIONS)})),
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
     updated_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`;
@@ -1000,7 +1003,7 @@ export const COLUMN_ADD_MIGRATIONS: ColumnAddMigration[] = [
     column: "filing_error",
     ddl: `ALTER TABLE vigil_proposals ADD COLUMN filing_error TEXT`,
   },
-  { table: "attention_items", column: "resolution", ddl: "ALTER TABLE attention_items ADD COLUMN resolution TEXT CHECK(resolution IN ('approved','dismissed','expired','superseded','read','archived'))" },
+  { table: "attention_items", column: "resolution", ddl: `ALTER TABLE attention_items ADD COLUMN resolution TEXT CHECK(resolution IN (${sqlList(ATTENTION_RESOLUTIONS)}))` },
   {
     table: "vigil_events",
     column: "digested_at",
