@@ -6,6 +6,8 @@ import { getVigilSubject, type VigilEventRow } from "./db";
 import { subjectClass, vigilSeverity } from "./policy";
 import { resolveVigilAttention } from "./resolution";
 
+export const DEFAULT_STACK_ID = "default";
+
 export function applyVigilAttention(
   db: Database,
   event: Pick<VigilEventRow, "id" | "subject_key" | "to_value" | "direction">,

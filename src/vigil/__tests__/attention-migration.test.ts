@@ -1,3 +1,4 @@
+// glossary-ignore: node, path, agent
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
@@ -94,8 +95,8 @@ test("fresh databases accept proposal and all six resolutions with CHECK constra
 
 test("route and delivery migrate once, preserving historical events without a sendable route", () => {
   using file = temporaryVigilDatabaseFile("vigil-routing-");
-  const { path } = file;
-  const old = initDatabase(path);
+  const { path: databasePath } = file;
+  const old = initDatabase(databasePath);
   ingestFromSourceStack(old, ledgerEnvelope(), ENDED_AT);
   old.run("ALTER TABLE vigil_events DROP COLUMN route");
   old.run("ALTER TABLE vigil_events DROP COLUMN delivery");
@@ -103,7 +104,7 @@ test("route and delivery migrate once, preserving historical events without a se
   const subjects = old.query("SELECT * FROM vigil_subjects").all();
   old.close();
 
-  const migrated = initDatabase(path);
+  const migrated = initDatabase(databasePath);
   let events;
   try {
     events = listVigilEvents(migrated, KEY);
@@ -116,7 +117,7 @@ test("route and delivery migrate once, preserving historical events without a se
     expect(migrated.query("PRAGMA foreign_key_check").all()).toEqual([]);
   } finally { migrated.close(); }
 
-  const reopened = initDatabase(path);
+  const reopened = initDatabase(databasePath);
   try {
     expect(listVigilEvents(reopened, KEY)).toEqual(events);
     ingestFromSourceStack(reopened, ledgerEnvelope({ outcome: "succeeded", ended_at: "2026-10-12T10:01:05Z" }), ENDED_AT + 60_000);

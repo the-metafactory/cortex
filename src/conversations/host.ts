@@ -1,3 +1,6 @@
+import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
+import { AuthorityPublication } from "./authority-publication";
+import { authorityHash } from "./authority-records";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -9,6 +12,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { z } from "zod";
 import { OperationJournalStore } from "./domain-adapters/operations/journal";
 import type { DomainAdapterRegistry } from "./domain-adapters/registry";
+import { AuthorityMediator, type AuthorityBindings, type HostPolicyState } from "./authority";
 import { creationFor } from "./creation";
 import { ConversationError } from "./errors";
 export { ConversationError } from "./errors";
@@ -148,8 +152,10 @@ export async function openConversationHost(options: HostOptions): Promise<HostSt
 
 export class ConversationHost {
   private harness: Harness | null = null;
+  private authorityService: { registry: DomainAdapterRegistry; bindings: AuthorityBindings; mediator: AuthorityMediator } | null = null;
   private readonly context: Context = BACKGROUND_CONTEXT;
   private readonly queues = new Map<string, Promise<void>>();
+  private readonly authorityPublication = new AuthorityPublication();
   private readonly transcripts = new Map<string, { head: string; lines: ExchangeLine[] }>();
   private readonly now: () => Date;
   private sources: HostSources;
@@ -199,6 +205,67 @@ export class ConversationHost {
     return new OperationJournalStore(this.engine, registry, this.context);
   }
 
+  lifecycleWriters(): WriterAuthority { return new WriterAuthority(this.engine, this.authorityPublication, this.context); }
+
+  lifecycleAuthority(registry: DomainAdapterRegistry, bindings: AuthorityBindings): AuthorityMediator {
+    if (this.authorityService) {
+      if (this.authorityService.registry !== registry || this.authorityService.bindings !== bindings) throw new Error("Authority bindings are already registered for this host.");
+      return this.authorityService.mediator;
+    }
+    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters());
+    this.authorityService = { registry, bindings, mediator };
+    return mediator;
+  }
+
+  private lifecyclePolicyRevision(): string {
+    return authorityHash(asJson({ tool: this.options.tools?.config() ?? null, communication: (this.sources.communications?.() ?? []).map(connector => ({ id: connector.id, service: connector.service, family: connector.family, operations: connector.operations, actions: connector.actions, scopes: connector.scopes() })) }));
+  }
+
+  private async lifecyclePolicy(id: string): Promise<HostPolicyState> {
+    const { stored, effective, available } = await this.tighten(id, false);
+    if (!available) throw new ConversationError(403, "Current source policy is unavailable.");
+    return {
+      principal: stored.principal, stack: stored.stack, policy: effective,
+      tool: asJson({ config: this.options.tools?.config() ?? null, sources: stored.toolSources }),
+      communication: asJson({ sources: stored.communicationSources, connectors: (this.sources.communications?.() ?? []).map(connector => ({ id: connector.id, service: connector.service, family: connector.family, operations: connector.operations, actions: connector.actions, scopes: connector.scopes() })) }),
+      link: asJson({ links: stored.links, sources: await this.sourcesOf(stored.links) }), work: asJson(await this.lifecycleWorkInputs(stored)), history: asJson(await this.lifecycleHistoryInputs(id)),
+    };
+  }
+
+  private async lifecycleWorkInputs(stored: Stored): Promise<object[]> {
+    const result: object[] = [];
+    for (const [key, recorded] of Object.entries(stored.workSources)) {
+      const at = key.indexOf(":");
+      const kind = key.slice(0, at);
+      const reader = this.sources.readers?.[kind as keyof WorkReaders];
+      const current = reader ? await reader.read(key.slice(at + 1)) : null;
+      if (current?.state !== "available") throw new ConversationError(403, "Current work policy is unavailable.");
+      result.push({ kind, id: current.object.id, area: current.object.area, policy: current.object.policy, recorded });
+    }
+    return result;
+  }
+
+  private async lifecycleHistoryInputs(id: string): Promise<object[]> {
+    const result: object[] = [];
+    const seen = new Set<string>();
+    const pending = [id];
+    while (pending.length) {
+      const next = pending.pop();
+      if (next === undefined) continue;
+      if (seen.has(next)) continue;
+      seen.add(next);
+      const source = await this.stored(next);
+      for (const key of Object.keys(source.communicationSources)) {
+        const [connectorId, scopeId] = key.split("\u0000");
+        const connector = this.sources.communications?.().find(item => item.id === connectorId);
+        if (!connector || !scopeId || !await connector.authorize(source.principal, scopeId)) throw new ConversationError(403, "Current communication policy is unavailable.");
+      }
+      result.push({ conversationId: next, principal: source.principal, policy: source.policy, links: await this.sourcesOf(source.links), tool: source.toolSources, work: await this.lifecycleWorkInputs(source), communication: source.communicationSources, history: source.historySources });
+      pending.push(...Object.keys(source.historySources));
+    }
+    return result;
+  }
+
   private async directory(): Promise<Record<string, Stored>> {
     const doc = await this.engine.snapshot(DirectoryDoc, this.context);
     return Object.fromEntries(Object.entries(doc?.conversations ?? {}).map(([id, value]) => [id, StoredSchema.parse(value)]));
@@ -211,14 +278,14 @@ export class ConversationHost {
   }
 
   private async update(id: string, change: (stored: Stored) => Stored): Promise<Stored> {
-    const next = await this.engine.commit(async tx => {
+    const next = await this.authorityPublication.publish(() => this.engine.commit(async tx => {
       const doc = await tx.doc(DirectoryDoc);
       const current = doc.conversations[id];
       if (!current) return null;
       const changed = change(StoredSchema.parse(current));
       doc.conversations[id] = asJson(changed);
       return changed;
-    }, this.context);
+    }, this.context));
     if (!next) throw new ConversationError(404, "That conversation was not found on this stack.");
     return next;
   }
@@ -242,9 +309,13 @@ export class ConversationHost {
     finally { resolve(undefined); if (this.queues.get(id) === promise) this.queues.delete(id); }
   }
 
+  publishLifecyclePolicy<T>(change: () => Promise<T>): Promise<T> {
+    return this.authorityPublication.publish(change);
+  }
+
   attachSources(sources: HostSources): Promise<string[]> {
-    this.sources = sources;
-    const run = this.reconciling.then(() => this.reconcile()).catch((error: unknown): string[] => {
+    const publication = this.authorityPublication.publish(() => { this.sources = sources; return Promise.resolve(); });
+    const run = this.reconciling.then(() => publication).then(() => this.reconcile()).catch((error: unknown): string[] => {
       console.error(`conversations: reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
       return [];
     });
@@ -252,7 +323,21 @@ export class ConversationHost {
     return run;
   }
 
-  get writers(): OwnerWriters { return this.sources.writers ?? {}; }
+  get writers(): OwnerWriters {
+    const writers: OwnerWriters = {};
+    for (const owner of OWNER_TYPES) {
+      const writer = this.sources.writers?.[owner];
+      if (!writer) continue;
+      writers[owner] = { readback: writer.readback.bind(writer), ...(writer.suggest ? { suggest: writer.suggest.bind(writer) } : {}), create: async request => {
+        const entered = await this.authorityPublication.run(async () => {
+          if (!await this.lifecycleWriters().legacyOwnerAllowed(this.options.stack, owner)) return { denied: true as const };
+          return { pending: writer.create(request) };
+        });
+        return "denied" in entered ? { state: "failed", error: "Legacy owner mutation is disabled by the durable writer fence. Resume the explicit verified cutover." } : entered.pending;
+      } };
+    }
+    return writers;
+  }
 
   get withheld(): WithheldReasons { return this.sources.withheld ?? {}; }
 
@@ -330,7 +415,7 @@ export class ConversationHost {
     }
   }
 
-  private async tighten(id: string): Promise<{ stored: Stored; effective: Policy; sources: SourceView[]; available: boolean }> {
+  private async tighten(id: string, persist = true): Promise<{ stored: Stored; effective: Policy; sources: SourceView[]; available: boolean }> {
     const current = await this.stored(id);
     const own = await this.ownPrivacy(current);
     const policies = [own.policy];
@@ -349,7 +434,7 @@ export class ConversationHost {
       pending.push(...Object.keys(source.historySources));
     }
     const resolved = strictest(policies);
-    const stored = resolved === current.policy ? current : await this.update(id, s => ({ ...s, policy: strictest([s.policy, resolved]) }));
+    const stored = resolved === current.policy ? current : persist ? await this.update(id, s => ({ ...s, policy: strictest([s.policy, resolved]) })) : { ...current, policy: strictest([current.policy, resolved]) };
     return { stored, effective: own.available ? stored.policy : "local", sources: own.sources, available: own.available };
   }
 

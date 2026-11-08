@@ -146,3 +146,14 @@ export function projectLegacyOperation(raw: unknown, binding?: LegacyBinding): O
   const { conversationId, proposalId, revision } = snapshot.provenance;
   return { operationId: journal.operationId, conversationId, proposalId, revision, owner: binding.owner, state, digest: snapshot.digest, ...(canonicalId ? { canonicalId } : {}), history: [{ state: "confirmed", at: approval.at }] };
 }
+
+export async function readLegacyImportWatermark(store: OperationJournalStore, sources: { operationId: string; sourceDigest: string }[]): Promise<import("./writer-authority").ImportWatermark> {
+  if (new Set(sources.map(source => source.operationId)).size !== sources.length) throw new Error("Duplicate watermark source.");
+  for (const source of sources) {
+    const stored = await store.read(source.operationId);
+    const evidence = readOperationEvidence(stored);
+    const event = stored?.journal.events[0];
+    if (evidence.kind !== "legacy" || event?.event.kind !== "legacy-import" || event.event.sourceDigest !== source.sourceDigest || !stored?.retryBlocked) throw new Error("Durable source-hashed import watermark is missing or changed.");
+  }
+  return { version: 1, sourceHash: hash(sources), sources: structuredClone(sources) };
+}

@@ -14,7 +14,7 @@ const jobId = "11111111-1111-4111-8111-111111111111";
 const text = (body = "A thought") => `---\ntype: question\nareas: [lab]\nstate: active\nopened: 2026-11-01\n---\n## Question\nWhich approach?\n## Where I stand\nTest it.\n## Ivy's notes\n### 2026-11-02T12:00:00Z\ntrigger: nightly\nmodel: fixture\nrun: ${jobId}\n\n${body}\n## Responses\n### 2026-11-03T12:00:00Z\nre: 2026-11-02T12:00:00Z\nWe tried it.\n## Log\n- 2026-11-03: Next step: compare both approaches\n`;
 async function rig() {
   const dir = await mkdtemp(join(tmpdir(), "studio-evidence-")); dirs.push(dir);
-  const git = (...args: string[]) => { const r = Bun.spawnSync(["git", "-C", dir, ...args]); if (r.exitCode) throw new Error(r.stderr.toString()); return r.stdout.toString().trim(); };
+  const git = (...args: string[]) => { const r = Bun.spawnSync(["git", "-C", dir, ...args], { env: { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" } }); if (r.exitCode) throw new Error(r.stderr.toString()); return r.stdout.toString().trim(); };
   git("init", "-q"); git("config", "user.name", "Fixture"); git("config", "user.email", "fixture@example.invalid");
   await mkdir(join(dir, "threads")); await writeFile(join(dir, "threads/alpha.md"), text("A".repeat(9000)));
   git("add", "."); git("commit", "-qm", "Initial note and response");
@@ -137,4 +137,19 @@ test("unavailable and pruned job policies restrict notes to local even on a clou
   expect(await r.read({ scope: "notes", thread: "alpha" })).toMatchObject({ policy: "local" });
   expect(await r.read({ scope: "notes", thread: "alpha" }, async () => ({ code: 1, stdout: "", stderr: "offline" }))).toMatchObject({ policy: "local", items: [{ run: r.audit.id }] });
   expect(await r.read({ scope: "notes", thread: "alpha" }, async () => ({ code: 0, stdout: JSON.stringify({ directory: r.dir, dailyRuns: { local: 5, cloud: 5 }, runs: [] }), stderr: "" }))).toMatchObject({ policy: "local", items: [{ run: r.audit.id }] });
+});
+
+test("fixture commits keep the fixture author under conflicting inherited git identity", async () => {
+  const names = ["GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"] as const;
+  const saved = names.map((n) => process.env[n]);
+  names.forEach((n) => { process.env[n] = n.endsWith("EMAIL") ? "inherited@example.invalid" : "Inherited"; });
+  try {
+    const r = await rig();
+    await writeFile(join(r.dir, "threads/alpha.md"), text().replace("Test it.", "Choose approach B."));
+    r.git("add", "."); r.git("commit", "-qm", "Decision");
+    const history = await r.read({ scope: "history", thread: "alpha", limit: 1 });
+    expect(history).toMatchObject({ history: [{ author: "Fixture", email: "fixture@example.invalid" }] });
+  } finally {
+    names.forEach((n, i) => { Reflect.deleteProperty(process.env, n); if (saved[i] !== undefined) process.env[n] = saved[i]; });
+  }
 });

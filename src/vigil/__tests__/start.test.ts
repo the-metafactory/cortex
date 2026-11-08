@@ -1,4 +1,4 @@
-// glossary-ignore: subscriber, agent, data, persona, run
+// glossary-ignore: subscriber, agent, data, persona, run, message
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import type { ConsumerMessages, JsMsg } from "nats";

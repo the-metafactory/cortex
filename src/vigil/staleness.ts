@@ -2,7 +2,7 @@
 import type { Database } from "bun:sqlite";
 import { writeVigilTransition, type VigilSubjectRow, type VigilEventRow } from "./db";
 import type { AttentionDelta } from "../surface/mc/attention-notify";
-import { applyVigilTransitions } from "./attention";
+import { applyVigilTransitions, DEFAULT_STACK_ID } from "./attention";
 import { STALE_VALUE } from "./state-subject";
 
 export const DEFAULT_CADENCE_MS = 26 * 60 * 60 * 1000;
@@ -21,7 +21,7 @@ export function effectiveCadenceMs(
 }
 
 /** A7c: silence strictly beyond twice the cadence is an ordinary worse transition. */
-export function sweepStale(db: Database, now: number, cadence: VigilCadence, stackId = "default"): AttentionDelta {
+export function sweepStale(db: Database, now: number, cadence: VigilCadence, stackId = DEFAULT_STACK_ID): AttentionDelta {
   return db.transaction(() => {
     const events: VigilEventRow[] = [];
     const subjects = db.query<VigilSubjectRow, [string]>(`SELECT * FROM vigil_subjects

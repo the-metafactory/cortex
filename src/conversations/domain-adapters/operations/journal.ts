@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { defineDocFamily, type JsonObject, type Session } from "@earendil-works/pi-durable";
+import { defineDocFamily, type JsonObject, type Session, type Tx } from "@earendil-works/pi-durable";
 import { z } from "zod";
 import type { DomainAdapterRegistry } from "../registry";
 import { AuthoritySchema, JournalEventSchema, OperationJournalSchema, OwnerSupportSchema, parseWire, type ApprovedSnapshot, type Authority, type JournalEvent, type OperationJournal, type OwnerResult, type OwnerSupport } from "./types";
@@ -34,10 +34,12 @@ export class OperationJournalStore {
   }
 
   async approve(approval: Approval): Promise<StoredOperation> {
+    return this.engine.commit(tx => this.approveInTransaction(tx, approval), this.context);
+  }
+
+  async approveInTransaction(tx: Tx, approval: Approval): Promise<StoredOperation> {
     const snapshot = validateSnapshot(this.registry, approval.snapshot);
-    const authority = parseWire(AuthoritySchema, approval.authority);
-    const journal = parseWire(OperationJournalSchema, { lifecycleVersion: "1.0.0", operationId: approval.operationId, sequence: 1, state: "confirmed", idempotencyKey: approval.idempotencyKey, ownerRequestId: approval.ownerRequestId, snapshot, events: [{ sequence: 1, eventId: randomUUID(), at: approval.at, event: { kind: "approved", snapshot, authority } }], ...(approval.links ? { links: approval.links } : {}) });
-    return this.engine.commit(async tx => {
+    const journal = parseWire(OperationJournalSchema, { lifecycleVersion: "1.0.0", operationId: approval.operationId, sequence: 1, state: "confirmed", idempotencyKey: approval.idempotencyKey, ownerRequestId: approval.ownerRequestId, snapshot, events: [{ sequence: 1, eventId: randomUUID(), at: approval.at, event: { kind: "approved", snapshot, authority: parseWire(AuthoritySchema, approval.authority) } }], ...(approval.links ? { links: approval.links } : {}) });
       const doc = await tx.doc(StoreDoc, journal.operationId, journal.operationId);
       if (doc.record) {
         const stored = StoredSchema.parse(doc.record);
@@ -47,7 +49,6 @@ export class OperationJournalStore {
       const stored: StoredOperation = { format: "desk-operation-journal/1", revision: 1, journal, cancelRequested: false, retryBlocked: false, quarantine: [], budgets: null, outbox: [] };
       doc.record = jsonObject(stored);
       return stored;
-    }, this.context);
   }
 
   async importLegacy(journal: OperationJournal): Promise<StoredOperation> {

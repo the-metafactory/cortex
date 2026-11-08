@@ -22,6 +22,10 @@ guard_daemon_environment() {
   local kind="$1" dst="$2" tmp="$3"
   local guard_dir
   guard_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if ! python3 "${guard_dir}/guard-writer-service.py" render "${kind}" "${dst}" "${tmp}"; then
+    rm -f "${tmp}"
+    return 1
+  fi
   if ! python3 "${guard_dir}/guard-daemon-environment.py" "${kind}" "${dst}" "${tmp}"; then
     rm -f "${tmp}"
     return 1
@@ -366,6 +370,14 @@ render_stack_plist() {
   local bun_path="$5"
 
   local dst="${launch_dir}/ai.meta-factory.cortex.${slug}.plist"
+  local writer_guard_result=0
+  python3 "${LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}/guard-writer-service.py" retired plist "${dst}" "${dst}" || writer_guard_result=$?
+  if [ "${writer_guard_result}" -eq 0 ]; then
+    return 0
+  fi
+  if [ "${writer_guard_result}" -ne 1 ]; then
+    return 1
+  fi
 
   # Resolve the layout-aware --config path (cortex#717): per-stack sentinel
   # when the directory layout exists, else the legacy root monolith. This is
