@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { approvalFixture, attemptFixture, AT, authority, eventFixture, openJournalFixture, prepareOperationFixture, registryFixture, resultFixture, support } from "../operations/fixtures";
 import { JournalConflict, OperationJournalStore } from "../operations/journal";
 import * as schemas from "../operations/types";
-import { canonicalWire, snapshotDigest, validateSnapshot } from "../operations/validation";
+import { canonicalWire, snapshotDigest, validateResultPayload, validateSnapshot } from "../operations/validation";
 
 const hosts: Awaited<ReturnType<typeof openJournalFixture>>[] = [];
 const dirs: string[] = [];
@@ -64,6 +64,8 @@ describe("operation lifecycle validation", () => {
     const registry = registryFixture();
     const snapshot = approvalFixture().snapshot;
     expect(validateSnapshot(registry, snapshot)).toEqual(snapshot);
+    const incompatibleRegistry = registryFixture();
+    expect(() => validateResultPayload(incompatibleRegistry, { ...snapshot, outputSchemaRef: { ...snapshot.outputSchemaRef, version: "1.1.0" } }, resultFixture(approvalFixture(), attemptFixture(), "succeeded"))).toThrow();
     for (const change of [{ inputSchemaRef: { ...snapshot.inputSchemaRef, version: "1.0.1" } }, { outputSchemaRef: { ...snapshot.outputSchemaRef, version: "2.0.0" } }, { input: { title: "missing area" } }, { destinations: [{ ...snapshot.destinations[0]!, connectionId: "other-connection" }] }, { digest: "0".repeat(64) }]) expect(() => validateSnapshot(registry, { ...snapshot, ...change })).toThrow();
   });
 });
@@ -210,8 +212,10 @@ describe("durable lifecycle journal", () => {
       await host.journal.append(approval.operationId, 1, eventFixture(2, { kind: "attempt-prepared", attempt: first }), { support: guaranteed });
       await host.journal.append(approval.operationId, 2, eventFixture(3, timeout(first.attemptId)));
       await host.journal.reserveLookup(approval.operationId, 3, "2026-11-01T00:00:30.000Z");
-      const lookup = await host.journal.append(approval.operationId, 4, eventFixture(4, { kind: "reconciliation", lookup: { lifecycleVersion: "1.0.0", operationId: approval.operationId, checkedAt: "2026-11-01T00:00:30.000Z", result: { kind: "unknown", reason: { code: "unknown", message: "Synthetic unknown." } } } }));
+      const lookup = await host.journal.append(approval.operationId, 4, eventFixture(4, { kind: "reconciliation", lookup: { lifecycleVersion: "1.0.0", operationId: approval.operationId, checkedAt: "2026-11-01T00:00:30.000Z", result: { kind: "unknown", reason: { code: "unknown", message: "Synthetic unknown." } } } }, "2026-11-01T00:00:30.000Z"));
       const retry = { ...first, attemptId: crypto.randomUUID(), number: 2, kind: "retry" as const, preparedAt: "2026-11-01T00:00:31.000Z", deadlineAt: "2026-11-01T00:01:01.000Z" };
+      const tooSoon = { ...retry, preparedAt: "2026-11-01T00:00:30.500Z", deadlineAt: "2026-11-01T00:01:00.500Z" };
+      await expect(host.journal.append(approval.operationId, lookup.revision, eventFixture(5, { kind: "attempt-prepared", attempt: tooSoon }, tooSoon.preparedAt), { support: guaranteed, retryAuthorized: true })).rejects.toThrow();
       const write = host.journal.append(approval.operationId, lookup.revision, eventFixture(5, { kind: "attempt-prepared", attempt: retry }, retry.preparedAt), { support: guaranteed, retryAuthorized: true });
       if (retentionMs === 40_000) await expect(write).rejects.toThrow();
       else {
@@ -236,6 +240,28 @@ describe("durable lifecycle journal", () => {
     expect(stored.outbox).toHaveLength(0);
     expect(stored.quarantine[0]?.raw).toMatchObject({ event: { response: success } });
     expect(stored.retryBlocked).toBe(true);
+  });
+  test("F9 cancellation preserves final no-effect and unknown outcomes; F16 historical fences quarantine late effects", async () => {
+    for (const final of [true, false]) {
+      const host = await prepared();
+      await host.journal.append(host.approval.operationId, 2, eventFixture(3, { kind: "cancel-requested", cancelId: "cancel-example", authority }));
+      await host.journal.append(host.approval.operationId, 3, eventFixture(4, timeout(host.attempt.attemptId)));
+      const result: schemas.OperationLookup["result"] = final ? { kind: "no-effect", evidence: { kind: "no-effect", evidenceId: "cancel-fence", ownerRequestId: host.approval.ownerRequestId, observedAt: AT, receipt: { cancelled: true }, final: true } } : { kind: "unknown", reason: { code: "unknown", message: "Synthetic unknown." } };
+      const stored = await host.journal.append(host.approval.operationId, 4, eventFixture(5, { kind: "reconciliation", lookup: { lifecycleVersion: "1.0.0", operationId: host.approval.operationId, checkedAt: AT, result } }));
+      expect(stored.cancelRequested).toBe(true);
+      expect(stored.journal.state).toBe(final ? "cancelled" : "uncertain");
+      const late = await host.journal.receive(host.approval.operationId, stored.revision, resultFixture(host.approval, host.attempt, "succeeded"), AT);
+      expect(late.journal.state).toBe("succeeded");
+      expect(late.retryBlocked).toBe(final);
+      expect(late.quarantine.some(item => item.code === "outcome_conflict")).toBe(final);
+    }
+    const host = await prepared();
+    await host.journal.append(host.approval.operationId, 2, eventFixture(3, timeout(host.attempt.attemptId)));
+    const fenced = await host.journal.append(host.approval.operationId, 3, eventFixture(4, { kind: "reconciliation", lookup: { lifecycleVersion: "1.0.0", operationId: host.approval.operationId, checkedAt: AT, result: { kind: "no-effect", evidence: { kind: "no-effect", evidenceId: "failure-fence", ownerRequestId: host.approval.ownerRequestId, observedAt: AT, receipt: { fenced: true }, final: true } } } }));
+    expect(fenced.journal.state).toBe("failed");
+    const late = await host.journal.receive(host.approval.operationId, fenced.revision, resultFixture(host.approval, host.attempt, "succeeded"), AT);
+    expect(late.journal.state).toBe("succeeded");
+    expect(late.quarantine.at(-1)?.code).toBe("outcome_conflict");
   });
   test("F14 persisted lookup budgets and backward clocks cannot reset on reopen", async () => {
     const host = await prepared();

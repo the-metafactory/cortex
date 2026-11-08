@@ -136,7 +136,9 @@ export class OperationJournalStore {
       if (["dispatching", "pending"].includes(journal.state)) journal.state = "uncertain";
       return;
     }
-    const contradictory = prior.some(item => item.resultId === response.resultId && canonicalWire(item) !== canonicalWire(response) || item.result.kind === "succeeded" && noEffect(response) || noEffect(item) && response.result.kind === "succeeded" && (attempts(journal).find(attempt => attempt.attemptId === item.attemptId)?.number ?? 0) >= (attempts(journal).find(attempt => attempt.attemptId === response.attemptId)?.number ?? 0));
+    const preparation = journal.events.find(item => item.event.kind === "attempt-prepared" && item.event.attempt.attemptId === response.attemptId);
+    const lookupFence = response.result.kind === "succeeded" && journal.events.some(item => item.event.kind === "reconciliation" && item.event.lookup.result.kind === "no-effect" && item.event.lookup.result.evidence.ownerRequestId === journal.ownerRequestId && preparation !== undefined && item.sequence > preparation.sequence);
+    const contradictory = lookupFence || prior.some(item => item.resultId === response.resultId && canonicalWire(item) !== canonicalWire(response) || item.result.kind === "succeeded" && noEffect(response) || noEffect(item) && response.result.kind === "succeeded" && (attempts(journal).find(attempt => attempt.attemptId === item.attemptId)?.number ?? 0) >= (attempts(journal).find(attempt => attempt.attemptId === response.attemptId)?.number ?? 0));
     if (contradictory || ["cancelled", "refused", "conflict"].includes(journal.state) && response.result.kind === "succeeded") this.quarantine(stored, entry, "outcome_conflict");
     if (response.result.kind === "succeeded") {
       journal.state = "succeeded";
@@ -172,7 +174,8 @@ export class OperationJournalStore {
       const budget = stored.budgets;
       requireState(options.retryAuthorized === true && budget !== null && start >= Date.parse(budget.lastObservedAt) && start >= Date.parse(previous.at(-1)?.preparedAt ?? attempt.preparedAt) + 1000 && end <= Date.parse(budget.deadlineAt) && budget.redispatchCount < 1, "Retry lacks authority or exceeds the persisted work budget.");
       if (!budget) return;
-      if (journal.state === "uncertain") requireState(support.dedup.kind === "guaranteed" && support.operationLookup === "historical" && budget.lookupCount > 0 && budget.dedupValidUntil !== undefined && attempt.dedupValidUntil === budget.dedupValidUntil && end < Date.parse(budget.dedupValidUntil) && journal.events.some(item => item.event.kind === "reconciliation" && item.sequence > (journal.events.findLast(event => event.event.kind === "attempt-prepared")?.sequence ?? 0)), "Uncertain retry requires a completed lookup and a live same-key dedup guarantee.");
+      const latestLookup = journal.events.findLast(item => item.event.kind === "reconciliation");
+      if (journal.state === "uncertain") requireState(latestLookup !== undefined && start >= Date.parse(latestLookup.at) + 1000 && end - start === 30_000 && support.dedup.kind === "guaranteed" && support.operationLookup === "historical" && budget.lookupCount > 0 && budget.dedupValidUntil !== undefined && attempt.dedupValidUntil === budget.dedupValidUntil && end < Date.parse(budget.dedupValidUntil) && journal.events.some(item => item.event.kind === "reconciliation" && item.sequence > (journal.events.findLast(event => event.event.kind === "attempt-prepared")?.sequence ?? 0)), "Uncertain retry requires a completed lookup and a live same-key dedup guarantee.");
       else requireState(outcomes(journal).some(item => noEffect(item)) || journal.events.some(item => item.event.kind === "reconciliation" && item.event.lookup.result.kind === "no-effect" && item.event.lookup.result.evidence.ownerRequestId === journal.ownerRequestId), "Failed retry requires final operation-wide no-effect evidence.");
       budget.redispatchCount++;
       budget.lastObservedAt = attempt.preparedAt;

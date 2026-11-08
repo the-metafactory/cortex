@@ -41,6 +41,7 @@ function references(value: Json): ObjectReference[] {
 }
 
 export function validateResultPayload(registry: DomainAdapterRegistry, snapshot: ApprovedSnapshot, response: OwnerResult): void {
+  validateSnapshot(registry, snapshot);
   const result = response.result;
   if (result.kind === "succeeded") {
     const checked = registry.validateOutput(snapshot.capabilityId, result.output);
