@@ -39,6 +39,7 @@ export interface AuthorityBindings {
   sinks: ReadonlyMap<string, (value: Json) => Promise<void>>;
 }
 export interface HostPolicyState { principal: string; stack: string; policy: "local" | "cloud"; tool: Json; communication: Json; link: Json; work: Json; history: Json }
+export interface ObservedRead { projection: ReleaseProjection<Json>; called: boolean; value?: Json }
 export interface LookupRequest { lifecycleVersion: "1.0.0"; operationId: string; ownerRequestId: string }
 export interface ReadbackRequest { lifecycleVersion: "1.0.0"; ref: ObjectReference }
 const LookupRequestSchema = z.object({ lifecycleVersion: z.literal("1.0.0"), operationId: z.string().min(1), ownerRequestId: z.string().min(1) }).strict();
@@ -58,6 +59,7 @@ function headRecord(state: AuthorityState, kind: HostRecord["kind"], id: string)
   const record = state.records[`${kind}:${id}`]?.at(-1);
   return record?.kind === kind ? record.value : undefined;
 }
+interface ReadOptions { ref?: ObjectReference; validate?: (value: Json) => boolean; observed?: ObservedRead; signal?: AbortSignal }
 interface Resolved { binding: AuthenticatedBinding; principal: PrincipalBinding; connection: ConnectionRecord; restrictions: RestrictionRecord[]; policy: PolicyInputs; vector: Json; policyRevision: string; revision: string; heads: Record<string, number> }
 interface Basis { kind: "confirmation"; confirmationId: string } 
 interface GrantBasis { kind: "grant"; grantId: string }
@@ -479,14 +481,19 @@ export class AuthorityMediator {
   }
 
   async lookup(context: HostContext, raw: LookupRequest, sink: ReleaseSink): Promise<ReleaseProjection<Json>> {
+    return (await this.lookupObserved(context, raw, sink)).projection;
+  }
+
+  async lookupObserved(context: HostContext, raw: LookupRequest, sink: ReleaseSink, signal: AbortSignal = new AbortController().signal): Promise<ObservedRead> {
+    const observed: ObservedRead = { projection: withheld(), called: false };
     try {
       const request = parseWire(LookupRequestSchema, raw);
       const stored = await this.journal.read(request.operationId);
-      if (stored?.journal.ownerRequestId !== request.ownerRequestId || "kind" in stored.journal.snapshot) return withheld();
+      if (stored?.journal.ownerRequestId !== request.ownerRequestId || "kind" in stored.journal.snapshot) return observed;
       const snapshot = stored.journal.snapshot;
-      return await this.read(context, snapshot.connectionId, snapshot, sink, connector => {
+      observed.projection = await this.read(context, snapshot.connectionId, snapshot, sink, connector => {
         if (!connector.lookup || connector.support.operationLookup !== "historical") throw new Error("Historical lookup unavailable.");
-        return connector.lookup(request, new AbortController().signal).then(raw => {
+        return connector.lookup(request, signal).then(raw => {
           const result = parseWire(OperationLookupSchema, raw);
           if (result.operationId !== request.operationId || result.result.kind === "known" && (result.result.response.operationId !== request.operationId || result.result.response.snapshotDigest !== snapshot.digest)) throw new Error("Lookup identity mismatch.");
           if (result.result.kind === "known") {
@@ -496,8 +503,9 @@ export class AuthorityMediator {
           } else if (result.result.kind === "no-effect" && result.result.evidence.ownerRequestId !== request.ownerRequestId) throw new Error("Lookup owner identity mismatch.");
           return json(result);
         });
-      });
-    } catch (error) { return error instanceof Error ? withheld() : withheld(); }
+      }, { observed, signal });
+      return observed;
+    } catch { observed.projection = withheld(); return observed; }
   }
 
   private readbackAllowed(resolved: Resolved, ref: ObjectReference): boolean {
@@ -507,20 +515,26 @@ export class AuthorityMediator {
   }
 
   async readback(context: HostContext, raw: ReadbackRequest, sink: ReleaseSink): Promise<ReleaseProjection<Json>> {
+    return (await this.readbackObserved(context, raw, sink)).projection;
+  }
+
+  async readbackObserved(context: HostContext, raw: ReadbackRequest, sink: ReleaseSink, signal: AbortSignal = new AbortController().signal): Promise<ObservedRead> {
+    const observed: ObservedRead = { projection: withheld(), called: false };
     try {
       const request = parseWire(ReadbackRequestSchema, raw);
-      return await this.read(context, request.ref.connectionId, undefined, sink, connector => {
+      observed.projection = await this.read(context, request.ref.connectionId, undefined, sink, connector => {
         if (!connector.readback) throw new Error("Object readback unavailable.");
-        return connector.readback(request, new AbortController().signal).then(json);
-      }, request.ref, value => {
+        return connector.readback(request, signal).then(json);
+      }, { signal, observed, ref: request.ref, validate: value => {
         const result = parseWire(ObjectReadbackSchema, value);
         if (canonicalWire(result.ref) !== canonicalWire(request.ref) || result.provenance.adapterId !== request.ref.adapterId || result.provenance.connectionId !== request.ref.connectionId) return false;
         return result.result.kind !== "present" || this.registry.validateObject(request.ref.adapterId, request.ref.objectType, result.result.schemaRef, result.result.value).ok;
-      });
-    } catch (error) { return error instanceof Error ? withheld() : withheld(); }
+      } });
+      return observed;
+    } catch { observed.projection = withheld(); return observed; }
   }
 
-  private async read(context: HostContext, connectionId: string, snapshot: ApprovedSnapshot | undefined, sink: ReleaseSink, fetch: (connector: TrustedConnector) => Promise<Json>, ref?: ObjectReference, validate?: (value: Json) => boolean): Promise<ReleaseProjection<Json>> {
+  private async read(context: HostContext, connectionId: string, snapshot: ApprovedSnapshot | undefined, sink: ReleaseSink, fetch: (connector: TrustedConnector) => Promise<Json>, { ref, validate, observed, signal }: ReadOptions = {}): Promise<ReleaseProjection<Json>> {
     let pending: Promise<Json> | undefined;
     let readAccount: string | undefined;
     let readRestrictionRef: string | undefined;
@@ -537,12 +551,14 @@ export class AuthorityMediator {
       readRestrictionRef = ref ? final.restrictions.find(record => canonicalWire(record.source) === canonicalWire(ref))?.restrictionRef : undefined;
       if (ref && !readRestrictionRef) return withheld();
       pending = fetch(connector);
+      if (observed) observed.called = true;
       return null;
     });
     if (outcome) { await this.recordDenied(context, "read", snapshot?.digest ?? "object-read"); return outcome; }
     if (!pending || !readAccount) return withheld();
     const accountBindingDigest = readAccount;
     const value = await pending;
+    if (observed) observed.value = value;
     let releasable = true;
     try { releasable = validate?.(value) ?? true; }
     catch { releasable = INVALID_READBACK_IS_NOT_RELEASABLE; }
@@ -551,6 +567,7 @@ export class AuthorityMediator {
       state.evidence[reference] = { connectionId, snapshot: snapshot ? json(snapshot) : null, value, releasable, accountBindingDigest, ...(ref ? { readRef: ref, readRestrictionRef } : {}) };
       return reference;
     }));
+    if (signal?.aborted) return withheld();
     return this.release(context, reference, sink);
   }
 }
