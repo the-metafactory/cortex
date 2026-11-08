@@ -1,4 +1,6 @@
 import { OperationBridge, type SupportLookup } from "./domain-adapters/operations/dispatch";
+import { OperationReconciler } from "./domain-adapters/operations/reconciliation";
+import { ObjectReader } from "./domain-adapters/operations/readback";
 import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
 import { AuthorityPublication } from "./authority-publication";
 import { authorityHash } from "./authority-records";
@@ -220,6 +222,14 @@ export class ConversationHost {
 
   lifecycleBridge(registry: DomainAdapterRegistry, bindings: AuthorityBindings, supportFor: SupportLookup, waitMs?: number, maxOutstandingCalls?: number): OperationBridge {
     return new OperationBridge({ journal: this.lifecycleJournal(registry), authority: this.lifecycleAuthority(registry, bindings), writers: this.lifecycleWriters(), supportFor, now: this.now, ...(waitMs === undefined ? {} : { waitMs }), ...(maxOutstandingCalls === undefined ? {} : { maxOutstandingCalls }) });
+  }
+
+  lifecycleReconciler(registry: DomainAdapterRegistry, bindings: AuthorityBindings, bridge: OperationBridge, supportFor: SupportLookup): OperationReconciler {
+    return new OperationReconciler({ journal: this.lifecycleJournal(registry), authority: this.lifecycleAuthority(registry, bindings), bridge, supportFor, now: this.now });
+  }
+
+  lifecycleReader(registry: DomainAdapterRegistry, bindings: AuthorityBindings): ObjectReader {
+    return new ObjectReader({ authority: this.lifecycleAuthority(registry, bindings) });
   }
 
   private lifecyclePolicyRevision(): string {

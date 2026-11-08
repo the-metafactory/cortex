@@ -21,8 +21,8 @@ export function ownerResult(request: Pick<DispatchRequest, "operationId" | "atte
   return { ...base, result: { kind, error: { code: "synthetic_unknown", message: "The owner cannot tell." }, ownerRequestId: request.ownerRequestId } };
 }
 
-export async function dispatchRig(waitMs = 30_000, maxOutstandingCalls?: number) {
-  const rig = await authorityRig({ now: () => new Date(AT) });
+export async function dispatchRig(waitMs = 30_000, maxOutstandingCalls?: number, clock: () => Date = () => new Date(AT)) {
+  const rig = await authorityRig({ now: clock });
   const declared: { support: OwnerSupport | undefined } = { support: { ...support, cancellation: "best-effort", operationLookup: "historical" } };
   const build = () => rig.host.lifecycleBridge(rig.registry, rig.bindings, () => declared.support, waitMs, maxOutstandingCalls);
   const holder = { bridge: build() };

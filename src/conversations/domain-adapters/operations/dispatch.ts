@@ -2,11 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { Denial, HostContext, WriterLease } from "../../authority";
 import type { BoundaryError } from "../types";
 import { JournalConflict, type OperationJournalStore, type StoredOperation } from "./journal";
-import { CancelRequestSchema, parseWire, type ApprovedSnapshot, type Authority, type CancelRequest, type DispatchRequest, type OperationState, type OwnerSupport } from "./types";
+import { CancelRequestSchema, parseWire, type ApprovedSnapshot, type Attempt, type Authority, type CancelRequest, type DispatchRequest, type OperationState, type OwnerSupport } from "./types";
 import type { WriterAuthority, WriterBinding } from "./writer-authority";
 
 export const OWNER_CALL_WAIT_MS = 30_000;
 export const MAX_OUTSTANDING_OWNER_CALLS = 64;
+export const MIN_REDISPATCH_GAP_MS = 1000;
 const JOURNAL_RETRIES = 5;
 
 export type SupportLookup = (snapshot: ApprovedSnapshot) => OwnerSupport | undefined;
@@ -29,6 +30,7 @@ export type DispatchOutcome =
   | { kind: "timed-out"; operation: StoredOperation; attemptId: string }
   | { kind: "refused"; reason: BoundaryError; operation: StoredOperation | null }
   | { kind: "not-dispatchable"; operation: StoredOperation };
+export type RedispatchOutcome = DispatchOutcome | { kind: "not-eligible"; reason: BoundaryError; operation: StoredOperation | null };
 export type CancelOutcome =
   | { kind: "cancelled-before-dispatch"; operation: StoredOperation }
   | { kind: "stop-recorded"; operation: StoredOperation; sent: boolean }
@@ -75,9 +77,9 @@ export class OperationBridge {
     return this.options.journal.read(operationId);
   }
 
-  private append(stored: StoredOperation, event: unknown, options: { at?: string; support?: OwnerSupport } = {}): Promise<StoredOperation> {
+  private append(stored: StoredOperation, event: unknown, options: { at?: string; support?: OwnerSupport; retryAuthorized?: boolean } = {}): Promise<StoredOperation> {
     const entry = { sequence: stored.journal.sequence + 1, eventId: randomUUID(), at: options.at ?? this.now().toISOString(), event };
-    return this.options.journal.append(stored.journal.operationId, stored.revision, entry, options.support ? { support: options.support } : {});
+    return this.options.journal.append(stored.journal.operationId, stored.revision, entry, { ...(options.support ? { support: options.support } : {}), ...(options.retryAuthorized ? { retryAuthorized: true } : {}) });
   }
 
   private async refuse(operationId: string, why: BoundaryError): Promise<DispatchOutcome> {
@@ -107,13 +109,53 @@ export class OperationBridge {
 
     const start = this.now();
     const attempt = { attemptId: randomUUID(), number: 1, kind: "initial" as const, preparedAt: start.toISOString(), deadlineAt: new Date(start.getTime() + OWNER_CALL_WAIT_MS).toISOString(), authority: approval.authority, supportDeclarationId: support.declarationId, ...(support.dedup.kind === "guaranteed" ? { dedupValidUntil: new Date(start.getTime() + support.dedup.retentionMs).toISOString() } : {}) };
-    try { await this.append(stored, { kind: "attempt-prepared", attempt }, { at: attempt.preparedAt, support }); }
+    return this.launch(context, lease, stored, snapshot, approval.authority, support, attempt, false);
+  }
+
+  async redispatch(context: HostContext, operationId: string, lease: WriterLease): Promise<RedispatchOutcome> {
+    const stored = await this.options.journal.read(operationId);
+    const blocked = (code: string, message: string): RedispatchOutcome => ({ kind: "not-eligible", reason: reason(code, message), operation: stored });
+    if (!stored) return { kind: "not-eligible", reason: reason("operation_unknown", "The operation does not exist."), operation: null };
+    const snapshot = stored.journal.snapshot;
+    if ("kind" in snapshot) return blocked("legacy_ambiguous", "A legacy operation has no approved snapshot to replay.");
+    if (!this.activated.has(bindingKey(snapshot))) return blocked("bridge_inactive", INACTIVE.message);
+    const budget = stored.budgets;
+    const prior = attempts(stored);
+    const approval = stored.journal.events[0]?.event;
+    const lookup = stored.journal.events.findLast(entry => entry.event.kind === "reconciliation");
+    const lastPrepared = stored.journal.events.findLast(entry => entry.event.kind === "attempt-prepared");
+    if (stored.journal.state !== "uncertain" || stored.cancelRequested || stored.retryBlocked) return blocked("replay_not_permitted", "The operation state forbids a replay.");
+    if (!budget || approval?.kind !== "approved" || !prior.length || lookup?.event.kind !== "reconciliation" || !lastPrepared || lookup.sequence < lastPrepared.sequence) return blocked("lookup_required", "A replay needs a completed historical lookup after the latest attempt.");
+    if (!["unknown", "denied", "unavailable"].includes(lookup.event.lookup.result.kind)) return blocked("lookup_conclusive", "The lookup was conclusive; there is nothing to replay.");
+    if (budget.redispatchCount >= 1) return blocked("replay_budget_exhausted", "The single automatic replay is already spent.");
+    const support = this.options.supportFor(snapshot);
+    if (support?.dedup.kind !== "guaranteed" || support.operationLookup !== "historical") return blocked("dedup_unavailable", "No attested same-key concurrent deduplication guarantee exists.");
+    if (snapshot.expectedOwnerRevision !== undefined && support.conditionalUpdate !== "owner-enforced") return blocked("conditional_update_unsupported", "The owner does not enforce conditional updates.");
+    const now = this.now();
+    const start = now.getTime();
+    const end = start + OWNER_CALL_WAIT_MS;
+    const retained = budget.dedupValidUntil;
+    if (retained === undefined) return blocked("dedup_expired", "No persisted retention window exists for the owner guarantee.");
+    const validUntil = Date.parse(retained);
+    if (start < Date.parse(budget.lastObservedAt) || start < Date.parse(lookup.at)) return blocked("clock_discontinuity", "The clock moved backwards; the outcome stays uncertain.");
+    if (start < Date.parse(lookup.at) + MIN_REDISPATCH_GAP_MS) return blocked("replay_too_early", "A replay waits at least one second after the lookup.");
+    if (end > Date.parse(budget.deadlineAt)) return blocked("work_budget_exhausted", "The replay wait does not fit the total work budget.");
+    if (!(end < validUntil)) return blocked("dedup_expired", "The replay wait does not fit the owner deduplication retention window.");
+    const checked = await this.options.authority.preflight(context, operationId, approval.authority, lease, "mutation");
+    if (checked.kind === "denied") return { kind: "not-eligible", reason: checked.reason, operation: stored };
+    const attempt = { attemptId: randomUUID(), number: prior.length + 1, kind: "retry" as const, preparedAt: now.toISOString(), deadlineAt: new Date(end).toISOString(), authority: approval.authority, supportDeclarationId: support.declarationId, dedupValidUntil: retained };
+    return this.launch(context, lease, stored, snapshot, approval.authority, support, attempt, true);
+  }
+
+  private async launch(context: HostContext, lease: WriterLease, stored: StoredOperation, snapshot: ApprovedSnapshot, authority: Authority, support: OwnerSupport, attempt: Attempt, retry: boolean): Promise<DispatchOutcome> {
+    const operationId = stored.journal.operationId;
+    try { await this.append(stored, { kind: "attempt-prepared", attempt }, { at: attempt.preparedAt, support, ...(retry ? { retryAuthorized: true } : {}) }); }
     catch (error) {
       if (!(error instanceof JournalConflict)) throw error;
       const current = await this.options.journal.read(operationId);
       return current ? { kind: "not-dispatchable", operation: current } : { kind: "refused", reason: INACTIVE, operation: null };
     }
-    const request: DispatchRequest = { lifecycleVersion: "1.0.0", operationId, attemptId: attempt.attemptId, idempotencyKey: stored.journal.idempotencyKey, ownerRequestId: stored.journal.ownerRequestId, snapshot, authority: approval.authority, supportDeclarationId: support.declarationId, deadlineAt: attempt.deadlineAt };
+    const request: DispatchRequest = { lifecycleVersion: "1.0.0", operationId, attemptId: attempt.attemptId, idempotencyKey: stored.journal.idempotencyKey, ownerRequestId: stored.journal.ownerRequestId, snapshot, authority, supportDeclarationId: support.declarationId, deadlineAt: attempt.deadlineAt };
     return this.cross(this.options.authority.dispatch(context, request, lease), operationId, attempt.attemptId);
   }
 
