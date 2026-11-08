@@ -10,6 +10,11 @@ async function expectNoDispatch(rig: AuthorityRig, request: PreparedRequest): Pr
   expect(rig.calls.dispatch).toBe(0);
 }
 
+async function expectNoRelease(rig: AuthorityRig, reference: string): Promise<void> {
+  expect((await rig.service.release(rig.context, reference, rig.sink)).kind).toBe("withheld");
+  expect(rig.calls.sends).toHaveLength(0);
+}
+
 afterEach(async () => { for (const rig of rigs.splice(0)) await rig.close(); });
 
 test("confirmation and approval persist atomically and duplicate delivery reopens the same protected records", async () => {
@@ -458,4 +463,87 @@ test("unavailable synchronous policy publication head denies without entering a 
   const request = await rig.prepare();
   rig.bindings.currentRevision = () => "";
   await expectNoDispatch(rig, request);
+});
+
+
+test("exact current object restrictions deny fetch for missing, ambiguous, revoked or unauthorized provenance", async () => {
+  for (const change of [{ readScope: [] }, { readScope: [crypto.randomUUID()] }, { audiences: [] }, { status: "revoked" as const }, { resolverBinding: "unregistered-resolver" }, { source: { adapterId: "balance", connectionId: "another-connection", objectType: "area", canonicalId: "area-example" } }]) {
+    const rig = await authorityRig(); rigs.push(rig);
+    await rig.service.publishHostRecord({ kind: "restriction", value: { ...rig.objectRestriction, ...change, revision: "2" } }, 1);
+    const result = await rig.service.readback(rig.context, { lifecycleVersion: "1.0.0", ref: rig.objectRestriction.source }, rig.sink);
+    expect(result.kind).toBe("withheld");
+    expect(rig.calls.readback).toBe(0);
+    expect(rig.calls.sends).toHaveLength(0);
+  }
+  const ambiguous = await authorityRig(); rigs.push(ambiguous);
+  await ambiguous.service.publishHostRecord({ kind: "restriction", value: { ...ambiguous.objectRestriction, restrictionRef: crypto.randomUUID() } }, 0);
+  expect((await ambiguous.service.readback(ambiguous.context, { lifecycleVersion: "1.0.0", ref: ambiguous.objectRestriction.source }, ambiguous.sink)).kind).toBe("withheld");
+  expect(ambiguous.calls.readback).toBe(0);
+});
+
+test("readback retains exact restriction provenance and rechecks it after fetch and reopen", async () => {
+  const rig = await authorityRig(); rigs.push(rig);
+  const ref = rig.objectRestriction.source;
+  rig.hooks.readback = async () => {
+    await rig.service.publishHostRecord({ kind: "restriction", value: { ...rig.objectRestriction, revision: "2", readScope: [] } }, 1);
+    return { lifecycleVersion: "1.0.0", ref, checkedAt: "2026-11-01T00:00:00.000Z", provenance: { adapterId: "balance", connectionId: ref.connectionId, evidenceId: "synthetic-private-object" }, result: { kind: "present", schemaRef: { schemaId: "balance.area", version: "1.0.0" }, value: ref, links: [] } };
+  };
+  expect((await rig.service.readback(rig.context, { lifecycleVersion: "1.0.0", ref }, rig.sink)).kind).toBe("withheld");
+  expect(rig.calls.readback).toBe(1);
+  expect(rig.calls.sends).toHaveLength(0);
+  const [reference, evidence] = Object.entries((await rig.service.inspectHostRecords()).evidence)[0]!;
+  expect(evidence).toHaveProperty("readRestrictionRef", rig.objectRestriction.restrictionRef);
+  expect(evidence.value).toHaveProperty("result.kind", "present");
+  await rig.reopen();
+  await expectNoRelease(rig, reference);
+});
+
+test("readback source audience revocation denies already stored evidence and outbox retries", async () => {
+  const rig = await authorityRig(); rigs.push(rig);
+  expect((await rig.service.readback(rig.context, { lifecycleVersion: "1.0.0", ref: rig.objectRestriction.source }, rig.sink)).kind).toBe("released");
+  const reference = Object.keys((await rig.service.inspectHostRecords()).evidence)[0]!;
+  const queued = await rig.service.queueRelease(rig.context, reference, rig.sink);
+  if (queued.kind !== "queued") throw new Error("Synthetic readback outbox missing.");
+  rig.calls.sends.splice(0);
+  await rig.service.publishHostRecord({ kind: "restriction", value: { ...rig.objectRestriction, revision: "2", audiences: [] } }, 1);
+  expect((await rig.service.deliver(rig.context, queued.outboxRef)).kind).toBe("withheld");
+  await expectNoRelease(rig, reference);
+});
+
+test("local object evidence never enters cloud conversations, Discord or a cloud model", async () => {
+  for (const audience of ["web", "discord", "model"] as const) {
+    const rig = await authorityRig({}, "cloud"); rigs.push(rig);
+    await rig.service.publishHostRecord({ kind: "restriction", value: { ...rig.objectRestriction, revision: "2", egress: "local" } }, 1);
+    const context = audience === "web" ? rig.context : await rig.service.authenticate(`${audience}-session`);
+    if (!context) throw new Error("Synthetic authenticated audience missing.");
+    const sink = audience === "model" ? { kind: "model" as const, conversationId: rig.sink.conversationId, route: "cloud" } : { kind: audience, conversationId: rig.sink.conversationId };
+    expect((await rig.service.readback(context, { lifecycleVersion: "1.0.0", ref: rig.objectRestriction.source }, sink)).kind).toBe("withheld");
+    expect(rig.calls.readback).toBe(0);
+    expect(rig.calls.sends).toHaveLength(0);
+  }
+});
+
+
+test("object restriction resolution fails closed on missing or inconsistent current owner evidence", async () => {
+  const rig = await authorityRig(); rigs.push(rig);
+  for (const resolve of [async () => null, async () => ({ ...rig.objectRestriction, ownerRevision: "changed-owner-revision" }), async (): Promise<never> => { throw new Error("Synthetic private resolver failure."); }]) {
+    rig.hooks.restriction = resolve;
+    const result = await rig.service.readback(rig.context, { lifecycleVersion: "1.0.0", ref: rig.objectRestriction.source }, rig.sink);
+    expect(result.kind).toBe("withheld");
+    expect(JSON.stringify(result)).not.toContain("private resolver failure");
+    expect(rig.calls.readback).toBe(0);
+    expect(rig.calls.sends).toHaveLength(0);
+  }
+});
+
+
+test("a new local restriction withholds previously read object evidence from a cloud conversation", async () => {
+  const rig = await authorityRig({}, "cloud"); rigs.push(rig);
+  expect((await rig.service.readback(rig.context, { lifecycleVersion: "1.0.0", ref: rig.objectRestriction.source }, rig.sink)).kind).toBe("released");
+  const reference = Object.keys((await rig.service.inspectHostRecords()).evidence)[0]!;
+  rig.calls.sends.splice(0);
+  await rig.service.publishHostRecord({ kind: "restriction", value: { ...rig.objectRestriction, revision: "2", egress: "local" } }, 1);
+  await expectNoRelease(rig, reference);
+  await rig.reopen();
+  await expectNoRelease(rig, reference);
 });
