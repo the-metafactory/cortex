@@ -24,6 +24,7 @@
   },
   "scripts": {
     "prototype:desk-adapter-ui": "bun scripts/prototype-desk-adapter-ui.ts",
+    "prototype:desk-drafting": "bun scripts/prototype-desk-adapter-ui.ts",
     "bench:container": "bash deploy/test/container-compose.sh",
     "build:dashboard": "bun scripts/build-desk-wake.ts && bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --splitting",
     "watch:dashboard": "bun build src/surface/mc/dashboard-v2/index.html --outdir dist/dashboard-v2 --target browser --splitting --watch",

@@ -1,0 +1,23 @@
+{
+  "passed": true,
+  "browserVersion": "151.0.7922.34",
+  "checks": [
+    "Both types consume discussion outcomes and known destinations",
+    "Exact source links on demand",
+    "No silent refresh; explicit refresh consumes new messages",
+    "Edited title and cleared optional note survive update",
+    "Reopen and double approval preserve one identity/effect",
+    "Desktop/mobile without plumbing or overflow",
+    "Manual destination/date resolution survives regeneration",
+    "Cleared required title preserved and blocked",
+    "Missing and ambiguous destinations require ordinary choice",
+    "Optional blank project/date remain valid",
+    "Late generation cannot overwrite newer edits",
+    "Definitive failure allows explicit retry",
+    "Uncertainty uses canonical readback without replay",
+    "Historic success survives unavailable current object"
+  ],
+  "errors": [],
+  "external": [],
+  "limitation": "Controlled synthetic drafting and owner fixtures; not general NLP, live AI or a live owner. State survives navigation, not reload."
+}

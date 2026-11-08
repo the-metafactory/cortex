@@ -2,7 +2,7 @@ import { basename, join } from "node:path";
 const root = join(import.meta.dir, "..");
 const args = process.argv.slice(2);
 const portIndex = args.indexOf("--port");
-const port = Number(portIndex >= 0 ? args[portIndex + 1] : 33590);
+const port = Number(portIndex >= 0 ? args[portIndex + 1] : 33592);
 if (!Number.isSafeInteger(port) || port < 1024 || port > 65534) throw new Error("Choose a local prototype port between1024 and65534.");
 const built = await Bun.build({ entrypoints: [join(root, "src/surface/mc/dashboard-v2/desk-adapter-ui-prototype-main.tsx")], target: "browser", define: { "process.env.NODE_ENV": JSON.stringify("development") }, minify: false });
 if (!built.success) throw new Error(built.logs.map(log => log.message).join("\n"));
