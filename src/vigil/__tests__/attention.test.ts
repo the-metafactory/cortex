@@ -1,3 +1,4 @@
+// glossary-ignore: server, run
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { renderToStaticMarkup } from "react-dom/server";

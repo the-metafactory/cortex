@@ -1,3 +1,4 @@
+// glossary-ignore: run
 import type { VigilSubjectRow } from "./db";
 import type { StateDirection, StateVocab } from "./state-subject";
 

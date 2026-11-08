@@ -6,7 +6,7 @@ import { resetUnverifiedSubject, getVigilSubject, isNewObservation, writeVigilSu
 import type { AttentionDelta } from "../surface/mc/attention-notify";
 import { ingestResult } from "./results";
 import { ingestRefAttention, type VigilIngestOpts } from "./ref-attention";
-import { applyVigilAttention, applyVigilTransitions } from "./attention";
+import { applyVigilAttention, applyVigilTransitions, DEFAULT_STACK_ID } from "./attention";
 import { stateDirection, stateSubjectKey, updateStateSubject, vocabularyOf, type LedgerObservation } from "./state-subject";
 import { getAttentionItem } from "../surface/mc/db/attention";
 
@@ -98,9 +98,9 @@ export function ingestLedgerEnvelope(db: Database, envelope: Envelope, subject: 
       const direction = replayDirection(subject, prior ?? null, resetKeys.has(key));
       if (direction) applyVigilAttention(db, {
         id: "", subject_key: key, to_value: subject.value, direction,
-      }, opts.localStackId ?? "default", { replay: true, now: observation.last_ended_at });
+      }, opts.localStackId ?? DEFAULT_STACK_ID, { replay: true, now: observation.last_ended_at });
     }
-    return applyVigilTransitions(db, events.filter((event) => event !== null), opts.localStackId ?? "default");
+    return applyVigilTransitions(db, events.filter((event) => event !== null), opts.localStackId ?? DEFAULT_STACK_ID);
   }).immediate();
   if (!opts.replay) countSourceStackMismatch(envelope, observation.stack, opts.log ?? console);
   return delta;
