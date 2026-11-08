@@ -1,0 +1,102 @@
+{
+  "passed": true,
+  "browserVersion": "151.0.7922.34",
+  "cases": [
+    "three desktop/mobile layouts",
+    "dirty draft retained",
+    "host validation",
+    "explicit synthetic confirmation once",
+    "real isolated graph and Balance frames",
+    "current generation binding",
+    "unknown event rejection",
+    "parent DOM denial",
+    "fetch/image CSP and worker denial",
+    "ambient message ignored",
+    "self-navigation frame-source containment",
+    "renderer fallback",
+    "loading/unavailable"
+  ],
+  "finalState": {
+    "prototype": true,
+    "variant": "A",
+    "adapter": "graph",
+    "stage": "editor",
+    "renderer": "custom",
+    "condition": "unavailable",
+    "bridge": "closed",
+    "frameFailure": "Frame did not complete the matched handshake; generic fallback.",
+    "dirty": {
+      "graph": true,
+      "balance": false
+    },
+    "drafts": {
+      "graph": {
+        "repository": "example/project",
+        "parent": "lifecycle-map",
+        "title": "Frame edited title",
+        "body": "Compare persisted receipts with owner lookup. Document the crash immediately after acceptance, then propose a regression test.",
+        "checkpoint": "receipt-restart-evidence"
+      },
+      "balance": {
+        "area": "Reliability",
+        "project": "Lifecycle review",
+        "title": "Review restart receipts",
+        "note": "Compare the preserved receipt and canonical owner lookup. Review the crash cases and regression proposal.",
+        "due": ""
+      }
+    },
+    "pending": null,
+    "receipt": {
+      "adapter": "graph",
+      "fields": {
+        "repository": "example/project",
+        "parent": "lifecycle-map",
+        "title": "Approved synthetic title",
+        "body": "Compare persisted receipts with owner lookup. Document the crash immediately after acceptance, then propose a regression test.",
+        "checkpoint": "receipt-restart-evidence"
+      },
+      "canonicalId": "graph-synthetic-object"
+    },
+    "receipts": {
+      "graph": {
+        "adapter": "graph",
+        "fields": {
+          "repository": "example/project",
+          "parent": "lifecycle-map",
+          "title": "Approved synthetic title",
+          "body": "Compare persisted receipts with owner lookup. Document the crash immediately after acceptance, then propose a regression test.",
+          "checkpoint": "receipt-restart-evidence"
+        },
+        "canonicalId": "graph-synthetic-object"
+      },
+      "balance": null
+    },
+    "syntheticOwnerWrites": 1,
+    "externalOwnerWrites": 0,
+    "instance": "360fca64-8de2-4b94-82ed-dcd7189af1da",
+    "release": "generation-a",
+    "events": [
+      "Host validation blocked an incomplete proposal.",
+      "Host confirmed one synthetic owner call; no external provider.",
+      "parent: blocked by opaque origin",
+      "fetch: blocked (TypeError)",
+      "connect-src: browser CSP blocked http://127.0.0.1:33591/fetch",
+      "img-src: browser CSP blocked http://127.0.0.1:33591/image",
+      "worker: blocked (SecurityError)",
+      "Ambient frame message ignored; no authority.",
+      "Frame identity or generation mismatch; generic fallback.",
+      "Unsupported frame event; generic fallback.",
+      "Frame identity or generation mismatch; generic fallback.",
+      "Frame identity or generation mismatch; generic fallback.",
+      "Renderer failed; draft retained in generic fallback."
+    ]
+  },
+  "network": {
+    "syntheticReceiverRequests": []
+  },
+  "failedRequests": [
+    "http://127.0.0.1:33591/image csp"
+  ],
+  "pageErrors": [],
+  "limitation": "Chromium synthetic local-origin candidate evidence only; not a complete no-egress or hosted authentication proof. No real protected data or credentials admitted."
+}

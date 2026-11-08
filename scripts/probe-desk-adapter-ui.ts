@@ -1,0 +1,104 @@
+import { chromium } from "playwright";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+const option = (name: string, fallback: string) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] ?? fallback : fallback; };
+const origin = option("--origin", "http://127.0.0.1:33590");
+const executablePath = option("--browser", "/tmp/cortex-3290-browser/chrome-headless-shell");
+const output = option("--out", "/tmp/cortex-3290-browser-evidence");
+await mkdir(output, { recursive: true });
+const home = await mkdtemp(join(tmpdir(), "desk-ui-prototype-home-"));
+const browser = await chromium.launch({ executablePath, headless: true, env: { HOME: home, TMPDIR: home, PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8", TZ: "UTC" } });
+try {
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+page.setDefaultTimeout(5000);
+const pageErrors: string[] = [];
+const failedRequests: string[] = [];
+page.on("pageerror", error => pageErrors.push(error.message));
+page.on("requestfailed", request => failedRequests.push(`${request.url()} ${request.failure()?.errorText}`));
+const ensure = (condition: unknown, message: string) => { if (!condition) throw new Error(message); };
+const state = async () => JSON.parse(await page.locator("[data-prototype-state]").innerText()) as { adapter: string; stage: string; bridge: string; drafts: Record<string, Record<string, string>>; dirty: Record<string, boolean>; syntheticOwnerWrites: number; externalOwnerWrites: number; events: string[] };
+const waitState = async (predicate: (value: Awaited<ReturnType<typeof state>>) => boolean, message: string) => { for (let attempt = 0; attempt < 50; attempt++) { if (predicate(await state())) return; await page.waitForTimeout(100); } throw new Error(message); };
+await page.goto(`${origin}/?desk=adapter-ui-prototype&variant=A`);
+await page.getByRole("heading", { name: "Investigate receipt preservation", exact: true }).waitFor();
+for (const variant of ["A", "B", "C"]) {
+  await page.goto(`${origin}/?desk=adapter-ui-prototype&variant=${variant}`);
+  await page.locator("[data-prototype-state]").waitFor();
+  await page.screenshot({ path: join(output, `desktop-${variant}.png`), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: join(output, `mobile-${variant}.png`), fullPage: true });
+  ensure(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Mobile overflow in${variant}`);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+}
+console.log("Screenshots captured; exercising schema draft");
+await page.getByRole("button", { name: "editor", exact: true }).click();
+await page.getByLabel("Title", { exact: true }).fill("Edited graph title");
+await page.getByLabel("Title", { exact: true }).press("ArrowRight");
+ensure(new URL(page.url()).searchParams.get("variant") === "C", "Variant keyboard handler intercepted a text edit");
+await page.getByRole("button", { name: "Next variant", exact: true }).click();
+ensure((await state()).drafts.graph?.title === "Edited graph title", "Variant switch lost a dirty draft");
+await page.getByLabel("Adapter", { exact: true }).selectOption("balance");
+await page.getByLabel("Adapter", { exact: true }).selectOption("graph");
+ensure((await state()).drafts.graph?.title === "Edited graph title", "Unsaved draft lost across adapter switch");
+await page.getByLabel("Title", { exact: true }).fill("");
+await page.getByRole("button", { name: "Review proposal", exact: true }).click();
+await page.getByText("Title is required.", { exact: true }).waitFor();
+ensure((await state()).syntheticOwnerWrites === 0, "Validation failure wrote to owner");
+await page.getByLabel("Title", { exact: true }).fill("Approved synthetic title");
+await page.getByRole("button", { name: "Review proposal", exact: true }).click();
+await page.getByRole("button", { name: "Confirm synthetic save", exact: true }).click();
+ensure((await state()).syntheticOwnerWrites === 1, "Explicit confirmation did not call synthetic owner once");
+await page.getByRole("button", { name: "summary", exact: true }).click();
+await page.getByRole("button", { name: "saved", exact: true }).click();
+ensure((await state()).syntheticOwnerWrites === 1, "Reopen duplicated synthetic effect");
+await page.getByLabel("Adapter", { exact: true }).selectOption("balance");
+await page.getByRole("heading", { name: "Nothing saved", exact: true }).waitFor();
+await page.getByLabel("Adapter", { exact: true }).selectOption("graph");
+await page.getByRole("heading", { name: "Synthetic saved result", exact: true }).waitFor();
+await page.getByRole("button", { name: "summary", exact: true }).click();
+console.log("Schema draft/save passed; mounting custom frame");
+await page.getByLabel("Renderer", { exact: true }).selectOption("custom");
+await waitState(value => value.bridge === "ready", "Frame handshake never ready");
+const frame = page.frameLocator("iframe");
+await frame.getByRole("button", { name: "Edit this draft" }).click();
+await frame.getByLabel("title", { exact: true }).fill("Frame edited title");
+await waitState(value => value.drafts.graph?.title === "Frame edited title", "Frame edit not mediated to host");
+await page.getByLabel("Adapter", { exact: true }).selectOption("balance");
+await waitState(value => value.bridge === "ready", "Balance frame not mounted");
+await page.screenshot({ path: join(output, "custom-balance.png"), fullPage: true });
+await page.getByLabel("Adapter", { exact: true }).selectOption("graph");
+await waitState(value => value.bridge === "ready", "Graph frame did not remount");
+ensure((await state()).drafts.graph?.title === "Frame edited title", "Frame edit lost after remount");
+console.log("Custom graph/Balance editing passed; testing boundary");
+const remount = async () => { await page.getByRole("button", { name: "Remount renderer", exact: true }).click(); await waitState(value => value.bridge === "ready", "Remount failed"); };
+await page.getByText("Boundary probes", { exact: true }).click();
+for (const attack of ["parent", "fetch", "image", "worker", "ambient"]) {
+  await page.getByRole("button", { name: `Probe ${attack}`, exact: true }).click();
+  await page.waitForTimeout(150);
+}
+let observed = await state();
+ensure(observed.events.some(event => event.includes("opaque origin")), "Parent DOM isolation not observed");
+ensure(observed.events.some(event => event.includes("connect-src")), "Fetch CSP enforcement not observed");
+ensure(observed.events.some(event => event.includes("img-src")), "Image CSP enforcement not observed");
+ensure(observed.events.some(event => event.startsWith("worker:") && event.includes("blocked")), "Worker boundary denial not observed");
+ensure(observed.events.some(event => event.includes("Ambient")), "Ambient forged event not ignored");
+for (const attack of ["wrong-generation", "unknown-event", "cyclic-payload", "bigint-payload", "renderer-error", "self-navigation"]) {
+  await remount();
+  await page.getByRole("button", { name: `Probe ${attack}`, exact: true }).click();
+  await waitState(value => value.bridge === "closed", `${attack} did not close bridge/fallback`);
+  ensure((await state()).syntheticOwnerWrites === 1, `${attack} executed an action`);
+}
+await page.screenshot({ path: join(output, "fallback-after-boundary-failure.png"), fullPage: true });
+await page.getByLabel("Simulated state", { exact: true }).selectOption("loading");
+await page.getByText("Loading the synthetic renderer…", { exact: true }).waitFor();
+await page.getByLabel("Simulated state", { exact: true }).selectOption("unavailable");
+await page.getByRole("heading", { name: "Connection unavailable" }).waitFor();
+observed = await state();
+const network = await (await fetch(`${origin}/__prototype-network`)).json() as { syntheticReceiverRequests: string[] };
+ensure(network.syntheticReceiverRequests.length === 0, "A synthetic exfiltration request reached the second origin");
+ensure(pageErrors.length === 0, `Unexpected browser errors:${pageErrors.join(";")}`);
+await writeFile(join(output, "probe.json"), JSON.stringify({ passed: true, browserVersion: browser.version(), cases: ["three desktop/mobile layouts", "dirty draft retained", "host validation", "explicit synthetic confirmation once", "real isolated graph and Balance frames", "current generation binding", "unknown event rejection", "parent DOM denial", "fetch/image CSP and worker denial", "ambient message ignored", "self-navigation frame-source containment", "renderer fallback", "loading/unavailable"], finalState: observed, network, failedRequests, pageErrors, limitation: "Chromium synthetic local-origin candidate evidence only; not a complete no-egress or hosted authentication proof. No real protected data or credentials admitted." }, null, 2));
+console.log(`Prototype browser probe passed; evidence:${output}`);
+
+} finally { await browser.close(); }

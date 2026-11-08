@@ -1,3 +1,4 @@
+import { DeskAdapterUiPrototype } from "./desk-adapter-ui-prototype";
 import { submitCapabilityInstall } from "../lib/desk-capability-install";
 import { CatchupPreview, DeskCatchUp } from "./desk-catch-up";
 import { catchupSearch, clearedCatchup } from "../hooks/use-catchup-location";
@@ -56,7 +57,12 @@ interface DeskViewProps {
 
 type DayTarget = { kind: "event"; key: string } | { kind: "proposal" };
 
-export function DeskView({ onOpenMissionControl }: DeskViewProps) {
+export function DeskView(props: DeskViewProps) {
+  if (process.env.NODE_ENV !== "production" && new URLSearchParams(location.search).get("desk") === "adapter-ui-prototype") return <DeskAdapterUiPrototype />;
+  return <LiveDeskView {...props} />;
+}
+
+function LiveDeskView({ onOpenMissionControl }: DeskViewProps) {
   const { view, enabled, error, reload } = useDesk(true);
   const [settings, setSettings] = useSettingsLocation();
   const [routines, setRoutines] = useRoutinesLocation();
