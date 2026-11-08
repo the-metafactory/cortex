@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const here = import.meta.dir;
@@ -174,6 +174,7 @@ if (existsSync(join(here, "more-packages.ts"))) {
   rmSync(out, { recursive: true, force: true });
   for (const spec of Object.values(registered)) if (!only.length || only.includes(spec.dir)) build(spec);
   more.finish?.(out);
+  cpSync(join(here, "blind-packages/plant-care"), join(out, "plant-care"), { recursive: true });
 } else {
   rmSync(out, { recursive: true, force: true });
   for (const spec of Object.values(registered)) build(spec);
