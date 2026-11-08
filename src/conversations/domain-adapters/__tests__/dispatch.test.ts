@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { deferred, dispatchRig, ownerResult } from "../operations/dispatch-fixtures";
+import { snapshotDigest } from "../operations/validation";
 
 type Rig = Awaited<ReturnType<typeof dispatchRig>>;
 const rigs: Rig[] = [];
@@ -10,6 +11,12 @@ async function ready(waitMs?: number): Promise<Rig> {
   if (confirmed.kind !== "allowed") throw new Error("Synthetic confirmation denied.");
   expect(await rig.activate()).toBe(true);
   return rig;
+}
+
+function attemptOf(stored: Awaited<ReturnType<Rig["events"]>>): string {
+  const entry = stored?.journal.events.find(item => item.event.kind === "attempt-prepared");
+  if (entry?.event.kind !== "attempt-prepared") throw new Error("Attempt missing.");
+  return entry.event.attempt.attemptId;
 }
 const kinds = async (rig: Rig) => (await rig.events())?.journal.events.map(entry => entry.event.kind);
 afterEach(async () => { for (const rig of rigs.splice(0)) await rig.close(); });
@@ -84,9 +91,7 @@ test("timeout yields uncertainty and a late validated success settles once witho
   const outcome = await rig.dispatch();
   expect(outcome.kind).toBe("timed-out");
   expect((await rig.events())?.journal.state).toBe("uncertain");
-  const request = (await rig.events())?.journal.events.find(entry => entry.event.kind === "attempt-prepared");
-  if (request?.event.kind !== "attempt-prepared") throw new Error("Attempt missing.");
-  gate.resolve(ownerResult({ operationId: rig.approval.operationId, attemptId: request.event.attempt.attemptId, ownerRequestId: rig.approval.ownerRequestId, snapshot: rig.approval.snapshot }, "succeeded"));
+  gate.resolve(ownerResult({ operationId: rig.approval.operationId, attemptId: attemptOf(await rig.events()), ownerRequestId: rig.approval.ownerRequestId, snapshot: rig.approval.snapshot }, "succeeded"));
   await rig.bridge.settled();
   const stored = await rig.events();
   expect(stored?.journal.state).toBe("succeeded");
@@ -154,12 +159,6 @@ test("legacy mutations keep the old route until a capability migrates, then upgr
   expect(rig.calls.dispatch).toBe(1);
 });
 
-function attemptOf(stored: Awaited<ReturnType<Rig["events"]>>): string {
-  const entry = stored?.journal.events.find(item => item.event.kind === "attempt-prepared");
-  if (entry?.event.kind !== "attempt-prepared") throw new Error("Attempt missing.");
-  return entry.event.attempt.attemptId;
-}
-
 test("a call that ends abnormally after preparation is uncertain, never a no-call refusal", async () => {
   const rig = await ready();
   rig.hooks.dispatch = () => Promise.reject(new Error("connector crashed"));
@@ -177,8 +176,16 @@ test("outstanding owner calls are capped and a refused admission prepares no att
   const never = deferred<ReturnType<typeof ownerResult>>();
   rig.hooks.dispatch = () => never.promise;
   expect((await rig.dispatch()).kind).toBe("timed-out");
-  const second = await rig.dispatch();
-  expect(second.kind).toBe("not-dispatchable");
+  const proposalId = "proposal-second";
+  const snapshot = { ...rig.approval.snapshot, provenance: { ...rig.approval.snapshot.provenance, proposalId } };
+  const operationId = `${snapshot.provenance.conversationId}:${proposalId}:1`;
+  const other = { operationId, idempotencyKey: operationId, ownerRequestId: `${rig.approval.ownerRequestId}-second`, snapshot: { ...snapshot, digest: snapshotDigest(snapshot) } };
+  expect((await rig.service.confirm(rig.context, other)).kind).toBe("allowed");
+  const calls = rig.calls.dispatch;
+  const second = await rig.bridge.dispatch(rig.context, operationId, rig.lease);
+  expect(second.kind === "refused" && second.reason.code).toBe("capacity_exceeded");
+  expect(rig.calls.dispatch).toBe(calls);
+  expect((await rig.host.lifecycleJournal(rig.registry).read(operationId))?.journal.state).toBe("confirmed");
   const probe = await dispatchRig(10, 0);
   rigs.push(probe);
   await probe.confirm();

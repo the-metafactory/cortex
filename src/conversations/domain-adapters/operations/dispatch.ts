@@ -75,14 +75,15 @@ export class OperationBridge {
     return this.options.journal.read(operationId);
   }
 
-  private append(stored: StoredOperation, event: unknown, support?: OwnerSupport): Promise<StoredOperation> {
-    return this.options.journal.append(stored.journal.operationId, stored.revision, event, support ? { support } : {});
+  private append(stored: StoredOperation, event: unknown, options: { at?: string; support?: OwnerSupport } = {}): Promise<StoredOperation> {
+    const entry = { sequence: stored.journal.sequence + 1, eventId: randomUUID(), at: options.at ?? this.now().toISOString(), event };
+    return this.options.journal.append(stored.journal.operationId, stored.revision, entry, options.support ? { support: options.support } : {});
   }
 
   private async refuse(operationId: string, why: BoundaryError): Promise<DispatchOutcome> {
     const operation = await this.mutate(operationId, async stored => {
       if (stored.journal.state !== "confirmed" || attempts(stored).length) return false;
-      await this.append(stored, { sequence: stored.journal.sequence + 1, eventId: randomUUID(), at: this.now().toISOString(), event: { kind: "local-outcome", state: "refused", reason: why } });
+      await this.append(stored, { kind: "local-outcome", state: "refused", reason: why });
       return true;
     });
     return { kind: "refused", reason: why, operation };
@@ -106,7 +107,7 @@ export class OperationBridge {
 
     const start = this.now();
     const attempt = { attemptId: randomUUID(), number: 1, kind: "initial" as const, preparedAt: start.toISOString(), deadlineAt: new Date(start.getTime() + OWNER_CALL_WAIT_MS).toISOString(), authority: approval.authority, supportDeclarationId: support.declarationId, ...(support.dedup.kind === "guaranteed" ? { dedupValidUntil: new Date(start.getTime() + support.dedup.retentionMs).toISOString() } : {}) };
-    try { await this.append(stored, { sequence: stored.journal.sequence + 1, eventId: randomUUID(), at: attempt.preparedAt, event: { kind: "attempt-prepared", attempt } }, support); }
+    try { await this.append(stored, { kind: "attempt-prepared", attempt }, { at: attempt.preparedAt, support }); }
     catch (error) {
       if (!(error instanceof JournalConflict)) throw error;
       const current = await this.options.journal.read(operationId);
@@ -153,7 +154,7 @@ export class OperationBridge {
   private async expire(operationId: string, attemptId: string, why: BoundaryError): Promise<StoredOperation> {
     const operation = await this.mutate(operationId, async stored => {
       if (!["dispatching", "pending"].includes(stored.journal.state) || !attempts(stored).some(item => item.attemptId === attemptId)) return false;
-      await this.append(stored, { sequence: stored.journal.sequence + 1, eventId: randomUUID(), at: this.now().toISOString(), event: { kind: "wait-expired", attemptId, reason: why } });
+      await this.append(stored, { kind: "wait-expired", attemptId, reason: why });
       return true;
     });
     if (!operation) throw new Error("Expired operation vanished from the journal.");
@@ -176,7 +177,7 @@ export class OperationBridge {
     if (checked.kind === "denied") return { kind: "refused", reason: checked.reason };
     const recorded = await this.mutate(request.operationId, async current => {
       if (current.journal.state !== "confirmed" && !ACTIVE.includes(current.journal.state)) return false;
-      await this.append(current, { sequence: current.journal.sequence + 1, eventId: randomUUID(), at: this.now().toISOString(), event: { kind: "cancel-requested", cancelId: request.cancelId, authority: request.authority } });
+      await this.append(current, { kind: "cancel-requested", cancelId: request.cancelId, authority: request.authority });
       return true;
     });
     if (!recorded) return { kind: "refused", reason: reason("operation_unknown", "The operation does not exist.") };
