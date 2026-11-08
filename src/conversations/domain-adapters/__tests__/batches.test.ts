@@ -181,6 +181,18 @@ test("the read route is gated by current authority and unknown batches look the 
   expect((await reader.read(rig.context, built.batchId, rig.sink)).kind).toBe("withheld");
 });
 
+test("narrowing the connection read scope withholds batches whose items fall outside it", async () => {
+  const rig = await rigged();
+  const built = await build(rig, ["succeeded", "unattempted"]);
+  const reader = rig.host.lifecycleBatchReader(rig.registry, rig.bindings);
+  expect((await reader.read(rig.context, built.batchId, rig.sink)).kind).toBe("released");
+  const previous = Number(rig.connection.connectionRevision);
+  rig.connection.connectionRevision = String(previous + 1);
+  rig.connection.readCapabilityIds = rig.connection.readCapabilityIds.filter(id => id !== rig.approval.snapshot.capabilityId);
+  await rig.service.publishHostRecord({ kind: "connection", value: rig.connection }, previous);
+  expect((await reader.read(rig.context, built.batchId, rig.sink)).kind).toBe("withheld");
+});
+
 test("internal derivation confers no access and legacy clients are told to upgrade", async () => {
   const rig = await rigged();
   const built = await build(rig, ["succeeded"]);

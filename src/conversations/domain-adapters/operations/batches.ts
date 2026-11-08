@@ -2,7 +2,7 @@ import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { defineDocFamily, type JsonObject, type Session } from "@earendil-works/pi-durable";
 import { z } from "zod";
-import type { Denial, HostContext, ReleaseProjection } from "../../authority";
+import type { Denial, HostContext, ReadScope, ReleaseProjection } from "../../authority";
 import type { ReleaseSink } from "../../authority-records";
 import type { BoundaryError } from "../types";
 import { StoreDoc, StoredSchema, type StoredOperation } from "./journal";
@@ -86,6 +86,19 @@ export class BatchReceiptStore {
     return doc?.record ? BatchIndexSchema.parse(doc.record) : null;
   }
 
+  async itemScopes(batchId: string): Promise<ReadScope[]> {
+    const index = await this.index(batchId);
+    if (!index) return [];
+    const scopes: ReadScope[] = [];
+    for (const item of index.items) {
+      const doc = await this.engine.snapshot(StoreDoc, item.operationId, this.context);
+      const stored = doc?.record ? StoredSchema.parse(doc.record) : null;
+      checkItem(index, item, stored);
+      if (stored && !("kind" in stored.journal.snapshot)) scopes.push({ capabilityId: stored.journal.snapshot.capabilityId, destinations: stored.journal.snapshot.destinations });
+    }
+    return scopes;
+  }
+
   async derive(batchId: string): Promise<BatchProjection> {
     return this.engine.commit(async tx => {
       const batchDoc = await tx.doc(BatchDoc, batchId, batchId);
@@ -108,7 +121,7 @@ export class BatchReceiptStore {
 }
 
 export interface BatchReadAuthority {
-  projectHostData(context: HostContext, connectionId: string, sink: ReleaseSink, derive: () => Promise<Json>): Promise<ReleaseProjection<Json>>;
+  projectHostData(context: HostContext, connectionId: string, sink: ReleaseSink, derive: () => Promise<Json>, scopes: ReadScope[]): Promise<ReleaseProjection<Json>>;
 }
 export type BatchReadOutcome =
   | { kind: "released"; projection: BatchProjection; decisionRef: string }
@@ -122,7 +135,8 @@ export class BatchReceiptReader {
   async read(context: HostContext, batchId: string, sink: ReleaseSink): Promise<BatchReadOutcome> {
     const index = await this.store.index(batchId);
     if (!index) return NOT_FOUND;
-    const released = await this.authority.projectHostData(context, index.connectionId, sink, async () => asObject(await this.store.derive(batchId)));
+    const scopes = await this.store.itemScopes(batchId);
+    const released = await this.authority.projectHostData(context, index.connectionId, sink, async () => asObject(await this.store.derive(batchId)), scopes);
     if (released.kind === "withheld") return { kind: "withheld", reason: released.reason, recovery: released.recovery };
     return { kind: "released", projection: parseWire(BatchProjectionSchema, released.value), decisionRef: released.decisionRef };
   }
