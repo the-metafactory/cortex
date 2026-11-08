@@ -60,6 +60,16 @@ try {
   await send(page, "turn this into a task");
   ensure(await card(page).count() === 1 && await count(page, "effects") === 1, "Repeated intent duplicated task");
   await page.screenshot({ path: join(output, "desktop-saved.png"), fullPage: true });
+  await card(page, "graph").getByRole("button", { name: "Approve", exact: true }).click();
+  await page.getByRole("article", { name: "Saved Work graph research node", exact: true }).waitFor();
+  ensure(await count(page, "effects") === 2, "Graph approval did not create its one distinct object");
+  await card(page, "graph").getByRole("button", { name: "View research node →", exact: true }).click();
+  await page.getByRole("button", { name: "Back to conversation", exact: false }).click();
+  await send(page, "make this a research node");
+  ensure(await card(page, "graph").count() === 1 && await count(page, "effects") === 2, "Graph reopen or repeated intent duplicated an object");
+  await send(page, "new draft task");
+  ensure(await card(page).count() === 2 && await count(page, "effects") === 2, "Explicit new draft failed to create only a fresh draft identity");
+  checks.push("Graph approval, view and reopen preserve its canonical result", "Only explicit new draft creates a fresh draft identity");
   checks.push("Both types consume discussion outcomes and known destinations", "Exact source links on demand", "No silent refresh; explicit refresh consumes new messages", "Edited title and cleared optional note survive update", "Reopen and double approval preserve one identity/effect", "Desktop/mobile without plumbing or overflow");
   const empty = await open(); await draft(empty);
   await card(empty).getByRole("button", { name: "Edit", exact: true }).click();

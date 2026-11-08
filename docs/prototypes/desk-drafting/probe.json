@@ -2,6 +2,8 @@
   "passed": true,
   "browserVersion": "151.0.7922.34",
   "checks": [
+    "Graph approval, view and reopen preserve its canonical result",
+    "Only explicit new draft creates a fresh draft identity",
     "Both types consume discussion outcomes and known destinations",
     "Exact source links on demand",
     "No silent refresh; explicit refresh consumes new messages",
