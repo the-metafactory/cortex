@@ -11,6 +11,7 @@ import { OperationLookupSchema, parseWire, type ApprovedSnapshot, type EffectEvi
 export const AUTOMATIC_LOOKUP_OFFSETS_MS = [0, 5_000, 30_000] as const;
 export const MAX_AUTOMATIC_LOOKUPS = AUTOMATIC_LOOKUP_OFFSETS_MS.length;
 const JOURNAL_RETRIES = 5;
+export const RECOVERY_CONCURRENCY = 8;
 
 export interface LookupAuthority {
   lookupObserved(context: HostContext, request: { lifecycleVersion: "1.0.0"; operationId: string; ownerRequestId: string }, sink: ReleaseSink, signal?: AbortSignal): Promise<ObservedRead>;
@@ -49,7 +50,11 @@ export class OperationReconciler {
 
   async recoverAll(context: HostContext, lease: WriterLease, sink: ReleaseSink, inventory: OperationInventory): Promise<Map<string, ReconcileOutcome>> {
     const results = new Map<string, ReconcileOutcome>();
-    for (const operationId of new Set(await inventory.inFlight())) results.set(operationId, await this.advance(context, operationId, lease, sink));
+    const queue = [...new Set(await inventory.inFlight())];
+    const worker = async (): Promise<void> => {
+      for (let operationId = queue.shift(); operationId !== undefined; operationId = queue.shift()) results.set(operationId, await this.advance(context, operationId, lease, sink));
+    };
+    await Promise.all(Array.from({ length: Math.min(RECOVERY_CONCURRENCY, queue.length) }, worker));
     return results;
   }
 

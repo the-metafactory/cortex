@@ -320,6 +320,26 @@ test("object readback is gated before the fetch, bounded, and validated against 
   expect(invalid.kind).toBe("withheld");
 });
 
+test("a read that outlives its wait is never released to the sink", async () => {
+  const rig = await started({ dedup: "none" });
+  const ref = objectRef("balance", "area", "area-example");
+  const late = { lifecycleVersion: "1.0.0", ref, checkedAt: AT, provenance: { adapterId: "balance", connectionId: ref.connectionId, evidenceId: "late" }, result: { kind: "deleted", evidenceId: "tombstone-late" } };
+  rig.hooks.readback = () => new Promise(resolve => setTimeout(() => resolve(late), 40));
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 10);
+  const observed = await rig.host.lifecycleAuthority(rig.registry, rig.bindings).readbackObserved(rig.context, { lifecycleVersion: "1.0.0", ref }, rig.sink, controller.signal);
+  expect(observed.called).toBe(true);
+  expect(observed.projection.kind).toBe("withheld");
+});
+
+test("recovery advances independent operations concurrently", async () => {
+  const rig = await started({ dedup: "none", lookupWaitMs: 100 });
+  rig.hooks.lookup = () => new Promise(resolve => setTimeout(() => resolve(rig.answer(rig.unknown)), 60));
+  const ids = [rig.approval.operationId, "missing-a", "missing-b"];
+  const outcomes = await rig.reconciler().recoverAll(rig.context, rig.lease, rig.sink, { inFlight: () => Promise.resolve(ids) });
+  expect([...outcomes.keys()].sort()).toEqual([...ids].sort());
+});
+
 test("legacy imports are never looked up or replayed, and legacy shapes map conservatively", async () => {
   const rig = await reconcileRig({ dedup: GUARANTEED });
   rigs.push(rig);

@@ -59,6 +59,7 @@ function headRecord(state: AuthorityState, kind: HostRecord["kind"], id: string)
   const record = state.records[`${kind}:${id}`]?.at(-1);
   return record?.kind === kind ? record.value : undefined;
 }
+interface ReadOptions { ref?: ObjectReference; validate?: (value: Json) => boolean; observed?: ObservedRead; signal?: AbortSignal }
 interface Resolved { binding: AuthenticatedBinding; principal: PrincipalBinding; connection: ConnectionRecord; restrictions: RestrictionRecord[]; policy: PolicyInputs; vector: Json; policyRevision: string; revision: string; heads: Record<string, number> }
 interface Basis { kind: "confirmation"; confirmationId: string } 
 interface GrantBasis { kind: "grant"; grantId: string }
@@ -502,7 +503,7 @@ export class AuthorityMediator {
           } else if (result.result.kind === "no-effect" && result.result.evidence.ownerRequestId !== request.ownerRequestId) throw new Error("Lookup owner identity mismatch.");
           return json(result);
         });
-      }, undefined, undefined, observed);
+      }, { observed, signal });
       return observed;
     } catch { observed.projection = withheld(); return observed; }
   }
@@ -524,16 +525,16 @@ export class AuthorityMediator {
       observed.projection = await this.read(context, request.ref.connectionId, undefined, sink, connector => {
         if (!connector.readback) throw new Error("Object readback unavailable.");
         return connector.readback(request, signal).then(json);
-      }, request.ref, value => {
+      }, { signal, observed, ref: request.ref, validate: value => {
         const result = parseWire(ObjectReadbackSchema, value);
         if (canonicalWire(result.ref) !== canonicalWire(request.ref) || result.provenance.adapterId !== request.ref.adapterId || result.provenance.connectionId !== request.ref.connectionId) return false;
         return result.result.kind !== "present" || this.registry.validateObject(request.ref.adapterId, request.ref.objectType, result.result.schemaRef, result.result.value).ok;
-      }, observed);
+      } });
       return observed;
     } catch { observed.projection = withheld(); return observed; }
   }
 
-  private async read(context: HostContext, connectionId: string, snapshot: ApprovedSnapshot | undefined, sink: ReleaseSink, fetch: (connector: TrustedConnector) => Promise<Json>, ref?: ObjectReference, validate?: (value: Json) => boolean, observed?: ObservedRead): Promise<ReleaseProjection<Json>> {
+  private async read(context: HostContext, connectionId: string, snapshot: ApprovedSnapshot | undefined, sink: ReleaseSink, fetch: (connector: TrustedConnector) => Promise<Json>, { ref, validate, observed, signal }: ReadOptions = {}): Promise<ReleaseProjection<Json>> {
     let pending: Promise<Json> | undefined;
     let readAccount: string | undefined;
     let readRestrictionRef: string | undefined;
@@ -566,6 +567,7 @@ export class AuthorityMediator {
       state.evidence[reference] = { connectionId, snapshot: snapshot ? json(snapshot) : null, value, releasable, accountBindingDigest, ...(ref ? { readRef: ref, readRestrictionRef } : {}) };
       return reference;
     }));
+    if (signal?.aborted) return withheld();
     return this.release(context, reference, sink);
   }
 }
