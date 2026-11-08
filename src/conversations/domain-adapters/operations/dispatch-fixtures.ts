@@ -26,7 +26,8 @@ export async function dispatchRig(waitMs = 30_000) {
   const declared: { support: OwnerSupport | undefined } = { support: { ...support, cancellation: "best-effort", operationLookup: "historical" } };
   const build = () => rig.host.lifecycleBridge(rig.registry, rig.bindings, () => declared.support, waitMs);
   const holder = { bridge: build() };
-  const reopen = (): Promise<void> => rig.reopen();
+  const original = rig.reopen.bind(rig);
+  const reopen = (): Promise<void> => original();
   const binding: WriterBinding = { stack: "test", owner: "synthetic-owner", adapterId: rig.approval.snapshot.adapterId, connectionId: rig.approval.snapshot.connectionId, capabilityId: rig.approval.snapshot.capabilityId };
   const events = () => rig.host.lifecycleJournal(rig.registry).read(rig.approval.operationId);
   const extended = Object.assign(rig, {
