@@ -6,7 +6,7 @@ import { AT, openJournalFixture } from "../conversations/domain-adapters/operati
 import { legacyFixture, legacyContext } from "../conversations/domain-adapters/operations/legacy-fixtures";
 import { importLegacyOperation, previewLegacyOperation, readLegacyImportWatermark } from "../conversations/domain-adapters/operations/legacy";
 import { WriterAuthority, type WriterPlan, type WriterCutoverSteps } from "../conversations/domain-adapters/operations/writer-authority";
-import { executableDigest, PersistentWriterManifest } from "./writer-manifest";
+import { implementationDigest, PersistentWriterManifest } from "./writer-manifest";
 import { ManagedWriterSupervisor, type SupervisorPlatform } from "./writer-supervisor";
 import { renderGuardedWriterService } from "./writer-service";
 
@@ -47,7 +47,7 @@ export async function writerSupervisorFixture(kind: "launchd" | "systemd" = "lau
   const source = legacyFixture("running");
   const context = legacyContext(source);
   const preview = previewLegacyOperation(source, context);
-  const plan: WriterPlan = { cutoverId: "synthetic-explicit-cutover", binding: { stack: "test", owner: "synthetic-owner", adapterId: "balance", connectionId: "connection-example", capabilityId: "balance.task.create" }, implementation: { version: "2.0.0", sha256: executableDigest(await readFile(approved)) }, inventoryRef: "synthetic-complete-inventory", entries: [{ kind, label: "synthetic.retired", definition, pids: [2147483646], connectionQualified: false }], knownCalls: [source.record.operationId], sources: [{ operationId: source.record.operationId, sourceDigest: preview.sourceDigest }] };
+  const plan: WriterPlan = { cutoverId: "synthetic-explicit-cutover", binding: { stack: "test", owner: "synthetic-owner", adapterId: "balance", connectionId: "connection-example", capabilityId: "balance.task.create" }, implementation: { version: "2.0.0", sha256: await implementationDigest(approved) }, inventoryRef: "synthetic-complete-inventory", entries: [{ kind, label: "synthetic.retired", definition, pids: [2147483646], connectionQualified: false }], knownCalls: [source.record.operationId], sources: [{ operationId: source.record.operationId, sourceDigest: preview.sourceDigest }] };
   let host = await openJournalFixture(join(home, "durable.sqlite"));
   let writers = new WriterAuthority(host.engine, new AuthorityPublication());
   const steps: WriterCutoverSteps = {

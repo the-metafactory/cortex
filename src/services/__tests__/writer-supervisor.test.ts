@@ -3,7 +3,7 @@ import { access, readFile, symlink, unlink, writeFile, mkdir } from "node:fs/pro
 import { join } from "node:path";
 import { writerSupervisorFixture } from "../writer-fixtures";
 import { writerLease } from "../../conversations/domain-adapters/operations/writer-authority";
-import { readWriterManifest } from "../writer-manifest";
+import { implementationDigest, readWriterManifest } from "../writer-manifest";
 import { readGuardedWriterService, verifyGuardedWriterService } from "../writer-service";
 
 const rigs: Awaited<ReturnType<typeof writerSupervisorFixture>>[] = [];
@@ -138,3 +138,24 @@ for (const kind of ["launchd", "systemd"] as const) {
     expect((await readFile(join(fixture.home, "effects"), "utf8")).trim()).toBe("approved");
   });
 }
+
+test("implementation digest changes when an imported module changes while the entry file stays identical", async () => {
+  const fixture = await rig();
+  const entry = join(fixture.home, "entry.ts");
+  const dependency = join(fixture.home, "dependency.ts");
+  await writeFile(entry, 'import "./dependency";\n');
+  await writeFile(dependency, "export const route = 1;\n");
+  const before = await implementationDigest(entry);
+  await writeFile(dependency, "export const route = 2;\n");
+  expect(await implementationDigest(entry)).not.toBe(before);
+  expect(await implementationDigest(fixture.approved)).toBe(fixture.plan.implementation.sha256);
+});
+
+test("launcher passes through a stack with no enrolled writer binding but refuses an enrolled stack's retired executable", async () => {
+  const fixture = await rig();
+  const begun = await fixture.writers.begin(fixture.plan, 0);
+  await fixture.writers.resume(begun.bindingKey, fixture.steps);
+  const other = Bun.spawn([join(fixture.root, "launch"), "unenrolled", fixture.old, "start"], { stdout: "pipe", stderr: "pipe", env: { ...process.env, HOME: fixture.home } });
+  expect(await other.exited).toBe(0);
+  expect((await launch(fixture, fixture.old)).code).toBe(78);
+});

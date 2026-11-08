@@ -1,15 +1,41 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdir, open, readFile, rename, stat } from "node:fs/promises";
+import { dirname, extname, join, resolve } from "node:path";
 import { z } from "zod";
 import { acquireHostLock } from "../conversations/lock";
-import type { WriterRecord } from "../conversations/domain-adapters/operations/writer-authority";
+import { compareWriterVersions, WriterImplementationSchema, type WriterRecord } from "../conversations/domain-adapters/operations/writer-authority";
 
-const implementation = z.object({ version: z.string().regex(/^\d+\.\d+\.\d+$/), sha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+const implementation = WriterImplementationSchema;
 const entry = z.object({ stack: z.string().min(1), implementation, epoch: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), instanceId: z.string().min(1), receiptRef: z.string().nullable(), enabled: z.boolean(), retiredEntries: z.array(z.object({ kind: z.string(), label: z.string(), definition: z.string() }).strict()), retiredDigests: z.array(z.string()), minimumVersion: implementation.shape.version }).strict();
 export const WriterManifestSchema = z.object({ version: z.literal(1), revision: z.number().int().nonnegative(), entries: z.record(z.string(), entry) }).strict();
 export type WriterManifest = z.infer<typeof WriterManifestSchema>;
 export const executableDigest = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
+const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs", ".cjs"]);
+const RESOLVE_SUFFIXES = ["", ".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs", ".cjs", ".json", "/index.ts", "/index.tsx", "/index.js", "/index.mjs"];
+async function isFile(path: string): Promise<boolean> { try { return (await stat(path)).isFile(); } catch (error) { if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return false; throw error; } }
+async function resolveRelativeImport(from: string, specifier: string): Promise<string> {
+  const base = resolve(dirname(from), specifier);
+  const bases = /\.[mc]?js$/.test(base) ? [base, base.replace(/\.([mc]?)js$/, ".$1ts"), base.replace(/\.js$/, ".tsx")] : [base];
+  for (const candidate of bases) for (const suffix of RESOLVE_SUFFIXES) if (await isFile(candidate + suffix)) return candidate + suffix;
+  throw new Error(`Managed executable import ${specifier} from ${from} cannot be resolved; implementation digest refused.`);
+}
+export async function implementationDigest(entryPath: string): Promise<string> {
+  const files = new Map<string, Uint8Array>();
+  const pending = [entryPath];
+  while (pending.length) {
+    const path = pending.pop()!;
+    if (files.has(path)) continue;
+    const bytes = await readFile(path);
+    files.set(path, bytes);
+    if (!SOURCE_EXTENSIONS.has(extname(path))) continue;
+    const transpiler = new Bun.Transpiler({ loader: extname(path).includes("x") ? "tsx" : extname(path).includes("t") ? "ts" : "js" });
+    for (const imported of transpiler.scanImports(new TextDecoder().decode(bytes))) if (imported.path.startsWith(".")) pending.push(await resolveRelativeImport(path, imported.path));
+  }
+  if (files.size === 1) return executableDigest(files.get(entryPath)!);
+  const hash = createHash("sha256");
+  for (const path of [...files.keys()].sort()) hash.update(`${path}\0${executableDigest(files.get(path)!)}\n`);
+  return hash.digest("hex");
+}
 export async function readWriterManifest(root: string): Promise<WriterManifest> { return WriterManifestSchema.parse(JSON.parse(await readFile(join(root, "manifest.json"), "utf8"))); }
 export async function durableWriterFile(path: string, content: string, mode: number): Promise<void> {
   const staged = `${path}.${randomUUID()}.tmp`;
@@ -19,12 +45,7 @@ export async function durableWriterFile(path: string, content: string, mode: num
   const directory = await open(dirname(path), "r");
   try { await directory.sync(); } finally { await directory.close(); }
 }
-const versionParts = (version: string): number[] => version.split(".").map(Number);
-export function writerVersionAtLeast(selected: string, floor: string): boolean {
-  const a = versionParts(selected), b = versionParts(floor);
-  for (let i = 0; i < 3; i++) { if (a[i] !== b[i]) return (a[i] ?? 0) > (b[i] ?? 0); }
-  return true;
-}
+export const writerVersionAtLeast = (selected: string, floor: string): boolean => compareWriterVersions(selected, floor) >= 0;
 export class PersistentWriterManifest {
   constructor(readonly root: string) {}
 
