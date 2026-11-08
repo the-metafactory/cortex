@@ -98,6 +98,10 @@ export class DomainAdapterRegistry {
     return success(structuredClone(declaration));
   }
 
+  declaresObjectType(adapterId: string, objectType: string): boolean {
+    return this.adapters.get(adapterId)?.declaration.objectTypes.some(object => object.objectType === objectType) ?? false;
+  }
+
   discover(availability: Readonly<Record<string, Availability>> = {}): DeclaredCapability[] {
     return [...this.capabilities].map(([id, entry]) => this.describe(entry, availability[id] ?? Available));
   }

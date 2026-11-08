@@ -7,6 +7,8 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type Conversation, type EntryId, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { z } from "zod";
+import { OperationJournalStore } from "./domain-adapters/operations/journal";
+import type { DomainAdapterRegistry } from "./domain-adapters/registry";
 import { creationFor } from "./creation";
 import { ConversationError } from "./errors";
 export { ConversationError } from "./errors";
@@ -191,6 +193,10 @@ export class ConversationHost {
   private get engine(): Harness {
     if (!this.harness) throw new ConversationError(503, "Conversations unavailable: the host is closed.");
     return this.harness;
+  }
+
+  lifecycleJournal(registry: DomainAdapterRegistry): OperationJournalStore {
+    return new OperationJournalStore(this.engine, registry, this.context);
   }
 
   private async directory(): Promise<Record<string, Stored>> {
