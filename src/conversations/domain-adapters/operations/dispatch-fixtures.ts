@@ -21,10 +21,10 @@ export function ownerResult(request: Pick<DispatchRequest, "operationId" | "atte
   return { ...base, result: { kind, error: { code: "synthetic_unknown", message: "The owner cannot tell." }, ownerRequestId: request.ownerRequestId } };
 }
 
-export async function dispatchRig(waitMs = 30_000) {
+export async function dispatchRig(waitMs = 30_000, maxOutstandingCalls?: number) {
   const rig = await authorityRig({ now: () => new Date(AT) });
   const declared: { support: OwnerSupport | undefined } = { support: { ...support, cancellation: "best-effort", operationLookup: "historical" } };
-  const build = () => rig.host.lifecycleBridge(rig.registry, rig.bindings, () => declared.support, waitMs);
+  const build = () => rig.host.lifecycleBridge(rig.registry, rig.bindings, () => declared.support, waitMs, maxOutstandingCalls);
   const holder = { bridge: build() };
   const original = rig.reopen.bind(rig);
   const reopen = (): Promise<void> => original();

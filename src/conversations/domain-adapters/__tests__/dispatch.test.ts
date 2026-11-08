@@ -159,3 +159,33 @@ function attemptOf(stored: Awaited<ReturnType<Rig["events"]>>): string {
   if (entry?.event.kind !== "attempt-prepared") throw new Error("Attempt missing.");
   return entry.event.attempt.attemptId;
 }
+
+test("a call that ends abnormally after preparation is uncertain, never a no-call refusal", async () => {
+  const rig = await ready();
+  rig.hooks.dispatch = () => Promise.reject(new Error("connector crashed"));
+  const outcome = await rig.dispatch();
+  expect(outcome.kind).not.toBe("refused");
+  expect((await rig.events())?.journal.state).toBe("uncertain");
+  expect(rig.calls.dispatch).toBe(1);
+});
+
+test("outstanding owner calls are capped and a refused admission prepares no attempt", async () => {
+  const rig = await dispatchRig(10, 1);
+  rigs.push(rig);
+  await rig.confirm();
+  await rig.activate();
+  const never = deferred<ReturnType<typeof ownerResult>>();
+  rig.hooks.dispatch = () => never.promise;
+  expect((await rig.dispatch()).kind).toBe("timed-out");
+  const second = await rig.dispatch();
+  expect(second.kind).toBe("not-dispatchable");
+  const probe = await dispatchRig(10, 0);
+  rigs.push(probe);
+  await probe.confirm();
+  await probe.activate();
+  const capped = await probe.dispatch();
+  expect(capped.kind === "refused" && capped.reason.code).toBe("capacity_exceeded");
+  expect(probe.calls.dispatch).toBe(0);
+  expect((await probe.events())?.journal.state).toBe("confirmed");
+  never.resolve(ownerResult({ operationId: "x", attemptId: "x", ownerRequestId: "x", snapshot: rig.approval.snapshot }, "uncertain"));
+});

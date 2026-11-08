@@ -6,6 +6,7 @@ import { CancelRequestSchema, parseWire, type ApprovedSnapshot, type Authority, 
 import type { WriterAuthority, WriterBinding } from "./writer-authority";
 
 export const OWNER_CALL_WAIT_MS = 30_000;
+export const MAX_OUTSTANDING_OWNER_CALLS = 64;
 const JOURNAL_RETRIES = 5;
 
 export type SupportLookup = (snapshot: ApprovedSnapshot) => OwnerSupport | undefined;
@@ -21,6 +22,7 @@ export interface BridgeOptions {
   supportFor: SupportLookup;
   now?: () => Date;
   waitMs?: number;
+  maxOutstandingCalls?: number;
 }
 export type DispatchOutcome =
   | { kind: "settled"; operation: StoredOperation; attemptId: string }
@@ -45,10 +47,12 @@ export class OperationBridge {
   private readonly inflight = new Set<Promise<unknown>>();
   private readonly now: () => Date;
   private readonly waitMs: number;
+  private readonly maxOutstanding: number;
 
   constructor(private readonly options: BridgeOptions) {
     this.now = options.now ?? (() => new Date());
     this.waitMs = options.waitMs ?? OWNER_CALL_WAIT_MS;
+    this.maxOutstanding = options.maxOutstandingCalls ?? MAX_OUTSTANDING_OWNER_CALLS;
   }
 
   async activate(binding: WriterBinding, lease: WriterLease): Promise<boolean> {
@@ -91,6 +95,7 @@ export class OperationBridge {
     if ("kind" in snapshot) return { kind: "refused", reason: reason("legacy_ambiguous", "A legacy operation has no approved snapshot to dispatch."), operation: stored };
     if (!this.activated.has(bindingKey(snapshot))) return { kind: "refused", reason: INACTIVE, operation: stored };
     if (stored.journal.state !== "confirmed" || attempts(stored).length || stored.cancelRequested || stored.retryBlocked) return { kind: "not-dispatchable", operation: stored };
+    if (this.inflight.size >= this.maxOutstanding) return { kind: "refused", reason: reason("capacity_exceeded", "Too many owner calls are still outstanding; retry later."), operation: stored };
     const approval = stored.journal.events[0]?.event;
     if (approval?.kind !== "approved") return this.refuse(operationId, reason("legacy_ambiguous", "The operation has no recorded approval."));
     const support = this.options.supportFor(snapshot);
@@ -126,8 +131,12 @@ export class OperationBridge {
   }
 
   private async cross(call: Promise<{ kind: "admitted" } | Denial>, operationId: string, attemptId: string): Promise<DispatchOutcome> {
-    const continuation = this.track(call.catch((): Denial => ({ kind: "denied", reason: reason("authority_denied", "Admission failed before the owner outcome was known."), recovery: "retry-later" })));
+    const continuation = this.track(call.catch((): { kind: "failed" } => ({ kind: "failed" })));
     const waited = await this.wait(continuation);
+    if (waited.done && waited.value.kind === "failed") {
+      const operation = await this.expire(operationId, attemptId, reason("outcome_unknown", "The owner call ended abnormally after the attempt was prepared; the outcome is unknown."));
+      return { kind: "timed-out", operation, attemptId };
+    }
     if (!waited.done) {
       const operation = await this.expire(operationId, attemptId, reason("deadline_exceeded", "The owner did not answer within the wait; the outcome is unknown."));
       return { kind: "timed-out", operation, attemptId };
