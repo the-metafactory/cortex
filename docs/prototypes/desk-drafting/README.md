@@ -30,8 +30,10 @@ Additional ordinary conversation fixtures use URL parameters, with no scenario s
 | `&case=failed` | Definitive failure retains the draft; Try again is an explicit new attempt. |
 | `&case=uncertain` | The owner accepted but the answer was lost. Check result reads the original result without another creation. |
 | `&case=uncertain-missing` | The historic result remains saved even when the current object cannot be shown. |
-| `&case=slow` | Editing during a pending update wins over its late response. |
-| `&case=local-only` | Unavailable drafting leaves manual editing; there is no cloud fallback. |
+| `&case=slow` | Editing during a pending update wins over its late response. Later discussion remains marked outdated and is excluded from the captured update. |
+| `&case=local-only` | Unavailable drafting leaves manual editing, including on refresh; there is no cloud fallback. |
+
+Destination and date choices change only the selected fields, preserving unrelated content, edits and outdated status. Each choice resolves only its own clarification.
 
 A discussion addition containing both Friday and Monday asks for an explicit date or no due date. The fixture's reference date is2026-11-08. A manually chosen date/destination remains resolved on subsequent updates. Deliberately clearing a required title is preserved, with approval blocked until corrected; blank optional fields are valid.
 

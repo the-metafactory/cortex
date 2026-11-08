@@ -104,6 +104,48 @@ try {
   ensure(await card(manual).getByRole("button", { name: "Approve", exact: true }).isEnabled(), `Manual resolution was lost or old alternatives kept approval blocked: ${await card(manual).innerText()}`);
   checks.push("Manual destination/date resolution survives regeneration");
   checks.push("Cleared required title preserved and blocked", "Missing and ambiguous destinations require ordinary choice", "Optional blank project/date remain valid");
+  for (const kind of ["balance", "graph"]) {
+    const boundary = await open("slow"); await draft(boundary, kind);
+    await send(boundary, "Also include FIRST captured evidence.");
+    await send(boundary, kind === "graph" ? "update research node" : "update task");
+    await send(boundary, "Also include SECOND later evidence.");
+    await boundary.getByText("I updated the draft with the new details.", { exact: true }).waitFor();
+    const note = await card(boundary, kind).locator(".dcp-note").innerText();
+    ensure(note.includes("FIRST captured") && !note.includes("SECOND later"), "Refresh crossed its captured source boundary");
+    ensure((await card(boundary, kind).innerText()).includes("New details are available"), "Late discussion lost its outdated marker");
+    const unavailable = await open("local-only"); await draft(unavailable, kind);
+    await send(unavailable, kind === "graph" ? "update research node" : "update task");
+    await unavailable.waitForTimeout(400);
+    ensure(await card(unavailable, kind).locator("h2").innerText() === "Untitled draft", "Unavailable refresh generated a title");
+    ensure(await card(unavailable, kind).locator(".dcp-note").innerText() === "", "Unavailable refresh generated private content");
+    ensure(await card(unavailable, kind).getByRole("button", { name: "Approve", exact: true }).isDisabled(), "Unavailable blank draft became approvable");
+    await card(unavailable, kind).getByRole("button", { name: "Edit", exact: true }).click();
+    await unavailable.getByRole("textbox", { name: "Title", exact: true }).fill("My manual task");
+    if (kind === "graph") {
+      await unavailable.getByText("More details", { exact: true }).click();
+      await unavailable.getByRole("textbox", { name: "Completion check", exact: true }).fill("My manual completion check");
+    }
+    await unavailable.getByRole("button", { name: "Save changes", exact: true }).click();
+    await send(unavailable, kind === "graph" ? "update research node" : "update task");
+    ensure(await card(unavailable, kind).locator("h2").innerText() === "My manual task", "Unavailable refresh lost manual editing");
+    if (kind === "graph") await card(unavailable, kind).getByRole("button", { name: "Lifecycle map", exact: true }).click();
+    ensure(await card(unavailable, kind).locator("h2").innerText() === "My manual task" && await card(unavailable, kind).locator(".dcp-note").innerText() === "", "Manual destination setup generated private content");
+    ensure(await card(unavailable, kind).getByRole("button", { name: "Approve", exact: true }).isEnabled(), "Unavailable drafting blocked a complete manual card");
+    const choice = await open("missing"); await draft(choice, kind);
+    const original = await card(choice, kind).locator(".dcp-note").innerText();
+    await send(choice, "Also include NEW evidence after drafting.");
+    await card(choice, kind).getByRole("button", { name: kind === "graph" ? "Lifecycle map" : "Inbox", exact: true }).click();
+    ensure(await card(choice, kind).locator(".dcp-note").innerText() === original, "Destination choice silently refreshed content");
+    ensure((await card(choice, kind).innerText()).includes("New details are available"), "Destination choice cleared outdated status");
+  }
+  checks.push("Both types retain captured source boundaries and late-message stale status", "Unavailable drafting cannot refresh private content and preserves manual editing", "Destination selection preserves unrelated content and stale status");
+  const conflicts = await open("ambiguous");
+  await send(conflicts, "The due date could be Friday or Monday."); await draft(conflicts);
+  await card(conflicts).getByRole("button", { name: "Platform — Operations", exact: true }).click();
+  ensure(await card(conflicts).getByRole("button", { name: "Friday", exact: true }).isVisible(), "Destination choice erased the unresolved date");
+  await card(conflicts).getByRole("button", { name: "Monday", exact: true }).click();
+  ensure(await card(conflicts).getByRole("button", { name: "Approve", exact: true }).isEnabled(), "Separate choices failed to resolve both conflicts");
+  checks.push("A choice resolves only its own field clarification");
   const slow = await open("slow"); await draft(slow); await send(slow, "Include process shutdown coverage."); await send(slow, "update task");
   await card(slow).getByRole("button", { name: "Edit", exact: true }).click();
   await slow.getByRole("textbox", { name: "Title", exact: true }).fill("Race-safe manual title");

@@ -1,6 +1,6 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type SyntheticEvent } from "react";
 import { DeskAdapterUiPrototypeLab } from "./desk-adapter-ui-prototype-lab";
-import { adapterFixtures, applyDraftUpdate, draftFromDiscussion, draftMissing, prototypeDiscussion, resolveFixtureDestinations, unresolvedAlternatives, SyntheticDraftOwner, type ConversationDraft, type DiscussionMessage, type DraftContext, type DraftFields, type DraftKind } from "./desk-drafting-prototype-model";
+import { adapterFixtures, applyDraftUpdate, discussionFacts, draftFromDiscussion, draftMissing, prototypeDiscussion, resolveFixtureDestinations, unresolvedAlternatives, SyntheticDraftOwner, type ConversationDraft, type DiscussionMessage, type DraftContext, type DraftFields, type DraftKind } from "./desk-drafting-prototype-model";
 import "./desk-conversation-task-prototype.css";
 
 export function DeskAdapterUiPrototype() {
@@ -11,7 +11,7 @@ function ConversationDraftingPrototype() {
   const [messages, setMessages] = useState<DiscussionMessage[]>(() => prototypeDiscussion(scenario));
   const [drafts, setDrafts] = useState<ConversationDraft[]>([]);
   const [input, setInput] = useState("");
-  const [pane, setPane] = useState<"conversation" | "conversations" | string>("conversation");
+  const [pane, setPane] = useState<string>("conversation");
   const [editing, setEditing] = useState<string | null>(null);
   const [editFields, setEditFields] = useState<DraftFields>({});
   const [error, setError] = useState("");
@@ -31,30 +31,31 @@ function ConversationDraftingPrototype() {
   const replace = (id: string, update: (draft: ConversationDraft) => ConversationDraft) => { setDrafts(current => current.map(draft => draft.id === id ? update(draft) : draft)); };
   const generate = (kind: DraftKind, discussion: DiscussionMessage[], existing?: ConversationDraft) => {
     if (scenario === "local-only") { append("Ivy", "I can’t draft from this private discussion right now. You can still fill in the card yourself."); }
-    const candidate = draftFromDiscussion(kind, discussion, context.current);
+    const candidate = draftFromDiscussion(kind, scenario === "local-only" ? [] : discussion, context.current);
     const fields = scenario === "local-only" ? { ...candidate.fields, title: "", [adapterFixtures[kind].mainText]: "" } : candidate.fields;
     if (existing) replace(existing.id, draft => applyDraftUpdate(draft, { ...candidate, fields }));
     else {
       const id = crypto.randomUUID();
-      const draft: ConversationDraft = { id, kind, revision: 1, editEpoch: 0, fields, origins: candidate.origins, edited: [], missing: candidate.missing, alternatives: candidate.alternatives, stale: false, updating: false, status: "proposed", destinations: candidate.destinations };
+      const draft: ConversationDraft = { id, kind, revision: 1, editEpoch: 0, fields, origins: candidate.origins, edited: [], missing: candidate.missing, alternatives: candidate.alternatives, stale: JSON.stringify(discussionFacts(discussion)) !== JSON.stringify(discussionFacts(live.current.messages)), updating: false, status: "proposed", destinations: candidate.destinations };
       setDrafts(current => [...current, draft]);
       append("Ivy", kind === "balance" ? "Here’s a task for that." : "Here’s a research node for that.", id);
-      if (candidate.alternatives.length) append("Ivy", kind === "balance" ? "Which destination or date did you mean? Choose below, or tell me." : "Where should I put the research node?");
+      if (candidate.alternatives.length) append("Ivy", kind === "balance" ? "Which destination or date did you mean? Choose below." : "Where should I put the research node?");
     }
   };
   const refresh = (draft: ConversationDraft, discussion: DiscussionMessage[]) => {
     if (["saving", "saved", "uncertain"].includes(draft.status)) { append("Ivy", "Let’s keep the submitted card intact. We can check its result or start a separate draft after it is settled."); return; }
+    if (scenario === "local-only") { append("Ivy", "I can’t draft from this private discussion right now. You can still fill in the card yourself."); return; }
     const revision = draft.revision, epoch = draft.editEpoch;
     replace(draft.id, current => ({ ...current, updating: true }));
     const candidate = draftFromDiscussion(draft.kind, discussion, context.current);
     setTimeout(() => {
       const current = live.current.drafts.find(value => value.id === draft.id);
-      if (!current || current.revision !== revision || current.editEpoch !== epoch) {
+      if (current?.revision !== revision || current.editEpoch !== epoch) {
         replace(draft.id, value => ({ ...value, updating: false }));
         append("Ivy", "You edited the card while I was updating it. I kept your edits; ask me to update again when you’re ready.");
         return;
       }
-      replace(draft.id, value => applyDraftUpdate(value, candidate));
+      replace(draft.id, value => ({ ...applyDraftUpdate(value, candidate), stale: JSON.stringify(discussionFacts(discussion)) !== JSON.stringify(discussionFacts(live.current.messages)) }));
       append("Ivy", current.edited.length ? "I updated the untouched details and kept your edits." : "I updated the draft with the new details.");
     }, scenario === "slow" ? 1000 : 220);
   };
@@ -89,7 +90,7 @@ function ConversationDraftingPrototype() {
   };
   const startEdit = (draft: ConversationDraft) => { setEditing(draft.id); setEditFields({ ...draft.fields }); setError(""); };
   const change = (draft: ConversationDraft, name: string, value: string) => { setEditFields(current => ({ ...current, [name]: value })); replace(draft.id, current => ({ ...current, editEpoch: current.editEpoch + 1 })); setError(""); };
-  const saveEdit = (event: FormEvent<HTMLFormElement>, draft: ConversationDraft) => {
+  const saveEdit = (event: SyntheticEvent<HTMLFormElement>, draft: ConversationDraft) => {
     event.preventDefault();
     const changed = Object.keys(editFields).filter(key => editFields[key] !== draft.fields[key]);
     replace(draft.id, current => ({ ...current, fields: { ...editFields }, edited: [...new Set([...current.edited, ...changed])], origins: { ...current.origins, ...Object.fromEntries(changed.map(key => [key, { kind: "user" as const, sourceIds: [] }])) }, revision: current.revision + 1, alternatives: unresolvedAlternatives(current.kind, editFields, [...current.edited, ...changed], current.alternatives), missing: draftMissing(current.kind, editFields), destinations: resolveFixtureDestinations(current.kind, editFields), status: "proposed", operationId: undefined }));
@@ -100,12 +101,13 @@ function ConversationDraftingPrototype() {
     const dateChoice = ["Friday", "Monday", "No due date"].includes(selection);
     if (dateChoice) { context.current.dueSelection = selection; context.current.dueMessageId = message.id; }
     else context.current.selection = selection;
-    const candidate = draftFromDiscussion(draft.kind, [...live.current.messages, message], context.current);
+    const candidate = draftFromDiscussion(draft.kind, [], context.current);
     const selectedFields = dateChoice ? ["due"] : draft.kind === "balance" ? ["area", "project"] : ["repository", "parent"];
     replace(draft.id, current => {
-      const updated = applyDraftUpdate(current, candidate);
+      const updated = { ...current, fields: { ...current.fields }, origins: { ...current.origins }, revision: current.revision + 1, operationId: undefined };
       for (const key of selectedFields) { updated.fields[key] = candidate.fields[key] ?? ""; updated.origins[key] = { kind: "user", sourceIds: [message.id] }; }
       updated.edited = [...new Set([...updated.edited, ...selectedFields])];
+      updated.alternatives = unresolvedAlternatives(updated.kind, updated.fields, updated.edited, current.alternatives);
       updated.missing = draftMissing(updated.kind, updated.fields);
       updated.destinations = resolveFixtureDestinations(updated.kind, updated.fields);
       return updated;
@@ -126,10 +128,11 @@ function ConversationDraftingPrototype() {
     }, 300);
   };
   const check = (draft: ConversationDraft) => {
-    if (!draft.operationId || checking) return;
+    const operationId = draft.operationId;
+    if (!operationId || checking) return;
     setChecking(draft.id);
     setTimeout(() => {
-      const receipt = owner.current.lookup(draft.operationId!);
+      const receipt = owner.current.lookup(operationId);
       if (receipt) replace(draft.id, current => ({ ...current, status: "saved", receipt }));
       setChecking(null);
     }, 220);
@@ -142,14 +145,14 @@ function ConversationDraftingPrototype() {
     const destination = draft.kind === "balance" ? [draft.fields.area, draft.fields.project].filter(Boolean).join(" · ") : [draft.fields.repository, draft.fields.parent].filter(Boolean).join(" · ");
     const saved = draft.status === "saved";
     return <article id={`draft-${draft.id}`} key={draft.id} className="dcp-card" aria-label={`${saved ? "Saved" : "Proposed"} ${fixture.label} ${fixture.action}`} data-draft-id={draft.id} data-revision={draft.revision} data-kind={draft.kind} data-draft-status={draft.status} data-destination-count={draft.destinations.length}>
-      <div className="dcp-card-meta"><span className="dcp-balance">{fixture.label}</span><span>{destination || "Destination not chosen"}</span></div>
+      <div className="dcp-card-meta"><span className="dcp-balance">{fixture.label}</span><span>{destination.length ? destination : "Destination not chosen"}</span></div>
       {editing === draft.id && !detail ? <form className="dcp-edit" onSubmit={event => { saveEdit(event, draft); }}>
         {fixture.fields.slice(0, 2).map(field => <label key={field.name}>{field.label}{field.long ? <textarea aria-label={field.label} value={editFields[field.name] ?? ""} onChange={event => { change(draft, field.name, event.target.value); }} /> : <input aria-label={field.label} autoFocus value={editFields[field.name] ?? ""} onChange={event => { change(draft, field.name, event.target.value); }} />}</label>)}
         {error && <p className="dcp-error" role="alert">{error}</p>}
         <details><summary>More details</summary><div className="dcp-extra-fields">{fixture.fields.slice(2).map(field => <label key={field.name}>{field.label}<input aria-label={field.label} type={field.name === "due" ? "date" : "text"} value={editFields[field.name] ?? ""} onChange={event => { change(draft, field.name, event.target.value); }} /></label>)}</div></details>
         <div className="dcp-actions"><button type="submit" className="dcp-primary">Save changes</button><button type="button" onClick={() => { setEditing(null); setError(""); }}>Cancel</button></div>
       </form> : <>
-        <h2>{draft.fields.title || "Untitled draft"}</h2><p className="dcp-note">{draft.fields[fixture.mainText]}</p>
+        <h2>{draft.fields.title?.length ? draft.fields.title : "Untitled draft"}</h2><p className="dcp-note">{draft.fields[fixture.mainText]}</p>
         {draft.fields.due && <p className="dcp-due">Due {draft.fields.due} <span>· Suggested</span></p>}
         {draft.stale && !saved && <p className="dcp-update">New details are available in our conversation.</p>}
         {draft.updating && <p role="status" className="dcp-thinking">Updating the draft…</p>}
