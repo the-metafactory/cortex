@@ -167,6 +167,7 @@
       "docs/security/reviews/2026-07-23-nws-security-review.md"
     ],
     "linePatterns": [
+      "\"operator-cutover\"",
       "//[[:space:]]*historical:",
       "<!--[[:space:]]*historical",
       "\\bOP_[A-Z0-9]",

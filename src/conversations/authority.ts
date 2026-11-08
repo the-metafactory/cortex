@@ -18,6 +18,7 @@ export interface Denial { kind: "denied"; reason: BoundaryError; recovery: "auth
 export type AuthorityCheck = { kind: "allowed"; authority: Authority } | Denial;
 export type ReleaseProjection<T> = { kind: "released"; value: T; decisionRef: string } | { kind: "withheld"; reason: BoundaryError; recovery: Denial["recovery"] };
 export interface TrustedConnector {
+  authorizeConnection(connection: ConnectionRecord): Promise<{ version: 1; available: boolean; revision: string }>;
   support: OwnerSupport;
   dispatch(request: DispatchRequest, signal: AbortSignal): Promise<unknown>;
   cancel?(request: CancelRequest, signal: AbortSignal): Promise<unknown>;
@@ -66,7 +67,10 @@ export class AuthorityMediator {
 
   constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly registry: DomainAdapterRegistry, private readonly bindings: AuthorityBindings, private readonly hostPolicy: (id: string) => Promise<HostPolicyState>, private readonly context: Context, private readonly now: () => Date) {
     this.journal = new OperationJournalStore(engine, registry, context);
-    this.connectors = new Map([...bindings.connectors].map(([key, connector]) => [key, Object.freeze({ ...connector, support: parseWire(OwnerSupportSchema, connector.support) })]));
+    this.connectors = new Map([...bindings.connectors].map(([key, connector]) => [key, Object.freeze({
+      support: parseWire(OwnerSupportSchema, connector.support), authorizeConnection: connector.authorizeConnection.bind(connector), dispatch: connector.dispatch.bind(connector),
+      ...(connector.cancel ? { cancel: connector.cancel.bind(connector) } : {}), ...(connector.lookup ? { lookup: connector.lookup.bind(connector) } : {}), ...(connector.readback ? { readback: connector.readback.bind(connector) } : {}),
+    })]));
     this.sinks = new Map(bindings.sinks);
   }
 
@@ -136,6 +140,10 @@ export class AuthorityMediator {
     const principal = principals[0].value;
     const connection = headRecord(state, "connection", connectionId);
     if (connection?.status !== "active" || connection.principalRef !== principal.principalRef || !this.connectors.has(connection.connectorId) || !connection.credentialHandle) throw new Error("Connection binding is unavailable.");
+    const connector = this.connectors.get(connection.connectorId);
+    if (!connector?.authorizeConnection) throw new Error("Current credential resolution is unavailable.");
+    const connectorAdmission = parseWire(z.object({ version: z.literal(1), available: z.boolean(), revision: z.string().min(1) }).strict(), await connector.authorizeConnection(structuredClone(connection)));
+    if (!connectorAdmission.available) throw new Error("Current credential or account scope is unavailable.");
     const configured = parseWire(PolicyInputsSchema, await this.bindings.policy(binding));
     const host = await this.hostPolicy(binding.conversationId);
     if (host.principal !== principal.principal || host.stack !== principal.stack) throw new Error("Conversation identity mismatch.");
@@ -150,7 +158,7 @@ export class AuthorityMediator {
       return record;
     }));
     const heads = Object.fromEntries([`principal:${principal.principalRef}`, `connection:${connectionId}`, ...restrictions.map(record => `restriction:${record.restrictionRef}`)].map(key => [key, state.heads[key] ?? 0]));
-    const vector = json({ identityBindingRevision: principal.identityBindingRevision, principal, connection, grantHeads: Object.fromEntries(Object.entries(state.heads).filter(([key]) => key.startsWith("grant:"))), context: policy, host, restrictions, heads });
+    const vector = json({ identityBindingRevision: principal.identityBindingRevision, binding, snapshotDigest: snapshot?.digest ?? null, principal, connection, grantHeads: Object.fromEntries(Object.entries(state.heads).filter(([key]) => key.startsWith("grant:"))), context: policy, connectorAdmission, host, restrictions, heads });
     return { binding, principal, connection, restrictions, policy, vector, policyRevision: authorityHash(vector), heads };
   }
 
@@ -222,6 +230,9 @@ export class AuthorityMediator {
           if (prior && priorJournal) {
             const event = priorJournal.journal.events[0];
             if (event?.event.kind !== "approved" || grantId && (event.event.authority.basis.kind !== "grant" || event.event.authority.basis.grantId !== grantId)) return denied("review-again");
+            const approvedAuthority = event.event.authority;
+            const approvedConnection = state.records[`connection:${snapshot.connectionId}`]?.find(record => record.kind === "connection" && record.value.connectionRevision === approvedAuthority.connectionRevision);
+            if (approvedConnection?.kind !== "connection" || accountBinding(approvedConnection.value) !== accountBinding(resolved.connection)) return denied("review-again");
             if (canonicalWire(this.basis(state, resolved, input.operationId, snapshot, event.event.authority.basis, "mutation")) !== canonicalWire(event.event.authority.basis)) return denied("review-again");
             if (canonicalWire(priorJournal.journal.snapshot) !== canonicalWire(snapshot) || priorJournal.journal.ownerRequestId !== input.ownerRequestId || priorJournal.journal.idempotencyKey !== input.idempotencyKey) return denied("review-again");
             return { kind: "allowed" as const, authority: event.event.authority };

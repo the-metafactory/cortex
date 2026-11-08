@@ -252,6 +252,7 @@ const CARVEOUT_PATHS: string[] = [
 // from scripts/check-carveouts.sh (F17).
 // ─────────────────────────────────────────────────────────────────────────────
 const CARVEOUT_LINE_PATTERNS: string[] = [
+  "\"operator-cutover\"",
   // Explicit historical markers
   "//[[:space:]]*historical:",
   "<!--[[:space:]]*historical",

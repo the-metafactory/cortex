@@ -349,3 +349,16 @@ test("legacy authority records cannot be adopted and unsupported protected polic
   expect((await other.confirm()).kind).toBe("denied");
   expect(other.calls.dispatch).toBe(0);
 });
+
+test("current connector credential resolution denies dispatch and cancellation without a new owner call", async () => {
+  const rig = await authorityRig(); rigs.push(rig);
+  const request = await rig.prepare();
+  const cancelId = crypto.randomUUID();
+  const cancellation = await rig.service.confirmCancellation(rig.context, request.operationId, cancelId);
+  if (cancellation.kind !== "allowed") throw new Error("Synthetic cancellation missing.");
+  rig.hooks.credentialsAvailable = false;
+  expect((await rig.service.dispatch(rig.context, request, rig.lease)).kind).toBe("denied");
+  expect((await rig.service.cancel(rig.context, { lifecycleVersion: "1.0.0", operationId: request.operationId, cancelId, authority: cancellation.authority, requestedAt: "2026-11-01T00:00:00.000Z" }, rig.lease)).kind).toBe("denied");
+  expect(rig.calls.dispatch).toBe(0);
+  expect(rig.calls.cancel).toBe(0);
+});

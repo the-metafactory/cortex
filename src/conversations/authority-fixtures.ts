@@ -20,7 +20,7 @@ export async function authorityRig(extra: Partial<HostOptions> = {}) {
   const policy: PolicyInputs = { version: 1, contextRevision: "context-1", areaId: "area-example", conversationPolicy: "local", tool: {}, communication: {}, link: {}, work: {}, history: {}, registryRevision: "registry-1", executionBindingRevision: support.declarationId, operationVisible: true, readsAllowed: true, writesAllowed: true, releaseAllowed: true, allowedAudiences: ["web", "discord", "model", "view"] };
   const lease: WriterLease = { bindingKey: "synthetic-binding", epoch: 1, instanceId: "synthetic-instance", supervisorReceiptRef: "synthetic-supervisor" };
   const calls = { dispatch: 0, cancel: 0, lookup: 0, readback: 0, sends: [] as Json[], signals: [] as AbortSignal[] };
-  const hooks: { policy?: () => Promise<void>; dispatch?: (request: DispatchRequest) => Promise<unknown>; sink?: () => Promise<void>; lookup?: () => Promise<unknown>; readback?: () => Promise<unknown>; writer?: () => Promise<boolean>; sessionEnabled?: boolean } = {};
+  const hooks: { policy?: () => Promise<void>; dispatch?: (request: DispatchRequest) => Promise<unknown>; sink?: () => Promise<void>; lookup?: () => Promise<unknown>; readback?: () => Promise<unknown>; writer?: () => Promise<boolean>; sessionEnabled?: boolean; credentialsAvailable?: boolean } = {};
   let conversationId = "";
   let attempt: Attempt | undefined;
   const sinks = new Map<string, (value: Json) => Promise<void>>();
@@ -29,7 +29,7 @@ export async function authorityRig(extra: Partial<HostOptions> = {}) {
     policy: async () => { await hooks.policy?.(); return structuredClone(policy); },
     writer: async checked => hooks.writer ? hooks.writer() : canonicalWire(checked) === canonicalWire(lease),
     restrictions: new Map([["synthetic-restriction-resolver", record => Promise.resolve(record)]]),
-    connectors: new Map([[connection.connectorId, { support: { ...support, cancellation: "best-effort", operationLookup: "historical" },
+    connectors: new Map([[connection.connectorId, { authorizeConnection: current => Promise.resolve({ version: 1, available: hooks.credentialsAvailable !== false && current.credentialHandle === "synthetic-credential-handle" && canonicalWire(current.accountScope) === canonicalWire({ account: "synthetic-account", resource: "area-example" }), revision: "synthetic-credential-1" }), support: { ...support, cancellation: "best-effort", operationLookup: "historical" },
       dispatch: async (request, signal) => { calls.dispatch++; calls.signals.push(signal); return hooks.dispatch ? hooks.dispatch(request) : resultFixture({ ...approval, authority: request.authority }, requireValue(attempt), "succeeded"); },
       cancel: (_request, signal) => { calls.cancel++; calls.signals.push(signal); return Promise.resolve(resultFixture(approval, requireValue(attempt), "succeeded")); },
       lookup: async () => { calls.lookup++; return hooks.lookup ? hooks.lookup() : { lifecycleVersion: "1.0.0", operationId: approval.operationId, checkedAt: AT, result: { kind: "unknown", reason: { code: "synthetic_unknown", message: "No historical evidence." } } }; },
