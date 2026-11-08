@@ -44,6 +44,17 @@ const bindingKey = (snapshot: Pick<ApprovedSnapshot, "adapterId" | "connectionId
 const attempts = (stored: StoredOperation) => stored.journal.events.flatMap(entry => entry.event.kind === "attempt-prepared" ? [entry.event.attempt] : []);
 const ACTIVE: readonly OperationState[] = ["dispatching", "pending", "uncertain"];
 
+interface LaunchArguments {
+  context: HostContext;
+  lease: WriterLease;
+  stored: StoredOperation;
+  snapshot: ApprovedSnapshot;
+  authority: Authority;
+  support: OwnerSupport;
+  attempt: Attempt;
+  retryAuthorized: boolean;
+}
+
 export class OperationBridge {
   private readonly activated = new Map<string, WriterBinding>();
   private readonly inflight = new Set<Promise<unknown>>();
@@ -109,7 +120,7 @@ export class OperationBridge {
 
     const start = this.now();
     const attempt = { attemptId: randomUUID(), number: 1, kind: "initial" as const, preparedAt: start.toISOString(), deadlineAt: new Date(start.getTime() + OWNER_CALL_WAIT_MS).toISOString(), authority: approval.authority, supportDeclarationId: support.declarationId, ...(support.dedup.kind === "guaranteed" ? { dedupValidUntil: new Date(start.getTime() + support.dedup.retentionMs).toISOString() } : {}) };
-    return this.launch(context, lease, stored, snapshot, approval.authority, support, attempt, false);
+    return this.launch({ context, lease, stored, snapshot, authority: approval.authority, support, attempt, retryAuthorized: false });
   }
 
   async redispatch(context: HostContext, operationId: string, lease: WriterLease): Promise<RedispatchOutcome> {
@@ -144,12 +155,13 @@ export class OperationBridge {
     const checked = await this.options.authority.preflight(context, operationId, approval.authority, lease, "mutation");
     if (checked.kind === "denied") return { kind: "not-eligible", reason: checked.reason, operation: stored };
     const attempt = { attemptId: randomUUID(), number: prior.length + 1, kind: "retry" as const, preparedAt: now.toISOString(), deadlineAt: new Date(end).toISOString(), authority: approval.authority, supportDeclarationId: support.declarationId, dedupValidUntil: retained };
-    return this.launch(context, lease, stored, snapshot, approval.authority, support, attempt, true);
+    return this.launch({ context, lease, stored, snapshot, authority: approval.authority, support, attempt, retryAuthorized: true });
   }
 
-  private async launch(context: HostContext, lease: WriterLease, stored: StoredOperation, snapshot: ApprovedSnapshot, authority: Authority, support: OwnerSupport, attempt: Attempt, retry: boolean): Promise<DispatchOutcome> {
+  private async launch(launch: LaunchArguments): Promise<DispatchOutcome> {
+    const { context, lease, stored, snapshot, authority, support, attempt, retryAuthorized } = launch;
     const operationId = stored.journal.operationId;
-    try { await this.append(stored, { kind: "attempt-prepared", attempt }, { at: attempt.preparedAt, support, ...(retry ? { retryAuthorized: true } : {}) }); }
+    try { await this.append(stored, { kind: "attempt-prepared", attempt }, { at: attempt.preparedAt, support, ...(retryAuthorized ? { retryAuthorized: true } : {}) }); }
     catch (error) {
       if (!(error instanceof JournalConflict)) throw error;
       const current = await this.options.journal.read(operationId);
