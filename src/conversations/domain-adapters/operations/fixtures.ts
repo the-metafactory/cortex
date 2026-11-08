@@ -15,6 +15,9 @@ export const support: OwnerSupport = { lifecycleVersion: "1.0.0", adapterId: "ba
 export function registryFixture(): DomainAdapterRegistry {
   const registry = new DomainAdapterRegistry();
   const declaration = balanceDeclaration();
+  const creation = declaration.capabilities[0];
+  if (!creation) throw new Error("Synthetic task capability is unavailable.");
+  declaration.capabilities.push({ ...creation, capabilityId: "balance.object.read", kind: "query", objectTypes: ["task", "area", "project"] });
   const registered = registry.register(declaration, fixtureBindings(declaration));
   if (!registered.ok) throw new Error(registered.error.code);
   return registry;

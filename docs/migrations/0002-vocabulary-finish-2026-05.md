@@ -1291,3 +1291,7 @@ This continuation manifest is filed under [cortex#426](https://github.com/the-me
 - Myelin manifest: [myelin#164](https://github.com/the-metafactory/myelin/pull/164) (merged)
 - Cortex CONTEXT.md: `./CONTEXT.md`
 - Compass context map: `compass/ecosystem/CONTEXT-MAP.md`
+
+### Host authority recovery compatibility
+
+The quoted wire literal `"operator-cutover"` is retained by the approved host authority integration contract (cortex node 3305). The vocabulary gate permits only this exact quoted literal; it is a compatibility discriminant, never a principal identity or a new domain synonym. It retires only through an explicitly versioned authority contract migration.

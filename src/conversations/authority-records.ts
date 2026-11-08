@@ -1,0 +1,47 @@
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import { defineDoc, type JsonObject } from "@earendil-works/pi-durable";
+import { ObjectReferenceSchema, type ObjectReference } from "./domain-adapters/types";
+import { canonicalWire } from "./domain-adapters/operations/validation";
+
+const id = z.string().min(1);
+const uuid = z.uuid();
+const revision = z.string().regex(/^[1-9]\d*$/).refine(value => Number.isSafeInteger(Number(value)));
+const time = z.iso.datetime();
+const policy = z.enum(["local", "cloud"]);
+const status = z.enum(["active", "revoked"]);
+const refs = z.array(ObjectReferenceSchema).refine(value => new Set(value.map(canonicalWire)).size === value.length);
+const base = { version: z.literal(1), status };
+export const GrantContextSchema = z.discriminatedUnion("kind", [z.object({ kind: z.literal("conversation"), conversationId: id }).strict(), z.object({ kind: z.literal("area"), areaId: id }).strict(), z.object({ kind: z.literal("principal") }).strict()]);
+export const GrantConstraintsSchema = z.object({ adapterId: id, connectionId: id, capabilityIds: z.array(id).min(1), destinations: refs, target: ObjectReferenceSchema.optional(), context: GrantContextSchema, sourceReleaseCeiling: policy }).strict();
+export const PrincipalBindingSchema = z.object({ ...base, principalRef: uuid, principal: id, stack: id, identityBindingRevision: revision }).strict();
+export const ConnectionRecordSchema = z.object({ ...base, connectionId: id, adapterId: id, principalRef: uuid, connectionRevision: revision, credentialHandle: id, accountScope: z.record(z.string(), z.json()).refine(value => Object.keys(value).length > 0), readCapabilityIds: z.array(id), writeCapabilityIds: z.array(id), readDestinations: refs, writeDestinations: refs, connectorId: id, executionBindingRef: id, registryRevision: id }).strict();
+export const GrantRecordSchema = z.object({ ...base, purpose: z.enum(["mutation", "cancellation"]), grantId: uuid, grantRevision: revision, principalRef: uuid, constraints: GrantConstraintsSchema, createdAt: time, revokedAt: time.optional(), revocationReason: id.optional() }).strict();
+export const RestrictionRecordSchema = z.object({ ...base, restrictionRef: uuid, source: ObjectReferenceSchema, ownerRevision: id, decisionRef: id, audiences: z.array(z.enum(["web", "discord", "model", "view"])), egress: policy, readScope: z.array(uuid), resolverBinding: id, revision }).strict();
+export const ConfirmationRecordSchema = z.object({ ...base, confirmationId: uuid, principalRef: uuid, authenticatedSessionRef: id, transport: z.enum(["web", "discord"]), operationId: id, digest: z.string().regex(/^[a-f0-9]{64}$/), proposalRevision: z.number().int().positive(), connectionId: id, capabilityId: id, destinations: refs, target: ObjectReferenceSchema.optional(), restrictionRefs: z.array(uuid), confirmedAt: time, purpose: z.enum(["mutation", "cancellation"]), cancelId: id.optional(), accountBindingDigest: id }).strict();
+export const PolicyInputsSchema = z.object({ version: z.literal(1), contextRevision: id, areaId: id.optional(), conversationPolicy: policy, tool: z.json(), communication: z.json(), link: z.json(), work: z.json(), history: z.json(), registryRevision: id, executionBindingRevision: id, operationVisible: z.boolean(), readsAllowed: z.boolean(), writesAllowed: z.boolean(), releaseAllowed: z.boolean(), allowedAudiences: z.array(z.enum(["web", "discord", "model", "view"])) }).strict();
+export const DecisionRecordSchema = z.object({ decisionRef: uuid, principalRef: uuid, purpose: id, reference: id, snapshotDigest: id.optional(), basis: z.json(), heads: z.record(z.string(), z.number().int().nonnegative()), audience: id, allowed: z.boolean(), reasonCode: id, authorizedAt: time, policyRevision: id }).strict();
+export const PolicyRecordSchema = z.object({ policyRevision: id, input: z.json(), allowed: z.boolean(), reasonCode: id }).strict();
+export const ReleaseSinkSchema = z.discriminatedUnion("kind", [z.object({ kind: z.literal("web"), conversationId: id }).strict(), z.object({ kind: z.literal("discord"), conversationId: id }).strict(), z.object({ kind: z.literal("model"), conversationId: id, route: id }).strict(), z.object({ kind: z.literal("view"), conversationId: id, viewId: id }).strict()]);
+export type PrincipalBinding = z.infer<typeof PrincipalBindingSchema>;
+export type ConnectionRecord = z.infer<typeof ConnectionRecordSchema>;
+export type GrantRecord = z.infer<typeof GrantRecordSchema>;
+export type RestrictionRecord = z.infer<typeof RestrictionRecordSchema>;
+export type ConfirmationRecord = z.infer<typeof ConfirmationRecordSchema>;
+export type PolicyInputs = z.infer<typeof PolicyInputsSchema>;
+export type DecisionRecord = z.infer<typeof DecisionRecordSchema>;
+export type ReleaseSink = z.infer<typeof ReleaseSinkSchema>;
+export type HostRecord = { kind: "principal"; value: PrincipalBinding } | { kind: "connection"; value: ConnectionRecord } | { kind: "grant"; value: GrantRecord } | { kind: "restriction"; value: RestrictionRecord };
+export const HostRecordSchema = z.discriminatedUnion("kind", [z.object({ kind: z.literal("principal"), value: PrincipalBindingSchema }).strict(), z.object({ kind: z.literal("connection"), value: ConnectionRecordSchema }).strict(), z.object({ kind: z.literal("grant"), value: GrantRecordSchema }).strict(), z.object({ kind: z.literal("restriction"), value: RestrictionRecordSchema }).strict()]);
+export const AuthorityStateSchema = z.object({ version: z.literal(1), records: z.record(z.string(), z.array(HostRecordSchema)), heads: z.record(z.string(), z.number().int().positive()), confirmations: z.array(ConfirmationRecordSchema), decisions: z.array(DecisionRecordSchema), policies: z.array(PolicyRecordSchema), admissions: z.array(z.object({ key: id, operationId: id, kind: z.enum(["dispatch", "cancel"]), authority: z.json(), lease: z.json(), at: time }).strict()), outbox: z.record(z.string(), z.object({ evidenceRef: uuid, sink: ReleaseSinkSchema, state: z.enum(["pending", "sending", "sent"]) }).strict()), evidence: z.record(z.string(), z.object({ operationId: id.optional(), connectionId: id, snapshot: z.json().nullable(), value: z.json(), releasable: z.boolean(), accountBindingDigest: id, readRef: ObjectReferenceSchema.optional(), readRestrictionRef: uuid.optional() }).strict()) }).strict();
+export type AuthorityState = z.infer<typeof AuthorityStateSchema>;
+export const AuthorityDoc = defineDoc<{ state: JsonObject }>({ kind: "cortex.authority", version: 1, scope: "session", initial: () => ({ state: { version: 1, records: {}, heads: {}, confirmations: [], decisions: [], policies: [], admissions: [], outbox: {}, evidence: {} } }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
+export const authorityJson = (value: unknown): JsonObject => JSON.parse(canonicalWire(value)) as JsonObject;
+export const authorityHash = (value: unknown): string => createHash("sha256").update(canonicalWire(value)).digest("hex");
+export const recordId = (record: HostRecord): string => record.kind === "principal" ? record.value.principalRef : record.kind === "connection" ? record.value.connectionId : record.kind === "grant" ? record.value.grantId : record.value.restrictionRef;
+export const recordRevision = (record: HostRecord): string => record.kind === "principal" ? record.value.identityBindingRevision : record.kind === "connection" ? record.value.connectionRevision : record.kind === "grant" ? record.value.grantRevision : record.value.revision;
+export function exactReferences(left: ObjectReference[], right: ObjectReference[]): boolean {
+  const a = left.map(canonicalWire).sort();
+  const b = right.map(canonicalWire).sort();
+  return new Set(a).size === a.length && new Set(b).size === b.length && canonicalWire(a) === canonicalWire(b);
+}
