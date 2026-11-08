@@ -1,22 +1,12 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { approvalFixture, attemptFixture, AT, authority, eventFixture, openJournalFixture, prepareOperationFixture, registryFixture, resultFixture, support } from "../operations/fixtures";
+import { describe, expect, test } from "bun:test";
+import { approvalFixture, attemptFixture, AT, authority, eventFixture, prepareOperationFixture, registryFixture, resultFixture, support } from "../operations/fixtures";
 import { JournalConflict, OperationJournalStore } from "../operations/journal";
 import * as schemas from "../operations/types";
 import { canonicalWire, snapshotDigest, validateResultPayload, validateSnapshot } from "../operations/validation";
 
-const hosts: Awaited<ReturnType<typeof openJournalFixture>>[] = [];
-const dirs: string[] = [];
-afterEach(async () => { await Promise.all(hosts.splice(0).map(host => host.close())); await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))); });
-async function open(path?: string) {
-  const dir = path ?? await mkdtemp(join(tmpdir(), "operation-journal-"));
-  if (!path) dirs.push(dir);
-  const host = await openJournalFixture(join(dir, "durable.sqlite"));
-  hosts.push(host);
-  return { ...host, dir };
-}
+import { journalStoreTestFixture } from "./journal-store";
+
+const { hosts, open } = journalStoreTestFixture();
 async function prepared() {
   const host = await open();
   return { ...host, ...await prepareOperationFixture(host.journal) };

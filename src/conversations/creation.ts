@@ -35,7 +35,7 @@ export const ConfirmSchema = z.object({
 }).strict();
 export type Confirm = z.infer<typeof ConfirmSchema>;
 
-const ProposalSchema = z.object({
+export const ProposalSchema = z.object({
   proposalId: z.string(),
   conversationId: z.string(),
   type: z.enum(CREATABLE_TYPES).nullable(),
