@@ -25,9 +25,9 @@ const server = Bun.serve({ hostname: "127.0.0.1", port, fetch(request) {
   if (url.pathname === `${moduleRoot}module.js`) return new Response(moduleFile, { headers: { ...common, "Content-Type": "text/javascript" } });
   const file = files.get(url.pathname);
   if (file) return new Response(file, { headers: { ...common, "Content-Security-Policy": parentPolicy } });
-  if (url.pathname !== "/" || url.searchParams.get("desk") !== "adapter-ui-prototype") return new Response("Synthetic prototype only. Open /?desk=adapter-ui-prototype&variant=A", { status: 404, headers: common });
+  if (url.pathname !== "/" || url.searchParams.get("desk") !== "adapter-ui-prototype") return new Response("Synthetic prototype only. Open /?desk=adapter-ui-prototype", { status: 404, headers: common });
   return new Response(`<!doctype html><html lang="en" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Desk adapter UI prototype</title><link rel="stylesheet" href="${css}"></head><body><div id="root"></div><script type="module" src="${js}"></script></body></html>`, { headers: { ...common, "Content-Type": "text/html", "Content-Security-Policy": parentPolicy } });
 } });
-console.log(`Throwaway synthetic Desk UI: ${origin}/?desk=adapter-ui-prototype&variant=A`);
+console.log(`Throwaway synthetic Desk UI: ${origin}/?desk=adapter-ui-prototype`);
 console.log(`Boundary receiver: http://127.0.0.1:${receiver.port}; no real provider, account or stored data.`);
 process.on("SIGTERM", () => { server.stop(true); receiver.stop(true); });

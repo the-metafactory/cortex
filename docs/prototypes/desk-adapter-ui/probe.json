@@ -2,105 +2,21 @@
   "passed": true,
   "browserVersion": "151.0.7922.34",
   "cases": [
-    "three desktop/mobile layouts",
-    "dirty draft retained",
-    "host validation",
-    "explicit synthetic confirmation once",
-    "real isolated graph and Balance frames",
-    "current generation binding",
-    "data-free bootstrap and pre-ready rejection",
-    "unknown/inherited event and array rejection",
-    "parent DOM denial",
-    "fetch/image CSP and worker denial",
-    "ambient message ignored",
-    "self-navigation frame-source containment",
-    "renderer fallback",
-    "loading/unavailable"
+    "conversation-first default and B URL",
+    "typed request produces one Balance card",
+    "only Approve and Edit proposal actions",
+    "no visible technical plumbing",
+    "edit cancel and title validation",
+    "unsaved edits survive conversation navigation",
+    "save changes updates the proposal without creation",
+    "one exact edited approval despite double click",
+    "saved task and repeated request do not create again",
+    "desktop/mobile without overflow",
+    "zero external requests or effects"
   ],
-  "finalState": {
-    "prototype": true,
-    "variant": "A",
-    "adapter": "graph",
-    "stage": "editor",
-    "renderer": "custom",
-    "condition": "unavailable",
-    "bridge": "closed",
-    "frameFailure": "Frame did not complete the matched handshake; generic fallback.",
-    "dirty": {
-      "graph": true,
-      "balance": false
-    },
-    "drafts": {
-      "graph": {
-        "repository": "example/project",
-        "parent": "lifecycle-map",
-        "title": "Frame edited title",
-        "body": "Compare persisted receipts with owner lookup. Document the crash immediately after acceptance, then propose a regression test.",
-        "checkpoint": "receipt-restart-evidence"
-      },
-      "balance": {
-        "area": "Reliability",
-        "project": "Lifecycle review",
-        "title": "Review restart receipts",
-        "note": "Compare the preserved receipt and canonical owner lookup. Review the crash cases and regression proposal.",
-        "due": ""
-      }
-    },
-    "pending": null,
-    "receipt": {
-      "adapter": "graph",
-      "fields": {
-        "repository": "example/project",
-        "parent": "lifecycle-map",
-        "title": "Approved synthetic title",
-        "body": "Compare persisted receipts with owner lookup. Document the crash immediately after acceptance, then propose a regression test.",
-        "checkpoint": "receipt-restart-evidence"
-      },
-      "canonicalId": "graph-synthetic-object"
-    },
-    "receipts": {
-      "graph": {
-        "adapter": "graph",
-        "fields": {
-          "repository": "example/project",
-          "parent": "lifecycle-map",
-          "title": "Approved synthetic title",
-          "body": "Compare persisted receipts with owner lookup. Document the crash immediately after acceptance, then propose a regression test.",
-          "checkpoint": "receipt-restart-evidence"
-        },
-        "canonicalId": "graph-synthetic-object"
-      },
-      "balance": null
-    },
-    "syntheticOwnerWrites": 1,
-    "externalOwnerWrites": 0,
-    "instance": "30da69d2-75a0-450a-ad75-082f8b928e25",
-    "release": "generation-a",
-    "events": [
-      "parent: blocked by opaque origin",
-      "fetch: blocked (TypeError)",
-      "connect-src: browser CSP blocked http://127.0.0.1:33591/fetch",
-      "img-src: browser CSP blocked http://127.0.0.1:33591/image",
-      "worker: blocked (SecurityError)",
-      "Ambient frame message ignored; no authority.",
-      "Frame identity or generation mismatch; generic fallback.",
-      "Unsupported frame event; generic fallback.",
-      "Frame replayed a completed handshake; generic fallback.",
-      "Unsupported frame event; generic fallback.",
-      "Unsupported frame event; generic fallback.",
-      "Unsupported frame event; generic fallback.",
-      "Frame identity or generation mismatch; generic fallback.",
-      "Frame identity or generation mismatch; generic fallback.",
-      "Frame identity or generation mismatch; generic fallback.",
-      "Renderer failed; draft retained in generic fallback."
-    ]
-  },
-  "network": {
-    "syntheticReceiverRequests": []
-  },
-  "failedRequests": [
-    "http://127.0.0.1:33591/image csp"
-  ],
+  "syntheticOwnerWrites": 1,
+  "externalOwnerWrites": 0,
+  "requests": [],
   "pageErrors": [],
-  "limitation": "Chromium synthetic local-origin candidate evidence only; not a complete no-egress or hosted authentication proof. No real protected data or credentials admitted."
+  "limitation": "Synthetic conversation, model and owner in memory; no real Balance task is created. Reload starts a fresh example."
 }
