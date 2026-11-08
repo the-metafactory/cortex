@@ -30,13 +30,27 @@ export const MAX_REPLY_CHARS = 20_000;
 export type MailActionResult = MoveResult;
 
 /** The mail behind a Desk item key, from the sources' last reading, never from the page. */
-export function findListedMail(readings: SourceReading[], itemKey: string): ListedMail | null {
+export type ListedMailLookup = { ok: true; mail: ListedMail } | { ok: false; reason: "unlisted" | "ambiguous"; error: string };
+
+export const AMBIGUOUS_ACCOUNT_REFUSAL = "This Message-ID is listed under more than one account, so the Desk cannot tell which mailbox to act on. Nothing was run.";
+
+/** Resolves a Desk item key to one listed mail; a Message-ID listed under more than one account is ambiguous. */
+export function resolveListedMail(readings: SourceReading[], itemKey: string): ListedMailLookup {
+  const hits: ListedMail[] = [];
   for (const r of readings) {
     const m = r.mail.find((x) => `mail:${x.id}` === itemKey);
-    if (m) return { ...m, sourceId: r.id };
+    if (m) hits.push({ ...m, sourceId: r.id });
   }
-  return null;
+  const [first] = hits;
+  if (!first) return { ok: false, reason: "unlisted", error: "The Desk no longer lists this mail." };
+  if (new Set(hits.map((h) => h.account ?? null)).size > 1) return { ok: false, reason: "ambiguous", error: AMBIGUOUS_ACCOUNT_REFUSAL };
+  return { ok: true, mail: first };
 }
+
+export const findListedMail = (readings: SourceReading[], itemKey: string): ListedMail | null => {
+  const found = resolveListedMail(readings, itemKey);
+  return found.ok ? found.mail : null;
+};
 
 export interface TrashLedger {
   has(key: string): boolean;

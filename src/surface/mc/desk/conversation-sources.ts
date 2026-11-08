@@ -14,7 +14,7 @@ import type { GoalRunner } from "./goals";
 import { loadBalanceState } from "./balance-store";
 import type { DeskOptions } from "./compose";
 import type { WriterRunner } from "./create";
-import type { ListedMail, TrashLedger } from "./mail-actions";
+import type { ListedMail, ListedMailLookup, TrashLedger } from "./mail-actions";
 import { mailDraftReady, mailDraftWriter } from "./mail-draft-conversation-writer";
 import type { RoutineRunner } from "./routine-command";
 import { reminderWriter } from "./reminder-conversation-writer";
@@ -51,6 +51,7 @@ export interface SourceDeps {
   now?: () => number;
   deskItems?: () => Promise<DeskItem[]>;
   listedMail?: (key: string) => ListedMail | null;
+  lookupMail?: (key: string) => ListedMailLookup;
   ledger?: TrashLedger;
   runMailDraft?: WriterRunner;
   runRoutine?: RoutineRunner;
@@ -119,8 +120,8 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const goal = goalWriter({ ...writerDeps("goal"), ...(deps.listGoals ? { list: deps.listGoals } : {}) });
   const tanaNote = tanaNoteWriter(writerDeps("note"));
   const deskNote = deskNoteWriter(writerDeps("note"));
-  const { listedMail, ledger } = deps;
-  const mailDraft = listedMail && ledger ? mailDraftWriter({ desk: deps.desk, listedMail, ledger, ...(deps.runMailDraft ? { run: deps.runMailDraft } : {}), ...(deps.now ? { now: deps.now } : {}) }) : undefined;
+  const { lookupMail, ledger } = deps;
+  const mailDraft = lookupMail && ledger ? mailDraftWriter({ desk: deps.desk, lookupMail, ledger, ...(deps.runMailDraft ? { run: deps.runMailDraft } : {}), ...(deps.now ? { now: deps.now } : {}) }) : undefined;
   return {
     get writers() {
       const desk = deps.desk();
