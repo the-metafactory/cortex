@@ -14,7 +14,7 @@ const render = ({ projection, theme }) => {
   put(card, "h1", object.title, "font-size:21px;line-height:1.3;margin:8px 0");
   if (object.summary) put(card, "p", object.summary, "margin:0 0 10px;font-style:italic");
   if (object.tags?.length) put(card, "div", object.tags.map(tag => `#${tag}`).join("  "), "font-size:12px");
-  send("resize", { height: Math.ceil(document.documentElement.scrollHeight) });
+  send("resize", { height: Math.ceil(root.getBoundingClientRect().height) });
 };
 window.addEventListener("message", event => {
   if (event.source !== parent || port || event.data?.type !== "desk:init" || event.data.protocol !== "1.0.0" || event.ports.length !== 1) return;

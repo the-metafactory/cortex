@@ -10,7 +10,7 @@ const FRAME_READY_MS = 2500;
 const MAX_FRAME_HEIGHT = 640;
 const FRAME_MESSAGE_TYPES = new Set(["ready", "resize", "renderer:error", "host:navigate"]);
 
-function AdapterFrame({ entry, projection, onFail, run }: { entry: any; projection: unknown; onFail: (reason: string) => void; run: Run }) {
+function AdapterFrame({ entry, projection, onFail, onReady, run }: { entry: any; projection: unknown; onFail: (reason: string) => void; onReady: () => void; run: Run }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(220);
   const [state, setState] = useState("mounting");
@@ -29,7 +29,7 @@ function AdapterFrame({ entry, projection, onFail, run }: { entry: any; projecti
       if (!data || data.instance !== instance || data.release !== entry.releaseDigest || data.protocol !== PROTOCOL || !FRAME_MESSAGE_TYPES.has(type)) { clearTimeout(timer); fail(`forged-or-unknown:${type}`); return; }
       if (type === "ready") {
         if (ready) { fail("duplicate-ready"); return; }
-        ready = true; clearTimeout(timer); setState("ready");
+        ready = true; clearTimeout(timer); setState("ready"); onReady();
         channel.port1.postMessage({ type: "host:projection", ...identity, projection, theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light" });
       } else if (type === "resize" && typeof data.height === "number") setHeight(Math.min(Math.max(data.height, 60), MAX_FRAME_HEIGHT));
       else if (type === "renderer:error") fail("renderer-error");
@@ -38,7 +38,7 @@ function AdapterFrame({ entry, projection, onFail, run }: { entry: any; projecti
     channel.port1.start();
     target.postMessage({ type: "desk:init", ...identity }, "*", [channel.port2]);
   };
-  return <iframe ref={frame} data-frame-state={state} data-adapter={entry.adapterId} title="Adapter view" sandbox="allow-scripts" referrerPolicy="no-referrer" src={entry.src} onLoad={load} style={{ width: "100%", height, border: 0, display: "block" }} />;
+  return <iframe ref={frame} data-frame-state={state} data-adapter={entry.adapterId} title="Adapter view" sandbox="allow-scripts" referrerPolicy="no-referrer" src={entry.src} onLoad={load} style={{ width: "100%", height: state === "ready" ? height : 0, border: 0, display: "block" }} />;
 }
 
 function viewFor(view: View, adapterId: string, objectType: string): any {
@@ -48,9 +48,9 @@ function viewFor(view: View, adapterId: string, objectType: string): any {
 
 function ObjectResult({ view, adapterId, objectType, object, objectRef, fallback, run }: { view: View; adapterId: string; objectType: string; object: unknown; objectRef: unknown; fallback: React.ReactNode; run: Run }) {
   const entry = viewFor(view, adapterId, objectType);
-  const [failed, setFailed] = useState(false);
-  if (!entry || failed) return <div data-rendered-by="host">{fallback}</div>;
-  return <div data-rendered-by="adapter"><AdapterFrame entry={entry} projection={{ view: "result", objectType, object, ref: objectRef }} onFail={() => { setFailed(true); }} run={run} /></div>;
+  const [phase, setPhase] = useState<"waiting" | "ready" | "failed">("waiting");
+  if (!entry || phase === "failed") return <div data-rendered-by="host">{fallback}</div>;
+  return <div data-rendered-by={phase === "ready" ? "adapter" : "host-until-ready"}>{phase === "waiting" && fallback}<AdapterFrame entry={entry} projection={{ view: "result", objectType, object, ref: objectRef }} onFail={() => { setPhase("failed"); }} onReady={() => { setPhase("ready"); }} run={run} /></div>;
 }
 
 const display = (value: unknown, draft: any): string => {

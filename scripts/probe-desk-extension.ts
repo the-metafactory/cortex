@@ -70,7 +70,12 @@ if (phase === "all" || phase === "a") {
   await page.locator('[data-group="sample.reading"] iframe').first().waitFor();
   await page.waitForTimeout(500);
   const customHeadings = await Promise.all((await adapterFrames("sample.reading")).map(frame => frame.locator("[data-custom-view]").count().catch(() => 0)));
-  check("query results render in the adapter's own sandboxed view", customHeadings.some(count => count > 0) && await page.locator('[data-rendered-by="adapter"]').count() === 2, customHeadings);
+  const frameHeights = await page.locator('[data-group="sample.reading"] iframe').evaluateAll(frames => frames.map(frame => frame.clientHeight));
+  check("every query result renders in the adapter's own sandboxed view", customHeadings.length === 2 && customHeadings.every(count => count === 1) && await page.locator('[data-rendered-by="adapter"]').count() === 2, customHeadings);
+  check("each frame sizes to its content", frameHeights.every(height => height > 60 && height < 220), frameHeights);
+  await page.locator('[data-group="sample.reading"]').last().scrollIntoViewIfNeeded();
+  await page.waitForTimeout(200);
+  await page.locator('[data-group="sample.reading"]').last().screenshot({ path: join(output, "query-custom-view-card.png") });
   check("frame is sandboxed without same-origin", (await page.locator('[data-group="sample.reading"] iframe').first().getAttribute("sandbox")) === "allow-scripts");
   await shot("query-custom-view");
   await pane("Adapters");
@@ -107,6 +112,9 @@ if (phase === "all" || phase === "a") {
   await approve.dblclick();
   await card.locator('[data-rendered-by="adapter"]').waitFor({ timeout: 5000 });
   await page.waitForTimeout(500);
+  await card.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(200);
+  await card.screenshot({ path: join(output, "saved-custom-view-card.png") });
   check("double approval produces one owner call", (await diagnostics()).ownerCalls === 1, (await diagnostics()).ownerCalls);
   check("saved result renders the owner's readback in the adapter's own view", (await page.frames().some(frame => frame !== page.mainFrame())) && await card.locator('[data-rendered-by="adapter"] iframe').getAttribute("data-frame-state") === "ready");
   check("host-owned confirmation shows the saved state", (await card.textContent())?.includes("Added to Reading list") === true);
@@ -192,6 +200,9 @@ if (phase === "all" || phase === "b") {
   await repair.locator('[data-rendered-by="adapter"] iframe[data-frame-state="ready"]').waitFor({ timeout: 5000 });
   check("the second adapter saves and shows its own different view", (await repair.textContent())?.includes("Added to Workshop") === true);
   await page.waitForTimeout(400);
+  await repair.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(200);
+  await repair.screenshot({ path: join(output, "second-saved-card.png") });
   await shot("second-saved");
 
   await bringUp("tide-tables");
@@ -236,6 +247,7 @@ if (phase === "all" || phase === "b") {
   for (const sample of ["crashing-view", "hostile-view"]) await bringUp(sample);
   const ownerCallsBeforeHostile = (await diagnostics()).ownerCalls;
   await say("find Prop");
+  check("a view that has not answered yet shows the safe host rendering, not a blank box", (await page.locator('[data-group="sample.crash"]').last().textContent())?.includes("Prop from Crashing view") === true);
   await page.waitForTimeout(3200);
   const groups = page.locator('[data-group^="sample.crash"], [data-group^="sample.hostile"]');
   check("a crashing or hostile view falls back to the safe host rendering", await groups.count() >= 2 && await page.locator('[data-group="sample.crash"] [data-rendered-by="host"]').count() > 0 && await page.locator('[data-group="sample.hostile"] [data-rendered-by="host"]').count() > 0, await groups.allTextContents());

@@ -1,8 +1,8 @@
 {
  "origin": "http://127.0.0.1:33594",
  "phase": "all",
- "at": "2026-11-08T14:49:45.276Z",
- "passed": 60,
+ "at": "2026-11-08T14:52:17.029Z",
+ "passed": 62,
  "failed": 0,
  "checks": [
   {
@@ -41,7 +41,7 @@
      {
       "dir": "reading-list",
       "packageId": "sample/reading-list",
-      "releaseDigest": "d40eb75f38c86d9861b03013126c9c118a232c95bc33fa739c1925342f1d88e5",
+      "releaseDigest": "8c1d271e349ef7b2c9e49215e5bb08715be42e32bef4c9d4257c0ca7ed127636",
       "packageVersion": "1.0.0",
       "label": "Reading list",
       "state": "active"
@@ -51,11 +51,19 @@
    }
   },
   {
-   "name": "query results render in the adapter's own sandboxed view",
+   "name": "every query result renders in the adapter's own sandboxed view",
    "pass": true,
    "detail": [
     1,
     1
+   ]
+  },
+  {
+   "name": "each frame sizes to its content",
+   "pass": true,
+   "detail": [
+    147,
+    147
    ]
   },
   {
@@ -257,6 +265,10 @@
    "pass": true
   },
   {
+   "name": "a view that has not answered yet shows the safe host rendering, not a blank box",
+   "pass": true
+  },
+  {
    "name": "a crashing or hostile view falls back to the safe host rendering",
    "pass": true,
    "detail": [
@@ -394,7 +406,7 @@
    {
     "dir": "reading-list",
     "packageId": "sample/reading-list",
-    "releaseDigest": "d40eb75f38c86d9861b03013126c9c118a232c95bc33fa739c1925342f1d88e5",
+    "releaseDigest": "8c1d271e349ef7b2c9e49215e5bb08715be42e32bef4c9d4257c0ca7ed127636",
     "packageVersion": "1.0.0",
     "label": "Reading list",
     "state": "active"
@@ -418,7 +430,7 @@
    {
     "dir": "workshop",
     "packageId": "sample/workshop",
-    "releaseDigest": "297af67ba5b81e9ef95a2fc704e77987483b7b2921c4b047f5045417de131de9",
+    "releaseDigest": "a14c56fad727078e063bd784ada846316d37d7958c21910fe3ddf6e20aaf73fe",
     "packageVersion": "1.0.0",
     "label": "Workshop",
     "state": "active"

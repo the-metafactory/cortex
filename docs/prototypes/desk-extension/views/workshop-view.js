@@ -19,7 +19,7 @@ const render = ({ projection }) => {
   if (object.hours !== undefined) put(facts, "span", `⏱ ${object.hours} h`);
   if (object.neededBy) put(facts, "span", `by ${object.neededBy}`);
   if (object.parts?.length) put(facts, "span", `parts: ${object.parts.join(", ")}`);
-  send("resize", { height: Math.ceil(document.documentElement.scrollHeight) });
+  send("resize", { height: Math.ceil(root.getBoundingClientRect().height) });
 };
 window.addEventListener("message", event => {
   if (event.source !== parent || port || event.data?.type !== "desk:init" || event.data.protocol !== "1.0.0" || event.ports.length !== 1) return;

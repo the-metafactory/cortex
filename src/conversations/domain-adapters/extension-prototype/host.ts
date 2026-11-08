@@ -29,6 +29,7 @@ const refKey = (ref: ObjectReference): string => `${ref.adapterId}|${ref.connect
 const isReference = (value: Json): value is ObjectReference => !!value && typeof value === "object" && "canonicalId" in value;
 const sha = (value: string): string => createHash("sha256").update(value).digest("hex");
 const iso = (): string => new Date().toISOString();
+const withArticle = (noun: string): string => `${/^[aeiou]/i.test(noun) ? "an" : "a"} ${noun}`;
 const STALE_AFTER_MS = 10 * 60_000;
 const DEFAULT_PAGE_TIMEOUT_MS = 10_000;
 
@@ -248,7 +249,7 @@ export class ExtensionHost {
     if (!matches.length) { this.say("Ivy", "Nothing connected here can make that yet. You can add one under Adapters."); return; }
     const withAction = matches.flatMap(match => { const capability = match.pkg.manifest.declaration.capabilities.find(entry => entry.kind === "action" && entry.objectTypes.includes(match.objectType)); return capability ? [{ ...match, capabilityId: capability.capabilityId }] : []; });
     const chosen = withAction[0];
-    if (!chosen) { const match = matches[0]; this.say("Ivy", `${match?.pkg.manifest.declaration.label ?? "That"} can be read here, but it can’t make a ${match?.label.toLowerCase() ?? "new one"} from a conversation.`); return; }
+    if (!chosen) { const match = matches[0]; this.say("Ivy", `${match?.pkg.manifest.declaration.label ?? "That"} can be read here, but it can’t make ${match ? withArticle(match.label.toLowerCase()) : "a new one"} from a conversation.`); return; }
     if (withAction.length > 1) { this.say("Ivy", `More than one connected source has a ${chosen.label.toLowerCase()}. Which did you mean: ${withAction.map(entry => entry.pkg.manifest.declaration.label).join(" or ")}?`); return; }
     const adapterId = chosen.pkg.manifest.declaration.adapterId;
     if (!this.live(adapterId)) { this.say("Ivy", `${chosen.pkg.manifest.declaration.label} isn’t connected yet. You can connect it under Adapters.`); return; }
@@ -259,7 +260,7 @@ export class ExtensionHost {
     const generated = this.generate(chosen.pkg, binding, spec, [], {});
     const draft: Draft = { id: randomUUID(), adapterId, adapterLabel: chosen.pkg.manifest.declaration.label, objectLabel: chosen.label, objectType: chosen.objectType, capabilityId: chosen.capabilityId, inputSchemaRef, spec, fields: generated.fields, edited: [], revision: 1, status: "proposed", stale: false, alternatives: generated.alternatives, automatic: !!binding, origins: generated.origins };
     this.state.drafts[draft.id] = draft;
-    this.say("Ivy", binding ? `Here’s a ${chosen.label.toLowerCase()} for that.` : `I can’t draft this one for you, but you can fill in the ${chosen.label.toLowerCase()} yourself.`, { kind: "draft", id: draft.id });
+    this.say("Ivy", binding ? `Here’s ${withArticle(chosen.label.toLowerCase())} for that.` : `I can’t draft this one for you, but you can fill in the ${chosen.label.toLowerCase()} yourself.`, { kind: "draft", id: draft.id });
   }
 
   private async refreshDraft(text: string): Promise<void> {
