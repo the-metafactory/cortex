@@ -4,6 +4,10 @@ import { AdapterDeclarationSchema, BoundaryErrorSchema, InputRequestSchema, type
 import { canonicalSchema, failure, jsonBoundCode, SchemaBundle, schemaKey, success, validatePayload } from "./schema-validation";
 
 export const DOMAIN_ADAPTER_CONTRACT_VERSION = "1.0.0";
+export interface DraftingView {
+  adapterId: string; kind: CapabilityDeclaration["kind"]; inputSchemaRef: SchemaRef; outputSchemaRef: SchemaRef; errorSchemaRef: SchemaRef;
+  root: Record<string, unknown>; relationships: AdapterDeclaration["objectTypes"][number]["relationships"]; field(pointer: string): Record<string, unknown> | undefined;
+}
 interface RegisteredAdapter { declaration: AdapterDeclaration; bundle: SchemaBundle; bindings: AdapterBindings }
 interface RegisteredCapability { adapter: RegisteredAdapter; declaration: CapabilityDeclaration }
 const Available: Availability = { state: "available" };
@@ -100,6 +104,17 @@ export class DomainAdapterRegistry {
 
   declaresObjectType(adapterId: string, objectType: string): boolean {
     return this.adapters.get(adapterId)?.declaration.objectTypes.some(object => object.objectType === objectType) ?? false;
+  }
+
+  draftingView(capabilityId: string): DraftingView | undefined {
+    const entry = this.capabilities.get(capabilityId);
+    if (!entry) return undefined;
+    const { adapter, declaration } = entry;
+    const inputKey = schemaKey(declaration.inputSchemaRef);
+    const root = adapter.declaration.schemas.find(schema => schemaKey(schema) === inputKey)?.schema;
+    if (typeof root !== "object" || Array.isArray(root)) return undefined;
+    const relationships = adapter.declaration.objectTypes.filter(object => schemaKey(object.schemaRef) === inputKey).flatMap(object => structuredClone(object.relationships));
+    return { adapterId: adapter.declaration.adapterId, kind: declaration.kind, inputSchemaRef: structuredClone(declaration.inputSchemaRef), outputSchemaRef: structuredClone(declaration.outputSchemaRef), errorSchemaRef: structuredClone(declaration.errorSchemaRef), root: structuredClone(root), relationships, field: pointer => { const found = adapter.bundle.field(declaration.inputSchemaRef, pointer); return found && structuredClone(found); } };
   }
 
   discover(availability: Readonly<Record<string, Availability>> = {}): DeclaredCapability[] {

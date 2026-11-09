@@ -74,3 +74,13 @@ Run `bun scripts/probe-desk-writer-fence.ts` for the checked-in synthetic probe:
 temporary store/manifest, fake launchd supervisor and harmless executable files.
 It retires the old executable, closes/reopens the store, refuses its restart
 through the stable path, and executes only the approved digest once.
+
+## Schema-guided drafting
+
+<!-- glossary-ignore: draft, binding, manifest, host, owner, user, path, data, run -->
+
+`drafting.ts` is the internal durable drafting service (`ConversationHost.drafts(deps)`). `DraftingBindings` registers separate strict drafting binding 1.0.0 documents keyed by exact `adapterId`/`capabilityId`/`inputSchemaRef`; field hints are limited to `pointer`, `role`, optional `resolveWith` and optional `widget: "long"`. Registration fails closed on unknown fields or versions, unresolved pointers, duplicates and relationship mismatches. It does not touch registry 1.0.0 or the surface SDK.
+
+`make` creates or reopens a draft per conversation, entry and capability; `newDraft` creates a distinct one and several matches return a selection. Every mutation is a compare-and-swap on the draft revision. Edits own whole top-level fields (including `null`, omission and compound subtrees); `refresh` changes only untouched generated or suggested fields, and `regenerateField` is the one way to release a user-owned field. Model output supplies candidate values and citations only: citations are checked against the captured manifest, references resolve through the host-supplied destination resolver, and structured values are marked suggested. Host policy is rechecked before model input and before output release; local-only sources never reach a cloud lane. `handoff` validates the exact current revision and returns the data for the existing approval path. Nothing here calls an owner.
+
+Run the vertical demonstration with `bun scripts/probe-desk-drafting.ts`.
