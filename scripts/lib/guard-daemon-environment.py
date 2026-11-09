@@ -65,7 +65,7 @@ def main():
         return 1
     if dropped_env:
         print("cortex render: refusing to drop environment keys: " + ", ".join(sorted(dropped_env)), file=sys.stderr)
-        print("Store surface secrets with `arc secrets set cortex NAME` before removing their old entries.", file=sys.stderr)
+        print("For a secret: store it with `arc secrets set <package> NAME`, using the Cortex package name from `arc list`, then remove its entry from the existing service and retry.", file=sys.stderr)
     if dropped_configuration:
         names = ", ".join(json.dumps(key, ensure_ascii=True) for key in sorted(dropped_configuration))
         print("cortex render: refusing to drop Cortex runtime configuration keys: " + names, file=sys.stderr)

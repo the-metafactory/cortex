@@ -1,4 +1,5 @@
 import { runBoundedProcess } from "../bus/process-runner";
+import { isSurfaceSecretName, readSurfaceSecret } from "../common/config/surface-secret-store";
 
 export interface ProposalCommandOptions {
   timeout_ms: number;
@@ -44,6 +45,13 @@ export const runProposalCommand: ProposalCommandRunner = async (argv, options) =
   return result.ok ? { ok: true, stdout: output } : result;
 };
 
+function proposalToken(name: string | undefined, env: Record<string, string | undefined>): string | undefined {
+  if (!name) return undefined;
+  const inherited = env[name]?.trim();
+  if (inherited) return inherited;
+  return isSurfaceSecretName(name) ? readSurfaceSecret(name, { env })?.trim() : undefined;
+}
+
 export async function fileProposal(
   ref: string, options: ProposalFilingOptions,
 ): Promise<{ filed: string } | { error: string; status: number }> {
@@ -53,8 +61,8 @@ export async function fileProposal(
     return { error: "invalid proposal_ref", status: 400 };
   }
   const parentEnv = options.env ?? process.env;
-  const token = options.proposal_token_env ? parentEnv[options.proposal_token_env] : undefined;
-  if (!token?.trim()) return { error: "no proposal token configured", status: 503 };
+  const token = proposalToken(options.proposal_token_env, parentEnv);
+  if (!token) return { error: "no proposal token configured", status: 503 };
   const env: Record<string, string> = { GH_TOKEN: token };
   for (const key of ["PATH", "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "SOMA_HOME"]) {
     const value = parentEnv[key];

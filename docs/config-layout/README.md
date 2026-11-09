@@ -116,7 +116,7 @@ double-publish.
 
 Keep surface credentials as placeholders such as `__SAMPLE_DISCORD_TOKEN__`
 in the stack config or agent fragment, and provision them under the installed
-Cortex package:
+Cortex package, using the name `arc list` shows for it (`cortex` or `Cortex`):
 
 ```bash
 arc secrets set cortex SAMPLE_DISCORD_TOKEN
@@ -127,10 +127,14 @@ At config load, a nonempty inherited environment variable takes precedence;
 otherwise Cortex reads the named secret from Arc's `secrets/cortex/` directory
 (respecting `ARC_CONFIG_ROOT` and `XDG_CONFIG_HOME`), then the macOS Keychain
 service `ai.meta-factory.cortex.cortex.SAMPLE_DISCORD_TOKEN` if no file exists.
+Both lookups also accept the package name `Cortex`, after `cortex`.
 The file must be mode 0600. The value enters the daemon environment and config
 in memory; rendering never copies it into a plist or unit. Restart the stack
 after provisioning. A manual launch can opt in with
 `CORTEX_SURFACE_SECRETS=arc cortex start --config <path>`.
+
+The Vigil proposal token named by `vigil.proposal_token_env` resolves the same
+way when a proposal is filed: the inherited variable first, then this store.
 
 Rendering requires Python 3 to check existing service environments. An upgrade
 that would discard extra environment keys stops before replacing that service
