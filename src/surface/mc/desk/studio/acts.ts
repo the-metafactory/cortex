@@ -246,9 +246,19 @@ function fromProposal(p: StudioProposalView, area: string): OpenSource {
   return { path: p.path, type: p.type, areas, question: p.question, material: [], log: `Opened from Ivy's proposal ${p.id}` };
 }
 
+const OPEN_IN_MAIL = /\s*Open in Mail: <([^>\s]+)>/;
+
+const linkLabel = (label: string): string => label.replace(/\[/g, "(").replace(/\]/g, ")");
+
+function captureMaterial(c: StudioCapture, today: string): string {
+  const url = OPEN_IN_MAIL.exec(c.text)?.[1];
+  const label = `Capture, ${today}: “${clip(oneLine(c.text.replace(OPEN_IN_MAIL, "")), 80)}”`;
+  return url ? `${c.via}: [${linkLabel(label)}](${url.replace(/\)/g, "%29")})` : `${c.via}: ${label}`;
+}
+
 function fromCapture(c: StudioCapture, today: string): OpenSource {
   const question = clip(oneLine(c.text), 200);
-  return { path: c.path, type: "question", areas: [], question, material: [`${c.via}: Capture, ${today}: “${clip(oneLine(c.text), 80)}”`], log: `Opened from a capture (${c.via})` };
+  return { path: c.path, type: "question", areas: [], question, material: [captureMaterial(c, today)], log: `Opened from a capture (${c.via})` };
 }
 
 function yesSection(ctx: Ctx, answers: Record<string, string> | undefined): { lines: string[]; summary: string } {

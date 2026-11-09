@@ -1,4 +1,6 @@
 import { SourceConversations } from "./desk-source-conversations";
+import { DeskLink } from "./desk-link";
+import { deskLinkAttributes } from "../lib/desk-link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { clip, plainQuestion } from "../../desk/studio/board";
 import type { IvyNote } from "../../desk/studio/format";
@@ -264,7 +266,8 @@ function RelationItem({ r, onOpen }: { r: Relation; onOpen: (slug: string) => vo
     const slug = r.open;
     return <button type="button" className="dst-relitem open" data-rel={r.kind} onClick={() => onOpen(slug)}>{body}</button>;
   }
-  if (r.href) return <a className="dst-relitem" data-rel={r.kind} href={r.href} target="_blank" rel="noreferrer">{body}</a>;
+  const link = r.href ? deskLinkAttributes(r.href) : null;
+  if (link) return <a className="dst-relitem" data-rel={r.kind} {...link}>{body}</a>;
   return <div className="dst-relitem" data-rel={r.kind}>{body}</div>;
 }
 
@@ -382,7 +385,7 @@ export function ThreadPageView({ page, onBack, onOpen, zoom, acts, onBringBack, 
           {page.material.map((m, i) => (
             <div key={`${i}-${m.label}`} className={m.also.length ? "dst-n mat shared" : "dst-n mat"} data-wire="in" data-key={`m-${i}`}>
               <span className="k">{m.kind}</span>
-              <span className="lb">{m.href ? <a href={m.href} target="_blank" rel="noreferrer">{m.label}</a> : m.label}</span>
+              <span className="lb">{m.href ? <DeskLink url={m.href}>{m.label}</DeskLink> : m.label}</span>
               {m.also.map((o) => (
                 <button key={o.slug} type="button" className="also" onClick={() => onOpen(o.slug)}>Also feeds “{clip(plainQuestion(o.question), 40)}”</button>
               ))}
