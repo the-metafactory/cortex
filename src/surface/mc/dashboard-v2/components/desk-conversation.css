@@ -74,8 +74,8 @@
 .dcv-markdown :is(ul, ol) { margin: 6px 0; padding-left: 24px; }
 .dcv-markdown blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid #d4d4d8; color: var(--ink2, #3f3f46); }
 .dcv-markdown .md-code-block { box-sizing: border-box; max-width: 100%; overflow-x: auto; white-space: pre; padding: 10px; border-radius: 8px; background: #f4f4f5; }
-.dcv-markdown .md-code-block code { white-space: pre; overflow-wrap: normal; }
-.dcv-markdown .md-inline-code { background: #f4f4f5; border-radius: 3px; padding: 1px 3px; }
+.dcv-markdown .md-code-block code { white-space: pre; overflow-wrap: normal; color: var(--ink, #18181b); }
+.dcv-markdown .md-inline-code { color: var(--ink, #18181b); background: #f4f4f5; border-radius: 3px; padding: 1px 3px; }
 .dcv-markdown .md-link { color: #2563eb; text-decoration: underline; }
 .dcv-markdown .md-table-wrap { max-width: 100%; overflow-x: auto; margin: 8px 0; }
 .dcv-markdown .md-table { border-collapse: collapse; font-size: .95em; }
