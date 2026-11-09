@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { CreateRequest, CreateResult, OwnerReadback, OwnerWriter, Policy, Suggestion } from "../../../conversations/types";
 import type { DeskOptions } from "./compose";
 import { studioRequestId } from "./conversation-ids";
-import { readStudioMyDay } from "./studio-my-day";
+import { syncStudioBalance } from "./studio-my-day";
 import { planAct, StudioActSchema, type ActContext, type ActPlan, type ActRefusal, type StudioAct } from "./studio/acts";
 import { askFiler, captureId, captureInInbox, captureInThread, captureModel, filerFor, recordCaptureDone, type CaptureModel } from "./studio/capture";
 import { CONVERSATION_NOTE_KINDS, planConversationNote, type ConversationNoteKind } from "./studio/conversation-note";
@@ -77,7 +77,7 @@ export function studioConversationWriter(deps: StudioWriterDeps, spec: StudioWri
 }
 
 const refreshMyDay = (deps: StudioWriterDeps) => async (desk: DeskOptions): Promise<void> => {
-  await readStudioMyDay(deps.db, desk, (deps.now ?? Date.now)()).catch(() => undefined);
+  await syncStudioBalance(deps.db, desk, (deps.now ?? Date.now)()).catch(() => undefined);
 };
 
 const RESPONSE_LABELS = { thread: "The thread", text: "The response" };
@@ -89,7 +89,7 @@ export function studioResponseWriter(deps: StudioWriterDeps): OwnerWriter {
     prepare: async (request, desk) => {
       const act = studioAct({ act: "respond", thread: request.fields.thread ?? "", text: request.fields.text ?? "" }, RESPONSE_LABELS);
       if (typeof act === "string") return act;
-      try { await readStudioMyDay(deps.db, desk, clock(), true); }
+      try { await syncStudioBalance(deps.db, desk, clock(), true); }
       catch { return STUDIO_BUSY; }
       return ctx => planAct(ctx, act, conversationVia(request));
     },

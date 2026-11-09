@@ -1,3 +1,4 @@
+import { deskFixtureOptions as desk } from "../../../../scripts/lib/desk-options-fixture";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +15,7 @@ import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import {
   changeMyDay,
   localDay,
+  loadMeta,
   movedKeys,
   readMyDay,
   sourceIdentity,
@@ -24,14 +26,6 @@ import { balanceParents, proposeBalanceParent } from "../desk/balance-parent";
 
 const now = new Date(2026, 10, 1, 10).getTime();
 const date = localDay(now);
-const desk: DeskOptions = {
-  enabled: true,
-  displayName: "",
-  topN: 5,
-  rangerUrl: "",
-  sources: [],
-  areas: [{ id: "work", label: "Work", color: "", repos: [], goals: [] }],
-};
 const item: DeskItem = {
   key: "probe:source",
   source: "probe",
@@ -325,7 +319,7 @@ it("proposes only existing parents with routing permissions covering all catalog
   }
 });
 
-it("freezes the existing proposed day before first-ever filing without a prior read", () => {
+it("computes the proposed day after first-ever filing without persisting an engine draft", () => {
   const result = changeMyDay({
     db,
     desk,
@@ -341,10 +335,9 @@ it("freezes the existing proposed day before first-ever filing without a prior r
       parent: "area:work",
     },
   });
-  expect(result.view.items.map((i) => i.task.id)).toEqual(["existing"]);
-  expect(result.view.items.map((i) => i.task.id)).not.toContain(
-    result.outlineId,
-  );
+  if (!result.outlineId) throw new Error("Missing filing receipt");
+  expect(result.view.items.map((i) => i.task.id)).toEqual([result.outlineId, "existing"]);
+  expect(loadMeta(db).draft).toBeNull();
 });
 
 it("actual Desk handlers retain a changed source and file/read back/replay one current reminder", async () => {

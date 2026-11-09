@@ -9,7 +9,8 @@ import type { DeskOptions } from "./compose";
 import { operationUuid } from "./conversation-ids";
 import type { ListedMail } from "./mail-actions";
 import { logMailTodo } from "./mail-log";
-import { changeMyDay, loadMeta, localDay, readMyDay, sourceIdentity } from "./my-day";
+import { syncBalance } from "./balance-sync";
+import { changeMyDay, loadMeta, localDay, sourceIdentity } from "./my-day";
 import { withStudioProjection } from "./studio-my-day";
 import type { StudioProjection } from "./studio-outline";
 import type { DeskItem } from "./types";
@@ -75,6 +76,7 @@ export function balanceWriter(kind: BalanceKind, deps: BalanceWriterDeps): Owner
     if (!state) return failed("Balance has no saved outline on this stack yet.");
     const where = balanceDestination(state, desk, request.fields);
     if ("refused" in where) return failed(where.refused);
+    syncBalance(deps.db, desk, clock(), studio);
     const requestId = operationUuid(request.operationId);
     const attempt = (revision: number): string | undefined => {
       const command = addCommand(kind, request.fields, where.parent, revision);
@@ -87,7 +89,8 @@ export function balanceWriter(kind: BalanceKind, deps: BalanceWriterDeps): Owner
       try { return attempt(loadMeta(deps.db).revision); }
       catch (error) {
         if (!stale(error)) throw error;
-        return attempt(readMyDay(deps.db, desk, clock(), studio).revision);
+        syncBalance(deps.db, desk, clock(), studio);
+        return attempt(loadMeta(deps.db).revision);
       }
     };
     let outlineId: string | undefined;
@@ -118,6 +121,7 @@ export function balanceInboxWriter(deps: InboxWriterDeps): OwnerWriter {
   const clock = deps.now ?? Date.now;
   const move = (desk: DeskOptions, request: CreateRequest, item: DeskItem, studio: StudioProjection | undefined): CreateResult => {
     const now = clock();
+    syncBalance(deps.db, desk, now, studio);
     let outlineId: string | undefined;
     try {
       outlineId = changeMyDay({ db: deps.db, desk, now, date: localDay(now), requestId: operationUuid(request.operationId), command: { op: "todo", key: item.key, fingerprint: sourceIdentity(item) }, source: item, studio }).outlineId;
