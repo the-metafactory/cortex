@@ -23,7 +23,7 @@
         "hono": "4.12.10",
         "libsodium-wrappers": "^0.8.4",
         "nats": "^2.29.3",
-        "pulse": "https://github.com/the-metafactory/pulse.git#v0.34.1",
+        "pulse": "https://github.com/the-metafactory/pulse.git#v0.35.0",
         "react": "^19.2.4",
         "react-dom": "^19.2.4",
         "semver": "7.8.0",
@@ -648,7 +648,7 @@
 
     "pug-walk": ["pug-walk@2.0.0", "", {}, "sha512-yYELe9Q5q9IQhuvqsZNwA5hfPkMJ8u92bQLIMcsMxf/VADjNtEYptU+inlufAFYcWdHlwNfZOEnOOQrZrcyJCQ=="],
 
-    "pulse": ["pulse@github:the-metafactory/pulse#ca76fe5", { "dependencies": { "@the-metafactory/myelin": "https://github.com/the-metafactory/myelin.git#v0.9.0", "commander": "^12.0.0", "nats": "^2.29.3", "yaml": "^2.8.3", "zod": "^3.22.0" }, "bin": { "pulse": "src/cli.ts" } }, "the-metafactory-pulse-ca76fe5", "sha512-KzEPu6TXi5RM4vPpg3JYFgVP6paghb47RigumRWkTw0R8EAgKUJGRR/ZMPi6xLcfbUS/A5xQ0oiJC8zuHceddg=="],
+    "pulse": ["pulse@github:the-metafactory/pulse#9257027", { "dependencies": { "@the-metafactory/myelin": "https://github.com/the-metafactory/myelin.git#v0.9.0", "commander": "^12.0.0", "nats": "^2.29.3", "yaml": "^2.8.3", "zod": "^3.22.0" }, "bin": { "pulse": "src/cli.ts" } }, "the-metafactory-pulse-9257027", "sha512-2W//RAMK1183dQnhw40SLScyLl/J18WNYuEF9Ct3dPxettt1MRu09kA2WrZDj4haHwGRNBRuP6HH94icyELntA=="],
 
     "pump": ["pump@3.0.4", "", { "dependencies": { "end-of-stream": "^1.1.0", "once": "^1.3.1" } }, "sha512-VS7sjc6KR7e1ukRFhQSY5LM2uBWAUPiOPa/A3mkKmiMwSmRFUITt0xuj+/lesgnCv+dPIEYlkzrcyXgquIHMcA=="],
 
