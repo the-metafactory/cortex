@@ -40,7 +40,7 @@ Run the standalone package demonstration with:
 bun scripts/probe-desk-adapter-packages.ts
 ```
 
-It uses temporary package roots, a fake arc inventory and a real temporary host store. It performs no real arc install, no service restart and no provider mutation.
+It uses temporary package roots, a fake arc inventory and a real temporary host store. It performs no real arc install, no service restart and dispatches no provider handler, neither a read nor a mutation.
 
 ## Inactive writer cutover
 

@@ -80,6 +80,13 @@ export type DeskAdapterSetup = z.infer<typeof DeskAdapterSetupSchema>;
 export type DeskAdapterUi = z.infer<typeof DeskAdapterUiSchema>;
 export type DeskPackageSource = "bundled" | "installed";
 
+export interface DeskPackageItem {
+  source: DeskPackageSource;
+  root: string;
+  origin: string;
+  arcPackage?: ArcPackage;
+}
+
 export interface DeskAdapterApproval {
   packageId: string;
   origin: string;
@@ -352,6 +359,7 @@ function stageRegistry(entries: readonly StageEntry[], bindingsOf: (entry: Stage
       const registered = registry.register(entry.declaration, bindingsOf(entry));
       if (registered.ok) {
         pending.splice(pending.indexOf(entry), 1);
+        failures.delete(entry);
         progress = true;
       } else {
         failures.set(entry, registered.error);
@@ -430,7 +438,7 @@ export class DeskPackageLoader {
     return candidate;
   }
 
-  private async verifyStructural(item: { source: DeskPackageSource; root: string; origin: string; arcPackage?: ArcPackage }): Promise<DeskPackageCandidate | DeskPackageIssue> {
+  private async verifyStructural(item: DeskPackageItem): Promise<DeskPackageCandidate | DeskPackageIssue> {
     let realRoot: string;
     try {
       realRoot = realpathSync(item.root);
@@ -519,8 +527,8 @@ export class DeskPackageLoader {
     return candidate;
   }
 
-  private async installedItems(issues: DeskPackageIssue[]): Promise<{ source: DeskPackageSource; root: string; origin: string; arcPackage?: ArcPackage }[]> {
-    const items: { source: DeskPackageSource; root: string; origin: string; arcPackage?: ArcPackage }[] = [];
+  private async packageItems(issues: DeskPackageIssue[]): Promise<DeskPackageItem[]> {
+    const items: DeskPackageItem[] = [];
     for (const root of this.options.bundledPackages ?? []) items.push({ source: "bundled", root, origin: "bundled" });
     if ((this.options.installedRoots ?? []).length === 0) return items;
     const roots = (this.options.installedRoots ?? []).flatMap(root => {
@@ -548,7 +556,7 @@ export class DeskPackageLoader {
     return items;
   }
 
-  private async verifyItems(items: { source: DeskPackageSource; root: string; origin: string; arcPackage?: ArcPackage }[], issues: DeskPackageIssue[]): Promise<DeskPackageCandidate[]> {
+  private async verifyItems(items: DeskPackageItem[], issues: DeskPackageIssue[]): Promise<DeskPackageCandidate[]> {
     const seen = new Set<string>();
     const candidates: DeskPackageCandidate[] = [];
     for (const item of items) {
@@ -595,10 +603,10 @@ export class DeskPackageLoader {
 
   async discover(): Promise<DeskPackageDiscovery> {
     const issues: DeskPackageIssue[] = [];
-    const candidates = await this.verifyItems(await this.installedItems(issues), issues);
+    const candidates = await this.verifyItems(await this.packageItems(issues), issues);
     await this.applyTrust(candidates, issues);
     this.markDuplicates(candidates);
-    const installable = candidates.filter(candidate => candidate.state.state === "installable");
+    const installable = candidates.filter(candidate => candidate.state.state === "installable" && candidate.trust.state === "trusted");
     const staged = stageRegistry(installable.map(candidate => ({
       adapterId: candidate.adapterId,
       candidate,
@@ -769,7 +777,10 @@ export class DeskPackageLoader {
     if (prepared.length > 0) {
       const published = await this.publishPrepared(prepared);
       if (!published.ok) {
-        for (const adapter of prepared) this.failed(adapter.candidate, failure(published.error.code, published.error.message));
+        for (const adapter of prepared) {
+          const single = await this.publishPrepared([adapter]);
+          if (!single.ok) this.failed(adapter.candidate, failure(single.error.code, single.error.message));
+        }
       }
     }
     return discovery;

@@ -113,7 +113,7 @@ The host supplies:
 - the configured surface-plugin signing posture and trust root, which are reused as-is. No Desk-specific allowlist, exemption or flag is added;
 - the durable generation store from the conversation host.
 
-`discover()` reads and verifies manifests, identity uniqueness, version compatibility, setup documents, bindings, file digests, containment, trust and signatures. It does not import a backend. `install(packageId)` reports `{ packageId, packageVersion, adapterId, origin, releaseDigest }` without importing, so the principal can approve that exact release without a restart. A refused package reports its code immediately.
+`discover()` reads and verifies manifests, identity uniqueness, version compatibility, setup documents, bindings, file digests, containment, trust and signatures. It does not import a backend. Binding validation stages trusted candidates only, so an unapproved package never claims an adapter identity ahead of an approved release of the same adapter. `install(packageId)` reports `{ packageId, packageVersion, adapterId, origin, releaseDigest }` without importing, so the principal can approve that exact release without a restart. A refused package reports its code immediately.
 
 `activate(packageId, { releaseDigest })` is the managed activation step. It re-verifies the release, imports the verified backend, validates the returned declaration and connectors, composes a complete new registry snapshot, persists the selected generation, and swaps the snapshot atomically. Installation alone never restarts a service; Approve and Remove trigger the managed activation, which is outside this loader.
 
@@ -125,7 +125,7 @@ The release digest covers the canonical verified manifest, backend and asset ide
 - `catalog()` lists only available generations with their package generation, declaration, read bindings, drafting bindings, UI descriptor and availability.
 - `disable(adapterId)` immediately fences logical admission and removes the adapter from the catalog; the in-process registration stays until a managed restart.
 - `uninstall(adapterId)` does the same and marks the durable record uninstalled. Package files and stored drafts, receipts and schema pins are retained. It deletes no credential, remote object or user data.
-- `boot()` applies durable fences at a managed restart. Fenced generations are not published.
+- `boot()` applies durable fences at a managed restart. Fenced generations are not published. It composes every trusted package into one snapshot so relationships between adapters resolve; when that composition fails it publishes each adapter on its own, so one adapter's composition failure leaves the others usable.
 - `admit(adapterId, { releaseDigest })` returns `available`, `unavailable` or `upgrade_required`. A stored generation that does not match the active one is never downconverted. The caller must reopen it with the matching generation.
 
 ## Verification
@@ -138,7 +138,7 @@ The standalone demonstration is:
 bun scripts/probe-desk-adapter-packages.ts
 ```
 
-It loads a bundled default and an explicitly approved synthetic arc package from temporary roots, shows unavailable bad and missing packages, fences a disabled adapter, keeps the last valid generation on a rejected update and reports zero provider mutation calls. It performs no real arc install, no service restart and uses no host secret.
+It loads a bundled default and an explicitly approved synthetic arc package from temporary roots, shows unavailable bad and missing packages, fences a disabled adapter, keeps the last valid generation on a rejected update and reports that install, activation, connector creation and a rejected update dispatch no provider handler, neither a read nor a mutation. It performs no real arc install, no service restart and uses no host secret.
 
 ## Not in this contract
 

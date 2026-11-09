@@ -199,6 +199,31 @@ describe("Desk adapter package discovery", () => {
     await expectDuplicateIdentity({ bundledPackages: [first.dir, second.dir] }, "the-metafactory.desk-adapter-balance");
   });
 
+  test("an unapproved arc package listed before the approved release of the same adapter cannot block it", async () => {
+    const installedRoot = tempDir("arc");
+    const unapproved = writeDeskFixturePackage(join(installedRoot, "a-unapproved"), { packageVersion: "9.0.0" });
+    const approved = writeDeskFixturePackage(join(installedRoot, "b-approved"), { packageVersion: "1.0.1" });
+    const base: DeskPackageLoaderOptions = {
+      installedRoots: [installedRoot],
+      runner: deskFixtureRunner([deskFixtureArcPackage(unapproved.dir, { name: "desk-balance-unapproved" }), deskFixtureArcPackage(approved.dir, { name: "desk-balance-approved" })]),
+    };
+    const discovery = await loaderFor(base).discover();
+    expect(discovery.candidates.every(candidate => candidate.state.state === "installable")).toBe(true);
+    expect(discovery.candidates.find(candidate => candidate.packageVersion === "9.0.0")?.trust.state).toBe("untrusted");
+    const approvedRelease = discovery.candidates.find(candidate => candidate.packageVersion === "1.0.1");
+    if (!approvedRelease) throw new Error("the approved release was not discovered");
+    expect(approvedRelease.trust.state).toBe("untrusted");
+    const { store } = await openStore();
+    const loader = loaderFor({
+      ...base,
+      store,
+      approvals: [{ packageId: approvedRelease.packageId, origin: approvedRelease.origin, packageVersion: approvedRelease.packageVersion, releaseDigest: approvedRelease.releaseDigest }],
+    });
+    const activation = await loader.activate(approvedRelease.packageId);
+    expect(activation.ok).toBe(true);
+    expect(loader.catalog()[0]?.generation.packageVersion).toBe("1.0.1");
+  });
+
   test("an unapproved installed package cannot disable a bundled adapter", async () => {
     const bundledRoot = tempDir("bundled");
     const bundled = writeDeskFixturePackage(join(bundledRoot, "balance"));
@@ -259,6 +284,20 @@ describe("Desk adapter generation publication", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("module_incompatible");
     expect(loader.catalog()).toEqual([]);
+  });
+
+  test("clears an early registration failure once a later adapter owns the relationship target", async () => {
+    const root = tempDir("bundled");
+    const dependent = writeDeskFixturePackage(join(root, "dependent"), { adapterId: "dependent", declaration: deskFixtureDeclaration("dependent", { relationship: { targetAdapterId: "target" } }) });
+    const target = writeDeskFixturePackage(join(root, "target"), { adapterId: "target" });
+    const { store } = await openStore();
+    const loader = loaderFor({ bundledPackages: [dependent.dir, target.dir], store });
+    const discovery = await loader.discover();
+    expect(discovery.candidates.map(candidate => candidate.state.state)).toEqual(["installable", "installable"]);
+    expect((await loader.activate(deskFixturePackageId("target"))).ok).toBe(true);
+    const dependentActivation = await loader.activate(deskFixturePackageId("dependent"));
+    expect(dependentActivation.ok).toBe(true);
+    expect(loader.catalog().map(entry => entry.generation.adapterId)).toEqual(["dependent", "target"]);
   });
 
   test("keeps the previous validated generation selected when a staged update is rejected", async () => {

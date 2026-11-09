@@ -16,20 +16,49 @@ export const deskFixturePackageId = (adapterId: string): string => `the-metafact
 const schemaRef = (schemaId: string) => ({ schemaId, version: "1.0.0" });
 const objectSchema = (properties: Record<string, unknown>, required: string[] = []) => ({ type: "object", additionalProperties: false, required, properties });
 
-export function deskFixtureDeclaration(adapterId = DESK_FIXTURE_ADAPTER) {
+export interface DeskFixtureRelationship {
+  targetAdapterId: string;
+  targetObjectType?: string;
+}
+
+export interface DeskFixtureDeclarationOptions {
+  relationship?: DeskFixtureRelationship;
+}
+
+const referenceProperties = (relationship: DeskFixtureRelationship): Record<string, unknown> => ({
+  parent: {
+    type: "object",
+    additionalProperties: false,
+    required: ["adapterId", "connectionId", "objectType", "canonicalId"],
+    properties: {
+      adapterId: { type: "string", const: relationship.targetAdapterId },
+      connectionId: { type: "string", minLength: 1 },
+      objectType: { type: "string", const: relationship.targetObjectType ?? "task" },
+      canonicalId: { type: "string", minLength: 1 },
+    },
+  },
+});
+
+export function deskFixtureDeclaration(adapterId = DESK_FIXTURE_ADAPTER, options: DeskFixtureDeclarationOptions = {}) {
+  const relationship = options.relationship;
   return {
     adapterId,
     label: adapterId,
     contractRange: "^1.0.0",
     schemas: [
-      { schemaId: `${adapterId}.task`, version: "1.0.0", schema: objectSchema({ title: { type: "string", minLength: 1 } }, ["title"]) },
+      { schemaId: `${adapterId}.task`, version: "1.0.0", schema: objectSchema({ title: { type: "string", minLength: 1 }, ...(relationship ? referenceProperties(relationship) : {}) }, ["title"]) },
       { schemaId: `${adapterId}.task.create.input`, version: "1.0.0", schema: objectSchema({ title: { type: "string", minLength: 1 } }, ["title"]) },
       { schemaId: `${adapterId}.task.create.output`, version: "1.0.0", schema: objectSchema({ ref: { type: "string", minLength: 1 } }, ["ref"]) },
       { schemaId: `${adapterId}.task.query.input`, version: "1.0.0", schema: objectSchema({}) },
       { schemaId: `${adapterId}.task.query.output`, version: "1.0.0", schema: objectSchema({ objects: { type: "array", items: { type: "object" } } }, ["objects"]) },
       { schemaId: `${adapterId}.error`, version: "1.0.0", schema: { type: "object" } },
     ],
-    objectTypes: [{ objectType: "task", label: "Task", schemaRef: schemaRef(`${adapterId}.task`), relationships: [] }],
+    objectTypes: [{
+      objectType: "task",
+      label: "Task",
+      schemaRef: schemaRef(`${adapterId}.task`),
+      relationships: relationship ? [{ fieldPath: "/parent", cardinality: "one", targetAdapterId: relationship.targetAdapterId, targetObjectType: relationship.targetObjectType ?? "task" }] : [],
+    }],
     capabilities: [
       { capabilityId: `${adapterId}.task.create`, label: "Create task", kind: "action", objectTypes: ["task"], inputSchemaRef: schemaRef(`${adapterId}.task.create.input`), outputSchemaRef: schemaRef(`${adapterId}.task.create.output`), errorSchemaRef: schemaRef(`${adapterId}.error`) },
       { capabilityId: `${adapterId}.task.query`, label: "Query tasks", kind: "query", objectTypes: ["task"], inputSchemaRef: schemaRef(`${adapterId}.task.query.input`), outputSchemaRef: schemaRef(`${adapterId}.task.query.output`), errorSchemaRef: schemaRef(`${adapterId}.error`) },
@@ -97,7 +126,7 @@ export function deskFixtureBackend(declaration: { adapterId: string }, options: 
     `  calls[${JSON.stringify(adapterId)}] = (calls[${JSON.stringify(adapterId)}] ?? 0) + 1;`,
     options.throwOnCreate ? '  throw new Error("synthetic adapter creation failure");' : "",
     options.omitConnector ? "" : `  host.registerConnector(${JSON.stringify(`${adapterId}.task.create`)}, connection => { calls[${JSON.stringify(connectorId)}] = (calls[${JSON.stringify(connectorId)}] ?? 0) + 1; return { kind: "action", adapterId: ${JSON.stringify(adapterId)}, connectionId: connection.connectionId, capabilityId: ${JSON.stringify(`${adapterId}.task.create`)} }; });`,
-    `  return { declaration: ${JSON.stringify(declaration)}, bindings: { handlers: { ${JSON.stringify(`${adapterId}.task.query`)}: () => { calls["provider"] = (calls["provider"] ?? 0) + 1; return { objects: [] }; } }, observations: {} } };`,
+    `  return { declaration: ${JSON.stringify(declaration)}, bindings: { handlers: { ${JSON.stringify(`${adapterId}.task.query`)}: (input) => { const key = input && input.mutation ? "provider:mutation" : "provider:read"; calls[key] = (calls[key] ?? 0) + 1; return { objects: [] }; } }, observations: {} } };`,
     "}",
     options.extraExport ? "export const leaked = true;" : "",
   ].join("\n");
