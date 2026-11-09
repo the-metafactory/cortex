@@ -10,7 +10,7 @@ export const TASK_UNAVAILABLE: WaitingTask = { kind: "unavailable", reason: "Sou
 export const QUESTION_UNAVAILABLE = "The question is unavailable. Open the source to see what is needed.";
 export const canonicalTaskRef = (ref: string): string => ref.replace(/^github:github\.com\//, "");
 export type WaitingTaskReader = (ref: string) => Promise<WaitingTask>;
-const FRESH_MS = 5 * 60_000;
+const FRESH_MS = 30 * 60_000;
 const RETRY_MS = 5 * 60_000;
 const CONCURRENT_READS = 6;
 

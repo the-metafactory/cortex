@@ -106,6 +106,16 @@ describe("waiting-task source projection", () => {
   });
 });
 
+const FRESH_WINDOW_MS = 30 * 60_000;
+const RETRY_WINDOW_MS = 5 * 60_000;
+const UNAVAILABLE: WaitingTask = { kind: "unavailable", reason: "Source status could not be checked." };
+
+function countedReader(initial: WaitingTask) {
+  const state = { now: 0, calls: 0, task: initial };
+  const reader = new WaitingTasks(async () => { state.calls++; return state.task; }, () => state.now);
+  return { state, reader };
+}
+
 describe("waiting source reads", () => {
   it("extracts only explicit source questions and bounds the summary", () => {
     expect(questionSummary("## Question\n\nShould we use the ring hull?\n\nUnrelated background\n\n## Notes\nOther text")).toBe("Should we use the ring hull?");
@@ -148,20 +158,37 @@ describe("waiting source reads", () => {
   });
 
   it("deduplicates concurrent reads, refreshes status and does not retain closure after a failed refresh", async () => {
-    let now = 0;
-    let calls = 0;
-    let task: WaitingTask = source("open", "Choose a hull");
-    const reader = new WaitingTasks(async () => { calls++; return task; }, () => now);
+    const { state, reader } = countedReader(source("open", "Choose a hull"));
     const cold = await reader.read(["example/game#12"]);
     expect(cold.get("example/game#12")?.kind).toBe("unavailable");
     await Promise.all([reader.warm(["example/game#12", "example/game#12"]), reader.warm(["github:github.com/example/game#12"])]);
-    expect(calls).toBe(1);
-    task = source("closed", "Choose a hull"); now = 300_001;
+    expect(state.calls).toBe(1);
+    state.task = source("closed", "Choose a hull"); state.now = FRESH_WINDOW_MS + 1;
     await reader.warm(["example/game#12"]);
     expect((await reader.read(["example/game#12"])).get("example/game#12")?.kind).toBe("closed");
-    task = { kind: "unavailable", reason: "Source status could not be checked." }; now += 300_001;
+    state.task = UNAVAILABLE; state.now += FRESH_WINDOW_MS + 1;
     expect((await reader.read(["example/game#12"])).get("example/game#12")?.kind).toBe("unavailable");
     const broken = new WaitingTasks(async () => { throw new Error("offline"); });
     expect((await broken.read(["example/game#12"])).get("example/game#12")?.kind).toBe("unavailable");
+  });
+
+  it("spends one GitHub read per issue per half hour, and retries a failed read after five minutes", async () => {
+    const { state, reader } = countedReader(source("open", "Choose a hull"));
+    await reader.warm(["example/game#12"]);
+    expect(state.calls).toBe(1);
+    state.now = FRESH_WINDOW_MS - 1;
+    await reader.warm(["example/game#12"]);
+    expect(state.calls).toBe(1);
+    expect((await reader.read(["example/game#12"])).get("example/game#12")?.kind).toBe("open");
+    state.now = FRESH_WINDOW_MS;
+    state.task = UNAVAILABLE;
+    await reader.warm(["example/game#12"]);
+    expect(state.calls).toBe(2);
+    state.now += RETRY_WINDOW_MS - 1;
+    await reader.warm(["example/game#12"]);
+    expect(state.calls).toBe(2);
+    state.now += 1;
+    await reader.warm(["example/game#12"]);
+    expect(state.calls).toBe(3);
   });
 });
