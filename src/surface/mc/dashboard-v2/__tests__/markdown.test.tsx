@@ -101,4 +101,34 @@ describe("lib/markdown", () => {
     expect(html).toContain('href="https://example.com/guide_(paper)"');
     expect(html).toContain('class="md-link">A guide</a></p>');
   });
+
+  it("renders a GFM pipe table with header, alignment and inline markdown in cells", () => {
+    const md = "Results:\n\n| Name | Count |\n|:-----|------:|\n| **a** | `1` |\n| b \\| c | 2 |\n\nAfter.";
+    const html = renderToStaticMarkup(<>{renderMarkdown(md)}</>);
+    expect(html).toContain('<p class="md-paragraph">Results:</p><div class="md-table-wrap"><table class="md-table"><thead><tr><th style="text-align:left">Name</th><th style="text-align:right">Count</th></tr></thead>');
+    expect(html).toContain('<tr><td style="text-align:left"><strong>a</strong></td><td style="text-align:right"><code class="md-inline-code">1</code></td></tr>');
+    expect(html).toContain('<td style="text-align:left">b | c</td>');
+    expect(html).toContain('</table></div><p class="md-paragraph">After.</p>');
+  });
+
+  it("pads short rows and drops extra cells", () => {
+    const html = renderToStaticMarkup(<>{renderMarkdown("a | b\n--|--\n1\n`x\\|y` | 2 | 3")}</>);
+    expect(html).toContain("<tbody><tr><td>1</td><td></td></tr><tr><td><code class=\"md-inline-code\">x|y</code></td><td>2</td></tr></tbody>");
+  });
+
+  it("splits an unclosed backtick cell on the next pipe and needs a pipe in the delimiter row", () => {
+    expect(renderToStaticMarkup(<>{renderMarkdown("a | b\n--|--\n`x | y")}</>)).toContain("<td>`x</td><td>y</td>");
+    expect(renderToStaticMarkup(<>{renderMarkdown("| a |\n---")}</>)).not.toContain("<table");
+  });
+
+  it("ends a table at the next block", () => {
+    const html = renderToStaticMarkup(<>{renderMarkdown("a | b\n--|--\n1 | 2\n## Next")}</>);
+    expect(html).toContain("</table></div><h2>Next</h2>");
+  });
+
+  it("leaves a pipe line without a delimiter row as a paragraph", () => {
+    const html = renderToStaticMarkup(<>{renderMarkdown("a | b\nc | d")}</>);
+    expect(html).not.toContain("<table");
+    expect(html).toContain('<p class="md-paragraph">a | b\nc | d</p>');
+  });
 });
