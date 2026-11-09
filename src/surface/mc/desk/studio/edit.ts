@@ -2,7 +2,7 @@ import { stringify } from "yaml";
 import { NOTE_META_KEYS, sectionKey } from "./format";
 import { localDate } from "./labels";
 
-export type FrontValue = string | boolean | undefined;
+export type FrontValue = string | boolean | string[] | undefined;
 
 interface Doc {
   lines: string[];
@@ -20,12 +20,13 @@ const fromDoc = (doc: Doc): string => `${doc.lines.join("\n").replace(/\n+$/, ""
 
 export const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
 
-function scalar(value: string | boolean): string {
+function scalar(value: string | boolean | string[]): string {
+  if (Array.isArray(value)) return `[${value.map(scalar).join(", ")}]`;
   if (typeof value === "boolean") return String(value);
   return stringify(oneLine(value)).trimEnd();
 }
 
-const continues = (line: string | undefined): boolean => line !== undefined && /^\s+\S/.test(line);
+const continues = (line: string | undefined): boolean => line !== undefined && /^(\s+\S|-\s)/.test(line);
 
 export function setFront(text: string, key: string, value: FrontValue): string | null {
   const doc = toDoc(text);

@@ -217,8 +217,18 @@ function ThreadActions({ page, acting, onBringBack }: { page: ThreadPage; acting
   const t = page.thread;
   if (t.state === "closed") return null;
   const off = !acts || acts.pending;
+  const rename = () => {
+    const question = window.prompt("Rename the thread", t.question)?.trim();
+    if (question && question !== t.question) void acts?.send({ act: "rename", thread: slug, question });
+  };
+  const current = t.areas.length === 1 ? t.areas[0] : "";
   return (
     <>
+      <button type="button" className="desk-btn ghost" disabled={off} onClick={rename}>Rename</button>
+      <select className="desk-btn ghost" aria-label="Area" disabled={off} value={current} onChange={(e) => { if (e.target.value) void acts?.send({ act: "area", thread: slug, area: e.target.value }); }}>
+        {!current && <option value="">Move to area…</option>}
+        {page.choices.map((a) => <option key={a.id} value={a.id}>{a.label} · {a.policy}</option>)}
+      </select>
       <button type="button" className="desk-btn ghost" aria-pressed={t.thinkTonight} disabled={off} onClick={() => void acts?.send({ act: "think", thread: slug, on: !t.thinkTonight })}>
         {t.thinkTonight ? "On Ivy's list tonight" : "Think tonight"}
       </button>
