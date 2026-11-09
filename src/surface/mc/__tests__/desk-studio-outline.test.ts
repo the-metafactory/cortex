@@ -8,10 +8,11 @@ import { createElement } from "react";
 import { DEFAULT_SETTINGS, findNode, selectToday, type AppState } from "../../../balance";
 import { initDatabase } from "../db/init";
 import { saveBalanceState, loadBalanceState } from "../desk/balance-store";
+import { syncBalance } from "../desk/balance-sync";
 import { changeMyDay, localDay, readMyDay } from "../desk/my-day";
 import { MyDayMetaSchema } from "../desk/my-day-schema";
 import { projectStudio, type StudioProjection } from "../desk/studio-outline";
-import { readStudioMyDay } from "../desk/studio-my-day";
+import { readSyncedMyDay } from "../desk/studio-my-day";
 import { parseThreadFile, type StudioThread } from "../desk/studio/format";
 import { acquireStudioLock } from "../desk/studio/write-lock";
 import { StudioWriteLock, runStudioAct } from "../desk/studio/writer";
@@ -106,6 +107,7 @@ describe("Studio source projection", () => {
     const db = initDatabase(":memory:");
     try {
       const input: StudioProjection = { namespace: "source", threads: [thread()] };
+      syncBalance(db, desk, now, input);
       const view = readMyDay(db, desk, now, input);
       const task = first(view.items).task;
       const change = (command: Parameters<typeof changeMyDay>[0]["command"]) => changeMyDay({ db, desk, now, date: localDay(now), requestId: crypto.randomUUID(), command, studio: input });
@@ -143,15 +145,15 @@ test("actual respond endpoint syncs before any My day read, survives retry and r
     expect((await handleDeskStudioAct(request(), runtime, deps)).status).toBe(200);
     expect(loadBalanceState(db)?.log).toHaveLength(1);
     expect((await handleDeskStudioAct(request(), runtime, deps)).status).toBe(200);
-    await readStudioMyDay(db, repo.options, now);
+    await readSyncedMyDay(db, repo.options, now);
     expect(loadBalanceState(db)?.log).toHaveLength(1);
     const saved = await readFile(join(repo.dir, "threads/design.md"), "utf8");
     expect(parseThreadFile("threads/design.md", saved).ok).toBe(true);
     await rename(join(repo.dir, "threads/design.md"), join(repo.dir, "threads/renamed.md"));
-    await readStudioMyDay(db, repo.options, now);
+    await readSyncedMyDay(db, repo.options, now);
     expect(loadBalanceState(db)?.log).toHaveLength(1);
     await writeFile(join(repo.dir, "threads/renamed.md"), repo.text.replace("type: question", "studioId: invalid-uuid\ntype: question"));
-    const view = await readStudioMyDay(db, repo.options, now);
+    const view = await readSyncedMyDay(db, repo.options, now);
     expect(view.items).toHaveLength(0);
     expect(loadBalanceState(db)?.log).toHaveLength(1);
   } finally { db.close(); }
@@ -162,15 +164,15 @@ test("a committed response before projection recovery earns credit once after re
   const directory = await mkdtemp(join(tmpdir(), "studio-projection-db-")); directories.push(directory);
   const path = join(directory, "projection.sqlite");
   const db = initDatabase(path);
-  await readStudioMyDay(db, repo.options, now);
+  await readSyncedMyDay(db, repo.options, now);
   const result = await runStudioAct({ options: repo.options.studio, areas: desk.areas, requestId: "crash-fixture-response", act: { act: "respond", thread: "design", text: "The smaller sketch." }, now: new Date(responseAt) });
   expect(result.ok).toBe(true);
   expect(loadBalanceState(db)?.log).toHaveLength(0);
   db.close();
   const reopened = initDatabase(path);
   try {
-    await readStudioMyDay(reopened, repo.options, now);
-    await readStudioMyDay(reopened, repo.options, now);
+    await readSyncedMyDay(reopened, repo.options, now);
+    await readSyncedMyDay(reopened, repo.options, now);
     expect(loadBalanceState(reopened)?.log).toHaveLength(1);
   } finally { reopened.close(); }
 });
@@ -178,12 +180,12 @@ test("a committed response before projection recovery earns credit once after re
 test("busy source leaves the saved projection intact and a pre-response refusal is structured", async () => {
   const repo = await repository(); const db = initDatabase(":memory:");
   try {
-    await readStudioMyDay(db, repo.options, now);
+    await readSyncedMyDay(db, repo.options, now);
     const before = loadBalanceState(db);
     const release = await acquireStudioLock(repo.dir);
     if (!release) throw new Error("Missing fixture lock");
     try {
-      const view = await readStudioMyDay(db, repo.options, now);
+      const view = await readSyncedMyDay(db, repo.options, now);
       expect(view.studioStatus).toBe("unavailable"); expect(loadBalanceState(db)).toEqual(before);
       const response = await handleDeskStudioAct(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ act: "respond", thread: "design", text: "A response", requestId: "locked-response-fixture" }) }), { options: repo.options, ledger: new HandledLedger() }, { db });
       expect(response.status).toBe(409);
@@ -204,7 +206,7 @@ test("successful file commit remains successful if post-commit projection is una
     expect(loadBalanceState(db)?.log).toHaveLength(0);
     expect(await readFile(join(repo.dir, "threads/design.md"), "utf8")).toContain("A saved response");
     await rm(held, { recursive: true });
-    await readStudioMyDay(db, repo.options, now); await readStudioMyDay(db, repo.options, now);
+    await readSyncedMyDay(db, repo.options, now); await readSyncedMyDay(db, repo.options, now);
     expect(loadBalanceState(db)?.log).toHaveLength(1);
   } finally { db.close(); }
 });
@@ -232,12 +234,13 @@ test("duplicate owned source UUIDs refuse actual response writes without credit"
   } finally { db.close(); }
 });
 
-test("a successful source projection seeds an empty proposed draft after an unavailable first read", () => {
+test("a successful source sync makes computed picks available after an unavailable first read", () => {
   const db = initDatabase(":memory:");
   try {
     const configured = { ...desk, studio: { dir: "/unavailable-studio", maxActive: 5 } };
     expect(readMyDay(db, configured, now).items).toHaveLength(0);
     const input: StudioProjection = { namespace: "source", threads: [thread()] };
+    syncBalance(db, configured, now, input);
     expect(readMyDay(db, configured, now, input).items).toHaveLength(1);
     const started = changeMyDay({ db, desk, now, date: localDay(now), requestId: crypto.randomUUID(), command: { op: "start", ids: [] }, studio: input });
     expect(started.view.items).toHaveLength(0);
@@ -250,24 +253,26 @@ test("actual unavailable-to-available source fills only an empty proposal and re
   try {
     const release = await acquireStudioLock(repo.dir);
     if (!release) throw new Error("Missing fixture lock");
-    try { const unavailable = await readStudioMyDay(db, repo.options, now); expect(unavailable.studioStatus).toBe("unavailable"); expect(unavailable.items).toHaveLength(0); }
+    try { const unavailable = await readSyncedMyDay(db, repo.options, now); expect(unavailable.studioStatus).toBe("unavailable"); expect(unavailable.items).toHaveLength(0); }
     finally { await release(); }
-    const available = await readStudioMyDay(db, repo.options, now);
+    const available = await readSyncedMyDay(db, repo.options, now);
     expect(available.studioStatus).toBe("synced"); expect(available.items).toHaveLength(1);
     const id = first(available.items).task.id;
     changeMyDay({ db, desk: repo.options, now, date: localDay(now), requestId: crypto.randomUUID(), command: { op: "defer", id } });
     changeMyDay({ db, desk: repo.options, now, date: localDay(now), requestId: crypto.randomUUID(), command: { op: "draft", ids: [] } });
-    expect((await readStudioMyDay(db, repo.options, now)).items).toHaveLength(0);
+    expect((await readSyncedMyDay(db, repo.options, now)).items).toHaveLength(0);
   } finally { db.close(); }
 });
-test("source arrival preserves a nonempty proposed day", () => {
+test("source arrival preserves a person-chosen nonempty proposed day", () => {
   const db = initDatabase(":memory:");
   try {
     const seeded = state();
     first(seeded.outline.children).children.push({ id: "chosen", title: "My chosen task", weight: 50, ordering: "parallel", children: [], effort: 1 });
     saveBalanceState(db, seeded);
     expect(readMyDay(db, desk, now).items.map(i => i.task.id)).toEqual(["chosen"]);
+    changeMyDay({ db, desk, now, date: localDay(now), requestId: crypto.randomUUID(), command: { op: "draft", ids: ["chosen"] } });
     const input: StudioProjection = { namespace: "source", threads: [thread()] };
+    syncBalance(db, desk, now, input);
     expect(readMyDay(db, desk, now, input).items.map(i => i.task.id)).toEqual(["chosen"]);
   } finally { db.close(); }
 });
@@ -285,7 +290,7 @@ test("an unreadable different source does not block parking a healthy thread", a
     expect(response.status).toBe(200);
     const parsed = parseThreadFile("threads/design.md", await readFile(join(repo.dir, "threads/design.md"), "utf8"));
     expect(parsed.ok && parsed.value.state).toBe("parked");
-    expect((await readStudioMyDay(db, repo.options, now)).studioStatus).toBe("unavailable");
+    expect((await readSyncedMyDay(db, repo.options, now)).studioStatus).toBe("unavailable");
     expect(loadBalanceState(db)?.log ?? []).toHaveLength(0);
   } finally { db.close(); }
 });
@@ -296,10 +301,10 @@ test("an explicitly cleared proposed day stays empty with Studio disabled or ena
     const db = initDatabase(":memory:");
     try {
       const seeded = state(); first(seeded.outline.children).children.push({ id: "chosen", title: "My chosen task", weight: 50, ordering: "parallel", children: [], effort: 1 });
-      saveBalanceState(db, seeded); await readStudioMyDay(db, options, now);
+      saveBalanceState(db, seeded); await readSyncedMyDay(db, options, now);
       const cleared = changeMyDay({ db, desk: options, now, date: localDay(now), requestId: crypto.randomUUID(), command: { op: "draft", ids: [] } });
       expect(cleared.view.items).toHaveLength(0);
-      expect((await readStudioMyDay(db, options, now)).items).toHaveLength(0);
+      expect((await readSyncedMyDay(db, options, now)).items).toHaveLength(0);
     } finally { db.close(); }
   }
 });
@@ -309,10 +314,10 @@ test("clearing an unavailable-created draft cancels later automatic recovery", a
   try {
     const release = await acquireStudioLock(repo.dir); if (!release) throw new Error("Missing fixture lock");
     try {
-      expect((await readStudioMyDay(db, repo.options, now)).studioStatus).toBe("unavailable");
+      expect((await readSyncedMyDay(db, repo.options, now)).studioStatus).toBe("unavailable");
       changeMyDay({ db, desk: repo.options, now, date: localDay(now), requestId: crypto.randomUUID(), command: { op: "draft", ids: [] } });
     } finally { await release(); }
-    const recovered = await readStudioMyDay(db, repo.options, now);
+    const recovered = await readSyncedMyDay(db, repo.options, now);
     expect(recovered.studioStatus).toBe("synced"); expect(recovered.items).toHaveLength(0);
   } finally { db.close(); }
 });
@@ -332,11 +337,11 @@ test("an engine Refresh while Studio is unavailable recovers its empty proposal 
   try {
     const release = await acquireStudioLock(repo.dir); if (!release) throw new Error("Missing fixture lock");
     try {
-      await readStudioMyDay(db, repo.options, now);
+      await readSyncedMyDay(db, repo.options, now);
       const response = await handleDeskMyDay(new Request("http://localhost/x", { method: "POST", body: JSON.stringify({ date: localDay(now), requestId: crypto.randomUUID(), command: { op: "propose" } }) }), db, { options: repo.options, ledger: new HandledLedger() }, undefined, now);
       expect(response.status).toBe(200);
     } finally { await release(); }
-    expect((await readStudioMyDay(db, repo.options, now)).items).toHaveLength(1);
+    expect((await readSyncedMyDay(db, repo.options, now)).items).toHaveLength(1);
   } finally { db.close(); }
 });
 
@@ -362,7 +367,7 @@ test("a real same-second Studio response completes its task once", async () => {
     const deps = { db, now: () => new Date("2026-11-01T09:00:00.900Z") };
     expect((await handleDeskStudioAct(request(), runtime, deps)).status).toBe(200);
     expect((await handleDeskStudioAct(request(), runtime, deps)).status).toBe(200);
-    const view = await readStudioMyDay(db, repo.options, now);
+    const view = await readSyncedMyDay(db, repo.options, now);
     expect(view.studioTasks).toHaveLength(0); expect(view.wins).toHaveLength(1);
   } finally { db.close(); }
 });

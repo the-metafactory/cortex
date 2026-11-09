@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type { Database } from "bun:sqlite";
 import type { DeskOptions } from "./compose";
 import { readMyDay } from "./my-day";
+import { syncBalance } from "./balance-sync";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioView } from "./studio/view";
 import { acquireStudioLock } from "./studio/write-lock";
@@ -34,6 +35,15 @@ export function readStudioMyDay(db: Database, desk: DeskOptions, now: number, st
   return withStudioProjection(desk, source => readMyDay(db, desk, now, source), strict);
 }
 
-export function readStudioDesk(db: Database, desk: DeskOptions, now: number) {
-  return withStudioProjection(desk, (source, studio) => ({ myDay: readMyDay(db, desk, now, source), studio }));
+export function withSyncedBalance<T>(db: Database, desk: DeskOptions, now: number, take: (source: StudioProjection | undefined, studio: StudioView | null) => T, strict = false): Promise<T> {
+  return withStudioProjection(desk, (source, studio) => {
+    syncBalance(db, desk, now, source);
+    return take(source, studio);
+  }, strict);
+}
+export function readSyncedMyDay(db: Database, desk: DeskOptions, now: number, strict = false) {
+  return withSyncedBalance(db, desk, now, source => readMyDay(db, desk, now, source), strict);
+}
+export function syncStudioBalance(db: Database, desk: DeskOptions, now: number, strict = false): Promise<void> {
+  return withSyncedBalance(db, desk, now, () => undefined, strict);
 }

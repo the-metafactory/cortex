@@ -48,7 +48,7 @@ describe("a task added in Balance joins Today's priorities", () => {
   it("re-runs the engine proposal when the only person draft belongs to a previous day", () => {
     database().query("INSERT INTO desk_my_day (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(JSON.stringify({ draft: { date: shiftDays(DATE, -1), ids: ["first"], origin: "person" } }));
     const result = change({ op: "add", parent: "area:work", title: "Fresh today", kind: "task" });
-    expect(loadMeta(database()).draft).toMatchObject({ date: DATE, origin: "engine" });
+    expect(loadMeta(database()).draft).toBeNull();
     expect(result.view.items.map(item => item.task.id)).toContain(findNode(result.view.outline, "area:work")?.children.find(node => node.title === "Fresh today")?.id ?? "missing");
   });
 

@@ -12,7 +12,7 @@ import { balanceDetails, type BalanceCommand } from "../desk/balance-command";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose";
 import { localDay, readMyDay, type MyDayView } from "../desk/my-day";
-import { readStudioMyDay } from "../desk/studio-my-day";
+import { syncStudioBalance } from "../desk/studio-my-day";
 import { SourceCache } from "../desk/sources/command";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
@@ -221,6 +221,8 @@ describe("Balance through the real My day owner", () => {
     const file = { op: "outline-file", id: intake.id, parent: "standalone", revision: view().revision };
     const requestId = crypto.randomUUID();
     const dayIds = view().items.map(task => task.task.id);
+    expect((await post({ op: "draft", ids: dayIds })).status).toBe(200);
+    file.revision = view().revision;
     expect((await post(file, requestId)).status).toBe(200);
     expect((await post(file, requestId)).status).toBe(200);
     expect(view().inbox).toHaveLength(0);
@@ -238,12 +240,14 @@ describe("Balance through the real My day owner", () => {
     const text = (question: string) => `---\nstudioId: 120e1a58-09a5-4a1d-8ef2-61ef4e66a0ba\ntype: question\nareas: [work]\nstate: active\nopened: 2026-11-01\n---\n## Question\n${question}\n## Where I stand\nThinking\n## Material\n## Ivy's notes\n## Log\n`;
     await writeFile(join(dir, "threads/sketch.md"), text("Which sketch?"));
     runtime = { ...runtime, options: { ...desk, studio: { dir, maxActive: 5 } } };
-    const first = await readStudioMyDay(db, runtime.options, NOW);
+    await syncStudioBalance(db, runtime.options, NOW);
+    const first = readMyDay(db, runtime.options, NOW);
     const project = first.outline.children[0]?.children.find(node => node.id.startsWith("studio-thread:"));
     if (!project) throw new Error("Missing Studio project");
     await writeFile(join(dir, "threads/sketch.md"), text("Which smaller sketch?"));
     expect((await post(edit(first, "first", { note: "Stale source snapshot" }))).status).toBe(409);
-    const current = await readStudioMyDay(db, runtime.options, NOW);
+    await syncStudioBalance(db, runtime.options, NOW);
+    const current = readMyDay(db, runtime.options, NOW);
     expect(current.revision).toBeGreaterThan(first.revision);
     expect((await post(edit(current, project.id, { title: "Forged source title" }))).status).toBe(409);
     for (const command of [

@@ -10,6 +10,7 @@ import { createElement } from "react";
 import { initDatabase } from "../db/init";
 import { DEFAULT_SETTINGS, findNode, selectToday, type AppState } from "../../../balance";
 import { saveBalanceState, loadBalanceState } from "../desk/balance-store";
+import { syncBalance } from "../desk/balance-sync";
 import { changeMyDay, readMyDay, movedKeys, sourceIdentity, localDay } from "../desk/my-day";
 import { MyDayLane } from "../dashboard-v2/components/desk-my-day";
 import { SettingsBody } from "../dashboard-v2/components/desk-settings";
@@ -196,6 +197,7 @@ describe("My day lane and day contract", () => {
     expect(findNode(loadBalanceState(db)?.outline ?? state.outline, task.id)?.repeat?.timesDone).toBe(1);
     expect(readMyDay(db, desk, NOW).items.map(i => i.task.id)).not.toContain(task.id);
     const tomorrow = NOW + 86400000;
+    syncBalance(db, desk, tomorrow);
     const next = readMyDay(db, desk, tomorrow);
     expect(next.items.map(i => i.task.id)).toContain(task.id);
     change({ op: "start", ids: [task.id] }, crypto.randomUUID(), { now: tomorrow, date: localDay(tomorrow) });

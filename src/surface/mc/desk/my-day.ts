@@ -4,44 +4,19 @@ import { sourceIdentity, todo } from "./source-task";
 export { sourceIdentity } from "./source-task";
 import { balanceParents } from "./balance-parent";
 import { planSource, unplanSource } from "./source-plan";
-import { projectStudio, studioLinks, studioOwned, type StudioProjection } from "./studio-outline";
+import { studioLinks, studioOwned, type StudioProjection } from "./studio-outline";
 import { DEFAULT_YES_FILTER } from "./yes-filter";
 import { applyBalanceCommand, completeOutlineLeaf, fileBalanceInbox, outlineDestination, setOutlineFocus } from "./balance-outline";
 import type { Database } from "bun:sqlite";
-import { DEFAULT_SETTINGS, applyDayToHistory, applyRecurrence, collectLeaves, findNode, rankAll, selectToday, shiftDays, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
-import { loadBalanceState, saveBalanceState } from "./balance-store";
-import { MyDayMetaSchema, type MyDayCommand, type MyDayMeta } from "./my-day-schema";
+import { applyDayToHistory, findNode, rankAll, selectToday, shiftDays, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
+import { saveBalanceState } from "./balance-store";
+import type { MyDayCommand, MyDayMeta } from "./my-day-schema";
 import { addToToday, joinToday, liveDayUndo, removeFromToday, undoToday, type TodayContext } from "./my-day-today";
 import type { DeskOptions } from "./compose";
 import type { DeskItem } from "./types";
+import { configuredState, isPersonDraft, loadMeta, loadMyDayState, retireStaleDraft, saveMeta, todayCap } from "./balance-sync";
+export { loadMeta } from "./balance-sync";
 
-const ROOT_ID = "desk:outline";
-export function loadMeta(db: Database): MyDayMeta {
-  const row = db.query<{ data: string }, []>("SELECT data FROM desk_my_day WHERE id = 1").get();
-  return MyDayMetaSchema.parse(row ? JSON.parse(row.data) : {});
-}
-function saveMeta(db: Database, meta: MyDayMeta): void {
-  db.query("INSERT INTO desk_my_day (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data").run(JSON.stringify(meta));
-}
-function initial(desk: DeskOptions): AppState {
-  return { outline: { id: ROOT_ID, title: "Outline", weight: 100, ordering: "parallel", children: [
-    ...desk.areas.map(a => ({ id: `area:${a.id}`, title: a.label, weight: 50, ordering: "parallel" as const, children: [] })),
-  ] }, log: [], settings: { ...DEFAULT_SETTINGS, todayCap: desk.myDay?.cap ?? 5 }, dayState: null, history: { deficits: {}, lastSurfaced: {} } };
-}
-function stateFor(db: Database, desk: DeskOptions, date: string, meta: MyDayMeta, studio?: StudioProjection): AppState {
-  const state = loadBalanceState(db) ?? initial(desk);
-  const before = JSON.stringify([state.outline, state.log, meta.studio]);
-  for (const area of desk.areas) {
-    const existing = findNode(state.outline, `area:${area.id}`);
-    if (existing) existing.title = area.label;
-    else state.outline.children.push({ id: `area:${area.id}`, title: area.label, weight: 50, ordering: "parallel", children: [] });
-  }
-  if (studio) projectStudio(state, meta, studio);
-  const completedToday = new Set(state.log.filter(event => event.date === date).map(event => event.taskId));
-  for (const task of collectLeaves(state.outline)) if (!completedToday.has(task.id)) applyRecurrence(task, date);
-  if (JSON.stringify([state.outline, state.log, meta.studio]) !== before) meta.revision += 1;
-  return state;
-}
 export interface MyDayView {
   work: {
     confirmedIds: string[];
@@ -67,18 +42,11 @@ export interface MyDayView {
   undos: { receipt: string; title: string }[];
   dayUndo: { receipt: string; text: string } | null;
 }
-function configuredState(state: AppState, desk: DeskOptions): AppState {
-  const ids = new Set(desk.areas.map(a => `area:${a.id}`));
-  return { ...state, outline: { ...state.outline, children: state.outline.children.filter(n => ids.has(n.id)) } };
-}
-function engineDraft(state: AppState, desk: DeskOptions, date: string, studio?: StudioProjection): NonNullable<MyDayMeta["draft"]> {
-  return { date, ids: selectToday(configuredState(state, desk), date).map(i => i.task.id), origin: desk.studio && !studio ? "studio-unavailable" : "engine" };
-}
 function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, studio?: StudioProjection): MyDayView {
   const state = configuredState(storedState, desk);
   const day = state.dayState?.date === date ? state.dayState : null;
   const all = rankAll(state, date);
-  const ids = day?.confirmed ?? (meta.draft?.date === date ? meta.draft.ids : selectToday(state, date).map(i => i.task.id));
+  const ids = day?.confirmed ?? (isPersonDraft(meta, date) ? meta.draft.ids : selectToday(state, date).map(i => i.task.id));
   const visibleIds = day ? ids : ids.slice(0, state.settings.todayCap);
   const byId = new Map(all.map(i => [i.task.id, i]));
   const selected = meta.selection?.date === date ? meta.selection : null;
@@ -105,15 +73,9 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
 }
 export function readMyDay(db: Database, desk: DeskOptions, now: number, studio?: StudioProjection): MyDayView {
   return db.transaction(() => {
-    const date = localDay(now);
     const meta = loadMeta(db);
-    const state = stateFor(db, desk, date, meta, studio);
-    state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
-    if (state.dayState?.date !== date && (meta.draft?.date !== date || (studio?.namespace && meta.draft.origin === "studio-unavailable" && !meta.draft.ids.length))) meta.draft = engineDraft(state, desk, date, studio);
-    saveMeta(db, meta);
-    saveBalanceState(db, state);
-    return viewOf(state, meta, desk, date, studio);
-  }).immediate();
+    return viewOf(loadMyDayState(db, desk, meta), meta, desk, localDay(now), studio);
+  }).deferred();
 }
 export function movedKeys(db: Database): Set<string> {
   return new Set(loadMeta(db).sources.map(s => s.fingerprint));
@@ -141,8 +103,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
   const { db, desk, now, date, requestId, command, source, studio } = args;
   return db.transaction(() => {
     const meta = loadMeta(db);
-    const state = stateFor(db, desk, localDay(now), meta, studio);
-    state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
+    const state = loadMyDayState(db, desk, meta);
     const payload = JSON.stringify({ date, command });
     const receipt = meta.receipts.find(r => r.id === requestId);
     if (receipt) {
@@ -153,7 +114,6 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
       return { view: viewOf(state, meta, desk, localDay(now), studio), ...(receipt.undo ? { undo: receipt.undo } : {}), ...(receipt.outlineId ? { outlineId: receipt.outlineId } : {}), ...(receipt.notice ? { notice: receipt.notice } : {}), ...(receipt.location ? { location: receipt.location } : {}) };
     }
     if (date !== localDay(now)) throw new Error("The date changed. Refresh the Desk before changing your day.");
-    state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
     let undo: string | undefined;
     let outlineBefore: TodayItem[] | undefined;
     let outlineId: string | undefined;
@@ -181,7 +141,6 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         break;
       }
       case "source-plan":
-        if (state.dayState?.date !== date && meta.draft?.date !== date) meta.draft = engineDraft(state, desk, date, studio);
         location = command.parent === null ? "Inbox" : balanceParents({ outline: state.outline }, desk.areas).find(p => p.id === command.parent)?.path;
         if (!location) throw new Error("Choose a currently configured area or open project. Your plan is kept.");
         outlineId = planSource({ state, meta, desk, command, source, requestId, date });
@@ -196,7 +155,6 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
       case "outline-complete":
       case "outline-reopen":
       case "outline-remove": {
-        if (state.dayState?.date !== date && meta.draft?.date !== date) meta.draft = engineDraft(state, desk, date, studio);
         outlineBefore = viewOf(state, meta, desk, date, studio).items;
         outlineId = applyBalanceCommand(state, meta, desk, date, command);
         const outlineAfter = viewOf(state, meta, desk, date, studio).items;
@@ -275,7 +233,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
       }
       case "propose":
         if (state.dayState?.date === date) throw new Error("Your day is already started.");
-        meta.draft = engineDraft(state, desk, date, studio);
+        meta.draft = null;
         break;
       case "reset-caps":
         meta.caps = null;
@@ -288,7 +246,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         if (meta.draft?.date === date && state.dayState?.date !== date) meta.draft.ids = meta.draft.ids.slice(0, command.cap);
         break;
       case "topN":
-        meta.caps = { cap: meta.caps?.cap ?? desk.myDay?.cap ?? 5, topN: command.topN };
+        meta.caps = { cap: todayCap(meta, desk), topN: command.topN };
         break;
       case "file": {
         fileBalanceInbox(state, meta, desk, command.id, command.parent);
@@ -307,18 +265,17 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         edit(state, command, date);
         break;
     }
-    if (joined && state.dayState?.date !== date && !(meta.draft?.date === date && meta.draft.origin === "person")) {
-      meta.draft = engineDraft(state, desk, date, studio);
-      if (meta.draft.ids.slice(0, state.settings.todayCap).includes(joined)) todayNotice = `Added ${requiredNode(state, joined).title} to today's proposal.`;
+    if (joined && state.dayState?.date !== date && !isPersonDraft(meta, date)) {
+      if (selectToday(configuredState(state, desk), date).some(item => item.task.id === joined)) todayNotice = `Added ${requiredNode(state, joined).title} to today's proposal.`;
     } else if (joined) {
       const outcome = joinToday(today(), dayIds(), joined, state.settings.todayCap);
       todayNotice = outcome.notice;
       undo = outcome.undo;
     }
-    if ((command.op === "add" || command.op === "file") && !joined && !meta.draft?.ids.length && state.dayState?.date !== date) meta.draft = engineDraft(state, desk, date, studio);
+    retireStaleDraft(meta, date);
     meta.revision += 1;
     const view = viewOf(state, meta, desk, date, studio);
-    const notice = [unavailable.length ? `${unavailable.join(", ")} ${unavailable.length === 1 ? "is" : "are"} no longer actionable in today's list. The remaining choices keep their order; no replacement was added.` : undefined, todayNotice].filter(Boolean).join(" ") || undefined;
+    const notice = [unavailable.length ? `${unavailable.join(", ")} ${unavailable.length === 1 ? "is" : "are"} no longer actionable in today's list.` : undefined, todayNotice].filter(Boolean).join(" ") || undefined;
     meta.receipts.push({ id: requestId, payload, ...(location ? { location } : {}), ...(undo ? { undo } : {}), ...(outlineId ? { outlineId } : {}), ...(notice ? { notice } : {}) });
     saveBalanceState(db, state);
     saveMeta(db, meta);

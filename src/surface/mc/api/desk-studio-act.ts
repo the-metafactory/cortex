@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite";
-import { readStudioMyDay } from "../desk/studio-my-day";
+import { syncStudioBalance } from "../desk/studio-my-day";
 import type { RangerRunner } from "../desk/actions";
 import { readStudioFiles } from "../desk/studio/read";
 import { buildStudioView } from "../desk/studio/view";
@@ -39,7 +39,7 @@ export async function handleDeskStudioAct(req: Request, runtime: DeskRuntime | u
     return answer(200, { ...result, studio: await withThinking(studio, desk.studio.dir, desk.rangerCli, deps.run) });
   }
   try {
-    if (deps.db && parsed.data.act === "respond") await readStudioMyDay(deps.db, desk, deps.now?.().getTime() ?? Date.now(), true);
+    if (deps.db && parsed.data.act === "respond") await syncStudioBalance(deps.db, desk, deps.now?.().getTime() ?? Date.now(), true);
   } catch {
     return fail(409, "Studio is busy or unreadable. Nothing was written; retry when its files are ready.");
   }
@@ -54,7 +54,7 @@ export async function handleDeskStudioAct(req: Request, runtime: DeskRuntime | u
   });
   if (!result.ok) return fail(result.status, result.error, result.needsPark ? { needsPark: true } : {});
   try {
-    if (deps.db) await readStudioMyDay(deps.db, desk, deps.now?.().getTime() ?? Date.now());
+    if (deps.db) await syncStudioBalance(deps.db, desk, deps.now?.().getTime() ?? Date.now());
   } catch {
     return answer(200, { ...result, projection: "pending", studio: result.studio });
   }
