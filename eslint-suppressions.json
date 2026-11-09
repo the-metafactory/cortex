@@ -534,11 +534,6 @@
       "count": 34
     }
   },
-  "src/adapters/plugin-signing.ts": {
-    "cortex/no-comments": {
-      "count": 34
-    }
-  },
   "src/adapters/plugin-support.ts": {
     "cortex/no-comments": {
       "count": 15
@@ -2804,6 +2799,11 @@
   "src/common/registry/admission-state.ts": {
     "cortex/no-comments": {
       "count": 30
+    }
+  },
+  "src/common/registry/bundle-signature.ts": {
+    "cortex/no-comments": {
+      "count": 34
     }
   },
   "src/common/registry/canonical-json.ts": {

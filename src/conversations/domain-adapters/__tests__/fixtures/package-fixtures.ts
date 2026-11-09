@@ -4,9 +4,10 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { sha256Bytes } from "../../common/registry/arc-package-inventory";
-import type { ArcPackage } from "../../common/types/plugin-manifest";
-import { DeskGenerationStore } from "./package-generation";
+import { sha256Bytes } from "../../../../common/registry/arc-package-inventory";
+import type { ArcPackage } from "../../../../common/types/plugin-manifest";
+import type { DeskAdapterApproval, DeskPackageCandidate } from "../../package";
+import { DeskGenerationStore } from "../../package-generation";
 
 export const DESK_FIXTURE_ORIGIN = "https://github.com/example/desk-balance";
 export const DESK_FIXTURE_ADAPTER = "balance";
@@ -197,6 +198,13 @@ export const deskFixtureArcPackage = (installPath: string, overrides: Partial<Ar
 });
 
 export const deskFixtureRunner = (packages: ArcPackage[]) => () => Promise.resolve({ stdout: JSON.stringify({ packages }), stderr: "", exitCode: 0 });
+
+export const approvalOf = (candidate: Pick<DeskPackageCandidate, "packageId" | "origin" | "packageVersion" | "releaseDigest">): DeskAdapterApproval => ({
+  packageId: candidate.packageId,
+  origin: candidate.origin,
+  packageVersion: candidate.packageVersion,
+  releaseDigest: candidate.releaseDigest,
+});
 
 export async function openDeskFixtureStore(dir: string): Promise<{ engine: Harness; store: DeskGenerationStore }> {
   mkdirSync(dir, { recursive: true });

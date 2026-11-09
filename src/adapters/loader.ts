@@ -92,7 +92,7 @@ import {
   PLUGIN_TRUST_ROOT,
   verifyBundleSignature,
   type PluginSigningPosture,
-} from "./plugin-signing";
+} from "../common/registry/bundle-signature";
 
 export type { ArcListRunner, ArcListRunResult } from "../common/registry/arc-package-inventory";
 
@@ -774,7 +774,7 @@ export interface LoadPluginsOptions {
    * ever read for a signature file. `"permissive"` verifies and logs but
    * never refuses; `"enforce"` refuses any bundle whose signature is
    * missing, malformed, tampered, or signed outside the trust root. See
-   * `src/adapters/plugin-signing.ts` module doc for the full design.
+   * `src/common/registry/bundle-signature.ts` module doc for the full design.
    */
   pluginSigning?: PluginSigningPosture;
   /**
@@ -840,7 +840,7 @@ export async function loadExternalPlugins(
     // rather than buried in per-bundle stderr noise.
     process.stderr.write(
       `cortex plugin-loader: system.plugins.signing="${pluginSigning}" but the plugin trust root ` +
-        `is EMPTY — no bundle can verify. See src/adapters/plugin-signing.ts PLUGIN_TRUST_ROOT ` +
+        `is EMPTY — no bundle can verify. See src/common/registry/bundle-signature.ts PLUGIN_TRUST_ROOT ` +
         `(populating it is a deliberate open decision, not yet made — see that module's doc).\n`,
     );
   }
@@ -1209,7 +1209,7 @@ export type ReimportRendererResult =
  * refuses, `enforce` refuses and the tampered code is never imported).
  * `pluginSigning` is a REQUIRED param (no default) precisely so a caller
  * cannot silently omit it the way this call site silently omitted
- * verification entirely before this fix — see `src/adapters/plugin-signing.ts`'s
+ * verification entirely before this fix — see `src/common/registry/bundle-signature.ts`'s
  * module doc "Coverage" section for the full audit of both `import()` call
  * sites.
  *

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { DeskPackageLoader } from "../src/conversations/domain-adapters/package";
 import {
+  approvalOf,
   deskFixtureArcPackage,
   deskFixtureBackend,
   deskFixtureCalls,
@@ -13,7 +14,7 @@ import {
   deskFixtureRunner,
   openDeskFixtureStore,
   writeDeskFixturePackage,
-} from "../src/conversations/domain-adapters/package-fixtures";
+} from "../src/conversations/domain-adapters/__tests__/fixtures/package-fixtures";
 
 const failures: string[] = [];
 const check = (condition: boolean, label: string): void => {
@@ -47,7 +48,7 @@ try {
   const loader = new DeskPackageLoader({
     ...base,
     store,
-    approvals: [{ packageId: installed.packageId, origin: installed.origin, packageVersion: installed.packageVersion, releaseDigest: installed.releaseDigest }],
+    approvals: [approvalOf(installed)],
   });
 
   const calls = deskFixtureCalls();

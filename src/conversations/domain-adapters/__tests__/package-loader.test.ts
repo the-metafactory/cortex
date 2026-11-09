@@ -6,6 +6,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   DESK_FIXTURE_ADAPTER,
   DESK_FIXTURE_ORIGIN,
+  approvalOf,
   deskFixtureArcPackage,
   deskFixtureBackend,
   deskFixtureCalls,
@@ -17,11 +18,26 @@ import {
   deskFixtureSetup,
   openDeskFixtureStore,
   writeDeskFixturePackage,
-} from "../package-fixtures";
+} from "./fixtures/package-fixtures";
 import { DeskPackageLoader, type DeskAdapterApproval, type DeskPackageLoaderOptions } from "../package";
 import { DeskGenerationStore } from "../package-generation";
 
 const schemaRef = (schemaId: string) => ({ schemaId, version: "1.0.0" });
+
+interface FixtureDeclaration {
+  schemas: { schemaId: string; version: string; schema: Record<string, unknown> }[];
+  objectTypes: { schemaRef: { schemaId: string; version: string } }[];
+}
+
+const sharedObjectSchema = (adapterId: string, schemaId: string, properties: Record<string, unknown>): FixtureDeclaration => {
+  const declaration = structuredClone(deskFixtureDeclaration(adapterId)) as unknown as FixtureDeclaration;
+  const object = declaration.objectTypes[0];
+  if (object) object.schemaRef = { schemaId, version: "1.0.0" };
+  declaration.schemas = declaration.schemas.map(schema => schema.schemaId === `${adapterId}.task`
+    ? { schemaId, version: "1.0.0", schema: { type: "object", additionalProperties: false, required: ["title"], properties } }
+    : schema);
+  return declaration;
+};
 const roots: string[] = [];
 const engines: { close(context: typeof BACKGROUND_CONTEXT): Promise<void> }[] = [];
 
@@ -37,6 +53,11 @@ afterEach(async () => {
 });
 
 const approvalUnit = (adapterId = DESK_FIXTURE_ADAPTER): DeskAdapterApproval => ({ packageId: deskFixturePackageId(adapterId), origin: DESK_FIXTURE_ORIGIN, packageVersion: "1.0.0", releaseDigest: "0".repeat(64) });
+
+const misplacedHandlerPackage = (root: string) => writeDeskFixturePackage(join(root, "a-broken"), {
+  adapterId: "a-broken",
+  backendSource: deskFixtureBackend(deskFixtureDeclaration("a-broken"), { misplacedHandler: true }),
+});
 
 async function openStore(): Promise<{ store: DeskGenerationStore; dir: string }> {
   const dir = tempDir("store");
@@ -69,7 +90,7 @@ async function approvalFor(options: DeskPackageLoaderOptions, adapterId = DESK_F
   const discovery = await loaderFor(options).discover();
   const candidate = discovery.candidates.find(item => item.adapterId === adapterId);
   if (!candidate) throw new Error(`fixture package ${adapterId} was not discovered: ${JSON.stringify(discovery.issues)}`);
-  return { packageId: candidate.packageId, origin: candidate.origin, packageVersion: candidate.packageVersion, releaseDigest: candidate.releaseDigest };
+  return approvalOf(candidate);
 }
 
 describe("Desk adapter package discovery", () => {
@@ -231,7 +252,7 @@ describe("Desk adapter package discovery", () => {
     const loader = loaderFor({
       ...base,
       store,
-      approvals: [{ packageId: approvedRelease.packageId, origin: approvedRelease.origin, packageVersion: approvedRelease.packageVersion, releaseDigest: approvedRelease.releaseDigest }],
+      approvals: [approvalOf(approvedRelease)],
     });
     const activation = await loader.activate(approvedRelease.packageId);
     expect(activation.ok).toBe(true);
@@ -266,7 +287,7 @@ describe("Desk adapter package discovery", () => {
     expect(discovery.candidates.every(candidate => candidate.trust.state === "untrusted")).toBe(true);
     for (const adapterId of ["dependent", "target"]) expect((await loaderFor(base).install(deskFixturePackageId(adapterId))).ok).toBe(true);
     const approvals: DeskAdapterApproval[] = discovery.candidates.flatMap(candidate => candidate.trust.state === "untrusted"
-      ? [{ packageId: candidate.packageId, origin: candidate.origin, packageVersion: candidate.packageVersion, releaseDigest: candidate.releaseDigest }]
+      ? [approvalOf(candidate)]
       : []);
     const { store } = await openStore();
     const loader = loaderFor({ ...base, store, approvals });
@@ -430,10 +451,7 @@ describe("Desk adapter generation publication", () => {
 
   test("at a managed restart a dependent adapter still publishes after an unrelated composition failure", async () => {
     const root = tempDir("bundled");
-    const broken = writeDeskFixturePackage(join(root, "a-broken"), {
-      adapterId: "a-broken",
-      backendSource: deskFixtureBackend(deskFixtureDeclaration("a-broken"), { misplacedHandler: true }),
-    });
+    const broken = misplacedHandlerPackage(root);
     const dependent = writeDeskFixturePackage(join(root, "dependent"), { adapterId: "dependent", declaration: deskFixtureDeclaration("dependent", { relationship: { targetAdapterId: "target" } }) });
     const target = writeDeskFixturePackage(join(root, "target"), { adapterId: "target" });
     const { store } = await openStore();
@@ -445,6 +463,37 @@ describe("Desk adapter generation publication", () => {
     expect(loader.diagnostics().some(issue => issue.packageId === deskFixturePackageId("a-broken"))).toBe(true);
     expect(loader.capability("dependent.task.query").support).toBe("declared");
     expect(loader.capability("a-broken.task.query").support).toBe("unsupported");
+  });
+
+  test("at a managed restart an adapter that targets its own object type still publishes", async () => {
+    const root = tempDir("bundled");
+    const broken = misplacedHandlerPackage(root);
+    const self = writeDeskFixturePackage(join(root, "self"), { adapterId: "self", declaration: deskFixtureDeclaration("self", { relationship: { targetAdapterId: "self" } }) });
+    const { store } = await openStore();
+    const loader = loaderFor({ bundledPackages: [broken.dir, self.dir], store });
+    await loader.boot();
+    expect(loader.catalog().map(entry => entry.generation.adapterId)).toEqual(["self"]);
+    expect(loader.admission("self")).toEqual({ state: "available" });
+    expect(loader.admission("a-broken").state).toBe("unavailable");
+  });
+
+  test("an unapproved package's registration conflict does not make an approved package unavailable", async () => {
+    const installedRoot = tempDir("arc");
+    const rogue = writeDeskFixturePackage(join(installedRoot, "rogue"), { adapterId: "rogue", declaration: sharedObjectSchema("rogue", "shared.task", { title: { type: "string", minLength: 1 } }) });
+    const good = writeDeskFixturePackage(join(installedRoot, "good"), { adapterId: "good", declaration: sharedObjectSchema("good", "shared.task", { title: { type: "string", minLength: 2 }, owner: { type: "string" } }) });
+    const base: DeskPackageLoaderOptions = {
+      installedRoots: [installedRoot],
+      runner: deskFixtureRunner([deskFixtureArcPackage(rogue.dir, { name: "desk-a-rogue" }), deskFixtureArcPackage(good.dir, { name: "desk-b-good" })]),
+    };
+    const provisional = await loaderFor(base).discover();
+    const approvedRelease = provisional.candidates.find(candidate => candidate.adapterId === "good");
+    if (!approvedRelease) throw new Error(`the approved fixture was not discovered: ${JSON.stringify(provisional.issues)}`);
+    const loader = loaderFor({ ...base, approvals: [approvalOf(approvedRelease)] });
+    const discovery = await loader.discover();
+    expect(discovery.candidates.find(candidate => candidate.adapterId === "good")?.trust).toEqual({ state: "trusted", basis: "principal" });
+    expect(discovery.candidates.find(candidate => candidate.adapterId === "good")?.state).toEqual({ state: "installable" });
+    expect(discovery.candidates.find(candidate => candidate.adapterId === "rogue")?.trust.state).toBe("untrusted");
+    expect((await loader.install(deskFixturePackageId("good"))).ok).toBe(true);
   });
 
   test("at a managed restart a dependent of a module that never loads is fenced as a missing dependency", async () => {

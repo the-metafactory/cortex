@@ -4,8 +4,8 @@ import { satisfies, validRange } from "semver";
 import { z } from "zod";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { verifyBundleSignature, type PluginSigningPosture } from "../../adapters/plugin-signing";
 import { errorText } from "../../common/error-text";
+import { verifyBundleSignature, type PluginSigningPosture } from "../../common/registry/bundle-signature";
 import { canonicalJSON } from "../../common/registry/canonical-json";
 import { containedRealPath, defaultArcListRunner, readArcPackageInventory, sha256Bytes, sha256FileAsync, type ArcListRunner } from "../../common/registry/arc-package-inventory";
 import type { ArcPackage } from "../../common/types/plugin-manifest";
@@ -379,13 +379,23 @@ interface StagedRegistry {
 
 const registrationConflict: BoundaryError = { code: "publication_rejected", message: "Adapter declarations cannot be registered together; a relationship target or identity conflicts." };
 
-async function settle<T>(items: readonly T[], attempt: (item: T) => Result<unknown> | Promise<Result<unknown>>): Promise<ReadonlyMap<T, BoundaryError>> {
+interface Settlement<T> {
+  readonly failures: ReadonlyMap<T, BoundaryError>;
+  readonly pending: readonly T[];
+}
+
+async function settle<T>(
+  items: readonly T[],
+  attempt: (item: T) => Result<unknown> | Promise<Result<unknown>>,
+  ready: (item: T) => boolean = () => true,
+): Promise<Settlement<T>> {
   const pending = [...items];
   const failures = new Map<T, BoundaryError>();
   let progress = true;
   while (pending.length > 0 && progress) {
     progress = false;
     for (const item of [...pending]) {
+      if (!ready(item)) continue;
       const result = await attempt(item);
       if (!result.ok) {
         failures.set(item, result.error);
@@ -396,12 +406,12 @@ async function settle<T>(items: readonly T[], attempt: (item: T) => Result<unkno
       progress = true;
     }
   }
-  return failures;
+  return { failures, pending };
 }
 
 async function stageRegistry(entries: readonly StageEntry[]): Promise<StagedRegistry> {
   const registry = new DomainAdapterRegistry();
-  const failures = new Map(await settle(entries, entry => registry.register(entry.declaration, entry.bindings)));
+  const failures = new Map((await settle(entries, entry => registry.register(entry.declaration, entry.bindings))).failures);
   const drafting = new DraftingBindings(registry);
   for (const entry of entries) {
     if (failures.has(entry)) continue;
@@ -655,8 +665,13 @@ export class DeskPackageLoader {
   private async settleInstallable(entries: readonly StageEntry[]): Promise<void> {
     const staged = await stageRegistry(entries);
     for (const [entry] of staged.failures) {
-      const backdrop = entries.filter(other => other !== entry && other.candidate.packageId !== entry.candidate.packageId && other.adapterId !== entry.adapterId);
-      const alone = (await stageRegistry([...backdrop, entry])).failures.get(entry);
+      const backdrop = entries.filter(other => other === entry || (
+        !staged.failures.has(other)
+        && other.candidate.packageId !== entry.candidate.packageId
+        && other.adapterId !== entry.adapterId
+        && (entry.candidate.trust.state !== "trusted" || other.candidate.trust.state === "trusted")
+      ));
+      const alone = (await stageRegistry(backdrop)).failures.get(entry);
       if (alone) this.issue(entry.candidate, alone.code, alone.message);
     }
   }
@@ -806,20 +821,18 @@ export class DeskPackageLoader {
   }
 
   private async publishByDependency(prepared: readonly PublishedAdapter[]): Promise<void> {
-    const waiting = [...prepared];
-    const missing = (adapter: PublishedAdapter): string[] => relationshipTargets(adapter.definition.declaration).filter(target => !this.state.published.has(target));
-    let progressed = true;
-    while (waiting.length > 0 && progressed) {
-      progressed = false;
-      for (const adapter of [...waiting]) {
-        if (missing(adapter).length > 0) continue;
-        waiting.splice(waiting.indexOf(adapter), 1);
-        const published = await this.publishPrepared([adapter]);
-        if (!published.ok) this.failed(adapter.candidate, published.error);
-        progressed = true;
-      }
-    }
-    for (const adapter of waiting) {
+    const missing = (adapter: PublishedAdapter): string[] => relationshipTargets(adapter.definition.declaration)
+      .filter(target => target !== adapter.adapterId && !this.state.published.has(target));
+    const settled = await settle(
+      prepared,
+      adapter => this.publishPrepared([adapter]),
+      adapter => missing(adapter).length === 0,
+    );
+    for (const [adapter, error] of settled.failures) this.failed(adapter.candidate, error);
+    const held = settled.pending.filter(adapter => !settled.failures.has(adapter));
+    if (held.length === 0) return;
+    if ((await this.publishPrepared(held)).ok) return;
+    for (const adapter of held) {
       this.failed(adapter.candidate, { code: "dependency_unavailable", message: `A relationship target adapter did not publish, so this adapter stays unavailable: ${missing(adapter).join(", ")}.` });
     }
   }
