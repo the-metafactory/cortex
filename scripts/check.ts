@@ -9,7 +9,7 @@ export const GATES: Gate[] = [
   { name: "duplication", steps: [["bun", "scripts/check-duplication.ts"]] },
   { name: "typecheck", steps: [["bunx", "tsc", "--noEmit"]] },
   { name: "vocab", steps: [["bash", "scripts/check-carveouts.sh"], ["bun", "scripts/check-wire-vocab.ts"]] },
-  { name: "sdk", steps: [["bun", "run", "sdk:dts:check"], ["bun", "scripts/check-release-pins.ts"]] },
+  { name: "sdk", steps: [["bun", "run", "sdk:dts:check"], ["bun", "scripts/check-release-pins.ts"], ["bun", "scripts/check-desk-sdk.ts"]] },
   { name: "shippable", steps: [["bun", "scripts/check-shippable-hygiene.ts"]] },
   { name: "xdg", steps: [["bun", "scripts/xdg-audit.ts", "--repos", "."]] },
   { name: "test", steps: [["bun", "scripts/build-desk-wake.ts"], ["bun", "scripts/desk-wake/probe-build-cache.ts"], ["bun", "run", "test", "--parallel"]] },

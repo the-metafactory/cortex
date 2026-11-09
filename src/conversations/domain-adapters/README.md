@@ -20,7 +20,23 @@ Run the standalone boundary demonstration with:
 bun scripts/probe-desk-adapter-registry.ts
 ```
 
-It prints discovery, an invalid title with `/title`, a pinned-version mismatch and zero owner calls. Live connections, owner mutations, operation receipts/lifecycle, package loading, conversation drafting and UI hosting remain separate slices.
+It prints discovery, an invalid title with `/title`, a pinned-version mismatch and zero owner calls. Live connections, owner mutations, operation receipts/lifecycle, conversation drafting and UI hosting remain separate slices.
+
+## Desk adapter packages and SDK
+
+`package.ts` is the strict `desk-adapter-package/1` loader for bundled defaults and installed arc packages. It validates the closed manifest, the setup descriptor, the independent SDK/domain/drafting/UI versions, immutable schema refs, contained `.mjs` bundles, optional asset digests, read and drafting bindings and duplicate identities before importing anything. `install` reports a verified release digest without importing; `activate` imports `createDeskAdapter(host)`, compares the returned declaration to the manifest, requires one connector per action capability and swaps a complete registry snapshot atomically. The durable `package-generation.ts` store keeps the active and last-valid generation and returns `upgrade_required` instead of downconverting stored evidence.
+
+Installed packages need a principal approval for their exact origin, version and release digest. Bundled defaults need none. The loader reuses the configured surface-plugin signing posture and adds no allowlist, flag or exemption. Backend code is trusted in-process code, not a sandbox.
+
+The separately versioned Desk adapter SDK 1.0.0 is `src/desk-sdk/index.ts`; `SURFACE_SDK_VERSION` is unchanged. The authoring contract and manifest example are in `docs/desk-adapter-sdk.md`. The `.d.ts` artifact and its version/declaration gate are `src/desk-sdk/generated/desk-sdk.d.ts` and `scripts/check-desk-sdk.ts`.
+
+Run the standalone package demonstration with:
+
+```sh
+bun scripts/probe-desk-adapter-packages.ts
+```
+
+It uses temporary package roots, a fake arc inventory and a real temporary host store. It performs no real arc install, no service restart and no provider mutation.
 
 ## Inactive writer cutover
 

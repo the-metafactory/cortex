@@ -13,6 +13,10 @@
       "types": "./src/surface-sdk/generated/surface-sdk.d.ts",
       "default": "./src/surface-sdk/index.ts"
     },
+    "./desk-sdk": {
+      "types": "./src/desk-sdk/generated/desk-sdk.d.ts",
+      "default": "./src/desk-sdk/index.ts"
+    },
     "./bus": {
       "types": "./src/bus/index.ts",
       "default": "./src/bus/index.ts"
@@ -35,7 +39,9 @@
     "lint:errors": "bun eslint/suppressions-guard.ts && bun --bun eslint --quiet .",
     "lint:fix": "bun --bun eslint --fix .",
     "sdk:dts": "bun scripts/gen-surface-sdk-dts.ts",
-    "sdk:dts:check": "bun scripts/gen-surface-sdk-dts.ts --check"
+    "sdk:dts:check": "bun scripts/gen-surface-sdk-dts.ts --check",
+    "desk:dts": "bun scripts/gen-desk-sdk-dts.ts",
+    "desk:dts:check": "bun scripts/gen-desk-sdk-dts.ts --check"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

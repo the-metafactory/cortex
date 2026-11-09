@@ -523,7 +523,7 @@
   },
   "src/adapters/loader.ts": {
     "cortex/no-comments": {
-      "count": 230
+      "count": 224
     }
   },
   "src/adapters/mock.ts": {

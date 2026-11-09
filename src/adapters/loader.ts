@@ -75,9 +75,8 @@ import { join, resolve as resolvePath, sep } from "path";
 import { pathToFileURL } from "url";
 import { parse as parseYaml } from "yaml";
 
-import { resolveArcPackReposDir } from "../common/config/arc-pack-repos-dir";
+import { defaultArcPackageRoot, readArcPackageInventory, containedRealPath, defaultArcListRunner, type ArcListRunner } from "../common/registry/arc-package-inventory";
 import {
-  ArcListOutputSchema,
   PluginManifestSchema,
   type ArcPackage,
   type PluginManifest,
@@ -95,42 +94,13 @@ import {
   type PluginSigningPosture,
 } from "./plugin-signing";
 
-// =============================================================================
-// arc subprocess driver — injectable for tests. Same "spawn, capture
-// stdout/stderr/exitCode, let the caller decide what a non-zero exit
-// means" shape several other cortex CLI commands already use for shelling
-// out to arc.
-// =============================================================================
+export type { ArcListRunner, ArcListRunResult } from "../common/registry/arc-package-inventory";
 
-export interface ArcListRunResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
-
-/** Pluggable subprocess driver. Tests inject a fake; production shells to
- *  `arc list --json`. */
-export type ArcListRunner = () => Promise<ArcListRunResult>;
-
-async function defaultArcListRunner(): Promise<ArcListRunResult> {
-  const proc = Bun.spawn(["arc", "list", "--json"], { stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  const exitCode = await proc.exited;
-  return { stdout, stderr, exitCode };
-}
-
-/** Default trusted install root — arc's package-repos dir. Routed through the
- *  shared existence-gated resolver (cortex#2007 / #1988) so it mirrors arc's
- *  post-#287 layout: the canonical `~/.local/share/metafactory/arc/repos` on a
- *  migrated box, the legacy `~/.config/metafactory/pkg/repos` only on a
- *  singleTree install. A raw `join(homedir(), ".config"/"metafactory"/"pkg"/"repos")`
- *  here was a segmented copy of the pre-#287 default that the literal path audit
- *  could not see. Overridable (tests point this at a fixtures directory). */
+/** Default trusted install root — arc's package-repos dir, resolved through the
+ *  shared existence-gated resolver so this loader and the Desk package loader
+ *  read where arc writes. Overridable (tests point this at a fixtures directory). */
 export function defaultPkgRoot(): string {
-  return resolveArcPackReposDir();
+  return defaultArcPackageRoot();
 }
 
 // =============================================================================
@@ -198,62 +168,23 @@ export async function discoverPluginBundles(
     return { bundles: [], issues };
   }
 
-  let runResult: ArcListRunResult;
-  try {
-    runResult = await runner();
-  } catch (err) {
-    issues.push({
-      bundleName: "(arc list)",
-      stage: "arc_list",
-      reason: `arc list --json failed to run: ${err instanceof Error ? err.message : String(err)}`,
-    });
-    return { bundles: [], issues };
+  const inventory = await readArcPackageInventory(runner);
+  for (const issue of inventory.issues) {
+    issues.push({ bundleName: "(arc list)", stage: issue.stage, reason: issue.reason });
   }
+  if (inventory.packages.length === 0) return { bundles: [], issues };
 
-  if (runResult.exitCode !== 0) {
-    issues.push({
-      bundleName: "(arc list)",
-      stage: "arc_list",
-      reason: `arc list --json exited ${runResult.exitCode}: ${runResult.stderr.slice(0, 500)}`,
-    });
-    return { bundles: [], issues };
-  }
-
-  let parsedJson: unknown;
-  try {
-    parsedJson = JSON.parse(runResult.stdout);
-  } catch (err) {
-    issues.push({
-      bundleName: "(arc list)",
-      stage: "arc_list_parse",
-      reason: `arc list --json produced invalid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    });
-    return { bundles: [], issues };
-  }
-
-  const parsed = ArcListOutputSchema.safeParse(parsedJson);
-  if (!parsed.success) {
-    issues.push({
-      bundleName: "(arc list)",
-      stage: "arc_list_schema",
-      reason: `arc list --json output did not match the expected {packages:[...]} shape: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
-    });
-    return { bundles: [], issues };
-  }
-
-  const packages = [...parsed.data.packages].sort((a, b) => a.name.localeCompare(b.name));
+  const packages = inventory.packages;
   const bundles: DiscoveredBundle[] = [];
 
   for (const pkg of packages) {
     try {
-      let realInstallPath: string;
-      try {
-        realInstallPath = realpathSync(pkg.installPath);
-      } catch (err) {
+      const install = containedRealPath(realPkgRoot, pkg.installPath);
+      if (!install.ok && install.stage === "unreadable") {
         issues.push({
           bundleName: pkg.name,
           stage: "containment",
-          reason: `installPath "${pkg.installPath}" does not resolve to a readable path: ${err instanceof Error ? err.message : String(err)}`,
+          reason: `installPath "${pkg.installPath}" does not resolve to a readable path: ${install.detail}`,
         });
         continue;
       }
@@ -264,16 +195,15 @@ export async function discoverPluginBundles(
       // buggy `arc list` output naming a path outside the trusted root
       // (via `..`, an absolute escape, or a symlink) is refused, not
       // followed.
-      const isContained =
-        realInstallPath === realPkgRoot || realInstallPath.startsWith(realPkgRoot + sep);
-      if (!isContained) {
+      if (!install.ok) {
         issues.push({
           bundleName: pkg.name,
           stage: "containment",
-          reason: `installPath "${pkg.installPath}" (resolved: "${realInstallPath}") escapes the trusted pkgRoot "${realPkgRoot}" — refused`,
+          reason: `installPath "${pkg.installPath}" (resolved: "${install.resolved}") escapes the trusted pkgRoot "${realPkgRoot}" — refused`,
         });
         continue;
       }
+      const realInstallPath = install.path;
 
       const manifestPath = join(realInstallPath, "cortex-plugin.yaml");
       if (!existsSync(manifestPath)) {

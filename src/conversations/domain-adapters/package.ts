@@ -1,0 +1,781 @@
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, resolve, sep } from "node:path";
+import { satisfies, valid, validRange } from "semver";
+import { z } from "zod";
+import type { Context } from "@earendil-works/chord";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { verifyBundleSignature, type PluginSigningPosture } from "../../adapters/plugin-signing";
+import { canonicalJSON } from "../../common/registry/canonical-json";
+import { containedRealPath, defaultArcListRunner, readArcPackageInventory, sha256Bytes, sha256File, type ArcListRunner } from "../../common/registry/arc-package-inventory";
+import type { ArcPackage } from "../../common/types/plugin-manifest";
+import type { DeskAdapterDefinition, DeskActionConnector, DeskAdapterConnection, DeskAdapterHost, DeskConnectorFactory } from "../../desk-sdk";
+import { DESK_ADAPTER_SDK_VERSION } from "../../desk-sdk/version";
+import { DraftingBindingSchema, DraftingBindings, DRAFTING_BINDING_VERSION, type DraftingBinding } from "./drafting-binding";
+import { DeskAdapterGenerationSchema, DeskGenerationStore, DESK_UI_PROTOCOL_VERSION, generationId, type DeskAdapterGeneration, type DeskAdapterGenerationRecord, type DeskGenerationAdmission } from "./package-generation";
+import { verifyReadBinding } from "./reads/bindings";
+import { READ_BINDING_VERSION, ReadBindingSchema, type ReadBinding } from "./reads/types";
+import { DOMAIN_ADAPTER_CONTRACT_VERSION, DomainAdapterRegistry } from "./registry";
+import { failure, SchemaBundle, success } from "./schema-validation";
+import { AdapterDeclarationSchema, SchemaRefSchema, type AdapterBindings, type AdapterDeclaration, type BoundaryError, type Result } from "./types";
+
+export const DESK_ADAPTER_PACKAGE_FORMAT = "desk-adapter-package/1";
+export const DESK_ADAPTER_PACKAGE_MANIFEST = "desk-adapter.json";
+export const DESK_ADAPTER_SETUP_VERSION = "1.0.0";
+export const DESK_ADAPTER_SDK_SPECIFIER = "@the-metafactory/cortex/desk-sdk";
+export const DESK_ADAPTER_MAX_MANIFEST_BYTES = 512 * 1024;
+export const DESK_ADAPTER_MAX_FILES = 256;
+export const DESK_ADAPTER_MAX_FILE_BYTES = 8 * 1024 * 1024;
+export const DESK_ADAPTER_MEDIA_TYPES = ["text/html", "text/javascript", "text/css", "image/png", "image/jpeg", "image/svg+xml", "image/webp", "font/woff", "font/woff2"] as const;
+export const DESK_ADAPTER_BUILTIN_IMPORTS: ReadonlySet<string> = new Set(["node:crypto", "node:buffer", "node:util", "node:url", "node:zlib", "node:stream", "node:events", "node:string_decoder", "node:timers", "node:net", "node:tls"]);
+
+const identifier = z.string().min(1).refine(value => value.trim().length > 0 && value === value.trim());
+const exactVersion = z.string().refine(value => valid(value) === value);
+const sdkRange = z.string().refine(value => validRange(value) !== null);
+const hex64 = z.string().regex(/^[0-9a-f]{64}$/);
+const namespaced = z.string().regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)+$/);
+const relativePath = z.string().min(1)
+  .refine(value => !isAbsolute(value) && !/^[a-zA-Z]:[\\/]/.test(value))
+  .refine(value => !value.includes("\0") && !value.includes("\\"))
+  .refine(value => !value.split("/").includes("..") && !value.split("/").includes(""))
+  .refine(value => !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value));
+const setupSchema = z.object({ schemaId: identifier, version: exactVersion, schema: z.union([z.boolean(), z.record(z.string(), z.json())]) }).strict();
+const authMethod = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("local") }).strict(),
+  z.object({ kind: z.literal("token"), slots: z.array(z.object({ name: identifier, label: identifier, required: z.boolean() }).strict()).min(1) }).strict(),
+  z.object({ kind: z.literal("broker"), brokerId: identifier }).strict(),
+]);
+const mediaType = z.enum(DESK_ADAPTER_MEDIA_TYPES);
+const uiFile = z.object({ path: relativePath, sha256: hex64, mediaType }).strict();
+const uiView = z.object({ objectType: identifier, view: z.literal("result") }).strict();
+export const DeskAdapterSetupSchema = z.object({
+  version: z.literal(DESK_ADAPTER_SETUP_VERSION),
+  schemas: z.array(setupSchema),
+  configurationSchemaRef: SchemaRefSchema,
+  accountScopeSchemaRef: SchemaRefSchema,
+  authMethods: z.array(authMethod).min(1),
+}).strict();
+export const DeskAdapterUiSchema = z.object({
+  protocolVersion: z.literal(DESK_UI_PROTOCOL_VERSION),
+  entry: relativePath,
+  views: z.array(uiView),
+  files: z.array(uiFile).min(1),
+}).strict();
+export const DeskAdapterBackendSchema = z.object({
+  entry: relativePath.refine(value => value.endsWith(".mjs")),
+  sha256: hex64,
+}).strict();
+export const DeskAdapterPackageSchema = z.object({
+  format: z.literal(DESK_ADAPTER_PACKAGE_FORMAT),
+  packageId: namespaced,
+  packageVersion: exactVersion,
+  deskSdkRange: sdkRange,
+  domainContractVersion: z.literal(DOMAIN_ADAPTER_CONTRACT_VERSION),
+  backend: DeskAdapterBackendSchema,
+  declaration: AdapterDeclarationSchema,
+  draftingBindings: z.array(DraftingBindingSchema),
+  readBindings: z.array(ReadBindingSchema),
+  setup: DeskAdapterSetupSchema,
+  ui: DeskAdapterUiSchema.optional(),
+}).strict();
+export type DeskAdapterPackage = z.infer<typeof DeskAdapterPackageSchema>;
+export type DeskAdapterSetup = z.infer<typeof DeskAdapterSetupSchema>;
+export type DeskAdapterUi = z.infer<typeof DeskAdapterUiSchema>;
+export type DeskPackageSource = "bundled" | "installed";
+
+export interface DeskAdapterApproval {
+  packageId: string;
+  origin: string;
+  packageVersion: string;
+  releaseDigest: string;
+}
+
+export interface DeskAdapterSignaturePolicy {
+  posture: PluginSigningPosture;
+  trustedSigners: ReadonlySet<string>;
+}
+
+export type DeskPackageCandidateState = { state: "installable" } | { state: "unavailable"; code: string; message: string };
+export type DeskPackageTrust = { state: "trusted"; basis: "bundled" | "principal" } | { state: "untrusted"; code: "approval_missing"; message: string };
+export type DeskAdapterAvailability = { state: "available" } | { state: "unavailable"; code: string; message: string };
+
+export interface DeskPackageCandidate {
+  packageId: string;
+  packageVersion: string;
+  adapterId: string;
+  origin: string;
+  source: DeskPackageSource;
+  packageRoot: string;
+  manifestSha256: string;
+  backendPath: string;
+  releaseDigest: string;
+  manifest: DeskAdapterPackage;
+  ui?: DeskAdapterUi;
+  state: DeskPackageCandidateState;
+  trust: DeskPackageTrust;
+}
+
+export interface DeskPackageIssue {
+  packageId?: string;
+  packageRoot?: string;
+  stage: string;
+  code: string;
+  message: string;
+}
+
+export interface DeskPackageDiscovery {
+  candidates: DeskPackageCandidate[];
+  issues: DeskPackageIssue[];
+}
+
+export interface DeskPackageInstall {
+  packageId: string;
+  packageVersion: string;
+  adapterId: string;
+  origin: string;
+  releaseDigest: string;
+}
+
+export interface DeskPackageLoaderOptions {
+  bundledPackages?: readonly string[];
+  installedRoots?: readonly string[];
+  runner?: ArcListRunner;
+  approvals?: readonly DeskAdapterApproval[];
+  signature?: DeskAdapterSignaturePolicy;
+  store?: DeskGenerationStore;
+  now?: () => Date;
+}
+
+export interface DeskAdapterCatalogEntry {
+  generation: DeskAdapterGeneration;
+  declaration: AdapterDeclaration;
+  readBindings: readonly ReadBinding[];
+  draftingBindings: readonly DraftingBinding[];
+  ui?: DeskAdapterUi;
+  availability: DeskAdapterAvailability;
+}
+
+interface PublishedAdapter {
+  packageId: string;
+  adapterId: string;
+  candidate: DeskPackageCandidate;
+  definition: DeskAdapterDefinition;
+  connectors: ReadonlyMap<string, DeskConnectorFactory>;
+  generation: DeskAdapterGeneration;
+  readBindings: readonly ReadBinding[];
+  draftingBindings: readonly DraftingBinding[];
+  ui?: DeskAdapterUi;
+}
+
+interface ComposedAdapters {
+  registry: DomainAdapterRegistry;
+  drafting: DraftingBindings;
+  reads: ReadonlyMap<string, ReadBinding>;
+}
+
+interface LoaderState extends ComposedAdapters {
+  published: ReadonlyMap<string, PublishedAdapter>;
+  availability: ReadonlyMap<string, DeskAdapterAvailability>;
+  diagnostics: ReadonlyMap<string, DeskPackageIssue[]>;
+}
+
+const emptyState = (): LoaderState => {
+  const registry = new DomainAdapterRegistry();
+  return { registry, drafting: new DraftingBindings(registry), reads: new Map(), published: new Map(), availability: new Map(), diagnostics: new Map() };
+};
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+const readKey = (binding: ReadBinding): string => JSON.stringify([binding.adapterId, binding.capabilityId]);
+const unavailable = (code: string, message: string): DeskPackageCandidateState => ({ state: "unavailable", code, message });
+const sameDeclaration = (left: AdapterDeclaration, right: AdapterDeclaration): boolean => canonicalJSON(left) === canonicalJSON(right);
+const fileDigest = (path: string): string | null => {
+  try {
+    return sha256File(path);
+  } catch {
+    return null;
+  }
+};
+const versions = (manifest: DeskAdapterPackage): { domainContractVersion: string; uiProtocolVersion?: string } => ({
+  domainContractVersion: manifest.domainContractVersion,
+  ...(manifest.ui ? { uiProtocolVersion: manifest.ui.protocolVersion } : {}),
+});
+
+function versionProblem(raw: unknown): BoundaryError | null {
+  if (!isRecord(raw)) return { code: "invalid_manifest", message: "The package manifest is not a JSON object." };
+  if (raw.format !== DESK_ADAPTER_PACKAGE_FORMAT) return { code: "unsupported_format", message: "The package format is not desk-adapter-package/1." };
+  if (raw.domainContractVersion !== DOMAIN_ADAPTER_CONTRACT_VERSION) return { code: "unsupported_contract", message: "The domain contract version is not supported." };
+  if (isRecord(raw.setup) && raw.setup.version !== DESK_ADAPTER_SETUP_VERSION) return { code: "unsupported_setup_version", message: "The setup descriptor version is not supported." };
+  if (isRecord(raw.ui) && raw.ui.protocolVersion !== DESK_UI_PROTOCOL_VERSION) return { code: "unsupported_ui_protocol", message: "The UI protocol version is not supported." };
+  if (Array.isArray(raw.readBindings) && raw.readBindings.some(binding => !isRecord(binding) || binding.version !== READ_BINDING_VERSION)) {
+    return { code: "unsupported_binding_version", message: "A read binding version is not supported." };
+  }
+  if (Array.isArray(raw.draftingBindings) && raw.draftingBindings.some(binding => !isRecord(binding) || binding.bindingVersion !== DRAFTING_BINDING_VERSION)) {
+    return { code: "unsupported_binding_version", message: "A drafting binding version is not supported." };
+  }
+  return null;
+}
+
+function importSpecifiers(source: string): string[] {
+  const patterns = [
+    /(?:^|[;{}\n])\s*(?:import|export)\s+(?:[^;'"]*?\s+from\s+)?["']([^"']+)["']/g,
+    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+    /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+  ];
+  const found = new Set<string>();
+  for (const pattern of patterns) for (const match of source.matchAll(pattern)) if (match[1]) found.add(match[1]);
+  return [...found];
+}
+
+export function deskPackageImportProblem(source: string): BoundaryError | null {
+  if (/\beval\s*\(/.test(source) || /\bnew\s+Function\s*\(/.test(source)) return { code: "invalid_import", message: "The backend bundle may not evaluate source at runtime." };
+  if (/\bimport\s*\(\s*(?!["'])/.test(source)) return { code: "invalid_import", message: "The backend bundle may not use a computed dynamic import." };
+  const refused = importSpecifiers(source).filter(specifier => specifier !== DESK_ADAPTER_SDK_SPECIFIER && !DESK_ADAPTER_BUILTIN_IMPORTS.has(specifier));
+  if (refused.length > 0) return { code: "invalid_import", message: `The backend bundle imports an unapproved module: ${refused.join(", ")}.` };
+  return null;
+}
+
+function verifyContainedFile(root: string, path: string, digest: string, limit: number): Result<string> {
+  const candidate = resolve(root, path);
+  if (!candidate.startsWith(root + sep)) return failure("containment_escape", "A package file path escapes the package directory.");
+  let stat;
+  try {
+    stat = lstatSync(candidate);
+  } catch {
+    return failure("missing_file", `A declared package file is missing: ${path}.`);
+  }
+  if (stat.isSymbolicLink()) return failure("containment_escape", "A package file path is a symlink and cannot be verified in place.");
+  if (!stat.isFile()) return failure("missing_file", `A declared package file is not a regular file: ${path}.`);
+  const contained = containedRealPath(root, candidate);
+  if (!contained.ok) return failure("containment_escape", "A package file resolves outside the package directory.");
+  if (stat.size > limit) return failure("file_too_large", `A package file exceeds the host size bound: ${path}.`);
+  let observed: string;
+  try {
+    observed = sha256File(contained.path);
+  } catch {
+    return failure("missing_file", `A declared package file could not be read: ${path}.`);
+  }
+  if (observed !== digest) return failure("digest_mismatch", `A package file digest does not match the manifest: ${path}.`);
+  return success(contained.path);
+}
+
+function setupProblem(manifest: DeskAdapterPackage): BoundaryError | null {
+  const keys = manifest.setup.schemas.map(schema => JSON.stringify([schema.schemaId, schema.version]));
+  if (new Set(keys).size !== keys.length) return { code: "invalid_setup", message: "Setup schema identities are duplicated." };
+  let bundle: SchemaBundle;
+  try {
+    bundle = new SchemaBundle(manifest.setup.schemas);
+  } catch {
+    return { code: "invalid_setup_schema", message: "The setup schemas are not a valid immutable bundle." };
+  }
+  for (const ref of [manifest.setup.configurationSchemaRef, manifest.setup.accountScopeSchemaRef]) {
+    if (!bundle.validator(ref)) return { code: "invalid_setup_schema", message: "A setup schema reference does not resolve to an exact bundled schema." };
+    const document = manifest.setup.schemas.find(schema => schema.schemaId === ref.schemaId && schema.version === ref.version)?.schema;
+    if (typeof document !== "object" || Array.isArray(document)) return { code: "invalid_setup_schema", message: "Setup schemas must be object documents." };
+  }
+  const authKeys = manifest.setup.authMethods.map(method => canonicalJSON(method));
+  if (new Set(authKeys).size !== authKeys.length) return { code: "invalid_setup", message: "Setup authentication alternatives are duplicated." };
+  for (const method of manifest.setup.authMethods) {
+    if (method.kind !== "token") continue;
+    const names = method.slots.map(slot => slot.name);
+    if (new Set(names).size !== names.length) return { code: "invalid_setup", message: "Token slot names must be unique." };
+  }
+  return null;
+}
+
+export function releaseDigest(manifest: DeskAdapterPackage, manifestSha256: string): string {
+  const sortBy = <T>(items: readonly T[], key: (item: T) => string): T[] => [...items].sort((left, right) => key(left).localeCompare(key(right)));
+  const identity = {
+    format: manifest.format,
+    packageId: manifest.packageId,
+    packageVersion: manifest.packageVersion,
+    deskSdkRange: manifest.deskSdkRange,
+    domainContractVersion: manifest.domainContractVersion,
+    manifestSha256,
+    backend: manifest.backend,
+    declaration: manifest.declaration,
+    draftingBindings: sortBy(manifest.draftingBindings, binding => JSON.stringify([binding.adapterId, binding.capabilityId, binding.inputSchemaRef.schemaId, binding.inputSchemaRef.version])),
+    readBindings: sortBy(manifest.readBindings, binding => JSON.stringify([binding.adapterId, binding.capabilityId, binding.mode, binding.objectType])),
+    setup: { ...manifest.setup, schemas: sortBy(manifest.setup.schemas, schema => JSON.stringify([schema.schemaId, schema.version])) },
+    ui: manifest.ui ? { ...manifest.ui, views: sortBy(manifest.ui.views, view => JSON.stringify([view.objectType, view.view])), files: sortBy(manifest.ui.files, file => file.path) } : null,
+  };
+  return sha256Bytes(canonicalJSON(identity));
+}
+
+export function stagingBindings(declaration: AdapterDeclaration): AdapterBindings {
+  return {
+    handlers: Object.fromEntries(declaration.capabilities.filter(capability => capability.kind === "query").map(capability => [capability.capabilityId, () => undefined])),
+    observations: Object.fromEntries(declaration.capabilities.filter(capability => capability.kind === "observation").map(capability => [capability.capabilityId, {}])),
+  };
+}
+
+function compose(published: ReadonlyMap<string, PublishedAdapter>): Result<ComposedAdapters> {
+  const registry = new DomainAdapterRegistry();
+  const pending = new Map(published);
+  let progress = true;
+  while (pending.size > 0 && progress) {
+    progress = false;
+    for (const [adapterId, adapter] of pending) {
+      const registered = registry.register(adapter.definition.declaration, adapter.definition.bindings);
+      if (registered.ok) {
+        pending.delete(adapterId);
+        progress = true;
+      }
+    }
+  }
+  if (pending.size > 0) return failure("publication_rejected", "Adapter declarations cannot be registered together; a relationship target or identity conflicts.");
+  const drafting = new DraftingBindings(registry);
+  for (const adapter of published.values()) {
+    for (const binding of adapter.draftingBindings) {
+      const registered = drafting.register(binding);
+      if (!registered.ok) return failure(registered.error.code, registered.error.message);
+    }
+  }
+  const reads = new Map<string, ReadBinding>();
+  for (const adapter of published.values()) {
+    for (const binding of adapter.readBindings) {
+      const verified = verifyReadBinding(registry, binding);
+      if (!verified.ok) return failure(verified.error.code, verified.error.message);
+      if (reads.has(readKey(binding))) return failure("duplicate_binding", "A read binding is declared twice.");
+      reads.set(readKey(binding), binding);
+    }
+  }
+  return success({ registry, drafting, reads });
+}
+
+export class DeskPackageLoader {
+  private state: LoaderState = emptyState();
+  private readonly options: DeskPackageLoaderOptions;
+  private readonly context: Context;
+
+  constructor(options: DeskPackageLoaderOptions = {}, context: Context = BACKGROUND_CONTEXT) {
+    this.options = options;
+    this.context = context;
+  }
+
+  private get store(): DeskGenerationStore | null {
+    return this.options.store ?? null;
+  }
+
+  private now(): string {
+    return (this.options.now?.() ?? new Date()).toISOString();
+  }
+
+  private issue(candidate: DeskPackageCandidate, code: string, message: string): DeskPackageCandidate {
+    candidate.state = unavailable(code, message);
+    return candidate;
+  }
+
+  private verifyStructural(item: { source: DeskPackageSource; root: string; origin: string; arcPackage?: ArcPackage }): DeskPackageCandidate | DeskPackageIssue {
+    let realRoot: string;
+    try {
+      realRoot = realpathSync(item.root);
+    } catch (error) {
+      return { stage: "package_root", code: "unreadable", message: `The package directory is not readable: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    const manifestPath = join(realRoot, DESK_ADAPTER_PACKAGE_MANIFEST);
+    let stat;
+    try {
+      stat = lstatSync(manifestPath);
+    } catch {
+      return { stage: "manifest", code: "missing_manifest", message: `No ${DESK_ADAPTER_PACKAGE_MANIFEST} exists in the package directory.` };
+    }
+    if (stat.isSymbolicLink()) return { stage: "manifest", code: "containment_escape", message: "The package manifest is a symlink and cannot be verified in place." };
+    if (!stat.isFile()) return { stage: "manifest", code: "missing_manifest", message: "The package manifest is not a regular file." };
+    if (stat.size > DESK_ADAPTER_MAX_MANIFEST_BYTES) return { stage: "manifest", code: "manifest_too_large", message: "The package manifest exceeds the host size bound." };
+    let text: string;
+    try {
+      text = readFileSync(manifestPath, "utf8");
+    } catch (error) {
+      return { stage: "manifest", code: "unreadable", message: `The package manifest could not be read: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(text);
+    } catch {
+      return { stage: "manifest", code: "invalid_manifest", message: "The package manifest is not valid JSON." };
+    }
+    const problem = versionProblem(raw);
+    if (problem) return { stage: "manifest", code: problem.code, message: problem.message };
+    const parsed = DeskAdapterPackageSchema.safeParse(raw);
+    if (!parsed.success) {
+      return { stage: "manifest", code: "invalid_manifest", message: `The package manifest does not match the strict contract: ${parsed.error.issues.map(issue => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ")}` };
+    }
+    const manifest = parsed.data;
+    const manifestSha256 = sha256Bytes(text);
+    const digest = releaseDigest(manifest, manifestSha256);
+    const candidate: DeskPackageCandidate = {
+      packageId: manifest.packageId,
+      packageVersion: manifest.packageVersion,
+      adapterId: manifest.declaration.adapterId,
+      origin: item.origin,
+      source: item.source,
+      packageRoot: realRoot,
+      manifestSha256,
+      backendPath: "",
+      releaseDigest: digest,
+      manifest,
+      ...(manifest.ui ? { ui: manifest.ui } : {}),
+      state: { state: "installable" },
+      trust: { state: "untrusted", code: "approval_missing", message: "The installed package has no principal approval for this origin, version and content digest." },
+    };
+    if (!satisfies(DESK_ADAPTER_SDK_VERSION, manifest.deskSdkRange)) return this.issue(candidate, "incompatible_sdk", "The package does not support the running Desk adapter SDK version.");
+    const backend = verifyContainedFile(realRoot, manifest.backend.entry, manifest.backend.sha256, DESK_ADAPTER_MAX_FILE_BYTES);
+    if (!backend.ok) return this.issue(candidate, backend.error.code, backend.error.message);
+    candidate.backendPath = backend.value;
+    let source: string;
+    try {
+      source = readFileSync(backend.value, "utf8");
+    } catch {
+      return this.issue(candidate, "missing_file", "The backend entry could not be read.");
+    }
+    const importProblem = deskPackageImportProblem(source);
+    if (importProblem) return this.issue(candidate, importProblem.code, importProblem.message);
+    const setupError = setupProblem(manifest);
+    if (setupError) return this.issue(candidate, setupError.code, setupError.message);
+    if (!manifest.ui) return candidate;
+    const assetFiles = manifest.ui.files;
+    if (assetFiles.length > DESK_ADAPTER_MAX_FILES) return this.issue(candidate, "too_many_files", "The package declares more asset files than the host accepts.");
+    const paths = assetFiles.map(file => file.path);
+    if (new Set(paths).size !== paths.length) return this.issue(candidate, "duplicate_id", "The UI asset paths are not unique.");
+    if (!paths.includes(manifest.ui.entry)) return this.issue(candidate, "missing_file", "The declared UI entry is not listed in the package files.");
+    if (assetFiles.find(file => file.path === manifest.ui?.entry)?.mediaType !== "text/html") return this.issue(candidate, "invalid_ui", "The UI entry must be an HTML asset.");
+    const objectTypes = new Set(manifest.declaration.objectTypes.map(object => object.objectType));
+    if (manifest.ui.views.some(view => !objectTypes.has(view.objectType))) return this.issue(candidate, "invalid_ui", "A UI view names an object type the declaration does not define.");
+    for (const file of assetFiles) {
+      const verified = verifyContainedFile(realRoot, file.path, file.sha256, DESK_ADAPTER_MAX_FILE_BYTES);
+      if (!verified.ok) return this.issue(candidate, verified.error.code, verified.error.message);
+    }
+    return candidate;
+  }
+
+  private async trust(candidate: DeskPackageCandidate, approvals: readonly DeskAdapterApproval[], used: Set<DeskAdapterApproval>, signature: DeskAdapterSignaturePolicy | undefined): Promise<DeskPackageCandidate> {
+    if (signature && signature.posture !== "off") {
+      const verified = await verifyBundleSignature({ installPath: candidate.packageRoot, trustedSigners: signature.trustedSigners });
+      if (!verified.ok && signature.posture === "enforce") return this.issue(candidate, `signature_${verified.stage}`, "The package signature is missing, invalid or untrusted.");
+    }
+    if (candidate.source === "bundled") {
+      candidate.trust = { state: "trusted", basis: "bundled" };
+      return candidate;
+    }
+    const approval = approvals.find(item => item.packageId === candidate.packageId && item.origin.trim() === candidate.origin && item.packageVersion === candidate.packageVersion && item.releaseDigest === candidate.releaseDigest);
+    if (approval) {
+      used.add(approval);
+      candidate.trust = { state: "trusted", basis: "principal" };
+    }
+    return candidate;
+  }
+
+  async discover(): Promise<DeskPackageDiscovery> {
+    const issues: DeskPackageIssue[] = [];
+    const items: { source: DeskPackageSource; root: string; origin: string; arcPackage?: ArcPackage }[] = [];
+    for (const root of this.options.bundledPackages ?? []) items.push({ source: "bundled", root, origin: "bundled" });
+    if ((this.options.installedRoots ?? []).length > 0) {
+      const roots = (this.options.installedRoots ?? []).flatMap(root => {
+        try {
+          return [realpathSync(root)];
+        } catch {
+          return [];
+        }
+      });
+      const inventory = roots.length === 0 ? { packages: [], issues: [] } : await readArcPackageInventory(this.options.runner ?? defaultArcListRunner);
+      for (const inventoryIssue of inventory.issues) issues.push({ stage: inventoryIssue.stage, code: "arc_inventory", message: inventoryIssue.reason });
+      for (const arcPackage of inventory.packages) {
+        if (arcPackage.status !== "active") continue;
+        if (arcPackage.repoUrl.trim().length === 0) {
+          issues.push({ packageId: arcPackage.name, stage: "identity", code: "origin_missing", message: `The arc package ${arcPackage.name} has no origin and cannot be approved.` });
+          continue;
+        }
+        const contained = roots.map(root => containedRealPath(root, arcPackage.installPath)).find((result): result is { ok: true; path: string } => result.ok);
+        if (!contained) {
+          issues.push({ packageId: arcPackage.name, stage: "containment", code: "containment_escape", message: `The arc install path for ${arcPackage.name} is not inside an approved package root.` });
+          continue;
+        }
+        items.push({ source: "installed", root: contained.path, origin: arcPackage.repoUrl.trim(), arcPackage });
+      }
+    }
+    const seen = new Set<string>();
+    const candidates: DeskPackageCandidate[] = [];
+    for (const item of items) {
+      let verified: DeskPackageCandidate | DeskPackageIssue;
+      try {
+        verified = this.verifyStructural(item);
+      } catch (error) {
+        verified = { stage: "manifest", code: "invalid_manifest", message: `The package manifest could not be verified: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      if ("stage" in verified) {
+        issues.push({ ...verified, ...(item.arcPackage ? { packageId: item.arcPackage.name } : {}), packageRoot: item.root });
+        continue;
+      }
+      if (seen.has(verified.packageRoot)) continue;
+      seen.add(verified.packageRoot);
+      candidates.push(verified);
+    }
+    const usedApprovals = new Set<DeskAdapterApproval>();
+    for (const candidate of candidates) await this.trust(candidate, this.options.approvals ?? [], usedApprovals, this.options.signature);
+    for (const approval of this.options.approvals ?? []) {
+      if (!usedApprovals.has(approval)) issues.push({ packageId: approval.packageId, stage: "approval", code: "approval_unmatched", message: "An approval does not name any discovered release with that origin, version and digest." });
+    }
+    const groups = new Map<string, DeskPackageCandidate[]>();
+    const add = (key: string, candidate: DeskPackageCandidate): void => {
+      groups.set(key, [...(groups.get(key) ?? []), candidate]);
+    };
+    for (const candidate of candidates) {
+      add(`package:${candidate.packageId}:${candidate.packageVersion}`, candidate);
+      add(`adapter:${candidate.adapterId}`, candidate);
+    }
+    for (const group of groups.values()) {
+      if (group.length < 2) continue;
+      for (const candidate of group) this.issue(candidate, "duplicate_identity", `The package identity ${candidate.packageId} or adapter ${candidate.adapterId} is discovered more than once.`);
+    }
+    const registry = new DomainAdapterRegistry();
+    const accepted: DeskPackageCandidate[] = [];
+    const pendingCandidates = candidates.filter(candidate => candidate.state.state === "installable");
+    const lastError = new Map<DeskPackageCandidate, BoundaryError>();
+    while (pendingCandidates.length > 0) {
+      let progress = false;
+      for (const candidate of [...pendingCandidates]) {
+        const registered = registry.register(candidate.manifest.declaration, stagingBindings(candidate.manifest.declaration));
+        if (registered.ok) {
+          accepted.push(candidate);
+          pendingCandidates.splice(pendingCandidates.indexOf(candidate), 1);
+          progress = true;
+        } else {
+          lastError.set(candidate, registered.error);
+        }
+      }
+      if (!progress) break;
+    }
+    for (const candidate of pendingCandidates) {
+      const error = lastError.get(candidate) ?? { code: "invalid_registration", message: "The declaration cannot be registered against the running domain contract." };
+      this.issue(candidate, error.code, error.message);
+    }
+    const drafting = new DraftingBindings(registry);
+    for (const candidate of accepted) {
+      if (candidate.manifest.draftingBindings.length === 0) continue;
+      for (const binding of candidate.manifest.draftingBindings) {
+        const registered = drafting.register(binding);
+        if (!registered.ok) {
+          this.issue(candidate, registered.error.code, registered.error.message);
+          break;
+        }
+      }
+    }
+    for (const candidate of accepted) {
+      if (candidate.state.state !== "installable") continue;
+      for (const binding of candidate.manifest.readBindings) {
+        const verified = verifyReadBinding(registry, binding);
+        if (!verified.ok) {
+          this.issue(candidate, verified.error.code, verified.error.message);
+          break;
+        }
+      }
+    }
+    return { candidates: candidates.sort((left, right) => left.packageId.localeCompare(right.packageId)), issues };
+  }
+
+  private candidate(discovery: DeskPackageDiscovery, packageId: string, expected?: { releaseDigest?: string }): Result<DeskPackageCandidate> {
+    const candidate = discovery.candidates.find(item => item.packageId === packageId);
+    if (!candidate) return failure("unknown_package", "No discovered package carries that identity.");
+    if (expected?.releaseDigest && expected.releaseDigest !== candidate.releaseDigest) return failure("release_mismatch", "The approved release digest does not match the discovered package content.");
+    if (candidate.state.state !== "installable") return failure(candidate.state.code, candidate.state.message);
+    return success(candidate);
+  }
+
+  async install(packageId: string, expected?: { releaseDigest?: string }): Promise<Result<DeskPackageInstall>> {
+    const candidate = this.candidate(await this.discover(), packageId, expected);
+    if (!candidate.ok) return candidate;
+    return success({ packageId: candidate.value.packageId, packageVersion: candidate.value.packageVersion, adapterId: candidate.value.adapterId, origin: candidate.value.origin, releaseDigest: candidate.value.releaseDigest });
+  }
+
+  async activate(packageId: string, expected?: { releaseDigest?: string }): Promise<Result<DeskAdapterGeneration>> {
+    const candidate = this.candidate(await this.discover(), packageId, expected);
+    if (!candidate.ok) return candidate;
+    if (candidate.value.trust.state !== "trusted") {
+      return failure(candidate.value.trust.code, "The installed package has no principal approval for this origin, version and content digest.");
+    }
+    return this.publish(candidate);
+  }
+
+  private async publish(candidate: Result<DeskPackageCandidate>): Promise<Result<DeskAdapterGeneration>> {
+    if (!candidate.ok) return candidate;
+    const store = this.store;
+    if (!store) return failure("generation_store_unavailable", "Activation requires the durable generation store.");
+    const acting = candidate.value;
+    if (acting.manifestSha256 !== fileDigest(join(acting.packageRoot, DESK_ADAPTER_PACKAGE_MANIFEST))) return failure("digest_mismatch", "The package manifest changed after discovery.");
+    if (fileDigest(acting.backendPath) !== acting.manifest.backend.sha256) return failure("digest_mismatch", "The backend entry changed after discovery.");
+    const existing = this.state.published.get(acting.adapterId);
+    if (existing && existing.packageId !== acting.packageId) return failure("duplicate_identity", "Another package already owns this adapter identity.");
+    let namespace: Record<string, unknown>;
+    try {
+      namespace = await import(`${acting.backendPath}?desk-generation=${acting.releaseDigest}`) as Record<string, unknown>;
+    } catch (error) {
+      return this.failed(acting, failure("module_throwing", `The backend module threw while loading: ${error instanceof Error ? error.message : String(error)}`));
+    }
+    const extra = Object.keys(namespace).filter(name => name !== "createDeskAdapter" && name !== "default");
+    if (extra.length > 0) return this.failed(acting, failure("module_incompatible", "The backend module exports more than createDeskAdapter(host)."));
+    const create = namespace.createDeskAdapter;
+    if (typeof create !== "function") return this.failed(acting, failure("module_incompatible", "The backend module does not export createDeskAdapter(host)."));
+    const connectors = new Map<string, DeskConnectorFactory>();
+    const host: DeskAdapterHost = {
+      sdkVersion: DESK_ADAPTER_SDK_VERSION,
+      registerConnector(capabilityId, factory) {
+        if (connectors.has(capabilityId)) throw new Error(`Connector ${capabilityId} is already registered.`);
+        connectors.set(capabilityId, factory);
+      },
+    };
+    let definition: DeskAdapterDefinition;
+    try {
+      definition = (create as (host: DeskAdapterHost) => DeskAdapterDefinition)(host);
+    } catch (error) {
+      return this.failed(acting, failure("module_throwing", `The backend module threw while creating the adapter: ${error instanceof Error ? error.message : String(error)}`));
+    }
+    if (!isRecord(definition) || !isRecord(definition.declaration) || !isRecord(definition.bindings)) return this.failed(acting, failure("module_incompatible", "createDeskAdapter did not return a declaration and bindings."));
+    const declared = AdapterDeclarationSchema.safeParse(definition.declaration);
+    if (!declared.success || !sameDeclaration(declared.data, acting.manifest.declaration)) return this.failed(acting, failure("module_incompatible", "The module declaration does not match the verified manifest."));
+    const actions = new Set(acting.manifest.declaration.capabilities.filter(capability => capability.kind === "action").map(capability => capability.capabilityId));
+    if (actions.size !== connectors.size || [...actions].some(capabilityId => !connectors.has(capabilityId)) || [...connectors.keys()].some(capabilityId => !actions.has(capabilityId) || typeof connectors.get(capabilityId) !== "function")) {
+      return this.failed(acting, failure("module_incompatible", "Every action capability needs exactly one registered connector, and no other capability may register one."));
+    }
+    const generation: DeskAdapterGeneration = DeskAdapterGenerationSchema.parse({
+      format: "desk-adapter-generation/1",
+      generationId: generationId({ packageId: acting.packageId, packageVersion: acting.packageVersion, releaseDigest: acting.releaseDigest }),
+      packageId: acting.packageId,
+      packageVersion: acting.packageVersion,
+      adapterId: acting.adapterId,
+      origin: acting.origin,
+      releaseDigest: acting.releaseDigest,
+      deskSdkRange: acting.manifest.deskSdkRange,
+      ...versions(acting.manifest),
+      selectedAt: this.now(),
+    });
+    const published = new Map(this.state.published);
+    published.set(acting.adapterId, {
+      packageId: acting.packageId,
+      adapterId: acting.adapterId,
+      candidate: acting,
+      definition: { declaration: declared.data, bindings: definition.bindings },
+      connectors,
+      generation,
+      readBindings: acting.manifest.readBindings,
+      draftingBindings: acting.manifest.draftingBindings,
+      ...(acting.ui ? { ui: acting.ui } : {}),
+    });
+    const composed = compose(published);
+    if (!composed.ok) return this.failed(acting, composed);
+    await store.select(generation);
+    const availability = new Map(this.state.availability);
+    availability.delete(acting.adapterId);
+    const diagnostics = new Map(this.state.diagnostics);
+    diagnostics.delete(acting.adapterId);
+    this.state = { ...composed.value, published, availability, diagnostics };
+    return success(generation);
+  }
+
+  private failed(candidate: DeskPackageCandidate, error: Result<never>): Result<never> {
+    const reason = error.ok ? { code: "publication_rejected", message: "The package could not be published." } : error.error;
+    const availability = new Map(this.state.availability);
+    if (!this.state.published.has(candidate.adapterId)) availability.set(candidate.adapterId, { state: "unavailable", code: reason.code, message: reason.message });
+    const diagnostics = new Map(this.state.diagnostics);
+    diagnostics.set(candidate.adapterId, [{ packageId: candidate.packageId, packageRoot: candidate.packageRoot, stage: "publication", code: reason.code, message: reason.message }]);
+    this.state = { ...this.state, availability, diagnostics };
+    return error.ok ? failure(reason.code, reason.message) : error;
+  }
+
+  async boot(): Promise<DeskPackageDiscovery> {
+    const discovery = await this.discover();
+    const store = this.store;
+    if (!store) return discovery;
+    const records = new Map((await store.all()).map(record => [record.adapterId, record]));
+    for (const candidate of discovery.candidates) {
+      if (candidate.state.state !== "installable" || candidate.trust.state !== "trusted") continue;
+      const record = records.get(candidate.adapterId);
+      if (record?.uninstalled) {
+        this.fence(candidate.adapterId, "adapter_uninstalled", "The adapter package is uninstalled; the in-process generation waits for a managed restart.");
+        continue;
+      }
+      if (record?.disabled) {
+        this.fence(candidate.adapterId, "adapter_disabled", "The adapter is disabled; no new admission is granted.");
+        continue;
+      }
+      await this.publish(success(candidate));
+    }
+    return discovery;
+  }
+
+  private fence(adapterId: string, code: "adapter_disabled" | "adapter_uninstalled", message: string): void {
+    const availability = new Map(this.state.availability);
+    availability.set(adapterId, { state: "unavailable", code, message });
+    this.state = { ...this.state, availability };
+  }
+
+  async disable(adapterId: string): Promise<DeskAdapterGenerationRecord | null> {
+    const store = this.store;
+    if (!store) return null;
+    const record = await store.fence(adapterId, "disabled");
+    this.fence(adapterId, "adapter_disabled", "The adapter is disabled; no new admission is granted.");
+    return record;
+  }
+
+  async uninstall(adapterId: string): Promise<DeskAdapterGenerationRecord | null> {
+    const store = this.store;
+    if (!store) return null;
+    const record = await store.fence(adapterId, "uninstalled");
+    this.fence(adapterId, "adapter_uninstalled", "The adapter package is uninstalled; stored evidence stays protected until a managed restart removes the generation.");
+    return record;
+  }
+
+  admission(adapterId: string): DeskAdapterAvailability {
+    return this.state.availability.get(adapterId) ?? { state: "available" };
+  }
+
+  async admit(adapterId: string, required: { releaseDigest: string }): Promise<DeskGenerationAdmission> {
+    const store = this.store;
+    if (!store) return { state: "unavailable", code: "generation_missing", message: "No durable generation store is configured." };
+    return store.admit(adapterId, required);
+  }
+
+  capability(capabilityId: string) {
+    const found = this.state.registry.capability(capabilityId);
+    return found.support === "declared" ? this.state.registry.capability(capabilityId, this.admission(found.adapterId)) : found;
+  }
+
+  list(): DeskAdapterCatalogEntry[] {
+    return [...this.state.published.values()].map(adapter => ({
+      generation: structuredClone(adapter.generation),
+      declaration: structuredClone(adapter.definition.declaration),
+      readBindings: structuredClone(adapter.readBindings),
+      draftingBindings: structuredClone(adapter.draftingBindings),
+      ...(adapter.ui ? { ui: structuredClone(adapter.ui) } : {}),
+      availability: this.admission(adapter.adapterId),
+    })).sort((left, right) => left.generation.adapterId.localeCompare(right.generation.adapterId));
+  }
+
+  catalog(): DeskAdapterCatalogEntry[] {
+    return this.list().filter(entry => entry.availability.state === "available");
+  }
+
+  diagnostics(): DeskPackageIssue[] {
+    return [...this.state.diagnostics.values()].flat().sort((left, right) => `${left.packageId ?? ""}:${left.code}`.localeCompare(`${right.packageId ?? ""}:${right.code}`));
+  }
+
+  connector(adapterId: string, capabilityId: string, connection: DeskAdapterConnection): Result<DeskActionConnector> {
+    const availability = this.admission(adapterId);
+    if (availability.state !== "available") return failure(availability.code, availability.message);
+    const adapter = this.state.published.get(adapterId);
+    const factory = adapter?.connectors.get(capabilityId);
+    if (!adapter || !factory) return failure("connector_missing", "No registered action connector exists for this capability.");
+    if (connection.adapterId !== adapterId) return failure("connector_mismatch", "The connection does not belong to this adapter.");
+    let connector: unknown;
+    try {
+      connector = factory(connection);
+    } catch (error) {
+      return failure("module_throwing", `The connector factory threw for this connection: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (!isRecord(connector) || connector.kind !== "action" || connector.adapterId !== adapterId || connector.connectionId !== connection.connectionId || connector.capabilityId !== capabilityId) {
+      return failure("connector_mismatch", "The connector does not match the adapter, connection and capability identity.");
+    }
+    return success(structuredClone(connector) as unknown as DeskActionConnector);
+  }
+}
+
+export async function discoverDeskAdapterPackages(options: DeskPackageLoaderOptions = {}): Promise<DeskPackageDiscovery> {
+  return new DeskPackageLoader(options).discover();
+}
