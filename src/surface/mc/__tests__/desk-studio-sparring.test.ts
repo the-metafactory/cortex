@@ -65,7 +65,7 @@ test("pending survives unrelated notes and resolves only for the corresponding r
   const run = { runUuid: uuid, params: { thread: "alpha", mode: "red-team", requestId: "request-sparring" }, status: "queued" as const, startedAt: null, policy: null, reason: "Deferred until tomorrow: the local daily run budget is spent" };
   const studio = { ...r.studio, thinking: { kind: "ready" as const, dailyRuns: { local: 1, cloud: 5 }, runs: [run, { ...run, runUuid: "other", status: "failed" as const, startedAt: now.toISOString(), policy: "local" as const }] } };
   const unrelated = { at: now.toISOString(), trigger: "You asked: red-team", mode: "red-team", model: "local", kind: "note" as const, status: "open" as const, sample: false, text: "An unrelated note" };
-  expect(threadThinking(studio, { ...thread, notes: [unrelated] }, now)).toMatchObject({ kind: "ready", budgetSpent: true, runs: [{ id: uuid, status: "pending", reason: run.reason }, { status: "failed" }] });
+  expect(threadThinking(studio, { ...thread, notes: [unrelated] }, now)).toMatchObject({ kind: "ready", budget: "spent", runs: [{ id: uuid, status: "pending", reason: run.reason }, { status: "failed" }] });
   expect(threadThinking(studio, { ...thread, notes: [{ ...unrelated, run: uuid }] }, now)).toMatchObject({ runs: [{ id: "other" }] });
   const parsed = parseThreadFile("threads/alpha.md", `${text}\n## Ivy's notes\n\n### ${now.toISOString()}\ntrigger: You asked: red-team\nmodel: local / pi\nmode: red-team\nrun: ${uuid}\n\nA note.\n`);
   expect(parsed.ok && parsed.value.notes[0]?.run).toBe(uuid);
