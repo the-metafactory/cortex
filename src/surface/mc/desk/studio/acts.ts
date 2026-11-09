@@ -24,6 +24,8 @@ export const StudioActSchema = z.discriminatedUnion("act", [
   z.object({ act: z.literal("park"), thread: slug }),
   z.object({ act: z.literal("unpark"), thread: slug, park: slug.optional() }),
   z.object({ act: z.literal("think"), thread: slug, on: z.boolean() }),
+  z.object({ act: z.literal("rename"), thread: slug, question: words(MAX_QUESTION).regex(/^[^\r\n]+$/, "must be one line") }),
+  z.object({ act: z.literal("area"), thread: slug, area: areaId }),
   z.object({
     act: z.literal("close"),
     thread: slug,
@@ -182,6 +184,21 @@ function think(ctx: Ctx, act: Extract<StudioAct, { act: "think" }>, { thread, te
   return plan([edited(thread.path, out)], `Think tonight ${act.on ? "on" : "off"} for ${thread.slug}`, act.on ? "Ivy thinks about it tonight." : "Ivy leaves it alone tonight.");
 }
 
+function rename(ctx: Ctx, act: Extract<StudioAct, { act: "rename" }>, { thread, text }: Found): ActPlan | ActRefusal {
+  const question = oneLine(act.question);
+  if (question === oneLine(thread.question)) return refuse(409, "The thread already has this name.");
+  const out = chain(text, (t) => setSection(t, "question", "Question", question), (t) => appendLog(t, ctx.today, `Renamed from ${quoted(thread.question)}`));
+  return plan([edited(thread.path, out)], `Rename ${thread.slug}`, `Renamed to ${quoted(question)}.`);
+}
+
+function moveArea(ctx: Ctx, act: Extract<StudioAct, { act: "area" }>, { thread, text }: Found): ActPlan | ActRefusal {
+  const area = ctx.view.areas.find((a) => a.id === act.area);
+  if (!area) return refuse(400, `The Desk config lists no area ${act.area}.`);
+  if (thread.areas.length === 1 && thread.areas[0] === act.area) return refuse(409, `This thread is already in ${area.label}.`);
+  const out = chain(text, (t) => setFront(t, "areas", [act.area]), (t) => appendLog(t, ctx.today, `Moved to ${area.label} (${area.policy} model)`));
+  return plan([edited(thread.path, out)], `Move ${thread.slug} to ${act.area}`, `Moved to ${area.label}; it now runs on the ${area.policy} model.`);
+}
+
 function close(ctx: Ctx, act: Extract<StudioAct, { act: "close" }>, { thread, text }: Found): ActPlan | ActRefusal {
   const decided = act.outcome === "decided";
   if (decided && !act.expect) return refuse(400, "A decision needs what you expect to happen, so the review has something to check.");
@@ -310,6 +327,10 @@ function threadAct(ctx: Ctx, act: Exclude<StudioAct, { act: "open" }>, found: Fo
       return think(ctx, act, found);
     case "close":
       return close(ctx, act, found);
+    case "rename":
+      return rename(ctx, act, found);
+    case "area":
+      return moveArea(ctx, act, found);
   }
 }
 

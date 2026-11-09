@@ -22,6 +22,7 @@ export interface ThreadPage {
   typeLabel: string;
   where: string;
   areas: BoardArea[];
+  choices: BoardArea[];
   policy: AreaPolicy;
   material: PageMaterial[];
   standProposal: IvyNote | null;
@@ -79,6 +80,7 @@ export function buildThreadPage(studio: StudioView, slug: string, ctx: RelatesCo
     typeLabel: TYPE_LABEL[thread.type],
     where: whereLine(thread, studio.maxActive),
     areas: thread.areas.map(area),
+    choices: studio.areas,
     policy: thread.policy,
     material: thread.material.map((link) => {
       const { href, ...m } = link;

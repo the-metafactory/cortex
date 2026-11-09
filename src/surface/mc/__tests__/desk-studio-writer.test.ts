@@ -212,6 +212,18 @@ describe("Studio writer acts", () => {
     expect(commits()).toHaveLength(5);
   });
 
+  it("renames a thread and moves it between local and cloud areas", async () => {
+    seed();
+    expect((await run({ act: "rename", thread: "gamma", question: "A better name?" })).ok).toBe(true);
+    expect(parsed("gamma").question).toBe("A better name?");
+    expect((await run({ act: "area", thread: "gamma", area: "work" })).ok).toBe(true);
+    expect(parsed("gamma").areas).toEqual(["work"]);
+    const local = await run({ act: "area", thread: "gamma", area: "lab" });
+    expect(local.ok && local.studio.parked.find((t) => t.slug === "gamma")?.policy).toBe("cloud");
+    expect((await run({ act: "area", thread: "gamma", area: "lab" })).ok).toBe(false);
+    expect(parsed("gamma").log.map((l) => l.text).slice(1)).toEqual(["Renamed from “What about 2026-10-03”", "Moved to Work (local model)", "Moved to Lab (cloud model)"]);
+  });
+
   it("needs a park choice to bring a thread back at the cap", async () => {
     seed();
     const refused = await run({ act: "unpark", thread: "gamma" }, rid(), 2);
