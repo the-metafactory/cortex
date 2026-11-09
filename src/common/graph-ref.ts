@@ -52,6 +52,13 @@ export function parseGraphNodeRef(text: string): GraphNodeRef | null {
   return { repo, sigil, iid: Number(match[3]) };
 }
 
+export function graphReadScope(read: { repos: readonly string[]; namespaces?: readonly string[] }): GraphReadScope {
+  return {
+    repositories: read.repos.flatMap(text => parseGraphRepoRef(text) ?? []),
+    namespaces: (read.namespaces ?? []).flatMap(text => parseGraphRepoRef(text) ?? []),
+  };
+}
+
 export const formatGraphRepoRef = (repo: GraphRepoRef): string => `${repo.forge}:${repo.host}/${repo.path}`;
 
 export const formatGraphNodeRef = (ref: GraphNodeRef): string => `${formatGraphRepoRef(ref.repo)}${ref.sigil}${ref.iid}`;

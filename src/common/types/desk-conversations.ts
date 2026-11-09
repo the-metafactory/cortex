@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { formatGraphNodeRef, formatGraphRepoRef, parseGraphNodeRef, parseGraphRepoRef, permitsGraphRead } from "../graph-ref";
+import { formatGraphNodeRef, formatGraphRepoRef, graphReadScope, parseGraphNodeRef, parseGraphRepoRef, permitsGraphRead } from "../graph-ref";
 
 export const PI_FILE_TOOLS = ["read", "grep", "find", "ls"] as const;
 export const PI_SOMA_TOOLS = ["soma_context"] as const;
@@ -90,7 +90,7 @@ const GraphSchema = z.object({
   maps: z.array(GraphMapSchema).min(1).max(100).refine(maps => new Set(maps.map(map => map.id)).size === maps.length, "mc.desk.conversations.tools graph map ids must be unique").refine(maps => new Set(maps.map(map => map.ref.toLowerCase())).size === maps.length, "mc.desk.conversations.tools graph map roots must be unique"),
   read: GraphReadSchema,
 }).strict().superRefine((graph, context) => {
-  const scope = { repositories: graph.read.repos.flatMap(text => { const repo = parseGraphRepoRef(text); return repo ? [repo] : []; }), namespaces: graph.read.namespaces.flatMap(text => { const repo = parseGraphRepoRef(text); return repo ? [repo] : []; }) };
+  const scope = graphReadScope(graph.read);
   for (const map of graph.maps) {
     const ref = parseGraphNodeRef(map.ref);
     if (ref && !permitsGraphRead(scope, ref.repo)) context.addIssue({ code: "custom", path: ["maps"], message: `graph map ${map.id} is outside the configured read scope` });

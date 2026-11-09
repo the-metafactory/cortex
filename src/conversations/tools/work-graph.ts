@@ -1,9 +1,9 @@
 import { z } from "zod/v4";
-import { canonicalNodeId, formatGraphNodeRef, formatGraphRepoRef, parseGraphNodeRef, parseGraphRepoRef, permitsGraphRead, qualifiedNodeId, type GraphNodeRef, type GraphReadScope } from "../../common/graph-ref";
+import { canonicalNodeId, formatGraphNodeRef, formatGraphRepoRef, graphReadScope, parseGraphNodeRef, permitsGraphRead, qualifiedNodeId, type GraphNodeRef, type GraphReadScope } from "../../common/graph-ref";
 import { PROJECT_ID, type GraphSource } from "../../common/types/desk-conversations";
 import { CommandTimeout, runCommand, type CommandResult } from "../../surface/mc/desk/spawn";
 import type { ToolContext, ToolDefinition } from "./capabilities";
-import { isRecord, list, num, rec, str, strings } from "./json";
+import { isRecord, num, rec, str, strings } from "./json";
 
 export type WorkGraphRunner = (argv: string[], timeoutMs: number) => Promise<CommandResult>;
 export interface WorkGraphToolOptions {
@@ -14,6 +14,7 @@ export interface WorkGraphToolOptions {
 
 type GraphFailure = "denied" | "not-found" | "identity-mismatch" | "invalid-source" | "owner-timeout" | "owner-unavailable" | "owner-failure" | "unreadable";
 type OwnerRead = { ok: true; body: Record<string, unknown> } | { ok: false; status: GraphFailure; message: string };
+type GraphMap = GraphSource["maps"][number];
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_BODY_LIMIT = 2_000;
@@ -22,6 +23,7 @@ const MAX_PAGE = 50;
 const MAX_FINDINGS = 200;
 const MAX_GIST = 500;
 const MAX_TITLE = 300;
+const OUTSIDE_SCOPE = "This dependency is outside the permitted read scope; its state is unavailable and it remains blocking.";
 
 const SourceId = z.string().regex(new RegExp(`^${PROJECT_ID}$`));
 const MapId = z.string().regex(new RegExp(`^${PROJECT_ID}$`));
@@ -50,10 +52,7 @@ const DecisionsInput = SourceInput.extend({
 
 const clip = (text: string, limit: number): string => text.length > limit ? `${text.slice(0, limit)}\n[truncated ${text.length - limit} characters]` : text;
 
-const scopeOf = (graph: GraphSource): GraphReadScope => ({
-  repositories: graph.read.repos.flatMap(text => parseGraphRepoRef(text) ?? []),
-  namespaces: graph.read.namespaces.flatMap(text => parseGraphRepoRef(text) ?? []),
-});
+const scopeOf = (graph: GraphSource): GraphReadScope => graphReadScope(graph.read);
 const scopeArgs = (graph: GraphSource): string[] => [
   ...graph.read.repos.flatMap(ref => ["--read-repo", ref]),
   ...graph.read.namespaces.flatMap(ref => ["--read-namespace", ref]),
@@ -67,6 +66,11 @@ const failureOf = (result: CommandResult): { status: GraphFailure; message: stri
   return { status: "owner-failure", message: "The graph owner did not answer usefully. Nothing was released." };
 };
 
+const entries = (value: unknown): Record<string, unknown>[] => Array.isArray(value)
+  ? value.flatMap(entry => typeof entry === "string" ? [{ id: entry }] : isRecord(entry) ? [entry] : [])
+  : [];
+const entryId = (entry: Record<string, unknown>): string => str(entry.id) ?? str(entry.ref) ?? "";
+
 interface BlockerView {
   ref: string;
   unavailable?: true;
@@ -76,6 +80,10 @@ interface BlockerView {
   message?: string;
 }
 
+interface NodeTarget { map: GraphMap; repo: string }
+interface PreparedMap extends NodeTarget { graph: GraphSource }
+type MapRead = { refusal: string } | { refusal?: undefined; graph: GraphSource; map: GraphMap; repo: string; scope: GraphReadScope; body: Record<string, unknown> };
+
 export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDefinition[] {
   const run: WorkGraphRunner = options.run ?? ((argv, timeoutMs) => runCommand(argv, timeoutMs));
   const now = options.now ?? (() => new Date());
@@ -83,7 +91,7 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
 
   const fetchedAt = (): string => now().toISOString();
 
-  const invoke = async (graph: GraphSource, argv: string[]): Promise<OwnerRead> => {
+  const invoke = async (argv: string[]): Promise<OwnerRead> => {
     let result: CommandResult;
     try {
       result = await run(argv, timeoutMs);
@@ -104,50 +112,92 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
   };
 
   const failed = (graph: GraphSource, failure: Extract<OwnerRead, { ok: false }>): string => JSON.stringify({ status: failure.status, graph: graph.id, fetchedAt: fetchedAt(), message: failure.message });
-
-  const mapOf = (graph: GraphSource, id: string): GraphSource["maps"][number] | null => graph.maps.find(map => map.id === id) ?? null;
-  const repoOf = (graph: GraphSource, map: GraphSource["maps"][number]): string | null => {
-    const root = parseGraphNodeRef(map.ref);
-    return root ? formatGraphRepoRef(root.repo) : null;
+  const grantedGraph = (context: ToolContext): GraphSource | string => context.graph ?? JSON.stringify({ status: "invalid-source", message: "No configured graph source was granted." });
+  const mapOf = (maps: readonly GraphMap[], id: string): GraphMap | null => maps.find(map => map.id === id) ?? null;
+  const mapTarget = (graph: GraphSource, id: string): NodeTarget | null => {
+    const map = mapOf(graph.maps, id);
+    const root = map ? parseGraphNodeRef(map.ref) : null;
+    return map && root ? { map, repo: formatGraphRepoRef(root.repo) } : null;
   };
-  const rootOf = (graph: GraphSource, map: GraphSource["maps"][number]): GraphNodeRef | null => parseGraphNodeRef(map.ref);
-  const mapTarget = (graph: GraphSource, id: string): { map: GraphSource["maps"][number]; repo: string } | null => {
-    const map = mapOf(graph, id);
-    const repo = map ? repoOf(graph, map) : null;
-    return map && repo ? { map, repo } : null;
-  };
-  const preparedMap = (context: ToolContext, id: string): string | { graph: GraphSource; map: GraphSource["maps"][number]; repo: string } => {
-    const graph = context.graph;
-    if (!graph) return JSON.stringify({ status: "invalid-source", message: "No configured graph source was granted." });
+  const preparedMap = (context: ToolContext, id: string): string | PreparedMap => {
+    const graph = grantedGraph(context);
+    if (typeof graph === "string") return graph;
     const target = mapTarget(graph, id);
     if (!target) return JSON.stringify({ status: "invalid-source", graph: graph.id, fetchedAt: fetchedAt(), message: "No configured map has that id." });
     context.signal.throwIfAborted();
     return { graph, ...target };
   };
+  const wrongRepo = (graph: GraphSource, body: Record<string, unknown>, repo: string, what: string): string | null =>
+    (str(body.repo) ?? "").toLowerCase() === repo.toLowerCase()
+      ? null
+      : failed(graph, { ok: false, status: "identity-mismatch", message: `The graph owner returned ${what} from a different repository. Nothing was released.` });
 
-  const blocker = (repo: string, entry: Record<string, unknown>): BlockerView => {
-    const id = str(entry.id) ?? "";
+  const nodeRef = (scope: GraphReadScope, repo: string, id: string): { ref: string; outside: boolean } => {
+    const ref = qualifiedNodeId(repo, id);
+    const parsed = parseGraphNodeRef(ref);
+    return { ref, outside: parsed === null || !permitsGraphRead(scope, parsed.repo) };
+  };
+
+  const dependency = (scope: GraphReadScope, repo: string, entry: Record<string, unknown>): BlockerView => {
+    const { ref, outside } = nodeRef(scope, repo, entryId(entry));
     const status = str(entry.status);
-    const unavailable = status === "unavailable" || entry.unavailable === true;
+    const unavailable = outside || status === "unavailable" || entry.unavailable === true;
     const abandoned = entry.abandoned === true;
-    if (unavailable) return { ref: qualifiedNodeId(repo, id), unavailable: true, cleared: false, message: "This dependency is outside the permitted read scope; its state is unavailable and it remains blocking." };
+    if (unavailable) return { ref, unavailable: true, cleared: false, message: OUTSIDE_SCOPE };
     return {
-      ref: qualifiedNodeId(repo, id),
+      ref,
       state: status === "open" || status === "closed" ? status : null,
       ...(abandoned ? { abandoned: true as const } : {}),
       cleared: status === "closed" && !abandoned,
     };
   };
 
-  const projectNode = (repo: string, state: Record<string, unknown>, bodyLimit: number): Record<string, unknown> => {
+  const membershipEdges = (scope: GraphReadScope, repo: string, value: unknown): { source: string; target: string; unavailable: true }[] =>
+    entries(value).map(edge => ({
+      source: nodeRef(scope, repo, str(rec(edge.source).id) ?? "").ref,
+      target: nodeRef(scope, repo, str(rec(edge.target).id) ?? "").ref,
+      unavailable: true,
+    }));
+
+  const bounded = <T>(all: readonly T[]): { items: T[]; omitted: number } => ({ items: all.slice(0, MAX_FINDINGS), omitted: Math.max(0, all.length - MAX_FINDINGS) });
+  const findingRefs = (repo: string, value: unknown): { items: string[]; omitted: number } =>
+    bounded(entries(value).map(entry => qualifiedNodeId(repo, entryId(entry))).filter(ref => ref.length > 0));
+
+  const pageOf = <T>(all: readonly T[], offset: number, limit: number): { page: T[]; total: number; offset: number; next: number | null } => {
+    const page = all.slice(offset, offset + limit);
+    const end = offset + page.length;
+    return { page, total: all.length, offset, next: end < all.length ? end : null };
+  };
+
+  const readMap = async (context: ToolContext, request: { map: string; verb: string; args?: string[]; what: string }): Promise<MapRead> => {
+    const prepared = preparedMap(context, request.map);
+    if (typeof prepared === "string") return { refusal: prepared };
+    const { graph, map, repo } = prepared;
+    context.signal.throwIfAborted();
+    const result = await invoke(["soma", "graph", request.verb, map.ref, ...(request.args ?? []), ...scopeArgs(graph), "--json"]);
+    context.signal.throwIfAborted();
+    if (!result.ok) return { refusal: failed(graph, result) };
+    const wrong = wrongRepo(graph, result.body, repo, request.what);
+    if (wrong) return { refusal: wrong };
+    return { graph, map, repo, scope: scopeOf(graph), body: result.body };
+  };
+
+  const projectNode = (scope: GraphReadScope, repo: string, state: Record<string, unknown>, bodyLimit: number): Record<string, unknown> => {
     const node = rec(state.node);
     const ref = rec(state.ref);
     const parent = rec(state.parent);
     const id = str(ref.id) ?? str(node.id) ?? "";
     const status = str(state.status);
     const closed = status === "closed";
-    const blockedBy = list(state.blockedBy).map(entry => blocker(repo, entry));
+    const blockedBy = entries(state.blockedBy).map(entry => dependency(scope, repo, entry));
     const body = str(state.body);
+    const parentId = str(parent.id);
+    const parentRef = parentId ? nodeRef(scope, repo, parentId) : null;
+    const children = entries(state.children).map(entry => nodeRef(scope, repo, entryId(entry)));
+    const unavailableChildren = [...new Set([
+      ...entries(state.unavailableChildren).map(entry => nodeRef(scope, repo, entryId(entry)).ref),
+      ...children.filter(child => child.outside).map(child => child.ref),
+    ])];
     return {
       ref: qualifiedNodeId(repo, id),
       url: str(state.url),
@@ -162,13 +212,13 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
       assignees: strings(state.assignees),
       blocked: blockedBy.some(entry => !entry.cleared),
       blockedBy,
-      parent: str(parent.id) === null ? null : qualifiedNodeId(repo, str(parent.id) ?? ""),
-      parentUnavailable: parent.unavailable === true,
+      parent: parentRef?.ref ?? null,
+      parentUnavailable: parent.unavailable === true || (parentRef?.outside ?? false),
       receiptBacked: state.currentCloseReceipt === true,
       receiptMissing: closed && state.currentCloseReceipt !== true,
       checkpoint: str(node.checkpointId),
       serves: str(node.serves),
-      unavailableChildren: list(state.unavailableChildren).map(entry => qualifiedNodeId(repo, str(entry.id) ?? "")),
+      unavailableChildren,
       snapshot: "live",
       ...(bodyLimit > 0 && body !== null ? { body: clip(body, bodyLimit), bodyTruncated: body.length > bodyLimit } : {}),
     };
@@ -182,17 +232,17 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
     bindRegistry: true,
     input: MapsInput,
     run: async (_raw, context) => {
-      const graph = context.graph;
-      if (!graph) return JSON.stringify({ status: "invalid-source", message: "No configured graph source was granted." });
+      const graph = grantedGraph(context);
+      if (typeof graph === "string") return graph;
       const roots = graph.maps.map(map => map.ref);
       if (roots.length === 0) return JSON.stringify({ status: "invalid-source", graph: graph.id, message: "This graph source configures no maps." });
       context.signal.throwIfAborted();
-      const result = await invoke(graph, ["soma", "graph", "maps", ...roots.flatMap(ref => ["--root", ref]), ...scopeArgs(graph), "--json"]);
+      const result = await invoke(["soma", "graph", "maps", ...roots.flatMap(ref => ["--root", ref]), ...scopeArgs(graph), "--json"]);
       context.signal.throwIfAborted();
       if (!result.ok) return failed(graph, result);
-      const entries = list(result.body.maps);
+      const scope = scopeOf(graph);
       const byRef = new Map<string, Record<string, unknown>>();
-      for (const entry of entries) {
+      for (const entry of entries(result.body.maps)) {
         const ref = str(entry.ref);
         if (!ref || byRef.has(ref.toLowerCase())) return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned a map inventory that does not match the configured maps. Nothing was released." });
         byRef.set(ref.toLowerCase(), entry);
@@ -201,9 +251,10 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
       const projected = graph.maps.map(map => {
         const entry = byRef.get(map.ref.toLowerCase());
         const state = rec(entry?.state);
-        const repo = repoOf(graph, map);
+        const root = parseGraphNodeRef(map.ref);
+        const repo = root ? formatGraphRepoRef(root.repo) : null;
         if (!entry || !repo || entry.unavailable === true || Object.keys(state).length === 0) return { id: map.id, ref: map.ref, label: map.label ?? null, status: "unavailable", message: "The owner reports this map unavailable in the permitted read scope." };
-        return { id: map.id, ref: map.ref, label: map.label ?? null, status: "available", map: projectNode(repo, state, 0) };
+        return { id: map.id, ref: map.ref, label: map.label ?? null, status: "available", map: projectNode(scope, repo, state, 0) };
       });
       const unavailable = projected.filter(entry => entry.status === "unavailable").length;
       return JSON.stringify({ status: "ok", graph: graph.id, fetchedAt: fetchedAt(), snapshot: "live", maps: projected, unavailable });
@@ -218,9 +269,9 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
     }
     const bare = /^#?([1-9]\d*)$/.exec(input.node)?.[1];
     if (!bare || !input.map) return "A bare node number needs one of this graph's configured map ids.";
-    const map = mapOf(graph, input.map);
-    const root = map ? rootOf(graph, map) : null;
-    if (!map || !root) return "No configured map has that id.";
+    const map = mapOf(graph.maps, input.map);
+    const root = map ? parseGraphNodeRef(map.ref) : null;
+    if (!root) return "No configured map has that id.";
     const target = `${formatGraphRepoRef(root.repo)}#${bare}`;
     const ref = parseGraphNodeRef(target);
     return ref ? { ref, target } : "The configured map root cannot name a node.";
@@ -234,61 +285,48 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
     bindRegistry: true,
     input: NodeInput,
     run: async (raw, context) => {
-      const graph = context.graph;
-      if (!graph) return JSON.stringify({ status: "invalid-source", message: "No configured graph source was granted." });
+      const graph = grantedGraph(context);
+      if (typeof graph === "string") return graph;
       const input = raw as z.infer<typeof NodeInput>;
       const target = resolveNode(graph, input);
       if (typeof target === "string") return JSON.stringify({ status: "invalid-source", graph: graph.id, fetchedAt: fetchedAt(), message: target });
       context.signal.throwIfAborted();
-      const result = await invoke(graph, ["soma", "graph", "node", target.target, ...scopeArgs(graph), "--json"]);
+      const result = await invoke(["soma", "graph", "node", target.target, ...scopeArgs(graph), "--json"]);
       context.signal.throwIfAborted();
       if (!result.ok) return failed(graph, result);
       const repo = formatGraphRepoRef(target.ref.repo);
-      if ((str(result.body.repo) ?? "").toLowerCase() !== repo.toLowerCase()) return failed(graph, { ok: false, status: "identity-mismatch", message: "The graph owner returned a node from a different repository. Nothing was released." });
+      const wrong = wrongRepo(graph, result.body, repo, "a node");
+      if (wrong) return wrong;
       if (str(rec(result.body.ref).id) !== canonicalNodeId(target.ref)) return failed(graph, { ok: false, status: "identity-mismatch", message: "The graph owner returned a different node. Nothing was released." });
       if (result.body.status !== "open" && result.body.status !== "closed") return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned a node without a usable open or closed state. Nothing was released." });
-      return JSON.stringify({ status: "ok", graph: graph.id, fetchedAt: fetchedAt(), snapshot: "live", repo, node: projectNode(repo, result.body, input.bodyLimit) });
+      return JSON.stringify({ status: "ok", graph: graph.id, fetchedAt: fetchedAt(), snapshot: "live", repo, node: projectNode(scopeOf(graph), repo, result.body, input.bodyLimit) });
     },
   };
 
   const frontier: ToolDefinition = {
     name: "work_graph_frontier",
-    description: "Read the next unblocked work-graph nodes on one configured map: open, unassigned and unblocked across the map's membership subtree. Returns a bounded page of live nodes with forge-qualified references, source links, typed state, assignees and dependencies, plus nodes skipped because they are outside the store's write scope and any membership edges omitted by the read scope. Observe again rather than trusting an earlier page. This reads only: it never claims or releases a node.",
+    description: "Read the next unblocked work-graph nodes on one configured map: open, unassigned and unblocked across the map's membership subtree. Returns a bounded page of live nodes with forge-qualified references, source links, typed state, assignees and dependencies, plus bounded lists of nodes skipped because they are outside the store's write scope and membership edges omitted by the read scope. Observe again rather than trusting an earlier page. This reads only: it never claims or releases a node.",
     operation: "graph.read",
     source: "graph",
     bindRegistry: true,
     input: FrontierInput,
     run: async (raw, context) => {
-      const graph = context.graph;
-      if (!graph) return JSON.stringify({ status: "invalid-source", message: "No configured graph source was granted." });
       const input = raw as z.infer<typeof FrontierInput>;
-      const map = mapOf(graph, input.map);
-      const root = map ? rootOf(graph, map) : null;
-      const repo = map ? repoOf(graph, map) : null;
-      if (!map || !root || !repo) return JSON.stringify({ status: "invalid-source", graph: graph.id, fetchedAt: fetchedAt(), message: "No configured map has that id." });
-      context.signal.throwIfAborted();
-      const result = await invoke(graph, ["soma", "graph", "frontier", map.ref, ...scopeArgs(graph), "--json"]);
-      context.signal.throwIfAborted();
-      if (!result.ok) return failed(graph, result);
-      if ((str(result.body.repo) ?? "").toLowerCase() !== repo.toLowerCase()) return failed(graph, { ok: false, status: "identity-mismatch", message: "The graph owner returned a frontier from a different repository. Nothing was released." });
-      if (!Array.isArray(result.body.frontier) || !Array.isArray(result.body.notWritable)) return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned a frontier without node lists. Nothing was released." });
-      const nodes = list(result.body.frontier).map(state => projectNode(repo, state, 0));
-      const notWritable = list(result.body.notWritable).map(state => projectNode(repo, state, 0));
-      const unavailableMembership = list(result.body.unavailableMembership).map(edge => ({ source: qualifiedNodeId(repo, str(rec(edge.source).id) ?? ""), target: qualifiedNodeId(repo, str(rec(edge.target).id) ?? ""), unavailable: true }));
-      const page = nodes.slice(input.offset, input.offset + input.limit);
-      const end = input.offset + page.length;
+      const read = await readMap(context, { map: input.map, verb: "frontier", what: "a frontier" });
+      if (read.refusal !== undefined) return read.refusal;
+      const { graph, map, repo, scope, body } = read;
+      if (!Array.isArray(body.frontier) || !Array.isArray(body.notWritable)) return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned a frontier without node lists. Nothing was released." });
+      const nodes = entries(body.frontier).map(state => projectNode(scope, repo, state, 0));
+      const notWritable = bounded(entries(body.notWritable).map(state => projectNode(scope, repo, state, 0)));
+      const unavailableMembership = bounded(membershipEdges(scope, repo, body.unavailableMembership));
+      const paged = pageOf(nodes, input.offset, input.limit);
       return JSON.stringify({
         status: "ok", graph: graph.id, fetchedAt: fetchedAt(), snapshot: "live", repo,
         map: { id: map.id, ref: map.ref, label: map.label ?? null },
-        total: nodes.length, offset: input.offset, nodes: page, notWritable, unavailableMembership,
-        next: end < nodes.length ? end : null,
+        total: paged.total, offset: paged.offset, nodes: paged.page, notWritable, unavailableMembership,
+        next: paged.next,
       });
     },
-  };
-
-  const cap = (value: unknown): { items: string[]; omitted: number } => {
-    const all = strings(value);
-    return { items: all.slice(0, MAX_FINDINGS), omitted: Math.max(0, all.length - MAX_FINDINGS) };
   };
 
   const audit: ToolDefinition = {
@@ -300,30 +338,25 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
     input: AuditInput,
     run: async (raw, context) => {
       const input = raw as z.infer<typeof AuditInput>;
-      const prepared = preparedMap(context, input.map);
-      if (typeof prepared === "string") return prepared;
-      const { graph, map, repo } = prepared;
-      const result = await invoke(graph, ["soma", "graph", "audit", map.ref, ...scopeArgs(graph), ...(input.scope ? ["--scope", input.scope] : []), "--json"]);
-      context.signal.throwIfAborted();
-      if (!result.ok) return failed(graph, result);
-      if ((str(result.body.repo) ?? "").toLowerCase() !== repo.toLowerCase()) return failed(graph, { ok: false, status: "identity-mismatch", message: "The graph owner returned an audit from a different repository. Nothing was released." });
-      const nodes = num(result.body.nodes);
+      const read = await readMap(context, { map: input.map, verb: "audit", args: input.scope ? ["--scope", input.scope] : [], what: "an audit" });
+      if (read.refusal !== undefined) return read.refusal;
+      const { graph, map, repo, scope, body } = read;
+      const nodes = num(body.nodes);
       if (nodes === null) return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned an audit without a node count. Nothing was released." });
-      const closedWithoutReceipt = cap(result.body.closedWithoutReceipt);
-      const openWithoutCheckpoint = cap(result.body.openWithoutCheckpoint);
-      const openWithFullSuiteProbe = cap(result.body.openWithFullSuiteProbe);
-      const openWithBareBunTestProbe = cap(result.body.openWithBareBunTestProbe);
-      const openClaimed = list(result.body.openClaimed).slice(0, MAX_FINDINGS).map(entry => ({ ref: qualifiedNodeId(repo, str(entry.id) ?? ""), assignees: strings(entry.assignees) }));
-      const buildBriefNotReady = list(result.body.buildBriefNotReady).slice(0, MAX_FINDINGS).map(entry => ({ ref: qualifiedNodeId(repo, str(entry.id) ?? ""), missing: strings(entry.missing).slice(0, 20) }));
-      const unavailableMembership = list(result.body.unavailableMembership).map(edge => ({ source: qualifiedNodeId(repo, str(rec(edge.source).id) ?? ""), target: qualifiedNodeId(repo, str(rec(edge.target).id) ?? ""), unavailable: true }));
+      const openClaimed = bounded(entries(body.openClaimed).map(entry => ({ ref: qualifiedNodeId(repo, entryId(entry)), assignees: strings(entry.assignees) })));
+      const buildBriefNotReady = bounded(entries(body.buildBriefNotReady).map(entry => ({ ref: qualifiedNodeId(repo, entryId(entry)), missing: strings(entry.missing).slice(0, 20) })));
+      const unavailableMembership = bounded(membershipEdges(scope, repo, body.unavailableMembership));
       return JSON.stringify({
         status: "ok", graph: graph.id, fetchedAt: fetchedAt(), snapshot: "live", repo,
         map: { id: map.id, ref: map.ref, label: map.label ?? null },
         scope: input.scope ?? "all", uncheckedFindings: input.scope !== undefined, nodes,
         findings: {
-          closedWithoutReceipt, openWithoutCheckpoint, openWithFullSuiteProbe, openWithBareBunTestProbe,
-          openClaimed: { items: openClaimed, omitted: Math.max(0, list(result.body.openClaimed).length - MAX_FINDINGS) },
-          buildBriefNotReady: { items: buildBriefNotReady, omitted: Math.max(0, list(result.body.buildBriefNotReady).length - MAX_FINDINGS) },
+          closedWithoutReceipt: findingRefs(repo, body.closedWithoutReceipt),
+          openWithoutCheckpoint: findingRefs(repo, body.openWithoutCheckpoint),
+          openWithFullSuiteProbe: findingRefs(repo, body.openWithFullSuiteProbe),
+          openWithBareBunTestProbe: findingRefs(repo, body.openWithBareBunTestProbe),
+          openClaimed,
+          buildBriefNotReady,
         },
         unavailableMembership,
       });
@@ -339,29 +372,24 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
     input: DecisionsInput,
     run: async (raw, context) => {
       const input = raw as z.infer<typeof DecisionsInput>;
-      const prepared = preparedMap(context, input.map);
-      if (typeof prepared === "string") return prepared;
-      const { graph, map, repo } = prepared;
-      const result = await invoke(graph, ["soma", "graph", "decisions", map.ref, ...scopeArgs(graph), "--json"]);
-      context.signal.throwIfAborted();
-      if (!result.ok) return failed(graph, result);
-      if ((str(result.body.repo) ?? "").toLowerCase() !== repo.toLowerCase()) return failed(graph, { ok: false, status: "identity-mismatch", message: "The graph owner returned decisions from a different repository. Nothing was released." });
-      if (!Array.isArray(result.body.decisions)) return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned no decision list. Nothing was released." });
-      const all = list(result.body.decisions).map(entry => ({
-        ref: qualifiedNodeId(repo, str(entry.id) ?? ""),
+      const read = await readMap(context, { map: input.map, verb: "decisions", what: "decisions" });
+      if (read.refusal !== undefined) return read.refusal;
+      const { graph, map, repo, body } = read;
+      if (!Array.isArray(body.decisions)) return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned no decision list. Nothing was released." });
+      const all = entries(body.decisions).map(entry => ({
+        ref: qualifiedNodeId(repo, entryId(entry)),
         title: clip(str(entry.title) ?? "", MAX_TITLE),
         url: str(entry.url),
         receiptBacked: entry.hasReceipt === true,
         abandoned: entry.abandoned === true,
         gist: str(entry.gist) === null ? null : clip(str(entry.gist) ?? "", MAX_GIST),
       }));
-      const page = all.slice(input.offset, input.offset + input.limit);
-      const end = input.offset + page.length;
+      const paged = pageOf(all, input.offset, input.limit);
       return JSON.stringify({
         status: "ok", graph: graph.id, fetchedAt: fetchedAt(), historical: true, derivedFrom: "close-receipts", repo,
         map: { id: map.id, ref: map.ref, label: map.label ?? null },
-        total: all.length, offset: input.offset, decisions: page,
-        next: end < all.length ? end : null,
+        total: paged.total, offset: paged.offset, decisions: paged.page,
+        next: paged.next,
       });
     },
   };

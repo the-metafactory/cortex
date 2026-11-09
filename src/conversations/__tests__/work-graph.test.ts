@@ -120,7 +120,7 @@ describe("work graph reads through the conversation boundary", () => {
     const r = rig({
       node: ok({
         repo: DESK,
-        ...nodeState({ blockedBy: [{ id: "example/secret#7", status: "unavailable" }, { id: "example/other#8", status: "closed" }] }),
+        ...nodeState({ blockedBy: [{ id: "example/secret#7", status: "unavailable" }, { id: "example/other#8", status: "closed" }, { id: "example/secret#9", status: "closed", abandoned: true }] }),
       }),
     });
     const output = toolBody((await r.call("work_graph_node", { graph: "maps", map: "desk", node: "42" })).text);
@@ -129,6 +129,8 @@ describe("work graph reads through the conversation boundary", () => {
     expect(blockers[0]).toEqual({ ref: "github:github.com/example/secret#7", unavailable: true, cleared: false, message: "This dependency is outside the permitted read scope; its state is unavailable and it remains blocking." });
     expect(blockers[0]).not.toHaveProperty("state");
     expect(blockers[1]).toMatchObject({ ref: "github:github.com/example/other#8", state: "closed", cleared: true });
+    expect(blockers[2]).toEqual({ ref: "github:github.com/example/secret#9", unavailable: true, cleared: false, message: "This dependency is outside the permitted read scope; its state is unavailable and it remains blocking." });
+    expect(blockers[2]).not.toHaveProperty("state");
     expect(r.argvs).toHaveLength(1);
   });
 
@@ -144,8 +146,8 @@ describe("work graph reads through the conversation boundary", () => {
     const output = toolBody((await r.call("work_graph_frontier", { graph: "maps", map: "desk", offset: 1, limit: 1 })).text);
     expect(output).toMatchObject({ status: "ok", repo: DESK, total: 3, offset: 1, next: 2, map: { id: "desk", ref: `${DESK}#1`, label: "Desk" } });
     expect((output.nodes as { ref: string }[]).map(node => node.ref)).toEqual([`${DESK}#12`]);
-    expect((output.notWritable as { ref: string }[]).map(node => node.ref)).toEqual([`${DESK}#14`]);
-    expect(output.unavailableMembership).toEqual([{ source: `${DESK}#11`, target: "github:github.com/example/secret#9", unavailable: true }]);
+    expect(output.notWritable).toMatchObject({ items: [{ ref: `${DESK}#14` }], omitted: 0 });
+    expect(output.unavailableMembership).toEqual({ items: [{ source: `${DESK}#11`, target: "github:github.com/example/secret#9", unavailable: true }], omitted: 0 });
     expect(r.argvs[0]).toEqual(["soma", "graph", "frontier", `${DESK}#1`, "--read-repo", DESK, "--read-repo", OTHER, "--json"]);
   });
 
@@ -158,6 +160,17 @@ describe("work graph reads through the conversation boundary", () => {
     expect(output.findings).toMatchObject({ buildBriefNotReady: { items: [{ ref: `${DESK}#42`, missing: ["## Deliverable"] }], omitted: 0 }, closedWithoutReceipt: { items: [], omitted: 0 } });
     expect(r.argvs[0]).toContain("--scope");
     expect(r.argvs[0]).not.toContain("--write");
+  });
+
+  test("audit finding lists qualify both id objects and bare ids", async () => {
+    const r = rig({
+      audit: ok({ repo: DESK, root: "1", nodes: 4, closedWithoutReceipt: [{ id: "42" }, "43", { ref: "example/other#44" }], openClaimed: ["45"] }),
+    });
+    const output = toolBody((await r.call("work_graph_audit", { graph: "maps", map: "desk" })).text);
+    expect(output.findings).toMatchObject({
+      closedWithoutReceipt: { items: [`${DESK}#42`, `${DESK}#43`, "github:github.com/example/other#44"], omitted: 0 },
+      openClaimed: { items: [{ ref: `${DESK}#45`, assignees: [] }], omitted: 0 },
+    });
   });
 
   test("the decisions read is labelled historical and receipt-derived", async () => {
@@ -232,10 +245,12 @@ describe("work graph authorization and owner output", () => {
   test("capabilities lists the graph as its own source kind", async () => {
     const r = rig({});
     const output = toolBody((await r.call("capabilities", {})).text);
-    const sources = output.sources as { project: string; kind: string; tools: { tool: string; availability: string }[] }[];
-    expect(sources.find(source => source.project === "maps")).toMatchObject({ kind: "graph" });
-    expect(sources.find(source => source.project === "project-alpha")).toMatchObject({ kind: "project" });
-    expect(sources.find(source => source.project === "project-alpha")?.tools).toEqual([]);
-    expect(sources.find(source => source.project === "maps")?.tools.map(tool => tool.tool).sort()).toEqual(["work_graph_audit", "work_graph_decisions", "work_graph_frontier", "work_graph_maps", "work_graph_node"]);
+    const sources = output.sources as { source: string; project: string; kind: string; tools: { tool: string; availability: string }[] }[];
+    expect(sources.find(source => source.source === "maps")).toMatchObject({ project: "maps", kind: "graph" });
+    expect(sources.find(source => source.source === "project-alpha")).toMatchObject({ kind: "project" });
+    expect(sources.find(source => source.source === "project-alpha")?.tools).toEqual([]);
+    expect(sources.find(source => source.source === "maps")?.tools.map(tool => tool.tool).sort()).toEqual(["work_graph_audit", "work_graph_decisions", "work_graph_frontier", "work_graph_maps", "work_graph_node"]);
+    const filtered = toolBody((await r.call("capabilities", { source: "maps" })).text);
+    expect((filtered.sources as { source: string }[]).map(source => source.source)).toEqual(["maps"]);
   });
 });

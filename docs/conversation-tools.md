@@ -57,7 +57,7 @@ Without this block, configurations remain valid and discovery returns no project
 
 ## Discovery and dispatch
 
-`capabilities` accepts an optional `project`, `offset`, and `limit`. The default page contains up to ten projects. `next` contains the next offset or `null`. Each visible source identifies its stable project ID, policy, forge identity, and tool availability. Checkout locations and credentials remain in the Cortex runtime.
+`capabilities` accepts an optional `source`, `offset`, and `limit`. The default page contains up to ten sources. `next` contains the next offset or `null`. Each visible source identifies its stable ID under `source`, its kind (`project` or `graph`), policy, operations and tool availability; a project also carries its forge identity. `project` repeats the same ID as a deprecated alias and is still accepted as a filter. Checkout locations and credentials remain in the Cortex runtime.
 
 Availability distinguishes `available`, `not-configured`, `denied`, `dependency-missing`, and `provider-unavailable`. Blocking reasons identify the permitted operation, missing dependency, or provider connection to check. Hidden sources and unknown sources receive the same response. Discovery reveals neither hidden names nor their count.
 
@@ -161,13 +161,23 @@ Graph reads run the installed `soma` CLI with fixed read verbs and validated arg
 | `work_graph_audit` | `map`, optional `scope` | Close-gate findings, optionally only `build-brief-not-ready` |
 | `work_graph_decisions` | `map`, `offset`, `limit` | A bounded page of the receipt-derived decision index |
 
-A node reference is either fully qualified or a bare node number together with a configured map id. A qualified reference must lie inside the graph's read scope before the owner is called. Results preserve forge, host and path, including GitLab group identity, in every node and dependency reference.
+A node reference is either fully qualified or a bare node number together with a configured map id. A qualified reference must lie inside the graph's read scope before the owner is called. Results preserve forge, host and path, including GitLab group identity, in every node, dependency and audit-finding reference.
 
-`state` is `open` or `closed` as the owner reports it. `blocked` is true while any dependency is not a completed close; an abandoned dependency keeps its dependent blocked. `receiptBacked` is true only when the owner proves a current close receipt. `receiptMissing` marks a tracker-side close. A dependency outside the read scope has `unavailable: true`, no foreign state, and remains blocking. A node outside the read scope is refused with nothing read. Body text is returned only for `work_graph_node` with `bodyLimit`; it is data and never used to infer progress.
+`state` is `open` or `closed` as the owner reports it. `blocked` is true while any dependency is not a completed close; an abandoned dependency keeps its dependent blocked. `receiptBacked` is true only when the owner proves a current close receipt. `receiptMissing` marks a tracker-side close. A dependency, parent or child outside the read scope has `unavailable: true`, no foreign state, and remains blocking, whatever state the owner reports for it. A node outside the read scope is refused with nothing read. Body text is returned only for `work_graph_node` with `bodyLimit`; it is data and never used to infer progress.
+
+`work_graph_frontier` pages `nodes` with `offset`, `limit` and `next`. Its `notWritable` nodes and `unavailableMembership` edges are bounded to 200 entries each and carry an `omitted` count, so a large map cannot inflate one page. `work_graph_audit` reports each finding as `items` with an `omitted` count; every item is a forge-qualified reference, whether the owner sends bare IDs or `{id}` objects.
 
 Map, node and frontier reads are labelled `snapshot: live`. The decision index is labelled `historical: true` and `derivedFrom: close-receipts`; an audit with a `scope` is labelled `uncheckedFindings: true`. Failures stay distinct: `denied`, `not-found`, `identity-mismatch`, `invalid-source`, `owner-timeout`, `owner-unavailable`, `owner-failure` and `unreadable`. A malformed, truncated or wrong-repository owner response releases nothing. Cancellation and the Cortex runtime's output limit apply as for other source tools.
 
 The graph's `policy` applies before the owner is called and again before the result is released. A local-only graph requires a local-policy conversation, a local model and web transport. A graph source used by a conversation is recorded in its durable tool sources; changing or removing it refuses later turns of that conversation.
+
+<!-- glossary-ignore: run -->
+<!-- glossary-ignore: node -->
+<!-- glossary-ignore: owner -->
+<!-- glossary-ignore: host -->
+<!-- glossary-ignore: path -->
+<!-- glossary-ignore: body -->
+<!-- glossary-ignore: data -->
 
 ## Web search and page reads
 
