@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { initDatabase } from "../../surface/mc/db/init";
 import { getAttentionItem } from "../../surface/mc/db/attention";
@@ -126,6 +129,41 @@ test.each([{}, { proposal_token_env: "MISSING" }, { proposal_token_env: "PROPOSA
     expect(getAttentionItem(db, ID)?.status).toBe("open");
   },
 );
+
+async function tokenFiledWith(stored: string, inherited: Record<string, string> = {}): Promise<string | undefined> {
+  const root = mkdtempSync(join(tmpdir(), "cortex-proposal-secret-"));
+  try {
+    const store = join(root, "secrets/cortex");
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, "PROPOSAL_TOKEN"), stored, { mode: 0o600 });
+    let token: string | undefined;
+    const run: ProposalCommandRunner = async (_argv, commandOptions) => {
+      token = commandOptions.env.GH_TOKEN;
+      return success();
+    };
+    const env = { CORTEX_SURFACE_SECRETS: "arc", ARC_CONFIG_ROOT: root, PATH: "/usr/bin", ...inherited };
+    const response = await handleAttentionLifecycle(db, ID, "resolve", { proposal_token_env: "PROPOSAL_TOKEN", env, run });
+    expect(response.status).toBe(200);
+    return token;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test("a token held only in arc's secret store files the proposal, without the file's newline", async () => {
+  expect(await tokenFiledWith(`${TOKEN}\n`)).toBe(TOKEN);
+});
+
+test("an inherited token wins over the stored one", async () => {
+  expect(await tokenFiledWith("stored-token", { PROPOSAL_TOKEN: TOKEN })).toBe(TOKEN);
+});
+
+test("a configured name the store cannot hold reports no token instead of throwing", async () => {
+  const run = mock(async () => success());
+  const response = await handleAttentionLifecycle(db, ID, "resolve", { proposal_token_env: "lower_case_token", env: { CORTEX_SURFACE_SECRETS: "arc" }, run });
+  expect(response.status).toBe(503);
+  expect(run).not.toHaveBeenCalled();
+});
 
 test.each(["soma:", "soma:/absolute", "soma:proposals/../bad.md", "soma:proposals\\bad.md", "soma:bad\0.md", "--token=bad", "/tmp/bad"])(
   "invalid proposal_ref %s is refused before running", async (ref) => {

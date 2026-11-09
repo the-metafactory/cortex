@@ -27,6 +27,14 @@ describe("persistent surface secret lookup", () => {
     expect(readSurfaceSecret(name, options)).toBe("synthetic-secret\n");
   });
 
+  test("reads the file backend under the package name Cortex", () => {
+    const options = fixture();
+    const store = join(options.home, ".config/metafactory/arc/secrets/Cortex");
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, name), "synthetic-secret", { mode: 0o600 });
+    expect(readSurfaceSecret(name, options)).toBe("synthetic-secret");
+  });
+
   test("honors XDG_CONFIG_HOME and ARC_CONFIG_ROOT including tilde expansion", () => {
     const options = fixture();
     const xdg = join(options.home, "xdg");
@@ -52,6 +60,26 @@ describe("persistent surface secret lookup", () => {
     });
     expect(queried).toEqual(["find-generic-password", "-s", `ai.meta-factory.cortex.cortex.${name}`, "-a", "sample-user", "-w"]);
     expect(value).toBe("synthetic-secret\n");
+  });
+
+  test("finds a Keychain secret arc stored under the package name Cortex", () => {
+    const options = fixture();
+    const value = readSurfaceSecret(name, {
+      ...options, platform: "darwin", username: "sample-user",
+      security: (args) => args[2] === `ai.meta-factory.cortex.Cortex.${name}`
+        ? { status: 0, stdout: "synthetic-secret\n" }
+        : { status: 44, stdout: "" },
+    });
+    expect(value).toBe("synthetic-secret");
+  });
+
+  test("the name cortex wins when arc holds the secret under both package names", () => {
+    const options = fixture();
+    const value = readSurfaceSecret(name, {
+      ...options, platform: "darwin", username: "sample-user",
+      security: (args) => ({ status: 0, stdout: `${args[2]}\n` }),
+    });
+    expect(value).toBe(`ai.meta-factory.cortex.cortex.${name}`);
   });
 
   test("does not query a persistent store without the service opt-in", () => {
