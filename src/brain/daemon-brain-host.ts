@@ -220,7 +220,7 @@ const CREATE_PRIVATE_THREAD_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 // ---------------------------------------------------------------------------
 
 /**
- * Rate limit for `post_log`: 10/hour, PER AGENT (cortex#2256) — the same
+ * Rate limit for `post_log`: 100/hour, PER AGENT (cortex#2256) — the same
  * constant class and sliding-window mechanics as
  * {@link CREATE_PRIVATE_THREAD_RATE_LIMIT_PER_HOUR}, and a SEPARATE budget
  * from it (opening threads and notifying the log channel are independent
@@ -232,8 +232,32 @@ const CREATE_PRIVATE_THREAD_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
  * agents ARE allowed to use `post_log`; this window (plus the length cap) is
  * what keeps the steward channel unspammable, matching the ADR posture that
  * host-side enforcement, not brain trust, carries anon safety.
+ *
+ * ── Why 100 and not the original 10 ────────────────────────────────────────
+ * Raised from 10 on the principal's decision. 10/hour was sized for the
+ * original use case — a human-facing NOTIFICATION ("a stranger appeared"),
+ * where more than a handful an hour is itself the anomaly. A second consumer
+ * has since appeared with a different shape: a plan steward whose LEDGER is a
+ * record of every accepted change, and for which `post_log` is the only
+ * host-derived target that can reach a fixed channel while the conversation
+ * itself has been retargeted into a thread. A ledger that silently stops at
+ * entry 11 is worse than one that never started, because the gap is invisible
+ * to the reader.
+ *
+ * What this does NOT change is the property the ADR actually leans on: the
+ * target stays HOST-DERIVED (a brain can never name the channel) and the
+ * length cap is untouched, so the blast radius is still "odd words in one
+ * fixed channel, never routing". The window bounds VOLUME, not reach.
+ *
+ * The residual cost is honest and belongs on the record: for an anon-reachable
+ * agent the trigger is stranger-influenced, so this raises the sustained spam
+ * ceiling in that one channel from ~1 every 6 minutes to ~1.7 a minute. If
+ * that proves too loose for open-onboarding agents specifically, the right fix
+ * is a per-posture limit (trusted vs anon), NOT a global walk-back that would
+ * re-break the ledger case — a single constant is now serving two use cases
+ * with genuinely different volume profiles.
  */
-export const POST_LOG_RATE_LIMIT_PER_HOUR = 10;
+export const POST_LOG_RATE_LIMIT_PER_HOUR = 100;
 
 /** The sliding window `POST_LOG_RATE_LIMIT_PER_HOUR` is measured over. */
 const POST_LOG_RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
@@ -1166,7 +1190,7 @@ export class DaemonBrainHost {
           return;
         }
 
-        // 3. Rate limit — 10/hour/agent (named constant), a real sliding
+        // 3. Rate limit — 100/hour/agent (named constant), a real sliding
         // window, SEPARATE from the thread-create window. Reserved BEFORE
         // the publish attempt: an attempt costs real delivery budget
         // whether or not it succeeds (same reserve-before-I/O rule as
