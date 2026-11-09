@@ -77,7 +77,7 @@ try {
 
   const connector = loader.connector("balance", "balance.task.create", { adapterId: "balance", connectionId: "connection-probe" });
   check(connector.ok && (calls["balance:connector"] ?? 0) === 1, "the host creates one connector per connection after publication");
-  check(providerEffects() === 0 && (calls["provider:mutation"] ?? 0) === 0, "creating a connector makes zero provider mutation calls");
+  check(providerEffects() === 0, "creating a connector dispatches no provider handler");
 
   const disabled = await loader.disable("balance-arc");
   check(disabled?.disabled === true && disabled.active !== null, "disable persists a durable admission fence and keeps the generation");
@@ -92,7 +92,7 @@ try {
   const after = (await store.read("balance"))?.active?.generationId;
   check(!refused.ok && after === before, "a rejected staged update keeps the last valid generation selected");
   check(loader.catalog().find(entry => entry.generation.adapterId === "balance")?.generation.generationId === before, "the catalog keeps serving the previous generation");
-  check(providerEffects() === 0 && (calls["provider:mutation"] ?? 0) === 0, "a rejected update makes zero provider mutation calls");
+  check(providerEffects() === 0, "a rejected update dispatches no provider handler");
 
   const admission = await store.admit("balance", { releaseDigest: "f".repeat(64) });
   check(admission.state === "upgrade_required", "mismatched stored evidence returns upgrade-required rather than downconverting");

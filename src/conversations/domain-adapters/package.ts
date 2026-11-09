@@ -348,27 +348,31 @@ interface StagedRegistry {
   readonly failures: ReadonlyMap<StageEntry, BoundaryError>;
 }
 
-function stageRegistry(entries: readonly StageEntry[], bindingsOf: (entry: StageEntry) => AdapterBindings): StagedRegistry {
-  const registry = new DomainAdapterRegistry();
-  const failures = new Map<StageEntry, BoundaryError>();
-  const pending = [...entries];
+const registrationConflict: BoundaryError = { code: "publication_rejected", message: "Adapter declarations cannot be registered together; a relationship target or identity conflicts." };
+
+async function settle<T>(items: readonly T[], attempt: (item: T) => Result<unknown> | Promise<Result<unknown>>): Promise<ReadonlyMap<T, BoundaryError>> {
+  const pending = [...items];
+  const failures = new Map<T, BoundaryError>();
   let progress = true;
   while (pending.length > 0 && progress) {
     progress = false;
-    for (const entry of [...pending]) {
-      const registered = registry.register(entry.declaration, bindingsOf(entry));
-      if (registered.ok) {
-        pending.splice(pending.indexOf(entry), 1);
-        failures.delete(entry);
-        progress = true;
-      } else {
-        failures.set(entry, registered.error);
+    for (const item of [...pending]) {
+      const result = await attempt(item);
+      if (!result.ok) {
+        failures.set(item, result.error);
+        continue;
       }
+      pending.splice(pending.indexOf(item), 1);
+      failures.delete(item);
+      progress = true;
     }
   }
-  for (const entry of pending) {
-    failures.set(entry, failures.get(entry) ?? { code: "publication_rejected", message: "Adapter declarations cannot be registered together; a relationship target or identity conflicts." });
-  }
+  return failures;
+}
+
+async function stageRegistry(entries: readonly StageEntry[]): Promise<StagedRegistry> {
+  const registry = new DomainAdapterRegistry();
+  const failures = new Map(await settle(entries, entry => registry.register(entry.declaration, entry.bindings)));
   const drafting = new DraftingBindings(registry);
   for (const entry of entries) {
     if (failures.has(entry)) continue;
@@ -399,17 +403,17 @@ function stageRegistry(entries: readonly StageEntry[], bindingsOf: (entry: Stage
   return { registry, drafting, reads, failures };
 }
 
-function compose(published: ReadonlyMap<string, PublishedAdapter>): Result<ComposedAdapters> {
-  const staged = stageRegistry([...published.values()].map(adapter => ({
+async function compose(published: ReadonlyMap<string, PublishedAdapter>): Promise<Result<ComposedAdapters>> {
+  const staged = await stageRegistry([...published.values()].map(adapter => ({
     adapterId: adapter.adapterId,
     candidate: adapter.candidate,
     declaration: adapter.definition.declaration,
     bindings: registryBindings(adapter.definition.bindings),
     draftingBindings: adapter.draftingBindings,
     readBindings: adapter.readBindings,
-  })), entry => entry.bindings);
+  })));
   if (staged.failures.size > 0) {
-    const error = [...staged.failures.values()][0] ?? { code: "publication_rejected", message: "Adapter declarations cannot be registered together; a relationship target or identity conflicts." };
+    const error = [...staged.failures.values()][0] ?? registrationConflict;
     return failure(error.code, error.message);
   }
   return success({ registry: staged.registry, drafting: staged.drafting, reads: staged.reads });
@@ -606,16 +610,25 @@ export class DeskPackageLoader {
     const candidates = await this.verifyItems(await this.packageItems(issues), issues);
     await this.applyTrust(candidates, issues);
     this.markDuplicates(candidates);
-    const installable = candidates.filter(candidate => candidate.state.state === "installable" && candidate.trust.state === "trusted");
-    const staged = stageRegistry(installable.map(candidate => ({
+    const entryFor = (candidate: DeskPackageCandidate): StageEntry => ({
       adapterId: candidate.adapterId,
       candidate,
       declaration: candidate.manifest.declaration,
       bindings: stagingBindings(candidate.manifest.declaration),
       draftingBindings: candidate.manifest.draftingBindings,
       readBindings: candidate.manifest.readBindings,
-    })), entry => entry.bindings);
+    });
+    const installable = candidates.filter(candidate => candidate.state.state === "installable");
+    const trusted = installable.filter(candidate => candidate.trust.state === "trusted").map(entryFor);
+    const staged = await stageRegistry(trusted);
     for (const [entry, failure] of staged.failures) this.issue(entry.candidate, failure.code, failure.message);
+    const settled = trusted.filter(entry => !staged.failures.has(entry));
+    for (const candidate of installable.filter(item => item.trust.state !== "trusted")) {
+      const own = entryFor(candidate);
+      const backdrop = settled.filter(entry => entry.candidate.packageId !== candidate.packageId && entry.adapterId !== candidate.adapterId);
+      const failure = (await stageRegistry([...backdrop, own])).failures.get(own);
+      if (failure) this.issue(candidate, failure.code, failure.message);
+    }
     return { candidates: candidates.sort((left, right) => left.packageId.localeCompare(right.packageId)), issues };
   }
 
@@ -644,7 +657,7 @@ export class DeskPackageLoader {
     if (candidate.value.trust.state !== "trusted") {
       return failure(candidate.value.trust.code, "The installed package has no principal approval for this origin, version and content digest.");
     }
-    return this.publish(candidate);
+    return this.publish(candidate.value);
   }
 
   private async prepare(acting: DeskPackageCandidate): Promise<Result<PublishedAdapter>> {
@@ -719,7 +732,7 @@ export class DeskPackageLoader {
       if (existing && existing.packageId !== adapter.packageId) return failure("duplicate_identity", "Another package already owns this adapter identity.");
       published.set(adapter.adapterId, adapter);
     }
-    const composed = compose(published);
+    const composed = await compose(published);
     if (!composed.ok) return failure(composed.error.code, composed.error.message);
     for (const adapter of prepared) await store.select(adapter.generation);
     const availability = new Map(this.state.availability);
@@ -732,25 +745,23 @@ export class DeskPackageLoader {
     return success(prepared.map(adapter => adapter.generation));
   }
 
-  private async publish(candidate: Result<DeskPackageCandidate>): Promise<Result<DeskAdapterGeneration>> {
-    if (!candidate.ok) return candidate;
-    const prepared = await this.prepare(candidate.value);
-    if (!prepared.ok) return this.failed(candidate.value, failure(prepared.error.code, prepared.error.message));
+  private async publish(candidate: DeskPackageCandidate): Promise<Result<DeskAdapterGeneration>> {
+    const prepared = await this.prepare(candidate);
+    if (!prepared.ok) return this.failed(candidate, prepared.error);
     const published = await this.publishPrepared([prepared.value]);
-    if (!published.ok) return this.failed(candidate.value, failure(published.error.code, published.error.message));
+    if (!published.ok) return this.failed(candidate, published.error);
     const generation = published.value[0];
     if (!generation) return failure("publication_rejected", "The package published no generation.");
     return success(generation);
   }
 
-  private failed(candidate: DeskPackageCandidate, error: Result<never>): Result<never> {
-    const reason = error.ok ? { code: "publication_rejected", message: "The package could not be published." } : error.error;
+  private failed(candidate: DeskPackageCandidate, reason: BoundaryError): Result<never> {
     const availability = new Map(this.state.availability);
     if (!this.state.published.has(candidate.adapterId)) availability.set(candidate.adapterId, { state: "unavailable", code: reason.code, message: reason.message });
     const diagnostics = new Map(this.state.diagnostics);
     diagnostics.set(candidate.adapterId, [{ packageId: candidate.packageId, packageRoot: candidate.packageRoot, stage: "publication", code: reason.code, message: reason.message }]);
     this.state = { ...this.state, availability, diagnostics };
-    return error.ok ? failure(reason.code, reason.message) : error;
+    return failure(reason.code, reason.message);
   }
 
   async boot(): Promise<DeskPackageDiscovery> {
@@ -772,16 +783,11 @@ export class DeskPackageLoader {
       }
       const preparedCandidate = await this.prepare(candidate);
       if (preparedCandidate.ok) prepared.push(preparedCandidate.value);
-      else this.failed(candidate, failure(preparedCandidate.error.code, preparedCandidate.error.message));
+      else this.failed(candidate, preparedCandidate.error);
     }
-    if (prepared.length > 0) {
-      const published = await this.publishPrepared(prepared);
-      if (!published.ok) {
-        for (const adapter of prepared) {
-          const single = await this.publishPrepared([adapter]);
-          if (!single.ok) this.failed(adapter.candidate, failure(single.error.code, single.error.message));
-        }
-      }
+    if (prepared.length > 0 && !(await this.publishPrepared(prepared)).ok) {
+      const refused = await settle(prepared, adapter => this.publishPrepared([adapter]));
+      for (const [adapter, error] of refused) this.failed(adapter.candidate, error);
     }
     return discovery;
   }

@@ -98,6 +98,20 @@ describe("Desk adapter package discovery", () => {
     expect(calls["balance-arc"] ?? 0).toBe(0);
   });
 
+  test("refuses an unapproved package with broken bindings at install, before the principal approves it", async () => {
+    const installedRoot = tempDir("arc");
+    const installed = writeDeskFixturePackage(join(installedRoot, "desk-balance"), {
+      readBindings: [{ ...deskFixtureReadBinding(DESK_FIXTURE_ADAPTER), outputSchemaRef: schemaRef(`${DESK_FIXTURE_ADAPTER}.task.create.output`) }],
+    });
+    const loader = loaderFor({ installedRoots: [installedRoot], runner: deskFixtureRunner([deskFixtureArcPackage(installed.dir)]) });
+    const discovery = await loader.discover();
+    expect(discovery.candidates[0]?.trust.state).toBe("untrusted");
+    expect(discovery.candidates[0]?.state).toEqual({ state: "unavailable", code: "binding_mismatch", message: expect.any(String) });
+    const install = await loader.install(deskFixturePackageId(DESK_FIXTURE_ADAPTER));
+    expect(install.ok).toBe(false);
+    if (!install.ok) expect(install.error.code).toBe("binding_mismatch");
+  });
+
   test("refuses an unapproved arc package for activation while install still reports its release digest", async () => {
     const installedRoot = tempDir("arc");
     const installed = writeDeskFixturePackage(join(installedRoot, "desk-balance"));
@@ -380,6 +394,25 @@ describe("Desk adapter generation publication", () => {
     const reopened = await store.read(DESK_FIXTURE_ADAPTER);
     expect(reopened?.active?.generationId).toBe(record?.active?.generationId);
     expect(reopened?.lastValid?.generationId).toBe(record?.lastValid?.generationId);
+  });
+
+  test("at a managed restart a dependent adapter still publishes after an unrelated composition failure", async () => {
+    const root = tempDir("bundled");
+    const broken = writeDeskFixturePackage(join(root, "a-broken"), {
+      adapterId: "a-broken",
+      backendSource: deskFixtureBackend(deskFixtureDeclaration("a-broken"), { misplacedHandler: true }),
+    });
+    const dependent = writeDeskFixturePackage(join(root, "dependent"), { adapterId: "dependent", declaration: deskFixtureDeclaration("dependent", { relationship: { targetAdapterId: "target" } }) });
+    const target = writeDeskFixturePackage(join(root, "target"), { adapterId: "target" });
+    const { store } = await openStore();
+    const loader = loaderFor({ bundledPackages: [broken.dir, dependent.dir, target.dir], store });
+    const discovery = await loader.boot();
+    expect(discovery.candidates.map(candidate => candidate.state.state)).toEqual(["installable", "installable", "installable"]);
+    expect(loader.catalog().map(entry => entry.generation.adapterId)).toEqual(["dependent", "target"]);
+    expect(loader.admission("a-broken").state).toBe("unavailable");
+    expect(loader.diagnostics().some(issue => issue.packageId === deskFixturePackageId("a-broken"))).toBe(true);
+    expect(loader.capability("dependent.task.query").support).toBe("declared");
+    expect(loader.capability("a-broken.task.query").support).toBe("unsupported");
   });
 
   test("returns upgrade-required for stored evidence that belongs to a different generation", async () => {

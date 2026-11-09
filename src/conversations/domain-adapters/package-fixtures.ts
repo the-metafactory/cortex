@@ -107,6 +107,7 @@ export interface DeskFixtureBackendOptions {
   throwOnCreate?: boolean;
   omitConnector?: boolean;
   extraExport?: boolean;
+  misplacedHandler?: boolean;
 }
 
 export type DeskFixtureCallLog = Record<string, number>;
@@ -126,7 +127,7 @@ export function deskFixtureBackend(declaration: { adapterId: string }, options: 
     `  calls[${JSON.stringify(adapterId)}] = (calls[${JSON.stringify(adapterId)}] ?? 0) + 1;`,
     options.throwOnCreate ? '  throw new Error("synthetic adapter creation failure");' : "",
     options.omitConnector ? "" : `  host.registerConnector(${JSON.stringify(`${adapterId}.task.create`)}, connection => { calls[${JSON.stringify(connectorId)}] = (calls[${JSON.stringify(connectorId)}] ?? 0) + 1; return { kind: "action", adapterId: ${JSON.stringify(adapterId)}, connectionId: connection.connectionId, capabilityId: ${JSON.stringify(`${adapterId}.task.create`)} }; });`,
-    `  return { declaration: ${JSON.stringify(declaration)}, bindings: { handlers: { ${JSON.stringify(`${adapterId}.task.query`)}: (input) => { const key = input && input.mutation ? "provider:mutation" : "provider:read"; calls[key] = (calls[key] ?? 0) + 1; return { objects: [] }; } }, observations: {} } };`,
+    `  return { declaration: ${JSON.stringify(declaration)}, bindings: { handlers: { ${JSON.stringify(`${adapterId}.task.query`)}: (input) => { const key = input && input.mutation ? "provider:mutation" : "provider:read"; calls[key] = (calls[key] ?? 0) + 1; return { objects: [] }; }${options.misplacedHandler ? `, ${JSON.stringify(`${adapterId}.task.create`)}: () => ({ objects: [] })` : ""} }, observations: {} } };`,
     "}",
     options.extraExport ? "export const leaked = true;" : "",
   ].join("\n");
