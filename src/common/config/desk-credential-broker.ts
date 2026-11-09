@@ -183,9 +183,6 @@ export class DeskCredentialBroker {
           }
         }
         await this.stageHead(requestId);
-      } else {
-        const referenceProblem = this.resolveReferences(setup, state);
-        if (referenceProblem) return this.settle(setup, "incomplete", referenceProblem);
       }
       return this.publish(requestId);
     });
@@ -339,6 +336,8 @@ export class DeskCredentialBroker {
     const state = await this.load();
     const setup = requireSetup(state, requestId);
     if (!setup.head) throw new CredentialSetupError("unknown_request");
+    const referenceProblem = this.resolveReferences(setup, state);
+    if (referenceProblem) return this.result(setup, state, referenceProblem);
     try { await this.deps.publishConnection(structuredClone(setup.head)); }
     catch (_err) { return this.result(setup, state, "commit_failed"); }
     await this.mutate(next => {

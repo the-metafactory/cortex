@@ -222,6 +222,17 @@ describe("desk credential broker", () => {
     expect(rig.published).toHaveLength(0);
   });
 
+  test("advancing a revision after reference authorization is revoked publishes nothing", async () => {
+    const rig = await make();
+    const owner = await rig.session("owner");
+    const begun = await rig.broker().begin(owner, setup);
+    const active = await rig.broker().provision(owner, begun.requestId, { primary: { reference: "EXAMPLE_API_KEY" }, backup: { token: SYNTHETIC_TOKEN } });
+    expect(active.status).toBe("active");
+    rig.hooks.revokeReferences = true;
+    expect(await code(rig.broker().advanceRevision(owner, begun.connectionId))).toBe("reference_not_authorized");
+    expect(rig.published).toHaveLength(1);
+  });
+
   test("a failed secret write leaves no partial file and the identity stays writable", async () => {
     const rig = await make();
     await expect(rig.store.writeIfAbsent("CORTEX_PARTIAL_CHECK", 123 as unknown as string)).rejects.toThrow();
