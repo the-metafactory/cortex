@@ -27,13 +27,13 @@ async function readSavedFlow(name: string, options: { pulse: readonly string[] }
   return Response.json(SavedFlowDefinitionSchema.parse(found.data), { headers });
 }
 
-async function listSavedFlows(options: { pulse: readonly string[] }, run: WriterRunner): Promise<Response> {
+async function listSavedFlows(options: { pulse: readonly string[] }, routines: { target: string; timeZone: string } | undefined, run: WriterRunner): Promise<Response> {
   const { code, reply } = await read(options, ["flow", "list", "--saved", "--json"], run);
   const listed = Listed.safeParse(reply);
   if (code !== 0 || !listed.success) return unreadable();
   const flows = listed.data.flows.flatMap((flow) => flow.source === "saved" ? [{ name: flow.name, sha256: flow.sha256, savedAt: flow.provenance.saved_at, origin: flow.provenance.origin, conversationId: flow.provenance.conversation }] : []);
   flows.sort((a, b) => Date.parse(b.savedAt) - Date.parse(a.savedAt));
-  return Response.json(SavedFlowsSchema.parse({ flows }), { headers });
+  return Response.json(SavedFlowsSchema.parse({ flows, ...(routines ? { routine: { target: routines.target, timeZone: routines.timeZone } } : {}) }), { headers });
 }
 
 export async function handleDeskFlows(req: Request, runtime: DeskRuntime | undefined, run: WriterRunner = spawnWithStdin): Promise<Response> {
@@ -47,6 +47,6 @@ export async function handleDeskFlows(req: Request, runtime: DeskRuntime | undef
     catch { return fail(400, "Provide a valid saved flow name."); }
     if (!SavedFlowNameSchema.safeParse(name).success) return fail(400, "Provide a valid saved flow name.");
   }
-  try { return name ? await readSavedFlow(name, options, run) : await listSavedFlows(options, run); }
+  try { return name ? await readSavedFlow(name, options, run) : await listSavedFlows(options, runtime?.options?.routines, run); }
   catch { return unreadable(); }
 }

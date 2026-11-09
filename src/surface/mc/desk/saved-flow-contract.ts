@@ -10,7 +10,9 @@ export const SavedFlowSchema = z.object({
   origin: z.enum(["conversation", "cli"]),
   conversationId: z.string().min(1).nullable(),
 });
-export const SavedFlowsSchema = z.object({ flows: z.array(SavedFlowSchema) });
+export const FlowRoutineSchema = z.object({ target: z.string().min(1), timeZone: z.string().min(1) });
+export const SavedFlowsSchema = z.object({ flows: z.array(SavedFlowSchema), routine: FlowRoutineSchema.optional() });
 export const SavedFlowDefinitionSchema = z.object({ name: SavedFlowNameSchema, sha256: FlowHashSchema, yaml: z.string() });
+export type FlowRoutine = z.infer<typeof FlowRoutineSchema>;
 export type SavedFlow = z.infer<typeof SavedFlowSchema>;
 export type SavedFlowDefinition = z.infer<typeof SavedFlowDefinitionSchema>;
