@@ -1,4 +1,5 @@
-import { chmod, mkdir, open, readFile, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, link, mkdir, open, readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { isSurfaceSecretName } from "./surface-secret-store";
 
@@ -27,12 +28,16 @@ export function createArcFileSecretStore(options: { configRoot: string; id?: str
     async writeIfAbsent(identity, value) {
       const path = pathOf(identity);
       await mkdir(directory, { recursive: true, mode: 0o700 });
-      let handle;
-      try { handle = await open(path, "wx", 0o600); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return "exists"; throw new Error("Secret store write failed.", { cause: error }); }
-      try { await handle.writeFile(value, "utf8"); await handle.sync(); }
-      finally { await handle.close(); }
-      await chmod(path, 0o600);
+      const staging = `${path}.${randomUUID()}.partial`;
+      try {
+        const handle = await open(staging, "wx", 0o600);
+        try { await handle.writeFile(value, "utf8"); await handle.sync(); }
+        finally { await handle.close(); }
+        await chmod(staging, 0o600);
+        try { await link(staging, path); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return "exists"; throw error; }
+      } catch (error) { throw new Error("Secret store write failed.", { cause: error }); }
+      finally { await unlink(staging).catch((_err: unknown) => undefined); }
       return "created";
     },
     async matches(identity, value) {

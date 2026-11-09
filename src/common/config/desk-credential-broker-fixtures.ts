@@ -15,7 +15,7 @@ export interface BrokerRig {
   configRoot: string;
   env: Record<string, string>;
   published: ConnectionHead[];
-  hooks: { publish?: () => Promise<void>; writeAfter?: () => void; unavailable?: boolean; existingUnrelated?: boolean };
+  hooks: { publish?: () => Promise<void>; writeAfter?: () => void; unavailable?: boolean; existingUnrelated?: boolean; revokeReferences?: boolean };
   principals: Map<string, SetupPrincipal>;
   host(): ConversationHost;
   broker(): DeskCredentialBroker;
@@ -55,8 +55,8 @@ export async function brokerRig(): Promise<BrokerRig> {
     broker = host.credentialBroker({
       store,
       authenticate: sessionRef => Promise.resolve(principals.get(sessionRef) ?? null),
-      publishConnection: async head => { await hooks.publish?.(); published.push(head); },
-      references: { authorized: (principalRef, name) => principals.get("owner")?.principalRef === principalRef && name === "EXAMPLE_API_KEY", present: name => name in env },
+      publishConnection: async head => { await hooks.publish?.(); if (!published.some(item => item.connectionId === head.connectionId && item.connectionRevision === head.connectionRevision)) published.push(head); },
+      references: { authorized: (principalRef, name) => !hooks.revokeReferences && principals.get("owner")?.principalRef === principalRef && name === "EXAMPLE_API_KEY", present: name => name in env },
       approvedBrokers: new Set(["approved-broker"]),
     });
     broker.registerSetup(TOKEN_DESCRIPTOR);

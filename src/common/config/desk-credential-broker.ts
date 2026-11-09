@@ -183,6 +183,9 @@ export class DeskCredentialBroker {
           }
         }
         await this.stageHead(requestId);
+      } else {
+        const referenceProblem = this.resolveReferences(setup, state);
+        if (referenceProblem) return this.settle(setup, "incomplete", referenceProblem);
       }
       return this.publish(requestId);
     });
@@ -293,6 +296,7 @@ export class DeskCredentialBroker {
     for (const slot of setup.slots.filter(item => item.mode === "reference")) {
       const name = slot.reference ? state.references[slot.reference]?.name : undefined;
       if (!name || !this.deps.references?.present(name)) return "reference_missing";
+      if (!this.deps.references.authorized(setup.principalRef, name)) throw new CredentialSetupError("reference_not_authorized");
     }
     return undefined;
   }

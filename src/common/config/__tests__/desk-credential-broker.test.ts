@@ -210,4 +210,22 @@ describe("desk credential broker", () => {
     expect(rig.published.map(head => head.connectionRevision)).toEqual(["1", "2"]);
     expect(rig.published[1]?.slotHandles).toEqual(rig.published[0]?.slotHandles);
   });
+
+  test("revoked reference authorization blocks publication on a later retry", async () => {
+    const rig = await make();
+    const owner = await rig.session("owner");
+    const begun = await rig.broker().begin(owner, setup);
+    const first = await rig.broker().provision(owner, begun.requestId, { primary: { reference: "EXAMPLE_API_KEY" } });
+    expect(first.status).toBe("incomplete");
+    rig.hooks.revokeReferences = true;
+    expect(await code(rig.broker().provision(owner, begun.requestId, { backup: { token: SYNTHETIC_TOKEN } }))).toBe("reference_not_authorized");
+    expect(rig.published).toHaveLength(0);
+  });
+
+  test("a failed secret write leaves no partial file and the identity stays writable", async () => {
+    const rig = await make();
+    await expect(rig.store.writeIfAbsent("CORTEX_PARTIAL_CHECK", 123 as unknown as string)).rejects.toThrow();
+    expect(secretFiles(rig)).toEqual([]);
+    expect(await rig.store.writeIfAbsent("CORTEX_PARTIAL_CHECK", SYNTHETIC_TOKEN)).toBe("created");
+  });
 });
