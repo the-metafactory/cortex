@@ -142,7 +142,7 @@ export class DraftService {
     const known = view && sameRef(view.inputSchemaRef, current.schemaRef) ? keyOf(pointer) in properties(view) : pointer in current.fields;
     if (!known || !/^\/[^/]/.test(pointer)) throw new DraftConflict("The field is not declared by the pinned schema.");
     return this.mutateOrThrow(draftId, expected, draft => {
-      draft.fields[pointer] = { pointer, presence: change.kind === "set" ? "present" : change.kind === "null" ? "null" : "absent", ...(change.kind === "set" ? { value: change.value as DraftField["value"] } : change.kind === "null" ? { value: null } : {}), origin: "user", citations: [], generationId: null, alternatives: [], unresolved: null };
+      draft.fields[pointer] = { pointer, presence: change.kind === "set" ? "present" : change.kind === "null" ? "null" : "absent", ...(change.kind === "set" ? { value: change.value as DraftField["value"] } : change.kind === "null" ? { value: null } : {}), origin: "principal", citations: [], generationId: null, alternatives: [], unresolved: null };
     });
   }
 
@@ -208,10 +208,11 @@ export class DraftService {
     const captured = await this.deps.sources.capture({ conversationId: draft.conversationId, entryId: draft.entryId, selected });
     const omissions: Manifest["omissions"] = Array.from({ length: captured.unavailable }, () => ({ reason: "unavailable" as const }));
     const permitted: SourceItem[] = [];
-    for (const item of captured.items) {
-      if (await this.deps.policy.readable(item.id)) permitted.push(item);
+    const readable = await Promise.all(captured.items.map(item => this.deps.policy.readable(item.id)));
+    captured.items.forEach((item, index) => {
+      if (readable[index]) permitted.push(item);
       else omissions.push({ reason: "not-permitted" });
-    }
+    });
     const rank = (item: SourceItem): number => item.id === draft.entryId ? -1 : KIND_RANK[item.kind];
     permitted.sort((left, right) => rank(left) - rank(right) || right.at.localeCompare(left.at));
     const items: SourceItem[] = [];
@@ -247,7 +248,11 @@ export class DraftService {
     const prepared = await this.prepare(draft, view, binding, raw.output, manifest, targets);
     const applied = await this.mutate(draft.draftId, draft.revision, target => {
       for (const [pointer, field] of prepared.fields) target.fields[pointer] = field;
-      target.manifest = manifest;
+      const refreshed = new Set(prepared.fields.keys());
+      const kept = new Set(Object.values(target.fields).filter(field => !refreshed.has(field.pointer)).flatMap(field => [...field.citations, ...field.alternatives.flatMap(alternative => alternative.citations)]));
+      const fresh = new Set(manifest.items.map(item => item.id));
+      const carried = (target.manifest?.items ?? []).filter(item => kept.has(item.id) && !fresh.has(item.id));
+      target.manifest = { ...manifest, items: [...manifest.items, ...carried] };
       target.limitations = [...prepared.limitations, ...(manifest.truncated ? [limit("context_truncated", "Context was truncated; omitted sources are listed in the manifest.")] : [])];
     });
     return applied ? { kind: "applied", view: await this.view(applied) } : { kind: "stale" };
@@ -378,7 +383,7 @@ export class DraftService {
     const shown: typeof items = [];
     for (const item of items) if (await this.deps.policy.readable(item.id) && (!audience || await this.deps.policy.releasable([item.id], audience))) shown.push(item);
     const visible = new Set(shown.map(item => item.id));
-    const alternatives = field.alternatives.map(alternative => ({ value: alternative.value, citations: alternative.citations.filter(id => visible.has(id)) }));
+    const alternatives = field.alternatives.map(alternative => ({ value: alternative.value, citations: alternative.citations.filter(id => visible.has(id)) })).filter(alternative => !audience || alternative.citations.length > 0);
     return { pointer, origin: field.origin, reason: field.unresolved, sources: shown.map(item => ({ id: item.id, kind: item.kind, revision: item.revision, digest: item.digest })), hiddenSources: items.length - shown.length, alternatives };
   }
 

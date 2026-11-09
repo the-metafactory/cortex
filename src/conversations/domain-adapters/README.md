@@ -77,7 +77,7 @@ through the stable path, and executes only the approved digest once.
 
 ## Schema-guided drafting
 
-<!-- glossary-ignore: draft, binding, manifest, host, owner -->
+<!-- glossary-ignore: draft, binding, manifest, host, owner, user, path, data, run -->
 
 `drafting.ts` is the internal durable drafting service (`ConversationHost.drafts(deps)`). `DraftingBindings` registers separate strict drafting binding 1.0.0 documents keyed by exact `adapterId`/`capabilityId`/`inputSchemaRef`; field hints are limited to `pointer`, `role`, optional `resolveWith` and optional `widget: "long"`. Registration fails closed on unknown fields or versions, unresolved pointers, duplicates and relationship mismatches. It does not touch registry 1.0.0 or the surface SDK.
 

@@ -35,7 +35,7 @@ try {
   await rig.reopen();
   const reopened = await rig.service.read(id);
   assert.equal(reopened?.draft.fields["/title"]?.value, "Edited during generation");
-  assert.equal(reopened?.draft.fields["/note"]?.origin, "user");
+  assert.equal(reopened?.draft.fields["/note"]?.origin, "principal");
   const again = await rig.service.make({ conversationId: "conversation-example", entryId: "turn-1", capabilityId: "balance.task.create", connectionId: "connection-example" });
   assert.ok(again.kind === "draft" && again.reopened && again.view.draft.draftId === id);
   console.log(`reopened ${id} after host restart with edits and clears intact`);

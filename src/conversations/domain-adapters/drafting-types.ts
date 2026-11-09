@@ -9,7 +9,7 @@ export const FieldSchema = z.object({
   pointer: id,
   presence: z.enum(["present", "null", "absent"]),
   value: z.json().optional(),
-  origin: z.enum(["generated", "suggested", "user", "default"]),
+  origin: z.enum(["generated", "suggested", "principal", "default"]),
   citations: z.array(id),
   generationId: id.nullable(),
   alternatives: z.array(z.object({ value: z.json(), citations: z.array(id) }).strict()),

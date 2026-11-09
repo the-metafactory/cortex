@@ -87,7 +87,7 @@ describe("durable drafts", () => {
     const id = created.draft.draftId;
     await r.service.edit(id, 2, "/title", { kind: "set", value: "Audit restart receipts" });
     const cleared = await r.service.edit(id, 3, "/note", { kind: "omit" });
-    expect(cleared.draft.fields["/note"]).toMatchObject({ origin: "user", presence: "absent" });
+    expect(cleared.draft.fields["/note"]).toMatchObject({ origin: "principal", presence: "absent" });
     r.state.items.push({ id: "turn-2", kind: "turn", revision: "1", digest: "d3", restriction: "cloud", text: "Include a crash immediately after acceptance; perhaps Friday or Monday.", at: "2026-11-08T10:05:00.000Z" });
     r.state.head = "2";
     const stale = await r.reopen().then(service => service.read(id));
@@ -97,15 +97,17 @@ describe("durable drafts", () => {
     const refreshed = await r.service.refresh(id, 4);
     if (refreshed.kind !== "applied") throw new Error("expected refresh");
     const { fields } = refreshed.view.draft;
-    expect(fields["/title"]).toMatchObject({ origin: "user", value: "Audit restart receipts" });
-    expect(fields["/note"]).toMatchObject({ origin: "user", presence: "absent" });
+    expect(fields["/title"]).toMatchObject({ origin: "principal", value: "Audit restart receipts" });
+    expect(fields["/note"]).toMatchObject({ origin: "principal", presence: "absent" });
     expect(fields["/due"]).toMatchObject({ unresolved: "conflict", presence: "absent" });
     expect(fields["/due"]?.alternatives.map(item => item.value)).toEqual([FRIDAY, MONDAY]);
     expect(refreshed.view.status).toBe("needs-input");
     expect(refreshed.view.blocking).toContainEqual({ pointer: "/due", code: "unresolved" });
     expect(refreshed.view.outdated).toEqual([]);
+    expect((await r.service.details(id, "/due", "cloud"))?.alternatives).toHaveLength(2);
+    expect(refreshed.view.draft.manifest?.items.map(item => item.id)).toContain("turn-2");
     const chosen = await r.service.chooseAlternative(id, refreshed.view.draft.revision, "/due", 1);
-    expect(chosen.draft.fields["/due"]).toMatchObject({ origin: "user", value: MONDAY });
+    expect(chosen.draft.fields["/due"]).toMatchObject({ origin: "principal", value: MONDAY });
     expect(chosen.status).toBe("ready-for-confirmation");
   });
 
