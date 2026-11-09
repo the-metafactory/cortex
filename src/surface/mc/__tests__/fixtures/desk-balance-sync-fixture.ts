@@ -2,12 +2,12 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deskFixtureOptions } from "./desk-options-fixture";
-import { DEFAULT_SETTINGS, type AppState } from "../../src/balance";
-import { handleDeskMyDay } from "../../src/surface/mc/api/desk-my-day";
-import { initDatabase } from "../../src/surface/mc/db/init";
-import { HandledLedger } from "../../src/surface/mc/desk/actions";
-import type { DeskOptions, DeskRuntime } from "../../src/surface/mc/desk/compose";
-import type { MyDayView } from "../../src/surface/mc/desk/my-day";
+import { DEFAULT_SETTINGS, type AppState } from "../../../../balance";
+import { handleDeskMyDay } from "../../api/desk-my-day";
+import { initDatabase } from "../../db/init";
+import { HandledLedger } from "../../desk/actions";
+import type { DeskOptions, DeskRuntime } from "../../desk/compose";
+import type { MyDayView } from "../../desk/my-day";
 
 export const SYNC_NOW = new Date(2026, 10, 1, 10).getTime();
 export const SYNC_DATE = "2026-11-01";

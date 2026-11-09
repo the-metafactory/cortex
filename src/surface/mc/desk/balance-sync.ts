@@ -19,9 +19,18 @@ function initial(desk: DeskOptions): AppState {
     ...desk.areas.map(a => ({ id: `area:${a.id}`, title: a.label, weight: 50, ordering: "parallel" as const, children: [] })),
   ] }, log: [], settings: { ...DEFAULT_SETTINGS, todayCap: desk.myDay?.cap ?? 5 }, dayState: null, history: { deficits: {}, lastSurfaced: {} } };
 }
+export function todayCap(meta: MyDayMeta, desk: DeskOptions): number {
+  return meta.caps?.cap ?? desk.myDay?.cap ?? 5;
+}
+export function isPersonDraft(meta: MyDayMeta, date: string): meta is MyDayMeta & { draft: NonNullable<MyDayMeta["draft"]> } {
+  return meta.draft?.date === date && meta.draft.origin === "person";
+}
+export function retireStaleDraft(meta: MyDayMeta, date: string): void {
+  if (meta.draft && !isPersonDraft(meta, date)) meta.draft = null;
+}
 export function loadMyDayState(db: Database, desk: DeskOptions, meta: MyDayMeta): AppState {
   const state = loadBalanceState(db) ?? initial(desk);
-  state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
+  state.settings.todayCap = todayCap(meta, desk);
   return state;
 }
 export function configuredState(state: AppState, desk: DeskOptions): AppState {
@@ -44,8 +53,8 @@ export function syncBalance(db: Database, desk: DeskOptions, now: number, studio
     if (studio) projectStudio(state, meta, studio);
     const completedToday = new Set(state.log.filter(event => event.date === date).map(event => event.taskId));
     for (const task of collectLeaves(state.outline)) if (!completedToday.has(task.id)) applyRecurrence(task, date);
-    if (meta.draft && (meta.draft.date !== date || meta.draft.origin !== "person")) meta.draft = null;
-    state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
+    retireStaleDraft(meta, date);
+    state.settings.todayCap = todayCap(meta, desk);
     const stateChanged = JSON.stringify(state) !== beforeState;
     const metaChanged = JSON.stringify(meta) !== beforeMeta;
     if (stateChanged || metaChanged) meta.revision += 1;

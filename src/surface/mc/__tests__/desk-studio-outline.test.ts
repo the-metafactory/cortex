@@ -12,7 +12,7 @@ import { syncBalance } from "../desk/balance-sync";
 import { changeMyDay, localDay, readMyDay } from "../desk/my-day";
 import { MyDayMetaSchema } from "../desk/my-day-schema";
 import { projectStudio, type StudioProjection } from "../desk/studio-outline";
-import { withSyncedBalance } from "../desk/studio-my-day";
+import { readSyncedMyDay } from "../desk/studio-my-day";
 import { parseThreadFile, type StudioThread } from "../desk/studio/format";
 import { acquireStudioLock } from "../desk/studio/write-lock";
 import { StudioWriteLock, runStudioAct } from "../desk/studio/writer";
@@ -29,9 +29,6 @@ const note = (at = noteAt) => ({ at, trigger: "A synthetic design question", mod
 const thread = (): StudioThread => ({ slug: "design", path: "threads/design.md", type: "question", areas: ["lab", "other"], state: "active", opened: "2026-11-01", thinkTonight: false, question: "Which sketch?", stand: "", notes: [note()], responses: [], material: [], log: [], outcomeText: "" });
 const desk: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", sources: [], areas: [{ id: "lab", label: "Lab", color: "", repos: [], goals: [] }, { id: "other", label: "Other", color: "", repos: [], goals: [] }] };
 const state = (): AppState => ({ outline: { id: "root", title: "Outline", weight: 100, ordering: "parallel", children: desk.areas.map(a => ({ id: `area:${a.id}`, title: a.label, weight: 50, ordering: "parallel", children: [] })) }, log: [], settings: { ...DEFAULT_SETTINGS }, history: { deficits: {}, lastSurfaced: {} }, dayState: null });
-async function readSyncedMyDay(db: Parameters<typeof readMyDay>[0], options: DeskOptions, at: number) {
-  return withSyncedBalance(db, options, at, source => readMyDay(db, options, at, source));
-}
 function fixture() {
   const model = state();
   const meta = MyDayMetaSchema.parse({});

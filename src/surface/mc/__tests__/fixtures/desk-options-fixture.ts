@@ -1,4 +1,4 @@
-import type { DeskOptions } from "../../src/surface/mc/desk/compose";
+import type { DeskOptions } from "../../desk/compose";
 
 export const deskFixtureOptions: DeskOptions = {
   enabled: true,

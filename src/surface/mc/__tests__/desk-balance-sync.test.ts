@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { balanceSyncFixture, SYNC_DATE, SYNC_NOW, syncFixtureState } from "../../../../scripts/lib/desk-balance-sync-fixture";
+import { balanceSyncFixture, SYNC_DATE, SYNC_NOW, syncFixtureState } from "./fixtures/desk-balance-sync-fixture";
 import { findNode } from "../../../balance";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import { loadMeta, saveMeta, syncBalance } from "../desk/balance-sync";
@@ -10,6 +10,7 @@ import { changeMyDay, readMyDay } from "../desk/my-day";
 import { readStudioMyDay, syncStudioBalance } from "../desk/studio-my-day";
 import { acquireStudioLock } from "../desk/studio/write-lock";
 import { handleGetDesk } from "../api/desk";
+import { handleDeskMyDay } from "../api/desk-my-day";
 
 describe("Balance owner sync and pure My Day reads", () => {
   let stack: Awaited<ReturnType<typeof balanceSyncFixture>>;
@@ -51,6 +52,33 @@ describe("Balance owner sync and pure My Day reads", () => {
       expect(readMyDay(readonly, stack.runtime.options, SYNC_NOW).items.map(item => item.task.id)).toEqual(["task"]);
       expect(stack.bytes()).toBe(before);
     } finally { readonly.close(); }
+  });
+
+  for (const op of ["add", "outline-add"] as const) test(`${op} only announces a task that fits the visible proposal cap`, async () => {
+    const state = syncFixtureState();
+    state.outline.children[0]!.children = state.outline.children[0]!.children.filter(task => task.id !== "repeat");
+    findNode(state.outline, "task")!.dueDate = SYNC_DATE;
+    saveBalanceState(stack.db, state);
+    await stack.read();
+    command({ op: "cap", cap: 1 });
+    const post = async (dueDate?: string) => {
+      const response = await handleDeskMyDay(new Request("http://localhost/api/desk/my-day", {
+        method: "POST",
+        body: JSON.stringify({ date: SYNC_DATE, requestId: crypto.randomUUID(), command: {
+          op, parent: "area:work", kind: "task", title: "Another sketch", revision: read().revision, ...(dueDate ? { dueDate } : {}),
+        } }),
+      }), stack.db, stack.runtime, undefined, SYNC_NOW);
+      expect(response.status).toBe(200);
+      return response.json() as Promise<ReturnType<typeof changeMyDay>>;
+    };
+    const hidden = await post();
+    expect(hidden.view.items.map(item => item.task.id)).toEqual(["task"]);
+    expect(hidden.notice).toBeUndefined();
+    if (op === "outline-add") {
+      const visible = await post("2026-10-31");
+      expect(visible.view.items.map(item => item.task.id)).toEqual([visible.outlineId!]);
+      expect(visible.notice).toContain("Added Another sketch to today's proposal.");
+    }
   });
 
   test("the Desk My Day route syncs a note and recurrence once and keeps reads stable afterward", async () => {

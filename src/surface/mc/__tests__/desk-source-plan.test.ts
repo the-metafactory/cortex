@@ -1,4 +1,4 @@
-import { deskFixtureOptions as desk } from "../../../../scripts/lib/desk-options-fixture";
+import { deskFixtureOptions as desk } from "./fixtures/desk-options-fixture";
 import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

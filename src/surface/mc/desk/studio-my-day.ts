@@ -41,6 +41,9 @@ export function withSyncedBalance<T>(db: Database, desk: DeskOptions, now: numbe
     return take(source, studio);
   }, strict);
 }
+export function readSyncedMyDay(db: Database, desk: DeskOptions, now: number, strict = false) {
+  return withSyncedBalance(db, desk, now, source => readMyDay(db, desk, now, source), strict);
+}
 export function syncStudioBalance(db: Database, desk: DeskOptions, now: number, strict = false): Promise<void> {
   return withSyncedBalance(db, desk, now, () => undefined, strict);
 }

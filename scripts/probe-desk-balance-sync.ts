@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { balanceSyncFixture, SYNC_NOW, syncFixtureState } from "./lib/desk-balance-sync-fixture";
+import { balanceSyncFixture, SYNC_NOW, syncFixtureState } from "../src/surface/mc/__tests__/fixtures/desk-balance-sync-fixture";
 import { findNode } from "../src/balance";
 import { saveBalanceState, loadBalanceState } from "../src/surface/mc/desk/balance-store";
 import { loadMeta } from "../src/surface/mc/desk/balance-sync";

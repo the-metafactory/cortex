@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { composeDesk, type DeskRuntime, type DeskVigilSource } from "../desk/compose";
-import { changeMyDay, readMyDay } from "../desk/my-day";
-import { withSyncedBalance } from "../desk/studio-my-day";
+import { changeMyDay } from "../desk/my-day";
+import { readSyncedMyDay, withSyncedBalance } from "../desk/studio-my-day";
 import { MyDayRequestSchema } from "../desk/my-day-schema";
 import { findListedMail } from "../desk/mail-actions";
 import { logMailTodo } from "../desk/mail-log";
@@ -10,7 +10,7 @@ export async function handleDeskMyDay(req: Request, db: Database, runtime: DeskR
   const desk = runtime?.options;
   if (!desk?.enabled || !runtime) return Response.json({ error: "The Desk is turned off." }, { status: 409 });
   if (req.method === "GET") {
-    const view = await withSyncedBalance(db, desk, now, source => readMyDay(db, desk, now, source));
+    const view = await readSyncedMyDay(db, desk, now);
     return Response.json(view, { headers: { "Cache-Control": "no-store" } });
   }
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "GET, POST" } });

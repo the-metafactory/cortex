@@ -14,7 +14,7 @@ import type { MyDayCommand, MyDayMeta } from "./my-day-schema";
 import { addToToday, joinToday, liveDayUndo, removeFromToday, undoToday, type TodayContext } from "./my-day-today";
 import type { DeskOptions } from "./compose";
 import type { DeskItem } from "./types";
-import { configuredState, loadMeta, loadMyDayState, saveMeta } from "./balance-sync";
+import { configuredState, isPersonDraft, loadMeta, loadMyDayState, retireStaleDraft, saveMeta, todayCap } from "./balance-sync";
 export { loadMeta } from "./balance-sync";
 
 export interface MyDayView {
@@ -46,7 +46,7 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
   const state = configuredState(storedState, desk);
   const day = state.dayState?.date === date ? state.dayState : null;
   const all = rankAll(state, date);
-  const ids = day?.confirmed ?? (meta.draft?.date === date && meta.draft.origin === "person" ? meta.draft.ids : selectToday(state, date).map(i => i.task.id));
+  const ids = day?.confirmed ?? (isPersonDraft(meta, date) ? meta.draft.ids : selectToday(state, date).map(i => i.task.id));
   const visibleIds = day ? ids : ids.slice(0, state.settings.todayCap);
   const byId = new Map(all.map(i => [i.task.id, i]));
   const selected = meta.selection?.date === date ? meta.selection : null;
@@ -104,7 +104,6 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
   return db.transaction(() => {
     const meta = loadMeta(db);
     const state = loadMyDayState(db, desk, meta);
-    state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
     const payload = JSON.stringify({ date, command });
     const receipt = meta.receipts.find(r => r.id === requestId);
     if (receipt) {
@@ -115,7 +114,6 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
       return { view: viewOf(state, meta, desk, localDay(now), studio), ...(receipt.undo ? { undo: receipt.undo } : {}), ...(receipt.outlineId ? { outlineId: receipt.outlineId } : {}), ...(receipt.notice ? { notice: receipt.notice } : {}), ...(receipt.location ? { location: receipt.location } : {}) };
     }
     if (date !== localDay(now)) throw new Error("The date changed. Refresh the Desk before changing your day.");
-    state.settings.todayCap = meta.caps?.cap ?? desk.myDay?.cap ?? 5;
     let undo: string | undefined;
     let outlineBefore: TodayItem[] | undefined;
     let outlineId: string | undefined;
@@ -248,7 +246,7 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         if (meta.draft?.date === date && state.dayState?.date !== date) meta.draft.ids = meta.draft.ids.slice(0, command.cap);
         break;
       case "topN":
-        meta.caps = { cap: meta.caps?.cap ?? desk.myDay?.cap ?? 5, topN: command.topN };
+        meta.caps = { cap: todayCap(meta, desk), topN: command.topN };
         break;
       case "file": {
         fileBalanceInbox(state, meta, desk, command.id, command.parent);
@@ -267,14 +265,14 @@ export function changeMyDay(args: { db: Database; desk: DeskOptions; now: number
         edit(state, command, date);
         break;
     }
-    if (joined && state.dayState?.date !== date && !(meta.draft?.date === date && meta.draft.origin === "person")) {
+    if (joined && state.dayState?.date !== date && !isPersonDraft(meta, date)) {
       if (selectToday(configuredState(state, desk), date).some(item => item.task.id === joined)) todayNotice = `Added ${requiredNode(state, joined).title} to today's proposal.`;
     } else if (joined) {
       const outcome = joinToday(today(), dayIds(), joined, state.settings.todayCap);
       todayNotice = outcome.notice;
       undo = outcome.undo;
     }
-    if (meta.draft && (meta.draft.date !== date || meta.draft.origin !== "person")) meta.draft = null;
+    retireStaleDraft(meta, date);
     meta.revision += 1;
     const view = viewOf(state, meta, desk, date, studio);
     const notice = [unavailable.length ? `${unavailable.join(", ")} ${unavailable.length === 1 ? "is" : "are"} no longer actionable in today's list.` : undefined, todayNotice].filter(Boolean).join(" ") || undefined;
