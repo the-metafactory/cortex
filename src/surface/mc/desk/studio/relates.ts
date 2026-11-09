@@ -2,6 +2,7 @@ import type { DeskEvent, DeskGoal } from "../types";
 import { clip, normaliseLabel, sameSource } from "./board";
 import type { MaterialLink } from "./format";
 import { outcomeLabel, withHref } from "./labels";
+import { withoutMailFrame } from "./mail-header";
 import type { StudioThreadView, StudioView } from "./view";
 
 const PERSON_KINDS = ["person", "people", "contact"] as const;
@@ -111,15 +112,47 @@ function peopleRelations(thread: StudioThreadView): Relation[] {
   return uniqueBy(found, (r) => r.key);
 }
 
+const MIN_TOPIC_WORD = 4;
+const TOPIC_SHARE = 0.25;
+const COMMON_WORDS = new Set([
+  "about", "after", "again", "also", "been", "before", "being", "both", "could", "does", "doing", "done", "each", "even", "from", "have", "here", "into", "just", "like", "make", "more", "most", "much", "must", "need", "next", "only", "other", "over", "same", "should", "some", "such", "than", "that", "their", "them", "then", "there", "these", "they", "this", "those", "through", "under", "very", "want", "were", "what", "when", "where", "which", "while", "will", "with", "would", "your",
+  "aber", "alle", "auch", "dann", "dass", "denn", "eine", "einen", "einer", "nach", "nicht", "noch", "oder", "sein", "sich", "sind", "soll", "unter", "wenn", "wird", "zwischen",
+]);
+
+const topicText = (t: StudioThreadView): string => [withoutMailFrame(t.question), t.expect ?? "", t.outcomeText].join(" ");
+
+function topicWords(t: StudioThreadView): Set<string> {
+  return new Set(
+    normaliseLabel(topicText(t))
+      .split(" ")
+      .filter((w) => w.length >= MIN_TOPIC_WORD && !/^\d+$/.test(w) && !COMMON_WORDS.has(w)),
+  );
+}
+
+function rareWordCheck(studio: StudioView): (word: string) => boolean {
+  const all = [...studio.active, ...studio.parked, ...studio.closed];
+  const seenIn = new Map<string, number>();
+  for (const t of all) for (const w of topicWords(t)) seenIn.set(w, (seenIn.get(w) ?? 0) + 1);
+  const most = Math.max(2, Math.floor(all.length * TOPIC_SHARE));
+  return (word) => (seenIn.get(word) ?? 0) <= most;
+}
+
+function sharedTopic(a: StudioThreadView, b: StudioThreadView, isRare: (word: string) => boolean): string | undefined {
+  const theirs = topicWords(b);
+  return [...topicWords(a)].find((w) => theirs.has(w) && isRare(w));
+}
+
 function decisionRelations(thread: StudioThreadView, studio: StudioView): Relation[] {
   const areaLabel = new Map(studio.areas.map((a) => [a.id, a.label]));
+  const isRare = rareWordCheck(studio);
   return studio.closed
     .filter((c) => c.slug !== thread.slug)
     .flatMap((c): Relation[] => {
       const hit = sharedLink(thread, c);
       const area = hit ? undefined : c.areas.find((a) => thread.areas.includes(a));
-      if (!hit && area === undefined) return [];
-      const via = hit ? `Shares a source: ${hit.label}.` : `Same area: ${areaLabel.get(area ?? "") ?? area}.`;
+      const topic = area === undefined ? undefined : sharedTopic(thread, c, isRare);
+      if (!hit && topic === undefined) return [];
+      const via = hit ? `Shares a source: ${hit.label}.` : `Same area: ${areaLabel.get(area ?? "") ?? area}, and both mention “${topic}”.`;
       const head = `${outcomeLabel(c)}${c.closed ? ` ${c.closed}` : ""}.`;
       const said = c.expect ? ` Expected: ${clip(c.expect, 80)}` : c.outcomeText ? ` ${clip(c.outcomeText, 80)}` : "";
       return [{ kind: "decision", key: `decision:${c.slug}`, title: c.question, why: `${head}${said} ${via}`.replace(/\s+/g, " "), open: c.slug }];
