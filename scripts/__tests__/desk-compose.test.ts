@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { COMPOSE_CALL_TIMEOUT_MS, COMPOSE_MAX_TOKENS, composeDeskRoutine, forwardRoutineEdit, loadDeskRoutineCatalog } from "../desk-compose";
@@ -102,4 +102,63 @@ it("holds the Desk's compose to its delivery", async () => {
   });
   expect(result).toMatchObject({ status: "no-match" });
   expect(asked).toBe(1);
+});
+
+describe("command model through the real composer CLI", () => {
+  async function setup(reply?: unknown) {
+    const capture = join(root, "messages.jsonl");
+    const command = join(root, "model.ts");
+    await writeFile(command, `import { appendFileSync } from "node:fs";
+const input = JSON.parse(await new Response(Bun.stdin.stream()).text());
+appendFileSync(${JSON.stringify(capture)}, JSON.stringify(input)+"\\n");
+const editing = input.messages[0].content.startsWith("Propose routine parameter edits");
+const delivery = input.messages[0].content.startsWith("Read a routine request");
+const text = editing ? JSON.stringify({patches:[{path:["actions",0,"A_READ","limit"],value:3}]}) : delivery ? JSON.stringify({channels:[],send:false,mailsSomeoneElse:false}) : "\`\`\`yaml\\nname: F_READ\\nactions:\\n  - A_READ # sovereignty: D, residency: CH\\n\`\`\`";
+process.stdout.write(JSON.stringify(${reply === undefined ? "{text}" : JSON.stringify(reply)}));
+`);
+    const installPath = join(root, "A_READ");
+    await mkdir(installPath);
+    await writeFile(join(installPath, "action.json"), JSON.stringify({ name: "A_READ", description: "Read a fixed value", input: {}, output: { value: { type: "string" } }, effect: "read" }));
+    const catalog = join(root, "catalog.json");
+    await writeFile(catalog, JSON.stringify({ packages: [{ name: "A_READ", type: "action", status: "active", installPath }] }));
+    return { capture, argv: [process.execPath, join(import.meta.dir, "..", "desk-compose.ts"), "--catalog-file", catalog, "--model-command", JSON.stringify([process.execPath, command]), "--request", "read a fixed value", "--json"] };
+  }
+
+  async function execute(argv: string[]) {
+    const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return { stdout, stderr, code };
+  }
+
+  it("composes without an HTTP endpoint and preserves the delivery check", async () => {
+    const { argv, capture } = await setup();
+    const result = await execute(argv);
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "complete", flow: { name: "F_READ", actions: ["A_READ"] } });
+    const calls = (await readFile(capture, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    expect(calls).toHaveLength(2);
+    expect(calls.every((call) => call.sourcePolicy === "cloud")).toBe(true);
+    expect(calls[0].messages[0].content).toStartWith("Read a routine request");
+    expect(calls[1].messages[0].content).toContain('"text"');
+  });
+
+  it("proposes validated edits through the command without forwarding to Pulse HTTP", async () => {
+    const { argv } = await setup();
+    const flow = { name: "F_READ", steps: [{ path: ["actions", 0], action: "A_READ", purpose: "Read", reason: "Read", parameters: [{ name: "limit", kind: "literal", value: 1 }], editable: [{ name: "limit", type: "number", minimum: 1, maximum: 5 }] }] };
+    const result = await execute([...argv, "--pulse-bin", "/nonexistent/pulse", "--routine-edit", JSON.stringify(flow)]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ status: "edit", patches: [{ path: ["actions", 0, "A_READ", "limit"], value: 3 }] });
+    flow.steps[0].editable[0].maximum = 2;
+    const invalid = await execute([...argv, "--routine-edit", JSON.stringify(flow)]);
+    expect(invalid.code).toBe(1);
+    expect(JSON.parse(invalid.stdout)).toMatchObject({ status: "invalid" });
+  });
+
+  it("rejects malformed command responses instead of accepting an unchecked proposal", async () => {
+    const { argv } = await setup({ text: 42 });
+    const result = await execute(argv);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "invalid" });
+  });
 });
