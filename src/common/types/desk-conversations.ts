@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import { formatGraphNodeRef, formatGraphRepoRef, graphReadScope, parseGraphNodeRef, parseGraphRepoRef, permitsGraphRead } from "../graph-ref";
 
 export const PI_FILE_TOOLS = ["read", "grep", "find", "ls"] as const;
 export const PI_SOMA_TOOLS = ["soma_context"] as const;
@@ -60,10 +61,48 @@ const WebSchema = z.object({
   }).strict().default(WEB_LIMIT_DEFAULTS),
 }).strict();
 export type WebConfig = z.infer<typeof WebSchema>;
+const GraphRepoRefSchema = z.string().trim().min(5).max(300).transform((text, context) => {
+  const repo = parseGraphRepoRef(text);
+  if (!repo) { context.addIssue({ code: "custom", message: "graph read scopes must be qualified forge refs such as github:github.com/owner/name" }); return z.NEVER; }
+  return formatGraphRepoRef(repo);
+});
+const GraphNamespaceSchema = z.string().trim().min(5).max(300).transform((text, context) => {
+  const repo = parseGraphRepoRef(text);
+  if (repo?.forge !== "gitlab") { context.addIssue({ code: "custom", message: "graph read namespaces must be qualified GitLab refs such as gitlab:gitlab.example.org/group" }); return z.NEVER; }
+  return formatGraphRepoRef(repo);
+});
+const GraphMapSchema = z.object({
+  id: z.string().regex(new RegExp(`^${PROJECT_ID}$`), "mc.desk.conversations.tools graph map id must be lower-case letters, digits and dashes"),
+  ref: z.string().trim().min(5).max(300).transform((text, context) => {
+    const ref = parseGraphNodeRef(text);
+    if (!ref) { context.addIssue({ code: "custom", message: "graph map roots must be qualified node refs such as github:github.com/owner/name#12" }); return z.NEVER; }
+    return formatGraphNodeRef(ref);
+  }),
+  label: z.string().trim().min(1).max(100).optional(),
+}).strict();
+const GraphReadSchema = z.object({
+  repos: z.array(GraphRepoRefSchema).max(50).default([]),
+  namespaces: z.array(GraphNamespaceSchema).max(50).default([]),
+}).strict().refine(read => read.repos.length + read.namespaces.length > 0, "mc.desk.conversations.tools graphs read scope must permit at least one repository or namespace");
+const GraphSchema = z.object({
+  id: z.string().regex(new RegExp(`^${PROJECT_ID}$`), "mc.desk.conversations.tools graph id must be lower-case letters, digits and dashes"),
+  policy: z.enum(["local", "cloud"]).default("local"),
+  maps: z.array(GraphMapSchema).min(1).max(100).refine(maps => new Set(maps.map(map => map.id)).size === maps.length, "mc.desk.conversations.tools graph map ids must be unique").refine(maps => new Set(maps.map(map => map.ref.toLowerCase())).size === maps.length, "mc.desk.conversations.tools graph map roots must be unique"),
+  read: GraphReadSchema,
+}).strict().superRefine((graph, context) => {
+  const scope = graphReadScope(graph.read);
+  for (const map of graph.maps) {
+    const ref = parseGraphNodeRef(map.ref);
+    if (ref && !permitsGraphRead(scope, ref.repo)) context.addIssue({ code: "custom", path: ["maps"], message: `graph map ${map.id} is outside the configured read scope` });
+  }
+});
+export type GraphMap = z.infer<typeof GraphMapSchema>;
+export type GraphSource = z.infer<typeof GraphSchema>;
 const ToolsSchema = z.object({
   web: WebSchema.optional(),
   projects: z.array(ProjectSchema).max(50).default([]).refine(projects => new Set(projects.map(project => project.id)).size === projects.length, "mc.desk.conversations.tools project ids must be unique"),
-}).strict();
+  graphs: z.array(GraphSchema).max(20).optional().refine(graphs => !graphs || new Set(graphs.map(graph => graph.id)).size === graphs.length, "mc.desk.conversations.tools graph ids must be unique"),
+}).strict().refine(tools => !tools.graphs || new Set([...tools.projects.map(project => project.id), ...tools.graphs.map(graph => graph.id)]).size === tools.projects.length + tools.graphs.length, "mc.desk.conversations.tools project and graph ids must be unique across sources");
 export type ToolsConfig = z.infer<typeof ToolsSchema>;
 
 export const DeskConversationsSchema = z.object({

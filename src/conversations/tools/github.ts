@@ -2,6 +2,7 @@ import { z } from "zod/v4";
 import type { ToolProject } from "../../common/types/desk-conversations";
 import { runCommand, type CommandResult } from "../../surface/mc/desk/spawn";
 import type { ToolContext, ToolDefinition } from "./capabilities";
+import { list, num, rec, str } from "./json";
 
 export type GithubRunner = (argv: string[], timeoutMs: number) => Promise<CommandResult>;
 export interface GithubToolOptions {
@@ -54,11 +55,6 @@ const clip = (text: unknown, limit: number): string => {
   const value = typeof text === "string" ? text : "";
   return value.length > limit ? `${value.slice(0, limit)}\n[truncated ${value.length - limit} characters]` : value;
 };
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-const rec = (value: unknown): Record<string, unknown> => isRecord(value) ? value : {};
-const list = (value: unknown): Record<string, unknown>[] => Array.isArray(value) ? value.filter(isRecord) : [];
-const str = (value: unknown): string | null => typeof value === "string" ? value : null;
-const num = (value: unknown): number | null => typeof value === "number" ? value : null;
 const login = (value: unknown): string | null => str(rec(value).login);
 const sameRepo = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
 
