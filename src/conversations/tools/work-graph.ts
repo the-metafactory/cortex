@@ -80,7 +80,7 @@ interface BlockerView {
   message?: string;
 }
 
-interface NodeTarget { map: GraphMap; repo: string }
+interface NodeTarget { map: GraphMap; root: GraphNodeRef; repo: string }
 interface PreparedMap extends NodeTarget { graph: GraphSource }
 type MapRead = { refusal: string } | { refusal?: undefined; graph: GraphSource; map: GraphMap; repo: string; scope: GraphReadScope; body: Record<string, unknown> };
 
@@ -114,10 +114,14 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
   const failed = (graph: GraphSource, failure: Extract<OwnerRead, { ok: false }>): string => JSON.stringify({ status: failure.status, graph: graph.id, fetchedAt: fetchedAt(), message: failure.message });
   const grantedGraph = (context: ToolContext): GraphSource | string => context.graph ?? JSON.stringify({ status: "invalid-source", message: "No configured graph source was granted." });
   const mapOf = (maps: readonly GraphMap[], id: string): GraphMap | null => maps.find(map => map.id === id) ?? null;
+  const mapView = (map: GraphMap): { id: string; ref: string; label: string | null } => ({ id: map.id, ref: map.ref, label: map.label ?? null });
+  const readHeader = (graph: GraphSource, repo: string, map: GraphMap): Record<string, unknown> => ({ status: "ok", graph: graph.id, fetchedAt: fetchedAt(), repo, map: mapView(map) });
+  const liveHeader = (graph: GraphSource, repo: string, map: GraphMap): Record<string, unknown> => ({ ...readHeader(graph, repo, map), snapshot: "live" });
+  const historicalHeader = (graph: GraphSource, repo: string, map: GraphMap): Record<string, unknown> => ({ ...readHeader(graph, repo, map), historical: true, derivedFrom: "close-receipts" });
   const mapTarget = (graph: GraphSource, id: string): NodeTarget | null => {
     const map = mapOf(graph.maps, id);
     const root = map ? parseGraphNodeRef(map.ref) : null;
-    return map && root ? { map, repo: formatGraphRepoRef(root.repo) } : null;
+    return map && root ? { map, root, repo: formatGraphRepoRef(root.repo) } : null;
   };
   const preparedMap = (context: ToolContext, id: string): string | PreparedMap => {
     const graph = grantedGraph(context);
@@ -160,8 +164,18 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
     }));
 
   const bounded = <T>(all: readonly T[]): { items: T[]; omitted: number } => ({ items: all.slice(0, MAX_FINDINGS), omitted: Math.max(0, all.length - MAX_FINDINGS) });
-  const findingRefs = (repo: string, value: unknown): { items: string[]; omitted: number } =>
-    bounded(entries(value).map(entry => qualifiedNodeId(repo, entryId(entry))).filter(ref => ref.length > 0));
+  const findingEntries = (value: unknown): Record<string, unknown>[] | null => {
+    if (!Array.isArray(value)) return null;
+    const entries: Record<string, unknown>[] = [];
+    for (const raw of value) {
+      const entry = typeof raw === "string" ? { id: raw } : isRecord(raw) ? raw : null;
+      if (entry === null || entryId(entry) === "") return null;
+      entries.push(entry);
+    }
+    return entries;
+  };
+  const findingRefs = (repo: string, entries: readonly Record<string, unknown>[]): { items: string[]; omitted: number } =>
+    bounded(entries.map(entry => qualifiedNodeId(repo, entryId(entry))));
 
   const pageOf = <T>(all: readonly T[], offset: number, limit: number): { page: T[]; total: number; offset: number; next: number | null } => {
     const page = all.slice(offset, offset + limit);
@@ -251,10 +265,9 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
       const projected = graph.maps.map(map => {
         const entry = byRef.get(map.ref.toLowerCase());
         const state = rec(entry?.state);
-        const root = parseGraphNodeRef(map.ref);
-        const repo = root ? formatGraphRepoRef(root.repo) : null;
-        if (!entry || !repo || entry.unavailable === true || Object.keys(state).length === 0) return { id: map.id, ref: map.ref, label: map.label ?? null, status: "unavailable", message: "The owner reports this map unavailable in the permitted read scope." };
-        return { id: map.id, ref: map.ref, label: map.label ?? null, status: "available", map: projectNode(scope, repo, state, 0) };
+        const target = mapTarget(graph, map.id);
+        if (!entry || !target || entry.unavailable === true || Object.keys(state).length === 0) return { ...mapView(map), status: "unavailable", message: "The owner reports this map unavailable in the permitted read scope." };
+        return { ...mapView(map), status: "available", map: projectNode(scope, target.repo, state, 0) };
       });
       const unavailable = projected.filter(entry => entry.status === "unavailable").length;
       return JSON.stringify({ status: "ok", graph: graph.id, fetchedAt: fetchedAt(), snapshot: "live", maps: projected, unavailable });
@@ -269,10 +282,9 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
     }
     const bare = /^#?([1-9]\d*)$/.exec(input.node)?.[1];
     if (!bare || !input.map) return "A bare node number needs one of this graph's configured map ids.";
-    const map = mapOf(graph.maps, input.map);
-    const root = map ? parseGraphNodeRef(map.ref) : null;
-    if (!root) return "No configured map has that id.";
-    const target = `${formatGraphRepoRef(root.repo)}#${bare}`;
+    const mapped = mapTarget(graph, input.map);
+    if (!mapped) return "No configured map has that id.";
+    const target = `${mapped.repo}#${bare}`;
     const ref = parseGraphNodeRef(target);
     return ref ? { ref, target } : "The configured map root cannot name a node.";
   };
@@ -316,14 +328,14 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
       if (read.refusal !== undefined) return read.refusal;
       const { graph, map, repo, scope, body } = read;
       if (!Array.isArray(body.frontier) || !Array.isArray(body.notWritable)) return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned a frontier without node lists. Nothing was released." });
-      const nodes = entries(body.frontier).map(state => projectNode(scope, repo, state, 0));
-      const notWritable = bounded(entries(body.notWritable).map(state => projectNode(scope, repo, state, 0)));
+      const paged = pageOf(entries(body.frontier), input.offset, input.limit);
+      const nodes = paged.page.map(state => projectNode(scope, repo, state, 0));
+      const rawNotWritable = entries(body.notWritable);
+      const notWritable = { items: rawNotWritable.slice(0, MAX_FINDINGS).map(state => projectNode(scope, repo, state, 0)), omitted: Math.max(0, rawNotWritable.length - MAX_FINDINGS) };
       const unavailableMembership = bounded(membershipEdges(scope, repo, body.unavailableMembership));
-      const paged = pageOf(nodes, input.offset, input.limit);
       return JSON.stringify({
-        status: "ok", graph: graph.id, fetchedAt: fetchedAt(), snapshot: "live", repo,
-        map: { id: map.id, ref: map.ref, label: map.label ?? null },
-        total: paged.total, offset: paged.offset, nodes: paged.page, notWritable, unavailableMembership,
+        ...liveHeader(graph, repo, map),
+        total: paged.total, offset: paged.offset, nodes, notWritable, unavailableMembership,
         next: paged.next,
       });
     },
@@ -343,18 +355,25 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
       const { graph, map, repo, scope, body } = read;
       const nodes = num(body.nodes);
       if (nodes === null) return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned an audit without a node count. Nothing was released." });
-      const openClaimed = bounded(entries(body.openClaimed).map(entry => ({ ref: qualifiedNodeId(repo, entryId(entry)), assignees: strings(entry.assignees) })));
-      const buildBriefNotReady = bounded(entries(body.buildBriefNotReady).map(entry => ({ ref: qualifiedNodeId(repo, entryId(entry)), missing: strings(entry.missing).slice(0, 20) })));
+      const checked = input.scope ? ["buildBriefNotReady"] : ["closedWithoutReceipt", "openWithoutCheckpoint", "openWithFullSuiteProbe", "openWithBareBunTestProbe", "openClaimed", "buildBriefNotReady"];
+      const lists = new Map<string, Record<string, unknown>[]>();
+      for (const key of checked) {
+        const found = findingEntries(body[key]);
+        if (found === null) return failed(graph, { ok: false, status: "unreadable", message: `The graph owner returned an audit without a usable ${key} finding list. Nothing was released.` });
+        lists.set(key, found);
+      }
+      const refs = (key: string): { items: string[]; omitted: number } => findingRefs(repo, lists.get(key) ?? []);
+      const openClaimed = bounded((lists.get("openClaimed") ?? []).map(entry => ({ ref: qualifiedNodeId(repo, entryId(entry)), assignees: strings(entry.assignees) })));
+      const buildBriefNotReady = bounded((lists.get("buildBriefNotReady") ?? []).map(entry => ({ ref: qualifiedNodeId(repo, entryId(entry)), missing: strings(entry.missing).slice(0, 20) })));
       const unavailableMembership = bounded(membershipEdges(scope, repo, body.unavailableMembership));
       return JSON.stringify({
-        status: "ok", graph: graph.id, fetchedAt: fetchedAt(), snapshot: "live", repo,
-        map: { id: map.id, ref: map.ref, label: map.label ?? null },
+        ...liveHeader(graph, repo, map),
         scope: input.scope ?? "all", uncheckedFindings: input.scope !== undefined, nodes,
         findings: {
-          closedWithoutReceipt: findingRefs(repo, body.closedWithoutReceipt),
-          openWithoutCheckpoint: findingRefs(repo, body.openWithoutCheckpoint),
-          openWithFullSuiteProbe: findingRefs(repo, body.openWithFullSuiteProbe),
-          openWithBareBunTestProbe: findingRefs(repo, body.openWithBareBunTestProbe),
+          closedWithoutReceipt: refs("closedWithoutReceipt"),
+          openWithoutCheckpoint: refs("openWithoutCheckpoint"),
+          openWithFullSuiteProbe: refs("openWithFullSuiteProbe"),
+          openWithBareBunTestProbe: refs("openWithBareBunTestProbe"),
           openClaimed,
           buildBriefNotReady,
         },
@@ -386,8 +405,7 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
       }));
       const paged = pageOf(all, input.offset, input.limit);
       return JSON.stringify({
-        status: "ok", graph: graph.id, fetchedAt: fetchedAt(), historical: true, derivedFrom: "close-receipts", repo,
-        map: { id: map.id, ref: map.ref, label: map.label ?? null },
+        ...historicalHeader(graph, repo, map),
         total: paged.total, offset: paged.offset, decisions: paged.page,
         next: paged.next,
       });

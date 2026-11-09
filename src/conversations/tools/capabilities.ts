@@ -71,7 +71,7 @@ export function sourcePolicyRefusal(session: ToolSession, project: { policy: unk
   return null;
 }
 interface Grant { project: ToolProject | null; graph: GraphSource | null; session: ToolSession }
-type Source = ToolProject | GraphSource;
+type Source = { kind: "project"; source: ToolProject } | { kind: "graph"; source: GraphSource };
 const graphTool = (tool: ToolDefinition): boolean => tool.source === "graph";
 interface Binding { session: ToolSession | null; registry: string }
 
@@ -110,7 +110,11 @@ export class ToolHost {
       description: "List permitted source projects and work graphs plus tools, their current availability and blocking reasons. Use offset to read the next page.",
       operation: null,
       input: CapabilitiesInput,
-      run: async (input, context) => JSON.stringify(await this.capabilities(context.session, input as z.infer<typeof CapabilitiesInput>, context.signal)),
+      run: async (input, context) => {
+        const parsed = input as z.infer<typeof CapabilitiesInput>;
+        if (parsed.source !== undefined && parsed.project !== undefined && parsed.source !== parsed.project) return { outcome: "refused", text: "source and project name different sources; pass one filter." };
+        return JSON.stringify(await this.capabilities(context.session, parsed, context.signal));
+      },
     };
   }
 
@@ -157,46 +161,56 @@ export class ToolHost {
   }
 
   private visible(kind: "project" | "graph", session: ToolSession): Source[] {
-    return kind === "graph" ? this.visibleGraphs(session) : this.visibleProjects(session);
+    return kind === "graph"
+      ? this.visibleGraphs(session).map(source => ({ kind: "graph" as const, source }))
+      : this.visibleProjects(session).map(source => ({ kind: "project" as const, source }));
   }
 
   private sourceOf(kind: "project" | "graph", id: string): Source | null {
-    return kind === "graph"
-      ? (this.options.config()?.graphs ?? []).find(candidate => candidate.id === id) ?? null
-      : (this.options.config()?.projects ?? []).find(candidate => candidate.id === id) ?? null;
+    if (kind === "graph") {
+      const source = (this.options.config()?.graphs ?? []).find(candidate => candidate.id === id) ?? null;
+      return source ? { kind: "graph", source } : null;
+    }
+    const source = (this.options.config()?.projects ?? []).find(candidate => candidate.id === id) ?? null;
+    return source ? { kind: "project", source } : null;
   }
 
-  private operationsOf(kind: "project" | "graph", source: Source): readonly ToolOperation[] {
-    return kind === "graph" ? ["graph.read"] : (source as ToolProject).operations;
+  private operationsOf(source: Source): readonly ToolOperation[] {
+    return source.kind === "graph" ? ["graph.read"] : source.source.operations;
   }
 
-  private async availability(session: ToolSession, kind: "project" | "graph", source: Source, tool: ToolDefinition, signal: AbortSignal): Promise<{ availability: Availability; reason: string | null }> {
+  private async availability(session: ToolSession, source: Source, tool: ToolDefinition, signal: AbortSignal): Promise<{ availability: Availability; reason: string | null }> {
     if (tool.operation === null) return { availability: "available", reason: null };
-    if (graphTool(tool) !== (kind === "graph")) return { availability: "denied", reason: `${tool.name} does not read this kind of source` };
-    if (!this.operationsOf(kind, source).includes(tool.operation)) return { availability: "denied", reason: `${tool.operation} is not permitted for this source` };
-    const sourcePolicy = sourcePolicyRefusal(session, source);
+    if (graphTool(tool) !== (source.kind === "graph")) return { availability: "denied", reason: `${tool.name} does not read this kind of source` };
+    if (!this.operationsOf(source).includes(tool.operation)) return { availability: "denied", reason: `${tool.operation} is not permitted for this source` };
+    const sourcePolicy = sourcePolicyRefusal(session, source.source);
     if (sourcePolicy) return { availability: "denied", reason: sourcePolicy };
     const gated = tool.gate?.(session) ?? null;
     if (gated) return { availability: "denied", reason: gated };
-    const missing = kind === "project" ? tool.dependency?.(source as ToolProject) ?? null : null;
-    if (missing) return { availability: "dependency-missing", reason: missing };
-    const down = signal.aborted ? "the check was cancelled" : kind === "project" ? await tool.provider?.(source as ToolProject).catch(() => "The provider could not be reached. Check its configured connection.") ?? null : null;
-    return down ? { availability: "provider-unavailable", reason: down } : { availability: "available", reason: null };
+    if (signal.aborted) return { availability: "provider-unavailable", reason: "the check was cancelled" };
+    if (source.kind === "project") {
+      const missing = tool.dependency?.(source.source) ?? null;
+      if (missing) return { availability: "dependency-missing", reason: missing };
+      const down = await tool.provider?.(source.source).catch(() => "The provider could not be reached. Check its configured connection.") ?? null;
+      if (down) return { availability: "provider-unavailable", reason: down };
+    }
+    return { availability: "available", reason: null };
   }
 
   private async capabilities(session: ToolSession, input: z.infer<typeof CapabilitiesInput>, signal: AbortSignal): Promise<object> {
     const { project, source: named, offset, limit } = input;
     const only = named ?? project;
-    const shown = (["project", "graph"] as const).flatMap(kind => this.visible(kind, session).map(source => ({ kind, source })));
+    const shown = [...this.visible("project", session), ...this.visible("graph", session)];
     const asked = only === undefined ? shown : shown.filter(entry => entry.source.id === only);
-    const sources = await Promise.all(asked.slice(offset, offset + limit).map(async ({ kind, source }) => {
-      const tools = await Promise.all([...this.tools.values()].filter(tool => tool.operation !== null && graphTool(tool) === (kind === "graph")).map(async tool => ({ tool: tool.name, operation: tool.operation, ...(await this.availability(session, kind, source, tool, signal)) })));
+    const sources = await Promise.all(asked.slice(offset, offset + limit).map(async entry => {
+      const { kind, source } = entry;
+      const tools = await Promise.all([...this.tools.values()].filter(tool => tool.operation !== null && graphTool(tool) === (kind === "graph")).map(async tool => ({ tool: tool.name, operation: tool.operation, ...(await this.availability(session, entry, tool, signal)) })));
       const available = tools.some(tool => tool.availability === "available");
       return {
-        source: source.id, project: source.id, kind, policy: source.policy, scope: this.operationsOf(kind, source),
+        source: source.id, project: source.id, kind, policy: source.policy, scope: this.operationsOf(entry),
         availability: available ? "available" : tools.find(tool => tool.availability === "dependency-missing" || tool.availability === "provider-unavailable")?.availability ?? (tools.length ? "denied" : "not-configured"),
         reason: available ? null : tools.length ? "Check the blocking reasons for this source's tools." : "No source tools are installed in this conversation catalog.",
-        ...(kind === "project" ? { forge: (source as ToolProject).forge ? { kind: (source as ToolProject).forge?.kind, host: (source as ToolProject).forge?.host ?? null, repo: (source as ToolProject).forge?.repo } : null } : {}),
+        ...(entry.kind === "project" ? { forge: entry.source.forge ? { kind: entry.source.forge.kind, host: entry.source.forge.host ?? null, repo: entry.source.forge.repo } : null } : {}),
         tools,
       };
     }));
@@ -215,22 +229,22 @@ export class ToolHost {
     const id = (input as { graph?: unknown; project?: unknown })[kind];
     if (typeof id !== "string") return refuse(`Invalid input for ${tool.name}: ${kind} is required.`);
     const source = this.sourceOf(kind, id);
-    if (!source || !session.scope.includes(id) || !this.visible(kind, session).some(candidate => candidate.id === id)) return refuse("No such source is available to this conversation.");
-    if (!this.operationsOf(kind, source).includes(tool.operation)) return refuse(`${tool.operation} is not permitted for this source.`);
-    const policyRefusal = sourcePolicyRefusal(session, source);
+    if (!source || !session.scope.includes(id) || !this.visible(kind, session).some(candidate => candidate.source.id === id)) return refuse("No such source is available to this conversation.");
+    if (!this.operationsOf(source).includes(tool.operation)) return refuse(`${tool.operation} is not permitted for this source.`);
+    const policyRefusal = sourcePolicyRefusal(session, source.source);
     if (policyRefusal) return refuse(policyRefusal);
     const gated = tool.gate?.(session) ?? null;
     if (gated) return refuse(gated);
-    return kind === "graph"
-      ? { project: null, graph: structuredClone(source as GraphSource), session }
-      : { project: structuredClone(source as ToolProject), graph: null, session };
+    return source.kind === "graph"
+      ? { project: null, graph: structuredClone(source.source), session }
+      : { project: structuredClone(source.source), graph: null, session };
   }
 
   private async runGranted(request: CallRequest, tool: ToolDefinition, input: object, binding: Binding, before: Grant, signal: AbortSignal): Promise<ToolOutcome> {
-    const kind = before.graph ? "graph" : "project";
     const source = before.graph ?? before.project;
-    if (source) {
-      const status = await this.availability(before.session, kind, source, tool, signal);
+    const entry = before.graph ? { kind: "graph" as const, source: before.graph } : before.project ? { kind: "project" as const, source: before.project } : null;
+    if (entry) {
+      const status = await this.availability(before.session, entry, tool, signal);
       signal.throwIfAborted();
       if (status.availability !== "available") return { outcome: "error", text: bounded(redact(`${tool.name} is unavailable: ${status.reason}`), this.outputLimit) };
     }

@@ -164,13 +164,22 @@ describe("work graph reads through the conversation boundary", () => {
 
   test("audit finding lists qualify both id objects and bare ids", async () => {
     const r = rig({
-      audit: ok({ repo: DESK, root: "1", nodes: 4, closedWithoutReceipt: [{ id: "42" }, "43", { ref: "example/other#44" }], openClaimed: ["45"] }),
+      audit: ok({ repo: DESK, root: "1", nodes: 4, closedWithoutReceipt: [{ id: "42" }, "43", { ref: "example/other#44" }], openWithoutCheckpoint: [], openWithFullSuiteProbe: [], openWithBareBunTestProbe: [], openClaimed: ["45"], buildBriefNotReady: [] }),
     });
     const output = toolBody((await r.call("work_graph_audit", { graph: "maps", map: "desk" })).text);
     expect(output.findings).toMatchObject({
       closedWithoutReceipt: { items: [`${DESK}#42`, `${DESK}#43`, "github:github.com/example/other#44"], omitted: 0 },
       openClaimed: { items: [{ ref: `${DESK}#45`, assignees: [] }], omitted: 0 },
     });
+  });
+
+  test("a missing or malformed audit finding list is refused", async () => {
+    const missing = rig({ audit: ok({ repo: DESK, root: "1", nodes: 4, closedWithoutReceipt: [], openWithoutCheckpoint: [], openWithFullSuiteProbe: [], openWithBareBunTestProbe: [], openClaimed: [] }) });
+    expect(toolBody((await missing.call("work_graph_audit", { graph: "maps", map: "desk" })).text)).toMatchObject({ status: "unreadable" });
+    const reshaped = rig({ audit: ok({ repo: DESK, root: "1", nodes: 4, closedWithoutReceipt: [{ title: "no id" }], openWithoutCheckpoint: [], openWithFullSuiteProbe: [], openWithBareBunTestProbe: [], openClaimed: [], buildBriefNotReady: [] }) });
+    expect(toolBody((await reshaped.call("work_graph_audit", { graph: "maps", map: "desk" })).text)).toMatchObject({ status: "unreadable" });
+    const scoped = rig({ audit: ok({ repo: DESK, root: "1", nodes: 3 }) });
+    expect(toolBody((await scoped.call("work_graph_audit", { graph: "maps", map: "desk", scope: "build-brief-not-ready" })).text)).toMatchObject({ status: "unreadable" });
   });
 
   test("the decisions read is labelled historical and receipt-derived", async () => {
@@ -252,5 +261,13 @@ describe("work graph authorization and owner output", () => {
     expect(sources.find(source => source.source === "maps")?.tools.map(tool => tool.tool).sort()).toEqual(["work_graph_audit", "work_graph_decisions", "work_graph_frontier", "work_graph_maps", "work_graph_node"]);
     const filtered = toolBody((await r.call("capabilities", { source: "maps" })).text);
     expect((filtered.sources as { source: string }[]).map(source => source.source)).toEqual(["maps"]);
+  });
+
+  test("capabilities refuses conflicting source and project filters", async () => {
+    const r = rig({});
+    const result = await r.call("capabilities", { source: "maps", project: "project-alpha" });
+    expect(result.outcome).toBe("refused");
+    expect(result.text).toContain("different sources");
+    expect(r.argvs).toHaveLength(0);
   });
 });
