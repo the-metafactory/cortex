@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { COMPOSE_CALL_TIMEOUT_MS, COMPOSE_MAX_TOKENS, composeDeskRoutine, forwardRoutineEdit, loadDeskRoutineCatalog } from "../desk-compose";
 import { RoutineOptionsSchema, type RoutineOptions } from "../../src/common/types/desk-routines";
 import { initDatabase } from "../../src/surface/mc/db/init";
 import { buildRoutineCard } from "../../src/surface/mc/desk/routines";
+import { handleDeskAsk } from "../../src/surface/mc/api/desk-ask";
+import { handleDeskRoutineEditor } from "../../src/surface/mc/api/desk-routine-editor";
+import { HandledLedger } from "../../src/surface/mc/desk/actions";
+import type { DeskRuntime } from "../../src/surface/mc/desk/compose";
+import { runCommand } from "../../src/surface/mc/desk/spawn";
 
 let root: string;
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "desk-catalog-")); });
@@ -105,14 +110,16 @@ it("holds the Desk's compose to its delivery", async () => {
 });
 
 describe("command model through the real composer CLI", () => {
+  const editableFlow = { name: "F_READ", steps: [{ path: ["actions", 0], action: "A_READ", purpose: "Read", reason: "Read", parameters: [{ name: "limit", kind: "literal", value: 1 }], editable: [{ name: "limit", type: "number", minimum: 1, maximum: 5 }] }] };
   async function setup(reply?: unknown) {
     const capture = join(root, "messages.jsonl");
     const command = join(root, "model.ts");
     await writeFile(command, `import { appendFileSync } from "node:fs";
 const input = JSON.parse(await new Response(Bun.stdin.stream()).text());
 appendFileSync(${JSON.stringify(capture)}, JSON.stringify(input)+"\\n");
-const editing = input.messages[0].content.startsWith("Propose routine parameter edits");
-const delivery = input.messages[0].content.startsWith("Read a routine request");
+const instructions = JSON.parse(input.messages[1].content).instructions;
+const editing = instructions.startsWith("Propose routine parameter edits");
+const delivery = instructions.startsWith("Read a routine request");
 const text = editing ? JSON.stringify({patches:[{path:["actions",0,"A_READ","limit"],value:3}]}) : delivery ? JSON.stringify({channels:[],send:false,mailsSomeoneElse:false}) : "\`\`\`yaml\\nname: F_READ\\nactions:\\n  - A_READ # sovereignty: D, residency: CH\\n\`\`\`";
 process.stdout.write(JSON.stringify(${reply === undefined ? "{text}" : JSON.stringify(reply)}));
 `);
@@ -139,20 +146,40 @@ process.stdout.write(JSON.stringify(${reply === undefined ? "{text}" : JSON.stri
     const calls = (await readFile(capture, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     expect(calls).toHaveLength(2);
     expect(calls.every((call) => call.sourcePolicy === "cloud")).toBe(true);
-    expect(calls[0].messages[0].content).toStartWith("Read a routine request");
+    expect(JSON.parse(calls[0].messages[1].content).instructions).toStartWith("Read a routine request");
     expect(calls[1].messages[0].content).toContain('"text"');
   });
 
   it("proposes validated edits through the command without forwarding to Pulse HTTP", async () => {
     const { argv } = await setup();
-    const flow = { name: "F_READ", steps: [{ path: ["actions", 0], action: "A_READ", purpose: "Read", reason: "Read", parameters: [{ name: "limit", kind: "literal", value: 1 }], editable: [{ name: "limit", type: "number", minimum: 1, maximum: 5 }] }] };
-    const result = await execute([...argv, "--pulse-bin", "/nonexistent/pulse", "--routine-edit", JSON.stringify(flow)]);
+    const result = await execute([...argv, "--pulse-bin", "/nonexistent/pulse", "--routine-edit", JSON.stringify(editableFlow)]);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({ status: "edit", patches: [{ path: ["actions", 0, "A_READ", "limit"], value: 3 }] });
-    flow.steps[0].editable[0].maximum = 2;
-    const invalid = await execute([...argv, "--routine-edit", JSON.stringify(flow)]);
+    const restricted = { ...editableFlow, steps: editableFlow.steps.map((step) => ({ ...step, editable: step.editable.map((field) => ({ ...field, maximum: 2 })) })) };
+    const invalid = await execute([...argv, "--routine-edit", JSON.stringify(restricted)]);
     expect(invalid.code).toBe(1);
     expect(JSON.parse(invalid.stdout)).toMatchObject({ status: "invalid" });
+  });
+
+  it.each([{ patches: [] }, { text: { patches: [] } }])("rejects the wrong envelope shape %j", async (reply) => {
+    const { argv } = await setup(reply);
+    const result = await execute([...argv, "--routine-edit", JSON.stringify(editableFlow)]);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "invalid" });
+  });
+
+  it("accepts fenced JSON inside the string envelope for an edit", async () => {
+    const { argv } = await setup({ text: '```json\n{"patches":[]}\n```' });
+    const result = await execute([...argv, "--routine-edit", JSON.stringify(editableFlow)]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ status: "edit", patches: [] });
+  });
+
+  it("stops an undeliverable command request after the delivery read", async () => {
+    const { argv, capture } = await setup({ text: JSON.stringify({ channels: ["email"], send: true, mailsSomeoneElse: true }) });
+    const result = await execute(argv);
+    expect(JSON.parse(result.stdout)).toMatchObject({ status: "no-match" });
+    expect((await readFile(capture, "utf8")).trim().split("\n")).toHaveLength(1);
   });
 
   it("rejects malformed command responses instead of accepting an unchecked proposal", async () => {
@@ -160,5 +187,112 @@ process.stdout.write(JSON.stringify(${reply === undefined ? "{text}" : JSON.stri
     const result = await execute(argv);
     expect(result.code).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({ status: "invalid" });
+  });
+
+  it("normalizes private stderr and bounded-output failures", async () => {
+    const { argv } = await setup();
+    const model = join(root, "model.ts");
+    for (const code of ['process.stderr.write("PRIVATE_SENTINEL"); process.exit(1);', 'process.stdout.write("PRIVATE_SENTINEL" + "x".repeat(600000));', 'process.stdout.write("PRIVATE_SENTINEL");']) {
+      await writeFile(model, code);
+      const result = await execute(argv);
+      expect(result.code).toBe(1);
+      expect(result.stdout + result.stderr).not.toContain("PRIVATE_SENTINEL");
+      expect(result.stderr).toContain("desk-compose: model failed");
+      expect(JSON.parse(result.stdout)).toMatchObject({ status: "invalid" });
+    }
+  });
+
+  it.each(["SIGTERM", "SIGINT"] as const)("kills the model group and starts no retry after %s", async (signal) => {
+    const { argv } = await setup();
+    const pidFile = join(root, "pid");
+    const cleaned = join(root, "cleaned");
+    await writeFile(join(root, "model.ts"), `import { existsSync,readFileSync,writeFileSync,renameSync } from "node:fs"; const child=Bun.spawn([process.execPath,"-e","setInterval(() => {},1000)"],{stdout:"inherit",stderr:"inherit"});const file=${JSON.stringify(pidFile)};const prior=existsSync(file)?readFileSync(file,"utf8"):"";writeFileSync(file+".tmp",prior+JSON.stringify([process.pid,child.pid])+"\\n");renameSync(file+".tmp",file);process.on("SIGTERM",async()=>{writeFileSync(${JSON.stringify(cleaned)},"cleaned");await child.exited;process.exit(0);}); setInterval(() => {}, 1000);`);
+    const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
+    try {
+      for (let i = 0; i < 200 && !await Bun.file(pidFile).exists(); i++) await Bun.sleep(10);
+      const pids: number[] = JSON.parse((await readFile(pidFile, "utf8")).trim());
+      if (!pids.every((pid) => Number.isSafeInteger(pid) && pid > 1)) throw new Error("Invalid model PID fixture");
+      proc.kill(signal);
+      const [, , code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+      expect(code).not.toBe(0);
+      for (const pid of pids) expect(() => process.kill(pid, 0)).toThrow();
+      expect((await readFile(pidFile, "utf8")).trim().split("\n")).toHaveLength(1);
+      expect(await Bun.file(cleaned).exists()).toBe(true);
+    } finally { proc.kill("SIGKILL"); await proc.exited; }
+  });
+
+  it("abort settles even when a detached descendant holds the output pipe", async () => {
+    const pidFile = join(root, "detached-pid");
+    const script = `import {writeFileSync,renameSync} from "node:fs"; const child=Bun.spawn([process.execPath,"-e","setInterval(()=>{},1000)"],{detached:true,stdout:"inherit",stderr:"inherit"});const file=${JSON.stringify(pidFile)};writeFileSync(file+".tmp",String(child.pid));renameSync(file+".tmp",file);process.on("SIGTERM",()=>{});setInterval(()=>{},1000);`;
+    const abort = new AbortController();
+    const result = runCommand([process.execPath, "-e", script], 10000, "", undefined, true, { maxOutputBytes: 1024, signal: abort.signal });
+    let child: number | undefined;
+    try {
+      for (let i = 0; i < 200 && !await Bun.file(pidFile).exists(); i++) await Bun.sleep(10);
+      const pid = Number(await readFile(pidFile, "utf8"));
+      if (!Number.isSafeInteger(pid) || pid <= 1) throw new Error("Invalid detached PID fixture");
+      child = pid;
+      abort.abort();
+      await expect(result).rejects.toThrow();
+    } finally {
+      abort.abort();
+      if (child !== undefined && child > 1) process.kill(-child, "SIGKILL");
+    }
+  });
+
+  it("keeps HTTP edits on the forwarding path without constructing an HTTP model", async () => {
+    const { argv } = await setup();
+    const pulse = join(root, "pulse");
+    await writeFile(pulse, '#!/usr/bin/env bun\nprocess.stdout.write(JSON.stringify({status:"edit",patches:[]}));\n');
+    await chmod(pulse, 0o755);
+    const commandIndex = argv.indexOf("--model-command");
+    const http = [...argv.slice(0, commandIndex), ...argv.slice(commandIndex + 2), "--model-url", "previously-forwarded-value", "--model", "test", "--api-key-env", "MODEL_KEY", "--pulse-bin", pulse, "--routine-edit", JSON.stringify({ name: "F_READ", steps: [] })];
+    const result = await execute(http);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ status: "edit", patches: [] });
+  });
+
+  it("rejects ambiguous model configuration and an empty command before spawning", async () => {
+    const { argv, capture } = await setup();
+    const invalidCommands = ["[]", "not-json", '"not-array"', '[""]', '["relative-model"]'].map((json) => argv.map((value, i) => argv[i - 1] === "--model-command" ? json : value));
+    for (const args of [[...argv, "--model-url", "https://model.example/v1", "--model", "model", "--api-key-env", "MODEL_KEY"], [...argv, "--model", "partial-http"], ...invalidCommands]) {
+      const result = await execute(args);
+      expect(result.code).toBe(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({ status: "invalid" });
+    }
+    expect(await Bun.file(capture).exists()).toBe(false);
+  });
+
+  it("refuses local and unknown areas before starting the cloud composer", async () => {
+    const { argv } = await setup();
+    const runtime: DeskRuntime = { ledger: new HandledLedger(), options: { enabled: true, displayName: "Test", topN: 5, rangerUrl: "", sources: [], areas: [{ id: "work", label: "Work", color: "", repos: [], goals: [], policy: "local" }], routines: RoutineOptionsSchema.parse({ composer: argv, reflex: ["reflex"], target: "@test/pulse-flow", timeZone: "UTC" }) } };
+    const detail = { id: "test", revision: "a".repeat(64), writable: true, reason: "", flow: { name: "F_READ", steps: [] } };
+    const db = initDatabase(":memory:");
+    let modelCalls = 0;
+    const run = async (args: string[]) => {
+      if (args[0] !== "reflex") modelCalls++;
+      return { code: 0, stdout: JSON.stringify(args[0] === "reflex" ? detail : { status: "edit", patches: [] }), stderr: "" };
+    };
+    try {
+      for (const area of ["work", "unknown", ""]) {
+        const ask = await handleDeskAsk(new Request("http://localhost/api/desk/ask", { method: "POST", body: JSON.stringify({ text: "every morning at 8 read a fixed value", area }) }), runtime, { runRoutine: run }, db);
+        expect(ask.status).toBe(area === "work" ? 409 : 400);
+        if (area === "work") expect(await ask.text()).toContain("provider restriction");
+        const edit = await handleDeskRoutineEditor(new Request("http://localhost/api/desk/routine-editor", { method: "POST", body: JSON.stringify({ id: detail.id, revision: detail.revision, action: "propose", text: "use three attempts", area }) }), runtime, run);
+        expect(edit.status).toBe(area === "" ? 400 : 409);
+        if (area !== "") expect(await edit.text()).toContain("provider restriction");
+      }
+      expect(modelCalls).toBe(0);
+      const options = runtime.options;
+      if (!options) throw new Error("Fixture options are missing");
+      for (const area of [undefined, "personal", "default-policy"]) {
+        const allowed = { ...runtime, options: { ...options, areas: [...options.areas, { id: "personal", label: "Personal", color: "", repos: [], goals: [], policy: "cloud" as const }, { id: "default-policy", label: "Default", color: "", repos: [], goals: [] }] } };
+        const edit = await handleDeskRoutineEditor(new Request("http://localhost/api/desk/routine-editor", { method: "POST", body: JSON.stringify({ id: detail.id, revision: detail.revision, action: "propose", text: "use three attempts", area }) }), allowed, run);
+        expect(edit.status).toBe(200);
+        const ask = await handleDeskAsk(new Request("http://localhost/api/desk/ask", { method: "POST", body: JSON.stringify({ text: "every morning at 8 read a fixed value", area }) }), allowed, { runRoutine: run }, db);
+        expect(ask.status).toBe(200);
+      }
+      expect(modelCalls).toBe(6);
+    } finally { db.close(); }
   });
 });

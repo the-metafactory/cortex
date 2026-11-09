@@ -25,7 +25,7 @@ export type RoutineInventory = z.infer<typeof RoutineInventorySchema>;
 const mutation = z.object({ id: z.string().min(1).max(100), revision: z.string().regex(/^[a-f0-9]{64}$/) });
 export const EditorRequestSchema = z.discriminatedUnion("action", [
   mutation.extend({ action: z.literal("update"), patches: z.array(RoutinePatchSchema).min(1).max(100) }).strict(),
-  mutation.extend({ action: z.literal("propose"), text: z.string().trim().min(1).max(2000), area: z.string().optional() }).strict(),
+  mutation.extend({ action: z.literal("propose"), text: z.string().trim().min(1).max(2000), area: z.string().min(1).optional() }).strict(),
 ]);
 
 export function parameterError(field: RoutineStep["editable"][number], value: unknown): string | null {
