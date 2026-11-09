@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import { WEB_LIMIT_DEFAULTS, type ToolsConfig, type WebConfig } from "../../common/types/desk-conversations";
 import type { ToolContext, ToolDefinition, ToolSession } from "./capabilities";
+import { list, rec } from "./json";
 import { createPublicFetcher, type FetchLimits, type PageResult, type Resolver, type Transport } from "./web-fetch";
 
 export interface SearchRequest { url: string; headers: Record<string, string>; signal: AbortSignal; maxBytes: number }
@@ -35,9 +36,6 @@ const FetchInput = z.object({
   limit: z.number().int().min(500).max(40_000).optional(),
 }).strict();
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-const rec = (value: unknown): Record<string, unknown> => isRecord(value) ? value : {};
-const list = (value: unknown): Record<string, unknown>[] => Array.isArray(value) ? value.filter(isRecord) : [];
 const clip = (value: unknown, limit: number): string => {
   const text = typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
   return text.length > limit ? `${text.slice(0, limit)}...` : text;
