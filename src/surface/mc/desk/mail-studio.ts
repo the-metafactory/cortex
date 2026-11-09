@@ -6,6 +6,7 @@ import { logMailDecision, mailFeatures } from "./mail-log";
 import type { SourceReading } from "./sources/command";
 import { askFiler, captureId, captureInThread, captureModel, filerFor, type CaptureModel } from "./studio/capture";
 import { localTime, oneLine, safeBody } from "./studio/edit";
+import { mailHeader, openInMail } from "./studio/mail-header";
 import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioArea } from "./studio/view";
 import { runStudioTransaction, type ActResult } from "./studio/writer";
@@ -71,8 +72,8 @@ const gist = (item: MailForStudio): string => oneLine(item.summary ?? item.mail.
 
 export function mailLine(item: MailForStudio): string {
   const summary = gist(item);
-  const link = item.mail.url ? ` Open in Mail: <${linkTarget(item.mail.url)}>` : "";
-  return `Mail from ${sender(item)}, received ${day(item.mail.receivedAt)}: “${oneLine(item.mail.subject)}”.${summary ? ` ${summary}` : ""}${link}`;
+  const link = item.mail.url ? openInMail(linkTarget(item.mail.url)) : "";
+  return `${mailHeader(sender(item), day(item.mail.receivedAt))}“${oneLine(item.mail.subject)}”.${summary ? ` ${summary}` : ""}${link}`;
 }
 
 const quoted = (text: string): string[] => safeBody(text).map((l) => (l.trim() ? `  > ${l}` : "  >"));

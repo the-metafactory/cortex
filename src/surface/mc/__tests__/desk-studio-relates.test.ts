@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { studioNote, studioThread } from "./__fixtures__/studio";
 import type { IvyNote, MaterialLink } from "../desk/studio/format";
 import { buildThreadPage } from "../desk/studio/page";
+import { mailHeader, openInMail } from "../desk/studio/mail-header";
 import { relatesTo, relationCount, type RelatesContext } from "../desk/studio/relates";
 import type { StudioThreadView, StudioView } from "../desk/studio/view";
 import type { DeskEvent } from "../desk/types";
@@ -110,9 +111,30 @@ describe("relates-to derivation", () => {
     expect(relatesTo(POST, STUDIO, CTX).people).toEqual([]);
   });
 
-  it("relates closed decisions that share a material link or an area", () => {
+  it("relates closed decisions that share a material link, or an area and a rare word", () => {
     expect(relatesTo(NETOPS, STUDIO, CTX).decisions.map((d) => [d.open, d.why])).toEqual([["old", "Dropped 2026-09-01. Shares a source: Cover email, sent 14 Oct."]]);
-    expect(relatesTo(DESK, STUDIO, CTX).decisions.map((d) => [d.open, d.why])).toEqual([["balance", "Decided 2026-10-31. Expected: The engine becomes a package. Same area: Lab."]]);
+    expect(relatesTo(DESK, STUDIO, CTX).decisions.map((d) => [d.open, d.why])).toEqual([["balance", "Decided 2026-10-31. Expected: The engine becomes a package. Same area: Lab, and both mention “desk”."]]);
+  });
+
+  it("does not relate a closed decision on a shared area alone", () => {
+    const mail = thread("mail", { areas: ["lab"], question: "Mail from a friend: a video about idea generators", material: [mat("mail", "Capture, 2026-11-09: Mail from a friend")] });
+    expect(relatesTo(mail, STUDIO, CTX).decisions).toEqual([]);
+  });
+
+  it("does not relate two mail threads through the sender, date or mail link", () => {
+    const mailFrom = (slug: string, subject: string, state: StudioThreadView["state"] = "active") =>
+      thread(slug, { state, areas: ["home"], question: `${mailHeader("Ana Example <ana@example.org>", "2026-11-09 18:42")}“${subject}”.${openInMail("message:%3Cid@example.org%3E")}` });
+    const earlier = { ...mailFrom("earlier", "Garden fence quote", "closed"), closed: "2026-11-01", outcome: "decided" as const };
+    const studio: StudioView = { ...STUDIO, active: [...STUDIO.active], closed: [...STUDIO.closed, earlier] };
+    expect(relatesTo(mailFrom("later", "Idea generator video"), studio, CTX).decisions).toEqual([]);
+    expect(relatesTo(mailFrom("again", "Second fence quote"), studio, CTX).decisions.map((d) => d.open)).toEqual(["earlier"]);
+  });
+
+  it("ignores a shared word that most threads in the studio use", () => {
+    const common = (slug: string, state: StudioThreadView["state"] = "active") => thread(slug, { state, areas: ["lab"], question: `Which engine for ${slug}?` });
+    const closed = { ...common("old-engine", "closed"), closed: "2026-10-01", outcome: "decided" as const };
+    const crowd: StudioView = { ...STUDIO, active: [common("alpha"), common("beta"), common("gamma"), common("delta")], parked: [], closed: [closed] };
+    expect(relatesTo(common("alpha"), crowd, CTX).decisions).toEqual([]);
   });
 
   it("finds nothing for a thread that shares nothing", () => {
