@@ -2,7 +2,7 @@
 
 This module validates declarations and typed boundaries for Desk domain adapters. It is independent of the transport surface SDK and does not authorize or execute owner operations.
 
-Register an `AdapterDeclaration` with separate `AdapterBindings`. Registration stages and compiles the complete bundle before publishing anything; a failure returns a safe structured error and preserves previous registrations. Descriptors and discovery results are copies. Handlers are checked for presence and kind but never called by the registry.
+Register an `AdapterDeclaration` with separate `AdapterBindings`. Registration stages and compiles the complete bundle before publishing anything; a failure returns a safe structured error and preserves previous registrations. Descriptors and discovery results are copies. Each `query` requires an entry in `bindings.handlers`; each `observation` requires an entry in `bindings.observations`. A missing binding returns `missing_handler`. An `action` requires no registry handler: actions dispatch only through the registered connector, which is their single binding. An entry in `bindings.handlers` naming an action returns `invalid_registration` without publishing any of that declaration. The registry never calls handlers.
 
 `discover()` lists declared capabilities; `capability(id)` also represents unsupported capabilities explicitly. The host may supply connection-specific availability separately. Availability and successful validation are not access grants.
 
@@ -12,7 +12,7 @@ Schema bundles use synchronous JSON Schema 2020-12 validation through AJV, with 
 
 Relationship fields must describe canonical object references with the four required identity fields, fixed target adapter/object type, nonempty string identity values and no extra identity fields. One/many cardinality follows object/array shape; optional and nullable fields retain their explicit schema behavior. Owners remain responsible for actual object existence and destination validity.
 
-Synthetic conformance fixtures include Balance, work-graph, read-only and observation-only adapters. Their handlers throw if invoked. The isolated tests include a legacy catalogue mapping fixture that preserves saved proposals, edited fields, receipts and source links; it does not migrate production records.
+Synthetic conformance fixtures include Balance, work-graph, read-only and observation-only adapters. The action adapters have no registry handlers; query handlers throw if invoked. The isolated tests include a legacy catalogue mapping fixture that preserves saved proposals, edited fields, receipts and source links; it does not migrate production records.
 
 Run the standalone boundary demonstration with:
 

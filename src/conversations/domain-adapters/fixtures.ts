@@ -54,7 +54,7 @@ export function referenceDeclaration(kind: "query" | "observation"): AdapterDecl
 
 export function fixtureBindings(adapter: AdapterDeclaration): AdapterBindings {
   return {
-    handlers: Object.fromEntries(adapter.capabilities.filter(capability => capability.kind !== "observation").map(capability => [capability.capabilityId, () => { throw new Error("Synthetic handlers must not execute."); }])),
+    handlers: Object.fromEntries(adapter.capabilities.filter(capability => capability.kind === "query").map(capability => [capability.capabilityId, () => { throw new Error("Synthetic handlers must not execute."); }])),
     observations: Object.fromEntries(adapter.capabilities.filter(capability => capability.kind === "observation").map(capability => [capability.capabilityId, { fixture: true }])),
   };
 }

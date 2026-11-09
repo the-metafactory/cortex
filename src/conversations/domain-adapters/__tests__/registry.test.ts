@@ -61,7 +61,7 @@ describe("Desk domain adapter registry", () => {
     expect(code(registry.register(balanceDeclaration(), fixtureBindings(balanceDeclaration())))).toBe("duplicate_id");
     const graph = graphDeclaration();
     expect(code(registry.register({ ...graph, authority: "write" }, fixtureBindings(graph)))).toBe("invalid_registration");
-    expect(code(registry.register(graph, { handlers: {}, observations: {} }))).toBe("missing_handler");
+    expect(code(registry.register(referenceDeclaration("query"), { handlers: {}, observations: {} }))).toBe("missing_handler");
     const bindings = fixtureBindings(graph);
     bindings.handlers.extra = () => undefined;
     expect(code(registry.register(graph, bindings))).toBe("invalid_registration");
