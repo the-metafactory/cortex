@@ -178,7 +178,7 @@ Opening a thread on the board zooms the card into its thread page; `?desk=studio
 - **Goal it serves**: material items of kind `goal`. A label that starts with a goal id (`G5: one post a week`) takes its name and state from the Desk's goals.
 - **Coming up**: upcoming calendar events from the Desk's calendar sources whose title (at least 4 characters) appears as whole words in a material label or in the question. At most five, soonest first.
 - **People**: material items of kind `person`, `people` or `contact`. Free text is never searched for names.
-- **Decision journal**: closed threads that share a material item, or that share an area and a rare word in the question or outcome. A word counts when it has at least 4 letters, is not a common English or German word, and appears in no more than a quarter of the Studio's threads (at least two). A decision opens in place.
+- **Decision journal**: closed threads that share a material item, or that share an area and a rare word in the question, expectation or outcome. A word counts when it has at least 4 letters, is not a common English or German word, and appears in no more than a quarter of the Studio's threads (at least two). A decision opens in place.
 - **Ivy proposes**: open `relation` notes, each with Keep and Dismiss. A kept relation joins its group (`thread`, `goal`, `person`/`people`/`contact`) or **Also related** for any other kind; a dismissed one disappears.
 
 Goals, events and people link to their `href` when the material or the event has one.
