@@ -14,13 +14,58 @@ type Block =
   | { type: "code"; text: string; lang?: string }
   | { type: "heading"; text: string; tag: HeadingTag }
   | { type: "list"; items: string[]; start: number | null }
-  | { type: "quote"; text: string };
+  | { type: "quote"; text: string }
+  | { type: "table"; header: string[]; align: CellAlign[]; rows: string[][] };
+
+type CellAlign = "left" | "center" | "right" | undefined;
 
 const HEADING_TAGS: HeadingTag[] = ["h1", "h2", "h3", "h4", "h5", "h6"];
 const HEADING_RE = /^(#{1,6})[ \t]+(.*)$/;
 const LIST_RE = /^\s*(?:([-+*])|(\d+)[.)])\s+(.+)$/;
 const QUOTE_RE = /^\s*>\s?(.*)$/;
 const WORD_RE = /[\p{L}\p{N}_]/u;
+const TABLE_DELIMITER_CELL_RE = /^:?-+:?$/;
+
+function splitTableRow(line: string): string[] {
+  let row = line.trim();
+  if (row.startsWith("|")) row = row.slice(1);
+  if (row.endsWith("|") && !row.endsWith("\\|")) row = row.slice(0, -1);
+  const cells: string[] = [];
+  let cell = "";
+  for (let i = 0; i < row.length; i++) {
+    const ch = row[i];
+    if (ch === "\\" && row[i + 1] === "|") { cell += "|"; i++; continue; }
+    if (ch === "|") { cells.push(cell.trim()); cell = ""; continue; }
+    cell += ch ?? "";
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function tableAlignment(line: string): CellAlign[] | null {
+  if (!line.includes("-") || !line.includes("|")) return null;
+  const cells = splitTableRow(line);
+  if (!cells.every((c) => TABLE_DELIMITER_CELL_RE.test(c))) return null;
+  return cells.map((c) => {
+    const left = c.startsWith(":");
+    const right = c.endsWith(":");
+    if (left && right) return "center";
+    if (right) return "right";
+    return left ? "left" : undefined;
+  });
+}
+
+function isTableRow(line: string): boolean {
+  return line.includes("|") && line.trim() !== "";
+}
+
+function continuesTable(line: string): boolean {
+  return line.trim() !== "" && ![FENCE_RE, HEADING_RE, QUOTE_RE, LIST_RE].some((re) => re.test(line));
+}
+
+function fitRow(cells: string[], width: number): string[] {
+  return Array.from({ length: width }, (_, i) => cells[i] ?? "");
+}
 
 function headingText(raw: string): string {
   const text = raw.trim();
@@ -40,6 +85,14 @@ function renderBlock(block: Block, key: number): ReactNode {
       return block.start === null ? <ul key={key}>{items}</ul> : <ol key={key} start={block.start}>{items}</ol>;
     }
     case "quote": return <blockquote key={key}><p className="md-paragraph">{renderInline(block.text)}</p></blockquote>;
+    case "table": return (
+      <div key={key} className="md-table-wrap">
+        <table className="md-table">
+          <thead><tr>{block.header.map((cell, i) => <th key={i} style={block.align[i] ? { textAlign: block.align[i] } : undefined}>{renderInline(cell)}</th>)}</tr></thead>
+          {block.rows.length > 0 && <tbody>{block.rows.map((row, r) => <tr key={r}>{row.map((cell, i) => <td key={i} style={block.align[i] ? { textAlign: block.align[i] } : undefined}>{renderInline(cell)}</td>)}</tr>)}</tbody>}
+        </table>
+      </div>
+    );
     default: {
       const exhaustive: never = block;
       return exhaustive;
@@ -62,7 +115,15 @@ function splitIntoBlocks(src: string): Block[] {
     const heading = HEADING_RE.exec(line);
     const list = LIST_RE.exec(line);
     const quote = QUOTE_RE.exec(line);
-    if (fence) {
+    const align = isTableRow(line) ? tableAlignment(lines[i + 1] ?? "") : null;
+    const header = align ? splitTableRow(line) : [];
+    if (align && header.length === align.length) {
+      flush();
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && continuesTable(lines[i] ?? "")) rows.push(fitRow(splitTableRow(lines[i++] ?? ""), header.length));
+      blocks.push({ type: "table", header, align, rows });
+    } else if (fence) {
       flush();
       const code: string[] = [];
       i++;

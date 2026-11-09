@@ -212,6 +212,10 @@
   overflow-x: auto;
 }
 .md-code-block code { background: none; border: 0; padding: 0; color: var(--fg); }
+.md-table-wrap { max-width: 100%; overflow-x: auto; margin: 6px 0; }
+.md-table { border-collapse: collapse; white-space: normal; }
+.md-table :is(th, td) { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md-table th { background: var(--panel-2); font-weight: 600; }
 
 /* --- Input --- */
 .drill-input {
