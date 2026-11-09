@@ -8,6 +8,8 @@ import type { Capability, CreationView, ProposalView } from "../../../conversati
 import { handleConversations } from "../api/conversations";
 import { buildAllowedHostnames, type MutationGuardContext } from "../api/mutation-guard";
 import { CreationSection } from "../dashboard-v2/components/desk-conversation-create";
+import { DEFAULT_CHECKPOINT, prefillFields } from "../dashboard-v2/components/desk-conversation-graph-fields";
+import { CREATION_CATALOG } from "../../../conversations/catalog";
 
 const LABEL = "ai.meta-factory.cortex.creation-test";
 const OTHER = { "cf-access-authenticated-user-email": "someone-else@example.invalid" };
@@ -132,4 +134,34 @@ describe("conversation creation API", () => {
     expect(html).not.toContain("Confirm creation");
   });
 
+});
+
+describe("graph node destination fields", () => {
+  const specs = CREATION_CATALOG["graph-node"].fields;
+  const ticked = (...refs: string[]) => refs.map(ref => ({ ref, label: ref, forge: "github", enabled: true }));
+
+  test("autonomy and kind offer only the values the writer accepts, and the card links the pickers", async () => {
+    const { call, id } = await rig();
+    const { body: caps } = await call("GET", "/api/conversations/capabilities");
+    await call("POST", `/api/conversations/${id}/proposals`, { proposalId: randomUUID(), type: "graph-node", fields: { title: "Picker probe" } });
+    const { body: view } = await call("GET", `/api/conversations/${id}/proposals`);
+    const html = renderToStaticMarkup(<CreationSection id={id} archived={false} types={caps.types ?? []} view={{ proposals: view.proposals ?? [], grants: [] }} error={null} busy={false} seed={{ entryId: null, text: "" }} act={() => Promise.resolve()} />);
+    const options = (label: string): string[] => [...(new RegExp(`<select aria-label="${label}[^"]*"[^>]*>(.*?)</select>`).exec(html)?.[1] ?? "").matchAll(/value="([^"]*)"/g)].map(m => m[1] ?? "");
+    expect(options("Autonomy")).toEqual(["approve", "propose"]);
+    expect(options("Kind")).toEqual(["grilling", "research", "prototype", "task", "build"]);
+    expect(html).toMatch(/aria-label="Repository" list="[^"]+-repositories"/);
+    expect(html).toMatch(/aria-label="Parent node" list="[^"]+-nodes"/);
+    expect(html).toContain(`value="${DEFAULT_CHECKPOINT}"`);
+  });
+
+  test("prefill fills only empty fields, and recalls the last destination only while its repository is ticked", () => {
+    const remembered = { repository: "github:github.com/example/a", parent: "42" };
+    expect(prefillFields("graph-node", { title: "t" }, specs, ticked("github:github.com/example/a", "github:github.com/example/b"), remembered))
+      .toEqual({ title: "t", autonomy: "approve", kind: "grilling", checkpoint: DEFAULT_CHECKPOINT, repository: "github:github.com/example/a", parent: "42" });
+    expect(prefillFields("graph-node", { repository: "github:github.com/example/b", kind: "task", checkpoint: "mine" }, specs, ticked("github:github.com/example/a", "github:github.com/example/b"), remembered))
+      .toEqual({ repository: "github:github.com/example/b", kind: "task", checkpoint: "mine", autonomy: "approve" });
+    expect(prefillFields("graph-node", {}, specs, ticked("github:github.com/example/b"), remembered).repository).toBe("github:github.com/example/b");
+    expect(prefillFields("graph-node", {}, specs, ticked("github:github.com/example/b", "github:github.com/example/c"), remembered).repository).toBeUndefined();
+    expect(prefillFields("graph-node", {}, specs, null, remembered).repository).toBeUndefined();
+  });
 });

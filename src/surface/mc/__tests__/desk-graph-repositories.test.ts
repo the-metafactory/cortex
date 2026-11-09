@@ -295,6 +295,50 @@ describe("PUT /api/desk/graph-repositories/<encoded ref>", () => {
   });
 });
 
+describe("the destination picker routes", () => {
+  const github = githubRef("example/synthetic");
+  const gitlab = gitlabRef("gitlab.example.org", "group/sub/project");
+  const tick = (ref: string): void => { db.query("INSERT INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run(ref, NOW); };
+  const nodesOf = (ref: string, deps: DeskGraphRepositoryDeps, method = "GET"): Promise<Response> => call(`/api/desk/graph-repositories/${encodeURIComponent(ref)}/nodes`, method, deps);
+
+  it("lists only the ticked repositories, without asking a forge", async () => {
+    tick(github);
+    tick(gitlab);
+    const run = forges({});
+    const res = await call("/api/desk/graph-repositories?ticked=1", "GET", { run });
+    expect(await res.json()).toEqual({ repositories: [
+      { ref: github, label: "example/synthetic", forge: "github", enabled: true },
+      { ref: gitlab, label: "group/sub/project", forge: "gitlab", enabled: true },
+    ] });
+    expect(run.calls).toEqual([]);
+  });
+
+  it("lists the open issues of a ticked GitHub repository as parent candidates", async () => {
+    tick(github);
+    const run = gh(JSON.stringify([{ number: 12, title: "Map root" }, { number: 7, title: "A child" }, { title: "no number" }]));
+    const res = await nodesOf(github, { run });
+    expect(await res.json()).toEqual({ ok: true, nodes: [{ id: "12", title: "Map root" }, { id: "7", title: "A child" }] });
+    expect(run.calls[0]?.argv).toEqual(["gh", "issue", "list", "--repo", "example/synthetic", "--state", "open", "--limit", "100", "--json", "number,title"]);
+  });
+
+  it("lists the open issues of a ticked GitLab project by iid", async () => {
+    tick(gitlab);
+    const run = forges({ glab: ok(JSON.stringify([{ id: 9001, iid: 3, title: "Epic child" }])) });
+    expect(await (await nodesOf(gitlab, { run })).json()).toEqual({ ok: true, nodes: [{ id: "3", title: "Epic child" }] });
+    expect(run.calls[0]?.argv).toEqual(["glab", "api", "--hostname", "gitlab.example.org", "projects/group%2Fsub%2Fproject/issues?state=opened&per_page=100&order_by=created_at&sort=desc"]);
+  });
+
+  it("refuses an unticked repository without asking a forge, and reports a forge failure as a reason", async () => {
+    const run = gh("[]");
+    expect((await nodesOf(github, { run })).status).toBe(403);
+    expect(run.calls).toEqual([]);
+    tick(github);
+    const failing = forges({ gh: { code: 1, signal: null, stdout: "", stderr: "HTTP 404: Not Found\nmore" } });
+    expect(await (await nodesOf(github, { run: failing })).json()).toEqual({ ok: false, reason: "HTTP 404: Not Found" });
+    expect((await nodesOf(github, { run }, "POST")).status).toBe(405);
+  });
+});
+
 describe("the route through the real server", () => {
   const ref = githubRef("jcfischer/desk");
   const put = (port: number, headers: Record<string, string> = {}) =>

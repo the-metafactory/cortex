@@ -58,6 +58,8 @@ export function setGraphRepositoryEnabled(db: Database, ref: string, enabled: bo
 
 const storedRefs = (db: Database): string[] => db.query<{ ref: string }, []>("SELECT ref FROM desk_graph_repositories").all().map((r) => r.ref);
 
+const byLabelThenRef = (a: GraphRepository, b: GraphRepository): number => a.label.localeCompare(b.label) || a.ref.localeCompare(b.ref);
+
 function describeRef(ref: string): Pick<GraphRepository, "label" | "forge"> {
   const colon = ref.indexOf(":");
   const forge = colon > 0 ? ref.slice(0, colon) : "unknown";
@@ -195,6 +197,45 @@ export async function listGraphRepositories(db: Database, run: GraphRepositoryRu
     const described = describeRef(ref);
     rows.set(ref, { ref, ...described, enabled: true, ...(listingAnswered(ref, github, gitlab.listing) ? { listed: false as const } : {}) });
   }
-  const repositories = [...rows.values()].sort((a, b) => a.label.localeCompare(b.label) || a.ref.localeCompare(b.ref));
+  const repositories = [...rows.values()].sort(byLabelThenRef);
   return { repositories, listing: github.ok ? { ok: true } : { ok: false, reason: github.reason }, gitlab: gitlab.listing };
+}
+
+export const GRAPH_NODE_LIMIT = 100;
+
+export interface GraphNodeOption { id: string; title: string }
+
+export type GraphNodeListing = { ok: true; nodes: GraphNodeOption[] } | { ok: false; reason: string };
+
+function nodeArgv(ref: string): { tool: string; argv: string[]; id: "number" | "iid" } | null {
+  if (isGithubRef(ref)) return { tool: "gh", id: "number", argv: ["gh", "issue", "list", "--repo", ref.slice(GITHUB_REF_PREFIX.length), "--state", "open", "--limit", String(GRAPH_NODE_LIMIT), "--json", "number,title"] };
+  const gitlab = parseGitlabRef(ref);
+  if (!gitlab) return null;
+  return { tool: "glab", id: "iid", argv: ["glab", "api", "--hostname", gitlab.host, `projects/${encodeURIComponent(gitlab.path)}/issues?state=opened&per_page=${GRAPH_NODE_LIMIT}&order_by=created_at&sort=desc`] };
+}
+
+function readNodes(stdout: string, id: "number" | "iid"): GraphNodeOption[] | null {
+  const items = parseProjectPages(stdout);
+  if (items === null) return null;
+  return items.flatMap((item: unknown) => {
+    const row = (typeof item === "object" && item !== null ? item : {}) as Record<string, unknown>;
+    const n = row[id];
+    return typeof n === "number" && typeof row.title === "string" ? [{ id: String(n), title: row.title }] : [];
+  });
+}
+
+/** At most GRAPH_NODE_LIMIT open issues of a ticked repository, newest first, as candidate parent nodes. The caller has already checked the tick. */
+export async function listGraphNodes(ref: string, run: GraphRepositoryRunner = runCommand): Promise<GraphNodeListing> {
+  const plan = nodeArgv(ref);
+  if (!plan) return { ok: false, reason: `${ref} is neither a GitHub repository nor a GitLab project.` };
+  const ran = await attempt(run, plan.tool, plan.argv);
+  if (!ran.ok) return ran;
+  if (ran.result.code !== 0) return { ok: false, reason: firstLine(ran.result.stderr) || `${plan.tool} exited with code ${ran.result.code}` };
+  const nodes = readNodes(ran.result.stdout, plan.id);
+  return nodes === null ? { ok: false, reason: `${plan.tool} did not return an issue list` } : { ok: true, nodes: nodes.slice(0, GRAPH_NODE_LIMIT) };
+}
+
+/** The ticked repositories alone, without asking a forge: what a conversation may file to, for its destination picker. */
+export function tickedGraphRepositories(db: Database): GraphRepository[] {
+  return storedRefs(db).map(ref => ({ ref, ...describeRef(ref), enabled: true })).sort(byLabelThenRef);
 }

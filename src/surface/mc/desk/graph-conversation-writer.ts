@@ -4,6 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
+import { GRAPH_AUTONOMIES, GRAPH_KINDS } from "../../../conversations/catalog";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, Provenance, ReadbackResult } from "../../../conversations/types";
 import type { DeskOptions } from "./compose";
 import { studioRequestId } from "./conversation-ids";
@@ -11,8 +12,6 @@ import { spawnWithStdin, type WriterResult, type WriterRunner } from "./create";
 import { GITHUB_REF_PREFIX, isGraphRepositoryAllowed } from "./graph-repositories";
 
 export const GRAPH_LABEL = "ivy:conversation";
-export const GRAPH_AUTONOMIES = ["approve", "propose"] as const;
-export const GRAPH_KINDS = ["research", "grilling", "prototype", "task", "build"] as const;
 
 const NOTHING = "Nothing was created.";
 const ADD_TIMEOUT_MS = 28_000;
