@@ -27,6 +27,14 @@ describe("persistent surface secret lookup", () => {
     expect(readSurfaceSecret(name, options)).toBe("synthetic-secret\n");
   });
 
+  test("reads the file backend under the package name Cortex", () => {
+    const options = fixture();
+    const store = join(options.home, ".config/metafactory/arc/secrets/Cortex");
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, name), "synthetic-secret", { mode: 0o600 });
+    expect(readSurfaceSecret(name, options)).toBe("synthetic-secret");
+  });
+
   test("honors XDG_CONFIG_HOME and ARC_CONFIG_ROOT including tilde expansion", () => {
     const options = fixture();
     const xdg = join(options.home, "xdg");

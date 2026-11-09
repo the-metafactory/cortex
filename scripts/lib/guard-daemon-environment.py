@@ -65,7 +65,8 @@ def main():
         return 1
     if dropped_env:
         print("cortex render: refusing to drop environment keys: " + ", ".join(sorted(dropped_env)), file=sys.stderr)
-        print("For a secret: store it with `arc secrets set <package> NAME`, using the Cortex package name from `arc list`, then remove its entry from the existing service and retry.", file=sys.stderr)
+        print("Only a surface secret or the key named by vigil.proposal_token_env can move: store it with `arc secrets set <package> NAME`, using the Cortex package name from `arc list`, then remove its entry from the existing service and retry.", file=sys.stderr)
+        print("Anything else that reads this key from the environment loses it if the entry is removed.", file=sys.stderr)
     if dropped_configuration:
         names = ", ".join(json.dumps(key, ensure_ascii=True) for key in sorted(dropped_configuration))
         print("cortex render: refusing to drop Cortex runtime configuration keys: " + names, file=sys.stderr)
