@@ -569,13 +569,11 @@ export class AuthorityMediator {
   async admitRead(context: HostContext, raw: unknown, rawSink: ReleaseSink): Promise<ReleaseProjection<Json>> {
     const controller = new AbortController();
     const key = randomUUID();
-    let pending: Promise<unknown> | undefined;
-    let plan: { binding: ReadBinding; scope: HostScope; connectionId: string; sink: ReleaseSink } | undefined;
     try {
       const sink = parseWire(ReleaseSinkSchema, rawSink);
       const request = parseWire(ReadAdmissionRequestSchema, raw);
       const subject = authorityHash({ capabilityId: request.capabilityId, destinations: request.destinations });
-      const outcome = await this.exclusive(async () => {
+      const outcome = await this.exclusive(async (): Promise<ReleaseProjection<Json> | { pending: Promise<unknown>; plan: { binding: ReadBinding; scope: HostScope; connectionId: string; sink: ReleaseSink } }> => {
         const publicationHead = this.publication.head;
         const state = await this.state();
         const connection = headRecord(state, "connection", request.connectionId);
@@ -593,13 +591,13 @@ export class AuthorityMediator {
         const final = await this.resolve(context, request.connectionId, undefined, undefined, undefined, [scope]);
         if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || !admit(final)) return withheld();
         this.active.set(key, { controller, heads: new Set(Object.keys(resolved.heads)) });
+        let pending: Promise<unknown>;
         try { pending = connector.read({ lifecycleVersion: "1.0.0", capabilityId: request.capabilityId, destinations: request.destinations, input: request.input }, controller.signal); }
         catch (error) { pending = Promise.reject(error instanceof Error ? error : new Error("Connector failed during admission.")); }
-        plan = { binding: lookup.binding, scope, connectionId: request.connectionId, sink };
-        return null;
+        return { pending, plan: { binding: lookup.binding, scope, connectionId: request.connectionId, sink } };
       });
-      if (outcome || !pending || !plan) { await this.recordDenied(context, "read", subject); return outcome ?? withheld(); }
-      const admitted = plan;
+      if (!("plan" in outcome)) { await this.recordDenied(context, "read", subject); return outcome; }
+      const { pending, plan: admitted } = outcome;
       let page: ReadPage;
       try { page = parseWire(ReadPageSchema, await pending); }
       catch { return withheld(); }
