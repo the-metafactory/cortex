@@ -14,6 +14,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type Conversation, type EntryId, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { z } from "zod";
+import { DraftService, type DraftServiceDeps } from "./domain-adapters/drafting";
 import { OperationJournalStore } from "./domain-adapters/operations/journal";
 import type { DomainAdapterRegistry } from "./domain-adapters/registry";
 import { AuthorityMediator, type AuthorityBindings, type HostPolicyState } from "./authority";
@@ -208,6 +209,8 @@ export class ConversationHost {
   lifecycleJournal(registry: DomainAdapterRegistry): OperationJournalStore {
     return new OperationJournalStore(this.engine, registry, this.context);
   }
+
+  drafts(deps: DraftServiceDeps): DraftService { return new DraftService(this.engine, deps, this.context); }
 
   lifecycleWriters(): WriterAuthority { return new WriterAuthority(this.engine, this.authorityPublication, this.context); }
 
