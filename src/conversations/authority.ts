@@ -5,6 +5,8 @@ import { z } from "zod";
 import type { Context } from "@earendil-works/chord";
 import type { Session, Tx } from "@earendil-works/pi-durable";
 import type { DomainAdapterRegistry } from "./domain-adapters/registry";
+import { ReadAdmissionRequestSchema, ReadPageSchema, type ReadBinding, type ReadPage, type ReadRequest } from "./domain-adapters/reads/types";
+import type { ReadBindings } from "./domain-adapters/reads/bindings";
 import { ObjectReferenceSchema, type BoundaryError, type ObjectReference } from "./domain-adapters/types";
 import { CancelRequestSchema, DispatchRequestSchema, ObjectReadbackSchema, OperationLookupSchema, OwnerResultSchema, OwnerSupportSchema, parseWire, type ApprovedSnapshot, type Authority, type CancelRequest, type DispatchRequest, type Json, type OwnerSupport } from "./domain-adapters/operations/types";
 import { canonicalWire, validateSnapshot, validateResultPayload } from "./domain-adapters/operations/validation";
@@ -28,6 +30,7 @@ export interface TrustedConnector {
   lookup?(request: LookupRequest, signal: AbortSignal): Promise<unknown>;
   readbackCapabilityId?: string;
   readback?(request: ReadbackRequest, signal: AbortSignal): Promise<unknown>;
+  read?(request: ReadRequest, signal: AbortSignal): Promise<unknown>;
 }
 export interface AuthorityBindings {
   currentRevision(): string;
@@ -37,6 +40,7 @@ export interface AuthorityBindings {
   restrictions: ReadonlyMap<string, (record: RestrictionRecord) => Promise<RestrictionRecord | null>>;
   connectors: ReadonlyMap<string, TrustedConnector>;
   sinks: ReadonlyMap<string, (value: Json) => Promise<void>>;
+  readBindings?: ReadBindings;
 }
 export interface HostPolicyState { principal: string; stack: string; policy: "local" | "cloud"; tool: Json; communication: Json; link: Json; work: Json; history: Json }
 export interface ObservedRead { projection: ReleaseProjection<Json>; called: boolean; value?: Json }
@@ -81,7 +85,7 @@ export class AuthorityMediator {
     this.journal = new OperationJournalStore(engine, registry, context);
     this.connectors = new Map([...bindings.connectors].map(([key, connector]) => [key, Object.freeze({
       writerOwner: connector.writerOwner, support: parseWire(OwnerSupportSchema, connector.support), authorizeConnection: connector.authorizeConnection.bind(connector), dispatch: connector.dispatch.bind(connector),
-      ...(connector.cancel ? { cancel: connector.cancel.bind(connector) } : {}), ...(connector.lookup ? { lookup: connector.lookup.bind(connector) } : {}), ...(connector.readback ? { readback: connector.readback.bind(connector), readbackCapabilityId: connector.readbackCapabilityId } : {}),
+      ...(connector.cancel ? { cancel: connector.cancel.bind(connector) } : {}), ...(connector.lookup ? { lookup: connector.lookup.bind(connector) } : {}), ...(connector.read ? { read: connector.read.bind(connector) } : {}), ...(connector.readback ? { readback: connector.readback.bind(connector), readbackCapabilityId: connector.readbackCapabilityId } : {}),
     })]));
     this.sinks = new Map(bindings.sinks);
   }
@@ -518,6 +522,100 @@ export class AuthorityMediator {
   async projectHostData(context: HostContext, connectionId: string, sink: ReleaseSink, derive: () => Promise<Json>, scopes: ReadScope[] = []): Promise<ReleaseProjection<Json>> {
     try { return await this.read(context, connectionId, undefined, sink, () => derive(), { scopes }); }
     catch { return withheld(); }
+  }
+
+  private readScopeFor(state: AuthorityState, destinations: ObjectReference[]): HostScope | null {
+    const sources: HostScope["sources"] = [];
+    for (const destination of destinations) {
+      const matches = this.restrictionsFor(state, destination).filter(record => record.status === "active");
+      const only = matches[0];
+      if (matches.length !== 1 || !only) return null;
+      sources.push({ ref: destination, restrictionRef: only.restrictionRef });
+    }
+    return { capabilityId: "", destinations, sources, policy: "cloud" };
+  }
+
+  private restrictionsFor(state: AuthorityState, source: ObjectReference): RestrictionRecord[] {
+    return Object.values(state.records).flatMap(values => { const record = values.at(-1); return record?.kind === "restriction" && canonicalWire(record.value.source) === canonicalWire(source) ? [record.value] : []; });
+  }
+
+  private async objectReleasable(state: AuthorityState, resolved: Resolved, binding: ReadBinding, scope: HostScope, sink: ReleaseSink, object: ReadPage["objects"][number]): Promise<boolean> {
+    const { ref, destination } = object;
+    if (ref.adapterId !== binding.adapterId || ref.connectionId !== resolved.connection.connectionId || ref.objectType !== binding.objectType) return false;
+    if (binding.destinationType !== undefined && (destination?.objectType !== binding.destinationType)) return false;
+    if (destination && !withinLimits(scope.destinations, [destination])) return false;
+    if (!this.registry.validateObject(binding.adapterId, binding.objectType, object.schemaRef, object.value).ok) return false;
+    const own = this.restrictionsFor(state, ref);
+    if (own.length === 0) return true;
+    const record = own[0];
+    if (own.length !== 1 || record?.status !== "active" || !record.readScope.includes(resolved.principal.principalRef) || !record.resolverBinding) return false;
+    const resolver = this.bindings.restrictions.get(record.resolverBinding);
+    if (!resolver || canonicalWire(await resolver(structuredClone(record))) !== canonicalWire(record)) return false;
+    const localOnly = record.egress === "local" && (resolved.policy.conversationPolicy === "cloud" || sink.kind === "discord" || sink.kind === "model" && sink.route !== "local");
+    return record.audiences.includes(sink.kind) && !localOnly;
+  }
+
+  async admitRead(context: HostContext, raw: unknown, rawSink: ReleaseSink): Promise<ReleaseProjection<Json>> {
+    const controller = new AbortController();
+    const key = randomUUID();
+    let pending: Promise<unknown> | undefined;
+    let plan: { binding: ReadBinding; scope: HostScope; connectionId: string; sink: ReleaseSink } | undefined;
+    try {
+      const sink = parseWire(ReleaseSinkSchema, rawSink);
+      const request = parseWire(ReadAdmissionRequestSchema, raw);
+      const subject = authorityHash({ capabilityId: request.capabilityId, destinations: request.destinations });
+      const outcome = await this.exclusive(async () => {
+        const publicationHead = this.publication.head;
+        const state = await this.state();
+        const connection = headRecord(state, "connection", request.connectionId);
+        const lookup = connection ? this.bindings.readBindings?.lookup(connection.adapterId, request.connectionId, request.capabilityId) : undefined;
+        if (lookup?.state !== "available" || lookup.binding.mode === "destinations") return withheld();
+        const found = this.readScopeFor(state, request.destinations);
+        if (!found) return withheld();
+        const scope: HostScope = { ...found, capabilityId: request.capabilityId };
+        const admit = (resolved: Resolved): boolean => this.readable(resolved, undefined, [scope]) && this.sinkAllowed(resolved, undefined, sink, [scope]);
+        const resolved = await this.resolve(context, request.connectionId, undefined, undefined, undefined, [scope]);
+        const connector = this.connectors.get(resolved.connection.connectorId);
+        const checked = this.registry.validateInput({ capabilityId: request.capabilityId, inputSchemaRef: lookup.binding.inputSchemaRef, input: request.input }, null);
+        if (!admit(resolved) || !connector?.read || !checked.ok) return withheld();
+        await this.commit(next => this.decision(next, resolved, "read", subject, json({ kind: "read" })));
+        const final = await this.resolve(context, request.connectionId, undefined, undefined, undefined, [scope]);
+        if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || !admit(final)) return withheld();
+        this.active.set(key, { controller, heads: new Set(Object.keys(resolved.heads)) });
+        try { pending = connector.read({ lifecycleVersion: "1.0.0", capabilityId: request.capabilityId, destinations: request.destinations, input: request.input }, controller.signal); }
+        catch (error) { pending = Promise.reject(error instanceof Error ? error : new Error("Connector failed during admission.")); }
+        plan = { binding: lookup.binding, scope, connectionId: request.connectionId, sink };
+        return null;
+      });
+      if (outcome || !pending || !plan) { await this.recordDenied(context, "read", subject); return outcome ?? withheld(); }
+      const admitted = plan;
+      let page: ReadPage;
+      try { page = parseWire(ReadPageSchema, await pending); }
+      catch { return withheld(); }
+      finally { this.active.delete(key); }
+      if (controller.signal.aborted) return withheld();
+      let send: Promise<void> | undefined;
+      const released = await this.exclusive(async () => {
+        const publicationHead = this.publication.head;
+        const state = await this.state();
+        const resolved = await this.resolve(context, admitted.connectionId, undefined, undefined, undefined, [admitted.scope]);
+        if (!this.readable(resolved, undefined, [admitted.scope]) || !this.sinkAllowed(resolved, undefined, admitted.sink, [admitted.scope])) return withheld();
+        const sender = this.sinks.get(canonicalWire(admitted.sink));
+        if (!sender) return withheld();
+        const kept: ReadPage["objects"] = [];
+        for (const object of page.objects) if (await this.objectReleasable(state, resolved, admitted.binding, admitted.scope, admitted.sink, object)) kept.push(object);
+        const decision = await this.commit(next => this.decision(next, resolved, "release", subject, json({ kind: "read" })));
+        const final = await this.resolve(context, admitted.connectionId, undefined, undefined, undefined, [admitted.scope]);
+        if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || !this.sinkAllowed(final, undefined, admitted.sink, [admitted.scope])) return withheld();
+        const value = json({ objects: kept });
+        send = sender(structuredClone(value));
+        return { kind: "released" as const, value, decisionRef: decision.decisionRef };
+      });
+      if (send) await send;
+      if (released.kind === "withheld") await this.recordDenied(context, "release", subject);
+      return released;
+    } catch { return withheld(); }
+    finally { this.active.delete(key); }
   }
 
   private readbackAllowed(resolved: Resolved, ref: ObjectReference): boolean {
