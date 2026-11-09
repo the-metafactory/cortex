@@ -3,7 +3,11 @@ import { DomainAdapterRegistry } from "../src/conversations/domain-adapters/regi
 import { balanceDeclaration, fixtureBindings, graphDeclaration, objectRef, referenceDeclaration } from "../src/conversations/domain-adapters/fixtures";
 
 const registry = new DomainAdapterRegistry();
-for (const declaration of [balanceDeclaration(), graphDeclaration(), referenceDeclaration("query"), referenceDeclaration("observation")]) assert.equal(registry.register(declaration, fixtureBindings(declaration)).ok, true);
+for (const declaration of [balanceDeclaration(), graphDeclaration(), referenceDeclaration("query"), referenceDeclaration("observation")]) {
+  const bindings = fixtureBindings(declaration);
+  for (const capability of declaration.capabilities.filter(item => item.kind === "action")) assert.equal(Object.hasOwn(bindings.handlers, capability.capabilityId), false);
+  assert.equal(registry.register(declaration, bindings).ok, true);
+}
 const inputSchemaRef = { schemaId: "balance.task.create.input", version: "1.0.0" };
 const context = { connectionId: "connection-example" };
 const input = { area: objectRef("balance", "area", "area-example"), title: 42 };
