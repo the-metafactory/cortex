@@ -99,13 +99,27 @@ describe("the Studio board", () => {
   });
 
   it("explains a spent budget on every thinking button and retains queued deferrals", () => {
-    const studio: StudioView = { ...STUDIO, thinking: { kind: "ready", dailyRuns: { local: 0, cloud: 0 }, runs: [{ runUuid: "run-1", params: { thread: "one", mode: "red-team", requestId: "request-1" }, status: "queued", reason: "Deferred until tomorrow: the cloud daily run budget is spent", startedAt: null, policy: null }] } };
+    const today = new Date().toISOString();
+    const studio: StudioView = { ...STUDIO, thinking: { kind: "ready", dailyRuns: { local: 1, cloud: 1 }, runs: [
+      { runUuid: "run-0", params: { thread: "two" }, status: "succeeded", reason: null, startedAt: today, policy: "cloud" },
+      { runUuid: "run-1", params: { thread: "one", mode: "red-team", requestId: "request-1" }, status: "queued", reason: "Deferred until tomorrow: the cloud daily run budget is spent", startedAt: null, policy: null },
+    ] } };
     const html = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} at={AT} />);
+    expect(html).toContain("Today&#x27;s cloud thinking budget is spent.");
     expect(html).toContain("Red team · budget spent");
     expect(html).toContain("Think now · budget spent");
     expect(html).toContain("Pending: red team");
     expect(html).toContain("Deferred until tomorrow");
     expect(html).toContain("What would A skeptic say?");
+  });
+
+  it("says thinking is turned off when the thread's policy has a daily limit of 0", () => {
+    const studio: StudioView = { ...STUDIO, thinking: { kind: "ready", dailyRuns: { local: 5, cloud: 0 }, runs: [] } };
+    const html = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} at={AT} />);
+    expect(html).toContain("Cloud thinking is turned off: its daily run limit in Ranger is 0.");
+    expect(html).toContain("Think now · turned off");
+    expect(html).not.toContain("budget spent");
+    expect(html).not.toContain("wait until tomorrow");
   });
 
   it("asks for a response while Ivy waits, and not after one", () => {
