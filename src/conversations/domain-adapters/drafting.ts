@@ -383,7 +383,8 @@ export class DraftService {
     const shown: typeof items = [];
     for (const item of items) if (await this.deps.policy.readable(item.id) && (!audience || await this.deps.policy.releasable([item.id], audience))) shown.push(item);
     const visible = new Set(shown.map(item => item.id));
-    const alternatives = field.alternatives.map(alternative => ({ value: alternative.value, citations: alternative.citations.filter(id => visible.has(id)) })).filter(alternative => !audience || alternative.citations.length > 0);
+    const fullyReleasable = (citations: string[]): boolean => citations.length > 0 && citations.every(id => visible.has(id));
+    const alternatives = field.alternatives.filter(alternative => !audience || fullyReleasable(alternative.citations)).map(alternative => ({ value: alternative.value, citations: alternative.citations.filter(id => visible.has(id)) }));
     return { pointer, origin: field.origin, reason: field.unresolved, sources: shown.map(item => ({ id: item.id, kind: item.kind, revision: item.revision, digest: item.digest })), hiddenSources: items.length - shown.length, alternatives };
   }
 

@@ -230,6 +230,19 @@ describe("failure and policy behaviour", () => {
     expect((await r.service.read(refused.draft.draftId, "local"))?.draft.fields["/title"]).toBeDefined();
   });
 
+  test("an alternative citing a local-only source is withheld whole from a cloud audience", async () => {
+    const r = await rig();
+    r.state.items.push({ id: "local-1", kind: "linked", revision: "1", digest: "d9", restriction: "local", text: "Local-only evidence.", at: "2026-11-08T10:01:00.000Z" });
+    r.state.localOnly.add("local-1");
+    r.state.lanes = ["local"];
+    r.state.response = () => balanceResponse({ due: { pointer: "/due", citations: ["turn-1", "local-1"], alternatives: [{ value: FRIDAY, citations: ["turn-1", "local-1"] }, { value: MONDAY, citations: ["turn-1"] }] } });
+    const created = await draftOf(r);
+    const cloud = await r.service.details(created.draft.draftId, "/due", "cloud");
+    expect(cloud?.alternatives.map(item => item.value)).toEqual([MONDAY]);
+    const local = await r.service.details(created.draft.draftId, "/due", "local");
+    expect(local?.alternatives.map(item => item.value)).toEqual([FRIDAY, MONDAY]);
+  });
+
   test("revoked sources are omitted without disclosure and mark an existing draft outdated", async () => {
     const r = await rig();
     const created = await draftOf(r);
