@@ -5,7 +5,7 @@ export const YES_ANSWERS = ["yes", "not sure", "no"] as const;
 export const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] as const;
 export const TYPE_LABEL: Record<ThreadType, string> = { question: "Question", topic: "Topic", making: "Making" };
 const OUTCOME_LABEL: Record<ThreadOutcome, string> = { decided: "Decided", shipped: "Shipped", dropped: "Dropped" };
-const SAFE_SCHEMES = new Set(["http:", "https:", "mailto:"]);
+const SAFE_SCHEMES = new Set(["http:", "https:", "mailto:", "message:"]);
 
 export const localDate = (at: Date): string => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
 
