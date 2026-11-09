@@ -1,6 +1,6 @@
 // glossary-ignore: host
-import type { GitlabHostListing, GitlabListing, GraphRepository, GraphRepositoryListing } from "../../desk/graph-repositories";
-import { GRAPH_REPOSITORIES_PATH } from "../../desk/graph-repository-schema";
+import type { GitlabHostListing, GitlabListing, GraphNodeOption, GraphRepository, GraphRepositoryListing } from "../../desk/graph-repositories";
+import { GRAPH_REPOSITORIES_PATH, GRAPH_TICKED_PARAM, graphNodesPath } from "../../desk/graph-repository-schema";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -67,4 +67,23 @@ export async function saveGraphRepositories(refs: readonly string[], enabled: bo
     else failures.push(`${ref}: ${result.text}`);
   }
   return failures.length ? { ok: false, text: `${failures.length} of ${unique.length} repository changes could not be saved. ${failures.join(" ")}` } : { ok: true };
+}
+
+export type GraphChoiceResult<T> = { ok: true; items: T[] } | { ok: false; text: string };
+
+const isNode = (v: unknown): v is GraphNodeOption => typeof (v as Record<string, unknown> | null)?.id === "string" && typeof (v as Record<string, unknown>).title === "string";
+
+export async function loadTickedGraphRepositories(fetchImpl: FetchLike = fetch): Promise<GraphChoiceResult<GraphRepository>> {
+  const sent = await send(`${GRAPH_REPOSITORIES_PATH}?${GRAPH_TICKED_PARAM}=1`, { method: "GET" }, fetchImpl);
+  if (typeof sent === "string") return { ok: false, text: sent };
+  return sent.res.ok && Array.isArray(sent.body?.repositories) ? { ok: true, items: sent.body.repositories.filter(isRepository) } : { ok: false, text: refusal(sent.res, sent.body) };
+}
+
+export async function loadGraphNodes(ref: string, fetchImpl: FetchLike = fetch): Promise<GraphChoiceResult<GraphNodeOption>> {
+  const sent = await send(graphNodesPath(ref), { method: "GET" }, fetchImpl);
+  if (typeof sent === "string") return { ok: false, text: sent };
+  const { res, body } = sent;
+  if (!res.ok) return { ok: false, text: refusal(res, body) };
+  if (body?.ok === true && Array.isArray(body.nodes)) return { ok: true, items: body.nodes.filter(isNode) };
+  return { ok: false, text: typeof body?.reason === "string" && body.reason ? `The open nodes could not be listed: ${body.reason}.` : "The open nodes could not be listed." };
 }

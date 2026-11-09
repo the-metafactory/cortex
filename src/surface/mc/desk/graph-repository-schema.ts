@@ -1,5 +1,8 @@
 // glossary-ignore: host
 export const GRAPH_REPOSITORIES_PATH = "/api/desk/graph-repositories";
+export const GRAPH_TICKED_PARAM = "ticked";
+export const GRAPH_NODES_SUFFIX = "/nodes";
+export const graphNodesPath = (ref: string): string => `${GRAPH_REPOSITORIES_PATH}/${encodeURIComponent(ref)}${GRAPH_NODES_SUFFIX}`;
 
 export const GRAPH_REPOSITORY_SQL = [
   "CREATE TABLE IF NOT EXISTS desk_graph_repositories (ref TEXT PRIMARY KEY, enabled_at INTEGER NOT NULL)",

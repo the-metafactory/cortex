@@ -5,6 +5,7 @@ import { failureText } from "../lib/conversations";
 import { check, confirm, feedbackLabel, propose, readCapabilities, readCreation, revise, revoke, type Capability, type CreationView, type GrantScope, type ProposalView } from "../lib/conversation-creation";
 
 import { ConversationDestination } from "./desk-conversation-destination";
+import { GRAPH_TYPES, GraphDatalists, graphListFor, prefillFields, recallGraphDestination, rememberGraphDestination, useGraphChoices } from "./desk-conversation-graph-fields";
 import { ConversationBalanceTask, useConversationBalanceTasks, type ConversationBalanceTasks } from "./desk-conversation-balance-task";
 
 const QUICK = ["graph-node", "balance-task", "routine", "flow"] as const;
@@ -57,7 +58,8 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
     const title = seed.text.split("\n")[0]?.slice(0, 200) ?? "";
     const spec = type ? byType.get(type) : undefined;
     const subject = SUBJECT_FIELDS.find(name => spec?.fields.some(f => f.name === name)) ?? "title";
-    void act(() => propose(id, { proposalId: crypto.randomUUID(), ...(type ? { type } : { intent: "card" }), fields: title ? { [subject]: title } : {}, ...(seed.entryId ? { entryId: seed.entryId } : {}) }), "The proposal was not saved. Try again; nothing was created.");
+    const body: Record<string, string> = type && GRAPH_TYPES.has(type) && subject !== "body" && seed.text.trim() ? { body: seed.text.trim().slice(0, 20_000) } : {};
+    void act(() => propose(id, { proposalId: crypto.randomUUID(), ...(type ? { type } : { intent: "card" }), fields: { ...(title ? { [subject]: title } : {}), ...body }, ...(seed.entryId ? { entryId: seed.entryId } : {}) }), "The proposal was not saved. Try again; nothing was created.");
   };
   const proposals = view?.proposals ?? [];
   const balance = useConversationBalanceTasks(proposals.filter(p => p.proposal.type === "balance-task" && p.operation?.state === "created").map(p => p.operation?.canonicalId ?? "").join("\0"));
@@ -86,21 +88,27 @@ function ProposalCard({ id, view, types, busy, archived, act, balance }: { id: s
   const { proposal, capability } = view;
   const links = proposalLinks(view);
   const balanceProposal = usesBalanceDestinationPicker(proposal.type);
-  const [fields, setFields] = useState<Record<string, string>>(proposal.fields);
+  const open = view.feedback === "proposed" || view.feedback === "unavailable" || view.feedback === "choose" || view.feedback === "failed";
+  const editable = open && !archived;
+  const graph = editable && GRAPH_TYPES.has(proposal.type ?? "");
+  const [repository, setRepository] = useState(proposal.fields.repository ?? "");
+  const choices = useGraphChoices(graph, repository);
+  const filled = (saved: Record<string, string>): Record<string, string> => editable && capability ? prefillFields(proposal.type, saved, capability.fields, choices.repositories, recallGraphDestination()) : saved;
+  const [fields, setFields] = useState<Record<string, string>>(() => filled(proposal.fields));
   const [type, setType] = useState<string>(proposal.type ?? "");
   const [standing, setStanding] = useState(false);
   const [scope, setScope] = useState<GrantScope>("conversation");
   const savedFields = JSON.stringify(proposal.fields);
-  useEffect(() => { setFields(JSON.parse(savedFields) as Record<string, string>); setType(proposal.type ?? ""); }, [proposal.revision, savedFields, proposal.type]);
+  useEffect(() => { setFields(filled(JSON.parse(savedFields) as Record<string, string>)); setType(proposal.type ?? ""); }, [proposal.revision, savedFields, proposal.type, choices.repositories]);
+  useEffect(() => { setRepository(fields.repository ?? ""); }, [fields.repository]);
   const dirty = JSON.stringify(fields) !== JSON.stringify(proposal.fields);
-  const open = view.feedback === "proposed" || view.feedback === "unavailable" || view.feedback === "choose" || view.feedback === "failed";
-  const editable = open && !archived;
   const settled = view.operation?.state === "created";
   const savedBalanceTask = settled && proposal.type === "balance-task";
   const save = (): Promise<ProposalView> => revise(id, proposal.proposalId, { revision: proposal.revision, fields });
   const doConfirm = (): void => void act(async () => {
     const current = dirty ? await save() : view;
     await confirm(id, proposal.proposalId, { revision: current.proposal.revision, digest: current.digest, ...(standing ? { grant: { scope } } : {}) });
+    if (graph) rememberGraphDestination(fields);
   }, "Mission Control did not confirm this. Confirm again: it repeats the same operation and never creates twice.");
   const last = view.operation?.history.at(-1)?.detail;
   let why = proposal.entryId ? `From this exchange · revision ${proposal.revision}` : `Revision ${proposal.revision}`;
@@ -125,10 +133,16 @@ function ProposalCard({ id, view, types, busy, archived, act, balance }: { id: s
     {capability && view.feedback !== "choose" && !savedBalanceTask && <div className="dcv-fields">
       {balanceProposal && <ConversationDestination fields={fields} onChange={setFields} disabled={!editable || busy} project={proposal.type === "balance-task"} />}
       {capability.fields.filter(f => !(balanceProposal && (f.name === "area" || f.name === "project"))).map(f => <label key={f.name}>{f.label}{f.required ? "" : " (optional)"}{f.destination ? " · destination" : ""}
-        {f.kind === "long"
+        {f.options
+          ? <select aria-label={f.label} value={fields[f.name] ?? ""} disabled={!editable} onChange={e => { setFields({ ...fields, [f.name]: e.target.value }); }}>
+            {f.options.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+          : f.kind === "long"
           ? <textarea aria-label={f.label} value={fields[f.name] ?? ""} disabled={!editable} maxLength={20_000} onChange={e => { setFields({ ...fields, [f.name]: e.target.value }); }} />
-          : <input aria-label={f.label} type={f.kind === "date" ? "date" : f.kind === "datetime" ? "datetime-local" : "text"} value={fields[f.name] ?? ""} disabled={!editable} onChange={e => { setFields({ ...fields, [f.name]: e.target.value }); }} />}
+          : <input aria-label={f.label} list={graph ? graphListFor(proposal.type, f.name, proposal.proposalId) : undefined} type={f.kind === "date" ? "date" : f.kind === "datetime" ? "datetime-local" : "text"} value={fields[f.name] ?? ""} disabled={!editable} onChange={e => { setFields({ ...fields, [f.name]: e.target.value }); }} />}
       </label>)}
+      {graph && <GraphDatalists id={proposal.proposalId} choices={choices} />}
+      {graph && choices.note && <p className="dcv-quiet" role="status">{choices.note}</p>}
       {capability.fixed.map(t => <p key={t.label} className="dcv-quiet"><strong>{t.label}:</strong> {t.value}</p>)}
       {proposal.suggestion && <p className="dcv-quiet">Filer: {proposal.suggestion}</p>}
     </div>}
