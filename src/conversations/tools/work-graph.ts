@@ -1,8 +1,8 @@
 import { z } from "zod/v4";
 import { canonicalNodeId, formatGraphNodeRef, formatGraphRepoRef, graphReadScope, parseGraphNodeRef, permitsGraphRead, qualifiedNodeId, type GraphNodeRef, type GraphReadScope } from "../../common/graph-ref";
-import { PROJECT_ID, type GraphSource } from "../../common/types/desk-conversations";
+import type { GraphSource } from "../../common/types/desk-conversations";
 import { CommandTimeout, runCommand, type CommandResult } from "../../surface/mc/desk/spawn";
-import type { ToolContext, ToolDefinition } from "./capabilities";
+import { SourceId, type ToolContext, type ToolDefinition } from "./capabilities";
 import { isRecord, num, rec, str, strings } from "./json";
 
 export type WorkGraphRunner = (argv: string[], timeoutMs: number) => Promise<CommandResult>;
@@ -24,28 +24,27 @@ const MAX_FINDINGS = 200;
 const MAX_GIST = 500;
 const MAX_TITLE = 300;
 const OUTSIDE_SCOPE = "This dependency is outside the permitted read scope; its state is unavailable and it remains blocking.";
+const INVENTORY_MISMATCH = "The graph owner returned a map inventory that does not match the configured maps. Nothing was released.";
 
-const SourceId = z.string().regex(new RegExp(`^${PROJECT_ID}$`));
-const MapId = z.string().regex(new RegExp(`^${PROJECT_ID}$`));
 const SourceInput = z.object({ graph: SourceId });
 const MapsInput = SourceInput.strict();
 const NodeInput = SourceInput.extend({
   node: z.string().trim().min(1).max(300),
-  map: MapId.optional(),
+  map: SourceId.optional(),
   bodyLimit: z.number().int().min(0).max(MAX_BODY_LIMIT).default(DEFAULT_BODY_LIMIT),
 }).strict().refine(input => parseGraphNodeRef(input.node) !== null || /^#?[1-9]\d*$/.test(input.node), "node must be a qualified node reference or a bare node number")
   .refine(input => parseGraphNodeRef(input.node) !== null || input.map !== undefined, "a bare node number needs a configured map id");
 const FrontierInput = SourceInput.extend({
-  map: MapId,
+  map: SourceId,
   offset: z.number().int().min(0).max(10_000).default(0),
   limit: z.number().int().min(1).max(MAX_PAGE).default(20),
 }).strict();
 const AuditInput = SourceInput.extend({
-  map: MapId,
+  map: SourceId,
   scope: z.enum(["build-brief-not-ready"]).optional(),
 }).strict();
 const DecisionsInput = SourceInput.extend({
-  map: MapId,
+  map: SourceId,
   offset: z.number().int().min(0).max(10_000).default(0),
   limit: z.number().int().min(1).max(MAX_PAGE).default(25),
 }).strict();
@@ -258,10 +257,10 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
       const byRef = new Map<string, Record<string, unknown>>();
       for (const entry of entries(result.body.maps)) {
         const ref = str(entry.ref);
-        if (!ref || byRef.has(ref.toLowerCase())) return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned a map inventory that does not match the configured maps. Nothing was released." });
+        if (!ref || byRef.has(ref.toLowerCase())) return failed(graph, { ok: false, status: "unreadable", message: INVENTORY_MISMATCH });
         byRef.set(ref.toLowerCase(), entry);
       }
-      if (byRef.size !== roots.length) return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned a map inventory that does not match the configured maps. Nothing was released." });
+      if (byRef.size !== roots.length) return failed(graph, { ok: false, status: "unreadable", message: INVENTORY_MISMATCH });
       const projected = graph.maps.map(map => {
         const entry = byRef.get(map.ref.toLowerCase());
         const state = rec(entry?.state);

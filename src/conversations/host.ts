@@ -22,7 +22,7 @@ import { AuthorityMediator, type AuthorityBindings, type HostPolicyState } from 
 import { creationFor } from "./creation";
 import { ConversationError } from "./errors";
 export { ConversationError } from "./errors";
-import { graphRevision, projectRevision, registryRevision, ToolHost, type ToolDefinition, type ToolSession } from "./tools/capabilities";
+import { registryRevision, sourceRevision, ToolHost, type ToolDefinition, type ToolSession } from "./tools/capabilities";
 import type { HistoryConversation, HistoryOwner } from "./tools/conversation-history";
 import type { CommunicationConnector, CommunicationOwner } from "./tools/communications";
 import { readEach, type WorkOwner, type WorkReaders } from "./tools/work-context";
@@ -429,7 +429,7 @@ export class ConversationHost {
     const toolPolicies = Object.entries(current.toolSources).map(([id, source]) => {
       const project = this.options.tools?.config()?.projects.find(project => project.id === id);
       const graph = this.options.tools?.config()?.graphs?.find(graph => graph.id === id);
-      const revision = project ? projectRevision(project) : graph ? graphRevision(graph) : null;
+      const revision = sourceRevision(project ?? null, graph ?? null);
       if (revision === null || revision !== source.revision || source.projectRegistryRevision && source.projectRegistryRevision !== registryRevision(this.options.tools?.config())) throw new ConversationError(403, "A previously used tool source was revoked or changed. Start a new conversation with current permissions.");
       return strictest([project?.policy ?? graph?.policy ?? "local", source.policy]);
     });
