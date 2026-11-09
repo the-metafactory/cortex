@@ -13,14 +13,18 @@ export interface DeskGraphRepositoryDeps {
 }
 
 
-async function nodes(req: Request, encoded: string, db: Database, run: GraphRepositoryRunner): Promise<Response> {
-  if (req.method !== "GET") return new Response(null, { status: 405, headers: { Allow: "GET" } });
-  let ref: string;
+function decodeRef(encoded: string): string | Response {
   try {
-    ref = decodeURIComponent(encoded);
+    return decodeURIComponent(encoded);
   } catch (_err) {
     return fail(400, "The repository reference is not valid.");
   }
+}
+
+async function nodes(req: Request, encoded: string, db: Database, run: GraphRepositoryRunner): Promise<Response> {
+  if (req.method !== "GET") return new Response(null, { status: 405, headers: { Allow: "GET" } });
+  const ref = decodeRef(encoded);
+  if (ref instanceof Response) return ref;
   if (!isGraphRepositoryAllowed(db, ref)) return fail(403, `This conversation may not file to ${ref}. Tick it in Desk Settings first.`);
   return Response.json(await listGraphNodes(ref, run), { headers: noStore });
 }
@@ -40,12 +44,8 @@ export async function handleDeskGraphRepositories(req: Request, url: URL, db: Da
   if (!rest.startsWith("/") || rest.length === 1) return fail(404, "Unknown route.");
   if (rest.endsWith(NODES_SUFFIX) && rest.length > NODES_SUFFIX.length + 1) return nodes(req, rest.slice(1, -NODES_SUFFIX.length), db, deps.run ?? runCommand);
   if (req.method !== "PUT") return new Response(null, { status: 405, headers: { Allow: "PUT" } });
-  let ref: string;
-  try {
-    ref = decodeURIComponent(rest.slice(1));
-  } catch (_err) {
-    return fail(400, "The repository reference is not valid.");
-  }
+  const ref = decodeRef(rest.slice(1));
+  if (ref instanceof Response) return ref;
   const body = (await req.json().catch(() => null)) as { enabled?: unknown } | null;
   if (typeof body?.enabled !== "boolean") return fail(400, "enabled must be true or false.");
   if (body.enabled && !isGithubRef(ref) && !isGitlabRef(ref)) return fail(400, "Only a GitHub repository such as github:github.com/<owner>/<name> or a GitLab project such as gitlab:<host>/<group>/<name> can be ticked.");

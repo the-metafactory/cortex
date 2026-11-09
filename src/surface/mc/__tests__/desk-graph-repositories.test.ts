@@ -318,14 +318,14 @@ describe("the destination picker routes", () => {
     const run = gh(JSON.stringify([{ number: 12, title: "Map root" }, { number: 7, title: "A child" }, { title: "no number" }]));
     const res = await nodesOf(github, { run });
     expect(await res.json()).toEqual({ ok: true, nodes: [{ id: "12", title: "Map root" }, { id: "7", title: "A child" }] });
-    expect(run.calls[0]?.argv).toEqual(["gh", "issue", "list", "--repo", "example/synthetic", "--state", "open", "--limit", "200", "--json", "number,title"]);
+    expect(run.calls[0]?.argv).toEqual(["gh", "issue", "list", "--repo", "example/synthetic", "--state", "open", "--limit", "100", "--json", "number,title"]);
   });
 
   it("lists the open issues of a ticked GitLab project by iid", async () => {
     tick(gitlab);
     const run = forges({ glab: ok(JSON.stringify([{ id: 9001, iid: 3, title: "Epic child" }])) });
     expect(await (await nodesOf(gitlab, { run })).json()).toEqual({ ok: true, nodes: [{ id: "3", title: "Epic child" }] });
-    expect(run.calls[0]?.argv).toEqual(["glab", "api", "--hostname", "gitlab.example.org", "projects/group%2Fsub%2Fproject/issues?state=opened&per_page=100&order_by=updated_at"]);
+    expect(run.calls[0]?.argv).toEqual(["glab", "api", "--hostname", "gitlab.example.org", "projects/group%2Fsub%2Fproject/issues?state=opened&per_page=100&order_by=created_at&sort=desc"]);
   });
 
   it("refuses an unticked repository without asking a forge, and reports a forge failure as a reason", async () => {

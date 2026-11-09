@@ -93,13 +93,14 @@ function ProposalCard({ id, view, types, busy, archived, act, balance }: { id: s
   const graph = editable && GRAPH_TYPES.has(proposal.type ?? "");
   const [repository, setRepository] = useState(proposal.fields.repository ?? "");
   const choices = useGraphChoices(graph, repository);
-  const filled = (saved: Record<string, string>): Record<string, string> => editable && capability ? prefillFields(proposal.type, saved, capability.fields, choices.repositories, recallGraphDestination()) : saved;
+  const filled = (current: Record<string, string>): Record<string, string> => editable && capability ? prefillFields(proposal.type, current, capability.fields, choices.repositories, recallGraphDestination()) : current;
   const [fields, setFields] = useState<Record<string, string>>(() => filled(proposal.fields));
   const [type, setType] = useState<string>(proposal.type ?? "");
   const [standing, setStanding] = useState(false);
   const [scope, setScope] = useState<GrantScope>("conversation");
   const savedFields = JSON.stringify(proposal.fields);
-  useEffect(() => { setFields(filled(JSON.parse(savedFields) as Record<string, string>)); setType(proposal.type ?? ""); }, [proposal.revision, savedFields, proposal.type, choices.repositories]);
+  useEffect(() => { setFields(filled(JSON.parse(savedFields) as Record<string, string>)); setType(proposal.type ?? ""); }, [proposal.revision, savedFields, proposal.type]);
+  useEffect(() => { setFields(filled); }, [choices.repositories]);
   useEffect(() => { setRepository(fields.repository ?? ""); }, [fields.repository]);
   const dirty = JSON.stringify(fields) !== JSON.stringify(proposal.fields);
   const settled = view.operation?.state === "created";
