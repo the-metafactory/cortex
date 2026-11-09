@@ -45,10 +45,10 @@ function relationshipMatches(bundle: SchemaBundle, object: AdapterDeclaration["o
 function prepare(declaration: AdapterDeclaration, bindings: AdapterBindings): Result<RegisteredAdapter> {
   if (!distinct(declaration.objectTypes.map(object => object.objectType)) || !distinct(declaration.capabilities.map(capability => capability.capabilityId)) || !distinct(declaration.schemas.map(schemaKey))) return failure("duplicate_id", "Declaration contains a duplicate identity.");
   const declared = new Map(declaration.capabilities.map(capability => [capability.capabilityId, capability]));
-  if (Object.keys(bindings.handlers).some(id => declared.get(id)?.kind !== "action" && declared.get(id)?.kind !== "query") || Object.keys(bindings.observations).some(id => declared.get(id)?.kind !== "observation")) return failure("invalid_registration", "Bindings must match declared capability kinds.");
+  if (Object.keys(bindings.handlers).some(id => declared.get(id)?.kind !== "query") || Object.keys(bindings.observations).some(id => declared.get(id)?.kind !== "observation")) return failure("invalid_registration", "Bindings must match declared query or observation capability kinds.");
   for (const capability of declaration.capabilities) {
     if (!namespace(capability.capabilityId, declaration.adapterId)) return failure("invalid_registration", "Capability identity must belong to the adapter namespace.");
-    if (capability.kind === "observation" ? !Object.hasOwn(bindings.observations, capability.capabilityId) : !Object.hasOwn(bindings.handlers, capability.capabilityId)) return failure("missing_handler", "A declared capability has no matching handler or observation binding.");
+    if (capability.kind === "query" && !Object.hasOwn(bindings.handlers, capability.capabilityId) || capability.kind === "observation" && !Object.hasOwn(bindings.observations, capability.capabilityId)) return failure("missing_handler", "A declared query or observation has no matching binding.");
     if (!distinct(capability.objectTypes) || capability.objectTypes.some(type => !declaration.objectTypes.some(object => object.objectType === type))) return failure("invalid_registration", "Capability refers to an undeclared object type.");
   }
   let bundle: SchemaBundle;

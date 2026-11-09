@@ -35,7 +35,7 @@ export function draftingRegistry() {
   const registry = new DomainAdapterRegistry();
   for (const [declaration, finder] of [[balanceDeclaration(), "balance.area.find"], [graphDeclaration(), "work-graph.node.find"]] as const) {
     const full = withFinder(declaration, finder);
-    const handlers = Object.fromEntries(full.capabilities.map(capability => [capability.capabilityId, () => { owner[capability.kind === "action" ? "mutations" : "queries"]++; throw new Error("Synthetic owners must not execute."); }]));
+    const handlers = Object.fromEntries(full.capabilities.filter(capability => capability.kind === "query").map(capability => [capability.capabilityId, () => { owner.queries++; throw new Error("Synthetic owners must not execute."); }]));
     const registered = registry.register(full, { handlers, observations: {} });
     if (!registered.ok) throw new Error(registered.error.code);
   }
