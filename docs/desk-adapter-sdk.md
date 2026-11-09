@@ -1,3 +1,4 @@
+<!-- glossary-ignore: host, token, path, user, data -->
 # Desk adapter package and SDK authoring contract
 
 This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK 1.0.0, and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.0.0"`).

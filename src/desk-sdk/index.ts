@@ -1,15 +1,23 @@
+// glossary-ignore: host
 export { DESK_ADAPTER_SDK_VERSION } from "./version";
-import type { AdapterBindings, AdapterDeclaration } from "../conversations/domain-adapters/types";
+import type { AdapterDeclaration } from "../conversations/domain-adapters/types";
 export type {
-  AdapterBindings,
   AdapterDeclaration,
   BoundaryError,
   CapabilityDeclaration,
-  Handler,
   ObjectReference,
   Result,
   SchemaRef,
 } from "../conversations/domain-adapters/types";
+
+/** The registry handler a package's module supplies for one query capability. */
+export type DeskQueryHandler = (input: unknown, context: unknown) => unknown;
+
+/** The registry bindings a package's module supplies for its declared query and observation capabilities. */
+export interface DeskAdapterBindings {
+  readonly handlers: Record<string, DeskQueryHandler>;
+  readonly observations: Record<string, object>;
+}
 
 /** The connection identity the host binds when it constructs a connector for one configured connection. */
 export interface DeskAdapterConnection {
@@ -37,7 +45,7 @@ export interface DeskAdapterHost {
 /** What a package's `createDeskAdapter` returns; the loader compares the declaration to the verified manifest. */
 export interface DeskAdapterDefinition {
   readonly declaration: AdapterDeclaration;
-  readonly bindings: AdapterBindings;
+  readonly bindings: DeskAdapterBindings;
 }
 
 /** The factory a package's ESM entry exports; it runs with no credentials and starts no provider effect. */

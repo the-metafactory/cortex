@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
+// glossary-ignore: run
 import { runSdkDts } from "./lib/sdk-dts";
 
 const HEADER = `// ============================================================================
+// glossary-ignore: host, run
 // GENERATED FILE — DO NOT EDIT BY HAND.
 //
 // Self-contained type artifact for the Desk adapter SDK. Out-of-tree Desk

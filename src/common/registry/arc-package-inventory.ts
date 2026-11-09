@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { createReadStream, readFileSync, realpathSync } from "node:fs";
 import { sep } from "node:path";
 import { resolveArcPackReposDir } from "../config/arc-pack-repos-dir";
 import { ArcListOutputSchema, type ArcPackage } from "../types/plugin-manifest";
@@ -82,4 +82,10 @@ export function sha256Bytes(value: Uint8Array | string): string {
 
 export function sha256File(path: string): string {
   return sha256Bytes(readFileSync(path));
+}
+
+export async function sha256FileAsync(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Uint8Array);
+  return hash.digest("hex");
 }

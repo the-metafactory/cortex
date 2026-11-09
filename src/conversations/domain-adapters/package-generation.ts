@@ -1,16 +1,14 @@
 import { z } from "zod";
-import { valid, validRange, satisfies } from "semver";
+import { validRange, satisfies } from "semver";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { defineDoc, type JsonObject, type Session } from "@earendil-works/pi-durable";
 import { DESK_ADAPTER_SDK_VERSION } from "../../desk-sdk/version";
+import { DESK_ADAPTER_GENERATION_FORMAT, exactVersion as version, hex64, identifier } from "./package-primitives";
 import { DOMAIN_ADAPTER_CONTRACT_VERSION } from "./registry";
 
-const identifier = z.string().min(1).refine(value => value.trim().length > 0 && value === value.trim());
-const version = z.string().refine(value => valid(value) === value);
-const hex64 = z.string().regex(/^[0-9a-f]{64}$/);
 const generation = z.object({
-  format: z.literal("desk-adapter-generation/1"),
+  format: z.literal(DESK_ADAPTER_GENERATION_FORMAT),
   generationId: identifier,
   packageId: identifier,
   packageVersion: version,
@@ -22,7 +20,7 @@ const generation = z.object({
   uiProtocolVersion: version.optional(),
   selectedAt: z.iso.datetime(),
 }).strict();
-export const DESK_ADAPTER_GENERATION_FORMAT = "desk-adapter-generation/1";
+export { DESK_ADAPTER_GENERATION_FORMAT } from "./package-primitives";
 export const DESK_ADAPTER_GENERATION_RECORD_FORMAT = "desk-adapter-generation-record/1";
 export const DESK_UI_PROTOCOL_VERSION = "1.0.0";
 export const DeskAdapterGenerationSchema = generation;

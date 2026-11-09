@@ -1,3 +1,5 @@
+<!-- glossary-ignore: host, owner, run -->
+
 # Internal Desk domain-adapter registry
 
 This module validates declarations and typed boundaries for Desk domain adapters. It is independent of the transport surface SDK and does not authorize or execute owner operations.
@@ -21,6 +23,8 @@ bun scripts/probe-desk-adapter-registry.ts
 ```
 
 It prints discovery, an invalid title with `/title`, a pinned-version mismatch and zero owner calls. Live connections, owner mutations, operation receipts/lifecycle, conversation drafting and UI hosting remain separate slices.
+
+<!-- glossary-ignore: host, owner, run -->
 
 ## Desk adapter packages and SDK
 

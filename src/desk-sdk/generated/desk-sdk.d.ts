@@ -1,4 +1,5 @@
 // ============================================================================
+// glossary-ignore: host, run
 // GENERATED FILE — DO NOT EDIT BY HAND.
 //
 // Self-contained type artifact for the Desk adapter SDK. Out-of-tree Desk
@@ -103,10 +104,12 @@ export type Result<T> = {
 	ok: false;
 	error: BoundaryError;
 };
-export type Handler = (input: unknown, context: unknown) => unknown;
-export interface AdapterBindings {
-	handlers: Record<string, Handler>;
-	observations: Record<string, object>;
+/** The registry handler a package's module supplies for one query capability. */
+export type DeskQueryHandler = (input: unknown, context: unknown) => unknown;
+/** The registry bindings a package's module supplies for its declared query and observation capabilities. */
+export interface DeskAdapterBindings {
+	readonly handlers: Record<string, DeskQueryHandler>;
+	readonly observations: Record<string, object>;
 }
 /** The connection identity the host binds when it constructs a connector for one configured connection. */
 export interface DeskAdapterConnection {
@@ -130,7 +133,7 @@ export interface DeskAdapterHost {
 /** What a package's `createDeskAdapter` returns; the loader compares the declaration to the verified manifest. */
 export interface DeskAdapterDefinition {
 	readonly declaration: AdapterDeclaration;
-	readonly bindings: AdapterBindings;
+	readonly bindings: DeskAdapterBindings;
 }
 /** The factory a package's ESM entry exports; it runs with no credentials and starts no provider effect. */
 export type CreateDeskAdapter = (host: DeskAdapterHost) => DeskAdapterDefinition;
