@@ -22,7 +22,7 @@ import { AuthorityMediator, type AuthorityBindings, type HostPolicyState } from 
 import { creationFor } from "./creation";
 import { ConversationError } from "./errors";
 export { ConversationError } from "./errors";
-import { projectRevision, registryRevision, ToolHost, type ToolDefinition, type ToolSession } from "./tools/capabilities";
+import { registryRevision, sourceRevision, ToolHost, type ToolDefinition, type ToolSession } from "./tools/capabilities";
 import type { HistoryConversation, HistoryOwner } from "./tools/conversation-history";
 import type { CommunicationConnector, CommunicationOwner } from "./tools/communications";
 import { readEach, type WorkOwner, type WorkReaders } from "./tools/work-context";
@@ -428,8 +428,10 @@ export class ConversationHost {
     const sources = await this.sourcesOf(current.links);
     const toolPolicies = Object.entries(current.toolSources).map(([id, source]) => {
       const project = this.options.tools?.config()?.projects.find(project => project.id === id);
-      if (!project || projectRevision(project) !== source.revision || source.projectRegistryRevision && source.projectRegistryRevision !== registryRevision(this.options.tools?.config())) throw new ConversationError(403, "A previously used tool source was revoked or changed. Start a new conversation with current permissions.");
-      return strictest([project.policy, source.policy]);
+      const graph = this.options.tools?.config()?.graphs?.find(graph => graph.id === id);
+      const revision = sourceRevision(project ?? null, graph ?? null);
+      if (revision === null || revision !== source.revision || source.projectRegistryRevision && source.projectRegistryRevision !== registryRevision(this.options.tools?.config())) throw new ConversationError(403, "A previously used tool source was revoked or changed. Start a new conversation with current permissions.");
+      return strictest([project?.policy ?? graph?.policy ?? "local", source.policy]);
     });
     const workPolicies = [...await this.workPolicies(current), ...this.communicationPolicies(current)];
     return { policy: strictest([current.policy, ...toolPolicies, ...Object.values(current.historySources), ...workPolicies, ...sources.flatMap(s => s.state === "available" ? [s.policy] : [])]), sources, available: sources.every(s => s.state === "available") };
@@ -604,7 +606,8 @@ export class ConversationHost {
     if (!transport) return null;
     const route = this.routeFor(effective, stored.cloud);
     if (!route) return null;
-    return { principal: stored.principal, conversationId: id, transport, route, policy: effective, entryId, scope: (this.options.tools?.config()?.projects ?? []).map(project => project.id) };
+    const tools = this.options.tools?.config();
+    return { principal: stored.principal, conversationId: id, transport, route, policy: effective, entryId, scope: [...(tools?.projects ?? []).map(project => project.id), ...(tools?.graphs ?? []).map(graph => graph.id)] };
   }
 
   private async recordTurn(id: string, event: TurnEvent): Promise<void> {

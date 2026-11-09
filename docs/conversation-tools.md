@@ -1,6 +1,6 @@
 # Conversation tool boundary
 
-Ivy conversations discover permitted projects with `capabilities` and investigate their working files with `repo_list`, `repo_read`, `repo_find`, and `repo_search`. The Cortex runtime owns the project registry, tool catalog, authorization, and durable activity. Local and cloud model lanes use the same boundary. Forge, graph, and web operations need their individual tool implementations.
+Ivy conversations discover permitted projects and work graphs with `capabilities` and investigate their working files with `repo_list`, `repo_read`, `repo_find`, and `repo_search`. The Cortex runtime owns the source registry, tool catalog, authorization, and durable activity. Local and cloud model lanes use the same boundary. Forge, graph, and web operations need their individual tool implementations.
 
 ## Stack configuration
 
@@ -27,7 +27,26 @@ mc:
               host: git.example.org
               repo: example/private-project
             policy: local
-            operations: [repo.read, forge.read, graph.read]
+            operations: [repo.read, forge.read]
+        graphs:
+          - id: desk-work
+            policy: cloud
+            maps:
+              - id: desk
+                ref: github:github.com/example/desk#10
+                label: The Desk
+              - id: conversations
+                ref: github:github.com/example/desk#2948
+            read:
+              repos: [github:github.com/example/desk]
+              namespaces: [gitlab:git.example.org/example]
+          - id: private-work
+            policy: local
+            maps:
+              - id: private-map
+                ref: gitlab:git.example.org/example/private-project#3
+            read:
+              namespaces: [gitlab:git.example.org/example]
 ```
 
 A project ID is stable across checkout moves. IDs contain lowercase letters, digits, and dashes, start with a letter, and have at most 64 characters. Each ID appears once. Roots are absolute or start with `~/`. Forge identities contain the provider kind, repository name, and optional hostname. They contain no credentials.
@@ -38,7 +57,7 @@ Without this block, configurations remain valid and discovery returns no project
 
 ## Discovery and dispatch
 
-`capabilities` accepts an optional `project`, `offset`, and `limit`. The default page contains up to ten projects. `next` contains the next offset or `null`. Each visible source identifies its stable project ID, policy, forge identity, and tool availability. Checkout locations and credentials remain in the Cortex runtime.
+`capabilities` accepts an optional `source`, `offset`, and `limit`. The default page contains up to ten sources. `next` contains the next offset or `null`. Each visible source identifies its stable ID under `source`, its kind (`project` or `graph`), policy, operations and tool availability; a project also carries its forge identity. `project` repeats the same ID as a deprecated alias and is still accepted as a filter. Checkout locations and credentials remain in the Cortex runtime.
 
 Availability distinguishes `available`, `not-configured`, `denied`, `dependency-missing`, and `provider-unavailable`. Blocking reasons identify the permitted operation, missing dependency, or provider connection to check. Hidden sources and unknown sources receive the same response. Discovery reveals neither hidden names nor their count.
 
@@ -127,6 +146,38 @@ A project with `forge.kind: github` and the `forge.read` operation gets six read
 Before every read the tool re-checks the configured host and `owner/name`, and refuses if the repository now resolves to another name. Every returned URL must lie inside the configured repository. Search text cannot name another `repo:`, `org:` or `user:` scope. Linked content in other repositories is never fetched.
 
 Results carry `fetchedAt`, canonical URLs and, for pull requests, the head SHA. `status` is one of `ok`, `login-required`, `permission-denied`, `not-found`, `rate-limited`, `provider-failure`, `identity-mismatch`, `head-changed` or `invalid-source`. A diff or check read whose pull request head moved during the read is withheld as `head-changed`. The check `rollup` is `passing` only when every run and status was read and finished successfully; otherwise it is `failing`, `pending`, `incomplete`, `stale` or `none`. Pages are bounded; `nextPage` and `nextOffset` continue. `github_checks` pages check runs with `page` and commit statuses with `statusPage`; a commit status `targetUrl` outside the repository is returned as `null`.
+
+## Work graph reads
+
+A `graphs` entry names a Soma work-graph source. Each graph has a stable `id`, a `policy`, one to 100 configured `maps` and an explicit `read` scope. A map has a stable `id`, a fully qualified `ref` (`github:<host>/<owner>/<name>#<n>` or `gitlab:<host>/<group>/<project>#<n>`, `&<n>` for a GitLab epic) and an optional `label`. The `read` scope names exact repositories under `repos` and GitLab namespaces under `namespaces`. Every configured map must lie inside that scope, and a graph needs at least one read entry; an empty scope permits nothing. Graph ids are unique across projects and graphs. A project's `graph.read` operation does not create a graph source.
+
+Graph reads run the installed `soma` CLI with fixed read verbs and validated arguments: `maps`, `node`, `frontier`, `audit` and `decisions`. Configured map references become `--root`; the read scope becomes repeated `--read-repo` and `--read-namespace`. No input field reaches the command line as a flag, and `--repo` is never used. The tool never runs `claim`, `release`, `abandon`, `add`, `link`, `chart`, `close`, `edit`, `rule`, `file-proposal`, `decisions --write`, or any raw tracker write.
+
+| Tool | Input | Result |
+| --- | --- | --- |
+| `work_graph_maps` | None | Permitted map inventory with each live root node |
+| `work_graph_node` | `node`, optional `map`, `bodyLimit` | One live node with source link, typed state, assignees, dependencies, parent and receipt-backed close |
+| `work_graph_frontier` | `map`, `offset`, `limit` | A bounded page of open, unassigned, unblocked nodes plus skipped and omitted membership |
+| `work_graph_audit` | `map`, optional `scope` | Close-gate findings, optionally only `build-brief-not-ready` |
+| `work_graph_decisions` | `map`, `offset`, `limit` | A bounded page of the receipt-derived decision index |
+
+A node reference is either fully qualified or a bare node number together with a configured map id. A qualified reference must lie inside the graph's read scope before the owner is called. Results preserve forge, host and path, including GitLab group identity, in every node, dependency and audit-finding reference.
+
+`state` is `open` or `closed` as the owner reports it. `blocked` is true while any dependency is not a completed close; an abandoned dependency keeps its dependent blocked. `receiptBacked` is true only when the owner proves a current close receipt. `receiptMissing` marks a tracker-side close. A dependency, parent or child outside the read scope has `unavailable: true`, no foreign state, and remains blocking, whatever state the owner reports for it. A node outside the read scope is refused with nothing read. Body text is returned only for `work_graph_node` with `bodyLimit`; it is data and never used to infer progress.
+
+`work_graph_frontier` pages `nodes` with `offset`, `limit` and `next`. Its `notWritable` nodes and `unavailableMembership` edges are bounded to 200 entries each and carry an `omitted` count, so a large map cannot inflate one page. `work_graph_audit` reports each finding as `items` with an `omitted` count; every item is a forge-qualified reference, whether the owner sends bare IDs or `{id}` objects. A full audit must carry every finding list, and a scoped audit must carry its one checked list; a missing, non-array or id-less finding list is refused as `unreadable` rather than reported as no findings.
+
+Map, node and frontier reads are labelled `snapshot: live`. The decision index is labelled `historical: true` and `derivedFrom: close-receipts`; an audit with a `scope` is labelled `uncheckedFindings: true`. Failures stay distinct: `denied`, `not-found`, `identity-mismatch`, `invalid-source`, `owner-timeout`, `owner-unavailable`, `owner-failure` and `unreadable`. A malformed, truncated or wrong-repository owner response releases nothing. Cancellation and the Cortex runtime's output limit apply as for other source tools.
+
+The graph's `policy` applies before the owner is called and again before the result is released. A local-only graph requires a local-policy conversation, a local model and web transport. A graph source used by a conversation is recorded in its durable tool sources; changing or removing it refuses later turns of that conversation.
+
+<!-- glossary-ignore: run -->
+<!-- glossary-ignore: node -->
+<!-- glossary-ignore: owner -->
+<!-- glossary-ignore: host -->
+<!-- glossary-ignore: path -->
+<!-- glossary-ignore: body -->
+<!-- glossary-ignore: data -->
 
 ## Web search and page reads
 
