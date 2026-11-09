@@ -63,6 +63,10 @@ function continuesTable(line: string): boolean {
   return line.trim() !== "" && ![FENCE_RE, HEADING_RE, QUOTE_RE, LIST_RE].some((re) => re.test(line));
 }
 
+function cellStyle(align: CellAlign): { textAlign: CellAlign } | undefined {
+  return align ? { textAlign: align } : undefined;
+}
+
 function fitRow(cells: string[], width: number): string[] {
   return Array.from({ length: width }, (_, i) => cells[i] ?? "");
 }
@@ -88,8 +92,8 @@ function renderBlock(block: Block, key: number): ReactNode {
     case "table": return (
       <div key={key} className="md-table-wrap">
         <table className="md-table">
-          <thead><tr>{block.header.map((cell, i) => <th key={i} style={block.align[i] ? { textAlign: block.align[i] } : undefined}>{renderInline(cell)}</th>)}</tr></thead>
-          {block.rows.length > 0 && <tbody>{block.rows.map((row, r) => <tr key={r}>{row.map((cell, i) => <td key={i} style={block.align[i] ? { textAlign: block.align[i] } : undefined}>{renderInline(cell)}</td>)}</tr>)}</tbody>}
+          <thead><tr>{block.header.map((cell, i) => <th key={i} style={cellStyle(block.align[i])}>{renderInline(cell)}</th>)}</tr></thead>
+          {block.rows.length > 0 && <tbody>{block.rows.map((row, r) => <tr key={r}>{row.map((cell, i) => <td key={i} style={cellStyle(block.align[i])}>{renderInline(cell)}</td>)}</tr>)}</tbody>}
         </table>
       </div>
     );
