@@ -113,6 +113,12 @@ describe("the Studio board", () => {
     expect(html).toContain("What would A skeptic say?");
   });
 
+  it("opens a thread's Mail material in Mail, not in a new tab", () => {
+    const studio: StudioView = { ...STUDIO, active: [thread("one", 1, { material: [{ kind: "mail", label: "Capture from Ada", href: "message://%3cw1%3e" }] })] };
+    const html = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} at={AT} />);
+    expect(html).toContain('<a href="message://%3cw1%3e">Capture from Ada</a>');
+  });
+
   it("says thinking is turned off when the thread's policy has a daily limit of 0", () => {
     const studio: StudioView = { ...STUDIO, thinking: { kind: "ready", dailyRuns: { local: 5, cloud: 0 }, runs: [] } };
     const html = renderToStaticMarkup(<DeskStudio studio={studio} thread="one" onOpenThread={() => {}} at={AT} />);

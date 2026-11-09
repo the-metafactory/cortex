@@ -279,6 +279,19 @@ describe("Studio writer acts", () => {
     expect(existsSync(join(dir, "inbox/lecture.md"))).toBe(false);
   });
 
+  it("keeps the Open in Mail link when a mail capture becomes a thread", async () => {
+    seed();
+    writeFileSync(join(dir, "inbox/w1.md"), "---\nat: 2026-10-31T08:02:00+01:00\nvia: mail\n---\n\nMail from Ada <ada@example.org>, received 2026-10-31 08:00: “Engines [w1]”. Open in Mail: <message://%3cw1%3e>\n");
+    git("add", "-A");
+    git("commit", "-qm", "mail capture");
+    const r = await run({ act: "open", from: "capture", id: "w1", area: "lab" }, rid(), 5);
+    expect(r.ok).toBe(true);
+    const slug = "mail-from-ada-ada-example-org-received-2026-10-31-08-00-engi";
+    expect(parsed(slug).material[0]).toEqual({ kind: "mail", label: "Capture, 2026-10-31: “Mail from Ada <ada@example.org>, received 2026-10-31 08:00: “Engines (w1)”.”", href: "message://%3cw1%3e" });
+    if (!r.ok) return;
+    expect(buildThreadPage(r.studio, slug)?.material[0]?.href).toBe("message://%3cw1%3e");
+  });
+
   it("refuses an area the config does not list", async () => {
     seed();
     expect(await run({ act: "open", from: "capture", id: "lecture", area: "nowhere" })).toMatchObject({ ok: false, status: 400 });
