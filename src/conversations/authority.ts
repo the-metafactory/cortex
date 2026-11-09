@@ -535,17 +535,28 @@ export class AuthorityMediator {
     return { capabilityId: "", destinations, sources, policy: "cloud" };
   }
 
-  private restrictionsFor(state: AuthorityState, source: ObjectReference): RestrictionRecord[] {
-    return Object.values(state.records).flatMap(values => { const record = values.at(-1); return record?.kind === "restriction" && canonicalWire(record.value.source) === canonicalWire(source) ? [record.value] : []; });
+  private restrictionIndex(state: AuthorityState): Map<string, RestrictionRecord[]> {
+    const index = new Map<string, RestrictionRecord[]>();
+    for (const values of Object.values(state.records)) {
+      const record = values.at(-1);
+      if (record?.kind !== "restriction") continue;
+      const key = canonicalWire(record.value.source);
+      index.set(key, [...index.get(key) ?? [], record.value]);
+    }
+    return index;
   }
 
-  private async objectReleasable(state: AuthorityState, resolved: Resolved, binding: ReadBinding, scope: HostScope, sink: ReleaseSink, object: ReadPage["objects"][number]): Promise<boolean> {
+  private restrictionsFor(state: AuthorityState, source: ObjectReference): RestrictionRecord[] {
+    return this.restrictionIndex(state).get(canonicalWire(source)) ?? [];
+  }
+
+  private async objectReleasable(resolved: Resolved, binding: ReadBinding, scope: HostScope, sink: ReleaseSink, object: ReadPage["objects"][number], index: Map<string, RestrictionRecord[]>): Promise<boolean> {
     const { ref, destination } = object;
     if (ref.adapterId !== binding.adapterId || ref.connectionId !== resolved.connection.connectionId || ref.objectType !== binding.objectType) return false;
     if (binding.destinationType !== undefined && (destination?.objectType !== binding.destinationType)) return false;
-    if (destination && !withinLimits(scope.destinations, [destination])) return false;
+    if (!destination || !withinLimits(scope.destinations, [destination])) return false;
     if (!this.registry.validateObject(binding.adapterId, binding.objectType, object.schemaRef, object.value).ok) return false;
-    const own = this.restrictionsFor(state, ref);
+    const own = index.get(canonicalWire(ref)) ?? [];
     if (own.length === 0) return true;
     const record = own[0];
     if (own.length !== 1 || record?.status !== "active" || !record.readScope.includes(resolved.principal.principalRef) || !record.resolverBinding) return false;
@@ -603,7 +614,8 @@ export class AuthorityMediator {
         const sender = this.sinks.get(canonicalWire(admitted.sink));
         if (!sender) return withheld();
         const kept: ReadPage["objects"] = [];
-        for (const object of page.objects) if (await this.objectReleasable(state, resolved, admitted.binding, admitted.scope, admitted.sink, object)) kept.push(object);
+        const index = this.restrictionIndex(state);
+        for (const object of page.objects) if (await this.objectReleasable(resolved, admitted.binding, admitted.scope, admitted.sink, object, index)) kept.push(object);
         const decision = await this.commit(next => this.decision(next, resolved, "release", subject, json({ kind: "read" })));
         const final = await this.resolve(context, admitted.connectionId, undefined, undefined, undefined, [admitted.scope]);
         if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || !this.sinkAllowed(final, undefined, admitted.sink, [admitted.scope])) return withheld();
