@@ -37,6 +37,7 @@ export function isStackPrincipal(principal: string, guard: MutationGuardContext)
   return who === (guard.localPrincipal ?? DEFAULT_LOCAL_PRINCIPAL).trim().toLowerCase();
 }
 
+const WEB_CREATE_KEY = "web-create:";
 async function body(req: Request): Promise<unknown> {
   return req.json().catch(() => null);
 }
@@ -57,7 +58,11 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
       if (req.method !== "POST") return notAllowed("GET, POST");
       const parsed = CreateConversationSchema.safeParse(await body(req));
       if (!parsed.success) return fail(400, "The conversation request is not valid.");
-      return reply(201, { ok: true, conversation: await host.create(parsed.data, auth.principal) });
+      const { requestId, ...request } = parsed.data;
+      if (!requestId) return reply(201, { ok: true, conversation: await host.create(request, auth.principal) });
+      const key = `${WEB_CREATE_KEY}${requestId}`;
+      const known = (await host.keyed(WEB_CREATE_KEY)).has(requestId);
+      return reply(known ? 200 : 201, { ok: true, conversation: await host.create(request, auth.principal, { key }) });
     }
     if (url.pathname === "/api/conversations/overview") {
       if (req.method !== "GET") return notAllowed("GET");

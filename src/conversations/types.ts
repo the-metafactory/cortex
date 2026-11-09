@@ -60,6 +60,7 @@ export const CreateConversationSchema = z.object({
   links: z.array(ObjectRefSchema).max(50).default([]),
   origin: OriginSchema,
   policy: z.enum(["local", "cloud"]).default("cloud"),
+  requestId: z.uuid().optional(),
 }).strict();
 export type CreateConversation = z.infer<typeof CreateConversationSchema>;
 

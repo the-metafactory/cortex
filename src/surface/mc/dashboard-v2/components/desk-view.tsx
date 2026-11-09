@@ -35,7 +35,7 @@ import { FIELD_SCHEMAS, proposalTime, type AskFields, type DeskProposal } from "
 import { DAY_MS, startOfDay } from "../../desk/time";
 import "./desk-view.css";
 import { useDesk } from "../hooks/use-desk";
-import { useDeskLocation, useDeskStudio, type DeskLocation } from "../hooks/use-desk-studio";
+import { deskSearch, useDeskLocation, useDeskStudio, type DeskLocation } from "../hooks/use-desk-studio";
 import { DeskModeSwitch, DeskStudio } from "./desk-studio";
 import { ALL_AREAS, briefing, canSee, clock, isBriefingRequest, selectItems, spokenBriefing, URGENCY_LABEL } from "../../desk/present";
 import { useDeskVoice } from "../hooks/use-desk-voice";
@@ -80,7 +80,7 @@ export function DeskView({ onOpenMissionControl }: DeskViewProps) {
     );
   }
   return <>
-    {routineLocation && <div hidden={!routines}><DeskRoutineEditor active={Boolean(routines)} location={routineLocation} onLocation={setRoutines} view={view.routines} onChanged={reload} onBack={() => { setRoutines(null); reload(); }} /></div>}
+    {routineLocation && <div hidden={!routines}><DeskRoutineEditor active={Boolean(routines)} location={routineLocation} onLocation={setRoutines} view={view.routines} onChanged={reload} onConversation={(id) => { setRoutines(null); window.history.pushState(null, "", `${window.location.pathname}${deskSearch("", { mode: "conversation", thread: null, conversation: id })}`); window.dispatchEvent(new PopStateEvent("popstate")); }} onBack={() => { setRoutines(null); reload(); }} /></div>}
     {!routines && (settings ? <DeskSettings view={view} group={settings} onGroup={setSettings} onBack={() => { setSettings(null); reload(); }} /> : <DeskBody view={view} error={error} onOpenMissionControl={onOpenMissionControl} onOpenSettings={() => { setSettings("calendars"); }} onOpenRoutines={() => { setRoutines(visitedRoutines ?? defaultRoutinesLocation()); }} onChanged={reload} />)}
   </>;
 }
