@@ -251,6 +251,38 @@ describe("Desk adapter package discovery", () => {
     expect((await loader.activate(deskFixturePackageId(DESK_FIXTURE_ADAPTER))).ok).toBe(true);
     expect(loader.catalog().some(entry => entry.generation.adapterId === DESK_FIXTURE_ADAPTER)).toBe(true);
   });
+
+  test("installs an unapproved dependent beside its unapproved target and activates both once approved", async () => {
+    const installedRoot = tempDir("arc");
+    const target = writeDeskFixturePackage(join(installedRoot, "target"), { adapterId: "target" });
+    const dependent = writeDeskFixturePackage(join(installedRoot, "dependent"), { adapterId: "dependent", declaration: deskFixtureDeclaration("dependent", { relationship: { targetAdapterId: "target" } }) });
+    const base: DeskPackageLoaderOptions = {
+      installedRoots: [installedRoot],
+      runner: deskFixtureRunner([deskFixtureArcPackage(target.dir, { name: "desk-target" }), deskFixtureArcPackage(dependent.dir, { name: "desk-dependent" })]),
+    };
+    const discovery = await loaderFor(base).discover();
+    expect(discovery.candidates.map(candidate => candidate.adapterId)).toEqual(["dependent", "target"]);
+    expect(discovery.candidates.every(candidate => candidate.state.state === "installable")).toBe(true);
+    expect(discovery.candidates.every(candidate => candidate.trust.state === "untrusted")).toBe(true);
+    for (const adapterId of ["dependent", "target"]) expect((await loaderFor(base).install(deskFixturePackageId(adapterId))).ok).toBe(true);
+    const approvals: DeskAdapterApproval[] = discovery.candidates.flatMap(candidate => candidate.trust.state === "untrusted"
+      ? [{ packageId: candidate.packageId, origin: candidate.origin, packageVersion: candidate.packageVersion, releaseDigest: candidate.releaseDigest }]
+      : []);
+    const { store } = await openStore();
+    const loader = loaderFor({ ...base, store, approvals });
+    expect((await loader.activate(deskFixturePackageId("target"))).ok).toBe(true);
+    expect((await loader.activate(deskFixturePackageId("dependent"))).ok).toBe(true);
+    expect(loader.catalog().map(entry => entry.generation.adapterId)).toEqual(["dependent", "target"]);
+  });
+
+  test("refuses a dependent whose relationship target is not installed at all", async () => {
+    const dependent = writeDeskFixturePackage(join(tempDir("bundled"), "dependent"), { adapterId: "dependent", declaration: deskFixtureDeclaration("dependent", { relationship: { targetAdapterId: "absent" } }) });
+    const discovery = await loaderFor({ bundledPackages: [dependent.dir] }).discover();
+    const state = discovery.candidates[0]?.state;
+    expect(state?.state).toBe("unavailable");
+    if (state?.state === "unavailable") expect(state.code).toBe("invalid_registration");
+    expect((await loaderFor({ bundledPackages: [dependent.dir] }).install(deskFixturePackageId("dependent"))).ok).toBe(false);
+  });
 });
 
 describe("Desk adapter generation publication", () => {
@@ -413,6 +445,18 @@ describe("Desk adapter generation publication", () => {
     expect(loader.diagnostics().some(issue => issue.packageId === deskFixturePackageId("a-broken"))).toBe(true);
     expect(loader.capability("dependent.task.query").support).toBe("declared");
     expect(loader.capability("a-broken.task.query").support).toBe("unsupported");
+  });
+
+  test("at a managed restart a dependent of a module that never loads is fenced as a missing dependency", async () => {
+    const root = tempDir("bundled");
+    const broken = writeDeskFixturePackage(join(root, "a-broken"), { adapterId: "a-broken", backendSource: deskFixtureBackend(deskFixtureDeclaration("a-broken"), { throwOnCreate: true }) });
+    const dependent = writeDeskFixturePackage(join(root, "dependent"), { adapterId: "dependent", declaration: deskFixtureDeclaration("dependent", { relationship: { targetAdapterId: "a-broken" } }) });
+    const { store } = await openStore();
+    const loader = loaderFor({ bundledPackages: [broken.dir, dependent.dir], store });
+    await loader.boot();
+    expect(loader.catalog()).toEqual([]);
+    expect(loader.admission("a-broken").state).toBe("unavailable");
+    expect(loader.admission("dependent")).toEqual({ state: "unavailable", code: "dependency_unavailable", message: expect.any(String) });
   });
 
   test("returns upgrade-required for stored evidence that belongs to a different generation", async () => {

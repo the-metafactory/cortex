@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { verifyBundleSignature, type PluginSigningPosture } from "../../adapters/plugin-signing";
+import { errorText } from "../../common/error-text";
 import { canonicalJSON } from "../../common/registry/canonical-json";
 import { containedRealPath, defaultArcListRunner, readArcPackageInventory, sha256Bytes, sha256FileAsync, type ArcListRunner } from "../../common/registry/arc-package-inventory";
 import type { ArcPackage } from "../../common/types/plugin-manifest";
@@ -332,6 +333,34 @@ export function stagingBindings(declaration: AdapterDeclaration): AdapterBinding
   };
 }
 
+function connectorProblem(declaration: AdapterDeclaration, connectors: ReadonlyMap<string, DeskConnectorFactory>): BoundaryError | null {
+  const actions = new Set(declaration.capabilities.filter(capability => capability.kind === "action").map(capability => capability.capabilityId));
+  const exact = actions.size === connectors.size
+    && [...actions].every(capabilityId => typeof connectors.get(capabilityId) === "function")
+    && [...connectors.keys()].every(capabilityId => actions.has(capabilityId));
+  return exact ? null : { code: "module_incompatible", message: "Every action capability needs exactly one registered connector, and no other capability may register one." };
+}
+
+function generationFor(acting: DeskPackageCandidate, selectedAt: string): DeskAdapterGeneration {
+  return DeskAdapterGenerationSchema.parse({
+    format: DESK_ADAPTER_GENERATION_FORMAT,
+    generationId: generationId({ packageId: acting.packageId, packageVersion: acting.packageVersion, releaseDigest: acting.releaseDigest }),
+    packageId: acting.packageId,
+    packageVersion: acting.packageVersion,
+    adapterId: acting.adapterId,
+    origin: acting.origin,
+    releaseDigest: acting.releaseDigest,
+    deskSdkRange: acting.manifest.deskSdkRange,
+    ...versions(acting.manifest),
+    selectedAt,
+  });
+}
+
+function relationshipTargets(declaration: AdapterDeclaration): string[] {
+  const targets = declaration.objectTypes.flatMap(object => object.relationships.map(relation => relation.targetAdapterId));
+  return [...new Set(targets)];
+}
+
 interface StageEntry {
   readonly adapterId: string;
   readonly candidate: DeskPackageCandidate;
@@ -447,7 +476,7 @@ export class DeskPackageLoader {
     try {
       realRoot = realpathSync(item.root);
     } catch (error) {
-      return { stage: "package_root", code: "unreadable", message: `The package directory is not readable: ${error instanceof Error ? error.message : String(error)}` };
+      return { stage: "package_root", code: "unreadable", message: `The package directory is not readable: ${errorText(error)}` };
     }
     const manifestPath = join(realRoot, DESK_ADAPTER_PACKAGE_MANIFEST);
     let stat;
@@ -463,7 +492,7 @@ export class DeskPackageLoader {
     try {
       text = readFileSync(manifestPath, "utf8");
     } catch (error) {
-      return { stage: "manifest", code: "unreadable", message: `The package manifest could not be read: ${error instanceof Error ? error.message : String(error)}` };
+      return { stage: "manifest", code: "unreadable", message: `The package manifest could not be read: ${errorText(error)}` };
     }
     let raw: unknown;
     try {
@@ -568,7 +597,7 @@ export class DeskPackageLoader {
       try {
         verified = await this.verifyStructural(item);
       } catch (error) {
-        verified = { stage: "manifest", code: "invalid_manifest", message: `The package manifest could not be verified: ${error instanceof Error ? error.message : String(error)}` };
+        verified = { stage: "manifest", code: "invalid_manifest", message: `The package manifest could not be verified: ${errorText(error)}` };
       }
       if ("stage" in verified) {
         issues.push({ ...verified, ...(item.arcPackage ? { packageId: item.arcPackage.name } : {}), packageRoot: item.root });
@@ -619,17 +648,17 @@ export class DeskPackageLoader {
       readBindings: candidate.manifest.readBindings,
     });
     const installable = candidates.filter(candidate => candidate.state.state === "installable");
-    const trusted = installable.filter(candidate => candidate.trust.state === "trusted").map(entryFor);
-    const staged = await stageRegistry(trusted);
-    for (const [entry, failure] of staged.failures) this.issue(entry.candidate, failure.code, failure.message);
-    const settled = trusted.filter(entry => !staged.failures.has(entry));
-    for (const candidate of installable.filter(item => item.trust.state !== "trusted")) {
-      const own = entryFor(candidate);
-      const backdrop = settled.filter(entry => entry.candidate.packageId !== candidate.packageId && entry.adapterId !== candidate.adapterId);
-      const failure = (await stageRegistry([...backdrop, own])).failures.get(own);
-      if (failure) this.issue(candidate, failure.code, failure.message);
-    }
+    await this.settleInstallable(installable.map(entryFor));
     return { candidates: candidates.sort((left, right) => left.packageId.localeCompare(right.packageId)), issues };
+  }
+
+  private async settleInstallable(entries: readonly StageEntry[]): Promise<void> {
+    const staged = await stageRegistry(entries);
+    for (const [entry] of staged.failures) {
+      const backdrop = entries.filter(other => other !== entry && other.candidate.packageId !== entry.candidate.packageId && other.adapterId !== entry.adapterId);
+      const alone = (await stageRegistry([...backdrop, entry])).failures.get(entry);
+      if (alone) this.issue(entry.candidate, alone.code, alone.message);
+    }
   }
 
   private candidate(discovery: DeskPackageDiscovery, packageId: string, expected?: { releaseDigest?: string }): Result<DeskPackageCandidate> {
@@ -671,7 +700,7 @@ export class DeskPackageLoader {
     try {
       namespace = await import(`${acting.backendPath}?desk-generation=${acting.releaseDigest}`) as Record<string, unknown>;
     } catch (error) {
-      return failure("module_throwing", `The backend module threw while loading: ${error instanceof Error ? error.message : String(error)}`);
+      return failure("module_throwing", `The backend module threw while loading: ${errorText(error)}`);
     }
     const extra = Object.keys(namespace).filter(name => name !== "createDeskAdapter");
     if (extra.length > 0) return failure("module_incompatible", "The backend module exports more than createDeskAdapter(host).");
@@ -689,27 +718,14 @@ export class DeskPackageLoader {
     try {
       definition = (create as (host: DeskAdapterHost) => DeskAdapterDefinition)(host);
     } catch (error) {
-      return failure("module_throwing", `The backend module threw while creating the adapter: ${error instanceof Error ? error.message : String(error)}`);
+      return failure("module_throwing", `The backend module threw while creating the adapter: ${errorText(error)}`);
     }
     if (!isRecord(definition) || !isRecord(definition.declaration) || !isRecord(definition.bindings)) return failure("module_incompatible", "createDeskAdapter did not return a declaration and bindings.");
     const declared = AdapterDeclarationSchema.safeParse(definition.declaration);
     if (!declared.success || !sameDeclaration(declared.data, acting.manifest.declaration)) return failure("module_incompatible", "The module declaration does not match the verified manifest.");
-    const actions = new Set(acting.manifest.declaration.capabilities.filter(capability => capability.kind === "action").map(capability => capability.capabilityId));
-    if (actions.size !== connectors.size || [...actions].some(capabilityId => !connectors.has(capabilityId)) || [...connectors.keys()].some(capabilityId => !actions.has(capabilityId) || typeof connectors.get(capabilityId) !== "function")) {
-      return failure("module_incompatible", "Every action capability needs exactly one registered connector, and no other capability may register one.");
-    }
-    const generation: DeskAdapterGeneration = DeskAdapterGenerationSchema.parse({
-      format: DESK_ADAPTER_GENERATION_FORMAT,
-      generationId: generationId({ packageId: acting.packageId, packageVersion: acting.packageVersion, releaseDigest: acting.releaseDigest }),
-      packageId: acting.packageId,
-      packageVersion: acting.packageVersion,
-      adapterId: acting.adapterId,
-      origin: acting.origin,
-      releaseDigest: acting.releaseDigest,
-      deskSdkRange: acting.manifest.deskSdkRange,
-      ...versions(acting.manifest),
-      selectedAt: this.now(),
-    });
+    const connectorError = connectorProblem(acting.manifest.declaration, connectors);
+    if (connectorError) return failure(connectorError.code, connectorError.message);
+    const generation = generationFor(acting, this.now());
     return success({
       packageId: acting.packageId,
       adapterId: acting.adapterId,
@@ -785,11 +801,27 @@ export class DeskPackageLoader {
       if (preparedCandidate.ok) prepared.push(preparedCandidate.value);
       else this.failed(candidate, preparedCandidate.error);
     }
-    if (prepared.length > 0 && !(await this.publishPrepared(prepared)).ok) {
-      const refused = await settle(prepared, adapter => this.publishPrepared([adapter]));
-      for (const [adapter, error] of refused) this.failed(adapter.candidate, error);
-    }
+    if (prepared.length > 0 && !(await this.publishPrepared(prepared)).ok) await this.publishByDependency(prepared);
     return discovery;
+  }
+
+  private async publishByDependency(prepared: readonly PublishedAdapter[]): Promise<void> {
+    const waiting = [...prepared];
+    const missing = (adapter: PublishedAdapter): string[] => relationshipTargets(adapter.definition.declaration).filter(target => !this.state.published.has(target));
+    let progressed = true;
+    while (waiting.length > 0 && progressed) {
+      progressed = false;
+      for (const adapter of [...waiting]) {
+        if (missing(adapter).length > 0) continue;
+        waiting.splice(waiting.indexOf(adapter), 1);
+        const published = await this.publishPrepared([adapter]);
+        if (!published.ok) this.failed(adapter.candidate, published.error);
+        progressed = true;
+      }
+    }
+    for (const adapter of waiting) {
+      this.failed(adapter.candidate, { code: "dependency_unavailable", message: `A relationship target adapter did not publish, so this adapter stays unavailable: ${missing(adapter).join(", ")}.` });
+    }
   }
 
   private fence(adapterId: string, code: "adapter_disabled" | "adapter_uninstalled", message: string): void {
@@ -859,15 +891,11 @@ export class DeskPackageLoader {
     try {
       connector = factory(connection);
     } catch (error) {
-      return failure("module_throwing", `The connector factory threw for this connection: ${error instanceof Error ? error.message : String(error)}`);
+      return failure("module_throwing", `The connector factory threw for this connection: ${errorText(error)}`);
     }
     if (!isRecord(connector) || connector.kind !== "action" || connector.adapterId !== adapterId || connector.connectionId !== connection.connectionId || connector.capabilityId !== capabilityId) {
       return failure("connector_mismatch", "The connector does not match the adapter, connection and capability identity.");
     }
     return success(structuredClone(connector) as unknown as DeskActionConnector);
   }
-}
-
-export async function discoverDeskAdapterPackages(options: DeskPackageLoaderOptions = {}): Promise<DeskPackageDiscovery> {
-  return new DeskPackageLoader(options).discover();
 }

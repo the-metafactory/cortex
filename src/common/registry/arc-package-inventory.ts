@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, realpathSync } from "node:fs";
 import { sep } from "node:path";
 import { resolveArcPackReposDir } from "../config/arc-pack-repos-dir";
+import { errorText } from "../error-text";
 import { ArcListOutputSchema, type ArcPackage } from "../types/plugin-manifest";
 
 export interface ArcListRunResult {
@@ -40,7 +41,7 @@ export async function readArcPackageInventory(runner: ArcListRunner): Promise<Ar
   try {
     runResult = await runner();
   } catch (error) {
-    return { packages: [], issues: [{ stage: "arc_list", reason: `arc list --json failed to run: ${error instanceof Error ? error.message : String(error)}` }] };
+    return { packages: [], issues: [{ stage: "arc_list", reason: `arc list --json failed to run: ${errorText(error)}` }] };
   }
   if (runResult.exitCode !== 0) {
     return { packages: [], issues: [{ stage: "arc_list", reason: `arc list --json exited ${runResult.exitCode}: ${runResult.stderr.slice(0, 500)}` }] };
@@ -49,7 +50,7 @@ export async function readArcPackageInventory(runner: ArcListRunner): Promise<Ar
   try {
     parsedJson = JSON.parse(runResult.stdout);
   } catch (error) {
-    return { packages: [], issues: [{ stage: "arc_list_parse", reason: `arc list --json produced invalid JSON: ${error instanceof Error ? error.message : String(error)}` }] };
+    return { packages: [], issues: [{ stage: "arc_list_parse", reason: `arc list --json produced invalid JSON: ${errorText(error)}` }] };
   }
   const parsed = ArcListOutputSchema.safeParse(parsedJson);
   if (!parsed.success) {
@@ -68,7 +69,7 @@ export function containedRealPath(realRoot: string, candidate: string): Containm
   try {
     resolved = realpathSync(candidate);
   } catch (error) {
-    return { ok: false, stage: "unreadable", resolved: candidate, detail: error instanceof Error ? error.message : String(error) };
+    return { ok: false, stage: "unreadable", resolved: candidate, detail: errorText(error) };
   }
   if (resolved !== realRoot && !resolved.startsWith(realRoot + sep)) {
     return { ok: false, stage: "escape", resolved, detail: `resolved path is outside the trusted root "${realRoot}"` };
