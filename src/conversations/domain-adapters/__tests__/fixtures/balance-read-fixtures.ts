@@ -10,13 +10,13 @@ import { loadBalanceState, saveBalanceState } from "../../../../surface/mc/desk/
 import type { DeskArea } from "../../../../surface/mc/desk/types";
 import { objectRef } from "../../fixtures";
 import { DomainAdapterRegistry } from "../../registry";
+import { ReadBindings } from "../../reads/bindings";
 import type { QueryFetchRequest, QueryPage, QueryResult } from "../../reads/query-types";
 import type { QueryRunner } from "../../reads/query";
 import type { Json } from "../../operations/types";
 import type { ReadBinding } from "../../reads/types";
 import type { ObjectReference } from "../../types";
 import { createBalanceReadAdapter } from "../../balance/read";
-import { installReadBindings } from "./read-binding-rig";
 
 export const BALANCE_CONNECTION = "connection-example";
 export const LAB_AREA = objectRef("balance", "area", "area-example");
@@ -81,7 +81,13 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
   const rig = await authorityRig({}, "local", { registry, binding: taskQueryBinding, capabilityIds: adapter.readBindings.map(binding => binding.capabilityId) });
   db = initDatabase(join(rig.dir, "desk.sqlite"));
   saveBalanceState(db, balanceReadState());
-  installReadBindings(registry, rig.bindings, "balance", BALANCE_CONNECTION, adapter.readBindings);
+  const readBindings = new ReadBindings(registry);
+  const connector = { adapterId: "balance", connectionId: BALANCE_CONNECTION, readCapabilityIds: adapter.readBindings.map(binding => binding.capabilityId) };
+  for (const binding of adapter.readBindings) {
+    const added = readBindings.register(binding, connector);
+    if (!added.ok) throw new Error(added.error.code);
+  }
+  rig.bindings.readBindings = readBindings;
   const updated = { ...rig.connection, connectionRevision: "2", readCapabilityIds: adapter.readBindings.map(binding => binding.capabilityId), readDestinations: [LAB_AREA] };
   Object.assign(rig.connection, updated);
   await rig.service.publishHostRecord({ kind: "connection", value: updated }, 1);
