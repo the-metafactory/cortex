@@ -523,18 +523,13 @@
   },
   "src/adapters/loader.ts": {
     "cortex/no-comments": {
-      "count": 230
+      "count": 224
     }
   },
   "src/adapters/mock.ts": {
     "@typescript-eslint/require-await": {
       "count": 13
     },
-    "cortex/no-comments": {
-      "count": 34
-    }
-  },
-  "src/adapters/plugin-signing.ts": {
     "cortex/no-comments": {
       "count": 34
     }
@@ -2804,6 +2799,11 @@
   "src/common/registry/admission-state.ts": {
     "cortex/no-comments": {
       "count": 30
+    }
+  },
+  "src/common/registry/bundle-signature.ts": {
+    "cortex/no-comments": {
+      "count": 34
     }
   },
   "src/common/registry/canonical-json.ts": {

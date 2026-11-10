@@ -1,6 +1,6 @@
 /**
  * cortex#2347 (EBH-5, ADR-0024 D4) — unit tests for
- * `src/adapters/plugin-signing.ts`: the bundle content digest and the
+ * `src/common/registry/bundle-signature.ts`: the bundle content digest and the
  * signature-verification primitive, independent of the loader pipeline
  * (loader-level integration tests live in `loader.signing.test.ts`).
  *
@@ -23,7 +23,7 @@ import {
   renderSignatureFile,
   signBundleDigest,
   verifyBundleSignature,
-} from "../plugin-signing";
+} from "../../common/registry/bundle-signature";
 
 function freshKeypair(): { seed: string; pubkey: string } {
   const kp = createUser();

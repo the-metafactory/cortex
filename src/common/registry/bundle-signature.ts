@@ -169,10 +169,10 @@ import { join, relative, sep } from "path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod/v4";
 
-import { NKEY_PUBKEY_ERROR_MESSAGE, NKEY_PUBKEY_REGEX } from "../common/types/nkey";
-import { verifyEd25519 } from "../common/registry/signing";
-import { nkeyToBase64Pubkey } from "../bus/verify-signed-by-chain";
-import { signClaimWithSeed } from "../bus/stack-provisioning";
+import { NKEY_PUBKEY_ERROR_MESSAGE, NKEY_PUBKEY_REGEX } from "../types/nkey";
+import { verifyEd25519 } from "./signing";
+import { nkeyToBase64Pubkey } from "../../bus/verify-signed-by-chain";
+import { signClaimWithSeed } from "../../bus/stack-provisioning";
 
 /**
  * The three settable `system.plugins.signing` postures — re-exported here
@@ -247,7 +247,7 @@ export function assertPluginSigningTrustRootConfigured(
   if (trustedSigners.size > 0) return;
   throw new Error(
     `cortex plugin-loader: REFUSING TO BOOT — system.plugins.signing="enforce" but the plugin ` +
-      `trust root is EMPTY (src/adapters/plugin-signing.ts PLUGIN_TRUST_ROOT has zero entries). ` +
+      `trust root is EMPTY (src/common/registry/bundle-signature.ts PLUGIN_TRUST_ROOT has zero entries). ` +
       `Every bundle's signature would fail to verify, INCLUDING first-party bundles this stack may ` +
       `depend on for ADR-0024 §OQ9 renderer coverage (e.g. metafactory-cortex-renderer-pagerduty) — ` +
       `left unchecked this crashes several boot-stages later at the renderer-coverage guard with an ` +

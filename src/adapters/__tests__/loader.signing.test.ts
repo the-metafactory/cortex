@@ -24,7 +24,7 @@ import {
   PLUGIN_SIGNATURE_FILENAME,
   renderSignatureFile,
   signBundleDigest,
-} from "../plugin-signing";
+} from "../../common/registry/bundle-signature";
 import { SurfacePluginRegistry } from "../registry";
 import type { ArcPackage } from "../../common/types/plugin-manifest";
 

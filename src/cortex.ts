@@ -164,7 +164,7 @@ import {
   type SurfacePluginRegistry,
 } from "./adapters/registry";
 import { loadExternalPlugins } from "./adapters/loader";
-import { assertPluginSigningTrustRootConfigured, PLUGIN_TRUST_ROOT } from "./adapters/plugin-signing";
+import { assertPluginSigningTrustRootConfigured, PLUGIN_TRUST_ROOT } from "./common/registry/bundle-signature";
 import { createSystemPluginLoadFailedEvent, createSystemPluginLoadedEvent } from "./bus/system-events";
 import { startPluginControlServer } from "./gateway/plugin-control-server";
 import type { PluginRuntimeDeps, RendererHandle } from "./gateway/plugin-runtime";

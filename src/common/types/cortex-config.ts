@@ -1874,7 +1874,7 @@ export type {
  *
  * cortex#2347 (EBH-5, ADR-0024 D4 "named future escalation: registry
  * signing") — `signing` is the staged posture gating bundle SIGNATURE
- * verification (`src/adapters/plugin-signing.ts`), mirroring
+ * verification (`src/common/registry/bundle-signature.ts`), mirroring
  * `SecurityPostureSchema.signing` (`./config.ts`) exactly: `off` (default —
  * byte-identical to pre-EBH-5 behaviour, `plugin-signing.ts` is never
  * consulted) · `permissive` (verify + log every outcome, NEVER refuse a
