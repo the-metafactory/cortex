@@ -213,7 +213,7 @@ function nodeNaming(canonicalId: string): RegExp | null {
   return /^[1-9]\d*$/u.test(tail) ? new RegExp(`(?:#|/issues/|\\bnode\\s+|\\bissue\\s+)${tail}(?!\\d)`, "u") : null;
 }
 
-/** True only when the owner's own answer names this node and answers that it is absent; a command or transport failure names no node and so says nothing about existence. */
+/** True only when the owner's own answer names this node and answers that it is absent; a command, transport or infrastructure failure is a different answer, so it says nothing about existence. */
 export const workGraphOwnerGone = (result: CommandResult, canonicalId: string): boolean => { // glossary-ignore: node, owner
   const naming = nodeNaming(canonicalId);
   const text = `${result.stderr}\n${result.stdout}`;
