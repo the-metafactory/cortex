@@ -1,4 +1,5 @@
 import { syntheticWriterPlan, syntheticWriterSteps } from "./domain-adapters/operations/writer-fixtures";
+import type { ObservationConnector } from "./domain-adapters/reads/observation-types";
 import { writerLease } from "./domain-adapters/operations/writer-authority";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -18,7 +19,7 @@ import { snapshotDigest, canonicalWire } from "./domain-adapters/operations/vali
 
 function requireValue<T>(value: T | null | undefined): T { if (value === null || value === undefined) throw new Error("Synthetic authority fixture is incomplete."); return value; }
 
-export async function authorityRig(extra: Partial<HostOptions> = {}, conversationPolicy: "local" | "cloud" = "local", readSetup?: { registry: DomainAdapterRegistry; binding: unknown }) {
+export async function authorityRig(extra: Partial<HostOptions> = {}, conversationPolicy: "local" | "cloud" = "local", readSetup?: { registry: DomainAdapterRegistry; binding: unknown; observation?: ObservationConnector }) {
   const dir = await mkdtemp(join(tmpdir(), "host-authority-"));
   const registry = readSetup?.registry ?? registryFixture();
   const principal: PrincipalBinding = { version: 1, principalRef: randomUUID(), principal: "principal-example", stack: "test", identityBindingRevision: "1", status: "active" };
@@ -42,7 +43,7 @@ export async function authorityRig(extra: Partial<HostOptions> = {}, conversatio
     policy: async () => { await hooks.policy?.(); return structuredClone(policy); },
     writer: async checked => hooks.writer ? hooks.writer() : canonicalWire(checked) === canonicalWire(lease),
     restrictions: new Map([["synthetic-restriction-resolver", record => hooks.restriction ? hooks.restriction(record) : Promise.resolve(record)]]),
-    connectors: new Map([[connection.connectorId, { writerOwner: "synthetic-owner", authorizeConnection: current => Promise.resolve({ version: 1, available: hooks.credentialsAvailable !== false && current.credentialHandle === "synthetic-credential-handle" && canonicalWire(current.accountScope) === canonicalWire({ account: "synthetic-account", resource: "area-example" }), revision: "synthetic-credential-1" }), support: { ...support, cancellation: "best-effort", operationLookup: "historical" },
+    connectors: new Map([[connection.connectorId, { ...(readSetup?.observation ? { observation: readSetup.observation } : {}), writerOwner: "synthetic-owner", authorizeConnection: current => Promise.resolve({ version: 1, available: hooks.credentialsAvailable !== false && current.credentialHandle === "synthetic-credential-handle" && canonicalWire(current.accountScope) === canonicalWire({ account: "synthetic-account", resource: "area-example" }), revision: "synthetic-credential-1" }), support: { ...support, cancellation: "best-effort", operationLookup: "historical" },
       dispatch: async (request, signal) => { calls.dispatch++; calls.signals.push(signal); return hooks.dispatch ? hooks.dispatch(request) : resultFixture({ ...approval, authority: request.authority }, requireValue(attempt), "succeeded"); },
       cancel: (request, signal) => { calls.cancel++; calls.signals.push(signal); return hooks.cancel ? hooks.cancel(request) : Promise.resolve(resultFixture(approval, requireValue(attempt), "succeeded")); },
       lookup: async () => { calls.lookup++; return hooks.lookup ? hooks.lookup() : { lifecycleVersion: "1.0.0", operationId: approval.operationId, checkedAt: AT, result: { kind: "unknown", reason: { code: "synthetic_unknown", message: "No historical evidence." } } }; },

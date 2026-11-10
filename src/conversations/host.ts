@@ -1,3 +1,4 @@
+import { ObservationStore } from "./domain-adapters/reads/observations";
 import { QueryRunner, type QueryClock } from "./domain-adapters/reads/query";
 import { QueryStore } from "./domain-adapters/reads/query-store";
 import { OperationBridge, type SupportLookup } from "./domain-adapters/operations/dispatch";
@@ -161,6 +162,7 @@ export async function openConversationHost(options: HostOptions): Promise<HostSt
 
 export class ConversationHost {
   private harness: Harness | null = null;
+  private observationService: { store: ObservationStore; clock: QueryClock | undefined } | null = null;
   private queryService: { runner: QueryRunner; clock: QueryClock | undefined } | null = null;
   private authorityService: { registry: DomainAdapterRegistry; bindings: AuthorityBindings; mediator: AuthorityMediator } | null = null;
   private readonly context: Context = BACKGROUND_CONTEXT;
@@ -201,6 +203,7 @@ export class ConversationHost {
 
   async close(): Promise<void> {
     this.queryService?.runner.close();
+    this.observationService?.store.close();
     const harness = this.harness;
     this.harness = null;
     try { if (harness) await harness.close(this.context); }
@@ -221,6 +224,17 @@ export class ConversationHost {
   credentialBroker(deps: DeskCredentialBrokerDeps): DeskCredentialBroker { return new DeskCredentialBroker(this.engine, deps, this.context); }
 
   connectionSetup(broker: DeskCredentialBroker, authority: ConstructorParameters<typeof ConnectionSetupService>[2], deps: ConnectionSetupDeps): ConnectionSetupService { return new ConnectionSetupService(this.engine, broker, authority, deps, this.context); }
+
+  readObservations(registry: DomainAdapterRegistry, bindings: AuthorityBindings, clock?: QueryClock): ObservationStore {
+    const authority = this.lifecycleAuthority(registry, bindings);
+    if (this.observationService) {
+      if (this.observationService.clock !== clock) throw new Error("Observation clock is already registered for this host.");
+      return this.observationService.store;
+    }
+    const store = new ObservationStore(this.engine, authority, clock, this.context);
+    this.observationService = { store, clock };
+    return store;
+  }
 
   readQueries(registry: DomainAdapterRegistry, bindings: AuthorityBindings, clock?: QueryClock): QueryRunner {
     const authority = this.lifecycleAuthority(registry, bindings);

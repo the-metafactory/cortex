@@ -1,3 +1,4 @@
+import { validateObservationBatch, type ObservationBasis, type ObservationConnector, type ObservationRequest, type ObservationRow, type ObservationView } from "./domain-adapters/reads/observation-types";
 import { QuerySourceSchema, type QueryDispatch, type QueryFetchRequest } from "./domain-adapters/reads/query-types";
 import { validateQueryPage, type ValidatedQueryPage } from "./domain-adapters/reads/query-validation";
 import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
@@ -24,6 +25,7 @@ export interface Denial { kind: "denied"; reason: BoundaryError; recovery: "auth
 export type AuthorityCheck = { kind: "allowed"; authority: Authority } | Denial;
 export type ReleaseProjection<T> = { kind: "released"; value: T; decisionRef: string } | { kind: "withheld"; reason: BoundaryError; recovery: Denial["recovery"] };
 export interface TrustedConnector {
+  observation?: ObservationConnector;
   writerOwner: string;
   authorizeConnection(connection: ConnectionRecord): Promise<{ version: 1; available: boolean; revision: string }>;
   support: OwnerSupport;
@@ -87,6 +89,7 @@ export class AuthorityMediator {
   constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly registry: DomainAdapterRegistry, private readonly bindings: AuthorityBindings, private readonly hostPolicy: (id: string) => Promise<HostPolicyState>, private readonly context: Context, private readonly now: () => Date, private readonly publication: AuthorityPublication, private readonly hostRevision: () => string, private readonly writers: WriterAuthority) {
     this.journal = new OperationJournalStore(engine, registry, context);
     this.connectors = new Map([...bindings.connectors].map(([key, connector]) => [key, Object.freeze({
+      ...(connector.observation ? { observation: Object.freeze({ ...connector.observation, fetch: connector.observation.fetch.bind(connector.observation) }) } : {}),
       writerOwner: connector.writerOwner, support: parseWire(OwnerSupportSchema, connector.support), authorizeConnection: connector.authorizeConnection.bind(connector), dispatch: connector.dispatch.bind(connector),
       ...(connector.cancel ? { cancel: connector.cancel.bind(connector) } : {}), ...(connector.lookup ? { lookup: connector.lookup.bind(connector) } : {}), ...(connector.query ? { query: connector.query.bind(connector) } : {}), ...(connector.read ? { read: connector.read.bind(connector) } : {}), ...(connector.readback ? { readback: connector.readback.bind(connector), readbackCapabilityId: connector.readbackCapabilityId } : {}),
     })]));
@@ -553,12 +556,12 @@ export class AuthorityMediator {
     return this.restrictionIndex(state).get(canonicalWire(source)) ?? [];
   }
 
-  private async objectReleasable(resolved: Resolved, binding: ReadBinding, scope: HostScope, sink: ReleaseSink, object: ReadPage["objects"][number], index: Map<string, RestrictionRecord[]>): Promise<boolean> {
+  private async objectReleasable(resolved: Resolved, binding: ReadBinding, scope: HostScope, sink: ReleaseSink, object: ReadPage["objects"][number], index: Map<string, RestrictionRecord[]>, metadataOnly = false): Promise<boolean> {
     const { ref, destination } = object;
     if (ref.adapterId !== binding.adapterId || ref.connectionId !== resolved.connection.connectionId || ref.objectType !== binding.objectType) return false;
     if (binding.destinationType !== undefined && (destination?.objectType !== binding.destinationType)) return false;
     if (!destination || !withinLimits(scope.destinations, [destination])) return false;
-    if (!this.registry.validateObject(binding.adapterId, binding.objectType, object.schemaRef, object.value).ok) return false;
+    if (!metadataOnly && !this.registry.validateObject(binding.adapterId, binding.objectType, object.schemaRef, object.value).ok) return false;
     const own = index.get(canonicalWire(ref)) ?? [];
     if (own.length === 0) return true;
     const record = own[0];
@@ -597,6 +600,81 @@ export class AuthorityMediator {
         return { head: this.queryHeadOf(resolved, lookup.binding, state), binding: lookup.binding };
       });
     } catch { return null; }
+  }
+
+  private async observationAccess(context: HostContext, raw: unknown, rawSink: ReleaseSink) {
+    const source = QuerySourceSchema.parse(raw);
+    const sink = parseWire(ReleaseSinkSchema, rawSink);
+    const state = await this.state();
+    const found = this.readScopeFor(state, source.destinations);
+    if (!found) throw new Error("observation_scope_denied");
+    const scope = { ...found, capabilityId: source.capabilityId };
+    const resolved = await this.resolve(context, source.connectionId, undefined, undefined, undefined, [scope]);
+    const lookup = this.bindings.readBindings?.lookup(source.adapterId, source.connectionId, source.capabilityId);
+    const connector = this.connectors.get(resolved.connection.connectorId)?.observation;
+    if (resolved.connection.adapterId !== source.adapterId || lookup?.state !== "available" || !lookup.binding.observation || !connector || !this.readable(resolved, undefined, [scope]) || !this.sinkAllowed(resolved, undefined, sink, [scope]) || !this.sinks.has(canonicalWire(sink)) || canonicalWire(lookup.binding.inputSchemaRef) !== canonicalWire(source.inputSchemaRef) || !this.registry.validateInput({ capabilityId: source.capabilityId, inputSchemaRef: source.inputSchemaRef, input: source.input }, null).ok) throw new Error("observation_denied");
+    const basis: ObservationBasis = { head: this.queryHeadOf(resolved, lookup.binding, state), identity: authorityHash({ account: accountBinding(resolved.connection), connectionRevision: resolved.connection.connectionRevision, binding: lookup.binding, source }), binding: lookup.binding };
+    return { source, sink, state, scope, resolved, connector, basis };
+  }
+
+  async observationHead(context: HostContext, source: unknown, sink: ReleaseSink): Promise<ObservationBasis | null> {
+    try { return await this.exclusive(async () => (await this.observationAccess(context, source, sink)).basis); }
+    catch { return null; }
+  }
+
+  async admitObservation<T>(context: HostContext, request: ObservationRequest, sink: ReleaseSink, expected: ObservationBasis, signal: AbortSignal, consume: (validated: ReturnType<typeof validateObservationBatch>, basis: ObservationBasis, connector: ObservationConnector) => Promise<T>): Promise<{ kind: "accepted"; value: T } | { kind: "denied" }> {
+    const isAborted = (): boolean => signal.aborted;
+    const admitted = await this.exclusive(async () => {
+      const publicationHead = this.publication.head;
+      const access = await this.observationAccess(context, request.source, sink);
+      const policy = access.basis.binding.observation;
+      const mode = request.mode === "subscription" ? "subscription" : "poll";
+      if (!policy?.modes.includes(mode) || !access.connector.modes.includes(mode) || policy.ordering !== access.connector.ordering?.id || isAborted() || access.basis.head !== expected.head) throw new Error("observation_binding_changed");
+      const final = await this.observationAccess(context, request.source, sink);
+      if (publicationHead !== this.publication.head || final.basis.head !== access.basis.head || isAborted()) throw new Error("observation_admission_changed");
+      return { pending: final.connector.fetch(structuredClone(request), signal), basis: final.basis };
+    });
+    const raw = await admitted.pending;
+    if (isAborted()) return { kind: "denied" };
+    const validated = validateObservationBatch(this.registry, admitted.basis.binding, request.source, raw);
+    return this.exclusive(async () => {
+      const publicationHead = this.publication.head;
+      const access = await this.observationAccess(context, request.source, sink);
+      if (access.basis.head !== admitted.basis.head || isAborted()) return { kind: "denied" };
+      const index = this.restrictionIndex(access.state);
+      for (const event of validated.events) {
+        const object = { ref: event.ref, schemaRef: event.schemaRef, destination: event.destination, value: event.value ?? null };
+        if (!await this.objectReleasable(access.resolved, access.basis.binding, access.scope, access.sink, object, index, event.kind === "deleted")) return { kind: "denied" };
+      }
+      const final = await this.observationAccess(context, request.source, sink);
+      if (publicationHead !== this.publication.head || final.basis.head !== access.basis.head || isAborted()) return { kind: "denied" };
+      return { kind: "accepted", value: await consume(validated, final.basis, final.connector) };
+    });
+  }
+
+  async releaseObservations(context: HostContext, source: unknown, sink: ReleaseSink, load: () => Promise<{ row: ObservationRow; view: ObservationView; expiresAt: number }[]>, now: () => number): Promise<ReleaseProjection<Json>> {
+    try {
+      let send: Promise<void> | undefined;
+      const result = await this.exclusive(async () => {
+        const publicationHead = this.publication.head;
+        const access = await this.observationAccess(context, source, sink);
+        const rows = await load();
+        const index = this.restrictionIndex(access.state);
+        for (const { row } of rows) {
+          if (row.identity !== access.basis.identity || !await this.objectReleasable(access.resolved, access.basis.binding, access.scope, access.sink, { ref: row.ref, schemaRef: row.schemaRef, destination: row.destination, value: row.value ?? null }, index, row.kind === "deleted")) return withheld();
+        }
+        const final = await this.observationAccess(context, source, sink);
+        if (publicationHead !== this.publication.head || final.basis.head !== access.basis.head) return withheld();
+        if (rows.some(({ row, expiresAt }) => row.kind === "present" && now() >= expiresAt)) return withheld();
+        const value = json({ objects: rows.map(item => item.view), untrusted: true, sources: access.scope.sources });
+        const sender = this.sinks.get(canonicalWire(access.sink));
+        if (!sender) return withheld();
+        send = sender(structuredClone(value));
+        return { kind: "released" as const, value, decisionRef: randomUUID() };
+      });
+      if (send) await send;
+      return result;
+    } catch { return withheld(); }
   }
 
   async admitRead(context: HostContext, raw: unknown, rawSink: ReleaseSink, signal?: AbortSignal): Promise<ReleaseProjection<Json>> {
