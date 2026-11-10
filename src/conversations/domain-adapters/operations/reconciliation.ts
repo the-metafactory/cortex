@@ -7,7 +7,7 @@ import type { OperationBridge, SupportLookup, RedispatchOutcome } from "./dispat
 import { JournalConflict, type OperationJournalStore, type StoredOperation } from "./journal";
 import { boundedWaitMs, timeBoxed } from "./readback";
 import { OperationLookupSchema, parseWire, type ApprovedSnapshot, type EffectEvidence, type NoEffectEvidence, type OperationLookup, type OperationState } from "./types";
-import { fenceTargetOf, type FenceSink } from "./triggers";
+import { fenceTargetOf, signalFence, type FenceSink } from "./triggers";
 
 export const AUTOMATIC_LOOKUP_OFFSETS_MS = [0, 5_000, 30_000] as const;
 export const MAX_AUTOMATIC_LOOKUPS = AUTOMATIC_LOOKUP_OFFSETS_MS.length;
@@ -132,8 +132,8 @@ export class OperationReconciler {
     const result = lookup.result;
     if (result.kind === "known" || result.kind === "no-effect") return;
     const target = fenceTargetOf(snapshot);
-    if (result.kind === "unavailable" && result.reason.code !== "work_budget_exhausted") await this.options.fences?.trigger({ kind: "readback_failed", target, evidence: { operationId: stored.journal.operationId, detail: result.reason.message } });
-    await this.options.fences?.trigger({ kind: "repeated_uncertain", target, evidence: { operationId: stored.journal.operationId, detail: `The owner lookup stayed ${result.kind}.` } });
+    if (result.kind === "unavailable" && result.reason.code !== "work_budget_exhausted") await signalFence(this.options.fences, { kind: "readback_failed", target, evidence: { operationId: stored.journal.operationId, detail: result.reason.message } });
+    await signalFence(this.options.fences, { kind: "repeated_uncertain", target, evidence: { operationId: stored.journal.operationId, detail: `The owner lookup stayed ${result.kind}.` } });
   }
 
   private async fetch(context: HostContext, request: { lifecycleVersion: "1.0.0"; operationId: string; ownerRequestId: string }, sink: ReleaseSink, waitMs: number): Promise<OperationLookup> {

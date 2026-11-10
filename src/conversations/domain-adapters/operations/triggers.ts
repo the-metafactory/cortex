@@ -43,8 +43,9 @@ export type PrincipalNotifier = (notice: PrincipalNotice) => void | Promise<void
 const UncertainObservationSchema = z.object({ targetKey: text, at: time, operationId: text.optional() }).strict();
 const StateSchema = z.object({ version: z.literal(1), fences: z.record(text, z.array(FenceRecordSchema)), notices: z.array(PrincipalNoticeSchema), uncertain: z.array(UncertainObservationSchema) }).strict();
 type FenceState = z.infer<typeof StateSchema>;
+const EMPTY_STATE: FenceState = { version: 1, fences: {}, notices: [], uncertain: [] };
 
-const FenceDoc = defineDoc<{ state: JsonObject }>({ kind: "cortex.desk-binding-fence", version: 1, scope: "session", initial: () => ({ state: { version: 1, fences: {}, notices: [], uncertain: [] } }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
+const FenceDoc = defineDoc<{ state: JsonObject }>({ kind: "cortex.desk-binding-fence", version: 1, scope: "session", initial: () => ({ state: store(EMPTY_STATE) }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 
 const TITLES: Record<FenceTriggerKind, string> = {
   duplicate_owner_object: "An owner lookup returned two objects for one operation.",
@@ -74,6 +75,11 @@ export class FenceConflict extends Error {}
 
 const asState = (value: JsonObject): FenceState => StateSchema.parse(value);
 const store = (state: FenceState): JsonObject => JSON.parse(JSON.stringify(state)) as JsonObject;
+export async function signalFence(sink: FenceSink | undefined, signal: FenceSignalInput): Promise<void> {
+  if (!sink) return;
+  try { await sink.trigger(signal); }
+  catch (error) { console.error(`desk-fence: the ${signal.kind} trigger did not persist: ${error instanceof Error ? error.message : String(error)}`); }
+}
 const noticeFor = (signal: FenceSignal, at: string): PrincipalNotice => {
   const effect = isHardTrigger(signal.kind) ? "mutation-off" as const : "notify-only" as const;
   return { version: 1, notificationId: randomUUID(), at, effect, trigger: signal.kind, target: signal.target, targetKey: fenceKey(signal.target), title: TITLES[signal.kind], body: effect === "mutation-off" ? MUTATION_OFF : NOTIFY_ONLY, delivered: false };
@@ -82,13 +88,25 @@ const noticeFor = (signal: FenceSignal, at: string): PrincipalNotice => {
 export class BindingFenceStore implements FenceGate, FenceSink {
   private readonly now: () => Date;
 
-  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly notifier?: PrincipalNotifier, private readonly context: Context = BACKGROUND_CONTEXT, now?: () => Date) {
+  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private notifier?: PrincipalNotifier, private readonly context: Context = BACKGROUND_CONTEXT, now?: () => Date) {
     this.now = now ?? (() => new Date());
   }
 
   private async state(): Promise<FenceState> {
     const doc = await this.engine.snapshot(FenceDoc, this.context);
-    return asState(doc?.state ?? { version: 1, fences: {}, notices: [], uncertain: [] });
+    return asState(doc?.state ?? store(EMPTY_STATE));
+  }
+
+  private mutate<T>(change: (state: FenceState) => T): Promise<T> {
+    return this.engine.commit(async tx => {
+      const doc = await tx.doc(FenceDoc);
+      const before = doc.state;
+      const state = asState(before);
+      const result = change(state);
+      const after = store(state);
+      if (canonicalWire(after) !== canonicalWire(before)) doc.state = after;
+      return result;
+    }, this.context);
   }
 
   async read(target: FenceTarget): Promise<FenceRecord | null> {
@@ -111,15 +129,12 @@ export class BindingFenceStore implements FenceGate, FenceSink {
     const signal = FenceSignalSchema.parse(raw);
     const at = signal.at ?? this.now().toISOString();
     const targetKey = fenceKey(signal.target);
-    const committed = await this.engine.commit(async tx => {
-      const doc = await tx.doc(FenceDoc);
-      const state = asState(doc.state);
+    const committed = await this.mutate(state => {
       const head = state.fences[targetKey]?.at(-1);
       const notice = isHardTrigger(signal.kind) ? this.fence(state, signal, targetKey, at, head) : this.observe(state, signal, targetKey, at);
       if (notice) state.notices.push(notice);
-      doc.state = store(state);
       return { notice, head: state.fences[targetKey]?.at(-1) ?? null };
-    }, this.context);
+    });
     const notification = committed.notice ? await this.deliver(committed.notice) : null;
     return { fenced: committed.head?.state === "fenced", notification, fence: committed.head };
   }
@@ -144,17 +159,20 @@ export class BindingFenceStore implements FenceGate, FenceSink {
     return noticeFor(signal, at);
   }
 
+  async attachNotifier(notifier: PrincipalNotifier): Promise<void> {
+    this.notifier = notifier;
+    for (const notice of await this.pending()) await this.deliver(notice);
+  }
+
   private async deliver(notice: PrincipalNotice): Promise<PrincipalNotice> {
-    if (!this.notifier) return notice;
+    const notifier = this.notifier;
+    if (!notifier) return notice;
     try {
-      await this.notifier(notice);
-      await this.engine.commit(async tx => {
-        const doc = await tx.doc(FenceDoc);
-        const state = asState(doc.state);
+      await notifier(notice);
+      await this.mutate(state => {
         const found = state.notices.find(item => item.notificationId === notice.notificationId);
         if (found) found.delivered = true;
-        doc.state = store(state);
-      }, this.context);
+      });
       return { ...notice, delivered: true };
     } catch (error) {
       console.error(`desk-fence: principal notice ${notice.notificationId} was not delivered: ${error instanceof Error ? error.message : String(error)}`);
@@ -167,15 +185,12 @@ export class BindingFenceStore implements FenceGate, FenceSink {
     const reason = actionText.parse(action.reason);
     const at = this.now().toISOString();
     const key = fenceKey(target);
-    return this.engine.commit(async tx => {
-      const doc = await tx.doc(FenceDoc);
-      const state = asState(doc.state);
+    return this.mutate(state => {
       const head = state.fences[key]?.at(-1);
       if (head?.state !== "fenced") throw new FenceConflict("Only a fenced binding can be lifted.");
       const record: FenceRecord = { version: 1, fenceId: randomUUID(), target, targetKey: key, state: "open", trigger: head.trigger, message: head.message, at, liftedBy: principal, liftReason: reason, liftedAt: at };
       state.fences[key] = [...(state.fences[key] ?? []), record];
-      doc.state = store(state);
       return record;
-    }, this.context);
+    });
   }
 }

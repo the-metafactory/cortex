@@ -3,9 +3,8 @@ import { rm } from "node:fs/promises";
 import { objectRef } from "../fixtures";
 import { AT } from "../operations/fixtures";
 import { ownerResult, dispatchRig } from "../operations/dispatch-fixtures";
-import { OperationBridge } from "../operations/dispatch";
-import { openFenceRig, successFor, successWithoutEvidence, fenceTarget, type FenceRig } from "../operations/fence-fixtures";
 import type { RigOptions } from "../operations/reconciliation-fixtures";
+import { openFenceRig, deniedBridge, successFor, successWithoutEvidence, fenceTarget, type FenceRig } from "../operations/fence-fixtures";
 import { FENCE_TRIGGER_KINDS, isHardTrigger, type PrincipalNotice } from "../operations/triggers";
 import { balanceResponse, openDraftingRig, type DraftingRig } from "../drafting-fixtures";
 
@@ -59,9 +58,12 @@ test("a duplicate owner object fences the binding, notifies, stops mutation, and
   const made = await drafting.service.make({ conversationId: "conversation-example", entryId: "turn-1", capabilityId: "balance.task.create", connectionId: "connection-example" });
   if (made.kind !== "draft") throw new Error("Synthetic draft is unavailable.");
   await drafting.host?.lifecycleFences().trigger({ kind: "duplicate_owner_object", target: { adapterId: "balance", connectionId: "connection-example", capabilityId: "balance.task.create" } });
-  const again = await drafting.service.make({ conversationId: "conversation-example", entryId: "turn-1", capabilityId: "balance.task.create", connectionId: "connection-example" });
-  expect(again.kind).toBe("draft");
-  expect(again.kind === "draft" && again.view.draft.draftId).toBe(made.view.draft.draftId);
+  expect(await drafting.host?.lifecycleFences().isFenced({ adapterId: "balance", connectionId: "connection-example", capabilityId: "balance.task.create" })).toBe(true);
+  const created = await drafting.service.make({ conversationId: "conversation-example", entryId: "turn-2", capabilityId: "balance.task.create", connectionId: "connection-example" });
+  expect(created.kind).toBe("draft");
+  expect(created.kind === "draft" && created.reopened).toBe(false);
+  expect(created.kind === "draft" && created.view.draft.draftId).not.toBe(made.view.draft.draftId);
+  expect((await drafting.service.read(made.view.draft.draftId))?.draft.draftId).toBe(made.view.draft.draftId);
 });
 
 test("a success result with no owner evidence fences at the journal and never records the operation as succeeded", async () => {
@@ -77,19 +79,9 @@ test("a success result with no owner evidence fences at the journal and never re
 });
 
 test("a denied destination at connector entry fences before the owner is called", async () => {
-  const rig = await dispatchRig(20, undefined, () => new Date(AT), notify);
+  const rig = await openFenceRig(notify);
   rigs.push(rig);
-  const confirmed = await rig.confirm();
-  expect(confirmed.kind).toBe("allowed");
-  const bridge = new OperationBridge({
-    journal: rig.host.lifecycleJournal(rig.registry),
-    authority: rig.host.lifecycleAuthority(rig.registry, rig.bindings),
-    writers: rig.host.lifecycleWriters(),
-    supportFor: () => rig.declared.support,
-    fences: rig.host.lifecycleFences(),
-    connectorEntry: () => Promise.resolve({ kind: "denied", reason: { code: "destination_denied", message: "The destination left the write scope." } }),
-    now: () => new Date(AT),
-  });
+  const bridge = deniedBridge(rig);
   expect(await bridge.activate(rig.binding, rig.lease)).toBe(true);
   const outcome = await bridge.dispatch(rig.context, rig.approval.operationId, rig.lease);
   expect(outcome.kind).toBe("refused");
@@ -156,6 +148,26 @@ test("three uncertain results notify once in 24 hours, and a failed readback and
   expect((await crash.dispatch()).kind).not.toBe("refused");
   expect(notices.some(notice => notice.trigger === "adapter_crash" && notice.effect === "notify-only")).toBe(true);
   expect(await crash.host.lifecycleFences().isFenced(fenceTarget(crash))).toBe(false);
+});
+
+test("a notifier attached after boot delivers the fences that already fired and every later one", async () => {
+  const rig = await openFenceRig();
+  rigs.push(rig);
+  const target = fenceTarget(rig);
+  const store = rig.host.lifecycleFences();
+  const before = await store.trigger({ kind: "canary_secret_leaked", target: { ...target, stack: "test", owner: "synthetic-owner" }, evidence: { canaryId: "canary-example" } });
+  expect(before.notification?.delivered).toBe(false);
+  expect(notices).toHaveLength(0);
+  expect(await store.pending()).toHaveLength(1);
+
+  await rig.host.attachFenceNotifier(notify);
+  expect(notices.map(notice => [notice.trigger, notice.effect])).toEqual([["canary_secret_leaked", "mutation-off"]]);
+  expect(await store.pending()).toHaveLength(0);
+  expect((await rig.dispatch()).kind).toBe("refused");
+
+  await store.trigger({ kind: "destination_denied_at_connector", target: { ...target, capabilityId: "balance.object.read" }, evidence: { operationId: rig.approval.operationId } });
+  expect(notices.map(notice => notice.trigger)).toEqual(["canary_secret_leaked", "destination_denied_at_connector"]);
+  expect((await store.notices()).every(notice => notice.delivered)).toBe(true);
 });
 
 test("the hard trigger set is exactly the four that turn mutation off", () => {

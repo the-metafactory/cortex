@@ -4,7 +4,7 @@ import type { BoundaryError } from "../types";
 import { JournalConflict, type OperationJournalStore, type StoredOperation } from "./journal";
 import { CancelRequestSchema, parseWire, type ApprovedSnapshot, type Attempt, type Authority, type CancelRequest, type DispatchRequest, type OperationState, type OwnerSupport } from "./types";
 import type { WriterAuthority, WriterBinding } from "./writer-authority";
-import { fenceTargetOf, type FenceGate, type FenceTarget } from "./triggers";
+import { fenceTargetOf, signalFence, type FenceGate, type FenceTarget } from "./triggers";
 
 export const OWNER_CALL_WAIT_MS = 30_000;
 export const MAX_OUTSTANDING_OWNER_CALLS = 64;
@@ -176,7 +176,7 @@ export class OperationBridge {
     const target = this.fenceTarget(snapshot);
     const entry = this.options.connectorEntry ? await this.options.connectorEntry(context, snapshot) : { kind: "allowed" as const };
     if (entry.kind === "denied") {
-      if (entry.reason.code === "destination_denied") await this.options.fences?.trigger({ kind: "destination_denied_at_connector", target, evidence: { operationId, detail: entry.reason.message } });
+      if (entry.reason.code === "destination_denied") await signalFence(this.options.fences, { kind: "destination_denied_at_connector", target, evidence: { operationId, detail: entry.reason.message } });
       const operation = await this.expire(operationId, attempt.attemptId, entry.reason);
       return { kind: "refused", reason: entry.reason, operation };
     }
@@ -207,8 +207,8 @@ export class OperationBridge {
     const continuation = this.track(call.catch((): { kind: "failed" } => ({ kind: "failed" })));
     const waited = await this.wait(continuation);
     if (waited.done && waited.value.kind === "failed") {
-      await this.options.fences?.trigger({ kind: "adapter_crash", target, evidence: { operationId, detail: "The owner call ended abnormally after the attempt was prepared." } });
       const operation = await this.expire(operationId, attemptId, reason("outcome_unknown", "The owner call ended abnormally after the attempt was prepared; the outcome is unknown."));
+      await signalFence(this.options.fences, { kind: "adapter_crash", target, evidence: { operationId, detail: "The owner call ended abnormally after the attempt was prepared." } });
       return { kind: "timed-out", operation, attemptId };
     }
     if (!waited.done) {

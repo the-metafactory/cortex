@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
-import { AT } from "../src/conversations/domain-adapters/operations/fixtures";
 import { ownerResult } from "../src/conversations/domain-adapters/operations/dispatch-fixtures";
-import { OperationBridge } from "../src/conversations/domain-adapters/operations/dispatch";
-import { fenceTarget, openFenceRig, successFor, successWithoutEvidence, type FenceRig } from "../src/conversations/domain-adapters/operations/fence-fixtures";
+import { deniedBridge, fenceTarget, openFenceRig, successFor, successWithoutEvidence, type FenceRig } from "../src/conversations/domain-adapters/operations/fence-fixtures";
 import type { PrincipalNotice } from "../src/conversations/domain-adapters/operations/triggers";
 
 const notices: PrincipalNotice[] = [];
@@ -39,15 +37,7 @@ try {
   assert.equal(notices.some(notice => notice.trigger === "success_without_owner_evidence"), true);
 
   const denied = await rig();
-  const bridge = new OperationBridge({
-    journal: denied.host.lifecycleJournal(denied.registry),
-    authority: denied.host.lifecycleAuthority(denied.registry, denied.bindings),
-    writers: denied.host.lifecycleWriters(),
-    supportFor: () => denied.declared.support,
-    fences: denied.host.lifecycleFences(),
-    connectorEntry: () => Promise.resolve({ kind: "denied", reason: { code: "destination_denied", message: "The destination left the write scope." } }),
-    now: () => new Date(AT),
-  });
+  const bridge = deniedBridge(denied);
   assert.equal(await bridge.activate(denied.binding, denied.lease), true);
   assert.equal((await bridge.dispatch(denied.context, denied.approval.operationId, denied.lease)).kind, "refused");
   assert.equal(denied.calls.dispatch, 0);
@@ -62,6 +52,10 @@ try {
   const reopened = canary.host.lifecycleFences();
   assert.equal(await reopened.isFenced(fenceTarget(canary)), true);
   assert.equal(await reopened.isFenced({ ...fenceTarget(canary), capabilityId: "balance.object.read" }), false);
+  const persisted = await reopened.notices();
+  assert.equal(persisted.some(notice => notice.trigger === "canary_secret_leaked" && notice.delivered), true, "the notice survived the reopen");
+  assert.equal((await reopened.pending()).length, 0, "no notice is left undelivered");
+  console.log(JSON.stringify({ probe: "canary-reopen", fenced: await reopened.isFenced(fenceTarget(canary)), notices: persisted.map(notice => `${notice.trigger}:${notice.effect}:delivered=${notice.delivered}`) }));
   assert.equal((await canary.dispatch()).kind, "refused");
   assert.equal(canary.calls.dispatch, 0);
   const lifted = await reopened.lift(fenceTarget(canary), { principal: "principal-example", reason: "The owner rotated the canary and removed the leaking receipt." });

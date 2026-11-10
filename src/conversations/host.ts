@@ -165,6 +165,7 @@ export class ConversationHost {
   private harness: Harness | null = null;
   private queryService: { runner: QueryRunner; clock: QueryClock | undefined } | null = null;
   private authorityService: { registry: DomainAdapterRegistry; bindings: AuthorityBindings; mediator: AuthorityMediator } | null = null;
+  private fences: BindingFenceStore | null = null;
   private readonly context: Context = BACKGROUND_CONTEXT;
   private readonly queues = new Map<string, Promise<void>>();
   private readonly authorityPublication = new AuthorityPublication();
@@ -218,7 +219,14 @@ export class ConversationHost {
     return new OperationJournalStore(this.engine, registry, this.context, this.lifecycleFences());
   }
 
-  lifecycleFences(): BindingFenceStore { return new BindingFenceStore(this.engine, this.options.notify, this.context, this.now); }
+  lifecycleFences(): BindingFenceStore {
+    this.fences ??= new BindingFenceStore(this.engine, this.options.notify, this.context, this.now);
+    return this.fences;
+  }
+
+  async attachFenceNotifier(notifier: PrincipalNotifier): Promise<void> {
+    await this.lifecycleFences().attachNotifier(notifier);
+  }
 
   drafts(deps: DraftServiceDeps): DraftService { return new DraftService(this.engine, deps, this.context); }
 

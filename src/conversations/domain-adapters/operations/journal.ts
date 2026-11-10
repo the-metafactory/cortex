@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { DomainAdapterRegistry } from "../registry";
 import { AuthoritySchema, JournalEventSchema, OperationJournalSchema, OwnerSupportSchema, parseWire, type ApprovedSnapshot, type Authority, type JournalEvent, type OperationJournal, type OwnerResult, type OwnerSupport } from "./types";
 import { canonicalWire, validateResultPayload, validateSnapshot } from "./validation";
-import { fenceTargetOf, type FenceSink, type FenceSignalInput } from "./triggers";
+import { fenceTargetOf, signalFence, type FenceSink, type FenceSignalInput } from "./triggers";
 
 const ACTIVE = new Set(["dispatching", "pending", "uncertain"]);
 export const StoreDoc = defineDocFamily<{ record: JsonObject | null }, string>({ kind: "cortex.lifecycle-operation", version: 1, scope: "session", family: true, initial: () => ({ record: null }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
@@ -22,7 +22,8 @@ export interface Approval { operationId: string; idempotencyKey: string; ownerRe
 export interface AppendOptions { support?: OwnerSupport; retryAuthorized?: boolean }
 const jsonObject = (value: StoredOperation): JsonObject => JSON.parse(JSON.stringify(value)) as JsonObject;
 const attempts = (journal: OperationJournal) => journal.events.flatMap(entry => entry.event.kind === "attempt-prepared" ? [entry.event.attempt] : []);
-const outcomes = (journal: OperationJournal): OwnerResult[] => journal.events.flatMap(entry => entry.event.kind === "owner-result" ? [entry.event.response] : entry.event.kind === "reconciliation" && entry.event.lookup.result.kind === "known" ? [entry.event.lookup.result.response] : []);
+const responseOf = (entry: JournalEvent): OwnerResult | null => entry.event.kind === "owner-result" ? entry.event.response : entry.event.kind === "reconciliation" && entry.event.lookup.result.kind === "known" ? entry.event.lookup.result.response : null;
+const outcomes = (journal: OperationJournal): OwnerResult[] => journal.events.flatMap(entry => { const response = responseOf(entry); return response ? [response] : []; });
 const noEffect = (response: OwnerResult): boolean => ["failed", "conflict", "cancelled"].includes(response.result.kind);
 const requireState = (condition: boolean, reason: string): void => { if (!condition) throw new JournalConflict(reason); };
 const successRefs = (response: OwnerResult): string[] => response.result.kind === "succeeded" ? response.result.evidence.refs.map(canonicalWire).sort() : [];
@@ -55,7 +56,7 @@ export class OperationJournalStore {
   private async triggerFor(operationId: string, entry: JournalEvent): Promise<FenceSignalInput | null> {
     const stored = await this.read(operationId);
     if (!stored) return null;
-    const response = entry.event.kind === "owner-result" ? entry.event.response : entry.event.kind === "reconciliation" && entry.event.lookup.result.kind === "known" ? entry.event.lookup.result.response : null;
+    const response = responseOf(entry);
     return response ? this.successTrigger(stored, response) : null;
   }
 
@@ -63,7 +64,7 @@ export class OperationJournalStore {
     if (!successWithoutOwnerEvidence(raw)) return;
     const stored = await this.read(operationId);
     if (!stored || "kind" in stored.journal.snapshot) return;
-    await this.fences?.trigger({ kind: "success_without_owner_evidence", target: fenceTargetOf(stored.journal.snapshot), evidence: { operationId: stored.journal.operationId, ownerRequestId: stored.journal.ownerRequestId, detail: "The owner response failed lifecycle validation." } });
+    await signalFence(this.fences, { kind: "success_without_owner_evidence", target: fenceTargetOf(stored.journal.snapshot), evidence: { operationId: stored.journal.operationId, ownerRequestId: stored.journal.ownerRequestId, detail: "The owner response failed lifecycle validation." } });
   }
 
   async read(operationId: string): Promise<StoredOperation | null> {
@@ -133,7 +134,7 @@ export class OperationJournalStore {
       stored.journal.events.push(entry);
       stored.journal.sequence = entry.sequence;
     });
-    if (trigger) await this.fences?.trigger(trigger);
+    if (trigger) await signalFence(this.fences, trigger);
     return stored;
   }
 
