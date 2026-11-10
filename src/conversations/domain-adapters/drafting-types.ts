@@ -63,7 +63,7 @@ export interface DraftModel {
   generate(request: ModelRequest): Promise<{ modelId: string; output: unknown }>;
 }
 export type DestinationMatch = { kind: "unique"; ref: ObjectReference } | { kind: "multiple"; refs: ObjectReference[] } | { kind: "none" } | { kind: "unavailable" };
-export interface DraftDestinations { resolve(request: { capabilityId: string; connectionId: string; label: string }): Promise<DestinationMatch> }
+export interface DraftDestinations { batch?(): DraftDestinations; resolve(request: { capabilityId: string; connectionId: string; label: string; conversationId?: string; objectType?: string }): Promise<DestinationMatch> }
 export const DestinationRefSchema = ObjectReferenceSchema;
 
 export type EditChange = { kind: "set"; value: unknown } | { kind: "null" } | { kind: "omit" };

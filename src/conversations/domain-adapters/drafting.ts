@@ -279,10 +279,11 @@ export class DraftService {
 
   private async prepare(draft: StoredDraft, view: DraftingView, binding: DraftingBinding, output: ModelOutput, manifest: Manifest, targets: string[]): Promise<Prepared> {
     const cited = new Set(manifest.items.map(item => item.id));
+    const destinations = this.deps.destinations?.batch?.() ?? this.deps.destinations;
     const result: Prepared = { fields: new Map(), limitations: [] };
     for (const candidate of output.fields) {
       if (!targets.includes(candidate.pointer)) { result.limitations.push(limit("ignored_field", "A generated field was not a draftable target and was ignored.")); continue; }
-      const field = await this.candidateField(draft, view, binding, candidate, manifest.generationId, cited);
+      const field = await this.candidateField(draft, view, binding, candidate, manifest.generationId, cited, destinations);
       if (field.ok) { result.fields.set(candidate.pointer, field.field); continue; }
       result.limitations.push(limit(field.code, `A generated value for ${candidate.pointer} was not usable.`));
       if (!draft.fields[candidate.pointer]) result.fields.set(candidate.pointer, { pointer: candidate.pointer, presence: "absent", origin: "suggested", citations: [], generationId: manifest.generationId, alternatives: [], unresolved: field.code });
@@ -290,13 +291,13 @@ export class DraftService {
     return result;
   }
 
-  private async candidateField(draft: StoredDraft, view: DraftingView, binding: DraftingBinding, candidate: ModelOutput["fields"][number], generationId: string, cited: Set<string>): Promise<{ ok: true; field: DraftField } | { ok: false; code: string }> {
+  private async candidateField(draft: StoredDraft, view: DraftingView, binding: DraftingBinding, candidate: ModelOutput["fields"][number], generationId: string, cited: Set<string>, destinations: DraftDestinations | undefined): Promise<{ ok: true; field: DraftField } | { ok: false; code: string }> {
     const { pointer } = candidate;
     const citations = candidate.citations.filter(id => cited.has(id));
     if (citations.length === 0) return { ok: false, code: "unsupported_citation" };
     const base = { pointer, generationId, citations, alternatives: [] as DraftField["alternatives"], unresolved: null as string | null };
     const relationship = view.relationships.find(item => item.fieldPath === pointer);
-    if (relationship) return this.resolveReference(draft, binding, relationship, candidate.labels ?? [], base);
+    if (relationship) return this.resolveReference(draft, binding, relationship, candidate.labels ?? [], base, destinations);
     const alternatives = (candidate.alternatives ?? []).filter(item => this.validValue(draft.capabilityId, view, pointer, item.value)).map(item => ({ value: item.value, citations: item.citations.filter(id => cited.has(id)) })).filter(item => item.citations.length > 0);
     if (alternatives.length >= 2) return { ok: true, field: { ...base, presence: "absent", origin: "suggested", alternatives, unresolved: "conflict" } };
     if (candidate.value === undefined || !this.validValue(draft.capabilityId, view, pointer, candidate.value)) return { ok: false, code: "invalid_candidate" };
@@ -305,12 +306,11 @@ export class DraftService {
     return { ok: true, field: { ...base, presence: candidate.value === null ? "null" : "present", value: candidate.value, origin: structured ? "suggested" : "generated" } };
   }
 
-  private async resolveReference(draft: StoredDraft, binding: DraftingBinding, relationship: DraftingView["relationships"][number], labels: string[], base: Omit<DraftField, "presence" | "origin">): Promise<{ ok: true; field: DraftField } | { ok: false; code: string }> {
+  private async resolveReference(draft: StoredDraft, binding: DraftingBinding, relationship: DraftingView["relationships"][number], labels: string[], base: Omit<DraftField, "presence" | "origin">, destinations: DraftDestinations | undefined): Promise<{ ok: true; field: DraftField } | { ok: false; code: string }> {
     const resolveWith = binding.fieldHints.find(hint => hint.pointer === relationship.fieldPath)?.resolveWith;
     const unresolved = (reason: string, alternatives: DraftField["alternatives"] = []): { ok: true; field: DraftField } => ({ ok: true, field: { ...base, presence: "absent", origin: "suggested", alternatives, unresolved: reason } });
-    const destinations = this.deps.destinations;
     if (labels.length === 0 || !resolveWith || !destinations) return unresolved("unresolved_reference");
-    const matches = await Promise.all(labels.map(label => destinations.resolve({ capabilityId: resolveWith, connectionId: draft.connectionId, label })));
+    const matches = await Promise.all(labels.map(label => destinations.resolve({ capabilityId: resolveWith, connectionId: draft.connectionId, label, conversationId: draft.conversationId, objectType: relationship.targetObjectType })));
     const refs: ObjectReference[] = [];
     for (const match of matches) {
       if (match.kind === "multiple") return unresolved("ambiguous_reference", match.refs.slice(0, 10).map(ref => ({ value: ref, citations: base.citations })));
