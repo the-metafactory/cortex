@@ -159,7 +159,7 @@ export class DraftService {
     const binding = this.deps.bindings.lookup(current.adapterId, current.capabilityId, current.schemaRef);
     const relationship = view?.relationships.find(item => item.fieldPath === pointer);
     if (!view || !binding || !relationship || !sameRef(view.inputSchemaRef, current.schemaRef)) throw new DraftConflict("Reference resolution is unavailable for this field.");
-    const destinations = this.deps.destinations?.batch?.() ?? this.deps.destinations;
+    const destinations = this.destinationBatch();
     const resolved = await this.resolveReference(current, binding, relationship, labels, { pointer, generationId: null, citations: [], alternatives: [], unresolved: null }, destinations);
     if (!resolved.ok) throw new DraftConflict("Reference resolution is unavailable.");
     return this.mutateOrThrow(draftId, expected, draft => { draft.fields[pointer] = { ...resolved.field, origin: "principal" }; markDestinationEdited(draft); });
@@ -226,21 +226,35 @@ export class DraftService {
     draft.limitations = draft.limitations.filter(item => !isDestinationEdited(item));
   }
 
-  private async validDestinations(draft: StoredDraft, view: DraftingView, binding: DraftingBinding, destinations = this.deps.destinations?.batch?.() ?? this.deps.destinations): Promise<boolean> {
+  private destinationBatch(): DraftDestinations | undefined {
+    return this.deps.destinations?.batch?.() ?? this.deps.destinations;
+  }
+
+  private resolveWithFor(binding: DraftingBinding | undefined, pointer: string): string | undefined {
+    return binding?.fieldHints.find(hint => hint.pointer === pointer)?.resolveWith;
+  }
+
+  private async stillCanonical(draft: StoredDraft, resolveWith: string | undefined, value: unknown, destinations: DraftDestinations | undefined): Promise<boolean> {
+    const ref = DestinationRefSchema.safeParse(value);
+    if (!resolveWith || !ref.success || !destinations) return false;
+    const match = await destinations.resolve({ capabilityId: resolveWith, connectionId: draft.connectionId, conversationId: draft.conversationId, objectType: ref.data.objectType, label: ref.data.canonicalId });
+    return match.kind === "unique" && canonicalSchema(match.ref) === canonicalSchema(ref.data);
+  }
+
+  private async validDestinations(draft: StoredDraft, view: DraftingView, binding: DraftingBinding, destinations = this.destinationBatch()): Promise<boolean> {
     const valid = await Promise.all(view.relationships.map(async relationship => {
       const field = draft.fields[relationship.fieldPath];
       if (field?.unresolved) return false;
       if (!field || field.presence === "absent") return true;
       if (!this.validValue(draft.capabilityId, view, relationship.fieldPath, field.value)) return false;
       if (field.presence === "null") return true;
-      const resolveWith = binding.fieldHints.find(hint => hint.pointer === relationship.fieldPath)?.resolveWith;
+      const resolveWith = this.resolveWithFor(binding, relationship.fieldPath);
       if (!resolveWith || !destinations) return false;
       const values = Array.isArray(field.value) ? field.value : [field.value];
       const matches = await Promise.all(values.map(async value => {
         const ref = DestinationRefSchema.safeParse(value);
         if (!ref.success || ref.data.adapterId !== relationship.targetAdapterId || ref.data.objectType !== relationship.targetObjectType || ref.data.connectionId !== draft.connectionId) return false;
-        const match = await destinations.resolve({ capabilityId: resolveWith, connectionId: draft.connectionId, conversationId: draft.conversationId, objectType: relationship.targetObjectType, label: ref.data.canonicalId });
-        return match.kind === "unique" && canonicalSchema(match.ref) === canonicalSchema(ref.data);
+        return this.stillCanonical(draft, resolveWith, ref.data, destinations);
       }));
       return matches.every(Boolean);
     }));
@@ -299,7 +313,7 @@ export class DraftService {
       guidance: { guidanceId: binding.guidance.guidanceId, version: binding.guidance.version },
       items: context.items.map(item => ({ id: item.id, kind: item.kind, revision: item.revision, digest: item.digest, restriction: item.restriction })), omissions: context.omissions, truncated: context.truncated,
     };
-    const destinations = this.deps.destinations?.batch?.() ?? this.deps.destinations;
+    const destinations = this.destinationBatch();
     const prepared = await this.prepare(draft, view, binding, raw.output, manifest, targets, destinations);
     const fields = Object.fromEntries(Object.entries(draft.fields).filter(([pointer]) => !prepared.fields.has(pointer)));
     const valid = await this.validDestinations({ ...draft, fields }, view, binding, destinations);
@@ -364,7 +378,7 @@ export class DraftService {
   }
 
   private async resolveReference(draft: StoredDraft, binding: DraftingBinding, relationship: DraftingView["relationships"][number], labels: string[], base: Omit<DraftField, "presence" | "origin">, destinations: DraftDestinations | undefined): Promise<{ ok: true; field: DraftField } | { ok: false; code: string }> {
-    const resolveWith = binding.fieldHints.find(hint => hint.pointer === relationship.fieldPath)?.resolveWith;
+    const resolveWith = this.resolveWithFor(binding, relationship.fieldPath);
     const unresolved = (reason: string, alternatives: DraftField["alternatives"] = []): { ok: true; field: DraftField } => ({ ok: true, field: { ...base, presence: "absent", origin: "suggested", alternatives, unresolved: reason } });
     if (labels.length === 0 || !resolveWith || !destinations) return unresolved("unresolved_reference");
     const matches = await Promise.all(labels.map(label => destinations.resolve({ capabilityId: resolveWith, connectionId: draft.connectionId, label, conversationId: draft.conversationId, objectType: relationship.targetObjectType })));
@@ -444,14 +458,11 @@ export class DraftService {
     const visible = new Set(shown.map(item => item.id));
     const fullyReleasable = (citations: string[]): boolean => citations.length > 0 && citations.every(id => visible.has(id));
     const binding = this.deps.bindings.lookup(draft.adapterId, draft.capabilityId, draft.schemaRef);
-    const resolveWith = binding?.fieldHints.find(hint => hint.pointer === pointer)?.resolveWith;
-    const destinations = this.deps.destinations?.batch?.() ?? this.deps.destinations;
+    const resolveWith = this.resolveWithFor(binding, pointer);
+    const destinations = this.destinationBatch();
     const alternatives = (await Promise.all(field.alternatives.map(async alternative => {
       if (field.origin === "principal" && alternative.citations.length === 0) {
-        const ref = DestinationRefSchema.safeParse(alternative.value);
-        if (!resolveWith || !ref.success || !destinations) return [];
-        const current = await destinations.resolve({ capabilityId: resolveWith, connectionId: draft.connectionId, conversationId: draft.conversationId, objectType: ref.data.objectType, label: ref.data.canonicalId });
-        return current.kind === "unique" && canonicalSchema(current.ref) === canonicalSchema(ref.data) ? [alternative] : [];
+        return await this.stillCanonical(draft, resolveWith, alternative.value, destinations) ? [alternative] : [];
       }
       return !audience || fullyReleasable(alternative.citations) ? [{ value: alternative.value, citations: alternative.citations.filter(id => visible.has(id)) }] : [];
     }))).flat();
