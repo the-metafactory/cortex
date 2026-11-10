@@ -82,6 +82,6 @@ export async function handleDeskConnections(req: Request, url: URL, guard: Mutat
       return fail(status, message);
     }
     process.stderr.write("[desk-connections] unexpected setup failure\n");
-    return fail(500, "Connection setup failed. Nothing was enabled.");
+    return fail(500, "Connection setup failed. Reload to see the current state.");
   }
 }

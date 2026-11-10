@@ -133,9 +133,10 @@ export class ConnectionSetupService {
       const bound = await this.principalOf(principal);
       const context = await this.context(principal);
       const state = await this.load();
+      const snapshot = await this.authority.inspectHostRecords();
       const views: ConnectionView[] = [];
       for (const config of Object.values(state.connections)) {
-        if (config.principalRef === bound.principalRef && config.stack === bound.stack) views.push(await this.view(context, config));
+        if (config.principalRef === bound.principalRef && config.stack === bound.stack) views.push(await this.view(context, config, snapshot));
       }
       return views;
     });
@@ -323,10 +324,10 @@ export class ConnectionSetupService {
     return config;
   }
 
-  private async view(context: SetupContext, config: Config): Promise<ConnectionView> {
+  private async view(context: SetupContext, config: Config, snapshot?: Awaited<ReturnType<AuthorityMediator["inspectHostRecords"]>>): Promise<ConnectionView> {
     const status = await this.broker.status(context, config.connectionId);
     const entry = this.deps.catalog().find(item => item.packageId === config.packageId);
-    const authority = await this.authority.inspectHostRecords();
+    const authority = snapshot ?? await this.authority.inspectHostRecords();
     const latest = authority.records[`connection:${config.connectionId}`]?.at(-1);
     const live = latest?.kind === "connection" ? latest.value : undefined;
     const active = status?.status === "active" && config.head !== null;

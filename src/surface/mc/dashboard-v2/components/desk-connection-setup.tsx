@@ -21,6 +21,8 @@ const REASON_TEXT: Record<string, string> = {
 const sameRef = (a: object, b: object): boolean => JSON.stringify(a) === JSON.stringify(b);
 type Ref = PackageForm["destinations"][number]["ref"];
 
+type ObjectReference = PackageForm["destinations"][number]["ref"];
+
 function toggle<T>(list: T[], item: T, on: boolean, same: (a: T, b: T) => boolean): T[] {
   const rest = list.filter(entry => !same(entry, item));
   return on ? [...rest, item] : rest;
@@ -83,6 +85,30 @@ function ConnectionRow({ connection, label, form, busy, apply }: { connection: C
   );
 }
 
+interface AccessSelectionProps {
+  mode: "read" | "write";
+  form: PackageForm;
+  capabilities: string[];
+  destinations: ObjectReference[];
+  onCapabilities(next: string[]): void;
+  onDestinations(next: ObjectReference[]): void;
+}
+
+function AccessSelection({ mode, form, capabilities, destinations, onCapabilities, onDestinations }: AccessSelectionProps) {
+  const noun = mode === "read" ? "Read" : "Write";
+  const preposition = mode === "read" ? "from" : "to";
+  return (
+    <div role="group" aria-label={`${noun} access`}>
+      {form.capabilities.filter(item => item.access === mode).map(item => (
+        <label key={item.capabilityId}><input type="checkbox" checked={capabilities.includes(item.capabilityId)} onChange={event => onCapabilities(toggle(capabilities, item.capabilityId, event.target.checked, (a, b) => a === b))} />{noun}: {item.label}</label>
+      ))}
+      {form.destinations.map(item => (
+        <label key={`${mode}-${item.ref.canonicalId}`}><input type="checkbox" checked={destinations.some(ref => sameRef(ref, item.ref))} onChange={event => onDestinations(toggle(destinations, item.ref, event.target.checked, sameRef))} />{noun} {preposition}: {item.label}</label>
+      ))}
+    </div>
+  );
+}
+
 function PackageSetup({ form, busy, apply }: { form: PackageForm; busy: boolean; apply: (run: () => Promise<SetupOutcome>) => Promise<void> }) {
   const [scope, setScope] = useState<Record<string, string>>({});
   const [reads, setReads] = useState<string[]>([]);
@@ -111,22 +137,8 @@ function PackageSetup({ form, busy, apply }: { form: PackageForm; busy: boolean;
           <input type="text" value={scope[field.name] ?? ""} maxLength={256} onChange={event => setScope({ ...scope, [field.name]: event.target.value })} />
         </label>
       ))}
-      <div role="group" aria-label="Read access">
-        {form.capabilities.filter(item => item.access === "read").map(item => (
-          <label key={item.capabilityId}><input type="checkbox" checked={reads.includes(item.capabilityId)} onChange={event => setReads(toggle(reads, item.capabilityId, event.target.checked, (a, b) => a === b))} />Read: {item.label}</label>
-        ))}
-        {form.destinations.map(item => (
-          <label key={`r-${item.ref.canonicalId}`}><input type="checkbox" checked={readDestinations.some(ref => sameRef(ref, item.ref))} onChange={event => setReadDestinations(toggle(readDestinations, item.ref, event.target.checked, sameRef))} />Read from: {item.label}</label>
-        ))}
-      </div>
-      <div role="group" aria-label="Write access">
-        {form.capabilities.filter(item => item.access === "write").map(item => (
-          <label key={item.capabilityId}><input type="checkbox" checked={writes.includes(item.capabilityId)} onChange={event => setWrites(toggle(writes, item.capabilityId, event.target.checked, (a, b) => a === b))} />Write: {item.label}</label>
-        ))}
-        {form.destinations.map(item => (
-          <label key={`w-${item.ref.canonicalId}`}><input type="checkbox" checked={writeDestinations.some(ref => sameRef(ref, item.ref))} onChange={event => setWriteDestinations(toggle(writeDestinations, item.ref, event.target.checked, sameRef))} />Write to: {item.label}</label>
-        ))}
-      </div>
+      <AccessSelection mode="read" form={form} capabilities={reads} destinations={readDestinations} onCapabilities={setReads} onDestinations={setReadDestinations} />
+      <AccessSelection mode="write" form={form} capabilities={writes} destinations={writeDestinations} onCapabilities={setWrites} onDestinations={setWriteDestinations} />
       {!form.unavailableReason && form.slots.map(slot => (
         <div key={slot.slot}>
           <label>{slot.slot} ({slot.kind})
