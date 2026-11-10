@@ -32,14 +32,14 @@ export interface ObservationConnector {
 export interface ObservationBasis { head: string; identity: string; binding: ReadBinding }
 export type ObservationHealth = "fresh" | "stale" | "conflicted" | "unavailable";
 export interface ObservationRow {
-  ref: ObjectReference; schemaRef: z.infer<typeof SchemaRefSchema>; destination: ObjectReference; source: QuerySource; identity: string;
+  ref: ObjectReference; schemaRef: z.infer<typeof SchemaRefSchema>; destination: ObjectReference; sourceKey: string; identity: string;
   kind: "present" | "deleted"; value?: Json; digest: string; revision?: string; evidenceId?: string;
   observedAt: string; receivedAt: number; lastSuccessAt: number; conflicted: boolean; needsVerification: boolean; links: string[];
 }
 export interface ObservationView { ref: ObjectReference; kind: "present" | "deleted"; value?: Json; evidenceId?: string; observedAt: string; lastSuccessAt: number; lastAttemptAt: number | null; status: ObservationHealth; receivedAt: number; revision?: string; evidenceCount: number; quarantinedEvidence: number }
 export interface ObservationEvidence { key: string; objectKey: string; digest: string; at: number; quarantined: boolean }
 export interface ObservationSourceState { source: QuerySource; lastAttemptAt: number | null; lastSuccessAt: number | null; status: ObservationHealth; gap: boolean; generation: number; checkpoint: { cursor: string; expiresAt: number; head: string; generation: number } | null }
-export interface ObservationState { retention: ObservationRetention; rows: Record<string, ObservationRow>; evidence: ObservationEvidence[]; sources: Record<string, ObservationSourceState> }
+export interface ObservationState { retention: ObservationRetention; rows: Record<string, ObservationRow>; evidence: ObservationEvidence[]; sources: Record<string, ObservationSourceState>; oldestEvidenceAt: number | null }
 export function validateObservationBatch(registry: DomainAdapterRegistry, binding: ReadBinding, source: QuerySource, raw: unknown): { batch: ObservationBatch; events: ObservationEvent[] } {
   if (Buffer.byteLength(canonicalWire(raw)) > OBSERVATION_LIMITS.bytes) throw new Error("observation_size");
   const batch = ObservationBatchSchema.parse(raw);

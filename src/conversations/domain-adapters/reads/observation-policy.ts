@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const OBSERVATION_LIMITS = { objects: 1000, contentMs: 86400000, evidence: 10000, evidenceMs: 604800000, staleMs: 600000, intervalMs: 60000, minimumIntervalMs: 1000, fetchMs: 10000, batchItems: 20, bytes: 1048576 } as const;
+export const OBSERVATION_LIMITS = { objects: 1000, contentMs: 86400000, evidence: 10000, evidenceMs: 604800000, staleMs: 600000, intervalMs: 60000, minimumIntervalMs: 1000, fetchMs: 10000, batchItems: 20, bytes: 1048576, checkpointDeltas: 64 } as const;
 export const DEFAULT_OBSERVATION_RETENTION = { objects: OBSERVATION_LIMITS.objects, contentMs: OBSERVATION_LIMITS.contentMs, evidence: OBSERVATION_LIMITS.evidence, evidenceMs: OBSERVATION_LIMITS.evidenceMs };
 export const ObservationPolicySchema = z.object({
   modes: z.array(z.enum(["poll", "subscription"])).min(1), objectsPointer: z.string().regex(/^(?:\/(?:[^~/]|~[01])*)+$/),

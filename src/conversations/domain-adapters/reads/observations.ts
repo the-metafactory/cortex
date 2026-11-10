@@ -3,16 +3,17 @@ import { defineDocFamily, type JsonObject, type Session } from "@earendil-works/
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Context } from "@earendil-works/chord";
 import type { AuthorityMediator, HostContext, ReleaseProjection } from "../../authority";
-import { authorityHash, authorityJson, type ReleaseSink } from "../../authority-records";
+import { authorityHash, type ReleaseSink } from "../../authority-records";
 import type { ObjectReference } from "../types";
 import type { Json } from "../operations/types";
 import type { QuerySource } from "./query-types";
-import { OBSERVATION_LIMITS, type ObservationBasis, type ObservationConnector, type ObservationEvent, type ObservationMode, type ObservationRow, type ObservationSourceState, type ObservationState, type ObservationView, type validateObservationBatch } from "./observation-types";
+import { OBSERVATION_LIMITS, type ObservationBasis, type ObservationConnector, type ObservationEvent, type ObservationEvidence, type ObservationMode, type ObservationRow, type ObservationSourceState, type ObservationState, type ObservationView, type validateObservationBatch } from "./observation-types";
 import type { QueryClock } from "./query";
 import { DEFAULT_OBSERVATION_RETENTION } from "./observation-policy";
 
-const ObservationDoc = defineDocFamily<{ state: JsonObject }, string>({ kind: "cortex.read-observations", version: 1, scope: "session", family: true, initial: () => ({ state: { retention: { ...DEFAULT_OBSERVATION_RETENTION }, rows: {}, evidence: [], sources: {} } }), checkpointWhen: () => true });
+const ObservationDoc = defineDocFamily<{ state: JsonObject }, string>({ kind: "cortex.read-observations", version: 1, scope: "session", family: true, initial: () => ({ state: { retention: { ...DEFAULT_OBSERVATION_RETENTION }, rows: {}, evidence: [], sources: {}, oldestEvidenceAt: null } }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= OBSERVATION_LIMITS.checkpointDeltas });
 const sourceKey = (source: QuerySource): string => authorityHash(source);
+const detached = <T>(value: T): T => value === undefined ? value : JSON.parse(JSON.stringify(value)) as T;
 export interface ObservationCheck { status: "ok" | "denied" | "unavailable"; changed: number; quarantined: number }
 export const UNAVAILABLE_CHECK: Readonly<ObservationCheck> = Object.freeze({ status: "unavailable", changed: 0, quarantined: 0 });
 export const DENIED_CHECK: Readonly<ObservationCheck> = Object.freeze({ status: "denied", changed: 0, quarantined: 0 });
@@ -31,10 +32,7 @@ export class ObservationStore {
     if (this.closed) throw new Error("Observation store is closed.");
     return this.engine.commit(async tx => {
       const doc = await tx.doc(ObservationDoc, authorityHash(source.connectionId), source.connectionId);
-      const state = JSON.parse(JSON.stringify(doc.state)) as ObservationState;
-      const result = run(state);
-      doc.state = authorityJson(state);
-      return structuredClone(result);
+      return detached(run(doc.state as unknown as ObservationState));
     }, this.context);
   }
 
@@ -45,7 +43,18 @@ export class ObservationStore {
 
   private rowsFor(state: ObservationState, source: QuerySource): ObservationRow[] {
     const key = sourceKey(source);
-    return Object.values(state.rows).filter(row => sourceKey(row.source) === key);
+    return Object.values(state.rows).filter(row => row.sourceKey === key);
+  }
+
+  private recordEvidence(state: ObservationState, entry: ObservationEvidence): void {
+    state.evidence.push(entry);
+    state.oldestEvidenceAt = state.oldestEvidenceAt === null ? entry.at : Math.min(state.oldestEvidenceAt, entry.at);
+  }
+
+  private oldestEvidence(entries: ObservationEvidence[]): number | null {
+    let oldest: number | null = null;
+    for (const entry of entries) if (oldest === null || entry.at < oldest) oldest = entry.at;
+    return oldest;
   }
 
   private markGap(state: ObservationState, source: QuerySource, unavailable = false): void {
@@ -65,10 +74,16 @@ export class ObservationStore {
     const limits = state.retention;
     for (const key of ["objects", "contentMs", "evidence", "evidenceMs"] as const) limits[key] = Math.min(limits[key], policy[key]);
     const now = this.clock.now();
-    const retained = state.evidence.filter(entry => now - entry.at < limits.evidenceMs);
-    if (retained.length !== state.evidence.length) this.invalidate(state);
-    state.evidence = retained;
-    while (state.evidence.length > limits.evidence) { state.evidence.shift(); this.invalidate(state); }
+    if (state.oldestEvidenceAt !== null && now - state.oldestEvidenceAt >= limits.evidenceMs) {
+      const live = state.evidence.filter(entry => now - entry.at < limits.evidenceMs);
+      if (live.length !== state.evidence.length) { state.evidence = live; this.invalidate(state); }
+      state.oldestEvidenceAt = this.oldestEvidence(live);
+    }
+    if (state.evidence.length > limits.evidence) {
+      while (state.evidence.length > limits.evidence) state.evidence.shift();
+      state.oldestEvidenceAt = this.oldestEvidence(state.evidence);
+      this.invalidate(state);
+    }
     for (const [key, row] of Object.entries(state.rows)) {
       if (row.value !== undefined && now - row.lastSuccessAt >= limits.contentMs) delete row.value;
       if (row.kind === "deleted" && row.links.length === 0) { Reflect.deleteProperty(state.rows, key); this.invalidate(state); }
@@ -138,6 +153,7 @@ export class ObservationStore {
 
   private apply(state: ObservationState, source: QuerySource, basis: ObservationBasis, validated: ReturnType<typeof validateObservationBatch>, mode: ObservationMode, connector: ObservationConnector): ObservationCheck {
     const now = this.clock.now();
+    const rowSourceKey = sourceKey(source);
     const current = this.source(state, source);
     const generation = current.generation;
     const result: ObservationCheck = { status: "ok", changed: 0, quarantined: 0 };
@@ -157,7 +173,7 @@ export class ObservationStore {
           if (prior) prior.conflicted = true;
           if (held) held.conflicted = true;
           const conflictKey = authorityHash([evidence.key, digest]);
-          if (!state.evidence.some(entry => entry.key === conflictKey)) state.evidence.push({ key: conflictKey, objectKey: evidence.objectKey, digest, at: now, quarantined: true });
+          if (!state.evidence.some(entry => entry.key === conflictKey)) this.recordEvidence(state, { key: conflictKey, objectKey: evidence.objectKey, digest, at: now, quarantined: true });
           current.status = "conflicted";
           result.quarantined++;
           this.invalidate(state);
@@ -167,7 +183,7 @@ export class ObservationStore {
         }
         continue;
       }
-      if (evidenceKey && !evidence) state.evidence.push({ key: evidenceKey, objectKey: key, digest, at: now, quarantined: false });
+      if (evidenceKey && !evidence) this.recordEvidence(state, { key: evidenceKey, objectKey: key, digest, at: now, quarantined: false });
       if (blockedReplay) continue;
       const relation = this.relation(held, event, digest, connector);
       if (relation === "older") continue;
@@ -182,7 +198,7 @@ export class ObservationStore {
         this.invalidate(state);
       }
       const unchanged = held?.digest === digest;
-      const row: ObservationRow = { ref: event.ref, schemaRef: event.schemaRef, destination: event.destination, source, identity: basis.identity, kind: event.kind, digest, observedAt: event.observedAt, receivedAt: now, lastSuccessAt: now, conflicted: false, needsVerification: false, links: held?.links ?? [], ...(event.revision === undefined ? {} : { revision: event.revision }), ...(event.evidenceId === undefined ? {} : { evidenceId: event.evidenceId }), ...(event.kind === "present" ? { value: event.value } : {}) };
+      const row: ObservationRow = { ref: event.ref, schemaRef: event.schemaRef, destination: event.destination, sourceKey: rowSourceKey, identity: basis.identity, kind: event.kind, digest, observedAt: event.observedAt, receivedAt: now, lastSuccessAt: now, conflicted: false, needsVerification: false, links: held?.links ?? [], ...(event.revision === undefined ? {} : { revision: event.revision }), ...(event.evidenceId === undefined ? {} : { evidenceId: event.evidenceId }), ...(event.kind === "present" ? { value: event.value } : {}) };
       state.rows[key] = row;
       if (!unchanged) result.changed++;
     }
