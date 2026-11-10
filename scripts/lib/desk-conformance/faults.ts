@@ -1,3 +1,4 @@
+// glossary-ignore: owner
 import type { TrustedConnector } from "../../../src/conversations/authority";
 
 export type Fault =
@@ -42,8 +43,7 @@ async function apply(fault: Fault | undefined, delegate: () => Promise<unknown>)
     await delegate();
     return { nonsense: true };
   }
-  const answer = await delegate();
-  fault.reached();
+  const answer = await delegate().finally(() => fault.reached());
   await fault.gate;
   return answer;
 }

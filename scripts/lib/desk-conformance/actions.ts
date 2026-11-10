@@ -86,7 +86,7 @@ export async function prepareAction(env: ProbeEnv, capabilityId: string, view: D
   }
 }
 
-/** Builds the approved snapshot the host confirms, from the capability view and the prepared input. */
+/** Builds the approved snapshot the Cortex runtime confirms, from the capability view and the prepared input. */
 export function snapshotForAction(env: ProbeEnv, capabilityId: string, prepared: Prepared): ApprovedSnapshot {
   const { view } = prepared;
   const body = {
@@ -117,7 +117,7 @@ async function authorizeRead(env: ProbeEnv, ref: ObjectReference): Promise<void>
   }, 0);
 }
 
-/** Reads the created object back through the host's readback path and the released sink. */
+/** Reads the created object back through the Cortex runtime readback and the released Render target. */
 export async function probeReadback(env: ProbeEnv, capabilityId: string, ref: ObjectReference | null): Promise<CapabilityReport> {
   const { rig } = env;
   const target = env.plain.readbackCapabilityId ?? capabilityId;

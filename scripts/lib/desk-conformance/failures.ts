@@ -64,7 +64,7 @@ export interface FailureOptions { companionDir?: string }
 const HOST_WAIT_MS = 100;
 const CRASH_WAIT_MS = 400;
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-const messageOf = (error: unknown): string => (error instanceof Error ? error.message.slice(0, 200) : "The scenario failed.");
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message.replace(/\s+/g, " ").trim().slice(0, 200) : "The scenario failed.");
 const credentialOnly = (candidate: DeskPackageCandidate): string | null => {
   if (candidate.manifest.setup.authMethods.some(method => method.kind === "local")) return null;
   const kinds = candidate.manifest.setup.authMethods.map(method => method.kind).join(" and ");
@@ -168,6 +168,7 @@ async function ownerEffects(armed: Armed, input: Json): Promise<number> {
 interface Evidence {
   detail: string;
   code?: string;
+  incomplete?: true;
   operation?: string;
   allowed?: readonly string[];
   effects?: number;
@@ -180,6 +181,7 @@ interface Evidence {
 function judge(scenario: ScenarioName, evidence: Evidence, companion: CompanionReport, egress: number): ScenarioReport {
   const released = evidence.released ?? 0;
   const broken: string[] = [];
+  if (evidence.incomplete === true) broken.push(evidence.code ?? "scenario_incomplete");
   if (evidence.allowed !== undefined && evidence.operation === undefined) broken.push("operation_unknown");
   if (evidence.operation !== undefined && evidence.allowed !== undefined && !evidence.allowed.includes(evidence.operation)) broken.push(`operation_${evidence.operation}`);
   if (evidence.retried === true) broken.push("retry_issued");
@@ -231,27 +233,17 @@ const uncertainBody = (sentences: string) => async (armed: Armed): Promise<Evide
   };
 };
 
-const duplicateBody = async (armed: Armed): Promise<Evidence> => {
+const redeliveryBody = (reopen: boolean) => async (armed: Armed): Promise<Evidence> => {
   const snapshot = await snapshotOf(armed);
   const dispatched = await confirmAndDispatch(armed.env, armed.actionId, snapshot);
-  const delivered = await confirmAndDispatch(armed.env, armed.actionId, snapshot);
-  const operation = await journalState(armed, dispatched.run.operationId);
-  return {
-    detail: `a duplicate delivery was answered ${delivered.report.code ?? delivered.report.verdict} without a second owner call`,
-    ...(operation === undefined ? {} : { operation }), allowed: ["succeeded"],
-    effects: await ownerEffects(armed, snapshot.input), receipts: await receiptCount(armed, dispatched.run.operationId),
-    retried: delivered.report.verdict === "conformant", calls: armed.env.recorded.ownerCalls,
-  };
-};
-
-const restartBody = async (armed: Armed): Promise<Evidence> => {
-  const snapshot = await snapshotOf(armed);
-  const dispatched = await confirmAndDispatch(armed.env, armed.actionId, snapshot);
-  await armed.rig.reopen();
+  if (reopen) await armed.rig.reopen();
   const again = await confirmAndDispatch(armed.env, armed.actionId, snapshot);
   const operation = await journalState(armed, dispatched.run.operationId);
+  const answer = again.report.code ?? again.report.verdict;
   return {
-    detail: `after a restart the operation stayed ${operation ?? "unknown"} and a redelivery was answered ${again.report.code ?? again.report.verdict}`,
+    detail: reopen
+      ? `after a restart the operation stayed ${operation ?? "unknown"} and a redelivery was answered ${answer}`
+      : `a duplicate delivery was answered ${answer} without a second owner call`,
     ...(operation === undefined ? {} : { operation }), allowed: ["succeeded"],
     effects: await ownerEffects(armed, snapshot.input), receipts: await receiptCount(armed, dispatched.run.operationId),
     retried: again.report.verdict === "conformant", calls: armed.env.recorded.ownerCalls,
@@ -325,8 +317,8 @@ const PLANS: Record<Exclude<ScenarioName, "module-load">, () => ScenarioPlan> = 
   "owner-timeout": () => ({ fault: { dispatch: { kind: "timeout" } }, body: uncertainBody("a silent owner") }),
   "owner-invalid-output": () => ({ fault: { dispatch: { kind: "invalid-output" } }, body: uncertainBody("unparseable owner output") }),
   "owner-exit": () => ({ fault: { dispatch: { kind: "exit", code: 7 } }, body: uncertainBody("a non-zero owner exit") }),
-  "duplicate-delivery": () => ({ fault: {}, body: duplicateBody }),
-  "restart-after-success": () => ({ fault: {}, body: restartBody }),
+  "duplicate-delivery": () => ({ fault: {}, body: redeliveryBody(false) }),
+  "restart-after-success": () => ({ fault: {}, body: redeliveryBody(true) }),
   "crash-before-result": withHold("dispatch", crashBody),
   "revoked-query": withHold("query", revokedQueryBody),
   "revoked-write": withHold("dispatch", revokedWriteBody),
@@ -372,17 +364,18 @@ async function runScenario(scenario: ScenarioName, packageDir: string, companion
       evidence = { detail: "The package declares no action capability, so this scenario could make no owner call.", code: "no_action_capability", calls: emptyOwnerCalls() };
     } else {
       const plan = PLANS[scenario]();
-      const armed = await arm(run, candidate, plan.fault);
+      let armed: Armed | undefined;
       try {
+        armed = await arm(run, candidate, plan.fault);
         evidence = await plan.body(armed);
       } catch (error) {
-        evidence = { detail: messageOf(error), code: "scenario_threw", calls: armed.env.recorded.ownerCalls };
+        evidence = { detail: messageOf(error), code: "scenario_threw", incomplete: true, calls: armed?.env.recorded.ownerCalls ?? emptyOwnerCalls() };
       } finally {
-        await armed.close();
+        await armed?.close();
       }
     }
-    const egress = guard.count() - started;
     const companion = await probeCompanion(run, companionDir, activated);
+    const egress = guard.count() - started;
     return { report: judge(scenario, evidence, companion, egress), companion, ...(candidate === undefined ? {} : { packageId: candidate.packageId, adapterId: candidate.adapterId }) };
   } finally {
     await run.close();

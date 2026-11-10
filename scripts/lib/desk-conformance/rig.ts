@@ -46,7 +46,7 @@ function registerReadBindings(input: ConformanceRigInput): ReadBindings {
   return bindings;
 }
 
-/** Opens the production host over a synthetic local stack, and can reopen it over the same store to model a restart. */
+/** Opens the production Cortex runtime over a synthetic local stack, and can reopen it over the same store to model a restart. */
 export async function openConformanceRig(input: ConformanceRigInput) {
   const dir = await mkdtemp(join(input.dir, "rig-"));
   const readBindings = registerReadBindings(input);

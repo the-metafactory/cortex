@@ -1,0 +1,511 @@
+{
+  "format": "desk-adapter-package/1",
+  "packageId": "synthetic.seepage",
+  "packageVersion": "1.0.0",
+  "deskSdkRange": "^1.0.0",
+  "domainContractVersion": "1.0.0",
+  "backend": {
+    "entry": "backend.mjs",
+    "sha256": "a0b679ccfc5ede574ec7cde0849fddd8d6c08235ade6db7c290eb98cf448fbb0"
+  },
+  "declaration": {
+    "adapterId": "seepage",
+    "label": "Seepage",
+    "contractRange": "^1.0.0",
+    "schemas": [
+      {
+        "schemaId": "seepage.empty",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        }
+      },
+      {
+        "schemaId": "seepage.error",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "seepage.outfall",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "seepage.outfall.list.output",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:seepage.outfall:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "seepage.discharge",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "place"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Name"
+            },
+            "place": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "type": "string",
+                  "const": "seepage"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "outfall"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "note": {
+              "type": "string",
+              "title": "Note"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "seepage.discharge.list.output",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:seepage.discharge:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "seepage.find.input",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "seepage.get.input",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "canonicalId"
+          ],
+          "properties": {
+            "canonicalId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "seepage.created",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ref"
+          ],
+          "properties": {
+            "ref": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "type": "string",
+                  "const": "seepage"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "discharge"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "objectTypes": [
+      {
+        "objectType": "outfall",
+        "label": "Outfall",
+        "schemaRef": {
+          "schemaId": "seepage.outfall",
+          "version": "1.0.0"
+        },
+        "relationships": []
+      },
+      {
+        "objectType": "discharge",
+        "label": "Discharge",
+        "schemaRef": {
+          "schemaId": "seepage.discharge",
+          "version": "1.0.0"
+        },
+        "relationships": [
+          {
+            "fieldPath": "/place",
+            "cardinality": "one",
+            "targetAdapterId": "seepage",
+            "targetObjectType": "outfall"
+          }
+        ]
+      }
+    ],
+    "capabilities": [
+      {
+        "capabilityId": "seepage.outfall.list",
+        "label": "List outfalls",
+        "kind": "query",
+        "objectTypes": [
+          "outfall"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "seepage.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "seepage.outfall.list.output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "seepage.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "seepage.discharge.search",
+        "label": "Find discharges",
+        "kind": "query",
+        "objectTypes": [
+          "discharge"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "seepage.find.input",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "seepage.discharge.list.output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "seepage.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "seepage.discharge.watch",
+        "label": "Watch discharges",
+        "kind": "observation",
+        "objectTypes": [
+          "discharge"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "seepage.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "seepage.discharge.list.output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "seepage.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "seepage.discharge.record",
+        "label": "record a discharge",
+        "kind": "action",
+        "objectTypes": [
+          "discharge"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "seepage.discharge",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "seepage.created",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "seepage.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "seepage.discharge.get",
+        "label": "Read one discharge",
+        "kind": "query",
+        "objectTypes": [
+          "discharge"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "seepage.get.input",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "seepage.discharge",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "seepage.error",
+          "version": "1.0.0"
+        }
+      }
+    ]
+  },
+  "draftingBindings": [
+    {
+      "bindingVersion": "1.0.0",
+      "adapterId": "seepage",
+      "capabilityId": "seepage.discharge.record",
+      "inputSchemaRef": {
+        "schemaId": "seepage.discharge",
+        "version": "1.0.0"
+      },
+      "guidance": {
+        "guidanceId": "seepage.guidance",
+        "version": "1.0.0",
+        "instructions": "Draft a discharge from the conversation."
+      },
+      "fieldHints": [
+        {
+          "pointer": "/name",
+          "role": "title"
+        },
+        {
+          "pointer": "/place",
+          "role": "destination",
+          "resolveWith": "seepage.outfall.list"
+        },
+        {
+          "pointer": "/note",
+          "role": "detail",
+          "widget": "long"
+        }
+      ]
+    }
+  ],
+  "readBindings": [
+    {
+      "version": "1.0.0",
+      "adapterId": "seepage",
+      "capabilityId": "seepage.outfall.list",
+      "mode": "destinations",
+      "objectType": "outfall",
+      "inputSchemaRef": {
+        "schemaId": "seepage.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "seepage.outfall.list.output",
+        "version": "1.0.0"
+      },
+      "display": {
+        "title": "/name"
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "seepage",
+      "capabilityId": "seepage.discharge.search",
+      "mode": "query",
+      "objectType": "discharge",
+      "inputSchemaRef": {
+        "schemaId": "seepage.find.input",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "seepage.discharge.list.output",
+        "version": "1.0.0"
+      },
+      "textPointer": "/text",
+      "destinationType": "outfall",
+      "display": {
+        "title": "/name"
+      },
+      "query": {
+        "objectsPointer": "/items",
+        "ordering": "provider",
+        "stableSnapshot": true,
+        "limits": {
+          "items": 2
+        }
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "seepage",
+      "capabilityId": "seepage.discharge.watch",
+      "mode": "poll",
+      "objectType": "discharge",
+      "inputSchemaRef": {
+        "schemaId": "seepage.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "seepage.discharge.list.output",
+        "version": "1.0.0"
+      },
+      "destinationType": "outfall",
+      "display": {
+        "title": "/name"
+      },
+      "observation": {
+        "modes": [
+          "poll"
+        ],
+        "objectsPointer": "/items",
+        "resumable": false
+      }
+    }
+  ],
+  "setup": {
+    "version": "1.0.0",
+    "schemas": [
+      {
+        "schemaId": "seepage.setup.configuration",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "workspace": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "seepage.setup.account",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "account": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "configurationSchemaRef": {
+      "schemaId": "seepage.setup.configuration",
+      "version": "1.0.0"
+    },
+    "accountScopeSchemaRef": {
+      "schemaId": "seepage.setup.account",
+      "version": "1.0.0"
+    },
+    "authMethods": [
+      {
+        "kind": "local"
+      }
+    ]
+  }
+}

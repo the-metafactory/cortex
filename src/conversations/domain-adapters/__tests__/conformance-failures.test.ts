@@ -110,6 +110,40 @@ describe("a package that breaks isolation", () => {
   });
 });
 
+describe("a scenario whose verification throws", () => {
+  test("fails the harness and names the scenario instead of reporting isolation", async () => {
+    const report = await runFailureScenarios(packageDir("junk-read"), { companionDir: packageDir("observatory") });
+    expect(report.status).toBe("failed");
+    expect(report.code).toBe("scenario_threw");
+    expect(report.reason).toContain("owner-success");
+    expect(report.companion.status).toBe("conformant");
+    expect(scenarioOf(report, "module-load")?.verdict).toBe("isolated");
+    const thrown = report.scenarios.filter(item => item.code === "scenario_threw");
+    expect(thrown.length).toBeGreaterThan(0);
+    expect(thrown.every(item => item.verdict === "failed")).toBe(true);
+    expect(thrown.every(item => !item.detail.includes("\n"))).toBe(true);
+    expect(formatFailureReport(report)).toContain("failed    owner-success");
+  });
+
+  test("exits non-zero on the probe command for a package whose read the harness cannot verify", () => {
+    const ran = cli([packageDir("junk-read"), "--failures", "--companion", packageDir("observatory")]);
+    expect(ran.exitCode).toBe(1);
+    expect(ran.output).toContain("FAILED scenario_threw");
+    expect(ran.output).toMatch(/failed\s+owner-success\s+\[scenario_threw\]/);
+  });
+});
+
+describe("a companion package that breaks isolation", () => {
+  test("counts its network attempts in every scenario verdict", async () => {
+    const report = await runFailureScenarios(packageDir("greenhouse"), { companionDir: packageDir("unsafe-egress") });
+    expect(report.status).toBe("failed");
+    expect(report.code).toBe("network_egress");
+    expect(report.scenarios.every(item => item.verdict === "failed")).toBe(true);
+    expect(report.scenarios.every(item => item.networkRequests > 0)).toBe(true);
+    expect(report.companion.adapterId).toBe("seepage");
+  });
+});
+
 describe("the failure probe command", () => {
   test("prints every scenario and exits 0 for an isolated package", () => {
     const ran = cli([packageDir("greenhouse"), "--failures"]);

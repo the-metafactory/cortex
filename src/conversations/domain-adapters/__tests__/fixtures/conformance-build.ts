@@ -21,7 +21,8 @@ export type ConformanceVariant =
   | "symlink"
   | "token-only"
   | "broker-only"
-  | "egress";
+  | "egress"
+  | "junk-read";
 
 export const CONFORMANCE_DOMAINS: Record<string, ConformanceDomain> = {
   greenhouse: {
@@ -193,6 +194,7 @@ export function conformanceBackend(domain: ConformanceDomain, variant: Conforman
     "  return { readVersion: \"1.0.0\", payload: { items: places.map(place => ({ name: place.name })) }, annotations: places.map((place, index) => annotate(`/items/${index}`, ref(connectionId, D.place.type, place.id), D.place.schema, ref(connectionId, D.place.type, place.id), index, `${place.id}-evidence`)), observedAt: now(), ordering: \"provider\", snapshot: { kind: \"stable\", id: \"places\" } };",
     "}",
     "function search(request) {",
+    ...(variant === "junk-read" ? ["  if (D.variant === \"junk-read\") return { readVersion: \"1.0.0\", payload: { items: [] }, annotations: \"not-a-page\" };"] : []),
     "  const connectionId = request.destinations[0].connectionId;",
     "  const matching = scoped(request.destinations);",
     "  const offset = request.cursor === undefined ? 0 : Number(request.cursor);",
@@ -277,6 +279,7 @@ export const CONFORMANCE_PACKAGES: Record<string, { domain: string; variant: Con
 
 export const FAILURE_PACKAGES: Record<string, { domain: string; variant: ConformanceVariant }> = {
   "unsafe-egress": { domain: "seepage", variant: "egress" },
+  "junk-read": { domain: "seepage", variant: "junk-read" },
 };
 
 export function conformanceDomain(name: string): ConformanceDomain {
