@@ -39,7 +39,8 @@ await withTempHome(async () => {
     const read = await run(true, "work_read", { kind: "balance-task", id: "task-wing" });
     assert.equal(read.object?.title, saved.title);
     assert.equal(read.object?.area, "Lab");
-    console.log("work_read: runner object matches loadBalanceState");
+    assert.deepEqual(remembered, ["balance-task:task-wing:cloud", "balance-task:task-wing:cloud"]);
+    console.log("work_read: runner object matches loadBalanceState and records the owner source obligation");
 
     const bounded = await run(true, "work_search", { query: "", kinds: ["balance-task"], limit: 1, offset: 0 });
     assert.equal(bounded.status, "partial");

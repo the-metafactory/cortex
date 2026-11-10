@@ -46,8 +46,9 @@ describe("the Balance work adapter behind work_search and work_read", () => {
     expect(found.status).toBe("ok");
     expect(found.results.map((result: { id: string }) => result.id)).toEqual(["project-glider"]);
     expect(searched.remembered.map(object => `${object.kind}:${object.id}`)).toEqual(["balance-project:project-glider"]);
-    const read = JSON.parse((await call(rig, "local", "work_read", { kind: "balance-project", id: "project-glider" })).text);
-    expect(read).toMatchObject({ status: "stale", object: { id: "project-glider", title: "Glider", area: "Lab", summary: "Project in Lab", url: "?desk=balance&balance-item=project-glider" } });
+    const read = await call(rig, "local", "work_read", { kind: "balance-project", id: "project-glider" });
+    expect(JSON.parse(read.text)).toMatchObject({ status: "stale", object: { id: "project-glider", title: "Glider", area: "Lab", summary: "Project in Lab", url: "?desk=balance&balance-item=project-glider" } });
+    expect(read.remembered.map(remembered => `${remembered.kind}:${remembered.id}`)).toEqual(["balance-project:project-glider"]);
   });
 
   test("a bounded page is partial and an empty page with a continuation is not no match", async () => {
