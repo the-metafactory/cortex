@@ -1,9 +1,43 @@
-import { test, expect } from "bun:test";
+import { test, expect, spyOn } from "bun:test";
+import { join } from "node:path";
+import { openConversationHost } from "../../../conversations/host";
+import { QueryRunner } from "../../../conversations/domain-adapters/reads/query";
+import { createBalanceConnection } from "../desk/balance-connection";
 import { balanceConnectionStack, BALANCE_PRINCIPAL } from "./fixtures/balance-connection";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import { balanceDestinations } from "../desk/balance-destinations";
 
 const READ = "/api/desk/balance/read";
+
+test("Balance reads queued behind a runner failure recover and release their own results", async () => {
+  const stack = await balanceConnectionStack();
+  const status = await openConversationHost({ dir: join(stack.dir, "queue-host"), stack: "test", label: "test", expectedLabel: "test", lanes: {}, turns: request => Promise.resolve({ text: "unused", session: request.session, resumed: false }) });
+  if (status.state !== "ready") throw new Error(status.reason);
+  const run = spyOn(QueryRunner.prototype, "run");
+  try {
+    const balance = createBalanceConnection({ host: status.host, db: stack.db, desk: () => stack.desk, stack: "test", isPrincipal: principal => principal === BALANCE_PRINCIPAL, secretRoot: join(stack.dir, "queue-secrets") });
+    const [form] = await balance.setup.forms(BALANCE_PRINCIPAL);
+    const configured = await balance.setup.configure(BALANCE_PRINCIPAL, { packageId: "balance", scope: {}, readCapabilityIds: form!.capabilities.map(item => item.capabilityId), writeCapabilityIds: [], readDestinations: [form!.destinations[0]!.ref], writeDestinations: [] });
+    const connection = await balance.setup.enable(BALANCE_PRINCIPAL, configured.connectionId, configured.revision);
+    const conversation = await status.host.create({ title: "Queued reads", policy: "local", links: [], origin: { kind: "web" } }, BALANCE_PRINCIPAL);
+    const request = { conversationId: conversation.id, connectionId: connection.connectionId, destinations: connection.readDestinations, capabilityId: "balance.destinations" as const, input: {} };
+    const failure = new Error("Injected runner failure");
+    run.mockRejectedValueOnce(failure);
+    const results = await Promise.allSettled([
+      balance.read(BALANCE_PRINCIPAL, request),
+      balance.read(BALANCE_PRINCIPAL, request),
+      balance.read(BALANCE_PRINCIPAL, { ...request, capabilityId: "balance.task.read", input: { ref: { adapterId: "balance", connectionId: connection.connectionId, objectType: "task", canonicalId: "task-wing" } } }),
+    ]);
+    expect(results[0]).toEqual({ status: "rejected", reason: failure });
+    expect(results[1]).toMatchObject({ status: "fulfilled", value: { result: { status: "ok" }, pages: [{ objects: expect.arrayContaining([expect.objectContaining({ ref: expect.objectContaining({ canonicalId: "project-glider" }) })]) }] } });
+    expect(results[2]).toMatchObject({ status: "fulfilled", value: { result: { status: "ok" }, pages: [{ objects: [expect.objectContaining({ value: expect.objectContaining({ title: "Cut the wing" }), evidence: expect.objectContaining({ evidenceId: "balance.task.task-wing" }) })] }] } });
+    expect(run).toHaveBeenCalledTimes(3);
+  } finally {
+    run.mockRestore();
+    await status.host.close();
+    await stack.close();
+  }
+});
 
 test("live Balance setup enables without credentials, reads annotated owner data, survives reopen and disables without changing legacy Balance", async () => {
   const stack = await balanceConnectionStack();

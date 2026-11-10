@@ -132,7 +132,8 @@ export function createBalanceConnection(deps: BalanceConnectionDeps) {
   return {
     setup,
     read(principal: string, request: BalanceBrowserRead, signal?: AbortSignal) {
-      const work = (reads.get(request.conversationId) ?? Promise.resolve()).then(async () => {
+      const prior = reads.get(request.conversationId)?.then(() => undefined, () => undefined) ?? Promise.resolve();
+      const work = prior.then(async () => {
         if (!deps.isPrincipal(principal) || await host.principalOf(request.conversationId) !== principal) return null;
         const connection = await prepare(principal, request.connectionId);
         const binding = balanceReadBindings.find(item => item.capabilityId === request.capabilityId);
