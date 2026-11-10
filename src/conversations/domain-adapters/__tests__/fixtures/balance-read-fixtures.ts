@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
-import { DEFAULT_SETTINGS, type AppState, type OutlineNode } from "../../../../balance";
+import { DEFAULT_SETTINGS, findNode, type AppState, type OutlineNode } from "../../../../balance";
 import { authorityRig } from "../../../authority-fixtures";
 import { initDatabase } from "../../../../surface/mc/db/init";
 import { loadBalanceState, saveBalanceState } from "../../../../surface/mc/desk/balance-store";
@@ -13,13 +13,17 @@ import type { QueryFetchRequest, QueryPage, QueryResult } from "../../reads/quer
 import type { QueryRunner } from "../../reads/query";
 import type { Json } from "../../operations/types";
 import type { ReadBinding } from "../../reads/types";
+import type { ObjectReference } from "../../types";
 import { createBalanceReadAdapter } from "../../balance/read";
 
 export const BALANCE_CONNECTION = "connection-example";
 export const LAB_AREA = objectRef("balance", "area", "area-example");
 export const HOME_AREA = objectRef("balance", "area", "area-home");
+export const LAB_TASK_IDS = ["task-wing", "task-done", "task-glue"] as const;
 
-const leaf = (id: string, title: string, extra: Partial<OutlineNode> = {}): OutlineNode => ({ id, title, weight: 50, ordering: "parallel", children: [], effort: 1, ...extra });
+export function leaf(id: string, title: string, extra: Partial<OutlineNode> = {}): OutlineNode {
+  return { id, title, weight: 50, ordering: "parallel", children: [], effort: 1, ...extra };
+}
 
 export function releasedObjects(value: Json | undefined): { ref: { canonicalId: string }; value: Record<string, unknown> }[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("released value is not an object");
@@ -28,14 +32,9 @@ export function releasedObjects(value: Json | undefined): { ref: { canonicalId: 
   return held as { ref: { canonicalId: string }; value: Record<string, unknown> }[];
 }
 
-export function tasksIn(state: AppState, areaId: string): OutlineNode[] {
-  const found: OutlineNode[] = [];
-  const root = state.outline.children.find(node => node.id === `area:${areaId}`);
-  const visit = (node: OutlineNode): void => {
-    if (node.children.length === 0) found.push(node);
-    else for (const child of node.children) visit(child);
-  };
-  if (root) for (const child of root.children) visit(child);
+export function savedNode(state: AppState, id: string): OutlineNode {
+  const found = findNode(state.outline, id);
+  if (!found) throw new Error(`balance fixture node missing: ${id}`);
   return found;
 }
 
@@ -47,6 +46,8 @@ export function balanceReadState(): AppState {
           id: "area:area-example", title: "Lab", weight: 60, ordering: "parallel", children: [
             { id: "project-glider", title: "Glider", weight: 50, ordering: "parallel", children: [leaf("task-wing", "Cut the wing", { effort: 2, dueDate: "2026-12-01", note: "Use paper" }), leaf("task-done", "Fold the body", { effort: 1, done: true })] },
             leaf("task-glue", "Buy glue"),
+            { id: "project-empty", title: "Empty project", weight: 50, ordering: "parallel", children: [] },
+            { id: "studio-response:thread-1", title: "Studio thread", weight: 50, ordering: "parallel", children: [leaf("task-studio", "Studio answer")] },
           ],
         },
         { id: "area:area-home", title: "Home", weight: 40, ordering: "parallel", children: [leaf("task-garden", "Water the garden", { dueDate: "2026-11-20" })] },
@@ -58,6 +59,9 @@ export function balanceReadState(): AppState {
     history: { deficits: {}, lastSurfaced: {} },
   };
 }
+
+interface BalanceReadStepArgs { readonly capabilityId: string; readonly input: unknown; readonly destinations: readonly ObjectReference[]; readonly binding: ReadBinding }
+export interface BalanceReadStep { readonly result: QueryResult; readonly released: Json | undefined; readonly request: Awaited<ReturnType<QueryRunner["create"]>>; readonly args: BalanceReadStepArgs }
 
 export interface BalanceReadRig {
   readonly dir: string;
@@ -71,8 +75,10 @@ export interface BalanceReadRig {
   readonly taskReadBinding: ReadBinding;
   readonly runner: QueryRunner;
   destinations(): Promise<QueryPage>;
-  taskQuery(input?: unknown, destinations?: readonly typeof LAB_AREA[]): Promise<{ result: QueryResult; released: Json | undefined }>;
-  taskRead(canonicalId: string, area?: typeof LAB_AREA, destinations?: readonly typeof LAB_AREA[]): Promise<{ result: QueryResult; released: Json | undefined }>;
+  taskQuery(input?: unknown, destinations?: readonly ObjectReference[]): Promise<BalanceReadStep>;
+  continueTaskQuery(step: BalanceReadStep): Promise<BalanceReadStep>;
+  taskRead(canonicalId: string, area?: typeof LAB_AREA, destinations?: readonly ObjectReference[]): Promise<BalanceReadStep>;
+  addTask(parentId: string, node: OutlineNode): void;
   removeTask(canonicalId: string): void;
   removeArea(canonicalId: string): void;
   allowHome(): Promise<void>;
@@ -108,12 +114,16 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
     if (!state) throw new Error("balance state unavailable");
     return state;
   };
-  const run = async (capabilityId: string, input: unknown, destinations: readonly typeof LAB_AREA[], binding: ReadBinding): Promise<{ result: QueryResult; released: Json | undefined }> => {
+  const save = (state: AppState): void => {
+    if (!db) throw new Error("balance database unavailable");
+    saveBalanceState(db, state);
+  };
+  const run = async (args: BalanceReadStepArgs, resume?: { request: BalanceReadStep["request"]; continuation: string }): Promise<BalanceReadStep> => {
     const previous = rig.calls.sends.length;
-    const request = await runner.create(rig.context, [{ adapterId: "balance", connectionId: BALANCE_CONNECTION, capabilityId, inputSchemaRef: binding.inputSchemaRef, destinations: [...destinations], input: input as Json }], rig.sink);
-    const result = await runner.run(rig.context, request, rig.sink);
+    const request = resume?.request ?? await runner.create(rig.context, [{ adapterId: "balance", connectionId: BALANCE_CONNECTION, capabilityId: args.capabilityId, inputSchemaRef: args.binding.inputSchemaRef, destinations: [...args.destinations], input: args.input as Json }], rig.sink);
+    const result = await runner.run(rig.context, resume ? { ...request, continuation: resume.continuation } : request, rig.sink);
     const released = rig.calls.sends.length > previous ? rig.calls.sends[rig.calls.sends.length - 1] : undefined;
-    return { result, released };
+    return { result, released, request, args };
   };
   const remove = (node: OutlineNode, id: string): boolean => {
     const index = node.children.findIndex(child => child.id === id);
@@ -137,16 +147,27 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
       return await Promise.resolve(handler({}, {})) as QueryPage;
     },
     taskQuery(input = { area: LAB_AREA }, destinations = [LAB_AREA]) {
-      return run("balance.task.query", input, destinations, taskQueryBinding);
+      return run({ capabilityId: "balance.task.query", input, destinations, binding: taskQueryBinding });
+    },
+    continueTaskQuery(step) {
+      const continuation = step.result.continuation;
+      if (!continuation) throw new Error("balance query has no continuation");
+      return run(step.args, { request: step.request, continuation });
     },
     taskRead(canonicalId, area = LAB_AREA, destinations = [LAB_AREA]) {
-      return run("balance.task.read", { ref: { ...area, objectType: "task", canonicalId } }, destinations, taskReadBinding);
+      return run({ capabilityId: "balance.task.read", input: { ref: { ...area, objectType: "task", canonicalId } }, destinations, binding: taskReadBinding });
+    },
+    addTask(parentId, node) {
+      const state = stored();
+      const parent = findNode(state.outline, parentId);
+      if (!parent) throw new Error("balance fixture parent missing");
+      parent.children.unshift(node);
+      save(state);
     },
     removeTask(canonicalId) {
-      if (!db) throw new Error("balance database unavailable");
       const state = stored();
       if (!remove(state.outline, canonicalId)) throw new Error("balance task fixture missing");
-      saveBalanceState(db, state);
+      save(state);
     },
     removeArea(canonicalId) {
       const index = areas.findIndex(area => area.id === canonicalId);

@@ -3,7 +3,7 @@ import { balanceDestinations } from "../../../surface/mc/desk/balance-destinatio
 import { loadBalanceState } from "../../../surface/mc/desk/balance-store";
 import { createBalanceReadAdapter } from "../balance/read";
 import { objectRef } from "../fixtures";
-import { BALANCE_CONNECTION, HOME_AREA, LAB_AREA, openBalanceReadRig, releasedObjects, tasksIn, type BalanceReadRig } from "./fixtures/balance-read-fixtures";
+import { BALANCE_CONNECTION, HOME_AREA, LAB_AREA, LAB_TASK_IDS, leaf, openBalanceReadRig, releasedObjects, savedNode, type BalanceReadRig } from "./fixtures/balance-read-fixtures";
 
 const GLIDER = objectRef("balance", "project", "project-glider");
 const opened: BalanceReadRig[] = [];
@@ -18,13 +18,17 @@ describe("the inactive Balance read adapter", () => {
     const expected = balanceDestinations(state.outline, rig.areas);
     const page = await rig.destinations();
     const payload = page.payload as { items: { label: string }[] };
+    expect(page.annotations.map(annotation => [annotation.ref.objectType, annotation.ref.canonicalId])).toEqual([["area", "area-example"], ["project", "project-glider"], ["project", "project-empty"], ["area", "area-home"]]);
     expect(page.annotations.map(annotation => [annotation.ref.objectType, annotation.ref.canonicalId])).toEqual(expected.map(destination => [destination.project ? "project" : "area", destination.project ? destination.id : destination.area]));
+    expect(payload.items.map(item => item.label)).toEqual(["Lab", "Lab / Glider", "Lab / Empty project", "Home"]);
     expect(payload.items.map(item => item.label)).toEqual(expected.map(destination => destination.label));
     for (const [index, annotation] of page.annotations.entries()) {
       expect(annotation.ref.canonicalId).not.toBe(payload.items[index]?.label);
       expect(annotation.destination).toEqual(annotation.ref);
       expect(annotation.schemaRef.schemaId).toBe(annotation.ref.objectType === "project" ? "balance.project" : "balance.area");
     }
+    expect(page.snapshot.kind).toBe("stable");
+    expect(page.snapshot.kind === "stable" && page.snapshot.id.startsWith("balance.destinations:")).toBe(true);
     expect(rig.destinationsBinding.display).toEqual({ title: "/label" });
     expect(rig.rig.bindings.readBindings?.lookup("balance", BALANCE_CONNECTION, "balance.destinations")).toMatchObject({ state: "available" });
     expect(rig.adapter.bindings.observations).toEqual({});
@@ -34,23 +38,52 @@ describe("the inactive Balance read adapter", () => {
     const rig = await open();
     const state = loadBalanceState(rig.db);
     if (!state) throw new Error("balance fixture state missing");
-    const source = tasksIn(state, "area-example");
     const query = await rig.taskQuery();
     expect(query.result.status).toBe("ok");
     expect(query.result.groups[0]?.coverage).toBe("exhausted");
     const queried = releasedObjects(query.released);
-    expect(queried.map(object => object.ref.canonicalId)).toEqual(source.map(node => node.id));
-    expect(queried.map(object => [object.value.title, object.value.status, object.value.dueDate])).toEqual(source.map(node => [node.title, node.done ? "done" : "open", node.dueDate ?? null]));
+    expect(queried.map(object => object.ref.canonicalId)).toEqual([...LAB_TASK_IDS]);
+    expect(queried.map(object => [object.value.title, object.value.status, object.value.dueDate])).toEqual(LAB_TASK_IDS.map(id => {
+      const node = savedNode(state, id);
+      return [node.title, node.done === true ? "done" : "open", node.dueDate ?? null];
+    }));
     expect(queried[0]?.value).toMatchObject({ area: LAB_AREA, project: GLIDER, summary: "open · due 2026-12-01 · Lab", note: "Use paper", effort: 2 });
     expect(queried[1]?.value).toMatchObject({ area: LAB_AREA, project: GLIDER, summary: "done · Lab" });
     expect(queried[2]?.value).toMatchObject({ area: LAB_AREA, project: null, summary: "open · Lab" });
     expect(rig.taskQueryBinding.display).toEqual({ title: "/title", summary: "/summary", status: "/status", due: "/dueDate", area: "/area" });
     const read = await rig.taskRead("task-wing");
+    const saved = savedNode(state, "task-wing");
     expect(read.result.status).toBe("ok");
     expect(read.result.groups[0]?.coverage).toBe("exhausted");
     const [task] = releasedObjects(read.released);
     expect(task?.ref.canonicalId).toBe("task-wing");
-    expect(task?.value).toMatchObject({ title: "Cut the wing", status: "open", dueDate: "2026-12-01", area: LAB_AREA });
+    expect(task?.value).toMatchObject({ title: saved.title, status: "open", dueDate: saved.dueDate, area: LAB_AREA });
+  });
+
+  test("a childless project and a studio thread leaf are never tasks", async () => {
+    const rig = await open();
+    const queried = releasedObjects((await rig.taskQuery()).released).map(object => object.ref.canonicalId);
+    expect(queried).not.toContain("project-empty");
+    expect(queried).not.toContain("task-studio");
+    expect((await rig.taskRead("project-empty")).result.status).toBe("unavailable");
+    expect((await rig.taskRead("task-studio")).result.status).toBe("unavailable");
+  });
+
+  test("task query keeps one snapshot across pages and restarts when the projection changes", async () => {
+    const rig = await open();
+    const first = await rig.taskQuery({ area: LAB_AREA, limit: 1 });
+    expect(first.result.groups[0]?.coverage).toBe("more");
+    const second = await rig.continueTaskQuery(first);
+    const third = await rig.continueTaskQuery(second);
+    expect(third.result.groups[0]?.coverage).toBe("exhausted");
+    expect([first, second, third].flatMap(step => releasedObjects(step.released).map(object => object.ref.canonicalId))).toEqual([...LAB_TASK_IDS]);
+    const reopened = await rig.taskQuery({ area: LAB_AREA, limit: 1 });
+    expect(reopened.result.groups[0]?.coverage).toBe("more");
+    rig.addTask("project-glider", leaf("task-new", "Inserted first"));
+    const shifted = await rig.continueTaskQuery(reopened);
+    expect(shifted.result.restartRequired).toBe(true);
+    expect(shifted.result.status).toBe("unavailable");
+    expect(shifted.released).toBeUndefined();
   });
 
   test("a deleted task reads as unavailable and asserts nothing about historic operations", async () => {
@@ -64,6 +97,17 @@ describe("the inactive Balance read adapter", () => {
     const text = JSON.stringify(read.result);
     expect(text).not.toContain("Cut the wing");
     expect(text).not.toMatch(/operation|receipt|history/i);
+  });
+
+  test("a task in an area outside the requested destinations is indistinguishable from a missing one", async () => {
+    const rig = await open();
+    await rig.allowHome();
+    const missing = await rig.taskRead("task-missing", LAB_AREA, [LAB_AREA]);
+    const outside = await rig.taskRead("task-garden", LAB_AREA, [LAB_AREA]);
+    expect(outside.result).toEqual({ ...missing.result, queryId: outside.result.queryId });
+    expect(outside.released).toBeUndefined();
+    expect(JSON.stringify(outside.result)).not.toContain("Water the garden");
+    expect(JSON.stringify(outside.result)).not.toContain("Home");
   });
 
   test("an area outside the connection or removed from configuration denies reads without names or counts", async () => {
