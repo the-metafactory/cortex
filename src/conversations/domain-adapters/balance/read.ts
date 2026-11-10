@@ -5,13 +5,9 @@ import type { QueryFetchRequest, QueryPage } from "../reads/query-types";
 import type { ReadBinding } from "../reads/types";
 import { schemaKey } from "../schema-validation";
 import { ObjectReferenceSchema, type AdapterBindings, type AdapterDeclaration, type ObjectReference, type SchemaRef } from "../types";
+import { BALANCE_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, objectSchema, ref, referenceSchema } from "./schema";
 
-const ADAPTER_ID = "balance";
-const DIALECT = "https://json-schema.org/draft/2020-12/schema";
 const MAX_PAGE_ITEMS = 20;
-type SchemaDocument = Record<string, Json>;
-
-const ref = (schemaId: string): SchemaRef => ({ schemaId, version: "1.0.0" });
 const AREA_SCHEMA_REF = ref("balance.area");
 const PROJECT_SCHEMA_REF = ref("balance.project");
 const TASK_SCHEMA_REF = ref("balance.task");
@@ -22,15 +18,6 @@ const TASK_QUERY_OUTPUT_REF = ref("balance.task.query.output");
 const TASK_READ_INPUT_REF = ref("balance.task.read.input");
 const TASK_READ_OUTPUT_REF = ref("balance.task.read.output");
 const ERROR_REF = ref("balance.error");
-
-const objectSchema = (properties: Record<string, Json>, required: readonly string[]): SchemaDocument => ({ $schema: DIALECT, type: "object", additionalProperties: false, required: [...required], properties });
-const referenceSchema = (objectType: "area" | "project" | "task"): SchemaDocument => objectSchema({
-  adapterId: { type: "string", const: ADAPTER_ID },
-  connectionId: { type: "string", minLength: 1 },
-  objectType: { type: "string", const: objectType },
-  canonicalId: { type: "string", minLength: 1 },
-}, ["adapterId", "connectionId", "objectType", "canonicalId"]);
-const nullableReferenceSchema = (objectType: "area" | "project" | "task"): SchemaDocument => ({ anyOf: [referenceSchema(objectType), { type: "null" }] });
 
 const AREA_VALUE_SCHEMA = objectSchema({ label: { type: "string" } }, ["label"]);
 const PROJECT_VALUE_SCHEMA = objectSchema({ label: { type: "string" } }, ["label"]);
