@@ -1,6 +1,7 @@
 import { scrollBelowDesk } from "../lib/desk-scroll";
-import { useEffect, useRef, useState, type DragEvent } from "react";
-import { balanceDrop, balanceMovable, dropZone, type DropZone } from "../lib/balance-drop";
+import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { type DropZone } from "../lib/balance-drop";
+import { useBalanceDrag } from "../hooks/use-balance-drag";
 import { useStoredFlag } from "../hooks/use-stored-flag";
 import type { OutlineNode } from "../../../../balance";
 import type { MyDayView } from "../../desk/my-day";
@@ -32,8 +33,6 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
   const { busy, message, change, setMoving } = editor;
   const [adding, setAdding] = useState<TaskAdding | null>(null);
   const [hideDone, setHideDone] = useStoredFlag("desk.balance.hide-completed");
-  const [dragging, setDragging] = useState<string | null>(null);
-  const [hint, setHint] = useState<{ id: string; zone: DropZone } | null>(null);
   const inspector = useRef<HTMLElement>(null);
   const outlineHeading = useRef<HTMLHeadingElement>(null);
   const entries = balanceEntries(current.outline);
@@ -46,32 +45,19 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
   const roots = current.outline.children.filter(node => !location.area || node.id === location.area);
   const visible = roots.filter(node => visibleNode(node, location.query, hideDone));
   const studioProjects = new Set(current.studioProjects.map(project => project.id));
-  const drop = (target: string, zone: DropZone): void => {
-    const into = dragging ? balanceDrop(current.outline, dragging, target, zone, studioProjects) : null;
-    const id = dragging;
-    setDragging(null);
-    setHint(null);
-    if (!into || !id) return;
-    void change({ op: "outline-move", id, revision: current.revision, ...into }, current.date).then(saved => { if (saved) go({ ...location, item: id }); });
-  };
+  const drag = useBalanceDrag({
+    outline: current.outline, studioProjects, busy,
+    onStart: () => { setMoving(null); },
+    onDrop: (id, into) => {
+      void change({ op: "outline-move", id, revision: current.revision, ...into }, current.date).then(saved => { if (saved) go({ ...location, item: id }); });
+    },
+  });
   const tree: TreeContext = {
     query: location.query, hideDone, collapsed, selected: selectedId, date: current.date,
     studioProjects, today: new Set(current.items.map(item => item.task.id)),
-    hint,
-    canDrag: id => !busy && balanceMovable(current.outline, id, studioProjects),
+    ...drag,
     onToggle: id => { setCollapsed(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }); },
     onSelect: id => { setMoving(null); setSelectionTick(tick => tick + 1); go({ ...location, item: id }); },
-    onDragStart: id => { setMoving(null); setDragging(id); },
-    onDragEnd: () => { setDragging(null); setHint(null); },
-    onDragOver: (id, zone) => {
-      if (dragging === null || !balanceDrop(current.outline, dragging, id, zone, studioProjects)) {
-        if (hint) setHint(null);
-        return false;
-      }
-      if (hint?.id !== id || hint.zone !== zone) setHint({ id, zone });
-      return true;
-    },
-    onDrop: drop,
   };
   const refresh = async (): Promise<void> => {
     try { setLocal(await getJson<MyDayView>("/api/desk/my-day")); onChanged(); }
@@ -106,12 +92,9 @@ interface TreeContext {
   query: string; hideDone: boolean; collapsed: Set<string>; selected: string | null; date: string; studioProjects: Set<string>; today: Set<string>;
   hint: { id: string; zone: DropZone } | null; canDrag: (id: string) => boolean;
   onToggle: (id: string) => void; onSelect: (id: string) => void;
-  onDragStart: (id: string) => void; onDragEnd: () => void; onDragOver: (id: string, zone: DropZone) => boolean; onDrop: (id: string, zone: DropZone) => void;
+  dragging: string | null;
+  onPointerDown: (event: PointerEvent<HTMLDivElement>, id: string) => void;
 }
-const zoneOf = (event: DragEvent<HTMLElement>): DropZone => {
-  const box = event.currentTarget.getBoundingClientRect();
-  return dropZone(event.clientY - box.top, box.height);
-};
 
 function BalanceTree({ node, depth, tree }: { node: OutlineNode; depth: number; tree: TreeContext }) {
   if (!visibleNode(node, tree.query, tree.hideDone)) return null;
@@ -119,12 +102,12 @@ function BalanceTree({ node, depth, tree }: { node: OutlineNode; depth: number; 
   const studioProject = tree.studioProjects.has(node.id);
   const open = Boolean(tree.query) || !tree.collapsed.has(node.id);
   const hint = tree.hint?.id === node.id ? ` drop-${tree.hint.zone}` : "";
-  return <li><div className={`dbl-row ${tree.selected === node.id ? "selected" : ""} ${node.done ? "done" : ""}${hint}`} style={{ paddingInlineStart: 12 + Math.min(depth, 7) * 14 }}
-    draggable={tree.canDrag(node.id)}
-    onDragStart={event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", node.id); tree.onDragStart(node.id); }}
-    onDragEnd={tree.onDragEnd}
-    onDragOver={event => { if (tree.onDragOver(node.id, zoneOf(event))) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}
-    onDrop={event => { event.preventDefault(); tree.onDrop(node.id, zoneOf(event)); }}>
+  const movable = tree.canDrag(node.id);
+  return <li><div className={`dbl-row ${tree.selected === node.id ? "selected" : ""} ${node.done ? "done" : ""}${hint}${tree.dragging === node.id ? " drag-source" : ""}`} style={{ paddingInlineStart: 12 + Math.min(depth, 7) * 14 }}
+    data-balance-id={node.id} data-movable={movable}
+    onPointerDown={event => { tree.onPointerDown(event, node.id); }}
+    onDragStart={event => { event.preventDefault(); }}>
+    {movable ? <span className="dbl-grip" aria-hidden="true" title="Drag to move">⠿</span> : <span className="dbl-grip-space" />}
     {branch ? <button className="dbl-toggle" aria-label={`${open ? "Collapse" : "Expand"} ${node.title}`} aria-expanded={open} onClick={() => { tree.onToggle(node.id); }}>{open ? "⌄" : "›"}</button> : <span className="dbl-leaf">{studioProject ? "◇" : node.done ? "✓" : "○"}</span>}
     <button className="dbl-select" aria-pressed={tree.selected === node.id} onClick={() => { tree.onSelect(node.id); }}><strong>{node.title}{node.focusMonth === tree.date.slice(0, 7) ? " ★" : ""}</strong><small>{branch ? `${openLeaves(node)} open${node.ordering === "sequential" ? " · In sequence" : ""}` : depth === 0 ? "Configured area" : studioProject ? "Studio thread" : node.done ? "Complete" : `${node.estimateMinutes === undefined ? "Estimate unknown" : `${node.estimateMinutes} min`}${tree.today.has(node.id) ? " · Today" : ""}${node.dueDate ? ` · Due ${node.dueDate}` : ""}`}</small></button><span className="dbl-weight">{node.weight === 0 ? "Paused" : node.weight}</span>
   </div>{branch && open && <ul>{node.children.map(child => <BalanceTree key={child.id} node={child} depth={depth + 1} tree={tree} />)}</ul>}</li>;
