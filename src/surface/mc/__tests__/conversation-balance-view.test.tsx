@@ -30,7 +30,7 @@ describe("created conversation Balance task view", () => {
     expect(render("task:glider")).toContain("no longer available");
   });
   test("a created operation without a canonical reference cannot expose an editor", () => {
-    const html = renderToStaticMarkup(<ConversationBalanceTask id={undefined} balance={{ reading: { kind: "loading" }, reload: () => undefined }} />);
+    const html = renderToStaticMarkup(<ConversationBalanceTask id={undefined} />);
     expect(html).toContain("has no saved reference");
     expect(html).not.toContain("<input");
     expect(html).not.toContain(">Edit</button>");
