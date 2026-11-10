@@ -1,17 +1,48 @@
 // glossary-ignore: run
 import type { Database } from "bun:sqlite";
-import { isGithubRef, isGitlabRef, isGraphRepositoryAllowed, listGraphNodes, listGraphRepositories, setGraphRepositoryEnabled, tickedGraphRepositories, type GraphRepositoryRunner } from "../desk/graph-repositories";
+import { graphRepositoryRefs, graphRepositoryTickedAt, isGithubRef, isGitlabRef, isGraphRepositoryAllowed, listGraphNodes, listGraphRepositories, restoreGraphRepository, setGraphRepositoryEnabled, tickedGraphRepositories, type GraphRepositoryRunner } from "../desk/graph-repositories";
+import { failureReason, type GraphScope, type GraphScopePublication } from "../desk/graph-repository-authority";
 import { runCommand } from "../desk/spawn";
 import { GRAPH_NODES_SUFFIX as NODES_SUFFIX, GRAPH_REPOSITORIES_PATH, GRAPH_TICKED_PARAM as TICKED_PARAM } from "../desk/graph-repository-schema";
 
 const noStore = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string): Response => Response.json({ error }, { status, headers: noStore });
+const saved = (ref: string, enabled: boolean): Response => Response.json({ ref, enabled }, { headers: noStore });
+
+export type GraphScopeAccess = () => GraphScope | null;
 
 export interface DeskGraphRepositoryDeps {
   run?: GraphRepositoryRunner;
   now?: () => number;
+  graphScope?: GraphScopeAccess;
 }
 
+async function published(scope: GraphScope, refs: readonly string[]): Promise<GraphScopePublication> {
+  try {
+    return await scope.publish(refs);
+  } catch (err) {
+    return { ok: false, reason: failureReason(err) };
+  }
+}
+
+async function saveTick(db: Database, scope: GraphScope, ref: string, now: number): Promise<Response> {
+  const previous = graphRepositoryRefs(db);
+  const enabledAt = graphRepositoryTickedAt(db, ref);
+  setGraphRepositoryEnabled(db, ref, true, now);
+  const ticked = await published(scope, graphRepositoryRefs(db));
+  if (ticked.ok) return saved(ref, true);
+  const withdrawn = await published(scope, previous);
+  if (!withdrawn.ok) return fail(503, `The repository scope could not be published and the tick could not be withdrawn again, so the tick stands until the next change republishes the scope: ${ticked.reason}; ${withdrawn.reason}`);
+  restoreGraphRepository(db, ref, enabledAt);
+  return fail(503, `The repository scope was not published, so this change was not saved: ${ticked.reason}`);
+}
+
+async function saveUntick(db: Database, scope: GraphScope, ref: string, now: number): Promise<Response> {
+  const withdrawn = await published(scope, graphRepositoryRefs(db).filter(other => other !== ref));
+  if (!withdrawn.ok) return fail(503, `The restriction was not withdrawn, so this change was not saved: ${withdrawn.reason}`);
+  setGraphRepositoryEnabled(db, ref, false, now);
+  return saved(ref, false);
+}
 
 function decodeRef(encoded: string): string | Response {
   try {
@@ -31,8 +62,10 @@ async function nodes(req: Request, encoded: string, db: Database, run: GraphRepo
 
 /**
  * GET lists the principal's GitHub repositories and GitLab projects with their ticks; PUT /api/desk/graph-repositories/<encoded ref> with
- * {enabled} ticks or unticks one; GET ?ticked=1 lists only the ticked ones without asking a forge; GET /api/desk/graph-repositories/<encoded ref>/nodes lists a ticked repository's open issues as parent
- * candidates. The rebind and identity gates in handleApi run before this handler.
+ * {enabled} ticks or unticks one, publishing the resulting scope to the Cortex runtime's authority when it supplies a graph scope; GET ?ticked=1 lists only the ticked ones without asking a forge; GET /api/desk/graph-repositories/<encoded ref>/nodes lists a ticked repository's open issues as parent
+ * candidates. A tick writes its row before the authority and puts it back when the publication fails; an untick
+ * withdraws the restriction before its row, so a crash either way leaves the authority narrower than the table,
+ * never wider. The rebind and identity gates in handleApi apply before this handler.
  */
 export async function handleDeskGraphRepositories(req: Request, url: URL, db: Database, deps: DeskGraphRepositoryDeps = {}): Promise<Response> {
   const rest = url.pathname.slice(GRAPH_REPOSITORIES_PATH.length);
@@ -49,6 +82,9 @@ export async function handleDeskGraphRepositories(req: Request, url: URL, db: Da
   const body = (await req.json().catch(() => null)) as { enabled?: unknown } | null;
   if (typeof body?.enabled !== "boolean") return fail(400, "enabled must be true or false.");
   if (body.enabled && !isGithubRef(ref) && !isGitlabRef(ref)) return fail(400, "Only a GitHub repository such as github:github.com/<owner>/<name> or a GitLab project such as gitlab:<host>/<group>/<name> can be ticked.");
-  setGraphRepositoryEnabled(db, ref, body.enabled, (deps.now ?? Date.now)());
-  return Response.json({ ref, enabled: body.enabled }, { headers: noStore });
+  const now = (deps.now ?? Date.now)();
+  const scope = deps.graphScope?.() ?? null;
+  if (scope) return body.enabled ? saveTick(db, scope, ref, now) : saveUntick(db, scope, ref, now);
+  setGraphRepositoryEnabled(db, ref, body.enabled, now);
+  return saved(ref, body.enabled);
 }
