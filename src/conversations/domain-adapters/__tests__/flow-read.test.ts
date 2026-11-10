@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createFlowReadAdapter } from "../flow/read";
 import { releasedObjects } from "./fixtures/balance-read-fixtures";
-import { assertCloudReaderDenied, assertDeletedFlowUnavailable, assertNoFlowLeak, assertSavedFlowMatches, directQuery, FLOW_NAME, openFlowReadRig, openWithStubPulse, type FlowReadRig } from "./fixtures/flow-read-fixtures";
+import { assertCloudReaderDenied, assertDeletedFlowAbsent, assertNoFlowLeak, assertSavedFlowMatches, directQuery, FLOW_NAME, openFlowReadRig, openWithStubPulse, type FlowReadRig } from "./fixtures/flow-read-fixtures";
 
 const opened: FlowReadRig[] = [];
 afterEach(async () => { await Promise.all(opened.splice(0).map(rig => rig.close())); });
@@ -17,11 +17,11 @@ describe("inactive saved Flow reads through the registered host query runner", (
     await assertSavedFlowMatches(rig);
   });
 
-  test("deletion and unreadable owner data are unavailable without object or operation claims", async () => {
+  test("deletion confirms absence while unreadable owner data remains unavailable", async () => {
     const rig = await open();
     await rig.save();
     const shown = await rig.pulse(["show", FLOW_NAME]);
-    await assertDeletedFlowUnavailable(rig, shown);
+    await assertDeletedFlowAbsent(rig, shown);
     await writeFile(join(rig.flowsDir, `${FLOW_NAME}.yaml`), "name: [invalid");
     const unreadable = await rig.query();
     expect(unreadable.result.status).toBe("unavailable");
