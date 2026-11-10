@@ -48,6 +48,8 @@ describe("writeDeskAdapterEvidence", () => {
 
   test("rejects bad matrix rows", () => {
     rejects(summary => { summary.matrix = [{ row: "A15", result: "pass" }]; });
+    rejects(summary => { summary.matrix = [{ row: "A1", result: "pass" }]; });
+    rejects(summary => { summary.matrix = (summary.matrix as unknown[]).slice(1); });
     rejects(summary => { summary.matrix = [{ row: "A1", result: "pass" }, { row: "A1", result: "pass" }]; });
   });
 

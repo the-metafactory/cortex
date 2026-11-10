@@ -91,6 +91,7 @@ function validateMatrix(value: unknown, problems: string[]): void {
     else seen.add(item.row);
     result(item.result, `${path}.result`, problems);
   });
+  for (const row of MATRIX_ROWS) if (!seen.has(row)) problems.push(`matrix is missing row ${row}`);
 }
 
 function validateTiming(value: unknown, problems: string[]): void {
