@@ -38,6 +38,9 @@ async function probe() {
     assert.equal(await page.locator(".dbl-drag-preview").count(), 1, "The whole row follows the pointer during the drag");
     assert.match(await page.locator(".dbl-drag-preview").innerText(), /Fold the body/);
     assert.equal(await target.evaluate(element => element.classList.contains("drop-before")), true, "The insertion point is highlighted");
+    const commits = await page.evaluate(() => document.body.dataset.balanceCommits);
+    await page.mouse.move(to.x + 220, to.y + 2, { steps: 20 });
+    assert.equal(await page.evaluate(() => document.body.dataset.balanceCommits), commits, "Moving within one drop zone must not commit tree renders");
     const saved = page.waitForResponse(response => response.url().endsWith("/api/desk/my-day") && response.request().method() === "POST");
     await page.mouse.up();
     assert.equal((await saved).status(), 200);
