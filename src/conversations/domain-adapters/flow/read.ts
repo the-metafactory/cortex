@@ -50,7 +50,7 @@ export function createFlowReadAdapter(source: FlowReadSource) {
   };
   const readSaved = async (saved: SavedListing, target: ObjectReference, signal?: AbortSignal) => {
     const listed = saved.find(item => item.name === target.canonicalId);
-    if (!listed) return unavailable();
+    if (!listed) return { items: [] };
     const shown = parse(shownRecord, await owner(["show", target.canonicalId], signal));
     const { yaml: _yaml, ...metadata } = shown;
     const { package: _package, ...expected } = listed;
