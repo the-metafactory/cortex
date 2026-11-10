@@ -28,7 +28,8 @@ describe("graph surfaces over the host query runner", () => {
     const found = await reader.destinations();
     if (!found.enabled) throw new Error("graph surfaces were off");
     expect(found.repositories.map(r => r.ref)).toEqual([CORTEX, "gitlab:gitlab.example.org/claw/crisis-simulator"]);
-    expect(found.parents.map(p => [p.kind, p.ref, p.repository])).toEqual(expect.arrayContaining([["map", CORTEX_MAP, CORTEX], ["node", CORTEX_NODE, CORTEX]]));
+    expect(found.parents.map(p => [p.kind, p.ref, p.repository])).toContainEqual(["map", CORTEX_MAP, CORTEX]);
+    expect(found.parents.map(p => [p.kind, p.ref, p.repository])).toContainEqual(["node", CORTEX_NODE, CORTEX]);
     expect(found.parents.some(p => p.ref.includes("other"))).toBe(false);
   });
 

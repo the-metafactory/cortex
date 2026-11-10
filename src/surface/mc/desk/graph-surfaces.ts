@@ -1,26 +1,23 @@
 // glossary-ignore: host, owner
-import type { HostContext } from "../../../conversations/authority";
-import type { ReleaseSink } from "../../../conversations/authority-records";
 import type { Json } from "../../../conversations/domain-adapters/operations/types";
-import type { QueryRunner } from "../../../conversations/domain-adapters/reads/query";
 import { readPointer } from "../../../conversations/domain-adapters/reads/query-validation";
-import type { QueryPage, QueryResult } from "../../../conversations/domain-adapters/reads/query-types";
+import type { QueryPage } from "../../../conversations/domain-adapters/reads/query-types";
 import type { ReadBinding } from "../../../conversations/domain-adapters/reads/types";
 import type { ObjectReference, SchemaRef } from "../../../conversations/domain-adapters/types";
 import { canonicalGraphRef } from "../../../common/graph-ref";
 import { graphNodeRepository } from "../../../conversations/domain-adapters/work-graph/read";
+import { runHostQuery, type HostQueryRun, type HostQueryRunner } from "./query-run";
 import type { GraphSurfaceCard, GraphSurfaceDestinations, GraphSurfaceFacts } from "./graph-surface-schema";
 
 const WORK_GRAPH = "work-graph";
 const READ_FAILED_IS_UNAVAILABLE: GraphSurfaceCard = { enabled: true, state: "unavailable" };
 const NODE_READ = "work-graph.node.read";
 
-export interface GraphSurfaceRun { readonly result: QueryResult; readonly released?: Json }
 export interface GraphSurfaceSource {
   readonly connectionId: string;
   readonly enabled: () => boolean;
   readonly destinations: () => QueryPage | Promise<QueryPage>;
-  readonly readNode: (request: { input: Json; destinations: readonly ObjectReference[] }) => Promise<GraphSurfaceRun>;
+  readonly readNode: (request: { input: Json; destinations: readonly ObjectReference[] }) => Promise<HostQueryRun>;
   readonly display: ReadBinding["display"];
 }
 export type GraphSurfaceAccess = () => GraphSurfaceReader | null;
@@ -29,28 +26,20 @@ export interface GraphSurfaceReader {
   destinations(): Promise<GraphSurfaceDestinations>;
   node(ref: string, repository?: string): Promise<GraphSurfaceCard>;
 }
-export interface GraphSurfaceRunner {
+export interface GraphSurfaceRunner extends HostQueryRunner {
   readonly connectionId: string;
-  readonly runner: Pick<QueryRunner, "create" | "run">;
-  readonly context: HostContext;
-  readonly sink: ReleaseSink;
   readonly inputSchemaRef: SchemaRef;
 }
 
 export function graphSurfaceRun(config: GraphSurfaceRunner): GraphSurfaceSource["readNode"] {
-  return async request => {
-    const created = await config.runner.create(config.context, [{
-      adapterId: WORK_GRAPH,
-      connectionId: config.connectionId,
-      capabilityId: NODE_READ,
-      inputSchemaRef: config.inputSchemaRef,
-      destinations: [...request.destinations],
-      input: request.input,
-    }], config.sink);
-    let released: Json | undefined;
-    const result = await config.runner.run(config.context, created, config.sink, undefined, undefined, { released: value => { released = value; } });
-    return { result, ...(released === undefined ? {} : { released }) };
-  };
+  return request => runHostQuery(config, {
+    adapterId: WORK_GRAPH,
+    connectionId: config.connectionId,
+    capabilityId: NODE_READ,
+    inputSchemaRef: config.inputSchemaRef,
+    destinations: [...request.destinations],
+    input: request.input,
+  });
 }
 
 interface Released { ref: ObjectReference; value: Json }
@@ -60,7 +49,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> => typeof va
 function releasedObjects(released: Json | undefined): Released[] {
   const held = isRecord(released) ? released.objects : undefined;
   if (!Array.isArray(held)) return [];
-  return held.flatMap(entry => isRecord(entry) && isRecord(entry.ref) && entry.value !== undefined ? [{ ref: entry.ref as unknown as ObjectReference, value: entry.value as Json }] : []);
+  return held.flatMap(entry => isRecord(entry) && isRecord(entry.ref) && entry.value !== undefined ? [{ ref: entry.ref as unknown as ObjectReference, value: entry.value }] : []);
 }
 
 const text = (value: Json | undefined): string | null => typeof value === "string" ? value : null;
