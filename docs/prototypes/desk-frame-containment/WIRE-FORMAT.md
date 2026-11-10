@@ -57,7 +57,8 @@ Frame → host
 - **Authority contract** (#3288 D5, #3290): confirmation and execution stay host-owned. No frame message carries a grant, credential, URL, capability id or callback; `action:propose` can only open the host's confirmation, and the host rechecks read/release and effect admission before replying or acting. Identity binds every message to one adapter, connection, generation and release, so a cached frame of generation A cannot talk to backend B.
 - **Drafting contract**: `draft:change` reuses `EditChange` and JSON-pointer field addressing; `host:draft.blocking` reuses `Blocking`.
 
-## Open decisions for the principal
+## Principal rulings (2026-11-10)
 
-- **D2** Rename `host:navigate` to `ui:navigate` under the sender-prefix rule (proposed), or keep the prototype name.
-- **D3** Editor views: widen the package `ui.views[].view` to `result | editor` before the Desk SDK 1.0.0 release, so 1.0.0 covers editors (proposed); or ship 1.0.0 result-only and add `editor` with `draft:change` / `action:propose` in 1.1.0.
+- `host:navigate` is renamed `ui:navigate`; message prefixes name the sender.
+- The package `ui.views[].view` widens to `result | editor` before the Desk SDK 1.0.0 release, so 1.0.0 covers editors.
+- Delivery is the inline single document; WebRTC and WebKit preconnect egress are accepted residual risks (see the README).
