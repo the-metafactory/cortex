@@ -1,3 +1,4 @@
+import { createTextBatcher } from "./text-batcher";
 import { existsSync } from "node:fs";
 import { mkdir, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -21,7 +22,6 @@ export interface PiSettings {
 
 const RESULT_LIMIT = 50_000;
 const STDERR_LIMIT = 400;
-const TEXT_INTERVAL_MS = 100;
 const FILE_TOOLS: readonly string[] = PI_FILE_TOOLS;
 const BASE_ENV = new Set(["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM", "TZ", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"]);
 const BASE_ENV_PREFIXES = ["PI_", "SOMA_", "XDG_", "LC_"];
@@ -159,21 +159,7 @@ type Answer = Extract<PiEvent, { type: "message_end" }>["message"];
 async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: Set<string>, request: TurnRequest, halt: (reason: string) => void, bridged = new Set<string>()): Promise<Answer | null> {
   const calls = new Map<string, unknown>();
   let answer: Answer | null = null;
-  let pendingText = "";
-  let lastTextAt = 0;
-  let textTimer: ReturnType<typeof setTimeout> | undefined;
-  let flushing = Promise.resolve();
-  const flushText = (): Promise<void> => {
-    clearTimeout(textTimer);
-    textTimer = undefined;
-    const text = pendingText;
-    pendingText = "";
-    if (text) {
-      lastTextAt = Date.now();
-      flushing = flushing.then(async () => { await request.text?.(text); });
-    }
-    return flushing;
-  };
+  const text = createTextBatcher(request.text, halt);
   try {
     for await (const line of lines(child.stdout)) {
       let raw: unknown;
@@ -182,28 +168,14 @@ async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: 
       if (!event.success) continue;
       const e = event.data;
       if (e.type === "message_start") {
-        if (e.message.role === "assistant") {
-          clearTimeout(textTimer);
-          textTimer = undefined;
-          pendingText = "";
-          lastTextAt = 0;
-          await flushing;
-          await request.text?.("", true);
-        }
+        if (e.message.role === "assistant") await text.reset();
         continue;
       }
       if (e.type === "message_update") {
-        if (e.assistantMessageEvent.type === "text_delta" && e.assistantMessageEvent.delta) {
-          pendingText += e.assistantMessageEvent.delta;
-          const remaining = TEXT_INTERVAL_MS - (Date.now() - lastTextAt);
-          if (remaining <= 0) await flushText();
-          else textTimer ??= setTimeout(() => {
-            void flushText().catch((error: unknown) => { halt(error instanceof Error ? error.message : String(error)); });
-          }, remaining);
-        }
+        if (e.assistantMessageEvent.type === "text_delta" && e.assistantMessageEvent.delta) text.push(e.assistantMessageEvent.delta);
         continue;
       }
-      await flushText();
+      await text.flush();
       if (e.type === "tool_execution_start") { calls.set(e.toolCallId, e.args); continue; }
       if (e.type === "message_end") { if (e.message.role === "assistant") answer = e.message; continue; }
       const result = capped(textOf(e.result?.content));
@@ -212,9 +184,9 @@ async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: 
       if (!bridged.has(e.toolCallId)) await request.activity(activityOf({ callId: e.toolCallId, name: e.toolName, input: calls.get(e.toolCallId) ?? null }, { outcome, text: result }));
       if (outcome === "stopped") { halt(`pi reported ${e.toolName}, which is not on the read-only tool allowlist, as run; the turn was stopped`); return null; }
     }
-    await flushText();
+    await text.flush();
     return answer;
-  } finally { clearTimeout(textTimer); await flushing; }
+  } finally { await text.dispose(); }
 }
 
 export function piTurns(settings: PiSettings): TurnCall {

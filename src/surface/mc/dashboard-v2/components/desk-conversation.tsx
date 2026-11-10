@@ -3,7 +3,7 @@ import { renderMarkdown } from "../lib/markdown";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { SessionEnd } from "../../desk/studio/session-schema";
 import {
-  chooseOutcome, continueInDiscord, entryViews, failureText as failure, modelLine, organize as organizeConversation, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel, statusLabel,
+  chooseOutcome, continueInDiscord, entryViews, failureText as failure, modelLine, organize as organizeConversation, readConversation, readEntries, saveDraft, sendInput, sourceLabel, statusLabel,
   type ConversationDetail, type ConversationEntry, type OperationRecord,
 } from "../lib/conversations";
 import { laneName, type Organize, type SourceView } from "../../../../conversations/types";
@@ -274,7 +274,7 @@ export function WorkspaceView(c: WorkspaceProps) {
   const stream = useRef<HTMLDivElement>(null);
   const count = c.entries.length;
   useEffect(() => { stream.current?.scrollTo({ top: stream.current.scrollHeight }); }, [count, c.liveText]);
-  const { conversation, sources, pending, studio } = c.detail;
+  const { conversation, sources, studio } = c.detail;
   const views = c.entries.flatMap(entry => entryViews(entry).map((view, i) => ({ key: `${entry.id}-${i}`, view })));
   const archived = conversation.state === "archived";
   const said = c.entries.filter(entry => entry.role === "user" && entry.text).at(-1);
@@ -312,8 +312,6 @@ export function WorkspaceView(c: WorkspaceProps) {
       {c.liveText && <article className="dcv-msg ivy" aria-label="Ivy is answering"><small>Ivy · answering…</small><IvyAnswer text={c.liveText} /></article>}
       {views.length === 0 && !c.liveText && <p className="dcv-quiet">No messages yet. Your exchange is saved as you go.</p>}
     </div>
-    {pending.length > 0 && <div className="dcv-queue" role="status"><strong>{pending.length === 1 ? "1 message in order" : `${pending.length} messages in order`} · one shared order for web and Discord</strong>
-      <ol>{pending.map(p => <li key={p.inputId}>{pendingLabel(p)}</li>)}</ol></div>}
     <form className="dcv-composer" onSubmit={e => { e.preventDefault(); if (!archived) c.onSend("queue"); }}>
       <label>Message Ivy<textarea aria-label="Message Ivy" value={c.draft} disabled={!c.ready || archived} maxLength={20_000} onChange={e => { c.onDraft(e.target.value); }} placeholder="Continue the thought…" /></label>
       <div className="dcv-acts">
