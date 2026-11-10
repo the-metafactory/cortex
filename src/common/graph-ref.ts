@@ -84,3 +84,18 @@ export function qualifiedNodeId(repoText: string, id: string): string {
 export function canonicalNodeId(ref: GraphNodeRef): string {
   return ref.repo.forge === "github" ? String(ref.iid) : `${ref.repo.path}${ref.sigil}${ref.iid}`;
 }
+
+const BARE_NODE = /^#?([1-9]\d*)$/;
+
+export const isBareGraphNode = (value: string): boolean => BARE_NODE.test(value);
+
+/**
+ * The equality form of a stored graph id: only one `github:github.com/` prefix is removed, as `canonicalTaskRef` does,
+ * and a bare number is joined to the repository it was asked with. Nothing else is normalised, so GitLab refs stay as written.
+ */
+export function canonicalGraphRef(value: string, repository?: string): string {
+  const text = value.trim();
+  const bare = BARE_NODE.exec(text);
+  const combined = bare && repository !== undefined ? `${repository}#${bare[1]}` : text;
+  return combined.replace(/^github:github\.com\//, "");
+}

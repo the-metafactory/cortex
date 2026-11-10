@@ -6,6 +6,7 @@ import type { SchemaRef } from "../../../conversations/domain-adapters/types";
 import { QUERY_LIMITS, type QueryResult } from "../../../conversations/domain-adapters/reads/query-types";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import { SEARCH_MAX_LIMIT, SEARCH_MAX_OFFSET, type WorkKind, type WorkObject, type WorkPage, type WorkRead, type WorkReader } from "../../../conversations/tools/work-context";
+import { runHostQuery } from "./query-run";
 import type { Policy } from "../../../conversations/types";
 
 export interface BalanceWorkArea {
@@ -164,19 +165,14 @@ export function balanceWorkQuery(config: BalanceWorkRunner): BalanceWorkQuery {
   return {
     connectionId: config.connectionId,
     areas: config.areas,
-    run: async request => {
-      const created = await config.runner.create(config.context, [{
-        adapterId: "balance",
-        connectionId: config.connectionId,
-        capabilityId: request.capabilityId,
-        inputSchemaRef: config.inputSchemaRef(request.capabilityId),
-        destinations: [...request.destinations],
-        input: request.input,
-      }], config.sink);
-      let released: Json | undefined;
-      const result = await config.runner.run(config.context, created, config.sink, undefined, undefined, { released: value => { released = value; } });
-      return { result, ...(released === undefined ? {} : { released }) };
-    },
+    run: request => runHostQuery(config, {
+      adapterId: "balance",
+      connectionId: config.connectionId,
+      capabilityId: request.capabilityId,
+      inputSchemaRef: config.inputSchemaRef(request.capabilityId),
+      destinations: [...request.destinations],
+      input: request.input,
+    }),
   };
 }
 

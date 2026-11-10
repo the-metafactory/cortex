@@ -4,6 +4,8 @@ import { proposalLinks } from "../../../../conversations/links";
 import { failureText } from "../lib/conversations";
 import { check, confirm, feedbackLabel, propose, readCapabilities, readCreation, revise, revoke, type Capability, type CreationView, type GrantScope, type ProposalView } from "../lib/conversation-creation";
 
+import { DisplayCard, useDisplayCard } from "./desk-conversation-display-card";
+import { readGraphSurfaceCard } from "../lib/desk-graph-surfaces";
 import { ConversationDestination } from "./desk-conversation-destination";
 import { GRAPH_TYPES, GraphDatalists, graphListFor, prefillFields, recallGraphDestination, rememberGraphDestination, useGraphChoices } from "./desk-conversation-graph-fields";
 import { ConversationBalanceTask, useConversationBalanceTasks, type ConversationBalanceTasks } from "./desk-conversation-balance-task";
@@ -102,9 +104,23 @@ function ProposalCard({ id, view, types, busy, archived, act, balance }: { id: s
   useEffect(() => { setFields(filled(JSON.parse(savedFields) as Record<string, string>)); setType(proposal.type ?? ""); }, [proposal.revision, savedFields, proposal.type]);
   useEffect(() => { setFields(filled); }, [choices.repositories]);
   useEffect(() => { setRepository(fields.repository ?? ""); }, [fields.repository]);
+  const [reference, setReference] = useState<{ ref: string; ok: boolean; text: string } | null>(null);
+  const typedParent = (fields.parent ?? "").trim();
+  const offered = choices.adapter && typedParent !== "" && Boolean(choices.nodes?.some(n => n.id === typedParent));
+  const needsCheck = choices.adapter && typedParent !== "" && !offered && !(reference?.ref === typedParent && reference.ok);
+  const outsideScope = choices.adapter && Boolean(fields.repository) && !choices.repositories?.some(r => r.ref === fields.repository);
+  const checkReference = (): void => {
+    const ref = typedParent;
+    readGraphSurfaceCard(ref, fields.repository ?? "").then(card => {
+      if (!card.enabled) setReference({ ref, ok: false, text: "The graph connection is off." });
+      else if (card.state === "available") setReference({ ref, ok: true, text: `Found: ${card.title}${card.status ? ` (${card.status})` : ""}.` });
+      else setReference({ ref, ok: false, text: card.state === "withheld" ? "That reference is in a repository that is not ticked." : "That reference was not found." });
+    }).catch(() => { setReference({ ref, ok: false, text: "The reference could not be checked. Try again." }); });
+  };
   const dirty = JSON.stringify(fields) !== JSON.stringify(proposal.fields);
   const settled = view.operation?.state === "created";
   const savedBalanceTask = settled && proposal.type === "balance-task";
+  const savedCard = useDisplayCard(view.operation?.canonicalId, proposal.fields.repository ?? "", settled && GRAPH_TYPES.has(proposal.type ?? ""));
   const save = (): Promise<ProposalView> => revise(id, proposal.proposalId, { revision: proposal.revision, fields });
   const doConfirm = (): void => void act(async () => {
     const current = dirty ? await save() : view;
@@ -143,11 +159,17 @@ function ProposalCard({ id, view, types, busy, archived, act, balance }: { id: s
           : <input aria-label={f.label} list={graph ? graphListFor(proposal.type, f.name, proposal.proposalId) : undefined} type={f.kind === "date" ? "date" : f.kind === "datetime" ? "datetime-local" : "text"} value={fields[f.name] ?? ""} disabled={!editable} onChange={e => { setFields({ ...fields, [f.name]: e.target.value }); }} />}
       </label>)}
       {graph && <GraphDatalists id={proposal.proposalId} choices={choices} />}
+      {graph && choices.adapter && typedParent !== "" && !offered && <div className="dcv-quiet">
+        <button type="button" className="desk-btn" disabled={busy} onClick={checkReference}>Check reference</button>
+        <span role="status"> {reference?.ref === typedParent ? reference.text : "Check this reference before confirming; it is not one of the offered parents."}</span>
+      </div>}
+      {graph && outsideScope && <p className="dcv-quiet" role="status">This repository is not ticked in Desk Settings.</p>}
       {graph && choices.note && <p className="dcv-quiet" role="status">{choices.note}</p>}
       {capability.fixed.map(t => <p key={t.label} className="dcv-quiet"><strong>{t.label}:</strong> {t.value}</p>)}
       {proposal.suggestion && <p className="dcv-quiet">Filer: {proposal.suggestion}</p>}
     </div>}
     {savedBalanceTask && <ConversationBalanceTask id={view.operation?.canonicalId} balance={balance} />}
+    {settled && GRAPH_TYPES.has(proposal.type ?? "") && <DisplayCard reading={savedCard} />}
     {settled && <p role="status">Created {capability?.label.toLowerCase()} {view.operation?.canonicalId}{links.object ? <> · <a href={links.object}>Open it</a></> : null}. It links back to this exchange.</p>}
     {editable && view.feedback === "proposed" && <div className="dcv-standing">
       <label><input type="checkbox" checked={standing} onChange={e => { setStanding(e.target.checked); }} /> Allow future {capability?.label.toLowerCase()} creation without asking</label>
@@ -157,7 +179,7 @@ function ProposalCard({ id, view, types, busy, archived, act, balance }: { id: s
       </select>}
     </div>}
     <div className="dcv-acts">
-      {editable && view.feedback === "proposed" && <button type="button" className="desk-btn pri" disabled={busy || view.missing.length > 0 && !dirty || Boolean(view.refusal)} onClick={doConfirm}>Confirm creation</button>}
+      {editable && view.feedback === "proposed" && <button type="button" className="desk-btn pri" disabled={busy || view.missing.length > 0 && !dirty || Boolean(view.refusal) || needsCheck || outsideScope} onClick={doConfirm}>Confirm creation</button>}
       {(view.feedback === "uncertain" || view.feedback === "accepted") && <button type="button" className="desk-btn pri" disabled={busy} onClick={() => void act(() => check(id, proposal.proposalId), "The owner could not be asked. Check again later.")}>Check</button>}
       {view.feedback === "failed" && !archived && <button type="button" className="desk-btn pri" disabled={busy} onClick={() => void act(() => revise(id, proposal.proposalId, { revision: proposal.revision, fields }), "Not saved. Try again.")}>Try again</button>}
       {editable && dirty && <button type="button" className="desk-btn" disabled={busy} onClick={() => void act(save, "Your edits were not saved. They are still here; try again.")}>Save edits</button>}
