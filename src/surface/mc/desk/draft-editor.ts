@@ -5,6 +5,7 @@ import type { DraftConfirmation, DraftConfirmationRequest, DraftReceipt, DraftEd
 export function deskDraftEditor(host: ConversationHost, deps: DraftServiceDeps, options: {
   targets: () => readonly DraftTarget[];
   audience: Lane;
+  hasOperation?: (view: DraftView) => Promise<boolean>;
   receipt?: (view: DraftView) => Promise<DraftReceipt | null>;
   confirm?: (request: DraftConfirmationRequest) => Promise<DraftConfirmation>;
 }) {
@@ -26,7 +27,8 @@ export function deskDraftEditor(host: ConversationHost, deps: DraftServiceDeps, 
     if (before && before.draft.connectionId !== view.draft.connectionId) destinationChanges.push({ pointer: "connection", before: before.draft.connectionId, after: view.draft.connectionId });
     return { view, fields, destinationChanges, receipt: await options.receipt?.(view) ?? null };
   }
-  return { host, service, targets: options.targets, audience: options.audience, confirm: options.confirm, receipt: options.receipt, present };
+  const hasOperation = options.hasOperation ?? (async (view: DraftView) => Boolean(await options.receipt?.(view)));
+  return { host, service, targets: options.targets, audience: options.audience, confirm: options.confirm, hasOperation, present };
 }
 
 export type DeskDraftEditor = ReturnType<typeof deskDraftEditor>;

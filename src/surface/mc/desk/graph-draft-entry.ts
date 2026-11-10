@@ -1,6 +1,6 @@
 import type { AuthorityMediator, HostContext, WriterLease } from "../../../conversations/authority";
 import type { ConversationHost } from "../../../conversations/host";
-import { DraftingBindings, type DraftServiceDeps, type Handoff, type Lane } from "../../../conversations/domain-adapters/drafting";
+import { draftOperationId, DraftingBindings, type DraftServiceDeps, type Handoff, type Lane } from "../../../conversations/domain-adapters/drafting";
 import type { OperationBridge } from "../../../conversations/domain-adapters/operations/dispatch";
 import { receiptStatus } from "../../../conversations/domain-adapters/operations/reconciliation";
 import type { ApprovedSnapshot } from "../../../conversations/domain-adapters/operations/types";
@@ -40,9 +40,10 @@ export function deskGraphDraftEditor(host: ConversationHost, deps: GraphDraftSet
   const editor = deskDraftEditor(host, { ...deps, bindings, destinations }, {
     audience: options.audience,
     targets: () => [{ connectionId: options.connectionId, capabilityId: "work-graph.node.create", label: "Graph node" }],
+    hasOperation: async view => Boolean(await host.lifecycleJournal(deps.registry).read(draftOperationId(view.draft))),
     receipt: async view => {
       const draft = view.draft;
-      const operationId = `${draft.conversationId}:${draft.draftId}:${draft.revision}`;
+      const operationId = draftOperationId(draft);
       const stored = await host.lifecycleJournal(deps.registry).read(operationId);
       if (!stored) return null;
       const session = await options.session(draft.conversationId);
@@ -80,7 +81,7 @@ export function deskGraphDraftEditor(host: ConversationHost, deps: GraphDraftSet
       const snapshot = workGraphNodeApprovedSnapshot({ connectionId: options.connectionId, provenance: { conversationId: draft.conversationId, proposalId: draft.draftId, revision: draft.revision, entryId: draft.entryId, link: `?desk=conversation&conversation=${encodeURIComponent(draft.conversationId)}` }, input, policy: handoff.policy });
       snapshot.sources = sources;
       snapshot.digest = snapshotDigest(snapshot);
-      const operationId = `${draft.conversationId}:${draft.draftId}:${draft.revision}`;
+      const operationId = draftOperationId(draft);
       if (!await unchanged()) return blocked("The draft changed; review it again.");
       const approval = await options.authority.confirm(session.context, { operationId, idempotencyKey: operationId, ownerRequestId: workGraphNodeRequestId(operationId), snapshot });
       if (approval.kind !== "allowed") return blocked(approval.reason.message);

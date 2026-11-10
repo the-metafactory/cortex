@@ -78,7 +78,8 @@ export async function openGraphCreateRig(fixture: { discussion?: string } = {}) 
     items: [{ id: "turn-example", kind: "turn", revision: "1", digest: "synthetic-digest", restriction: "cloud", text: fixture.discussion ?? GRAPH_DRAFT_DISCUSSION, at: AT }] as SourceItem[],
   };
   const sinks = new Map([[canonicalWire({ kind: "web", conversationId: conversation.id }), () => Promise.resolve()]]);
-  const connectors = new Map<string, TrustedConnector>([[connection.connectorId, { ...binding.connector, authorizeConnection: () => Promise.resolve({ version: 1, available: true, revision: "1" }), query: request => read.query(request) }]]);
+  const trustedConnector = (): TrustedConnector => ({ ...binding.connector, authorizeConnection: () => Promise.resolve({ version: 1, available: true, revision: "1" }), query: request => read.query(request) });
+  const connectors = new Map<string, TrustedConnector>([[connection.connectorId, trustedConnector()]]);
   const bindings: AuthorityBindings = {
     currentRevision: () => JSON.stringify({ connection, policy, sessionEnabled: state.sessionEnabled }),
     authenticate: sessionRef => Promise.resolve(sessionRef === "graph-session" && state.sessionEnabled ? { principal: principal.principal, stack: "test", conversationId: conversation.id, authenticatedSessionRef: sessionRef, transport: "web", audience: "web", expiresAt: "2026-12-01T00:00:00.000Z", maintenance: false } : null),
@@ -132,7 +133,7 @@ export async function openGraphCreateRig(fixture: { discussion?: string } = {}) 
       host = await openHost();
       journal = host.lifecycleJournal(registry);
       binding = createBinding();
-      connectors.set(connection.connectorId, { ...binding.connector, authorizeConnection: () => Promise.resolve({ version: 1, available: true, revision: "1" }), query: request => read.query(request) });
+      connectors.set(connection.connectorId, trustedConnector());
       authority = host.lifecycleAuthority(registry, bindings);
       bridge = host.lifecycleBridge(registry, bindings, () => binding.support);
       runner = host.readQueries(registry, bindings);

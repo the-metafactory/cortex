@@ -116,8 +116,7 @@ export async function handleDeskDrafts(req: Request, url: URL, guard: MutationGu
     if (!before) return fail(404, "Draft does not exist.");
     await editor.host.detail(before.draft.conversationId);
     if (!hasTarget(editor, before.draft.capabilityId, before.draft.connectionId)) return fail(403, "This drafting destination is unavailable; the saved draft is retained.");
-    const receipt = await editor.receipt?.(before);
-    if (receipt && req.method !== "GET" && segments[1] !== "confirm") return fail(409, "This draft already has an operation. Reopen its receipt or make a new draft.");
+    if (req.method !== "GET" && segments[1] !== "confirm" && await editor.hasOperation(before)) return fail(409, "This draft already has an operation. Reopen its receipt or make a new draft.");
     const action = ACTIONS.get(segments[1] ?? "");
     return action ? await action({ req, url, editor, audience, principal, draftId, before }) : fail(404, "Unknown draft action.");
   } catch (error) {

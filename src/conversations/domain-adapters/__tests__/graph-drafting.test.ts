@@ -178,19 +178,58 @@ test("manual ambiguous references keep authorized alternatives and failure canno
   await expectBlockedConfirmation(rig, failed);
 });
 
-test("explicit refresh revalidates fully owned destinations without needing a model", async () => {
-  const rig = await open();
+async function ownFields(rig: Rig): Promise<DraftEditorView> {
   let current: DraftEditorView = await make(rig);
   for (const field of current.fields) {
     const value = current.view.draft.fields[field.pointer];
     current = await edit(rig, current, field.pointer, value?.presence === "present" ? { kind: "set", value: value.value } : { kind: "omit" });
   }
+  return current;
+}
+
+const invalidDestinations = [
+  { name: "unknown parent", pointer: "/parent", value: (rig: Rig) => rig.ref("node", `${CREATE_REPOSITORY}#999`) },
+  { name: "ambiguous parent", pointer: "/parent", value: (rig: Rig) => rig.ref("node", "Shared title") },
+  { name: "noncanonical parent", pointer: "/parent", value: (rig: Rig) => rig.ref("node", "Lifecycle map") },
+  { name: "foreign connection", pointer: "/parent", value: (rig: Rig) => ({ ...rig.ref("node", CREATE_MAP), connectionId: "another-connection" }) },
+  { name: "malformed parent", pointer: "/parent", value: () => ({ canonicalId: CREATE_MAP }) },
+  { name: "unknown dependency", pointer: "/dependencies", value: (rig: Rig) => [rig.ref("node", CREATE_MAP), rig.ref("node", `${CREATE_REPOSITORY}#999`)] },
+];
+for (const generate of [false, true]) for (const scenario of invalidDestinations) test(`refresh keeps ${scenario.name} blocked with generation ${generate}`, async () => {
+  const rig = await open();
+  let current = generate ? await make(rig) : await ownFields(rig);
+  const invalid = scenario.value(rig);
+  current = await edit(rig, current, scenario.pointer, { kind: "set", value: invalid });
+  if (!generate) rig.state.lanes = [];
+  current = await refresh(rig, current);
+  expect(current.view.outdated).toContain("destination-changed");
+  expect(current.view.draft.fields[scenario.pointer]).toMatchObject({ origin: "principal", value: invalid });
+  expect((await rig.editor.service.handoff(current.view.draft.draftId, current.view.draft.revision)).ok).toBe(false);
+  await expectBlockedConfirmation(rig, current);
+});
+
+test("refresh retains destination review when its repository is revoked", async () => {
+  const rig = await open();
+  let current = await ownFields(rig);
+  await rig.untick(CREATE_REPOSITORY);
+  rig.state.lanes = [];
+  current = await refresh(rig, current);
+  expect(current.view.outdated).toContain("destination-changed");
+  await expectBlockedConfirmation(rig, current);
+});
+
+test("explicit refresh revalidates fully owned destinations without needing a model", async () => {
+  const rig = await open();
+  let current = await ownFields(rig);
+  expect(current.view.draft.limitations.filter(item => item.code === "destination_changed")).toHaveLength(1);
   expect(current.view.outdated).toContain("destination-changed");
   rig.state.lanes = [];
   const requests = rig.state.requests.length;
+  const reads = rig.reads.length;
   current = await refresh(rig, current);
   expect(current.view.outdated).not.toContain("destination-changed");
   expect(current.view.status).toBe("ready-for-confirmation");
   expect(rig.state.requests).toHaveLength(requests);
+  expect(rig.reads.length).toBeGreaterThan(reads);
   expect(rig.soma.calls).toEqual([]);
 });

@@ -96,7 +96,8 @@ export function DeskDraftEditor({ editor, targets, disabled = false, onChanged }
 
 function DraftFieldEditor({ field, editor, disabled, save, saveReferences }: { field: EditorField; editor: DraftEditorView; disabled: boolean; save: (change: EditChange) => Promise<void>; saveReferences: (labels: string[]) => Promise<void> }) {
   const current = editor.view.draft.fields[field.pointer];
-  const storedText = current?.presence === "present" ? (field.destination ? referenceText(current.value) : valueText(current.value)) : "";
+  const fieldText = (value: unknown): string => field.destination ? referenceText(value) : valueText(value);
+  const storedText = current?.presence === "present" ? fieldText(current.value) : "";
   const [text, setText] = useState(storedText);
   const [details, setDetails] = useState<DraftDetails | null>(null);
   const [error, setError] = useState("");
@@ -124,6 +125,6 @@ function DraftFieldEditor({ field, editor, disabled, save, saveReferences }: { f
         void draftDetails(editor.view.draft.draftId, field.pointer).then(reply => { setDetails(reply.details); }).catch((err: unknown) => { setError(errorText(err)); }).finally(() => { setLoading(false); });
       }}>Sources for {field.label}</button></div>
     {error && <p role="alert">{error}</p>}
-    {details && <aside aria-label={`Sources for ${field.label}`}><p>Origin: {details.origin}. {details.reason}</p>{details.sources.map(source => <p key={source.id}>{source.kind}: {source.id}, revision {source.revision}</p>)}{details.hiddenSources > 0 && <p>{details.hiddenSources} sources withheld by policy.</p>}{details.alternatives.map((alternative, index) => <button key={index} onClick={() => { void save({ kind: "set", value: alternative.value }); }}>Use {field.destination ? referenceText(alternative.value) : valueText(alternative.value)}</button>)}</aside>}
+    {details && <aside aria-label={`Sources for ${field.label}`}><p>Origin: {details.origin}. {details.reason}</p>{details.sources.map(source => <p key={source.id}>{source.kind}: {source.id}, revision {source.revision}</p>)}{details.hiddenSources > 0 && <p>{details.hiddenSources} sources withheld by policy.</p>}{details.alternatives.map((alternative, index) => <button key={index} onClick={() => { void save({ kind: "set", value: alternative.value }); }}>Use {fieldText(alternative.value)}</button>)}</aside>}
   </fieldset>;
 }
