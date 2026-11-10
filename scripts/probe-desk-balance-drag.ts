@@ -57,7 +57,7 @@ async function probe() {
     assert.equal(await page.locator(".drag-source").count(), 0);
     assert.equal((await read()).revision, current.revision);
     await startDrag();
-    await page.mouse.move(5, 5);
+    await page.mouse.move(-5, -5);
     assert.equal(await page.locator(".drop-before, .drop-after, .drop-inside").count(), 0);
     await page.mouse.up();
     assert.equal((await read()).revision, current.revision);

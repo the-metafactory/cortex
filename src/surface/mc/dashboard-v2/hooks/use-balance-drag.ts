@@ -53,6 +53,7 @@ export function useBalanceDrag(options: DragOptions) {
     const cleanup = (): void => {
       cancelAnimationFrame(frame);
       preview?.remove();
+      if (row.hasPointerCapture(pointer)) row.releasePointerCapture(pointer);
       document.body.classList.remove("dbl-dragging");
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
@@ -74,6 +75,7 @@ export function useBalanceDrag(options: DragOptions) {
       if (!preview && Math.hypot(x - start.x, y - start.y) < 5) return;
       next.preventDefault();
       if (!preview) {
+        row.setPointerCapture(pointer);
         preview = row.cloneNode(true) as HTMLElement;
         preview.className = "dbl-row dbl-drag-preview";
         preview.removeAttribute("data-balance-id");
