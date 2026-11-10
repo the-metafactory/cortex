@@ -24,6 +24,7 @@ export const graphRef = (connectionId: string, objectType: "repository" | "map" 
 
 export const GRAPH_NODE_BODIES: Readonly<Record<string, unknown>> = {
   [`${CORTEX}#3348`]: { repo: CORTEX, ref: { id: "3348" }, status: "open", url: "https://github.com/the-metafactory/cortex/issues/3348", node: { title: "Read graph destinations and nodes", kind: "build" }, parent: { id: "3293" } },
+  [CORTEX_MAP]: { repo: CORTEX, ref: { id: "3000" }, status: "open", url: "https://github.com/the-metafactory/cortex/issues/3000", node: { title: "Desk adapters map", kind: "map" }, parent: null },
   [`${CORTEX}#3350`]: { repo: CORTEX, ref: { id: "3350" }, status: "closed", url: "https://github.com/the-metafactory/cortex/issues/3350", node: { title: "Publish graph repository ticks", kind: "build" }, parent: { id: "3293" } },
   [`${CRISIS}#12`]: { repo: CRISIS, ref: { id: "claw/crisis-simulator#12" }, status: "open", url: "https://gitlab.example.org/claw/crisis-simulator/-/issues/12", node: { title: "Crisis simulator short", kind: "task" }, parent: null },
 };
@@ -156,5 +157,13 @@ export async function openGraphReadRig(): Promise<GraphReadRig> {
     async close() {
       await rig.close();
     },
+  };
+}
+
+export function trackGraphRigs(): { open: () => Promise<GraphReadRig>; closeAll: () => Promise<void> } {
+  const opened: GraphReadRig[] = [];
+  return {
+    open: async () => { const rig = await openGraphReadRig(); opened.push(rig); return rig; },
+    closeAll: async () => { await Promise.all(opened.splice(0).map(rig => rig.close())); },
   };
 }
