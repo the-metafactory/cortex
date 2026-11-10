@@ -310,7 +310,7 @@ export class DraftService {
     const unresolved = (reason: string, alternatives: DraftField["alternatives"] = []): { ok: true; field: DraftField } => ({ ok: true, field: { ...base, presence: "absent", origin: "suggested", alternatives, unresolved: reason } });
     const destinations = this.deps.destinations;
     if (labels.length === 0 || !resolveWith || !destinations) return unresolved("unresolved_reference");
-    const matches = await Promise.all(labels.map(label => destinations.resolve({ capabilityId: resolveWith, connectionId: draft.connectionId, label })));
+    const matches = await Promise.all(labels.map(label => destinations.resolve({ capabilityId: resolveWith, connectionId: draft.connectionId, label, conversationId: draft.conversationId, objectType: relationship.targetObjectType })));
     const refs: ObjectReference[] = [];
     for (const match of matches) {
       if (match.kind === "multiple") return unresolved("ambiguous_reference", match.refs.slice(0, 10).map(ref => ({ value: ref, citations: base.citations })));
