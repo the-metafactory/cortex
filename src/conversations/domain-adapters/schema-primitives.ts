@@ -10,3 +10,4 @@ export const objectReferenceSchema = (adapterId: string, objectType: string): Sc
   objectType: { type: "string", const: objectType },
   canonicalId: { type: "string", minLength: 1 },
 }, ["adapterId", "connectionId", "objectType", "canonicalId"]);
+export const nullableObjectReferenceSchema = (adapterId: string, objectType: string): SchemaDocument => ({ ...objectReferenceSchema(adapterId, objectType), type: ["object", "null"] });

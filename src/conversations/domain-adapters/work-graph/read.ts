@@ -1,19 +1,20 @@
 import { canonicalNodeId, formatGraphNodeRef, formatGraphRepoRef, parseGraphNodeRef, parseGraphRepoRef, qualifiedNodeId } from "../../../common/graph-ref";
 import { CommandTimeout, runCommand, type CommandResult } from "../../../surface/mc/desk/spawn";
 import { isRecord, parseObjectReference, parseReadHandlerContext, readObservedAt, readPage, readSnapshotId, type Json, type QueryFetchRequest, type QueryPage, type QueryPageEntry, type ReadBinding } from "../reads/page-primitives";
+import { objectSchema, schemaRef } from "../schema-primitives";
 import { schemaKey } from "../schema-validation";
 import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../types";
-import { WORK_GRAPH_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, objectSchema, ref, referenceSchema, type GraphObjectType } from "./schema";
+import { WORK_GRAPH_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, referenceSchema, type GraphObjectType } from "./schema";
 
 const DEFAULT_TIMEOUT_MS = 8_000;
 const NODE_PAGE_ITEMS = 1;
-const REPOSITORY_SCHEMA_REF = ref("work-graph.repository");
-const NODE_SCHEMA_REF = ref("work-graph.node");
-const DESTINATIONS_INPUT_REF = ref("work-graph.destinations.input");
-const DESTINATIONS_OUTPUT_REF = ref("work-graph.destinations.output");
-const NODE_READ_INPUT_REF = ref("work-graph.node.read.input");
-const NODE_READ_OUTPUT_REF = ref("work-graph.node.read.output");
-const ERROR_REF = ref("work-graph.error");
+const REPOSITORY_SCHEMA_REF = schemaRef("work-graph.repository");
+const NODE_SCHEMA_REF = schemaRef("work-graph.node");
+const DESTINATIONS_INPUT_REF = schemaRef("work-graph.destinations.input");
+const DESTINATIONS_OUTPUT_REF = schemaRef("work-graph.destinations.output");
+const NODE_READ_INPUT_REF = schemaRef("work-graph.node.read.input");
+const NODE_READ_OUTPUT_REF = schemaRef("work-graph.node.read.output");
+const ERROR_REF = schemaRef("work-graph.error");
 
 const REPOSITORY_VALUE_SCHEMA = objectSchema({ title: { type: "string", minLength: 1 } }, ["title"]);
 const NODE_VALUE_SCHEMA = objectSchema({
@@ -98,7 +99,8 @@ const reference = (connectionId: string, objectType: GraphObjectType, canonicalI
 const parseReference = (value: unknown): ObjectReference => parseObjectReference(value, failure);
 const observedAt = readObservedAt;
 const snapshotId = (scope: string, content: Json): string => readSnapshotId("work-graph", scope, content);
-const isBareNode = (value: string): boolean => /^#?[1-9]\d*$/.test(value);
+const BARE_NODE = /^#?([1-9]\d*)$/;
+const isBareNode = (value: string): boolean => BARE_NODE.test(value);
 const NODE_TAIL = /^(.+?)([#&])([1-9]\d*)$/;
 const GITHUB_RELATIVE_NODE = /^([\w.-]+\/[\w.-]+)([#&])([1-9]\d*)$/;
 
@@ -108,10 +110,21 @@ const GITHUB_RELATIVE_NODE = /^([\w.-]+\/[\w.-]+)([#&])([1-9]\d*)$/;
  */
 export function canonicalGraphRef(value: string, repository?: string): string {
   const text = value.trim();
-  const bare = /^#?([1-9]\d*)$/.exec(text);
+  const bare = BARE_NODE.exec(text);
   const combined = bare && repository !== undefined ? `${repository}#${bare[1]}` : text;
   return combined.replace(/^github:github\.com\//, "");
 }
+
+const isOwnRepository = (source: WorkGraphReadSource, value: ObjectReference): boolean =>
+  value.adapterId === ADAPTER_ID && value.connectionId === source.connectionId && value.objectType === "repository";
+
+const requestedRepositories = (source: WorkGraphReadSource, destinations: readonly ObjectReference[]): ObjectReference[] =>
+  destinations.filter(destination => isOwnRepository(source, destination));
+
+const isTicked = (source: WorkGraphReadSource, canonicalId: string): boolean => {
+  const wanted = canonicalGraphRef(canonicalId);
+  return source.repositories().some(repository => canonicalGraphRef(repository) === wanted);
+};
 
 const parseHandlerContext = (raw: unknown) => parseReadHandlerContext(raw, NODE_PAGE_ITEMS, failure);
 
@@ -132,7 +145,7 @@ function nodeTarget(canonicalId: string, source: WorkGraphReadSource, destinatio
     return { canonicalId: text, repository, full: `${repository}#${relative[3] ?? failure("invalid_input")}` };
   }
   if (!isBareNode(text)) return failure("invalid_input");
-  const repositories = destinations.filter(destination => destination.adapterId === ADAPTER_ID && destination.connectionId === source.connectionId && destination.objectType === "repository");
+  const repositories = requestedRepositories(source, destinations);
   if (repositories.length !== 1) return failure("invalid_input");
   const repository = repositories[0]?.canonicalId ?? "";
   const parsed = parseGraphRepoRef(repository);
@@ -143,7 +156,7 @@ function nodeTarget(canonicalId: string, source: WorkGraphReadSource, destinatio
 
 function destinationFor(source: WorkGraphReadSource, destinations: readonly ObjectReference[], repository: string): ObjectReference | null {
   const wanted = canonicalGraphRef(repository);
-  return destinations.find(destination => destination.adapterId === ADAPTER_ID && destination.connectionId === source.connectionId && destination.objectType === "repository" && canonicalGraphRef(destination.canonicalId) === wanted) ?? null;
+  return destinations.find(destination => isOwnRepository(source, destination) && canonicalGraphRef(destination.canonicalId) === wanted && isTicked(source, destination.canonicalId)) ?? null;
 }
 
 function repositoryOf(value: string): string | null {
@@ -239,8 +252,7 @@ async function nodeReadPage(source: WorkGraphReadSource, input: unknown, destina
   const target = nodeTarget(parsed.canonicalId, source, destinations);
   const destination = destinationFor(source, destinations, target.repository);
   if (!destination) return failure("destination_denied");
-  const scopeArgs = destinations.filter(item => item.objectType === "repository").flatMap(item => ["--read-repo", item.canonicalId]);
-  const body = await ownerNode(source, [source.somaBin ?? "soma", "graph", "node", target.full, ...scopeArgs, "--json"]);
+  const body = await ownerNode(source, [source.somaBin ?? "soma", "graph", "node", target.full, "--read-repo", destination.canonicalId, "--json"]);
   const value = nodeValue(source, target, body);
   const entry: QueryPageEntry = {
     ref: reference(source.connectionId, "node", parsed.canonicalId),

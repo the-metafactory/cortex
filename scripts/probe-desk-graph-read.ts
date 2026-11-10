@@ -1,35 +1,21 @@
 import { strict as assert } from "node:assert";
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { CLOSED_NODE, CORTEX, CORTEX_MAP, CORTEX_NODE, GRAPH_NODE_BODIES, MISSING_NODE, UNTICKED, graphRef } from "../src/conversations/domain-adapters/__tests__/fixtures/graph-read-fixtures";
 import type { QueryPage } from "../src/conversations/domain-adapters/reads/query-types";
 import type { ObjectReference } from "../src/conversations/domain-adapters/types";
 import { canonicalGraphRef, createWorkGraphReadAdapter } from "../src/conversations/domain-adapters/work-graph/read";
 import { withTempHome } from "./probe-temp-home";
 
-const CORTEX = "github:github.com/the-metafactory/cortex";
-const OTHER = "github:github.com/the-metafactory/other";
-const CORTEX_MAP = `${CORTEX}#3000`;
-const CORTEX_NODE = "the-metafactory/cortex#3348";
-const CLOSED_NODE = `${CORTEX}#3350`;
-const MISSING_NODE = `${CORTEX}#9999`;
 const CONNECTION = "connection-graph-probe";
-const repository = (canonicalId: string): ObjectReference => ({ adapterId: "work-graph", connectionId: CONNECTION, objectType: "repository", canonicalId });
-const node = (canonicalId: string): ObjectReference => ({ adapterId: "work-graph", connectionId: CONNECTION, objectType: "node", canonicalId });
-
-const OPEN = JSON.stringify({ repo: CORTEX, ref: { id: "3348" }, status: "open", url: "https://github.com/the-metafactory/cortex/issues/3348", node: { title: "Read graph destinations and nodes", kind: "build" }, parent: { id: "3293" } });
-const CLOSED = JSON.stringify({ repo: CORTEX, ref: { id: "3350" }, status: "closed", url: "https://github.com/the-metafactory/cortex/issues/3350", node: { title: "Publish graph repository ticks", kind: "build" }, parent: null });
+const UNTICKED_NODE = `${UNTICKED}#7`;
+const repository = (canonicalId: string): ObjectReference => graphRef(CONNECTION, "repository", canonicalId);
+const node = (canonicalId: string): ObjectReference => graphRef(CONNECTION, "node", canonicalId);
+const foreignRepository = (canonicalId: string): ObjectReference => ({ adapterId: "balance", connectionId: CONNECTION, objectType: "repository", canonicalId });
 
 function somaScript(log: string): string {
-  return [
-    "#!/bin/sh",
-    `printf '%s\\n' \"$*\" >> ${JSON.stringify(log)}`,
-    "case \"$*\" in",
-    `  *\"cortex#3348\"*) printf '%s' ${JSON.stringify(OPEN)} ;;`,
-    `  *\"cortex#3350\"*) printf '%s' ${JSON.stringify(CLOSED)} ;;`,
-    "  *) printf '%s' \"node not found\" >&2; exit 1 ;;",
-    "esac",
-    "",
-  ].join("\n");
+  const arms = Object.entries(GRAPH_NODE_BODIES).map(([target, body]) => `  *"${target}"*) printf '%s' ${JSON.stringify(JSON.stringify(body))} ;;`);
+  return ["#!/bin/sh", `printf '%s\\n' "$*" >> ${JSON.stringify(log)}`, "case \"$*\" in", ...arms, "  *) printf '%s' \"node not found\" >&2; exit 1 ;;", "esac", ""].join("\n");
 }
 
 function released(page: QueryPage): { ref: ObjectReference; value: Record<string, unknown> }[] {
@@ -51,6 +37,10 @@ await withTempHome(async home => {
     somaBin: soma,
     now: () => new Date("2026-11-10T00:00:00.000Z"),
   });
+  const argvLines = async (): Promise<string[]> => {
+    const text = (await readFile(log, "utf8")).trimEnd();
+    return text.length === 0 ? [] : text.split("\n");
+  };
 
   const destinations = await adapter.destinations();
   assert.deepEqual(destinations.annotations.map(annotation => [annotation.ref.objectType, annotation.ref.canonicalId]), [["repository", CORTEX], ["map", CORTEX_MAP], ["node", CORTEX_NODE]]);
@@ -58,7 +48,10 @@ await withTempHome(async home => {
   assert.ok(destinations.annotations.every(annotation => annotation.destination.objectType === "repository" && annotation.destination.canonicalId === CORTEX));
   console.log("destinations: the exact stored repository ref and the linked map and node, every one scoped to that repository.");
 
-  const open = await adapter.query({ readVersion: "1.0.0", queryId: "probe-open", capabilityId: "work-graph.node.read", input: { ref: node(CORTEX_NODE) }, destinations: [repository(CORTEX)], limit: 1 });
+  const open = await adapter.query({
+    readVersion: "1.0.0", queryId: "probe-open", capabilityId: "work-graph.node.read", input: { ref: node(CORTEX_NODE) },
+    destinations: [repository(CORTEX), repository(UNTICKED), foreignRepository(UNTICKED)], limit: 1,
+  });
   const [openNode] = released(open);
   assert.deepEqual(openNode?.ref, node(CORTEX_NODE));
   assert.deepEqual(openNode?.value, { title: "Read graph destinations and nodes", status: "open", kind: "build", parent: node(`${CORTEX}#3293`), url: "https://github.com/the-metafactory/cortex/issues/3348" });
@@ -66,7 +59,8 @@ await withTempHome(async home => {
 
   const closed = await adapter.query({ readVersion: "1.0.0", queryId: "probe-closed", capabilityId: "work-graph.node.read", input: { ref: node(CLOSED_NODE) }, destinations: [repository(CORTEX)], limit: 1 });
   assert.equal(released(closed)[0]?.value.status, "closed");
-  console.log("closed node: status closed is available, not an unavailable read.");
+  assert.deepEqual(released(closed)[0]?.value.parent, node(`${CORTEX}#3293`));
+  console.log("closed node: status closed is available with its parent, not an unavailable read.");
 
   await assert.rejects(
     adapter.query({ readVersion: "1.0.0", queryId: "probe-missing", capabilityId: "work-graph.node.read", input: { ref: node(MISSING_NODE) }, destinations: [repository(CORTEX)], limit: 1 }),
@@ -74,16 +68,19 @@ await withTempHome(async home => {
   );
   console.log("missing node: unavailable and proves nothing about a historic operation.");
 
-  const seen = (await readFile(log, "utf8")).trimEnd().split("\n").length;
+  const seen = (await argvLines()).length;
   await assert.rejects(
-    adapter.query({ readVersion: "1.0.0", queryId: "probe-denied", capabilityId: "work-graph.node.read", input: { ref: node(CORTEX_NODE) }, destinations: [repository(OTHER)], limit: 1 }),
+    adapter.query({ readVersion: "1.0.0", queryId: "probe-mismatched", capabilityId: "work-graph.node.read", input: { ref: node(CORTEX_NODE) }, destinations: [repository(UNTICKED)], limit: 1 }),
     /work-graph\.destination_denied/,
   );
-  const after = (await readFile(log, "utf8")).trimEnd().split("\n").length;
-  assert.equal(after, seen);
-  console.log("denied reference: the repository is not a destination, so the refusal precedes soma and the argv log stays unchanged.");
+  await assert.rejects(
+    adapter.query({ readVersion: "1.0.0", queryId: "probe-unticked", capabilityId: "work-graph.node.read", input: { ref: node(UNTICKED_NODE) }, destinations: [repository(UNTICKED)], limit: 1 }),
+    /work-graph\.destination_denied/,
+  );
+  assert.equal((await argvLines()).length, seen);
+  console.log("denied references: a node outside the requested repository and a node in a repository that is not ticked both refuse before soma runs, so the argv log stays unchanged.");
 
-  const argv = (await readFile(log, "utf8")).trimEnd().split("\n");
+  const argv = await argvLines();
   assert.deepEqual(argv, [`graph node ${CORTEX}#3348 --read-repo ${CORTEX} --json`, `graph node ${CORTEX}#3350 --read-repo ${CORTEX} --json`, `graph node ${CORTEX}#9999 --read-repo ${CORTEX} --json`]);
-  console.log("argv: every soma call is recorded; the synthetic executable ran three reads and no denied one.");
+  console.log("argv: every soma call is recorded with only the node's own ticked repository as read scope; the synthetic executable ran three reads and no denied one.");
 });

@@ -22,14 +22,15 @@ export const MISSING_NODE = `${CORTEX}#9999`;
 
 export const graphRef = (connectionId: string, objectType: "repository" | "map" | "node", canonicalId: string): ObjectReference => ({ adapterId: "work-graph", connectionId, objectType, canonicalId });
 
+export const GRAPH_NODE_BODIES: Readonly<Record<string, unknown>> = {
+  [`${CORTEX}#3348`]: { repo: CORTEX, ref: { id: "3348" }, status: "open", url: "https://github.com/the-metafactory/cortex/issues/3348", node: { title: "Read graph destinations and nodes", kind: "build" }, parent: { id: "3293" } },
+  [`${CORTEX}#3350`]: { repo: CORTEX, ref: { id: "3350" }, status: "closed", url: "https://github.com/the-metafactory/cortex/issues/3350", node: { title: "Publish graph repository ticks", kind: "build" }, parent: { id: "3293" } },
+  [`${CRISIS}#12`]: { repo: CRISIS, ref: { id: "claw/crisis-simulator#12" }, status: "open", url: "https://gitlab.example.org/claw/crisis-simulator/-/issues/12", node: { title: "Crisis simulator short", kind: "task" }, parent: null },
+};
+
 const answer = (argv: string[]): { code: number; signal: null; stdout: string; stderr: string } => {
   const target = argv[3] ?? "";
-  const bodies: Record<string, unknown> = {
-    [`${CORTEX}#3348`]: { repo: CORTEX, ref: { id: "3348" }, status: "open", url: "https://github.com/the-metafactory/cortex/issues/3348", node: { title: "Read graph destinations and nodes", kind: "build" }, parent: { id: "3293" } },
-    [`${CORTEX}#3350`]: { repo: CORTEX, ref: { id: "3350" }, status: "closed", url: "https://github.com/the-metafactory/cortex/issues/3350", node: { title: "Publish graph repository ticks", kind: "build" }, parent: { id: "3293" } },
-    [`${CRISIS}#12`]: { repo: CRISIS, ref: { id: "claw/crisis-simulator#12" }, status: "open", url: "https://gitlab.example.org/claw/crisis-simulator/-/issues/12", node: { title: "Crisis simulator short", kind: "task" }, parent: null },
-  };
-  const body = bodies[target];
+  const body = GRAPH_NODE_BODIES[target];
   if (body) return { code: 0, signal: null, stdout: JSON.stringify(body), stderr: "" };
   if (target === `${CORTEX}#9998`) return { code: 2, signal: null, stdout: "", stderr: "soma could not reach the graph owner" };
   return { code: 1, signal: null, stdout: "", stderr: `node ${target} not found` };

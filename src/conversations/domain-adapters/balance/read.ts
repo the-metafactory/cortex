@@ -1,20 +1,21 @@
 import { balanceDestinations, type AppState, type DestinationArea, type OutlineNode } from "../../../balance";
 import { isRecord, parseObjectReference, parseReadHandlerContext, readObservedAt, readPage, readPageLimit, readSnapshotId, type Json, type QueryFetchRequest, type QueryPage, type QueryPageEntry, type ReadBinding } from "../reads/page-primitives";
+import { objectSchema, schemaRef } from "../schema-primitives";
 import { schemaKey } from "../schema-validation";
 import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../types";
-import { BALANCE_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, objectSchema, ref, referenceSchema } from "./schema";
+import { BALANCE_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, referenceSchema } from "./schema";
 
 const MAX_PAGE_ITEMS = 20;
-const AREA_SCHEMA_REF = ref("balance.area");
-const PROJECT_SCHEMA_REF = ref("balance.project");
-const TASK_SCHEMA_REF = ref("balance.task");
-const DESTINATIONS_INPUT_REF = ref("balance.destinations.input");
-const DESTINATIONS_OUTPUT_REF = ref("balance.destinations.output");
-const TASK_QUERY_INPUT_REF = ref("balance.task.query.input");
-const TASK_QUERY_OUTPUT_REF = ref("balance.task.query.output");
-const TASK_READ_INPUT_REF = ref("balance.task.read.input");
-const TASK_READ_OUTPUT_REF = ref("balance.task.read.output");
-const ERROR_REF = ref("balance.error");
+const AREA_SCHEMA_REF = schemaRef("balance.area");
+const PROJECT_SCHEMA_REF = schemaRef("balance.project");
+const TASK_SCHEMA_REF = schemaRef("balance.task");
+const DESTINATIONS_INPUT_REF = schemaRef("balance.destinations.input");
+const DESTINATIONS_OUTPUT_REF = schemaRef("balance.destinations.output");
+const TASK_QUERY_INPUT_REF = schemaRef("balance.task.query.input");
+const TASK_QUERY_OUTPUT_REF = schemaRef("balance.task.query.output");
+const TASK_READ_INPUT_REF = schemaRef("balance.task.read.input");
+const TASK_READ_OUTPUT_REF = schemaRef("balance.task.read.output");
+const ERROR_REF = schemaRef("balance.error");
 
 const AREA_VALUE_SCHEMA = objectSchema({ label: { type: "string" } }, ["label"]);
 const PROJECT_VALUE_SCHEMA = objectSchema({ label: { type: "string" } }, ["label"]);

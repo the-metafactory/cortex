@@ -120,6 +120,34 @@ describe("the inactive work-graph read adapter", () => {
     expect(withdrawn.argv).toHaveLength(0);
   });
 
+  test("the adapter itself refuses a repository that is not ticked, without waiting for host admission", async () => {
+    const rig = await open();
+    const before = rig.calls.argv.length;
+    await expect(rig.adapter.query({
+      readVersion: "1.0.0", queryId: "query-unticked", capabilityId: "work-graph.node.read", input: { ref: graphRef(rig.connectionId, "node", `${UNTICKED}#7`) },
+      destinations: [graphRef(rig.connectionId, "repository", UNTICKED)], limit: 1,
+    })).rejects.toThrow("work-graph.destination_denied");
+    expect(rig.calls.argv.length).toBe(before);
+    expect((await rig.destinations()).annotations.some(annotation => annotation.destination.canonicalId === UNTICKED)).toBe(false);
+  });
+
+  test("a requested destination outside the node's repository never widens the soma read scope", async () => {
+    const rig = await open();
+    const before = rig.calls.argv.length;
+    const page = await rig.adapter.query({
+      readVersion: "1.0.0", queryId: "query-wide", capabilityId: "work-graph.node.read", input: { ref: graphRef(rig.connectionId, "node", CORTEX_NODE) },
+      destinations: [
+        graphRef(rig.connectionId, "repository", CORTEX),
+        graphRef(rig.connectionId, "repository", CRISIS),
+        graphRef(rig.connectionId, "repository", UNTICKED),
+        { adapterId: "balance", connectionId: rig.connectionId, objectType: "repository", canonicalId: UNTICKED },
+      ],
+      limit: 1,
+    });
+    expect(page.annotations.map(annotation => annotation.destination)).toEqual([graphRef(rig.connectionId, "repository", CORTEX)]);
+    expect(rig.calls.argv.slice(before)).toEqual([["soma", "graph", "node", `${CORTEX}#3348`, "--read-repo", CORTEX, "--json"]]);
+  });
+
   test("a failing soma reads as unavailable, not as an empty result", async () => {
     const rig = await open();
     const failed = await rig.node(`${CORTEX}#9998`);
@@ -129,13 +157,13 @@ describe("the inactive work-graph read adapter", () => {
     expect(failed.argv).toHaveLength(1);
   });
 
-  test("creating the adapter enables no connection and leaves authority records unchanged", async () => {
-    const rig = await open();
-    const before = JSON.stringify(await rig.rig.service.inspectHostRecords());
-    const another = createWorkGraphReadAdapter({ connectionId: rig.connectionId, repositories: () => [CORTEX], links: () => [] });
-    expect(another.bindings.observations).toEqual({});
-    await another.destinations();
-    await another.query({ readVersion: "1.0.0", queryId: "query-example", capabilityId: "work-graph.destinations", input: {}, destinations: [graphRef(rig.connectionId, "repository", CORTEX)], limit: 1 });
-    expect(JSON.stringify(await rig.rig.service.inspectHostRecords())).toBe(before);
+  test("the adapter declares only query capabilities and no connection, observation or mutation surface of its own", () => {
+    const adapter = createWorkGraphReadAdapter({ connectionId: "connection-inactive", repositories: () => [CORTEX], links: () => [] });
+    const capabilities = adapter.declaration.capabilities;
+    expect(capabilities.map(capability => capability.kind)).toEqual(["query", "query"]);
+    expect(capabilities.map(capability => capability.capabilityId).sort()).toEqual(Object.keys(adapter.bindings.handlers).sort());
+    expect(adapter.bindings.observations).toEqual({});
+    expect(adapter.readBindings.map(binding => binding.mode)).toEqual(["destinations", "query"]);
+    expect(adapter.declaration.objectTypes.map(object => object.objectType)).toEqual(["repository", "map", "node"]);
   });
 });

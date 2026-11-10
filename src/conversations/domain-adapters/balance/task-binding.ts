@@ -9,9 +9,10 @@ import { operationUuid } from "../../../surface/mc/desk/conversation-ids";
 import { loadMeta } from "../../../surface/mc/desk/my-day";
 import type { LookupRequest, TrustedConnector } from "../../authority";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, ReadbackResult } from "../../types";
+import { objectSchema, schemaRef } from "../schema-primitives";
 import type { AdapterBindings, AdapterDeclaration, BoundaryError, ObjectReference } from "../types";
 import { ObjectReferenceSchema } from "../types";
-import { BALANCE_ADAPTER_ID as ADAPTER_ID, objectSchema, ref, referenceSchema } from "./schema";
+import { BALANCE_ADAPTER_ID as ADAPTER_ID, referenceSchema } from "./schema";
 import type { DispatchOutcome } from "../operations/dispatch";
 import type { OperationJournalStore, StoredOperation } from "../operations/journal";
 import type { WriterBinding } from "../operations/writer-authority";
@@ -23,12 +24,12 @@ const OWNER = "balance-task";
 export const BALANCE_TASK_CREATE_SUPPORT_ID = "balance.task.create.v1";
 export const BALANCE_TASK_DEDUP_RETENTION_MS = 86_400_000;
 
-const AREA_SCHEMA_REF = ref("balance.task.create.area");
-const PROJECT_SCHEMA_REF = ref("balance.task.create.project");
-const TASK_SCHEMA_REF = ref("balance.task.create.task");
-const INPUT_SCHEMA_REF = ref("balance.task.create.input");
-const OUTPUT_SCHEMA_REF = ref("balance.task.create.output");
-const ERROR_SCHEMA_REF = ref("balance.task.create.error");
+const AREA_SCHEMA_REF = schemaRef("balance.task.create.area");
+const PROJECT_SCHEMA_REF = schemaRef("balance.task.create.project");
+const TASK_SCHEMA_REF = schemaRef("balance.task.create.task");
+const INPUT_SCHEMA_REF = schemaRef("balance.task.create.input");
+const OUTPUT_SCHEMA_REF = schemaRef("balance.task.create.output");
+const ERROR_SCHEMA_REF = schemaRef("balance.task.create.error");
 
 const INPUT_SCHEMA = objectSchema({
   area: referenceSchema("area"),
