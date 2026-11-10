@@ -5,16 +5,16 @@ import { join } from "node:path";
 import { openSyntheticHost, removeSyntheticRig, syntheticLive } from "../common/config/desk-credential-broker-fixtures";
 import { createArcFileSecretStore, type ArcSecretStore } from "../common/config/desk-credential-arc-file-store";
 import type { ConnectionHead, SetupDescriptor, SetupPrincipal } from "../common/config/desk-credential-broker";
-import { TOKEN_DESCRIPTOR, LOCAL_DESCRIPTOR } from "../common/config/desk-credential-broker-fixtures";
+import { SYNTHETIC_TOKEN, TOKEN_DESCRIPTOR, LOCAL_DESCRIPTOR } from "../common/config/desk-credential-broker-fixtures";
 import type { AuthorityBindings } from "./authority";
-import { ConnectionSetupService, type SetupCatalogEntry } from "./connection-setup";
+import { ConnectionSetupService, type ConnectionView, type SetupCatalogEntry } from "./connection-setup";
 import type { ConversationHost } from "./host";
 import { registryFixture } from "./domain-adapters/operations/fixtures";
 import type { MutationGuardContext } from "../surface/mc/api/mutation-guard";
 import { CF_ACCESS_EMAIL_HEADER, CF_ACCESS_JWT_HEADER } from "../surface/mc/api/networks-admission";
-import { handleDeskConnections } from "../surface/mc/api/desk-connections";
+import { DESK_CONNECTIONS_PATH, handleDeskConnections } from "../surface/mc/api/desk-connections";
 
-export { SYNTHETIC_TOKEN } from "../common/config/desk-credential-broker-fixtures";
+export { SYNTHETIC_TOKEN };
 export const OWNER = "principal-example";
 export const OTHER = "principal-other";
 const DESTINATION = { adapterId: "example-package", connectionId: "example-connection", objectType: "area", canonicalId: "area-example" };
@@ -34,6 +34,7 @@ export const CATALOG: SetupCatalogEntry[] = [
 ];
 
 export const SELECTION = { scope: { account: "synthetic-account", resource: "area-example" }, readCapabilityIds: ["example.object.read"], writeCapabilityIds: [] as string[], readDestinations: [DESTINATION], writeDestinations: [] as typeof DESTINATION[] };
+export const SYNTHETIC_TOKENS = { primary: { token: SYNTHETIC_TOKEN }, backup: { token: `${SYNTHETIC_TOKEN}-backup` } };
 
 export interface ConnectionSetupRig {
   dir: string;
@@ -118,4 +119,23 @@ export async function connectionSetupRig(): Promise<ConnectionSetupRig> {
   };
   await open();
   return rig;
+}
+
+export async function createConnection(rig: ConnectionSetupRig): Promise<ConnectionView> {
+  const made = await rig.http("local", "POST", DESK_CONNECTIONS_PATH, { packageId: "example-package", ...SELECTION, inputs: SYNTHETIC_TOKENS });
+  if (made.status !== 200) throw new Error(`synthetic setup failed with HTTP ${made.status}`);
+  return made.body.connection as ConnectionView;
+}
+
+export async function enableConnection(rig: ConnectionSetupRig): Promise<ConnectionView> {
+  const created = await createConnection(rig);
+  const on = await rig.http("local", "POST", `${DESK_CONNECTIONS_PATH}/${created.connectionId}/enable`, { expectedRevision: created.revision });
+  if (on.status !== 200) throw new Error(`synthetic enable failed with HTTP ${on.status}`);
+  return on.body.connection as ConnectionView;
+}
+
+export async function listConnections(rig: ConnectionSetupRig): Promise<ConnectionView[]> {
+  const res = await rig.http("local", "GET", DESK_CONNECTIONS_PATH, undefined);
+  if (res.status !== 200) throw new Error(`synthetic Settings failed with HTTP ${res.status}`);
+  return res.body.connections as ConnectionView[];
 }

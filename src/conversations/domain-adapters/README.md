@@ -116,3 +116,17 @@ Run the vertical demonstration with `bun scripts/probe-desk-drafting.ts`.
 Production startup supplies no asset service yet, like the connection setup route: both answer 503 until the managed activation node passes a provider through `adapterAssets`.
 
 Run `bun scripts/probe-desk-adapter-assets.ts` for the synthetic probe: temporary package root, real temporary generation store, local HTTP server and a synthetic hosted gateway. It does no real deployment, restart or provider call.
+
+## Connection status and local-only diagnostics
+
+<!-- glossary-ignore: host, owner, run, binding, data -->
+
+`diagnostics.ts` owns one `cortex.desk-adapter-diagnostics` document per connection in the configured host durable store. `ConversationHost.adapterDiagnostics()` exposes the single shared store. Each connection keeps its own status record and at most 500 strict events; a new event removes the oldest event without changing the status record.
+
+The status is `available`, `unavailable`, `stale` or `fenced`, with `lastSuccessAt`, `lastAttemptAt` and one reason code. A binding fence on any capability makes the connection read as fenced. An available connection whose last successful operation is older than 15 minutes reads as stale. Enabling and disabling a connection, a changed scope, query refusal or partial query, journaled operation state transitions and fired fence triggers each store one event.
+
+Event names start with `desk.adapter.` and are closed: `connection_status`, `query_refused`, `query_partial`, `operation_state` and `trigger_fired`. An event carries only opaque adapter, connection and capability identifiers, one state, one error code and a timestamp. The strict schema refuses any other field, logs which field was refused and stores nothing. Diagnostics never construct or call a bus client, and no stored event is a valid bus envelope.
+
+`GET /api/desk/connections` includes each connection's status, so Desk Settings shows the status, its last success, its last attempt and a safe reason next to the setup state.
+
+Run `bun scripts/probe-desk-adapter-diagnostics.ts` for the synthetic probe: a real temporary host store, a synthetic connection driven through all four statuses, status read back through the Settings API, the rendered Settings view asserted in Chromium, a strict-schema refusal and a bus client that receives nothing.
