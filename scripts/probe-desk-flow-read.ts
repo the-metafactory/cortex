@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { assertCloudReaderDenied, assertDeletedFlowUnavailable, assertSavedFlowMatches, openFlowReadRig } from "../src/conversations/domain-adapters/__tests__/fixtures/flow-read-fixtures";
+import { assertCloudReaderDenied, assertDeletedFlowAbsent, assertSavedFlowMatches, openFlowReadRig } from "../src/conversations/domain-adapters/__tests__/fixtures/flow-read-fixtures";
 
 const rig = await openFlowReadRig({ conversationPolicy: "cloud" });
 try {
@@ -11,8 +11,8 @@ try {
   const shown = await assertSavedFlowMatches(rig);
   console.log("query and read: match real Pulse listing and show; installed arc Flow excluded");
 
-  await assertDeletedFlowUnavailable(rig, shown);
-  console.log("deleted saved Flow: unavailable read and owner-evidenced empty query");
+  await assertDeletedFlowAbsent(rig, shown);
+  console.log("deleted saved Flow: owner-evidenced empty read and query");
 
   await rig.setPolicy("local");
   await assertCloudReaderDenied(rig);
