@@ -176,8 +176,8 @@ export class OperationBridge {
     const target = this.fenceTarget(snapshot);
     const entry = this.options.connectorEntry ? await this.options.connectorEntry(context, snapshot) : { kind: "allowed" as const };
     if (entry.kind === "denied") {
-      if (entry.reason.code === "destination_denied") await signalFence(this.options.fences, { kind: "destination_denied_at_connector", target, evidence: { operationId, detail: entry.reason.message } });
       const operation = await this.expire(operationId, attempt.attemptId, entry.reason);
+      if (entry.reason.code === "destination_denied") await signalFence(this.options.fences, { kind: "destination_denied_at_connector", target, evidence: { operationId, detail: entry.reason.message } });
       return { kind: "refused", reason: entry.reason, operation };
     }
     const request: DispatchRequest = { lifecycleVersion: "1.0.0", operationId, attemptId: attempt.attemptId, idempotencyKey: stored.journal.idempotencyKey, ownerRequestId: stored.journal.ownerRequestId, snapshot, authority, supportDeclarationId: support.declarationId, deadlineAt: attempt.deadlineAt };

@@ -27,16 +27,14 @@ const outcomes = (journal: OperationJournal): OwnerResult[] => journal.events.fl
 const noEffect = (response: OwnerResult): boolean => ["failed", "conflict", "cancelled"].includes(response.result.kind);
 const requireState = (condition: boolean, reason: string): void => { if (!condition) throw new JournalConflict(reason); };
 const successRefs = (response: OwnerResult): string[] => response.result.kind === "succeeded" ? response.result.evidence.refs.map(canonicalWire).sort() : [];
-function successWithoutOwnerEvidence(raw: unknown): boolean {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
-  const result = (raw as Record<string, unknown>).result;
-  if (result === null || typeof result !== "object" || Array.isArray(result)) return false;
-  if ((result as Record<string, unknown>).kind !== "succeeded") return false;
-  const evidence = (result as Record<string, unknown>).evidence;
-  if (evidence === null || typeof evidence !== "object" || Array.isArray(evidence)) return true;
-  const ownerRequestId = (evidence as Record<string, unknown>).ownerRequestId;
-  const refs = (evidence as Record<string, unknown>).refs;
-  return typeof ownerRequestId !== "string" || ownerRequestId.trim().length === 0 || !Array.isArray(refs) || refs.length === 0;
+const RawSucceededSchema = z.object({ result: z.object({ kind: z.literal("succeeded") }).loose() }).loose();
+const RawEvidenceSchema = z.object({ ownerRequestId: z.unknown().optional(), refs: z.unknown().optional() }).loose();
+const lacksOwnerEvidence = (expected: string, evidence: { ownerRequestId?: unknown; refs?: unknown }): boolean => evidence.ownerRequestId !== expected || !Array.isArray(evidence.refs) || evidence.refs.length === 0;
+function rawSuccessEvidence(raw: unknown): { ownerRequestId?: unknown; refs?: unknown } | null {
+  const succeeded = RawSucceededSchema.safeParse(raw);
+  if (!succeeded.success) return null;
+  const evidence = RawEvidenceSchema.safeParse((succeeded.data.result as { evidence?: unknown }).evidence);
+  return evidence.success ? evidence.data : {};
 }
 
 export class OperationJournalStore {
@@ -47,7 +45,7 @@ export class OperationJournalStore {
     if ("kind" in snapshot || response.result.kind !== "succeeded") return null;
     const target = fenceTargetOf(snapshot);
     const evidence = response.result.evidence;
-    if (evidence.ownerRequestId !== stored.journal.ownerRequestId || evidence.refs.length === 0) return { kind: "success_without_owner_evidence", target, evidence: { operationId: stored.journal.operationId, ownerRequestId: stored.journal.ownerRequestId, resultId: response.resultId, detail: "The success result does not carry owner evidence for this operation." } };
+    if (lacksOwnerEvidence(stored.journal.ownerRequestId, evidence)) return { kind: "success_without_owner_evidence", target, evidence: { operationId: stored.journal.operationId, ownerRequestId: stored.journal.ownerRequestId, resultId: response.resultId, detail: "The success result does not carry owner evidence for this operation." } };
     const refs = successRefs(response);
     const duplicate = outcomes(stored.journal).some(item => item.result.kind === "succeeded" && canonicalWire(successRefs(item)) !== canonicalWire(refs));
     return duplicate ? { kind: "duplicate_owner_object", target, evidence: { operationId: stored.journal.operationId, ownerRequestId: stored.journal.ownerRequestId, resultId: response.resultId, refs, detail: "The owner answered one operation with two different objects." } } : null;
@@ -61,9 +59,11 @@ export class OperationJournalStore {
   }
 
   private async triggerWithoutEvidence(operationId: string, raw: unknown): Promise<void> {
-    if (!successWithoutOwnerEvidence(raw)) return;
+    const evidence = rawSuccessEvidence(raw);
+    if (!evidence) return;
     const stored = await this.read(operationId);
     if (!stored || "kind" in stored.journal.snapshot) return;
+    if (!lacksOwnerEvidence(stored.journal.ownerRequestId, evidence)) return;
     await signalFence(this.fences, { kind: "success_without_owner_evidence", target: fenceTargetOf(stored.journal.snapshot), evidence: { operationId: stored.journal.operationId, ownerRequestId: stored.journal.ownerRequestId, detail: "The owner response failed lifecycle validation." } });
   }
 

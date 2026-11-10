@@ -4,8 +4,8 @@ import { objectRef } from "../fixtures";
 import { AT } from "../operations/fixtures";
 import { ownerResult, dispatchRig } from "../operations/dispatch-fixtures";
 import type { RigOptions } from "../operations/reconciliation-fixtures";
-import { openFenceRig, deniedBridge, successFor, successWithoutEvidence, fenceTarget, type FenceRig } from "../operations/fence-fixtures";
-import { FENCE_TRIGGER_KINDS, isHardTrigger, type PrincipalNotice } from "../operations/triggers";
+import { openFenceRig, deniedBridge, failingFence, successFor, successWithoutEvidence, fenceTarget, type FenceRig } from "../operations/fence-fixtures";
+import { FENCE_TRIGGER_KINDS, FencePersistenceError, isHardTrigger, signalFence, type PrincipalNotice } from "../operations/triggers";
 import { balanceResponse, openDraftingRig, type DraftingRig } from "../drafting-fixtures";
 
 type Rig = Awaited<ReturnType<typeof dispatchRig>>;
@@ -168,6 +168,23 @@ test("a notifier attached after boot delivers the fences that already fired and 
   await store.trigger({ kind: "destination_denied_at_connector", target: { ...target, capabilityId: "balance.object.read" }, evidence: { operationId: rig.approval.operationId } });
   expect(notices.map(notice => notice.trigger)).toEqual(["canary_secret_leaked", "destination_denied_at_connector"]);
   expect((await store.notices()).every(notice => notice.delivered)).toBe(true);
+});
+
+test("a hard trigger that cannot be persisted surfaces to its caller, while a notify-only one is logged and dropped", async () => {
+  const target = { adapterId: "balance", connectionId: "connection-example", capabilityId: "balance.task.create" };
+  await expect(signalFence(failingFence(), { kind: "duplicate_owner_object", target })).rejects.toThrow(FencePersistenceError);
+  await expect(signalFence(failingFence(), { kind: "destination_denied_at_connector", target })).rejects.toThrow(FencePersistenceError);
+  await expect(signalFence(failingFence(), { kind: "adapter_crash", target })).resolves.toBeUndefined();
+  await expect(signalFence(failingFence(), { kind: "readback_failed", target })).resolves.toBeUndefined();
+
+  const rig = await openFenceRig(notify);
+  rigs.push(rig);
+  const bridge = deniedBridge(rig, "The destination left the write scope.", failingFence());
+  expect(await bridge.activate(rig.binding, rig.lease)).toBe(true);
+  await expect(bridge.dispatch(rig.context, rig.approval.operationId, rig.lease)).rejects.toThrow(FencePersistenceError);
+  expect(rig.calls.dispatch).toBe(0);
+  expect((await rig.events())?.journal.state).not.toBe("dispatching");
+  expect(notices).toHaveLength(0);
 });
 
 test("the hard trigger set is exactly the four that turn mutation off", () => {

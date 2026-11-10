@@ -75,10 +75,18 @@ export class FenceConflict extends Error {}
 
 const asState = (value: JsonObject): FenceState => StateSchema.parse(value);
 const store = (state: FenceState): JsonObject => JSON.parse(JSON.stringify(state)) as JsonObject;
+export class FencePersistenceError extends Error {
+  constructor(readonly kind: FenceTriggerKind, readonly failure: unknown) {
+    super(`The ${kind} trigger did not persist, so its fence is not recorded: ${failure instanceof Error ? failure.message : String(failure)}`);
+  }
+}
 export async function signalFence(sink: FenceSink | undefined, signal: FenceSignalInput): Promise<void> {
   if (!sink) return;
   try { await sink.trigger(signal); }
-  catch (error) { console.error(`desk-fence: the ${signal.kind} trigger did not persist: ${error instanceof Error ? error.message : String(error)}`); }
+  catch (error) {
+    if (isHardTrigger(signal.kind)) throw new FencePersistenceError(signal.kind, error);
+    console.error(`desk-fence: the ${signal.kind} trigger did not persist: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 const noticeFor = (signal: FenceSignal, at: string): PrincipalNotice => {
   const effect = isHardTrigger(signal.kind) ? "mutation-off" as const : "notify-only" as const;

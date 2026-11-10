@@ -3,7 +3,7 @@ import { OperationBridge } from "./dispatch";
 import { AT } from "./fixtures";
 import { ownerResult } from "./dispatch-fixtures";
 import { reconcileRig, type RigOptions } from "./reconciliation-fixtures";
-import type { FenceTarget, PrincipalNotifier } from "./triggers";
+import type { FenceGate, FenceSink, FenceTarget, PrincipalNotifier } from "./triggers";
 import type { OwnerResult } from "./types";
 
 export type FenceRig = Awaited<ReturnType<typeof reconcileRig>>;
@@ -16,10 +16,12 @@ export async function openFenceRig(notify?: PrincipalNotifier, options: RigOptio
   return rig;
 }
 
-export function deniedBridge(rig: FenceRig, message = "The destination left the write scope."): OperationBridge {
+export const failingFence = (): FenceGate & FenceSink => ({ isFenced: () => Promise.resolve(false), trigger: () => Promise.reject(new Error("synthetic fence store failure")) });
+
+export function deniedBridge(rig: FenceRig, message = "The destination left the write scope.", fences: FenceGate & FenceSink = rig.host.lifecycleFences()): OperationBridge {
   return new OperationBridge({
     journal: rig.host.lifecycleJournal(rig.registry), authority: rig.host.lifecycleAuthority(rig.registry, rig.bindings), writers: rig.host.lifecycleWriters(),
-    supportFor: () => rig.declared.support, fences: rig.host.lifecycleFences(),
+    supportFor: () => rig.declared.support, fences,
     connectorEntry: () => Promise.resolve({ kind: "denied", reason: { code: "destination_denied", message } }), now: () => new Date(AT),
   });
 }
