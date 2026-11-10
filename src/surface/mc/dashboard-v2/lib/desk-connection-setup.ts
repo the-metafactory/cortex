@@ -20,37 +20,36 @@ export type SetupOutcome = { ok: true; connection: ConnectionView } | { ok: fals
 
 const Failure = z.object({ error: z.string() });
 const BASE = "/api/desk/connections";
+type Answer = { status: number; body: unknown } | string;
 
-async function send(path: string, init: RequestInit, fetchImpl: SetupFetch): Promise<{ status: number; body: unknown }> {
-  const res = await fetchImpl(path, { ...init, credentials: "same-origin", cache: "no-store" });
-  return { status: res.status, body: await res.json().catch(() => null) as unknown };
+async function call(path: string, init: RequestInit, fetchImpl: SetupFetch): Promise<Answer> {
+  try {
+    const res = await fetchImpl(path, { ...init, credentials: "same-origin", cache: "no-store" });
+    return { status: res.status, body: await res.json().catch(() => null) as unknown };
+  } catch (err) {
+    return `Connection setup is unavailable: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }
 
-function failure(status: number, body: unknown): string {
-  const parsed = Failure.safeParse(body);
-  return parsed.success ? parsed.data.error : `Mission Control answered HTTP ${status} without a connection setup answer.`;
+function refusal(answer: { status: number; body: unknown }): { ok: false; error: string } {
+  const parsed = Failure.safeParse(answer.body);
+  return { ok: false, error: parsed.success ? parsed.data.error : `Mission Control answered HTTP ${answer.status} without a connection setup answer.` };
 }
 
 export async function requestSetup(fetchImpl: SetupFetch = fetch): Promise<SetupSnapshot> {
-  try {
-    const { status, body } = await send(BASE, { method: "GET" }, fetchImpl);
-    const parsed = body as { ok?: boolean; packages?: PackageForm[]; connections?: ConnectionView[] } | null;
-    if (status === 200 && parsed?.ok && parsed.packages && parsed.connections) return { ok: true, packages: parsed.packages, connections: parsed.connections };
-    return { ok: false, error: failure(status, body) };
-  } catch (err) {
-    return { ok: false, error: `Connection setup is unavailable: ${err instanceof Error ? err.message : String(err)}` };
-  }
+  const answer = await call(BASE, { method: "GET" }, fetchImpl);
+  if (typeof answer === "string") return { ok: false, error: answer };
+  const parsed = answer.body as { ok?: boolean; packages?: PackageForm[]; connections?: ConnectionView[] } | null;
+  if (answer.status === 200 && parsed?.ok && parsed.packages && parsed.connections) return { ok: true, packages: parsed.packages, connections: parsed.connections };
+  return refusal(answer);
 }
 
 async function post(path: string, payload: unknown, fetchImpl: SetupFetch): Promise<SetupOutcome> {
-  try {
-    const { status, body } = await send(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }, fetchImpl);
-    const parsed = body as { ok?: boolean; connection?: ConnectionView } | null;
-    if (status === 200 && parsed?.ok && parsed.connection) return { ok: true, connection: parsed.connection };
-    return { ok: false, error: failure(status, body) };
-  } catch (err) {
-    return { ok: false, error: `Connection setup is unavailable: ${err instanceof Error ? err.message : String(err)}` };
-  }
+  const answer = await call(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }, fetchImpl);
+  if (typeof answer === "string") return { ok: false, error: answer };
+  const parsed = answer.body as { ok?: boolean; connection?: ConnectionView } | null;
+  if (answer.status === 200 && parsed?.ok && parsed.connection) return { ok: true, connection: parsed.connection };
+  return refusal(answer);
 }
 
 export const saveConnection = (submission: SetupSubmission, fetchImpl: SetupFetch = fetch): Promise<SetupOutcome> => post(BASE, submission, fetchImpl);

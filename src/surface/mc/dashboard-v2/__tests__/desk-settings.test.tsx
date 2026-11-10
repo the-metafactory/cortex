@@ -10,14 +10,14 @@ const list = (rows: SenderRow[] | null, note: string | null = null) => ({ rows, 
 const none = list([]);
 
 describe("the Desk settings page", () => {
-  it("labels nine vertical tabs and their retained panels while selecting only one page", () => {
+  it("labels ten vertical tabs and their retained panels while selecting only one page", () => {
     const html = renderToStaticMarkup(<SettingsBody group="vips" vips={none} unimportant={none} busy={false} onBack={noop} notify="granted" onEnableNotify={noop} />);
     expect(html).toContain('role="tablist" aria-label="Settings groups" aria-orientation="vertical"');
     expect(html).toContain('aria-selected="true" aria-controls="settings-panel-vips" tabindex="0"');
     expect(html).toContain('id="settings-panel-calendars" role="tabpanel" aria-labelledby="settings-tab-calendars" hidden=""');
-    expect(html.match(/role="tab"/g)).toHaveLength(9);
-    expect(html.match(/role="tabpanel"/g)).toHaveLength(9);
-    expect(html.match(/ hidden=""/g)).toHaveLength(8);
+    expect(html.match(/role="tab"/g)).toHaveLength(10);
+    expect(html.match(/role="tabpanel"/g)).toHaveLength(10);
+    expect(html.match(/ hidden=""/g)).toHaveLength(9);
   });
   it("lists the senders marked as not phishing with their waived reasons and a way to remove each", () => {
     const trusted = [{ sender: "billing@pay.example", codes: ["reply-to" as const], mails: [], at: 0, sentence: "Not flagged for replies going to another domain." }];

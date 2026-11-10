@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { openSyntheticHost, removeSyntheticRig, syntheticLive } from "../common/config/desk-credential-broker-fixtures";
 import { createArcFileSecretStore, type ArcSecretStore } from "../common/config/desk-credential-arc-file-store";
 import type { ConnectionHead, SetupDescriptor, SetupPrincipal } from "../common/config/desk-credential-broker";
 import { TOKEN_DESCRIPTOR, LOCAL_DESCRIPTOR } from "../common/config/desk-credential-broker-fixtures";
 import type { AuthorityBindings } from "./authority";
 import { ConnectionSetupService, type SetupCatalogEntry } from "./connection-setup";
-import { openConversationHost, type ConversationHost } from "./host";
+import type { ConversationHost } from "./host";
 import { registryFixture } from "./domain-adapters/operations/fixtures";
 import type { MutationGuardContext } from "../surface/mc/api/mutation-guard";
 import { CF_ACCESS_EMAIL_HEADER, CF_ACCESS_JWT_HEADER } from "../surface/mc/api/networks-admission";
@@ -67,11 +68,9 @@ export async function connectionSetupRig(): Promise<ConnectionSetupRig> {
   for (const name of [OWNER, OTHER]) principals.set(name, { principalRef: randomUUID(), principal: name, stack: "test", expiresAt: "2999-01-01T00:00:00.000Z" });
   let host: ConversationHost | undefined;
   let service: ConnectionSetupService | undefined;
-  const live = <T>(value: T | undefined): T => { if (value === undefined) throw new Error("Synthetic rig is closed."); return value; };
+  const live = syntheticLive;
   const open = async (): Promise<void> => {
-    const status = await openConversationHost({ dir: join(dir, "host"), stack: "test", label: "test", expectedLabel: "test", lanes: {}, turns: request => Promise.resolve({ text: "synthetic", session: request.session, resumed: false }) });
-    if (status.state !== "ready") throw new Error(status.reason);
-    host = status.host;
+    host = await openSyntheticHost(dir);
     const bindings = { currentRevision: () => "rev", authenticate: () => Promise.resolve(null), policy: () => Promise.reject(new Error("unused")), writer: () => Promise.resolve(false), restrictions: new Map(), connectors: new Map(), sinks: new Map() } as unknown as AuthorityBindings;
     const authority = host.lifecycleAuthority(registryFixture(), bindings);
     for (const person of principals.values()) {
@@ -95,7 +94,7 @@ export async function connectionSetupRig(): Promise<ConnectionSetupRig> {
       principalFor: (principal, stack) => Promise.resolve(principals.get(principal)?.stack === stack ? principals.get(principal) ?? null : null),
       references: principalRef => principals.get(OWNER)?.principalRef === principalRef ? Object.keys(env) : [],
       approvedBrokers: new Set(["approved-broker"]),
-      closeBridges: async id => { counts.bridgesClosed.push(id); },
+      closeBridges: id => { counts.bridgesClosed.push(id); return Promise.resolve(); },
     });
     service.registerCatalog();
   };
@@ -115,7 +114,7 @@ export async function connectionSetupRig(): Promise<ConnectionSetupRig> {
       return { status: res.status, body: text ? JSON.parse(text) as Record<string, unknown> : {}, text };
     },
     async reopen() { await host?.close(); await open(); },
-    async close() { await host?.close(); await rm(dir, { recursive: true, force: true }); },
+    close: () => removeSyntheticRig(dir, host),
   };
   await open();
   return rig;

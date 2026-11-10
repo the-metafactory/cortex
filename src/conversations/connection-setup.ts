@@ -100,7 +100,7 @@ const sameRefs = (left: ObjectReference[], right: ObjectReference[]): boolean =>
 const unique = <T>(items: T[], key: (item: T) => string): boolean => new Set(items.map(key)).size === items.length;
 
 export class ConnectionSetupService {
-  private queue: Promise<unknown> = Promise.resolve();
+  private tail: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly engine: Pick<Session, "commit" | "snapshot">,
@@ -173,11 +173,8 @@ export class ConnectionSetupService {
 
   resume(principal: string, connectionId: string, expectedRevision: number, inputs: Readonly<Record<string, SlotInput>> = {}): Promise<ConnectionView> {
     return this.serial(async () => {
-      const bound = await this.principalOf(principal);
-      const config = this.ownedConfig(await this.load(), bound, connectionId);
-      if (config.revision !== expectedRevision) throw new ConnectionSetupError("stale_head");
+      const { config, context } = await this.claim(principal, connectionId, expectedRevision);
       this.entry(config.packageId);
-      const context = await this.context(principal);
       await this.broker.provision(context, config.requestId, inputs);
       return this.view(context, (await this.load()).connections[connectionId] ?? config);
     });
@@ -185,12 +182,9 @@ export class ConnectionSetupService {
 
   enable(principal: string, connectionId: string, expectedRevision: number): Promise<ConnectionView> {
     return this.serial(async () => {
-      const bound = await this.principalOf(principal);
-      const config = this.ownedConfig(await this.load(), bound, connectionId);
-      if (config.revision !== expectedRevision) throw new ConnectionSetupError("stale_head");
+      const { bound, config, context } = await this.claim(principal, connectionId, expectedRevision);
       const entry = this.entry(config.packageId);
       if (this.unavailableReason(entry.setup)) throw new ConnectionSetupError("package_unavailable");
-      const context = await this.context(principal);
       const status = await this.broker.status(context, connectionId);
       if (status?.status !== "active" || !config.head) throw new ConnectionSetupError("setup_incomplete");
       const authority = await this.authority.inspectHostRecords();
@@ -207,19 +201,23 @@ export class ConnectionSetupService {
 
   disable(principal: string, connectionId: string, expectedRevision: number): Promise<ConnectionView> {
     return this.serial(async () => {
-      const bound = await this.principalOf(principal);
-      const config = this.ownedConfig(await this.load(), bound, connectionId);
-      if (config.revision !== expectedRevision) throw new ConnectionSetupError("stale_head");
-      const context = await this.context(principal);
+      const { context } = await this.claim(principal, connectionId, expectedRevision);
       await this.fence(connectionId);
       return this.view(context, await this.bump(connectionId));
     });
   }
 
+  private async claim(principal: string, connectionId: string, expectedRevision: number): Promise<{ bound: SetupPrincipal; config: Config; context: SetupContext }> {
+    const bound = await this.principalOf(principal);
+    const config = this.ownedConfig(await this.load(), bound, connectionId);
+    if (config.revision !== expectedRevision) throw new ConnectionSetupError("stale_head");
+    return { bound, config, context: await this.context(principal) };
+  }
+
   private serial<T>(run: () => Promise<T>): Promise<T> {
-    const next = this.queue.then(run, run);
-    this.queue = next.catch((_err: unknown) => undefined);
-    return next;
+    const result = this.tail.then(run);
+    this.tail = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   private entry(packageId: string): SetupCatalogEntry {
@@ -236,7 +234,7 @@ export class ConnectionSetupService {
 
   private async principalOf(principal: string): Promise<SetupPrincipal> {
     const found = await this.deps.principalFor(principal, this.deps.stack);
-    if (!found || found.stack !== this.deps.stack) throw new ConnectionSetupError("unauthenticated");
+    if (found?.stack !== this.deps.stack) throw new ConnectionSetupError("unauthenticated");
     return found;
   }
 
@@ -305,7 +303,7 @@ export class ConnectionSetupService {
     const config: Config = ConfigSchema.parse({
       connectionId, principalRef: principal.principalRef, stack: principal.stack, packageId: entry.packageId, setupSchemaId: entry.setup.setupSchemaId, setupVersion: entry.setup.version,
       requestId, revision: (existing?.revision ?? 0) + 1, scope: input.scope, readCapabilityIds: input.readCapabilityIds, writeCapabilityIds: input.writeCapabilityIds,
-      readDestinations: input.readDestinations, writeDestinations: input.writeDestinations, head: existing && existing.requestId === requestId ? existing.head : null,
+      readDestinations: input.readDestinations, writeDestinations: input.writeDestinations, head: existing?.requestId === requestId ? existing.head : null,
     });
     await this.mutate(state => { state.connections[connectionId] = config; });
     return config;

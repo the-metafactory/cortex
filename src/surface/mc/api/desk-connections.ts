@@ -2,15 +2,12 @@ import { z } from "zod";
 import { CredentialSetupError } from "../../../common/config/desk-credential-broker";
 import { ConnectionSetupError, type ConnectionSetupService } from "../../../conversations/connection-setup";
 import { ObjectReferenceSchema } from "../../../conversations/domain-adapters/types";
-import { isStackPrincipal } from "./conversations";
+import { fail, isStackPrincipal, notAllowed, reply } from "./conversations";
 import { checkRebindGuard, enforceMutationAuth, type MutationGuardContext } from "./mutation-guard";
 
 export const DESK_CONNECTIONS_PATH = "/api/desk/connections";
 export type ConnectionSetupAccess = () => ConnectionSetupService | null;
 
-const reply = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
-const fail = (status: number, error: string): Response => reply(status, { ok: false, error });
-const notAllowed = (allow: string): Response => new Response(null, { status: 405, headers: { Allow: allow } });
 
 const Input = z.union([z.object({ token: z.string().min(1).max(8192) }).strict(), z.object({ reference: z.string().regex(/^[A-Z][A-Z0-9_]{0,127}$/) }).strict()]);
 const Inputs = z.record(z.string().max(32), Input).optional();
@@ -44,15 +41,19 @@ const REFUSALS: Record<string, [number, string]> = {
   schema_changed: [409, "The package setup changed. Reload and retry."],
 };
 
+async function stackPrincipalOf(req: Request, guard: MutationGuardContext): Promise<string | Response> {
+  const foreign = checkRebindGuard(req, guard);
+  if (foreign) return foreign;
+  const verified = await enforceMutationAuth(req, guard);
+  if (verified instanceof Response) return verified;
+  return isStackPrincipal(verified.principal, guard) ? verified.principal : fail(403, "Only this stack's principal can set up its connections.");
+}
+
 export async function handleDeskConnections(req: Request, url: URL, guard: MutationGuardContext, access: ConnectionSetupAccess | undefined): Promise<Response> {
-  const rebind = checkRebindGuard(req, guard);
-  if (rebind) return rebind;
-  const auth = await enforceMutationAuth(req, guard);
-  if (auth instanceof Response) return auth;
-  if (!isStackPrincipal(auth.principal, guard)) return fail(403, "Only this stack's principal can set up its connections.");
+  const who = await stackPrincipalOf(req, guard);
+  if (who instanceof Response) return who;
   const service = access?.() ?? null;
   if (!service) return fail(503, "Connection setup is unavailable on this stack.");
-  const who = auth.principal;
   try {
     if (url.pathname === DESK_CONNECTIONS_PATH) {
       if (req.method === "GET") return reply(200, { ok: true, packages: await service.forms(who), connections: await service.list(who) });
@@ -65,7 +66,7 @@ export async function handleDeskConnections(req: Request, url: URL, guard: Mutat
     const match = ITEM.exec(url.pathname);
     if (!match?.[1] || !match[2]) return fail(404, "Unknown connection setup route.");
     if (req.method !== "POST") return notAllowed("POST");
-    const raw = await req.json().catch(() => null);
+    const raw: unknown = await req.json().catch(() => null);
     if (match[2] === "provision") {
       const parsed = Resume.safeParse(raw);
       if (!parsed.success) return fail(400, "The connection setup request is not valid.");

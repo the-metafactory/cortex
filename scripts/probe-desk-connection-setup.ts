@@ -7,10 +7,15 @@ import { connectionSetupRig, OTHER, SELECTION, SYNTHETIC_TOKEN } from "../src/co
 import { ConnectionSetupBody } from "../src/surface/mc/dashboard-v2/components/desk-connection-setup";
 import type { ConnectionView, PackageForm } from "../src/surface/mc/dashboard-v2/lib/desk-connection-setup";
 
+const logged: string[] = [];
+const stderrWrite = process.stderr.write.bind(process.stderr);
 const priorHome = process.env.HOME;
-const lines: string[] = [];
-const realWrite = process.stderr.write.bind(process.stderr);
-process.stderr.write = ((chunk: string | Uint8Array) => { lines.push(String(chunk)); return true; }) as typeof process.stderr.write;
+const capture = (chunk: string | Uint8Array): boolean => { logged.push(String(chunk)); return true; };
+const settle = (): void => {
+  process.stderr.write = stderrWrite;
+  if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
+};
+process.stderr.write = capture as typeof process.stderr.write;
 const rig = await connectionSetupRig();
 process.env.HOME = rig.dir;
 const PATH = "/api/desk/connections";
@@ -67,16 +72,14 @@ try {
   assert.ok((missing.body.connections as ConnectionView[]).some(item => item.state === "unavailable" && item.reason === "package_missing"));
   assert.equal(rig.counts.ownerMutations, 0);
 
-  const everything = JSON.stringify([seen, after.text, missing.text, lines, rig.heads.map(head => Object.keys(head))]);
-  assert.ok(!everything.includes(SYNTHETIC_TOKEN));
+  assert.ok(!JSON.stringify([seen, after.text, missing.text, logged]).includes(SYNTHETIC_TOKEN));
   await rig.host().close();
-  const files = readdirSync(join(rig.dir, "host"), { recursive: true, withFileTypes: true }).filter(entry => entry.isFile());
-  assert.ok(files.every(entry => !readFileSync(join(entry.parentPath, entry.name)).toString("latin1").includes(SYNTHETIC_TOKEN)));
+  const stored = readdirSync(join(rig.dir, "host"), { recursive: true, withFileTypes: true }).filter(entry => entry.isFile());
+  for (const entry of stored) assert.ok(!readFileSync(join(entry.parentPath, entry.name)).toString("latin1").includes(SYNTHETIC_TOKEN));
   await rig.reopen();
-  process.stderr.write = realWrite;
+  settle();
   console.log(`Synthetic connection setup (local and hosted): ${rig.counts.secretWrites} secret writes, ${rig.counts.headUpdates} head updates, ${rig.counts.authorityPublishes} authority publications, ${rig.counts.ownerMutations} owner mutations; partial failure stayed incomplete and resumed after reopen; wrong-principal, forged and stale requests changed nothing; explicit enable and disable closed bridges and kept all records; missing package shown as unavailable; no secret in responses, logs or the host store.`);
 } finally {
-  process.stderr.write = realWrite;
-  if (priorHome === undefined) delete process.env.HOME; else process.env.HOME = priorHome;
+  settle();
   await rig.close();
 }

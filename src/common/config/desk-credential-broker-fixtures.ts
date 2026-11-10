@@ -10,6 +10,22 @@ export const SYNTHETIC_TOKEN = "synthetic-token-value-1f3a9c";
 export const TOKEN_DESCRIPTOR: SetupDescriptor = { packageId: "example-package", setupSchemaId: "example-setup", version: "1.0.0", authKind: "token", slots: [{ slot: "primary", kind: "token" }, { slot: "backup", kind: "api-key" }] };
 export const LOCAL_DESCRIPTOR: SetupDescriptor = { packageId: "example-package", setupSchemaId: "example-local", version: "1.0.0", authKind: "local", slots: [] };
 
+export function syntheticLive<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("Synthetic rig is closed.");
+  return value;
+}
+
+export async function openSyntheticHost(dir: string): Promise<ConversationHost> {
+  const status = await openConversationHost({ dir: join(dir, "host"), stack: "test", label: "test", expectedLabel: "test", lanes: {}, turns: request => Promise.resolve({ text: "synthetic", session: request.session, resumed: false }) });
+  if (status.state !== "ready") throw new Error(status.reason);
+  return status.host;
+}
+
+export async function removeSyntheticRig(dir: string, host: ConversationHost | undefined): Promise<void> {
+  await host?.close();
+  await rm(dir, { recursive: true, force: true });
+}
+
 export interface BrokerRig {
   dir: string;
   configRoot: string;
@@ -47,11 +63,9 @@ export async function brokerRig(): Promise<BrokerRig> {
   const principals = new Map<string, SetupPrincipal>();
   let host: ConversationHost | undefined;
   let broker: DeskCredentialBroker | undefined;
-  const live = <T>(value: T | undefined): T => { if (value === undefined) throw new Error("Synthetic rig is closed."); return value; };
+  const live = syntheticLive;
   const open = async (): Promise<void> => {
-    const status = await openConversationHost({ dir: join(dir, "host"), stack: "test", label: "test", expectedLabel: "test", lanes: {}, turns: request => Promise.resolve({ text: "synthetic", session: request.session, resumed: false }) });
-    if (status.state !== "ready") throw new Error(status.reason);
-    host = status.host;
+    host = await openSyntheticHost(dir);
     broker = host.credentialBroker({
       store,
       authenticate: sessionRef => Promise.resolve(principals.get(sessionRef) ?? null),
@@ -74,7 +88,7 @@ export async function brokerRig(): Promise<BrokerRig> {
     broker: () => live(broker),
     async session(name) { const context = await live(broker).authenticate(name); if (!context) throw new Error("synthetic session rejected"); return context; },
     async reopen() { await host?.close(); await open(); },
-    async close() { await host?.close(); await rm(dir, { recursive: true, force: true }); },
+    close: () => removeSyntheticRig(dir, host),
   };
   return rig;
 }

@@ -9,13 +9,13 @@ import { DEFAULT_LOCAL_PRINCIPAL } from "./networks-admission";
 
 export type ConversationAccess = (() => HostStatus | null) & { discord?: () => DiscordConversations | null };
 
-const reply = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
-const fail = (status: number, error: string): Response => reply(status, { ok: false, error });
+export const reply = (status: number, body: object): Response => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
+export const fail = (status: number, error: string): Response => reply(status, { ok: false, error });
 const NO_SOURCES = (): Response => fail(503, "Conversation sources are not set up on this stack.");
 const NO_DISCORD = "Discord threads are not set up for conversations on this stack.";
 const AttachSchema = z.object({ retry: z.boolean().optional() }).strict();
 const LinkSchema = z.object({ ref: ObjectRefSchema, acknowledge: z.literal("discord-history").optional() }).strict();
-const notAllowed = (allow: string): Response => new Response(null, { status: 405, headers: { Allow: allow } });
+export const notAllowed = (allow: string): Response => new Response(null, { status: 405, headers: { Allow: allow } });
 function decoded(value: string): string | null {
   try { return decodeURIComponent(value); }
   catch { return null; }
