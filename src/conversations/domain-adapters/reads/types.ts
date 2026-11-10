@@ -15,7 +15,7 @@ export const ReadBindingSchema = z.object({
   outputSchemaRef: SchemaRefSchema,
   textPointer: pointer.optional(),
   destinationType: identifier.optional(),
-  display: z.object({ title: pointer, summary: pointer.optional(), status: pointer.optional(), due: pointer.optional(), area: pointer.optional() }).strict(),
+  display: z.object({ title: pointer, summary: pointer.optional(), status: pointer.optional(), due: pointer.optional(), area: pointer.optional(), kind: pointer.optional(), parent: pointer.optional(), url: pointer.optional() }).strict(),
   attention: z.object({ pointer }).strict().optional(),
   query: z.object({
     objectsPointer: pointer,
