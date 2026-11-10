@@ -47,7 +47,7 @@ export async function openFlowSaveRig() {
       resolve({ code: typeof error?.code === "number" ? error.code : 0, stdout, stderr });
     });
   });
-  const state: { mode: "normal" | "exit-2" | "invalid-output" | "timeout" | "wrong-name" | "missing-hash"; configured: boolean } = { mode: "normal", configured: true };
+  const state: { mode: "normal" | "exit-2" | "invalid-output" | "timeout" | "wrong-name" | "missing-hash"; configured: boolean; now: number } = { mode: "normal", configured: true, now: FLOW_SAVE_NOW };
   const run: WriterRunner = async (argv, stdin, timeout) => {
     calls.push(argv);
     const result = await owner(argv, stdin, timeout);
@@ -66,11 +66,14 @@ export async function openFlowSaveRig() {
   const registered = registry.register(binding.declaration, binding.bindings);
   if (!registered.ok) throw new Error(JSON.stringify(registered.error));
   const facade = createFlowSaveFacade({ binding, journal, now: () => FLOW_SAVE_NOW });
-  const { bridge, lifecycle } = lifecycleRig({ journal, live: () => binding, now: FLOW_SAVE_NOW, label: "Flow save" });
+  const { bridge, lifecycle, context, lease } = lifecycleRig({ journal, live: () => binding, now: FLOW_SAVE_NOW, clock: () => new Date(state.now), label: "Flow save" });
+  const command = (args: string[]): Promise<WriterResult> => owner([...pulse, "flow", ...args, "--json"], "", 8000);
   return {
     dir, flowsDir, env, pulse, calls, state, registry, journal, binding, facade, bridge, lifecycle,
-    command: (args: string[]): Promise<WriterResult> => owner([...pulse, "flow", ...args, "--json"], "", 8000),
+    command,
+    savedCount: async (): Promise<number> => JSON.parse((await command(["list", "--saved"])).stdout).flows.length,
     create: (request = flowSaveRequest()) => facade.create(request, flowSaveAuthority, lifecycle()),
+    retry: (operationId: string) => bridge.redispatch(context, operationId, lease),
     async reopened() {
       await engine.closeEngine();
       engine = await openJournal(dir, registry);

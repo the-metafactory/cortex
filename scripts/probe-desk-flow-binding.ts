@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { assertFlowCreated, assertFlowDeleted, assertFlowRefused, assertFlowUncertain } from "../src/conversations/domain-adapters/__tests__/fixtures/flow-save-checks";
+import { assertFlowCreated, assertFlowDeleted, assertFlowRefused, assertFlowUncertain, assertFlowReplayBlockedAfterDeletion } from "../src/conversations/domain-adapters/__tests__/fixtures/flow-save-checks";
 import { openFlowSaveRig } from "../src/conversations/domain-adapters/__tests__/fixtures/flow-save-fixtures";
 
 const saved = await openFlowSaveRig();
@@ -27,3 +27,9 @@ for (const mode of ["exit-2", "invalid-output", "timeout"] as const) {
     console.log(`${mode}: uncertain save reconciles by request ID, one Flow and one success receipt`);
   } finally { await crashed.close(); }
 }
+
+const deletedUncertain = await openFlowSaveRig();
+try {
+  await assertFlowReplayBlockedAfterDeletion(deletedUncertain);
+  console.log("deleted uncertain save: lookup stays unknown, lifecycle retry blocked, no Flow recreated");
+} finally { await deletedUncertain.close(); }

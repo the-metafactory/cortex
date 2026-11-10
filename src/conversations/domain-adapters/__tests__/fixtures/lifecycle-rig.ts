@@ -25,7 +25,7 @@ export interface LiveBinding {
   readonly connector: Pick<TrustedConnector, "dispatch">;
 }
 
-export function lifecycleRig(options: { journal: OperationJournalStore; live: () => LiveBinding; now: number; label: string }) {
+export function lifecycleRig(options: { journal: OperationJournalStore; live: () => LiveBinding; now: number; clock?: () => Date; label: string }) {
   const { journal, live, now } = options;
   const context = {} as HostContext;
   const lease: WriterLease = { bindingKey: writerBindingKey(live().writerBinding), epoch: 1, instanceId: "instance-example", supervisorReceiptRef: "receipt-example" };
@@ -40,7 +40,7 @@ export function lifecycleRig(options: { journal: OperationJournalStore; live: ()
     },
     cancel: () => Promise.resolve({ kind: "denied", reason: { code: "authority_denied", message: "Cancellation is not declared." }, recovery: "reauthorize" }),
   };
-  const bridge = new OperationBridge({ journal, authority, writers: { current: () => Promise.resolve(true), legacyAllowed: () => Promise.resolve(true) }, supportFor: () => live().support, now: () => new Date(now) });
+  const bridge = new OperationBridge({ journal, authority, writers: { current: () => Promise.resolve(true), legacyAllowed: () => Promise.resolve(true) }, supportFor: () => live().support, now: options.clock ?? (() => new Date(now)) });
   const lifecycle = () => ({ activate: () => bridge.activate(live().writerBinding, lease), dispatch: (operationId: string) => bridge.dispatch(context, operationId, lease) });
   return { context, lease, bridge, lifecycle };
 }

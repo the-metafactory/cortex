@@ -18,7 +18,7 @@ export async function assertFlowCreated(rig: FlowSaveRig) {
   const shown = JSON.parse((await rig.command(["show", "F_SAVE_EXAMPLE"])).stdout) as { name: string; sha256: string };
   assert.deepEqual(response.result.evidence.receipt, { name: shown.name, sha256: shown.sha256 });
   assert.deepEqual(response.result.output, { ref: { adapterId: "flow", connectionId: "connection-example", objectType: "saved", canonicalId: shown.name }, name: shown.name, sha256: shown.sha256 });
-  assert.equal(JSON.parse((await rig.command(["list", "--saved"])).stdout).flows.length, 1);
+  assert.equal(await rig.savedCount(), 1);
   return shown;
 }
 
@@ -45,7 +45,7 @@ export async function assertFlowRefused(rig: FlowSaveRig) {
     assert.equal(response.result.evidence.kind, "no-effect");
     assert.ok(typeof response.result.evidence.receipt === "object" && response.result.evidence.receipt !== null && "draftKept" in response.result.evidence.receipt && response.result.evidence.receipt.draftKept === true);
   }
-  assert.equal(JSON.parse((await rig.command(["list", "--saved"])).stdout).flows.length, 1);
+  assert.equal(await rig.savedCount(), 1);
 }
 
 export async function assertFlowUncertain(rig: FlowSaveRig) {
@@ -62,7 +62,7 @@ export async function assertFlowUncertain(rig: FlowSaveRig) {
   const reconciled = await rig.journal.append(id, stored.revision, { sequence: stored.journal.sequence + 1, eventId: crypto.randomUUID(), at: new Date(FLOW_SAVE_NOW + 2000).toISOString(), event: { kind: "reconciliation", lookup: found } });
   assert.equal(reconciled.journal.state, "succeeded");
   assert.equal(reconciled.outbox.length, 1);
-  assert.equal(JSON.parse((await rig.command(["list", "--saved"])).stdout).flows.length, 1);
+  assert.equal(await rig.savedCount(), 1);
   return found;
 }
 
@@ -72,5 +72,28 @@ export async function assertFlowDeleted(rig: FlowSaveRig, shown: { name: string;
   assert.ok(found.result.kind === "known" && found.result.response.result.kind === "succeeded");
   assert.deepEqual(found.result.response.result.evidence.receipt, { name: shown.name, sha256: shown.sha256 });
   assert.equal((await rig.command(["show", shown.name])).code, 1);
-  assert.equal(JSON.parse((await rig.command(["list", "--saved"])).stdout).flows.length, 0);
+  assert.equal(await rig.savedCount(), 0);
+}
+
+export async function assertFlowReplayBlockedAfterDeletion(rig: FlowSaveRig) {
+  rig.state.mode = "exit-2";
+  await rig.create();
+  const id = flowSaveRequest().operationId;
+  const shown = JSON.parse((await rig.command(["show", "F_SAVE_EXAMPLE"])).stdout) as { name: string; sha256: string };
+  assert.equal((await rig.command(["delete", shown.name, "--expected-sha256", shown.sha256])).code, 0);
+  const found = await lookup(rig);
+  assert.equal(found.result.kind, "unknown");
+  const stored = await rig.journal.read(id);
+  assert.ok(stored);
+  const reserved = await rig.journal.reserveLookup(id, stored.revision, new Date(FLOW_SAVE_NOW + 2000).toISOString());
+  await rig.journal.append(id, reserved.revision, { sequence: reserved.journal.sequence + 1, eventId: crypto.randomUUID(), at: new Date(FLOW_SAVE_NOW + 2000).toISOString(), event: { kind: "reconciliation", lookup: found } });
+  rig.state.now = FLOW_SAVE_NOW + 4000;
+  rig.state.mode = "normal";
+  const retried = await rig.retry(id);
+  assert.equal(retried.kind, "not-eligible");
+  assert.ok(retried.kind === "not-eligible");
+  assert.equal(retried.reason.code, "dedup_unavailable");
+  assert.equal(rig.calls.filter(argv => argv.includes("save")).length, 1);
+  assert.equal(await rig.savedCount(), 0);
+  assert.equal((await rig.journal.read(id))?.journal.state, "uncertain");
 }

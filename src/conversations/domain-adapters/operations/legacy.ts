@@ -67,14 +67,16 @@ function graphNodeIssues(source: LegacySource, context: LegacyContext): string[]
   return issues;
 }
 
+function flowLegacyIssues(source: LegacySource, context: LegacyContext): string[] {
+  const issues: string[] = [];
+  const [destination] = context.destinations;
+  if (context.destinations.length !== 1 || destination?.objectType !== "stack" || !destination.canonicalId.trim() || destination.canonicalId.trim() !== destination.canonicalId) issues.push("legacy_destination_ambiguous");
+  if (context.canonicalReference && (context.canonicalReference.objectType !== "saved" || context.canonicalReference.canonicalId !== source.record.canonicalId || !flowName.safeParse(context.canonicalReference.canonicalId).success)) issues.push("legacy_canonical_mapping_unsupported");
+  return issues;
+}
+
 function conversionIssues(source: LegacySource, context: LegacyContext): string[] {
-  if (source.record.owner === "flow" && context.owner === "flow" && context.adapterId === "flow" && context.capabilityId === "flow.saved.create") {
-    const issues: string[] = [];
-    const [destination] = context.destinations;
-    if (context.destinations.length !== 1 || destination?.objectType !== "stack" || !destination.canonicalId.trim() || destination.canonicalId.trim() !== destination.canonicalId) issues.push("legacy_destination_ambiguous");
-    if (context.canonicalReference && (context.canonicalReference.objectType !== "saved" || context.canonicalReference.canonicalId !== source.record.canonicalId || !flowName.safeParse(context.canonicalReference.canonicalId).success)) issues.push("legacy_canonical_mapping_unsupported");
-    return issues;
-  }
+  if (source.record.owner === "flow" && context.owner === "flow" && context.adapterId === "flow" && context.capabilityId === "flow.saved.create") return flowLegacyIssues(source, context);
   if (source.record.owner === "graph-node" && isGraphNodeBinding(context)) return graphNodeIssues(source, context);
   if (source.record.owner !== "balance-task" || !isBalanceTaskBinding(context)) return ["legacy_capability_mapping_unsupported"];
   const fields = source.proposal.fields;

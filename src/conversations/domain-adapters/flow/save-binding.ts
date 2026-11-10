@@ -4,8 +4,7 @@ import type { CreateRequest } from "../../types";
 import type { FlowOptions } from "../../../common/types/config";
 import { studioRequestId } from "../../../surface/mc/desk/conversation-ids";
 import { spawnWithStdin, type WriterRunner } from "../../../surface/mc/desk/create";
-import { definitionName, flowJson, flowSaveArgs, FlowSavedResponseSchema, FlowRefusedResponseSchema, SAVE_TIMEOUT_MS, SHOW_TIMEOUT_MS } from "../../../surface/mc/desk/flow-conversation-writer";
-import { withFlowFile } from "../../../surface/mc/desk/flow-file";
+import { flowJson, FlowSavedResponseSchema, runFlowSave, sentence, SHOW_TIMEOUT_MS } from "./pulse-contract";
 import { FlowHashSchema } from "../../../surface/mc/desk/saved-flow-contract";
 import type { DispatchOutcome } from "../operations/dispatch";
 import type { OperationJournalStore } from "../operations/journal";
@@ -22,7 +21,6 @@ const INPUT_REF = flowSchemaRef(`${CAPABILITY_ID}.input`);
 const OUTPUT_REF = flowSchemaRef(`${CAPABILITY_ID}.output`);
 const ERROR_REF = flowSchemaRef(`${CAPABILITY_ID}.error`);
 export const FLOW_SAVE_SUPPORT_ID = "flow.saved.create.v1";
-export const FLOW_SAVE_DEDUP_RETENTION_MS = 31_536_000_000;
 const kit = ownerResultKit("flow");
 
 export const FlowSaveInputSchema = z.object({ stack: ObjectReferenceSchema, name: flowName, definition: z.string().min(1) }).strict();
@@ -48,7 +46,7 @@ export function flowSaveDeclaration(): AdapterDeclaration {
 export function flowSaveSupport(connectionId: string): OwnerSupport {
   return {
     lifecycleVersion: "1.0.0", adapterId: FLOW_ADAPTER_ID, connectionId, capabilityId: CAPABILITY_ID, declarationId: FLOW_SAVE_SUPPORT_ID,
-    dedup: { kind: "guaranteed", scope: "connection-capability", retentionMs: FLOW_SAVE_DEDUP_RETENTION_MS, bindsSnapshot: true, concurrent: true },
+    dedup: { kind: "none" },
     operationLookup: "historical", conditionalUpdate: "none", cancellation: "none",
   };
 }
@@ -85,7 +83,7 @@ export function createFlowSaveBinding(options: FlowSaveBindingOptions) {
     return response;
   };
   const dispatch = async (request: DispatchRequest, signal?: AbortSignal): Promise<OwnerResult> => {
-    const refuse = (message: string) => kit.refused(request, `${message} Nothing was created.`, at());
+    const refuse = (message: string) => kit.refused(request, `${sentence(message)} Nothing was created.`, at());
     const snapshot = request.snapshot;
     if (snapshot.adapterId !== FLOW_ADAPTER_ID || snapshot.capabilityId !== CAPABILITY_ID || snapshot.connectionId !== options.connectionId || request.ownerRequestId !== studioRequestId(request.operationId)) return refuse("The approved save belongs to another capability, connection or owner request.");
     let input: FlowSaveInput;
@@ -94,22 +92,14 @@ export function createFlowSaveBinding(options: FlowSaveBindingOptions) {
     if (snapshot.destinations.length !== 1 || canonicalWire(snapshot.destinations[0]) !== canonicalWire(input.stack)) return refuse("The approved destination does not match the Flow stack.");
     const flows = options.flows();
     if (!flows) return refuse("Pulse is not set up on this stack.");
-    const named = definitionName(input.definition);
-    if (named === undefined) return refuse("The flow definition is not a YAML mapping with a name.");
-    if (named !== input.name) return refuse("The name and the flow definition's name differ.");
     if (signal?.aborted) return refuse("The conversation stopped waiting before Pulse was called.");
-    try {
-      const provenance = { ...snapshot.provenance, operationId: request.operationId };
-      const result = await withFlowFile(input.definition.endsWith("\n") ? input.definition : `${input.definition}\n`, file => run(flowSaveArgs(flows, file, { operationId: request.operationId, provenance }), "", SAVE_TIMEOUT_MS));
-      const reply = flowJson(result.stdout);
-      const saved = Saved.safeParse(reply);
-      if (result.code === 0 && saved.success && saved.data.name === input.name) return success(requestParts(request), saved.data, at());
-      const refused = FlowRefusedResponseSchema.safeParse(reply);
-      if (result.code === 1 && refused.success) return refuse(refused.data.status === "conflict" ? refused.data.reason : refused.data.findings.map(finding => finding.message).join(" "));
-      return kit.uncertain(request, `Pulse did not confirm the save (${result.code}). Check its saved flows before retrying.`, at());
-    } catch (error) {
-      return kit.uncertain(request, error instanceof Error ? error.message : "Pulse failed without a result.", at());
-    }
+    const provenance = { ...snapshot.provenance, operationId: request.operationId };
+    const outcome = await runFlowSave(run, flows, input, { operationId: request.operationId, provenance, ...(signal ? { signal } : {}) });
+    if (outcome.kind === "refused") return refuse(outcome.reason);
+    if (outcome.kind === "unconfirmed") return kit.uncertain(request, outcome.error.message, at());
+    const saved = Saved.safeParse(outcome.value);
+    if (saved.success) return success(requestParts(request), saved.data, at());
+    return kit.uncertain(request, "Pulse did not return a valid name and sha256 for the save. Check its saved flows before retrying.", at());
   };
   const lookup = async (request: LookupRequest): Promise<OperationLookup> => {
     const checkedAt = at();
@@ -155,8 +145,8 @@ export function createFlowSaveFacade(options: { binding: FlowSaveBinding; journa
       let snapshot: ApprovedSnapshot;
       try {
         snapshot = flowSaveApprovedSnapshot({ connectionId: options.binding.support.connectionId, stack: options.binding.writerBinding.stack, provenance, input: { stack: stackRef(options.binding.support.connectionId, options.binding.writerBinding.stack), name: request.fields.name ?? "", definition: request.fields.definition ?? "" } });
-        await options.journal.approve({ operationId: request.operationId, idempotencyKey: request.operationId, ownerRequestId: studioRequestId(request.operationId), snapshot, authority, at: new Date((options.now ?? Date.now)()).toISOString() });
       } catch { return refuse("The reviewed Flow is invalid or no longer matches this operation."); }
+      await options.journal.approve({ operationId: request.operationId, idempotencyKey: request.operationId, ownerRequestId: studioRequestId(request.operationId), snapshot, authority, at: new Date((options.now ?? Date.now)()).toISOString() });
       if (!await lifecycle.activate()) return refuse("The Flow save binding is inactive.");
       const outcome = await lifecycle.dispatch(request.operationId);
       const stored = await options.journal.read(request.operationId);

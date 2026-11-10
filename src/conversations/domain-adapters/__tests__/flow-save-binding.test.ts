@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { studioRequestId } from "../../../surface/mc/desk/conversation-ids";
 import { createFlowReadAdapter } from "../flow/read";
 import { createFlowSaveBinding, flowSaveSupport } from "../flow/save-binding";
@@ -6,7 +6,7 @@ import { importLegacyOperation, previewLegacyOperation, projectLegacyOperation, 
 import { legacyFixture } from "../operations/legacy-fixtures";
 import { createOutcome, resultsOf } from "../operations/owner-results";
 import { FLOW_SAVE_NOW, flowSaveAuthority, flowSaveDefinition, flowSaveDispatchRequest, flowSaveRequest, openFlowSaveRig, type FlowSaveRig } from "./fixtures/flow-save-fixtures";
-import { assertFlowCreated, assertFlowDeleted, assertFlowRefused, assertFlowUncertain } from "./fixtures/flow-save-checks";
+import { assertFlowCreated, assertFlowDeleted, assertFlowRefused, assertFlowUncertain, assertFlowReplayBlockedAfterDeletion } from "./fixtures/flow-save-checks";
 
 const rigs: FlowSaveRig[] = [];
 async function open() { const rig = await openFlowSaveRig(); rigs.push(rig); return rig; }
@@ -37,11 +37,41 @@ test("same-operation facade replay dispatches nothing and a direct owner repeat 
   expect(createOutcome(response)).toBe("created");
   const first = resultsOf(stored)[0]!;
   expect(response.result.kind === "succeeded" && response.result.output).toEqual(first.result.kind === "succeeded" && first.result.output);
-  expect(JSON.parse((await rig.command(["list", "--saved"])).stdout).flows).toHaveLength(1);
+  expect(await rig.savedCount()).toBe(1);
 });
 
 test("collision, invalid owner YAML and mismatched name are refused and preserve drafts without writes", async () => {
   await assertFlowRefused(await open());
+});
+
+test("owner refusal reasons and findings are separate sentences", async () => {
+  const rig = await open();
+  const cases = [
+    { reply: { status: "conflict", reason: "A saved flow is already named F_SAVE_EXAMPLE  " }, message: "A saved flow is already named F_SAVE_EXAMPLE. Nothing was created." },
+    { reply: { status: "invalid", findings: [{ message: "The input is invalid" }, { message: "Actions are missing.  " }] }, message: "The input is invalid. Actions are missing. Nothing was created." },
+  ];
+  for (const { reply, message } of cases) {
+    const binding = createFlowSaveBinding({ stack: "stack-example", connectionId: "connection-example", flows: () => ({ pulse: rig.pulse }), journal: rig.journal, run: () => Promise.resolve({ code: 1, stdout: JSON.stringify(reply), stderr: "" }) });
+    const response = await binding.dispatch(flowSaveDispatchRequest());
+    expect(response.result.kind).toBe("failed");
+    expect(response.result.kind === "failed" && response.result.error.message).toBe(message);
+  }
+  expect(await rig.savedCount()).toBe(0);
+});
+
+test("invalid Flow fields are refused but journal approval failures propagate before activation", async () => {
+  const rig = await open();
+  const failure = new Error("Journal storage unavailable");
+  const approve = spyOn(rig.journal, "approve").mockRejectedValueOnce(failure);
+  const lifecycle = { activate: () => { throw new Error("Failed approval activated the binding."); }, dispatch: () => { throw new Error("Failed approval dispatched."); } };
+  try {
+    expect((await rig.facade.create(flowSaveRequest("invalid-fields", { name: "invalid" }), flowSaveAuthority, lifecycle)).kind).toBe("refused");
+    expect(approve).not.toHaveBeenCalled();
+    await expect(rig.facade.create(flowSaveRequest(), flowSaveAuthority, lifecycle)).rejects.toBe(failure);
+    expect(approve).toHaveBeenCalledTimes(1);
+    expect(await rig.journal.read(flowSaveRequest().operationId)).toBeNull();
+    expect(rig.calls).toEqual([]);
+  } finally { approve.mockRestore(); }
 });
 
 test("concurrent owner dispatches deduplicate one request and mismatched content is refused", async () => {
@@ -49,7 +79,7 @@ test("concurrent owner dispatches deduplicate one request and mismatched content
   const request = flowSaveDispatchRequest();
   const responses = await Promise.all([rig.binding.dispatch(request), rig.binding.dispatch({ ...request, attemptId: crypto.randomUUID() })]);
   expect(responses.map(createOutcome)).toEqual(["created", "created"]);
-  expect(JSON.parse((await rig.command(["list", "--saved"])).stdout).flows).toHaveLength(1);
+  expect(await rig.savedCount()).toBe(1);
   if (typeof request.snapshot.input !== "object" || request.snapshot.input === null || Array.isArray(request.snapshot.input)) throw new Error("Flow input required.");
   const changed = await rig.binding.dispatch({ ...request, snapshot: { ...request.snapshot, input: { ...request.snapshot.input, definition: flowSaveDefinition().replace("text: example", "text: changed") } } });
   expect(createOutcome(changed)).toBe("refused");
@@ -101,8 +131,12 @@ test("a missing owner response and absent Flow stay unknown rather than assertin
   expect(lookup.result.kind).toBe("unknown");
 });
 
-test("support declares request dedup, historical lookup and no update, cancellation or compensation", () => {
-  expect(flowSaveSupport("connection-example")).toMatchObject({ dedup: { kind: "guaranteed", bindsSnapshot: true, concurrent: true }, operationLookup: "historical", conditionalUpdate: "none", cancellation: "none" });
+test("a lost response followed by deletion cannot recreate the Flow through lifecycle retry", async () => {
+  await assertFlowReplayBlockedAfterDeletion(await open());
+});
+
+test("support permits historical lookup without an unproven retry, update, cancellation or compensation guarantee", () => {
+  expect(flowSaveSupport("connection-example")).toMatchObject({ dedup: { kind: "none" }, operationLookup: "historical", conditionalUpdate: "none", cancellation: "none" });
   expect(flowSaveSupport("connection-example").compensationCapabilityId).toBeUndefined();
 });
 
