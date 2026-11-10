@@ -30,6 +30,7 @@ import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifie
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
 import { backSnoozes, snoozedIds, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
+import type { BalanceDayAccess } from "./balance-day";
 import type { PiSettings } from "../../../conversations/pi";
 import { digestTopics, digestView, listMailGroups, readDigestFlags, type DigestConfig, type DigestFlagger } from "./mail-digest";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
@@ -57,6 +58,7 @@ import { routeOf, sourceBoundary } from "./source-boundary";
 
 export interface DeskRuntime {
   conversations?: () => boolean;
+  adapterDay?: BalanceDayAccess;
   waitingTasks?: Pick<WaitingTasks, "read">;
   routineCapabilities?: import("./routine-providers").RoutineCapabilities;
   routineRead?: RoutineReadLoop;
@@ -133,6 +135,7 @@ export interface DeskVigilSource {
 
 export interface ComposeDeps {
   adapterAttention?: AdapterAttention;
+  adapterDay?: BalanceDayAccess;
   conversations?: boolean;
   waitingTasks?: Pick<WaitingTasks, "read">;
   routineRead?: RoutineReadLoop;
@@ -231,7 +234,10 @@ export async function composeDesk(
   const activeCorrections = corrections.ok ? corrections.corrections : [];
   const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
   const localClassifier = desk.mailClassifier?.local ? deps.localMailClassifier : undefined;
-  const { myDay, studio } = await withSyncedBalance(db, desk, now, (source, studio) => ({ myDay: readMyDay(db, desk, now, source), studio }));
+  const { myDay, studio } = await withSyncedBalance(db, desk, now, async (source, studio) => {
+    const projection = deps.adapterDay ? await deps.adapterDay()?.projection() ?? null : null;
+    return { myDay: readMyDay(db, desk, now, source, projection ?? undefined), studio };
+  });
   const cloudAreas = new Set(desk.areas.filter((a) => a.policy === "cloud").map((a) => a.id));
   const boundary = sourceBoundary(desk);
   const cloudSources = new Set(readings.filter((r) => !boundary.has(r.id)).map((r) => r.id));

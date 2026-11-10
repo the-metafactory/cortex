@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import type { MyDayView } from "../../desk/my-day";
 import type { MyDayCommand } from "../../desk/my-day-schema";
 import { ApiFailure } from "../lib/api";
-import { submitMyDay } from "../lib/desk-my-day-action";
+import { refreshMyDay, submitMyDay } from "../lib/desk-my-day-action";
 
 interface DayIntent { date: string; command: MyDayCommand; requestId: string; onSaved?: () => void }
 
@@ -11,6 +11,7 @@ export function useMyDay(day: MyDayView, onChanged: () => void) {
   const current = local?.date === day.date && local.revision > day.revision ? local : day;
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [retryable, setRetryable] = useState(false);
   const inFlight = useRef(false);
   const pending = useRef<DayIntent | null>(null);
@@ -49,5 +50,23 @@ export function useMyDay(day: MyDayView, onChanged: () => void) {
     return send({ date: current.date, command, requestId: crypto.randomUUID(), ...(onSaved ? { onSaved } : {}) });
   };
   const retry = (): Promise<boolean> => pending.current ? send(pending.current) : Promise.resolve(false);
-  return { current, note, busy, retryable, change, retry, adopt: (view: MyDayView): void => { setLocal(view); } };
+  const refresh = async (): Promise<boolean> => {
+    if (inFlight.current) return false;
+    inFlight.current = true;
+    setRefreshing(true);
+    try {
+      const view = await refreshMyDay();
+      setLocal(view);
+      setNote("");
+      onChanged();
+      return true;
+    } catch (error) {
+      setNote(error instanceof Error ? error.message : "Could not refresh My day.");
+      return false;
+    } finally {
+      inFlight.current = false;
+      setRefreshing(false);
+    }
+  };
+  return { current, note, busy, refreshing, retryable, change, retry, refresh, adopt: (view: MyDayView): void => { setLocal(view); } };
 }
