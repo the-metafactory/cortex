@@ -42,6 +42,7 @@ import { useDeskVoice } from "../hooks/use-desk-voice";
 import { MicButton, VoicePanel, WakeStatus, WakeSwitch } from "./desk-voice";
 import { WAITING_OPS, type WaitingOp } from "../../desk/mail-waiting-schema";
 import type { DeskAction, DeskArea, DeskCorrection, DeskCorrectionMode, DeskEvent, DeskEvidence, DeskFoldedGroup, DeskItem, DeskItemKind, DeskPrecedent, DeskView as DeskViewModel } from "../../desk/types";
+import { freshnessLabel } from "../../desk/types";
 import type { MoveTarget } from "../../desk/mail-move";
 import type { MailCorrection } from "../../desk/mail-actions";
 import { CORRECTION_MOVES } from "../../desk/mail-correction-schema";
@@ -738,13 +739,13 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
   const shown = (item: DeskItem): DeskItem => (confirming?.key === item.key ? withConfirm(item, confirming.action) : item);
   const busyWith = (item: DeskItem): string | null => sending.get(item.key) ?? (item.checking ? "goal.check" : null);
   const originalDetail = detail ? view.items.find((i) => i.key === detail.key) ?? (detail.readOnly ? null : detail) : null;
-  const detailItem = originalDetail?.readOnly ? originalDetail : originalDetail ? { ...originalDetail, more: [...(originalDetail.more ?? []), { id: "todo", label: "Plan this", role: "secondary" as const, wired: true }] } : null;
+  const detailItem = originalDetail ? withPlanThis(originalDetail) : null;
   const detailRuling = detailItem ? rulings.get(detailItem.key) : undefined;
 
   const itemRow = (item: DeskItem, idx: number) => (
     <DeskItemRow
       key={item.key}
-      item={shown(item.readOnly ? item : { ...item, more: [...(item.more ?? []), { id: "todo", label: "Plan this", role: "secondary", wired: true }] })}
+      item={shown(withPlanThis(item))}
       rank={idx + 1}
       area={item.area ? areaById.get(item.area) : undefined}
       event={item.eventKey ? view.today.find((e) => e.key === item.eventKey) : undefined}
@@ -1195,7 +1196,7 @@ export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending
         <div className="desk-meta">
           {area && <span className="area"><AreaDot area={area} />{area.label}</span>}
           <span className={item.urgency === "today" || item.urgency === "now" ? "due" : ""}>{URGENCY_LABEL[item.urgency]}</span>
-          {item.freshness && item.freshness !== "fresh" && <span className="desk-stale">Stale observation</span>}
+          {freshnessLabel(item.freshness) && <span className="desk-stale">{freshnessLabel(item.freshness)}</span>}
           {item.correction && <span className="desk-corr">{CORRECTION_TAG[item.correction]}</span>}
           {item.suspicious && <span className="desk-suspect">Looks like phishing</span>}
         </div>
@@ -1215,7 +1216,7 @@ export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending
               {clock(event.at)} today ↑
             </button>
           )}
-          {!item.readOnly && <ItemMenu current={item.correction} onCorrect={onCorrect} {...(onCorrectMail ? { onCorrectMail } : {})} onTodo={() => { onAction({ id: "todo", label: "Plan this", role: "secondary", wired: true }); }} />}
+          {!item.readOnly && <ItemMenu current={item.correction} onCorrect={onCorrect} {...(onCorrectMail ? { onCorrectMail } : {})} onTodo={() => { onAction(PLAN_THIS); }} />}
         </div>
       </div>
     </article>
@@ -1255,6 +1256,10 @@ export function correctionStep(said: MailCorrection, result: Outcome, canReply: 
 }
 
 const PLAN_THIS: DeskAction = { id: "todo", label: "Plan this", role: "secondary", wired: true };
+
+function withPlanThis(item: DeskItem): DeskItem {
+  return item.readOnly ? item : { ...item, more: [...(item.more ?? []), PLAN_THIS] };
+}
 
 const CORRECTION_TAG: Record<DeskCorrectionMode, string> = { less: "Less like this", always: "Always shown" };
 

@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { initDatabase } from "../../db/init";
@@ -6,9 +6,10 @@ import { composeDesk } from "../compose";
 import { canonicalWire } from "../../../../conversations/domain-adapters/operations/validation";
 import type { Json } from "../../../../conversations/domain-adapters/operations/types";
 import { ReadBindings } from "../../../../conversations/domain-adapters/reads/bindings";
-import { catchupItems } from "../../dashboard-v2/components/desk-catch-up";
+import { CatchupPreview, catchupItems } from "../../dashboard-v2/components/desk-catch-up";
 import { DeskItemRow } from "../../dashboard-v2/components/desk-view";
-import { ATTENTION_DESK, attentionRig } from "./fixtures/adapter-attention-fixtures";
+import { SourceCache } from "../sources/command";
+import { ATTENTION_DESK, attentionRig } from "../fixtures/adapter-attention-fixtures";
 
 const opened: Awaited<ReturnType<typeof attentionRig>>[] = [];
 const dbs: ReturnType<typeof initDatabase>[] = [];
@@ -108,6 +109,65 @@ test("mapped display text uses source redaction and stale status remains visible
   const html = renderToStaticMarkup(createElement(DeskItemRow, { item: view.items[0]!, rank: 1, onOpen: () => undefined, onAction: () => undefined, sending: null, onFocusEvent: () => undefined, onCorrect: () => undefined }));
   expect(html).toContain("Stale observation");
   expect(html).not.toContain("Plan this");
+});
+
+test.each([
+  ["fresh", "Observed"],
+  ["stale", "Stale observation"],
+  ["conflicted", "Conflicting observation"],
+  ["unavailable", "Observation unavailable"],
+] as const)("%s observations have accurate labels in history, rows and Day preview", async (status, label) => {
+  const item = await open();
+  await item.ingest(0);
+  if (status === "stale") item.time.advance(720000);
+  if (status === "conflicted") await item.ingest(0, [item.value(0, "Changed under the same revision")], "poll");
+  if (status === "unavailable") await item.store.gap(item.sources[0]!, true);
+  const view = await compose(item);
+  const card = view.items[0]!;
+  expect(card.freshness).toBe(status);
+  expect(card.detail.history[0]).toStartWith(`${label}: last success `);
+  const row = renderToStaticMarkup(createElement(DeskItemRow, { item: card, rank: 1, onOpen: () => undefined, onAction: () => undefined, sending: null, onFocusEvent: () => undefined, onCorrect: () => undefined }));
+  const preview = renderToStaticMarkup(createElement(CatchupPreview, { view, onOpen: () => undefined }));
+  for (const html of [row, preview]) {
+    if (status === "fresh") expect(html).not.toMatch(/Stale observation|Conflicting observation|Observation unavailable/);
+    else expect(html).toContain(label);
+    if (status === "conflicted" || status === "unavailable") expect(html).not.toContain("Stale observation");
+  }
+});
+
+test("composition overlaps observation sources and other reads, preserving source order", async () => {
+  const item = await open();
+  await item.ingest(0);
+  await item.ingest(1);
+  const read = item.store.read.bind(item.store);
+  const first = Promise.withResolvers<null>();
+  const started: string[] = [];
+  const finished: string[] = [];
+  const readSpy = spyOn(item.store, "read").mockImplementation(async (...args) => {
+    const id = args[1].adapterId;
+    started.push(id);
+    if (id === item.sources[0]!.adapterId) await first.promise;
+    const result = await read(...args);
+    finished.push(id);
+    if (id === item.sources[1]!.adapterId) first.resolve(null);
+    return result;
+  });
+  const sourceCache = new SourceCache();
+  const cacheSpy = spyOn(sourceCache, "read").mockImplementation(async () => {
+    expect(started).toEqual(item.sources.map(source => source.adapterId));
+    return [];
+  });
+  const db = initDatabase(":memory:"); dbs.push(db);
+  try {
+    const view = await composeDesk(db, ATTENTION_DESK, undefined, { now: item.time.clock.now(), adapterAttention: item.feature, sourceCache });
+    expect(finished).toEqual([...started].reverse());
+    expect(view.items.map(card => card.source)).toEqual(started);
+    expect(view.sources.filter(source => source.id.startsWith("adapter:"))).toEqual(started.map(id => ({ id: `adapter:${id}`, ok: true })));
+  } finally {
+    first.resolve(null);
+    readSpy.mockRestore();
+    cacheSpy.mockRestore();
+  }
 });
 
 test("revoked read, local-only release and owner deletion remove content and source counts", async () => {

@@ -1,22 +1,27 @@
 import { randomUUID } from "node:crypto";
-import type { ConnectionRecord, RestrictionRecord } from "../../../../../conversations/authority-records";
-import { authorityRig } from "../../../../../conversations/authority-fixtures";
-import { DomainAdapterRegistry } from "../../../../../conversations/domain-adapters/registry";
-import { fixtureBindings, objectSchema, referenceDeclaration, referenceSchema } from "../../../../../conversations/domain-adapters/fixtures";
-import { ReadBindingSchema } from "../../../../../conversations/domain-adapters/reads/types";
-import { controlledQueryClock } from "../../../../../conversations/domain-adapters/reads/query-fixtures";
-import type { QuerySource } from "../../../../../conversations/domain-adapters/reads/query-types";
-import type { ObservationBatch } from "../../../../../conversations/domain-adapters/reads/observation-types";
-import type { Json } from "../../../../../conversations/domain-adapters/operations/types";
-import type { AdapterDeclaration, ObjectReference } from "../../../../../conversations/domain-adapters/types";
-import type { AdapterAttention } from "../../adapter-items";
-import type { DeskOptions } from "../../compose";
+import type { ConnectionRecord, RestrictionRecord } from "../../../../conversations/authority-records";
+import { authorityRig } from "../../../../conversations/authority-fixtures";
+import { DomainAdapterRegistry } from "../../../../conversations/domain-adapters/registry";
+import { fixtureBindings, objectSchema, referenceDeclaration, referenceSchema } from "../../../../conversations/domain-adapters/fixtures";
+import { ReadBindingSchema } from "../../../../conversations/domain-adapters/reads/types";
+import { controlledQueryClock } from "../../../../conversations/domain-adapters/reads/query-fixtures";
+import type { QuerySource } from "../../../../conversations/domain-adapters/reads/query-types";
+import type { ObservationBatch, ObservationMode } from "../../../../conversations/domain-adapters/reads/observation-types";
+import type { Json } from "../../../../conversations/domain-adapters/operations/types";
+import type { AdapterDeclaration, ObjectReference } from "../../../../conversations/domain-adapters/types";
+import type { AdapterAttention } from "../adapter-items";
+import type { DeskOptions } from "../compose";
 
 export const ATTENTION_DESK: DeskOptions = { enabled: true, displayName: "", topN: 5, rangerUrl: "", sources: [], areas: [{ id: "lab", label: "Lab", color: "#345678", repos: [], goals: [] }] };
 
+function required<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("The synthetic attention fixture is incomplete.");
+  return value;
+}
+
 function syntheticAdapter(adapterId: string) {
   const declaration = JSON.parse(JSON.stringify(referenceDeclaration("observation")).replaceAll("reference-feed", adapterId)) as AdapterDeclaration;
-  const capability = declaration.capabilities[0]!;
+  const capability = required(declaration.capabilities[0]);
   const schemaRef = { schemaId: `${adapterId}.object`, version: "1.0.0" };
   declaration.schemas.push({ ...schemaRef, schema: objectSchema({
     "display/data": objectSchema({
@@ -25,8 +30,8 @@ function syntheticAdapter(adapterId: string) {
     }, ["title~text"]),
     score: { type: "number" }, urgency: { type: "string" }, attention: { type: "string" }, interrupt: { type: "boolean" }, notification: { type: "boolean" }, actions: { type: "array", items: { type: "string" } },
   }, ["display/data"]) as AdapterDeclaration["schemas"][number]["schema"] });
-  declaration.objectTypes[0]!.schemaRef = schemaRef;
-  declaration.schemas.find(schema => schema.schemaId === capability.outputSchemaRef.schemaId)!.schema = objectSchema({ items: { type: "array", items: { $ref: `urn:desk-schema:${schemaRef.schemaId}:1.0.0` } } }) as AdapterDeclaration["schemas"][number]["schema"];
+  required(declaration.objectTypes[0]).schemaRef = schemaRef;
+  required(declaration.schemas.find(schema => schema.schemaId === capability.outputSchemaRef.schemaId)).schema = objectSchema({ items: { type: "array", items: { $ref: `urn:desk-schema:${schemaRef.schemaId}:1.0.0` } } }) as AdapterDeclaration["schemas"][number]["schema"];
   const binding = ReadBindingSchema.parse({
     version: "1.0.0", adapterId, capabilityId: capability.capabilityId, mode: "poll", objectType: "document", inputSchemaRef: capability.inputSchemaRef, outputSchemaRef: capability.outputSchemaRef, destinationType: "document",
     display: { title: "/display~1data/title~0text", due: "/display~1data/due", area: "/display~1data/area", url: "/display~1data/url" },
@@ -46,7 +51,7 @@ export async function attentionRig(policy: "local" | "cloud" = "local") {
   const batches = new Map<string, ObservationBatch>();
   let fetches = 0;
   const connector = { modes: ["poll"] as const, fetch(request: { source: QuerySource }) { fetches++; return Promise.resolve(batches.get(request.source.adapterId)); } };
-  const first = adapters[0]!;
+  const first = required(adapters[0]);
   const rig = await authorityRig({}, policy, { registry, binding: first.binding, adapterId: first.binding.adapterId, capabilityIds: [first.binding.capabilityId], observation: connector });
   const sources: QuerySource[] = [];
   const connections: ConnectionRecord[] = [];
@@ -69,26 +74,26 @@ export async function attentionRig(policy: "local" | "cloud" = "local") {
   const store = rig.host.readObservations(registry, rig.bindings, time.clock);
   const feature: AdapterAttention = { enabled: true, store, bindings: rig.readBindings, context: rig.context, sink: rig.sink, sources };
   const batch = (index: number, objects: Json[]): ObservationBatch => {
-    const source = sources[index]!;
-    return { version: "1.0.0", payload: { items: objects }, events: objects.map((_value, item) => ({ kind: "present", pointer: `/items/${item}`, ref: { adapterId: source.adapterId, connectionId: source.connectionId, objectType: "document", canonicalId: `item-${item}` }, schemaRef: adapters[index]!.schemaRef, destination: source.destinations[0]!, observedAt: new Date(time.clock.now()).toISOString(), revision: "1" })), gap: false, coverage: "objects" };
+    const source = required(sources[index]);
+    return { version: "1.0.0", payload: { items: objects }, events: objects.map((_value, item) => ({ kind: "present", pointer: `/items/${item}`, ref: { adapterId: source.adapterId, connectionId: source.connectionId, objectType: "document", canonicalId: `item-${item}` }, schemaRef: required(adapters[index]).schemaRef, destination: required(source.destinations[0]), observedAt: new Date(time.clock.now()).toISOString(), revision: "1" })), gap: false, coverage: "objects" };
   };
-  const value = (index: number, title = "Synthetic review", due: string | null = "2026-11-01"): Json => ({ "display/data": { "title~text": title, reason: "Review the synthetic observation.", due, area: sources[index]!.destinations[0]!, url: "https://example.test/synthetic" } });
-  async function ingest(index: number, objects: Json[] = [value(index)]) {
-    const source = sources[index]!;
+  const value = (index: number, title = "Synthetic review", due: string | null = "2026-11-01"): Json => ({ "display/data": { "title~text": title, reason: "Review the synthetic observation.", due, area: required(required(sources[index]).destinations[0]), url: "https://example.test/synthetic" } });
+  async function ingest(index: number, objects: Json[] = [value(index)], mode: ObservationMode = "resync") {
+    const source = required(sources[index]);
     batches.set(source.adapterId, batch(index, objects));
-    return store.check(rig.context, source, rig.sink, "resync");
+    return store.check(rig.context, source, rig.sink, mode);
   }
   async function revoke(index = 0) {
-    const connection = connections[index]!;
+    const connection = required(connections[index]);
     const revision = Number(connection.connectionRevision);
     connection.connectionRevision = String(revision + 1);
     connection.readCapabilityIds = [];
     await rig.service.publishHostRecord({ kind: "connection", value: connection }, revision);
   }
   async function remove(index = 0) {
-    const source = sources[index]!;
+    const source = required(sources[index]);
     const deletion = batch(index, [value(index)]);
-    const event = deletion.events[0]!;
+    const event = required(deletion.events[0]);
     deletion.payload = { items: [] };
     deletion.events = [{ kind: "deleted", ownerDeletion: true, evidenceId: "synthetic-owner-deletion", ref: event.ref, schemaRef: event.schemaRef, destination: event.destination, observedAt: event.observedAt, revision: "2" }];
     batches.set(source.adapterId, deletion);

@@ -171,6 +171,7 @@ export async function composeDesk(
   deps: ComposeDeps = {},
 ): Promise<DeskView> {
   const now = deps.now ?? Date.now();
+  const adapterRead = adapterItems(deps.adapterAttention, now);
   const routineRead = desk.routines ? deps.routineRead ? Promise.resolve(deps.routineRead.read(db, desk.routines, now)) : readRoutines(db, desk.routines, deps.runRoutine) : Promise.resolve(undefined);
   const sources: DeskView["sources"] = [];
 
@@ -183,7 +184,7 @@ export async function composeDesk(
     : Promise.resolve(null);
   const commandRead = (deps.sourceCache ?? new SourceCache()).read(desk.sources, now);
   const statusRead = deps.goalStatuses?.read(desk.goals?.somaBin ?? "", now) ?? Promise.resolve(new Map<string, string>());
-  const [vigilSubjects, rangerResult, readings, goalStatuses, routines] = await Promise.all([vigilRead, rangerRead, commandRead, statusRead, routineRead]);
+  const [vigilSubjects, rangerResult, readings, goalStatuses, routines, adapters] = await Promise.all([vigilRead, rangerRead, commandRead, statusRead, routineRead, adapterRead]);
 
   const subjects: VigilSubjectView[] = vigilSubjects ?? [];
   if (vigilSubjects) sources.push({ id: "vigil", ok: true });
@@ -307,7 +308,6 @@ export async function composeDesk(
     const view = invitationView(m, calendarsOnly(availability, readings), desk.mailInvitations, answers.get(m.id));
     return view ? [[m.id, view]] : [];
   }));
-  const adapters = await adapterItems(deps.adapterAttention, now);
   sources.push(...adapters.sources);
   const corrected = applyCorrections([...markInterrupts([
     ...withAutonomyNotes(ranked, done, now),

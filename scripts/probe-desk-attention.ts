@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { chromium } from "playwright";
 import { initDatabase } from "../src/surface/mc/db/init";
 import { composeDesk } from "../src/surface/mc/desk/compose";
-import { ATTENTION_DESK, attentionRig } from "../src/surface/mc/desk/__tests__/fixtures/adapter-attention-fixtures";
+import { ATTENTION_DESK, attentionRig } from "../src/surface/mc/desk/fixtures/adapter-attention-fixtures";
 import { runWithTemporaryHome } from "./probe-temp-home";
 
 async function probe() {

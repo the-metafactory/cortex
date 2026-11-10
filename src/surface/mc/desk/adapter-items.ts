@@ -11,7 +11,7 @@ import { ObjectReferenceSchema } from "../../../conversations/domain-adapters/ty
 import { canonicalWire } from "../../../conversations/domain-adapters/operations/validation";
 import { redactToolText } from "../../../conversations/tools/output";
 import { localDay } from "./time";
-import type { DeskItem, DeskView } from "./types";
+import { freshnessLabel, type DeskItem, type DeskView } from "./types";
 
 export interface AdapterAttention {
   enabled: boolean;
@@ -59,7 +59,7 @@ function mappedItem(row: ObservationView, binding: ReadBinding, now: number): De
     freshness: status, readOnly: true,
     detail: {
       summary: why.data,
-      history: [`${status === "fresh" ? "Observed" : "Stale observation"}: last success ${new Date(row.lastSuccessAt).toISOString()}; last attempt ${row.lastAttemptAt === null ? "unavailable" : new Date(row.lastAttemptAt).toISOString()}.`],
+      history: [`${freshnessLabel(status) ?? "Observed"}: last success ${new Date(row.lastSuccessAt).toISOString()}; last attempt ${row.lastAttemptAt === null ? "unavailable" : new Date(row.lastAttemptAt).toISOString()}.`],
       refs: [key], links: url.data === null ? [] : [{ label: "Open source", url: url.data }],
     },
   };
@@ -69,20 +69,26 @@ export async function adapterItems(feature: AdapterAttention | undefined, now: n
   const items = new Map<string, DeskItem>();
   const sources: DeskView["sources"] = [];
   if (!feature?.enabled) return { items: [], sources };
-  for (const source of feature.sources) {
+  const releasedSources = await Promise.all(feature.sources.map(async source => {
     const found = feature.bindings.lookup(source.adapterId, source.connectionId, source.capabilityId);
-    if (found.state !== "available" || !found.binding.attention) continue;
+    if (found.state !== "available" || !found.binding.attention) return null;
     const released = await feature.store.read(feature.context, source, feature.sink);
-    if (released.kind !== "released") continue;
+    if (released.kind !== "released") return null;
     const rows = (released.value as unknown as { objects: ObservationView[] }).objects;
+    const mapped: DeskItem[] = [];
     let invalid = false;
     for (const row of rows) {
       if (row.kind !== "present") continue;
       const item = mappedItem(row, found.binding, now);
-      if (item) items.set(item.key, item);
+      if (item) mapped.push(item);
       else invalid = true;
     }
-    sources.push({ id: `adapter:${redactToolText(source.adapterId)}`, ok: !invalid, ...(invalid ? { error: MAPPING_PROBLEM } : {}) });
+    return { items: mapped, source: { id: `adapter:${redactToolText(source.adapterId)}`, ok: !invalid, ...(invalid ? { error: MAPPING_PROBLEM } : {}) } };
+  }));
+  for (const released of releasedSources) {
+    if (!released) continue;
+    for (const item of released.items) items.set(item.key, item);
+    sources.push(released.source);
   }
   return { items: [...items.values()], sources };
 }

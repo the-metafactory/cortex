@@ -116,6 +116,17 @@ export interface DeskItem {
   back?: { line: string; at: number };
 }
 
+const FRESHNESS_LABEL: Record<NonNullable<DeskItem["freshness"]>, string | null> = {
+  fresh: null,
+  stale: "Stale observation",
+  conflicted: "Conflicting observation",
+  unavailable: "Observation unavailable",
+};
+
+export function freshnessLabel(status: DeskItem["freshness"]): string | null {
+  return status ? FRESHNESS_LABEL[status] : null;
+}
+
 export interface DeskInterrupt {
   delivery: "off" | "pending" | "sending" | "sent" | "buffered" | "failed";
   error?: string;
