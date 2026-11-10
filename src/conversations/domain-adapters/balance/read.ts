@@ -17,6 +17,10 @@ const TASK_QUERY_INPUT_REF = ref("balance.task.query.input");
 const TASK_QUERY_OUTPUT_REF = ref("balance.task.query.output");
 const TASK_READ_INPUT_REF = ref("balance.task.read.input");
 const TASK_READ_OUTPUT_REF = ref("balance.task.read.output");
+const PROJECT_QUERY_INPUT_REF = ref("balance.project.query.input");
+const PROJECT_QUERY_OUTPUT_REF = ref("balance.project.query.output");
+const PROJECT_READ_INPUT_REF = ref("balance.project.read.input");
+const PROJECT_READ_OUTPUT_REF = ref("balance.project.read.output");
 const ERROR_REF = ref("balance.error");
 
 const AREA_VALUE_SCHEMA = objectSchema({ label: { type: "string" } }, ["label"]);
@@ -33,10 +37,14 @@ const TASK_VALUE_SCHEMA = objectSchema({
 }, ["title", "status", "dueDate", "area", "project", "summary"]);
 const DESTINATIONS_INPUT_SCHEMA = objectSchema({}, []);
 const DESTINATIONS_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { anyOf: [AREA_VALUE_SCHEMA, PROJECT_VALUE_SCHEMA] } } }, ["items"]);
-const TASK_QUERY_INPUT_SCHEMA = objectSchema({ area: referenceSchema("area"), query: { type: "string", maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: MAX_PAGE_ITEMS } }, ["area"]);
+const TASK_QUERY_INPUT_SCHEMA = objectSchema({ area: referenceSchema("area"), query: { type: "string", maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: MAX_PAGE_ITEMS }, offset: { type: "integer", minimum: 0 } }, ["area"]);
 const TASK_QUERY_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(TASK_SCHEMA_REF) } } }, ["items"]);
 const TASK_READ_INPUT_SCHEMA = objectSchema({ ref: referenceSchema("task") }, ["ref"]);
 const TASK_READ_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(TASK_SCHEMA_REF) } } }, ["items"]);
+const PROJECT_QUERY_INPUT_SCHEMA = objectSchema({ query: { type: "string", maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: MAX_PAGE_ITEMS }, offset: { type: "integer", minimum: 0 } }, []);
+const PROJECT_QUERY_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(PROJECT_SCHEMA_REF) } } }, ["items"]);
+const PROJECT_READ_INPUT_SCHEMA = objectSchema({ ref: referenceSchema("project") }, ["ref"]);
+const PROJECT_READ_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(PROJECT_SCHEMA_REF) } } }, ["items"]);
 const ERROR_SCHEMA = objectSchema({ code: { type: "string", pattern: "^balance\\..+$" }, message: { type: "string", minLength: 1 }, issues: { type: "array", items: objectSchema({ path: { type: "string" }, code: { type: "string" }, message: { type: "string" } }, ["path", "code", "message"]) } }, ["code", "message"]);
 
 export function balanceReadDeclaration(): AdapterDeclaration {
@@ -54,6 +62,10 @@ export function balanceReadDeclaration(): AdapterDeclaration {
       { ...TASK_QUERY_OUTPUT_REF, schema: TASK_QUERY_OUTPUT_SCHEMA },
       { ...TASK_READ_INPUT_REF, schema: TASK_READ_INPUT_SCHEMA },
       { ...TASK_READ_OUTPUT_REF, schema: TASK_READ_OUTPUT_SCHEMA },
+      { ...PROJECT_QUERY_INPUT_REF, schema: PROJECT_QUERY_INPUT_SCHEMA },
+      { ...PROJECT_QUERY_OUTPUT_REF, schema: PROJECT_QUERY_OUTPUT_SCHEMA },
+      { ...PROJECT_READ_INPUT_REF, schema: PROJECT_READ_INPUT_SCHEMA },
+      { ...PROJECT_READ_OUTPUT_REF, schema: PROJECT_READ_OUTPUT_SCHEMA },
       { ...ERROR_REF, schema: ERROR_SCHEMA },
     ],
     objectTypes: [
@@ -65,6 +77,8 @@ export function balanceReadDeclaration(): AdapterDeclaration {
       { capabilityId: "balance.destinations", label: "List destinations", kind: "query", objectTypes: ["area", "project"], inputSchemaRef: DESTINATIONS_INPUT_REF, outputSchemaRef: DESTINATIONS_OUTPUT_REF, errorSchemaRef: ERROR_REF },
       { capabilityId: "balance.task.query", label: "Query tasks", kind: "query", objectTypes: ["task"], inputSchemaRef: TASK_QUERY_INPUT_REF, outputSchemaRef: TASK_QUERY_OUTPUT_REF, errorSchemaRef: ERROR_REF },
       { capabilityId: "balance.task.read", label: "Read task", kind: "query", objectTypes: ["task"], inputSchemaRef: TASK_READ_INPUT_REF, outputSchemaRef: TASK_READ_OUTPUT_REF, errorSchemaRef: ERROR_REF },
+      { capabilityId: "balance.project.query", label: "Query projects", kind: "query", objectTypes: ["project"], inputSchemaRef: PROJECT_QUERY_INPUT_REF, outputSchemaRef: PROJECT_QUERY_OUTPUT_REF, errorSchemaRef: ERROR_REF },
+      { capabilityId: "balance.project.read", label: "Read project", kind: "query", objectTypes: ["project"], inputSchemaRef: PROJECT_READ_INPUT_REF, outputSchemaRef: PROJECT_READ_OUTPUT_REF, errorSchemaRef: ERROR_REF },
     ],
   };
 }
@@ -79,6 +93,16 @@ export const balanceReadBindings: readonly ReadBinding[] = [
   {
     version: "1.0.0", adapterId: ADAPTER_ID, capabilityId: "balance.task.read", mode: "query", objectType: "task", inputSchemaRef: TASK_READ_INPUT_REF, outputSchemaRef: TASK_READ_OUTPUT_REF, destinationType: "area",
     display: { title: "/title", summary: "/summary", status: "/status", due: "/dueDate", area: "/area" },
+    query: { objectsPointer: "/items", ordering: "provider", stableSnapshot: true, limits: { items: 1 } },
+  },
+  {
+    version: "1.0.0", adapterId: ADAPTER_ID, capabilityId: "balance.project.query", mode: "query", objectType: "project", inputSchemaRef: PROJECT_QUERY_INPUT_REF, outputSchemaRef: PROJECT_QUERY_OUTPUT_REF, destinationType: "area",
+    display: { title: "/label" },
+    query: { objectsPointer: "/items", ordering: "provider", stableSnapshot: true, limits: { items: MAX_PAGE_ITEMS } },
+  },
+  {
+    version: "1.0.0", adapterId: ADAPTER_ID, capabilityId: "balance.project.read", mode: "query", objectType: "project", inputSchemaRef: PROJECT_READ_INPUT_REF, outputSchemaRef: PROJECT_READ_OUTPUT_REF, destinationType: "area",
+    display: { title: "/label" },
     query: { objectsPointer: "/items", ordering: "provider", stableSnapshot: true, limits: { items: 1 } },
   },
 ];
@@ -131,14 +155,32 @@ function parseCursor(cursor: string | undefined): number {
   return offset;
 }
 
-function parseTaskQuery(input: unknown): { area: ObjectReference; query: string; limit: number } {
-  if (!isRecord(input)) return failure("invalid_input");
-  const area = parseReference(input.area);
-  if (input.query !== undefined && typeof input.query !== "string") return failure("invalid_input");
-  return { area, query: typeof input.query === "string" ? input.query : "", limit: parseLimit(input.limit, "invalid_input") };
+function boundedPage<T>(matching: readonly T[], bounds: { readonly limit: number; readonly offset: number }, cursor: string | undefined, limit: number): { readonly slice: T[]; readonly next?: string } {
+  const offset = cursor === undefined ? bounds.offset : parseCursor(cursor);
+  const bounded = Math.min(limit, bounds.limit, MAX_PAGE_ITEMS);
+  const slice = matching.slice(offset, offset + bounded);
+  return { slice, ...(offset + slice.length < matching.length ? { next: String(offset + slice.length) } : {}) };
 }
 
-function parseTaskRead(input: unknown): ObjectReference {
+function parseOffset(raw: unknown): number {
+  if (raw === undefined) return 0;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) return failure("invalid_input");
+  return raw;
+}
+
+function parseQuery(input: unknown): { query: string; limit: number; offset: number } {
+  if (!isRecord(input)) return failure("invalid_input");
+  if (input.query !== undefined && typeof input.query !== "string") return failure("invalid_input");
+  return { query: typeof input.query === "string" ? input.query : "", limit: parseLimit(input.limit, "invalid_input"), offset: parseOffset(input.offset) };
+}
+
+function parseTaskQuery(input: unknown): { area: ObjectReference; query: string; limit: number; offset: number } {
+  if (!isRecord(input)) return failure("invalid_input");
+  const area = parseReference(input.area);
+  return { area, ...parseQuery(input) };
+}
+
+function parseRefRead(input: unknown): ObjectReference {
   if (!isRecord(input)) return failure("invalid_input");
   return parseReference(input.ref);
 }
@@ -218,10 +260,7 @@ function taskQueryPage(source: BalanceReadSource, input: unknown, destinations: 
   const found = locateTasks(state, [area]);
   const needle = parsed.query.trim().toLocaleLowerCase();
   const matching = needle.length === 0 ? found : found.filter(task => `${task.node.title}\n${task.node.note ?? ""}`.toLocaleLowerCase().includes(needle));
-  const offset = parseCursor(cursor);
-  const bounded = Math.min(limit, parsed.limit, MAX_PAGE_ITEMS);
-  const slice = matching.slice(offset, offset + bounded);
-  const next = offset + slice.length < matching.length ? String(offset + slice.length) : undefined;
+  const { slice, next } = boundedPage(matching, parsed, cursor, limit);
   return buildPage(
     slice.map(task => taskEntry(task, source.connectionId, taskValue(task, source.connectionId))),
     snapshotId("task.query", { connectionId: source.connectionId, area: area.id, tasks: matching.map(task => task.node.id) }),
@@ -231,7 +270,7 @@ function taskQueryPage(source: BalanceReadSource, input: unknown, destinations: 
 }
 
 function taskReadPage(source: BalanceReadSource, input: unknown, destinations: readonly ObjectReference[], limit: number): QueryPage {
-  const parsed = parseTaskRead(input);
+  const parsed = parseRefRead(input);
   if (parsed.adapterId !== ADAPTER_ID || parsed.objectType !== "task" || parsed.connectionId !== source.connectionId) return failure("invalid_input");
   if (limit < 1) return failure("invalid_input");
   const state = source.state();
@@ -245,9 +284,36 @@ function taskReadPage(source: BalanceReadSource, input: unknown, destinations: r
 function destinationsPage(source: BalanceReadSource): QueryPage {
   const state = source.state();
   const entries: PageEntry[] = state === null ? [] : balanceDestinations(state.outline, source.areas()).map(destination => destination.project
-    ? { ref: reference(source.connectionId, "project", destination.id), schemaRef: PROJECT_SCHEMA_REF, destination: reference(source.connectionId, "project", destination.id), evidenceId: `balance.destination.project.${destination.id}`, value: { label: destination.label } }
+    ? { ref: reference(source.connectionId, "project", destination.id), schemaRef: PROJECT_SCHEMA_REF, destination: reference(source.connectionId, "area", destination.area), evidenceId: `balance.destination.project.${destination.id}`, value: { label: destination.label } }
     : { ref: reference(source.connectionId, "area", destination.area), schemaRef: AREA_SCHEMA_REF, destination: reference(source.connectionId, "area", destination.area), evidenceId: `balance.destination.area.${destination.area}`, value: { label: destination.label } });
   return buildPage(entries, snapshotId("destinations", { connectionId: source.connectionId, destinations: entries.map(entry => entry.ref) }), observedAt(source));
+}
+
+function projectEntries(source: BalanceReadSource): PageEntry[] {
+  const page = destinationsPage(source);
+  const items = (page.payload as { items: Json[] }).items;
+  return page.annotations.flatMap((annotation, position) => {
+    const value = items[position];
+    return annotation.ref.objectType === "project" && value !== undefined ? [{ ref: annotation.ref, schemaRef: annotation.schemaRef, destination: annotation.destination, evidenceId: annotation.evidence.evidenceId, value }] : [];
+  });
+}
+
+function projectsPage(source: BalanceReadSource, input: unknown, destinations: readonly ObjectReference[], cursor: string | undefined, limit: number): QueryPage {
+  const parsed = parseQuery(input);
+  const needle = parsed.query.trim().toLocaleLowerCase();
+  const scoped = projectEntries(source).filter(project => destinations.some(destination => sameReference(destination, project.destination)));
+  const matching = needle.length === 0 ? scoped : scoped.filter(project => typeof project.value === "object" && project.value !== null && String((project.value as Record<string, unknown>).label).toLocaleLowerCase().includes(needle));
+  const { slice, next } = boundedPage(matching, parsed, cursor, limit);
+  return buildPage(slice, snapshotId("project.query", { connectionId: source.connectionId, projects: matching.map(project => project.ref) }), observedAt(source), next);
+}
+
+function projectReadPage(source: BalanceReadSource, input: unknown, destinations: readonly ObjectReference[], limit: number): QueryPage {
+  const parsed = parseRefRead(input);
+  if (parsed.adapterId !== ADAPTER_ID || parsed.objectType !== "project" || parsed.connectionId !== source.connectionId) return failure("invalid_input");
+  if (limit < 1) return failure("invalid_input");
+  const entry = projectEntries(source).find(project => project.ref.canonicalId === parsed.canonicalId);
+  if (!entry || !destinations.some(destination => sameReference(destination, entry.destination))) return failure("project_unavailable");
+  return buildPage([entry], snapshotId("project.read", { connectionId: source.connectionId, project: entry.ref }), observedAt(source));
 }
 
 export function createBalanceReadAdapter(source: BalanceReadSource): BalanceReadAdapter {
@@ -255,6 +321,8 @@ export function createBalanceReadAdapter(source: BalanceReadSource): BalanceRead
     if (request.capabilityId === "balance.destinations") return Promise.resolve(destinationsPage(source));
     if (request.capabilityId === "balance.task.query") return Promise.resolve(taskQueryPage(source, request.input, request.destinations, request.cursor, request.limit));
     if (request.capabilityId === "balance.task.read") return Promise.resolve(taskReadPage(source, request.input, request.destinations, request.limit));
+    if (request.capabilityId === "balance.project.query") return Promise.resolve(projectsPage(source, request.input, request.destinations, request.cursor, request.limit));
+    if (request.capabilityId === "balance.project.read") return Promise.resolve(projectReadPage(source, request.input, request.destinations, request.limit));
     return Promise.reject(new Error("balance.unknown_capability"));
   };
   const handlers: AdapterBindings["handlers"] = {
@@ -269,6 +337,14 @@ export function createBalanceReadAdapter(source: BalanceReadSource): BalanceRead
     "balance.task.read": (input, context) => {
       const checked = parseHandlerContext(context);
       return taskReadPage(source, input, checked.destinations, checked.limit);
+    },
+    "balance.project.query": (input, context) => {
+      const checked = parseHandlerContext(context);
+      return projectsPage(source, input, checked.destinations, checked.cursor, checked.limit);
+    },
+    "balance.project.read": (input, context) => {
+      const checked = parseHandlerContext(context);
+      return projectReadPage(source, input, checked.destinations, checked.limit);
     },
   };
   return {
