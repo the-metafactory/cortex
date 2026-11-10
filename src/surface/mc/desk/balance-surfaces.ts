@@ -90,17 +90,21 @@ export function createBalanceSurfaceReader(source: BalanceSurfaceSource): Balanc
   const read = async (ref: string, area: string | undefined): Promise<BalanceSurfaceTask & { enabled: true }> => {
     const wanted = ref.trim();
     const owned = (area ?? "").trim();
-    if (wanted.length === 0 || owned.length === 0) return { enabled: true, state: "unavailable" };
+    if (wanted.length === 0 || owned.length === 0) throw new Error("A Balance task reference and its area are required.");
     const choices = await listed();
     if (!choices.areas.some(candidate => candidate.ref === owned)) return { enabled: true, state: "withheld" };
     const run = await source.readTask({
       input: { ref: { adapterId: BALANCE, connectionId: source.connectionId, objectType: "task", canonicalId: wanted } },
       destinations: [areaReference(source.connectionId, owned)],
     });
-    if (run.result.status === "denied" || run.result.restricted) return { enabled: true, state: "withheld" };
-    const object = run.result.status === "ok" ? releasedObjects(run.released ?? {}).find(entry => entry.ref.objectType === "task" && entry.ref.canonicalId === wanted) : undefined;
-    const facts = object === undefined ? null : factsOf(object.value as Json, source.display, choices);
-    return facts === null ? { enabled: true, state: "unavailable" } : { enabled: true, state: "available", ...facts };
+    if (run.result.restricted || run.result.status === "denied") return { enabled: true, state: "withheld" };
+    if (run.result.status === "unavailable") return { enabled: true, state: "unavailable" };
+    if (run.result.status !== "ok") throw new Error(`The Balance task read did not complete: ${run.result.status}`);
+    const object = releasedObjects(run.released ?? {}).find(entry => entry.ref.objectType === "task" && entry.ref.canonicalId === wanted);
+    if (object === undefined) return { enabled: true, state: "unavailable" };
+    const facts = factsOf(object.value as Json, source.display, choices);
+    if (facts === null) throw new Error("The Balance task read released no title.");
+    return { enabled: true, state: "available", ...facts };
   };
   return {
     async destinations() {
@@ -109,7 +113,7 @@ export function createBalanceSurfaceReader(source: BalanceSurfaceSource): Balanc
     },
     async task(ref, area) {
       if (!source.enabled()) return { enabled: false };
-      return await read(ref, area).catch((): BalanceSurfaceTask => ({ enabled: true, state: "unavailable" }));
+      return await read(ref, area);
     },
   };
 }

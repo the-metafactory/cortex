@@ -55,6 +55,7 @@ await withTempHome(async () => {
   });
   let savedTaskId: string | undefined;
   let deskReads = true;
+  let surfacesReads = true;
   const view = (): CreationView => ({
     grants: [],
     proposals: [
@@ -74,7 +75,7 @@ await withTempHome(async () => {
       if (url.pathname === "/fixture.json") return Response.json({ types, view: view() });
       if (url.pathname === "/api/desk") return deskReads ? handleGetDesk(rig.db, runtime, undefined) : Response.json({ error: "Desk reads are broken for this probe." }, { status: 503 });
       if (url.pathname === "/api/desk/my-day") return deskReads ? handleDeskMyDay(req, rig.db, runtime, undefined, NOW) : Response.json({ error: "Desk reads are broken for this probe." }, { status: 503 });
-      if (url.pathname.startsWith("/api/desk/balance-surfaces/")) return handleDeskBalanceSurfaces(req, url, () => connectionOn ? reader : null);
+      if (url.pathname.startsWith("/api/desk/balance-surfaces/")) return surfacesReads ? handleDeskBalanceSurfaces(req, url, () => connectionOn ? reader : null) : Response.json({ error: "The Balance read failed for this probe." }, { status: 502 });
       return new Response('<!doctype html><html><body><div id="root"></div><script type="module" src="/probe.js"></script></body></html>', { headers: { "content-type": "text/html" } });
     },
   });
@@ -127,6 +128,18 @@ await withTempHome(async () => {
     await page.waitForURL(/desk=balance/);
     assert.equal(new URL(page.url()).searchParams.get("balance-item"), savedTaskId);
     console.log("card: the shared summary matches /api/desk/my-day and Edit opens the Balance item");
+
+    surfacesReads = false;
+    await load();
+    const retried = cardOf(page, TITLE);
+    await retried.getByText("could not be read").waitFor();
+    assert.equal(await retried.locator("section.dtd-summary").count(), 0);
+    await retried.getByRole("button", { name: "Retry task" }).click();
+    await retried.getByText("could not be read").waitFor();
+    surfacesReads = true;
+    await retried.getByRole("button", { name: "Retry task" }).click();
+    await retried.locator("section.dtd-summary").getByText(facts.title).waitFor();
+    console.log("read failure: a failed surfaces read shows a retry instead of a deleted task, and retrying after recovery restores the card");
 
     connectionOn = false;
     await load();

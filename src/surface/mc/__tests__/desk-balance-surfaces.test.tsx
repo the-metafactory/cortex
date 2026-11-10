@@ -6,14 +6,40 @@ import { openBalanceReadRig, type BalanceReadRig } from "../../../conversations/
 import { handleDeskBalanceSurfaces } from "../api/desk-balance-surfaces";
 import { BalanceTaskCard } from "../dashboard-v2/components/desk-conversation-balance-task";
 import { BALANCE_SURFACES_DESTINATIONS, balanceSurfaceTaskPath, type BalanceSurfaceTask } from "../desk/balance-surface-schema";
-import { balanceSurfaceRun, createBalanceSurfaceReader, type BalanceSurfaceReader } from "../desk/balance-surfaces";
+import { balanceSurfaceRun, createBalanceSurfaceReader, type BalanceSurfaceReader, type BalanceSurfaceSource } from "../desk/balance-surfaces";
+import type { QueryResult } from "../../../conversations/domain-adapters/reads/query-types";
 
 const opened: BalanceReadRig[] = [];
 afterEach(async () => { await Promise.all(opened.splice(0).map(rig => rig.close())); });
 
-async function open(enabled = true): Promise<{ rig: BalanceReadRig; reader: BalanceSurfaceReader }> {
+const track = async (): Promise<BalanceReadRig> => {
   const rig = await openBalanceReadRig();
   opened.push(rig);
+  return rig;
+};
+
+const readerWith = (rig: BalanceReadRig, overrides: Partial<BalanceSurfaceSource>): BalanceSurfaceReader => createBalanceSurfaceReader({
+  connectionId: rig.rig.connection.connectionId,
+  enabled: () => true,
+  destinations: () => rig.destinations(),
+  readTask: balanceSurfaceRun({ connectionId: rig.rig.connection.connectionId, runner: rig.runner, context: rig.rig.context, sink: rig.rig.sink, inputSchemaRef: rig.taskReadBinding.inputSchemaRef }),
+  display: rig.taskReadBinding.display,
+  ...overrides,
+});
+
+const queryResult = (overrides: Partial<QueryResult>): QueryResult => ({ readVersion: "1.0.0", queryId: crypto.randomUUID(), status: "ok", groups: [], restricted: false, noMatch: false, ...overrides });
+
+const failureOf = async (reading: Promise<unknown>): Promise<string> => {
+  try {
+    await reading;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error("The Balance surface read resolved instead of rejecting.");
+};
+
+async function open(enabled = true): Promise<{ rig: BalanceReadRig; reader: BalanceSurfaceReader }> {
+  const rig = await track();
   const reader = createBalanceSurfaceReader({
     connectionId: rig.rig.connection.connectionId,
     enabled: () => enabled,
@@ -69,9 +95,28 @@ describe("Balance surfaces over the host query runner", () => {
     expect(await reader.task("task-wing", "area-example")).toEqual({ enabled: false });
     expect(rig.rig.calls.sends).toHaveLength(0);
     const live = await open();
-    expect(await live.reader.task("task-wing", "")).toEqual({ enabled: true, state: "unavailable" });
-    expect(await live.reader.task("  ", "area-example")).toEqual({ enabled: true, state: "unavailable" });
+    expect(await failureOf(live.reader.task("task-wing", ""))).toContain("reference and its area are required");
+    expect(await failureOf(live.reader.task("  ", "area-example"))).toContain("reference and its area are required");
     expect(live.rig.rig.calls.sends).toHaveLength(0);
+  });
+
+  test("a failed owner read rejects instead of claiming the saved task is gone", async () => {
+    const reader = readerWith(await track(), { readTask: () => Promise.reject(new Error("the owner read failed")) });
+    expect(await failureOf(reader.task("task-wing", "area-example"))).toBe("the owner read failed");
+  });
+
+  test("a cancelled, partial or unsupported read rejects rather than reporting a deleted task", async () => {
+    const rig = await track();
+    const unfinished = [queryResult({ status: "cancelled" }), queryResult({ status: "partial" }), queryResult({ status: "unsupported" })];
+    for (const result of unfinished) {
+      const reader = readerWith(rig, { readTask: () => Promise.resolve({ result }) });
+      expect(await failureOf(reader.task("task-wing", "area-example"))).toContain("did not complete");
+    }
+  });
+
+  test("a successful read that released no matching task reports it unavailable", async () => {
+    const reader = readerWith(await track(), { readTask: () => Promise.resolve({ result: queryResult({}) }) });
+    expect(await reader.task("task-wing", "area-example")).toEqual({ enabled: true, state: "unavailable" });
   });
 });
 
@@ -87,6 +132,16 @@ describe("the Balance surfaces route", () => {
     expect((await call(balanceSurfaceTaskPath("task-wing", ""), reader)).status).toBe(400);
     expect((await call("/api/desk/balance-surfaces/unknown", reader)).status).toBe(404);
     expect((await call(BALANCE_SURFACES_DESTINATIONS, reader, "POST")).status).toBe(405);
+  });
+
+  test("answers 502 for a failed read so the card offers retry instead of a deleted task", async () => {
+    const rig = await track();
+    const failedTask = readerWith(rig, { readTask: () => Promise.reject(new Error("the owner read failed")) });
+    const failedRead = await call(balanceSurfaceTaskPath("task-wing", "area-example"), failedTask);
+    expect(failedRead.status).toBe(502);
+    expect(await failedRead.json()).toEqual({ error: "The Balance connection could not be read." });
+    const failedDestinations = readerWith(rig, { destinations: () => Promise.reject(new Error("the destinations failed")) });
+    expect((await call(BALANCE_SURFACES_DESTINATIONS, failedDestinations)).status).toBe(502);
   });
 });
 
