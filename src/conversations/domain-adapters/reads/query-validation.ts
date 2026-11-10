@@ -15,6 +15,30 @@ export function readPointer(value: Json, pointer: string): Json | undefined {
   return current;
 }
 
+const scalar = (held: Json): boolean => typeof held === "string";
+const nullableScalar = (held: Json): boolean => held === null || typeof held === "string";
+const reference = (held: Json): boolean => typeof held === "object" && held !== null && !Array.isArray(held);
+const nullableReference = (held: Json): boolean => held === null || reference(held);
+const DISPLAY_CHECKS: Record<keyof ReadBinding["display"], (held: Json) => boolean> = {
+  title: scalar,
+  summary: scalar,
+  status: scalar,
+  due: nullableScalar,
+  area: reference,
+  kind: nullableScalar,
+  parent: nullableReference,
+  url: nullableScalar,
+};
+
+function displayAccepted(value: Json, display: ReadBinding["display"]): boolean {
+  return Object.entries(DISPLAY_CHECKS).every(([field, accepts]) => {
+    const pointer = (display as Readonly<Record<string, string | undefined>>)[field];
+    if (pointer === undefined) return true;
+    const held = readPointer(value, pointer);
+    return held !== undefined && accepts(held);
+  });
+}
+
 export interface ValidatedQueryPage { page: QueryPage; objects: ReadPageObject[]; released: Json; seen: Record<string, string>; itemCount: number }
 export function validateQueryPage(registry: DomainAdapterRegistry, binding: ReadBinding, dispatch: QueryDispatch, raw: unknown): ValidatedQueryPage {
   canonicalSchema(raw);
@@ -47,15 +71,7 @@ export function validateQueryPage(registry: DomainAdapterRegistry, binding: Read
     pointers.add(entry.pointer);
     const value = readPointer(page.payload, entry.pointer);
     if (value === undefined || entry.ref.adapterId !== binding.adapterId || entry.ref.connectionId !== dispatch.source.connectionId || entry.ref.objectType !== binding.objectType || !dispatch.source.destinations.some(dest => canonicalWire(dest) === canonicalWire(entry.destination)) || !registry.validateObject(binding.adapterId, binding.objectType, entry.schemaRef, value).ok) throw new Error("invalid_annotations");
-    const display = binding.display;
-    const present = (pointer: string | undefined, accepts: (held: Json) => boolean): boolean => {
-      if (pointer === undefined) return true;
-      const held = readPointer(value, pointer);
-      return held !== undefined && accepts(held);
-    };
-    const scalar = (held: Json): boolean => typeof held === "string";
-    const reference = (held: Json): boolean => typeof held === "object" && held !== null && !Array.isArray(held);
-    if (typeof readPointer(value, display.title) !== "string" || !present(display.summary, scalar) || !present(display.status, scalar) || !present(display.due, held => held === null || typeof held === "string") || !present(display.area, reference)) throw new Error("invalid_display");
+    if (!displayAccepted(value, binding.display)) throw new Error("invalid_display");
     const key = authorityHash(entry.ref);
     const digest = authorityHash({ value, revision: entry.evidence.revision, schemaRef: entry.schemaRef, destination: entry.destination });
     if (seen[key] !== undefined && seen[key] !== digest) throw new Error("restart_required");

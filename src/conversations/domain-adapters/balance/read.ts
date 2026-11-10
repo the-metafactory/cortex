@@ -3,6 +3,7 @@ import { authorityHash } from "../../authority-records";
 import type { Json } from "../operations/types";
 import type { QueryFetchRequest, QueryPage } from "../reads/query-types";
 import type { ReadBinding } from "../reads/types";
+import { readPage as buildPage } from "../reads/page-primitives";
 import { schemaKey } from "../schema-validation";
 import { ObjectReferenceSchema, type AdapterBindings, type AdapterDeclaration, type ObjectReference, type SchemaRef } from "../types";
 import { BALANCE_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, objectSchema, ref, referenceSchema } from "./schema";
@@ -216,25 +217,6 @@ function taskValue(task: LocatedTask, connectionId: string): Json {
     summary,
     ...(task.node.note === undefined ? {} : { note: task.node.note }),
     ...(task.node.effort === undefined ? {} : { effort: task.node.effort }),
-  };
-}
-
-function buildPage(entries: readonly PageEntry[], snapshot: string, at: string, cursor?: string): QueryPage {
-  return {
-    readVersion: "1.0.0",
-    payload: { items: entries.map(entry => entry.value) },
-    annotations: entries.map((entry, position) => ({
-      pointer: `/items/${position}`,
-      ref: entry.ref,
-      schemaRef: entry.schemaRef,
-      destination: entry.destination,
-      position,
-      evidence: { evidenceId: entry.evidenceId, revision: "1", observedAt: at },
-    })),
-    observedAt: at,
-    ordering: "provider",
-    snapshot: { kind: "stable", id: snapshot },
-    ...(cursor === undefined ? {} : { cursor }),
   };
 }
 
