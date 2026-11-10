@@ -66,7 +66,7 @@ describe("pi turns", () => {
       return Promise.resolve();
     } }));
     finished = true;
-    expect(chunks).toEqual(["Hello ", "there"]);
+    expect(chunks.join("")).toBe("Hello there");
     expect(reply.text).toBe("Hello there");
   });
 
@@ -88,7 +88,24 @@ describe("pi turns", () => {
   test("a trailing text publication failure stops Pi and rejects the turn", async () => {
     const r = await rig({ STUB_PI_PAUSE_AFTER: "2", STUB_PI_PAUSE_MS: "5000" });
     await script(r, greetingEvents());
-    await expect(piTurns(r.settings)(request({ text: delta => delta === "there" ? Promise.reject(new Error("publication revoked")) : Promise.resolve() }))).rejects.toThrow("publication revoked");
+    await expect(piTurns(r.settings)(request({ text: delta => delta.includes("there") ? Promise.reject(new Error("publication revoked")) : Promise.resolve() }))).rejects.toThrow("publication revoked");
+  });
+
+  test("slow text publication coalesces already-buffered Pi output instead of waiting once per token", async () => {
+    const r = await rig();
+    const deltas = Array.from({ length: 12 }, (_, i) => `word${i} `);
+    await script(r, [
+      ...deltas.map(delta => ({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } })),
+      answer(deltas.join("")),
+    ]);
+    const published: string[] = [];
+    const reply = await piTurns(r.settings)(request({ text: async delta => {
+      await Bun.sleep(120);
+      published.push(delta);
+    } }));
+    expect(published.join("")).toBe(deltas.join(""));
+    expect(published.length).toBeLessThan(6);
+    expect(reply.text).toBe(deltas.join("").trim());
   });
 
   test("tool narration resets before the next assistant message and small deltas are batched", async () => {
