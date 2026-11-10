@@ -88,7 +88,9 @@ describe("graph node update writers", () => {
     expect(await ruling.readback(operation("op-r"))).toEqual({ found: false });
     body += "- 2026-11-09 (jc): earlier\n  Filed from Ivy conversation conv-8, operation op-r2.\n";
     expect(await ruling.readback(operation("op-r"))).toEqual({ found: false });
-    body += "- 2026-11-10 (jc): D1\n  Filed from Ivy conversation conv-9, operation op-r.";
+    const sent = calls.find(c => c.argv[2] === "rule")?.file ?? "";
+    const [first = "", ...rest] = sent.trimEnd().split("\n");
+    body += [`- 2026-11-10 10:00 (jc): ${first}`, ...rest.map(line => line ? `  ${line}` : "")].join("\n");
     expect(await ruling.readback(operation("op-r"))).toEqual({ found: true, canonicalId: "example/app#31", url: "https://github.com/example/app/issues/31" });
     await close.create(request({ node: "example/app#31", resolution: "Done." }, "op-c"));
     expect(await close.readback(operation("op-c"))).toEqual({ found: false });
