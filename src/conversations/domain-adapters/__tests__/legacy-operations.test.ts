@@ -8,7 +8,7 @@ import { operationUuid, studioRequestId } from "../../../surface/mc/desk/convers
 import { AT, attemptFixture, eventFixture, support, approvalFixture, registryFixture } from "../operations/fixtures";
 import { importLegacyOperation, previewLegacyOperation, projectLegacyOperation, readOperationEvidence, UpgradeRequired } from "../operations/legacy";
 import { OperationJournalStore } from "../operations/journal";
-import { legacyContext, legacyFixture } from "../operations/legacy-fixtures";
+import { graphNodeLegacyContext, graphNodeLegacyFixture, legacyContext, legacyFixture } from "../operations/legacy-fixtures";
 import { canonicalWire } from "../operations/validation";
 
 import { expectLegacyReviewRequired, journalStoreTestFixture } from "./journal-store";
@@ -248,4 +248,31 @@ test("readers revalidate persisted mappings whose old import marker did not repo
   expect(readOperationEvidence(imported)).toMatchObject({ kind: "legacy", issues: ["legacy_capability_mapping_unsupported"] });
   expect(() => projectLegacyOperation(imported)).toThrow(UpgradeRequired);
   expect(event.rawRecord).toEqual(rawRecord);
+});
+
+test("graph-node history maps with the studio request id, keeps the canonical id exactly and resolves a bare parent only against its repository", async () => {
+  for (const parent of ["12", "#12", "example/desk#12", "github:github.com/example/desk#12"]) {
+    const host = await open();
+    const source = graphNodeLegacyFixture({ parent });
+    const context = graphNodeLegacyContext(source);
+    expect(previewLegacyOperation(source, context).issues).toEqual([]);
+    const imported = await importLegacyOperation(host.journal, source, context, AT);
+    expect(imported.journal.ownerRequestId).toBe(studioRequestId(source.record.operationId));
+    expect(imported.journal.state).toBe("succeeded");
+    expect(projectLegacyOperation(imported)).toEqual(source.record);
+    expect(projectLegacyOperation(imported).canonicalId).toBe("example/desk#40");
+  }
+});
+
+test("graph-node history that cannot be mapped exactly is legacy_destination_ambiguous", async () => {
+  const base = graphNodeLegacyFixture();
+  const ambiguous = (source: ReturnType<typeof graphNodeLegacyFixture>, context = graphNodeLegacyContext(source)) => previewLegacyOperation(source, context).issues;
+  expect(ambiguous(graphNodeLegacyFixture({ parent: "other/repo#12" }))).toContain("legacy_destination_ambiguous");
+  expect(ambiguous(graphNodeLegacyFixture({ parent: "--repo" }))).toContain("legacy_destination_ambiguous");
+  expect(ambiguous(graphNodeLegacyFixture({ parent: " 12 " }))).toContain("legacy_destination_ambiguous");
+  expect(ambiguous(graphNodeLegacyFixture({ parent: "" }))).toContain("legacy_destination_ambiguous");
+  expect(ambiguous(base, { ...graphNodeLegacyContext(base), destinations: [] })).toContain("legacy_destination_ambiguous");
+  const other = { ...graphNodeLegacyContext(base).destinations[0]!, canonicalId: "github:github.com/example/other" };
+  expect(ambiguous(base, { ...graphNodeLegacyContext(base), destinations: [other] })).toContain("legacy_destination_ambiguous");
+  expect(ambiguous(base, { ...graphNodeLegacyContext(base), canonicalReference: { ...graphNodeLegacyContext(base).canonicalReference!, canonicalId: "example/desk#41" } })).toContain("legacy_canonical_mapping_unsupported");
 });

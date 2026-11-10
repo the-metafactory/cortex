@@ -1,7 +1,7 @@
 import { canonicalGraphRef, canonicalNodeId, formatGraphNodeRef, isBareGraphNode, formatGraphRepoRef, parseGraphNodeRef, parseGraphRepoRef, qualifiedNodeId } from "../../../common/graph-ref";
 import { CommandTimeout, runCommand, type CommandResult } from "../../../surface/mc/desk/spawn";
 import { isRecord, parseObjectReference, parseReadHandlerContext, readObservedAt, readPage, readSnapshotId, type Json, type QueryFetchRequest, type QueryPage, type QueryPageEntry, type ReadBinding } from "../reads/page-primitives";
-import { objectSchema, schemaRef } from "../schema-primitives";
+import { adapterErrorSchema, objectSchema, schemaRef } from "../schema-primitives";
 import { schemaKey } from "../schema-validation";
 import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../types";
 import { WORK_GRAPH_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, referenceSchema, type GraphObjectType } from "./schema";
@@ -28,7 +28,7 @@ const DESTINATIONS_INPUT_SCHEMA = objectSchema({}, []);
 const DESTINATIONS_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { anyOf: [REPOSITORY_VALUE_SCHEMA, NODE_VALUE_SCHEMA] } } }, ["items"]);
 const NODE_READ_INPUT_SCHEMA = objectSchema({ ref: referenceSchema("node") }, ["ref"]);
 const NODE_READ_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(NODE_SCHEMA_REF) } } }, ["items"]);
-const ERROR_SCHEMA = objectSchema({ code: { type: "string", pattern: "^work-graph\\..+$" }, message: { type: "string", minLength: 1 }, issues: { type: "array", items: objectSchema({ path: { type: "string" }, code: { type: "string" }, message: { type: "string" } }, ["path", "code", "message"]) } }, ["code", "message"]);
+const ERROR_SCHEMA = adapterErrorSchema(ADAPTER_ID);
 
 export function workGraphReadDeclaration(): AdapterDeclaration {
   return {
