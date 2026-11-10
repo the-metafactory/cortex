@@ -22,7 +22,6 @@ const authoritativeCurrentTask: NonNullable<ObservationConnector["ordering"]> = 
   compare: (left, right) => left === right ? "same" : "newer",
 };
 
-
 export function balanceTaskObservationDeclaration(): AdapterDeclaration {
   const read = balanceReadDeclaration();
   return {
