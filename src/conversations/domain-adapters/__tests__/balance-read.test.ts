@@ -1,15 +1,12 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { balanceDestinations } from "../../../surface/mc/desk/balance-destinations";
 import { loadBalanceState } from "../../../surface/mc/desk/balance-store";
 import { createBalanceReadAdapter } from "../balance/read";
 import { objectRef } from "../fixtures";
-import { BALANCE_CONNECTION, HOME_AREA, LAB_AREA, LAB_TASK_IDS, leaf, openBalanceReadRig, releasedObjects, savedNode, type BalanceReadRig } from "./fixtures/balance-read-fixtures";
+import { BALANCE_CONNECTION, HOME_AREA, LAB_AREA, LAB_TASK_IDS, leaf, releasedObjects, savedNode, type BalanceReadRig } from "./fixtures/balance-read-fixtures";
+import { openBalanceReadRigForTest as open } from "./fixtures/balance-test-rig";
 
 const GLIDER = objectRef("balance", "project", "project-glider");
-const opened: BalanceReadRig[] = [];
-afterEach(async () => { await Promise.all(opened.splice(0).map(rig => rig.close())); });
-async function open(): Promise<BalanceReadRig> { const rig = await openBalanceReadRig(); opened.push(rig); return rig; }
-
 describe("the inactive Balance read adapter", () => {
   test("balance destinations list configured areas and open projects by canonical identity", async () => {
     const rig = await open();
@@ -24,7 +21,7 @@ describe("the inactive Balance read adapter", () => {
     expect(payload.items.map(item => item.label)).toEqual(expected.map(destination => destination.label));
     for (const [index, annotation] of page.annotations.entries()) {
       expect(annotation.ref.canonicalId).not.toBe(payload.items[index]?.label);
-      expect(annotation.destination).toEqual(annotation.ref);
+      expect(annotation.destination).toEqual(annotation.ref.objectType === "project" ? { ...annotation.ref, objectType: "area", canonicalId: expected[index]!.area } : annotation.ref);
       expect(annotation.schemaRef.schemaId).toBe(annotation.ref.objectType === "project" ? "balance.project" : "balance.area");
     }
     expect(page.snapshot.kind).toBe("stable");

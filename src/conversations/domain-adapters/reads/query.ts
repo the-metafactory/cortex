@@ -3,7 +3,7 @@ import type { AuthorityMediator, HostContext } from "../../authority";
 import type { ReleaseSink } from "../../authority-records";
 import { authorityHash } from "../../authority-records";
 import { canonicalSchema } from "../schema-validation";
-import { QueryRequestSchema, QUERY_LIMITS, queryError, type QueryGroup, type QueryRequest, type QueryResult, type QuerySource } from "./query-types";
+import { QueryRequestSchema, QUERY_LIMITS, queryError, type QueryGroup, type QueryObserver, type QueryRequest, type QueryResult, type QuerySource } from "./query-types";
 import { QueryStore, type StoredQuery } from "./query-store";
 
 export interface QueryClock { now(): number; setTimer(callback: () => void, ms: number, background?: boolean): () => void }
@@ -13,6 +13,7 @@ interface PageContext {
   heads: Awaited<ReturnType<AuthorityMediator["queryHead"]>>[];
   budget: Invocation; combined: AbortSignal; deadline: { timedOut: boolean };
   progress: { failed: boolean; restricted: boolean }; sink: ReleaseSink;
+  observer?: QueryObserver;
 }
 function invalidateStored(query: StoredQuery): void {
   query.cancelled = true;
@@ -78,7 +79,7 @@ export class QueryRunner {
     return { readVersion: "1.0.0", queryId, status: "cancelled", groups: [], restricted: false, noMatch: false };
   }
 
-  async run(context: HostContext, raw: unknown, sink: ReleaseSink, invocation: QueryInvocation = this.invocation(), signal?: AbortSignal): Promise<QueryResult> {
+  async run(context: HostContext, raw: unknown, sink: ReleaseSink, invocation: QueryInvocation = this.invocation(), signal?: AbortSignal, observer?: QueryObserver): Promise<QueryResult> {
     let request: QueryRequest;
     try { canonicalSchema(raw); request = QueryRequestSchema.parse(raw); }
     catch { return restart(""); }
@@ -111,7 +112,7 @@ export class QueryRunner {
       if (!heads) { await this.cancel(request.queryId); return { readVersion: "1.0.0", queryId: request.queryId, status: deadline.timedOut ? "partial" : "cancelled", groups: deadline.timedOut ? request.sources.flatMap((source, index) => query.states[index]?.head ? [{ source: sourceIdentity(source), status: "not-attempted" as const, coverage: "budget-exhausted" as const, reason: queryError("budget_exhausted") }] : []) : [], restricted: progress.restricted, noMatch: false, ...(deadline.timedOut ? { reason: queryError("deadline_exceeded"), restartRequired: true as const } : {}) }; }
       if (heads.some((head, index) => (head?.head ?? null) !== query.states[index]?.head)) return await this.invalidate(request.queryId);
       let next = 0;
-      const pageContext: PageContext = { context, request, query, heads, budget, combined, deadline, progress, sink };
+      const pageContext: PageContext = { context, request, query, heads, budget, combined, deadline, progress, sink, ...(observer ? { observer } : {}) };
       const worker = async () => {
         while (next < request.sources.length) {
           const index = next++;
@@ -140,7 +141,7 @@ export class QueryRunner {
     }
   }
 
-  private async fetchSourcePage({ context, request, query, heads, budget, combined, deadline, progress, sink }: PageContext, index: number): Promise<QueryGroup | undefined> {
+  private async fetchSourcePage({ context, request, query, heads, budget, combined, deadline, progress, sink, observer }: PageContext, index: number): Promise<QueryGroup | undefined> {
     const stopped = () => combined.aborted || this.clock.now() - budget.started >= QUERY_LIMITS.invocationMs;
     const source = request.sources[index];
     const state = query.states[index];
@@ -168,6 +169,7 @@ export class QueryRunner {
         group.status = "unavailable"; group.coverage = "incomplete"; group.reason = queryError("source_unavailable"); progress.failed = true; return group;
       }
       const { protectedPage } = outcome;
+      observer?.released(protectedPage.released);
       charge = protectedPage.itemCount;
       state.seen = protectedPage.seen;
       state.position++;
