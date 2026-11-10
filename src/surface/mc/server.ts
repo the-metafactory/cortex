@@ -5,6 +5,7 @@ import { handleDeskMyDay } from "./api/desk-my-day";
 import { handleDeskCalendars } from "./api/desk-calendars";
 import { DESK_ADAPTER_ASSET_PATH, handleDeskAdapterAssets, type AdapterAssetAccess } from "./api/desk-adapter-assets";
 import { DESK_CONNECTIONS_PATH, handleDeskConnections, type ConnectionSetupAccess } from "./api/desk-connections";
+import type { GraphScopeAccess } from "./api/desk-graph-repositories";
 import { handleDeskRoutines } from "./api/desk-routines";
 import { handleDeskFlows } from "./api/desk-flows";
 import { DESK_FLOWS_PATH } from "./desk/saved-flow-contract";
@@ -201,6 +202,7 @@ export interface MissionControlViews {
   conversations?: ConversationAccess;
   connectionSetup?: ConnectionSetupAccess;
   adapterAssets?: AdapterAssetAccess;
+  graphScope?: GraphScopeAccess;
 }
 
 export interface StartServerOptions extends MissionControlViews {
@@ -371,6 +373,7 @@ export function startServer(
           options.conversations,
           options.connectionSetup,
           options.adapterAssets,
+          options.graphScope,
         );
       }
 
@@ -500,6 +503,7 @@ async function handleApi(
   conversations?: ConversationAccess,
   connectionSetup?: ConnectionSetupAccess,
   adapterAssets?: AdapterAssetAccess,
+  graphScope?: GraphScopeAccess,
 ): Promise<Response> {
   const { pathname } = url;
   if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });
@@ -559,7 +563,7 @@ async function handleApi(
 
   if (pathname === "/api/desk/unimportant") return handleDeskSenders(req, url, db, "unimportant");
 
-  if (pathname === GRAPH_REPOSITORIES_PATH || pathname.startsWith(`${GRAPH_REPOSITORIES_PATH}/`)) return handleDeskGraphRepositories(req, url, db);
+  if (pathname === GRAPH_REPOSITORIES_PATH || pathname.startsWith(`${GRAPH_REPOSITORIES_PATH}/`)) return handleDeskGraphRepositories(req, url, db, graphScope ? { graphScope } : {});
 
   if (pathname === "/api/desk/mail") return handleDeskMail(req, db, desk);
 

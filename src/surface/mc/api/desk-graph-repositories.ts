@@ -1,17 +1,33 @@
 // glossary-ignore: run
 import type { Database } from "bun:sqlite";
-import { isGithubRef, isGitlabRef, isGraphRepositoryAllowed, listGraphNodes, listGraphRepositories, setGraphRepositoryEnabled, tickedGraphRepositories, type GraphRepositoryRunner } from "../desk/graph-repositories";
+import { graphRepositoryRefs, isGithubRef, isGitlabRef, isGraphRepositoryAllowed, listGraphNodes, listGraphRepositories, restoreGraphRepository, setGraphRepositoryEnabled, tickedGraphRepositories, type GraphRepositoryRunner } from "../desk/graph-repositories";
+import type { GraphScope } from "../desk/graph-repository-authority";
 import { runCommand } from "../desk/spawn";
 import { GRAPH_NODES_SUFFIX as NODES_SUFFIX, GRAPH_REPOSITORIES_PATH, GRAPH_TICKED_PARAM as TICKED_PARAM } from "../desk/graph-repository-schema";
 
 const noStore = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string): Response => Response.json({ error }, { status, headers: noStore });
 
+export type GraphScopeAccess = () => GraphScope | null;
+
 export interface DeskGraphRepositoryDeps {
   run?: GraphRepositoryRunner;
   now?: () => number;
+  graphScope?: GraphScopeAccess;
 }
 
+const tickedAt = (db: Database, ref: string): number | null => db.query<{ enabled_at: number }, [string]>("SELECT enabled_at FROM desk_graph_repositories WHERE ref = ?").get(ref)?.enabled_at ?? null;
+
+async function savePublishedGraphRepository(db: Database, scope: GraphScope, ref: string, enabled: boolean, now: number): Promise<Response> {
+  const previous = graphRepositoryRefs(db);
+  const enabledAt = tickedAt(db, ref);
+  setGraphRepositoryEnabled(db, ref, enabled, now);
+  const published = await scope.publish(graphRepositoryRefs(db)).catch((err: unknown) => ({ ok: false as const, reason: err instanceof Error ? err.message : String(err) }));
+  if (published.ok) return Response.json({ ref, enabled }, { headers: noStore });
+  restoreGraphRepository(db, ref, enabledAt);
+  await scope.publish(previous).catch((err: unknown) => { process.stderr.write(`[desk-graph-repositories] the saved graph scope could not be restored: ${err instanceof Error ? err.message : String(err)}\n`); });
+  return fail(503, `The repository scope was not published, so this change was not saved: ${published.reason}`);
+}
 
 function decodeRef(encoded: string): string | Response {
   try {
@@ -31,7 +47,7 @@ async function nodes(req: Request, encoded: string, db: Database, run: GraphRepo
 
 /**
  * GET lists the principal's GitHub repositories and GitLab projects with their ticks; PUT /api/desk/graph-repositories/<encoded ref> with
- * {enabled} ticks or unticks one; GET ?ticked=1 lists only the ticked ones without asking a forge; GET /api/desk/graph-repositories/<encoded ref>/nodes lists a ticked repository's open issues as parent
+ * {enabled} ticks or unticks one, publishing the resulting scope to the host authority when the host supplies a graph scope; GET ?ticked=1 lists only the ticked ones without asking a forge; GET /api/desk/graph-repositories/<encoded ref>/nodes lists a ticked repository's open issues as parent
  * candidates. The rebind and identity gates in handleApi run before this handler.
  */
 export async function handleDeskGraphRepositories(req: Request, url: URL, db: Database, deps: DeskGraphRepositoryDeps = {}): Promise<Response> {
@@ -49,6 +65,9 @@ export async function handleDeskGraphRepositories(req: Request, url: URL, db: Da
   const body = (await req.json().catch(() => null)) as { enabled?: unknown } | null;
   if (typeof body?.enabled !== "boolean") return fail(400, "enabled must be true or false.");
   if (body.enabled && !isGithubRef(ref) && !isGitlabRef(ref)) return fail(400, "Only a GitHub repository such as github:github.com/<owner>/<name> or a GitLab project such as gitlab:<host>/<group>/<name> can be ticked.");
-  setGraphRepositoryEnabled(db, ref, body.enabled, (deps.now ?? Date.now)());
+  const now = (deps.now ?? Date.now)();
+  const scope = deps.graphScope?.() ?? null;
+  if (scope) return savePublishedGraphRepository(db, scope, ref, body.enabled, now);
+  setGraphRepositoryEnabled(db, ref, body.enabled, now);
   return Response.json({ ref, enabled: body.enabled }, { headers: noStore });
 }

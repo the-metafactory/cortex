@@ -56,7 +56,14 @@ export function setGraphRepositoryEnabled(db: Database, ref: string, enabled: bo
   else db.query("DELETE FROM desk_graph_repositories WHERE ref = ?").run(ref);
 }
 
-const storedRefs = (db: Database): string[] => db.query<{ ref: string }, []>("SELECT ref FROM desk_graph_repositories").all().map((r) => r.ref);
+/** Every ticked ref, exactly as stored, in string order: the graph scope the Settings route publishes. */
+export const graphRepositoryRefs = (db: Database): string[] => db.query<{ ref: string }, []>("SELECT ref FROM desk_graph_repositories ORDER BY ref").all().map((r) => r.ref);
+
+/** Puts one tick back the way it was before a failed publication: the row removed, or its original tick time restored. */
+export function restoreGraphRepository(db: Database, ref: string, enabledAt: number | null): void {
+  if (enabledAt === null) db.query("DELETE FROM desk_graph_repositories WHERE ref = ?").run(ref);
+  else db.query("INSERT OR REPLACE INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run(ref, enabledAt);
+}
 
 const byLabelThenRef = (a: GraphRepository, b: GraphRepository): number => a.label.localeCompare(b.label) || a.ref.localeCompare(b.ref);
 
@@ -182,7 +189,7 @@ function listingAnswered(ref: string, github: { ok: boolean }, gitlab: GitlabLis
  * are still returned, so they can be unticked.
  */
 export async function listGraphRepositories(db: Database, run: GraphRepositoryRunner = runCommand): Promise<GraphRepositoryView> {
-  const enabled = new Set(storedRefs(db));
+  const enabled = new Set(graphRepositoryRefs(db));
   const [github, gitlab] = await Promise.all([listGithubFullNames(run), listGitlabProjects(run)]);
   const rows = new Map<string, GraphRepository>();
   if (github.ok) {
@@ -237,5 +244,5 @@ export async function listGraphNodes(ref: string, run: GraphRepositoryRunner = r
 
 /** The ticked repositories alone, without asking a forge: what a conversation may file to, for its destination picker. */
 export function tickedGraphRepositories(db: Database): GraphRepository[] {
-  return storedRefs(db).map(ref => ({ ref, ...describeRef(ref), enabled: true })).sort(byLabelThenRef);
+  return graphRepositoryRefs(db).map(ref => ({ ref, ...describeRef(ref), enabled: true })).sort(byLabelThenRef);
 }
