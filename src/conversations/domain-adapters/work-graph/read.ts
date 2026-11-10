@@ -5,6 +5,7 @@ import { adapterErrorSchema, objectSchema, schemaRef } from "../schema-primitive
 import { schemaKey } from "../schema-validation";
 import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../types";
 import { WORK_GRAPH_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, referenceSchema, type GraphObjectType } from "./schema";
+import { workGraphNodeCreateDeclaration } from "./node-binding";
 
 const DEFAULT_TIMEOUT_MS = 8_000;
 const NODE_PAGE_ITEMS = 1;
@@ -31,11 +32,13 @@ const NODE_READ_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { 
 const ERROR_SCHEMA = adapterErrorSchema(ADAPTER_ID);
 
 export function workGraphReadDeclaration(): AdapterDeclaration {
+  const creation = workGraphNodeCreateDeclaration();
   return {
     adapterId: ADAPTER_ID,
     label: "Work graph",
     contractRange: "^1.0.0",
     schemas: [
+      ...creation.schemas,
       { ...REPOSITORY_SCHEMA_REF, schema: REPOSITORY_VALUE_SCHEMA },
       { ...NODE_SCHEMA_REF, schema: NODE_VALUE_SCHEMA },
       { ...DESTINATIONS_INPUT_REF, schema: DESTINATIONS_INPUT_SCHEMA },
@@ -45,11 +48,13 @@ export function workGraphReadDeclaration(): AdapterDeclaration {
       { ...ERROR_REF, schema: ERROR_SCHEMA },
     ],
     objectTypes: [
+      ...creation.objectTypes.filter(object => object.objectType === "node-draft"),
       { objectType: "repository", label: "Repository", schemaRef: REPOSITORY_SCHEMA_REF, relationships: [] },
       { objectType: "map", label: "Map", schemaRef: NODE_SCHEMA_REF, relationships: [] },
       { objectType: "node", label: "Node", schemaRef: NODE_SCHEMA_REF, relationships: [{ fieldPath: "/parent", targetAdapterId: ADAPTER_ID, targetObjectType: "node", cardinality: "one" }] },
     ],
     capabilities: [
+      ...creation.capabilities,
       { capabilityId: "work-graph.destinations", label: "List destinations", kind: "query", objectTypes: ["repository", "map", "node"], inputSchemaRef: DESTINATIONS_INPUT_REF, outputSchemaRef: DESTINATIONS_OUTPUT_REF, errorSchemaRef: ERROR_REF },
       { capabilityId: "work-graph.node.read", label: "Read node", kind: "query", objectTypes: ["node"], inputSchemaRef: NODE_READ_INPUT_REF, outputSchemaRef: NODE_READ_OUTPUT_REF, errorSchemaRef: ERROR_REF },
     ],

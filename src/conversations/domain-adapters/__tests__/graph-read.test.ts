@@ -157,13 +157,13 @@ describe("the inactive work-graph read adapter", () => {
     expect(failed.argv).toHaveLength(1);
   });
 
-  test("the adapter declares only query capabilities and no connection, observation or mutation surface of its own", () => {
+  test("the adapter declares creation alongside reads without a direct mutation handler or connection", () => {
     const adapter = createWorkGraphReadAdapter({ connectionId: "connection-inactive", repositories: () => [CORTEX], links: () => [] });
     const capabilities = adapter.declaration.capabilities;
-    expect(capabilities.map(capability => capability.kind)).toEqual(["query", "query"]);
-    expect(capabilities.map(capability => capability.capabilityId).sort()).toEqual(Object.keys(adapter.bindings.handlers).sort());
+    expect(capabilities.map(capability => capability.kind)).toEqual(["action", "query", "query"]);
+    expect(capabilities.filter(capability => capability.kind === "query").map(capability => capability.capabilityId).sort()).toEqual(Object.keys(adapter.bindings.handlers).sort());
     expect(adapter.bindings.observations).toEqual({});
     expect(adapter.readBindings.map(binding => binding.mode)).toEqual(["destinations", "query"]);
-    expect(adapter.declaration.objectTypes.map(object => object.objectType)).toEqual(["repository", "map", "node"]);
+    expect(adapter.declaration.objectTypes.map(object => object.objectType)).toEqual(["node-draft", "repository", "map", "node"]);
   });
 });
