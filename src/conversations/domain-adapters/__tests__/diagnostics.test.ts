@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { enableConnection, listConnections, connectionSetupRig, SYNTHETIC_TOKEN, type ConnectionSetupRig } from "../../connection-setup-fixtures";
-import { syntheticDiagnostics } from "../diagnostics-fixtures";
+import { busClient, syntheticDiagnostics } from "../diagnostics-fixtures";
 import type { ConnectionView } from "../../connection-setup";
-import { validateEnvelope } from "../../../bus/myelin/envelope-validator";
 import { ADAPTER_EVENT_CAPACITY, DIAGNOSTIC_EVENT_KEYS, DIAGNOSTIC_EVENT_NAMES } from "../diagnostics";
 import { eventFixture, prepareOperationFixture, registryFixture } from "../operations/fixtures";
 import { queryBinding, queryRig, syntheticQueryPage } from "../reads/query-fixtures";
@@ -22,7 +21,6 @@ async function listed(rig: ConnectionSetupRig): Promise<Map<string, ConnectionVi
 }
 
 const statusEvent = (connectionId: string, state: "available" | "unavailable" | "stale" | "fenced", errorCode?: string) => ({ event: "desk.adapter.connection_status", adapterId: "balance", connectionId, state, ...(errorCode ? { errorCode } : {}) });
-const busClient = (): { published: unknown[]; publish(envelope: unknown): boolean } => ({ published: [], publish(envelope: unknown): boolean { if (!validateEnvelope(envelope).ok) return false; this.published.push(envelope); return true; } });
 
 describe("adapter diagnostics store", () => {
   test("stores one strict event per kind with only opaque identifiers, capability, state and an error code", async () => {
@@ -54,6 +52,7 @@ describe("adapter diagnostics store", () => {
       expect(refused).toEqual({ stored: false, code: "invalid_event" });
       expect(await diagnostics.events("connection-example")).toEqual([]);
       expect(logged.some(line => line.includes("refused"))).toBe(true);
+      expect(logged.join("\n")).toContain("unrecognized_keys@message,account");
       expect(logged.join("\n")).not.toContain("owner@example.test");
       expect(logged.join("\n")).not.toContain("synthetic-account");
     } finally { report.mockRestore(); }

@@ -259,7 +259,7 @@ export class ConversationHost {
       if (this.authorityService.registry !== registry || this.authorityService.bindings !== bindings) throw new Error("Authority bindings are already registered for this host.");
       return this.authorityService.mediator;
     }
-    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters(), this.lifecycleFences(), this.adapterDiagnostics());
+    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters(), { fences: this.lifecycleFences(), diagnostics: this.adapterDiagnostics() });
     this.authorityService = { registry, bindings, mediator };
     return mediator;
   }

@@ -76,7 +76,7 @@ function observe(status: ConnectionStatus, event: DiagnosticEvent): ConnectionSt
   return next;
 }
 
-const issueReport = (error: z.ZodError): string => error.issues.map(issue => `${issue.code}@${issue.path.join(".") || "event"}`).join(",");
+const issueReport = (error: z.ZodError): string => error.issues.map(issue => `${issue.code}@${issue.path.join(".") || ("keys" in issue ? issue.keys.join(",") : "") || "event"}`).join(",");
 
 export class AdapterDiagnostics implements ConnectionStatusReader {
   private readonly now: () => Date;

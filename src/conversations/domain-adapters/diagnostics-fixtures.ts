@@ -1,6 +1,14 @@
 import { enableConnection, type ConnectionSetupRig } from "../connection-setup-fixtures";
 import type { ConnectionView } from "../connection-setup";
+import { validateEnvelope } from "../../bus/myelin/envelope-validator";
 import type { AdapterDiagnostics } from "./diagnostics";
+
+export interface BusClientStub {
+  published: unknown[];
+  publish(envelope: unknown): boolean;
+}
+
+export const busClient = (): BusClientStub => ({ published: [], publish(envelope: unknown): boolean { if (!validateEnvelope(envelope).ok) return false; this.published.push(envelope); return true; } });
 
 export interface SyntheticDiagnostics {
   diagnostics: AdapterDiagnostics;

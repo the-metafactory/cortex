@@ -5,14 +5,13 @@ import { chromium } from "playwright";
 import { listConnections, connectionSetupRig, SYNTHETIC_TOKEN } from "../src/conversations/connection-setup-fixtures";
 import type { ConnectionView, PackageForm } from "../src/conversations/connection-setup";
 import { DIAGNOSTIC_EVENT_KEYS, DIAGNOSTIC_EVENT_NAMES } from "../src/conversations/domain-adapters/diagnostics";
-import { syntheticDiagnostics } from "../src/conversations/domain-adapters/diagnostics-fixtures";
-import { validateEnvelope } from "../src/bus/myelin/envelope-validator";
+import { busClient, syntheticDiagnostics } from "../src/conversations/domain-adapters/diagnostics-fixtures";
 import { ConnectionSetupBody } from "../src/surface/mc/dashboard-v2/components/desk-connection-setup";
 import { probeChecks } from "./lib/probe-checks";
 
 const { check, finish } = probeChecks();
 const ALLOWED = new Set<string>(DIAGNOSTIC_EVENT_KEYS);
-const bus = { published: [] as unknown[], publish(envelope: unknown): boolean { if (!validateEnvelope(envelope).ok) return false; this.published.push(envelope); return true; } };
+const bus = busClient();
 const rig = await connectionSetupRig();
 
 const browser = await chromium.launch({ headless: true });
