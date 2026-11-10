@@ -44,6 +44,10 @@ export function detailsCommand(draft: TaskDraft): BalanceCommand {
   return { op: "outline-edit", id: draft.node.id, revision: draft.revision, details: draft.details, yes: draft.yes };
 }
 
+export function addCommand(adding: TaskAdding): BalanceCommand {
+  return { op: "outline-add", parent: adding.parent, title: adding.title, revision: adding.revision, ...(adding.details ? { weight: adding.details.weight, note: adding.details.note, dueDate: adding.details.dueDate || undefined, context: adding.details.context, effort: adding.details.effort, estimateMinutes: adding.details.estimateMinutes } : {}) };
+}
+
 export function useBalanceEditor(day: MyDayView, onSaved: (view: MyDayView) => void) {
   const [drafts, setDrafts] = useState(new Map<string, TaskDraft>());
   const [message, setMessage] = useState<TaskMessage>(null);
@@ -74,7 +78,7 @@ export function useBalanceEditor(day: MyDayView, onSaved: (view: MyDayView) => v
     const edited = id ? drafts.get(id) : undefined;
     return { draft: edited ?? (entry ? { node: entry.node, details: balanceDetails(entry.node, day.date), revision: day.revision, date: day.date, yes: false } : null), dirty: edited !== undefined };
   };
-  const add = (adding: TaskAdding): Promise<Saved | null> => change({ op: "outline-add", parent: adding.parent, title: adding.title, revision: adding.revision, ...(adding.details ? { weight: adding.details.weight, note: adding.details.note, dueDate: adding.details.dueDate || undefined, context: adding.details.context, effort: adding.details.effort, estimateMinutes: adding.details.estimateMinutes } : {}) }, adding.date);
+  const add = (adding: TaskAdding): Promise<Saved | null> => change(addCommand(adding), adding.date);
   return { busy, message, setMessage, change, add, setDraft, discard, draftFor, moving, setMoving };
 }
 export type BalanceEditor = ReturnType<typeof useBalanceEditor>;
@@ -190,7 +194,8 @@ function DetailsActions({ node, entry, day, busy, dirty, onAdd, onMove, onComple
   const sourceOwned = isSourceOwned(day, node.id);
   const source = day.sources.find(link => link.taskId === node.id);
   const studio = day.studioProjects.find(link => link.id === node.id) ?? day.studioTasks.find(link => link.id === node.id);
-  return <div className="dbl-actions"><button className="desk-btn ghost" disabled={busy || dirty || !entry || (node.done ?? false) || node.id.startsWith("studio-response:")} onClick={onAdd}>+ Add subtask</button>{!area && !sourceOwned && <><button className="desk-btn ghost" disabled={busy || dirty || !entry} onClick={onMove}>Move…</button><button className="desk-btn" disabled={busy || dirty || !entry} onClick={onComplete}>{node.done ? "Reopen" : node.children.length ? "Close project" : "Mark complete"}</button><button type="button" className="desk-btn ghost" disabled={busy || dirty || !entry || node.children.length > 0 || Boolean(source)} onClick={() => { if (window.confirm(`Delete “${node.title}”? This removes the task from Balance.`)) void change({ op: "outline-remove", id: node.id, revision: day.revision, confirm: true }); }}>Delete task</button></>}{!area && entry && <TodayControl node={node} day={day} busy={busy || dirty} change={change} />}{dirty && <p className="dbl-help">Save or discard the draft before changing this item's structure.</p>}
+  const remove = () => { if (window.confirm(`Delete “${node.title}”? This removes the task from Balance.`)) void change({ op: "outline-remove", id: node.id, revision: day.revision, confirm: true }); };
+  return <div className="dbl-actions"><button className="desk-btn ghost" disabled={busy || dirty || !entry || (node.done ?? false) || node.id.startsWith("studio-response:")} onClick={onAdd}>+ Add subtask</button>{!area && !sourceOwned && <><button className="desk-btn ghost" disabled={busy || dirty || !entry} onClick={onMove}>Move…</button><button className="desk-btn" disabled={busy || dirty || !entry} onClick={onComplete}>{node.done ? "Reopen" : node.children.length ? "Close project" : "Mark complete"}</button><button type="button" className="desk-btn ghost" disabled={busy || dirty || !entry || node.children.length > 0 || Boolean(source)} onClick={remove}>Delete task</button></>}{!area && entry && <TodayControl node={node} day={day} busy={busy || dirty} change={change} />}{dirty && <p className="dbl-help">Save or discard the draft before changing this item's structure.</p>}
     {source && <DeskSourceLink source={source} />}{studio && <button className="desk-btn ghost" onClick={() => { onThread(studio.slug); }}>Open Studio thread →</button>}
   </div>;
 }
