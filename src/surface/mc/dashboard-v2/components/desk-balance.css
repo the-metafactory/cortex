@@ -46,7 +46,16 @@
 .dbl-review .dmr { padding: 0; max-width: none; }
 .dbl-review .dmr-header { margin-top: 0; }
 @media (max-width: 760px) { .dbl { padding: 25px 14px 100px; } .dbl-heading { align-items: start; } .dbl-heading h1 { font-size: 28px; } .dbl-heading > button { white-space: nowrap; } .dbl-tabs { flex-wrap: wrap; } .dbl-tabs span { flex-basis: 100%; margin-left: 0; } .dbl-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; } .dbl-inspector { position: static; scroll-margin-top: 20px; padding: 22px 17px; } .dbl-back { display: inline-block; margin-bottom: 20px; } .dbl-toolbar { padding-inline: 16px; } .dbl-filters { padding-inline: 16px; grid-template-columns: minmax(0, 1fr) minmax(95px, 110px); } .dbl-tree { padding-inline: 4px; } .dbl-row { gap: 4px; padding-right: 8px; } .dbl-weight { flex-basis: 36px; } }
-.dbl-row[draggable="true"] { cursor: grab; }
-.dbl-row.drop-before { box-shadow: inset 0 2px 0 #3f7a52; }
-.dbl-row.drop-after { box-shadow: inset 0 -2px 0 #3f7a52; }
-.dbl-row.drop-inside { outline: 2px dashed #3f7a52; outline-offset: -2px; }
+.dbl-row[data-movable="true"], .dbl-row[data-movable="true"] .dbl-select { cursor: grab; }
+.dbl-grip, .dbl-grip-space { width: 16px; flex: 0 0 16px; }
+.dbl-grip { color: #758c7d; font-size: 20px; text-align: center; touch-action: none; }
+.dbl-row[data-movable="true"] { user-select: none; }
+.dbl-row.drag-source { opacity: .3; }
+.dbl-row.drop-before, .dbl-row.drop-after { position: relative; }
+.dbl-row.drop-before::after, .dbl-row.drop-after::after { content: ""; position: absolute; left: 8px; right: 8px; height: 4px; background: #267d49; border-radius: 3px; box-shadow: 0 0 0 2px white; pointer-events: none; }
+.dbl-row.drop-before::after { top: -2px; }
+.dbl-row.drop-after::after { bottom: -2px; }
+.dbl-row.drop-inside { background: #e3f1e7; outline: 2px solid #267d49; outline-offset: -2px; }
+.dbl-dragging, .dbl-dragging * { cursor: grabbing !important; user-select: none !important; }
+.dbl-drag-preview { position: fixed; z-index: 10000; pointer-events: none; box-sizing: border-box; background: white; border: 1px solid #85a68f; box-shadow: 0 10px 30px #173d2b33, 0 2px 6px #173d2b22; transform: translate(10px, 10px) rotate(-1deg); opacity: .96; font-family: inherit; }
+.dbl-drag-preview[data-allowed="false"] { border-color: #aeb7b0; }
