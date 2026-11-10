@@ -6,6 +6,7 @@ import { isBalanceProjectId } from "../../../surface/mc/desk/balance-destination
 import { operationUuid, studioRequestId } from "../../../surface/mc/desk/conversation-ids";
 import { ObjectReferenceSchema, type ObjectReference } from "../types";
 import { canonicalGraphRef } from "../work-graph/read";
+import { flowName } from "../flow/schema";
 import { OperationJournalStore, StoredSchema, type StoredOperation } from "./journal";
 import { parseWire, type Json, type OperationJournal } from "./types";
 import { canonicalWire } from "./validation";
@@ -67,6 +68,13 @@ function graphNodeIssues(source: LegacySource, context: LegacyContext): string[]
 }
 
 function conversionIssues(source: LegacySource, context: LegacyContext): string[] {
+  if (source.record.owner === "flow" && context.owner === "flow" && context.adapterId === "flow" && context.capabilityId === "flow.saved.create") {
+    const issues: string[] = [];
+    const [destination] = context.destinations;
+    if (context.destinations.length !== 1 || destination?.objectType !== "stack" || !destination.canonicalId.trim() || destination.canonicalId.trim() !== destination.canonicalId) issues.push("legacy_destination_ambiguous");
+    if (context.canonicalReference && (context.canonicalReference.objectType !== "saved" || context.canonicalReference.canonicalId !== source.record.canonicalId || !flowName.safeParse(context.canonicalReference.canonicalId).success)) issues.push("legacy_canonical_mapping_unsupported");
+    return issues;
+  }
   if (source.record.owner === "graph-node" && isGraphNodeBinding(context)) return graphNodeIssues(source, context);
   if (source.record.owner !== "balance-task" || !isBalanceTaskBinding(context)) return ["legacy_capability_mapping_unsupported"];
   const fields = source.proposal.fields;
