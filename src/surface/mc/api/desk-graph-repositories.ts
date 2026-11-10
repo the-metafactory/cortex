@@ -65,7 +65,7 @@ async function nodes(req: Request, encoded: string, db: Database, run: GraphRepo
  * {enabled} ticks or unticks one, publishing the resulting scope to the Cortex runtime's authority when it supplies a graph scope; GET ?ticked=1 lists only the ticked ones without asking a forge; GET /api/desk/graph-repositories/<encoded ref>/nodes lists a ticked repository's open issues as parent
  * candidates. A tick writes its row before the authority and puts it back when the publication fails; an untick
  * withdraws the restriction before its row, so a crash either way leaves the authority narrower than the table,
- * never wider. The rebind and identity gates in handleApi run before this handler.
+ * never wider. The rebind and identity gates in handleApi apply before this handler.
  */
 export async function handleDeskGraphRepositories(req: Request, url: URL, db: Database, deps: DeskGraphRepositoryDeps = {}): Promise<Response> {
   const rest = url.pathname.slice(GRAPH_REPOSITORIES_PATH.length);

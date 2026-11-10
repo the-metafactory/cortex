@@ -371,7 +371,8 @@ export function startServer(
           deskVigil(options),
           deskRuntime,
           options,
-        );      }
+        );
+      }
 
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
         return new Response(Bun.file(join(DASHBOARD_DIST, "index.html")), {

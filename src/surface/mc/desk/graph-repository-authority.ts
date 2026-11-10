@@ -91,8 +91,14 @@ export function graphDestinationPermitted(state: AuthorityState, address: GraphS
   return permittedGraphDestinations(state, address).some(source => source.canonicalId === ref);
 }
 
-/** The message a failed publication carries: what the Settings route reports and logs. */
+/** The reason a failed publication carries: what the Settings route reports and logs. */
 export const failureReason = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+const SCOPE_FIELDS = ["source", "readScope", "audiences", "egress", "resolverBinding"] as const;
+
+type ScopeFields = Pick<RestrictionRecord, (typeof SCOPE_FIELDS)[number]>;
+
+const pickScopeFields = (record: RestrictionRecord): ScopeFields => Object.fromEntries(SCOPE_FIELDS.map(field => [field, record[field]])) as ScopeFields;
 
 /**
  * Publishes the Desk Settings graph scope as host authority restrictions: one `repository` restriction per
@@ -121,17 +127,21 @@ export class GraphScope {
     return String((this.binding.now ?? Date.now)());
   }
 
+  private scopeFields(ref: string): ScopeFields {
+    return { source: graphScopeSource(ref, this.connectionId), readScope: [this.binding.principalRef], audiences: [...SCOPE_AUDIENCES], egress: SCOPE_EGRESS, resolverBinding: GRAPH_SCOPE_RESOLVER_BINDING };
+  }
+
   private current(record: RestrictionRecord | undefined, ref: string): boolean {
-    return record?.status === "active" && canonicalWire(record.source) === canonicalWire(graphScopeSource(ref, this.connectionId)) && canonicalWire(record.readScope) === canonicalWire([this.binding.principalRef]) && canonicalWire(record.audiences) === canonicalWire(SCOPE_AUDIENCES) && record.egress === SCOPE_EGRESS && record.resolverBinding === GRAPH_SCOPE_RESOLVER_BINDING;
+    return record?.status === "active" && canonicalWire(pickScopeFields(record)) === canonicalWire(this.scopeFields(ref));
   }
 
   private record(ref: string, status: RestrictionRecord["status"], existing?: RestrictionRecord): RestrictionRecord {
+    const fields = this.scopeFields(ref);
     const base: RestrictionRecord = existing ?? {
-      version: 1, status, restrictionRef: scopeRestrictionRef(this.binding.stackId, this.binding.principalRef, ref), source: graphScopeSource(ref, this.connectionId),
-      ownerRevision: this.now(), decisionRef: SCOPE_DECISION_REF, audiences: [...SCOPE_AUDIENCES], egress: SCOPE_EGRESS,
-      readScope: [this.binding.principalRef], resolverBinding: GRAPH_SCOPE_RESOLVER_BINDING, revision: "1",
+      version: 1, status, restrictionRef: scopeRestrictionRef(this.binding.stackId, this.binding.principalRef, ref), ...fields,
+      ownerRevision: this.now(), decisionRef: SCOPE_DECISION_REF, revision: "1",
     };
-    return { ...base, status, source: graphScopeSource(ref, this.connectionId), readScope: [this.binding.principalRef], audiences: [...SCOPE_AUDIENCES], egress: SCOPE_EGRESS, resolverBinding: GRAPH_SCOPE_RESOLVER_BINDING, ownerRevision: this.now(), revision: String(Number(existing?.revision ?? "0") + 1) };
+    return { ...base, ...fields, status, ownerRevision: this.now(), revision: String(Number(existing?.revision ?? "0") + 1) };
   }
 
   async permitted(): Promise<ObjectReference[]> {
