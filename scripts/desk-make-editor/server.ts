@@ -3,8 +3,15 @@ import { join } from "node:path";
 import type { DeskDraftEditor } from "../../src/surface/mc/desk/draft-editor";
 import { handleDeskDrafts } from "../../src/surface/mc/api/desk-drafts";
 import { buildAllowedHostnames } from "../../src/surface/mc/api/mutation-guard";
+import { handleConversations, type ConversationAccess } from "../../src/surface/mc/api/conversations";
 
-export async function serveDraftBrowserProbe(rig: { makeInput: unknown; readonly editor: DeskDraftEditor }) {
+interface DraftBrowserOptions {
+  conversations?: ConversationAccess;
+  principal?: string;
+  route?: string;
+}
+
+export async function serveDraftBrowserProbe(rig: { makeInput: unknown; readonly editor: DeskDraftEditor }, options: DraftBrowserOptions = {}) {
   const bundle = await Bun.build({ entrypoints: [join(import.meta.dir, "browser-probe.tsx")], target: "browser", naming: "[name].[ext]" });
   if (!bundle.success) throw new Error(`The Make editor browser probe did not build: ${bundle.logs.join("\n")}`);
   const javascript = bundle.outputs.find(item => item.path.endsWith(".js"));
@@ -17,9 +24,14 @@ export async function serveDraftBrowserProbe(rig: { makeInput: unknown; readonly
       if (url.pathname === "/probe.js") return new Response(javascript, { headers: { "content-type": "text/javascript" } });
       if (url.pathname === "/probe.css") return new Response(css ?? "", { headers: { "content-type": "text/css" } });
       if (url.pathname === "/fixture.json") return Response.json(rig.makeInput);
+      const guard = { isLoopback: true, allowedHostnames: buildAllowedHostnames("127.0.0.1"), listenPort: server.port ?? 0, principals: new Set<string>(), localPrincipal: options.principal };
       if (url.pathname.startsWith("/api/desk/drafts")) {
         calls.push(`${req.method} ${url.pathname}${url.search}`);
-        return handleDeskDrafts(req, url, { isLoopback: true, allowedHostnames: buildAllowedHostnames("127.0.0.1"), listenPort: server.port ?? 0, principals: new Set() }, () => rig.editor);
+        return handleDeskDrafts(req, url, guard, () => rig.editor);
+      }
+      if (url.pathname.startsWith("/api/conversations") && options.conversations) {
+        calls.push(`${req.method} ${url.pathname}${url.search}`);
+        return handleConversations(req, url, guard, options.conversations);
       }
       return new Response('<!doctype html><html><head><link rel="stylesheet" href="/probe.css"></head><body><main id="root"></main><script type="module" src="/probe.js"></script></body></html>', { headers: { "content-type": "text/html" } });
     },
@@ -38,13 +50,13 @@ export async function openDraftProbePage(url: URL) {
   } catch (error) { await browser.close(); throw error; }
 }
 
-export async function withDraftBrowserProbe(rig: { makeInput: unknown; readonly editor: DeskDraftEditor; close(): Promise<void> }, run: (probe: { page: Page; calls: string[]; errors: string[] }) => Promise<void>) {
+export async function withDraftBrowserProbe(rig: { makeInput: unknown; readonly editor: DeskDraftEditor; close(): Promise<void> }, run: (probe: { page: Page; calls: string[]; errors: string[] }) => Promise<void>, options: DraftBrowserOptions = {}) {
   let server: Awaited<ReturnType<typeof serveDraftBrowserProbe>>["server"] | undefined;
   let browser: Browser | undefined;
   try {
-    const serving = await serveDraftBrowserProbe(rig);
+    const serving = await serveDraftBrowserProbe(rig, options);
     server = serving.server;
-    const opened = await openDraftProbePage(server.url);
+    const opened = await openDraftProbePage(new URL(options.route ?? "/", server.url));
     browser = opened.browser;
     await run({ ...opened, calls: serving.calls });
   } catch (error) {

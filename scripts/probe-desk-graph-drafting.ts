@@ -1,15 +1,23 @@
 import assert from "node:assert/strict";
-import { CREATE_PARENT, graphDiscussionOutput, openGraphCreateRig } from "../src/conversations/domain-adapters/work-graph/fixtures/graph-create";
+import { CREATE_PARENT, GRAPH_DRAFT_DISCUSSION, graphDiscussionOutput, openGraphCreateRig } from "../src/conversations/domain-adapters/work-graph/fixtures/graph-create";
 import { withDraftBrowserProbe } from "./desk-make-editor/server";
+import type { DraftEditorView } from "../src/surface/mc/desk/draft-editor-contract";
 
-const rig = await openGraphCreateRig();
+const rig = await openGraphCreateRig({ discussion: GRAPH_DRAFT_DISCUSSION });
 rig.state.output = graphDiscussionOutput();
 await withDraftBrowserProbe(rig, async ({ page, calls, errors }) => {
+  await page.getByRole("region", { name: "Ivy conversation: Graph creation", exact: true }).waitFor();
+  await page.getByText(GRAPH_DRAFT_DISCUSSION, { exact: true }).waitFor();
+  const making = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/desk/drafts");
   await page.getByRole("button", { name: "Make", exact: true }).click();
   const editor = page.getByRole("article", { name: "Draft editor", exact: true });
   const title = page.getByLabel("title (required)", { exact: true });
   const body = page.getByLabel("body", { exact: true });
   await title.waitFor();
+  const made = await (await making).json() as DraftEditorView;
+  assert.equal(made.view.draft.entryId, rig.makeInput.entryId);
+  assert.equal(made.view.draft.manifest?.boundary.entryId, rig.makeInput.entryId);
+  assert.ok(calls.includes(`GET /api/conversations/${rig.makeInput.conversationId}`));
   assert.equal(await title.inputValue(), "Investigate receipt preservation across restart");
   assert.match(await body.inputValue(), /Problem:[\s\S]*Intended result:[\s\S]*Evidence:[\s\S]*Constraints:/);
   const parent = page.getByLabel("parent (required)", { exact: true });
@@ -21,7 +29,7 @@ await withDraftBrowserProbe(rig, async ({ page, calls, errors }) => {
   assert.equal(calls.filter(call => call.includes("/details")).length, 1);
   assert.equal((await parent.inputValue()).includes("adapterId"), false);
   await page.screenshot({ path: (process.argv[2] ?? "/tmp/desk-graph-drafting.png").replace(/\.png$/, "-prefilled.png"), fullPage: true });
-  console.log("Make populated title, substantive body, checkpoint and suggested canonical references; source details loaded only on demand.");
+  console.log("Conversation workspace Make populated title, substantive body, checkpoint and suggested canonical references from the displayed discussion; source details loaded only on demand.");
 
   const revision = async () => Number(await editor.getAttribute("data-revision"));
   const changed = async (before: number) => { await page.waitForFunction(value => Number(document.querySelector('[aria-label="Draft editor"]')?.getAttribute("data-revision")) > value, before); };
@@ -46,8 +54,13 @@ await withDraftBrowserProbe(rig, async ({ page, calls, errors }) => {
   await rig.reopen();
   const generations = rig.state.requests.length;
   await page.reload();
+  const remaking = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/desk/drafts");
   await page.getByRole("button", { name: "Make", exact: true }).click();
   await title.waitFor();
+  const reopened = await (await remaking).json() as DraftEditorView;
+  assert.equal(reopened.view.draft.draftId, made.view.draft.draftId);
+  assert.equal(reopened.view.draft.entryId, made.view.draft.entryId);
+  assert.equal(reopened.view.draft.manifest?.boundary.entryId, rig.makeInput.entryId);
   assert.equal(await title.inputValue(), "Audit restart receipts");
   assert.equal(await body.inputValue(), "");
   assert.equal(rig.state.requests.length, generations);
@@ -77,4 +90,4 @@ await withDraftBrowserProbe(rig, async ({ page, calls, errors }) => {
   assert.deepEqual(errors, []);
   await page.screenshot({ path: process.argv[2] ?? "/tmp/desk-graph-drafting.png", fullPage: true });
   console.log("Changed destination required explicit refresh; unavailable permitted model kept edits; confirmation was blocked. Graph mutation calls and authority confirmations: 0.");
-});
+}, { conversations: () => ({ state: "ready", host: rig.host, tookOver: null, resumed: [], reconciled: [] }), principal: rig.principal.principal, route: `/?desk=conversation&conversation=${rig.makeInput.conversationId}` });

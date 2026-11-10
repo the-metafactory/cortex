@@ -30,8 +30,9 @@ export const CREATE_PARENT = "example/desk#12";
 export const CREATE_MAP = `${CREATE_REPOSITORY}#10`;
 const AT = new Date(GRAPH_NODE_NOW).toISOString();
 const CAPABILITY = "work-graph.node.create";
+export const GRAPH_DRAFT_DISCUSSION = "The importer can lose acceptance receipts on restart. Compare persisted receipts with canonical lookup, document crash cases and propose a regression test. File a research node under the lifecycle map; use checkpoint receipt-restart-evidence. Keep unknown dependencies absent and do not activate a writer.";
 
-export async function openGraphCreateRig() {
+export async function openGraphCreateRig(fixture: { discussion?: string } = {}) {
   const root = await mkdtemp(join(tmpdir(), "desk-graph-create-"));
   const db = initDatabase(join(root, "desk.sqlite"));
   const openHost = async () => {
@@ -42,7 +43,9 @@ export async function openGraphCreateRig() {
   let host = await openHost();
   const connectionId = randomUUID();
   const principal: PrincipalBinding = { version: 1, status: "active", principalRef: randomUUID(), principal: "local", stack: "test", identityBindingRevision: "1" };
-  const conversation = await host.create({ title: "Graph creation", policy: "cloud", links: [], origin: { kind: "web" } }, principal.principal);
+  const conversation = await host.create({ title: "Graph creation", policy: "cloud", links: [], origin: { kind: "web" } }, principal.principal, { entries: fixture.discussion ? [{ kind: "synthetic-discussion", data: {}, messages: [{ role: "user", text: fixture.discussion, at: GRAPH_NODE_NOW }] }] : [] });
+  const entryId = fixture.discussion ? (await host.entries(conversation.id, 100, undefined)).entries.find(entry => entry.role === "user")?.id : "entry-example";
+  if (!entryId) throw new Error("Synthetic discussion entry missing");
   const repositories = [CREATE_REPOSITORY, CREATE_OTHER_REPOSITORY];
   const ref = (objectType: string, canonicalId: string): ObjectReference => ({ adapterId: "work-graph", connectionId, objectType, canonicalId });
   const refs = () => repositories.map(repository => ref("repository", repository));
@@ -72,7 +75,7 @@ export async function openGraphCreateRig() {
   }
   const state = { sessionEnabled: true, sourceAvailable: true, output: { fields: [] } as ModelOutput, sourceRestrictionsAvailable: true,
     head: "1", localOnly: false, lanes: ["cloud"] as Lane[], requests: [] as ModelRequest[], modelFails: false, onGenerate: undefined as undefined | (() => Promise<void>),
-    items: [{ id: "turn-example", kind: "turn", revision: "1", digest: "synthetic-digest", restriction: "cloud", text: "The importer can lose acceptance receipts on restart. Compare persisted receipts with canonical lookup, document crash cases and propose a regression test. File a research node under the lifecycle map; use checkpoint receipt-restart-evidence. Keep unknown dependencies absent and do not activate a writer.", at: AT }] as SourceItem[],
+    items: [{ id: "turn-example", kind: "turn", revision: "1", digest: "synthetic-digest", restriction: "cloud", text: fixture.discussion ?? GRAPH_DRAFT_DISCUSSION, at: AT }] as SourceItem[],
   };
   const sinks = new Map([[canonicalWire({ kind: "web", conversationId: conversation.id }), () => Promise.resolve()]]);
   const connectors = new Map<string, TrustedConnector>([[connection.connectorId, { ...binding.connector, authorizeConnection: () => Promise.resolve({ version: 1, available: true, revision: "1" }), query: request => read.query(request) }]]);
@@ -105,7 +108,7 @@ export async function openGraphCreateRig() {
   const sourceRestriction = restrictions[0];
   if (!sourceRestriction) throw new Error("Synthetic source restriction missing");
   const deps: GraphDraftSetup["deps"] = { registry,
-    sources: { capture: () => Promise.resolve({ boundary: { entryId: "entry-example", revision: state.head }, items: state.items.map(item => ({ ...item, restriction: state.localOnly ? "local" as const : item.restriction })), unavailable: 0 }), head: () => Promise.resolve(state.head) },
+    sources: { capture: () => Promise.resolve({ boundary: { entryId, revision: state.head }, items: state.items.map(item => ({ ...item, restriction: state.localOnly ? "local" as const : item.restriction })), unavailable: 0 }), head: () => Promise.resolve(state.head) },
     policy: { revision: () => Promise.resolve("1"), readable: () => Promise.resolve(state.sourceAvailable), releasable: (_ids, lane) => Promise.resolve(state.sourceAvailable && (!state.localOnly || lane === "local")) },
     model: { lanes: () => Promise.resolve(state.lanes), generate: async request => { state.requests.push(request); await state.onGenerate?.(); if (state.modelFails) throw new Error("Synthetic model unavailable"); return { modelId: "synthetic-model", output: state.output }; } },
     now: () => new Date(AT),
@@ -114,7 +117,7 @@ export async function openGraphCreateRig() {
   let editor = deskGraphDraftEditor(host, deps, options);
   const destinations = graphDraftDestinations({ connectionId, session, authority });
   const servers: ReturnType<typeof startServer>[] = [];
-  const makeInput = { conversationId: conversation.id, entryId: "entry-example", capabilityId: CAPABILITY, connectionId };
+  const makeInput = { conversationId: conversation.id, entryId, capabilityId: CAPABILITY, connectionId };
   const restrictRepository = async (repository: string, patch: Partial<Pick<RestrictionRecord, "status" | "egress">>) => {
     const restriction = restrictions.find(item => item.source.canonicalId === repository);
     if (!restriction) throw new Error("Synthetic restriction missing");
