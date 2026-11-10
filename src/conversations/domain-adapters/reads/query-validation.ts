@@ -54,8 +54,10 @@ export function validateQueryPage(registry: DomainAdapterRegistry, binding: Read
       return held !== undefined && accepts(held);
     };
     const scalar = (held: Json): boolean => typeof held === "string";
+    const nullableScalar = (held: Json): boolean => held === null || typeof held === "string";
     const reference = (held: Json): boolean => typeof held === "object" && held !== null && !Array.isArray(held);
-    if (typeof readPointer(value, display.title) !== "string" || !present(display.summary, scalar) || !present(display.status, scalar) || !present(display.due, held => held === null || typeof held === "string") || !present(display.area, reference)) throw new Error("invalid_display");
+    const nullableReference = (held: Json): boolean => held === null || reference(held);
+    if (typeof readPointer(value, display.title) !== "string" || !present(display.summary, scalar) || !present(display.status, scalar) || !present(display.due, nullableScalar) || !present(display.area, reference) || !present(display.kind, nullableScalar) || !present(display.parent, nullableReference) || !present(display.url, nullableScalar)) throw new Error("invalid_display");
     const key = authorityHash(entry.ref);
     const digest = authorityHash({ value, revision: entry.evidence.revision, schemaRef: entry.schemaRef, destination: entry.destination });
     if (seen[key] !== undefined && seen[key] !== digest) throw new Error("restart_required");

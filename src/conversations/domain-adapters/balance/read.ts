@@ -1,10 +1,7 @@
 import { balanceDestinations, type AppState, type DestinationArea, type OutlineNode } from "../../../balance";
-import { authorityHash } from "../../authority-records";
-import type { Json } from "../operations/types";
-import type { QueryFetchRequest, QueryPage } from "../reads/query-types";
-import type { ReadBinding } from "../reads/types";
+import { isRecord, parseObjectReference, parseReadHandlerContext, readObservedAt, readPage, readPageLimit, readSnapshotId, type Json, type QueryFetchRequest, type QueryPage, type QueryPageEntry, type ReadBinding } from "../reads/page-primitives";
 import { schemaKey } from "../schema-validation";
-import { ObjectReferenceSchema, type AdapterBindings, type AdapterDeclaration, type ObjectReference, type SchemaRef } from "../types";
+import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../types";
 import { BALANCE_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, objectSchema, ref, referenceSchema } from "./schema";
 
 const MAX_PAGE_ITEMS = 20;
@@ -99,30 +96,16 @@ export interface BalanceReadAdapter {
 }
 
 interface LocatedTask { readonly node: OutlineNode; readonly area: DestinationArea; readonly project: string | null }
-interface HandlerContext { readonly destinations: readonly ObjectReference[]; readonly cursor?: string; readonly limit: number }
-interface PageEntry { readonly ref: ObjectReference; readonly schemaRef: SchemaRef; readonly destination: ObjectReference; readonly evidenceId: string; readonly value: Json }
 type BalanceReferenceType = "area" | "project" | "task";
 
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const failure = (code: string): never => { throw new Error(`balance.${code}`); };
 const reference = (connectionId: string, objectType: BalanceReferenceType, canonicalId: string): ObjectReference => ({ adapterId: ADAPTER_ID, connectionId, objectType, canonicalId });
 const sameReference = (left: ObjectReference, right: ObjectReference): boolean => left.adapterId === right.adapterId && left.connectionId === right.connectionId && left.objectType === right.objectType && left.canonicalId === right.canonicalId;
-const parseReference = (value: unknown): ObjectReference => { const parsed = ObjectReferenceSchema.safeParse(value); return parsed.success ? parsed.data : failure("invalid_input"); };
-const observedAt = (source: BalanceReadSource): string => (source.now?.() ?? new Date()).toISOString();
-const snapshotId = (scope: string, content: Json): string => `balance.${scope}:${authorityHash(content)}`;
-
-function parseLimit(raw: unknown, code: string): number {
-  if (raw === undefined) return MAX_PAGE_ITEMS;
-  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1) return failure(code);
-  return Math.min(raw, MAX_PAGE_ITEMS);
-}
-
-function parseHandlerContext(raw: unknown): HandlerContext {
-  if (!isRecord(raw)) return failure("invalid_context");
-  const destinations = Array.isArray(raw.destinations) ? raw.destinations.map(parseReference) : failure("invalid_context");
-  if (raw.cursor !== undefined && typeof raw.cursor !== "string") return failure("invalid_context");
-  return { destinations, ...(typeof raw.cursor === "string" ? { cursor: raw.cursor } : {}), limit: parseLimit(raw.limit, "invalid_context") };
-}
+const parseReference = (value: unknown): ObjectReference => parseObjectReference(value, failure);
+const observedAt = readObservedAt;
+const snapshotId = (scope: string, content: Json): string => readSnapshotId("balance", scope, content);
+const parseLimit = (raw: unknown, code: string): number => readPageLimit(raw, MAX_PAGE_ITEMS, failure, code);
+const parseHandlerContext = (raw: unknown) => parseReadHandlerContext(raw, MAX_PAGE_ITEMS, failure);
 
 function parseCursor(cursor: string | undefined): number {
   if (cursor === undefined) return 0;
@@ -177,26 +160,7 @@ function taskValue(task: LocatedTask, connectionId: string): Json {
   };
 }
 
-function buildPage(entries: readonly PageEntry[], snapshot: string, at: string, cursor?: string): QueryPage {
-  return {
-    readVersion: "1.0.0",
-    payload: { items: entries.map(entry => entry.value) },
-    annotations: entries.map((entry, position) => ({
-      pointer: `/items/${position}`,
-      ref: entry.ref,
-      schemaRef: entry.schemaRef,
-      destination: entry.destination,
-      position,
-      evidence: { evidenceId: entry.evidenceId, revision: "1", observedAt: at },
-    })),
-    observedAt: at,
-    ordering: "provider",
-    snapshot: { kind: "stable", id: snapshot },
-    ...(cursor === undefined ? {} : { cursor }),
-  };
-}
-
-function taskEntry(task: LocatedTask, connectionId: string, value: Json): PageEntry {
+function taskEntry(task: LocatedTask, connectionId: string, value: Json): QueryPageEntry {
   return {
     ref: reference(connectionId, "task", task.node.id),
     schemaRef: TASK_SCHEMA_REF,
@@ -222,7 +186,7 @@ function taskQueryPage(source: BalanceReadSource, input: unknown, destinations: 
   const bounded = Math.min(limit, parsed.limit, MAX_PAGE_ITEMS);
   const slice = matching.slice(offset, offset + bounded);
   const next = offset + slice.length < matching.length ? String(offset + slice.length) : undefined;
-  return buildPage(
+  return readPage(
     slice.map(task => taskEntry(task, source.connectionId, taskValue(task, source.connectionId))),
     snapshotId("task.query", { connectionId: source.connectionId, area: area.id, tasks: matching.map(task => task.node.id) }),
     observedAt(source),
@@ -239,15 +203,15 @@ function taskReadPage(source: BalanceReadSource, input: unknown, destinations: r
   const task = locateTasks(state, source.areas()).find(item => item.node.id === parsed.canonicalId);
   if (!task || !destinations.some(item => sameReference(item, reference(source.connectionId, "area", task.area.id)))) return failure("task_unavailable");
   const value = taskValue(task, source.connectionId);
-  return buildPage([taskEntry(task, source.connectionId, value)], snapshotId("task.read", { connectionId: source.connectionId, task: task.node.id, value }), observedAt(source));
+  return readPage([taskEntry(task, source.connectionId, value)], snapshotId("task.read", { connectionId: source.connectionId, task: task.node.id, value }), observedAt(source));
 }
 
 function destinationsPage(source: BalanceReadSource): QueryPage {
   const state = source.state();
-  const entries: PageEntry[] = state === null ? [] : balanceDestinations(state.outline, source.areas()).map(destination => destination.project
+  const entries: QueryPageEntry[] = state === null ? [] : balanceDestinations(state.outline, source.areas()).map(destination => destination.project
     ? { ref: reference(source.connectionId, "project", destination.id), schemaRef: PROJECT_SCHEMA_REF, destination: reference(source.connectionId, "project", destination.id), evidenceId: `balance.destination.project.${destination.id}`, value: { label: destination.label } }
     : { ref: reference(source.connectionId, "area", destination.area), schemaRef: AREA_SCHEMA_REF, destination: reference(source.connectionId, "area", destination.area), evidenceId: `balance.destination.area.${destination.area}`, value: { label: destination.label } });
-  return buildPage(entries, snapshotId("destinations", { connectionId: source.connectionId, destinations: entries.map(entry => entry.ref) }), observedAt(source));
+  return readPage(entries, snapshotId("destinations", { connectionId: source.connectionId, destinations: entries.map(entry => entry.ref) }), observedAt(source));
 }
 
 export function createBalanceReadAdapter(source: BalanceReadSource): BalanceReadAdapter {
