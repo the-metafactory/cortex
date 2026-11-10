@@ -6,7 +6,7 @@ import { canonicalSchema } from "./schema-validation";
 import type { DomainAdapterRegistry, DraftingView } from "./registry";
 import type { DraftingBinding, DraftingBindings } from "./drafting-binding";
 import type { ObjectReference, SchemaRef } from "./types";
-import { DraftConflict, DraftSchema, IndexSchema, ModelOutputSchema, type Blocking, type DraftDestinations, type DraftField, type DraftModel, type DraftPolicy, type DraftSources, type DraftView, type EditChange, type Handoff, type HandoffResult, type Lane, type Limitation, type MakeResult, type Manifest, type ModelOutput, type OutdatedReason, type RefreshResult, type SourceItem, type StoredDraft } from "./drafting-types";
+import { DestinationRefSchema, DraftConflict, DraftSchema, IndexSchema, ModelOutputSchema, type Blocking, type DraftDestinations, type DraftField, type DraftModel, type DraftPolicy, type DraftSources, type DraftView, type EditChange, type Handoff, type HandoffResult, type Lane, type Limitation, type MakeResult, type Manifest, type ModelOutput, type OutdatedReason, type RefreshResult, type SourceItem, type StoredDraft } from "./drafting-types";
 
 export * from "./drafting-types";
 export { DraftingBindings, DraftingBindingSchema, DRAFTING_BINDING_VERSION, type DraftingBinding as DraftingBindingDocument } from "./drafting-binding";
@@ -14,7 +14,7 @@ export { DraftingBindings, DraftingBindingSchema, DRAFTING_BINDING_VERSION, type
 const DraftDoc = defineDocFamily<{ record: JsonObject | null }, string>({ kind: "cortex.desk-draft", version: 1, scope: "session", family: true, initial: () => ({ record: null }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 const IndexDoc = defineDocFamily<{ record: JsonObject | null }, string>({ kind: "cortex.desk-draft-index", version: 1, scope: "session", family: true, initial: () => ({ record: null }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 const DEFAULT_CONTEXT_CHARS = 12000;
-const BLOCKING_OUTDATED = new Set<OutdatedReason>(["schema-changed", "source-unavailable", "policy-changed"]);
+const BLOCKING_OUTDATED = new Set<OutdatedReason>(["schema-changed", "source-unavailable", "policy-changed", "destination-changed"]);
 const SIMPLE_TYPES = new Set(["string", "number", "integer", "boolean", "array", "object", "null"]);
 const KIND_RANK: Record<SourceItem["kind"], number> = { outcome: 0, selected: 1, linked: 2, turn: 3 };
 
@@ -142,8 +142,21 @@ export class DraftService {
     const known = view && sameRef(view.inputSchemaRef, current.schemaRef) ? keyOf(pointer) in properties(view) : pointer in current.fields;
     if (!known || !/^\/[^/]/.test(pointer)) throw new DraftConflict("The field is not declared by the pinned schema.");
     return this.mutateOrThrow(draftId, expected, draft => {
+      if (view?.relationships.some(item => item.fieldPath === pointer)) draft.limitations.push(limit("destination_changed", "The destination was edited. Refresh explicitly before confirming."));
       draft.fields[pointer] = { pointer, presence: change.kind === "set" ? "present" : change.kind === "null" ? "null" : "absent", ...(change.kind === "set" ? { value: change.value as DraftField["value"] } : change.kind === "null" ? { value: null } : {}), origin: "principal", citations: [], generationId: null, alternatives: [], unresolved: null };
     });
+  }
+
+  async editReferences(draftId: string, expected: number, pointer: string, labels: string[]): Promise<DraftView> {
+    const current = await this.requireDraft(draftId);
+    const view = this.deps.registry.draftingView(current.capabilityId);
+    const binding = this.deps.bindings.lookup(current.adapterId, current.capabilityId, current.schemaRef);
+    const relationship = view?.relationships.find(item => item.fieldPath === pointer);
+    if (!view || !binding || !relationship || !sameRef(view.inputSchemaRef, current.schemaRef)) throw new DraftConflict("Reference resolution is unavailable for this field.");
+    const destinations = this.deps.destinations?.batch?.() ?? this.deps.destinations;
+    const resolved = await this.resolveReference(current, binding, relationship, labels, { pointer, generationId: null, citations: [], alternatives: [], unresolved: null }, destinations);
+    if (!resolved.ok) throw new DraftConflict("Reference resolution is unavailable.");
+    return this.mutateOrThrow(draftId, expected, draft => { draft.fields[pointer] = { ...resolved.field, origin: "principal" }; draft.limitations.push(limit("destination_changed", "The destination was edited. Refresh explicitly before confirming.")); });
   }
 
   async chooseAlternative(draftId: string, expected: number, pointer: string, index: number): Promise<DraftView> {
@@ -189,7 +202,14 @@ export class DraftService {
     if (!view || !sameRef(view.inputSchemaRef, draft.schemaRef)) return this.noteFailure(draft, limit("schema_changed", "The pinned schema changed; review and migrate before refreshing."));
     if (!binding || binding.guidance.guidanceId !== draft.binding?.guidanceId || binding.guidance.version !== draft.binding.version) return this.noteFailure(draft, limit("automatic_drafting_unavailable", "Automatic drafting is unavailable; manual editing remains available."));
     const targets = Object.keys(properties(view)).map(pointerOf).filter(pointer => this.eligible(draft.fields[pointer], pointer, options));
-    if (targets.length === 0) return { kind: "kept", view: await this.view(draft) };
+    if (targets.length === 0) {
+      if (!draft.manifest || !draft.limitations.some(item => item.code === "destination_changed") && draft.manifest.connectionId === draft.connectionId) return { kind: "kept", view: await this.view(draft) };
+      const reviewed = await this.mutate(draftId, expected, target => {
+        if (target.manifest) target.manifest.connectionId = target.connectionId;
+        target.limitations = target.limitations.filter(item => item.code !== "destination_changed");
+      });
+      return reviewed ? { kind: "kept", view: await this.view(reviewed) } : { kind: "stale" };
+    }
     return this.generate(draft, view, binding, targets, options);
   }
 
@@ -200,7 +220,7 @@ export class DraftService {
   }
 
   private async noteFailure(draft: StoredDraft, ...limitations: Limitation[]): Promise<RefreshResult> {
-    const noted = await this.mutate(draft.draftId, draft.revision, target => { target.limitations = limitations; }, false);
+    const noted = await this.mutate(draft.draftId, draft.revision, target => { target.limitations = [...target.limitations.filter(item => item.code === "destination_changed"), ...limitations]; }, false);
     return noted ? { kind: "kept", view: await this.view(noted) } : { kind: "stale" };
   }
 
@@ -315,10 +335,12 @@ export class DraftService {
     for (const match of matches) {
       if (match.kind === "multiple") return unresolved("ambiguous_reference", match.refs.slice(0, 10).map(ref => ({ value: ref, citations: base.citations })));
       if (match.kind !== "unique") return unresolved(match.kind === "none" ? "missing_reference" : "unresolved_reference");
-      if (match.ref.adapterId !== relationship.targetAdapterId || match.ref.objectType !== relationship.targetObjectType) return unresolved("wrong_target");
+      if (match.ref.adapterId !== relationship.targetAdapterId || match.ref.objectType !== relationship.targetObjectType || match.ref.connectionId !== draft.connectionId) return unresolved("wrong_target");
       refs.push(match.ref);
     }
-    const value = relationship.cardinality === "one" ? refs[0] : refs;
+    const unique = [...new Map(refs.map(ref => [canonicalSchema(ref), ref])).values()];
+    if (relationship.cardinality === "one" && unique.length > 1) return unresolved("ambiguous_reference", unique.map(ref => ({ value: ref, citations: base.citations })));
+    const value = relationship.cardinality === "one" ? unique[0] : unique;
     return value === undefined ? unresolved("unresolved_reference") : { ok: true, field: { ...base, presence: "present", value, origin: "suggested" } };
   }
 
@@ -327,7 +349,7 @@ export class DraftService {
     const manifest = draft.manifest;
     if (!view || !sameRef(view.inputSchemaRef, draft.schemaRef) || manifest && !sameRef(manifest.schemaRef, draft.schemaRef)) reasons.push("schema-changed");
     if (!manifest) return reasons;
-    if (manifest.connectionId !== draft.connectionId) reasons.push("destination-changed");
+    if (manifest.connectionId !== draft.connectionId || draft.limitations.some(item => item.code === "destination_changed")) reasons.push("destination-changed");
     if (await this.deps.sources.head(draft.conversationId) !== manifest.boundary.revision) reasons.push("conversation-changed");
     if (await this.deps.policy.revision() !== manifest.policyRevision) reasons.push("policy-changed");
     if (!(await Promise.all(manifest.items.map(item => this.deps.policy.readable(item.id)))).every(Boolean)) reasons.push("source-unavailable");
@@ -384,7 +406,17 @@ export class DraftService {
     for (const item of items) if (await this.deps.policy.readable(item.id) && (!audience || await this.deps.policy.releasable([item.id], audience))) shown.push(item);
     const visible = new Set(shown.map(item => item.id));
     const fullyReleasable = (citations: string[]): boolean => citations.length > 0 && citations.every(id => visible.has(id));
-    const alternatives = field.alternatives.filter(alternative => !audience || fullyReleasable(alternative.citations)).map(alternative => ({ value: alternative.value, citations: alternative.citations.filter(id => visible.has(id)) }));
+    const alternatives: DraftField["alternatives"] = [];
+    for (const alternative of field.alternatives) {
+      if (field.origin === "principal" && alternative.citations.length === 0) {
+        const binding = this.deps.bindings.lookup(draft.adapterId, draft.capabilityId, draft.schemaRef);
+        const resolveWith = binding?.fieldHints.find(hint => hint.pointer === pointer)?.resolveWith;
+        const ref = DestinationRefSchema.safeParse(alternative.value);
+        if (!resolveWith || !ref.success || !this.deps.destinations) continue;
+        const current = await this.deps.destinations.resolve({ capabilityId: resolveWith, connectionId: draft.connectionId, conversationId: draft.conversationId, objectType: ref.data.objectType, label: ref.data.canonicalId });
+        if (current.kind === "unique" && canonicalSchema(current.ref) === canonicalSchema(ref.data)) alternatives.push(alternative);
+      } else if (!audience || fullyReleasable(alternative.citations)) alternatives.push({ value: alternative.value, citations: alternative.citations.filter(id => visible.has(id)) });
+    }
     return { pointer, origin: field.origin, reason: field.unresolved, sources: shown.map(item => ({ id: item.id, kind: item.kind, revision: item.revision, digest: item.digest })), hiddenSources: items.length - shown.length, alternatives };
   }
 

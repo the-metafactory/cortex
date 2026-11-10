@@ -2,10 +2,11 @@ import type { AuthorityMediator, HostContext, WriterLease } from "../../../conve
 import type { ConversationHost } from "../../../conversations/host";
 import { DraftingBindings, type DraftServiceDeps, type Handoff, type Lane } from "../../../conversations/domain-adapters/drafting";
 import type { OperationBridge } from "../../../conversations/domain-adapters/operations/dispatch";
+import { receiptStatus } from "../../../conversations/domain-adapters/operations/reconciliation";
 import type { ApprovedSnapshot } from "../../../conversations/domain-adapters/operations/types";
 import { canonicalWire, snapshotDigest } from "../../../conversations/domain-adapters/operations/validation";
 import { parseWorkGraphNodeInput, workGraphNodeApprovedSnapshot, workGraphNodeRequestId } from "../../../conversations/domain-adapters/work-graph/node-binding";
-import { workGraphNodeDraftingBinding } from "../../../conversations/domain-adapters/work-graph/drafting";
+import { workGraphNodeDraftingBinding } from "../../../conversations/domain-adapters/drafting/graph";
 import { deskDraftEditor } from "./draft-editor";
 import type { DraftConfirmation, DraftConfirmationRequest } from "./draft-editor-contract";
 import { graphDraftDestinations, type GraphDraftReadSession } from "./graph-draft-destinations";
@@ -39,6 +40,20 @@ export function deskGraphDraftEditor(host: ConversationHost, deps: GraphDraftSet
   const editor = deskDraftEditor(host, { ...deps, bindings, destinations }, {
     audience: options.audience,
     targets: () => [{ connectionId: options.connectionId, capabilityId: "work-graph.node.create", label: "Graph node" }],
+    receipt: async view => {
+      const draft = view.draft;
+      const operationId = `${draft.conversationId}:${draft.draftId}:${draft.revision}`;
+      const stored = await host.lifecycleJournal(deps.registry).read(operationId);
+      if (!stored) return null;
+      const session = await options.session(draft.conversationId);
+      if (!session || view.withheld.length) return { kind: "withheld" };
+      const snapshot = stored.journal.snapshot;
+      if ("kind" in snapshot) return { kind: "withheld" };
+      const status = receiptStatus(stored);
+      const receipt = { kind: "receipt" as const, operationId, state: status.state, references: status.effects.flatMap(effect => effect.refs.map(ref => ref.canonicalId)) };
+      const released = await options.authority.projectHostData(session.context, options.connectionId, session.sink, () => Promise.resolve(receipt), [{ capabilityId: snapshot.capabilityId, destinations: snapshot.destinations, sources: snapshot.sources, policy: snapshot.policy }]);
+      return released.kind === "released" ? receipt : { kind: "withheld" };
+    },
     confirm: async (request: DraftConfirmationRequest): Promise<DraftConfirmation> => {
       const { handoff } = request;
       if (handoff.adapterId !== "work-graph" || handoff.capabilityId !== "work-graph.node.create" || handoff.connectionId !== options.connectionId) return blocked("The draft belongs to another graph connection or capability.");
