@@ -3,6 +3,7 @@ import type { MailSweepView } from "../../desk/mail-sweep";
 
 export type CatchupKind = "all" | DeskItemKind;
 export const CARD_KIND_LABELS: Record<DeskItemKind, string> = {
+  adapter: "Connected items",
   goal: "Goals", sensor: "Checks", "agent-failed": "Failed agents",
   "agent-blocked": "Blocked agents", decision: "Decisions", grilling: "Grilling",
   escalation: "Escalations", mail: "Mail", reminder: "Reminders", meeting: "Meetings",

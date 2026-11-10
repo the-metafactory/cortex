@@ -20,7 +20,7 @@ import {
 } from "../hooks/use-catchup-location";
 import "./desk-catch-up.css";
 import { CARD_KIND_LABELS, catchupMailGroups, matchesCatchupItem, readCatchupKind as readKind, type CatchupKind } from "../lib/catchup-filters";
-import { DESK_ITEM_KINDS } from "../../desk/types";
+import { DESK_ITEM_KINDS, freshnessLabel } from "../../desk/types";
 
 export function needsAction(item: DeskItem): boolean {
   return item.attention !== "update";
@@ -69,6 +69,7 @@ export function CatchupPreview({
                 {view.areas.find((a) => a.id === item.area)?.label ??
                   "All areas"}{" "}
                 · {item.source}
+                {freshnessLabel(item.freshness) && <span> · {freshnessLabel(item.freshness)}</span>}
               </small>
             </button>
           </li>
@@ -417,7 +418,7 @@ export function DeskCatchUp({
                   "All areas"}{" "}
                 · {item.source}
               </span>
-              <button
+              {!item.readOnly && <button
                 type="button"
                 className="desk-btn"
                 disabled={
@@ -429,7 +430,7 @@ export function DeskCatchUp({
                 onClick={() => void propose(item)}
               >
                 Plan this
-              </button>
+              </button>}
             </footer>
           </article>
         )} />}
