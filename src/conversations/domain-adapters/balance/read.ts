@@ -223,8 +223,8 @@ function taskValue(task: LocatedTask, connectionId: string): Json {
 
 export interface BalanceTaskObject { readonly ref: ObjectReference; readonly destination: ObjectReference; readonly value: Json }
 
-export function balanceTaskObjects(state: AppState, areas: readonly DestinationArea[], connectionId: string): BalanceTaskObject[] {
-  return locateTasks(state, areas).map(task => ({
+export function balanceTaskObjects(state: AppState, areas: readonly DestinationArea[], connectionId: string, limit: number): BalanceTaskObject[] {
+  return locateTasks(state, areas).slice(0, limit).map(task => ({
     ref: reference(connectionId, "task", task.node.id),
     destination: reference(connectionId, "area", task.area.id),
     value: taskValue(task, connectionId),

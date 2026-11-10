@@ -13,7 +13,7 @@ export function MyDayLane({ day, onChanged }: { day: MyDayView; onChanged: () =>
   return <section className="desk-myday" aria-label="My day">
     <header><h2>My day</h2><span>{current.phase === "proposed" ? "Your proposed day" : current.phase === "closed" ? "Day complete" : "Your intention today"}</span></header>
     {current.studioStatus === "unavailable" && <p role="status">Studio files are busy or unreadable. Showing the last saved outline; refresh when they are ready.</p>}
-    {current.observation && current.observation.status !== "fresh" && <p role="status">Balance reads are {current.observation.status}. Showing the last saved outline. <button type="button" className="desk-btn" disabled={busy || refreshing} onClick={() => void refresh()}>Refresh</button></p>}
+    <MyDayObservationStatus day={current} disabled={busy || refreshing} onRefresh={() => void refresh()} />
     {current.phase === "closed" && <Wins day={current} />}
     {current.phase !== "closed" && <>
       {current.items.length === 0 && <p className="myday-empty">A little space. Add a task to your outline to shape your day.</p>}
@@ -35,6 +35,11 @@ export function MyDayLane({ day, onChanged }: { day: MyDayView; onChanged: () =>
     <a className="desk-btn ghost myday-outline-toggle" href={`${balanceSearch(typeof window === "undefined" ? "" : window.location.search, { tab: "plan", item: null, area: "", query: "" })}${typeof window === "undefined" ? "" : window.location.hash}`}>Edit outline in Balance →</a>
   </section>;
 }
+export function MyDayObservationStatus({ day, disabled, onRefresh }: { day: MyDayView; disabled: boolean; onRefresh: () => void }) {
+  if (!day.observation || day.observation.status === "fresh") return null;
+  return <p role="status">Balance reads are {day.observation.status}. Showing the last saved outline. <button type="button" className="desk-btn" disabled={disabled} onClick={onRefresh}>Refresh</button></p>;
+}
+
 function Wins({ day }: { day: MyDayView }) {
   return <div className="myday-wins"><h3>Wins today</h3>{day.wins.length ? <ul>{day.wins.map((w, i) => <li key={`${w.taskId}:${i}`}>{w.title}</li>)}</ul> : <p>You made room for what matters. No tasks marked done yet.</p>}</div>;
 }

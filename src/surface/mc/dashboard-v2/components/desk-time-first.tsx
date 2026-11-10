@@ -7,6 +7,7 @@ import { balanceDestinations } from "../../desk/balance-destinations";
 import type { DeskArea } from "../../desk/types";
 import { ALL_AREAS } from "../../desk/present";
 import { BalanceAddForm, balanceEntries, TaskDetails, TaskMessageBanner, useBalanceEditor, type TaskAdding } from "./desk-task-details";
+import { MyDayObservationStatus } from "./desk-my-day";
 import { useMyDay } from "../hooks/use-my-day";
 import { balanceItemSearch } from "../hooks/use-balance-location";
 import { deskSearch } from "../hooks/use-desk-studio";
@@ -59,7 +60,7 @@ export function DeskTimeFirst(props: TimeFirstProps) {
 
 function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, ambient, areas, selectedArea = ALL_AREAS, onChanged, onThread, onConversation }: Omit<TimeFirstProps, "day"> & { day: MyDayView }) {
   const changes = useMyDay(day, onChanged);
-  const { current, busy, change, retryable } = changes;
+  const { current, busy, change, retryable, refreshing, refresh } = changes;
   const gap = currentGap(calendar ?? { sources: [], events: [] }, now);
   const recommendation = nextTask(current, gap);
   const selection = current.work.selection;
@@ -85,6 +86,7 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, am
     <main className="tf-main">
       {before}
       <header className="tf-heading"><div><h1>My day</h1><p>Your overall priorities stay in their saved order.</p></div><span>{current.wins.length} done</span></header>
+      <MyDayObservationStatus day={current} disabled={busy || refreshing} onRefresh={() => void refresh()} />
       {current.phase === "closed" && <DayWins day={current} />}
       <section className="tf-gap" aria-label="Calendar availability">
         <span className="tf-eyebrow">{gap.kind === "bounded" ? "Time available now" : "Today's calendar"}</span>

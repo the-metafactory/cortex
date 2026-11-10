@@ -86,18 +86,15 @@ function observe(source: BalanceReadSource, request: ObservationRequest, signal:
   const state = source.state();
   if (!state) return failure("source_unavailable");
   const areas = source.areas().filter(area => chosen.includes(area.id));
-  const objects = balanceTaskObjects(state, areas, source.connectionId);
   const observedAt = readObservedAt(source);
   const limit = Math.max(1, Math.min(request.limit, OBSERVATION_LIMITS.batchItems));
+  const objects = balanceTaskObjects(state, areas, source.connectionId, limit);
   const events: ObservationEvent[] = [];
   const items: Json[] = [];
-  for (const object of objects.slice(0, limit)) {
+  for (const object of objects) {
     const revision = authorityHash(object.value);
     items.push(object.value);
-    events.push({
-      kind: "present", pointer: `/items/${items.length - 1}`, ref: object.ref, schemaRef: TASK_SCHEMA_REF, destination: object.destination,
-      observedAt, revision, evidenceId: `balance.task.${object.ref.canonicalId}.${revision}`,
-    });
+    events.push({ kind: "present", pointer: `/items/${items.length - 1}`, ref: object.ref, schemaRef: TASK_SCHEMA_REF, destination: object.destination, observedAt, revision });
   }
   return { version: "1.0.0", payload: { items }, events, coverage: "objects", gap: false };
 }

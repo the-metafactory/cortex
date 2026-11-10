@@ -57,6 +57,21 @@ describe("the inactive Balance observation binding", () => {
     expect((await rig.check()).changed).toBe(0);
   });
 
+  test("a value the owner restores becomes current again without a conflict", async () => {
+    const rig = await open();
+    await rig.check();
+    const original = (await rig.views()).find(view => view.ref.canonicalId === "task-wing")?.value;
+    edit(rig, "task-wing", { title: "Cut the second wing", done: true });
+    expect((await rig.check()).changed).toBe(1);
+    expect((await rig.views()).find(view => view.ref.canonicalId === "task-wing")?.value).toMatchObject({ title: "Cut the second wing", status: "done" });
+    edit(rig, "task-wing", { title: "Cut the wing", done: false });
+    expect(await rig.check()).toMatchObject({ status: "ok", changed: 1, quarantined: 0 });
+    const restored = (await rig.views()).find(view => view.ref.canonicalId === "task-wing");
+    expect(restored).toMatchObject({ kind: "present", status: "fresh", value: original });
+    expect((await rig.check()).changed).toBe(0);
+    expect((await rig.views()).find(view => view.ref.canonicalId === "task-wing")?.value).toEqual(original);
+  });
+
   test("a task that disappears from the owner keeps its value, goes stale, and is never read as deleted", async () => {
     const rig = await open();
     await rig.check();

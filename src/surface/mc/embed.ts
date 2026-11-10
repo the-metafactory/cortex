@@ -88,7 +88,6 @@ export async function startMissionControl(
       ...(opts.conversations ? { conversations: opts.conversations } : {}),
       ...(opts.connectionSetup ? { connectionSetup: opts.connectionSetup } : {}),
       ...(opts.balanceConnection ? { balanceConnection: opts.balanceConnection } : {}),
-      ...(opts.balanceDay ? { balanceDay: opts.balanceDay } : {}),
       ...(opts.adapterAssets ? { adapterAssets: opts.adapterAssets } : {}),
       ...(opts.graphScope ? { graphScope: opts.graphScope } : {}),
       ...(opts.drafts ? { drafts: opts.drafts } : {}),

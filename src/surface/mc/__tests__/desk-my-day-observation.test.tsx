@@ -8,6 +8,8 @@ import { composeDesk, type DeskOptions, type DeskRuntime } from "../desk/compose
 import { HandledLedger } from "../desk/actions";
 import { localDay, type MyDayView } from "../desk/my-day";
 import { MyDayLane } from "../dashboard-v2/components/desk-my-day";
+import { DeskBalance } from "../dashboard-v2/components/desk-balance";
+import { DeskTimeFirst } from "../dashboard-v2/components/desk-time-first";
 import { openBalanceReadRig, type BalanceReadRig } from "../../../conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
 import { deskFixtureOptions } from "./fixtures/desk-options-fixture";
 
@@ -19,19 +21,17 @@ describe("My Day reads the Balance observation projection", () => {
   let rig: BalanceReadRig;
   let desk: DeskOptions;
   let runtime: DeskRuntime;
-  let dayAccess: (() => ReturnType<BalanceReadRig["reader"]>) | null;
 
   beforeEach(async () => {
     rig = await openBalanceReadRig();
     desk = { ...deskFixtureOptions, areas: rig.areas.map(area => ({ ...area, repos: [], goals: [] })) };
     runtime = { options: desk, ledger: new HandledLedger(), adapterDay: () => rig.reader() };
-    dayAccess = () => rig.reader();
   });
   afterEach(async () => { await rig.close(); });
 
   const route = (body?: unknown, path = "/api/desk/my-day") => handleDeskMyDay(
     new Request(`http://localhost${path}`, body === undefined ? undefined : { method: "POST", body: JSON.stringify(body) }),
-    rig.db, runtime, undefined, NOW, dayAccess ?? undefined,
+    rig.db, runtime, undefined, NOW,
   );
   const read = async (): Promise<MyDayView> => {
     const response = await route();
@@ -83,6 +83,24 @@ describe("My Day reads the Balance observation projection", () => {
     expect(refreshedHtml).not.toContain("Balance reads are stale.");
   });
 
+  it("shows the stale marker with Refresh in the mounted Day and Balance surfaces", async () => {
+    await read();
+    const composed = await composeDesk(rig.db, desk, undefined, { now: NOW, adapterDay: () => rig.reader() });
+    const fresh = composed.myDay;
+    if (!fresh) throw new Error("Missing My day view");
+    const day = (current: MyDayView): string => renderToStaticMarkup(createElement(DeskTimeFirst, { day: current, now: NOW, before: null, after: null, proposal: null, preview: null, ambient: null, areas: desk.areas, onChanged: () => undefined, onThread: () => undefined }));
+    const balance = (current: MyDayView): string => renderToStaticMarkup(createElement(DeskBalance, { day: current, view: { ...composed, myDay: current }, foreground: { kind: "unavailable", reason: "Not yet measured" }, onChanged: () => undefined, onThread: () => undefined }));
+    expect(day(fresh)).not.toContain("Balance reads are");
+    expect(balance(fresh)).not.toContain("Balance reads are");
+    rig.unavailable(true);
+    const stale = await read();
+    expect(stale.observation).toEqual({ status: "stale", observedAt: OBSERVED_AT });
+    for (const html of [day(stale), balance(stale)]) {
+      expect(html).toContain("Balance reads are stale.");
+      expect(html).toContain(">Refresh</button>");
+    }
+  });
+
   it("drops a removed area's cached tasks from the panel at once", async () => {
     await read();
     rig.removeArea("area-example");
@@ -96,7 +114,6 @@ describe("My Day reads the Balance observation projection", () => {
 
   it("reads the owner store as before while the connection is off", async () => {
     runtime.adapterDay = () => null;
-    dayAccess = null;
     const view = await read();
     expect(view.observation).toBeNull();
     expect(view.outline).toEqual(stored().outline);

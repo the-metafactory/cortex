@@ -9,7 +9,7 @@ import { HandledLedger } from "../src/surface/mc/desk/actions";
 import { loadBalanceState } from "../src/surface/mc/desk/balance-store";
 import { composeDesk, type DeskOptions, type DeskRuntime } from "../src/surface/mc/desk/compose";
 import { localDay, type MyDayView } from "../src/surface/mc/desk/my-day";
-import { MyDayLane } from "../src/surface/mc/dashboard-v2/components/desk-my-day";
+import { DeskTimeFirst } from "../src/surface/mc/dashboard-v2/components/desk-time-first";
 import { runWithTemporaryHome } from "./probe-temp-home";
 
 const NOW = new Date(2026, 10, 1, 10).getTime();
@@ -18,8 +18,7 @@ await runWithTemporaryHome(import.meta.path, async () => {
   const rig = await openBalanceReadRig();
   const desk: DeskOptions = { ...deskFixtureOptions, areas: rig.areas.map(area => ({ ...area, repos: [], goals: [] })) };
   const runtime: DeskRuntime = { options: desk, ledger: new HandledLedger(), adapterDay: () => rig.reader() };
-  const access = () => rig.reader();
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => handleDeskMyDay(request, rig.db, runtime, undefined, NOW, access) });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => handleDeskMyDay(request, rig.db, runtime, undefined, NOW) });
   const stored = () => {
     const state = loadBalanceState(rig.db);
     assert.ok(state, "the owner store is missing");
@@ -50,7 +49,7 @@ await runWithTemporaryHome(import.meta.path, async () => {
     assert.equal(stale.observation?.status, "stale");
     assert.ok(findNode(stale.outline, "task-wing"));
     assert.ok(findNode(stale.outline, "task-garden"));
-    const html = renderToStaticMarkup(createElement(MyDayLane, { day: stale, onChanged: () => {} }));
+    const html = renderToStaticMarkup(createElement(DeskTimeFirst, { day: stale, now: NOW, before: null, after: null, proposal: null, preview: null, ambient: null, areas: desk.areas, onChanged: () => {}, onThread: () => {} }));
     assert.ok(html.includes("Balance reads are stale."));
     assert.ok(html.includes(">Refresh</button>"));
     console.log("stale: the marker and an explicit Refresh show while last values stay, including a task the projection never saw");
