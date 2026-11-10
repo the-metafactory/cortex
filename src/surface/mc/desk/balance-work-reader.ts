@@ -7,6 +7,7 @@ import { QUERY_LIMITS, type QueryResult } from "../../../conversations/domain-ad
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import { SEARCH_MAX_LIMIT, SEARCH_MAX_OFFSET, type WorkKind, type WorkObject, type WorkPage, type WorkRead, type WorkReader } from "../../../conversations/tools/work-context";
 import type { Policy } from "../../../conversations/types";
+import { objectReference, observedAtOf, releasedObjects, runReleased, type QueryRun, type ReleasedObject } from "./work-released";
 
 export interface BalanceWorkArea {
   readonly id: string;
@@ -22,10 +23,7 @@ export interface BalanceQueryRequest {
   readonly destinations: readonly ObjectReference[];
   readonly limit: number;
 }
-export interface BalanceQueryRun {
-  readonly result: QueryResult;
-  readonly released?: Json;
-}
+export type BalanceQueryRun = QueryRun;
 export interface BalanceWorkQuery {
   readonly connectionId: string;
   readonly areas: readonly BalanceWorkArea[];
@@ -48,12 +46,6 @@ export interface BalanceWorkSchemaRefs {
 export const balanceWorkSchemaRef = (refs: BalanceWorkSchemaRefs): ((capabilityId: string) => SchemaRef) => capabilityId =>
   capabilityId === "balance.task.query" ? refs.taskQuery : capabilityId === "balance.task.read" ? refs.taskRead : capabilityId === "balance.project.query" ? refs.projectQuery : refs.projectRead;
 
-interface ReleasedObject {
-  readonly ref: ObjectReference;
-  readonly destination: ObjectReference;
-  readonly value: Record<string, unknown>;
-  readonly evidence?: { readonly observedAt?: string };
-}
 type ObjectMapper = (query: BalanceWorkQuery, object: ReleasedObject, at: number) => WorkObject;
 interface KindFacts {
   readonly search: BalanceCapability;
@@ -64,37 +56,10 @@ interface KindFacts {
 }
 const NO_AREA: WorkPage = { items: [], more: false, status: "unavailable", reason: "No Balance destination is available." };
 const MAX_WALKED_ITEMS = SEARCH_MAX_OFFSET + SEARCH_MAX_LIMIT;
-const objectReference = (value: unknown): ObjectReference | null => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const held = value as Record<string, unknown>;
-  return typeof held.adapterId === "string" && typeof held.connectionId === "string" && typeof held.objectType === "string" && typeof held.canonicalId === "string"
-    ? { adapterId: held.adapterId, connectionId: held.connectionId, objectType: held.objectType, canonicalId: held.canonicalId }
-    : null;
-};
-const releasedObjects = (released: Json): ReleasedObject[] => {
-  if (typeof released !== "object" || released === null || Array.isArray(released)) return [];
-  const held = (released as { objects?: unknown }).objects;
-  if (!Array.isArray(held)) return [];
-  const objects: ReleasedObject[] = [];
-  for (const entry of held) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) continue;
-    const raw = entry as Record<string, unknown>;
-    const ref = objectReference(raw.ref);
-    const destination = objectReference(raw.destination);
-    const value = raw.value;
-    if (!ref || !destination || typeof value !== "object" || value === null || Array.isArray(value)) continue;
-    const evidence = typeof raw.evidence === "object" && raw.evidence !== null && !Array.isArray(raw.evidence) ? raw.evidence as { observedAt?: string } : undefined;
-    objects.push({ ref, destination, value: value as Record<string, unknown>, ...(evidence ? { evidence } : {}) });
-  }
-  return objects;
-};
 const releasedOf = (run: BalanceQueryRun): ReleasedObject[] => run.released ? releasedObjects(run.released) : [];
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 const areaOf = (query: BalanceWorkQuery, id: string): BalanceWorkArea | undefined => query.areas.find(area => area.id === id || area.id === `area:${id}`);
-const observedAt = (object: ReleasedObject, at: number): number => {
-  const time = object.evidence?.observedAt ? Date.parse(object.evidence.observedAt) : Number.NaN;
-  return Number.isFinite(time) ? time : at;
-};
+const observedAt = observedAtOf;
 const urlOf = (id: string): string => `?desk=balance&balance-item=${encodeURIComponent(id)}`;
 const taskObject = (query: BalanceWorkQuery, object: ReleasedObject, at: number): WorkObject => {
   const areaRef = objectReference(object.value.area);
@@ -165,17 +130,14 @@ export function balanceWorkQuery(config: BalanceWorkRunner): BalanceWorkQuery {
     connectionId: config.connectionId,
     areas: config.areas,
     run: async request => {
-      const created = await config.runner.create(config.context, [{
+      return runReleased(config.runner, config.context, config.sink, {
         adapterId: "balance",
         connectionId: config.connectionId,
         capabilityId: request.capabilityId,
         inputSchemaRef: config.inputSchemaRef(request.capabilityId),
         destinations: [...request.destinations],
         input: request.input,
-      }], config.sink);
-      let released: Json | undefined;
-      const result = await config.runner.run(config.context, created, config.sink, undefined, undefined, { released: value => { released = value; } });
-      return { result, ...(released === undefined ? {} : { released }) };
+      });
     },
   };
 }

@@ -154,6 +154,14 @@ function nodeTarget(canonicalId: string, source: WorkGraphReadSource, destinatio
   return { canonicalId: text, repository: formatted, full: `${formatted}#${text.replace(/^#/, "")}` };
 }
 
+export function graphNodeRepository(canonicalId: string): string | null {
+  const text = canonicalId.trim();
+  const full = parseGraphNodeRef(text);
+  if (full) return formatGraphRepoRef(full.repo);
+  const relative = GITHUB_RELATIVE_NODE.exec(text);
+  return relative?.[2] === "#" ? `github:github.com/${relative[1]}` : null;
+}
+
 function destinationFor(source: WorkGraphReadSource, destinations: readonly ObjectReference[], repository: string): ObjectReference | null {
   const wanted = canonicalGraphRef(repository);
   return destinations.find(destination => isOwnRepository(source, destination) && canonicalGraphRef(destination.canonicalId) === wanted && isTicked(source, destination.canonicalId)) ?? null;

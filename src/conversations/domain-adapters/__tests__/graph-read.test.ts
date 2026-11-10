@@ -2,11 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { readPointer } from "../reads/query-validation";
 import type { Json } from "../operations/types";
 import { canonicalGraphRef, createWorkGraphReadAdapter } from "../work-graph/read";
-import { CLOSED_NODE, CORTEX, CORTEX_MAP, CORTEX_NODE, CRISIS, CRISIS_NODE, MISSING_NODE, UNTICKED, graphRef, openGraphReadRig, releasedObjects, type GraphReadRig } from "./fixtures/graph-read-fixtures";
+import { CLOSED_NODE, CORTEX, CORTEX_MAP, CORTEX_NODE, CRISIS, CRISIS_NODE, MISSING_NODE, UNTICKED, graphRef, trackGraphRigs, releasedObjects, type GraphReadRig } from "./fixtures/graph-read-fixtures";
 
-const opened: GraphReadRig[] = [];
-afterEach(async () => { await Promise.all(opened.splice(0).map(rig => rig.close())); });
-async function open(): Promise<GraphReadRig> { const rig = await openGraphReadRig(); opened.push(rig); return rig; }
+const rigs = trackGraphRigs();
+const open = rigs.open;
+afterEach(rigs.closeAll);
 
 describe("the inactive work-graph read adapter", () => {
   test("destinations list the exact ticked refs and the conversation's linked maps and nodes", async () => {

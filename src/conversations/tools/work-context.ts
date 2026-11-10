@@ -4,7 +4,7 @@ import { routePolicy, type Policy } from "../types";
 import type { ToolDefinition, ToolSession } from "./capabilities";
 import { redactToolText } from "./output";
 
-export const WORK_KINDS = ["studio-thread", "balance-task", "balance-project", "desk-item"] as const;
+export const WORK_KINDS = ["studio-thread", "balance-task", "balance-project", "desk-item", "graph-node"] as const;
 export type WorkKind = (typeof WORK_KINDS)[number];
 export const STALE_AFTER_MS = 10 * 60_000;
 export const UNSUPPORTED_REASON = "The owning system exposes no read operation for this kind.";
@@ -20,7 +20,7 @@ export interface WorkObject {
   url: string;
   observedAt: number;
 }
-export type WorkRead = { state: "available"; object: WorkObject } | { state: "unavailable"; reason: "gone" | "unauthorized" };
+export type WorkRead = { state: "available"; object: WorkObject } | { state: "unavailable"; reason: "gone" | "unauthorized" | "unavailable" };
 export interface WorkPage {
   items: WorkObject[];
   more: boolean;
@@ -29,6 +29,7 @@ export interface WorkPage {
   restricted?: boolean;
   status?: "ok" | "partial" | "denied" | "cancelled" | "unavailable" | "unsupported";
   reason?: string;
+  coverageLimit?: string;
   continuation?: string;
 }
 export interface WorkReader {
@@ -66,6 +67,11 @@ const project = (owner: WorkOwner, object: WorkObject, snippetOnly: boolean) => 
   observedAt: new Date(object.observedAt).toISOString(), freshness: age(owner, object),
   [snippetOnly ? "snippet" : "summary"]: redactToolText(snippetOnly ? object.summary.slice(0, SNIPPET) : object.summary),
 });
+const UNAVAILABLE_READ_MESSAGES = {
+  gone: "The source was removed.",
+  unauthorized: "This conversation may not read that object.",
+  unavailable: "The owning system could not answer. This is not a confirmed absence.",
+} as const;
 const unavailable = (): string => JSON.stringify({ status: "unavailable", message: "The related work could not be released. It may have been removed, changed or denied." });
 const PARTIAL_COVERAGE: ReadonlySet<NonNullable<WorkPage["coverage"]>> = new Set(["more", "partial", "incomplete", "budget-exhausted"]);
 const pagePartial = (page: WorkPage): boolean => page.status === "partial" || page.coverage !== undefined && PARTIAL_COVERAGE.has(page.coverage);
@@ -81,7 +87,7 @@ const searchStatus = ({ partial, restricted, found, kinds, unavailable: missing,
 export function workContextTools(owner: WorkOwner): ToolDefinition[] {
   const search: ToolDefinition = {
     name: "work_search", operation: null, input: SearchInput,
-    description: "Search or list the principal's related Studio threads, Balance tasks and projects and Desk items through their owning systems. Empty query lists. Cite url, status and observedAt; freshness stale means the snapshot is old. unavailable kinds have no owner read operation. Follow next for more. Memory and identity come from soma_context, not here. This reads only and never grants action authority.",
+    description: "Search or list the principal's related Studio threads, Balance tasks and projects, Desk items and work-graph nodes through their owning systems. Empty query lists. Cite url, status and observedAt; freshness stale means the snapshot is old. unavailable kinds have no owner read operation. coverageLimits names a kind whose search covers less than everything, such as graph nodes linked to this conversation. Follow next for more. Memory and identity come from soma_context, not here. This reads only and never grants action authority.",
     run: async (raw, { session, signal }) => {
       const input = raw as z.infer<typeof SearchInput>;
       const readers = readersFor(owner, session);
@@ -95,6 +101,7 @@ export function workContextTools(owner: WorkOwner): ToolDefinition[] {
       let restricted = false;
       let continuation: string | undefined;
       let noMatch = false;
+      const coverageLimits: { kind: WorkKind; note: string }[] = [];
       for (const { kind, reader } of kinds) {
         if (!reader) continue;
         signal.throwIfAborted();
@@ -107,6 +114,7 @@ export function workContextTools(owner: WorkOwner): ToolDefinition[] {
         noMatch ||= page.noMatch === true;
         continuation ??= page.continuation;
         if (page.status === "unavailable" || page.status === "unsupported") unavailableKinds.push({ kind, reason: page.reason ?? "The owning system cannot answer this read." });
+        if (page.coverageLimit) coverageLimits.push({ kind, note: page.coverageLimit });
         found.push(...allowed);
       }
       const items = found.slice(0, input.limit * kinds.length);
@@ -124,7 +132,7 @@ export function workContextTools(owner: WorkOwner): ToolDefinition[] {
       if (!await owner.remember(session, items, signal)) return unavailable();
       const next = more && !restricted ? { offset: input.offset + input.limit, ...(continuation ? { continuation } : {}) } : null;
       const status = searchStatus({ partial, restricted, found: items.length, kinds: kinds.length, unavailable: unsupported.length + unavailableKinds.length, noMatch, more });
-      return JSON.stringify({ status, coverage: more ? "partial" : "exhausted", restricted, results: items.map(object => project(owner, object, true)), unavailable: [...unsupported, ...unavailableKinds], next });
+      return JSON.stringify({ status, coverage: more ? "partial" : "exhausted", restricted, results: items.map(object => project(owner, object, true)), unavailable: [...unsupported, ...unavailableKinds], ...(coverageLimits.length ? { coverageLimits } : {}), next });
     },
   };
   const read: ToolDefinition = {
@@ -136,7 +144,7 @@ export function workContextTools(owner: WorkOwner): ToolDefinition[] {
       if (!reader) return JSON.stringify({ status: "unavailable", kind: input.kind, message: UNSUPPORTED_REASON });
       const result = await reader.read(input.id);
       signal.throwIfAborted();
-      if (result.state === "unavailable") return JSON.stringify({ status: result.reason, kind: input.kind, id: input.id, message: result.reason === "gone" ? "The source was removed." : "This conversation may not read that object." });
+      if (result.state === "unavailable") return JSON.stringify({ status: result.reason, kind: input.kind, id: input.id, message: UNAVAILABLE_READ_MESSAGES[result.reason] });
       if (!mayRelease(session, result.object.policy)) return JSON.stringify({ status: "unauthorized", kind: input.kind, id: input.id, message: "This conversation may not read that object." });
       const again = await reader.read(input.id);
       if (again.state !== "available" || again.object.policy !== result.object.policy || !mayRelease(session, again.object.policy)) return unavailable();
