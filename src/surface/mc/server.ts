@@ -370,12 +370,8 @@ export function startServer(
           authorizer,
           deskVigil(options),
           deskRuntime,
-          options.conversations,
-          options.connectionSetup,
-          options.adapterAssets,
-          options.graphScope,
-        );
-      }
+          options,
+        );      }
 
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
         return new Response(Bun.file(join(DASHBOARD_DIST, "index.html")), {
@@ -500,11 +496,9 @@ async function handleApi(
   authorizer: Authorizer | null = null,
   vigil?: VigilSubjectsOptions,
   desk?: DeskRuntime,
-  conversations?: ConversationAccess,
-  connectionSetup?: ConnectionSetupAccess,
-  adapterAssets?: AdapterAssetAccess,
-  graphScope?: GraphScopeAccess,
+  views: MissionControlViews = {},
 ): Promise<Response> {
+  const { conversations, connectionSetup, adapterAssets, graphScope } = views;
   const { pathname } = url;
   if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });
 

@@ -11,6 +11,20 @@ export const GRAPH_SCOPE_RESOLVER_BINDING = "desk-graph-repositories";
 const SCOPE_DECISION_REF = "desk-settings-graph-scope";
 const SCOPE_AUDIENCES: RestrictionRecord["audiences"] = ["web", "model", "view"];
 const SCOPE_EGRESS: RestrictionRecord["egress"] = "cloud";
+const STACK_ID = /^[^/\s]+\/[^/\s]+$/;
+
+/**
+ * A stack's canonical identity, `stack.id` (`{principal}/{slug}`). The graph scope's connection identity derives
+ * from this literal, so a caller holding a config locator, a directory name or a bare slug has to resolve it
+ * first instead of minting a connection the graph cutover could never adopt.
+ */
+export type StackId = string & { readonly canonicalStackId: "stack.id" };
+
+/** Claims a value as a stack's canonical `stack.id`, refusing anything that is not `{principal}/{slug}`. */
+export function stackId(value: string): StackId {
+  if (!STACK_ID.test(value)) throw new Error(`A stack id is {principal}/{slug}, but this one is ${JSON.stringify(value)}.`);
+  return value as StackId;
+}
 
 export interface GraphScopeStore {
   inspectHostRecords(): Promise<AuthorityState>;
@@ -19,7 +33,7 @@ export interface GraphScopeStore {
 
 export interface GraphScopeBinding {
   readonly store: GraphScopeStore;
-  readonly stack: string;
+  readonly stackId: StackId;
   readonly principalRef: string;
   readonly connectionId?: string;
   readonly now?: () => number;
@@ -39,21 +53,26 @@ function scopedUuid(...parts: string[]): string {
 }
 
 /**
- * The one `work-graph` connection a stack owns, derived from the stack name so a tick can publish its
- * scope before the connection is set up and the later cutover adopts the same identity.
+ * The one `work-graph` connection a stack owns, derived from its `stack.id` so a tick can publish its scope
+ * before the connection is set up and the later cutover adopts the same identity.
  */
-export const workGraphConnectionId = (stack: string): string => scopedUuid("cortex.desk.graph-scope/1", stack);
+export const workGraphConnectionId = (stackId: StackId): string => scopedUuid("cortex.desk.graph-scope/1", stackId);
 
-const scopeRestrictionRef = (stack: string, principalRef: string, ref: string): string => scopedUuid("cortex.desk.graph-scope/1", stack, principalRef, ref);
+const scopeRestrictionRef = (stackId: StackId, principalRef: string, ref: string): string => scopedUuid("cortex.desk.graph-scope/1", stackId, principalRef, ref);
 
 /** The destination identity a ticked repository takes on that connection: its canonical ID is the exact stored ref. */
 export const graphScopeSource = (ref: string, connectionId: string): ObjectReference => ({ adapterId: GRAPH_SCOPE_ADAPTER_ID, connectionId, objectType: GRAPH_SCOPE_OBJECT_TYPE, canonicalId: ref });
 
-const scopeRestrictions = (state: AuthorityState, connectionId: string): RestrictionRecord[] =>
-  Object.values(state.records).flatMap(records => {
+/** The current record of every graph-scope restriction chain, whichever connection it names: what Settings published. */
+export function graphScopeRestrictionHeads(state: AuthorityState): RestrictionRecord[] {
+  return Object.values(state.records).flatMap(records => {
     const head = records.at(-1);
-    return head?.kind === "restriction" && head.value.source.adapterId === GRAPH_SCOPE_ADAPTER_ID && head.value.source.connectionId === connectionId && head.value.source.objectType === GRAPH_SCOPE_OBJECT_TYPE ? [head.value] : [];
+    return head?.kind === "restriction" && head.value.source.adapterId === GRAPH_SCOPE_ADAPTER_ID ? [head.value] : [];
   });
+}
+
+const scopeRestrictions = (state: AuthorityState, connectionId: string): RestrictionRecord[] =>
+  graphScopeRestrictionHeads(state).filter(record => record.source.connectionId === connectionId && record.source.objectType === GRAPH_SCOPE_OBJECT_TYPE);
 
 const byRevisionDescending = (left: RestrictionRecord, right: RestrictionRecord): number => Number(right.revision) - Number(left.revision);
 
@@ -72,22 +91,26 @@ export function graphDestinationPermitted(state: AuthorityState, address: GraphS
   return permittedGraphDestinations(state, address).some(source => source.canonicalId === ref);
 }
 
-const failureReason = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+/** The message a failed publication carries: what the Settings route reports and logs. */
+export const failureReason = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /**
  * Publishes the Desk Settings graph scope as host authority restrictions: one `repository` restriction per
- * ticked ref on the stack's `work-graph` connection, revoked when the ref is unticked. The Settings route is
- * the only caller. The graph cutover registers `GRAPH_SCOPE_RESOLVER_BINDING` so the mediator revalidates each
+ * ticked ref on the stack's `work-graph` connection, revoked when the ref is unticked. Settings is the only
+ * caller. The graph cutover registers `GRAPH_SCOPE_RESOLVER_BINDING` so the mediator revalidates each
  * restriction as a source, and adopts `workGraphConnectionId` as the connection's own identity and destination
- * list. The Settings table and the host store are separate stores, so the route saves the table first and puts
- * it back when publication fails: a crash between the two leaves the authority narrower than Settings, never
- * wider, and the next change publishes the whole ticked set again.
+ * list. The Settings table and the authority store are separate stores, so the route orders each change so the
+ * authority is never wider than the table: a tick writes its row and puts it back when the publication fails,
+ * an untick withdraws the restriction and writes its row only after that landed. A crash between the two
+ * writes leaves the authority narrower than Settings; a tick whose publication failed keeps its row exactly
+ * when the withdrawal that would have removed it cannot land again, so the table still covers every published
+ * restriction. Either way the next change republishes the whole ticked set.
  */
 export class GraphScope {
   readonly connectionId: string;
 
   constructor(private readonly binding: GraphScopeBinding) {
-    this.connectionId = binding.connectionId ?? workGraphConnectionId(binding.stack);
+    this.connectionId = binding.connectionId ?? workGraphConnectionId(binding.stackId);
   }
 
   private address(): GraphScopeAddress {
@@ -103,13 +126,12 @@ export class GraphScope {
   }
 
   private record(ref: string, status: RestrictionRecord["status"], existing?: RestrictionRecord): RestrictionRecord {
-    const source = graphScopeSource(ref, this.connectionId);
     const base: RestrictionRecord = existing ?? {
-      version: 1, status, restrictionRef: scopeRestrictionRef(this.binding.stack, this.binding.principalRef, ref), source,
+      version: 1, status, restrictionRef: scopeRestrictionRef(this.binding.stackId, this.binding.principalRef, ref), source: graphScopeSource(ref, this.connectionId),
       ownerRevision: this.now(), decisionRef: SCOPE_DECISION_REF, audiences: [...SCOPE_AUDIENCES], egress: SCOPE_EGRESS,
       readScope: [this.binding.principalRef], resolverBinding: GRAPH_SCOPE_RESOLVER_BINDING, revision: "1",
     };
-    return { ...base, status, source, ownerRevision: this.now(), revision: String(Number(existing?.revision ?? "0") + 1) };
+    return { ...base, status, source: graphScopeSource(ref, this.connectionId), readScope: [this.binding.principalRef], audiences: [...SCOPE_AUDIENCES], egress: SCOPE_EGRESS, resolverBinding: GRAPH_SCOPE_RESOLVER_BINDING, ownerRevision: this.now(), revision: String(Number(existing?.revision ?? "0") + 1) };
   }
 
   async permitted(): Promise<ObjectReference[]> {

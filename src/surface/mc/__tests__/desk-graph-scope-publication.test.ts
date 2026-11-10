@@ -6,8 +6,8 @@ import { authorityRig } from "../../../conversations/authority-fixtures";
 import type { AuthorityState, RestrictionRecord } from "../../../conversations/authority-records";
 import { handleDeskGraphRepositories } from "../api/desk-graph-repositories";
 import { initDatabase } from "../db/init";
-import { GRAPH_SCOPE_ADAPTER_ID, GRAPH_SCOPE_OBJECT_TYPE, GRAPH_SCOPE_RESOLVER_BINDING, GraphScope, graphDestinationPermitted, graphScopeSource, permittedGraphDestinations, workGraphConnectionId, type GraphScopeStore } from "../desk/graph-repository-authority";
-import { githubRef, gitlabRef, graphRepositoryRefs, isGraphRepositoryAllowed } from "../desk/graph-repositories";
+import { GRAPH_SCOPE_ADAPTER_ID, GRAPH_SCOPE_OBJECT_TYPE, GRAPH_SCOPE_RESOLVER_BINDING, GraphScope, graphDestinationPermitted, graphScopeRestrictionHeads, graphScopeSource, permittedGraphDestinations, stackId, workGraphConnectionId, type GraphScopeStore } from "../desk/graph-repository-authority";
+import { githubRef, gitlabRef, graphRepositoryRefs, graphRepositoryTickedAt, isGraphRepositoryAllowed } from "../desk/graph-repositories";
 import { GRAPH_REPOSITORIES_PATH } from "../desk/graph-repository-schema";
 
 const NOW = Date.parse("2026-11-10T09:00:00.000Z");
@@ -37,19 +37,13 @@ async function bench(store?: GraphScopeStore): Promise<Bench> {
   opened.add(rig);
   const db = initDatabase(":memory:");
   databases.add(db);
-  const connectionId = workGraphConnectionId(rig.principal.stack);
-  const scope = new GraphScope({ store: store ?? rig.service, stack: rig.principal.stack, principalRef: rig.principal.principalRef, now: () => NOW });
+  const stack = stackId(`${rig.principal.principal}/${rig.principal.stack}`);
+  const connectionId = workGraphConnectionId(stack);
+  const scope = new GraphScope({ store: store ?? rig.service, stackId: stack, principalRef: rig.principal.principalRef, now: () => NOW });
   return { rig, db, scope, connectionId, address: { connectionId, principalRef: rig.principal.principalRef } };
 }
 
-function restrictionHeads(state: AuthorityState): RestrictionRecord[] {
-  const heads: RestrictionRecord[] = [];
-  for (const records of Object.values(state.records)) {
-    const head = records.at(-1);
-    if (head?.kind === "restriction" && head.value.source.adapterId === GRAPH_SCOPE_ADAPTER_ID) heads.push(head.value);
-  }
-  return heads;
-}
+const stackOf = (rig: Rig) => stackId(`${rig.principal.principal}/${rig.principal.stack}`);
 
 function restrictionRevisions(state: AuthorityState): RestrictionRecord[] {
   return Object.values(state.records).flatMap(records => records.flatMap(record => (record.kind === "restriction" && record.value.source.adapterId === GRAPH_SCOPE_ADAPTER_ID ? [record.value] : [])));
@@ -59,8 +53,6 @@ const put = (db: Database, scope: GraphScope | null, ref: string, enabled: boole
   const path = `${GRAPH_REPOSITORIES_PATH}/${encodeURIComponent(ref)}`;
   return handleDeskGraphRepositories(new Request(`http://127.0.0.1${path}`, { method: "PUT", body: JSON.stringify({ enabled }) }), new URL(`http://127.0.0.1${path}`), db, { now: () => now, graphScope: () => scope });
 };
-
-const enabledAt = (db: Database, ref: string): number | null => db.query<{ enabled_at: number }, [string]>("SELECT enabled_at FROM desk_graph_repositories WHERE ref = ?").get(ref)?.enabled_at ?? null;
 
 const tick = (db: Database, ref: string, at: number): void => { db.query("INSERT INTO desk_graph_repositories (ref, enabled_at) VALUES (?, ?)").run(ref, at); };
 
@@ -72,7 +64,7 @@ test("ticking a repository publishes its exact ref as one active restriction on 
   expect(graphRepositoryRefs(db)).toEqual([REF]);
   expect(isGraphRepositoryAllowed(db, REF)).toBe(true);
   const state = await rig.service.inspectHostRecords();
-  const held = restrictionHeads(state);
+  const held = graphScopeRestrictionHeads(state);
   expect(held).toHaveLength(1);
   expect(held[0]).toMatchObject({
     version: 1, status: "active", revision: "1",
@@ -92,8 +84,8 @@ test("unticking withdraws the restriction before the response returns, and a lat
   expect(res.status).toBe(200);
   expect(await res.json()).toEqual({ ref: REF, enabled: false });
   const state = await rig.service.inspectHostRecords();
-  expect(restrictionHeads(state)).toHaveLength(1);
-  expect(restrictionHeads(state)[0]).toMatchObject({ status: "revoked", revision: "2" });
+  expect(graphScopeRestrictionHeads(state)).toHaveLength(1);
+  expect(graphScopeRestrictionHeads(state)[0]).toMatchObject({ status: "revoked", revision: "2" });
   expect(restrictionRevisions(state).flat()).toHaveLength(2);
   expect(graphDestinationPermitted(state, address, REF)).toBe(false);
   expect(await scope.admits(REF)).toBe(false);
@@ -105,30 +97,56 @@ test("unticking withdraws the restriction before the response returns, and a lat
 test("a failed publication saves no tick and reports the failure", async () => {
   const { rig, db } = await bench();
   const unreachable: GraphScopeStore = { inspectHostRecords: () => rig.service.inspectHostRecords(), publishHostRecord: () => Promise.reject(new Error("the authority store is unavailable")) };
-  const scope = new GraphScope({ store: unreachable, stack: rig.principal.stack, principalRef: rig.principal.principalRef, now: () => NOW });
+  const scope = new GraphScope({ store: unreachable, stackId: stackOf(rig), principalRef: rig.principal.principalRef, now: () => NOW });
   const res = await put(db, scope, REF, true);
   expect(res.status).toBe(503);
   expect(((await res.json()) as { error: string }).error).toContain("the authority store is unavailable");
   expect(graphRepositoryRefs(db)).toEqual([]);
-  expect(enabledAt(db, REF)).toBeNull();
+  expect(graphRepositoryTickedAt(db, REF)).toBeNull();
   expect(isGraphRepositoryAllowed(db, REF)).toBe(false);
-  expect(restrictionHeads(await rig.service.inspectHostRecords())).toEqual([]);
+  expect(graphScopeRestrictionHeads(await rig.service.inspectHostRecords())).toEqual([]);
 });
 
-test("a failed publication restores an untick it could not withdraw", async () => {
-  const { rig, db, scope } = await bench();
+test("a tick whose publication and its withdrawal both fail keeps its row so the table still covers the scope", async () => {
+  const { rig, db } = await bench();
+  tick(db, OTHER, NOW - 1_000);
+  const unreachable: GraphScopeStore = { inspectHostRecords: () => rig.service.inspectHostRecords(), publishHostRecord: () => Promise.reject(new Error("the authority store is unavailable")) };
+  const failing = new GraphScope({ store: unreachable, stackId: stackOf(rig), principalRef: rig.principal.principalRef, now: () => NOW });
+  const res = await put(db, failing, REF, true);
+  expect(res.status).toBe(503);
+  expect(((await res.json()) as { error: string }).error).toContain("the tick stands");
+  expect(graphRepositoryRefs(db)).toEqual([OTHER, REF].sort());
+  expect(graphScopeRestrictionHeads(await rig.service.inspectHostRecords())).toEqual([]);
+});
+
+test("a failed publication restores an untick it could not withdraw", async () => {  const { rig, db, scope } = await bench();
   expect((await put(db, scope, REF, true)).status).toBe(200);
   const unreachable: GraphScopeStore = { inspectHostRecords: () => rig.service.inspectHostRecords(), publishHostRecord: () => Promise.reject(new Error("the authority store is unavailable")) };
-  const failing = new GraphScope({ store: unreachable, stack: rig.principal.stack, principalRef: rig.principal.principalRef, now: () => NOW });
+  const failing = new GraphScope({ store: unreachable, stackId: stackOf(rig), principalRef: rig.principal.principalRef, now: () => NOW });
   const res = await put(db, failing, REF, false);
   expect(res.status).toBe(503);
   expect(graphRepositoryRefs(db)).toEqual([REF]);
-  expect(enabledAt(db, REF)).toBe(NOW);
+  expect(graphRepositoryTickedAt(db, REF)).toBe(NOW);
   expect(isGraphRepositoryAllowed(db, REF)).toBe(true);
   expect(await scope.admits(REF)).toBe(true);
 });
 
-test("a publication that fails midway leaves the table and the records agreeing on the scope they held before the change", async () => {
+test("an untick interrupted after the authority write is withdrawn anyway and leaves the authority narrower than the table", async () => {
+  const { rig, db, scope, address } = await bench();
+  expect((await put(db, scope, REF, true)).status).toBe(200);
+  const diesAfterPublishing: GraphScopeStore = {
+    inspectHostRecords: () => rig.service.inspectHostRecords(),
+    publishHostRecord: async (record, expected) => { await rig.service.publishHostRecord(record, expected); throw new Error("the Cortex runtime died before the row was written"); },
+  };
+  const interrupted = new GraphScope({ store: diesAfterPublishing, stackId: stackOf(rig), principalRef: rig.principal.principalRef, now: () => NOW });
+  const res = await put(db, interrupted, REF, false);
+  expect(res.status).toBe(503);
+  expect(graphRepositoryRefs(db)).toEqual([REF]);
+  expect(await scope.admits(REF)).toBe(false);
+  expect(permittedGraphDestinations(await rig.service.inspectHostRecords(), address)).toEqual([]);
+});
+
+test("a publication that fails midway stops with the authority narrower than the table, and the next change converges", async () => {
   const { rig, db, scope, address } = await bench();
   tick(db, OTHER, NOW - 1_000);
   tick(db, REF, NOW - 500);
@@ -138,14 +156,29 @@ test("a publication that fails midway leaves the table and the records agreeing 
     inspectHostRecords: () => rig.service.inspectHostRecords(),
     publishHostRecord: async (record, expected) => { calls += 1; if (calls === 2) throw new Error("the second publication failed"); await rig.service.publishHostRecord(record, expected); },
   };
-  const failing = new GraphScope({ store: flaky, stack: rig.principal.stack, principalRef: rig.principal.principalRef, now: () => NOW });
+  const failing = new GraphScope({ store: flaky, stackId: stackOf(rig), principalRef: rig.principal.principalRef, now: () => NOW });
   const res = await put(db, failing, OTHER, false);
   expect(res.status).toBe(503);
   expect(graphRepositoryRefs(db)).toEqual([OTHER, REF].sort());
-  const state = await rig.service.inspectHostRecords();
-  expect(permittedGraphDestinations(state, address).map(source => source.canonicalId)).toEqual(graphRepositoryRefs(db));
-  expect(await scope.admits(OTHER)).toBe(true);
-  expect(await scope.admits(REF)).toBe(true);
+  const permitted = permittedGraphDestinations(await rig.service.inspectHostRecords(), address).map(source => source.canonicalId);
+  expect(permitted).toEqual([]);
+  expect(permitted.every(ref => graphRepositoryRefs(db).includes(ref))).toBe(true);
+  expect(await scope.admits(OTHER)).toBe(false);
+  expect((await put(db, scope, REF, true)).status).toBe(200);
+  expect(permittedGraphDestinations(await rig.service.inspectHostRecords(), address).map(source => source.canonicalId)).toEqual(graphRepositoryRefs(db));
+});
+
+test("republishing a record whose scope fields drifted writes the current scope, so the scope converges", async () => {
+  const { rig, db, scope } = await bench();
+  expect((await put(db, scope, REF, true)).status).toBe(200);
+  const head = graphScopeRestrictionHeads(await rig.service.inspectHostRecords())[0];
+  if (!head) throw new Error("the tick published no restriction.");
+  await rig.service.publishHostRecord({ kind: "restriction", value: { ...head, audiences: ["web"], revision: "2" } }, Number(head.revision));
+  expect((await put(db, scope, REF, true)).status).toBe(200);
+  const republished = graphScopeRestrictionHeads(await rig.service.inspectHostRecords())[0];
+  expect(republished).toMatchObject({ status: "active", revision: "3", audiences: ["web", "model", "view"], egress: "cloud", resolverBinding: GRAPH_SCOPE_RESOLVER_BINDING });
+  expect((await put(db, scope, REF, true)).status).toBe(200);
+  expect(restrictionRevisions(await rig.service.inspectHostRecords())).toHaveLength(3);
 });
 
 test("an empty table permits no destination at all", async () => {
@@ -175,11 +208,11 @@ test("repeating a tick or an untick publishes no further revision", async () => 
   await put(db, scope, REF, true);
   await put(db, scope, REF, true, NOW + 1_000);
   expect(restrictionRevisions(await rig.service.inspectHostRecords())).toHaveLength(1);
-  expect(restrictionHeads(await rig.service.inspectHostRecords())[0]).toMatchObject({ status: "active", revision: "1" });
+  expect(graphScopeRestrictionHeads(await rig.service.inspectHostRecords())[0]).toMatchObject({ status: "active", revision: "1" });
   await put(db, scope, REF, false);
   await put(db, scope, REF, false, NOW + 2_000);
   expect(restrictionRevisions(await rig.service.inspectHostRecords())).toHaveLength(2);
-  expect(restrictionHeads(await rig.service.inspectHostRecords())[0]).toMatchObject({ status: "revoked", revision: "2" });
+  expect(graphScopeRestrictionHeads(await rig.service.inspectHostRecords())[0]).toMatchObject({ status: "revoked", revision: "2" });
 });
 
 test("a change publishes every ticked ref, including ticks stored before the host supplied a scope", async () => {
@@ -189,11 +222,11 @@ test("a change publishes every ticked ref, including ticks stored before the hos
   const state = await rig.service.inspectHostRecords();
   expect(graphRepositoryRefs(db)).toEqual([OTHER, REF].sort());
   expect(permittedGraphDestinations(state, address).map(source => source.canonicalId)).toEqual(graphRepositoryRefs(db));
-  expect(restrictionHeads(state).every(record => record.status === "active")).toBe(true);
+  expect(graphScopeRestrictionHeads(state).every(record => record.status === "active")).toBe(true);
   expect((await put(db, scope, OTHER, false)).status).toBe(200);
   const narrowed = await rig.service.inspectHostRecords();
   expect(permittedGraphDestinations(narrowed, address).map(source => source.canonicalId)).toEqual([REF]);
-  expect(restrictionHeads(narrowed).filter(record => record.status === "active")).toHaveLength(1);
+  expect(graphScopeRestrictionHeads(narrowed).filter(record => record.status === "active")).toHaveLength(1);
 });
 
 test("a repository scope grants only the principal and the stack connection it was published for", async () => {
@@ -201,14 +234,14 @@ test("a repository scope grants only the principal and the stack connection it w
   expect((await put(db, scope, REF, true)).status).toBe(200);
   const state = await rig.service.inspectHostRecords();
   expect(graphDestinationPermitted(state, { connectionId, principalRef: randomUUID() }, REF)).toBe(false);
-  expect(graphDestinationPermitted(state, { connectionId: workGraphConnectionId("another-stack"), principalRef: rig.principal.principalRef }, REF)).toBe(false);
+  expect(graphDestinationPermitted(state, { connectionId: workGraphConnectionId(stackId("principal-example/another-stack")), principalRef: rig.principal.principalRef }, REF)).toBe(false);
   expect(graphDestinationPermitted(state, { connectionId, principalRef: rig.principal.principalRef }, REF)).toBe(true);
 });
 
 test("the stack's work-graph connection identity is stable and belongs to that stack alone", () => {
-  expect(workGraphConnectionId("test")).toBe(workGraphConnectionId("test"));
-  expect(workGraphConnectionId("test")).not.toBe(workGraphConnectionId("another-stack"));
-  expect(workGraphConnectionId("test")).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  expect(workGraphConnectionId(stackId("principal-example/test"))).toBe(workGraphConnectionId(stackId("principal-example/test")));
+  expect(workGraphConnectionId(stackId("principal-example/test"))).not.toBe(workGraphConnectionId(stackId("principal-example/another-stack")));
+  expect(workGraphConnectionId(stackId("principal-example/test"))).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 });
 
 test("without a graph scope the route saves the tick on its table alone", async () => {

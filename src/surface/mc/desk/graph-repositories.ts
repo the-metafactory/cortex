@@ -59,6 +59,9 @@ export function setGraphRepositoryEnabled(db: Database, ref: string, enabled: bo
 /** Every ticked ref, exactly as stored, in string order: the graph scope the Settings route publishes. */
 export const graphRepositoryRefs = (db: Database): string[] => db.query<{ ref: string }, []>("SELECT ref FROM desk_graph_repositories ORDER BY ref").all().map((r) => r.ref);
 
+/** The tick time stored for one ref, or null when it is not ticked: what an untick puts back when its publication fails. */
+export const graphRepositoryTickedAt = (db: Database, ref: string): number | null => db.query<{ enabled_at: number }, [string]>("SELECT enabled_at FROM desk_graph_repositories WHERE ref = ?").get(ref)?.enabled_at ?? null;
+
 /** Puts one tick back the way it was before a failed publication: the row removed, or its original tick time restored. */
 export function restoreGraphRepository(db: Database, ref: string, enabledAt: number | null): void {
   if (enabledAt === null) db.query("DELETE FROM desk_graph_repositories WHERE ref = ?").run(ref);
