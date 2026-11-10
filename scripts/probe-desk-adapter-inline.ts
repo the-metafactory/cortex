@@ -1,19 +1,16 @@
 #!/usr/bin/env bun
 import { chromium, webkit } from "playwright";
 import { probeChecks } from "./lib/probe-checks";
-import { assetUrl, type AssetCatalogEntry } from "../src/surface/mc/desk/adapter-assets";
-import { ASSET_CONNECTION, ASSET_OWNER, inlineUiFixture, openAssetRig, type AssetRig } from "../src/surface/mc/desk/__tests__/fixtures/adapter-asset-fixtures";
+import { ASSET_OWNER, INLINE_ENTRY, entryUrl, inlineUiFixture, openAssetRig } from "../src/surface/mc/desk/__tests__/fixtures/adapter-asset-fixtures";
 
 const { check, finish } = probeChecks();
-const good = await openAssetRig({ ui: inlineUiFixture() });
+const ui = inlineUiFixture(INLINE_ENTRY.replace('</head>', '<link rel="stylesheet" href="print.css" media="print"></head>'));
+ui.files["ui/app.js"] = { body: 'document.documentElement.dataset.script = "ran-é";', mediaType: "text/javascript" };
+ui.files["ui/styles/main.css"] = { body: `${ui.files["ui/styles/main.css"]?.body} #styled::after { content: "café"; }`, mediaType: "text/css" };
+ui.files["ui/print.css"] = { body: '#styled { color: rgb(255, 0, 0); }', mediaType: "text/css" };
+const good = await openAssetRig({ ui });
 const bad = await openAssetRig({ ui: inlineUiFixture('<script>throw new Error("must not run")</script>') });
 const requests: string[] = [];
-const entryUrl = async (rig: AssetRig): Promise<string> => {
-  const catalog = await (await rig.local("/api/desk/adapters/catalog")).json() as { adapters: AssetCatalogEntry[] };
-  const entry = catalog.adapters[0];
-  if (!entry) throw new Error("Synthetic catalog is empty");
-  return assetUrl(entry.releaseDigest, ASSET_CONNECTION, entry.entry);
-};
 const goodEntry = await entryUrl(good);
 const badEntry = await entryUrl(bad);
 const sessionCookie = "desk-inline-probe=authenticated";
@@ -61,6 +58,7 @@ try {
             return {
               script: document.documentElement.dataset.script,
               color: styled ? getComputedStyle(styled).color : "",
+              content: styled ? getComputedStyle(styled, "::after").content : "",
               background: styled ? getComputedStyle(styled).backgroundImage : "",
               image: image?.complete && image.naturalWidth === 3 && image.naturalHeight === 2,
               parentDenied,
@@ -68,8 +66,8 @@ try {
             };
           });
           const label = `${browserType.name()} ${mode}`;
-          check(state.script === "ran", `${label}: hash-pinned classic script runs`);
-          check(state.color === "rgb(12, 34, 56)" && state.background.includes("data:image/svg+xml;base64,"), `${label}: hash-pinned stylesheet and CSS image apply`);
+          check(state.script === "ran-é", `${label}: hash-pinned UTF-8 classic script runs without meta charset`);
+          check(state.color === "rgb(12, 34, 56)" && state.content === '"café"' && state.background.includes("data:image/svg+xml;base64,"), `${label}: hash-pinned UTF-8 stylesheet and CSS image apply while print styles stay inactive`);
           check(state.image === true, `${label}: manifest image loads from a data URI`);
           check(state.parentDenied, `${label}: sandbox retains its opaque origin`);
           check(pageErrors.length === 0, `${label}: script has no runtime errors`);

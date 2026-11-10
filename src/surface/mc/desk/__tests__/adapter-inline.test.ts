@@ -3,18 +3,14 @@ import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sha256Bytes } from "../../../../common/registry/arc-package-inventory";
-import { assetUrl, type AssetCatalogEntry } from "../adapter-assets";
-import { ASSET_CONNECTION, ASSET_OTHER, ASSET_OWNER, INLINE_ENTRY, enabledConnection, inlineUiFixture, openAssetRig, type AssetRig, type AssetUiFixture } from "./fixtures/adapter-asset-fixtures";
+import { ASSET_CONNECTION, ASSET_OTHER, ASSET_OWNER, INLINE_ENTRY, enabledConnection, entryUrl, inlineUiFixture, openAssetRig, type AssetRig, type AssetUiFixture } from "./fixtures/adapter-asset-fixtures";
 
 const rigs: AssetRig[] = [];
 afterEach(async () => { for (const rig of rigs.splice(0)) await rig.close(); });
 const open = async (ui = inlineUiFixture()): Promise<{ rig: AssetRig; url: string }> => {
   const rig = await openAssetRig({ ui });
   rigs.push(rig);
-  const catalog = await (await rig.local("/api/desk/adapters/catalog")).json() as { adapters: AssetCatalogEntry[] };
-  const entry = catalog.adapters[0];
-  if (!entry) throw new Error("Missing fixture publication");
-  return { rig, url: assetUrl(entry.releaseDigest, ASSET_CONNECTION, entry.entry) };
+  return { rig, url: await entryUrl(rig) };
 };
 const digest = (text: string): string => `'sha256-${createHash("sha256").update(text).digest("base64")}'`;
 const expectedCsp = (scripts: string[], styles: string[]): string => `default-src 'none'; script-src ${scripts.map(digest).join(" ") || "'none'"}; style-src ${styles.map(digest).join(" ") || "'none'"}; img-src data:; font-src data:; media-src 'none'; connect-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; manifest-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts`;
@@ -58,6 +54,25 @@ describe("inline adapter entry route", () => {
     const response = await rig.local(url);
     expect(response.status).toBe(200);
     expect(response.headers.get("content-security-policy")).toBe(expectedCsp([], []));
+  });
+
+  test("preserves stylesheet media while hashing only its exact text", async () => {
+    const ui = inlineUiFixture('<link rel="stylesheet" href="styles/main.css" type="text/css" media="screen and (min-width: 1px)">');
+    ui.files["ui/styles/main.css"] = { body: 'p { color: green; }', mediaType: "text/css" };
+    const { rig, url } = await open(ui);
+    for (const mode of ["local", "hosted"] as const) {
+      const response = await rig[mode](url);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('<style media="screen and (min-width: 1px)">p { color: green; }</style>');
+      expect(response.headers.get("content-security-policy")).toBe(expectedCsp([], ['p { color: green; }']));
+    }
+  });
+
+  test("escapes stylesheet media without introducing HTML attributes or elements", async () => {
+    const { rig, url } = await open(inlineUiFixture('<link rel="stylesheet" href="styles/main.css" media="&quot;&gt;&lt;img src=missing&gt;&amp;">'));
+    const response = await rig.local(url);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toStartWith('<style media="&quot;&gt;&lt;img src=missing&gt;&amp;">');
   });
 
   test("hashes normalized UTF-8 text and deduplicates identical script hashes", async () => {
@@ -107,6 +122,11 @@ describe("inline adapter entry route", () => {
     '<script src="//example.test/app.js"></script>', '<script src="https://example.test/app.js"></script>',
     '<script src="data:text/javascript,void(0)"></script>', '<script type="module" src="app.js"></script>',
     '<script type="module"></script>', '<script type="mod&#117;le"></script>', '<script>void(0)</script>', '<script src="app.js"> </script>',
+    '<script defer src="app.js"></script>', '<script async src="app.js"></script>', '<script nomodule src="app.js"></script>',
+    '<script DeFeR="false" src="app.js"></script>', '<script ASYNC="false" src="app.js"></script>', '<script NOMODULE="false" src="app.js"></script>',
+    '<link rel="alternate stylesheet" href="styles/main.css">', '<link rel="STYLESHEET Alternate" href="styles/main.css">',
+    '<link rel="stylesheet" href="styles/main.css" disabled>', '<link rel="stylesheet" href="styles/main.css" title="Preferred">',
+    '<link rel="stylesheet" href="styles/main.css" type="text/plain">',
     '<style>p { color: red }</style>', '<div style="color:red"></div>', '<img src="picture.svg" onload="void(0)">',
     '<div ONCLICK="void(0)"></div>', '<a href="app.js">Link</a>', '<iframe src="app.html"></iframe>',
     '<img srcset="picture.svg 1x">', '<video poster="picture.svg"></video>', '<object data="picture.svg"></object>',

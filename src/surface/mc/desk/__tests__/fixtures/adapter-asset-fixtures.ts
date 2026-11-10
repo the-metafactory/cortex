@@ -9,7 +9,7 @@ import type { DeskGenerationStore } from "../../../../../conversations/domain-ad
 import { handleDeskAdapterAssets } from "../../../api/desk-adapter-assets";
 import type { MutationGuardContext } from "../../../api/mutation-guard";
 import { CF_ACCESS_EMAIL_HEADER, CF_ACCESS_JWT_HEADER } from "../../../api/networks-admission";
-import { AdapterAssetService, type AssetConnection } from "../../adapter-assets";
+import { AdapterAssetService, assetUrl, type AssetCatalogEntry, type AssetConnection } from "../../adapter-assets";
 
 export const ASSET_OWNER = "principal-example";
 export const ASSET_OTHER = "principal-other";
@@ -50,6 +50,13 @@ export interface AssetRig {
   local(path: string, init?: AssetRequestInit): Promise<Response>;
   hosted(path: string, init?: AssetRequestInit): Promise<Response>;
   close(): Promise<void>;
+}
+
+export async function entryUrl(rig: AssetRig): Promise<string> {
+  const catalog = await (await rig.local("/api/desk/adapters/catalog")).json() as { adapters: AssetCatalogEntry[] };
+  const entry = catalog.adapters[0];
+  if (!entry) throw new Error("Missing fixture publication");
+  return assetUrl(entry.releaseDigest, ASSET_CONNECTION, entry.entry);
 }
 
 export const enabledConnection = (connectionId = ASSET_CONNECTION): AssetConnection => ({

@@ -222,16 +222,14 @@ export class AdapterAssetService {
     if (!connections.some(connection => connection.connectionId === request.connectionId && this.linked(active, connection))) {
       return failure(403, "connection_not_authorized", "This connection is not enabled for this adapter on this stack.");
     }
-    const listed = active.ui.files.slice(0, DESK_ADAPTER_MAX_FILES).find(file => file.path === request.path);
-    if (!listed) return failure(404, "asset_not_listed", "That asset is not listed by the active adapter generation.");
     const read = async (path: string): Promise<AssetBody | AssetFailure> => {
       const file = active.ui.files.slice(0, DESK_ADAPTER_MAX_FILES).find(item => item.path === path);
       if (!file) return failure(404, "asset_not_listed", "That asset is not listed by the active adapter generation.");
       const result = await readListedFile(active.packageRoot, file.path, file.sha256);
       return result.ok ? { ...result, mediaType: file.mediaType } : result;
     };
-    const body = await read(listed.path);
-    if (!body.ok || listed.path !== active.ui.entry || listed.mediaType !== "text/html") return body;
+    const body = await read(request.path);
+    if (!body.ok || request.path !== active.ui.entry || body.mediaType !== "text/html") return body;
     return inlineAdapterEntry(active.ui.entry, body, read);
   }
 }
