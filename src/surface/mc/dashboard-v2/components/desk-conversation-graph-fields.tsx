@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FieldSpec } from "../../../../conversations/catalog";
 import type { GraphNodeOption, GraphRepository } from "../../desk/graph-repositories";
 import { canonicalGraphRef } from "../../../../common/graph-ref";
@@ -12,6 +12,7 @@ export const GRAPH_DESTINATION_KEY = "cortex.conversation.graph-destination";
 export interface GraphDestination { repository?: string; parent?: string }
 const NOTHING_REMEMBERED: GraphDestination = {};
 const STORAGE_UNAVAILABLE = false;
+const GRAPH_CHOICES_UNREADABLE = "The graph choices could not be read, so references and repositories cannot be checked right now.";
 
 const store = (): Storage | null => (typeof window === "undefined" ? null : window.localStorage);
 
@@ -55,7 +56,7 @@ export function prefillFields(type: string | null, fields: Record<string, string
 
 export interface GraphChoices { repositories: GraphRepository[] | null; nodes: GraphNodeOption[] | null; note: string | null; adapter: boolean }
 
-type AdapterReading = "pending" | "off" | Extract<GraphSurfaceDestinations, { enabled: true }>;
+type AdapterReading = "pending" | "off" | "unreadable" | Extract<GraphSurfaceDestinations, { enabled: true }>;
 
 function useAdapterDestinations(active: boolean): AdapterReading {
   const [reading, setReading] = useState<AdapterReading>("pending");
@@ -65,7 +66,7 @@ function useAdapterDestinations(active: boolean): AdapterReading {
     readGraphSurfaceDestinations(controller.signal).then(found => {
       if (!controller.signal.aborted) setReading(found.enabled ? found : "off");
     }).catch(() => {
-      if (!controller.signal.aborted) setReading("off");
+      if (!controller.signal.aborted) setReading("unreadable");
     });
     return () => { controller.abort(); };
   }, [active]);
@@ -89,6 +90,7 @@ export function useGraphChoices(active: boolean, repository: string): GraphChoic
     return () => { live = false; };
   }, [active, legacy]);
   const ticked = repositories?.some(r => r.ref === repository) ?? false;
+  const offeredRepositories = useMemo(() => typeof adapter === "object" ? adapter.repositories.map(r => ({ ref: r.ref, label: r.label, forge: "", enabled: true })) : null, [adapter]);
   useEffect(() => {
     setNodes(null);
     if (!active || !legacy || !ticked) return;
@@ -101,9 +103,10 @@ export function useGraphChoices(active: boolean, repository: string): GraphChoic
     return () => { live = false; };
   }, [active, legacy, ticked, repository]);
   if (adapter === "pending" || adapter === "off") return { repositories, nodes, note, adapter: false };
+  if (adapter === "unreadable") return { repositories: [], nodes: [], note: GRAPH_CHOICES_UNREADABLE, adapter: true };
   const wanted = canonicalGraphRef(repository);
   return {
-    repositories: adapter.repositories.map(r => ({ ref: r.ref, label: r.label, forge: "", enabled: true })),
+    repositories: offeredRepositories,
     nodes: adapter.parents.filter(p => !repository || canonicalGraphRef(p.repository) === wanted).map(p => ({ id: p.ref, title: p.label })),
     note: null,
     adapter: true,

@@ -144,7 +144,7 @@ function nodeTarget(canonicalId: string, source: WorkGraphReadSource, destinatio
   return { canonicalId: text, repository: formatted, full: `${formatted}#${text.replace(/^#/, "")}` };
 }
 
-/** The repository a full or GitHub-relative node reference names, in the stored `github:github.com/…` form; null for a bare number or anything unparseable. */
+/** The repository a full or GitHub-relative work-graph reference names, in the stored `github:github.com/…` form; null for a bare number or anything unparseable. */
 export function graphNodeRepository(value: string): string | null {
   const text = value.trim();
   const full = parseGraphNodeRef(text);
