@@ -17,6 +17,13 @@ export const ReadBindingSchema = z.object({
   destinationType: identifier.optional(),
   display: z.object({ title: pointer, summary: pointer.optional() }).strict(),
   attention: z.object({ pointer }).strict().optional(),
+  query: z.object({
+    objectsPointer: pointer,
+    aggregatePointers: z.array(pointer).optional(),
+    ordering: z.literal("provider"),
+    stableSnapshot: z.boolean(),
+    limits: z.object({ items: z.number().int().positive().max(20).optional(), bytes: z.number().int().positive().max(1048576).optional(), pageMs: z.number().int().positive().max(10000).optional() }).strict().optional(),
+  }).strict().optional(),
 }).strict();
 export type ReadBinding = z.infer<typeof ReadBindingSchema>;
 export type ReadMode = ReadBinding["mode"];

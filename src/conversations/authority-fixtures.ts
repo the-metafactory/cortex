@@ -11,14 +11,16 @@ import type { ConnectionRecord, PolicyInputs, PrincipalBinding, ReleaseSink, Res
 import { AT, approvalFixture, eventFixture, registryFixture, resultFixture, support } from "./domain-adapters/operations/fixtures";
 import type { Attempt, CancelRequest, DispatchRequest, Json } from "./domain-adapters/operations/types";
 import { ReadBindings } from "./domain-adapters/reads/bindings";
+import type { DomainAdapterRegistry } from "./domain-adapters/registry";
+import type { QueryFetchRequest } from "./domain-adapters/reads/query-types";
 import type { ReadRequest } from "./domain-adapters/reads/types";
 import { snapshotDigest, canonicalWire } from "./domain-adapters/operations/validation";
 
 function requireValue<T>(value: T | null | undefined): T { if (value === null || value === undefined) throw new Error("Synthetic authority fixture is incomplete."); return value; }
 
-export async function authorityRig(extra: Partial<HostOptions> = {}, conversationPolicy: "local" | "cloud" = "local") {
+export async function authorityRig(extra: Partial<HostOptions> = {}, conversationPolicy: "local" | "cloud" = "local", readSetup?: { registry: DomainAdapterRegistry; binding: unknown }) {
   const dir = await mkdtemp(join(tmpdir(), "host-authority-"));
-  const registry = registryFixture();
+  const registry = readSetup?.registry ?? registryFixture();
   const principal: PrincipalBinding = { version: 1, principalRef: randomUUID(), principal: "principal-example", stack: "test", identityBindingRevision: "1", status: "active" };
   const approval = approvalFixture();
   const connection: ConnectionRecord = { version: 1, status: "active", connectionId: approval.snapshot.connectionId, adapterId: "balance", principalRef: principal.principalRef, connectionRevision: "1", credentialHandle: "synthetic-credential-handle", accountScope: { account: "synthetic-account", resource: "area-example" }, readCapabilityIds: [approval.snapshot.capabilityId, "balance.object.read"], writeCapabilityIds: [approval.snapshot.capabilityId], readDestinations: approval.snapshot.destinations, writeDestinations: approval.snapshot.destinations, connectorId: "synthetic-connector", executionBindingRef: support.declarationId, registryRevision: "registry-1" };
@@ -26,13 +28,13 @@ export async function authorityRig(extra: Partial<HostOptions> = {}, conversatio
   const objectRestriction: RestrictionRecord = { version: 1, status: "active", restrictionRef: randomUUID(), source: requireValue(approval.snapshot.destinations[0]), ownerRevision: "synthetic-owner-1", decisionRef: "synthetic-object-provenance", audiences: ["web", "discord", "model", "view"], egress: "cloud", readScope: [principal.principalRef], resolverBinding: "synthetic-restriction-resolver", revision: "1" };
   const lease: WriterLease = { bindingKey: "synthetic-binding", epoch: 1, instanceId: "synthetic-instance", supervisorReceiptRef: "synthetic-supervisor" };
   const calls = { dispatch: 0, cancel: 0, lookup: 0, readback: 0, read: 0, sends: [] as Json[], signals: [] as AbortSignal[] };
-  const hooks: { policy?: () => Promise<void>; dispatch?: (request: DispatchRequest) => Promise<unknown>; sink?: () => Promise<void>; lookup?: () => Promise<unknown>; readback?: () => Promise<unknown>; read?: (request: ReadRequest) => Promise<unknown>; cancel?: (request: CancelRequest) => Promise<unknown>; writer?: () => Promise<boolean>; restriction?: (record: RestrictionRecord) => Promise<RestrictionRecord | null>; sessionEnabled?: boolean; credentialsAvailable?: boolean } = {};
+  const hooks: { policy?: () => Promise<void>; dispatch?: (request: DispatchRequest) => Promise<unknown>; sink?: () => Promise<void>; lookup?: () => Promise<unknown>; readback?: () => Promise<unknown>; read?: (request: ReadRequest) => Promise<unknown>; query?: (request: QueryFetchRequest, signal: AbortSignal) => Promise<unknown>; cancel?: (request: CancelRequest) => Promise<unknown>; writer?: () => Promise<boolean>; restriction?: (record: RestrictionRecord) => Promise<RestrictionRecord | null>; sessionEnabled?: boolean; credentialsAvailable?: boolean } = {};
   let conversationId = "";
   let attempt: Attempt | undefined;
   const sinks = new Map<string, (value: Json) => Promise<void>>();
   const readBindings = new ReadBindings(registry);
   const readBinding = { version: "1.0.0", adapterId: "balance", capabilityId: "balance.object.read", mode: "query", objectType: "task", inputSchemaRef: { schemaId: "balance.task.create.input", version: "1.0.0" }, outputSchemaRef: { schemaId: "balance.task.create.output", version: "1.0.0" }, destinationType: "area", display: { title: "/title" } };
-  const registered = readBindings.register(readBinding, { adapterId: "balance", connectionId: connection.connectionId, readCapabilityIds: connection.readCapabilityIds });
+  const registered = readBindings.register(readSetup?.binding ?? readBinding, { adapterId: "balance", connectionId: connection.connectionId, readCapabilityIds: connection.readCapabilityIds });
   if (!registered.ok) throw new Error(registered.error.code);
   const bindings: AuthorityBindings = {
     currentRevision: () => authorityHash({ policy, sessionEnabled: hooks.sessionEnabled ?? true, credentialsAvailable: hooks.credentialsAvailable ?? true, lease }),
@@ -44,6 +46,7 @@ export async function authorityRig(extra: Partial<HostOptions> = {}, conversatio
       dispatch: async (request, signal) => { calls.dispatch++; calls.signals.push(signal); return hooks.dispatch ? hooks.dispatch(request) : resultFixture({ ...approval, authority: request.authority }, requireValue(attempt), "succeeded"); },
       cancel: (request, signal) => { calls.cancel++; calls.signals.push(signal); return hooks.cancel ? hooks.cancel(request) : Promise.resolve(resultFixture(approval, requireValue(attempt), "succeeded")); },
       lookup: async () => { calls.lookup++; return hooks.lookup ? hooks.lookup() : { lifecycleVersion: "1.0.0", operationId: approval.operationId, checkedAt: AT, result: { kind: "unknown", reason: { code: "synthetic_unknown", message: "No historical evidence." } } }; },
+      query: async (request, signal) => { calls.read++; calls.signals.push(signal); return hooks.query ? hooks.query(request, signal) : { objects: [] }; },
       read: async request => { calls.read++; return hooks.read ? hooks.read(request) : { objects: [] }; },
       readbackCapabilityId: "balance.object.read", readback: async request => { calls.readback++; return hooks.readback ? hooks.readback() : { lifecycleVersion: "1.0.0", ref: request.ref, checkedAt: AT, provenance: { adapterId: "balance", connectionId: connection.connectionId, evidenceId: "synthetic-read" }, result: { kind: "unknown", reason: { code: "synthetic_unknown", message: "Current object unknown." } } }; },
     }]]), sinks, readBindings,
