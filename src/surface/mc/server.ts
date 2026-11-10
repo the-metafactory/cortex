@@ -289,6 +289,7 @@ export function startServer(
   if (conversationHost?.state === "ready" && options.desk?.routineScope && !options.connectionSetup) {
     const scope = options.desk.routineScope;
     const balance = createBalanceConnection({ host: conversationHost.host, db, desk: () => deskRuntime.options, stack: scope.stack, secretRoot: dirname(config.db.path), isPrincipal: principal => isStackPrincipal(principal, { ...guardBase, listenPort: config.port }) });
+    deskRuntime.adapterDay = () => balance.day;
     options = { ...options, connectionSetup: () => balance.setup, balanceConnection: () => balance };
   }
   options.conversations?.discord?.()?.setWebPrincipal(conversationWebPrincipal(guardBase.principals, guardBase.localPrincipal));
