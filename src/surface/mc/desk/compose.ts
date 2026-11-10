@@ -1,4 +1,5 @@
-import { adapterItems, type AdapterAttention } from "./adapter-items";
+import { adapterItems, adapterRowRef, type AdapterAttention, type AdapterAttentionAccess, type AdapterRows } from "./adapter-items";
+import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import { buildWeeklyMirror, mirrorWeek, type MirrorSchedule } from "./mirror";
 import { readMailMirror, type MailMirrorConfig, type MailMirrorUnsubscribe } from "./mail-mirror";
 import { loadBalanceState } from "./balance-store";
@@ -56,9 +57,20 @@ import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type G
 import { studioBriefing } from "./studio/overseer";
 import { routeOf, sourceBoundary } from "./source-boundary";
 
+export interface AdapterCapabilityRequest {
+  adapterId: string;
+  connectionId: string;
+  capabilityId: string;
+  destinations: ObjectReference[];
+}
+
+export type AdapterCapabilityAdmission = { kind: "allowed" } | { kind: "denied"; reason: string };
+
 export interface DeskRuntime {
   conversations?: () => boolean;
   adapterDay?: BalanceDayAccess;
+  adapterAttention?: AdapterAttentionAccess;
+  adapterCapability?: (request: AdapterCapabilityRequest) => Promise<AdapterCapabilityAdmission>;
   waitingTasks?: Pick<WaitingTasks, "read">;
   routineCapabilities?: import("./routine-providers").RoutineCapabilities;
   routineRead?: RoutineReadLoop;
@@ -134,7 +146,7 @@ export interface DeskVigilSource {
 }
 
 export interface ComposeDeps {
-  adapterAttention?: AdapterAttention;
+  adapterAttention?: AdapterAttention | AdapterAttentionAccess | readonly (AdapterAttention | AdapterAttentionAccess)[];
   adapterDay?: BalanceDayAccess;
   conversations?: boolean;
   waitingTasks?: Pick<WaitingTasks, "read">;
@@ -174,7 +186,7 @@ export async function composeDesk(
   deps: ComposeDeps = {},
 ): Promise<DeskView> {
   const now = deps.now ?? Date.now();
-  const adapterRead = adapterItems(deps.adapterAttention, now);
+  const adapterRead = readAdapterAttention(deps.adapterAttention, now);
   const routineRead = desk.routines ? deps.routineRead ? Promise.resolve(deps.routineRead.read(db, desk.routines, now)) : readRoutines(db, desk.routines, deps.runRoutine) : Promise.resolve(undefined);
   const sources: DeskView["sources"] = [];
 
@@ -314,6 +326,8 @@ export async function composeDesk(
     const view = invitationView(m, calendarsOnly(availability, readings), desk.mailInvitations, answers.get(m.id));
     return view ? [[m.id, view]] : [];
   }));
+  const studioSlugs = new Map(myDay.studioTasks.map(task => [task.id, task.slug]));
+  const adapterRows = adapters.items.map(item => withOwnerRespond(item, adapters.owners.get(item.key), studioSlugs));
   sources.push(...adapters.sources);
   const corrected = applyCorrections([...markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
@@ -324,7 +338,7 @@ export async function composeDesk(
     ...dmarcCards,
     ...waitingCards,
     ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now),
-  ], rules, readDeliveries(db), now), ...adapters.items], activeCorrections);
+  ], rules, readDeliveries(db), now), ...adapterRows], activeCorrections);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));
@@ -375,6 +389,40 @@ export async function composeDesk(
     corrections: activeCorrections,
     mailClassifier,
   };
+}
+
+const isAttentionFeature = (access: NonNullable<ComposeDeps["adapterAttention"]>): access is AdapterAttention => typeof access === "object" && "store" in access;
+
+async function readAdapterAttention(access: ComposeDeps["adapterAttention"], now: number): Promise<AdapterRows> {
+  if (access === undefined) return adapterItems(undefined, now);
+  if (isAttentionFeature(access)) return adapterItems(access, now);
+  const entries: readonly (AdapterAttention | AdapterAttentionAccess)[] = typeof access === "function" ? [access] : access;
+  const items = new Map<string, DeskItem>();
+  const owners = new Map<string, string>();
+  const sources: DeskView["sources"] = [];
+  for (const entry of entries) {
+    const rows = isAttentionFeature(entry) ? await adapterItems(entry, now) : await readAdapterSession(entry, now);
+    for (const item of rows.items) items.set(item.key, item);
+    for (const [key, owner] of rows.owners) owners.set(key, owner);
+    sources.push(...rows.sources);
+  }
+  return { items: [...items.values()], owners, sources };
+}
+
+async function readAdapterSession(access: AdapterAttentionAccess, now: number): Promise<AdapterRows> {
+  const session = await access();
+  if (!session) return adapterItems(undefined, now);
+  try {
+    return await adapterItems(session.feature, now);
+  } finally {
+    session.close();
+  }
+}
+
+function withOwnerRespond(item: DeskItem, owner: string | undefined, slugs: ReadonlyMap<string, string>): DeskItem {
+  if (owner !== "studio") return item;
+  const slug = slugs.get(adapterRowRef(item.key)?.canonicalId ?? "");
+  return { ...item, actions: [{ id: "studio.respond", label: "Respond in Studio", role: "primary", wired: true, ...(slug === undefined ? {} : { target: slug }) }] };
 }
 
 function unreadableLine(r: SourceReading): string {

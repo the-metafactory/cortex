@@ -12,7 +12,8 @@ export interface DeskSelection {
 
 export function selectItems(view: DeskView, area: string, snoozed: ReadonlySet<string>): DeskSelection {
   const open = view.items.filter((i) => !snoozed.has(i.key) && (area === ALL_AREAS || i.area === area));
-  const needsYou = open.filter((item, index) => index < view.topN || item.kind === "agent-blocked" || item.kind === "agent-failed");
+  const eligible = open.filter((item) => item.kind !== "adapter" || item.dueAt !== undefined);
+  const needsYou = eligible.filter((item, index) => index < view.topN || item.kind === "agent-blocked" || item.kind === "agent-failed");
   const visible = new Set(needsYou.map(item => item.key));
   const rest = open.filter(item => !visible.has(item.key));
   return { needsYou, rest, groups: fold(rest) };

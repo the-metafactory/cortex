@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium } from "playwright";
+import { buildDeskProbeBundle, deskProbeEntry, serveDeskProbe } from "./lib/desk-browser-probe";
 import { initDatabase } from "../src/surface/mc/db/init";
 import { composeDesk } from "../src/surface/mc/desk/compose";
 import { ATTENTION_DESK, attentionRig } from "../src/surface/mc/desk/fixtures/adapter-attention-fixtures";
@@ -17,18 +18,7 @@ async function probe() {
     assert.equal((await item.ingest(0)).status, "ok");
     item.time.advance(720000);
     const fetched = item.fetches;
-    const build = await Bun.build({ entrypoints: [join(import.meta.dir, "desk-attention/browser-probe.tsx")], target: "browser" });
-    const script = build.outputs.find(output => output.path.endsWith(".js"));
-    assert.ok(build.success && script, "Browser bundle builds.");
-    server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-      const url = new URL(request.url);
-      if (url.pathname === "/probe.js") return new Response(script, { headers: { "content-type": "text/javascript" } });
-      if (url.pathname === "/probe.css") return new Response(build.outputs.find(output => output.path.endsWith(".css")) ?? "", { headers: { "content-type": "text/css" } });
-      if (url.pathname === "/api/desk") return Response.json(await composeDesk(db, ATTENTION_DESK, undefined, { now: item.time.clock.now(), adapterAttention: item.feature }), { headers: { "Cache-Control": "no-store" } });
-      if (url.pathname === "/api/desk/studio") return Response.json({ studio: null });
-      if (url.pathname.startsWith("/api/")) return Response.json({ error: "This synthetic probe has no owner actions." }, { status: 404 });
-      return new Response('<!doctype html><html><head><link rel="stylesheet" href="/probe.css"></head><body><div id="root"></div><script type="module" src="/probe.js"></script></body></html>', { headers: { "content-type": "text/html" } });
-    } });
+    server = serveDeskProbe(await buildDeskProbeBundle(deskProbeEntry("desk-attention/browser-probe.tsx")), { desk: () => composeDesk(db, ATTENTION_DESK, undefined, { now: item.time.clock.now(), adapterAttention: item.feature }) });
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     page.on("pageerror", error => { errors.push(error.message); });

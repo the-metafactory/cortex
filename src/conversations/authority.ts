@@ -56,6 +56,7 @@ export type { LookupRequest, ReadbackRequest };
 const LookupRequestSchema = z.object({ lifecycleVersion: z.literal("1.0.0"), operationId: z.string().min(1), ownerRequestId: z.string().min(1) }).strict();
 const ReadbackRequestSchema = z.object({ lifecycleVersion: z.literal("1.0.0"), ref: ObjectReferenceSchema }).strict();
 const LeaseSchema = z.object({ bindingKey: z.string().min(1), epoch: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), instanceId: z.string().min(1), supervisorReceiptRef: z.string().min(1) }).strict();
+const RowCapabilityRequestSchema = z.object({ adapterId: z.string().min(1), connectionId: z.string().min(1), capabilityId: z.string().min(1), destinations: z.array(ObjectReferenceSchema).min(1) }).strict();
 const denied = (recovery: Denial["recovery"] = "reauthorize"): Denial => ({ kind: "denied", reason: { code: "authority_denied", message: "The current host authority does not permit this action." }, recovery });
 const withheld = (known = false): ReleaseProjection<never> => ({ kind: "withheld", reason: { code: known ? "release_withheld" : "not_found", message: known ? "This result is withheld under current access. Continue in private web." : "The requested result is unavailable." }, recovery: known ? "use-private-web" : "reauthorize" });
 const INVALID_READBACK_IS_NOT_RELEASABLE = false;
@@ -417,6 +418,21 @@ export class AuthorityMediator {
       await this.journal.append(operationId, stored.revision, { sequence: stored.journal.sequence + 1, eventId: randomUUID(), at: this.now().toISOString(), event: { kind: "wait-expired", attemptId: attempt.event.attempt.attemptId, reason: { code: "outcome_unavailable", message } } });
       if (!("kind" in stored.journal.snapshot)) await this.collaborators.fences?.trigger({ kind: "adapter_crash", target: fenceTargetOf(stored.journal.snapshot), evidence: { operationId, detail: message } });
     });
+  }
+
+  async admitRowCapability(context: HostContext, raw: unknown): Promise<{ kind: "allowed" } | Denial> {
+    try {
+      const request = parseWire(RowCapabilityRequestSchema, raw);
+      const resolved = await this.resolve(context, request.connectionId);
+      if (resolved.connection.adapterId === request.adapterId && this.writable(resolved, request)) return { kind: "allowed" };
+      return await this.recordDenied(context, "row-capability", `${request.connectionId}:${request.capabilityId}`);
+    } catch {
+      return await this.recordDenied(context, "row-capability", "row-capability");
+    }
+  }
+
+  private writable(resolved: Resolved, request: z.infer<typeof RowCapabilityRequestSchema>): boolean {
+    return !resolved.binding.maintenance && resolved.policy.operationVisible && resolved.policy.writesAllowed && resolved.connection.writeCapabilityIds.includes(request.capabilityId) && withinLimits(resolved.connection.writeDestinations, request.destinations);
   }
 
   async connectorEntry(context: HostContext, snapshot: ApprovedSnapshot): Promise<{ kind: "allowed" } | { kind: "denied"; reason: BoundaryError }> {

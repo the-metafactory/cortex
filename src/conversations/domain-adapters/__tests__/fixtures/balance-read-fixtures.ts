@@ -24,11 +24,13 @@ import type { ObjectReference } from "../../types";
 import { createBalanceReadAdapter } from "../../balance/read";
 import { BALANCE_TASK_OBSERVATION_CAPABILITY_ID, createBalanceObservationAdapter } from "../../balance/observation";
 import { createBalanceDayReader, releasedObservationViews, type BalanceDayReader } from "../../../../surface/mc/desk/balance-day";
+import type { AdapterAttentionSession } from "../../../../surface/mc/desk/adapter-items";
 
 export const BALANCE_CONNECTION = "connection-example";
 export const LAB_AREA = objectRef("balance", "area", "area-example");
 export const HOME_AREA = objectRef("balance", "area", "area-home");
 export const LAB_TASK_IDS = ["task-wing", "task-done", "task-glue"] as const;
+export const OBSERVED_TASK_IDS = [...LAB_TASK_IDS, "task-studio"] as const;
 
 export function releasedObjects(value: Json | undefined): { ref: { canonicalId: string }; value: Record<string, unknown> }[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("released value is not an object");
@@ -74,6 +76,7 @@ export interface BalanceReadRig {
   views(history?: boolean): Promise<ObservationView[]>;
   day(refresh?: boolean): Promise<import("../../../../surface/mc/desk/balance-day").BalanceDayProjection | null>;
   reader(): BalanceDayReader;
+  attentionAccess(): Promise<AdapterAttentionSession | null>;
   unavailable(value: boolean): void;
   destinations(): Promise<QueryPage>;
   taskQuery(input?: unknown, destinations?: readonly ObjectReference[]): Promise<BalanceReadStep>;
@@ -84,6 +87,18 @@ export interface BalanceReadRig {
   removeArea(canonicalId: string): void;
   allowHome(): Promise<void>;
   close(): Promise<void>;
+}
+
+const tracked: BalanceReadRig[] = [];
+
+export async function openTrackedBalanceReadRig(): Promise<BalanceReadRig> {
+  const rig = await openBalanceReadRig();
+  tracked.push(rig);
+  return rig;
+}
+
+export async function closeTrackedBalanceReadRigs(): Promise<void> {
+  await Promise.all(tracked.splice(0).map(rig => rig.close()));
 }
 
 export async function openBalanceReadRig(): Promise<BalanceReadRig> {
@@ -128,6 +143,10 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
     saveBalanceState(db, state);
   };
   const observationSource = (): QuerySource => ({ adapterId: "balance", connectionId: BALANCE_CONNECTION, capabilityId: BALANCE_TASK_OBSERVATION_CAPABILITY_ID, inputSchemaRef: observationBinding.inputSchemaRef, destinations: allowed.filter(destination => areas.some(area => area.id === destination.canonicalId)), input: {} });
+  const attention = (): AdapterAttentionSession | null => observationSource().destinations.length === 0 ? null : ({
+    feature: { enabled: true, store: rig.host.readObservations(registry, rig.bindings, time.clock), bindings: readBindings, context: rig.context, sink: rig.sink, sources: [observationSource()] },
+    close: () => undefined,
+  });
   const observationReader = (): BalanceDayReader => createBalanceDayReader({
     check: mode => rig.host.readObservations(registry, rig.bindings, time.clock).check(rig.context, observationSource(), rig.sink, mode),
     async views() {
@@ -169,6 +188,7 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
       return await observationReader().projection(refresh);
     },
     reader: () => observationReader(),
+    attentionAccess: () => Promise.resolve(attention()),
     unavailable(value) { reading = !value; },
     async destinations() {
       const handler = adapter.bindings.handlers["balance.destinations"];

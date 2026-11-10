@@ -8,6 +8,7 @@ export const DESK_MAIL_PATH = "/api/desk/mail";
 export const DESK_RULING_PATH = "/api/desk/ruling";
 export const DESK_MAIL_RULES_PATH = "/api/desk/mail/rules";
 export const DESK_DMARC_PATH = "/api/desk/mail/dmarc";
+export const DESK_ADAPTER_PATH = "/api/desk/adapter";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 export type Outcome = { ok: boolean; text: string; recorded?: boolean; correction?: number; uncertain?: boolean; undo?: string; undoKind?: "move" | "snooze" | "trust"; block?: string; restored?: string; rule?: MailRuleView };
@@ -38,6 +39,10 @@ async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Prom
   const line = typeof parsed?.detail === "string" ? parsed.detail : error;
   return { ok: false, text: line || `The action failed (HTTP ${res.status}).`, ...(parsed?.recorded === true ? { recorded: true } : {}), ...(typeof parsed?.correction === "number" ? { correction: parsed.correction } : {}) };
 }
+
+/** Asks the host authority for one change a connected row declares, and returns one line for the page. Never throws. */
+export const submitAdapterAction = (body: { key: string; capability: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
+  postDesk(DESK_ADAPTER_PATH, body, fetchImpl);
 
 /** Sends one Desk action and returns one line for the page. Never throws. */
 export const submitDeskAction = (body: { action: string; key: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>

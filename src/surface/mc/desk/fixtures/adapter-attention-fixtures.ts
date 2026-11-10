@@ -19,7 +19,9 @@ function required<T>(value: T | undefined): T {
   return value;
 }
 
-function syntheticAdapter(adapterId: string) {
+export interface AttentionOptions { rowCapabilities?: { granted: boolean } }
+
+function syntheticAdapter(adapterId: string, rowCapability: boolean) {
   const declaration = JSON.parse(JSON.stringify(referenceDeclaration("observation")).replaceAll("reference-feed", adapterId)) as AdapterDeclaration;
   const capability = required(declaration.capabilities[0]);
   const schemaRef = { schemaId: `${adapterId}.object`, version: "1.0.0" };
@@ -35,13 +37,16 @@ function syntheticAdapter(adapterId: string) {
   const binding = ReadBindingSchema.parse({
     version: "1.0.0", adapterId, capabilityId: capability.capabilityId, mode: "poll", objectType: "document", inputSchemaRef: capability.inputSchemaRef, outputSchemaRef: capability.outputSchemaRef, destinationType: "document",
     display: { title: "/display~1data/title~0text", due: "/display~1data/due", area: "/display~1data/area", url: "/display~1data/url" },
-    attention: { pointer: "/display~1data/reason" }, observation: { modes: ["poll"], objectsPointer: "/items", resumable: false },
+    attention: { pointer: "/display~1data/reason" },
+    ...(rowCapability ? { capabilities: [{ capabilityId: `${adapterId}.complete`, label: "Complete" }] } : {}),
+    observation: { modes: ["poll"], objectsPointer: "/items", resumable: false },
   });
   return { declaration, binding, schemaRef };
 }
 
-export async function attentionRig(policy: "local" | "cloud" = "local") {
-  const adapters = [syntheticAdapter("synthetic-one"), syntheticAdapter("synthetic-two")];
+export async function attentionRig(policy: "local" | "cloud" = "local", options: AttentionOptions = {}) {
+  const rowCapability = options.rowCapabilities !== undefined;
+  const adapters = [syntheticAdapter("synthetic-one", rowCapability), syntheticAdapter("synthetic-two", rowCapability)];
   const registry = new DomainAdapterRegistry();
   for (const adapter of adapters) {
     const result = registry.register(adapter.declaration, fixtureBindings(adapter.declaration));
@@ -59,7 +64,8 @@ export async function attentionRig(policy: "local" | "cloud" = "local") {
   for (const [index, adapter] of adapters.entries()) {
     const connectionId = index === 0 ? rig.connection.connectionId : "synthetic-second-connection";
     const destination: ObjectReference = { adapterId: adapter.binding.adapterId, connectionId, objectType: "document", canonicalId: "lab" };
-    const connection = { ...rig.connection, connectionId, adapterId: adapter.binding.adapterId, readCapabilityIds: [adapter.binding.capabilityId], readDestinations: [destination], writeCapabilityIds: [], writeDestinations: [], connectionRevision: index === 0 ? "2" : "1" };
+    const writeCapabilityIds = options.rowCapabilities?.granted === true ? [`${adapter.binding.adapterId}.complete`] : [];
+    const connection = { ...rig.connection, connectionId, adapterId: adapter.binding.adapterId, readCapabilityIds: [adapter.binding.capabilityId], readDestinations: [destination], writeCapabilityIds, writeDestinations: writeCapabilityIds.length > 0 ? [destination] : [], connectionRevision: index === 0 ? "2" : "1" };
     connections.push(connection);
     await rig.service.publishHostRecord({ kind: "connection", value: connection }, index === 0 ? 1 : 0);
     const restriction = { ...rig.objectRestriction, restrictionRef: randomUUID(), source: destination };
@@ -99,5 +105,5 @@ export async function attentionRig(policy: "local" | "cloud" = "local") {
     batches.set(source.adapterId, deletion);
     return store.check(rig.context, source, rig.sink);
   }
-  return { rig, time, store, feature, sources, adapters, restrictions, ingest, revoke, remove, value, get fetches() { return fetches; } };
+  return { rig, time, store, feature, sources, adapters, restrictions, ingest, revoke, remove, value, capabilityOf: (index = 0) => `${required(adapters[index]).binding.adapterId}.complete`, get fetches() { return fetches; } };
 }

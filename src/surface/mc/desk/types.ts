@@ -7,6 +7,7 @@ import type { AREA_POLICIES } from "../../../common/types/config";
 import type { RoutineView } from "./routine-command";
 import type { CalendarAvailability } from "./calendar-availability";
 import type { EventAvailability } from "./calendar-contract";
+import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 
 export type DeskUrgency = "now" | "today" | "this-week" | "waiting";
 
@@ -80,6 +81,8 @@ export interface DeskCorrection {
 
 export interface DeskItem {
   readOnly?: boolean;
+  badge?: string;
+  destination?: ObjectReference;
   freshness?: "fresh" | "stale" | "conflicted" | "unavailable";
   rangerMap?: { key: string; label: string };
   attention?: "action" | "update";

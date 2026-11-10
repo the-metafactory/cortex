@@ -5,6 +5,7 @@ import { isRecord, readObservedAt } from "../reads/page-primitives";
 import { ReadBindingSchema, type ReadBinding } from "../reads/types";
 import type { AdapterBindings, AdapterDeclaration } from "../types";
 import type { Json } from "../operations/types";
+import { BALANCE_TASK_ATTENTION, balanceTaskRowCapabilities } from "./attention";
 import { BALANCE_ADAPTER_ID as ADAPTER_ID, objectSchema, ref } from "./schema";
 import { balanceReadDeclaration, balanceReadBindings, createBalanceReadAdapter, balanceTaskObjects, type BalanceReadSource } from "./read";
 
@@ -39,10 +40,13 @@ export function balanceTaskObservationDeclaration(): AdapterDeclaration {
 }
 
 export function balanceTaskObservationBinding(): ReadBinding {
+  const capabilities = balanceTaskRowCapabilities();
   return ReadBindingSchema.parse({
     version: "1.0.0", adapterId: ADAPTER_ID, capabilityId: BALANCE_TASK_OBSERVATION_CAPABILITY_ID, mode: "poll", objectType: "task",
     inputSchemaRef: OBSERVATION_INPUT_REF, outputSchemaRef: OBSERVATION_OUTPUT_REF, destinationType: "area",
     display: { title: "/title", summary: "/summary", status: "/status", due: "/dueDate", area: "/area" },
+    attention: BALANCE_TASK_ATTENTION,
+    ...(capabilities.length > 0 ? { capabilities: [...capabilities] } : {}),
     observation: { modes: ["poll"], objectsPointer: "/items", resumable: false, ordering: BALANCE_TASK_ORDERING },
   });
 }
@@ -88,7 +92,7 @@ function observe(source: BalanceReadSource, request: ObservationRequest, signal:
   const areas = source.areas().filter(area => chosen.includes(area.id));
   const observedAt = readObservedAt(source);
   const limit = Math.max(1, Math.min(request.limit, OBSERVATION_LIMITS.batchItems));
-  const objects = balanceTaskObjects(state, areas, source.connectionId, limit);
+  const objects = balanceTaskObjects(state, areas, source.connectionId, limit, source.now?.() ?? new Date());
   const events: ObservationEvent[] = [];
   const items: Json[] = [];
   for (const object of objects) {

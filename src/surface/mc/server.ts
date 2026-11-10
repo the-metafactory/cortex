@@ -88,6 +88,7 @@ import { handleGetPhaseDetail } from "./api/phase-detail";
 import { handleGetWorkItemDetail } from "./api/work-item-detail";
 import { handleListAttention, handleAttentionLifecycle } from "./api/attention";
 import { handleGetDesk } from "./api/desk";
+import { handleDeskAdapterAction } from "./api/desk-adapter";
 import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
 import { handleDeskMail } from "./api/desk-mail";
 import { handleDeskGraphRepositories } from "./api/desk-graph-repositories";
@@ -290,6 +291,8 @@ export function startServer(
     const scope = options.desk.routineScope;
     const balance = createBalanceConnection({ host: conversationHost.host, db, desk: () => deskRuntime.options, stack: scope.stack, secretRoot: dirname(config.db.path), isPrincipal: principal => isStackPrincipal(principal, { ...guardBase, listenPort: config.port }) });
     deskRuntime.adapterDay = () => balance.day;
+    deskRuntime.adapterAttention = () => balance.attention();
+    deskRuntime.adapterCapability = request => balance.admit(request);
     options = { ...options, connectionSetup: () => balance.setup, balanceConnection: () => balance };
   }
   options.conversations?.discord?.()?.setWebPrincipal(conversationWebPrincipal(guardBase.principals, guardBase.localPrincipal));
@@ -581,6 +584,8 @@ async function handleApi(
   if (pathname === "/api/desk/my-day") return handleDeskMyDay(req, db, desk, vigil);
 
   if (pathname === "/api/desk/action") return handleDeskAction(req, desk);
+
+  if (pathname === "/api/desk/adapter") return handleDeskAdapterAction(req, db, desk, vigil);
 
   if (pathname === "/api/desk/autonomy") return handleDeskAutonomy(req, db, desk);
 

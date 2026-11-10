@@ -19,7 +19,7 @@ import { RoutinesSection, RoutineDone } from "./desk-routines";
 import { DeskRoutineEditor } from "./desk-routine-editor";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { getJson, postJson } from "../lib/api";
-import { fetchInviteProposal, fetchMailThreadProposal, noteMailOpened, submitDeskAction, submitDmarcAck, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
+import { fetchInviteProposal, fetchMailThreadProposal, noteMailOpened, submitAdapterAction, submitDeskAction, submitDmarcAck, submitGoalAction, submitMailAction, submitMailRule, submitRuling, type Outcome } from "../lib/desk-action";
 import { afterFailure, cancelRuling, newRuling, RulingBox, type RulingDraft } from "./desk-ruling";
 import { newReplyDraft, prepareAcceptDraft, prepareDeclineDraft, prepareProposalDraft, ReplyDraftBox, type ReplyDraft } from "./desk-mail-draft";
 import { InvitationBox, newInviteAsk, type InviteAsk } from "./desk-mail-invitation";
@@ -466,6 +466,8 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     setCardNote(item.key, null);
     if (a.id === "detail") setDetail(item);
     else if (a.id === "snooze") setSnoozed((s) => new Set(s).add(item.key));
+    else if (a.id === "studio.respond" && a.target) go({ mode: "studio", thread: a.target });
+    else if (a.id.startsWith("adapter.capability:") && a.target) { const capability = a.target; void send(item, a, { request: () => submitAdapterAction({ key: item.key, capability }), keepVisible: true }); }
     else if (a.id === "todo" && view.myDay) { setPlanItem({ ...item }); setDetail(null); openCatchup(item.key); }
     else if (a.id === "vip.add" && a.target) void addVip(a.target, item.title.split(" wrote:")[0] ?? null);
     else if (a.id === "reminder.done" && a.target) {
@@ -1195,6 +1197,7 @@ export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending
       <div className="body">
         <div className="desk-meta">
           {area && <span className="area"><AreaDot area={area} />{area.label}</span>}
+          {item.badge && <span className="desk-badge">{item.badge}</span>}
           <span className={item.urgency === "today" || item.urgency === "now" ? "due" : ""}>{URGENCY_LABEL[item.urgency]}</span>
           {freshnessLabel(item.freshness) && <span className="desk-stale">{freshnessLabel(item.freshness)}</span>}
           {item.correction && <span className="desk-corr">{CORRECTION_TAG[item.correction]}</span>}
