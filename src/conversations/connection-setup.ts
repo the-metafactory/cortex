@@ -7,6 +7,7 @@ import { ConnectionRecordSchema, type ConnectionRecord } from "./authority-recor
 import { CredentialSetupError, type DeskCredentialBroker, type SetupContext, type SetupDescriptor, type SetupPrincipal, type SetupReason, type SlotInput, type SlotStatus } from "../common/config/desk-credential-broker";
 import { ObjectReferenceSchema, type ObjectReference } from "./domain-adapters/types";
 import { canonicalWire } from "./domain-adapters/operations/validation";
+import type { AdapterConnectionState, ConnectionStatus, ConnectionStatusReader } from "./domain-adapters/diagnostics";
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const FIELD = /^[a-z][a-z0-9-]{0,31}$/;
@@ -41,6 +42,7 @@ export interface ConnectionView {
   writeDestinations: ObjectReference[];
   slots: SlotStatus[];
   publishedRevision: string | null;
+  status: ConnectionStatus;
 }
 
 export interface PackageForm {
@@ -108,6 +110,7 @@ export class ConnectionSetupService {
     private readonly authority: Pick<AuthorityMediator, "inspectHostRecords" | "publishHostRecord">,
     private readonly deps: ConnectionSetupDeps,
     private readonly hostContext: Context = BACKGROUND_CONTEXT,
+    private readonly diagnostics?: ConnectionStatusReader,
   ) {}
 
   registerCatalog(): void {
@@ -154,7 +157,7 @@ export class ConnectionSetupService {
       } else if (input.connectionId) throw new ConnectionSetupError("unknown_connection");
       const context = await this.context(principal);
       const changed = existing ? this.selectionChanged(existing, input) || Object.keys(input.inputs ?? {}).length > 0 : false;
-      if (existing && changed) await this.fence(existing.connectionId);
+      if (existing && changed) { await this.fence(existing.connectionId); await this.recordStatus(existing.connectionId, existing.packageId, "unavailable", "reconfigured"); }
 
       const hasInputs = Object.keys(input.inputs ?? {}).length > 0;
       const active = existing ? await this.isActive(context, existing) : false;
@@ -193,17 +196,19 @@ export class ConnectionSetupService {
       const head = authority.heads[key] ?? 0;
       const latest = authority.records[key]?.at(-1);
       const record = this.record(config, entry, bound, head + 1, "active");
-      if (latest?.kind === "connection" && latest.value.status === "active" && sameConnection(latest.value, record)) return this.view(context, config);
+      if (latest?.kind === "connection" && latest.value.status === "active" && sameConnection(latest.value, record)) { await this.recordStatus(connectionId, entry.packageId, "available", null); return this.view(context, config); }
       try { await this.authority.publishHostRecord({ kind: "connection", value: record }, head); }
       catch (_err) { throw new ConnectionSetupError("authority_changed"); }
+      await this.recordStatus(connectionId, entry.packageId, "available", null);
       return this.view(context, await this.bump(config.connectionId));
     });
   }
 
   disable(principal: string, connectionId: string, expectedRevision: number): Promise<ConnectionView> {
     return this.serial(async () => {
-      const { context } = await this.claim(principal, connectionId, expectedRevision);
+      const { config, context } = await this.claim(principal, connectionId, expectedRevision);
       await this.fence(connectionId);
+      await this.recordStatus(connectionId, config.packageId, "unavailable", "disabled");
       return this.view(context, await this.bump(connectionId));
     });
   }
@@ -336,11 +341,26 @@ export class ConnectionSetupService {
     let state: ConnectionState = !active ? (mechanismMissing ? "unavailable" : "incomplete") : published ? "enabled" : "disabled";
     let reason: SetupUnavailableReason | undefined = status?.reason;
     if (!entry) { state = "unavailable"; reason = "package_missing"; }
+    const fallback = this.fallbackStatus(state, reason);
+    const observed = this.diagnostics ? await this.diagnostics.status(config.connectionId, fallback) : fallback;
+    const settings = state === "enabled" ? observed : { ...observed, state: fallback.state, reason: fallback.reason };
     return {
       connectionId: config.connectionId, packageId: config.packageId, state, ...(reason ? { reason } : {}), revision: config.revision, scope: config.scope,
       readCapabilityIds: config.readCapabilityIds, writeCapabilityIds: config.writeCapabilityIds, readDestinations: config.readDestinations, writeDestinations: config.writeDestinations,
-      slots: status?.slots ?? [], publishedRevision: live ? live.connectionRevision : null,
+      slots: status?.slots ?? [], publishedRevision: live ? live.connectionRevision : null, status: settings,
     };
+  }
+
+  private fallbackStatus(state: ConnectionState, reason: SetupUnavailableReason | undefined): ConnectionStatus {
+    const code = state === "unavailable" ? reason ?? "unavailable" : state === "disabled" ? "disabled" : state === "incomplete" ? "setup_incomplete" : "not_configured";
+    return state === "enabled" ? { state: "available", lastSuccessAt: null, lastAttemptAt: null, reason: null } : { state: "unavailable", lastSuccessAt: null, lastAttemptAt: null, reason: code };
+  }
+
+  private async recordStatus(connectionId: string, adapterId: string, state: AdapterConnectionState, reason: string | null): Promise<void> {
+    if (!this.diagnostics) return;
+    const current = await this.diagnostics.status(connectionId);
+    if (current.state === state && current.reason === reason) return;
+    await this.diagnostics.record({ event: "desk.adapter.connection_status", adapterId, connectionId, state, ...(reason ? { errorCode: reason } : {}) });
   }
 
   private async load(): Promise<State> {
