@@ -1,5 +1,6 @@
 import { SETTINGS_GROUPS, type SettingsGroup } from "../hooks/use-settings-location";
 import { CalendarSettings } from "./desk-calendar-settings";
+import { ConnectionSetup } from "./desk-connection-setup";
 import { MailRuleSettings } from "./desk-mail-rules";
 import { TrustedSenderSettings } from "./desk-trusted-senders";
 import { GraphRepositorySettings } from "./desk-graph-repositories";
@@ -228,6 +229,7 @@ export function SettingsBody({ day, group = "calendars", onGroup, vips, unimport
             </section>)}
             {panel("not-phishing", <TrustedSenderSettings initial={trusted} />)}
             {panel("graph-repositories", <GraphRepositorySettings active={group === "graph-repositories"} />)}
+            {panel("connections", <ConnectionSetup active={group === "connections"} />)}
           </div>
         </div>
       </main>
