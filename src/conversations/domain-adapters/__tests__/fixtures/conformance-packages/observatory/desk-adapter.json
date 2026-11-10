@@ -1,0 +1,511 @@
+{
+  "format": "desk-adapter-package/1",
+  "packageId": "synthetic.observatory",
+  "packageVersion": "1.0.0",
+  "deskSdkRange": "^1.0.0",
+  "domainContractVersion": "1.0.0",
+  "backend": {
+    "entry": "backend.mjs",
+    "sha256": "d75f1a3121e03190d5b0a41d55417194fcea2e1db79b31105f99ad60686db4be"
+  },
+  "declaration": {
+    "adapterId": "observatory",
+    "label": "Observatory",
+    "contractRange": "^1.0.0",
+    "schemas": [
+      {
+        "schemaId": "observatory.empty",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        }
+      },
+      {
+        "schemaId": "observatory.error",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "observatory.dome",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "observatory.dome.list.output",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:observatory.dome:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "observatory.viewing",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "place"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Name"
+            },
+            "place": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "type": "string",
+                  "const": "observatory"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "dome"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "note": {
+              "type": "string",
+              "title": "Note"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "observatory.viewing.list.output",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:observatory.viewing:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "observatory.find.input",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "observatory.get.input",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "canonicalId"
+          ],
+          "properties": {
+            "canonicalId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "observatory.created",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ref"
+          ],
+          "properties": {
+            "ref": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "type": "string",
+                  "const": "observatory"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "viewing"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "objectTypes": [
+      {
+        "objectType": "dome",
+        "label": "Dome",
+        "schemaRef": {
+          "schemaId": "observatory.dome",
+          "version": "1.0.0"
+        },
+        "relationships": []
+      },
+      {
+        "objectType": "viewing",
+        "label": "Viewing",
+        "schemaRef": {
+          "schemaId": "observatory.viewing",
+          "version": "1.0.0"
+        },
+        "relationships": [
+          {
+            "fieldPath": "/place",
+            "cardinality": "one",
+            "targetAdapterId": "observatory",
+            "targetObjectType": "dome"
+          }
+        ]
+      }
+    ],
+    "capabilities": [
+      {
+        "capabilityId": "observatory.dome.list",
+        "label": "List domes",
+        "kind": "query",
+        "objectTypes": [
+          "dome"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "observatory.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "observatory.dome.list.output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "observatory.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "observatory.viewing.search",
+        "label": "Find viewings",
+        "kind": "query",
+        "objectTypes": [
+          "viewing"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "observatory.find.input",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "observatory.viewing.list.output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "observatory.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "observatory.viewing.watch",
+        "label": "Watch viewings",
+        "kind": "observation",
+        "objectTypes": [
+          "viewing"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "observatory.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "observatory.viewing.list.output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "observatory.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "observatory.viewing.book",
+        "label": "book a viewing",
+        "kind": "action",
+        "objectTypes": [
+          "viewing"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "observatory.viewing",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "observatory.created",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "observatory.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "observatory.viewing.get",
+        "label": "Read one viewing",
+        "kind": "query",
+        "objectTypes": [
+          "viewing"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "observatory.get.input",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "observatory.viewing",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "observatory.error",
+          "version": "1.0.0"
+        }
+      }
+    ]
+  },
+  "draftingBindings": [
+    {
+      "bindingVersion": "1.0.0",
+      "adapterId": "observatory",
+      "capabilityId": "observatory.viewing.book",
+      "inputSchemaRef": {
+        "schemaId": "observatory.viewing",
+        "version": "1.0.0"
+      },
+      "guidance": {
+        "guidanceId": "observatory.guidance",
+        "version": "1.0.0",
+        "instructions": "Draft a viewing from the conversation."
+      },
+      "fieldHints": [
+        {
+          "pointer": "/name",
+          "role": "title"
+        },
+        {
+          "pointer": "/place",
+          "role": "destination",
+          "resolveWith": "observatory.dome.list"
+        },
+        {
+          "pointer": "/note",
+          "role": "detail",
+          "widget": "long"
+        }
+      ]
+    }
+  ],
+  "readBindings": [
+    {
+      "version": "1.0.0",
+      "adapterId": "observatory",
+      "capabilityId": "observatory.dome.list",
+      "mode": "destinations",
+      "objectType": "dome",
+      "inputSchemaRef": {
+        "schemaId": "observatory.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "observatory.dome.list.output",
+        "version": "1.0.0"
+      },
+      "display": {
+        "title": "/name"
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "observatory",
+      "capabilityId": "observatory.viewing.search",
+      "mode": "query",
+      "objectType": "viewing",
+      "inputSchemaRef": {
+        "schemaId": "observatory.find.input",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "observatory.viewing.list.output",
+        "version": "1.0.0"
+      },
+      "textPointer": "/text",
+      "destinationType": "dome",
+      "display": {
+        "title": "/name"
+      },
+      "query": {
+        "objectsPointer": "/items",
+        "ordering": "provider",
+        "stableSnapshot": true,
+        "limits": {
+          "items": 2
+        }
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "observatory",
+      "capabilityId": "observatory.viewing.watch",
+      "mode": "poll",
+      "objectType": "viewing",
+      "inputSchemaRef": {
+        "schemaId": "observatory.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "observatory.viewing.list.output",
+        "version": "1.0.0"
+      },
+      "destinationType": "dome",
+      "display": {
+        "title": "/name"
+      },
+      "observation": {
+        "modes": [
+          "poll"
+        ],
+        "objectsPointer": "/items",
+        "resumable": false
+      }
+    }
+  ],
+  "setup": {
+    "version": "1.0.0",
+    "schemas": [
+      {
+        "schemaId": "observatory.setup.configuration",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "workspace": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "observatory.setup.account",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "account": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "configurationSchemaRef": {
+      "schemaId": "observatory.setup.configuration",
+      "version": "1.0.0"
+    },
+    "accountScopeSchemaRef": {
+      "schemaId": "observatory.setup.account",
+      "version": "1.0.0"
+    },
+    "authMethods": [
+      {
+        "kind": "local"
+      }
+    ]
+  }
+}

@@ -4,6 +4,7 @@ import { chromium, type Page } from "playwright";
 import { capabilities, type Capability, type CreationView, type ProposalView } from "../src/conversations/creation";
 import { CLOSED_NODE, CORTEX, CORTEX_MAP, CORTEX_NODE, GRAPH_NODE_BODIES, MISSING_NODE, UNTICKED, openGraphReadRig } from "../src/conversations/domain-adapters/__tests__/fixtures/graph-read-fixtures";
 import { handleDeskGraphSurfaces } from "../src/surface/mc/api/desk-graph-surfaces";
+import { openDashboardProbe } from "./probe-dashboard-page";
 import { createGraphSurfaceReader, graphSurfaceRun } from "../src/surface/mc/desk/graph-surfaces";
 
 const LEGACY_REPOSITORY = "github:github.com/example/legacy-only";
@@ -62,9 +63,7 @@ const soma = (target: string): { node: { title: string; kind: string }; status: 
 
 const browser = await chromium.launch({ headless: true });
 try {
-  const page = await browser.newPage();
-  page.on("pageerror", error => { throw error; });
-  const load = async (): Promise<void> => { await page.goto(server.url.toString()); await page.waitForSelector("body[data-mounted]", { state: "attached" }); };
+  const { page, load } = await openDashboardProbe(browser, server.url);
 
   await load();
   const draft = cardOf(page, "Draft from the probe");

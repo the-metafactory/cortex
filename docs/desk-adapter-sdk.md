@@ -68,6 +68,18 @@ Fields:
 
 Host bounds: 512 KiB manifest, 256 asset files, 8 MiB per file. These are fixed in `package.ts`; a package cannot raise them.
 
+## Inline UI entry
+
+The asset route delivers the active generation's HTML entry as one self-contained document for a `sandbox="allow-scripts"` frame. Author the entry with external classic scripts (`<script src="app.js"></script>`, optionally `type="text/javascript"`), stylesheet links (`<link rel="stylesheet" href="app.css">`) and images (`<img src="picture.png">`). Every reference must resolve to a file listed in `ui.files`. References, including CSS `url(...)` inside a stylesheet, resolve relative to the HTML entry, not the stylesheet directory. Use relative package paths; absolute paths, protocol-relative URLs, remote URLs and existing `data:` URLs are refused. CSS URLs may be quoted or unquoted and can reference listed images or fonts.
+
+The Cortex runtime verifies each referenced file's digest before building the document. Scripts become inline scripts, stylesheet links become styles, and images and CSS URLs become `data:` URIs using the manifest media type. Script and style hashes pin their exact inline text in the response CSP; text is UTF-8 with HTML newline normalization. The ETag identifies the produced document. Other listed files retain their individual asset responses.
+
+Script elements must omit `defer`, `async` and `nomodule`: their execution semantics cannot be preserved when the script becomes inline. Place scripts after the elements they access. Stylesheet links must use only `rel="stylesheet"`, `href`, optional `media` and optional `type="text/css"` attributes. The resulting style element retains `media`. Alternate, named and disabled stylesheets are unsupported.
+
+Keep script and style element bodies empty in the authored HTML. Module scripts, inline bodies, `style=` attributes, `on*` handlers, CSS `@import` and runtime-built asset URLs are unsupported. Script text must not contain HTML script delimiters (`</script`, `<script`, `<!--`); stylesheet text must not contain a closing style delimiter. Use JavaScript string escapes where those strings are needed. Other elements may carry only fragment values in `src`, `href`, `srcset`, `poster`, `data` or `action` attributes. Embedded `srcdoc` documents and meta `http-equiv` directives (including refresh) are refused. An unsupported entry returns `422 ui_not_inlinable`; a missing or tampered listed file returns 503. The document CSP denies network connections, workers, child frames, forms and external resources. No runtime asset fetch, module import or external font reference is supported.
+
+Execute `bun scripts/probe-desk-adapter-inline.ts` to exercise local and authenticated hosted rig routes in headless Chromium and WebKit. It checks UTF-8 script and style hashes without a meta charset, stylesheet media and image rendering, opaque-origin containment, zero subresource requests and rejection of an unsupported entry, using only synthetic packages and authentication.
+
 ## Backend module
 
 The backend entry exports exactly one factory:

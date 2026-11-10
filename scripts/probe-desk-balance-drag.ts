@@ -24,6 +24,9 @@ async function probe() {
     await page.setContent(`<html><head>${css ? `<link rel="stylesheet" href="/${css.path.split("/").at(-1)}">` : ""}</head><body style="margin:0;font-family:Arial"><div id="root"></div><script type="module" src="/${js.path.split("/").at(-1)}"></script></body></html>`);
     const source = page.locator(".dbl-row").filter({ has: page.getByText("Fold the body", { exact: true }) });
     const target = page.locator(".dbl-row").filter({ has: page.getByText("Cut the wing", { exact: true }) });
+    const hideCompleted = page.getByRole("button", { name: "Hide completed", exact: true });
+    await hideCompleted.waitFor();
+    if (await hideCompleted.getAttribute("aria-pressed") === "true") await hideCompleted.click();
     await source.waitFor();
     const from = await source.locator("strong").boundingBox();
     const to = await target.boundingBox();

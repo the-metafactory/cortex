@@ -32,7 +32,7 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
   const editor = useBalanceEditor(current, saved => { setLocal(saved); onChanged(); });
   const { busy, message, change, setMoving } = editor;
   const [adding, setAdding] = useState<TaskAdding | null>(null);
-  const [hideDone, setHideDone] = useStoredFlag("desk.balance.hide-completed");
+  const [hideDone, setHideDone] = useStoredFlag("desk.balance.hide-completed", true);
   const inspector = useRef<HTMLElement>(null);
   const outlineHeading = useRef<HTMLHeadingElement>(null);
   const entries = balanceEntries(current.outline);
