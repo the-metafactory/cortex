@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openSyntheticHost, removeSyntheticRig, syntheticLive } from "../common/config/desk-credential-broker-fixtures";
 import { createArcFileSecretStore, type ArcSecretStore } from "../common/config/desk-credential-arc-file-store";
-import type { ConnectionHead, SetupDescriptor, SetupPrincipal } from "../common/config/desk-credential-broker";
+import type { ConnectionHead, SetupDescriptor, SetupPrincipal, SlotInput } from "../common/config/desk-credential-broker";
 import { SYNTHETIC_TOKEN, TOKEN_DESCRIPTOR, LOCAL_DESCRIPTOR } from "../common/config/desk-credential-broker-fixtures";
 import type { AuthorityBindings } from "./authority";
 import { ConnectionSetupService, type ConnectionView, type SetupCatalogEntry } from "./connection-setup";
@@ -51,8 +51,10 @@ export interface ConnectionSetupRig {
   close(): Promise<void>;
 }
 
-export async function connectionSetupRig(): Promise<ConnectionSetupRig> {
-  const dir = await mkdtemp(join(tmpdir(), "desk-connection-setup-"));
+export interface ConnectionSetupRigOptions { dir?: string }
+
+export async function connectionSetupRig(options: ConnectionSetupRigOptions = {}): Promise<ConnectionSetupRig> {
+  const dir = options.dir ?? await mkdtemp(join(tmpdir(), "desk-connection-setup-"));
   const inner = createArcFileSecretStore({ configRoot: join(dir, "arc") });
   const hooks: ConnectionSetupRig["hooks"] = {};
   const counts: ConnectionSetupRig["counts"] = { secretWrites: 0, headUpdates: 0, authorityPublishes: 0, ownerMutations: 0, bridgesClosed: [] };
@@ -121,14 +123,14 @@ export async function connectionSetupRig(): Promise<ConnectionSetupRig> {
   return rig;
 }
 
-export async function createConnection(rig: ConnectionSetupRig): Promise<ConnectionView> {
-  const made = await rig.http("local", "POST", DESK_CONNECTIONS_PATH, { packageId: "example-package", ...SELECTION, inputs: SYNTHETIC_TOKENS });
+export async function createConnection(rig: ConnectionSetupRig, inputs: Readonly<Record<string, SlotInput>> = SYNTHETIC_TOKENS): Promise<ConnectionView> {
+  const made = await rig.http("local", "POST", DESK_CONNECTIONS_PATH, { packageId: "example-package", ...SELECTION, inputs });
   if (made.status !== 200) throw new Error(`synthetic setup failed with HTTP ${made.status}`);
   return made.body.connection as ConnectionView;
 }
 
-export async function enableConnection(rig: ConnectionSetupRig): Promise<ConnectionView> {
-  const created = await createConnection(rig);
+export async function enableConnection(rig: ConnectionSetupRig, inputs: Readonly<Record<string, SlotInput>> = SYNTHETIC_TOKENS): Promise<ConnectionView> {
+  const created = await createConnection(rig, inputs);
   const on = await rig.http("local", "POST", `${DESK_CONNECTIONS_PATH}/${created.connectionId}/enable`, { expectedRevision: created.revision });
   if (on.status !== 200) throw new Error(`synthetic enable failed with HTTP ${on.status}`);
   return on.body.connection as ConnectionView;

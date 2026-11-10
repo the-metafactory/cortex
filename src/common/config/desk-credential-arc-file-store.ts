@@ -13,12 +13,14 @@ export interface ArcSecretStore {
 
 const SECRETS_PACKAGE = "cortex";
 
+export function arcSecretPath(configRoot: string, identity: string): string {
+  if (!isSurfaceSecretName(identity)) throw new Error("Invalid secret identity.");
+  return join(configRoot, "secrets", SECRETS_PACKAGE, identity);
+}
+
 export function createArcFileSecretStore(options: { configRoot: string; id?: string }): ArcSecretStore {
   const directory = join(options.configRoot, "secrets", SECRETS_PACKAGE);
-  const pathOf = (identity: string): string => {
-    if (!isSurfaceSecretName(identity)) throw new Error("Invalid secret identity.");
-    return join(directory, identity);
-  };
+  const pathOf = (identity: string): string => arcSecretPath(options.configRoot, identity);
   return {
     id: options.id ?? "arc-file",
     async available() {
