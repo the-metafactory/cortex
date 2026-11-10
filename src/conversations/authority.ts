@@ -407,8 +407,8 @@ export class AuthorityMediator {
       const stored = await this.journal.read(operationId);
       const attempt = stored?.journal.events.findLast(item => item.event.kind === "attempt-prepared");
       if (!stored || attempt?.event.kind !== "attempt-prepared" || !["dispatching", "pending"].includes(stored.journal.state)) return;
-      if (!("kind" in stored.journal.snapshot)) await this.collaborators.fences?.trigger({ kind: "adapter_crash", target: fenceTargetOf(stored.journal.snapshot), evidence: { operationId, detail: message } });
       await this.journal.append(operationId, stored.revision, { sequence: stored.journal.sequence + 1, eventId: randomUUID(), at: this.now().toISOString(), event: { kind: "wait-expired", attemptId: attempt.event.attempt.attemptId, reason: { code: "outcome_unavailable", message } } });
+      if (!("kind" in stored.journal.snapshot)) await this.collaborators.fences?.trigger({ kind: "adapter_crash", target: fenceTargetOf(stored.journal.snapshot), evidence: { operationId, detail: message } });
     });
   }
 
@@ -624,7 +624,11 @@ export class AuthorityMediator {
     const resolved = await this.resolve(context, source.connectionId, undefined, undefined, undefined, [scope]);
     const lookup = this.bindings.readBindings?.lookup(source.adapterId, source.connectionId, source.capabilityId);
     const connector = this.connectors.get(resolved.connection.connectorId)?.observation;
-    if (resolved.connection.adapterId !== source.adapterId || lookup?.state !== "available" || !lookup.binding.observation || !connector || !this.readable(resolved, undefined, [scope]) || !this.sinkAllowed(resolved, undefined, sink, [scope]) || !this.sinks.has(canonicalWire(sink)) || canonicalWire(lookup.binding.inputSchemaRef) !== canonicalWire(source.inputSchemaRef) || !this.registry.validateInput({ capabilityId: source.capabilityId, inputSchemaRef: source.inputSchemaRef, input: source.input }, null).ok) throw new Error("observation_denied");
+    if (lookup?.state !== "available" || !connector) throw new Error("observation_denied");
+    const bindingMatches = resolved.connection.adapterId === source.adapterId && !!lookup.binding.observation && canonicalWire(lookup.binding.inputSchemaRef) === canonicalWire(source.inputSchemaRef);
+    const sinkPermitted = this.readable(resolved, undefined, [scope]) && this.sinkAllowed(resolved, undefined, sink, [scope]) && this.sinks.has(canonicalWire(sink));
+    const inputValid = this.registry.validateInput({ capabilityId: source.capabilityId, inputSchemaRef: source.inputSchemaRef, input: source.input }, null).ok;
+    if (!(bindingMatches && sinkPermitted && inputValid)) throw new Error("observation_denied");
     const basis: ObservationBasis = { head: this.queryHeadOf(resolved, lookup.binding, state), identity: authorityHash({ account: accountBinding(resolved.connection), connectionRevision: resolved.connection.connectionRevision, binding: lookup.binding, source }), binding: lookup.binding };
     return { source, sink, state, scope, resolved, connector, basis };
   }
