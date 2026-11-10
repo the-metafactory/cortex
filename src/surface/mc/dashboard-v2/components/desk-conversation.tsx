@@ -6,7 +6,7 @@ import {
   chooseOutcome, continueInDiscord, entryViews, failureText as failure, modelLine, organize as organizeConversation, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel, statusLabel,
   type ConversationDetail, type ConversationEntry, type OperationRecord,
 } from "../lib/conversations";
-import { laneName, type Organize } from "../../../../conversations/types";
+import { laneName, type Organize, type SourceView } from "../../../../conversations/types";
 import { CreationPanel } from "./desk-conversation-create";
 import "./desk-conversation.css";
 
@@ -232,6 +232,16 @@ export function ModelPicker({ models, disabled, onChoose }: { models: Conversati
 }
 
 const withoutHtmlComments = (text: string): string => text.replace(/<!--[\s\S]*?-->/g, "").trim();
+const webUrl = (url: string | undefined): string | null => url && /^https?:\/\//i.test(url) ? url : null;
+
+function AvailableSource({ source }: { source: Extract<SourceView, { state: "available" }> }) {
+  const body = source.context ? withoutHtmlComments(source.context) : "";
+  const url = webUrl(source.url);
+  return <div className="dcv-source"><small>{sourceLabel(source.ref)}</small><strong>{source.title}</strong>
+    {body && <div className="dcv-markdown">{renderMarkdown(body)}</div>}
+    {url && <a className="desk-btn ghost" href={url} target="_blank" rel="noreferrer">Open the full node</a>}
+  </div>;
+}
 
 const IvyAnswer = memo(function IvyAnswer({ text }: { text: string }) {
   return <div className="dcv-markdown">{renderMarkdown(text)}</div>;
@@ -264,7 +274,7 @@ export function WorkspaceView(c: WorkspaceProps) {
     </header>
     <aside className="dcv-sources" aria-label="Linked work">
       {sources.map(source => source.state === "available"
-        ? <div key={`${source.ref.owner}:${source.ref.id}`} className="dcv-source"><small>{sourceLabel(source.ref)}</small><strong>{source.title}</strong>{source.context && <div className="dcv-markdown">{renderMarkdown(withoutHtmlComments(source.context))}</div>}{source.url && <a className="desk-btn ghost" href={source.url} target="_blank" rel="noreferrer">Open the full node</a>}</div>
+        ? <AvailableSource key={`${source.ref.owner}:${source.ref.id}`} source={source} />
         : <div key={`${source.ref.owner}:${source.ref.id}`} className="dcv-source gone"><small>{sourceLabel(source.ref)}</small><strong>Unavailable</strong><p>This source is gone or not authorized here. Its content is not shown; this conversation and its history stay.</p></div>)}
       {sources.length === 0 && <p className="dcv-quiet">No linked work.</p>}
     </aside>

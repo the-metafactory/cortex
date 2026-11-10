@@ -107,7 +107,8 @@ export async function startFromSource(host: ConversationHost, deps: StudioConver
     const text = "Help me talk through the linked Ranger question. Prepare proposals for my confirmation. Starting this conversation changes nothing on the graph.";
     const key = `ranger-grilling:${source.id}`;
     const conversation = await host.create({ title: clip(resolved.title), links: [source], origin: { kind: "graph", ref: source.id }, policy: resolved.policy }, principal, { key, titleFromSource: true });
-    await host.submit(conversation.id, { inputId: key, transport: "web", text, mode: "queue" });
+    const unopened = (await host.entries(conversation.id, 1, undefined)).entries.length === 0;
+    if (unopened) await host.submit(conversation.id, { inputId: key, transport: "web", text, mode: "queue" });
     return host.meta(conversation.id);
   }
   if (source.owner !== "studio-thread" && source.owner !== "studio-note") throw new ConversationError(400, "Conversations start from a Studio thread, a Studio note, a Balance task or a Ranger question.");

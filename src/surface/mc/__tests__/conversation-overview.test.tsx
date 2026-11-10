@@ -193,4 +193,13 @@ describe("Ivy conversation overview view", () => {
     expect(html).toContain(`href="${url}"`);
     expect(html).toContain(">Open the full node</a>");
   });
+
+  test("linked work renders no link for a non-web url and no body for a context that is only a machine block", () => {
+    const sources: ConversationDetail["sources"] = [{ ref: { owner: "graph-node", id: "example/app#32" }, state: "available", policy: "cloud", title: "Which queue?", context: "<!-- soma:work-graph-node {} -->", url: "javascript:alert(1)" }];
+    const detail: ConversationDetail = { conversation: meta(), models: { cloud: [], chosen: null, using: null }, sources, draft: "", pending: [], studio: null };
+    const html = renderToStaticMarkup(<WorkspaceView detail={detail} entries={[]} draft="" ready busy={false} sending={false} retrying={false} error={null} onDraft={noop} onSend={noop} onRetry={noop} onLeave={noop} onSaved={noop} organizing={false} onOrganize={noop} />);
+    expect(html).not.toContain("javascript:");
+    expect(html).not.toContain("Open the full node");
+    expect(html).not.toMatch(/<aside[^>]*>.*dcv-markdown.*<\/aside>/s);
+  });
 });
