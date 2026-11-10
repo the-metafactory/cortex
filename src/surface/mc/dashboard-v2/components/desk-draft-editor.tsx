@@ -7,6 +7,7 @@ import "./desk-draft-editor.css";
 const valueText = (value: unknown): string => value === undefined ? "" : typeof value === "string" ? value : JSON.stringify(value, null, 2);
 const errorText = (error: unknown): string => error instanceof Error ? error.message : "The draft could not be updated.";
 const targetKey = (target: DraftTarget): string => JSON.stringify([target.capabilityId, target.connectionId]);
+const ORIGIN_LABEL: Record<string, string> = { suggested: "Suggested", principal: "Edited by you", generated: "From conversation", default: "Default" };
 
 export function DeskMakePanel({ conversationId, entryId, archived = false }: { conversationId: string; entryId: string | null; archived?: boolean }) {
   const [targets, setTargets] = useState<DraftTarget[]>([]);
@@ -66,7 +67,7 @@ export function DeskDraftEditor({ editor, targets, disabled = false, onChanged }
     {draft.limitations.map((item, index) => <p key={`${item.code}:${index}`}>{item.message}</p>)}
     {editor.view.withheld.length > 0 && <p>Policy withholds some draft fields in this context.</p>}
     {changes.length > 0 && <aside aria-label="Destination changes"><p>Destination changed. Review before confirming.</p>{changes.map(change => <p key={change.pointer}>{change.pointer}: {valueText(change.before)} → {valueText(change.after)}</p>)}<label><input type="checkbox" checked={reviewedRevision === draft.revision} onChange={event => { setReviewedRevision(event.target.checked ? draft.revision : null); }} />I reviewed the destination changes</label></aside>}
-    {editor.fields.map(field => <DraftFieldEditor key={`${draft.draftId}:${draft.revision}:${field.pointer}`} field={field} editor={editor} disabled={busy || disabled || editor.view.withheld.includes(field.pointer)} save={change => act(() => editDraft(draft.draftId, draft.revision, field.pointer, change))} />)}
+    {editor.fields.map(field => <DraftFieldEditor key={`${draft.draftId}:${field.pointer}`} field={field} editor={editor} disabled={busy || disabled || editor.view.withheld.includes(field.pointer)} save={change => act(() => editDraft(draft.draftId, draft.revision, field.pointer, change))} />)}
     {editor.view.unsupported.length > 0 && <p>Fields outside the current schema are kept: {editor.view.unsupported.join(", ")}</p>}
     {editor.view.blocking.map(item => <p key={`${item.pointer}:${item.code}`} role="status">{item.pointer}: {item.code}</p>)}
     {error && <p role="alert">{error}</p>}
@@ -84,10 +85,13 @@ export function DeskDraftEditor({ editor, targets, disabled = false, onChanged }
 
 function DraftFieldEditor({ field, editor, disabled, save }: { field: EditorField; editor: DraftEditorView; disabled: boolean; save: (change: EditChange) => Promise<void> }) {
   const current = editor.view.draft.fields[field.pointer];
-  const [text, setText] = useState(current?.presence === "present" ? valueText(current.value) : "");
+  const storedText = current?.presence === "present" ? valueText(current.value) : "";
+  const [text, setText] = useState(storedText);
   const [details, setDetails] = useState<DraftDetails | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  useEffect(() => { setText(storedText); }, [storedText, current?.presence]);
+  useEffect(() => { setDetails(null); }, [current]);
   const types = Array.isArray(field.schema.type) ? field.schema.type : [field.schema.type];
   const string = types.includes("string");
   const bool = types.includes("boolean");
@@ -100,7 +104,7 @@ function DraftFieldEditor({ field, editor, disabled, save }: { field: EditorFiel
   return <fieldset className="desk-draft-field" disabled={disabled}>
     <legend>{field.label}{field.destination ? " · Destination" : ""}</legend>
     <label>{label}{choices || bool ? <select aria-label={label} value={text} onChange={event => { setText(event.target.value); }}><option value="">Choose…</option>{(choices ?? [true, false]).map(value => <option key={JSON.stringify(value)} value={string ? String(value) : JSON.stringify(value)}>{String(value)}</option>)}</select> : field.long || !string ? <textarea aria-label={label} value={text} onChange={event => { setText(event.target.value); }} /> : <input aria-label={label} value={text} onChange={event => { setText(event.target.value); }} />}</label>
-    <span>{current?.origin === "suggested" ? "Suggested" : current?.origin === "principal" ? "Edited by you" : current?.origin === "generated" ? "From conversation" : current?.origin === "default" ? "Default" : "Not filled"}{current?.presence === "absent" ? " · Cleared" : current?.presence === "null" ? " · Null" : ""}</span>
+    <span>{ORIGIN_LABEL[current?.origin ?? ""] ?? "Not filled"}{current?.presence === "absent" ? " · Cleared" : current?.presence === "null" ? " · Null" : ""}</span>
     {current?.unresolved && <p>{current.unresolved}</p>}
     <div className="desk-draft-actions"><button onClick={update}>Save {field.label}</button><button onClick={() => { void save({ kind: "omit" }); }}>Clear {field.label}</button>{types.includes("null") && <button onClick={() => { void save({ kind: "null" }); }}>Set {field.label} to null</button>}
       <button disabled={!current || loading} onClick={() => {

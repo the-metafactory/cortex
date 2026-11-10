@@ -47,7 +47,6 @@ export async function openDraftEditorRig() {
   fake.state.destinations.set("Specimen shelf", { kind: "unique", ref: shelfRef("shelf-a") });
   const targets = [{ capabilityId: CAPABILITY, connectionId: "synthetic-local", label: "Specimen record" }, { capabilityId: CAPABILITY, connectionId: "synthetic-other", label: "Other specimen destination" }];
   const owner = { mutations: 0, admissions: 0 };
-  const create = () => { owner.mutations++; throw new Error("The synthetic owner must never be called."); };
   let host: ConversationHost;
   async function open() {
     const status = await openConversationHost({ dir: root, stack: "synthetic", label: "synthetic", expectedLabel: "synthetic", lanes: {}, turns: request => Promise.resolve({ text: "synthetic", session: request.session, resumed: false }) });
@@ -55,9 +54,8 @@ export async function openDraftEditorRig() {
     host = status.host;
     return deskDraftEditor(host, { registry, bindings, sources: fake.sources, policy: fake.policy, model: fake.model, destinations: fake.destinations }, { targets: () => targets, audience: "local", confirm: () => {
       owner.admissions++;
-      const policyAllowsCreation = false;
-      if (!policyAllowsCreation) return Promise.resolve({ kind: "blocked", reason: "Policy blocks creation for this connection. The draft is saved; nothing was created." });
-      return create();
+      owner.mutations++;
+      return Promise.resolve({ kind: "accepted", operationId: "synthetic-operation" });
     } });
   }
   let editor = await open();

@@ -22,6 +22,17 @@ async function made(rig: Rig): Promise<DraftEditorView> {
 const path = (editor: DraftEditorView) => `${DESK_DRAFTS_PATH}/${editor.view.draft.draftId}`;
 
 describe("generic Desk Make route", () => {
+  test("decodes escaped draft IDs and rejects malformed escapes", () => withRig(async rig => {
+    const first = await made(rig);
+    const escapedId = Array.from(first.view.draft.draftId).map(char => `%${char.charCodeAt(0).toString(16)}`).join("");
+    const encoded = `${DESK_DRAFTS_PATH}/${escapedId}`;
+    const res = await rig.call("GET", encoded);
+    expect(res.status).toBe(200);
+    expect((await res.json() as DraftEditorView).view.draft.draftId).toBe(first.view.draft.draftId);
+    expect((await rig.call("GET", `${encoded}/details?pointer=%2Fshelf`)).status).toBe(200);
+    for (const invalid of ["%", "%GG", "%E0%A4%A"]) expect((await rig.call("GET", `${DESK_DRAFTS_PATH}/${invalid}`)).status).toBe(400);
+  }));
+
   test("runs through the real MC router with principal-only discovery and host.drafts", () => withRig(async rig => {
     const db = initDatabase(join(rig.root, "mc.db"));
     const ctx = startServer({ ...DEFAULT_CONFIG, hostname: "127.0.0.1", port: 0 }, db, { drafts: () => rig.editor });
@@ -101,17 +112,27 @@ describe("generic Desk Make route", () => {
 
   test("policy-blocked confirmation explains the reason and never calls the owner", () => withRig(async rig => {
     const first = await made(rig);
+    rig.state.localOnly.add("turn-1");
+    rig.editor.audience = "cloud";
     const res = await rig.call("POST", `${path(first)}/confirm`, { revision: first.view.draft.revision });
-    expect(await res.json()).toMatchObject({ confirmation: { kind: "blocked", reason: expect.stringContaining("Policy blocks creation") } });
-    expect(rig.owner).toEqual({ mutations: 0, admissions: 1 });
+    expect(await res.json()).toMatchObject({ confirmation: { kind: "blocked", reason: expect.stringContaining("Policy withholds") } });
+    expect(rig.owner).toEqual({ mutations: 0, admissions: 0 });
+    rig.editor.audience = "local";
     rig.state.policyRevision = "changed-policy";
     const policy = await rig.call("POST", `${path(first)}/confirm`, { revision: first.view.draft.revision });
     expect(await policy.json()).toMatchObject({ confirmation: { kind: "blocked", reason: expect.stringContaining("policy-changed") } });
-    expect(rig.owner).toEqual({ mutations: 0, admissions: 1 });
+    expect(rig.owner).toEqual({ mutations: 0, admissions: 0 });
     rig.state.policyRevision = "policy-1";
     rig.editor.confirm = undefined;
     const inactive = await rig.call("POST", `${path(first)}/confirm`, { revision: first.view.draft.revision });
     expect(await inactive.json()).toMatchObject({ confirmation: { kind: "blocked", reason: expect.stringContaining("Creation is not enabled") } });
+  }));
+
+  test("the synthetic owner counter records a confirmation permitted by the route", () => withRig(async rig => {
+    const first = await made(rig);
+    const res = await rig.call("POST", `${path(first)}/confirm`, { revision: first.view.draft.revision });
+    expect(await res.json()).toEqual({ confirmation: { kind: "accepted", operationId: "synthetic-operation" } });
+    expect(rig.owner).toEqual({ mutations: 1, admissions: 1 });
   }));
 
   test("confirmation passes the exact validated handoff and authenticated principal to the host boundary", () => withRig(async rig => {
