@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EVIDENCE_DIR, EvidenceError, evidenceFileName, exampleEvidence, readDeskAdapterEvidence, validateEvidence, writeDeskAdapterEvidence } from "../write-desk-adapter-evidence";
 
+const PLATFORM_ID_DIGITS = "1".repeat(17);
+
 const dirs: string[] = [];
 function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "evidence-test-"));
@@ -42,8 +44,8 @@ describe("writeDeskAdapterEvidence", () => {
 
   test("rejects email and platform ID shapes", () => {
     rejects(summary => { summary.creationTypes = ["someone@example.com"]; });
-    rejects(summary => { summary.cutoverId = "cut-12345678901234567"; });
-    rejects(summary => { summary.ciRunId = "12345678901234567"; });
+    rejects(summary => { summary.cutoverId = `cut-${PLATFORM_ID_DIGITS}`; });
+    rejects(summary => { summary.ciRunId = PLATFORM_ID_DIGITS; });
   });
 
   test("rejects bad matrix rows", () => {
