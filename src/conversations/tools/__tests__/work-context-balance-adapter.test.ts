@@ -3,15 +3,16 @@ import { loadBalanceState } from "../../../surface/mc/desk/balance-store";
 import { savedNode, type BalanceReadRig } from "../../domain-adapters/__tests__/fixtures/balance-read-fixtures";
 import { openBalanceReadRigForTest as open } from "../../domain-adapters/__tests__/fixtures/balance-test-rig";
 import { legacyTask, queryFor, sessionOf } from "../../domain-adapters/__tests__/fixtures/balance-work-fixtures";
-import { balanceWorkReaders } from "../../../surface/mc/desk/balance-work-reader";
+import { balanceWorkReaders, type BalanceWorkArea } from "../../../surface/mc/desk/balance-work-reader";
 import { workContextTools, type WorkObject, type WorkOwner } from "../work-context";
 
 interface CallResult { readonly text: string; readonly remembered: WorkObject[] }
-async function call(rig: BalanceReadRig, policy: "local" | "cloud", name: "work_search" | "work_read", input: object, enabled = true, transport: "web" | "discord" = "web", queryPolicy: "local" | "cloud" = "cloud"): Promise<CallResult> {
+async function call(rig: BalanceReadRig, policy: "local" | "cloud", name: "work_search" | "work_read", input: object, enabled = true, transport: "web" | "discord" = "web", queryPolicy: "local" | "cloud" = "cloud", areas?: readonly BalanceWorkArea[]): Promise<CallResult> {
   const remembered: WorkObject[] = [];
+  const query = queryFor(rig, queryPolicy);
   const owner: WorkOwner = {
     readers: () => ({ "balance-task": legacyTask, "balance-project": legacyTask }),
-    ...(enabled ? { queries: () => balanceWorkReaders(queryFor(rig, queryPolicy)) } : {}),
+    ...(enabled ? { queries: () => balanceWorkReaders(areas ? { ...query, areas } : query) } : {}),
     now: () => Date.now(),
     remember: async (_session, objects) => { remembered.push(...objects); return true; },
   };
@@ -119,18 +120,27 @@ describe("the Balance work adapter behind work_search and work_read", () => {
 
   test("the home destination remains denied without leaking its task", async () => {
     const rig = await open();
-    const home = { ...queryFor(rig, "cloud"), areas: [{ id: "area-home", label: "Home" }] };
-    const remembered: WorkObject[] = [];
-    const owner: WorkOwner = { readers: () => ({}), queries: () => balanceWorkReaders(home), now: () => Date.now(), remember: async (_session, objects) => { remembered.push(...objects); return true; } };
-    const tool = workContextTools(owner).find(candidate => candidate.name === "work_search");
-    if (!tool) throw new Error("missing work_search");
-    const text = await tool.run({ query: "", kinds: ["balance-task"], limit: 1, offset: 0 }, { project: null, graph: null, projects: [], session: sessionOf(rig, "local"), signal: new AbortController().signal });
-    const found = JSON.parse(typeof text === "string" ? text : text.text);
+    const home = await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit: 1, offset: 0 }, true, "web", "cloud", [{ id: "area-home", label: "Home" }]);
+    const found = JSON.parse(home.text);
     expect(found.status).toBe("denied");
     expect(found.restricted).toBe(true);
     expect(found.results).toEqual([]);
     expect(JSON.stringify(found)).not.toContain("Home");
     expect(JSON.stringify(found)).not.toContain("Water the garden");
-    expect(remembered).toEqual([]);
+    expect(home.remembered).toEqual([]);
+  });
+
+  test("later pages reach the tasks of every configured area", async () => {
+    const rig = await open();
+    await rig.allowHome();
+    const seen: string[] = [];
+    let continuation: { offset: number } | null = { offset: 0 };
+    while (continuation) {
+      const page = JSON.parse((await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit: 2, offset: continuation.offset })).text);
+      expect(page.status).not.toBe("empty");
+      seen.push(...page.results.map((result: { id: string }) => result.id));
+      continuation = page.next;
+    }
+    expect([...seen].sort()).toEqual(["task-done", "task-garden", "task-glue", "task-wing"]);
   });
 });

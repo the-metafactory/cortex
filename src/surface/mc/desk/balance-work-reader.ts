@@ -3,7 +3,7 @@ import type { HostContext } from "../../../conversations/authority";
 import type { ReleaseSink } from "../../../conversations/authority-records";
 import type { QueryRunner } from "../../../conversations/domain-adapters/reads/query";
 import type { SchemaRef } from "../../../conversations/domain-adapters/types";
-import type { QueryResult } from "../../../conversations/domain-adapters/reads/query-types";
+import { QUERY_LIMITS, type QueryResult } from "../../../conversations/domain-adapters/reads/query-types";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import type { WorkKind, WorkObject, WorkPage, WorkRead, WorkReader } from "../../../conversations/tools/work-context";
 import type { Policy } from "../../../conversations/types";
@@ -55,8 +55,14 @@ interface ReleasedObject {
   readonly evidence?: { readonly observedAt?: string };
 }
 type ObjectMapper = (query: BalanceWorkQuery, object: ReleasedObject, at: number) => WorkObject;
+interface KindFacts {
+  readonly search: BalanceCapability;
+  readonly read: BalanceCapability;
+  readonly objectType: BalanceObjectType;
+  readonly toObject: ObjectMapper;
+  readonly many: boolean;
+}
 const NO_AREA: WorkPage = { items: [], more: false, status: "unavailable", reason: "No Balance destination is available." };
-const queryCapability = (kind: BalanceKind): BalanceCapability => kind === "balance-task" ? "balance.task.query" : "balance.project.query";
 const objectReference = (value: unknown): ObjectReference | null => {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const held = value as Record<string, unknown>;
@@ -101,12 +107,12 @@ const projectObject = (query: BalanceWorkQuery, object: ReleasedObject, at: numb
   const title = area && label.startsWith(`${area.label} / `) ? label.slice(area.label.length + 3) : label;
   return { kind: "balance-project", id: object.ref.canonicalId, title, status: "open", summary: `Project in ${area?.label ?? title}`, policy: area?.policy ?? "local", area: area?.label ?? null, url: urlOf(object.ref.canonicalId), observedAt: observedAt(object, at) };
 };
-const pageOf = (result: QueryResult, items: WorkObject[], kind: BalanceKind, limit: number): WorkPage => {
-  const groups = result.groups.filter(group => group.source.capabilityId === queryCapability(kind));
+const pageOf = (result: QueryResult, items: WorkObject[], capability: BalanceCapability): WorkPage => {
+  const groups = result.groups.filter(group => group.source.capabilityId === capability);
   const coverage = groups.find(group => group.coverage !== "exhausted")?.coverage ?? groups[0]?.coverage;
   return {
     items,
-    more: result.status === "partial" || result.continuation !== undefined || items.length > limit || coverage !== undefined && coverage !== "exhausted",
+    more: result.status === "partial" || result.continuation !== undefined || coverage !== undefined && coverage !== "exhausted",
     ...(coverage ? { coverage } : {}),
     noMatch: result.noMatch,
     restricted: result.restricted || result.status === "denied",
@@ -124,12 +130,11 @@ const mergedStatus = (pages: readonly WorkPage[], items: readonly WorkObject[], 
   if (pages.length > 0 && pages.every(page => page.status === "unavailable" || page.status === "unsupported")) return "unavailable";
   return more || coverage !== "exhausted" || pages.some(page => page.status === "partial") ? "partial" : "ok";
 };
-const mergePages = (pages: readonly WorkPage[], limit: number): WorkPage => {
-  const all = pages.flatMap(page => page.items);
-  const items = all.slice(0, limit);
+const mergePages = (pages: readonly WorkPage[], all: readonly WorkObject[], limit: number, offset: number, beyond: boolean): WorkPage => {
+  const items = all.slice(offset, offset + limit);
   const restricted = pages.some(page => page.restricted === true || page.status === "denied");
   const coverage = coverageOf(pages);
-  const more = all.length > limit || pages.some(page => page.more);
+  const more = beyond || all.length > offset + limit;
   const reason = pages.map(page => page.reason).find(value => value !== undefined);
   const continuation = pages.map(page => page.continuation).find(value => value !== undefined);
   return {
@@ -141,11 +146,10 @@ const mergePages = (pages: readonly WorkPage[], limit: number): WorkPage => {
     ...(continuation ? { continuation } : {}),
   };
 };
-const queryPage = async (query: BalanceWorkQuery, request: BalanceQueryRequest, kind: BalanceKind, at: number): Promise<WorkPage> => {
+const queryPage = async (query: BalanceWorkQuery, request: BalanceQueryRequest, facts: KindFacts, at: number): Promise<WorkPage> => {
   const run = await query.run(request);
-  const objects = releasedOf(run);
-  const items = kind === "balance-task" ? objects.map(object => taskObject(query, object, at)) : objects.filter(object => object.ref.objectType === "project").map(object => projectObject(query, object, at));
-  return pageOf(run.result, items, kind, request.limit);
+  const objects = releasedOf(run).filter(object => object.ref.objectType === facts.objectType);
+  return pageOf(run.result, objects.map(object => facts.toObject(query, object, at)), facts.search);
 };
 
 export function balanceWorkQuery(config: BalanceWorkRunner): BalanceWorkQuery {
@@ -169,39 +173,57 @@ export function balanceWorkQuery(config: BalanceWorkRunner): BalanceWorkQuery {
 }
 
 const destinationOf = (query: BalanceWorkQuery, area: BalanceWorkArea): ObjectReference => ({ adapterId: "balance", connectionId: query.connectionId, objectType: "area", canonicalId: area.id });
-const searchPage = async (query: BalanceWorkQuery, capabilityId: BalanceCapability, kind: BalanceKind, needle: string, limit: number, offset: number, at: number): Promise<WorkPage> => {
-  if (query.areas.length === 0) return NO_AREA;
+interface AreaCollection {
+  readonly pages: WorkPage[];
+  readonly items: WorkObject[];
+  readonly more: boolean;
+}
+const collectArea = async (query: BalanceWorkQuery, area: BalanceWorkArea, facts: KindFacts, needle: string, wanted: number, at: number): Promise<AreaCollection> => {
+  const destination = destinationOf(query, area);
   const pages: WorkPage[] = [];
-  for (const area of query.areas) {
-    const destination = destinationOf(query, area);
-    pages.push(await queryPage(query, { capabilityId, input: { ...(kind === "balance-task" ? { area: destination } : {}), query: needle, limit, offset }, destinations: [destination], limit }, kind, at));
+  const items: WorkObject[] = [];
+  let more = false;
+  for (;;) {
+    const size = Math.min(QUERY_LIMITS.pageItems, wanted - items.length);
+    if (size < 1) break;
+    const page = await queryPage(query, { capabilityId: facts.search, input: { ...(facts.objectType === "task" ? { area: destination } : {}), query: needle, limit: size, offset: items.length }, destinations: [destination], limit: size }, facts, at);
+    pages.push(page);
+    items.push(...page.items);
+    more = page.more;
+    if (!page.more || page.items.length === 0) break;
   }
-  return mergePages(pages, limit);
+  return { pages, items, more };
 };
-const readObject = async (query: BalanceWorkQuery, capabilityId: BalanceCapability, objectType: BalanceObjectType, id: string, toObject: ObjectMapper, at: number): Promise<WorkRead> => {
+const searchPage = async (query: BalanceWorkQuery, facts: KindFacts, needle: string, limit: number, offset: number, at: number): Promise<WorkPage> => {
+  if (query.areas.length === 0) return NO_AREA;
+  const collections = await Promise.all(query.areas.map(area => collectArea(query, area, facts, needle, offset + limit, at)));
+  return mergePages(collections.flatMap(collection => collection.pages), collections.flatMap(collection => collection.items), limit, offset, collections.some(collection => collection.more));
+};
+const readObject = async (query: BalanceWorkQuery, facts: KindFacts, id: string, at: number): Promise<WorkRead> => {
   if (query.areas.length === 0) return { state: "unavailable", reason: "gone" };
   let denied = false;
   for (const area of query.areas) {
     const destination = destinationOf(query, area);
-    const run = await query.run({ capabilityId, input: { ref: { ...destination, objectType, canonicalId: id } }, destinations: [destination], limit: 1 });
+    const run = await query.run({ capabilityId: facts.read, input: { ref: { ...destination, objectType: facts.objectType, canonicalId: id } }, destinations: [destination], limit: 1 });
     if (run.result.status === "denied" || run.result.restricted) { denied = true; continue; }
-    const object = releasedOf(run).find(entry => entry.ref.objectType === objectType && entry.ref.canonicalId === id);
-    if (run.result.status === "ok" && object) return { state: "available", object: toObject(query, object, at) };
+    const object = releasedOf(run).find(entry => entry.ref.objectType === facts.objectType && entry.ref.canonicalId === id);
+    if (run.result.status === "ok" && object) return { state: "available", object: facts.toObject(query, object, at) };
   }
   return { state: "unavailable", reason: denied ? "unauthorized" : "gone" };
 };
-const readerFor = (query: BalanceWorkQuery, searchCapability: BalanceCapability, readCapability: BalanceCapability, kind: BalanceKind, objectType: BalanceObjectType, toObject: ObjectMapper, many: boolean): WorkReader => {
-  const read = (id: string): Promise<WorkRead> => readObject(query, readCapability, objectType, id, toObject, Date.now());
+const KINDS: Record<BalanceKind, KindFacts> = {
+  "balance-task": { search: "balance.task.query", read: "balance.task.read", objectType: "task", toObject: taskObject, many: true },
+  "balance-project": { search: "balance.project.query", read: "balance.project.read", objectType: "project", toObject: projectObject, many: false },
+};
+const readerFor = (query: BalanceWorkQuery, facts: KindFacts): WorkReader => {
+  const read = (id: string): Promise<WorkRead> => readObject(query, facts, id, Date.now());
   return {
-    search: (needle, limit, offset) => searchPage(query, searchCapability, kind, needle, limit, offset, Date.now()),
+    search: (needle, limit, offset) => searchPage(query, facts, needle, limit, offset, Date.now()),
     read,
-    ...(many ? { readMany: (ids: readonly string[]) => Promise.all(ids.map(id => read(id))) } : {}),
+    ...(facts.many ? { readMany: (ids: readonly string[]) => Promise.all(ids.map(id => read(id))) } : {}),
   };
 };
 
 export function balanceWorkReaders(query: BalanceWorkQuery): Pick<Record<WorkKind, WorkReader>, "balance-task" | "balance-project"> {
-  return {
-    "balance-task": readerFor(query, "balance.task.query", "balance.task.read", "balance-task", "task", taskObject, true),
-    "balance-project": readerFor(query, "balance.project.query", "balance.project.read", "balance-project", "project", projectObject, false),
-  };
+  return { "balance-task": readerFor(query, KINDS["balance-task"]), "balance-project": readerFor(query, KINDS["balance-project"]) };
 }
