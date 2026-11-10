@@ -44,6 +44,17 @@ await runWithTemporaryHome(import.meta.path, async () => {
     await plus.blur();
     await plus.hover();
     assert.equal(await plus.evaluate(element => getComputedStyle(element).opacity), "1");
+    const buttonBox = await plus.boundingBox();
+    const iconBox = await plus.locator("svg").boundingBox();
+    assert.ok(buttonBox && iconBox);
+    assert.equal(buttonBox.width, 24);
+    assert.equal(buttonBox.height, 24);
+    assert.equal(iconBox.width, 14);
+    assert.equal(iconBox.height, 14);
+    assert.ok(Math.abs(buttonBox.x + buttonBox.width / 2 - iconBox.x - iconBox.width / 2) < 1);
+    assert.ok(Math.abs(buttonBox.y + buttonBox.height / 2 - iconBox.y - iconBox.height / 2) < 1);
+    assert.equal(await plus.evaluate(element => getComputedStyle(element).borderTopWidth), "0px");
+    await page.screenshot({ path: "/tmp/balance-add-icon-hover.png", fullPage: true });
     await plus.click();
     const dialog = page.getByRole("dialog", { name: "Add task", exact: true });
     await dialog.waitFor({ state: "visible" });
