@@ -5,6 +5,9 @@ import { QueryRequestSchema, type QueryRequest } from "../reads/query-types";
 import { ReadBindings } from "../reads/bindings";
 import type { Json } from "../operations/types";
 import type { ReadBinding } from "../reads/types";
+import type { Session, CommitPublication } from "@earendil-works/pi-durable";
+import { QueryStore, type StoredQuery } from "../reads/query-store";
+import { queryRegistry } from "../reads/query-fixtures";
 
 const opened: Awaited<ReturnType<typeof queryRig>>[] = [];
 afterEach(async () => { await Promise.all(opened.splice(0).map(item => item.rig.close())); });
@@ -13,6 +16,30 @@ async function begin(item: Awaited<ReturnType<typeof open>>) { return item.runne
 const resume = (request: QueryRequest, continuation: string | undefined): QueryRequest => ({ ...request, continuation });
 const objects = (value: Json | undefined): { ref: { canonicalId: string } }[] => (value as { objects: { ref: { canonicalId: string } }[] }).objects;
 function rebind(item: Awaited<ReturnType<typeof open>>, binding: ReadBinding) { const next = new ReadBindings(item.rig.registry); expect(next.register(binding, { adapterId: "balance", connectionId: item.source.connectionId, readCapabilityIds: [item.source.capabilityId] }).ok).toBe(true); item.rig.bindings.readBindings = next; }
+
+test("failed durable setup releases active ownership so the query can be retried", async () => {
+  const item = await open();
+  const request = await begin(item);
+  const failed = spyOn(QueryStore.prototype, "change").mockRejectedValueOnce(new Error("Synthetic commit failure."));
+  try {
+    await expect(item.runner.run(item.rig.context, request, item.rig.sink)).rejects.toThrow("Synthetic commit failure.");
+  } finally { failed.mockRestore(); }
+  expect((await item.runner.run(item.rig.context, request, item.rig.sink)).status).toBe("ok");
+  expect(item.rig.calls.read).toBe(1);
+});
+
+test("query service configuration is fixed and rejects changed dependencies", async () => {
+  const time = controlledQueryClock();
+  const item = await open(time.clock);
+  const runner = item.runner;
+  expect(item.rig.host.readQueries(item.rig.registry, item.rig.bindings, time.clock)).toBe(runner);
+  for (const [registry, bindings, clock] of [
+    [queryRegistry(), item.rig.bindings, time.clock],
+    [item.rig.registry, { ...item.rig.bindings }, time.clock],
+    [item.rig.registry, item.rig.bindings, controlledQueryClock().clock],
+    [item.rig.registry, item.rig.bindings, undefined],
+  ] as const) expect(() => item.rig.host.readQueries(registry, bindings, clock)).toThrow();
+});
 
 test("closed host-generated envelope and exact input pin are checked before fetch", async () => {
   const item = await open();
@@ -345,11 +372,15 @@ test("timed-out sinks cannot refund already released items to a model invocation
 test("cancellation in durable setup aborts before any fetch or release", async () => {
   const item = await open();
   const request = await begin(item);
-  const maintenance = item.runner as unknown as { maintain(): Promise<void> };
-  const original = maintenance.maintain.bind(maintenance);
+  const original = QueryStore.prototype.change;
   const entered = Promise.withResolvers<undefined>();
   const gate = Promise.withResolvers<undefined>();
-  const intercepted = spyOn(maintenance, "maintain").mockImplementation(async () => { entered.resolve(undefined); await gate.promise; await original(); });
+  const intercepted = spyOn(QueryStore.prototype, "change").mockImplementationOnce(async function <T>(this: QueryStore, queryId: string, change: (query: StoredQuery | undefined) => T) {
+    const result = await original.bind(this)<T>(queryId, change);
+    entered.resolve(undefined);
+    await gate.promise;
+    return result;
+  });
   try {
     const pending = item.runner.run(item.rig.context, request, item.rig.sink);
     await entered.promise;
@@ -406,4 +437,40 @@ test("an already expired invocation never waits on stalled policy resolution", a
   gate.resolve(undefined);
   await Bun.sleep(10);
   expect(item.rig.calls.read).toBe(0);
+});
+
+
+test("page persistence changes only its query document without a maintenance commit", async () => {
+  const item = await open();
+  const request = await begin(item);
+  const other = await begin(item);
+  const publications: CommitPublication[] = [];
+  const { engine } = item.rig.host as unknown as { engine: Pick<Session, "subscribeCommits"> };
+  const unsubscribe = engine.subscribeCommits(publication => { publications.push(publication); });
+  const sweep = spyOn(QueryStore.prototype, "sweep");
+  try {
+    expect((await item.runner.run(item.rig.context, request, item.rig.sink)).status).toBe("ok");
+    const commits = publications.flatMap(publication => publication.changes.flatMap(change => change.type === "document" && change.record.kind === "cortex.read-query" ? [change] : []));
+    expect(commits).toHaveLength(2);
+    expect(new Set(commits.map(change => change.record.id)).size).toBe(1);
+    expect(sweep).not.toHaveBeenCalled();
+  } finally { unsubscribe(); sweep.mockRestore(); }
+  await item.rig.reopen();
+  expect((await item.runner.run(item.rig.context, other, item.rig.sink)).status).toBe("ok");
+});
+
+test("expiry removes one query without losing a later query across reopen", async () => {
+  const time = controlledQueryClock();
+  const item = await open(time.clock);
+  item.rig.hooks.query = () => Promise.resolve(syntheticQueryPage(["first"], "protected"));
+  const first = await begin(item);
+  const firstPage = await item.runner.run(item.rig.context, first, item.rig.sink);
+  time.advance(300000);
+  const second = await begin(item);
+  const secondPage = await item.runner.run(item.rig.context, second, item.rig.sink);
+  time.advance(300000);
+  await item.rig.reopen();
+  expect((await item.runner.run(item.rig.context, resume(first, firstPage.continuation), item.rig.sink)).restartRequired).toBe(true);
+  expect((await item.runner.run(item.rig.context, resume(second, secondPage.continuation), item.rig.sink)).continuation).toBeDefined();
+  expect(item.rig.calls.read).toBe(3);
 });
