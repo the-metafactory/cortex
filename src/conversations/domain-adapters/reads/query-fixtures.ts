@@ -1,4 +1,4 @@
-import { authorityRig } from "../../authority-fixtures";
+import { authorityRig, type ReadSetup } from "../../authority-fixtures";
 import { DomainAdapterRegistry } from "../registry";
 import { balanceDeclaration, fixtureBindings, objectRef, objectSchema } from "../fixtures";
 import type { QueryClock } from "./query";
@@ -8,14 +8,18 @@ import { AT } from "../operations/fixtures";
 
 export const queryBinding = ReadBindingSchema.parse({ version: "1.0.0", adapterId: "balance", capabilityId: "balance.object.read", mode: "query", objectType: "task", inputSchemaRef: { schemaId: "balance.task.create.input", version: "1.0.0" }, outputSchemaRef: { schemaId: "balance.query.output", version: "1.0.0" }, destinationType: "area", display: { title: "/title" }, query: { objectsPointer: "/items", ordering: "provider", stableSnapshot: true } });
 export const queryArea = objectRef("balance", "area", "area-example");
-export function queryRegistry(outputVersion = "1.0.0") {
-  const registry = new DomainAdapterRegistry();
+export function queryDeclaration(outputVersion = "1.0.0") {
   const declaration = balanceDeclaration();
   const creation = declaration.capabilities[0];
   if (!creation) throw new Error("Synthetic creation declaration missing.");
   const outputSchemaRef = { ...queryBinding.outputSchemaRef, version: outputVersion };
   declaration.schemas.push({ ...outputSchemaRef, schema: objectSchema({ items: { type: "array", items: { $ref: `urn:desk-schema:balance.task.create.input:1.0.0` } } }) as (typeof declaration.schemas)[number]["schema"] });
   declaration.capabilities.push({ ...creation, kind: "query", capabilityId: queryBinding.capabilityId, outputSchemaRef });
+  return declaration;
+}
+export function queryRegistry(outputVersion = "1.0.0") {
+  const registry = new DomainAdapterRegistry();
+  const declaration = queryDeclaration(outputVersion);
   const registered = registry.register(declaration, fixtureBindings(declaration));
   if (!registered.ok) throw new Error(registered.error.code);
   return registry;
@@ -23,8 +27,8 @@ export function queryRegistry(outputVersion = "1.0.0") {
 export function syntheticQueryPage(ids = ["task-0"], cursor?: string, stable = true): QueryPage {
   return structuredClone({ readVersion: "1.0.0", payload: { items: ids.map(id => ({ title: id, area: queryArea })) }, annotations: ids.map((id, index) => ({ pointer: `/items/${index}`, ref: objectRef("balance", "task", id), schemaRef: queryBinding.inputSchemaRef, destination: queryArea, position: index, evidence: { evidenceId: `evidence-${id}`, revision: "1", observedAt: AT } })), observedAt: AT, ordering: "provider", snapshot: stable ? { kind: "stable", id: "snapshot-example" } : { kind: "live" }, ...(cursor === undefined ? {} : { cursor }) });
 }
-export async function queryRig(clock?: QueryClock, policy: "local" | "cloud" = "local", options: { secondConnection?: boolean } = {}) {
-  const rig = await authorityRig({}, policy, { registry: queryRegistry(), binding: queryBinding, ...(options.secondConnection ? { secondConnection: true } : {}) });
+export async function queryRig(clock?: QueryClock, policy: "local" | "cloud" = "local", options: { secondConnection?: boolean; setup?: Partial<Pick<ReadSetup, "registry" | "connector">> } = {}) {
+  const rig = await authorityRig({}, policy, { registry: queryRegistry(), binding: queryBinding, ...(options.secondConnection ? { secondConnection: true } : {}), ...options.setup });
   const source: QuerySource = { adapterId: "balance", connectionId: rig.connection.connectionId, capabilityId: queryBinding.capabilityId, inputSchemaRef: queryBinding.inputSchemaRef, destinations: [queryArea], input: { area: queryArea, title: "synthetic query" } };
   const secondSource: QuerySource | undefined = rig.secondConnection ? { ...source, connectionId: rig.secondConnection.connectionId } : undefined;
   rig.hooks.query = () => Promise.resolve(syntheticQueryPage());

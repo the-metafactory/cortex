@@ -1,0 +1,596 @@
+{
+  "format": "desk-adapter-package/1",
+  "packageId": "sample.plants",
+  "packageVersion": "1.0.0",
+  "deskSdkRange": "^1.0.0",
+  "domainContractVersion": "1.0.0",
+  "backend": {
+    "entry": "backend.mjs",
+    "sha256": "598c04923dd80549d284f3bba60fbf8767078150be4128a2fb4320f4cc09c4a5"
+  },
+  "declaration": {
+    "adapterId": "sample.plants",
+    "label": "Plant care",
+    "contractRange": "^1.0.0",
+    "schemas": [
+      {
+        "schemaId": "sample.plants.empty",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        }
+      },
+      {
+        "schemaId": "sample.plants.error",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "issues": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "sample.plants.room",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "name"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "sample.plants.plant",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "name",
+            "species",
+            "room",
+            "roomName",
+            "wateringIntervalHours",
+            "lastWatered",
+            "nextWaterDue",
+            "careNote"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "species": {
+              "type": "string"
+            },
+            "room": {
+              "type": "object",
+              "title": "Room",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "type": "string",
+                  "const": "sample.plants"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "room"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "roomName": {
+              "type": "string",
+              "minLength": 1
+            },
+            "wateringIntervalHours": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "lastWatered": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "nextWaterDue": {
+              "type": "string",
+              "format": "date"
+            },
+            "careNote": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "sample.plants.plant-list",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:sample.plants.plant:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "sample.plants.room-list",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:sample.plants.room:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "sample.plants.search-input",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text"
+          ],
+          "properties": {
+            "text": {
+              "type": "string",
+              "title": "Search text"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "sample.plants.get-input",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "canonicalId"
+          ],
+          "properties": {
+            "canonicalId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "sample.plants.add-input",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "room",
+            "wateringIntervalDays"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Plant name"
+            },
+            "room": {
+              "type": "object",
+              "title": "Room",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "type": "string",
+                  "const": "sample.plants"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "room"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "wateringIntervalDays": {
+              "type": "number",
+              "minimum": 1,
+              "title": "Water every (days)"
+            },
+            "notes": {
+              "type": "string",
+              "title": "Care notes"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "sample.plants.add-output",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "canonicalId",
+            "wateringIntervalHours"
+          ],
+          "properties": {
+            "canonicalId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "wateringIntervalHours": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    ],
+    "objectTypes": [
+      {
+        "objectType": "room",
+        "label": "room",
+        "schemaRef": {
+          "schemaId": "sample.plants.room",
+          "version": "1.0.0"
+        },
+        "relationships": []
+      },
+      {
+        "objectType": "plant",
+        "label": "plant",
+        "schemaRef": {
+          "schemaId": "sample.plants.plant",
+          "version": "1.0.0"
+        },
+        "relationships": [
+          {
+            "fieldPath": "/room",
+            "targetAdapterId": "sample.plants",
+            "targetObjectType": "room",
+            "cardinality": "one"
+          }
+        ]
+      }
+    ],
+    "capabilities": [
+      {
+        "capabilityId": "sample.plants.rooms",
+        "label": "List rooms",
+        "kind": "query",
+        "objectTypes": [
+          "room"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "sample.plants.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "sample.plants.room-list",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "sample.plants.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "sample.plants.thirsty",
+        "label": "Plants that need water",
+        "kind": "observation",
+        "objectTypes": [
+          "plant"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "sample.plants.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "sample.plants.plant-list",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "sample.plants.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "sample.plants.search",
+        "label": "Search plants",
+        "kind": "query",
+        "objectTypes": [
+          "plant"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "sample.plants.search-input",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "sample.plants.plant-list",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "sample.plants.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "sample.plants.get",
+        "label": "Read one plant",
+        "kind": "query",
+        "objectTypes": [
+          "plant"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "sample.plants.get-input",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "sample.plants.plant",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "sample.plants.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "sample.plants.add",
+        "label": "Add a plant",
+        "kind": "action",
+        "objectTypes": [
+          "plant"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "sample.plants.add-input",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "sample.plants.add-output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "sample.plants.error",
+          "version": "1.0.0"
+        }
+      }
+    ]
+  },
+  "draftingBindings": [
+    {
+      "version": "1.0.0",
+      "adapterId": "sample.plants",
+      "capabilityId": "sample.plants.add",
+      "inputSchemaRef": {
+        "schemaId": "sample.plants.add-input",
+        "version": "1.0.0"
+      },
+      "guidanceId": "sample.plants.add.guidance",
+      "guidanceVersion": "1.0.0",
+      "instruction": "Draft a new houseplant from the discussion: its name, its room, how often it needs water in days, and any care notes.",
+      "fieldHints": [
+        {
+          "pointer": "/name",
+          "role": "title"
+        },
+        {
+          "pointer": "/room",
+          "role": "destination",
+          "resolveWith": "sample.plants.rooms"
+        },
+        {
+          "pointer": "/notes",
+          "role": "detail",
+          "widget": "long"
+        }
+      ]
+    }
+  ],
+  "readBindings": [
+    {
+      "version": "1.0.0",
+      "adapterId": "sample.plants",
+      "capabilityId": "sample.plants.rooms",
+      "mode": "destinations",
+      "objectType": "room",
+      "inputSchemaRef": {
+        "schemaId": "sample.plants.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "sample.plants.room-list",
+        "version": "1.0.0"
+      },
+      "display": {
+        "title": "/name"
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "sample.plants",
+      "capabilityId": "sample.plants.thirsty",
+      "mode": "poll",
+      "objectType": "plant",
+      "inputSchemaRef": {
+        "schemaId": "sample.plants.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "sample.plants.plant-list",
+        "version": "1.0.0"
+      },
+      "destinationType": "room",
+      "display": {
+        "title": "/name",
+        "summary": "/careNote"
+      },
+      "attention": {
+        "title": "/name",
+        "why": "/careNote",
+        "due": "/nextWaterDue",
+        "area": "/roomName"
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "sample.plants",
+      "capabilityId": "sample.plants.search",
+      "mode": "query",
+      "objectType": "plant",
+      "inputSchemaRef": {
+        "schemaId": "sample.plants.search-input",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "sample.plants.plant-list",
+        "version": "1.0.0"
+      },
+      "textPointer": "/text",
+      "destinationType": "room",
+      "display": {
+        "title": "/name",
+        "summary": "/careNote"
+      }
+    }
+  ],
+  "setup": {
+    "version": "1.0.0",
+    "schemas": [
+      {
+        "schemaId": "sample.plants.config",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        }
+      },
+      {
+        "schemaId": "sample.plants.account",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {}
+        }
+      }
+    ],
+    "configurationSchemaRef": {
+      "schemaId": "sample.plants.config",
+      "version": "1.0.0"
+    },
+    "accountScopeSchemaRef": {
+      "schemaId": "sample.plants.account",
+      "version": "1.0.0"
+    },
+    "authMethods": [
+      {
+        "kind": "local"
+      }
+    ]
+  },
+  "ui": {
+    "protocolVersion": "1.0.0",
+    "entry": "view.html",
+    "files": [
+      {
+        "path": "view.html",
+        "sha256": "775a95b0292e0309af6f3657c33bedc3b2cbe09d67710747146d54369cb7bf38",
+        "mediaType": "text/html"
+      },
+      {
+        "path": "view.js",
+        "sha256": "37e2be6b0d54e2d5332e8a704f1439d1c01b0f7f5d6ac3763bd8a5a6501af704",
+        "mediaType": "text/javascript"
+      },
+      {
+        "path": "view.css",
+        "sha256": "1a812a685a00bfd135825de75069fdac7a47d0fd9767a0c40eca034feac3cef9",
+        "mediaType": "text/css"
+      }
+    ],
+    "views": [
+      {
+        "objectType": "plant",
+        "view": "result"
+      }
+    ]
+  }
+}
