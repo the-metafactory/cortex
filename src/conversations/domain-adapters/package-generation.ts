@@ -62,6 +62,12 @@ export function generationId(generation: Pick<DeskAdapterGeneration, "packageId"
   return `${generation.packageId}@${generation.packageVersion}+${generation.releaseDigest.slice(0, 16)}`;
 }
 
+export class DeskGenerationFencedError extends Error {
+  constructor(readonly code: "adapter_disabled" | "adapter_uninstalled") {
+    super(code);
+  }
+}
+
 export class DeskGenerationStore {
   constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly context: Context = BACKGROUND_CONTEXT) {}
 
@@ -93,9 +99,11 @@ export class DeskGenerationStore {
     }, this.context);
   }
 
-  select(selected: DeskAdapterGeneration): Promise<DeskAdapterGenerationRecord> {
+  select(selected: DeskAdapterGeneration, options: { refuseFenced?: boolean } = {}): Promise<DeskAdapterGenerationRecord> {
     const checked = DeskAdapterGenerationSchema.parse(selected);
     return this.mutate(checked.adapterId, record => {
+      if (options.refuseFenced && record.uninstalled) throw new DeskGenerationFencedError("adapter_uninstalled");
+      if (options.refuseFenced && record.disabled) throw new DeskGenerationFencedError("adapter_disabled");
       record.disabled = false;
       record.uninstalled = false;
       if (record.active?.generationId === checked.generationId) return;

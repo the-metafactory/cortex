@@ -12,7 +12,7 @@ import type { ArcPackage } from "../../common/types/plugin-manifest";
 import type { DeskActionConnector, DeskAdapterBindings, DeskAdapterConnection, DeskAdapterDefinition, DeskAdapterHost, DeskConnectorFactory } from "../../desk-sdk";
 import { DESK_ADAPTER_SDK_VERSION } from "../../desk-sdk/version";
 import { DraftingBindingSchema, DraftingBindings, DRAFTING_BINDING_VERSION, type DraftingBinding } from "./drafting-binding";
-import { DESK_ADAPTER_GENERATION_FORMAT, DeskAdapterGenerationSchema, DeskGenerationStore, DESK_UI_PROTOCOL_VERSION, FENCE_MESSAGE, generationId, type DeskAdapterGeneration, type DeskAdapterGenerationRecord, type DeskGenerationAdmission } from "./package-generation";
+import { DESK_ADAPTER_GENERATION_FORMAT, DeskAdapterGenerationSchema, DeskGenerationFencedError, DeskGenerationStore, DESK_UI_PROTOCOL_VERSION, FENCE_MESSAGE, generationId, type DeskAdapterGeneration, type DeskAdapterGenerationRecord, type DeskGenerationAdmission } from "./package-generation";
 import { exactVersion, hex64, identifier } from "./package-primitives";
 import { verifyReadBinding } from "./reads/bindings";
 import { READ_BINDING_VERSION, ReadBindingSchema, type ReadBinding } from "./reads/types";
@@ -158,6 +158,13 @@ export interface DeskAdapterCatalogEntry {
   draftingBindings: readonly DraftingBinding[];
   ui?: DeskAdapterUi;
   availability: DeskAdapterAvailability;
+}
+
+export interface DeskUiPublication {
+  generation: DeskAdapterGeneration;
+  ui: DeskAdapterUi;
+  packageRoot: string;
+  capabilityIds: string[];
 }
 
 interface PublishedAdapter {
@@ -752,7 +759,7 @@ export class DeskPackageLoader {
     });
   }
 
-  private async publishPrepared(prepared: readonly PublishedAdapter[]): Promise<Result<DeskAdapterGeneration[]>> {
+  private async publishPrepared(prepared: readonly PublishedAdapter[], options: { refuseFenced?: boolean } = {}): Promise<Result<DeskAdapterGeneration[]>> {
     const store = this.store;
     if (!store) return failure("generation_store_unavailable", "Activation requires the durable generation store.");
     const published = new Map(this.state.published);
@@ -763,7 +770,14 @@ export class DeskPackageLoader {
     }
     const composed = await compose(published);
     if (!composed.ok) return failure(composed.error.code, composed.error.message);
-    for (const adapter of prepared) await store.select(adapter.generation);
+    for (const adapter of prepared) {
+      try {
+        await store.select(adapter.generation, options);
+      } catch (error) {
+        if (error instanceof DeskGenerationFencedError) return failure(error.code, FENCE_MESSAGE[error.code]);
+        throw error;
+      }
+    }
     const availability = new Map(this.state.availability);
     const diagnostics = new Map(this.state.diagnostics);
     for (const adapter of prepared) {
@@ -774,10 +788,10 @@ export class DeskPackageLoader {
     return success(prepared.map(adapter => adapter.generation));
   }
 
-  private async publish(candidate: DeskPackageCandidate): Promise<Result<DeskAdapterGeneration>> {
+  private async publish(candidate: DeskPackageCandidate, options: { refuseFenced?: boolean } = {}): Promise<Result<DeskAdapterGeneration>> {
     const prepared = await this.prepare(candidate);
     if (!prepared.ok) return this.failed(candidate, prepared.error);
-    const published = await this.publishPrepared([prepared.value]);
+    const published = await this.publishPrepared([prepared.value], options);
     if (!published.ok) return this.failed(candidate, published.error);
     const [generation] = published.value as [DeskAdapterGeneration];
     return success(generation);
@@ -896,6 +910,35 @@ export class DeskPackageLoader {
 
   catalog(): DeskAdapterCatalogEntry[] {
     return this.list().filter(entry => entry.availability.state === "available");
+  }
+
+  uiPublications(): DeskUiPublication[] {
+    const publications: DeskUiPublication[] = [];
+    for (const adapter of this.state.published.values()) {
+      if (!adapter.ui || this.admission(adapter.adapterId).state !== "available") continue;
+      publications.push({
+        generation: structuredClone(adapter.generation),
+        ui: structuredClone(adapter.ui),
+        packageRoot: adapter.candidate.packageRoot,
+        capabilityIds: adapter.definition.declaration.capabilities.map(capability => capability.capabilityId),
+      });
+    }
+    return publications.sort((left, right) => left.generation.adapterId.localeCompare(right.generation.adapterId));
+  }
+
+  async rollback(adapterId: string): Promise<Result<DeskAdapterGeneration>> {
+    const store = this.store;
+    if (!store) return failure("generation_store_unavailable", "Rollback requires the durable generation store.");
+    const record = await store.read(adapterId);
+    if (record?.uninstalled) return failure("adapter_uninstalled", FENCE_MESSAGE.adapter_uninstalled);
+    if (record?.disabled) return failure("adapter_disabled", FENCE_MESSAGE.adapter_disabled);
+    const target = record?.lastValid;
+    if (!target) return failure("rollback_unavailable", "No earlier valid generation is recorded for this adapter.");
+    const discovery = await this.discover();
+    const candidate = discovery.candidates.find(item => item.adapterId === adapterId && item.releaseDigest === target.releaseDigest);
+    if (candidate?.state.state !== "installable") return failure("rollback_unavailable", "The earlier generation is not installed and verified; install it again before rolling back.");
+    if (candidate.trust.state !== "trusted") return failure(candidate.trust.code, "The earlier generation has no principal approval for this origin, version and content digest.");
+    return this.publish(candidate, { refuseFenced: true });
   }
 
   diagnostics(): DeskPackageIssue[] {

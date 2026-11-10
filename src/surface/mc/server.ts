@@ -3,6 +3,7 @@ import { handleDeskRoutineEvidence } from "./api/desk-routine-evidence";
 import { WaitingTasks } from "./desk/sources/waiting";
 import { handleDeskMyDay } from "./api/desk-my-day";
 import { handleDeskCalendars } from "./api/desk-calendars";
+import { DESK_ADAPTER_ASSET_PATH, handleDeskAdapterAssets, type AdapterAssetAccess } from "./api/desk-adapter-assets";
 import { DESK_CONNECTIONS_PATH, handleDeskConnections, type ConnectionSetupAccess } from "./api/desk-connections";
 import { handleDeskRoutines } from "./api/desk-routines";
 import { handleDeskFlows } from "./api/desk-flows";
@@ -199,6 +200,7 @@ export interface MissionControlViews {
   sidebandUrl?: string;
   conversations?: ConversationAccess;
   connectionSetup?: ConnectionSetupAccess;
+  adapterAssets?: AdapterAssetAccess;
 }
 
 export interface StartServerOptions extends MissionControlViews {
@@ -368,6 +370,7 @@ export function startServer(
           deskRuntime,
           options.conversations,
           options.connectionSetup,
+          options.adapterAssets,
         );
       }
 
@@ -496,11 +499,14 @@ async function handleApi(
   desk?: DeskRuntime,
   conversations?: ConversationAccess,
   connectionSetup?: ConnectionSetupAccess,
+  adapterAssets?: AdapterAssetAccess,
 ): Promise<Response> {
   const { pathname } = url;
   if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });
 
   if (pathname === DESK_CONNECTIONS_PATH || pathname.startsWith(`${DESK_CONNECTIONS_PATH}/`)) return handleDeskConnections(req, url, guard, connectionSetup);
+
+  if (pathname === DESK_ADAPTER_ASSET_PATH || pathname.startsWith(`${DESK_ADAPTER_ASSET_PATH}/`)) return handleDeskAdapterAssets(req, url, guard, adapterAssets);
 
   const deskFlowsRead = pathname === DESK_FLOWS_PATH || pathname.startsWith(`${DESK_FLOWS_PATH}/`);
   if (deskFlowsRead || (MUTATING_METHODS.has(req.method) && !isRebindExempt(pathname))) {
