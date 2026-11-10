@@ -24,11 +24,10 @@ export interface BalanceQueryRequest {
   readonly destinations: readonly ObjectReference[];
   readonly limit: number;
 }
-export type BalanceQueryRun = QueryRun;
 export interface BalanceWorkQuery {
   readonly connectionId: string;
   readonly areas: readonly BalanceWorkArea[];
-  readonly run: (request: BalanceQueryRequest) => Promise<BalanceQueryRun>;
+  readonly run: (request: BalanceQueryRequest) => Promise<QueryRun>;
 }
 export interface BalanceWorkRunner {
   readonly connectionId: string;
@@ -57,22 +56,21 @@ interface KindFacts {
 }
 const NO_AREA: WorkPage = { items: [], more: false, status: "unavailable", reason: "No Balance destination is available." };
 const MAX_WALKED_ITEMS = SEARCH_MAX_OFFSET + SEARCH_MAX_LIMIT;
-const releasedOf = (run: BalanceQueryRun): ReleasedObject[] => run.released ? releasedObjects(run.released) : [];
+const releasedOf = (run: QueryRun): ReleasedObject[] => run.released ? releasedObjects(run.released) : [];
 const text = (value: unknown): string => typeof value === "string" ? value : "";
 const areaOf = (query: BalanceWorkQuery, id: string): BalanceWorkArea | undefined => query.areas.find(area => area.id === id || area.id === `area:${id}`);
-const observedAt = observedAtOf;
 const urlOf = (id: string): string => `?desk=balance&balance-item=${encodeURIComponent(id)}`;
 const taskObject = (query: BalanceWorkQuery, object: ReleasedObject, at: number): WorkObject => {
   const areaRef = objectReference(object.value.area);
   const area = areaRef ? areaOf(query, areaRef.canonicalId) : undefined;
   const facts = [text(object.value.summary), text(object.value.note)].filter(Boolean);
-  return { kind: "balance-task", id: object.ref.canonicalId, title: text(object.value.title), status: text(object.value.status), summary: facts.join("\n"), policy: area?.policy ?? "local", area: area?.label ?? null, url: urlOf(object.ref.canonicalId), observedAt: observedAt(object, at) };
+  return { kind: "balance-task", id: object.ref.canonicalId, title: text(object.value.title), status: text(object.value.status), summary: facts.join("\n"), policy: area?.policy ?? "local", area: area?.label ?? null, url: urlOf(object.ref.canonicalId), observedAt: observedAtOf(object, at) };
 };
 const projectObject = (query: BalanceWorkQuery, object: ReleasedObject, at: number): WorkObject => {
   const area = areaOf(query, object.destination.canonicalId);
   const label = text(object.value.label);
   const title = area && label.startsWith(`${area.label} / `) ? label.slice(area.label.length + 3) : label;
-  return { kind: "balance-project", id: object.ref.canonicalId, title, status: "open", summary: `Project in ${area?.label ?? title}`, policy: area?.policy ?? "local", area: area?.label ?? null, url: urlOf(object.ref.canonicalId), observedAt: observedAt(object, at) };
+  return { kind: "balance-project", id: object.ref.canonicalId, title, status: "open", summary: `Project in ${area?.label ?? title}`, policy: area?.policy ?? "local", area: area?.label ?? null, url: urlOf(object.ref.canonicalId), observedAt: observedAtOf(object, at) };
 };
 const pageOf = (result: QueryResult, items: WorkObject[], capability: BalanceCapability): WorkPage => {
   const groups = result.groups.filter(group => group.source.capabilityId === capability);

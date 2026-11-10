@@ -12,7 +12,6 @@ export interface GraphWorkRepository {
   readonly id: string;
   readonly policy: Policy;
 }
-export type GraphQueryRun = QueryRun;
 export interface GraphNodeRequest {
   readonly ref: ObjectReference;
   readonly destination: ObjectReference;
@@ -21,7 +20,7 @@ export interface GraphWorkQuery {
   readonly connectionId: string;
   readonly repositories: () => readonly GraphWorkRepository[];
   readonly links: () => readonly GraphConversationLink[];
-  readonly run: (request: GraphNodeRequest) => Promise<GraphQueryRun>;
+  readonly run: (request: GraphNodeRequest) => Promise<QueryRun>;
 }
 export interface GraphWorkRunner {
   readonly connectionId: string;
@@ -63,14 +62,13 @@ const policyOf = (query: GraphWorkQuery, repository: string): Policy | null => {
   const wanted = canonicalGraphRef(repository);
   return query.repositories().find(candidate => canonicalGraphRef(candidate.id) === wanted)?.policy ?? null;
 };
-const observedAt = observedAtOf;
 const toObject = (query: GraphWorkQuery, object: ReleasedObject, repository: string, at: number): WorkObject => {
   const parent = object.value.parent;
   const parentId = typeof parent === "object" && parent !== null && !Array.isArray(parent) ? text((parent as Record<string, unknown>).canonicalId) : "";
   const facts = [text(object.value.kind) && `Kind: ${text(object.value.kind)}`, parentId && `Parent: ${parentId}`].filter(Boolean);
   return {
     kind: "graph-node", id: object.ref.canonicalId, title: text(object.value.title), status: text(object.value.status), summary: facts.join("\n"),
-    policy: policyOf(query, repository) ?? "local", area: canonicalGraphRef(repository), url: text(object.value.url), observedAt: observedAt(object, at),
+    policy: policyOf(query, repository) ?? "local", area: canonicalGraphRef(repository), url: text(object.value.url), observedAt: observedAtOf(object, at),
   };
 };
 
