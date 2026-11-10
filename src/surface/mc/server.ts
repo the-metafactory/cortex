@@ -89,6 +89,9 @@ import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
 import { handleDeskMail } from "./api/desk-mail";
 import { handleDeskGraphRepositories } from "./api/desk-graph-repositories";
 import { handleDeskGraphSurfaces } from "./api/desk-graph-surfaces";
+import { handleDeskDrafts } from "./api/desk-drafts";
+import { DESK_DRAFTS_PATH } from "./desk/draft-editor-contract";
+import type { DeskDraftAccess } from "./desk/draft-editor";
 import type { GraphSurfaceAccess } from "./desk/graph-surfaces";
 import { GRAPH_SURFACES_PATH } from "./desk/graph-surface-schema";
 import { GRAPH_REPOSITORIES_PATH } from "./desk/graph-repository-schema";
@@ -207,6 +210,7 @@ export interface MissionControlViews {
   adapterAssets?: AdapterAssetAccess;
   graphScope?: GraphScopeAccess;
   graphSurfaces?: GraphSurfaceAccess;
+  drafts?: DeskDraftAccess;
 }
 
 export interface StartServerOptions extends MissionControlViews {
@@ -505,6 +509,7 @@ async function handleApi(
 ): Promise<Response> {
   const { conversations, connectionSetup, adapterAssets, graphScope, graphSurfaces } = views;
   const { pathname } = url;
+  if (pathname === DESK_DRAFTS_PATH || pathname.startsWith(`${DESK_DRAFTS_PATH}/`)) return handleDeskDrafts(req, url, guard, views.drafts);
   if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });
 
   if (pathname === DESK_CONNECTIONS_PATH || pathname.startsWith(`${DESK_CONNECTIONS_PATH}/`)) return handleDeskConnections(req, url, guard, connectionSetup);
