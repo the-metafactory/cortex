@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import net from "node:net";
 import tls from "node:tls";
 
@@ -17,11 +18,12 @@ const blocked = (): never => {
 };
 
 let holders = 0;
-let totalAttempts = 0;
+const owner = new AsyncLocalStorage<{ attempts: number }>();
 let originals: Originals | undefined;
 
 const refuse = (): never => {
-  totalAttempts++;
+  const run = owner.getStore();
+  if (run) run.attempts++;
   return blocked();
 };
 
@@ -41,10 +43,11 @@ function restore(saved: Originals): void {
 export function guardNetwork(): NetworkGuard {
   if (holders === 0) install();
   holders++;
-  const base = totalAttempts;
+  const run = { attempts: 0 };
+  owner.enterWith(run);
   let released = false;
   return {
-    count: () => totalAttempts - base,
+    count: () => run.attempts,
     release() {
       if (released) return;
       released = true;

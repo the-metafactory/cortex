@@ -202,3 +202,20 @@ describe("sampled strings", () => {
     expect(String(sampleValue({ type: "string", maxLength: 3 }, context)).length).toBeLessThanOrEqual(3);
   });
 });
+
+describe("network guard attribution", () => {
+  test("an attempt is counted only for the run that made it", async () => {
+    const attempt = async (requests: number): Promise<number> => {
+      const guard = guardNetwork();
+      await Promise.resolve();
+      for (let index = 0; index < requests; index++) expect(() => fetch("https://example.invalid/")).toThrow();
+      await Promise.resolve();
+      const count = guard.count();
+      guard.release();
+      return count;
+    };
+    const [quiet, noisy] = await Promise.all([attempt(0), attempt(2)]);
+    expect(quiet).toBe(0);
+    expect(noisy).toBe(2);
+  });
+});
