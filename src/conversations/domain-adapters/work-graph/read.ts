@@ -205,7 +205,8 @@ function destinationsPage(source: WorkGraphReadSource): QueryPage {
   return readPage(entries, snapshotId("destinations", { connectionId: source.connectionId, entries: entries.map(entry => entry.ref) }), observedAt(source));
 }
 
-const OWNER_ABSENT = /\bnot[\s-]?found\b|\bno such\b|\bdoes not exist\b|\bgone\b|\b(?:404|410)\b/iu;
+const OWNER_ABSENT = /\bnot[\s-]?found\b|\bno such\b|\bdoes not exist\b|\bgone\b/iu;
+const OWNER_ABSENT_STATUS = /\b(?:http(?:\/\d+(?:\.\d+)?)?|status(?:\s*code)?)\s*[:=]?\s*(?:404|410)\b/iu;
 const OWNER_UNREADABLE = /could not resolve|no such host|dial tcp|name resolution|i\/o timeout|command not found|not found in \$?path|executable not found|no such file|permission denied|timed?\s?out|connection (?:refused|reset|closed)|network|rate limit|configuration|unauthori[sz]ed|bad credentials/iu;
 
 function nodeNaming(canonicalId: string): RegExp | null {
@@ -217,7 +218,7 @@ function nodeNaming(canonicalId: string): RegExp | null {
 export const workGraphOwnerGone = (result: CommandResult, canonicalId: string): boolean => { // glossary-ignore: node, owner
   const naming = nodeNaming(canonicalId);
   const text = `${result.stderr}\n${result.stdout}`;
-  return naming !== null && naming.test(text) && OWNER_ABSENT.test(text) && !OWNER_UNREADABLE.test(text);
+  return naming !== null && naming.test(text) && (OWNER_ABSENT.test(text) || OWNER_ABSENT_STATUS.test(text)) && !OWNER_UNREADABLE.test(text);
 };
 
 const ownerFailure = (result: CommandResult, canonicalId: string): string => result.code !== 0 && workGraphOwnerGone(result, canonicalId) ? "node_unavailable" : "owner_unavailable";

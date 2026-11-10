@@ -173,6 +173,21 @@ describe("the inactive work-graph read adapter", () => {
     expect(workGraphOwnerGone(answer(`${CORTEX}#9998 not found`), target)).toBe(false);
   });
 
+  test('an issue number in the request path is not absence evidence; only a status line is', () => {
+    const answer = (stderr: string): { code: number; signal: null; stdout: string; stderr: string } => ({ code: 1, signal: null, stdout: "", stderr });
+    for (const issue of [404, 410]) {
+      const target = `${CORTEX}#${issue}`;
+      const path = `gh api GET repos/the-metafactory/cortex/issues/${issue} failed (exit 1)`;
+      expect(workGraphOwnerGone(answer(`${path}: gh: Internal Server Error (HTTP 500)`), target)).toBe(false);
+      expect(workGraphOwnerGone(answer(`${path}: gh: Service Unavailable (HTTP 503)`), target)).toBe(false);
+      expect(workGraphOwnerGone(answer(`${path}: 404`), target)).toBe(false);
+      expect(workGraphOwnerGone(answer(`${path}: gh: Not Found (HTTP 404)`), target)).toBe(true);
+      expect(workGraphOwnerGone(answer(`${path}: gh: Gone (HTTP 410)`), target)).toBe(true);
+      expect(workGraphOwnerGone(answer(`${path}: HTTP/1.1 410 Gone`), target)).toBe(true);
+      expect(workGraphOwnerGone(answer(`${path}: status code: 404`), target)).toBe(true);
+    }
+  });
+
   test("the adapter declares creation alongside reads without a direct mutation handler or connection", () => {
     const adapter = createWorkGraphReadAdapter({ connectionId: "connection-inactive", repositories: () => [CORTEX], links: () => [] });
     const capabilities = adapter.declaration.capabilities;

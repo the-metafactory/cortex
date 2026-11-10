@@ -91,6 +91,21 @@ describe("the inactive work-graph observation binding", () => {
     expect(marker?.value).toBeUndefined();
   });
 
+  test("a transient HTTP 500 that names issue 404 or 410 in its request path keeps the retained value", async () => {
+    const rig = await open();
+    rig.graph.replace(OBSERVED, [...syntheticListing(), syntheticRow("404", "Row 404"), syntheticRow("410", "Row 410")]);
+    rig.links.push({ owner: "graph-node", id: `${OBSERVED}#404` }, { owner: "graph-node", id: `${OBSERVED}#410` });
+    expect(await rig.check()).toMatchObject({ status: "ok" });
+    rig.graph.replace(OBSERVED, syntheticListing());
+    for (const issue of [404, 410]) {
+      rig.graph.probeFail = `gh api GET repos/the-metafactory/cortex/issues/${issue} failed (exit 1): gh: Internal Server Error (HTTP 500)`;
+      expect(await rig.check()).toMatchObject({ status: "ok" });
+      const kept = (await rig.views()).find(view => view.ref.canonicalId === `${OBSERVED}#${issue}`);
+      expect(kept).toMatchObject({ kind: "present", value: { title: `Row ${issue}` } });
+      expect((await rig.views(true)).some(view => view.ref.canonicalId === `${OBSERVED}#${issue}` && view.kind === "deleted")).toBe(false);
+    }
+  });
+
   test("a truncated listing never probes an owner and never deletes a row it did not read", async () => {
     const rows = Array.from({ length: 25 }, (_value, index) => syntheticRow(String(4000 + index), `Row ${index}`));
     const graph = syntheticGraph();
