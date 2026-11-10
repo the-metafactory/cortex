@@ -55,12 +55,17 @@ function supportOf(input: DeskBackendInput): { support: OwnerSupport; state: Des
   return { support: parsed.data, state: { available: true } };
 }
 
+function isObservationBinding(binding: object): binding is DeskObservationBinding {
+  const candidate = binding as Partial<DeskObservationBinding>;
+  return typeof candidate.fetch === "function" && Array.isArray(candidate.modes) && candidate.modes.length > 0;
+}
+
 function observationOf(input: DeskBackendInput, call: <T>(run: () => T) => T): { observation?: ObservationConnector; state: DeskBackendPathState } {
   const entries = Object.entries(input.bindings.observations).filter(([id]) => input.declaration.capabilities.some(capability => capability.capabilityId === id && capability.kind === "observation"));
   if (entries.length === 0) return { state: unavailable("observation_unavailable", "This package declares no observation capability; the observation path is unavailable.") };
   const bindings = new Map<string, DeskObservationBinding>();
   for (const [id, binding] of entries) {
-    if (typeof binding.fetch !== "function" || !Array.isArray(binding.modes) || binding.modes.length === 0) return { state: unavailable("observation_unavailable", `The observation binding for ${id} supplies no fetch call or modes; the observation path is unavailable.`) };
+    if (!isObservationBinding(binding)) return { state: unavailable("observation_unavailable", `The observation binding for ${id} supplies no fetch call or modes; the observation path is unavailable.`) };
     bindings.set(id, binding);
   }
   const orderings = new Set([...bindings.values()].map(binding => binding.ordering?.id ?? ""));
@@ -97,7 +102,7 @@ export function adaptDeskBackend(input: DeskBackendInput): DeskBackendConnector 
   const dispatchable = dispatchState.available && action;
   const readbackTarget = action?.readbackCapabilityId;
   const readbackDeclared = typeof readbackTarget === "string" && queryIds.has(readbackTarget);
-  const readbackReady = dispatchable && typeof action.readback === "function" && readbackDeclared;
+  const readbackReady = action && typeof action.readback === "function" && readbackDeclared;
 
   const connector: TrustedConnector = {
     ...(observed.observation ? { observation: observed.observation } : {}),
@@ -111,8 +116,8 @@ export function adaptDeskBackend(input: DeskBackendInput): DeskBackendConnector 
       if (!dispatchable || typeof action.dispatch !== "function") return Promise.reject(new DeskBackendUnavailableError(dispatchState.available ? { code: "dispatch_unavailable", message: "The dispatch path is unavailable." } : dispatchState.error));
       return settled(() => call(() => action.dispatch?.(structuredClone(request), signal)));
     },
-    ...(dispatchable && typeof action.cancel === "function" ? { cancel: (request, signal) => settled(() => call(() => action.cancel?.(structuredClone(request), signal))) } : {}),
-    ...(dispatchable && typeof action.lookup === "function" ? { lookup: (request, signal) => settled(() => call(() => action.lookup?.(structuredClone(request), signal))) } : {}),
+    ...(action && typeof action.cancel === "function" ? { cancel: (request, signal) => settled(() => call(() => action.cancel?.(structuredClone(request), signal))) } : {}),
+    ...(action && typeof action.lookup === "function" ? { lookup: (request, signal) => settled(() => call(() => action.lookup?.(structuredClone(request), signal))) } : {}),
     ...(readbackReady ? { readbackCapabilityId: readbackTarget, readback: (request, signal) => settled(() => call(() => action.readback?.(structuredClone(request), signal))) } : {}),
     ...(hasQuery ? {
       query: async (request, signal) => {
@@ -124,15 +129,15 @@ export function adaptDeskBackend(input: DeskBackendInput): DeskBackendConnector 
   };
 
   const readback: DeskBackendPathState = readbackReady ? { available: true }
-    : !dispatchable ? OMITTED("readback")
+    : !action ? OMITTED("readback")
     : typeof action.readback !== "function" ? OMITTED("readback")
     : unavailable("readback_unavailable", "The action connector's readbackCapabilityId does not name a declared query capability; the readback path is unavailable.");
   const paths: Record<DeskBackendPath, DeskBackendPathState> = {
     query: hasQuery ? { available: true } : unavailable("query_unavailable", "This package supplies no query call; the query path is unavailable."),
     observation: observed.state,
     dispatch: dispatchState,
-    cancel: dispatchable && typeof action.cancel === "function" ? { available: true } : OMITTED("cancel"),
-    lookup: dispatchable && typeof action.lookup === "function" ? { available: true } : OMITTED("lookup"),
+    cancel: action && typeof action.cancel === "function" ? { available: true } : OMITTED("cancel"),
+    lookup: action && typeof action.lookup === "function" ? { available: true } : OMITTED("lookup"),
     readback,
   };
   return { connector, paths };

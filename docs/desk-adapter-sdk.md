@@ -5,7 +5,7 @@ This is the initial authoring contract for a Desk adapter package. It describes 
 
 The Desk adapter SDK is distinct from the surface plugin SDK. `SURFACE_SDK_VERSION` is unchanged: no existing surface export changes here. A Desk adapter is not a surface transport plugin, and a `cortex-plugin.yaml` is never reinterpreted as a Desk package manifest.
 
-SDK 1.1.0 amends 1.0.0 additively: it types query handlers and observation bindings, and lets an action connector supply dispatch, cancel, lookup and readback. A package built against 1.0.0 still loads, and `deskSdkRange: "^1.0.0"` still matches. No new major version is introduced.
+SDK 1.1.0 amends 1.0.0 additively: it types query handlers and observation bindings (the untyped 1.0.0 binding shape stays assignable), and lets an action connector supply dispatch, cancel, lookup and readback. A package built against 1.0.0 still loads, and `deskSdkRange: "^1.0.0"` still matches. No new major version is introduced.
 
 ## Trust position
 
@@ -114,8 +114,8 @@ A package supplies the calls below; the host adapts them to the `TrustedConnecto
 | query | `bindings.handlers[capabilityId](request, signal)` for each declared `query` capability | The request is the host's `QueryFetchRequest`; the result must parse as a `QueryPage` or the call fails. |
 | observation | `bindings.observations[capabilityId]`: `{ modes, ordering?, fetch(request, signal) }` | `fetch` returns an `ObservationBatch`, validated by the host against the read binding. All observation bindings of one adapter must share one ordering id, or the path is unavailable. |
 | dispatch | the action connector's `dispatch(request, signal)`, with `writerOwner` and `support` | `support` must name this adapter, connection and action capability. The host's writer fencing, confirmation and journal run first. |
-| cancel, lookup | the action connector's `cancel` and `lookup` | Optional; each is offered only when supplied. |
-| readback | the action connector's `readback(request, signal)` and `readbackCapabilityId` | `readbackCapabilityId` must name a declared `query` capability of the same adapter, else the path is unavailable. The host releases the result only for an exact, restricted object reference. |
+| cancel, lookup | the action connector's `cancel` and `lookup` | Optional; each is offered only when supplied, independent of dispatch. |
+| readback | the action connector's `readback(request, signal)` and `readbackCapabilityId` | Offered independent of dispatch. `readbackCapabilityId` must name a declared `query` capability of the same adapter, else the path is unavailable. The host releases the result only for an exact, restricted object reference. |
 
 Rules:
 

@@ -173,7 +173,7 @@ if (existsSync(join(here, "more-packages.ts"))) {
   for (const spec of more.specs(reference, text, reading)) registered[spec.dir] = spec;
   rmSync(out, { recursive: true, force: true });
   for (const spec of Object.values(registered)) if (!only.length || only.includes(spec.dir)) build(spec);
-  more.finish?.(out);
+  if (!only.length || only.includes("broken-symlink")) more.finish?.(out);
   cpSync(join(here, "blind-packages/plant-care"), join(out, "plant-care"), { recursive: true });
 } else {
   rmSync(out, { recursive: true, force: true });

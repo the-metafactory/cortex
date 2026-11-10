@@ -192,6 +192,15 @@ describe("a call the package omits is unavailable and says so", () => {
     if (!paths.dispatch.available) expect(paths.dispatch.error.code).toBe("dispatch_unavailable");
   });
 
+  test("offers readback and lookup when the package omits dispatch", async () => {
+    const loader = await loadPackage(readableDeclaration(), fullBackend(["dispatch"]), [queryBinding]);
+    const { connector, paths } = await trusted(loader);
+    expect(paths.dispatch.available).toBe(false);
+    expect(paths.readback).toEqual({ available: true });
+    expect(paths.lookup).toEqual({ available: true });
+    expect(typeof connector.readback).toBe("function");
+  });
+
   test("refuses a readback capability the declaration does not list as a query", async () => {
     const loader = await loadPackage(queryDeclaration(), { ...fullBackend(), readbackCapabilityId: "balance.unknown" }, [queryBinding]);
     const { connector, paths } = await trusted(loader);

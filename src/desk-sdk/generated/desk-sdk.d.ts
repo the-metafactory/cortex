@@ -698,10 +698,12 @@ export interface DeskObservationBinding {
 	};
 	fetch(request: ObservationRequest, signal: AbortSignal): unknown;
 }
+/** The untyped 1.0.0 binding shape; the host treats one without `fetch` and `modes` as an unavailable observation path. */
+export type DeskLegacyObservationBinding = object;
 /** The bindings a package's module supplies for its declared query and observation capabilities. */
 export interface DeskAdapterBindings {
 	readonly handlers: Record<string, DeskQueryHandler>;
-	readonly observations: Record<string, DeskObservationBinding>;
+	readonly observations: Record<string, DeskObservationBinding | DeskLegacyObservationBinding>;
 }
 /** The connection identity the host binds when it constructs a connector for one configured connection. */
 export interface DeskAdapterConnection {
