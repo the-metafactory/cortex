@@ -178,6 +178,8 @@ export function balanceTaskReceiptId(operationId: string): string {
   return operationUuid(operationId);
 }
 
+const refusedEnvelope = (reason: string): BalanceTaskFacadeOutcome => ({ kind: "refused", reason, result: { state: "failed", error: `${reason} Nothing was created.` } });
+
 export type BalanceTaskReceipt = ReturnType<typeof loadMeta>["receipts"][number];
 
 export interface BalanceTaskBindingOptions {
@@ -322,19 +324,19 @@ export function createBalanceTaskFacade(options: BalanceTaskFacadeOptions): Bala
     },
     async create(request, authority, lifecycle) {
       const review = facade.review(request.fields);
-      if (review.kind !== "resolved") return { kind: "refused", reason: review.reason, result: { state: "failed", error: `${review.reason} Nothing was created.` } };
+      if (review.kind !== "resolved") return refusedEnvelope(review.reason);
       let snapshot: ApprovedSnapshot;
       try {
         snapshot = balanceTaskApprovedSnapshot({ connectionId: options.binding.support.connectionId, provenance: { conversationId: request.provenance.conversationId, proposalId: request.provenance.proposalId, revision: request.provenance.revision, entryId: request.provenance.entryId, link: request.provenance.link }, input: review.input });
       } catch {
-        return { kind: "refused", reason: "The reviewed Balance task is not an approvable task.", result: { state: "failed", error: "The reviewed Balance task is not an approvable task. Nothing was created." } };
+        return refusedEnvelope("The reviewed Balance task is not an approvable task.");
       }
       try {
         await options.journal.approve({ operationId: request.operationId, idempotencyKey: request.operationId, ownerRequestId: operationUuid(request.operationId), snapshot, authority, at: at() });
       } catch {
-        return { kind: "refused", reason: "The approved Balance task no longer matches this operation.", result: { state: "failed", error: "The approved Balance task no longer matches this operation. Nothing was created." } };
+        return refusedEnvelope("The approved Balance task no longer matches this operation.");
       }
-      if (!await lifecycle.activate()) return { kind: "refused", reason: "The Balance task binding is inactive.", result: { state: "failed", error: "The Balance task binding is inactive. Nothing was created." } };
+      if (!await lifecycle.activate()) return refusedEnvelope("The Balance task binding is inactive.");
       const outcome = await lifecycle.dispatch(request.operationId);
       const stored = await options.journal.read(request.operationId);
       return { kind: "dispatched", outcome, stored, result: balanceTaskLegacyResult(stored) };
@@ -350,7 +352,7 @@ export function createBalanceTaskBinding(options: BalanceTaskBindingOptions): Ba
 
   const receipt = (operationId: string): BalanceTaskReceipt | undefined => {
     try {
-      const id = operationUuid(operationId);
+      const id = balanceTaskReceiptId(operationId);
       return loadMeta(options.db).receipts.find(item => item.id === id);
     } catch {
       return undefined;
@@ -380,16 +382,17 @@ export function createBalanceTaskBinding(options: BalanceTaskBindingOptions): Ba
     if (earlier?.outlineId) return succeededResult({ ...requestParts(request), connectionId: options.connectionId, canonicalId: earlier.outlineId, receipt: earlier, at: reportedAt });
     const stale = (error: unknown): boolean => error instanceof Error && error.constructor === Error && error.message === STALE_OUTLINE;
     const call = async (): Promise<CreateResult> => writer.create(create);
+    const uncertainFrom = (error: unknown): OwnerResult => uncertainResult(request, error instanceof Error ? error.message : "The Balance owner call failed without a result.", at(), jsonReceipt(receipt(request.operationId)));
     let result: CreateResult;
     try {
       result = await call();
     } catch (error) {
-      if (!stale(error)) return uncertainResult(request, error instanceof Error ? error.message : "The Balance owner call failed without a result.", at(), jsonReceipt(receipt(request.operationId)));
+      if (!stale(error)) return uncertainFrom(error);
       try {
         result = await call();
       } catch (retry) {
         if (stale(retry)) return refusedResult(request, STALE_OUTLINE, at());
-        return uncertainResult(request, retry instanceof Error ? retry.message : "The Balance owner call failed without a result.", at(), jsonReceipt(receipt(request.operationId)));
+        return uncertainFrom(retry);
       }
     }
     if (result.state === "created") return succeededResult({ ...requestParts(request), connectionId: options.connectionId, canonicalId: result.canonicalId, receipt: jsonReceipt(receipt(request.operationId), result.canonicalId), at: at() });

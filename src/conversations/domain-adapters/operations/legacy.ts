@@ -46,8 +46,9 @@ export interface LegacyPreview {
   ownerRequestId: string;
 }
 
-const canonicalProject = (value: string | undefined): string | undefined => value !== undefined && value.trim().length > 0 && value.trim() === value && isBalanceProjectId(value) ? value : undefined;
-const storableReference = (ref: ObjectReference): boolean => ref.objectType !== "project" || ref.canonicalId.trim() === ref.canonicalId && isBalanceProjectId(ref.canonicalId);
+const isCanonicalProjectId = (value: string): boolean => value.trim().length > 0 && value.trim() === value && isBalanceProjectId(value);
+const canonicalProject = (value: string | undefined): string | undefined => value !== undefined && isCanonicalProjectId(value) ? value : undefined;
+const storableReference = (ref: ObjectReference): boolean => ref.objectType !== "project" || isCanonicalProjectId(ref.canonicalId);
 
 function conversionIssues(source: LegacySource, context: LegacyContext): string[] {
   if (source.record.owner !== "balance-task" || !isBalanceTaskBinding(context)) return ["legacy_capability_mapping_unsupported"];
