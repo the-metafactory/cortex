@@ -17,7 +17,7 @@ import type { OperationJournalStore, StoredOperation } from "../operations/journ
 import type { WriterBinding } from "../operations/writer-authority";
 import type { ApprovedSnapshot, Authority, DispatchRequest, Json, OperationLookup, OwnerResult, OwnerSupport, Provenance } from "../operations/types";
 import { adapterErrorSchema } from "../schema-primitives";
-import { attemptsOf, buildApprovedSnapshot, createOutcome, ownerResultKit, requestParts, resultsOf, type CreateOutcome, type OwnerResultParts } from "../operations/owner-results";
+import { buildApprovedSnapshot, createOutcome, ownerResultKit, requestParts, resultsOf, type CreateOutcome, type OwnerResultParts } from "../operations/owner-results";
 
 const CAPABILITY_ID = "balance.task.create";
 const OWNER = "balance-task";

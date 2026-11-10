@@ -11,7 +11,7 @@ import { ADD_TIMEOUT_MS, GRAPH_LABEL, graphAnswer, graphBody, graphMarker, graph
 import type { DispatchOutcome } from "../operations/dispatch";
 import type { OperationJournalStore, StoredOperation } from "../operations/journal";
 import type { ApprovedSnapshot, Authority, DispatchRequest, Json, OperationLookup, OwnerResult, OwnerSupport, Provenance } from "../operations/types";
-import { attemptsOf, buildApprovedSnapshot, createOutcome, ownerResultKit, requestParts, resultsOf, type CreateOutcome } from "../operations/owner-results";
+import { buildApprovedSnapshot, createOutcome, ownerResultKit, requestParts, resultsOf, type CreateOutcome } from "../operations/owner-results";
 import type { WriterBinding } from "../operations/writer-authority";
 import { adapterErrorSchema, objectSchema, schemaRef } from "../schema-primitives";
 import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../types";
@@ -269,6 +269,8 @@ export function createWorkGraphNodeBinding(options: WorkGraphNodeBindingOptions)
     const checked = await kit.approvedForLookup(options.journal, request, checkedAt, "graph");
     if ("reply" in checked) return checked.reply;
     const { stored, snapshotDigest, attempt, replies: { respond, unknown } } = checked;
+    const success = resultsOf(stored).findLast(response => response.result.kind === "succeeded");
+    if (success?.result.kind === "succeeded") return respond({ kind: "known", response: success });
     const found = await readback(request.operationId);
     if (!found?.found) return unknown("work-graph.node_unconfirmed", "The graph does not confirm a node for this operation under the requested parent.");
     const parts = { operationId: request.operationId, attemptId: attempt.attemptId, ownerRequestId: request.ownerRequestId, snapshotDigest };
