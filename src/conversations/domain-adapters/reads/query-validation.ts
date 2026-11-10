@@ -47,7 +47,15 @@ export function validateQueryPage(registry: DomainAdapterRegistry, binding: Read
     pointers.add(entry.pointer);
     const value = readPointer(page.payload, entry.pointer);
     if (value === undefined || entry.ref.adapterId !== binding.adapterId || entry.ref.connectionId !== dispatch.source.connectionId || entry.ref.objectType !== binding.objectType || !dispatch.source.destinations.some(dest => canonicalWire(dest) === canonicalWire(entry.destination)) || !registry.validateObject(binding.adapterId, binding.objectType, entry.schemaRef, value).ok) throw new Error("invalid_annotations");
-    if (typeof readPointer(value, binding.display.title) !== "string" || binding.display.summary && typeof readPointer(value, binding.display.summary) !== "string") throw new Error("invalid_display");
+    const display = binding.display;
+    const present = (pointer: string | undefined, accepts: (held: Json) => boolean): boolean => {
+      if (pointer === undefined) return true;
+      const held = readPointer(value, pointer);
+      return held !== undefined && accepts(held);
+    };
+    const scalar = (held: Json): boolean => typeof held === "string";
+    const reference = (held: Json): boolean => typeof held === "object" && held !== null && !Array.isArray(held);
+    if (typeof readPointer(value, display.title) !== "string" || !present(display.summary, scalar) || !present(display.status, scalar) || !present(display.due, held => held === null || typeof held === "string") || !present(display.area, reference)) throw new Error("invalid_display");
     const key = authorityHash(entry.ref);
     const digest = authorityHash({ value, revision: entry.evidence.revision, schemaRef: entry.schemaRef, destination: entry.destination });
     if (seen[key] !== undefined && seen[key] !== digest) throw new Error("restart_required");
