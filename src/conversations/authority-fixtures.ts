@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openConversationHost, type ConversationHost, type HostOptions } from "./host";
-import { createArcFileSecretStore } from "../common/config/desk-credential-arc-file-store";
+import { arcSecretPath, createArcFileSecretStore } from "../common/config/desk-credential-arc-file-store";
 import { authorityHash } from "./authority-records";
 import { type AuthorityBindings, type WriterLease } from "./authority";
 import type { ConnectionRecord, PolicyInputs, PrincipalBinding, ReleaseSink, RestrictionRecord } from "./authority-records";
@@ -25,8 +25,11 @@ export async function authorityRig(extra: Partial<HostOptions> = {}, conversatio
   const dir = options.dir ?? await mkdtemp(join(tmpdir(), "host-authority-"));
   const registry = readSetup?.registry ?? registryFixture();
   const secretIdentity = "DESK_SYNTHETIC_CANARY_FIXTURE";
-  const secrets = options.credential === undefined ? null : createArcFileSecretStore({ configRoot: join(dir, "arc") });
-  if (secrets && options.credential !== undefined) await secrets.writeIfAbsent(secretIdentity, options.credential);
+  const secretsRoot = join(dir, "arc");
+  const credential = options.credential ?? null;
+  const secrets = credential === null ? null : createArcFileSecretStore({ configRoot: secretsRoot });
+  const credentialWrite = secrets === null || credential === null ? null : await secrets.writeIfAbsent(secretIdentity, credential);
+  const secretPath = secrets === null ? null : arcSecretPath(secretsRoot, secretIdentity);
   const principal: PrincipalBinding = { version: 1, principalRef: randomUUID(), principal: "principal-example", stack: "test", identityBindingRevision: "1", status: "active" };
   const approval = approvalFixture();
   const connection: ConnectionRecord = { version: 1, status: "active", connectionId: approval.snapshot.connectionId, adapterId: readSetup?.adapterId ?? "balance", principalRef: principal.principalRef, connectionRevision: "1", credentialHandle: "synthetic-credential-handle", accountScope: { account: "synthetic-account", resource: "area-example" }, readCapabilityIds: [...new Set([approval.snapshot.capabilityId, "balance.object.read", ...(readSetup?.capabilityIds ?? [])])], writeCapabilityIds: [approval.snapshot.capabilityId], readDestinations: approval.snapshot.destinations, writeDestinations: approval.snapshot.destinations, connectorId: "synthetic-connector", executionBindingRef: support.declarationId, registryRevision: "registry-1" };
@@ -87,7 +90,7 @@ export async function authorityRig(extra: Partial<HostOptions> = {}, conversatio
   let context = requireValue(await service.authenticate("authenticated-session"));
   const input = () => ({ operationId: approval.operationId, idempotencyKey: approval.idempotencyKey, ownerRequestId: approval.ownerRequestId, snapshot: approval.snapshot });
   const rig = {
-    get host() { return host; }, get service() { return service; }, get context() { return context; }, registry, principal, connection, secondConnection, objectRestriction, readBindings, readBinding, approval, policy, lease, calls, hooks, sink, dir, bindings, credential: options.credential ?? null, secrets, secretIdentity,
+    get host() { return host; }, get service() { return service; }, get context() { return context; }, registry, principal, connection, secondConnection, objectRestriction, readBindings, readBinding, approval, policy, lease, calls, hooks, sink, dir, bindings, credential: options.credential ?? null, secrets, secretIdentity, credentialWrite, secretPath,
     confirm: () => service.confirm(context, input()),
     input,
     async prepare() {

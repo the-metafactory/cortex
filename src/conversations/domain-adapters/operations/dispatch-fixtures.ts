@@ -25,6 +25,13 @@ export function ownerResult(request: Pick<DispatchRequest, "operationId" | "atte
 
 export interface DispatchRigOptions extends AuthorityRigOptions { readSetup?: { registry: DomainAdapterRegistry; binding: unknown; capabilityIds?: readonly string[]; adapterId?: string } }
 
+export interface DispatchRigSetup extends DispatchRigOptions { waitMs?: number; maxOutstandingCalls?: number; clock?: () => Date; notify?: PrincipalNotifier }
+
+export const dispatchRigWith = (setup: DispatchRigSetup = {}) => {
+  const { waitMs, maxOutstandingCalls, clock, notify, ...options } = setup;
+  return dispatchRig(waitMs, maxOutstandingCalls, clock, notify, options);
+};
+
 export async function dispatchRig(waitMs = 30_000, maxOutstandingCalls?: number, clock: () => Date = () => new Date(AT), notify?: PrincipalNotifier, options: DispatchRigOptions = {}) {
   const rig = await authorityRig({ now: clock, ...(notify ? { notify } : {}) }, "local", options.readSetup, options);
   const declared: { support: OwnerSupport | undefined } = { support: { ...support, cancellation: "best-effort", operationLookup: "historical" } };
