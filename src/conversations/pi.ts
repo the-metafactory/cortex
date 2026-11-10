@@ -161,41 +161,60 @@ async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: 
   let answer: Answer | null = null;
   let pendingText = "";
   let lastTextAt = 0;
-  const flushText = async (): Promise<void> => {
-    if (!pendingText) return;
+  let textTimer: ReturnType<typeof setTimeout> | undefined;
+  let flushing = Promise.resolve();
+  const flushText = (): Promise<void> => {
+    clearTimeout(textTimer);
+    textTimer = undefined;
     const text = pendingText;
     pendingText = "";
-    lastTextAt = Date.now();
-    await request.text?.(text);
-  };
-  for await (const line of lines(child.stdout)) {
-    let raw: unknown;
-    try { raw = JSON.parse(line); } catch { continue; }
-    const event = PiEvent.safeParse(raw);
-    if (!event.success) continue;
-    const e = event.data;
-    if (e.type === "message_start") {
-      if (e.message.role === "assistant") { pendingText = ""; lastTextAt = 0; await request.text?.("", true); }
-      continue;
+    if (text) {
+      lastTextAt = Date.now();
+      flushing = flushing.then(async () => { await request.text?.(text); });
     }
-    if (e.type === "message_update") {
-      if (e.assistantMessageEvent.type === "text_delta" && e.assistantMessageEvent.delta) {
-        pendingText += e.assistantMessageEvent.delta;
-        if (Date.now() - lastTextAt >= TEXT_INTERVAL_MS) await flushText();
+    return flushing;
+  };
+  try {
+    for await (const line of lines(child.stdout)) {
+      let raw: unknown;
+      try { raw = JSON.parse(line); } catch { continue; }
+      const event = PiEvent.safeParse(raw);
+      if (!event.success) continue;
+      const e = event.data;
+      if (e.type === "message_start") {
+        if (e.message.role === "assistant") {
+          clearTimeout(textTimer);
+          textTimer = undefined;
+          pendingText = "";
+          lastTextAt = 0;
+          await flushing;
+          await request.text?.("", true);
+        }
+        continue;
       }
-      continue;
+      if (e.type === "message_update") {
+        if (e.assistantMessageEvent.type === "text_delta" && e.assistantMessageEvent.delta) {
+          pendingText += e.assistantMessageEvent.delta;
+          const remaining = TEXT_INTERVAL_MS - (Date.now() - lastTextAt);
+          if (remaining <= 0) await flushText();
+          else textTimer ??= setTimeout(() => {
+            void flushText().catch((error: unknown) => { halt(error instanceof Error ? error.message : String(error)); });
+          }, remaining);
+        }
+        continue;
+      }
+      await flushText();
+      if (e.type === "tool_execution_start") { calls.set(e.toolCallId, e.args); continue; }
+      if (e.type === "message_end") { if (e.message.role === "assistant") answer = e.message; continue; }
+      const result = capped(textOf(e.result?.content));
+      let outcome: ToolActivity["outcome"] = e.isError === true ? "error" : "done";
+      if (!allowed.has(e.toolName)) outcome = e.isError === true && result.trim() === `Tool ${e.toolName} not found` ? "refused" : "stopped";
+      if (!bridged.has(e.toolCallId)) await request.activity(activityOf({ callId: e.toolCallId, name: e.toolName, input: calls.get(e.toolCallId) ?? null }, { outcome, text: result }));
+      if (outcome === "stopped") { halt(`pi reported ${e.toolName}, which is not on the read-only tool allowlist, as run; the turn was stopped`); return null; }
     }
     await flushText();
-    if (e.type === "tool_execution_start") { calls.set(e.toolCallId, e.args); continue; }
-    if (e.type === "message_end") { if (e.message.role === "assistant") answer = e.message; continue; }
-    const result = capped(textOf(e.result?.content));
-    let outcome: ToolActivity["outcome"] = e.isError === true ? "error" : "done";
-    if (!allowed.has(e.toolName)) outcome = e.isError === true && result.trim() === `Tool ${e.toolName} not found` ? "refused" : "stopped";
-    if (!bridged.has(e.toolCallId)) await request.activity(activityOf({ callId: e.toolCallId, name: e.toolName, input: calls.get(e.toolCallId) ?? null }, { outcome, text: result }));
-    if (outcome === "stopped") { halt(`pi reported ${e.toolName}, which is not on the read-only tool allowlist, as run; the turn was stopped`); return null; }
-  }
-  await flushText();
-  return answer;
+    return answer;
+  } finally { clearTimeout(textTimer); await flushing; }
 }
 
 export function piTurns(settings: PiSettings): TurnCall {

@@ -65,6 +65,35 @@ describe("pi turns", () => {
     expect(reply.text).toBe("Hello there");
   });
 
+  test("buffered text is delivered while Pi stdout is paused", async () => {
+    const r = await rig({ STUB_PI_PAUSE_AFTER: "2", STUB_PI_PAUSE_MS: "500" });
+    const marker = join(r.dir, "stdout-resumed");
+    r.settings.env = { ...r.settings.env, STUB_PI_PAUSE_MARKER: marker };
+    await script(r, [
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Hello " } },
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "there" } },
+      answer("Hello there"),
+    ]);
+    let received = "";
+    const reply = await piTurns(r.settings)(request({ text: delta => {
+      received += delta;
+      if (received === "Hello there") expect(existsSync(marker)).toBe(false);
+      return Promise.resolve();
+    } }));
+    expect(received).toBe("Hello there");
+    expect(reply.text).toBe("Hello there");
+  });
+
+  test("a trailing text publication failure stops Pi and rejects the turn", async () => {
+    const r = await rig({ STUB_PI_PAUSE_AFTER: "2", STUB_PI_PAUSE_MS: "5000" });
+    await script(r, [
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Hello " } },
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "there" } },
+      answer("Hello there"),
+    ]);
+    await expect(piTurns(r.settings)(request({ text: delta => delta === "there" ? Promise.reject(new Error("publication revoked")) : Promise.resolve() }))).rejects.toThrow("publication revoked");
+  });
+
   test("tool narration resets before the next assistant message and small deltas are batched", async () => {
     const r = await rig();
     const update = (delta: string) => ({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } });
