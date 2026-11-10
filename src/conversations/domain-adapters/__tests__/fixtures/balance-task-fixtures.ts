@@ -99,14 +99,18 @@ export async function openBalanceTaskRig(): Promise<BalanceTaskRig> {
   const engine = await Harness.open(await openNodeSqliteStorage(join(dir, "operations.sqlite")), { registry: createRegistry(), models: createModels() }, BACKGROUND_CONTEXT);
   const journal = new OperationJournalStore(engine, registry, BACKGROUND_CONTEXT);
   const baseWriter = balanceWriter("task", { db, desk: () => options, now: () => BALANCE_TASK_NOW });
-  let binding = createBalanceTaskBinding({ stack: BALANCE_TASK_STACK, connectionId: BALANCE_TASK_CONNECTION, db, desk: () => options, areas: () => areas, journal, now: () => BALANCE_TASK_NOW, owner: baseWriter });
-  let facade = createBalanceTaskFacade({ binding, journal, areas: () => areas, state: () => loadBalanceState(db), now: () => BALANCE_TASK_NOW });
+  const build = (owner: Pick<OwnerWriter, "create" | "readback">): { binding: BalanceTaskBinding; facade: BalanceTaskFacade } => {
+    const binding = createBalanceTaskBinding({ stack: BALANCE_TASK_STACK, connectionId: BALANCE_TASK_CONNECTION, db, desk: () => options, areas: () => areas, journal, now: () => BALANCE_TASK_NOW, owner });
+    return { binding, facade: createBalanceTaskFacade({ binding, journal, areas: () => areas, state: () => loadBalanceState(db), now: () => BALANCE_TASK_NOW }) };
+  };
+  let current = build(baseWriter);
+  const live = (): BalanceTaskBinding => current.binding;
   const context = {} as HostContext;
-  const lease: WriterLease = { bindingKey: writerBindingKey(binding.writerBinding), epoch: 1, instanceId: "instance-example", supervisorReceiptRef: "receipt-example" };
+  const lease: WriterLease = { bindingKey: writerBindingKey(current.binding.writerBinding), epoch: 1, instanceId: "instance-example", supervisorReceiptRef: "receipt-example" };
   const authority: DispatchAuthority = {
     preflight: () => Promise.resolve({ kind: "allowed" }),
     async dispatch(_context, request) {
-      const response = await binding.connector.dispatch(request, new AbortController().signal);
+      const response = await live().connector.dispatch(request, new AbortController().signal);
       const stored = await journal.read(request.operationId);
       if (!stored) throw new Error("Balance task operation vanished before evidence.");
       await journal.receive(request.operationId, stored.revision, response, new Date(BALANCE_TASK_NOW + 1_000).toISOString());
@@ -118,10 +122,10 @@ export async function openBalanceTaskRig(): Promise<BalanceTaskRig> {
     journal,
     authority,
     writers: { current: () => Promise.resolve(true), legacyAllowed: () => Promise.resolve(true) },
-    supportFor: () => binding.support,
+    supportFor: () => live().support,
     now: () => new Date(BALANCE_TASK_NOW),
   });
-  const lifecycle = () => ({ activate: () => bridge.activate(binding.writerBinding, lease), dispatch: (operationIdValue: string) => bridge.dispatch(context, operationIdValue, lease) });
+  const lifecycle = () => ({ activate: () => bridge.activate(live().writerBinding, lease), dispatch: (operationIdValue: string) => bridge.dispatch(context, operationIdValue, lease) });
   const stored = (): AppState => {
     const state = loadBalanceState(db);
     if (!state) throw new Error("Balance task fixture state is missing.");
@@ -144,13 +148,12 @@ export async function openBalanceTaskRig(): Promise<BalanceTaskRig> {
     bridge,
     lease,
     context,
-    binding: () => binding,
-    facade: () => facade,
+    binding: live,
+    facade: () => current.facade,
     lifecycle,
     writer: () => baseWriter,
-    setOwner(writer) {
-      binding = createBalanceTaskBinding({ stack: BALANCE_TASK_STACK, connectionId: BALANCE_TASK_CONNECTION, db, desk: () => options, areas: () => areas, journal, now: () => BALANCE_TASK_NOW, owner: writer });
-      facade = createBalanceTaskFacade({ binding, journal, areas: () => areas, state: () => loadBalanceState(db), now: () => BALANCE_TASK_NOW });
+    setOwner(owner) {
+      current = build(owner);
     },
     state: stored,
     save,

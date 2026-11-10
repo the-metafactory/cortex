@@ -42,6 +42,26 @@ await withTempHome(async () => {
     assert.equal(repeated?.journal.events.filter(entry => entry.event.kind === "attempt-prepared").length, 1);
     console.log("repeat: no second task, attempt or receipt");
 
+    const approved = await rig.journal.read(createId);
+    assert.ok(approved && !("kind" in approved.journal.snapshot));
+    const prepared = approved.journal.events.find(entry => entry.event.kind === "attempt-prepared");
+    assert.ok(prepared?.event.kind === "attempt-prepared");
+    const redispatch = await rig.binding().dispatch({
+      lifecycleVersion: "1.0.0",
+      operationId: createId,
+      attemptId: crypto.randomUUID(),
+      idempotencyKey: createId,
+      ownerRequestId: operationUuid(createId),
+      snapshot: approved.journal.snapshot,
+      authority: balanceTaskAuthority,
+      supportDeclarationId: rig.binding().support.declarationId,
+      deadlineAt: prepared.event.attempt.deadlineAt,
+    });
+    assert.equal(redispatch.result.kind === "succeeded" && redispatch.result.evidence.refs[0]?.canonicalId, task.id);
+    assert.equal(rig.tasks("Probe create").length, 1);
+    assert.equal(rig.receipts().length, 1);
+    console.log("request-id redispatch: the owner receipt returns the same task and adds no effect");
+
     const refusalId = operationId("probe-refusal");
     await approveRefusal(rig, refusalId);
     assert.equal(await rig.lifecycle().activate(), true);

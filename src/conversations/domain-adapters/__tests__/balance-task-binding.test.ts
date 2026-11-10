@@ -4,7 +4,8 @@ import { operationUuid } from "../../../surface/mc/desk/conversation-ids";
 import { STALE_OUTLINE } from "../../../surface/mc/desk/balance-outline";
 import type { OperationRecord } from "../../types";
 import { objectRef } from "../fixtures";
-import { balanceTaskApprovedSnapshot, balanceTaskCreateOutcome, balanceTaskLegacyResult, reviewBalanceTask, type BalanceTaskCreateInput } from "../balance/task-binding";
+import { balanceTaskApprovedSnapshot, balanceTaskCreateOutcome, balanceTaskLegacyResult, reviewBalanceTask, type BalanceTaskBinding, type BalanceTaskCreateInput } from "../balance/task-binding";
+import type { OwnerResult } from "../operations/types";
 import { BALANCE_TASK_CONNECTION, BALANCE_TASK_NOW, CONVERSATION, balanceTaskAuthority, createTaskRequest, operationId, openBalanceTaskRig, taskFields, type BalanceTaskRig } from "./fixtures/balance-task-fixtures";
 
 const rigs: BalanceTaskRig[] = [];
@@ -22,6 +23,23 @@ const provenance = (operationIdValue: string) => ({ conversationId: CONVERSATION
 async function approve(rig: BalanceTaskRig, operationIdValue: string, input: BalanceTaskCreateInput): Promise<void> {
   const snapshot = balanceTaskApprovedSnapshot({ connectionId: BALANCE_TASK_CONNECTION, provenance: provenance(operationIdValue), input });
   await rig.journal.approve({ operationId: operationIdValue, idempotencyKey: operationIdValue, ownerRequestId: operationUuid(operationIdValue), snapshot, authority: balanceTaskAuthority, at: new Date(BALANCE_TASK_NOW).toISOString() });
+}
+
+async function dispatchRequest(rig: BalanceTaskRig, operationIdValue: string): Promise<Parameters<BalanceTaskBinding["dispatch"]>[0]> {
+  const stored = await rig.journal.read(operationIdValue);
+  if (!stored || "kind" in stored.journal.snapshot) throw new Error("Expected an approved snapshot.");
+  const prepared = stored.journal.events.find(entry => entry.event.kind === "attempt-prepared");
+  return {
+    lifecycleVersion: "1.0.0" as const,
+    operationId: operationIdValue,
+    attemptId: prepared?.event.kind === "attempt-prepared" ? prepared.event.attempt.attemptId : crypto.randomUUID(),
+    idempotencyKey: operationIdValue,
+    ownerRequestId: operationUuid(operationIdValue),
+    snapshot: stored.journal.snapshot,
+    authority: balanceTaskAuthority,
+    supportDeclarationId: rig.binding().support.declarationId,
+    deadlineAt: new Date(BALANCE_TASK_NOW + 120_000).toISOString(),
+  };
 }
 
 describe("the inactive Balance task execution binding", () => {
@@ -67,6 +85,52 @@ describe("the inactive Balance task execution binding", () => {
     const stored = await rig.journal.read(op);
     expect(stored?.journal.events.filter(entry => entry.event.kind === "attempt-prepared")).toHaveLength(1);
     expect(stored?.journal.events.filter(entry => entry.event.kind === "owner-result")).toHaveLength(1);
+  });
+
+  test("an owner-level redispatch of one request id creates one task and one receipt", async () => {
+    const rig = await open();
+    const op = operationId("owner-dedup");
+    await approve(rig, op, { area, title: "One effect only" });
+    expect(await rig.lifecycle().activate()).toBe(true);
+    expect((await rig.lifecycle().dispatch(op)).kind).toBe("settled");
+    const request = await dispatchRequest(rig, op);
+    const canonical = (response: OwnerResult): string | undefined => response.result.kind === "succeeded" ? response.result.evidence.refs[0]?.canonicalId : undefined;
+    const first = await rig.binding().dispatch(request);
+    const again = await rig.binding().dispatch({ ...request, attemptId: crypto.randomUUID() });
+    expect([first.result.kind, again.result.kind]).toEqual(["succeeded", "succeeded"]);
+    expect(canonical(again)).toBe(canonical(first));
+    expect(rig.tasks("One effect only")).toHaveLength(1);
+    expect(rig.receipts().filter(receipt => receipt.id === operationUuid(op))).toHaveLength(1);
+    expect(rig.receipts()).toHaveLength(1);
+  });
+
+  test("an invalid legacy field refuses instead of throwing from create", async () => {
+    const rig = await open();
+    const invalidDue = await rig.facade().create(createTaskRequest(taskFields({ title: "Invalid due", due: "tomorrow" }), operationId("invalid-due")), balanceTaskAuthority, rig.lifecycle());
+    expect(invalidDue).toMatchObject({ kind: "refused", result: { state: "failed" } });
+    const longTitle = await rig.facade().create(createTaskRequest(taskFields({ title: "x".repeat(301) }), operationId("invalid-title")), balanceTaskAuthority, rig.lifecycle());
+    expect(longTitle).toMatchObject({ kind: "refused", result: { state: "failed" } });
+    expect(rig.tasks("Invalid due")).toHaveLength(0);
+    expect(rig.receipts()).toHaveLength(0);
+    expect(await rig.journal.read(operationId("invalid-due"))).toBeNull();
+    expect(await rig.journal.read(operationId("invalid-title"))).toBeNull();
+  });
+
+  test("a misrouted or unparsable snapshot is refused before the owner is called", async () => {
+    const rig = await open();
+    const op = operationId("misrouted");
+    await approve(rig, op, { area, title: "Misrouted" });
+    const request = await dispatchRequest(rig, op);
+    const otherConnection = { ...request.snapshot, connectionId: "connection-other" };
+    const otherCapability = { ...request.snapshot, capabilityId: "balance.task.query" };
+    const unparsable = { ...request.snapshot, input: { area, title: "Unparsable", due: "tomorrow" } };
+    for (const snapshot of [otherConnection, otherCapability, unparsable]) {
+      const response = await rig.binding().dispatch({ ...request, snapshot });
+      expect(response.result.kind).toBe("failed");
+      expect(response.result.kind === "failed" && response.result.evidence).toMatchObject({ kind: "no-effect", final: true });
+    }
+    expect(rig.tasks("Misrouted")).toHaveLength(0);
+    expect(rig.receipts()).toHaveLength(0);
   });
 
   test("a refusal inside the owner path is a final no-effect result and keeps the draft", async () => {

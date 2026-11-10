@@ -124,6 +124,8 @@ export function balanceTaskLegacyFields(input: BalanceTaskCreateInput): BalanceT
   };
 }
 
+const INVALID_TASK = "A Balance task takes a title of up to 300 characters, a note of up to 10,000 and a due date in the form YYYY-MM-DD.";
+
 export function reviewBalanceTask(fields: BalanceTaskFields, state: AppState, areas: readonly DestinationArea[], connectionId: string): BalanceTaskReview {
   const areaId = fields.area ?? "";
   const area = areas.find(item => item.id === areaId);
@@ -132,11 +134,15 @@ export function reviewBalanceTask(fields: BalanceTaskFields, state: AppState, ar
   if (title.trim().length === 0) return refusedReview("A task needs a title.", fields);
   const areaRef = reference(connectionId, "area", area.id);
   const extra = { ...(fields.note ? { note: fields.note } : {}), ...(fields.due ? { due: fields.due } : {}) };
+  const resolved = (input: Record<string, unknown>, requiresFreshApproval: boolean): BalanceTaskReview => {
+    const parsed = BalanceTaskCreateInputSchema.safeParse(input);
+    return parsed.success ? { kind: "resolved", input: parsed.data, requiresFreshApproval, fields: { ...fields } } : refusedReview(INVALID_TASK, fields);
+  };
   const project = (fields.project ?? "").trim();
-  if (!project) return { kind: "resolved", input: { area: areaRef, ...extra, title }, requiresFreshApproval: false, fields: { ...fields } };
+  if (!project) return resolved({ area: areaRef, ...extra, title }, false);
   const open = areaProjects(balanceDestinations(state.outline, areas), area.id);
   const chosen = resolveBalanceProject(open, project);
-  if (chosen) return { kind: "resolved", input: { area: areaRef, project: reference(connectionId, "project", chosen.id), ...extra, title }, requiresFreshApproval: chosen.id !== project, fields: { ...fields } };
+  if (chosen) return resolved({ area: areaRef, project: reference(connectionId, "project", chosen.id), ...extra, title }, chosen.id !== project);
   if (isBalanceProjectId(project)) return refusedReview(`That project is not open in ${area.label}.`, fields);
   const titled = open.filter(item => item.title.trim().toLocaleLowerCase() === project.toLocaleLowerCase());
   if (titled.length > 1) return { kind: "choice", field: "project", options: titled, reason: `More than one open project in ${area.label} is named ${project}. Choose one.`, fields: { ...fields } };
@@ -203,35 +209,39 @@ const resultsOf = (stored: StoredOperation) => stored.journal.events.flatMap(ent
 const resultId = (operationId: string, attemptId: string): string => `balance.create:${operationId}:${attemptId}`;
 const reason = (code: string, message: string): BoundaryError => ({ code, message });
 
-function succeededResult(operationId: string, attemptId: string, ownerRequestId: string, digest: string, connectionId: string, canonicalId: string, receipt: Json, at: string): OwnerResult {
-  const task = reference(connectionId, "task", canonicalId);
+interface OwnerResultParts {
+  readonly operationId: string;
+  readonly attemptId: string;
+  readonly ownerRequestId: string;
+  readonly snapshotDigest: string;
+}
+
+const resultBase = (parts: OwnerResultParts, at: string) => ({
+  lifecycleVersion: "1.0.0" as const,
+  operationId: parts.operationId,
+  attemptId: parts.attemptId,
+  snapshotDigest: parts.snapshotDigest,
+  resultId: resultId(parts.operationId, parts.attemptId),
+  reportedAt: at,
+});
+
+const requestParts = (request: DispatchRequest): OwnerResultParts => ({ operationId: request.operationId, attemptId: request.attemptId, ownerRequestId: request.ownerRequestId, snapshotDigest: request.snapshot.digest });
+
+function succeededResult(options: OwnerResultParts & { readonly connectionId: string; readonly canonicalId: string; readonly receipt: Json; readonly at: string }): OwnerResult {
+  const task = reference(options.connectionId, "task", options.canonicalId);
   return {
-    lifecycleVersion: "1.0.0",
-    operationId,
-    attemptId,
-    snapshotDigest: digest,
-    resultId: resultId(operationId, attemptId),
-    reportedAt: at,
+    ...resultBase(options, options.at),
     result: {
       kind: "succeeded",
       output: { ref: task },
-      evidence: { kind: "effect", evidenceId: `balance.effect:${operationId}:${attemptId}`, observedAt: at, ownerRequestId, receipt, refs: [task] },
+      evidence: { kind: "effect", evidenceId: `balance.effect:${options.operationId}:${options.attemptId}`, observedAt: options.at, ownerRequestId: options.ownerRequestId, receipt: options.receipt, refs: [task] },
     },
   };
 }
 
-const ownerResultBase = (request: DispatchRequest, at: string) => ({
-  lifecycleVersion: "1.0.0" as const,
-  operationId: request.operationId,
-  attemptId: request.attemptId,
-  snapshotDigest: request.snapshot.digest,
-  resultId: resultId(request.operationId, request.attemptId),
-  reportedAt: at,
-});
-
 function refusedResult(request: DispatchRequest, message: string, at: string): OwnerResult {
   return {
-    ...ownerResultBase(request, at),
+    ...resultBase(requestParts(request), at),
     result: {
       kind: "failed",
       error: reason("balance.refused", message),
@@ -242,7 +252,7 @@ function refusedResult(request: DispatchRequest, message: string, at: string): O
 
 function uncertainResult(request: DispatchRequest, message: string, at: string, receipt?: Json): OwnerResult {
   return {
-    ...ownerResultBase(request, at),
+    ...resultBase(requestParts(request), at),
     result: { kind: "uncertain", error: reason("balance.uncertain", message), ownerRequestId: request.ownerRequestId, ...(receipt === undefined ? {} : { receipt }) },
   };
 }
@@ -313,7 +323,12 @@ export function createBalanceTaskFacade(options: BalanceTaskFacadeOptions): Bala
     async create(request, authority, lifecycle) {
       const review = facade.review(request.fields);
       if (review.kind !== "resolved") return { kind: "refused", reason: review.reason, result: { state: "failed", error: `${review.reason} Nothing was created.` } };
-      const snapshot = balanceTaskApprovedSnapshot({ connectionId: options.binding.support.connectionId, provenance: { conversationId: request.provenance.conversationId, proposalId: request.provenance.proposalId, revision: request.provenance.revision, entryId: request.provenance.entryId, link: request.provenance.link }, input: review.input });
+      let snapshot: ApprovedSnapshot;
+      try {
+        snapshot = balanceTaskApprovedSnapshot({ connectionId: options.binding.support.connectionId, provenance: { conversationId: request.provenance.conversationId, proposalId: request.provenance.proposalId, revision: request.provenance.revision, entryId: request.provenance.entryId, link: request.provenance.link }, input: review.input });
+      } catch {
+        return { kind: "refused", reason: "The reviewed Balance task is not an approvable task.", result: { state: "failed", error: "The reviewed Balance task is not an approvable task. Nothing was created." } };
+      }
       try {
         await options.journal.approve({ operationId: request.operationId, idempotencyKey: request.operationId, ownerRequestId: operationUuid(request.operationId), snapshot, authority, at: at() });
       } catch {
@@ -344,11 +359,14 @@ export function createBalanceTaskBinding(options: BalanceTaskBindingOptions): Ba
 
   const dispatch = async (request: DispatchRequest, signal?: AbortSignal): Promise<OwnerResult> => {
     const reportedAt = at();
+    if (request.snapshot.adapterId !== ADAPTER_ID || request.snapshot.capabilityId !== CAPABILITY_ID || request.snapshot.connectionId !== options.connectionId) {
+      return refusedResult(request, "The approved snapshot belongs to another Balance connection or capability. Nothing was created.", reportedAt);
+    }
     let input: BalanceTaskCreateInput;
     try {
-      input = parseBalanceTaskInput(request.snapshot.input, request.snapshot.connectionId);
-    } catch (error) {
-      return uncertainResult(request, error instanceof Error ? error.message : "Balance could not read the approved task.", reportedAt);
+      input = parseBalanceTaskInput(request.snapshot.input, options.connectionId);
+    } catch {
+      return refusedResult(request, "The approved snapshot is not a valid Balance task. Nothing was created.", reportedAt);
     }
     const create: CreateRequest = {
       operationId: request.operationId,
@@ -358,6 +376,8 @@ export function createBalanceTaskBinding(options: BalanceTaskBindingOptions): Ba
       provenance: { ...request.snapshot.provenance, operationId: request.operationId },
       signal: signal ?? new AbortController().signal,
     };
+    const earlier = receipt(request.operationId);
+    if (earlier?.outlineId) return succeededResult({ ...requestParts(request), connectionId: options.connectionId, canonicalId: earlier.outlineId, receipt: earlier, at: reportedAt });
     const stale = (error: unknown): boolean => error instanceof Error && error.constructor === Error && error.message === STALE_OUTLINE;
     const call = async (): Promise<CreateResult> => writer.create(create);
     let result: CreateResult;
@@ -372,22 +392,15 @@ export function createBalanceTaskBinding(options: BalanceTaskBindingOptions): Ba
         return uncertainResult(request, retry instanceof Error ? retry.message : "The Balance owner call failed without a result.", at(), jsonReceipt(receipt(request.operationId)));
       }
     }
-    if (result.state === "created") return succeededResult(request.operationId, request.attemptId, request.ownerRequestId, request.snapshot.digest, request.snapshot.connectionId, result.canonicalId, jsonReceipt(receipt(request.operationId), result.canonicalId), at());
+    if (result.state === "created") return succeededResult({ ...requestParts(request), connectionId: options.connectionId, canonicalId: result.canonicalId, receipt: jsonReceipt(receipt(request.operationId), result.canonicalId), at: at() });
     if (result.state === "failed") return refusedResult(request, result.error, at());
-    return {
-      lifecycleVersion: "1.0.0",
-      operationId: request.operationId,
-      attemptId: request.attemptId,
-      snapshotDigest: request.snapshot.digest,
-      resultId: resultId(request.operationId, request.attemptId),
-      reportedAt: at(),
-      result: { kind: "accepted", ownerRequestId: request.ownerRequestId, receipt: jsonReceipt(receipt(request.operationId), result.receipt) },
-    };
+    return { ...resultBase(requestParts(request), at()), result: { kind: "accepted", ownerRequestId: request.ownerRequestId, receipt: jsonReceipt(receipt(request.operationId), result.receipt) } };
   };
 
   const lookup = async (request: LookupRequest): Promise<OperationLookup> => {
     const checkedAt = at();
-    const unknown = (code: string, message: string): OperationLookup => ({ lifecycleVersion: "1.0.0", operationId: request.operationId, checkedAt, result: { kind: "unknown", reason: reason(code, message) } });
+    const respond = (result: OperationLookup["result"]): OperationLookup => ({ lifecycleVersion: "1.0.0", operationId: request.operationId, checkedAt, result });
+    const unknown = (code: string, message: string): OperationLookup => respond({ kind: "unknown", reason: reason(code, message) });
     const stored = await options.journal.read(request.operationId);
     if (!stored || "kind" in stored.journal.snapshot) return unknown("balance.operation_unavailable", "The Balance operation has no approved snapshot.");
     if (stored.journal.ownerRequestId !== request.ownerRequestId) return unknown("balance.request_mismatch", "The Balance operation belongs to another request.");
@@ -396,13 +409,13 @@ export function createBalanceTaskBinding(options: BalanceTaskBindingOptions): Ba
     if (!attempt) return unknown("balance.attempt_missing", "The Balance operation has no prepared attempt.");
     const found = receipt(request.operationId);
     if (found?.outlineId) {
-      const response = succeededResult(request.operationId, attempt.attemptId, request.ownerRequestId, stored.journal.snapshot.digest, stored.journal.snapshot.connectionId, found.outlineId, found, checkedAt);
-      return { lifecycleVersion: "1.0.0", operationId: request.operationId, checkedAt, result: { kind: "known", response } };
+      const response = succeededResult({ operationId: request.operationId, attemptId: attempt.attemptId, ownerRequestId: request.ownerRequestId, snapshotDigest: stored.journal.snapshot.digest, connectionId: options.connectionId, canonicalId: found.outlineId, receipt: found, at: checkedAt });
+      return respond({ kind: "known", response });
     }
     const success = resultsOf(stored).findLast(response => response.result.kind === "succeeded");
-    if (success?.result.kind === "succeeded") return { lifecycleVersion: "1.0.0", operationId: request.operationId, checkedAt, result: { kind: "known", response: success } };
+    if (success?.result.kind === "succeeded") return respond({ kind: "known", response: success });
     const failure = resultsOf(stored).findLast(response => response.result.kind === "failed");
-    if (failure?.result.kind === "failed" && failure.result.evidence.ownerRequestId === request.ownerRequestId) return { lifecycleVersion: "1.0.0", operationId: request.operationId, checkedAt, result: { kind: "no-effect", evidence: failure.result.evidence } };
+    if (failure?.result.kind === "failed" && failure.result.evidence.ownerRequestId === request.ownerRequestId) return respond({ kind: "no-effect", evidence: failure.result.evidence });
     return unknown("balance.receipt_missing", "Balance keeps no receipt for this operation.");
   };
 
