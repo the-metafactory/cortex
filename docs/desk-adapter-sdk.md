@@ -1,9 +1,11 @@
 <!-- glossary-ignore: host, token, path, user, data -->
 # Desk adapter package and SDK authoring contract
 
-This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK 1.0.0, and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.0.0"`).
+This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.1.0, an additive amendment of 1.0.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.1.0"`).
 
 The Desk adapter SDK is distinct from the surface plugin SDK. `SURFACE_SDK_VERSION` is unchanged: no existing surface export changes here. A Desk adapter is not a surface transport plugin, and a `cortex-plugin.yaml` is never reinterpreted as a Desk package manifest.
+
+SDK 1.1.0 amends 1.0.0 additively: it types query handlers and observation bindings (the untyped 1.0.0 binding shape stays assignable), and lets an action connector supply dispatch, cancel, lookup and readback. A package built against 1.0.0 still loads, and `deskSdkRange: "^1.0.0"` still matches. No new major version is introduced.
 
 ## Trust position
 
@@ -103,6 +105,27 @@ Rules the loader enforces at activation:
 
 `bindings.handlers` and `bindings.observations` are the existing internal registry bindings. The host validates them with the strict registry; the module cannot widen authority through the declaration or the UI descriptor.
 
+## Backend calls
+
+A package supplies the calls below; the host adapts them to the `TrustedConnector` and `QueryPage` shapes its authority paths already use (`src/conversations/domain-adapters/package-backend.ts`). `loader.trustedConnector(adapterId, connection, { authorizeConnection, actionCapabilityId? })` builds one per connection and returns the connector with a per-path availability report (`query`, `observation`, `dispatch`, `cancel`, `lookup`, `readback`). `loader.registry()` returns the composed registry the authority mediator needs.
+
+| Path | Where the package supplies it | Host contract |
+| --- | --- | --- |
+| query | `bindings.handlers[capabilityId](request, signal)` for each declared `query` capability | The request is the host's `QueryFetchRequest`; the result must parse as a `QueryPage` or the call fails. |
+| observation | `bindings.observations[capabilityId]`: `{ modes, ordering?, fetch(request, signal) }` | `fetch` returns an `ObservationBatch`, validated by the host against the read binding. All observation bindings of one adapter must share one ordering id, or the path is unavailable. |
+| dispatch | the action connector's `dispatch(request, signal)`, with `writerOwner` and `support` | `support` must name this adapter, connection and action capability. The host's writer fencing, confirmation and journal run first. |
+| cancel, lookup | the action connector's `cancel` and `lookup` | Optional; each is offered only when supplied, independent of dispatch. |
+| readback | the action connector's `readback(request, signal)` and `readbackCapabilityId` | Offered independent of dispatch. `readbackCapabilityId` must name a declared `query` capability of the same adapter, else the path is unavailable. The host releases the result only for an exact, restricted object reference. |
+
+Rules:
+
+- A call the package omits makes that path unavailable. The report names it with a `<path>_unavailable` code, the matching `TrustedConnector` member is absent (or, for dispatch, throws `DeskBackendUnavailableError` and carries an owner support that matches no snapshot), and the host never substitutes a synthetic connector.
+- The host owns credential and account checks. A package cannot report a connection as available: `authorizeConnection` comes from the host.
+- Every call re-checks that the adapter is still available and that the connector's generation is still the published one. Disable, uninstall or a newer generation fences a connector built earlier.
+- Requests are passed as copies. The package receives no credentials, and the host's admission, scope, release and writer checks around each call are the same as for a synthetic connector.
+- A connector serves one action capability. An adapter that registers several must name one in `actionCapabilityId`.
+- Not supplied by a package in this amendment: the legacy `read` call for destination and poll reads.
+
 ## Discovery, approval and activation
 
 The host supplies:
@@ -138,8 +161,18 @@ The standalone demonstration is:
 bun scripts/probe-desk-adapter-packages.ts
 ```
 
-It loads a bundled default and an explicitly approved synthetic arc package from temporary roots, shows unavailable bad and missing packages, fences a disabled adapter, keeps the last valid generation on a rejected update and reports that install, activation, connector creation and a rejected update dispatch no provider handler, neither a read nor a mutation. It performs no real arc install, no service restart and uses no host secret.
+The backend seam has its own tests (`src/conversations/domain-adapters/__tests__/package-backend.test.ts`) and probe:
+
+```sh
+bun scripts/probe-desk-package-backend.ts
+```
+
+It loads fixture packages with `DeskPackageLoader` in a temporary host and drives query, observation, confirmed dispatch and readback through the host paths, shows omitted calls reported unavailable, and fences a disabled adapter.
+
+The extension prototype's fixture packages are committed under `docs/prototypes/desk-extension`; `bun docs/prototypes/desk-extension/build-packages.ts` regenerates them byte for byte.
+
+The packaging probe loads a bundled default and an explicitly approved synthetic arc package from temporary roots, shows unavailable bad and missing packages, fences a disabled adapter, keeps the last valid generation on a rejected update and reports that install, activation, connector creation and a rejected update dispatch no provider handler, neither a read nor a mutation. It performs no real arc install, no service restart and uses no host secret.
 
 ## Not in this contract
 
-Credential provisioning, connection setup UI, asset HTTP delivery, the frame bridge, live package installation or restart, provider-family migration and untrusted-code sandbox execution remain separate slices. The exact view and editor vocabulary remains the approved UI prototype's decision. Unresolved query and observation behavior stays unavailable until its own decision closes.
+Credential provisioning, connection setup UI, asset HTTP delivery, the frame bridge, live package installation or restart, provider-family migration and untrusted-code sandbox execution remain separate slices. The exact view and editor vocabulary remains the approved UI prototype's decision. The conformance harness and its publication remain separate slices.

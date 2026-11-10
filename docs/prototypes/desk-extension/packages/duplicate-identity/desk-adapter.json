@@ -1,0 +1,523 @@
+{
+ "format": "desk-adapter-package/1",
+ "packageId": "sample/duplicate-identity",
+ "packageVersion": "1.0.0",
+ "deskSdkRange": "^1.0.0",
+ "domainContractVersion": "1.0.0",
+ "backend": {
+  "entry": "backend.mjs",
+  "sha256": "2ef51505e0b198a141d15c07bd52d309fcb88a47b566d69e32830498c28b1141"
+ },
+ "declaration": {
+  "adapterId": "sample.reading",
+  "label": "Reading list",
+  "contractRange": "^1.0.0",
+  "schemas": [
+   {
+    "schemaId": "sample.reading.article",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "title": {
+       "type": "string",
+       "minLength": 1,
+       "title": "Title"
+      },
+      "summary": {
+       "type": "string",
+       "title": "Why keep it"
+      },
+      "shelf": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "type": "object",
+       "properties": {
+        "adapterId": {
+         "type": "string",
+         "const": "sample.reading"
+        },
+        "connectionId": {
+         "type": "string",
+         "minLength": 1
+        },
+        "objectType": {
+         "type": "string",
+         "const": "shelf"
+        },
+        "canonicalId": {
+         "type": "string",
+         "minLength": 1
+        }
+       },
+       "required": [
+        "adapterId",
+        "connectionId",
+        "objectType",
+        "canonicalId"
+       ],
+       "additionalProperties": false,
+       "title": "Shelf"
+      },
+      "rating": {
+       "type": "string",
+       "enum": [
+        "skim",
+        "read",
+        "reread"
+       ],
+       "title": "Worth"
+      },
+      "revisit": {
+       "type": "string",
+       "format": "date",
+       "title": "Revisit"
+      },
+      "tags": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "title": "Tags"
+      }
+     },
+     "required": [
+      "title",
+      "shelf"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.reading.error",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "code": {
+       "type": "string",
+       "minLength": 1
+      },
+      "message": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "code",
+      "message"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.reading.article.empty",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.reading.article.search.input",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "text"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.reading.article.list",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "items": {
+       "type": "array",
+       "items": {
+        "$ref": "urn:desk-schema:sample.reading.article:1.0.0"
+       }
+      }
+     },
+     "required": [
+      "items"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.reading.shelf",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "name"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.reading.shelf.list",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "items": {
+       "type": "array",
+       "items": {
+        "$ref": "urn:desk-schema:sample.reading.shelf:1.0.0"
+       }
+      }
+     },
+     "required": [
+      "items"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.reading.article.created",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "ref": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "type": "object",
+       "properties": {
+        "adapterId": {
+         "type": "string",
+         "const": "sample.reading"
+        },
+        "connectionId": {
+         "type": "string",
+         "minLength": 1
+        },
+        "objectType": {
+         "type": "string",
+         "const": "article"
+        },
+        "canonicalId": {
+         "type": "string",
+         "minLength": 1
+        }
+       },
+       "required": [
+        "adapterId",
+        "connectionId",
+        "objectType",
+        "canonicalId"
+       ],
+       "additionalProperties": false
+      },
+      "revision": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "ref",
+      "revision"
+     ],
+     "additionalProperties": false
+    }
+   }
+  ],
+  "objectTypes": [
+   {
+    "objectType": "article",
+    "label": "article",
+    "schemaRef": {
+     "schemaId": "sample.reading.article",
+     "version": "1.0.0"
+    },
+    "relationships": [
+     {
+      "fieldPath": "/shelf",
+      "targetAdapterId": "sample.reading",
+      "targetObjectType": "shelf",
+      "cardinality": "one"
+     }
+    ]
+   },
+   {
+    "objectType": "shelf",
+    "label": "shelf",
+    "schemaRef": {
+     "schemaId": "sample.reading.shelf",
+     "version": "1.0.0"
+    },
+    "relationships": []
+   }
+  ],
+  "capabilities": [
+   {
+    "capabilityId": "sample.reading.article.search",
+    "label": "Search article",
+    "kind": "query",
+    "objectTypes": [
+     "article"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.reading.article.search.input",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.reading.article.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.reading.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.reading.article.observe",
+    "label": "Watch article",
+    "kind": "observation",
+    "objectTypes": [
+     "article"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.reading.article.empty",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.reading.article.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.reading.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.reading.shelf.list",
+    "label": "List shelf",
+    "kind": "query",
+    "objectTypes": [
+     "shelf"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.reading.article.empty",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.reading.shelf.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.reading.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.reading.article.create",
+    "label": "Make article",
+    "kind": "action",
+    "objectTypes": [
+     "article"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.reading.article",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.reading.article.created",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.reading.error",
+     "version": "1.0.0"
+    }
+   }
+  ]
+ },
+ "draftingBindings": [
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.reading",
+   "capabilityId": "sample.reading.article.create",
+   "inputSchemaRef": {
+    "schemaId": "sample.reading.article",
+    "version": "1.0.0"
+   },
+   "guidanceId": "sample.reading.guidance",
+   "guidanceVersion": "1.0.0",
+   "instruction": "Prepare a article from the discussion.",
+   "fieldHints": [
+    {
+     "pointer": "/title",
+     "role": "title"
+    },
+    {
+     "pointer": "/summary",
+     "role": "summary",
+     "widget": "long"
+    },
+    {
+     "pointer": "/shelf",
+     "role": "destination",
+     "resolveWith": "sample.reading.shelf.list"
+    }
+   ]
+  }
+ ],
+ "readBindings": [
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.reading",
+   "capabilityId": "sample.reading.article.search",
+   "mode": "query",
+   "objectType": "article",
+   "inputSchemaRef": {
+    "schemaId": "sample.reading.article.search.input",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.reading.article.list",
+    "version": "1.0.0"
+   },
+   "textPointer": "/text",
+   "destinationType": "shelf",
+   "display": {
+    "title": "/title",
+    "summary": "/summary"
+   }
+  },
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.reading",
+   "capabilityId": "sample.reading.article.observe",
+   "mode": "poll",
+   "objectType": "article",
+   "inputSchemaRef": {
+    "schemaId": "sample.reading.article.empty",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.reading.article.list",
+    "version": "1.0.0"
+   },
+   "destinationType": "shelf",
+   "display": {
+    "title": "/title"
+   },
+   "attention": {
+    "title": "/title",
+    "why": "/summary",
+    "due": "/revisit"
+   }
+  },
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.reading",
+   "capabilityId": "sample.reading.shelf.list",
+   "mode": "destinations",
+   "objectType": "shelf",
+   "inputSchemaRef": {
+    "schemaId": "sample.reading.article.empty",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.reading.shelf.list",
+    "version": "1.0.0"
+   },
+   "display": {
+    "title": "/name"
+   }
+  }
+ ],
+ "setup": {
+  "version": "1.0.0",
+  "schemas": [
+   {
+    "schemaId": "sample.reading.config",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.reading.account",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "account": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "account"
+     ],
+     "additionalProperties": false
+    }
+   }
+  ],
+  "configurationSchemaRef": {
+   "schemaId": "sample.reading.config",
+   "version": "1.0.0"
+  },
+  "accountScopeSchemaRef": {
+   "schemaId": "sample.reading.account",
+   "version": "1.0.0"
+  },
+  "authMethods": [
+   {
+    "kind": "local"
+   }
+  ]
+ },
+ "ui": {
+  "protocolVersion": "1.0.0",
+  "entry": "view.html",
+  "files": [
+   {
+    "path": "view.html",
+    "sha256": "0dcb04b08a9dcb8bf8e215f1a8ba2eb9f3b9994cb97c6436f87ca255decdce02",
+    "mediaType": "text/html"
+   },
+   {
+    "path": "view.js",
+    "sha256": "c873821b1706a32b7eb83e06443e1688863c863ae781fe94492b41fffb30e33e",
+    "mediaType": "text/javascript"
+   }
+  ],
+  "views": [
+   {
+    "objectType": "article",
+    "view": "result"
+   }
+  ]
+ }
+}

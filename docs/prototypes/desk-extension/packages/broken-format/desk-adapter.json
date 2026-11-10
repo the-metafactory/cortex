@@ -1,0 +1,248 @@
+{
+ "format": "desk-adapter-package/2",
+ "packageId": "sample/broken-format",
+ "packageVersion": "1.0.0",
+ "deskSdkRange": "^1.0.0",
+ "domainContractVersion": "1.0.0",
+ "backend": {
+  "entry": "backend.mjs",
+  "sha256": "f47ec307008aeac76cf07374385aeda38970ccdd15bd2be0a9a635ffe14714b2"
+ },
+ "declaration": {
+  "adapterId": "sample.brokenformat",
+  "label": "Future format package",
+  "contractRange": "^1.0.0",
+  "schemas": [
+   {
+    "schemaId": "sample.brokenformat.prop",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "title": {
+       "type": "string",
+       "minLength": 1,
+       "title": "Title"
+      }
+     },
+     "required": [
+      "title"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.brokenformat.error",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "code": {
+       "type": "string",
+       "minLength": 1
+      },
+      "message": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "code",
+      "message"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.brokenformat.prop.empty",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.brokenformat.prop.search.input",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "text"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.brokenformat.prop.list",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "items": {
+       "type": "array",
+       "items": {
+        "$ref": "urn:desk-schema:sample.brokenformat.prop:1.0.0"
+       }
+      }
+     },
+     "required": [
+      "items"
+     ],
+     "additionalProperties": false
+    }
+   }
+  ],
+  "objectTypes": [
+   {
+    "objectType": "prop",
+    "label": "prop",
+    "schemaRef": {
+     "schemaId": "sample.brokenformat.prop",
+     "version": "1.0.0"
+    },
+    "relationships": []
+   }
+  ],
+  "capabilities": [
+   {
+    "capabilityId": "sample.brokenformat.prop.search",
+    "label": "Search prop",
+    "kind": "query",
+    "objectTypes": [
+     "prop"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.brokenformat.prop.search.input",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.brokenformat.prop.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.brokenformat.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.brokenformat.prop.observe",
+    "label": "Watch prop",
+    "kind": "observation",
+    "objectTypes": [
+     "prop"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.brokenformat.prop.empty",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.brokenformat.prop.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.brokenformat.error",
+     "version": "1.0.0"
+    }
+   }
+  ]
+ },
+ "draftingBindings": [],
+ "readBindings": [
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.brokenformat",
+   "capabilityId": "sample.brokenformat.prop.search",
+   "mode": "query",
+   "objectType": "prop",
+   "inputSchemaRef": {
+    "schemaId": "sample.brokenformat.prop.search.input",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.brokenformat.prop.list",
+    "version": "1.0.0"
+   },
+   "textPointer": "/text",
+   "display": {
+    "title": "/title"
+   }
+  },
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.brokenformat",
+   "capabilityId": "sample.brokenformat.prop.observe",
+   "mode": "poll",
+   "objectType": "prop",
+   "inputSchemaRef": {
+    "schemaId": "sample.brokenformat.prop.empty",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.brokenformat.prop.list",
+    "version": "1.0.0"
+   },
+   "display": {
+    "title": "/title"
+   }
+  }
+ ],
+ "setup": {
+  "version": "1.0.0",
+  "schemas": [
+   {
+    "schemaId": "sample.brokenformat.config",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.brokenformat.account",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "account": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "account"
+     ],
+     "additionalProperties": false
+    }
+   }
+  ],
+  "configurationSchemaRef": {
+   "schemaId": "sample.brokenformat.config",
+   "version": "1.0.0"
+  },
+  "accountScopeSchemaRef": {
+   "schemaId": "sample.brokenformat.account",
+   "version": "1.0.0"
+  },
+  "authMethods": [
+   {
+    "kind": "local"
+   }
+  ]
+ }
+}

@@ -1,0 +1,657 @@
+{
+ "format": "desk-adapter-package/1",
+ "packageId": "sample/workshop",
+ "packageVersion": "1.0.0",
+ "deskSdkRange": "^1.0.0",
+ "domainContractVersion": "1.0.0",
+ "backend": {
+  "entry": "backend.mjs",
+  "sha256": "9a22f24cb3a932aa6d0dc33e8e71c7176ae5b9a78c77bcdfef4c0fae98d57073"
+ },
+ "declaration": {
+  "adapterId": "sample.workshop",
+  "label": "Workshop",
+  "contractRange": "^1.0.0",
+  "schemas": [
+   {
+    "schemaId": "sample.workshop.repair",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "fault": {
+       "type": "string",
+       "minLength": 1,
+       "title": "Fault"
+      },
+      "detail": {
+       "type": "string",
+       "title": "Detail"
+      },
+      "bench": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "type": "object",
+       "properties": {
+        "adapterId": {
+         "type": "string",
+         "const": "sample.workshop"
+        },
+        "connectionId": {
+         "type": "string",
+         "minLength": 1
+        },
+        "objectType": {
+         "type": "string",
+         "const": "bench"
+        },
+        "canonicalId": {
+         "type": "string",
+         "minLength": 1
+        }
+       },
+       "required": [
+        "adapterId",
+        "connectionId",
+        "objectType",
+        "canonicalId"
+       ],
+       "additionalProperties": false,
+       "title": "Bench"
+      },
+      "severity": {
+       "type": "string",
+       "enum": [
+        "low",
+        "medium",
+        "high"
+       ],
+       "title": "Severity"
+      },
+      "neededBy": {
+       "type": "string",
+       "format": "date",
+       "title": "Needed by"
+      },
+      "hours": {
+       "type": "number",
+       "title": "Hours"
+      },
+      "parts": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       },
+       "title": "Parts"
+      }
+     },
+     "required": [
+      "fault",
+      "bench"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.workshop.error",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "code": {
+       "type": "string",
+       "minLength": 1
+      },
+      "message": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "code",
+      "message"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.workshop.repair.empty",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.workshop.repair.search.input",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "text"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.workshop.repair.list",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "items": {
+       "type": "array",
+       "items": {
+        "$ref": "urn:desk-schema:sample.workshop.repair:1.0.0"
+       }
+      }
+     },
+     "required": [
+      "items"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.workshop.bench",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "name"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.workshop.bench.list",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "items": {
+       "type": "array",
+       "items": {
+        "$ref": "urn:desk-schema:sample.workshop.bench:1.0.0"
+       }
+      }
+     },
+     "required": [
+      "items"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.workshop.part",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "minLength": 1,
+       "title": "Name"
+      },
+      "inStock": {
+       "type": "boolean",
+       "title": "In stock"
+      }
+     },
+     "required": [
+      "name",
+      "inStock"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.workshop.part.list",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "items": {
+       "type": "array",
+       "items": {
+        "$ref": "urn:desk-schema:sample.workshop.part:1.0.0"
+       }
+      }
+     },
+     "required": [
+      "items"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.workshop.repair.created",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "ref": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "type": "object",
+       "properties": {
+        "adapterId": {
+         "type": "string",
+         "const": "sample.workshop"
+        },
+        "connectionId": {
+         "type": "string",
+         "minLength": 1
+        },
+        "objectType": {
+         "type": "string",
+         "const": "repair"
+        },
+        "canonicalId": {
+         "type": "string",
+         "minLength": 1
+        }
+       },
+       "required": [
+        "adapterId",
+        "connectionId",
+        "objectType",
+        "canonicalId"
+       ],
+       "additionalProperties": false
+      },
+      "revision": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "ref",
+      "revision"
+     ],
+     "additionalProperties": false
+    }
+   }
+  ],
+  "objectTypes": [
+   {
+    "objectType": "repair",
+    "label": "repair",
+    "schemaRef": {
+     "schemaId": "sample.workshop.repair",
+     "version": "1.0.0"
+    },
+    "relationships": [
+     {
+      "fieldPath": "/bench",
+      "targetAdapterId": "sample.workshop",
+      "targetObjectType": "bench",
+      "cardinality": "one"
+     }
+    ]
+   },
+   {
+    "objectType": "bench",
+    "label": "bench",
+    "schemaRef": {
+     "schemaId": "sample.workshop.bench",
+     "version": "1.0.0"
+    },
+    "relationships": []
+   },
+   {
+    "objectType": "part",
+    "label": "part",
+    "schemaRef": {
+     "schemaId": "sample.workshop.part",
+     "version": "1.0.0"
+    },
+    "relationships": []
+   }
+  ],
+  "capabilities": [
+   {
+    "capabilityId": "sample.workshop.repair.search",
+    "label": "Search repair",
+    "kind": "query",
+    "objectTypes": [
+     "repair"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.workshop.repair.search.input",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.workshop.repair.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.workshop.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.workshop.repair.observe",
+    "label": "Watch repair",
+    "kind": "observation",
+    "objectTypes": [
+     "repair"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.workshop.repair.empty",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.workshop.repair.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.workshop.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.workshop.bench.list",
+    "label": "List bench",
+    "kind": "query",
+    "objectTypes": [
+     "bench"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.workshop.repair.empty",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.workshop.bench.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.workshop.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.workshop.part.observe",
+    "label": "Watch part",
+    "kind": "observation",
+    "objectTypes": [
+     "part"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.workshop.repair.empty",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.workshop.part.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.workshop.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.workshop.part.search",
+    "label": "Search part",
+    "kind": "query",
+    "objectTypes": [
+     "part"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.workshop.repair.search.input",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.workshop.part.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.workshop.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.workshop.repair.create",
+    "label": "Make repair",
+    "kind": "action",
+    "objectTypes": [
+     "repair"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.workshop.repair",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.workshop.repair.created",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.workshop.error",
+     "version": "1.0.0"
+    }
+   }
+  ]
+ },
+ "draftingBindings": [
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.workshop",
+   "capabilityId": "sample.workshop.repair.create",
+   "inputSchemaRef": {
+    "schemaId": "sample.workshop.repair",
+    "version": "1.0.0"
+   },
+   "guidanceId": "sample.workshop.guidance",
+   "guidanceVersion": "1.0.0",
+   "instruction": "Prepare a repair from the discussion.",
+   "fieldHints": [
+    {
+     "pointer": "/fault",
+     "role": "title"
+    },
+    {
+     "pointer": "/detail",
+     "role": "summary",
+     "widget": "long"
+    },
+    {
+     "pointer": "/bench",
+     "role": "destination",
+     "resolveWith": "sample.workshop.bench.list"
+    }
+   ]
+  }
+ ],
+ "readBindings": [
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.workshop",
+   "capabilityId": "sample.workshop.repair.search",
+   "mode": "query",
+   "objectType": "repair",
+   "inputSchemaRef": {
+    "schemaId": "sample.workshop.repair.search.input",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.workshop.repair.list",
+    "version": "1.0.0"
+   },
+   "textPointer": "/text",
+   "destinationType": "bench",
+   "display": {
+    "title": "/fault",
+    "summary": "/detail"
+   }
+  },
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.workshop",
+   "capabilityId": "sample.workshop.repair.observe",
+   "mode": "poll",
+   "objectType": "repair",
+   "inputSchemaRef": {
+    "schemaId": "sample.workshop.repair.empty",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.workshop.repair.list",
+    "version": "1.0.0"
+   },
+   "destinationType": "bench",
+   "display": {
+    "title": "/fault"
+   },
+   "attention": {
+    "title": "/fault",
+    "why": "/detail",
+    "due": "/neededBy"
+   }
+  },
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.workshop",
+   "capabilityId": "sample.workshop.bench.list",
+   "mode": "destinations",
+   "objectType": "bench",
+   "inputSchemaRef": {
+    "schemaId": "sample.workshop.repair.empty",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.workshop.bench.list",
+    "version": "1.0.0"
+   },
+   "display": {
+    "title": "/name"
+   }
+  },
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.workshop",
+   "capabilityId": "sample.workshop.part.observe",
+   "mode": "poll",
+   "objectType": "part",
+   "inputSchemaRef": {
+    "schemaId": "sample.workshop.repair.empty",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.workshop.part.list",
+    "version": "1.0.0"
+   },
+   "display": {
+    "title": "/name"
+   }
+  },
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.workshop",
+   "capabilityId": "sample.workshop.part.search",
+   "mode": "query",
+   "objectType": "part",
+   "inputSchemaRef": {
+    "schemaId": "sample.workshop.repair.search.input",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.workshop.part.list",
+    "version": "1.0.0"
+   },
+   "textPointer": "/text",
+   "display": {
+    "title": "/name"
+   }
+  }
+ ],
+ "setup": {
+  "version": "1.0.0",
+  "schemas": [
+   {
+    "schemaId": "sample.workshop.config",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.workshop.account",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "account": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "account"
+     ],
+     "additionalProperties": false
+    }
+   }
+  ],
+  "configurationSchemaRef": {
+   "schemaId": "sample.workshop.config",
+   "version": "1.0.0"
+  },
+  "accountScopeSchemaRef": {
+   "schemaId": "sample.workshop.account",
+   "version": "1.0.0"
+  },
+  "authMethods": [
+   {
+    "kind": "local"
+   }
+  ]
+ },
+ "ui": {
+  "protocolVersion": "1.0.0",
+  "entry": "view.html",
+  "files": [
+   {
+    "path": "view.html",
+    "sha256": "9b474cc5983682a8217ff5f6186720f791c9adae4bf2aed85419025e0beb7dfe",
+    "mediaType": "text/html"
+   },
+   {
+    "path": "view.js",
+    "sha256": "3d83f6c2762b15e57dd89f1fc804da70cd8afee36c5bc400de97b5a55c5ccc9c",
+    "mediaType": "text/javascript"
+   }
+  ],
+  "views": [
+   {
+    "objectType": "repair",
+    "view": "result"
+   }
+  ]
+ }
+}
