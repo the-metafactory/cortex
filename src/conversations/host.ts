@@ -851,16 +851,18 @@ export class ConversationHost {
     return this.view(id, stored, await this.workingSet(), effective, available);
   }
 
-  async watchResponse(id: string, listener: (text: string | null) => void, onClose?: () => void): Promise<() => Promise<void>> {
+  async watchResponse(id: string, listener: (text: string | null) => void | Promise<void>, onClose?: () => void): Promise<() => Promise<void>> {
     const { stored } = await this.tighten(id);
     const conversation = await this.conversation(stored);
     const events = await watchEvents(this.engine, conversation.id, this.context);
     const textOf = (message: AssistantMessage | undefined): string | null => message ? message.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n") : null;
-    listener(textOf(events.snapshot.generation?.message));
-    events.start(async () => {
-      const live = await this.engine.snapshot(LiveDoc, conversation.id, this.context);
-      listener(textOf(live?.generation?.message));
-    });
+    try {
+      await listener(textOf(events.snapshot.generation?.message));
+      events.start(async () => {
+        const live = await this.engine.snapshot(LiveDoc, conversation.id, this.context);
+        await listener(textOf(live?.generation?.message));
+      });
+    } catch (error) { await events.stop(); throw error; }
     void events.closed.then(end => {
       if (end.reason === "listener_error" || end.reason === "session_failed") console.error("conversations: response stream closed", end.error);
       onClose?.();

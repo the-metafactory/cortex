@@ -57,10 +57,15 @@ export function useConversation(id: string) {
     const source = new EventSource(`/api/conversations/${id}/stream`);
     source.addEventListener("response", (event: MessageEvent<string>) => {
       try {
-        const text: unknown = JSON.parse(event.data);
-        if (text !== null && typeof text !== "string") return;
-        setLiveText(text);
-        if (text === null) void load();
+        const update: unknown = JSON.parse(event.data);
+        if (!update || typeof update !== "object") return;
+        if ("append" in update && typeof update.append === "string") {
+          const delta = update.append;
+          setLiveText(previous => (previous ?? "") + delta);
+        } else if ("text" in update && (update.text === null || typeof update.text === "string")) {
+          setLiveText(update.text);
+          if (update.text === null) void load();
+        }
       } catch (error) { console.error("conversations: invalid response stream", error); }
     });
     source.onerror = () => { setLiveText(null); void load(); };

@@ -65,6 +65,29 @@ describe("pi turns", () => {
     expect(reply.text).toBe("Hello there");
   });
 
+  test("tool narration resets before the next assistant message and small deltas are batched", async () => {
+    const r = await rig();
+    const update = (delta: string) => ({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } });
+    await script(r, [
+      { type: "message_start", message: { role: "assistant" } },
+      update("Let me check…"),
+      answer("Let me check…"),
+      { type: "message_start", message: { role: "assistant" } },
+      ...Array.from({ length: 1000 }, () => update("a")),
+      answer("a".repeat(1000)),
+    ]);
+    const messages: string[] = [];
+    let batches = 0;
+    const reply = await piTurns(r.settings)(request({ text: (delta, reset) => {
+      if (reset) messages.push("");
+      else { messages[messages.length - 1] = (messages.at(-1) ?? "") + delta; batches++; }
+      return Promise.resolve();
+    } }));
+    expect(messages).toEqual(["Let me check…", "a".repeat(1000)]);
+    expect(batches).toBeLessThan(1001);
+    expect(reply.text).toBe("a".repeat(1000));
+  });
+
   test("a turn runs pi with the read-only allowlist and the Soma projection, and records every tool call", async () => {
     const r = await rig();
     await script(r, [

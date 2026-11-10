@@ -40,7 +40,7 @@ export interface TurnRequest {
   session: string;
   signal: AbortSignal;
   activity: (activity: ToolActivity) => Promise<void>;
-  text?: (delta: string) => Promise<void>;
+  text?: (delta: string, reset?: boolean) => Promise<void>;
   tools?: ToolSurface;
 }
 export interface TurnReply { text: string; session: string; resumed: boolean }
@@ -110,14 +110,14 @@ export function cortexModels(lanes: Lanes, gate: RouteGate, turn: TurnCall, reco
           history: plan.history, resume: surface ? null : plan.resume, session: `${gated.conversationId}.${route.replace(":", "-")}.${plan.answers}.${randomUUID().slice(0, 8)}`,
           signal: options?.signal ?? new AbortController().signal,
           activity: activity => record(gated.conversationId, { kind: "tool", activity }),
-          text: async delta => {
+          text: async (delta, reset = false) => {
             await surface?.validate();
             const current = await gate(options?.sessionId, route);
             if ("refused" in current) throw new Error(current.refused);
             const block = base.content[0];
             if (block?.type !== "text") throw new Error("The conversation text block is missing.");
-            block.text += delta;
-            out.push({ type: "text_delta", contentIndex: 0, delta, partial: structuredClone(base) });
+            block.text = reset ? delta : block.text + delta;
+            out.push(reset ? { type: "text_start", contentIndex: 0, partial: structuredClone(base) } : { type: "text_delta", contentIndex: 0, delta, partial: structuredClone(base) });
           },
           ...(surface ? { tools: surface } : {}),
         });

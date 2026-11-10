@@ -1,3 +1,4 @@
+import { sseResponse } from "./sse";
 import { z } from "zod";
 import { ConfirmSchema, creationFor, ProposeSchema, ReviseSchema, type Actor } from "../../../conversations/creation";
 import type { DiscordConversations } from "../../../conversations/discord";
@@ -245,39 +246,13 @@ async function handleCreation(req: Request, url: URL, host: ConversationHost, ac
 
 async function responseStream(host: ConversationHost, id: string, signal: AbortSignal): Promise<Response> {
   await host.meta(id);
-  const encoder = new TextEncoder();
-  let stop: (() => Promise<void>) | undefined;
-  let heartbeat: ReturnType<typeof setInterval> | undefined;
-  let closed = false;
-  let close: () => void = () => undefined;
-  const cleanup = (): void => {
-    if (closed) return;
-    closed = true;
-    clearInterval(heartbeat);
-    signal.removeEventListener("abort", close);
-    void stop?.();
-  };
-  const stream = new ReadableStream<Uint8Array>({
-    start: async controller => {
-      close = () => { if (closed) return; cleanup(); controller.close(); };
-      signal.addEventListener("abort", close, { once: true });
-      let previous: string | null | undefined;
-      try {
-        stop = await host.watchResponse(id, text => {
-          if (closed || text === previous) return;
-          previous = text;
-          controller.enqueue(encoder.encode(`event: response\ndata: ${JSON.stringify(text)}\n\n`));
-        }, close);
-        if (closed) { await stop(); return; }
-        if (signal.aborted) { close(); return; }
-        heartbeat = setInterval(() => { controller.enqueue(encoder.encode(": keepalive\n\n")); }, 15_000);
-      } catch (error) {
-        cleanup();
-        console.error("conversations: response stream failed", error);
-        controller.error(error);
-      }
-    },
-    cancel: cleanup,
+  return sseResponse(signal, async (send, close) => {
+    let previous: string | null | undefined;
+    return host.watchResponse(id, async text => {
+      if (text === previous) return;
+      const update = typeof previous === "string" && typeof text === "string" && text.startsWith(previous) ? { append: text.slice(previous.length) } : { text };
+      previous = text;
+      await send(`event: response\ndata: ${JSON.stringify(update)}\n\n`);
+    }, close);
   });
-  return new Response(stream, { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-store", "X-Accel-Buffering": "no" } });
 }
