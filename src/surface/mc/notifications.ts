@@ -23,7 +23,9 @@
  *   - Phase B dispatcher after applyTransition (for controlled sessions)
  */
 
+import type { PrincipalNotice, PrincipalNotifier } from "../../conversations/domain-adapters/operations/triggers";
 import type { WsClientRegistry } from "./ws/client-registry";
+import type { DeskFenceNotice } from "./ws/types";
 import type { AssignmentState, BlockReason, McEvent } from "./types";
 import type { ProcessManager } from "./session/process-manager";
 import type {
@@ -327,4 +329,24 @@ export function observeTransitionForCancel(
       `[notifications] observeTransitionForCancel: closeSession(${sessionId}) failed: ${message}\n`
     );
   });
+}
+
+export function deskFenceNotice(notice: PrincipalNotice): DeskFenceNotice {
+  return {
+    notificationId: notice.notificationId,
+    binding: `${notice.target.adapterId}/${notice.target.capabilityId}`,
+    effect: notice.effect,
+    trigger: notice.trigger,
+    at: notice.at,
+    title: notice.title,
+    body: notice.body,
+  };
+}
+
+export function broadcastDeskFence(wsRegistry: WsClientRegistry, notice: DeskFenceNotice): void {
+  wsRegistry.broadcast({ type: "desk.fence", notice });
+}
+
+export function deskFenceNotifier(wsRegistry: WsClientRegistry): PrincipalNotifier {
+  return notice => { broadcastDeskFence(wsRegistry, deskFenceNotice(notice)); };
 }

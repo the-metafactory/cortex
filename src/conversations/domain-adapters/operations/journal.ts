@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { DomainAdapterRegistry } from "../registry";
 import { AuthoritySchema, JournalEventSchema, OperationJournalSchema, OwnerSupportSchema, parseWire, type ApprovedSnapshot, type Authority, type JournalEvent, type OperationJournal, type OwnerResult, type OwnerSupport } from "./types";
 import { canonicalWire, validateResultPayload, validateSnapshot } from "./validation";
+import { fenceTargetOf, type FenceSink, type FenceSignalInput } from "./triggers";
 
 const ACTIVE = new Set(["dispatching", "pending", "uncertain"]);
 export const StoreDoc = defineDocFamily<{ record: JsonObject | null }, string>({ kind: "cortex.lifecycle-operation", version: 1, scope: "session", family: true, initial: () => ({ record: null }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
@@ -24,9 +25,46 @@ const attempts = (journal: OperationJournal) => journal.events.flatMap(entry => 
 const outcomes = (journal: OperationJournal): OwnerResult[] => journal.events.flatMap(entry => entry.event.kind === "owner-result" ? [entry.event.response] : entry.event.kind === "reconciliation" && entry.event.lookup.result.kind === "known" ? [entry.event.lookup.result.response] : []);
 const noEffect = (response: OwnerResult): boolean => ["failed", "conflict", "cancelled"].includes(response.result.kind);
 const requireState = (condition: boolean, reason: string): void => { if (!condition) throw new JournalConflict(reason); };
+const successRefs = (response: OwnerResult): string[] => response.result.kind === "succeeded" ? response.result.evidence.refs.map(canonicalWire).sort() : [];
+function successWithoutOwnerEvidence(raw: unknown): boolean {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const result = (raw as Record<string, unknown>).result;
+  if (result === null || typeof result !== "object" || Array.isArray(result)) return false;
+  if ((result as Record<string, unknown>).kind !== "succeeded") return false;
+  const evidence = (result as Record<string, unknown>).evidence;
+  if (evidence === null || typeof evidence !== "object" || Array.isArray(evidence)) return true;
+  const ownerRequestId = (evidence as Record<string, unknown>).ownerRequestId;
+  const refs = (evidence as Record<string, unknown>).refs;
+  return typeof ownerRequestId !== "string" || ownerRequestId.trim().length === 0 || !Array.isArray(refs) || refs.length === 0;
+}
 
 export class OperationJournalStore {
-  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly registry: DomainAdapterRegistry, private readonly context: Context = BACKGROUND_CONTEXT) {}
+  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly registry: DomainAdapterRegistry, private readonly context: Context = BACKGROUND_CONTEXT, private readonly fences?: FenceSink) {}
+
+  private successTrigger(stored: StoredOperation, response: OwnerResult): FenceSignalInput | null {
+    const snapshot = stored.journal.snapshot;
+    if ("kind" in snapshot || response.result.kind !== "succeeded") return null;
+    const target = fenceTargetOf(snapshot);
+    const evidence = response.result.evidence;
+    if (evidence.ownerRequestId !== stored.journal.ownerRequestId || evidence.refs.length === 0) return { kind: "success_without_owner_evidence", target, evidence: { operationId: stored.journal.operationId, ownerRequestId: stored.journal.ownerRequestId, resultId: response.resultId, detail: "The success result does not carry owner evidence for this operation." } };
+    const refs = successRefs(response);
+    const duplicate = outcomes(stored.journal).some(item => item.result.kind === "succeeded" && canonicalWire(successRefs(item)) !== canonicalWire(refs));
+    return duplicate ? { kind: "duplicate_owner_object", target, evidence: { operationId: stored.journal.operationId, ownerRequestId: stored.journal.ownerRequestId, resultId: response.resultId, refs, detail: "The owner answered one operation with two different objects." } } : null;
+  }
+
+  private async triggerFor(operationId: string, entry: JournalEvent): Promise<FenceSignalInput | null> {
+    const stored = await this.read(operationId);
+    if (!stored) return null;
+    const response = entry.event.kind === "owner-result" ? entry.event.response : entry.event.kind === "reconciliation" && entry.event.lookup.result.kind === "known" ? entry.event.lookup.result.response : null;
+    return response ? this.successTrigger(stored, response) : null;
+  }
+
+  private async triggerWithoutEvidence(operationId: string, raw: unknown): Promise<void> {
+    if (!successWithoutOwnerEvidence(raw)) return;
+    const stored = await this.read(operationId);
+    if (!stored || "kind" in stored.journal.snapshot) return;
+    await this.fences?.trigger({ kind: "success_without_owner_evidence", target: fenceTargetOf(stored.journal.snapshot), evidence: { operationId: stored.journal.operationId, ownerRequestId: stored.journal.ownerRequestId, detail: "The owner response failed lifecycle validation." } });
+  }
 
   async read(operationId: string): Promise<StoredOperation | null> {
     const doc = await this.engine.snapshot(StoreDoc, operationId, this.context);
@@ -85,7 +123,8 @@ export class OperationJournalStore {
 
   async append(operationId: string, expectedRevision: number, raw: unknown, options: AppendOptions = {}): Promise<StoredOperation> {
     const entry = parseWire(JournalEventSchema, raw);
-    return this.mutate(operationId, expectedRevision, stored => {
+    const trigger = await this.triggerFor(operationId, entry);
+    const stored = await this.mutate(operationId, expectedRevision, stored => {
       const existing = stored.journal.events.find(event => event.eventId === entry.eventId);
       if (existing) { requireState(canonicalWire(existing) === canonicalWire(entry), "Event identity was reused."); return; }
       if (entry.event.kind === "owner-result" && this.duplicate(stored, entry.event.response)) return;
@@ -94,6 +133,8 @@ export class OperationJournalStore {
       stored.journal.events.push(entry);
       stored.journal.sequence = entry.sequence;
     });
+    if (trigger) await this.fences?.trigger(trigger);
+    return stored;
   }
 
   async receive(operationId: string, expectedRevision: number, raw: unknown, at: string): Promise<StoredOperation> {
@@ -105,7 +146,7 @@ export class OperationJournalStore {
       entry = parseWire(JournalEventSchema, { sequence: stored.journal.sequence + 1, eventId: randomUUID(), at, event: { kind: "owner-result", response: raw } });
     } catch (error) {
       const safeRaw = parseWire(z.json(), raw);
-      return this.mutate(operationId, expectedRevision, current => {
+      const quarantined = await this.mutate(operationId, expectedRevision, current => {
         current.quarantine.push({ at: z.iso.datetime().parse(at), code: error instanceof Error ? "invalid_output" : "invalid_response", raw: safeRaw });
         current.retryBlocked = true;
         if (["dispatching", "pending"].includes(current.journal.state)) {
@@ -115,6 +156,8 @@ export class OperationJournalStore {
           current.journal.state = "uncertain";
         }
       });
+      await this.triggerWithoutEvidence(operationId, raw);
+      return quarantined;
     }
     return this.append(operationId, expectedRevision, entry);
   }

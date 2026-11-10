@@ -96,6 +96,7 @@ export async function openDraftingRig(dir?: string, contextChars?: number) {
   let service = await open();
   return {
     root, registry, bindings, owner, ...fake,
+    get host() { return host; },
     get service() { return service; },
     async reopen() { await host?.close(); service = await open(); return service; },
     async close() { await host?.close(); },

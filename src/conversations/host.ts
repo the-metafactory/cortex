@@ -5,6 +5,7 @@ import { OperationReconciler } from "./domain-adapters/operations/reconciliation
 import { BatchReceiptReader, BatchReceiptStore } from "./domain-adapters/operations/batches";
 import { ObjectReader } from "./domain-adapters/operations/readback";
 import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
+import { BindingFenceStore, type PrincipalNotifier } from "./domain-adapters/operations/triggers";
 import { AuthorityPublication } from "./authority-publication";
 import { authorityHash } from "./authority-records";
 import { createHash, randomUUID } from "node:crypto";
@@ -119,6 +120,7 @@ export interface HostOptions {
   tools?: { config: () => ToolsConfig | undefined; definitions?: readonly ToolDefinition[]; timeoutMs?: number; outputLimit?: number };
   resolvers?: LinkResolvers;
   readbacks?: OwnerReadbacks;
+  notify?: PrincipalNotifier;
   now?: () => Date;
   alive?: (pid: number) => boolean;
   pid?: number;
@@ -213,8 +215,10 @@ export class ConversationHost {
   }
 
   lifecycleJournal(registry: DomainAdapterRegistry): OperationJournalStore {
-    return new OperationJournalStore(this.engine, registry, this.context);
+    return new OperationJournalStore(this.engine, registry, this.context, this.lifecycleFences());
   }
+
+  lifecycleFences(): BindingFenceStore { return new BindingFenceStore(this.engine, this.options.notify, this.context, this.now); }
 
   drafts(deps: DraftServiceDeps): DraftService { return new DraftService(this.engine, deps, this.context); }
 
@@ -240,17 +244,17 @@ export class ConversationHost {
       if (this.authorityService.registry !== registry || this.authorityService.bindings !== bindings) throw new Error("Authority bindings are already registered for this host.");
       return this.authorityService.mediator;
     }
-    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters());
+    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters(), this.lifecycleFences());
     this.authorityService = { registry, bindings, mediator };
     return mediator;
   }
 
   lifecycleBridge(registry: DomainAdapterRegistry, bindings: AuthorityBindings, supportFor: SupportLookup, waitMs?: number, maxOutstandingCalls?: number): OperationBridge {
-    return new OperationBridge({ journal: this.lifecycleJournal(registry), authority: this.lifecycleAuthority(registry, bindings), writers: this.lifecycleWriters(), supportFor, now: this.now, ...(waitMs === undefined ? {} : { waitMs }), ...(maxOutstandingCalls === undefined ? {} : { maxOutstandingCalls }) });
+    return new OperationBridge({ journal: this.lifecycleJournal(registry), authority: this.lifecycleAuthority(registry, bindings), writers: this.lifecycleWriters(), supportFor, fences: this.lifecycleFences(), connectorEntry: (context, snapshot) => this.lifecycleAuthority(registry, bindings).connectorEntry(context, snapshot), now: this.now, ...(waitMs === undefined ? {} : { waitMs }), ...(maxOutstandingCalls === undefined ? {} : { maxOutstandingCalls }) });
   }
 
   lifecycleReconciler(registry: DomainAdapterRegistry, bindings: AuthorityBindings, bridge: OperationBridge, supportFor: SupportLookup): OperationReconciler {
-    return new OperationReconciler({ journal: this.lifecycleJournal(registry), authority: this.lifecycleAuthority(registry, bindings), bridge, supportFor, now: this.now });
+    return new OperationReconciler({ journal: this.lifecycleJournal(registry), authority: this.lifecycleAuthority(registry, bindings), bridge, supportFor, fences: this.lifecycleFences(), now: this.now });
   }
 
   lifecycleBatches(): BatchReceiptStore { return new BatchReceiptStore(this.engine, this.context); }

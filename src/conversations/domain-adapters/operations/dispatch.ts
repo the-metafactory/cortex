@@ -4,6 +4,7 @@ import type { BoundaryError } from "../types";
 import { JournalConflict, type OperationJournalStore, type StoredOperation } from "./journal";
 import { CancelRequestSchema, parseWire, type ApprovedSnapshot, type Attempt, type Authority, type CancelRequest, type DispatchRequest, type OperationState, type OwnerSupport } from "./types";
 import type { WriterAuthority, WriterBinding } from "./writer-authority";
+import { fenceTargetOf, type FenceGate, type FenceTarget } from "./triggers";
 
 export const OWNER_CALL_WAIT_MS = 30_000;
 export const MAX_OUTSTANDING_OWNER_CALLS = 64;
@@ -21,6 +22,8 @@ export interface BridgeOptions {
   authority: DispatchAuthority;
   writers: Pick<WriterAuthority, "current" | "legacyAllowed">;
   supportFor: SupportLookup;
+  fences?: FenceGate;
+  connectorEntry?: (context: HostContext, snapshot: ApprovedSnapshot) => Promise<{ kind: "allowed" } | { kind: "denied"; reason: BoundaryError }>;
   now?: () => Date;
   waitMs?: number;
   maxOutstandingCalls?: number;
@@ -36,10 +39,11 @@ export type CancelOutcome =
   | { kind: "stop-recorded"; operation: StoredOperation; sent: boolean }
   | { kind: "refused"; reason: BoundaryError }
   | { kind: "not-cancellable"; operation: StoredOperation };
-export type LegacyRoute = { route: "legacy" } | { route: "upgrade-required"; reason: BoundaryError } | { route: "bridge"; outcome: DispatchOutcome };
+export type LegacyRoute = { route: "legacy" } | { route: "upgrade-required"; reason: BoundaryError } | { route: "fenced"; reason: BoundaryError } | { route: "bridge"; outcome: DispatchOutcome };
 
 const reason = (code: string, message: string): BoundaryError => ({ code, message });
 const INACTIVE = reason("bridge_inactive", "Operation dispatch is not active for this capability.");
+const FENCED = reason("binding_fenced", "This binding is fenced; its mutation is off until the principal lifts the fence with a reason.");
 const bindingKey = (snapshot: Pick<ApprovedSnapshot, "adapterId" | "connectionId" | "capabilityId">): string => JSON.stringify([snapshot.adapterId, snapshot.connectionId, snapshot.capabilityId]);
 const attempts = (stored: StoredOperation) => stored.journal.events.flatMap(entry => entry.event.kind === "attempt-prepared" ? [entry.event.attempt] : []);
 const ACTIVE: readonly OperationState[] = ["dispatching", "pending", "uncertain"];
@@ -107,6 +111,7 @@ export class OperationBridge {
     if (!stored) return { kind: "refused", reason: reason("operation_unknown", "The operation does not exist."), operation: null };
     const snapshot = stored.journal.snapshot;
     if ("kind" in snapshot) return { kind: "refused", reason: reason("legacy_ambiguous", "A legacy operation has no approved snapshot to dispatch."), operation: stored };
+    if (await this.options.fences?.isFenced(fenceTargetOf(snapshot))) return { kind: "refused", reason: FENCED, operation: stored };
     if (!this.activated.has(bindingKey(snapshot))) return { kind: "refused", reason: INACTIVE, operation: stored };
     if (stored.journal.state !== "confirmed" || attempts(stored).length || stored.cancelRequested || stored.retryBlocked) return { kind: "not-dispatchable", operation: stored };
     if (this.inflight.size >= this.maxOutstanding) return { kind: "refused", reason: reason("capacity_exceeded", "Too many owner calls are still outstanding; retry later."), operation: stored };
@@ -129,6 +134,7 @@ export class OperationBridge {
     if (!stored) return { kind: "not-eligible", reason: reason("operation_unknown", "The operation does not exist."), operation: null };
     const snapshot = stored.journal.snapshot;
     if ("kind" in snapshot) return blocked("legacy_ambiguous", "A legacy operation has no approved snapshot to replay.");
+    if (await this.options.fences?.isFenced(fenceTargetOf(snapshot))) return blocked("binding_fenced", FENCED.message);
     if (!this.activated.has(bindingKey(snapshot))) return blocked("bridge_inactive", INACTIVE.message);
     const budget = stored.budgets;
     const prior = attempts(stored);
@@ -167,8 +173,20 @@ export class OperationBridge {
       const current = await this.options.journal.read(operationId);
       return current ? { kind: "not-dispatchable", operation: current } : { kind: "refused", reason: INACTIVE, operation: null };
     }
+    const target = this.fenceTarget(snapshot);
+    const entry = this.options.connectorEntry ? await this.options.connectorEntry(context, snapshot) : { kind: "allowed" as const };
+    if (entry.kind === "denied") {
+      if (entry.reason.code === "destination_denied") await this.options.fences?.trigger({ kind: "destination_denied_at_connector", target, evidence: { operationId, detail: entry.reason.message } });
+      const operation = await this.expire(operationId, attempt.attemptId, entry.reason);
+      return { kind: "refused", reason: entry.reason, operation };
+    }
     const request: DispatchRequest = { lifecycleVersion: "1.0.0", operationId, attemptId: attempt.attemptId, idempotencyKey: stored.journal.idempotencyKey, ownerRequestId: stored.journal.ownerRequestId, snapshot, authority, supportDeclarationId: support.declarationId, deadlineAt: attempt.deadlineAt };
-    return this.cross(this.options.authority.dispatch(context, request, lease), operationId, attempt.attemptId);
+    return this.cross(this.options.authority.dispatch(context, request, lease), operationId, attempt.attemptId, target);
+  }
+
+  private fenceTarget(snapshot: ApprovedSnapshot): FenceTarget {
+    const binding = this.activated.get(bindingKey(snapshot));
+    return fenceTargetOf(snapshot, binding ? { stack: binding.stack, owner: binding.owner } : {});
   }
 
   private track<T>(work: Promise<T>): Promise<T> {
@@ -185,10 +203,11 @@ export class OperationBridge {
     finally { clearTimeout(timer); }
   }
 
-  private async cross(call: Promise<{ kind: "admitted" } | Denial>, operationId: string, attemptId: string): Promise<DispatchOutcome> {
+  private async cross(call: Promise<{ kind: "admitted" } | Denial>, operationId: string, attemptId: string, target: FenceTarget): Promise<DispatchOutcome> {
     const continuation = this.track(call.catch((): { kind: "failed" } => ({ kind: "failed" })));
     const waited = await this.wait(continuation);
     if (waited.done && waited.value.kind === "failed") {
+      await this.options.fences?.trigger({ kind: "adapter_crash", target, evidence: { operationId, detail: "The owner call ended abnormally after the attempt was prepared." } });
       const operation = await this.expire(operationId, attemptId, reason("outcome_unknown", "The owner call ended abnormally after the attempt was prepared; the outcome is unknown."));
       return { kind: "timed-out", operation, attemptId };
     }
@@ -247,6 +266,7 @@ export class OperationBridge {
   }
 
   async legacyMutation(context: HostContext, binding: WriterBinding, operationId: string, lease: WriterLease, connectionQualified = true): Promise<LegacyRoute> {
+    if (await this.options.fences?.isFenced(fenceTargetOf(binding))) return { route: "fenced", reason: FENCED };
     if (await this.options.writers.legacyAllowed(binding, connectionQualified)) return { route: "legacy" };
     if (!this.activated.has(bindingKey(binding))) return { route: "upgrade-required", reason: reason("upgrade_required", "This capability moved to lifecycle operations; upgrade the client.") };
     return { route: "bridge", outcome: await this.dispatch(context, operationId, lease) };

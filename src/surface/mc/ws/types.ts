@@ -138,7 +138,18 @@ export type WsServerMessage =
       type: "subscribed";
       assignmentIds: string[];
     }
+  | { type: "desk.fence"; notice: DeskFenceNotice }
   | { type: "error"; message: string };
+
+export interface DeskFenceNotice {
+  notificationId: string;
+  binding: string;
+  effect: "mutation-off" | "notify-only";
+  trigger: string;
+  at: string;
+  title: string;
+  body: string;
+}
 
 // Client → server messages
 export type WsClientMessage =
