@@ -1,0 +1,7 @@
+:is(.desk-switch, .desk-wake-switch){position:relative;flex:none;width:38px;height:22px;padding:0;border:0;border-radius:11px;background:#d4d4d8;cursor:pointer;transition:background .15s}
+:is(.desk-switch, .desk-wake-switch)[aria-checked="true"]{background:var(--ivy)}
+:is(.desk-switch, .desk-wake-switch):focus-visible{outline:2px solid var(--ivy);outline-offset:2px}
+:is(.desk-switch, .desk-wake-switch)[aria-disabled="true"]{opacity:.45;cursor:not-allowed}
+:is(.desk-switch-knob, .desk-wake-knob){position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .15s}
+:is(.desk-switch, .desk-wake-switch)[aria-checked="true"] :is(.desk-switch-knob, .desk-wake-knob){transform:translateX(16px)}
+@media (prefers-reduced-motion: reduce) { :is(.desk-switch, .desk-wake-switch), :is(.desk-switch-knob, .desk-wake-knob) { transition: none; } }
