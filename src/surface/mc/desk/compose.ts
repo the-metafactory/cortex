@@ -1,3 +1,4 @@
+import { adapterItems, type AdapterAttention } from "./adapter-items";
 import { buildWeeklyMirror, mirrorWeek, type MirrorSchedule } from "./mirror";
 import { readMailMirror, type MailMirrorConfig, type MailMirrorUnsubscribe } from "./mail-mirror";
 import { loadBalanceState } from "./balance-store";
@@ -131,6 +132,7 @@ export interface DeskVigilSource {
 }
 
 export interface ComposeDeps {
+  adapterAttention?: AdapterAttention;
   conversations?: boolean;
   waitingTasks?: Pick<WaitingTasks, "read">;
   routineRead?: RoutineReadLoop;
@@ -305,7 +307,9 @@ export async function composeDesk(
     const view = invitationView(m, calendarsOnly(availability, readings), desk.mailInvitations, answers.get(m.id));
     return view ? [[m.id, view]] : [];
   }));
-  const corrected = applyCorrections(markInterrupts([
+  const adapters = await adapterItems(deps.adapterAttention, now);
+  sources.push(...adapters.sources);
+  const corrected = applyCorrections([...markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
     ...mailItems({ now, mail: withoutAnsweredRead(mail, answers), yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), ivy: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
@@ -314,7 +318,7 @@ export async function composeDesk(
     ...dmarcCards,
     ...waitingCards,
     ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now),
-  ], rules, readDeliveries(db), now), activeCorrections);
+  ], rules, readDeliveries(db), now), ...adapters.items], activeCorrections);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));

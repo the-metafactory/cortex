@@ -10,7 +10,7 @@ import type { EventAvailability } from "./calendar-contract";
 
 export type DeskUrgency = "now" | "today" | "this-week" | "waiting";
 
-export const DESK_ITEM_KINDS = ["goal", "sensor", "agent-failed", "agent-blocked", "decision", "grilling", "escalation", "mail", "reminder", "meeting", "mail-rule", "dmarc", "mail-waiting", "mail-handoff"] as const;
+export const DESK_ITEM_KINDS = ["goal", "sensor", "agent-failed", "agent-blocked", "decision", "grilling", "escalation", "mail", "reminder", "meeting", "mail-rule", "dmarc", "mail-waiting", "mail-handoff", "adapter"] as const;
 
 export type DeskItemKind = (typeof DESK_ITEM_KINDS)[number];
 
@@ -79,6 +79,8 @@ export interface DeskCorrection {
 }
 
 export interface DeskItem {
+  readOnly?: boolean;
+  freshness?: "fresh" | "stale" | "conflicted" | "unavailable";
   rangerMap?: { key: string; label: string };
   attention?: "action" | "update";
   dueAt?: string;

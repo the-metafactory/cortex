@@ -69,6 +69,7 @@ export function CatchupPreview({
                 {view.areas.find((a) => a.id === item.area)?.label ??
                   "All areas"}{" "}
                 · {item.source}
+                {item.freshness && item.freshness !== "fresh" && <span> · Stale observation</span>}
               </small>
             </button>
           </li>
@@ -417,7 +418,7 @@ export function DeskCatchUp({
                   "All areas"}{" "}
                 · {item.source}
               </span>
-              <button
+              {!item.readOnly && <button
                 type="button"
                 className="desk-btn"
                 disabled={
@@ -429,7 +430,7 @@ export function DeskCatchUp({
                 onClick={() => void propose(item)}
               >
                 Plan this
-              </button>
+              </button>}
             </footer>
           </article>
         )} />}

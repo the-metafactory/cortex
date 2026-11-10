@@ -737,14 +737,14 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
 
   const shown = (item: DeskItem): DeskItem => (confirming?.key === item.key ? withConfirm(item, confirming.action) : item);
   const busyWith = (item: DeskItem): string | null => sending.get(item.key) ?? (item.checking ? "goal.check" : null);
-  const originalDetail = detail ? view.items.find((i) => i.key === detail.key) ?? detail : null;
-  const detailItem = originalDetail ? { ...originalDetail, more: [...(originalDetail.more ?? []), { id: "todo", label: "Plan this", role: "secondary" as const, wired: true }] } : null;
+  const originalDetail = detail ? view.items.find((i) => i.key === detail.key) ?? (detail.readOnly ? null : detail) : null;
+  const detailItem = originalDetail?.readOnly ? originalDetail : originalDetail ? { ...originalDetail, more: [...(originalDetail.more ?? []), { id: "todo", label: "Plan this", role: "secondary" as const, wired: true }] } : null;
   const detailRuling = detailItem ? rulings.get(detailItem.key) : undefined;
 
   const itemRow = (item: DeskItem, idx: number) => (
     <DeskItemRow
       key={item.key}
-      item={shown({ ...item, more: [...(item.more ?? []), { id: "todo", label: "Plan this", role: "secondary", wired: true }] })}
+      item={shown(item.readOnly ? item : { ...item, more: [...(item.more ?? []), { id: "todo", label: "Plan this", role: "secondary", wired: true }] })}
       rank={idx + 1}
       area={item.area ? areaById.get(item.area) : undefined}
       event={item.eventKey ? view.today.find((e) => e.key === item.eventKey) : undefined}
@@ -1195,6 +1195,7 @@ export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending
         <div className="desk-meta">
           {area && <span className="area"><AreaDot area={area} />{area.label}</span>}
           <span className={item.urgency === "today" || item.urgency === "now" ? "due" : ""}>{URGENCY_LABEL[item.urgency]}</span>
+          {item.freshness && item.freshness !== "fresh" && <span className="desk-stale">Stale observation</span>}
           {item.correction && <span className="desk-corr">{CORRECTION_TAG[item.correction]}</span>}
           {item.suspicious && <span className="desk-suspect">Looks like phishing</span>}
         </div>
@@ -1214,7 +1215,7 @@ export function DeskItemRow({ item, rank, area, event, onOpen, onAction, sending
               {clock(event.at)} today ↑
             </button>
           )}
-          <ItemMenu current={item.correction} onCorrect={onCorrect} {...(onCorrectMail ? { onCorrectMail } : {})} onTodo={() => { onAction({ id: "todo", label: "Plan this", role: "secondary", wired: true }); }} />
+          {!item.readOnly && <ItemMenu current={item.correction} onCorrect={onCorrect} {...(onCorrectMail ? { onCorrectMail } : {})} onTodo={() => { onAction({ id: "todo", label: "Plan this", role: "secondary", wired: true }); }} />}
         </div>
       </div>
     </article>
