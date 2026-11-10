@@ -1,0 +1,261 @@
+{
+ "format": "desk-adapter-package/1",
+ "packageId": "sample/tide-tables",
+ "packageVersion": "1.0.0",
+ "deskSdkRange": "^1.0.0",
+ "domainContractVersion": "1.0.0",
+ "backend": {
+  "entry": "backend.mjs",
+  "sha256": "03d0a6a3bc9476032e5687ade3451ecf5c6ff49f0fa8785f15ba5c8d5c3b479e"
+ },
+ "declaration": {
+  "adapterId": "sample.tides",
+  "label": "Tide tables",
+  "contractRange": "^1.0.0",
+  "schemas": [
+   {
+    "schemaId": "sample.tides.tide",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "minLength": 1,
+       "title": "Name"
+      },
+      "note": {
+       "type": "string",
+       "title": "Note"
+      },
+      "heightMetres": {
+       "type": "number",
+       "title": "Height"
+      }
+     },
+     "required": [
+      "name"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.tides.error",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "code": {
+       "type": "string",
+       "minLength": 1
+      },
+      "message": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "code",
+      "message"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.tides.tide.empty",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.tides.tide.search.input",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "text"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.tides.tide.list",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "items": {
+       "type": "array",
+       "items": {
+        "$ref": "urn:desk-schema:sample.tides.tide:1.0.0"
+       }
+      }
+     },
+     "required": [
+      "items"
+     ],
+     "additionalProperties": false
+    }
+   }
+  ],
+  "objectTypes": [
+   {
+    "objectType": "tide",
+    "label": "tide",
+    "schemaRef": {
+     "schemaId": "sample.tides.tide",
+     "version": "1.0.0"
+    },
+    "relationships": []
+   }
+  ],
+  "capabilities": [
+   {
+    "capabilityId": "sample.tides.tide.search",
+    "label": "Search tide",
+    "kind": "query",
+    "objectTypes": [
+     "tide"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.tides.tide.search.input",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.tides.tide.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.tides.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.tides.tide.observe",
+    "label": "Watch tide",
+    "kind": "observation",
+    "objectTypes": [
+     "tide"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.tides.tide.empty",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.tides.tide.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.tides.error",
+     "version": "1.0.0"
+    }
+   }
+  ]
+ },
+ "draftingBindings": [],
+ "readBindings": [
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.tides",
+   "capabilityId": "sample.tides.tide.search",
+   "mode": "query",
+   "objectType": "tide",
+   "inputSchemaRef": {
+    "schemaId": "sample.tides.tide.search.input",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.tides.tide.list",
+    "version": "1.0.0"
+   },
+   "textPointer": "/text",
+   "display": {
+    "title": "/name",
+    "summary": "/note"
+   }
+  },
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.tides",
+   "capabilityId": "sample.tides.tide.observe",
+   "mode": "poll",
+   "objectType": "tide",
+   "inputSchemaRef": {
+    "schemaId": "sample.tides.tide.empty",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.tides.tide.list",
+    "version": "1.0.0"
+   },
+   "display": {
+    "title": "/name"
+   },
+   "attention": {
+    "title": "/name",
+    "why": "/note"
+   }
+  }
+ ],
+ "setup": {
+  "version": "1.0.0",
+  "schemas": [
+   {
+    "schemaId": "sample.tides.config",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.tides.account",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "account": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "account"
+     ],
+     "additionalProperties": false
+    }
+   }
+  ],
+  "configurationSchemaRef": {
+   "schemaId": "sample.tides.config",
+   "version": "1.0.0"
+  },
+  "accountScopeSchemaRef": {
+   "schemaId": "sample.tides.account",
+   "version": "1.0.0"
+  },
+  "authMethods": [
+   {
+    "kind": "local"
+   }
+  ]
+ }
+}

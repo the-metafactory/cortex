@@ -1,0 +1,200 @@
+{
+ "origin": "http://127.0.0.1:33594",
+ "phase": "a",
+ "at": "2026-11-08T14:46:23.290Z",
+ "passed": 33,
+ "failed": 1,
+ "checks": [
+  {
+   "name": "install alone runs nothing",
+   "pass": true
+  },
+  {
+   "name": "restart stops at approval and adapter code has not run",
+   "pass": true
+  },
+  {
+   "name": "an unapproved adapter offers no draft",
+   "pass": true,
+   "detail": "Nothing connected here can make that yet. You can add one under Adapters."
+  },
+  {
+   "name": "observation reaches Day as a generic adapter item",
+   "pass": true,
+   "detail": "CalendarPlanning reviewStarts in 40 minutesReading listReceipts that survive a crashHow an owner lookup settles an unknown outcome.Due 2026-11-09Reading listA private crash diaryThis belongs on a shelf the connection may lose.Due 2026-11-09Reading listCrash-only software revisitedRestart as the only recovery path.Reading listIdempotency keys in practiceWhere crash retries duplicate work."
+  },
+  {
+   "name": "host ranks the native meeting above adapter items",
+   "pass": true
+  },
+  {
+   "name": "a repeated delivery adds no duplicate row or evidence",
+   "pass": true,
+   "detail": {
+    "ownerCalls": 0,
+    "deniedAttempts": 0,
+    "frameIncidents": [],
+    "projectionRows": 4,
+    "evidenceEntries": 4,
+    "quarantined": [],
+    "packages": [
+     {
+      "dir": "reading-list",
+      "packageId": "sample/reading-list",
+      "releaseDigest": "f4ce3c63b4b991e2416837f602f94bf10b28f3a4ffe88292b12d576ae81ba065",
+      "packageVersion": "1.0.0",
+      "label": "Reading list",
+      "state": "active"
+     }
+    ],
+    "syntheticReceiverRequests": []
+   }
+  },
+  {
+   "name": "query results render in the adapter's own sandboxed view",
+   "pass": true,
+   "detail": [
+    1,
+    1
+   ]
+  },
+  {
+   "name": "frame is sandboxed without same-origin",
+   "pass": true
+  },
+  {
+   "name": "revoking a destination removes its Day item",
+   "pass": true,
+   "detail": "CalendarPlanning reviewStarts in 40 minutesReading listReceipts that survive a crashHow an owner lookup settles an unknown outcome.Due 2026-11-09Reading listCrash-only software revisitedRestart as the only recovery path.Reading listIdempotency keys in practiceWhere crash retries duplicate work."
+  },
+  {
+   "name": "host withholds an owner answer outside the permitted destination",
+   "pass": true,
+   "detail": "Reading listSome results aren’t shown because of what this connection may read."
+  },
+  {
+   "name": "the denied owner answer is counted, not released",
+   "pass": true
+  },
+  {
+   "name": "draft card comes from schema and hints, with a contextual destination question",
+   "pass": true
+  },
+  {
+   "name": "Approve is blocked until the destination is chosen",
+   "pass": true
+  },
+  {
+   "name": "drafting made no owner call",
+   "pass": true
+  },
+  {
+   "name": "later discussion marks the draft outdated without changing it",
+   "pass": true
+  },
+  {
+   "name": "refresh keeps the edited title and takes new untouched text",
+   "pass": true
+  },
+  {
+   "name": "double approval produces one owner call",
+   "pass": true,
+   "detail": 1
+  },
+  {
+   "name": "saved result renders the owner's readback in the adapter's own view",
+   "pass": true
+  },
+  {
+   "name": "host-owned confirmation shows the saved state",
+   "pass": true
+  },
+  {
+   "name": "repeating the request reuses the saved result",
+   "pass": true
+  },
+  {
+   "name": "a draft only offers places the connection can add to",
+   "pass": true,
+   "detail": "Reading listPrivateIt also explains the lookup pathReceipts across a crash are worth coming back to. The piece I read explains why. It also explains the lookup path.ApproveEditWhy these details?TitleFrom our discussion.Why keep itSummarised from our discussion.ShelfThe only place this connection can add to."
+  },
+  {
+   "name": "a destination revoked after drafting denies at approval with no owner call",
+   "pass": true,
+   "detail": "Reading listPrivateIt also explains the lookup pathReceipts across a crash are worth coming back to. The piece I read explains why. It also explains the lookup path.This connection can’t add to Private, so nothing was saved.ApproveEditWhy these details?TitleFrom our discussion.Why keep itSummarised from our discussion.ShelfThe only place this connection can add to."
+  },
+  {
+   "name": "the denied draft keeps its content",
+   "pass": true
+  },
+  {
+   "name": "an owner refusal keeps the editable draft",
+   "pass": true,
+   "detail": "Reading listPrivateThis should fail at the ownerReceipts across a crash are worth coming back to. The piece I read explains why. It also explains the lookup path.I couldn’t save this. Your draft is still here.ApproveEditWhy these details?TitleYou edited this.Why keep itSummarised from our discussion.ShelfThe only place this connection can add to."
+  },
+  {
+   "name": "after restart the owner no longer knows the object: the receipt stays, current details do not",
+   "pass": false,
+   "detail": "Reading listWork✓ Added to Reading list"
+  },
+  {
+   "name": "remove fences immediately",
+   "pass": true
+  },
+  {
+   "name": "remove takes the adapter off Day at once",
+   "pass": true,
+   "detail": "CalendarPlanning reviewStarts in 40 minutes"
+  },
+  {
+   "name": "remove takes the adapter out of queries at once",
+   "pass": true,
+   "detail": "Nothing connected here can answer that yet."
+  },
+  {
+   "name": "remove keeps the saved receipt",
+   "pass": true
+  },
+  {
+   "name": "restart physically removes the package",
+   "pass": true
+  },
+  {
+   "name": "re-adding needs approval again",
+   "pass": true
+  },
+  {
+   "name": "re-adding brings the capability back",
+   "pass": true
+  },
+  {
+   "name": "no external requests from the parent page",
+   "pass": true,
+   "detail": []
+  },
+  {
+   "name": "no page errors",
+   "pass": true,
+   "detail": []
+  }
+ ],
+ "diagnostics": {
+  "ownerCalls": 2,
+  "deniedAttempts": 4,
+  "frameIncidents": [],
+  "projectionRows": 4,
+  "evidenceEntries": 4,
+  "quarantined": [],
+  "packages": [
+   {
+    "dir": "reading-list",
+    "packageId": "sample/reading-list",
+    "releaseDigest": "f4ce3c63b4b991e2416837f602f94bf10b28f3a4ffe88292b12d576ae81ba065",
+    "packageVersion": "1.0.0",
+    "label": "Reading list",
+    "state": "active"
+   }
+  ],
+  "syntheticReceiverRequests": []
+ }
+}
