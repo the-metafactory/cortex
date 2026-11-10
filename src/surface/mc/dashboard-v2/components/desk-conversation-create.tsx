@@ -8,7 +8,7 @@ import { DisplayCard, useDisplayCard } from "./desk-conversation-display-card";
 import { readGraphSurfaceCard } from "../lib/desk-graph-surfaces";
 import { ConversationDestination } from "./desk-conversation-destination";
 import { GRAPH_TYPES, GraphDatalists, graphListFor, prefillFields, recallGraphDestination, rememberGraphDestination, useGraphChoices } from "./desk-conversation-graph-fields";
-import { ConversationBalanceTask, useConversationBalanceTasks, type ConversationBalanceTasks } from "./desk-conversation-balance-task";
+import { ConversationBalanceTask } from "./desk-conversation-balance-task";
 
 const QUICK = ["graph-node", "balance-task", "routine", "flow"] as const;
 const SETTLING_MS = 3_000;
@@ -64,12 +64,11 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
     void act(() => propose(id, { proposalId: crypto.randomUUID(), ...(type ? { type } : { intent: "card" }), fields: { ...(title ? { [subject]: title } : {}), ...body }, ...(seed.entryId ? { entryId: seed.entryId } : {}) }), "The proposal was not saved. Try again; nothing was created.");
   };
   const proposals = view?.proposals ?? [];
-  const balance = useConversationBalanceTasks(proposals.filter(p => p.proposal.type === "balance-task" && p.operation?.state === "created").map(p => p.operation?.canonicalId ?? "").join("\0"));
   const grants = view?.grants ?? [];
   const active = grants.filter(g => !g.revokedAt);
   const revoked = grants.length - active.length;
   return <section className="dcv-create" aria-label="Create from this exchange">
-    {proposals.map(p => <ProposalCard key={p.proposal.proposalId} id={id} view={p} types={creatable} busy={busy} archived={archived} act={act} balance={balance} />)}
+    {proposals.map(p => <ProposalCard key={p.proposal.proposalId} id={id} view={p} types={creatable} busy={busy} archived={archived} act={act} />)}
     {!archived && <div className="dcv-acts" role="group" aria-label="Create from this exchange">
       <span className="dcv-quiet">Create from this exchange:</span>
       {QUICK.map(type => { const t = byType.get(type); return t ? <button key={type} type="button" className="desk-btn" disabled={busy} onClick={() => { start(type); }}>{t.label}</button> : null; })}
@@ -86,7 +85,7 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
   </section>;
 }
 
-function ProposalCard({ id, view, types, busy, archived, act, balance }: { id: string; view: ProposalView; types: Capability[]; busy: boolean; archived: boolean; act: Act; balance: ConversationBalanceTasks }) {
+function ProposalCard({ id, view, types, busy, archived, act }: { id: string; view: ProposalView; types: Capability[]; busy: boolean; archived: boolean; act: Act }) {
   const { proposal, capability } = view;
   const links = proposalLinks(view);
   const balanceProposal = usesBalanceDestinationPicker(proposal.type);
@@ -168,7 +167,7 @@ function ProposalCard({ id, view, types, busy, archived, act, balance }: { id: s
       {capability.fixed.map(t => <p key={t.label} className="dcv-quiet"><strong>{t.label}:</strong> {t.value}</p>)}
       {proposal.suggestion && <p className="dcv-quiet">Filer: {proposal.suggestion}</p>}
     </div>}
-    {savedBalanceTask && <ConversationBalanceTask id={view.operation?.canonicalId} balance={balance} />}
+    {savedBalanceTask && <ConversationBalanceTask id={view.operation?.canonicalId} area={proposal.fields.area ?? ""} />}
     {settled && GRAPH_TYPES.has(proposal.type ?? "") && <DisplayCard reading={savedCard} />}
     {settled && <p role="status">Created {capability?.label.toLowerCase()} {view.operation?.canonicalId}{links.object ? <> · <a href={links.object}>Open it</a></> : null}. It links back to this exchange.</p>}
     {editable && view.feedback === "proposed" && <div className="dcv-standing">

@@ -106,7 +106,7 @@ export function TaskDetails({ id, entry, day, editor, choices, titled = true, co
   const descendants = new Set(moving ? [node.id, ...balanceEntries(node).map(item => item.node.id)] : []);
   const moveChoices = choices.filter(option => !descendants.has(option.id));
   return <div className="dtd">
-    {editing ? <><DetailsForm draft={draft} entry={entry} day={day} titled={titled} busy={busy} dirty={dirty} onDraft={editor.setDraft} onSave={save} onDiscard={() => { finishEditing(); onRefresh(); }} />{compact && <button type="button" className="desk-btn ghost" disabled={busy} onClick={finishEditing}>Cancel editing</button>}</> : <TaskSummary node={node} entry={entry} day={day} titled={titled} busy={busy} onEdit={() => { setEditingId(node.id); }} />}
+    {editing ? <><DetailsForm draft={draft} entry={entry} day={day} titled={titled} busy={busy} dirty={dirty} onDraft={editor.setDraft} onSave={save} onDiscard={() => { finishEditing(); onRefresh(); }} />{compact && <button type="button" className="desk-btn ghost" disabled={busy} onClick={finishEditing}>Cancel editing</button>}</> : <TaskSummary view={taskSummaryView(node, entry, day)} titled={titled} busy={busy} onEdit={() => { setEditingId(node.id); }} canEdit={Boolean(entry)} />}
     <DetailsActions node={node} entry={entry} day={day} busy={busy} dirty={dirty} onAdd={() => { setMoving(null); onAdd(node.id); }} onMove={() => { setMoving({ id: node.id, parent: entry?.parent.id ?? "", index: null, revision: day.revision, date: day.date }); }} onComplete={complete} onThread={onThread} change={change} />
     {moving?.id === node.id && <form className="dbl-move" onSubmit={event => { event.preventDefault(); void change(moveCommand(moving, day.outline), moving.date).then(saved => { if (saved) { setMoving(null); onMoved(moving.id); } }); }}><DestinationPicker label="Move Balance parent" value={moving.parent} options={moveChoices} disabled={busy} onChange={parent => { setMoving({ ...moving, parent, index: null }); }} /><label>Position<select aria-label="Move Balance position" value={moving.index ?? ""} disabled={busy} onChange={event => { setMoving({ ...moving, index: event.target.value === "" ? null : Number(event.target.value) }); }}><option value="">At the end</option>{positionChoices(day.outline, moving.id, moving.parent).map(option => <option key={option.index} value={option.index}>Before {option.title}</option>)}</select></label><button className="desk-btn pri" disabled={busy || !moveChoices.some(option => option.id === moving.parent)}>Confirm move</button><button type="button" className="desk-btn" disabled={busy} onClick={() => { setMoving(null); }}>Cancel</button></form>}
     {children}
@@ -114,14 +114,29 @@ export function TaskDetails({ id, entry, day, editor, choices, titled = true, co
   </div>;
 }
 
-export function TaskSummary({ node, entry, day, titled, busy, onEdit }: { node: OutlineNode; entry: TaskEntry | undefined; day: MyDayView; titled: boolean; busy: boolean; onEdit: () => void }) {
+export interface TaskSummaryView {
+  title: string;
+  path: string[];
+  estimateMinutes: number | null | undefined;
+  weight: number | undefined;
+  dueDate: string | null;
+  context: string | null;
+  effort: number | null | undefined;
+  note: string | null;
+}
+
+export function taskSummaryView(node: OutlineNode, entry: TaskEntry | undefined, day: MyDayView): TaskSummaryView {
   const details = balanceDetails(node, day.date);
+  return { title: node.title, path: entry?.path ?? [], estimateMinutes: details.estimateMinutes, weight: details.weight, dueDate: details.dueDate || null, context: details.context || null, effort: details.effort, note: details.note || null };
+}
+
+export function TaskSummary({ view, titled, busy, onEdit, canEdit = true }: { view: TaskSummaryView; titled: boolean; busy: boolean; onEdit: () => void; canEdit?: boolean }) {
   return <section className="dtd-summary" aria-label="Saved task details">
-    {titled && <h2>{node.title}</h2>}
-    <p className="dbl-breadcrumb">{entry && entry.path.length > 0 ? entry.path.join(" / ") : "Top-level area"}</p>
-    <dl><div><dt>Estimate</dt><dd>{details.estimateMinutes === null ? "Unknown" : `${details.estimateMinutes} minutes`}</dd></div>{details.dueDate && <div><dt>Due</dt><dd><time dateTime={details.dueDate}>{details.dueDate}</time></dd></div>}{details.context && <div><dt>Context</dt><dd>{details.context}</dd></div>}<div><dt>Importance</dt><dd>{details.weight}</dd></div><div><dt>Effort</dt><dd>{details.effort === 4 ? "Large" : details.effort === 2 ? "Medium" : "Small"} · {details.effort}</dd></div></dl>
-    {details.note && <p className="dtd-note">{details.note}</p>}
-    <button type="button" className="desk-btn" disabled={busy || !entry} onClick={onEdit}>Edit</button>
+    {titled && <h2>{view.title}</h2>}
+    <p className="dbl-breadcrumb">{view.path.length > 0 ? view.path.join(" / ") : "Top-level area"}</p>
+    <dl>{view.estimateMinutes !== undefined && <div><dt>Estimate</dt><dd>{view.estimateMinutes === null ? "Unknown" : `${view.estimateMinutes} minutes`}</dd></div>}{view.dueDate && <div><dt>Due</dt><dd><time dateTime={view.dueDate}>{view.dueDate}</time></dd></div>}{view.context && <div><dt>Context</dt><dd>{view.context}</dd></div>}{view.weight !== undefined && <div><dt>Importance</dt><dd>{view.weight}</dd></div>}{view.effort !== undefined && view.effort !== null && <div><dt>Effort</dt><dd>{view.effort === 4 ? "Large" : view.effort === 2 ? "Medium" : "Small"} · {view.effort}</dd></div>}</dl>
+    {view.note && <p className="dtd-note">{view.note}</p>}
+    <button type="button" className="desk-btn" disabled={busy || !canEdit} onClick={onEdit}>Edit</button>
   </section>;
 }
 
