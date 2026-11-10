@@ -188,17 +188,37 @@ test("legacy conversion rejects unsupported capabilities and mismatched destinat
 
 test("Balance task conversion binds exact area and optional project fields without normalizing legacy edits", async () => {
   const source = legacyFixture();
-  source.proposal.fields.project = "project-example";
+  const identity = "3f2e4932-9a89-4f2a-8c1e-6c7e5c5f2a11";
+  source.proposal.fields.project = identity;
   const context = legacyContext(source);
-  const project = { ...context.destinations[0]!, objectType: "project", canonicalId: "project-example" };
+  const project = { ...context.destinations[0]!, objectType: "project", canonicalId: identity };
   const complete = { ...context, destinations: [project, ...context.destinations] };
   expect(previewLegacyOperation(source, context).issues.length).toBeGreaterThan(0);
   expect(previewLegacyOperation(source, complete).issues).toEqual([]);
   const host = await open();
   expect(projectLegacyOperation(await importLegacyOperation(host.journal, source, complete, AT))).toEqual(source.record);
-  source.proposal.fields.project = " project-example ";
+  source.proposal.fields.project = ` ${identity} `;
   const ambiguous = { ...complete, fields: structuredClone(source.proposal.fields) };
   expect(previewLegacyOperation(source, ambiguous).issues.length).toBeGreaterThan(0);
+});
+
+test("a legacy project title is reported ambiguous and is never stored as a canonical identity", async () => {
+  const source = legacyFixture();
+  source.proposal.fields.project = "Glider";
+  const context = legacyContext(source);
+  const titled = { ...context.destinations[0]!, objectType: "project", canonicalId: "Glider" };
+  const mapping = { ...context, destinations: [titled, ...context.destinations] };
+  expect(previewLegacyOperation(source, mapping).issues).toContain("legacy_destination_ambiguous");
+  const host = await open();
+  const imported = await importLegacyOperation(host.journal, source, mapping, AT);
+  const evidence = readOperationEvidence(imported);
+  expect(evidence.kind).toBe("legacy");
+  if (evidence.kind !== "legacy") throw new Error("Legacy evidence required.");
+  expect(evidence.issues).toContain("legacy_destination_ambiguous");
+  expect(evidence.context?.destinations.some(ref => ref.canonicalId === "Glider")).toBe(false);
+  expect(evidence.source.proposal.fields.project).toBe("Glider");
+  expect(evidence.source.ownerReceipts).toEqual(source.ownerReceipts);
+  expect(() => projectLegacyOperation(imported)).toThrow(UpgradeRequired);
 });
 
 test("unsupported owner conversions retain evidence and request identities without a legacy DTO projection", async () => {
