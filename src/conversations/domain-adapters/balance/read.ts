@@ -180,7 +180,7 @@ function parseTaskQuery(input: unknown): { area: ObjectReference; query: string;
   return { area, ...parseQuery(input) };
 }
 
-function parseTaskRead(input: unknown): ObjectReference {
+function parseRefRead(input: unknown): ObjectReference {
   if (!isRecord(input)) return failure("invalid_input");
   return parseReference(input.ref);
 }
@@ -270,7 +270,7 @@ function taskQueryPage(source: BalanceReadSource, input: unknown, destinations: 
 }
 
 function taskReadPage(source: BalanceReadSource, input: unknown, destinations: readonly ObjectReference[], limit: number): QueryPage {
-  const parsed = parseTaskRead(input);
+  const parsed = parseRefRead(input);
   if (parsed.adapterId !== ADAPTER_ID || parsed.objectType !== "task" || parsed.connectionId !== source.connectionId) return failure("invalid_input");
   if (limit < 1) return failure("invalid_input");
   const state = source.state();
@@ -308,7 +308,7 @@ function projectsPage(source: BalanceReadSource, input: unknown, destinations: r
 }
 
 function projectReadPage(source: BalanceReadSource, input: unknown, destinations: readonly ObjectReference[], limit: number): QueryPage {
-  const parsed = parseTaskRead(input);
+  const parsed = parseRefRead(input);
   if (parsed.adapterId !== ADAPTER_ID || parsed.objectType !== "project" || parsed.connectionId !== source.connectionId) return failure("invalid_input");
   if (limit < 1) return failure("invalid_input");
   const entry = projectEntries(source).find(project => project.ref.canonicalId === parsed.canonicalId);

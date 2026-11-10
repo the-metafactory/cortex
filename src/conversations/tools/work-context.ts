@@ -47,16 +47,19 @@ export interface WorkOwner {
   remember: (session: ToolSession, objects: readonly WorkObject[], signal: AbortSignal) => Promise<boolean>;
 }
 
+export const SEARCH_MAX_OFFSET = 500;
+export const SEARCH_MAX_LIMIT = 10;
 const SearchInput = z.object({
   query: z.string().trim().max(200).default(""),
   kinds: z.array(z.enum(WORK_KINDS)).min(1).max(WORK_KINDS.length).optional(),
-  offset: z.number().int().min(0).max(500).default(0),
-  limit: z.number().int().min(1).max(10).default(5),
+  offset: z.number().int().min(0).max(SEARCH_MAX_OFFSET).default(0),
+  limit: z.number().int().min(1).max(SEARCH_MAX_LIMIT).default(5),
 }).strict();
 const ReadInput = z.object({ kind: z.enum(WORK_KINDS), id: z.string().trim().min(1).max(512) }).strict();
 const SNIPPET = 300;
 
 export const mayRelease = (session: ToolSession, policy: Policy): boolean => policy === "cloud" || session.transport === "web" && routePolicy(session.route) === "local" && session.policy === "local";
+const readersFor = (owner: WorkOwner, session: ToolSession): WorkReaders => ({ ...owner.readers(), ...owner.queries?.(session) });
 const age = (owner: WorkOwner, object: WorkObject): "fresh" | "stale" => owner.now() - object.observedAt > STALE_AFTER_MS ? "stale" : "fresh";
 const project = (owner: WorkOwner, object: WorkObject, snippetOnly: boolean) => ({
   kind: object.kind, id: object.id, title: redactToolText(object.title), status: object.status, area: object.area, url: object.url,
@@ -81,7 +84,7 @@ export function workContextTools(owner: WorkOwner): ToolDefinition[] {
     description: "Search or list the principal's related Studio threads, Balance tasks and projects and Desk items through their owning systems. Empty query lists. Cite url, status and observedAt; freshness stale means the snapshot is old. unavailable kinds have no owner read operation. Follow next for more. Memory and identity come from soma_context, not here. This reads only and never grants action authority.",
     run: async (raw, { session, signal }) => {
       const input = raw as z.infer<typeof SearchInput>;
-      const readers = { ...owner.readers(), ...owner.queries?.(session) };
+      const readers = readersFor(owner, session);
       const wanted = input.kinds ?? WORK_KINDS;
       const kinds = wanted.map(kind => ({ kind, reader: readers[kind] }));
       const unsupported = kinds.filter(entry => !entry.reader).map(entry => ({ kind: entry.kind, reason: UNSUPPORTED_REASON }));
@@ -129,7 +132,7 @@ export function workContextTools(owner: WorkOwner): ToolDefinition[] {
     description: "Read one related work object by kind and id through its owning system. status is ok, stale (old snapshot, still shown), gone (source removed), unauthorized (policy or area denies this conversation) or unavailable (owner has no read operation). Cite url and observedAt. This reads only and never grants action authority.",
     run: async (raw, { session, signal }) => {
       const input = raw as z.infer<typeof ReadInput>;
-      const reader = { ...owner.readers(), ...owner.queries?.(session) }[input.kind];
+      const reader = readersFor(owner, session)[input.kind];
       if (!reader) return JSON.stringify({ status: "unavailable", kind: input.kind, message: UNSUPPORTED_REASON });
       const result = await reader.read(input.id);
       signal.throwIfAborted();

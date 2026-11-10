@@ -49,6 +49,12 @@ await withTempHome(async () => {
     assert.notEqual(bounded.next, null);
     console.log("bounded page: coverage is partial and a continuation is exposed");
 
+    const tail = await run(owner(true), "work_search", { query: "", kinds: ["balance-task"], limit: 5, offset: 5 });
+    assert.deepEqual(tail.results, []);
+    assert.equal(tail.next, null);
+    assert.equal(tail.status, "empty");
+    console.log("exhausted tail: an offset past the last task ends the walk instead of repeating a continuation");
+
     const home = { ...query, areas: [{ id: "area-home", label: "Home", policy: "cloud" as const }] };
     const homeOwner: WorkOwner = { readers: () => ({}), queries: () => balanceWorkReaders(home), now: () => Date.now(), remember: async () => true };
     const denied = await run(homeOwner, "work_search", { query: "", kinds: ["balance-task"], limit: 1, offset: 0 });

@@ -5,7 +5,7 @@ import type { QueryRunner } from "../../../conversations/domain-adapters/reads/q
 import type { SchemaRef } from "../../../conversations/domain-adapters/types";
 import { QUERY_LIMITS, type QueryResult } from "../../../conversations/domain-adapters/reads/query-types";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
-import type { WorkKind, WorkObject, WorkPage, WorkRead, WorkReader } from "../../../conversations/tools/work-context";
+import { SEARCH_MAX_LIMIT, SEARCH_MAX_OFFSET, type WorkKind, type WorkObject, type WorkPage, type WorkRead, type WorkReader } from "../../../conversations/tools/work-context";
 import type { Policy } from "../../../conversations/types";
 
 export interface BalanceWorkArea {
@@ -63,6 +63,7 @@ interface KindFacts {
   readonly many: boolean;
 }
 const NO_AREA: WorkPage = { items: [], more: false, status: "unavailable", reason: "No Balance destination is available." };
+const MAX_WALKED_ITEMS = SEARCH_MAX_OFFSET + SEARCH_MAX_LIMIT;
 const objectReference = (value: unknown): ObjectReference | null => {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const held = value as Record<string, unknown>;
@@ -121,22 +122,24 @@ const pageOf = (result: QueryResult, items: WorkObject[], capability: BalanceCap
     ...(result.continuation ? { continuation: result.continuation } : {}),
   };
 };
-const coverageOf = (pages: readonly WorkPage[]): NonNullable<WorkPage["coverage"]> =>
-  pages.find(page => page.coverage !== undefined && page.coverage !== "exhausted")?.coverage ?? "exhausted";
+const coverageOf = (collections: readonly AreaCollection[]): NonNullable<WorkPage["coverage"]> =>
+  collections.map(collection => collection.coverage).find(value => value !== "exhausted") ?? "exhausted";
 const mergedStatus = (pages: readonly WorkPage[], items: readonly WorkObject[], restricted: boolean, more: boolean, coverage: string): NonNullable<WorkPage["status"]> => {
   if (pages.some(page => page.status === "cancelled")) return "cancelled";
   if (restricted) return items.length > 0 ? "partial" : "denied";
   if (pages.length > 0 && pages.every(page => page.status === "unsupported")) return "unsupported";
   if (pages.length > 0 && pages.every(page => page.status === "unavailable" || page.status === "unsupported")) return "unavailable";
-  return more || coverage !== "exhausted" || pages.some(page => page.status === "partial") ? "partial" : "ok";
+  return more || coverage !== "exhausted" ? "partial" : "ok";
 };
-const mergePages = (pages: readonly WorkPage[], all: readonly WorkObject[], limit: number, offset: number, beyond: boolean): WorkPage => {
+const mergePages = (collections: readonly AreaCollection[], limit: number, offset: number): WorkPage => {
+  const pages = collections.flatMap(collection => collection.pages);
+  const all = collections.flatMap(collection => collection.items);
   const items = all.slice(offset, offset + limit);
   const restricted = pages.some(page => page.restricted === true || page.status === "denied");
-  const coverage = coverageOf(pages);
-  const more = beyond || all.length > offset + limit;
+  const coverage = coverageOf(collections);
+  const more = collections.some(collection => collection.more) || all.length > offset + limit;
   const reason = pages.map(page => page.reason).find(value => value !== undefined);
-  const continuation = pages.map(page => page.continuation).find(value => value !== undefined);
+  const continuation = more ? pages.map(page => page.continuation).find(value => value !== undefined) : undefined;
   return {
     items, more, coverage,
     noMatch: !restricted && pages.length > 0 && pages.every(page => page.noMatch === true),
@@ -146,10 +149,15 @@ const mergePages = (pages: readonly WorkPage[], all: readonly WorkObject[], limi
     ...(continuation ? { continuation } : {}),
   };
 };
-const queryPage = async (query: BalanceWorkQuery, request: BalanceQueryRequest, facts: KindFacts, at: number): Promise<WorkPage> => {
+interface QueryStep {
+  readonly page: WorkPage;
+  readonly released: number;
+}
+const queryPage = async (query: BalanceWorkQuery, request: BalanceQueryRequest, facts: KindFacts, at: number): Promise<QueryStep> => {
   const run = await query.run(request);
-  const objects = releasedOf(run).filter(object => object.ref.objectType === facts.objectType);
-  return pageOf(run.result, objects.map(object => facts.toObject(query, object, at)), facts.search);
+  const released = releasedOf(run);
+  const objects = released.filter(object => object.ref.objectType === facts.objectType);
+  return { page: pageOf(run.result, objects.map(object => facts.toObject(query, object, at)), facts.search), released: released.length };
 };
 
 export function balanceWorkQuery(config: BalanceWorkRunner): BalanceWorkQuery {
@@ -177,27 +185,31 @@ interface AreaCollection {
   readonly pages: WorkPage[];
   readonly items: WorkObject[];
   readonly more: boolean;
+  readonly coverage: NonNullable<WorkPage["coverage"]>;
 }
 const collectArea = async (query: BalanceWorkQuery, area: BalanceWorkArea, facts: KindFacts, needle: string, wanted: number, at: number): Promise<AreaCollection> => {
   const destination = destinationOf(query, area);
   const pages: WorkPage[] = [];
   const items: WorkObject[] = [];
   let more = false;
+  let offset = 0;
   for (;;) {
     const size = Math.min(QUERY_LIMITS.pageItems, wanted - items.length);
     if (size < 1) break;
-    const page = await queryPage(query, { capabilityId: facts.search, input: { ...(facts.objectType === "task" ? { area: destination } : {}), query: needle, limit: size, offset: items.length }, destinations: [destination], limit: size }, facts, at);
-    pages.push(page);
-    items.push(...page.items);
-    more = page.more;
-    if (!page.more || page.items.length === 0) break;
+    const step = await queryPage(query, { capabilityId: facts.search, input: { ...(facts.objectType === "task" ? { area: destination } : {}), query: needle, limit: size, offset }, destinations: [destination], limit: size }, facts, at);
+    pages.push(step.page);
+    items.push(...step.page.items);
+    offset += step.released;
+    more = step.page.more;
+    if (!step.page.more || step.released === 0) break;
   }
-  return { pages, items, more };
+  return { pages, items, more, coverage: pages[pages.length - 1]?.coverage ?? "exhausted" };
 };
 const searchPage = async (query: BalanceWorkQuery, facts: KindFacts, needle: string, limit: number, offset: number, at: number): Promise<WorkPage> => {
   if (query.areas.length === 0) return NO_AREA;
-  const collections = await Promise.all(query.areas.map(area => collectArea(query, area, facts, needle, offset + limit, at)));
-  return mergePages(collections.flatMap(collection => collection.pages), collections.flatMap(collection => collection.items), limit, offset, collections.some(collection => collection.more));
+  const wanted = Math.min(offset + limit, MAX_WALKED_ITEMS);
+  const collections = await Promise.all(query.areas.map(area => collectArea(query, area, facts, needle, wanted, at)));
+  return mergePages(collections, limit, offset);
 };
 const readObject = async (query: BalanceWorkQuery, facts: KindFacts, id: string, at: number): Promise<WorkRead> => {
   if (query.areas.length === 0) return { state: "unavailable", reason: "gone" };

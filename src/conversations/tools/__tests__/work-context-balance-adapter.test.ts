@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { loadBalanceState } from "../../../surface/mc/desk/balance-store";
-import { savedNode, type BalanceReadRig } from "../../domain-adapters/__tests__/fixtures/balance-read-fixtures";
+import { leaf, savedNode, type BalanceReadRig } from "../../domain-adapters/__tests__/fixtures/balance-read-fixtures";
 import { openBalanceReadRigForTest as open } from "../../domain-adapters/__tests__/fixtures/balance-test-rig";
 import { legacyTask, queryFor, sessionOf } from "../../domain-adapters/__tests__/fixtures/balance-work-fixtures";
 import { balanceWorkReaders, type BalanceWorkArea } from "../../../surface/mc/desk/balance-work-reader";
 import { workContextTools, type WorkObject, type WorkOwner } from "../work-context";
 
 interface CallResult { readonly text: string; readonly remembered: WorkObject[] }
-async function call(rig: BalanceReadRig, policy: "local" | "cloud", name: "work_search" | "work_read", input: object, enabled = true, transport: "web" | "discord" = "web", queryPolicy: "local" | "cloud" = "cloud", areas?: readonly BalanceWorkArea[]): Promise<CallResult> {
+interface CallOptions { readonly enabled?: boolean; readonly transport?: "web" | "discord"; readonly queryPolicy?: "local" | "cloud"; readonly areas?: readonly BalanceWorkArea[] }
+async function call(rig: BalanceReadRig, policy: "local" | "cloud", name: "work_search" | "work_read", input: object, options: CallOptions = {}): Promise<CallResult> {
+  const { enabled = true, transport = "web", queryPolicy = "cloud", areas } = options;
   const remembered: WorkObject[] = [];
   const query = queryFor(rig, queryPolicy);
   const owner: WorkOwner = {
@@ -72,7 +74,7 @@ describe("the Balance work adapter behind work_search and work_read", () => {
     expect(bounded.status).toBe("partial");
     expect(bounded.coverage).toBe("partial");
     expect(bounded.next).not.toBeNull();
-    const empty = JSON.parse((await call(rig, "cloud", "work_search", { query: "", kinds: ["balance-task"], limit: 1, offset: 0 }, true, "web", "local")).text);
+    const empty = JSON.parse((await call(rig, "cloud", "work_search", { query: "", kinds: ["balance-task"], limit: 1, offset: 0 }, { queryPolicy: "local" })).text);
     expect(empty.status).toBe("partial");
     expect(empty.results).toEqual([]);
     expect(empty.next).not.toBeNull();
@@ -80,11 +82,11 @@ describe("the Balance work adapter behind work_search and work_read", () => {
 
   test("a removed area or local-only policy returns nothing and no denied name or count", async () => {
     const rig = await open();
-    const denied = JSON.parse((await call(rig, "cloud", "work_search", { query: "", kinds: ["balance-task"], limit: 1, offset: 0 }, true, "web", "local")).text);
+    const denied = JSON.parse((await call(rig, "cloud", "work_search", { query: "", kinds: ["balance-task"], limit: 1, offset: 0 }, { queryPolicy: "local" })).text);
     expect(denied.status).toBe("partial");
     expect(denied.results).toEqual([]);
     expect(denied.restricted).toBe(false);
-    const local = JSON.parse((await call(rig, "cloud", "work_read", { kind: "balance-task", id: "task-wing" }, true, "web", "local")).text);
+    const local = JSON.parse((await call(rig, "cloud", "work_read", { kind: "balance-task", id: "task-wing" }, { queryPolicy: "local" })).text);
     expect(local.status).toBe("unauthorized");
     expect(local).not.toHaveProperty("object");
     expect(local).not.toHaveProperty("title");
@@ -101,7 +103,7 @@ describe("the Balance work adapter behind work_search and work_read", () => {
 
   test("the legacy WorkReader still answers when the connection is off", async () => {
     const rig = await open();
-    const legacy = await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit: 5, offset: 0 }, false);
+    const legacy = await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit: 5, offset: 0 }, { enabled: false });
     const searched = JSON.parse(legacy.text);
     expect(searched.status).toBe("ok");
     expect(searched.results.map((result: { id: string }) => result.id)).toEqual(["task-legacy"]);
@@ -120,7 +122,7 @@ describe("the Balance work adapter behind work_search and work_read", () => {
 
   test("the home destination remains denied without leaking its task", async () => {
     const rig = await open();
-    const home = await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit: 1, offset: 0 }, true, "web", "cloud", [{ id: "area-home", label: "Home" }]);
+    const home = await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit: 1, offset: 0 }, { areas: [{ id: "area-home", label: "Home" }] });
     const found = JSON.parse(home.text);
     expect(found.status).toBe("denied");
     expect(found.restricted).toBe(true);
@@ -142,5 +144,21 @@ describe("the Balance work adapter behind work_search and work_read", () => {
       continuation = page.next;
     }
     expect([...seen].sort()).toEqual(["task-done", "task-garden", "task-glue", "task-wing"]);
+  });
+
+  test("a long area is walked across sub-pages without duplicates", async () => {
+    const rig = await open();
+    const bulk = Array.from({ length: 25 }, (_unused, index) => `task-bulk-${index + 1}`);
+    for (const id of bulk) rig.addTask("area:area-example", leaf(id, `Bulk ${id}`));
+    const seen: string[] = [];
+    let continuation: { offset: number } | null = { offset: 0 };
+    while (continuation) {
+      const page = JSON.parse((await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit: 10, offset: continuation.offset })).text);
+      seen.push(...page.results.map((result: { id: string }) => result.id));
+      continuation = page.next;
+    }
+    expect(seen.length).toBe(bulk.length + 3);
+    expect(new Set(seen).size).toBe(bulk.length + 3);
+    expect([...seen].sort()).toEqual(["task-done", "task-glue", "task-wing", ...bulk].sort());
   });
 });
