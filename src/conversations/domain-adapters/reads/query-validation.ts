@@ -1,3 +1,4 @@
+import { acceptsReadObject } from "./bindings";
 import type { DomainAdapterRegistry } from "../registry";
 import type { ReadBinding, ReadPageObject } from "./types";
 import { canonicalWire } from "../operations/validation";
@@ -70,7 +71,7 @@ export function validateQueryPage(registry: DomainAdapterRegistry, binding: Read
     if (pointers.has(entry.pointer) || !values.some((_value, index) => entry.pointer === `${binding.query?.objectsPointer}/${index}`)) throw new Error("invalid_annotations");
     pointers.add(entry.pointer);
     const value = readPointer(page.payload, entry.pointer);
-    if (value === undefined || entry.ref.adapterId !== binding.adapterId || entry.ref.connectionId !== dispatch.source.connectionId || entry.ref.objectType !== binding.objectType || !dispatch.source.destinations.some(dest => canonicalWire(dest) === canonicalWire(entry.destination)) || !registry.validateObject(binding.adapterId, binding.objectType, entry.schemaRef, value).ok) throw new Error("invalid_annotations");
+    if (value === undefined || entry.ref.adapterId !== binding.adapterId || entry.ref.connectionId !== dispatch.source.connectionId || !acceptsReadObject(registry, binding, entry.ref.objectType) || !dispatch.source.destinations.some(dest => canonicalWire(dest) === canonicalWire(entry.destination)) || !registry.validateObject(binding.adapterId, entry.ref.objectType, entry.schemaRef, value).ok) throw new Error("invalid_annotations");
     if (!displayAccepted(value, binding.display)) throw new Error("invalid_display");
     const key = authorityHash(entry.ref);
     const digest = authorityHash({ value, revision: entry.evidence.revision, schemaRef: entry.schemaRef, destination: entry.destination });

@@ -24,6 +24,8 @@ export interface SetupCatalogEntry {
   scopeFields: { name: string; label: string }[];
   capabilities: { capabilityId: string; label: string; access: "read" | "write" }[];
   destinations: { ref: ObjectReference; label: string }[];
+  connectionScopedDestinations?: boolean;
+  fixedScope?: Record<string, string>;
 }
 
 export type ConnectionState = "discovered" | "incomplete" | "disabled" | "enabled" | "unavailable";
@@ -115,7 +117,7 @@ export class ConnectionSetupService {
 
   registerCatalog(): void {
     for (const entry of this.deps.catalog()) {
-      if (!ID.test(entry.packageId) || entry.scopeFields.length === 0 || !entry.scopeFields.every(field => FIELD.test(field.name))) throw new ConnectionSetupError("unknown_package");
+      if (!ID.test(entry.packageId) || (entry.scopeFields.length === 0 && !Object.keys(entry.fixedScope ?? {}).length) || !entry.scopeFields.every(field => FIELD.test(field.name))) throw new ConnectionSetupError("unknown_package");
       this.broker.registerSetup(entry.setup);
     }
   }
@@ -258,25 +260,28 @@ export class ConnectionSetupService {
   }
 
   private checkSelection(entry: SetupCatalogEntry, input: ConnectionSetupInput): void {
-    const allowed = new Set(entry.scopeFields.map(field => field.name));
-    const keys = Object.keys(input.scope);
+    const scope = { ...entry.fixedScope, ...input.scope };
+    const allowed = new Set([...entry.scopeFields.map(field => field.name), ...Object.keys(entry.fixedScope ?? {})]);
+    const keys = Object.keys(scope);
+    if (Object.entries(entry.fixedScope ?? {}).some(([key, value]) => scope[key] !== value)) throw new ConnectionSetupError("invalid_scope");
     if (keys.length !== allowed.size || keys.some(key => !allowed.has(key))) throw new ConnectionSetupError("invalid_scope");
-    if (Object.values(input.scope).some(value => value.trim() === "" || value.length > MAX_SCOPE_CHARS)) throw new ConnectionSetupError("invalid_scope");
+    if (Object.values(scope).some(value => value.trim() === "" || value.length > MAX_SCOPE_CHARS)) throw new ConnectionSetupError("invalid_scope");
     const caps = (access: "read" | "write") => new Set(entry.capabilities.filter(item => item.access === access).map(item => item.capabilityId));
     if (!input.readCapabilityIds.every(id => caps("read").has(id)) || !input.writeCapabilityIds.every(id => caps("write").has(id))) throw new ConnectionSetupError("invalid_capability");
     if (!unique(input.readCapabilityIds, id => id) || !unique(input.writeCapabilityIds, id => id)) throw new ConnectionSetupError("invalid_capability");
     const known = new Set(entry.destinations.map(item => canonicalWire(item.ref)));
-    for (const list of [input.readDestinations, input.writeDestinations]) {
+    for (const selection of [input.readDestinations, input.writeDestinations]) {
+      const list = selection.map(ref => entry.connectionScopedDestinations && ref.connectionId === input.connectionId ? { ...ref, connectionId: entry.packageId } : ref);
       if (!list.every(ref => known.has(canonicalWire(ref))) || !unique(list, canonicalWire)) throw new ConnectionSetupError("invalid_destination");
     }
     if ((input.readCapabilityIds.length > 0) !== (input.readDestinations.length > 0) || (input.writeCapabilityIds.length > 0) !== (input.writeDestinations.length > 0)) throw new ConnectionSetupError("invalid_destination");
   }
 
   private selectionChanged(config: Config, input: ConnectionSetupInput): boolean {
-    return canonicalWire(config.scope) !== canonicalWire(input.scope)
+    return canonicalWire(config.scope) !== canonicalWire({ ...this.entry(config.packageId).fixedScope, ...input.scope })
       || canonicalWire([...config.readCapabilityIds].sort()) !== canonicalWire([...input.readCapabilityIds].sort())
       || canonicalWire([...config.writeCapabilityIds].sort()) !== canonicalWire([...input.writeCapabilityIds].sort())
-      || !sameRefs(config.readDestinations, input.readDestinations) || !sameRefs(config.writeDestinations, input.writeDestinations);
+      || !sameRefs(config.readDestinations, this.qualify(this.entry(config.packageId), input.readDestinations, config.connectionId)) || !sameRefs(config.writeDestinations, this.qualify(this.entry(config.packageId), input.writeDestinations, config.connectionId));
   }
 
   private async isActive(context: SetupContext, config: Config): Promise<boolean> {
@@ -305,11 +310,15 @@ export class ConnectionSetupService {
     });
   }
 
+  private qualify(entry: SetupCatalogEntry, destinations: ObjectReference[], connectionId: string): ObjectReference[] {
+    return destinations.map(ref => entry.connectionScopedDestinations ? { ...ref, connectionId } : ref);
+  }
+
   private async store(principal: SetupPrincipal, entry: SetupCatalogEntry, connectionId: string, requestId: string, input: ConnectionSetupInput, existing: Config | undefined): Promise<Config> {
     const config: Config = ConfigSchema.parse({
       connectionId, principalRef: principal.principalRef, stack: principal.stack, packageId: entry.packageId, setupSchemaId: entry.setup.setupSchemaId, setupVersion: entry.setup.version,
-      requestId, revision: (existing?.revision ?? 0) + 1, scope: input.scope, readCapabilityIds: input.readCapabilityIds, writeCapabilityIds: input.writeCapabilityIds,
-      readDestinations: input.readDestinations, writeDestinations: input.writeDestinations, head: existing?.requestId === requestId ? existing.head : null,
+      requestId, revision: (existing?.revision ?? 0) + 1, scope: { ...entry.fixedScope, ...input.scope }, readCapabilityIds: input.readCapabilityIds, writeCapabilityIds: input.writeCapabilityIds,
+      readDestinations: this.qualify(entry, input.readDestinations, connectionId), writeDestinations: this.qualify(entry, input.writeDestinations, connectionId), head: existing?.requestId === requestId ? existing.head : null,
     });
     await this.mutate(state => { state.connections[connectionId] = config; });
     return config;
