@@ -60,6 +60,7 @@ export async function openFlowReadRig(options: { conversationPolicy?: "local" | 
   Object.assign(rig.connection, connection);
   await rig.service.publishHostRecord({ kind: "connection", value: connection }, 1);
   let restrictionRevision = 1;
+  let dataPolicy = adapter.dataPolicy;
   const restriction = adapter.restriction({ ...rig.objectRestriction, restrictionRef: randomUUID() });
   await rig.service.publishHostRecord({ kind: "restriction", value: restriction }, 0);
   rig.hooks.query = (request, signal) => adapter.query(request, signal);
@@ -76,9 +77,10 @@ export async function openFlowReadRig(options: { conversationPolicy?: "local" | 
   };
   return {
     dir, home, env, flowsDir, source, adapter, registry, rig, runner, pulse,
-    async save(name = FLOW_NAME) {
+    get dataPolicy() { return dataPolicy; },
+    async save(name = FLOW_NAME, yaml = flowYaml(name)) {
       const file = join(dir, `${name}.input.yaml`);
-      await writeFile(file, flowYaml(name));
+      await writeFile(file, yaml);
       return pulse(["save", "--file", file, "--request-id", randomUUID(), "--conversation", "conversation-example", "--saved-by", "principal-example"]);
     },
     query(limit = 20) { return run(queryBinding, { stack: adapter.destination, limit }); },
@@ -87,9 +89,10 @@ export async function openFlowReadRig(options: { conversationPolicy?: "local" | 
       if (!step.result.continuation) throw new Error("flow continuation missing");
       return run(queryBinding, { stack: adapter.destination }, { ...step.request, continuation: step.result.continuation });
     },
-    async setPolicy(dataPolicy: "local" | "cloud") {
-      const updated = createFlowReadAdapter({ ...source, dataPolicy }).restriction({ ...restriction, revision: String(restrictionRevision + 1) });
+    async setPolicy(policy: "local" | "cloud") {
+      const updated = createFlowReadAdapter({ ...source, dataPolicy: policy }).restriction({ ...restriction, revision: String(restrictionRevision + 1) });
       await rig.service.publishHostRecord({ kind: "restriction", value: updated }, restrictionRevision++);
+      dataPolicy = policy;
     },
     async close() { await rig.close(); await rm(dir, { recursive: true, force: true }); },
   };
