@@ -40,6 +40,7 @@ export interface TurnRequest {
   session: string;
   signal: AbortSignal;
   activity: (activity: ToolActivity) => Promise<void>;
+  text?: (delta: string, reset?: boolean) => Promise<void>;
   tools?: ToolSurface;
 }
 export interface TurnReply { text: string; session: string; resumed: boolean }
@@ -101,11 +102,23 @@ export function cortexModels(lanes: Lanes, gate: RouteGate, turn: TurnCall, reco
         if (!plan.prompt) throw new Error("the turn carries no new input");
         const surface = tools?.(gated.conversationId, route, activity => record(gated.conversationId, { kind: "tool", activity }));
         await surface?.validate();
+        base = { ...base, content: [{ type: "text", text: "" }] };
+        out.push({ type: "start", partial: structuredClone(base) });
+        out.push({ type: "text_start", contentIndex: 0, partial: structuredClone(base) });
         const reply = await turn({
           conversationId: gated.conversationId, route, lane, instructions, prompt: plan.prompt, linked: gated.context,
           history: plan.history, resume: surface ? null : plan.resume, session: `${gated.conversationId}.${route.replace(":", "-")}.${plan.answers}.${randomUUID().slice(0, 8)}`,
           signal: options?.signal ?? new AbortController().signal,
           activity: activity => record(gated.conversationId, { kind: "tool", activity }),
+          text: async (delta, reset = false) => {
+            await surface?.validate();
+            const current = await gate(options?.sessionId, route);
+            if ("refused" in current) throw new Error(current.refused);
+            const block = base.content[0];
+            if (block?.type !== "text") throw new Error("The conversation text block is missing.");
+            block.text = reset ? delta : block.text + delta;
+            out.push(reset ? { type: "text_start", contentIndex: 0, partial: structuredClone(base) } : { type: "text_delta", contentIndex: 0, delta, partial: structuredClone(base) });
+          },
           ...(surface ? { tools: surface } : {}),
         });
         await surface?.validate();
@@ -114,7 +127,7 @@ export function cortexModels(lanes: Lanes, gate: RouteGate, turn: TurnCall, reco
         const reason = reply.resumed || plan.history.length === 0 ? null : plan.reason ?? (surface ? "tool-policy" : "session-missing");
         if (reason && reason !== "lane-changed") await record(gated.conversationId, { kind: "reconstructed", route, reason });
         const message: AssistantMessage = { ...base, responseId: `${SESSION_PREFIX}${reply.session}`, content: [{ type: "text", text: reply.text }] };
-        out.push({ type: "start", partial: { ...base } });
+        out.push({ type: "text_end", contentIndex: 0, content: reply.text, partial: message });
         out.push({ type: "done", reason: "stop", message });
         out.end(message);
       } catch (error) {

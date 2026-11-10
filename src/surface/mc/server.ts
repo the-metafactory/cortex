@@ -371,6 +371,7 @@ export function startServer(
       }
 
       if (url.pathname.startsWith("/api/")) {
+        if (req.method === "GET" && /^\/api\/conversations\/[^/]+\/stream$/.test(url.pathname)) server.timeout(req, 0);
         if (req.method === "POST" && ["/api/desk/studio/session", "/api/desk/mail"].includes(url.pathname)) server.timeout(req, 180);
         if (req.method === "POST" && ["/api/desk/ask", "/api/desk/create", "/api/desk/routines", "/api/desk/routine-capability", "/api/desk/routine-editor"].includes(url.pathname)) server.timeout(req, 0);
         if (req.method === "POST" && /^\/api\/attention\/[^/]+\/resolve$/.test(url.pathname)) {

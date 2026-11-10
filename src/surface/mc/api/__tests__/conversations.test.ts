@@ -41,6 +41,13 @@ describe("conversation API gates", () => {
     const { conversation } = await created.json() as { conversation: { id: string } };
     expect((await call(status, "GET", `/api/conversations/${conversation.id}`)).status).toBe(200);
     expect((await call(status, "GET", `/api/conversations/${conversation.id}`, undefined, OTHER)).status).toBe(403);
+    expect((await call(status, "GET", `/api/conversations/${conversation.id}/stream`, undefined, OTHER)).status).toBe(403);
+    const streamed = await call(status, "GET", `/api/conversations/${conversation.id}/stream`);
+    expect(streamed.status).toBe(200);
+    expect(streamed.headers.get("content-type")).toBe("text/event-stream");
+    const reader = streamed.body?.getReader();
+    expect(new TextDecoder().decode((await reader?.read())?.value)).toBe('event: response\ndata: {"text":null}\n\n');
+    await reader?.cancel();
     expect((await call(status, "GET", `/api/conversations/${conversation.id}/entries`, undefined, OTHER)).status).toBe(403);
     expect((await call(status, "GET", `/api/conversations/${conversation.id}/entries/1`, undefined, OTHER)).status).toBe(403);
     expect((await call(status, "POST", `/api/conversations/${conversation.id}/inputs`, say("in-1", "x"), OTHER)).status).toBe(403);
@@ -57,6 +64,38 @@ describe("conversation API gates", () => {
     expect(unavailable.status).toBe(503);
     expect(await unavailable.json()).toEqual({ ok: false, error: "Conversations unavailable: store held by 42/ai.meta-factory.cortex.default" });
     expect((await call(null, "GET", "/api/conversations")).status).toBe(503);
+  });
+
+  test("the response stream sends an initial snapshot then only appended text and clears on completion", async () => {
+    const next = Promise.withResolvers<undefined>();
+    const finish = Promise.withResolvers<undefined>();
+    const status = await openConversationHost({ dir: await scratch(), stack: "api", label: LABEL, expectedLabel: LABEL, lanes: { cloud: { provider: "test", model: "m" } }, turns: async request => {
+      await request.text?.("Hello");
+      await next.promise;
+      await request.text?.(" world");
+      await finish.promise;
+      return { text: "Hello world", session: request.session, resumed: false };
+    } });
+    statuses.push(status);
+    if (status.state !== "ready") throw new Error(status.reason);
+    const conversation = await status.host.create({ title: "Synthetic streaming", origin: { kind: "web" }, links: [], policy: "cloud" }, "local-principal@loopback");
+    const response = await call(status, "GET", `/api/conversations/${conversation.id}/stream`);
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("The response stream is missing.");
+    const frame = async (): Promise<string> => new TextDecoder().decode((await reader.read()).value);
+    try {
+      expect(await frame()).toBe('event: response\ndata: {"text":null}\n\n');
+      await status.host.submit(conversation.id, { inputId: "stream-api", text: "hello", transport: "web", mode: "queue" });
+      const first = await frame();
+      if (first === 'event: response\ndata: {"text":""}\n\n') expect(await frame()).toBe('event: response\ndata: {"append":"Hello"}\n\n');
+      else expect(first).toBe('event: response\ndata: {"text":"Hello"}\n\n');
+      next.resolve(undefined);
+      expect(await frame()).toBe('event: response\ndata: {"append":" world"}\n\n');
+      finish.resolve(undefined);
+      expect(await frame()).toBe('event: response\ndata: {"text":null}\n\n');
+      await status.host.waitForIdle(conversation.id);
+      expect((await status.host.input(conversation.id, "stream-api")).answer).toBe("Hello world");
+    } finally { next.resolve(undefined); finish.resolve(undefined); await reader.cancel(); }
   });
 
   test("an entry citation reads the exact retained record and cannot read an entry from another conversation", async () => {
