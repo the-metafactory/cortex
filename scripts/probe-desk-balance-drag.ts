@@ -11,6 +11,7 @@ async function probe() {
     const bundle = await Bun.build({ entrypoints: [new URL("./desk-balance-drag/browser.tsx", import.meta.url).pathname], target: "browser" });
     assert.ok(bundle.success, JSON.stringify(bundle.logs));
     const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+    const awaitSave = () => page.waitForResponse(response => response.url().endsWith("/api/desk/my-day") && response.request().method() === "POST");
     page.setDefaultTimeout(10_000);
     page.on("pageerror", error => console.error(error.message));
     for (const output of bundle.outputs) {
@@ -41,7 +42,7 @@ async function probe() {
     const commits = await page.evaluate(() => document.body.dataset.balanceCommits);
     await page.mouse.move(to.x + 220, to.y + 2, { steps: 20 });
     assert.equal(await page.evaluate(() => document.body.dataset.balanceCommits), commits, "Moving within one drop zone must not commit tree renders");
-    const saved = page.waitForResponse(response => response.url().endsWith("/api/desk/my-day") && response.request().method() === "POST");
+    const saved = awaitSave();
     await page.mouse.up();
     assert.equal((await saved).status(), 200);
     await page.locator(".dbl-drag-preview").waitFor({ state: "detached" });
@@ -69,6 +70,19 @@ async function probe() {
     assert.equal((await read()).revision, current.revision);
     await source.locator(".dbl-select").click();
     assert.equal(await source.locator(".dbl-select").getAttribute("aria-pressed"), "true");
+    await page.setViewportSize({ width: 1280, height: 500 });
+    await source.scrollIntoViewIfNeeded();
+    const beforeScroll = await page.evaluate(() => window.scrollY);
+    await startDrag();
+    await page.mouse.move(200, 490);
+    await page.waitForFunction(previous => window.scrollY > previous, beforeScroll);
+    await page.mouse.move(200, 10);
+    await page.waitForFunction(previous => window.scrollY <= previous, beforeScroll);
+    await page.keyboard.press("Escape");
+    await page.mouse.up();
+    assert.equal((await read()).revision, current.revision);
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await page.evaluate(() => window.scrollTo(0, 0));
     const grip = await source.locator(".dbl-grip").boundingBox();
     const below = await target.boundingBox();
     assert.ok(grip && below);
@@ -77,13 +91,14 @@ async function probe() {
     await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: below.x + 80, y: below.y + below.height - 2 }] });
     assert.equal(await page.locator(".dbl-drag-preview").count(), 1);
     assert.equal(await target.evaluate(element => element.classList.contains("drop-after")), true);
-    const touchSave = page.waitForResponse(response => response.url().endsWith("/api/desk/my-day") && response.request().method() === "POST");
+    const touchSave = awaitSave();
     await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     assert.equal((await touchSave).status(), 200);
     assert.equal((await read()).outline.children[0]?.children[0]?.children[1]?.id, "task-done");
     console.log("PASS: drag from the title shows the whole row and insertion point; drop persists the reorder through the real owner.");
     console.log("PASS: Escape and outside drops cancel without a write; ordinary row clicks still select.");
     console.log("PASS: touch dragging from the grip shows the preview and after marker, then saves the reorder.");
+    console.log("PASS: pointer movement within one drop zone does not commit tree renders; viewport edges scroll down and up during a drag.");
   } finally { await browser.close(); await stack.close(); }
 }
 await runWithTemporaryHome(import.meta.path, probe);

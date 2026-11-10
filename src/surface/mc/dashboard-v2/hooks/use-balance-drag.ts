@@ -11,6 +11,18 @@ interface DragOptions {
 }
 interface DragHint { id: string; zone: DropZone }
 
+function createDragPreview(row: HTMLElement, width: number): HTMLElement {
+  const preview = row.cloneNode(true) as HTMLElement;
+  preview.className = "dbl-row dbl-drag-preview";
+  preview.removeAttribute("data-balance-id");
+  preview.setAttribute("aria-hidden", "true");
+  preview.inert = true;
+  preview.style.width = `${width}px`;
+  preview.style.paddingInlineStart = "12px";
+  document.body.append(preview);
+  return preview;
+}
+
 export function useBalanceDrag(options: DragOptions) {
   const [dragging, setDragging] = useState<string | null>(null);
   const [hint, setHint] = useState<DragHint | null>(null);
@@ -37,7 +49,8 @@ export function useBalanceDrag(options: DragOptions) {
       const bounds = target?.getBoundingClientRect();
       const zone = bounds ? dropZone(y - bounds.top, bounds.height) : "inside";
       destination = targetId ? balanceDrop(options.outline, id, targetId, zone, options.studioProjects) : null;
-      setHint(destination && targetId ? { id: targetId, zone } : null);
+      const next = destination && targetId ? { id: targetId, zone } : null;
+      setHint(previous => previous?.id === next?.id && previous?.zone === next?.zone ? previous : next);
       if (preview) preview.dataset.allowed = String(destination !== null);
     };
     const animate = (): void => {
@@ -76,14 +89,7 @@ export function useBalanceDrag(options: DragOptions) {
       next.preventDefault();
       if (!preview) {
         row.setPointerCapture(pointer);
-        preview = row.cloneNode(true) as HTMLElement;
-        preview.className = "dbl-row dbl-drag-preview";
-        preview.removeAttribute("data-balance-id");
-        preview.setAttribute("aria-hidden", "true");
-        preview.inert = true;
-        preview.style.width = `${box.width}px`;
-        preview.style.paddingInlineStart = "12px";
-        document.body.append(preview);
+        preview = createDragPreview(row, box.width);
         document.body.classList.add("dbl-dragging");
         setDragging(id);
         options.onStart();
