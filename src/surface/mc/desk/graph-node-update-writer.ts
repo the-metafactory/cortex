@@ -1,3 +1,4 @@
+// glossary-ignore: node
 import { z } from "zod";
 import { parseGraphNodeRef } from "../../../common/graph-ref";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, ReadbackResult } from "../../../conversations/types";
@@ -6,6 +7,7 @@ import { ADD_TIMEOUT_MS, graphNodeRef, provenanceLine, recordedGraphOperation, r
 import { GITHUB_REF_PREFIX, isGraphRepositoryAllowed } from "./graph-repositories";
 
 const READ_TIMEOUT_MS = 20_000;
+const WHOSE_CLOSE_UNKNOWN = null;
 const GITHUB_ISSUE_URL = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/([1-9]\d*)\/?$/;
 const BARE_NODE = /^[\w.-]+\/[\w.-]+#[1-9]\d*$/;
 
@@ -39,7 +41,7 @@ interface UpdateVerb {
   text: (fields: Record<string, string>) => string | null;
   missing: string;
   argv: (node: TargetNode, file: string, fields: Record<string, string>) => string[];
-  done: (read: z.infer<typeof NodeRead>, operationId: string) => boolean;
+  done: (read: z.infer<typeof NodeRead>, operationId: string) => boolean | null;
 }
 
 function updateWriter(deps: GraphWriterDeps, verb: UpdateVerb): OwnerWriter {
@@ -73,7 +75,9 @@ function updateWriter(deps: GraphWriterDeps, verb: UpdateVerb): OwnerWriter {
       const result = await run([somaBin, ...recorded.args], "", READ_TIMEOUT_MS);
       const read = NodeRead.safeParse(parsed(result.stdout));
       if (result.code !== 0 || !read.success) return null;
-      return verb.done(read.data, operation.operationId) ? { found: true, ...nodeRef({ repository: recorded.repository, id: recorded.parent }) } : { found: false };
+      const done = verb.done(read.data, operation.operationId);
+      if (done === null) return null;
+      return done ? { found: true, ...nodeRef({ repository: recorded.repository, id: recorded.parent }) } : { found: false };
     } catch (error) {
       process.stderr.write(`graph node readback failed for operation ${operation.operationId}: ${error instanceof Error ? error.message : String(error)}\n`);
       return null;
@@ -98,7 +102,7 @@ export function graphRulingWriter(deps: GraphWriterDeps): OwnerWriter {
     text: fields => filled(fields.text),
     missing: "Write the ruling to record.",
     argv: (node, file) => ["graph", "rule", node.id, "--text-file", file, "--repo", node.repository, "--json"],
-    done: (read, operationId) => read.body?.includes(`operation ${operationId}`) ?? false,
+    done: (read, operationId) => read.body?.includes(`operation ${operationId}.`) ?? false,
   });
 }
 
@@ -109,6 +113,6 @@ export function graphCloseWriter(deps: GraphWriterDeps): OwnerWriter {
     text: fields => filled(fields.resolution),
     missing: "Write the resolution the node closes with.",
     argv: (node, file, fields) => ["graph", "close", node.id, "--resolution-file", file, ...gistArgs(fields.gist), "--repo", node.repository],
-    done: read => read.status === "closed",
+    done: read => read.status === "closed" ? WHOSE_CLOSE_UNKNOWN : false,
   });
 }

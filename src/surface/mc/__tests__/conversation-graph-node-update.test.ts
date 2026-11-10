@@ -80,18 +80,20 @@ describe("graph node update writers", () => {
     expect(calls).toHaveLength(0);
   });
 
-  test("readback finds a ruling by its operation and a close by the node's closed status, so a retry is not repeated", async () => {
+  test("readback finds a ruling by its exact operation, allows a close retry only while the node is open, and cannot credit a closed node to this close", async () => {
     let body = "## Rulings\n";
     let status = "open";
     const { ruling, close, calls } = rig(argv => argv[2] === "node" ? { code: 0, stdout: JSON.stringify({ status, body }), stderr: "" } : { code: 0, stdout: "{}", stderr: "" });
     await ruling.create(request({ node: "example/app#31", text: "D1" }, "op-r"));
+    expect(await ruling.readback(operation("op-r"))).toEqual({ found: false });
+    body += "- 2026-11-09 (jc): earlier\n  Filed from Ivy conversation conv-8, operation op-r2.\n";
     expect(await ruling.readback(operation("op-r"))).toEqual({ found: false });
     body += "- 2026-11-10 (jc): D1\n  Filed from Ivy conversation conv-9, operation op-r.";
     expect(await ruling.readback(operation("op-r"))).toEqual({ found: true, canonicalId: "example/app#31", url: "https://github.com/example/app/issues/31" });
     await close.create(request({ node: "example/app#31", resolution: "Done." }, "op-c"));
     expect(await close.readback(operation("op-c"))).toEqual({ found: false });
     status = "closed";
-    expect(await close.readback(operation("op-c"))).toMatchObject({ found: true, canonicalId: "example/app#31" });
+    expect(await close.readback(operation("op-c"))).toBeNull();
     expect(calls.filter(c => c.argv[2] === "node").every(c => c.argv.join(" ") === `${SOMA} graph node 31 --repo ${REPO} --json`)).toBe(true);
     expect(await ruling.readback(operation("never-ran"))).toBeNull();
   });
