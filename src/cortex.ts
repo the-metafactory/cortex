@@ -207,6 +207,7 @@ import { resolveVoice } from "./surface/mc/desk/voice";
 import { accessPaths } from "./surface/mc/desk/mail-similar";
 import { resolveDigest } from "./surface/mc/desk/mail-digest";
 import { resolveWaiting } from "./surface/mc/desk/mail-waiting";
+import { deskFenceNotifier } from "./surface/mc/notifications";
 import { notifyWithResult } from "./adapters/notify-result";
 import { createVigilDeliveryPorts, startVigil, type VigilHandle } from "./vigil";
 import { somaGoalWording } from "./vigil/result-render";
@@ -5085,6 +5086,10 @@ export async function startCortex(
         // time; the embed wires it onto the `/api/observability/*` proxy.
         sidebandUrl: config.mc.sideband,
       });
+      if (conversationStatus?.state === "ready" && mcHandle.wsRegistry !== null) {
+        try { await conversationStatus.host.attachFenceNotifier(deskFenceNotifier(mcHandle.wsRegistry)); }
+        catch (error) { console.error(`cortex: desk fence notifier was not attached: ${error instanceof Error ? error.message : String(error)}`); }
+      }
       mcDb = mcHandle.db;
       // #1044 — headless mode binds no port (`mcHandle.port === null`); log the
       // producer-only state honestly instead of an unreachable localhost URL.

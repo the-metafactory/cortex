@@ -3,6 +3,7 @@ import { objectRef } from "../fixtures";
 import { AT, support } from "./fixtures";
 import type { DispatchRequest, OwnerResult, OwnerSupport } from "./types";
 import type { WriterBinding } from "./writer-authority";
+import type { PrincipalNotifier } from "./triggers";
 
 export interface Deferred<T> { promise: Promise<T>; resolve(value: T): void; reject(error: Error): void }
 export function deferred<T>(): Deferred<T> {
@@ -21,8 +22,8 @@ export function ownerResult(request: Pick<DispatchRequest, "operationId" | "atte
   return { ...base, result: { kind, error: { code: "synthetic_unknown", message: "The owner cannot tell." }, ownerRequestId: request.ownerRequestId } };
 }
 
-export async function dispatchRig(waitMs = 30_000, maxOutstandingCalls?: number, clock: () => Date = () => new Date(AT)) {
-  const rig = await authorityRig({ now: clock });
+export async function dispatchRig(waitMs = 30_000, maxOutstandingCalls?: number, clock: () => Date = () => new Date(AT), notify?: PrincipalNotifier) {
+  const rig = await authorityRig({ now: clock, ...(notify ? { notify } : {}) });
   const declared: { support: OwnerSupport | undefined } = { support: { ...support, cancellation: "best-effort", operationLookup: "historical" } };
   const build = () => rig.host.lifecycleBridge(rig.registry, rig.bindings, () => declared.support, waitMs, maxOutstandingCalls);
   const holder = { bridge: build() };
