@@ -25,6 +25,12 @@ async function refresh(rig: Rig, view: DraftEditorView): Promise<DraftEditorView
   return await response.json();
 }
 
+async function expectBlockedConfirmation(rig: Rig, view: DraftEditorView): Promise<void> {
+  const response = await rig.call("POST", `${path(view)}/confirm`, { revision: view.view.draft.revision });
+  expect(await response.json()).toMatchObject({ confirmation: { kind: "blocked" } });
+  expect(rig.soma.calls).toEqual([]);
+}
+
 test("graph Make uses trusted guidance, substantive discussion and canonical relationships without filing", async () => {
   const rig = await open();
   const made = await make(rig);
@@ -118,9 +124,7 @@ test("unavailable models and revoked or local-only sources keep manual edits and
   rig.state.sourceAvailable = false;
   const deniedDetails = await rig.call("GET", `${path(local)}/details?pointer=/body`);
   expect(await deniedDetails.json()).toMatchObject({ details: { sources: [], hiddenSources: 1 } });
-  const denied = await rig.call("POST", `${path(local)}/confirm`, { revision: local.view.draft.revision });
-  expect(await denied.json()).toMatchObject({ confirmation: { kind: "blocked" } });
-  expect(rig.soma.calls).toEqual([]);
+  await expectBlockedConfirmation(rig, local);
 });
 
 test("invalid graph guidance is rejected while the schema remains available for manual editing", async () => {
@@ -171,9 +175,7 @@ test("manual ambiguous references keep authorized alternatives and failure canno
   rig.state.modelFails = true;
   const failed = await refresh(rig, changed);
   expect(failed.view.outdated).toContain("destination-changed");
-  const denied = await rig.call("POST", `${path(failed)}/confirm`, { revision: failed.view.draft.revision });
-  expect(await denied.json()).toMatchObject({ confirmation: { kind: "blocked" } });
-  expect(rig.soma.calls).toEqual([]);
+  await expectBlockedConfirmation(rig, failed);
 });
 
 test("explicit refresh revalidates fully owned destinations without needing a model", async () => {
