@@ -11,3 +11,8 @@ export const objectReferenceSchema = (adapterId: string, objectType: string): Sc
   canonicalId: { type: "string", minLength: 1 },
 }, ["adapterId", "connectionId", "objectType", "canonicalId"]);
 export const nullableObjectReferenceSchema = (adapterId: string, objectType: string): SchemaDocument => ({ ...objectReferenceSchema(adapterId, objectType), type: ["object", "null"] });
+export const adapterErrorSchema = (adapterId: string): SchemaDocument => objectSchema({
+  code: { type: "string", pattern: `^${adapterId}\\..+$` },
+  message: { type: "string", minLength: 1 },
+  issues: { type: "array", items: objectSchema({ path: { type: "string" }, code: { type: "string" }, message: { type: "string" } }, ["path", "code", "message"]) },
+}, ["code", "message"]);

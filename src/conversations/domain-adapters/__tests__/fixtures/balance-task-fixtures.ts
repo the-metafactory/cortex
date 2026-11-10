@@ -2,10 +2,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
-import { createModels } from "@earendil-works/pi-ai/models";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createRegistry, Harness } from "@earendil-works/pi-durable";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { findNode, type AppState, type OutlineNode } from "../../../../balance";
 import { leaf, outlineState, removeOutlineNode } from "./balance-shared";
 import type { HostContext, WriterLease } from "../../../authority";
@@ -18,10 +14,9 @@ import type { DeskOptions } from "../../../../surface/mc/desk/compose";
 import { loadMeta } from "../../../../surface/mc/desk/my-day";
 import type { DeskArea } from "../../../../surface/mc/desk/types";
 import { DomainAdapterRegistry } from "../../registry";
-import type { DispatchAuthority } from "../../operations/dispatch";
-import { OperationBridge } from "../../operations/dispatch";
-import { OperationJournalStore } from "../../operations/journal";
-import { writerBindingKey } from "../../operations/writer-authority";
+import type { OperationBridge } from "../../operations/dispatch";
+import type { OperationJournalStore } from "../../operations/journal";
+import { confirmationAuthority, lifecycleRig, openJournal } from "./lifecycle-rig";
 import { balanceTaskCreateBindings, balanceTaskCreateDeclaration, createBalanceTaskBinding, createBalanceTaskFacade, type BalanceTaskBinding, type BalanceTaskFacade, type BalanceTaskFields } from "../../balance/task-binding";
 
 export const BALANCE_TASK_CONNECTION = "connection-example";
@@ -29,14 +24,7 @@ export const BALANCE_TASK_STACK = "test";
 export const BALANCE_TASK_NOW = Date.parse("2026-11-01T12:00:00.000Z");
 export const CONVERSATION = "conversation-example";
 
-export const balanceTaskAuthority: Authority = {
-  principalRef: "principal-example",
-  basis: { kind: "confirmation", confirmationId: "confirmation-example", transport: "web" },
-  connectionRevision: "1",
-  policyRevision: "1",
-  decisionRef: "decision-example",
-  authorizedAt: new Date(BALANCE_TASK_NOW).toISOString(),
-};
+export const balanceTaskAuthority: Authority = confirmationAuthority(BALANCE_TASK_NOW);
 
 export const taskFields = (overrides: Partial<BalanceTaskFields> = {}): BalanceTaskFields => ({ area: "area-example", title: "Probe task", ...overrides });
 
@@ -96,8 +84,7 @@ export async function openBalanceTaskRig(): Promise<BalanceTaskRig> {
   const declaration = balanceTaskCreateDeclaration();
   const registered = registry.register(declaration, balanceTaskCreateBindings());
   if (!registered.ok) throw new Error(registered.error.code);
-  const engine = await Harness.open(await openNodeSqliteStorage(join(dir, "operations.sqlite")), { registry: createRegistry(), models: createModels() }, BACKGROUND_CONTEXT);
-  const journal = new OperationJournalStore(engine, registry, BACKGROUND_CONTEXT);
+  const { journal, closeEngine } = await openJournal(dir, registry);
   const baseWriter = balanceWriter("task", { db, desk: () => options, now: () => BALANCE_TASK_NOW });
   const build = (owner: Pick<OwnerWriter, "create" | "readback">): { binding: BalanceTaskBinding; facade: BalanceTaskFacade } => {
     const binding = createBalanceTaskBinding({ stack: BALANCE_TASK_STACK, connectionId: BALANCE_TASK_CONNECTION, db, desk: () => options, areas: () => areas, journal, now: () => BALANCE_TASK_NOW, owner });
@@ -105,27 +92,7 @@ export async function openBalanceTaskRig(): Promise<BalanceTaskRig> {
   };
   let current = build(baseWriter);
   const live = (): BalanceTaskBinding => current.binding;
-  const context = {} as HostContext;
-  const lease: WriterLease = { bindingKey: writerBindingKey(current.binding.writerBinding), epoch: 1, instanceId: "instance-example", supervisorReceiptRef: "receipt-example" };
-  const authority: DispatchAuthority = {
-    preflight: () => Promise.resolve({ kind: "allowed" }),
-    async dispatch(_context, request) {
-      const response = await live().connector.dispatch(request, new AbortController().signal);
-      const stored = await journal.read(request.operationId);
-      if (!stored) throw new Error("Balance task operation vanished before evidence.");
-      await journal.receive(request.operationId, stored.revision, response, new Date(BALANCE_TASK_NOW + 1_000).toISOString());
-      return { kind: "admitted" };
-    },
-    cancel: () => Promise.resolve({ kind: "denied", reason: { code: "authority_denied", message: "Cancellation is not declared." }, recovery: "reauthorize" }),
-  };
-  const bridge = new OperationBridge({
-    journal,
-    authority,
-    writers: { current: () => Promise.resolve(true), legacyAllowed: () => Promise.resolve(true) },
-    supportFor: () => live().support,
-    now: () => new Date(BALANCE_TASK_NOW),
-  });
-  const lifecycle = () => ({ activate: () => bridge.activate(live().writerBinding, lease), dispatch: (operationIdValue: string) => bridge.dispatch(context, operationIdValue, lease) });
+  const { context, lease, bridge, lifecycle } = lifecycleRig({ journal, live, now: BALANCE_TASK_NOW, label: "Balance task" });
   const stored = (): AppState => {
     const state = loadBalanceState(db);
     if (!state) throw new Error("Balance task fixture state is missing.");
@@ -167,7 +134,7 @@ export async function openBalanceTaskRig(): Promise<BalanceTaskRig> {
     },
     async close() {
       db.close();
-      await engine.close(BACKGROUND_CONTEXT);
+      await closeEngine();
       await rm(dir, { recursive: true, force: true });
     },
   };

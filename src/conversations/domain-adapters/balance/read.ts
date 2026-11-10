@@ -6,6 +6,7 @@ import type { ReadBinding } from "../reads/types";
 import { readPage as buildPage } from "../reads/page-primitives";
 import { schemaKey } from "../schema-validation";
 import { ObjectReferenceSchema, type AdapterBindings, type AdapterDeclaration, type ObjectReference, type SchemaRef } from "../types";
+import { adapterErrorSchema } from "../schema-primitives";
 import { BALANCE_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, objectSchema, ref, referenceSchema } from "./schema";
 
 const MAX_PAGE_ITEMS = 20;
@@ -46,7 +47,7 @@ const PROJECT_QUERY_INPUT_SCHEMA = objectSchema({ query: { type: "string", maxLe
 const PROJECT_QUERY_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(PROJECT_SCHEMA_REF) } } }, ["items"]);
 const PROJECT_READ_INPUT_SCHEMA = objectSchema({ ref: referenceSchema("project") }, ["ref"]);
 const PROJECT_READ_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(PROJECT_SCHEMA_REF) } } }, ["items"]);
-const ERROR_SCHEMA = objectSchema({ code: { type: "string", pattern: "^balance\\..+$" }, message: { type: "string", minLength: 1 }, issues: { type: "array", items: objectSchema({ path: { type: "string" }, code: { type: "string" }, message: { type: "string" } }, ["path", "code", "message"]) } }, ["code", "message"]);
+const ERROR_SCHEMA = adapterErrorSchema(ADAPTER_ID);
 
 export function balanceReadDeclaration(): AdapterDeclaration {
   return {
