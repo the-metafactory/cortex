@@ -7,12 +7,13 @@ export { submitMyDay } from "../lib/desk-my-day-action";
 import "./desk-my-day.css";
 
 export function MyDayLane({ day, onChanged }: { day: MyDayView; onChanged: () => void }) {
-  const { current, note, busy, change, retryable, retry } = useMyDay(day, onChanged);
+  const { current, note, busy, refreshing, change, retryable, retry, refresh } = useMyDay(day, onChanged);
   const [swap, setSwap] = useState<string | null>(null);
   const ids = current.items.map(i => i.task.id);
   return <section className="desk-myday" aria-label="My day">
     <header><h2>My day</h2><span>{current.phase === "proposed" ? "Your proposed day" : current.phase === "closed" ? "Day complete" : "Your intention today"}</span></header>
     {current.studioStatus === "unavailable" && <p role="status">Studio files are busy or unreadable. Showing the last saved outline; refresh when they are ready.</p>}
+    {current.observation && current.observation.status !== "fresh" && <p role="status">Balance reads are {current.observation.status}. Showing the last saved outline. <button type="button" className="desk-btn" disabled={busy || refreshing} onClick={() => void refresh()}>Refresh</button></p>}
     {current.phase === "closed" && <Wins day={current} />}
     {current.phase !== "closed" && <>
       {current.items.length === 0 && <p className="myday-empty">A little space. Add a task to your outline to shape your day.</p>}
