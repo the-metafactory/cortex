@@ -3,7 +3,7 @@ import { CORTEX, CORTEX_MAP, CORTEX_NODE, CRISIS, CRISIS_NODE, UNTICKED, trackGr
 import type { GraphConversationLink } from "../../domain-adapters/work-graph/read";
 import { graphWorkQuery, graphWorkReaders, type GraphWorkRepository } from "../../../surface/mc/desk/graph-work-reader";
 import type { ToolSession } from "../capabilities";
-import { workContextTools, type WorkObject, type WorkOwner } from "../work-context";
+import { mayRelease, workContextTools, type WorkObject, type WorkOwner } from "../work-context";
 
 const rigs = trackGraphRigs();
 const open = rigs.open;
@@ -24,7 +24,7 @@ async function call(rig: GraphReadRig, name: "work_search" | "work_read", input:
   const query = graphWorkQuery({ connectionId: rig.connectionId, repositories: () => repositories, links: () => links, runner: rig.runner, context: rig.rig.context, sink: rig.rig.sink });
   const owner: WorkOwner = {
     readers: () => ({}),
-    ...(enabled ? { queries: () => graphWorkReaders(query) } : {}),
+    ...(enabled ? { queries: session => graphWorkReaders(query, object => mayRelease(session, object.policy)) } : {}),
     now: () => Date.now(),
     remember: async (_session, objects) => { remembered.push(...objects); return true; },
   };
@@ -93,6 +93,22 @@ describe("the work-graph adapter behind work_search and work_read", () => {
     expect(search.json.results).toEqual([]);
     const allowed = await call(rig, "work_read", { kind: "graph-node", id: CORTEX_NODE }, { repositories: local, sessionPolicy: "local" });
     expect(allowed.json.object.id).toBe(CORTEX_NODE);
+  });
+
+  test("search reaches a match behind more than twenty links", async () => {
+    const rig = await open();
+    const filler: GraphConversationLink[] = Array.from({ length: 24 }, (_, at) => ({ owner: "graph-node", id: `${CORTEX}#${9000 + at}` }));
+    const { json } = await call(rig, "work_search", { query: "destinations", kinds: ["graph-node"], limit: 5, offset: 0 }, { links: [...filler, { owner: "graph-node", id: CORTEX_NODE }] });
+    expect(json.results.map((result: { id: string }) => result.id)).toEqual([CORTEX_NODE]);
+  });
+
+  test("a protected match neither counts toward nor paginates a cloud search", async () => {
+    const rig = await open();
+    const mixed: GraphWorkRepository[] = [{ id: CORTEX, policy: "local" }, { id: CRISIS, policy: "cloud" }];
+    const links: GraphConversationLink[] = [{ owner: "graph-node", id: CORTEX_NODE }, { owner: "graph-node", id: `${CORTEX}#3350` }, { owner: "graph-node", id: CRISIS_NODE }];
+    const { json } = await call(rig, "work_search", { query: "", kinds: ["graph-node"], limit: 1, offset: 0 }, { repositories: mixed, links, sessionPolicy: "cloud" });
+    expect(json.results.map((result: { id: string }) => result.id)).toEqual([CRISIS_NODE]);
+    expect(json.next).toBeNull();
   });
 
   test("a failing soma reads as unavailable, not as no match or removal", async () => {

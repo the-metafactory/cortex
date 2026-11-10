@@ -32,7 +32,7 @@ export interface GraphWorkRunner {
 }
 
 export const GRAPH_SEARCH_COVERAGE_LIMIT = "Searches only the maps and nodes linked to this conversation. No list verb is bound yet, so other nodes in a ticked repository are read only by exact reference.";
-export const MAX_LINKED_READS = 20;
+export const LINKED_READ_CONCURRENCY = 5;
 const NODE_READ = "work-graph.node.read";
 const NODE_READ_BINDING = workGraphReadBindings.find(binding => binding.capabilityId === NODE_READ);
 const reference = (connectionId: string, objectType: "repository" | "node", canonicalId: string): ObjectReference => ({ adapterId: "work-graph", connectionId, objectType, canonicalId });
@@ -57,6 +57,7 @@ export function graphWorkQuery(config: GraphWorkRunner): GraphWorkQuery {
   };
 }
 
+export type Releasable = (object: WorkObject) => boolean;
 const policyOf = (query: GraphWorkQuery, repository: string): Policy | null => {
   const wanted = canonicalGraphRef(repository);
   return query.repositories().find(candidate => canonicalGraphRef(candidate.id) === wanted)?.policy ?? null;
@@ -95,20 +96,26 @@ const matches = (object: WorkObject, needle: string): boolean => {
   return wanted === "" || [object.title, object.id, object.status, object.summary].some(field => field.toLowerCase().includes(wanted));
 };
 
-const searchLinked = async (query: GraphWorkQuery, needle: string, limit: number, offset: number): Promise<WorkPage> => {
-  const ids = linkedIds(query).slice(0, MAX_LINKED_READS);
-  const found: WorkObject[] = [];
+const searchLinked = async (query: GraphWorkQuery, releasable: Releasable, needle: string, limit: number, offset: number): Promise<WorkPage> => {
+  const ids = linkedIds(query);
+  const hits: WorkObject[] = [];
+  const wanted = offset + limit + 1;
+  let answered = 0;
   let missing = 0;
   let denied = 0;
-  for (const id of ids) {
-    const outcome = await readNode(query, id);
-    if (outcome.state === "available") found.push(outcome.object);
-    else if (outcome.state === "denied") denied++;
-    else missing++;
+  for (let start = 0; start < ids.length && hits.length < wanted; start += LINKED_READ_CONCURRENCY) {
+    const outcomes = await Promise.all(ids.slice(start, start + LINKED_READ_CONCURRENCY).map(id => readNode(query, id)));
+    for (const outcome of outcomes) {
+      if (outcome.state === "denied") denied++;
+      else if (outcome.state === "unavailable") missing++;
+      else {
+        answered++;
+        if (releasable(outcome.object) && matches(outcome.object, needle)) hits.push(outcome.object);
+      }
+    }
   }
-  const hits = found.filter(object => matches(object, needle));
   const items = hits.slice(offset, offset + limit);
-  const unanswered = ids.length > 0 && found.length === 0 && missing > 0;
+  const unanswered = ids.length > 0 && answered === 0 && missing > 0;
   const restricted = denied > 0;
   return {
     items,
@@ -121,10 +128,10 @@ const searchLinked = async (query: GraphWorkQuery, needle: string, limit: number
   };
 };
 
-export function graphWorkReaders(query: GraphWorkQuery): { "graph-node": WorkReader } {
+export function graphWorkReaders(query: GraphWorkQuery, releasable: Releasable = () => true): { "graph-node": WorkReader } {
   const read = async (id: string): Promise<WorkRead> => {
     const outcome = await readNode(query, id);
     return outcome.state === "available" ? outcome : { state: "unavailable", reason: outcome.state === "denied" ? "unauthorized" : "unavailable" };
   };
-  return { "graph-node": { search: (needle, limit, offset) => searchLinked(query, needle, limit, offset), read } };
+  return { "graph-node": { search: (needle, limit, offset) => searchLinked(query, releasable, needle, limit, offset), read } };
 }

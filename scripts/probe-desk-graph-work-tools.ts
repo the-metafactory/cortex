@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { CORTEX, CORTEX_MAP, CORTEX_NODE, UNTICKED, openGraphReadRig } from "../src/conversations/domain-adapters/__tests__/fixtures/graph-read-fixtures";
 import type { GraphConversationLink } from "../src/conversations/domain-adapters/work-graph/read";
 import { graphWorkQuery, graphWorkReaders, type GraphWorkRepository } from "../src/surface/mc/desk/graph-work-reader";
-import { workContextTools, type WorkOwner } from "../src/conversations/tools/work-context";
+import { mayRelease, workContextTools, type WorkOwner } from "../src/conversations/tools/work-context";
 import { withTempHome } from "./probe-temp-home";
 
 await withTempHome(async () => {
@@ -11,7 +11,7 @@ await withTempHome(async () => {
     const remembered: string[] = [];
     const run = async (name: "work_search" | "work_read", input: object, links: GraphConversationLink[], repositories: GraphWorkRepository[], policy: "local" | "cloud"): Promise<Record<string, any>> => {
       const query = graphWorkQuery({ connectionId: rig.connectionId, repositories: () => repositories, links: () => links, runner: rig.runner, context: rig.rig.context, sink: rig.rig.sink });
-      const owner: WorkOwner = { readers: () => ({}), queries: () => graphWorkReaders(query), now: () => Date.now(), remember: async (_session, objects) => { remembered.push(...objects.map(object => `${object.kind}:${object.id}`)); return true; } };
+      const owner: WorkOwner = { readers: () => ({}), queries: session => graphWorkReaders(query, object => mayRelease(session, object.policy)), now: () => Date.now(), remember: async (_session, objects) => { remembered.push(...objects.map(object => `${object.kind}:${object.id}`)); return true; } };
       const tool = workContextTools(owner).find(candidate => candidate.name === name);
       if (!tool) throw new Error(`missing tool ${name}`);
       const session = { principal: "principal-example", conversationId: rig.rig.approval.snapshot.provenance.conversationId, transport: "web" as const, route: "local" as const, policy, scope: [] };
