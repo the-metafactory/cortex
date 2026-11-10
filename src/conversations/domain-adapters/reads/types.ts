@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ObservationPolicySchema } from "./observation-policy";
 import { ObjectReferenceSchema, SchemaRefSchema } from "../types";
 
 export const READ_BINDING_VERSION = "1.0.0";
@@ -17,6 +18,7 @@ export const ReadBindingSchema = z.object({
   destinationType: identifier.optional(),
   display: z.object({ title: pointer, summary: pointer.optional(), status: pointer.optional(), due: pointer.optional(), area: pointer.optional(), kind: pointer.optional(), parent: pointer.optional(), url: pointer.optional() }).strict(),
   attention: z.object({ pointer }).strict().optional(),
+  observation: ObservationPolicySchema.optional(),
   query: z.object({
     objectsPointer: pointer,
     aggregatePointers: z.array(pointer).optional(),
