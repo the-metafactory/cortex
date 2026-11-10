@@ -144,6 +144,7 @@ export default tseslint.config(
       "src/surface/mc/worker/",
       "src/services/network-registry/",
       "src/taps/gh-webhook/",
+      "src/conversations/domain-adapters/__tests__/fixtures/conformance-packages/",
       "src/surface/mc/dashboard-v2/",
       "**/*.bak.ts",
       // TC-4e — Node-subprocess mTLS test server (runs under Node, not Bun;

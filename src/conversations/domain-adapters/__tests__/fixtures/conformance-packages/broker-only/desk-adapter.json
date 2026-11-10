@@ -1,0 +1,512 @@
+{
+  "format": "desk-adapter-package/1",
+  "packageId": "synthetic.greenhouse",
+  "packageVersion": "1.0.0",
+  "deskSdkRange": "^1.0.0",
+  "domainContractVersion": "1.0.0",
+  "backend": {
+    "entry": "backend.mjs",
+    "sha256": "bef0182f83cd26409189fde85a652240bc23d7ea5c24deae34ec3b6840b0dc4c"
+  },
+  "declaration": {
+    "adapterId": "greenhouse",
+    "label": "Greenhouse",
+    "contractRange": "^1.0.0",
+    "schemas": [
+      {
+        "schemaId": "greenhouse.empty",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        }
+      },
+      {
+        "schemaId": "greenhouse.error",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "greenhouse.bench",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "greenhouse.bench.list.output",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:greenhouse.bench:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "greenhouse.seedling",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "place"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Name"
+            },
+            "place": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "type": "string",
+                  "const": "greenhouse"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "bench"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "note": {
+              "type": "string",
+              "title": "Note"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "greenhouse.seedling.list.output",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:greenhouse.seedling:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "greenhouse.find.input",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "greenhouse.get.input",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "canonicalId"
+          ],
+          "properties": {
+            "canonicalId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "greenhouse.created",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ref"
+          ],
+          "properties": {
+            "ref": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "type": "string",
+                  "const": "greenhouse"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "seedling"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "objectTypes": [
+      {
+        "objectType": "bench",
+        "label": "Bench",
+        "schemaRef": {
+          "schemaId": "greenhouse.bench",
+          "version": "1.0.0"
+        },
+        "relationships": []
+      },
+      {
+        "objectType": "seedling",
+        "label": "Seedling",
+        "schemaRef": {
+          "schemaId": "greenhouse.seedling",
+          "version": "1.0.0"
+        },
+        "relationships": [
+          {
+            "fieldPath": "/place",
+            "cardinality": "one",
+            "targetAdapterId": "greenhouse",
+            "targetObjectType": "bench"
+          }
+        ]
+      }
+    ],
+    "capabilities": [
+      {
+        "capabilityId": "greenhouse.bench.list",
+        "label": "List benchs",
+        "kind": "query",
+        "objectTypes": [
+          "bench"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "greenhouse.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "greenhouse.bench.list.output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "greenhouse.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "greenhouse.seedling.search",
+        "label": "Find seedlings",
+        "kind": "query",
+        "objectTypes": [
+          "seedling"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "greenhouse.find.input",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "greenhouse.seedling.list.output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "greenhouse.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "greenhouse.seedling.watch",
+        "label": "Watch seedlings",
+        "kind": "observation",
+        "objectTypes": [
+          "seedling"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "greenhouse.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "greenhouse.seedling.list.output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "greenhouse.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "greenhouse.seedling.sow",
+        "label": "sow a seedling",
+        "kind": "action",
+        "objectTypes": [
+          "seedling"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "greenhouse.seedling",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "greenhouse.created",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "greenhouse.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "greenhouse.seedling.get",
+        "label": "Read one seedling",
+        "kind": "query",
+        "objectTypes": [
+          "seedling"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "greenhouse.get.input",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "greenhouse.seedling",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "greenhouse.error",
+          "version": "1.0.0"
+        }
+      }
+    ]
+  },
+  "draftingBindings": [
+    {
+      "bindingVersion": "1.0.0",
+      "adapterId": "greenhouse",
+      "capabilityId": "greenhouse.seedling.sow",
+      "inputSchemaRef": {
+        "schemaId": "greenhouse.seedling",
+        "version": "1.0.0"
+      },
+      "guidance": {
+        "guidanceId": "greenhouse.guidance",
+        "version": "1.0.0",
+        "instructions": "Draft a seedling from the conversation."
+      },
+      "fieldHints": [
+        {
+          "pointer": "/name",
+          "role": "title"
+        },
+        {
+          "pointer": "/place",
+          "role": "destination",
+          "resolveWith": "greenhouse.bench.list"
+        },
+        {
+          "pointer": "/note",
+          "role": "detail",
+          "widget": "long"
+        }
+      ]
+    }
+  ],
+  "readBindings": [
+    {
+      "version": "1.0.0",
+      "adapterId": "greenhouse",
+      "capabilityId": "greenhouse.bench.list",
+      "mode": "destinations",
+      "objectType": "bench",
+      "inputSchemaRef": {
+        "schemaId": "greenhouse.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "greenhouse.bench.list.output",
+        "version": "1.0.0"
+      },
+      "display": {
+        "title": "/name"
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "greenhouse",
+      "capabilityId": "greenhouse.seedling.search",
+      "mode": "query",
+      "objectType": "seedling",
+      "inputSchemaRef": {
+        "schemaId": "greenhouse.find.input",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "greenhouse.seedling.list.output",
+        "version": "1.0.0"
+      },
+      "textPointer": "/text",
+      "destinationType": "bench",
+      "display": {
+        "title": "/name"
+      },
+      "query": {
+        "objectsPointer": "/items",
+        "ordering": "provider",
+        "stableSnapshot": true,
+        "limits": {
+          "items": 2
+        }
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "greenhouse",
+      "capabilityId": "greenhouse.seedling.watch",
+      "mode": "poll",
+      "objectType": "seedling",
+      "inputSchemaRef": {
+        "schemaId": "greenhouse.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "greenhouse.seedling.list.output",
+        "version": "1.0.0"
+      },
+      "destinationType": "bench",
+      "display": {
+        "title": "/name"
+      },
+      "observation": {
+        "modes": [
+          "poll"
+        ],
+        "objectsPointer": "/items",
+        "resumable": false
+      }
+    }
+  ],
+  "setup": {
+    "version": "1.0.0",
+    "schemas": [
+      {
+        "schemaId": "greenhouse.setup.configuration",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "workspace": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "greenhouse.setup.account",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "account": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "configurationSchemaRef": {
+      "schemaId": "greenhouse.setup.configuration",
+      "version": "1.0.0"
+    },
+    "accountScopeSchemaRef": {
+      "schemaId": "greenhouse.setup.account",
+      "version": "1.0.0"
+    },
+    "authMethods": [
+      {
+        "kind": "broker",
+        "brokerId": "synthetic-broker"
+      }
+    ]
+  }
+}
