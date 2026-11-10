@@ -33,6 +33,35 @@ const input = (inputId: string, text: string, mode: "queue" | "steer" = "queue")
 const create = (host: ConversationHost, policy: Policy = "cloud", links: { owner: "studio-thread"; id: string }[] = []) => host.create({ title: "Synthetic", links, origin: { kind: "web" }, policy }, "local-principal@loopback");
 
 describe("conversation host", () => {
+  test("a response is visible while the turn runs and clears after its answer is saved", async () => {
+    const hold = Promise.withResolvers<undefined>();
+    const partial = Promise.withResolvers<undefined>();
+    const cleared = Promise.withResolvers<undefined>();
+    const host = await open(await scratch(), { turns: async request => {
+      await request.text?.("Hello ");
+      await request.text?.("there");
+      await hold.promise;
+      return { text: "Hello there", session: request.session, resumed: false };
+    } });
+    const conversation = await create(host);
+    const seen: (string | null)[] = [];
+    const stop = await host.watchResponse(conversation.id, text => {
+      seen.push(text);
+      if (text === "Hello there") partial.resolve(undefined);
+      if (text === null && seen.includes("Hello there")) cleared.resolve(undefined);
+    });
+    try {
+      await host.submit(conversation.id, input("stream-1", "hello"));
+      await partial.promise;
+      expect((await host.input(conversation.id, "stream-1")).status).not.toBe("done");
+      hold.resolve(undefined);
+      await host.waitForIdle(conversation.id);
+      await cleared.promise;
+      expect((await host.input(conversation.id, "stream-1")).answer).toBe("Hello there");
+      expect(seen.at(-1)).toBeNull();
+    } finally { hold.resolve(undefined); await stop(); }
+  });
+
   test("an input is acknowledged after commit, answered, and an equal retry returns the original", async () => {
     const { calls, turns } = recorder();
     const host = await open(await scratch(), { turns });

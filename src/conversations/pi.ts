@@ -1,3 +1,4 @@
+import { createTextBatcher } from "./text-batcher";
 import { existsSync } from "node:fs";
 import { mkdir, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -105,6 +106,8 @@ async function sessionExists(dir: string, session: string): Promise<boolean> {
 
 const Content = z.array(z.object({ type: z.string(), text: z.string().optional() }).loose());
 const PiEvent = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("message_start"), message: z.object({ role: z.string() }).loose() }).loose(),
+  z.object({ type: z.literal("message_update"), assistantMessageEvent: z.object({ type: z.string(), delta: z.string().optional() }).loose() }).loose(),
   z.object({ type: z.literal("tool_execution_start"), toolCallId: z.string(), toolName: z.string(), args: z.unknown() }).loose(),
   z.object({ type: z.literal("tool_execution_end"), toolCallId: z.string(), toolName: z.string(), result: z.object({ content: Content.optional() }).loose().nullish(), isError: z.boolean().optional() }).loose(),
   z.object({ type: z.literal("message_end"), message: z.object({ role: z.string(), content: z.union([z.string(), Content]).optional(), stopReason: z.string().optional(), errorMessage: z.string().optional() }).loose() }).loose(),
@@ -156,21 +159,34 @@ type Answer = Extract<PiEvent, { type: "message_end" }>["message"];
 async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: Set<string>, request: TurnRequest, halt: (reason: string) => void, bridged = new Set<string>()): Promise<Answer | null> {
   const calls = new Map<string, unknown>();
   let answer: Answer | null = null;
-  for await (const line of lines(child.stdout)) {
-    let raw: unknown;
-    try { raw = JSON.parse(line); } catch { continue; }
-    const event = PiEvent.safeParse(raw);
-    if (!event.success) continue;
-    const e = event.data;
-    if (e.type === "tool_execution_start") { calls.set(e.toolCallId, e.args); continue; }
-    if (e.type === "message_end") { if (e.message.role === "assistant") answer = e.message; continue; }
-    const result = capped(textOf(e.result?.content));
-    let outcome: ToolActivity["outcome"] = e.isError === true ? "error" : "done";
-    if (!allowed.has(e.toolName)) outcome = e.isError === true && result.trim() === `Tool ${e.toolName} not found` ? "refused" : "stopped";
-    if (!bridged.has(e.toolCallId)) await request.activity(activityOf({ callId: e.toolCallId, name: e.toolName, input: calls.get(e.toolCallId) ?? null }, { outcome, text: result }));
-    if (outcome === "stopped") { halt(`pi reported ${e.toolName}, which is not on the read-only tool allowlist, as run; the turn was stopped`); return null; }
-  }
-  return answer;
+  const text = createTextBatcher(request.text, halt);
+  try {
+    for await (const line of lines(child.stdout)) {
+      let raw: unknown;
+      try { raw = JSON.parse(line); } catch { continue; }
+      const event = PiEvent.safeParse(raw);
+      if (!event.success) continue;
+      const e = event.data;
+      if (e.type === "message_start") {
+        if (e.message.role === "assistant") await text.reset();
+        continue;
+      }
+      if (e.type === "message_update") {
+        if (e.assistantMessageEvent.type === "text_delta" && e.assistantMessageEvent.delta) text.push(e.assistantMessageEvent.delta);
+        continue;
+      }
+      await text.flush();
+      if (e.type === "tool_execution_start") { calls.set(e.toolCallId, e.args); continue; }
+      if (e.type === "message_end") { if (e.message.role === "assistant") answer = e.message; continue; }
+      const result = capped(textOf(e.result?.content));
+      let outcome: ToolActivity["outcome"] = e.isError === true ? "error" : "done";
+      if (!allowed.has(e.toolName)) outcome = e.isError === true && result.trim() === `Tool ${e.toolName} not found` ? "refused" : "stopped";
+      if (!bridged.has(e.toolCallId)) await request.activity(activityOf({ callId: e.toolCallId, name: e.toolName, input: calls.get(e.toolCallId) ?? null }, { outcome, text: result }));
+      if (outcome === "stopped") { halt(`pi reported ${e.toolName}, which is not on the read-only tool allowlist, as run; the turn was stopped`); return null; }
+    }
+    await text.flush();
+    return answer;
+  } finally { await text.dispose(); }
 }
 
 export function piTurns(settings: PiSettings): TurnCall {
