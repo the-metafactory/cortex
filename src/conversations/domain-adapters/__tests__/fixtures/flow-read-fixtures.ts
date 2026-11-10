@@ -21,7 +21,7 @@ export const FLOW_NAME = "F_SAVED_EXAMPLE";
 export const ARC_FLOW_NAME = "F_ARC_EXAMPLE";
 export const flowYaml = (name: string): string => `name: ${name}\ninput:\n  text: example\nactions:\n  - A_EXAMPLE\n`;
 
-export async function openFlowReadRig(options: { conversationPolicy?: "local" | "cloud"; configured?: boolean; binary?: string } = {}) {
+export async function openFlowReadRig(options: { conversationPolicy?: "local" | "cloud"; configured?: boolean; binary?: string; stubPulse?: string } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "desk-flow-read-"));
   const home = join(dir, "home");
   const bin = join(dir, "bin");
@@ -35,8 +35,13 @@ export async function openFlowReadRig(options: { conversationPolicy?: "local" | 
   const packages = JSON.stringify({ packages: [{ name: "example-flow-package", version: "1.0.0", type: "tool", status: "installed", installPath: pkg }] });
   await writeFile(arc, `#!/bin/sh\nprintf '%s\\n' '${packages}'\n`);
   await chmod(arc, 0o700);
+  const binary = options.binary ?? (options.stubPulse === undefined ? pulseBinary : join(bin, "pulse"));
+  if (options.stubPulse !== undefined) {
+    await writeFile(binary, `#!/bin/sh\n${options.stubPulse}`);
+    await chmod(binary, 0o700);
+  }
   const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, "config"), XDG_DATA_HOME: join(home, "data"), XDG_STATE_HOME: join(home, "state"), PATH: bin };
-  const source = { connectionId: "connection-example", stack: "stack-example", ...(options.configured === false ? {} : { flowsDir }), binary: options.binary ?? pulseBinary, env };
+  const source = { connectionId: "connection-example", stack: "stack-example", ...(options.configured === false ? {} : { flowsDir }), binary, env };
   const adapter = createFlowReadAdapter(source);
   const registry = new DomainAdapterRegistry();
   const registered = registry.register(adapter.declaration, adapter.bindings);
@@ -90,6 +95,14 @@ export async function openFlowReadRig(options: { conversationPolicy?: "local" | 
   };
 }
 export type FlowReadRig = Awaited<ReturnType<typeof openFlowReadRig>>;
+
+export function openWithStubPulse(script: string) {
+  return openFlowReadRig({ stubPulse: script });
+}
+
+export function directQuery(rig: FlowReadRig, capabilityId: string, input: Json, limit: number) {
+  return rig.adapter.query({ readVersion: "1.0.0", queryId: "direct-query", capabilityId, input, destinations: [rig.adapter.destination], limit });
+}
 
 export function assertNoFlowLeak(step: Awaited<ReturnType<FlowReadRig["query"]>>) {
   assert.equal(step.released, undefined);

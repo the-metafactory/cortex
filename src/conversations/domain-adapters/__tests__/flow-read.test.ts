@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createFlowReadAdapter } from "../flow/read";
 import { releasedObjects } from "./fixtures/balance-read-fixtures";
-import { assertCloudReaderDenied, assertDeletedFlowUnavailable, assertNoFlowLeak, assertSavedFlowMatches, FLOW_NAME, openFlowReadRig, type FlowReadRig } from "./fixtures/flow-read-fixtures";
+import { assertCloudReaderDenied, assertDeletedFlowUnavailable, assertNoFlowLeak, assertSavedFlowMatches, directQuery, FLOW_NAME, openFlowReadRig, openWithStubPulse, type FlowReadRig } from "./fixtures/flow-read-fixtures";
 
 const opened: FlowReadRig[] = [];
 afterEach(async () => { await Promise.all(opened.splice(0).map(rig => rig.close())); });
@@ -80,16 +80,13 @@ describe("Flow registration and unavailable configuration", () => {
     }
   });
   test("a saved listing followed by an arc fallback or mismatched show never releases an object", async () => {
-    const rig = await open();
     const listed = { name: FLOW_NAME, source: "saved", sha256: "a".repeat(64), provenance: null, path: "/example/flow.yaml", package: null };
     for (const changed of [{ source: "arc" }, { name: "F_ANOTHER_EXAMPLE" }, { sha256: "b".repeat(64) }, { yaml: { private: "F_PRIVATE" } }]) {
-      const binary = join(rig.dir, "changed-pulse");
       const { package: _package, ...metadata } = listed;
       const shown = { ...metadata, yaml: "name: F_SAVED_EXAMPLE", ...changed };
-      await writeFile(binary, `#!/bin/sh\nif [ "$2" = "list" ]; then\nprintf '%s\\n' '${JSON.stringify({ status: "ok", flows: [listed] })}'\nelse\nprintf '%s\\n' '${JSON.stringify(shown)}'\nfi\n`);
-      await chmod(binary, 0o700);
-      const broken = await open({ binary });
-      await expect(broken.adapter.query({ readVersion: "1.0.0", queryId: "invalid-show", capabilityId: "flow.saved.read", input: { ref: { adapterId: "flow", connectionId: broken.source.connectionId, objectType: "saved", canonicalId: FLOW_NAME } }, destinations: [broken.adapter.destination], limit: 1 })).rejects.toThrow(/^flow.source_unavailable$/);
+      const broken = await openWithStubPulse(`if [ "$2" = "list" ]; then\nprintf '%s\\n' '${JSON.stringify({ status: "ok", flows: [listed] })}'\nelse\nprintf '%s\\n' '${JSON.stringify(shown)}'\nfi\n`);
+      opened.push(broken);
+      await expect(directQuery(broken, "flow.saved.read", { ref: { adapterId: "flow", connectionId: broken.source.connectionId, objectType: "saved", canonicalId: FLOW_NAME } }, 1)).rejects.toThrow(/^flow.source_unavailable$/);
       const result = await broken.read();
       expect(result.result.status).toBe("unavailable");
       expect(result.released).toBeUndefined();
@@ -97,13 +94,10 @@ describe("Flow registration and unavailable configuration", () => {
     }
   });
   test("successful exits with non-JSON or malformed JSON are unavailable", async () => {
-    const rig = await open();
     for (const output of ["not JSON", '{"status":"ok","flows":[{"source":"saved","name":"F_PRIVATE"}]}']) {
-      const binary = join(rig.dir, "unreadable-pulse");
-      await writeFile(binary, `#!/bin/sh\nprintf '%s\\n' '${output}'\n`);
-      await chmod(binary, 0o700);
-      const broken = await open({ binary });
-      await expect(broken.adapter.query({ readVersion: "1.0.0", queryId: "invalid-list", capabilityId: "flow.saved.query", input: { stack: broken.adapter.destination }, destinations: [broken.adapter.destination], limit: 20 })).rejects.toThrow(/^flow.source_unavailable$/);
+      const broken = await openWithStubPulse(`printf '%s\\n' '${output}'\n`);
+      opened.push(broken);
+      await expect(directQuery(broken, "flow.saved.query", { stack: broken.adapter.destination }, 20)).rejects.toThrow(/^flow.source_unavailable$/);
       const result = await broken.query();
       expect(result.result.status).toBe("unavailable");
       expect(result.released).toBeUndefined();
@@ -113,7 +107,7 @@ describe("Flow registration and unavailable configuration", () => {
   test("invalid input and handler context expose only the uniform unavailable error", async () => {
     const rig = await open();
     for (const capabilityId of ["flow.saved.query", "flow.saved.read"]) {
-      await expect(rig.adapter.query({ readVersion: "1.0.0", queryId: "invalid-input", capabilityId, input: { private: "F_PRIVATE" }, destinations: [rig.adapter.destination], limit: 20 })).rejects.toThrow(/^flow.source_unavailable$/);
+      await expect(directQuery(rig, capabilityId, { private: "F_PRIVATE" }, 20)).rejects.toThrow(/^flow.source_unavailable$/);
       expect(() => rig.adapter.bindings.handlers[capabilityId]?.({}, { private: "F_PRIVATE" })).toThrow(/^flow.source_unavailable$/);
     }
   });
