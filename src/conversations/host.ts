@@ -16,6 +16,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type Conversation, type EntryId, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { z } from "zod";
+import { ConnectionSetupService, type ConnectionSetupDeps } from "./connection-setup";
 import { DeskCredentialBroker, type DeskCredentialBrokerDeps } from "../common/config/desk-credential-broker";
 import { DraftService, type DraftServiceDeps } from "./domain-adapters/drafting";
 import { OperationJournalStore } from "./domain-adapters/operations/journal";
@@ -218,6 +219,8 @@ export class ConversationHost {
   drafts(deps: DraftServiceDeps): DraftService { return new DraftService(this.engine, deps, this.context); }
 
   credentialBroker(deps: DeskCredentialBrokerDeps): DeskCredentialBroker { return new DeskCredentialBroker(this.engine, deps, this.context); }
+
+  connectionSetup(broker: DeskCredentialBroker, authority: ConstructorParameters<typeof ConnectionSetupService>[2], deps: ConnectionSetupDeps): ConnectionSetupService { return new ConnectionSetupService(this.engine, broker, authority, deps, this.context); }
 
   readQueries(registry: DomainAdapterRegistry, bindings: AuthorityBindings, clock?: QueryClock): QueryRunner {
     const authority = this.lifecycleAuthority(registry, bindings);
