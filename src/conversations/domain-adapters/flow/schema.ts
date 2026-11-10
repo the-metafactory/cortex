@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { Json } from "../operations/types";
 import { schemaKey } from "../schema-validation";
 import type { AdapterDeclaration, SchemaRef } from "../types";
@@ -7,9 +8,11 @@ export const FLOW_ADAPTER_ID = "flow";
 export const flowSchemaRef = (schemaId: string): SchemaRef => ({ schemaId, version: "1.0.0" });
 const object = (properties: Record<string, Json>, required = Object.keys(properties)): Record<string, Json> => ({ $schema: "https://json-schema.org/draft/2020-12/schema", type: "object", additionalProperties: false, properties, required });
 const string = { type: "string" };
+export const flowName = z.string().regex(/^F_[A-Z0-9_]{1,64}$/);
+const provenance = z.object({ origin: z.enum(["conversation", "cli"]), conversation: z.string().nullable(), exchange: z.string().nullable(), request_id: z.string(), saved_at: z.iso.datetime(), saved_by: z.string() }).strict().nullable();
+export const flowSavedRecord = z.object({ name: flowName, source: z.literal("saved"), sha256: z.string().regex(/^[0-9a-f]{64}$/), provenance, path: z.string() });
 export const flowReferenceSchema = (objectType: "stack" | "saved"): Record<string, Json> => object({ adapterId: { const: FLOW_ADAPTER_ID, type: "string" }, connectionId: { type: "string", minLength: 1 }, objectType: { type: "string", const: objectType }, canonicalId: { type: "string", minLength: 1 } });
-const provenance = object({ origin: { type: "string", enum: ["conversation", "cli"] }, conversation: { type: ["string", "null"] }, exchange: { type: ["string", "null"] }, request_id: string, saved_at: string, saved_by: string });
-const saved = object({ name: { type: "string", pattern: "^F_[A-Z0-9_]{1,64}$" }, source: { type: "string", const: "saved" }, sha256: { type: "string", pattern: "^[0-9a-f]{64}$" }, provenance: { anyOf: [provenance, { type: "null" }] }, path: string, package: { type: "null" }, yaml: string }, ["name", "source", "sha256", "provenance", "path"]);
+const saved = JSON.parse(JSON.stringify(z.toJSONSchema(flowSavedRecord.extend({ package: z.null().optional(), yaml: z.string().optional() }).strict()))) as Record<string, Json>;
 const output = object({ items: { type: "array", items: { $ref: schemaKey(flowSchemaRef("flow.saved")) } } });
 const queryInput = object({ stack: flowReferenceSchema("stack"), limit: { type: "integer", minimum: 1, maximum: 20 } }, ["stack"]);
 const readInput = object({ ref: flowReferenceSchema("saved") });
