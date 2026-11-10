@@ -8,7 +8,7 @@ import { operationUuid, studioRequestId } from "../../../surface/mc/desk/convers
 import { AT, attemptFixture, eventFixture, support, approvalFixture, registryFixture } from "../operations/fixtures";
 import { importLegacyOperation, previewLegacyOperation, projectLegacyOperation, readOperationEvidence, UpgradeRequired } from "../operations/legacy";
 import { OperationJournalStore } from "../operations/journal";
-import { legacyContext, legacyFixture } from "../operations/legacy-fixtures";
+import { graphNodeLegacyContext, graphNodeLegacyFixture, legacyContext, legacyFixture } from "../operations/legacy-fixtures";
 import { canonicalWire } from "../operations/validation";
 
 import { expectLegacyReviewRequired, journalStoreTestFixture } from "./journal-store";
@@ -188,17 +188,37 @@ test("legacy conversion rejects unsupported capabilities and mismatched destinat
 
 test("Balance task conversion binds exact area and optional project fields without normalizing legacy edits", async () => {
   const source = legacyFixture();
-  source.proposal.fields.project = "project-example";
+  const identity = "3f2e4932-9a89-4f2a-8c1e-6c7e5c5f2a11";
+  source.proposal.fields.project = identity;
   const context = legacyContext(source);
-  const project = { ...context.destinations[0]!, objectType: "project", canonicalId: "project-example" };
+  const project = { ...context.destinations[0]!, objectType: "project", canonicalId: identity };
   const complete = { ...context, destinations: [project, ...context.destinations] };
   expect(previewLegacyOperation(source, context).issues.length).toBeGreaterThan(0);
   expect(previewLegacyOperation(source, complete).issues).toEqual([]);
   const host = await open();
   expect(projectLegacyOperation(await importLegacyOperation(host.journal, source, complete, AT))).toEqual(source.record);
-  source.proposal.fields.project = " project-example ";
+  source.proposal.fields.project = ` ${identity} `;
   const ambiguous = { ...complete, fields: structuredClone(source.proposal.fields) };
   expect(previewLegacyOperation(source, ambiguous).issues.length).toBeGreaterThan(0);
+});
+
+test("a legacy project title is reported ambiguous and is never stored as a canonical identity", async () => {
+  const source = legacyFixture();
+  source.proposal.fields.project = "Glider";
+  const context = legacyContext(source);
+  const titled = { ...context.destinations[0]!, objectType: "project", canonicalId: "Glider" };
+  const mapping = { ...context, destinations: [titled, ...context.destinations] };
+  expect(previewLegacyOperation(source, mapping).issues).toContain("legacy_destination_ambiguous");
+  const host = await open();
+  const imported = await importLegacyOperation(host.journal, source, mapping, AT);
+  const evidence = readOperationEvidence(imported);
+  expect(evidence.kind).toBe("legacy");
+  if (evidence.kind !== "legacy") throw new Error("Legacy evidence required.");
+  expect(evidence.issues).toContain("legacy_destination_ambiguous");
+  expect(evidence.context?.destinations.some(ref => ref.canonicalId === "Glider")).toBe(false);
+  expect(evidence.source.proposal.fields.project).toBe("Glider");
+  expect(evidence.source.ownerReceipts).toEqual(source.ownerReceipts);
+  expect(() => projectLegacyOperation(imported)).toThrow(UpgradeRequired);
 });
 
 test("unsupported owner conversions retain evidence and request identities without a legacy DTO projection", async () => {
@@ -228,4 +248,31 @@ test("readers revalidate persisted mappings whose old import marker did not repo
   expect(readOperationEvidence(imported)).toMatchObject({ kind: "legacy", issues: ["legacy_capability_mapping_unsupported"] });
   expect(() => projectLegacyOperation(imported)).toThrow(UpgradeRequired);
   expect(event.rawRecord).toEqual(rawRecord);
+});
+
+test("graph-node history maps with the studio request id, keeps the canonical id exactly and resolves a bare parent only against its repository", async () => {
+  for (const parent of ["12", "#12", "example/desk#12", "github:github.com/example/desk#12"]) {
+    const host = await open();
+    const source = graphNodeLegacyFixture({ parent });
+    const context = graphNodeLegacyContext(source);
+    expect(previewLegacyOperation(source, context).issues).toEqual([]);
+    const imported = await importLegacyOperation(host.journal, source, context, AT);
+    expect(imported.journal.ownerRequestId).toBe(studioRequestId(source.record.operationId));
+    expect(imported.journal.state).toBe("succeeded");
+    expect(projectLegacyOperation(imported)).toEqual(source.record);
+    expect(projectLegacyOperation(imported).canonicalId).toBe("example/desk#40");
+  }
+});
+
+test("graph-node history that cannot be mapped exactly is legacy_destination_ambiguous", async () => {
+  const base = graphNodeLegacyFixture();
+  const ambiguous = (source: ReturnType<typeof graphNodeLegacyFixture>, context = graphNodeLegacyContext(source)) => previewLegacyOperation(source, context).issues;
+  expect(ambiguous(graphNodeLegacyFixture({ parent: "other/repo#12" }))).toContain("legacy_destination_ambiguous");
+  expect(ambiguous(graphNodeLegacyFixture({ parent: "--repo" }))).toContain("legacy_destination_ambiguous");
+  expect(ambiguous(graphNodeLegacyFixture({ parent: " 12 " }))).toContain("legacy_destination_ambiguous");
+  expect(ambiguous(graphNodeLegacyFixture({ parent: "" }))).toContain("legacy_destination_ambiguous");
+  expect(ambiguous(base, { ...graphNodeLegacyContext(base), destinations: [] })).toContain("legacy_destination_ambiguous");
+  const other = { ...graphNodeLegacyContext(base).destinations[0]!, canonicalId: "github:github.com/example/other" };
+  expect(ambiguous(base, { ...graphNodeLegacyContext(base), destinations: [other] })).toContain("legacy_destination_ambiguous");
+  expect(ambiguous(base, { ...graphNodeLegacyContext(base), canonicalReference: { ...graphNodeLegacyContext(base).canonicalReference!, canonicalId: "example/desk#41" } })).toContain("legacy_canonical_mapping_unsupported");
 });

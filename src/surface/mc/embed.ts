@@ -88,6 +88,8 @@ export async function startMissionControl(
       ...(opts.conversations ? { conversations: opts.conversations } : {}),
       ...(opts.connectionSetup ? { connectionSetup: opts.connectionSetup } : {}),
       ...(opts.adapterAssets ? { adapterAssets: opts.adapterAssets } : {}),
+      ...(opts.graphScope ? { graphScope: opts.graphScope } : {}),
+      ...(opts.graphSurfaces ? { graphSurfaces: opts.graphSurfaces } : {}),
     });
     const { port, wsRegistry } = serverCtx;
     hookPoller = new HookStreamPoller(db, config.hooks, wsRegistry);

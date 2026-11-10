@@ -3,15 +3,16 @@ import { deferred, dispatchRig, ownerResult } from "./dispatch-fixtures";
 import { ObjectReader } from "./readback";
 import { OperationReconciler } from "./reconciliation";
 import type { DispatchRequest, OperationLookup, OwnerSupport } from "./types";
+import type { PrincipalNotifier } from "./triggers";
 
 export type SyntheticDedup = "none" | { retentionMs: number };
-export interface RigOptions { dedup?: SyntheticDedup; lookupWaitMs?: number; ownerWaitMs?: number }
+export interface RigOptions { dedup?: SyntheticDedup; lookupWaitMs?: number; ownerWaitMs?: number; notify?: PrincipalNotifier }
 
 const supportFor = (dedup: SyntheticDedup): OwnerSupport => ({ ...support, cancellation: "best-effort", operationLookup: "historical", dedup: dedup === "none" ? { kind: "none" } : { kind: "guaranteed", scope: "connection-capability", retentionMs: dedup.retentionMs, bindsSnapshot: true, concurrent: true } });
 
 export async function reconcileRig(options: RigOptions = {}) {
   const clock = { at: new Date(AT) };
-  const rig = await dispatchRig(options.ownerWaitMs ?? 20, undefined, () => new Date(clock.at));
+  const rig = await dispatchRig(options.ownerWaitMs ?? 20, undefined, () => new Date(clock.at), options.notify);
   rig.declared.support = supportFor(options.dedup ?? "none");
   const owner = { effects: new Map<string, string>(), attempts: [] as string[], reveal: false, hangFirst: true };
   const never = deferred<unknown>();
@@ -29,7 +30,7 @@ export async function reconcileRig(options: RigOptions = {}) {
     const request = { operationId: rig.approval.operationId, attemptId: owner.attempts[0] ?? "", ownerRequestId: rig.approval.ownerRequestId, snapshot: rig.approval.snapshot } satisfies Pick<DispatchRequest, "operationId" | "attemptId" | "ownerRequestId" | "snapshot">;
     return Promise.resolve(answer({ kind: "known", response: ownerResult(request, "succeeded", "result-late") }));
   };
-  const build = (): OperationReconciler => new OperationReconciler({ journal: rig.host.lifecycleJournal(rig.registry), authority: rig.host.lifecycleAuthority(rig.registry, rig.bindings), bridge: rig.bridge, supportFor: () => rig.declared.support, now: () => new Date(clock.at), ...(options.lookupWaitMs === undefined ? {} : { lookupWaitMs: () => options.lookupWaitMs ?? 0 }) });
+  const build = (): OperationReconciler => new OperationReconciler({ journal: rig.host.lifecycleJournal(rig.registry), authority: rig.host.lifecycleAuthority(rig.registry, rig.bindings), bridge: rig.bridge, supportFor: () => rig.declared.support, fences: rig.host.lifecycleFences(), now: () => new Date(clock.at), ...(options.lookupWaitMs === undefined ? {} : { lookupWaitMs: () => options.lookupWaitMs ?? 0 }) });
   const state = { reconciler: build() };
   const reopen = rig.reopen.bind(rig);
   const reader = () => new ObjectReader({ authority: rig.host.lifecycleAuthority(rig.registry, rig.bindings), waitMs: () => options.lookupWaitMs ?? 50 });

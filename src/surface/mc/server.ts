@@ -5,6 +5,7 @@ import { handleDeskMyDay } from "./api/desk-my-day";
 import { handleDeskCalendars } from "./api/desk-calendars";
 import { DESK_ADAPTER_ASSET_PATH, handleDeskAdapterAssets, type AdapterAssetAccess } from "./api/desk-adapter-assets";
 import { DESK_CONNECTIONS_PATH, handleDeskConnections, type ConnectionSetupAccess } from "./api/desk-connections";
+import type { GraphScopeAccess } from "./api/desk-graph-repositories";
 import { handleDeskRoutines } from "./api/desk-routines";
 import { handleDeskFlows } from "./api/desk-flows";
 import { DESK_FLOWS_PATH } from "./desk/saved-flow-contract";
@@ -87,6 +88,9 @@ import { handleGetDesk } from "./api/desk";
 import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
 import { handleDeskMail } from "./api/desk-mail";
 import { handleDeskGraphRepositories } from "./api/desk-graph-repositories";
+import { handleDeskGraphSurfaces } from "./api/desk-graph-surfaces";
+import type { GraphSurfaceAccess } from "./desk/graph-surfaces";
+import { GRAPH_SURFACES_PATH } from "./desk/graph-surface-schema";
 import { GRAPH_REPOSITORIES_PATH } from "./desk/graph-repository-schema";
 import { handleDeskMailRules } from "./api/desk-mail-rules";
 import { handleDeskDmarc } from "./api/desk-dmarc";
@@ -201,6 +205,8 @@ export interface MissionControlViews {
   conversations?: ConversationAccess;
   connectionSetup?: ConnectionSetupAccess;
   adapterAssets?: AdapterAssetAccess;
+  graphScope?: GraphScopeAccess;
+  graphSurfaces?: GraphSurfaceAccess;
 }
 
 export interface StartServerOptions extends MissionControlViews {
@@ -368,9 +374,7 @@ export function startServer(
           authorizer,
           deskVigil(options),
           deskRuntime,
-          options.conversations,
-          options.connectionSetup,
-          options.adapterAssets,
+          options,
         );
       }
 
@@ -497,10 +501,9 @@ async function handleApi(
   authorizer: Authorizer | null = null,
   vigil?: VigilSubjectsOptions,
   desk?: DeskRuntime,
-  conversations?: ConversationAccess,
-  connectionSetup?: ConnectionSetupAccess,
-  adapterAssets?: AdapterAssetAccess,
+  views: MissionControlViews = {},
 ): Promise<Response> {
+  const { conversations, connectionSetup, adapterAssets, graphScope, graphSurfaces } = views;
   const { pathname } = url;
   if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });
 
@@ -559,7 +562,9 @@ async function handleApi(
 
   if (pathname === "/api/desk/unimportant") return handleDeskSenders(req, url, db, "unimportant");
 
-  if (pathname === GRAPH_REPOSITORIES_PATH || pathname.startsWith(`${GRAPH_REPOSITORIES_PATH}/`)) return handleDeskGraphRepositories(req, url, db);
+  if (pathname.startsWith(`${GRAPH_SURFACES_PATH}/`)) return handleDeskGraphSurfaces(req, url, graphSurfaces);
+
+  if (pathname === GRAPH_REPOSITORIES_PATH || pathname.startsWith(`${GRAPH_REPOSITORIES_PATH}/`)) return handleDeskGraphRepositories(req, url, db, graphScope ? { graphScope } : {});
 
   if (pathname === "/api/desk/mail") return handleDeskMail(req, db, desk);
 

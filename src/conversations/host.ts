@@ -6,6 +6,8 @@ import { OperationReconciler } from "./domain-adapters/operations/reconciliation
 import { BatchReceiptReader, BatchReceiptStore } from "./domain-adapters/operations/batches";
 import { ObjectReader } from "./domain-adapters/operations/readback";
 import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
+import { BindingFenceStore, type PrincipalNotifier } from "./domain-adapters/operations/triggers";
+import { AdapterDiagnostics } from "./domain-adapters/diagnostics";
 import { AuthorityPublication } from "./authority-publication";
 import { authorityHash } from "./authority-records";
 import { createHash, randomUUID } from "node:crypto";
@@ -120,11 +122,12 @@ export interface HostOptions {
   tools?: { config: () => ToolsConfig | undefined; definitions?: readonly ToolDefinition[]; timeoutMs?: number; outputLimit?: number };
   resolvers?: LinkResolvers;
   readbacks?: OwnerReadbacks;
+  notify?: PrincipalNotifier;
   now?: () => Date;
   alive?: (pid: number) => boolean;
   pid?: number;
 }
-export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters; withheld?: WithheldReasons; readers?: WorkReaders; communications?: () => readonly CommunicationConnector[] }
+export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters; withheld?: WithheldReasons; readers?: WorkReaders; queries?: (session: ToolSession) => WorkReaders | undefined; communications?: () => readonly CommunicationConnector[] }
 export type HostStatus = { state: "ready"; host: ConversationHost; tookOver: LockOwner | null; resumed: string[]; reconciled: string[] } | { state: "unavailable"; reason: string };
 
 const strictest = (policies: Policy[]): Policy => policies.includes("local") ? "local" : "cloud";
@@ -165,6 +168,8 @@ export class ConversationHost {
   private observationService: { store: ObservationStore; clock: QueryClock | undefined } | null = null;
   private queryService: { runner: QueryRunner; clock: QueryClock | undefined } | null = null;
   private authorityService: { registry: DomainAdapterRegistry; bindings: AuthorityBindings; mediator: AuthorityMediator } | null = null;
+  private fences: BindingFenceStore | null = null;
+  private diagnosticsService: AdapterDiagnostics | null = null;
   private readonly context: Context = BACKGROUND_CONTEXT;
   private readonly queues = new Map<string, Promise<void>>();
   private readonly authorityPublication = new AuthorityPublication();
@@ -215,15 +220,29 @@ export class ConversationHost {
     return this.harness;
   }
 
+  adapterDiagnostics(): AdapterDiagnostics {
+    this.diagnosticsService ??= new AdapterDiagnostics(this.engine, { now: this.now, context: this.context, fenced: id => this.lifecycleFences().isConnectionFenced(id) });
+    return this.diagnosticsService;
+  }
+
   lifecycleJournal(registry: DomainAdapterRegistry): OperationJournalStore {
-    return new OperationJournalStore(this.engine, registry, this.context);
+    return new OperationJournalStore(this.engine, registry, this.context, this.lifecycleFences(), this.adapterDiagnostics());
+  }
+
+  lifecycleFences(): BindingFenceStore {
+    this.fences ??= new BindingFenceStore(this.engine, this.options.notify, this.context, this.now, this.adapterDiagnostics());
+    return this.fences;
+  }
+
+  async attachFenceNotifier(notifier: PrincipalNotifier): Promise<void> {
+    await this.lifecycleFences().attachNotifier(notifier);
   }
 
   drafts(deps: DraftServiceDeps): DraftService { return new DraftService(this.engine, deps, this.context); }
 
   credentialBroker(deps: DeskCredentialBrokerDeps): DeskCredentialBroker { return new DeskCredentialBroker(this.engine, deps, this.context); }
 
-  connectionSetup(broker: DeskCredentialBroker, authority: ConstructorParameters<typeof ConnectionSetupService>[2], deps: ConnectionSetupDeps): ConnectionSetupService { return new ConnectionSetupService(this.engine, broker, authority, deps, this.context); }
+  connectionSetup(broker: DeskCredentialBroker, authority: ConstructorParameters<typeof ConnectionSetupService>[2], deps: ConnectionSetupDeps): ConnectionSetupService { return new ConnectionSetupService(this.engine, broker, authority, deps, this.context, this.adapterDiagnostics()); }
 
   readObservations(registry: DomainAdapterRegistry, bindings: AuthorityBindings, clock?: QueryClock): ObservationStore {
     const authority = this.lifecycleAuthority(registry, bindings);
@@ -242,7 +261,7 @@ export class ConversationHost {
       if (this.queryService.clock !== clock) throw new Error("Query clock is already registered for this host.");
       return this.queryService.runner;
     }
-    const runner = new QueryRunner(authority, new QueryStore(this.engine, clock ? () => clock.now() : Date.now, this.context), clock);
+    const runner = new QueryRunner(authority, new QueryStore(this.engine, clock ? () => clock.now() : Date.now, this.context), clock, this.adapterDiagnostics());
     this.queryService = { runner, clock };
     return runner;
   }
@@ -254,17 +273,17 @@ export class ConversationHost {
       if (this.authorityService.registry !== registry || this.authorityService.bindings !== bindings) throw new Error("Authority bindings are already registered for this host.");
       return this.authorityService.mediator;
     }
-    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters());
+    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters(), { fences: this.lifecycleFences(), diagnostics: this.adapterDiagnostics() });
     this.authorityService = { registry, bindings, mediator };
     return mediator;
   }
 
   lifecycleBridge(registry: DomainAdapterRegistry, bindings: AuthorityBindings, supportFor: SupportLookup, waitMs?: number, maxOutstandingCalls?: number): OperationBridge {
-    return new OperationBridge({ journal: this.lifecycleJournal(registry), authority: this.lifecycleAuthority(registry, bindings), writers: this.lifecycleWriters(), supportFor, now: this.now, ...(waitMs === undefined ? {} : { waitMs }), ...(maxOutstandingCalls === undefined ? {} : { maxOutstandingCalls }) });
+    return new OperationBridge({ journal: this.lifecycleJournal(registry), authority: this.lifecycleAuthority(registry, bindings), writers: this.lifecycleWriters(), supportFor, fences: this.lifecycleFences(), connectorEntry: (context, snapshot) => this.lifecycleAuthority(registry, bindings).connectorEntry(context, snapshot), now: this.now, ...(waitMs === undefined ? {} : { waitMs }), ...(maxOutstandingCalls === undefined ? {} : { maxOutstandingCalls }) });
   }
 
   lifecycleReconciler(registry: DomainAdapterRegistry, bindings: AuthorityBindings, bridge: OperationBridge, supportFor: SupportLookup): OperationReconciler {
-    return new OperationReconciler({ journal: this.lifecycleJournal(registry), authority: this.lifecycleAuthority(registry, bindings), bridge, supportFor, now: this.now });
+    return new OperationReconciler({ journal: this.lifecycleJournal(registry), authority: this.lifecycleAuthority(registry, bindings), bridge, supportFor, fences: this.lifecycleFences(), now: this.now });
   }
 
   lifecycleBatches(): BatchReceiptStore { return new BatchReceiptStore(this.engine, this.context); }
@@ -611,6 +630,7 @@ export class ConversationHost {
   private workOwner(): WorkOwner {
     return {
       readers: () => this.sources.readers ?? {},
+      ...(this.sources.queries ? { queries: this.sources.queries } : {}),
       now: () => this.now().getTime(),
       remember: async (session, objects, signal) => {
         const sources: Record<string, Policy> = {};

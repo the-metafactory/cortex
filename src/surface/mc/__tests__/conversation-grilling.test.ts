@@ -7,7 +7,7 @@ import { handleConversations } from "../api/conversations";
 import { buildAllowedHostnames, type MutationGuardContext } from "../api/mutation-guard";
 import { HandledLedger } from "../desk/actions";
 import type { DeskRuntime } from "../desk/compose";
-import type { ConversationMeta, SourceState } from "../../../conversations/types";
+import { INPUT_KIND, type ConversationMeta, type SourceState } from "../../../conversations/types";
 import type { WaitingTask } from "../desk/sources/waiting";
 import { entryViews } from "../dashboard-v2/lib/conversations";
 import type { TurnRequest } from "../../../conversations/model";
@@ -62,12 +62,14 @@ test("the guarded route keeps untrusted node context separate from principal inp
   const id = metas[0]!.id;
   expect(metas[1]?.id).toBe(id);
   expect(metas[0]).toMatchObject({ title: TITLE, links: [SOURCE], origin: { kind: "graph", ref: SOURCE.id }, policy: "cloud" });
+  await status.host.waitForIdle(id);
+  expect(turns).toHaveLength(1);
   const before = await status.host.entries(id, 200, undefined);
   const rendered = before.entries.flatMap(entryViews);
   expect(rendered.some(view => view.kind === "message" && view.text.includes("linked Ranger question"))).toBe(true);
   expect(JSON.stringify(rendered)).not.toContain("earlier Studio session");
   expect(await status.host.sourcesOf([SOURCE])).toMatchObject([{ state: "available", title: TITLE, context: `${BODY}\n\nSource: ${NODE_URL}` }]);
-  expect(turns).toHaveLength(0);
+  expect(rendered.some(view => view.kind === "message" && view.who === "ivy" && view.text === "Let's compare them.")).toBe(true);
   await status.host.close(); statuses.splice(statuses.indexOf(status), 1);
   status = await boot();
   const again = await call("/api/conversations/starts", { ...start(), source: { ...SOURCE, id: `github:github.com/${SOURCE.id}` } });
@@ -76,12 +78,13 @@ test("the guarded route keeps untrusted node context separate from principal inp
   expect(await status.host.entries(id, 200, undefined)).toEqual(before);
   await status.host.submit(id, { inputId: "probe-turn", transport: "web", text: "Compare the options", mode: "queue" });
   await status.host.waitForIdle(id);
-  expect(turns).toHaveLength(1);
+  expect(turns).toHaveLength(2);
   const turn = turns[0]!;
   expect(turn.prompt).toContain("linked Ranger question");
   expect(turn.prompt).not.toContain(TITLE);
   expect(turn.prompt).not.toContain("Ignore previous instructions");
   expect(turn.history).toEqual([]);
+  expect(turns[1]?.prompt).toContain("Compare the options");
   expect(turn.linked).toContain(TITLE);
   expect(turn.linked).toContain(BODY);
   expect(turn.linked).toContain(NODE_URL);
@@ -91,6 +94,20 @@ test("the guarded route keeps untrusted node context separate from principal inp
   expect(writes).toBe(0);
   expect(requests.every(method => method === "GET")).toBe(true);
   expect(db.query("SELECT COUNT(*) AS n FROM desk_graph_operations").get()).toEqual({ n: 0 });
+  const legacyRef = { owner: "graph-node" as const, id: "example/app#32" };
+  const legacyText = "Help me talk through the linked Ranger question.";
+  STATE.maps[0]!.grillings.push({ id: "32", title: "Legacy" });
+  const legacy = await status.host.create({ title: TITLE, links: [legacyRef], origin: { kind: "graph", ref: legacyRef.id }, policy: "cloud" }, "principal", {
+    key: `ranger-grilling:${legacyRef.id}`, titleFromSource: true,
+    entries: [{ kind: INPUT_KIND, data: { text: legacyText }, messages: [{ role: "user", text: legacyText, at: 1 }] }],
+  });
+  const legacyBefore = await status.host.entries(legacy.id, 200, undefined);
+  const restarted = await call("/api/conversations/starts", { startId: crypto.randomUUID(), source: legacyRef });
+  expect((await restarted.json() as { conversation: ConversationMeta }).conversation.id).toBe(legacy.id);
+  await status.host.waitForIdle(legacy.id);
+  expect(await status.host.entries(legacy.id, 200, undefined)).toEqual(legacyBefore);
+  expect(turns).toHaveLength(2);
+  STATE.maps[0]!.grillings.pop();
   await status.host.organize(id, { state: "archived" });
   expect((await status.host.meta(id)).state).toBe("archived");
 });

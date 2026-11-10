@@ -14,6 +14,8 @@ import { ObjectReferenceSchema, type BoundaryError, type ObjectReference } from 
 import { CancelRequestSchema, DispatchRequestSchema, ObjectReadbackSchema, OperationLookupSchema, OwnerResultSchema, OwnerSupportSchema, parseWire, type ApprovedSnapshot, type Authority, type CancelRequest, type DispatchRequest, type Json, type OwnerSupport } from "./domain-adapters/operations/types";
 import { canonicalWire, validateSnapshot, validateResultPayload } from "./domain-adapters/operations/validation";
 import { OperationJournalStore, type Approval, type StoredOperation } from "./domain-adapters/operations/journal";
+import { fenceTargetOf, type FenceGate } from "./domain-adapters/operations/triggers";
+import type { DiagnosticRecorder } from "./domain-adapters/diagnostics";
 import { AuthorityDoc, AuthorityStateSchema, ConfirmationRecordSchema, HostRecordSchema, PolicyInputsSchema, ReleaseSinkSchema, authorityHash, authorityJson, exactReferences, recordId, recordRevision, type AuthorityState, type ConfirmationRecord, type ConnectionRecord, type DecisionRecord, type GrantRecord, type HostRecord, type PolicyInputs, type PrincipalBinding, type ReleaseSink, type RestrictionRecord } from "./authority-records";
 
 const AuthenticatedBindingSchema = z.object({ principal: z.string().min(1), stack: z.string().min(1), conversationId: z.string().min(1), authenticatedSessionRef: z.string().min(1), transport: z.enum(["web", "discord"]), audience: z.enum(["web", "discord", "model", "view"]), route: z.string().optional(), viewId: z.string().optional(), expiresAt: z.iso.datetime(), maintenance: z.boolean() }).strict();
@@ -76,6 +78,7 @@ interface Resolved { binding: AuthenticatedBinding; principal: PrincipalBinding;
 interface Basis { kind: "confirmation"; confirmationId: string } 
 interface GrantBasis { kind: "grant"; grantId: string }
 type ApprovalInput = Omit<Approval, "authority" | "at">;
+export interface AuthorityCollaborators { fences?: FenceGate; diagnostics?: DiagnosticRecorder }
 
 const HOST_DATA_SUBJECT = "host-data";
 
@@ -86,8 +89,8 @@ export class AuthorityMediator {
   private readonly active = new Map<string, { controller: AbortController; heads: Set<string> }>();
   private readonly journal: OperationJournalStore;
 
-  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly registry: DomainAdapterRegistry, private readonly bindings: AuthorityBindings, private readonly hostPolicy: (id: string) => Promise<HostPolicyState>, private readonly context: Context, private readonly now: () => Date, private readonly publication: AuthorityPublication, private readonly hostRevision: () => string, private readonly writers: WriterAuthority) {
-    this.journal = new OperationJournalStore(engine, registry, context);
+  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly registry: DomainAdapterRegistry, private readonly bindings: AuthorityBindings, private readonly hostPolicy: (id: string) => Promise<HostPolicyState>, private readonly context: Context, private readonly now: () => Date, private readonly publication: AuthorityPublication, private readonly hostRevision: () => string, private readonly writers: WriterAuthority, private readonly collaborators: AuthorityCollaborators = {}) {
+    this.journal = new OperationJournalStore(engine, registry, context, collaborators.fences, collaborators.diagnostics);
     this.connectors = new Map([...bindings.connectors].map(([key, connector]) => [key, Object.freeze({
       ...(connector.observation ? { observation: Object.freeze({ ...connector.observation, fetch: connector.observation.fetch.bind(connector.observation) }) } : {}),
       writerOwner: connector.writerOwner, support: parseWire(OwnerSupportSchema, connector.support), authorizeConnection: connector.authorizeConnection.bind(connector), dispatch: connector.dispatch.bind(connector),
@@ -404,8 +407,17 @@ export class AuthorityMediator {
       const stored = await this.journal.read(operationId);
       const attempt = stored?.journal.events.findLast(item => item.event.kind === "attempt-prepared");
       if (!stored || attempt?.event.kind !== "attempt-prepared" || !["dispatching", "pending"].includes(stored.journal.state)) return;
+      if (!("kind" in stored.journal.snapshot)) await this.collaborators.fences?.trigger({ kind: "adapter_crash", target: fenceTargetOf(stored.journal.snapshot), evidence: { operationId, detail: message } });
       await this.journal.append(operationId, stored.revision, { sequence: stored.journal.sequence + 1, eventId: randomUUID(), at: this.now().toISOString(), event: { kind: "wait-expired", attemptId: attempt.event.attempt.attemptId, reason: { code: "outcome_unavailable", message } } });
     });
+  }
+
+  async connectorEntry(context: HostContext, snapshot: ApprovedSnapshot): Promise<{ kind: "allowed" } | { kind: "denied"; reason: BoundaryError }> {
+    try {
+      const resolved = await this.resolve(context, snapshot.connectionId, snapshot);
+      if (!withinLimits(resolved.connection.writeDestinations, snapshot.destinations)) return { kind: "denied", reason: { code: "destination_denied", message: "The destination is no longer in the write scope." } };
+      return { kind: "allowed" };
+    } catch { return { kind: "denied", reason: { code: "connector_entry_unavailable", message: "The connector entry could not resolve the destination." } }; }
   }
 
   async ingestLateEvidence(operationId: string, raw: unknown): Promise<string> {

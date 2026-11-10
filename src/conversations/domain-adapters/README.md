@@ -116,3 +116,29 @@ Run the vertical demonstration with `bun scripts/probe-desk-drafting.ts`.
 Production startup supplies no asset service yet, like the connection setup route: both answer 503 until the managed activation node passes a provider through `adapterAssets`.
 
 Run `bun scripts/probe-desk-adapter-assets.ts` for the synthetic probe: temporary package root, real temporary generation store, local HTTP server and a synthetic hosted gateway. It does no real deployment, restart or provider call.
+
+## Connection status and local-only diagnostics
+
+<!-- glossary-ignore: host, owner, run, binding, data -->
+
+`diagnostics.ts` owns one `cortex.desk-adapter-diagnostics` document per connection in the configured host durable store. `ConversationHost.adapterDiagnostics()` exposes the single shared store. Each connection keeps its own status record and at most 500 strict events; a new event removes the oldest event without changing the status record.
+
+The status is `available`, `unavailable`, `stale` or `fenced`, with `lastSuccessAt`, `lastAttemptAt` and one reason code. A binding fence on any capability makes the connection read as fenced. An available connection whose last successful operation is older than 15 minutes reads as stale. Enabling and disabling a connection, a changed scope, query refusal or partial query, journaled operation state transitions and fired fence triggers each store one event.
+
+Event names start with `desk.adapter.` and are closed: `connection_status`, `query_refused`, `query_partial`, `operation_state` and `trigger_fired`. An event carries only opaque adapter, connection and capability identifiers, one state, one error code and a timestamp. The strict schema refuses any other field, logs which field was refused and stores nothing. Diagnostics never construct or call a bus client, and no stored event is a valid bus envelope.
+
+`GET /api/desk/connections` includes each connection's status, so Desk Settings shows the status, its last success, its last attempt and a safe reason next to the setup state.
+
+Run `bun scripts/probe-desk-adapter-diagnostics.ts` for the synthetic probe: a real temporary host store, a synthetic connection driven through all four statuses, status read back through the Settings API, the rendered Settings view asserted in Chromium, a strict-schema refusal and a bus client that receives nothing.
+
+## Canary secret across the five sinks
+
+<!-- glossary-ignore: host, owner, run, binding, data, token, sink -->
+
+Matrix row A9 asks for a canary secret checked across logs, events, receipts, UI responses and model context. `canary-fixtures.ts` builds one synthetic stack under a temporary root: the credential broker stores the canary in the Settings rig's arc-backed secret store, a fixture connection is enabled through the Settings route, and the lifecycle rig writes the same canary straight into the arc-backed secret store its connector authorizes against, where a bounded query, an owner-result dispatch, a schema-guided draft and an owner-error dispatch run. The stack captures the five sinks as text: wrapped console output, stored `desk.adapter.*` events, the operation journal with its receipt projection and legacy result, the Settings responses plus released query payloads, and the model requests the drafting service built. The captured console line is written by the diagnostics module when it refuses an invalid event, so log coverage never rests on the probe's own output.
+
+`scanCanary(sinks, canary)` lives in the same module and returns one finding per sink that holds the value; a finding names only the sink and the match count, never the value. It matches the literal value, its base64 and hex encodings, its URI encoding and its trailing segment, so an encoded or truncated copy still fails. A sink with no captured entry is reported as not covered, and the probe fails instead of passing an unproven sink.
+
+The leaking fixture plays a careless adapter: it reads the credential value the lifecycle rig's secret store holds and pushes it through the code that renders that sink. It logs an `Error`, stores a `desk.adapter.query_refused` event, returns an owner receipt, returns a query payload, or registers draft guidance instructions that reach the model request. That proves the scan can fail. Nothing is scanned on a real stack and no provider effect occurs.
+
+Run `bun scripts/probe-desk-adapter-canary.ts` for the clean stack: it exits 0 only when the fixture store was written and holds the canary, all five sinks were captured and none holds the value. Run `bun scripts/probe-desk-adapter-canary.ts --leak log` for the leaking fixture: it exits nonzero and names the sink.

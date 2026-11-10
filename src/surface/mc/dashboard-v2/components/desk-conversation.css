@@ -13,6 +13,8 @@
 .dcv-source { border: 1px solid var(--line, #ececec); border-radius: 10px; padding: 12px; background: #fff; }
 .dcv-source small { display: block; color: var(--mute, #71717a); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
 .dcv-source p { margin: 6px 0 0; white-space: pre-wrap; font-size: 13px; color: var(--ink2, #3f3f46); }
+.dcv-source .dcv-markdown { margin-top: 6px; font-size: 13px; color: var(--ink2, #3f3f46); overflow-wrap: anywhere; }
+.dcv-source > a { display: inline-block; margin-top: 8px; }
 .dcv-source.gone { background: #fafaf9; border-style: dashed; }
 .dcv-stream { grid-area: stream; display: grid; gap: 10px; max-height: 60vh; overflow: auto; padding-right: 4px; }
 .dcv-msg { min-width: 0; box-sizing: border-box; overflow-wrap: anywhere; border-radius: 12px; padding: 10px 14px; background: #fff; border: 1px solid var(--line, #ececec); max-width: 90%; }

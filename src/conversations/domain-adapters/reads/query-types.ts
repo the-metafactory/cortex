@@ -29,4 +29,5 @@ export interface QueryDispatch { queryId: string; source: QuerySource; head: str
 export type QueryStatus = "ok" | "partial" | "cancelled" | "denied" | "unsupported" | "unavailable";
 export interface QueryGroup { source: Pick<QuerySource, "adapterId" | "connectionId" | "capabilityId">; status: QueryStatus | "not-attempted"; reason?: BoundaryError; coverage: "exhausted" | "more" | "incomplete" | "budget-exhausted" }
 export interface QueryResult { readVersion: "1.0.0"; queryId: string; status: QueryStatus; groups: QueryGroup[]; restricted: boolean; noMatch: boolean; continuation?: string; restartRequired?: true; reason?: BoundaryError }
+export interface QueryObserver { released(value: Json): void }
 export const queryError = (code: string): BoundaryError => ({ code, message: code === "restart_required" ? "This query requires an explicit restart." : "The query could not complete within its current scope and bounds." });

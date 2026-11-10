@@ -1,5 +1,5 @@
 export const CREATABLE_TYPES = [
-  "graph-node", "graph-map", "balance-task", "balance-project", "balance-inbox-task", "studio-thread", "studio-capture", "studio-note", "studio-response", "studio-close",
+  "graph-node", "graph-map", "graph-ruling", "graph-close", "balance-task", "balance-project", "balance-inbox-task", "studio-thread", "studio-capture", "studio-note", "studio-response", "studio-close",
   "flow", "routine", "calendar-event", "reminder", "soma-goal", "tana-note", "desk-note", "mail-draft",
 ] as const;
 export type CreatableType = (typeof CREATABLE_TYPES)[number];
@@ -34,7 +34,7 @@ const choice = (name: string, label: string, options: readonly string[]): FieldS
 const graphAutonomy = choice("autonomy", "Autonomy (approve or propose; empty uses approve)", GRAPH_AUTONOMIES);
 const long = (name: string, label: string, required = false): FieldSpec => ({ name, label, kind: "long", required });
 export const OWNER_BLOCKERS: Record<CreatableType, number> = {
-  "graph-node": 3033, "graph-map": 3034,
+  "graph-node": 3033, "graph-map": 3034, "graph-ruling": 3457, "graph-close": 3457,
   "balance-task": 3030, "balance-project": 3031, "balance-inbox-task": 3032,
   "studio-thread": 3141, "studio-capture": 3142, "studio-note": 3140, "studio-response": 3138, "studio-close": 3139,
   flow: 3146, routine: 3035, "calendar-event": 3036, reminder: 3037, "soma-goal": 3038, "tana-note": 3039, "desk-note": 3040, "mail-draft": 3041,
@@ -50,6 +50,12 @@ export const CREATION_CATALOG: Record<CreatableType, CreatableSpec> = {
     text("repository", "Repository", true, true), text("title", "Title"), long("body", "Destination and constraints", true), text("checkpoint", "Checkpoint"),
     graphAutonomy, text("serves", "Serves goal (G<n>, optional)", false),
   ] },
+  "graph-ruling": { row: "O01", label: "Ruling on a graph node", owner: "Soma work graph", egress: "cloud", fields: [
+    text("node", "Graph node (owner/name#N)", true, true), long("text", "Ruling", true),
+  ], fixed: [{ label: "Node", value: "Appended under the node's Rulings, dated and attributed; the node stays open. Rulings cannot be edited afterwards." }] },
+  "graph-close": { row: "O01", label: "Close a graph node", owner: "Soma work graph", egress: "cloud", fields: [
+    text("node", "Graph node (owner/name#N)", true, true), text("gist", "Gist (one line for the map's decision index)"), long("resolution", "Resolution", true),
+  ], fixed: [{ label: "Close", value: "Closes the node with this resolution after its checkpoint gate passes; soma refuses a close that fails it. The map's decision index is not rewritten here." }] },
   "balance-task": { row: "O04", label: "Balance task", owner: "Balance", egress: "local", fields: [
     text("area", "Area", true, true), text("project", "Parent project", false, true), text("title", "Title"), long("note", "Note"), { name: "due", label: "Due", kind: "date", required: false },
   ] },
@@ -104,6 +110,6 @@ export const UNAVAILABLE_TYPES: UnavailableSpec[] = [
   { type: "settings", row: "O25", label: "Settings and status views", owner: "Configuration", reason: "Observation only: settings and status change through their own controls." },
 ];
 
-export const SUBJECT_FIELDS = ["title", "name", "question", "wording", "text", "body"] as const;
+export const SUBJECT_FIELDS = ["title", "name", "question", "wording", "text", "body", "resolution"] as const;
 
 export const isCreatable = (type: string): type is CreatableType => (CREATABLE_TYPES as readonly string[]).includes(type);
