@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { AuthorityBindings, TrustedConnector, WriterLease } from "../../../src/conversations/authority";
+import type { AuthorityBindings, AuthorityMediator, HostContext, TrustedConnector, WriterLease } from "../../../src/conversations/authority";
 import { authorityHash, type ConnectionRecord, type PolicyInputs, type PrincipalBinding, type ReleaseSink, type RestrictionRecord } from "../../../src/conversations/authority-records";
 import { openConversationHost, type ConversationHost } from "../../../src/conversations/host";
 import { writerLease } from "../../../src/conversations/domain-adapters/operations/writer-authority";
@@ -46,6 +46,7 @@ function registerReadBindings(input: ConformanceRigInput): ReadBindings {
   return bindings;
 }
 
+/** Opens the production Cortex runtime over a synthetic local stack, and can reopen it over the same store to model a restart. */
 export async function openConformanceRig(input: ConformanceRigInput) {
   const dir = await mkdtemp(join(input.dir, "rig-"));
   const readBindings = registerReadBindings(input);
@@ -69,6 +70,7 @@ export async function openConformanceRig(input: ConformanceRigInput) {
   const sends: Json[] = [];
   const sinks = new Map<string, (value: Json) => Promise<void>>();
   let conversationId = "";
+  let sink: ReleaseSink = { kind: "web", conversationId };
   const bindings: AuthorityBindings = {
     currentRevision: () => authorityHash({ policy, lease }),
     authenticate: sessionRef => Promise.resolve(sessionRef === SESSION ? { principal: principal.principal, stack: principal.stack, conversationId, authenticatedSessionRef: sessionRef, transport: "web", audience: "web", expiresAt: FAR_FUTURE, maintenance: false } : null),
@@ -79,26 +81,56 @@ export async function openConformanceRig(input: ConformanceRigInput) {
     sinks,
     readBindings,
   };
-  const status = await openConversationHost({ dir, stack: STACK, label: STACK, expectedLabel: STACK, lanes: {}, turns: request => Promise.resolve({ text: "conformance", session: request.session, resumed: false }), now: () => new Date() });
-  if (status.state !== "ready") throw new ConformanceRefusal("host_unavailable", status.reason);
-  const host: ConversationHost = status.host;
-  const conversation = await host.create({ title: "Conformance", policy: "local", links: [], origin: { kind: "web" } }, principal.principal);
-  conversationId = conversation.id;
-  const sink: ReleaseSink = { kind: "web", conversationId };
-  sinks.set(canonicalWire(sink), value => { sends.push(value); return Promise.resolve(); });
   const plan = syntheticWriterPlan({ stack: STACK, owner: input.connector.writerOwner, adapterId: input.adapterId, connectionId: input.connectionId, capabilityId: input.writerCapabilityId });
-  const writer = await host.lifecycleWriters().begin(plan, 0);
-  Object.assign(lease, writerLease(await host.lifecycleWriters().resume(writer.bindingKey, syntheticWriterSteps())));
-  const service = host.lifecycleAuthority(input.registry, bindings);
-  await service.publishHostRecord({ kind: "principal", value: principal }, 0);
-  await service.publishHostRecord({ kind: "connection", value: connection }, 0);
-  for (const restriction of restrictions) await service.publishHostRecord({ kind: "restriction", value: restriction }, 0);
-  const context = await service.authenticate(SESSION);
-  if (!context) throw new ConformanceRefusal("host_unavailable", "The host refused the synthetic session.");
+  const opened: { host: ConversationHost | null; service: AuthorityMediator | null; context: HostContext | null } = { host: null, service: null, context: null };
+  const host = (): ConversationHost => { if (!opened.host) throw new ConformanceRefusal("host_unavailable", "The conformance host is closed."); return opened.host; };
+  const service = () => { if (!opened.service) throw new ConformanceRefusal("host_unavailable", "The conformance authority is unavailable."); return opened.service; };
+  const context = () => { if (!opened.context) throw new ConformanceRefusal("host_unavailable", "The conformance session is unavailable."); return opened.context; };
+  async function boot(initial: boolean): Promise<void> {
+    const status = await openConversationHost({ dir, stack: STACK, label: STACK, expectedLabel: STACK, lanes: {}, turns: request => Promise.resolve({ text: "conformance", session: request.session, resumed: false }), now: () => new Date() });
+    if (status.state !== "ready") throw new ConformanceRefusal("host_unavailable", status.reason);
+    opened.host = status.host;
+    if (initial) {
+      const conversation = await status.host.create({ title: "Conformance", policy: "local", links: [], origin: { kind: "web" } }, principal.principal);
+      conversationId = conversation.id;
+      sink = { kind: "web", conversationId };
+      sinks.set(canonicalWire(sink), value => { sends.push(value); return Promise.resolve(); });
+    }
+    const writer = await status.host.lifecycleWriters().begin(plan, 0);
+    Object.assign(lease, writerLease(await status.host.lifecycleWriters().resume(writer.bindingKey, syntheticWriterSteps())));
+    opened.service = status.host.lifecycleAuthority(input.registry, bindings);
+    if (initial) {
+      await opened.service.publishHostRecord({ kind: "principal", value: principal }, 0);
+      await opened.service.publishHostRecord({ kind: "connection", value: connection }, 0);
+      for (const restriction of restrictions) await opened.service.publishHostRecord({ kind: "restriction", value: restriction }, 0);
+    }
+    opened.context = await opened.service.authenticate(SESSION);
+    if (!opened.context) throw new ConformanceRefusal("host_unavailable", "The host refused the synthetic session.");
+  }
+  await boot(true);
   return {
-    host, service, context, sink, lease, sends, bindings, connection, conversationId, registry: input.registry,
+    get host() { return host(); },
+    get service() { return service(); },
+    get context() { return context(); },
+    get sink() { return sink; },
+    get conversationId() { return conversationId; },
+    lease, sends, bindings, connection, registry: input.registry,
+    async revokeConnection(): Promise<void> {
+      const revision = Number(connection.connectionRevision);
+      connection.connectionRevision = String(revision + 1);
+      connection.status = "revoked";
+      await service().publishHostRecord({ kind: "connection", value: connection }, revision);
+    },
+    async reopen(): Promise<void> {
+      await host().close();
+      opened.host = null;
+      opened.service = null;
+      opened.context = null;
+      await boot(false);
+    },
     async close() {
-      await host.close();
+      await opened.host?.close();
+      opened.host = null;
       await rm(dir, { recursive: true, force: true });
     },
   };
