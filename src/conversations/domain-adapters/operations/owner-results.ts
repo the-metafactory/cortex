@@ -47,6 +47,7 @@ export function buildApprovedSnapshot(parts: ApprovedSnapshotParts): ApprovedSna
 
 export interface OwnerResultKit {
   readonly succeeded: (parts: OwnerResultParts, ref: ObjectReference, receipt: Json, at: string) => OwnerResult;
+  readonly found: (parts: OwnerResultParts, ref: ObjectReference, receipt: Json, at: string) => OwnerResult;
   readonly refused: (request: DispatchRequest, message: string, at: string) => OwnerResult;
   readonly uncertain: (request: DispatchRequest, message: string, at: string, receipt?: Json) => OwnerResult;
   readonly accepted: (request: DispatchRequest, receipt: Json, at: string) => OwnerResult;
@@ -61,23 +62,25 @@ const replies: OwnerResultKit["lookupReplies"] = (request, checkedAt) => {
 };
 
 export function ownerResultKit(prefix: string): OwnerResultKit {
-  const base = (parts: OwnerResultParts, at: string) => ({
+  const base = (parts: OwnerResultParts, at: string, stem = "create") => ({
     lifecycleVersion: "1.0.0" as const,
     operationId: parts.operationId,
     attemptId: parts.attemptId,
     snapshotDigest: parts.snapshotDigest,
-    resultId: `${prefix}.create:${parts.operationId}:${parts.attemptId}`,
+    resultId: `${prefix}.${stem}:${parts.operationId}:${parts.attemptId}`,
     reportedAt: at,
   });
+  const success = (stem: string) => (parts: OwnerResultParts, ref: ObjectReference, receipt: Json, at: string): OwnerResult => ({
+    ...base(parts, at, stem),
+    result: {
+      kind: "succeeded",
+      output: { ref },
+      evidence: { kind: "effect", evidenceId: `${prefix}.effect:${parts.operationId}:${parts.attemptId}`, observedAt: at, ownerRequestId: parts.ownerRequestId, receipt, refs: [ref] },
+    },
+  });
   return {
-    succeeded: (parts, ref, receipt, at) => ({
-      ...base(parts, at),
-      result: {
-        kind: "succeeded",
-        output: { ref },
-        evidence: { kind: "effect", evidenceId: `${prefix}.effect:${parts.operationId}:${parts.attemptId}`, observedAt: at, ownerRequestId: parts.ownerRequestId, receipt, refs: [ref] },
-      },
-    }),
+    succeeded: success("create"),
+    found: success("lookup"),
     refused: (request, message, at) => ({
       ...base(requestParts(request), at),
       result: {

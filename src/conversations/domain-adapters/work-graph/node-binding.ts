@@ -174,7 +174,7 @@ export function workGraphNodeApprovedSnapshot(options: WorkGraphNodeSnapshotOpti
 export const workGraphNodeRequestId = (operationId: string): string => studioRequestId(operationId);
 
 const kit = ownerResultKit("work-graph");
-const succeededResult = (parts: Parameters<typeof kit.succeeded>[0], connectionId: string, canonicalId: string, receipt: Json, at: string): OwnerResult => kit.succeeded(parts, reference(connectionId, "node", canonicalId), receipt, at);
+const succeededResult = (parts: Parameters<typeof kit.succeeded>[0], connectionId: string, canonicalId: string, receipt: Json, at: string, via: "succeeded" | "found" = "succeeded"): OwnerResult => kit[via](parts, reference(connectionId, "node", canonicalId), receipt, at);
 const { refused: refusedResult, uncertain: uncertainResult } = kit;
 
 export type WorkGraphNodeCreateOutcome = CreateOutcome;
@@ -223,7 +223,7 @@ export function createWorkGraphNodeBinding(options: WorkGraphNodeBindingOptions)
   const deps: GraphWriterDeps = { db: options.db, desk: options.desk, run, ...(options.now ? { now: options.now } : {}) };
   const readback = graphReadbackById(deps);
 
-  const dispatch = async (request: DispatchRequest, signal?: AbortSignal): Promise<OwnerResult> => {
+  const dispatchUnserialized = async (request: DispatchRequest, signal?: AbortSignal): Promise<OwnerResult> => {
     const reportedAt = at();
     const refuse = (message: string): OwnerResult => refusedResult(request, `${message} Nothing was created.`, reportedAt);
     const snapshot = request.snapshot;
@@ -264,6 +264,14 @@ export function createWorkGraphNodeBinding(options: WorkGraphNodeBindingOptions)
     }
   };
 
+  const filing = new Map<string, Promise<unknown>>();
+  const dispatch = (request: DispatchRequest, signal?: AbortSignal): Promise<OwnerResult> => {
+    const turn = (filing.get(request.operationId) ?? Promise.resolve()).then(() => dispatchUnserialized(request, signal));
+    const settled = turn.catch(() => undefined);
+    filing.set(request.operationId, settled);
+    return turn.finally(() => { if (filing.get(request.operationId) === settled) filing.delete(request.operationId); });
+  };
+
   const lookup = async (request: LookupRequest): Promise<OperationLookup> => {
     const checkedAt = at();
     const checked = await kit.approvedForLookup(options.journal, request, checkedAt, "graph");
@@ -274,7 +282,7 @@ export function createWorkGraphNodeBinding(options: WorkGraphNodeBindingOptions)
     const found = await readback(request.operationId);
     if (!found?.found) return unknown("work-graph.node_unconfirmed", "The graph does not confirm a node for this operation under the requested parent.");
     const parts = { operationId: request.operationId, attemptId: attempt.attemptId, ownerRequestId: request.ownerRequestId, snapshotDigest };
-    return respond({ kind: "known", response: succeededResult(parts, options.connectionId, found.canonicalId, { canonicalId: found.canonicalId, ...(found.url ? { url: found.url } : {}) }, checkedAt) });
+    return respond({ kind: "known", response: succeededResult(parts, options.connectionId, found.canonicalId, { canonicalId: found.canonicalId, ...(found.url ? { url: found.url } : {}) }, checkedAt, "found") });
   };
 
   return {

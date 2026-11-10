@@ -121,3 +121,25 @@ test("the binding declares marker dedup and lookup, and no update, cancellation 
   expect(support.cancellation).toBe("none");
   expect(support.compensationCapabilityId).toBeUndefined();
 });
+
+test("overlapping dispatches of one operation file one node", async () => {
+  const rig = await open();
+  const id = graphNodeOperationId("overlap");
+  await rig.journal.approve({ operationId: id, idempotencyKey: id, ownerRequestId: studioRequestId(id), snapshot: workGraphNodeApprovedSnapshot({ connectionId: GRAPH_NODE_CONNECTION, provenance: provenance(id), input: { repository, parent: node("12"), title: "Overlap", checkpoint: "cp" } }), authority: graphNodeAuthority, at: new Date(GRAPH_NODE_NOW).toISOString() });
+  const request = await dispatchRequest(rig, id);
+  const [first, second] = await Promise.all([rig.binding.dispatch(request), rig.binding.dispatch({ ...request, attemptId: crypto.randomUUID() })]);
+  expect(workGraphNodeCreateOutcome(first)).toBe("created");
+  expect(workGraphNodeCreateOutcome(second)).toBe("created");
+  expect(rig.soma.nodes.size).toBe(1);
+});
+
+test("a found node after an uncertain dispatch reconciles through the journal", async () => {
+  const rig = await open();
+  rig.soma.mode = "exit-after-file";
+  const id = graphNodeOperationId("reconcile");
+  await rig.facade.create(graphNodeRequest(graphNodeFields(), id), graphNodeAuthority, rig.lifecycle());
+  const lookup = await rig.binding.lookup({ lifecycleVersion: "1.0.0", operationId: id, ownerRequestId: studioRequestId(id) });
+  expect(lookup.result.kind === "known" && lookup.result.response.resultId).toContain("work-graph.lookup:");
+  const uncertain = (await rig.journal.read(id))?.journal.events.flatMap(entry => entry.event.kind === "owner-result" ? [entry.event.response] : []);
+  expect(uncertain?.some(response => lookup.result.kind === "known" && response.resultId === lookup.result.response.resultId)).toBe(false);
+});
