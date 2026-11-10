@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { ProposalSchema, type Proposal } from "../../creation";
 import { OperationRecordSchema, type CreateResult, type OperationRecord, type ReadbackResult } from "../../types";
+import { isBalanceProjectId } from "../../../surface/mc/desk/balance-destinations";
 import { operationUuid, studioRequestId } from "../../../surface/mc/desk/conversation-ids";
 import { ObjectReferenceSchema, type ObjectReference } from "../types";
 import { OperationJournalStore, StoredSchema, type StoredOperation } from "./journal";
@@ -45,17 +46,29 @@ export interface LegacyPreview {
   ownerRequestId: string;
 }
 
+const isCanonicalProjectId = (value: string): boolean => value.trim().length > 0 && value.trim() === value && isBalanceProjectId(value);
+const canonicalProject = (value: string | undefined): string | undefined => value !== undefined && isCanonicalProjectId(value) ? value : undefined;
+const storableReference = (ref: ObjectReference): boolean => ref.objectType !== "project" || isCanonicalProjectId(ref.canonicalId);
+
 function conversionIssues(source: LegacySource, context: LegacyContext): string[] {
   if (source.record.owner !== "balance-task" || !isBalanceTaskBinding(context)) return ["legacy_capability_mapping_unsupported"];
   const fields = source.proposal.fields;
+  const project = canonicalProject(fields.project);
   const destinations = ["area", "project"].flatMap(objectType => {
-    const canonicalId = fields[objectType];
+    const canonicalId = objectType === "project" ? project : fields[objectType];
     return canonicalId ? [{ adapterId: context.adapterId, connectionId: context.connectionId, objectType, canonicalId }] : [];
   });
   const issues: string[] = [];
-  if (!fields.area || destinations.some(ref => ref.canonicalId.trim() !== ref.canonicalId) || canonicalWire(context.destinations.map(canonicalWire).sort()) !== canonicalWire(destinations.map(canonicalWire).sort())) issues.push("legacy_destination_ambiguous");
+  const titledProject = fields.project !== undefined && fields.project.trim().length > 0 && project === undefined;
+  if (!fields.area || titledProject || destinations.some(ref => ref.canonicalId.trim() !== ref.canonicalId) || canonicalWire(context.destinations.map(canonicalWire).sort()) !== canonicalWire(destinations.map(canonicalWire).sort())) issues.push("legacy_destination_ambiguous");
   if (context.canonicalReference && (context.canonicalReference.objectType !== "task" || context.canonicalReference.canonicalId !== source.record.canonicalId)) issues.push("legacy_canonical_mapping_unsupported");
   return issues;
+}
+
+function storableContext(context: LegacyContext | null): LegacyContext | null {
+  if (!context) return null;
+  const { canonicalReference, ...rest } = context;
+  return { ...rest, destinations: context.destinations.filter(storableReference), ...(canonicalReference && storableReference(canonicalReference) ? { canonicalReference } : {}) };
 }
 
 export function previewLegacyOperation(raw: LegacySource, mapping?: LegacyContext): LegacyPreview {
@@ -88,8 +101,9 @@ export function previewLegacyOperation(raw: LegacySource, mapping?: LegacyContex
 
 export async function importLegacyOperation(store: OperationJournalStore, source: LegacySource, mapping: LegacyContext | undefined, importedAt: string): Promise<StoredOperation> {
   const preview = previewLegacyOperation(source, mapping);
-  const evidence = { source: preview.source, context: preview.context, issues: preview.issues };
-  const journal: OperationJournal = { lifecycleVersion: "1.0.0", operationId: source.record.operationId, sequence: 1, state: preview.state, idempotencyKey: source.record.operationId, ownerRequestId: preview.ownerRequestId, snapshot: { kind: "legacy-unavailable", reason: "Legacy evidence has no lifecycle approval; dispatch and retry require separate reviewed migration." }, events: [{ sequence: 1, eventId: `legacy-import:${preview.sourceDigest}`, at: importedAt, event: { kind: "legacy-import", rawRecord: parseWire(z.json(), evidence), sourceDigest: preview.sourceDigest } }] };
+  const evidence = { source: preview.source, context: storableContext(preview.context), issues: preview.issues };
+  const sourceDigest = hash(evidence);
+  const journal: OperationJournal = { lifecycleVersion: "1.0.0", operationId: source.record.operationId, sequence: 1, state: preview.state, idempotencyKey: source.record.operationId, ownerRequestId: preview.ownerRequestId, snapshot: { kind: "legacy-unavailable", reason: "Legacy evidence has no lifecycle approval; dispatch and retry require separate reviewed migration." }, events: [{ sequence: 1, eventId: `legacy-import:${sourceDigest}`, at: importedAt, event: { kind: "legacy-import", rawRecord: parseWire(z.json(), evidence), sourceDigest } }] };
   return store.importLegacy(journal);
 }
 

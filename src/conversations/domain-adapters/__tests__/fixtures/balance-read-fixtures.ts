@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
-import { DEFAULT_SETTINGS, findNode, type AppState, type OutlineNode } from "../../../../balance";
+import { findNode, type AppState, type OutlineNode } from "../../../../balance";
+import { leaf, outlineState, removeOutlineNode, savedNode } from "./balance-shared";
+export { leaf, savedNode } from "./balance-shared";
 import { authorityRig } from "../../../authority-fixtures";
 import { initDatabase } from "../../../../surface/mc/db/init";
 import { loadBalanceState, saveBalanceState } from "../../../../surface/mc/desk/balance-store";
@@ -21,10 +23,6 @@ export const LAB_AREA = objectRef("balance", "area", "area-example");
 export const HOME_AREA = objectRef("balance", "area", "area-home");
 export const LAB_TASK_IDS = ["task-wing", "task-done", "task-glue"] as const;
 
-export function leaf(id: string, title: string, extra: Partial<OutlineNode> = {}): OutlineNode {
-  return { id, title, weight: 50, ordering: "parallel", children: [], effort: 1, ...extra };
-}
-
 export function releasedObjects(value: Json | undefined): { ref: { canonicalId: string }; value: Record<string, unknown> }[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("released value is not an object");
   const held = (value as { objects?: unknown }).objects;
@@ -32,32 +30,18 @@ export function releasedObjects(value: Json | undefined): { ref: { canonicalId: 
   return held as { ref: { canonicalId: string }; value: Record<string, unknown> }[];
 }
 
-export function savedNode(state: AppState, id: string): OutlineNode {
-  const found = findNode(state.outline, id);
-  if (!found) throw new Error(`balance fixture node missing: ${id}`);
-  return found;
-}
-
 export function balanceReadState(): AppState {
-  return {
-    outline: {
-      id: "desk:outline", title: "Outline", weight: 100, ordering: "parallel", children: [
-        {
-          id: "area:area-example", title: "Lab", weight: 60, ordering: "parallel", children: [
-            { id: "project-glider", title: "Glider", weight: 50, ordering: "parallel", children: [leaf("task-wing", "Cut the wing", { effort: 2, dueDate: "2026-12-01", note: "Use paper" }), leaf("task-done", "Fold the body", { effort: 1, done: true })] },
-            leaf("task-glue", "Buy glue"),
-            { id: "project-empty", title: "Empty project", weight: 50, ordering: "parallel", children: [] },
-            { id: "studio-response:thread-1", title: "Studio thread", weight: 50, ordering: "parallel", children: [leaf("task-studio", "Studio answer")] },
-          ],
-        },
-        { id: "area:area-home", title: "Home", weight: 40, ordering: "parallel", children: [leaf("task-garden", "Water the garden", { dueDate: "2026-11-20" })] },
+  return outlineState([
+    {
+      id: "area:area-example", title: "Lab", weight: 60, ordering: "parallel", children: [
+        { id: "project-glider", title: "Glider", weight: 50, ordering: "parallel", children: [leaf("task-wing", "Cut the wing", { effort: 2, dueDate: "2026-12-01", note: "Use paper" }), leaf("task-done", "Fold the body", { effort: 1, done: true })] },
+        leaf("task-glue", "Buy glue"),
+        { id: "project-empty", title: "Empty project", weight: 50, ordering: "parallel", children: [] },
+        { id: "studio-response:thread-1", title: "Studio thread", weight: 50, ordering: "parallel", children: [leaf("task-studio", "Studio answer")] },
       ],
     },
-    log: [],
-    settings: { ...DEFAULT_SETTINGS },
-    dayState: null,
-    history: { deficits: {}, lastSurfaced: {} },
-  };
+    { id: "area:area-home", title: "Home", weight: 40, ordering: "parallel", children: [leaf("task-garden", "Water the garden", { dueDate: "2026-11-20" })] },
+  ]);
 }
 
 interface BalanceReadStepArgs { readonly capabilityId: string; readonly input: unknown; readonly destinations: readonly ObjectReference[]; readonly binding: ReadBinding }
@@ -125,11 +109,6 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
     const released = rig.calls.sends.length > previous ? rig.calls.sends[rig.calls.sends.length - 1] : undefined;
     return { result, released, request, args };
   };
-  const remove = (node: OutlineNode, id: string): boolean => {
-    const index = node.children.findIndex(child => child.id === id);
-    if (index >= 0) { node.children.splice(index, 1); return true; }
-    return node.children.some(child => remove(child, id));
-  };
   return {
     dir: rig.dir,
     get db() { if (!db) throw new Error("balance database unavailable"); return db; },
@@ -166,7 +145,7 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
     },
     removeTask(canonicalId) {
       const state = stored();
-      if (!remove(state.outline, canonicalId)) throw new Error("balance task fixture missing");
+      if (!removeOutlineNode(state.outline, canonicalId)) throw new Error("balance task fixture missing");
       save(state);
     },
     removeArea(canonicalId) {
