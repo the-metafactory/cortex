@@ -5,6 +5,7 @@ import { authorityHash } from "../../authority-records";
 import { canonicalSchema } from "../schema-validation";
 import { QueryRequestSchema, QUERY_LIMITS, queryError, type QueryGroup, type QueryObserver, type QueryRequest, type QueryResult, type QuerySource } from "./query-types";
 import { QueryStore, type StoredQuery } from "./query-store";
+import type { DiagnosticRecorder } from "../diagnostics";
 
 export interface QueryClock { now(): number; setTimer(callback: () => void, ms: number, background?: boolean): () => void }
 const systemClock: QueryClock = { now: Date.now, setTimer: (callback, ms, background) => { const timer = setTimeout(callback, ms); if (background) timer.unref(); return () => { clearTimeout(timer); }; } };
@@ -43,7 +44,7 @@ export class QueryRunner {
   private readonly active = new Map<string, AbortController>();
   private maintenanceTimer: (() => void) | undefined;
   private closed = false;
-  constructor(private readonly authority: Pick<AuthorityMediator, "queryHead" | "admitQueryPage">, private readonly store: QueryStore, private readonly clock: QueryClock = systemClock) {}
+  constructor(private readonly authority: Pick<AuthorityMediator, "queryHead" | "admitQueryPage">, private readonly store: QueryStore, private readonly clock: QueryClock = systemClock, private readonly diagnostics?: DiagnosticRecorder) {}
 
   close(): void { this.closed = true; this.maintenanceTimer?.(); for (const controller of this.active.values()) controller.abort(); }
 
@@ -109,7 +110,7 @@ export class QueryRunner {
     if (remainingMs <= 0) { deadline.timedOut = true; controller.abort(); }
     try {
       const heads = await untilAbort(Promise.all(request.sources.map(source => this.authority.queryHead(context, source, sink))), combined);
-      if (!heads) { await this.cancel(request.queryId); return { readVersion: "1.0.0", queryId: request.queryId, status: deadline.timedOut ? "partial" : "cancelled", groups: deadline.timedOut ? request.sources.flatMap((source, index) => query.states[index]?.head ? [{ source: sourceIdentity(source), status: "not-attempted" as const, coverage: "budget-exhausted" as const, reason: queryError("budget_exhausted") }] : []) : [], restricted: progress.restricted, noMatch: false, ...(deadline.timedOut ? { reason: queryError("deadline_exceeded"), restartRequired: true as const } : {}) }; }
+      if (!heads) { await this.cancel(request.queryId); const stopped: QueryResult = { readVersion: "1.0.0", queryId: request.queryId, status: deadline.timedOut ? "partial" : "cancelled", groups: deadline.timedOut ? request.sources.flatMap((source, index) => query.states[index]?.head ? [{ source: sourceIdentity(source), status: "not-attempted" as const, coverage: "budget-exhausted" as const, reason: queryError("budget_exhausted") }] : []) : [], restricted: progress.restricted, noMatch: false, ...(deadline.timedOut ? { reason: queryError("deadline_exceeded"), restartRequired: true as const } : {}) }; await this.observe(request, stopped); return stopped; }
       if (heads.some((head, index) => (head?.head ?? null) !== query.states[index]?.head)) return await this.invalidate(request.queryId);
       let next = 0;
       const pageContext: PageContext = { context, request, query, heads, budget, combined, deadline, progress, sink, ...(observer ? { observer } : {}) };
@@ -133,7 +134,9 @@ export class QueryRunner {
       const visible = groups.filter(group => group !== undefined);
       const incomplete = progress.failed || restricted || query.states.some(state => !state.exhausted || state.incomplete);
       const noMatch = !cancelled && !incomplete && token === null && query.states.every(state => Object.keys(state.seen).length === 0);
-      return { readVersion: "1.0.0", queryId: request.queryId, status: cancelled ? "cancelled" : restricted && visible.length === 0 ? "denied" : visible.length > 0 && visible.every(group => group.status === "unsupported") ? "unsupported" : visible.length > 0 && visible.every(group => group.status === "unavailable") ? "unavailable" : incomplete ? "partial" : "ok", groups: visible, restricted, noMatch, ...(token ? { continuation: token } : {}), ...(progress.failed ? { restartRequired: true as const } : {}) };
+      const result: QueryResult = { readVersion: "1.0.0", queryId: request.queryId, status: cancelled ? "cancelled" : restricted && visible.length === 0 ? "denied" : visible.length > 0 && visible.every(group => group.status === "unsupported") ? "unsupported" : visible.length > 0 && visible.every(group => group.status === "unavailable") ? "unavailable" : incomplete ? "partial" : "ok", groups: visible, restricted, noMatch, ...(token ? { continuation: token } : {}), ...(progress.failed ? { restartRequired: true as const } : {}) };
+      await this.observe(request, result);
+      return result;
     } catch { await this.cancel(request.queryId); return restart(request.queryId); }
     finally {
       clearDeadline();
@@ -185,4 +188,12 @@ export class QueryRunner {
   }
 
   private async invalidate(queryId: string): Promise<QueryResult> { await this.cancel(queryId); return restart(queryId); }
+
+  private async observe(request: QueryRequest, result: QueryResult): Promise<void> {
+    const source = request.sources[0];
+    if (!source || !this.diagnostics) return;
+    const identity = { adapterId: source.adapterId, connectionId: source.connectionId, capabilityId: source.capabilityId };
+    if (["denied", "unsupported", "unavailable"].includes(result.status)) { await this.diagnostics.record({ event: "desk.adapter.query_refused", ...identity, state: "refused", errorCode: result.reason?.code ?? result.status }); return; }
+    if (result.status === "partial") await this.diagnostics.record({ event: "desk.adapter.query_partial", ...identity, state: "partial", ...(result.reason ? { errorCode: result.reason.code } : {}) });
+  }
 }

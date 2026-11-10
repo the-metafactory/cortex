@@ -14,6 +14,7 @@ import { CancelRequestSchema, DispatchRequestSchema, ObjectReadbackSchema, Opera
 import { canonicalWire, validateSnapshot, validateResultPayload } from "./domain-adapters/operations/validation";
 import { OperationJournalStore, type Approval, type StoredOperation } from "./domain-adapters/operations/journal";
 import { fenceTargetOf, type FenceGate } from "./domain-adapters/operations/triggers";
+import type { DiagnosticRecorder } from "./domain-adapters/diagnostics";
 import { AuthorityDoc, AuthorityStateSchema, ConfirmationRecordSchema, HostRecordSchema, PolicyInputsSchema, ReleaseSinkSchema, authorityHash, authorityJson, exactReferences, recordId, recordRevision, type AuthorityState, type ConfirmationRecord, type ConnectionRecord, type DecisionRecord, type GrantRecord, type HostRecord, type PolicyInputs, type PrincipalBinding, type ReleaseSink, type RestrictionRecord } from "./authority-records";
 
 const AuthenticatedBindingSchema = z.object({ principal: z.string().min(1), stack: z.string().min(1), conversationId: z.string().min(1), authenticatedSessionRef: z.string().min(1), transport: z.enum(["web", "discord"]), audience: z.enum(["web", "discord", "model", "view"]), route: z.string().optional(), viewId: z.string().optional(), expiresAt: z.iso.datetime(), maintenance: z.boolean() }).strict();
@@ -85,8 +86,8 @@ export class AuthorityMediator {
   private readonly active = new Map<string, { controller: AbortController; heads: Set<string> }>();
   private readonly journal: OperationJournalStore;
 
-  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly registry: DomainAdapterRegistry, private readonly bindings: AuthorityBindings, private readonly hostPolicy: (id: string) => Promise<HostPolicyState>, private readonly context: Context, private readonly now: () => Date, private readonly publication: AuthorityPublication, private readonly hostRevision: () => string, private readonly writers: WriterAuthority, private readonly fences?: FenceGate) {
-    this.journal = new OperationJournalStore(engine, registry, context, fences);
+  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly registry: DomainAdapterRegistry, private readonly bindings: AuthorityBindings, private readonly hostPolicy: (id: string) => Promise<HostPolicyState>, private readonly context: Context, private readonly now: () => Date, private readonly publication: AuthorityPublication, private readonly hostRevision: () => string, private readonly writers: WriterAuthority, private readonly fences?: FenceGate, diagnostics?: DiagnosticRecorder) {
+    this.journal = new OperationJournalStore(engine, registry, context, fences, diagnostics);
     this.connectors = new Map([...bindings.connectors].map(([key, connector]) => [key, Object.freeze({
       writerOwner: connector.writerOwner, support: parseWire(OwnerSupportSchema, connector.support), authorizeConnection: connector.authorizeConnection.bind(connector), dispatch: connector.dispatch.bind(connector),
       ...(connector.cancel ? { cancel: connector.cancel.bind(connector) } : {}), ...(connector.lookup ? { lookup: connector.lookup.bind(connector) } : {}), ...(connector.query ? { query: connector.query.bind(connector) } : {}), ...(connector.read ? { read: connector.read.bind(connector) } : {}), ...(connector.readback ? { readback: connector.readback.bind(connector), readbackCapabilityId: connector.readbackCapabilityId } : {}),

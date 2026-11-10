@@ -18,6 +18,28 @@ const REASON_TEXT: Record<string, string> = {
   reference_missing: "The selected environment reference is not set.",
   package_missing: "The package is not installed. Your saved setup is kept.",
 };
+const STATUS_TEXT: Record<ConnectionView["status"]["state"], string> = {
+  available: "Available",
+  unavailable: "Unavailable",
+  stale: "Stale",
+  fenced: "Fenced",
+};
+const STATUS_REASON_TEXT: Record<string, string> = {
+  not_reported: "No adapter activity has been reported yet.",
+  not_configured: "The connection is not set up yet.",
+  disabled: "The connection is disabled. Enable it to use it.",
+  setup_incomplete: "The credential setup is incomplete.",
+  reconfigured: "The scope changed. Enable the connection again.",
+  package_missing: "The package is not installed. Your saved setup is kept.",
+  binding_fenced: "A safety trigger fenced this binding. Reads continue; mutation stays off.",
+  last_success_too_old: "No successful use was recorded recently. Check the connection.",
+  refused: "The adapter refused the last query.",
+};
+const when = (value: string | null): string => value === null ? "never" : new Date(value).toISOString().replace("T", " ").replace(".000Z", " UTC");
+const statusLine = (connection: ConnectionView): string => {
+  const reason = connection.status.reason;
+  return `${STATUS_TEXT[connection.status.state]} · last success ${when(connection.status.lastSuccessAt)} · last attempt ${when(connection.status.lastAttemptAt)}${reason ? ` · ${STATUS_REASON_TEXT[reason] ?? "A safety check stopped adapter use. See diagnostics."}` : ""}`;
+};
 const sameRef = (a: object, b: object): boolean => JSON.stringify(a) === JSON.stringify(b);
 type Ref = PackageForm["destinations"][number]["ref"];
 
@@ -72,7 +94,7 @@ function ConnectionRow({ connection, label, form, busy, apply }: { connection: C
   };
   return (
     <li aria-label={`${label} connection`}>
-      <span>{label}<small>{STATE_TEXT[connection.state]}{connection.reason ? ` · ${REASON_TEXT[connection.reason] ?? "See setup."}` : ""}</small></span>
+      <span>{label}<small>{STATE_TEXT[connection.state]}{connection.reason ? ` · ${REASON_TEXT[connection.reason] ?? "See setup."}` : ""}</small><small className="desk-set-status">{statusLine(connection)}</small></span>
       {connection.state === "incomplete" && form && missing.map(slot => (
         <label key={slot.slot}>{slot.slot}
           <input type="password" autoComplete="off" spellCheck={false} aria-label={`Credential for ${slot.slot}`} value={entries[slot.slot] ?? ""} onChange={event => setEntries({ ...entries, [slot.slot]: event.target.value })} />

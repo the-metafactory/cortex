@@ -6,6 +6,7 @@ import { BatchReceiptReader, BatchReceiptStore } from "./domain-adapters/operati
 import { ObjectReader } from "./domain-adapters/operations/readback";
 import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
 import { BindingFenceStore, type PrincipalNotifier } from "./domain-adapters/operations/triggers";
+import { AdapterDiagnostics } from "./domain-adapters/diagnostics";
 import { AuthorityPublication } from "./authority-publication";
 import { authorityHash } from "./authority-records";
 import { createHash, randomUUID } from "node:crypto";
@@ -166,6 +167,7 @@ export class ConversationHost {
   private queryService: { runner: QueryRunner; clock: QueryClock | undefined } | null = null;
   private authorityService: { registry: DomainAdapterRegistry; bindings: AuthorityBindings; mediator: AuthorityMediator } | null = null;
   private fences: BindingFenceStore | null = null;
+  private diagnosticsService: AdapterDiagnostics | null = null;
   private readonly context: Context = BACKGROUND_CONTEXT;
   private readonly queues = new Map<string, Promise<void>>();
   private readonly authorityPublication = new AuthorityPublication();
@@ -215,12 +217,17 @@ export class ConversationHost {
     return this.harness;
   }
 
+  adapterDiagnostics(): AdapterDiagnostics {
+    this.diagnosticsService ??= new AdapterDiagnostics(this.engine, { now: this.now, context: this.context, fenced: id => this.lifecycleFences().isConnectionFenced(id) });
+    return this.diagnosticsService;
+  }
+
   lifecycleJournal(registry: DomainAdapterRegistry): OperationJournalStore {
-    return new OperationJournalStore(this.engine, registry, this.context, this.lifecycleFences());
+    return new OperationJournalStore(this.engine, registry, this.context, this.lifecycleFences(), this.adapterDiagnostics());
   }
 
   lifecycleFences(): BindingFenceStore {
-    this.fences ??= new BindingFenceStore(this.engine, this.options.notify, this.context, this.now);
+    this.fences ??= new BindingFenceStore(this.engine, this.options.notify, this.context, this.now, this.adapterDiagnostics());
     return this.fences;
   }
 
@@ -232,7 +239,7 @@ export class ConversationHost {
 
   credentialBroker(deps: DeskCredentialBrokerDeps): DeskCredentialBroker { return new DeskCredentialBroker(this.engine, deps, this.context); }
 
-  connectionSetup(broker: DeskCredentialBroker, authority: ConstructorParameters<typeof ConnectionSetupService>[2], deps: ConnectionSetupDeps): ConnectionSetupService { return new ConnectionSetupService(this.engine, broker, authority, deps, this.context); }
+  connectionSetup(broker: DeskCredentialBroker, authority: ConstructorParameters<typeof ConnectionSetupService>[2], deps: ConnectionSetupDeps): ConnectionSetupService { return new ConnectionSetupService(this.engine, broker, authority, deps, this.context, this.adapterDiagnostics()); }
 
   readQueries(registry: DomainAdapterRegistry, bindings: AuthorityBindings, clock?: QueryClock): QueryRunner {
     const authority = this.lifecycleAuthority(registry, bindings);
@@ -240,7 +247,7 @@ export class ConversationHost {
       if (this.queryService.clock !== clock) throw new Error("Query clock is already registered for this host.");
       return this.queryService.runner;
     }
-    const runner = new QueryRunner(authority, new QueryStore(this.engine, clock ? () => clock.now() : Date.now, this.context), clock);
+    const runner = new QueryRunner(authority, new QueryStore(this.engine, clock ? () => clock.now() : Date.now, this.context), clock, this.adapterDiagnostics());
     this.queryService = { runner, clock };
     return runner;
   }
@@ -252,7 +259,7 @@ export class ConversationHost {
       if (this.authorityService.registry !== registry || this.authorityService.bindings !== bindings) throw new Error("Authority bindings are already registered for this host.");
       return this.authorityService.mediator;
     }
-    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters(), this.lifecycleFences());
+    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters(), this.lifecycleFences(), this.adapterDiagnostics());
     this.authorityService = { registry, bindings, mediator };
     return mediator;
   }

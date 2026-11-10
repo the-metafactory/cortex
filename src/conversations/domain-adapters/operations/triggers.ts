@@ -5,6 +5,7 @@ import { defineDoc, type JsonObject, type Session } from "@earendil-works/pi-dur
 import { z } from "zod";
 import type { ApprovedSnapshot } from "./types";
 import { canonicalWire } from "./validation";
+import type { DiagnosticRecorder } from "../diagnostics";
 
 const text = z.string().min(1);
 const actionText = z.string().trim().min(1);
@@ -96,8 +97,12 @@ const noticeFor = (signal: FenceSignal, at: string): PrincipalNotice => {
 export class BindingFenceStore implements FenceGate, FenceSink {
   private readonly now: () => Date;
 
-  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private notifier?: PrincipalNotifier, private readonly context: Context = BACKGROUND_CONTEXT, now?: () => Date) {
+  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private notifier?: PrincipalNotifier, private readonly context: Context = BACKGROUND_CONTEXT, now?: () => Date, private diagnostics?: DiagnosticRecorder) {
     this.now = now ?? (() => new Date());
+  }
+
+  attachDiagnostics(diagnostics: DiagnosticRecorder): void {
+    this.diagnostics = diagnostics;
   }
 
   private async state(): Promise<FenceState> {
@@ -125,6 +130,14 @@ export class BindingFenceStore implements FenceGate, FenceSink {
     return (await this.read(target))?.state === "fenced";
   }
 
+  async isConnectionFenced(connectionId: string): Promise<boolean> {
+    const state = await this.state();
+    return Object.values(state.fences).some(records => {
+      const head = records.at(-1);
+      return head?.state === "fenced" && head.target.connectionId === connectionId;
+    });
+  }
+
   async notices(): Promise<PrincipalNotice[]> {
     return (await this.state()).notices;
   }
@@ -144,7 +157,9 @@ export class BindingFenceStore implements FenceGate, FenceSink {
       return { notice, head: state.fences[targetKey]?.at(-1) ?? null };
     });
     const notification = committed.notice ? await this.deliver(committed.notice) : null;
-    return { fenced: committed.head?.state === "fenced", notification, fence: committed.head };
+    const fenced = committed.head?.state === "fenced";
+    await this.diagnostics?.record({ event: "desk.adapter.trigger_fired", adapterId: signal.target.adapterId, connectionId: signal.target.connectionId, capabilityId: signal.target.capabilityId, state: fenced ? "fenced" : "notify-only", errorCode: signal.kind, at });
+    return { fenced, notification, fence: committed.head };
   }
 
   private fence(state: FenceState, signal: FenceSignal, targetKey: string, at: string, head: FenceRecord | undefined): PrincipalNotice | null {
@@ -193,12 +208,14 @@ export class BindingFenceStore implements FenceGate, FenceSink {
     const reason = actionText.parse(action.reason);
     const at = this.now().toISOString();
     const key = fenceKey(target);
-    return this.mutate(state => {
+    const record = await this.mutate(state => {
       const head = state.fences[key]?.at(-1);
       if (head?.state !== "fenced") throw new FenceConflict("Only a fenced binding can be lifted.");
-      const record: FenceRecord = { version: 1, fenceId: randomUUID(), target, targetKey: key, state: "open", trigger: head.trigger, message: head.message, at, liftedBy: principal, liftReason: reason, liftedAt: at };
-      state.fences[key] = [...(state.fences[key] ?? []), record];
-      return record;
+      const lifted: FenceRecord = { version: 1, fenceId: randomUUID(), target, targetKey: key, state: "open", trigger: head.trigger, message: head.message, at, liftedBy: principal, liftReason: reason, liftedAt: at };
+      state.fences[key] = [...(state.fences[key] ?? []), lifted];
+      return lifted;
     });
+    await this.diagnostics?.record({ event: "desk.adapter.connection_status", adapterId: target.adapterId, connectionId: target.connectionId, state: "available", at });
+    return record;
   }
 }
