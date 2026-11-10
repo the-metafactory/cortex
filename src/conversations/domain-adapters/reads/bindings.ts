@@ -42,3 +42,9 @@ export class ReadBindings {
     return held ? { state: "available", binding: structuredClone(held) } : { state: "unavailable", code: "binding_missing" };
   }
 }
+
+export function acceptsReadObject(registry: DomainAdapterRegistry, binding: ReadBinding, objectType: string): boolean {
+  if (binding.mode !== "destinations") return objectType === binding.objectType;
+  const capability = registry.capability(binding.capabilityId);
+  return capability.support === "declared" && capability.adapterId === binding.adapterId && capability.capability.objectTypes.includes(objectType);
+}

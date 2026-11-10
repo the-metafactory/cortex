@@ -1,3 +1,4 @@
+import { acceptsReadObject } from "./domain-adapters/reads/bindings";
 import { validateObservationBatch, type ObservationBasis, type ObservationConnector, type ObservationRequest, type ObservationRow, type ObservationView } from "./domain-adapters/reads/observation-types";
 import { QuerySourceSchema, type QueryDispatch, type QueryFetchRequest } from "./domain-adapters/reads/query-types";
 import { validateQueryPage, type ValidatedQueryPage } from "./domain-adapters/reads/query-validation";
@@ -116,6 +117,13 @@ export class AuthorityMediator {
   }
 
   inspectHostRecords(): Promise<AuthorityState> { return this.state(); }
+
+  registerReleaseSink(raw: ReleaseSink, send: (value: Json) => Promise<void>): () => void {
+    const key = canonicalWire(parseWire(ReleaseSinkSchema, raw));
+    if (this.sinks.has(key)) throw new Error("Release sink is already registered.");
+    this.sinks.set(key, send);
+    return () => { if (this.sinks.get(key) === send) this.sinks.delete(key); };
+  }
 
   async publishHostRecord(raw: HostRecord, expectedRevision: number): Promise<void> {
     const record = parseWire(HostRecordSchema, raw);
@@ -569,10 +577,10 @@ export class AuthorityMediator {
 
   private async objectReleasable(resolved: Resolved, binding: ReadBinding, scope: HostScope, sink: ReleaseSink, object: ReadPage["objects"][number], index: Map<string, RestrictionRecord[]>, metadataOnly = false): Promise<boolean> {
     const { ref, destination } = object;
-    if (ref.adapterId !== binding.adapterId || ref.connectionId !== resolved.connection.connectionId || ref.objectType !== binding.objectType) return false;
+    if (ref.adapterId !== binding.adapterId || ref.connectionId !== resolved.connection.connectionId || !acceptsReadObject(this.registry, binding, ref.objectType)) return false;
     if (binding.destinationType !== undefined && (destination?.objectType !== binding.destinationType)) return false;
     if (!destination || !withinLimits(scope.destinations, [destination])) return false;
-    if (!metadataOnly && !this.registry.validateObject(binding.adapterId, binding.objectType, object.schemaRef, object.value).ok) return false;
+    if (!metadataOnly && !this.registry.validateObject(binding.adapterId, ref.objectType, object.schemaRef, object.value).ok) return false;
     const own = index.get(canonicalWire(ref)) ?? [];
     if (own.length === 0) return true;
     const record = own[0];
@@ -605,7 +613,7 @@ export class AuthorityMediator {
         const scope = { ...found, capabilityId: source.capabilityId };
         const resolved = await this.resolve(context, source.connectionId, undefined, undefined, undefined, [scope]);
         if (resolved.connection.adapterId !== source.adapterId || !this.readable(resolved, undefined, [scope]) || !this.sinkAllowed(resolved, undefined, sink, [scope]) || !this.sinks.has(canonicalWire(sink))) return null;
-        if (lookup?.state !== "available" || lookup.binding.mode !== "query" || !lookup.binding.query || !this.connectors.get(resolved.connection.connectorId)?.query) return { head: this.queryHeadOf(resolved, undefined, state) };
+        if (lookup?.state !== "available" || (lookup.binding.mode !== "query" && lookup.binding.mode !== "destinations") || !lookup.binding.query || !this.connectors.get(resolved.connection.connectorId)?.query) return { head: this.queryHeadOf(resolved, undefined, state) };
         if (canonicalWire(source.inputSchemaRef) !== canonicalWire(lookup.binding.inputSchemaRef)) return null;
         if (!this.registry.validateInput({ capabilityId: source.capabilityId, inputSchemaRef: source.inputSchemaRef, input: source.input }, null).ok) return null;
         return { head: this.queryHeadOf(resolved, lookup.binding, state), binding: lookup.binding };
@@ -715,7 +723,7 @@ export class AuthorityMediator {
         const state = await this.state();
         const connection = headRecord(state, "connection", request.connectionId);
         const lookup = connection ? this.bindings.readBindings?.lookup(connection.adapterId, request.connectionId, request.capabilityId) : undefined;
-        if (lookup?.state !== "available" || lookup.binding.mode === "destinations") return withheld();
+        if (lookup?.state !== "available" || lookup.binding.mode === "destinations" && !query) return withheld();
         const found = this.readScopeFor(state, request.destinations);
         if (!found) return withheld();
         const scope: HostScope = { ...found, capabilityId: request.capabilityId };
