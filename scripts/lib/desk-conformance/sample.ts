@@ -20,7 +20,8 @@ function sampleString(schema: Record<string, unknown>): string {
   if (schema.format === "date-time") return "2026-11-01T00:00:00.000Z";
   if (schema.format === "uri") return "https://example.invalid/conformance";
   const minimum = typeof schema.minLength === "number" ? schema.minLength : 1;
-  return FILLER.padEnd(minimum, "x");
+  const padded = FILLER.padEnd(minimum, "x");
+  return typeof schema.maxLength === "number" ? padded.slice(0, Math.max(schema.maxLength, 0)) : padded;
 }
 
 function sampleNumber(schema: Record<string, unknown>): number {

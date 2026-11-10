@@ -124,7 +124,7 @@ async function execute(packageDir: string, temp: string): Promise<Outcome> {
   }
 }
 
-/** Drives one local Desk adapter package through the production host seams and reports each capability. */
+/** Drives one local Desk adapter package through the production Cortex runtime seams and reports each capability. */
 export async function runConformance(packageDir: string): Promise<ConformanceReport> {
   const guard = guardNetwork();
   const temp = await mkdtemp(join(tmpdir(), "desk-conformance-"));

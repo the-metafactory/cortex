@@ -173,3 +173,32 @@ describe("the host source", () => {
     expect(hits).toEqual([]);
   });
 });
+
+describe("network guard", () => {
+  test("overlapping guards restore the original fetch only after the last release", () => {
+    const original = globalThis.fetch;
+    const first = guardNetwork();
+    const second = guardNetwork();
+    first.release();
+    expect(globalThis.fetch).not.toBe(original);
+    second.release();
+    expect(globalThis.fetch).toBe(original);
+  });
+
+  test("fetch.preconnect is refused and counted", () => {
+    const guard = guardNetwork();
+    try {
+      expect(() => (globalThis.fetch as unknown as { preconnect: (url: string) => void }).preconnect("http://example.invalid")).toThrow();
+      expect(guard.count()).toBe(1);
+    } finally {
+      guard.release();
+    }
+  });
+});
+
+describe("sampled strings", () => {
+  test("respect maxLength", () => {
+    const context = { schemas: new Map(), destinations: [], adapterId: "a", connectionId: "c" };
+    expect(String(sampleValue({ type: "string", maxLength: 3 }, context)).length).toBeLessThanOrEqual(3);
+  });
+});
