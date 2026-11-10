@@ -9,6 +9,7 @@ import type { ForegroundReading } from "../lib/studio-foreground";
 import { getJson } from "../lib/api";
 import { useBalanceLocation } from "../hooks/use-balance-location";
 import { DeskMirror } from "./desk-mirror";
+import { MyDayObservationStatus } from "./desk-my-day";
 import { UnfiledBalanceTasks } from "./desk-balance-intake";
 import { BalanceAddForm, balanceEntries, TaskDetails, TaskMessageBanner, useBalanceEditor, type TaskAdding } from "./desk-task-details";
 import "./desk-balance.css";
@@ -31,7 +32,7 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
   const editor = useBalanceEditor(current, saved => { setLocal(saved); onChanged(); });
   const { busy, message, change, setMoving } = editor;
   const [adding, setAdding] = useState<TaskAdding | null>(null);
-  const [hideDone, setHideDone] = useStoredFlag("desk.balance.hide-completed");
+  const [hideDone, setHideDone] = useStoredFlag("desk.balance.hide-completed", true);
   const [dragging, setDragging] = useState<string | null>(null);
   const [hint, setHint] = useState<{ id: string; zone: DropZone } | null>(null);
   const inspector = useRef<HTMLElement>(null);
@@ -86,9 +87,10 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
     <nav className="dbl-tabs" aria-label="Balance views"><button className="desk-btn" aria-pressed={location.tab === "plan"} onClick={() => { go({ ...location, tab: "plan" }); }}>Plan</button><button className="desk-btn" aria-pressed={location.tab === "review"} onClick={() => { go({ ...location, tab: "review" }); }}>Weekly review</button><span>Your full hierarchy, beyond today.</span></nav>
     <TaskMessageBanner message={message} busy={busy} onUndo={receipt => void change({ op: "undo", receipt })} />
     {current.studioStatus === "unavailable" && <p role="status">Studio is busy or unreadable. Its last saved outline is shown; refresh when its files are ready.</p>}
+    <MyDayObservationStatus day={current} disabled={busy} onRefresh={() => { void refresh(); }} />
     {adding && <BalanceAddForm adding={adding} choices={destinationChoices} busy={busy} heading="Add task" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) { setAdding(null); if (saved.outlineId) go({ tab: "plan", item: saved.outlineId, area: "", query: "" }); } }); }} />}
     {location.tab === "review" ? <div className="dbl-review">{view.mirror ? <DeskMirror mirror={view.mirror} areas={view.areas} foreground={foreground} onThread={onThread} onChanged={onChanged} /> : <p role="status">The weekly review is unavailable. Refresh the Desk to retry.</p>}</div> : <div className="dbl-layout">
-      <main className="dbl-outline" aria-label="Balance plan"><header className="dbl-toolbar"><div><h2 ref={outlineHeading} tabIndex={-1}>Your outline</h2><p>Areas → projects → tasks</p></div><div><button className="desk-btn ghost" aria-pressed={hideDone} onClick={() => { setHideDone(!hideDone); }}>Hide completed</button><button className="desk-btn ghost" onClick={() => { setCollapsed(new Set()); }}>Expand all</button><button className="desk-btn ghost" onClick={() => { setCollapsed(new Set(entries.filter(item => item.node.children.length).map(item => item.node.id))); }}>Collapse all</button></div></header>
+      <main className="dbl-outline" aria-label="Balance plan"><header className="dbl-toolbar"><div><h2 ref={outlineHeading} tabIndex={-1}>Your outline</h2><p>Areas → projects → tasks</p></div><div><span className="dbl-completed"><span>Hide completed</span><button type="button" role="switch" className="desk-switch" aria-label="Hide completed" aria-checked={hideDone} onClick={() => { setHideDone(!hideDone); }}><span className="desk-switch-knob" aria-hidden="true" /></button></span><button className="desk-btn ghost" onClick={() => { setCollapsed(new Set()); }}>Expand all</button><button className="desk-btn ghost" onClick={() => { setCollapsed(new Set(entries.filter(item => item.node.children.length).map(item => item.node.id))); }}>Collapse all</button></div></header>
         <div className="dbl-filters"><input aria-label="Search full hierarchy" placeholder="Find a project or task…" value={location.query} onChange={event => { go({ ...location, query: event.target.value }, true); }} /><select aria-label="Outline area" value={location.area} onChange={event => { go({ ...location, area: event.target.value }, true); }}><option value="">All areas</option>{current.outline.children.map(node => <option key={node.id} value={node.id}>{node.title}</option>)}</select></div>
         <div className="dbl-columns"><span>Task or project</span><span>Importance</span></div>
         <section aria-label="Full Balance hierarchy"><ul className="dbl-tree">{visible.map(node => <BalanceTree key={node.id} node={node} depth={0} tree={tree} />)}</ul>{visible.length === 0 && <p className="dbl-empty">No items match these area and search filters. <button className="desk-btn ghost" onClick={() => { go({ ...location, area: "", query: "" }, true); }}>Clear filters</button></p>}</section>

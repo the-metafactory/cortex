@@ -39,6 +39,32 @@ test("Balance reads queued behind a runner failure recover and release their own
   }
 });
 
+test("the enabled Balance connection feeds My Day from the durable observation projection", async () => {
+  const stack = await balanceConnectionStack();
+  try {
+    const catalog = await stack.http("/api/desk/connections");
+    expect(catalog.body.packages[0].capabilities.map((item: { capabilityId: string }) => item.capabilityId)).toContain("balance.task.observation");
+    const connection = await stack.enable();
+    const day = await stack.http("/api/desk/my-day");
+    expect(day.status).toBe(200);
+    expect(day.body.observation).toEqual({ status: "fresh", observedAt: expect.any(String) });
+    expect(day.body.outline).toEqual(loadBalanceState(stack.db)!.outline);
+    const desk = await stack.http("/api/desk");
+    expect(desk.status).toBe(200);
+    expect(desk.body.myDay.observation).toMatchObject({ status: "fresh" });
+    expect(desk.body.myDay.outline).toEqual(loadBalanceState(stack.db)!.outline);
+    expect(desk.body.items.every((item: { kind: string }) => item.kind !== "adapter")).toBe(true);
+    await stack.reopen();
+    const reopened = await stack.http("/api/desk/my-day");
+    expect(reopened.body.observation).toMatchObject({ status: "fresh" });
+    expect(reopened.body.outline).toEqual(loadBalanceState(stack.db)!.outline);
+    const disabled = await stack.http(`/api/desk/connections/${connection.connectionId}/disable`, { expectedRevision: connection.revision });
+    expect(disabled.body.connection.state).toBe("disabled");
+    const off = await stack.http("/api/desk/my-day");
+    expect(off.body.observation).toBeNull();
+  } finally { await stack.close(); }
+});
+
 test("live Balance setup enables without credentials, reads annotated owner data, survives reopen and disables without changing legacy Balance", async () => {
   const stack = await balanceConnectionStack();
   try {

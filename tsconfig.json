@@ -35,6 +35,7 @@
     "src/surface/mc/worker",
     "src/services/network-registry",
     "src/taps/gh-webhook",
+    "src/conversations/domain-adapters/__tests__/fixtures/conformance-packages",
     "../grove-auth"
   ]
 }
