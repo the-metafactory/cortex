@@ -10,7 +10,8 @@ const form: PackageForm = {
   capabilities: [{ capabilityId: "example.read", label: "Read objects", access: "read" }, { capabilityId: "example.create", label: "Create objects", access: "write" }],
   destinations: [{ ref, label: "Example area" }], references: ["EXAMPLE_API_KEY"],
 };
-const connection = (state: ConnectionView["state"], extra: Partial<ConnectionView> = {}): ConnectionView => ({ connectionId: "c1", packageId: "example-package", state, revision: 3, scope: { account: "a" }, readCapabilityIds: [], writeCapabilityIds: [], readDestinations: [], writeDestinations: [], slots: [], publishedRevision: null, ...extra });
+const status = (state: ConnectionView["status"]["state"], extra: Partial<ConnectionView["status"]> = {}): ConnectionView["status"] => ({ state, lastSuccessAt: null, lastAttemptAt: null, reason: null, ...extra });
+const connection = (state: ConnectionView["state"], extra: Partial<ConnectionView> = {}): ConnectionView => ({ connectionId: "c1", packageId: "example-package", state, revision: 3, scope: { account: "a" }, readCapabilityIds: [], writeCapabilityIds: [], readDestinations: [], writeDestinations: [], slots: [], publishedRevision: null, status: status("available"), ...extra });
 const render = (connections: ConnectionView[], packages: PackageForm[] = [form]) => renderToStaticMarkup(<ConnectionSetupBody snapshot={{ ok: true, packages, connections }} note={null} busy={false} apply={async () => {}} />);
 
 describe("connection setup form", () => {
@@ -32,6 +33,24 @@ describe("connection setup form", () => {
     const gone = render([connection("unavailable", { reason: "package_missing" })], []);
     expect(gone).toContain("The package is not installed. Your saved setup is kept.");
     expect(gone).not.toContain(">Enable<");
+  });
+
+  it("shows the connection's current status, its last success and last attempt and a safe reason", () => {
+    const html = render([
+      connection("enabled", { status: status("available", { lastSuccessAt: "2026-11-09T08:00:00.000Z", lastAttemptAt: "2026-11-09T08:05:00.000Z" }) }),
+      connection("disabled", { connectionId: "c2", status: status("unavailable", { reason: "disabled", lastAttemptAt: "2026-11-09T07:00:00.000Z" }) }),
+      connection("enabled", { connectionId: "c3", status: status("stale", { reason: "last_success_too_old", lastSuccessAt: "2026-11-09T06:00:00.000Z" }) }),
+      connection("enabled", { connectionId: "c4", status: status("fenced", { reason: "binding_fenced", lastAttemptAt: "2026-11-09T05:00:00.000Z" }) }),
+    ]);
+    expect(html).toContain("Available");
+    expect(html).toContain("last success 2026-11-09 08:00:00 UTC");
+    expect(html).toContain("last attempt 2026-11-09 08:05:00 UTC");
+    expect(html).toContain("The connection is disabled. Enable it to use it.");
+    expect(html).toContain("Stale");
+    expect(html).toContain("No successful use was recorded recently. Check the connection.");
+    expect(html).toContain("Fenced");
+    expect(html).toContain("A safety trigger fenced this binding. Reads continue; mutation stays off.");
+    expect(html).toContain("last success never");
   });
 
   it("states an unavailable sign-in mechanism and disables saving", () => {

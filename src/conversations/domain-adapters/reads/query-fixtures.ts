@@ -23,11 +23,12 @@ export function queryRegistry(outputVersion = "1.0.0") {
 export function syntheticQueryPage(ids = ["task-0"], cursor?: string, stable = true): QueryPage {
   return structuredClone({ readVersion: "1.0.0", payload: { items: ids.map(id => ({ title: id, area: queryArea })) }, annotations: ids.map((id, index) => ({ pointer: `/items/${index}`, ref: objectRef("balance", "task", id), schemaRef: queryBinding.inputSchemaRef, destination: queryArea, position: index, evidence: { evidenceId: `evidence-${id}`, revision: "1", observedAt: AT } })), observedAt: AT, ordering: "provider", snapshot: stable ? { kind: "stable", id: "snapshot-example" } : { kind: "live" }, ...(cursor === undefined ? {} : { cursor }) });
 }
-export async function queryRig(clock?: QueryClock, policy: "local" | "cloud" = "local") {
-  const rig = await authorityRig({}, policy, { registry: queryRegistry(), binding: queryBinding });
+export async function queryRig(clock?: QueryClock, policy: "local" | "cloud" = "local", options: { secondConnection?: boolean } = {}) {
+  const rig = await authorityRig({}, policy, { registry: queryRegistry(), binding: queryBinding, ...(options.secondConnection ? { secondConnection: true } : {}) });
   const source: QuerySource = { adapterId: "balance", connectionId: rig.connection.connectionId, capabilityId: queryBinding.capabilityId, inputSchemaRef: queryBinding.inputSchemaRef, destinations: [queryArea], input: { area: queryArea, title: "synthetic query" } };
+  const secondSource: QuerySource | undefined = rig.secondConnection ? { ...source, connectionId: rig.secondConnection.connectionId } : undefined;
   rig.hooks.query = () => Promise.resolve(syntheticQueryPage());
-  return { rig, source, get runner() { return rig.host.readQueries(rig.registry, rig.bindings, clock); } };
+  return { rig, source, secondSource, get runner() { return rig.host.readQueries(rig.registry, rig.bindings, clock); } };
 }
 export function controlledQueryClock() {
   let now = Date.parse(AT);
