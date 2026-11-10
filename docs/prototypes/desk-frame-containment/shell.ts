@@ -90,4 +90,16 @@ async function main(): Promise<void> {
   document.body.append(frame);
 }
 
+const panel = document.createElement("pre");
+panel.style.cssText = "font:12px/1.5 ui-monospace,monospace;background:#f4f4f5;color:#18181b;padding:12px;white-space:pre-wrap";
+document.body.append(panel);
+setInterval(() => {
+  panel.textContent = [
+    `attack: ${attack}   variant: ${variant}`,
+    `handshake: ${lab.ready ? "ready" : "not ready"}   projection sent: ${lab.projectionSent}   frame loads: ${lab.loads}`,
+    `bridge: ${lab.closed ? `closed (${lab.closed})` : "open"}   admitted effects: ${lab.accepted.join(", ") || "none"}   ambient messages ignored: ${lab.ambient}`,
+    "", ...lab.log,
+  ].join("\n");
+}, 250);
+
 void main().catch((error: unknown) => { note(`shell failed ${String(error)}`); lab.done = true; });

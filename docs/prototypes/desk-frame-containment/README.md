@@ -7,6 +7,7 @@ Throwaway lab; nothing here belongs on main. It settles the two prerequisites of
 ```sh
 bun install --frozen-lockfile
 bun x playwright install webkit firefox
+bun scripts/prototype-desk-frame-containment.ts                          # browsable lab at http://127.0.0.1:33610/
 bun scripts/probe-desk-frame-containment.ts --browsers=chromium,webkit   # ~5 min, writes evidence/
 ```
 

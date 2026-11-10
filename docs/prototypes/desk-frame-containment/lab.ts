@@ -149,6 +149,11 @@ export function openCell(route: Route, variant: Variant, rig: AssetRig, shellJs:
     const to = url.searchParams.get("to") ?? "about:blank";
 
     if (url.pathname === redirectPath || url.pathname.includes("/__expired__/")) return done(Response.redirect(to, 302), "lab redirect");
+    if (route === "hosted" && url.pathname === "/__lab/login") {
+      const next = url.searchParams.get("next") ?? "/";
+      if (!next.startsWith(`${origin}/`)) return done(new Response("bad next", { status: 400 }));
+      return done(new Response(null, { status: 302, headers: { Location: next, "Set-Cookie": `${SESSION_COOKIE}=${SESSION_VALUE}; Path=/; Secure; HttpOnly; SameSite=${variant === "combined" ? "None" : "Lax"}` } }), "lab login");
+    }
     if (route === "hosted" && !cookie) return done(Response.redirect(`${loginOrigin}/access-login${url.pathname}`, 302), "gateway: unauthenticated");
 
     if (url.pathname === "/" || url.pathname === "/lab/shell.html") {
