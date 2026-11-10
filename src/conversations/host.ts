@@ -123,7 +123,7 @@ export interface HostOptions {
   alive?: (pid: number) => boolean;
   pid?: number;
 }
-export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters; withheld?: WithheldReasons; readers?: WorkReaders; communications?: () => readonly CommunicationConnector[] }
+export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters; withheld?: WithheldReasons; readers?: WorkReaders; queries?: (session: ToolSession) => WorkReaders | undefined; communications?: () => readonly CommunicationConnector[] }
 export type HostStatus = { state: "ready"; host: ConversationHost; tookOver: LockOwner | null; resumed: string[]; reconciled: string[] } | { state: "unavailable"; reason: string };
 
 const strictest = (policies: Policy[]): Policy => policies.includes("local") ? "local" : "cloud";
@@ -597,6 +597,7 @@ export class ConversationHost {
   private workOwner(): WorkOwner {
     return {
       readers: () => this.sources.readers ?? {},
+      ...(this.sources.queries ? { queries: this.sources.queries } : {}),
       now: () => this.now().getTime(),
       remember: async (session, objects, signal) => {
         const sources: Record<string, Policy> = {};
