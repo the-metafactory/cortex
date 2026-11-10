@@ -250,16 +250,19 @@ test("Retry-After and bounded explicit resync preserve gap semantics", async () 
   expect(await observationViews(item)).toMatchObject([{ status: "fresh" }]);
 });
 
-test.each(["checkpoint", "gap", "poll"] as const)("scheduler recovers after a transient %s store error", async failure => {
+test.each(["checkpoint", "gap", "poll"] as const)("scheduler retries transient %s errors; subscription gaps require configured resync", async failure => {
   const item = await open();
   await check(item);
+  const lastSuccessAt = item.time.clock.now();
   const scheduler = schedule(item, failure === "poll" ? "poll" : "subscription");
   const fault = new Error("Synthetic transient durable-store failure");
   const mock = failure === "poll" ? spyOn(item.store, "check").mockRejectedValueOnce(fault) : spyOn(item.store, failure).mockRejectedValueOnce(fault);
   if (failure === "gap") item.hooks.fetch = () => Promise.reject(new Error("Synthetic dropped stream"));
   try {
     expect((await scheduler.refresh(item.source.connectionId)).status).toBe("unavailable");
-    item.hooks.fetch = () => Promise.resolve(syntheticObservation());
+    const updated = syntheticObservation("task-example", "Updated after retry", "2", "retry-evidence");
+    updated.checkpoint!.cursor = "synthetic recovered checkpoint";
+    item.hooks.fetch = () => Promise.resolve(updated);
     const count = item.requests.length;
     const delay = failure === "poll" ? 60000 : 1000;
     item.time.advance(delay - 1);
@@ -269,6 +272,31 @@ test.each(["checkpoint", "gap", "poll"] as const)("scheduler recovers after a tr
     await flush();
     expect(item.requests).toHaveLength(count + 1);
     expect(mock).toHaveBeenCalled();
+    expect(item.requests.at(-1)).toMatchObject(failure === "poll" ? { mode: "poll" } : { mode: "subscription", checkpoint: "synthetic protected checkpoint" });
+    const retryAt = item.time.clock.now();
+    const retried = await observationViews(item);
+    expect(retried).toMatchObject([failure === "poll"
+      ? { value: { title: "Updated after retry" }, revision: "2", status: "fresh", lastSuccessAt: retryAt, lastAttemptAt: retryAt }
+      : { value: { title: "Synthetic task" }, revision: "1", status: "stale", lastSuccessAt, lastAttemptAt: retryAt }]);
+    expect(await item.store.needsResync(item.rig.context, item.source, item.rig.sink)).toBe(failure !== "poll");
+    scheduler.close();
+    await item.rig.reopen();
+    expect(await observationViews(item)).toEqual(retried);
+    expect(await item.store.needsResync(item.rig.context, item.source, item.rig.sink)).toBe(failure !== "poll");
+    expect(await item.store.checkpoint(item.rig.context, item.source, item.rig.sink)).toBe(failure === "poll" ? "synthetic recovered checkpoint" : "synthetic protected checkpoint");
+    if (failure !== "poll") {
+      const repair = schedule(item, "subscription", true);
+      expect((await repair.refresh(item.source.connectionId)).status).toBe("ok");
+      expect(item.requests.slice(-2).map(request => request.mode)).toEqual(["resync", "subscription"]);
+      const repaired = await observationViews(item);
+      expect(repaired).toMatchObject([{ value: { title: "Updated after retry" }, revision: "2", status: "fresh", lastSuccessAt: retryAt }]);
+      expect(await item.store.needsResync(item.rig.context, item.source, item.rig.sink)).toBe(false);
+      repair.close();
+      await item.rig.reopen();
+      expect(await observationViews(item)).toEqual(repaired);
+      expect(await item.store.needsResync(item.rig.context, item.source, item.rig.sink)).toBe(false);
+      expect(await item.store.checkpoint(item.rig.context, item.source, item.rig.sink)).toBe("synthetic recovered checkpoint");
+    }
   } finally { mock.mockRestore(); }
 });
 

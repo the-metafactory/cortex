@@ -41,8 +41,13 @@ export class ObservationStore {
     return state.sources[sourceKey(source)] ??= { source: structuredClone(source), lastAttemptAt: null, lastSuccessAt: null, status: "stale", gap: false, generation: 0, checkpoint: null };
   }
 
+  private rowsFor(state: ObservationState, source: QuerySource): ObservationRow[] {
+    const key = sourceKey(source);
+    return Object.values(state.rows).filter(row => sourceKey(row.source) === key);
+  }
+
   private markGap(state: ObservationState, source: QuerySource, unavailable = false): void {
-    for (const row of Object.values(state.rows)) if (sourceKey(row.source) === sourceKey(source)) row.needsVerification = true;
+    for (const row of this.rowsFor(state, source)) row.needsVerification = true;
     const current = this.source(state, source);
     current.gap = true;
     current.status = unavailable ? "unavailable" : "stale";
@@ -185,9 +190,9 @@ export class ObservationStore {
     if ((mode === "resync" || mode === "reconcile") && !validated.batch.gap) current.gap = false;
     if (mode !== "subscription" || validated.batch.coverage === "watermark" && basis.binding.observation?.watermark) {
       current.lastSuccessAt = now;
-      if (validated.batch.coverage === "watermark") for (const row of Object.values(state.rows)) if (sourceKey(row.source) === sourceKey(source) && !row.conflicted) row.lastSuccessAt = now;
+      if (validated.batch.coverage === "watermark") for (const row of this.rowsFor(state, source)) if (!row.conflicted) row.lastSuccessAt = now;
     }
-    current.status = Object.values(state.rows).some(row => sourceKey(row.source) === sourceKey(source) && row.conflicted) ? "conflicted" : current.gap ? "stale" : "fresh";
+    current.status = this.rowsFor(state, source).some(row => row.conflicted) ? "conflicted" : current.gap ? "stale" : "fresh";
     this.maintain(state, basis);
     if (validated.batch.checkpoint && basis.binding.observation?.resumable && !current.gap && generation === current.generation && result.quarantined === 0 && result.status === "ok") current.checkpoint = { ...validated.batch.checkpoint, head: basis.head, generation: current.generation };
     return result;
@@ -222,7 +227,7 @@ export class ObservationStore {
         else count.evidenceCount++;
         counts.set(entry.objectKey, count);
       }
-      return Object.values(state.rows).filter(row => sourceKey(row.source) === sourceKey(source) && (row.kind === "deleted" ? history : row.value !== undefined)).map(row => {
+      return this.rowsFor(state, source).filter(row => row.kind === "deleted" ? history : row.value !== undefined).map(row => {
         const status = row.conflicted ? "conflicted" : current.status === "unavailable" ? "unavailable" : current.gap || row.needsVerification || current.status === "stale" || this.clock.now() - row.lastSuccessAt >= staleMs ? "stale" : "fresh";
         const evidence = counts.get(authorityHash(row.ref)) ?? { evidenceCount: 0, quarantinedEvidence: 0 };
         const view: ObservationView = { receivedAt: row.receivedAt, ...(row.revision === undefined ? {} : { revision: row.revision }), ...evidence, ref: row.ref, kind: row.kind, ...(row.kind === "present" ? { value: row.value } : {}), ...(row.evidenceId === undefined ? {} : { evidenceId: row.evidenceId }), observedAt: row.observedAt, lastSuccessAt: row.lastSuccessAt, lastAttemptAt: current.lastAttemptAt, status };
