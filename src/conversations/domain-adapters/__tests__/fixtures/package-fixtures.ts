@@ -211,3 +211,44 @@ export async function openDeskFixtureStore(dir: string): Promise<{ engine: Harne
   const engine = await Harness.open(await openNodeSqliteStorage(join(dir, "durable.sqlite")), { registry: createRegistry(), models: createModels() }, BACKGROUND_CONTEXT);
   return { engine, store: new DeskGenerationStore(engine) };
 }
+
+export type DeskBackendCall = "dispatch" | "cancel" | "lookup" | "readback";
+
+export interface DeskBackendFixtureOptions {
+  declaration: { adapterId: string };
+  actionCapabilityId?: string;
+  writerOwner?: string;
+  support?: object;
+  omit?: readonly DeskBackendCall[];
+  query?: { capabilityId: string; page: unknown };
+  observation?: { capabilityId: string; batch: unknown; modes?: readonly string[]; orderingId?: string };
+  readbackCapabilityId?: string;
+  readbackRef?: unknown;
+}
+
+const BACKEND_AT = "2026-11-01T00:00:00.000Z";
+
+export function deskBackendFixtureSource(options: DeskBackendFixtureOptions): string {
+  const adapterId = options.declaration.adapterId;
+  const omitted = new Set<string>(options.omit ?? []);
+  const keep = (call: DeskBackendCall, source: string): string => (omitted.has(call) ? "" : source);
+  const log = (name: string): string => `calls[${JSON.stringify(`${adapterId}:${name}`)}] = (calls[${JSON.stringify(`${adapterId}:${name}`)}] ?? 0) + 1;`;
+  const ref = JSON.stringify({ adapterId, connectionId: "connection-example", objectType: "task", canonicalId: "task-example" });
+  const connector = options.actionCapabilityId === undefined ? "" : `  host.registerConnector(${JSON.stringify(options.actionCapabilityId)}, connection => ({
+    kind: "action", adapterId: connection.adapterId, connectionId: connection.connectionId, capabilityId: ${JSON.stringify(options.actionCapabilityId)},
+    writerOwner: ${JSON.stringify(options.writerOwner ?? "package-owner")}, support: ${JSON.stringify(options.support ?? {})},
+    ${keep("dispatch", `dispatch(request) { ${log("dispatch")} return { lifecycleVersion: "1.0.0", operationId: request.operationId, attemptId: request.attemptId, snapshotDigest: request.snapshot.digest, resultId: "result-succeeded", reportedAt: ${JSON.stringify(BACKEND_AT)}, result: { kind: "succeeded", output: { ref: ${ref} }, evidence: { kind: "effect", evidenceId: "evidence-example", observedAt: ${JSON.stringify(BACKEND_AT)}, ownerRequestId: request.ownerRequestId, receipt: { committed: true }, refs: [${ref}] } } }; },`)}
+    ${keep("cancel", `cancel(request) { ${log("cancel")} return { lifecycleVersion: "1.0.0", operationId: request.operationId, checkedAt: ${JSON.stringify(BACKEND_AT)}, result: { kind: "unknown", reason: { code: "package_unknown", message: "No cancellation evidence." } } }; },`)}
+    ${keep("lookup", `lookup(request) { ${log("lookup")} return { lifecycleVersion: "1.0.0", operationId: request.operationId, checkedAt: ${JSON.stringify(BACKEND_AT)}, result: { kind: "unknown", reason: { code: "package_unknown", message: "No historical evidence." } } }; },`)}
+    ${keep("readback", `readbackCapabilityId: ${JSON.stringify(options.readbackCapabilityId ?? "")}, readback(request) { ${log("readback")} return { lifecycleVersion: "1.0.0", ref: request.ref, checkedAt: ${JSON.stringify(BACKEND_AT)}, provenance: { adapterId: request.ref.adapterId, connectionId: request.ref.connectionId, evidenceId: "package-readback" }, result: { kind: "deleted", evidenceId: "package-tombstone" } }; },`)}
+  }));`;
+  const handlers = options.query ? `${JSON.stringify(options.query.capabilityId)}: () => { ${log("query")} return ${JSON.stringify(options.query.page)}; }` : "";
+  const observations = options.observation ? `${JSON.stringify(options.observation.capabilityId)}: { modes: ${JSON.stringify(options.observation.modes ?? ["poll", "subscription"])}, ${options.observation.orderingId ? `ordering: { id: ${JSON.stringify(options.observation.orderingId)}, compare: (left, right) => (left === right ? "same" : Number(left) < Number(right) ? "older" : "newer") },` : ""} fetch(request) { ${log("observation")} return ${JSON.stringify(options.observation.batch)}; } }` : "";
+  return [
+    "const calls = globalThis.__deskPackageCalls ??= {};",
+    "export function createDeskAdapter(host) {",
+    connector,
+    `  return { declaration: ${JSON.stringify(options.declaration)}, bindings: { handlers: { ${handlers} }, observations: { ${observations} } } };`,
+    "}",
+  ].join("\n");
+}

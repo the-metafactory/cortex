@@ -12,7 +12,7 @@ import type { DomainAdapterRegistry } from "./domain-adapters/registry";
 import { ReadAdmissionRequestSchema, ReadPageSchema, type ReadBinding, type ReadPage, type ReadRequest } from "./domain-adapters/reads/types";
 import type { ReadBindings } from "./domain-adapters/reads/bindings";
 import { ObjectReferenceSchema, type BoundaryError, type ObjectReference } from "./domain-adapters/types";
-import { CancelRequestSchema, DispatchRequestSchema, ObjectReadbackSchema, OperationLookupSchema, OwnerResultSchema, OwnerSupportSchema, parseWire, type ApprovedSnapshot, type Authority, type CancelRequest, type DispatchRequest, type Json, type OwnerSupport } from "./domain-adapters/operations/types";
+import { CancelRequestSchema, DispatchRequestSchema, ObjectReadbackSchema, OperationLookupSchema, OwnerResultSchema, OwnerSupportSchema, parseWire, type ApprovedSnapshot, type Authority, type CancelRequest, type DispatchRequest, type Json, type LookupRequest, type OwnerSupport, type ReadbackRequest } from "./domain-adapters/operations/types";
 import { canonicalWire, validateSnapshot, validateResultPayload } from "./domain-adapters/operations/validation";
 import { OperationJournalStore, type Approval, type StoredOperation } from "./domain-adapters/operations/journal";
 import { fenceTargetOf, type FenceGate } from "./domain-adapters/operations/triggers";
@@ -52,8 +52,7 @@ export interface AuthorityBindings {
 }
 export interface HostPolicyState { principal: string; stack: string; policy: "local" | "cloud"; tool: Json; communication: Json; link: Json; work: Json; history: Json }
 export interface ObservedRead { projection: ReleaseProjection<Json>; called: boolean; value?: Json }
-export interface LookupRequest { lifecycleVersion: "1.0.0"; operationId: string; ownerRequestId: string }
-export interface ReadbackRequest { lifecycleVersion: "1.0.0"; ref: ObjectReference }
+export type { LookupRequest, ReadbackRequest };
 const LookupRequestSchema = z.object({ lifecycleVersion: z.literal("1.0.0"), operationId: z.string().min(1), ownerRequestId: z.string().min(1) }).strict();
 const ReadbackRequestSchema = z.object({ lifecycleVersion: z.literal("1.0.0"), ref: ObjectReferenceSchema }).strict();
 const LeaseSchema = z.object({ bindingKey: z.string().min(1), epoch: z.number().int().positive().max(Number.MAX_SAFE_INTEGER), instanceId: z.string().min(1), supervisorReceiptRef: z.string().min(1) }).strict();

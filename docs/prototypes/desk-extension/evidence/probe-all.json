@@ -1,0 +1,451 @@
+{
+ "origin": "http://127.0.0.1:33594",
+ "phase": "all",
+ "at": "2026-11-08T15:28:53.745Z",
+ "passed": 64,
+ "failed": 0,
+ "checks": [
+  {
+   "name": "install verifies the package without restarting or running its code",
+   "pass": true
+  },
+  {
+   "name": "no restart control exists",
+   "pass": true
+  },
+  {
+   "name": "an unapproved adapter offers no draft",
+   "pass": true,
+   "detail": "Nothing connected here can make that yet. You can add one under Adapters."
+  },
+  {
+   "name": "approval activates the release automatically",
+   "pass": true
+  },
+  {
+   "name": "observation reaches Day as a generic adapter item",
+   "pass": true,
+   "detail": "CalendarPlanning reviewStarts in 40 minutesReading listReceipts that survive a crashHow an owner lookup settles an unknown outcome.Due 2026-11-09Reading listA private crash diaryThis belongs on a shelf the connection may lose.Due 2026-11-09Reading listCrash-only software revisitedRestart as the only recovery path.Reading listIdempotency keys in practiceWhere crash retries duplicate work."
+  },
+  {
+   "name": "host ranks the native meeting above adapter items",
+   "pass": true
+  },
+  {
+   "name": "a repeated delivery adds no duplicate row or evidence",
+   "pass": true,
+   "detail": {
+    "startedAt": "2026-11-08T15:28:22.138Z",
+    "ownerCalls": 0,
+    "deniedAttempts": 0,
+    "frameIncidents": [],
+    "projectionRows": 4,
+    "evidenceEntries": 4,
+    "quarantined": [],
+    "packages": [
+     {
+      "dir": "reading-list",
+      "packageId": "sample/reading-list",
+      "releaseDigest": "8c1d271e349ef7b2c9e49215e5bb08715be42e32bef4c9d4257c0ca7ed127636",
+      "packageVersion": "1.0.0",
+      "label": "Reading list",
+      "state": "active"
+     }
+    ],
+    "syntheticReceiverRequests": []
+   }
+  },
+  {
+   "name": "every query result renders in the adapter's own sandboxed view",
+   "pass": true,
+   "detail": [
+    1,
+    1
+   ]
+  },
+  {
+   "name": "each frame sizes to its content",
+   "pass": true,
+   "detail": [
+    147,
+    147
+   ]
+  },
+  {
+   "name": "frame is sandboxed without same-origin",
+   "pass": true
+  },
+  {
+   "name": "revoking a destination removes its Day item",
+   "pass": true,
+   "detail": "CalendarPlanning reviewStarts in 40 minutesReading listReceipts that survive a crashHow an owner lookup settles an unknown outcome.Due 2026-11-09Reading listCrash-only software revisitedRestart as the only recovery path.Reading listIdempotency keys in practiceWhere crash retries duplicate work."
+  },
+  {
+   "name": "host withholds an owner answer outside the permitted destination",
+   "pass": true,
+   "detail": "Reading listSome results aren’t shown because of what this connection may read."
+  },
+  {
+   "name": "the denied owner answer is counted, not released",
+   "pass": true
+  },
+  {
+   "name": "draft card comes from schema and hints, with a contextual destination question",
+   "pass": true
+  },
+  {
+   "name": "Approve is blocked until the destination is chosen",
+   "pass": true
+  },
+  {
+   "name": "drafting made no owner call",
+   "pass": true
+  },
+  {
+   "name": "later discussion marks the draft outdated without changing it",
+   "pass": true
+  },
+  {
+   "name": "refresh keeps the edited title and takes new untouched text",
+   "pass": true
+  },
+  {
+   "name": "double approval produces one owner call",
+   "pass": true,
+   "detail": 1
+  },
+  {
+   "name": "saved result renders the owner's readback in the adapter's own view",
+   "pass": true
+  },
+  {
+   "name": "host-owned confirmation shows the saved state",
+   "pass": true
+  },
+  {
+   "name": "repeating the request reuses the saved result",
+   "pass": true
+  },
+  {
+   "name": "a draft only offers places the connection can add to",
+   "pass": true,
+   "detail": "Reading listPrivateIt also explains the lookup pathReceipts across a crash are worth coming back to. The piece I read explains why. It also explains the lookup path.ApproveEditWhy these details?TitleFrom our discussion.Why keep itSummarised from our discussion.ShelfThe only place this connection can add to."
+  },
+  {
+   "name": "a destination revoked after drafting denies at approval with no owner call",
+   "pass": true,
+   "detail": "Reading listPrivateIt also explains the lookup pathReceipts across a crash are worth coming back to. The piece I read explains why. It also explains the lookup path.This connection can’t add to Private, so nothing was saved.ApproveEditWhy these details?TitleFrom our discussion.Why keep itSummarised from our discussion.ShelfThe only place this connection can add to."
+  },
+  {
+   "name": "the denied draft keeps its content",
+   "pass": true
+  },
+  {
+   "name": "an owner refusal keeps the editable draft",
+   "pass": true,
+   "detail": "Reading listPrivateThis should fail at the ownerReceipts across a crash are worth coming back to. The piece I read explains why. It also explains the lookup path.I couldn’t save this. Your draft is still here.ApproveEditWhy these details?TitleYou edited this.Why keep itSummarised from our discussion.ShelfThe only place this connection can add to."
+  },
+  {
+   "name": "after restart the owner no longer knows the object: the receipt stays, current details do not",
+   "pass": true,
+   "detail": "Reading listWorkCrash-safe receiptsReceipts across a crash are worth coming back to. The piece I read explains why. It also explains the lookup path.WorthrereadTagsreliability, receipts✓ Added to Reading listThe saved result is preserved, but its current details are unavailable."
+  },
+  {
+   "name": "remove applies automatically and physically removes the package",
+   "pass": true
+  },
+  {
+   "name": "remove takes the adapter off Day at once",
+   "pass": true,
+   "detail": "CalendarPlanning reviewStarts in 40 minutes"
+  },
+  {
+   "name": "remove takes the adapter out of queries at once",
+   "pass": true,
+   "detail": "Nothing connected here can answer that yet."
+  },
+  {
+   "name": "remove keeps the saved receipt",
+   "pass": true
+  },
+  {
+   "name": "re-adding needs approval again",
+   "pass": true
+  },
+  {
+   "name": "approval activates the release automatically",
+   "pass": true
+  },
+  {
+   "name": "re-adding brings the capability back",
+   "pass": true
+  },
+  {
+   "name": "a second unknown adapter reaches Day",
+   "pass": true,
+   "detail": "CalendarPlanning reviewStarts in 40 minutesReading listReceipts that survive a crashHow an owner lookup settles an unknown outcome.Due 2026-11-09WorkshopBench grinder overheatsRuns hot after ten minutes.Due 2026-11-10Reading listCrash-only software revisitedRestart as the only recovery path.Reading listIdempotency keys in practiceWhere crash retries duplicate work."
+  },
+  {
+   "name": "an observation with no attention mapping stays off Day",
+   "pass": true,
+   "detail": "CalendarPlanning reviewStarts in 40 minutesReading listReceipts that survive a crashHow an owner lookup settles an unknown outcome.Due 2026-11-09WorkshopBench grinder overheatsRuns hot after ten minutes.Due 2026-11-10Reading listCrash-only software revisitedRestart as the only recovery path.Reading listIdempotency keys in practiceWhere crash retries duplicate work."
+  },
+  {
+   "name": "that observation stays queryable",
+   "pass": true,
+   "detail": "Reading listNo matches in what this connection can read.WorkshopNo matches in what this connection can read.WorkshopSpare bearing"
+  },
+  {
+   "name": "the shared editor renders the new domain's enum, date, number and list fields",
+   "pass": true
+  },
+  {
+   "name": "the destination named in discussion resolves to the owner's reference",
+   "pass": true,
+   "detail": "WorkshopBench 2The bench drill wobbles on Bench 2Receipts across a crash are worth coming back to. The piece I read explains why. It also explains the lookup path. The bench drill wobbles on Bench 2. Check the chuck before the weekend.SeverityhighHours2.5Partschuck key, bearingApproveEditWhy these details?FaultFrom our discussion.DetailSummarised from our discussion.BenchYou mentioned it.SeverityYou edited this.HoursYou edited this.PartsYou edited this."
+  },
+  {
+   "name": "the second adapter saves and shows its own different view",
+   "pass": true
+  },
+  {
+   "name": "a read-only adapter reaches Day",
+   "pass": true,
+   "detail": "CalendarPlanning reviewStarts in 40 minutesReading listReceipts that survive a crashHow an owner lookup settles an unknown outcome.Due 2026-11-09WorkshopBench grinder overheatsRuns hot after ten minutes.Due 2026-11-10Reading listCrash-only software revisitedRestart as the only recovery path.Reading listIdempotency keys in practiceWhere crash retries duplicate work.Tide tablesSpring tide at the harbourHighest water of the month this evening.Tide tablesNeap tide next weekUnremarkable."
+  },
+  {
+   "name": "with no custom UI, results use the safe host rendering",
+   "pass": true
+  },
+  {
+   "name": "a read-only adapter offers no creation and makes no owner call",
+   "pass": true,
+   "detail": "Tide tables can be read here, but it can’t make a tide from a conversation."
+  },
+  {
+   "name": "a schema the shared editor cannot represent disables approval",
+   "pass": true,
+   "detail": "RoutingDestination not chosenThe bench drill wobbles on Bench 2Add Stops before approving.Desk can’t fill in everything this needs, so it can’t be approved from here.ApproveEditWhy these details?NameFrom our discussion."
+  },
+  {
+   "name": "broken-digest is refused before approval or execution",
+   "pass": true,
+   "detail": "digest_mismatch"
+  },
+  {
+   "name": "broken-format is refused before approval or execution",
+   "pass": true,
+   "detail": "unsupported_manifest"
+  },
+  {
+   "name": "broken-symlink is refused before approval or execution",
+   "pass": true,
+   "detail": "path_escape"
+  },
+  {
+   "name": "duplicate-identity is refused before approval or execution",
+   "pass": true,
+   "detail": "duplicate_adapter"
+  },
+  {
+   "name": "installing a duplicate does not disturb the running adapter until the next activation",
+   "pass": true
+  },
+  {
+   "name": "duplicate identity disables both claimants, by name not by search order",
+   "pass": true
+  },
+  {
+   "name": "removing the duplicate restores the original",
+   "pass": true
+  },
+  {
+   "name": "broken-throws is unavailable after approval, others unaffected",
+   "pass": true,
+   "detail": "module_failed"
+  },
+  {
+   "name": "broken-mismatch is unavailable after approval, others unaffected",
+   "pass": true,
+   "detail": "declaration_mismatch"
+  },
+  {
+   "name": "other adapters still work with broken packages installed",
+   "pass": true
+  },
+  {
+   "name": "a view that has not answered yet shows the safe host rendering, not a blank box",
+   "pass": true
+  },
+  {
+   "name": "a crashing or hostile view falls back to the safe host rendering",
+   "pass": true,
+   "detail": [
+    "Crashing viewProp from Crashing view",
+    "Hostile viewProp from Hostile view"
+   ]
+  },
+  {
+   "name": "host recorded the crashing and hostile view incidents",
+   "pass": true,
+   "detail": [
+    "sample.hostile: forged-or-unknown:action:execute",
+    "sample.crash: no-handshake"
+   ]
+  },
+  {
+   "name": "hostile frame's beacons reached nothing",
+   "pass": true,
+   "detail": []
+  },
+  {
+   "name": "hostile frame caused no owner call",
+   "pass": true,
+   "detail": {
+    "before": 3,
+    "after": 3
+   }
+  },
+  {
+   "name": "hostile frame could not touch the parent",
+   "pass": true
+  },
+  {
+   "name": "mobile has no horizontal scroll",
+   "pass": true
+  },
+  {
+   "name": "every external attempt came from a frame and the browser's CSP blocked it",
+   "pass": true,
+   "detail": {
+    "external": [
+     "http://127.0.0.1:33595/image"
+    ],
+    "blockedByBrowser": [
+     {
+      "url": "http://127.0.0.1:33595/image",
+      "error": "csp",
+      "frame": true
+     }
+    ]
+   }
+  },
+  {
+   "name": "the receiver saw no request at all",
+   "pass": true,
+   "detail": []
+  },
+  {
+   "name": "the only page error is the crashing fixture's own",
+   "pass": true,
+   "detail": [
+    "This view fails before its handshake."
+   ]
+  }
+ ],
+ "diagnostics": {
+  "startedAt": "2026-11-08T15:28:48.852Z",
+  "ownerCalls": 3,
+  "deniedAttempts": 17,
+  "frameIncidents": [
+   "sample.hostile: forged-or-unknown:action:execute",
+   "sample.crash: no-handshake",
+   "sample.hostile: forged-or-unknown:action:execute"
+  ],
+  "projectionRows": 11,
+  "evidenceEntries": 11,
+  "quarantined": [],
+  "packages": [
+   {
+    "dir": "broken-digest",
+    "packageId": "broken-digest",
+    "state": "unavailable",
+    "code": "digest_mismatch",
+    "message": "Package file backend.mjs does not match its digest."
+   },
+   {
+    "dir": "broken-format",
+    "packageId": "broken-format",
+    "state": "unavailable",
+    "code": "unsupported_manifest",
+    "message": "The manifest does not match desk-adapter-package/1 (format)."
+   },
+   {
+    "dir": "broken-symlink",
+    "packageId": "broken-symlink",
+    "state": "unavailable",
+    "code": "path_escape",
+    "message": "Package file backend.mjs leaves the package."
+   },
+   {
+    "dir": "broken-mismatch",
+    "packageId": "sample/broken-mismatch",
+    "releaseDigest": "079e6228224502d0f7604a6ace39812ca7252369198e3d271ea7fa5363ed5d8c",
+    "packageVersion": "1.0.0",
+    "label": "Mismatched package",
+    "state": "unavailable",
+    "code": "declaration_mismatch",
+    "message": "The backend's declaration differs from its manifest."
+   },
+   {
+    "dir": "broken-throws",
+    "packageId": "sample/broken-throws",
+    "releaseDigest": "32bc644100eb0a96944a1e0479d5a7032a26e79330b8b15c1fba56bf6beff10c",
+    "packageVersion": "1.0.0",
+    "label": "Throwing package",
+    "state": "unavailable",
+    "code": "module_failed",
+    "message": "The adapter module failed while registering."
+   },
+   {
+    "dir": "crashing-view",
+    "packageId": "sample/crashing-view",
+    "releaseDigest": "9ab3102b94c4db275766884d10f2eba231fbec253f5ade9a80e04a2e1b97dbf2",
+    "packageVersion": "1.0.0",
+    "label": "Crashing view",
+    "state": "active"
+   },
+   {
+    "dir": "hostile-view",
+    "packageId": "sample/hostile-view",
+    "releaseDigest": "05a0296feed0ab4ce982eb154a599399f5ff6b857c29367c2b2681a6318c99ef",
+    "packageVersion": "1.0.0",
+    "label": "Hostile view",
+    "state": "active"
+   },
+   {
+    "dir": "reading-list",
+    "packageId": "sample/reading-list",
+    "releaseDigest": "8c1d271e349ef7b2c9e49215e5bb08715be42e32bef4c9d4257c0ca7ed127636",
+    "packageVersion": "1.0.0",
+    "label": "Reading list",
+    "state": "active"
+   },
+   {
+    "dir": "routing",
+    "packageId": "sample/routing",
+    "releaseDigest": "c311e8380e8675ce94c2714a26b06573b76cc3790368adb222b7791e750eab02",
+    "packageVersion": "1.0.0",
+    "label": "Routing",
+    "state": "active"
+   },
+   {
+    "dir": "tide-tables",
+    "packageId": "sample/tide-tables",
+    "releaseDigest": "d91c0a58739beef7533756f520baf60a6c925134bf5379f3cdf1c16662a72698",
+    "packageVersion": "1.0.0",
+    "label": "Tide tables",
+    "state": "active"
+   },
+   {
+    "dir": "workshop",
+    "packageId": "sample/workshop",
+    "releaseDigest": "a14c56fad727078e063bd784ada846316d37d7958c21910fe3ddf6e20aaf73fe",
+    "packageVersion": "1.0.0",
+    "label": "Workshop",
+    "state": "active"
+   }
+  ],
+  "syntheticReceiverRequests": []
+ }
+}

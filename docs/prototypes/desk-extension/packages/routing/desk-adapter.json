@@ -1,0 +1,363 @@
+{
+ "format": "desk-adapter-package/1",
+ "packageId": "sample/routing",
+ "packageVersion": "1.0.0",
+ "deskSdkRange": "^1.0.0",
+ "domainContractVersion": "1.0.0",
+ "backend": {
+  "entry": "backend.mjs",
+  "sha256": "f1727f83edddf3f59db5dd81abc16b483c497d5b84badb22db72cb292b8e22c7"
+ },
+ "declaration": {
+  "adapterId": "sample.routing",
+  "label": "Routing",
+  "contractRange": "^1.0.0",
+  "schemas": [
+   {
+    "schemaId": "sample.routing.route",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "name": {
+       "type": "string",
+       "minLength": 1,
+       "title": "Name"
+      },
+      "stops": {
+       "title": "Stops",
+       "oneOf": [
+        {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        },
+        {
+         "type": "object",
+         "properties": {
+          "from": {
+           "type": "string"
+          },
+          "to": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "from",
+          "to"
+         ],
+         "additionalProperties": false
+        }
+       ]
+      }
+     },
+     "required": [
+      "name",
+      "stops"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.routing.error",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "code": {
+       "type": "string",
+       "minLength": 1
+      },
+      "message": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "code",
+      "message"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.routing.route.empty",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.routing.route.search.input",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "text"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.routing.route.list",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "items": {
+       "type": "array",
+       "items": {
+        "$ref": "urn:desk-schema:sample.routing.route:1.0.0"
+       }
+      }
+     },
+     "required": [
+      "items"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.routing.route.created",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "ref": {
+       "$schema": "https://json-schema.org/draft/2020-12/schema",
+       "type": "object",
+       "properties": {
+        "adapterId": {
+         "type": "string",
+         "const": "sample.routing"
+        },
+        "connectionId": {
+         "type": "string",
+         "minLength": 1
+        },
+        "objectType": {
+         "type": "string",
+         "const": "route"
+        },
+        "canonicalId": {
+         "type": "string",
+         "minLength": 1
+        }
+       },
+       "required": [
+        "adapterId",
+        "connectionId",
+        "objectType",
+        "canonicalId"
+       ],
+       "additionalProperties": false
+      },
+      "revision": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "ref",
+      "revision"
+     ],
+     "additionalProperties": false
+    }
+   }
+  ],
+  "objectTypes": [
+   {
+    "objectType": "route",
+    "label": "route",
+    "schemaRef": {
+     "schemaId": "sample.routing.route",
+     "version": "1.0.0"
+    },
+    "relationships": []
+   }
+  ],
+  "capabilities": [
+   {
+    "capabilityId": "sample.routing.route.search",
+    "label": "Search route",
+    "kind": "query",
+    "objectTypes": [
+     "route"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.routing.route.search.input",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.routing.route.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.routing.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.routing.route.observe",
+    "label": "Watch route",
+    "kind": "observation",
+    "objectTypes": [
+     "route"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.routing.route.empty",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.routing.route.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.routing.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.routing.route.create",
+    "label": "Make route",
+    "kind": "action",
+    "objectTypes": [
+     "route"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.routing.route",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.routing.route.created",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.routing.error",
+     "version": "1.0.0"
+    }
+   }
+  ]
+ },
+ "draftingBindings": [
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.routing",
+   "capabilityId": "sample.routing.route.create",
+   "inputSchemaRef": {
+    "schemaId": "sample.routing.route",
+    "version": "1.0.0"
+   },
+   "guidanceId": "sample.routing.guidance",
+   "guidanceVersion": "1.0.0",
+   "instruction": "Prepare a route from the discussion.",
+   "fieldHints": [
+    {
+     "pointer": "/name",
+     "role": "title"
+    }
+   ]
+  }
+ ],
+ "readBindings": [
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.routing",
+   "capabilityId": "sample.routing.route.search",
+   "mode": "query",
+   "objectType": "route",
+   "inputSchemaRef": {
+    "schemaId": "sample.routing.route.search.input",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.routing.route.list",
+    "version": "1.0.0"
+   },
+   "textPointer": "/text",
+   "display": {
+    "title": "/name"
+   }
+  },
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.routing",
+   "capabilityId": "sample.routing.route.observe",
+   "mode": "poll",
+   "objectType": "route",
+   "inputSchemaRef": {
+    "schemaId": "sample.routing.route.empty",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.routing.route.list",
+    "version": "1.0.0"
+   },
+   "display": {
+    "title": "/name"
+   }
+  }
+ ],
+ "setup": {
+  "version": "1.0.0",
+  "schemas": [
+   {
+    "schemaId": "sample.routing.config",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.routing.account",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "account": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "account"
+     ],
+     "additionalProperties": false
+    }
+   }
+  ],
+  "configurationSchemaRef": {
+   "schemaId": "sample.routing.config",
+   "version": "1.0.0"
+  },
+  "accountScopeSchemaRef": {
+   "schemaId": "sample.routing.account",
+   "version": "1.0.0"
+  },
+  "authMethods": [
+   {
+    "kind": "local"
+   }
+  ]
+ }
+}
