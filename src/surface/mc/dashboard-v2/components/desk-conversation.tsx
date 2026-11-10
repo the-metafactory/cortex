@@ -8,6 +8,7 @@ import {
 } from "../lib/conversations";
 import { laneName, type Organize, type SourceView } from "../../../../conversations/types";
 import { CreationPanel } from "./desk-conversation-create";
+import { DeskMakePanel } from "./desk-draft-editor";
 import "./desk-conversation.css";
 
 const BUSY_MS = 2_000;
@@ -300,6 +301,7 @@ export function WorkspaceView(c: WorkspaceProps) {
       {c.error && <p className="desk-unsent" role="alert">{c.error}</p>}
     </form>
     <CreationPanel id={conversation.id} archived={archived} revision={c.entries.at(-1)?.id ?? ""} seed={{ entryId: said?.id ?? null, text: said?.text ?? "" }} />
+    <DeskMakePanel key={conversation.id} conversationId={conversation.id} entryId={said?.id ?? null} archived={archived} />
     {studio && !archived && <StudioOutcome id={conversation.id} studio={studio} onSaved={c.onSaved} />}
   </section>;
 }

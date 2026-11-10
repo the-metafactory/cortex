@@ -41,12 +41,12 @@ const REFUSALS: Record<string, [number, string]> = {
   schema_changed: [409, "The package setup changed. Reload and retry."],
 };
 
-export async function stackPrincipalOf(req: Request, guard: MutationGuardContext): Promise<string | Response> {
+export async function stackPrincipalOf(req: Request, guard: MutationGuardContext, refusal = "Only this stack's principal can set up its connections."): Promise<string | Response> {
   const foreign = checkRebindGuard(req, guard);
   if (foreign) return foreign;
   const verified = await enforceMutationAuth(req, guard);
   if (verified instanceof Response) return verified;
-  return isStackPrincipal(verified.principal, guard) ? verified.principal : fail(403, "Only this stack's principal can set up its connections.");
+  return isStackPrincipal(verified.principal, guard) ? verified.principal : fail(403, refusal);
 }
 
 export async function handleDeskConnections(req: Request, url: URL, guard: MutationGuardContext, access: ConnectionSetupAccess | undefined): Promise<Response> {
