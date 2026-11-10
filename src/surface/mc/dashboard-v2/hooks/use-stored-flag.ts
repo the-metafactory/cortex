@@ -1,15 +1,15 @@
 import { useState } from "react";
 
 const UNREADABLE_STORAGE_MEANS_OFF = false;
-const UNWRITABLE_STORAGE_KEEPS_THE_FLAG_FOR_THIS_PAGE = undefined;
+const KEPT_FOR_THIS_PAGE_ONLY = false;
 
 function readFlag(key: string): boolean {
   try { return typeof window !== "undefined" && window.localStorage.getItem(key) === "1"; }
   catch { return UNREADABLE_STORAGE_MEANS_OFF; }
 }
-function writeFlag(key: string, value: boolean): void {
-  try { window.localStorage.setItem(key, value ? "1" : "0"); }
-  catch { return UNWRITABLE_STORAGE_KEEPS_THE_FLAG_FOR_THIS_PAGE; }
+function writeFlag(key: string, value: boolean): boolean {
+  try { window.localStorage.setItem(key, value ? "1" : "0"); return true; }
+  catch { return KEPT_FOR_THIS_PAGE_ONLY; }
 }
 
 /** A per-browser on/off preference that survives a reload when local storage is available. */
