@@ -1,4 +1,5 @@
-import { authorityRig } from "../../authority-fixtures";
+import { authorityRig, type AuthorityRigOptions } from "../../authority-fixtures";
+import type { DomainAdapterRegistry } from "../registry";
 import { objectRef } from "../fixtures";
 import { AT, support } from "./fixtures";
 import type { DispatchRequest, OwnerResult, OwnerSupport } from "./types";
@@ -22,8 +23,10 @@ export function ownerResult(request: Pick<DispatchRequest, "operationId" | "atte
   return { ...base, result: { kind, error: { code: "synthetic_unknown", message: "The owner cannot tell." }, ownerRequestId: request.ownerRequestId } };
 }
 
-export async function dispatchRig(waitMs = 30_000, maxOutstandingCalls?: number, clock: () => Date = () => new Date(AT), notify?: PrincipalNotifier) {
-  const rig = await authorityRig({ now: clock, ...(notify ? { notify } : {}) });
+export interface DispatchRigOptions extends AuthorityRigOptions { readSetup?: { registry: DomainAdapterRegistry; binding: unknown; capabilityIds?: readonly string[]; adapterId?: string } }
+
+export async function dispatchRig(waitMs = 30_000, maxOutstandingCalls?: number, clock: () => Date = () => new Date(AT), notify?: PrincipalNotifier, options: DispatchRigOptions = {}) {
+  const rig = await authorityRig({ now: clock, ...(notify ? { notify } : {}) }, "local", options.readSetup, options);
   const declared: { support: OwnerSupport | undefined } = { support: { ...support, cancellation: "best-effort", operationLookup: "historical" } };
   const build = () => rig.host.lifecycleBridge(rig.registry, rig.bindings, () => declared.support, waitMs, maxOutstandingCalls);
   const holder = { bridge: build() };

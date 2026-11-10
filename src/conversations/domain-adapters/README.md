@@ -130,3 +130,13 @@ Event names start with `desk.adapter.` and are closed: `connection_status`, `que
 `GET /api/desk/connections` includes each connection's status, so Desk Settings shows the status, its last success, its last attempt and a safe reason next to the setup state.
 
 Run `bun scripts/probe-desk-adapter-diagnostics.ts` for the synthetic probe: a real temporary host store, a synthetic connection driven through all four statuses, status read back through the Settings API, the rendered Settings view asserted in Chromium, a strict-schema refusal and a bus client that receives nothing.
+
+## Canary secret across the five sinks
+
+<!-- glossary-ignore: host, owner, run, binding, data, token -->
+
+Matrix row A9 asks for a canary secret checked across logs, events, receipts, UI responses and model context. `canary-fixtures.ts` builds one synthetic stack under a temporary root: the real credential broker writes the canary into an arc-backed secret store, a fixture connection is enabled through the Settings route, and a lifecycle host whose connector authorizes against that stored credential runs a query, an owner result dispatch, a schema-guided draft and an owner error dispatch. The stack captures the five sinks as text: wrapped console output, stored `desk.adapter.*` events, the operation journal with its receipt projection and legacy result, the Settings responses plus released query payloads, and the model requests the drafting service built.
+
+`scripts/probe-desk-adapter-canary.ts` exports `scanCanary(sinks, canary)`. It returns one finding per sink that holds the value, and a finding names only the sink and the match count, never the value. A sink with no captured entry is reported as not covered, and the probe fails instead of passing an unproven sink. The leaking fixture adapters pass the credential they resolved into a chosen sink, which proves the scan can fail. Nothing is scanned on a real stack and no provider effect occurs.
+
+Run `bun scripts/probe-desk-adapter-canary.ts` for the clean stack: it exits 0 when the canary is installed in the credential, all five sinks were captured and none holds the value. Run `bun scripts/probe-desk-adapter-canary.ts --leak log` for the leaking fixture: it exits nonzero and names the sink.
