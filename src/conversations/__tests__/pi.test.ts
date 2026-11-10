@@ -29,6 +29,11 @@ const script = (r: Rig, events: object[]): Promise<void> => writeFile(r.events, 
 const said = async (r: Rig): Promise<{ argv: string[]; stdin: string }[]> => (await readFile(r.log, "utf8")).trim().split("\n").map(line => JSON.parse(line) as { argv: string[]; stdin: string });
 const flag = (argv: string[], name: string): string | undefined => argv[argv.indexOf(name) + 1];
 const answer = (text: string, extra: object = {}) => ({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text }], stopReason: "stop", ...extra } });
+const greetingEvents = () => [
+  { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Hello " } },
+  { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "there" } },
+  answer("Hello there"),
+];
 const tool = (id: string, toolName: string, args: object, result: string, isError = false) => [
   { type: "tool_execution_start", toolCallId: id, toolName, args },
   { type: "tool_execution_end", toolCallId: id, toolName, result: { content: [{ type: "text", text: result }] }, isError },
@@ -45,6 +50,87 @@ function request(overrides: Partial<TurnRequest> = {}): TurnRequest & { seen: To
 }
 
 describe("pi turns", () => {
+  test("text deltas arrive before the final answer and thinking stays private", async () => {
+    const r = await rig();
+    await script(r, [
+      { type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "private reasoning" } },
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Hello " } },
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "there" } },
+      answer("Hello there"),
+    ]);
+    const chunks: string[] = [];
+    let finished = false;
+    const reply = await piTurns(r.settings)(request({ text: delta => {
+      expect(finished).toBe(false);
+      chunks.push(delta);
+      return Promise.resolve();
+    } }));
+    finished = true;
+    expect(chunks.join("")).toBe("Hello there");
+    expect(reply.text).toBe("Hello there");
+  });
+
+  test("buffered text is delivered while Pi stdout is paused", async () => {
+    const r = await rig({ STUB_PI_PAUSE_AFTER: "2", STUB_PI_PAUSE_MS: "500" });
+    const marker = join(r.dir, "stdout-resumed");
+    r.settings.env = { ...r.settings.env, STUB_PI_PAUSE_MARKER: marker };
+    await script(r, greetingEvents());
+    let received = "";
+    const reply = await piTurns(r.settings)(request({ text: delta => {
+      received += delta;
+      if (received === "Hello there") expect(existsSync(marker)).toBe(false);
+      return Promise.resolve();
+    } }));
+    expect(received).toBe("Hello there");
+    expect(reply.text).toBe("Hello there");
+  });
+
+  test("a trailing text publication failure stops Pi and rejects the turn", async () => {
+    const r = await rig({ STUB_PI_PAUSE_AFTER: "2", STUB_PI_PAUSE_MS: "5000" });
+    await script(r, greetingEvents());
+    await expect(piTurns(r.settings)(request({ text: delta => delta.includes("there") ? Promise.reject(new Error("publication revoked")) : Promise.resolve() }))).rejects.toThrow("publication revoked");
+  });
+
+  test("slow text publication coalesces already-buffered Pi output instead of waiting once per token", async () => {
+    const r = await rig();
+    const deltas = Array.from({ length: 12 }, (_, i) => `word${i} `);
+    await script(r, [
+      ...deltas.map(delta => ({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } })),
+      answer(deltas.join("")),
+    ]);
+    const published: string[] = [];
+    const reply = await piTurns(r.settings)(request({ text: async delta => {
+      await Bun.sleep(120);
+      published.push(delta);
+    } }));
+    expect(published.join("")).toBe(deltas.join(""));
+    expect(published.length).toBeLessThan(6);
+    expect(reply.text).toBe(deltas.join("").trim());
+  });
+
+  test("tool narration resets before the next assistant message and small deltas are batched", async () => {
+    const r = await rig();
+    const update = (delta: string) => ({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta } });
+    await script(r, [
+      { type: "message_start", message: { role: "assistant" } },
+      update("Let me check…"),
+      answer("Let me check…"),
+      { type: "message_start", message: { role: "assistant" } },
+      ...Array.from({ length: 1000 }, () => update("a")),
+      answer("a".repeat(1000)),
+    ]);
+    const messages: string[] = [];
+    let batches = 0;
+    const reply = await piTurns(r.settings)(request({ text: (delta, reset) => {
+      if (reset) messages.push("");
+      else { messages[messages.length - 1] = (messages.at(-1) ?? "") + delta; batches++; }
+      return Promise.resolve();
+    } }));
+    expect(messages).toEqual(["Let me check…", "a".repeat(1000)]);
+    expect(batches).toBeLessThan(1001);
+    expect(reply.text).toBe("a".repeat(1000));
+  });
+
   test("a turn runs pi with the read-only allowlist and the Soma projection, and records every tool call", async () => {
     const r = await rig();
     await script(r, [

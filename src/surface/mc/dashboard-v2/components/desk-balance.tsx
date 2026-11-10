@@ -37,7 +37,7 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
   const inspector = useRef<HTMLElement>(null);
   const outlineHeading = useRef<HTMLHeadingElement>(null);
   const entries = balanceEntries(current.outline);
-  const selectedId = location.item ?? entries[0]?.node.id ?? null;
+  const selectedId = entries.find(item => item.node.id === location.item)?.node.id ?? entries[0]?.node.id ?? null;
   const entry = entries.find(item => item.node.id === selectedId);
   const destinationChoices = balanceDestinations(current.outline, view.areas, true);
   const destinationIds = new Set(destinationChoices.map(option => option.id));
@@ -57,6 +57,8 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
     query: location.query, hideDone, collapsed, selected: selectedId, date: current.date,
     studioProjects, today: new Set(current.items.map(item => item.task.id)),
     ...drag,
+    canAdd: id => !busy && destinationIds.has(id),
+    onAdd: parent => { beginAdd(parent); },
     onToggle: id => { setCollapsed(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }); },
     onSelect: id => { setMoving(null); setSelectionTick(tick => tick + 1); go({ ...location, item: id }); },
   };
@@ -64,7 +66,7 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
     try { setLocal(await getJson<MyDayView>("/api/desk/my-day")); onChanged(); }
     catch (error) { editor.setMessage({ kind: "error", text: error instanceof Error ? error.message : "The outline could not be refreshed. Your drafts are kept." }); }
   };
-  const beginAdd = (parent: string): void => { setAdding({ parent, title: "", revision: current.revision, date: current.date }); setMoving(null); };
+  const beginAdd = (parent: string): void => { setAdding({ parent, title: "", revision: current.revision, date: current.date }); setMoving(null); editor.setMessage(null); };
   useEffect(() => {
     if (location.tab === "plan" && location.item && window.matchMedia("(max-width: 760px)").matches) scrollBelowDesk(inspector.current);
   }, [location.item, location.tab, selectionTick]);
@@ -74,7 +76,7 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
     <TaskMessageBanner message={message} busy={busy} onUndo={receipt => void change({ op: "undo", receipt })} />
     {current.studioStatus === "unavailable" && <p role="status">Studio is busy or unreadable. Its last saved outline is shown; refresh when its files are ready.</p>}
     <MyDayObservationStatus day={current} disabled={busy} onRefresh={() => { void refresh(); }} />
-    {adding && <BalanceAddForm adding={adding} choices={destinationChoices} busy={busy} heading="Add task" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) { setAdding(null); if (saved.outlineId) go({ tab: "plan", item: saved.outlineId, area: "", query: "" }); } }); }} />}
+    {adding && <BalanceAddForm adding={adding} choices={destinationChoices} busy={busy} message={message} heading="Add task" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) { setAdding(null); if (saved.outlineId) go({ tab: "plan", item: saved.outlineId, area: "", query: "" }); } }); }} />}
     {location.tab === "review" ? <div className="dbl-review">{view.mirror ? <DeskMirror mirror={view.mirror} areas={view.areas} foreground={foreground} onThread={onThread} onChanged={onChanged} /> : <p role="status">The weekly review is unavailable. Refresh the Desk to retry.</p>}</div> : <div className="dbl-layout">
       <main className="dbl-outline" aria-label="Balance plan"><header className="dbl-toolbar"><div><h2 ref={outlineHeading} tabIndex={-1}>Your outline</h2><p>Areas → projects → tasks</p></div><div><span className="dbl-completed"><span>Hide completed</span><button type="button" role="switch" className="desk-switch" aria-label="Hide completed" aria-checked={hideDone} onClick={() => { setHideDone(!hideDone); }}><span className="desk-switch-knob" aria-hidden="true" /></button></span><button className="desk-btn ghost" onClick={() => { setCollapsed(new Set()); }}>Expand all</button><button className="desk-btn ghost" onClick={() => { setCollapsed(new Set(entries.filter(item => item.node.children.length).map(item => item.node.id))); }}>Collapse all</button></div></header>
         <div className="dbl-filters"><input aria-label="Search full hierarchy" placeholder="Find a project or task…" value={location.query} onChange={event => { go({ ...location, query: event.target.value }, true); }} /><select aria-label="Outline area" value={location.area} onChange={event => { go({ ...location, area: event.target.value }, true); }}><option value="">All areas</option>{current.outline.children.map(node => <option key={node.id} value={node.id}>{node.title}</option>)}</select></div>
@@ -93,7 +95,7 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
 interface TreeContext {
   query: string; hideDone: boolean; collapsed: Set<string>; selected: string | null; date: string; studioProjects: Set<string>; today: Set<string>;
   hint: { id: string; zone: DropZone } | null; canDrag: (id: string) => boolean;
-  onToggle: (id: string) => void; onSelect: (id: string) => void;
+  onToggle: (id: string) => void; onSelect: (id: string) => void; canAdd: (id: string) => boolean; onAdd: (id: string) => void;
   dragging: string | null;
   onPointerDown: (event: PointerEvent<HTMLDivElement>, id: string) => void;
 }
@@ -111,6 +113,6 @@ function BalanceTree({ node, depth, tree }: { node: OutlineNode; depth: number; 
     onDragStart={event => { event.preventDefault(); }}>
     {movable ? <span className="dbl-grip" aria-hidden="true" title="Drag to move">⠿</span> : <span className="dbl-grip-space" />}
     {branch ? <button className="dbl-toggle" aria-label={`${open ? "Collapse" : "Expand"} ${node.title}`} aria-expanded={open} onClick={() => { tree.onToggle(node.id); }}>{open ? "⌄" : "›"}</button> : <span className="dbl-leaf">{studioProject ? "◇" : node.done ? "✓" : "○"}</span>}
-    <button className="dbl-select" aria-pressed={tree.selected === node.id} onClick={() => { tree.onSelect(node.id); }}><strong>{node.title}{node.focusMonth === tree.date.slice(0, 7) ? " ★" : ""}</strong><small>{branch ? `${openLeaves(node)} open${node.ordering === "sequential" ? " · In sequence" : ""}` : depth === 0 ? "Configured area" : studioProject ? "Studio thread" : node.done ? "Complete" : `${node.estimateMinutes === undefined ? "Estimate unknown" : `${node.estimateMinutes} min`}${tree.today.has(node.id) ? " · Today" : ""}${node.dueDate ? ` · Due ${node.dueDate}` : ""}`}</small></button><span className="dbl-weight">{node.weight === 0 ? "Paused" : node.weight}</span>
+    <button className="dbl-select" aria-pressed={tree.selected === node.id} onClick={() => { tree.onSelect(node.id); }}><strong>{node.title}{node.focusMonth === tree.date.slice(0, 7) ? " ★" : ""}</strong><small>{branch ? `${openLeaves(node)} open${node.ordering === "sequential" ? " · In sequence" : ""}` : depth === 0 ? "Configured area" : studioProject ? "Studio thread" : node.done ? "Complete" : `${node.estimateMinutes === undefined ? "Estimate unknown" : `${node.estimateMinutes} min`}${tree.today.has(node.id) ? " · Today" : ""}${node.dueDate ? ` · Due ${node.dueDate}` : ""}`}</small></button><button type="button" className="dbl-row-add" aria-label={`Add subtask to ${node.title}`} title="Add subtask" onPointerDown={event => { event.stopPropagation(); }} disabled={!tree.canAdd(node.id)} onClick={() => { tree.onAdd(node.id); }}><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 2v10M2 7h10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" /></svg></button><span className="dbl-weight">{node.weight === 0 ? "Paused" : node.weight}</span>
   </div>{branch && open && <ul>{node.children.map(child => <BalanceTree key={child.id} node={child} depth={depth + 1} tree={tree} />)}</ul>}</li>;
 }
