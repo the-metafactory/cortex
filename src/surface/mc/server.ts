@@ -1,3 +1,6 @@
+import { createBalanceConnection } from "./desk/balance-connection";
+import { DESK_BALANCE_READ_PATH, handleDeskBalanceRead, type BalanceConnectionAccess } from "./api/desk-balance-read";
+import { isStackPrincipal } from "./api/conversations";
 import { handleDeskPlan } from "./api/desk-plan";
 import { handleDeskRoutineEvidence } from "./api/desk-routine-evidence";
 import { WaitingTasks } from "./desk/sources/waiting";
@@ -208,6 +211,7 @@ export interface MissionControlViews {
   sidebandUrl?: string;
   conversations?: ConversationAccess;
   connectionSetup?: ConnectionSetupAccess;
+  balanceConnection?: BalanceConnectionAccess;
   adapterAssets?: AdapterAssetAccess;
   graphScope?: GraphScopeAccess;
   graphSurfaces?: GraphSurfaceAccess;
@@ -278,6 +282,11 @@ export function startServer(
       : {}),
     ...(cfAccessVerifier ? { verifyJwt: cfAccessVerifier } : {}),
   };
+  if (conversationHost?.state === "ready" && options.desk?.routineScope && !options.connectionSetup) {
+    const scope = options.desk.routineScope;
+    const balance = createBalanceConnection({ host: conversationHost.host, db, desk: () => deskRuntime.options, stack: scope.stack, secretRoot: dirname(config.db.path), isPrincipal: principal => isStackPrincipal(principal, { ...guardBase, listenPort: config.port }) });
+    options = { ...options, connectionSetup: () => balance.setup, balanceConnection: () => balance };
+  }
   options.conversations?.discord?.()?.setWebPrincipal(conversationWebPrincipal(guardBase.principals, guardBase.localPrincipal));
 
   const stepUpSecretPath = expandTilde(
@@ -518,6 +527,8 @@ async function handleApi(
   const { pathname } = url;
   if (pathname === DESK_DRAFTS_PATH || pathname.startsWith(`${DESK_DRAFTS_PATH}/`)) return handleDeskDrafts(req, url, guard, views.drafts);
   if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });
+
+  if (pathname === DESK_BALANCE_READ_PATH) return handleDeskBalanceRead(req, guard, views.balanceConnection);
 
   if (pathname === DESK_CONNECTIONS_PATH || pathname.startsWith(`${DESK_CONNECTIONS_PATH}/`)) return handleDeskConnections(req, url, guard, connectionSetup);
 
