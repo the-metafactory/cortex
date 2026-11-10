@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Context } from "@earendil-works/chord";
-import { defineDoc, type JsonObject, type Session } from "@earendil-works/pi-durable";
+import { defineDocFamily, type JsonObject, type Session } from "@earendil-works/pi-durable";
 import { z } from "zod";
 import { OperationStateSchema } from "./operations/types";
 
@@ -18,6 +18,8 @@ export const DIAGNOSTIC_EVENT_NAMES = [
   "desk.adapter.trigger_fired",
 ] as const;
 export type DiagnosticEventName = (typeof DIAGNOSTIC_EVENT_NAMES)[number];
+
+export const DIAGNOSTIC_EVENT_KEYS = ["event", "adapterId", "connectionId", "capabilityId", "state", "errorCode", "at"] as const;
 
 export const ADAPTER_EVENT_CAPACITY = 500;
 export const STALE_AFTER_MS = 15 * 60 * 1000;
@@ -40,12 +42,12 @@ export const ConnectionStatusSchema = z.object({
 }).strict();
 export type ConnectionStatus = z.infer<typeof ConnectionStatusSchema>;
 
-const ConnectionRecordSchema = z.object({ status: ConnectionStatusSchema, events: z.array(DiagnosticEventSchema) }).strict();
-const StateSchema = z.object({ version: z.literal(1), connections: z.record(z.string(), ConnectionRecordSchema) }).strict();
-type DiagnosticState = z.infer<typeof StateSchema>;
+const ConnectionRecordSchema = z.object({ reported: z.boolean(), status: ConnectionStatusSchema, events: z.array(DiagnosticEventSchema) }).strict();
+type ConnectionRecord = z.infer<typeof ConnectionRecordSchema>;
 
 const EMPTY_STATUS: ConnectionStatus = { state: "unavailable", lastSuccessAt: null, lastAttemptAt: null, reason: "not_reported" };
-const DiagnosticsDoc = defineDoc<{ state: JsonObject }>({ kind: "cortex.desk-adapter-diagnostics", version: 1, scope: "session", initial: () => ({ state: { version: 1, connections: {} } }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
+const EMPTY_RECORD: ConnectionRecord = { reported: false, status: EMPTY_STATUS, events: [] };
+const DiagnosticsDoc = defineDocFamily<{ record: JsonObject | null }, string>({ kind: "cortex.desk-adapter-diagnostics", version: 1, scope: "session", family: true, initial: () => ({ record: null }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 
 export type DiagnosticOutcome = { stored: true; event: DiagnosticEvent } | { stored: false; code: "invalid_event" | "store_failed" };
 export interface DiagnosticRecorder {
@@ -63,14 +65,14 @@ export interface AdapterDiagnosticsOptions {
   context?: Context;
 }
 
-const later = (left: string | null, right: string): string => left !== null && Date.parse(left) > Date.parse(right) ? left : right;
-const allow = (status: ConnectionStatus, event: DiagnosticEvent): ConnectionStatus => ({ ...status, lastAttemptAt: later(status.lastAttemptAt, event.at) });
+const latest = (left: string | null, right: string | null): string | null => left === null ? right : right === null ? left : Date.parse(left) > Date.parse(right) ? left : right;
+const reports = (event: DiagnosticEvent): boolean => event.event === "desk.adapter.connection_status" || (event.event === "desk.adapter.operation_state" && event.state === "succeeded");
 
 function observe(status: ConnectionStatus, event: DiagnosticEvent): ConnectionStatus {
-  const next = allow(status, event);
+  const next = { ...status, lastAttemptAt: latest(status.lastAttemptAt, event.at) };
   if (event.event === "desk.adapter.connection_status") return { ...next, state: event.state, reason: event.errorCode ?? null };
   if (event.event === "desk.adapter.trigger_fired" && event.state === "fenced") return { ...next, state: "fenced", reason: event.errorCode };
-  if (event.event === "desk.adapter.operation_state" && event.state === "succeeded") return next.state === "fenced" ? { ...next, lastSuccessAt: later(next.lastSuccessAt, event.at) } : { ...next, lastSuccessAt: later(next.lastSuccessAt, event.at), state: "available", reason: null };
+  if (event.event === "desk.adapter.operation_state" && event.state === "succeeded") return next.state === "fenced" ? { ...next, lastSuccessAt: latest(next.lastSuccessAt, event.at) } : { ...next, lastSuccessAt: latest(next.lastSuccessAt, event.at), state: "available", reason: null };
   return next;
 }
 
@@ -98,11 +100,12 @@ export class AdapterDiagnostics implements ConnectionStatusReader {
     }
     const event = parsed.data;
     try {
-      await this.mutate(state => {
-        const current = state.connections[event.connectionId] ?? { status: EMPTY_STATUS, events: [] };
-        const kept = [...current.events, event].slice(-ADAPTER_EVENT_CAPACITY);
-        state.connections[event.connectionId] = { status: observe(current.status, event), events: kept };
-      });
+      await this.engine.commit(async tx => {
+        const doc = await tx.doc(DiagnosticsDoc, event.connectionId, event.connectionId);
+        const current = doc.record ? ConnectionRecordSchema.parse(doc.record) : EMPTY_RECORD;
+        const next: ConnectionRecord = { reported: current.reported || reports(event), status: observe(current.status, event), events: [...current.events, event].slice(-ADAPTER_EVENT_CAPACITY) };
+        doc.record = JSON.parse(JSON.stringify(next)) as JsonObject;
+      }, this.context);
       return { stored: true, event };
     } catch (error) {
       this.log(`desk-adapter-diagnostics: event not stored: ${error instanceof Error ? error.message : String(error)}`);
@@ -111,28 +114,26 @@ export class AdapterDiagnostics implements ConnectionStatusReader {
   }
 
   async events(connectionId: string): Promise<DiagnosticEvent[]> {
-    return (await this.load()).connections[connectionId]?.events.map(event => ({ ...event })) ?? [];
+    return (await this.load(connectionId))?.events.map(event => ({ ...event })) ?? [];
   }
 
   async status(connectionId: string, fallback?: ConnectionStatus): Promise<ConnectionStatus> {
-    const stored = (await this.load()).connections[connectionId]?.status;
-    const base = stored ?? fallback ?? EMPTY_STATUS;
+    return this.compose(connectionId, await this.load(connectionId), fallback);
+  }
+
+  private async compose(connectionId: string, record: ConnectionRecord | null, fallback?: ConnectionStatus): Promise<ConnectionStatus> {
+    const base = record?.reported ? record.status : fallback === undefined ? record?.status ?? EMPTY_STATUS : {
+      ...fallback,
+      lastSuccessAt: latest(fallback.lastSuccessAt, record?.status.lastSuccessAt ?? null),
+      lastAttemptAt: latest(fallback.lastAttemptAt, record?.status.lastAttemptAt ?? null),
+    };
     if (await this.options.fenced?.(connectionId)) return { ...base, state: "fenced", reason: base.state === "fenced" && base.reason !== null ? base.reason : "binding_fenced" };
     if (base.state === "available" && base.lastSuccessAt !== null && this.now().getTime() - Date.parse(base.lastSuccessAt) > this.staleAfterMs) return { ...base, state: "stale", reason: "last_success_too_old" };
     return base;
   }
 
-  private async load(): Promise<DiagnosticState> {
-    const doc = await this.engine.snapshot(DiagnosticsDoc, this.context);
-    return StateSchema.parse(doc?.state ?? { version: 1, connections: {} });
-  }
-
-  private async mutate(change: (state: DiagnosticState) => void): Promise<void> {
-    await this.engine.commit(async tx => {
-      const doc = await tx.doc(DiagnosticsDoc);
-      const state = StateSchema.parse(doc.state);
-      change(state);
-      doc.state = JSON.parse(JSON.stringify(StateSchema.parse(state))) as JsonObject;
-    }, this.context);
+  private async load(connectionId: string): Promise<ConnectionRecord | null> {
+    const doc = await this.engine.snapshot(DiagnosticsDoc, connectionId, this.context);
+    return doc?.record ? ConnectionRecordSchema.parse(doc.record) : null;
   }
 }

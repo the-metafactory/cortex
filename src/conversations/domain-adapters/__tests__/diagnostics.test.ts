@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { connectionSetupRig, SELECTION, SYNTHETIC_TOKEN, type ConnectionSetupRig } from "../../connection-setup-fixtures";
+import { enableConnection, listConnections, connectionSetupRig, SYNTHETIC_TOKEN, type ConnectionSetupRig } from "../../connection-setup-fixtures";
+import { syntheticDiagnostics } from "../diagnostics-fixtures";
 import type { ConnectionView } from "../../connection-setup";
-import { ADAPTER_EVENT_CAPACITY, DIAGNOSTIC_EVENT_NAMES } from "../diagnostics";
+import { validateEnvelope } from "../../../bus/myelin/envelope-validator";
+import { ADAPTER_EVENT_CAPACITY, DIAGNOSTIC_EVENT_KEYS, DIAGNOSTIC_EVENT_NAMES } from "../diagnostics";
 import { eventFixture, prepareOperationFixture, registryFixture } from "../operations/fixtures";
 import { queryBinding, queryRig, syntheticQueryPage } from "../reads/query-fixtures";
 
-const PATH = "/api/desk/connections";
-const tokens = { primary: { token: SYNTHETIC_TOKEN }, backup: { token: `${SYNTHETIC_TOKEN}-backup` } };
 const rigs: ConnectionSetupRig[] = [];
 
 afterEach(async () => { for (const rig of rigs.splice(0)) await rig.close(); });
@@ -17,29 +17,19 @@ async function openRig(): Promise<ConnectionSetupRig> {
   return rig;
 }
 
-async function enable(rig: ConnectionSetupRig): Promise<ConnectionView> {
-  const made = await rig.http("local", "POST", PATH, { packageId: "example-package", ...SELECTION, inputs: tokens });
-  expect(made.status).toBe(200);
-  const created = made.body.connection as ConnectionView;
-  const on = await rig.http("local", "POST", `${PATH}/${created.connectionId}/enable`, { expectedRevision: created.revision });
-  expect(on.status).toBe(200);
-  return on.body.connection as ConnectionView;
-}
-
 async function listed(rig: ConnectionSetupRig): Promise<Map<string, ConnectionView>> {
-  const res = await rig.http("local", "GET", PATH, undefined);
-  expect(res.status).toBe(200);
-  return new Map((res.body.connections as ConnectionView[]).map(item => [item.connectionId, item]));
+  return new Map((await listConnections(rig)).map(item => [item.connectionId, item]));
 }
 
 const statusEvent = (connectionId: string, state: "available" | "unavailable" | "stale" | "fenced", errorCode?: string) => ({ event: "desk.adapter.connection_status", adapterId: "balance", connectionId, state, ...(errorCode ? { errorCode } : {}) });
+const busClient = (): { published: unknown[]; publish(envelope: unknown): boolean } => ({ published: [], publish(envelope: unknown): boolean { if (!validateEnvelope(envelope).ok) return false; this.published.push(envelope); return true; } });
 
 describe("adapter diagnostics store", () => {
   test("stores one strict event per kind with only opaque identifiers, capability, state and an error code", async () => {
     const rig = await openRig();
     const diagnostics = rig.host().adapterDiagnostics();
     const connectionId = "connection-example";
-    const allowed = new Set(["event", "adapterId", "connectionId", "capabilityId", "state", "errorCode", "at"]);
+    const allowed = new Set<string>(DIAGNOSTIC_EVENT_KEYS);
     const events = [
       statusEvent(connectionId, "available"),
       { event: "desk.adapter.query_refused", adapterId: "balance", connectionId, capabilityId: "balance.object.read", state: "refused", errorCode: "denied" },
@@ -83,12 +73,25 @@ describe("adapter diagnostics store", () => {
     expect(await diagnostics.status(connectionId)).toMatchObject({ state: "available", reason: null });
   });
 
+  test("a first event that is not a connection report keeps the caller's enabled status", async () => {
+    const rig = await openRig();
+    const diagnostics = rig.host().adapterDiagnostics();
+    const connectionId = "connection-example";
+    expect((await diagnostics.record({ event: "desk.adapter.operation_state", adapterId: "balance", connectionId, state: "dispatching" })).stored).toBe(true);
+    expect(await diagnostics.status(connectionId)).toMatchObject({ state: "unavailable", reason: "not_reported" });
+    expect(await diagnostics.status(connectionId, { state: "available", lastSuccessAt: null, lastAttemptAt: null, reason: null })).toMatchObject({ state: "available", reason: null });
+    expect((await diagnostics.status(connectionId, { state: "available", lastSuccessAt: null, lastAttemptAt: null, reason: null })).lastAttemptAt).not.toBeNull();
+  });
+
   test("records no bus publication for any event", async () => {
     const rig = await openRig();
     const diagnostics = rig.host().adapterDiagnostics();
-    const bus = { published: [] as unknown[], publish(subject: string, payload: unknown): void { this.published.push({ subject, payload }); } };
+    const bus = busClient();
     await diagnostics.record(statusEvent("connection-example", "available"));
     await diagnostics.record({ event: "desk.adapter.query_partial", adapterId: "balance", connectionId: "connection-example", state: "partial" });
+    const stored = await diagnostics.events("connection-example");
+    expect(stored).toHaveLength(2);
+    expect(stored.map(event => bus.publish(event))).toEqual([false, false]);
     expect(bus.published).toEqual([]);
   });
 });
@@ -96,20 +99,7 @@ describe("adapter diagnostics store", () => {
 describe("adapter connection status in Desk Settings", () => {
   test("shows available, unavailable, stale and fenced with last success, last attempt and a safe reason", async () => {
     const rig = await openRig();
-    const diagnostics = rig.host().adapterDiagnostics();
-    const available = await enable(rig);
-    const stale = await enable(rig);
-    const fenced = await enable(rig);
-    const unavailable = await enable(rig);
-    const recent = new Date(Date.now() - 60_000).toISOString();
-    const older = new Date(Date.now() - 3_600_000).toISOString();
-    expect((await diagnostics.record({ event: "desk.adapter.operation_state", adapterId: available.packageId, connectionId: available.connectionId, state: "succeeded", at: recent })).stored).toBe(true);
-    expect((await diagnostics.record({ event: "desk.adapter.operation_state", adapterId: stale.packageId, connectionId: stale.connectionId, state: "succeeded", at: older })).stored).toBe(true);
-    const fenceTarget = { adapterId: fenced.packageId, connectionId: fenced.connectionId, capabilityId: "example.object.create" };
-    await rig.host().lifecycleFences().trigger({ kind: "duplicate_owner_object", target: fenceTarget });
-    const off = await rig.http("local", "POST", `${PATH}/${unavailable.connectionId}/disable`, { expectedRevision: unavailable.revision });
-    expect(off.status).toBe(200);
-
+    const { available, stale, fenced, unavailable, fenceTarget, recent, older } = await syntheticDiagnostics(rig);
     const views = await listed(rig);
     const status = (connectionId: string) => views.get(connectionId)?.status;
     expect(status(available.connectionId)).toMatchObject({ state: "available", reason: null, lastSuccessAt: recent });
@@ -123,10 +113,10 @@ describe("adapter connection status in Desk Settings", () => {
     expect(JSON.stringify([...views.values()])).not.toContain(SYNTHETIC_TOKEN);
   });
 
-  test("records status, query, operation and trigger events on the host store and never publishes", async () => {
+  test("records status, query, operation and trigger events on the host store", async () => {
     const rig = await openRig();
     const diagnostics = rig.host().adapterDiagnostics();
-    const connection = await enable(rig);
+    const connection = await enableConnection(rig);
     await rig.host().lifecycleFences().trigger({ kind: "readback_failed", target: { adapterId: connection.packageId, connectionId: connection.connectionId, capabilityId: "example.object.read" } });
     const events = await diagnostics.events(connection.connectionId);
     expect(events.map(item => item.event)).toContain("desk.adapter.connection_status");
@@ -172,5 +162,21 @@ describe("adapter query diagnostics", () => {
     const events = (await item.rig.host.adapterDiagnostics().events(item.source.connectionId)).filter(entry => entry.event === "desk.adapter.query_partial");
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ state: "partial", adapterId: "balance", connectionId: item.source.connectionId, capabilityId: queryBinding.capabilityId });
+  });
+
+  test("records a partial query on the connection whose source failed, not the first source", async () => {
+    const item = await queryRig(undefined, "local", { secondConnection: true });
+    if (!item.secondSource) throw new Error("Synthetic second connection missing.");
+    const failing = { ...item.secondSource, input: { ...item.secondSource.input as object, title: "failure" } };
+    item.rig.hooks.query = request => (request.input as { title: string }).title === "failure" ? Promise.reject(new Error("synthetic provider failure")) : Promise.resolve(syntheticQueryPage([]));
+    const request = await item.runner.create(item.rig.context, [item.source, failing], item.rig.sink);
+    const result = await item.runner.run(item.rig.context, request, item.rig.sink);
+    expect(result.status).toBe("partial");
+    const diagnostics = item.rig.host.adapterDiagnostics();
+    expect((await diagnostics.events(item.source.connectionId)).filter(entry => entry.event === "desk.adapter.query_partial")).toEqual([]);
+    const failed = (await diagnostics.events(failing.connectionId)).filter(entry => entry.event === "desk.adapter.query_partial");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ state: "partial", connectionId: failing.connectionId, capabilityId: queryBinding.capabilityId });
+    expect((await diagnostics.status(failing.connectionId)).lastAttemptAt).not.toBeNull();
   });
 });

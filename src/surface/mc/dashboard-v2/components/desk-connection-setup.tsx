@@ -35,7 +35,7 @@ const STATUS_REASON_TEXT: Record<string, string> = {
   last_success_too_old: "No successful use was recorded recently. Check the connection.",
   refused: "The adapter refused the last query.",
 };
-const when = (value: string | null): string => value === null ? "never" : new Date(value).toISOString().replace("T", " ").replace(".000Z", " UTC");
+const when = (value: string | null): string => value === null ? "never" : `${new Date(value).toISOString().slice(0, 19).replace("T", " ")} UTC`;
 const statusLine = (connection: ConnectionView): string => {
   const reason = connection.status.reason;
   return `${STATUS_TEXT[connection.status.state]} · last success ${when(connection.status.lastSuccessAt)} · last attempt ${when(connection.status.lastAttemptAt)}${reason ? ` · ${STATUS_REASON_TEXT[reason] ?? "A safety check stopped adapter use. See diagnostics."}` : ""}`;

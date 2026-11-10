@@ -37,6 +37,7 @@ async function untilAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T |
   finally { removeAbort(); }
 }
 const sourceIdentity = ({ adapterId, connectionId, capabilityId }: QuerySource) => ({ adapterId, connectionId, capabilityId });
+const sourceKey = ({ adapterId, connectionId, capabilityId }: Pick<QuerySource, "adapterId" | "connectionId" | "capabilityId">): string => `${adapterId}:${connectionId}:${capabilityId}`;
 const restart = (queryId: string): QueryResult => ({ readVersion: "1.0.0", queryId, status: "unavailable", groups: [], restricted: false, noMatch: false, restartRequired: true, reason: queryError("restart_required") });
 
 export class QueryRunner {
@@ -190,10 +191,19 @@ export class QueryRunner {
   private async invalidate(queryId: string): Promise<QueryResult> { await this.cancel(queryId); return restart(queryId); }
 
   private async observe(request: QueryRequest, result: QueryResult): Promise<void> {
-    const source = request.sources[0];
-    if (!source || !this.diagnostics) return;
-    const identity = { adapterId: source.adapterId, connectionId: source.connectionId, capabilityId: source.capabilityId };
-    if (["denied", "unsupported", "unavailable"].includes(result.status)) { await this.diagnostics.record({ event: "desk.adapter.query_refused", ...identity, state: "refused", errorCode: result.reason?.code ?? result.status }); return; }
-    if (result.status === "partial") await this.diagnostics.record({ event: "desk.adapter.query_partial", ...identity, state: "partial", ...(result.reason ? { errorCode: result.reason.code } : {}) });
+    if (!this.diagnostics) return;
+    const refused = new Set(["denied", "unsupported", "unavailable"]);
+    const groups = new Map(result.groups.map(group => [sourceKey(group.source), group]));
+    const recorded = new Set<string>();
+    for (const source of request.sources) {
+      const group = groups.get(sourceKey(source));
+      const event = result.status === "partial" ? (group?.status === "ok" ? undefined : "desk.adapter.query_partial") : refused.has(result.status) && (group === undefined || refused.has(group.status)) ? "desk.adapter.query_refused" : undefined;
+      if (event === undefined) continue;
+      const key = `${event}:${source.connectionId}`;
+      if (recorded.has(key)) continue;
+      recorded.add(key);
+      const errorCode = group?.reason?.code ?? result.reason?.code;
+      await this.diagnostics.record({ event, adapterId: source.adapterId, connectionId: source.connectionId, capabilityId: source.capabilityId, state: event === "desk.adapter.query_refused" ? "refused" : "partial", ...(errorCode === undefined ? {} : { errorCode }) });
+    }
   }
 }

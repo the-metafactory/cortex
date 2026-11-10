@@ -97,12 +97,8 @@ const noticeFor = (signal: FenceSignal, at: string): PrincipalNotice => {
 export class BindingFenceStore implements FenceGate, FenceSink {
   private readonly now: () => Date;
 
-  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private notifier?: PrincipalNotifier, private readonly context: Context = BACKGROUND_CONTEXT, now?: () => Date, private diagnostics?: DiagnosticRecorder) {
+  constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private notifier?: PrincipalNotifier, private readonly context: Context = BACKGROUND_CONTEXT, now?: () => Date, private readonly diagnostics?: DiagnosticRecorder) {
     this.now = now ?? (() => new Date());
-  }
-
-  attachDiagnostics(diagnostics: DiagnosticRecorder): void {
-    this.diagnostics = diagnostics;
   }
 
   private async state(): Promise<FenceState> {
