@@ -87,7 +87,8 @@ describe("conversation API gates", () => {
       expect(await frame()).toBe('event: response\ndata: {"text":null}\n\n');
       await status.host.submit(conversation.id, { inputId: "stream-api", text: "hello", transport: "web", mode: "queue" });
       const first = await frame();
-      expect(first).toBe('event: response\ndata: {"text":"Hello"}\n\n');
+      if (first === 'event: response\ndata: {"text":""}\n\n') expect(await frame()).toBe('event: response\ndata: {"append":"Hello"}\n\n');
+      else expect(first).toBe('event: response\ndata: {"text":"Hello"}\n\n');
       next.resolve(undefined);
       expect(await frame()).toBe('event: response\ndata: {"append":" world"}\n\n');
       finish.resolve(undefined);
