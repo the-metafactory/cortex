@@ -1,9 +1,0 @@
-Desk adapters: tighten graph scope publication checks and scope fields (node #3347)
-
-Drops a vacuous coverage assertion from the midway-failure test, renames and
-reflows the failed-untick test, extracts the graph scope field set into one
-helper that both the comparison and the write use, replaces the copy-pasted
-failing-store setups with scopeWith/unreachable helpers, and fixes two prose
-and formatting findings.
-
-Refs node #3347
