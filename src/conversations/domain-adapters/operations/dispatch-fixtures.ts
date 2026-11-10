@@ -1,5 +1,4 @@
-import { authorityRig, type AuthorityRigOptions } from "../../authority-fixtures";
-import type { DomainAdapterRegistry } from "../registry";
+import { authorityRig, type AuthorityRigOptions, type ReadSetup } from "../../authority-fixtures";
 import { objectRef } from "../fixtures";
 import { AT, support } from "./fixtures";
 import type { DispatchRequest, OwnerResult, OwnerSupport } from "./types";
@@ -23,7 +22,7 @@ export function ownerResult(request: Pick<DispatchRequest, "operationId" | "atte
   return { ...base, result: { kind, error: { code: "synthetic_unknown", message: "The owner cannot tell." }, ownerRequestId: request.ownerRequestId } };
 }
 
-export interface DispatchRigOptions extends AuthorityRigOptions { readSetup?: { registry: DomainAdapterRegistry; binding: unknown; capabilityIds?: readonly string[]; adapterId?: string } }
+export interface DispatchRigOptions extends AuthorityRigOptions { readSetup?: ReadSetup }
 
 export interface DispatchRigSetup extends DispatchRigOptions { waitMs?: number; maxOutstandingCalls?: number; clock?: () => Date; notify?: PrincipalNotifier }
 

@@ -1,5 +1,11 @@
 import { expect, test } from "bun:test";
-import { CANARY, CANARY_PATHS, CANARY_SINKS, canaryExitCode, canaryReport, captureLog, emptyCanarySinks, runCanaryProbe, scanCanary, type CanaryProbeResult } from "../canary-fixtures";
+import { CANARY, CANARY_PATHS, CANARY_SINKS, canaryExitCode, canaryReport, captureLog, emptyCanarySinks, runCanaryProbe, scanCanary, storeHoldsCanary, type CanaryProbeResult } from "../canary-fixtures";
+import type { ArcSecretStore } from "../../../common/config/desk-credential-arc-file-store";
+
+const storeOf = (stored: string): ArcSecretStore => ({
+  id: "synthetic-store", available: () => Promise.resolve(true), present: () => Promise.resolve(true),
+  writeIfAbsent: () => Promise.resolve("exists"), matches: (_identity, value) => Promise.resolve(value === stored),
+});
 
 const cleanResult = (credentialHoldsCanary: boolean): CanaryProbeResult => ({
   covered: [...CANARY_SINKS], missing: [], findings: [], credentialWritten: true, credentialHoldsCanary,
@@ -27,6 +33,13 @@ test("the scan finds encoded and truncated forms of the canary", () => {
   const findings = scanCanary(sinks);
   expect(findings.map(finding => finding.sink)).toEqual(["log", "event", "receipt"]);
   expect(findings.every(finding => finding.occurrences === 1)).toBe(true);
+});
+
+test("the credential check compares the store against the canary, not against the store's own contents", async () => {
+  expect(await storeHoldsCanary(storeOf(CANARY), "identity-example", CANARY)).toBe(true);
+  expect(await storeHoldsCanary(storeOf("not-the-canary"), "identity-example", "not-the-canary")).toBe(false);
+  expect(await storeHoldsCanary(storeOf(CANARY), "identity-example", "not-the-canary")).toBe(false);
+  expect(await storeHoldsCanary(null, "identity-example", CANARY)).toBe(false);
 });
 
 test("a captured Error keeps its message", () => {

@@ -12,6 +12,7 @@ import { DraftingBindings } from "./drafting";
 import { queryArea, queryBinding, queryRegistry, syntheticQueryPage } from "./reads/query-fixtures";
 import type { QuerySource } from "./reads/query-types";
 import type { DispatchRequest, OwnerResult } from "./operations/types";
+import type { ArcSecretStore } from "../../common/config/desk-credential-arc-file-store";
 import { DESK_CONNECTIONS_PATH } from "../../surface/mc/api/desk-connections";
 
 export const CANARY = "desk-canary-51e2a7b9c4d1";
@@ -85,6 +86,10 @@ export interface CanaryProbeResult {
   readonly entries: Record<CanarySink, number>;
 }
 
+export async function storeHoldsCanary(store: ArcSecretStore | null, identity: string, written: string): Promise<boolean> {
+  return written === CANARY && store !== null && await store.matches(identity, CANARY);
+}
+
 export const canaryExitCode = (result: CanaryProbeResult): number =>
   result.credentialWritten && result.credentialHoldsCanary && result.missing.length === 0 && result.findings.length === 0 ? 0 : 1;
 
@@ -100,8 +105,8 @@ export function canaryReport(result: CanaryProbeResult, leak: CanarySink | null 
     return { stream: "out" as const, text: `✅ ${sink}: scanned, the canary appeared nowhere` };
   });
   lines.push(result.credentialWritten && result.credentialHoldsCanary
-    ? { stream: "out", text: "✅ credential: the broker wrote the canary into the fixture connection's secret store and the store matched it" }
-    : { stream: "err", text: `❌ credential: ${result.credentialWritten ? "the secret store does not match the value the broker wrote" : "the broker did not write the value"}` });
+    ? { stream: "out", text: "✅ credential: the fixture connection's arc-backed secret store holds the canary" }
+    : { stream: "err", text: `❌ credential: ${result.credentialWritten ? "the fixture connection's secret store does not hold the canary" : "the fixture connection's secret store was not written"}` });
   if (leak === null) {
     lines.push(canaryExitCode(result) === 0
       ? { stream: "out", text: "Desk adapter canary probe passed: the query, draft, dispatch and failure paths ran in a stack whose connection authorizes against the canary credential, and no log, event, receipt, UI response or model context held the value. Synthetic temporary stack only." }
@@ -115,14 +120,8 @@ export function canaryReport(result: CanaryProbeResult, leak: CanarySink | null 
   return lines;
 }
 
-export interface CanaryStack {
+export interface CanaryStack extends Omit<CanaryProbeResult, "findings"> {
   readonly sinks: CanarySinks;
-  readonly covered: CanarySink[];
-  readonly missing: CanarySink[];
-  readonly credentialHoldsCanary: boolean;
-  readonly credentialWritten: boolean;
-  readonly paths: CanaryPath[];
-  readonly entries: Record<CanarySink, number>;
   close(): Promise<void>;
 }
 
@@ -220,7 +219,7 @@ export async function openCanaryStack(options: CanaryStackOptions): Promise<Cana
     if (live.secretPath === null) throw new Error("The canary credential has no secret store.");
     const credential = await readFile(live.secretPath, "utf8");
     const credentialWritten = live.credentialWrite === "created";
-    const credentialHoldsCanary = live.secrets !== null && await live.secrets.matches(live.secretIdentity, credential);
+    const credentialHoldsCanary = await storeHoldsCanary(live.secrets, live.secretIdentity, credential);
 
     if (leaking === "event") await live.host.adapterDiagnostics().record({ event: "desk.adapter.query_refused", adapterId: "balance", connectionId: live.connection.connectionId, state: "refused", errorCode: credential });
     await live.host.adapterDiagnostics().record({ event: "desk.adapter.connection_status", adapterId: "balance", connectionId: live.connection.connectionId, state: "not-a-state" });
@@ -264,15 +263,8 @@ export async function runCanaryProbe(options: CanaryProbeOptions = {}): Promise<
   try {
     const stack = await openCanaryStack({ root: join(root, "stack"), leak: options.leak ?? null });
     try {
-      return {
-        covered: stack.covered,
-        missing: stack.missing,
-        findings: scanCanary(stack.sinks),
-        credentialWritten: stack.credentialWritten,
-        credentialHoldsCanary: stack.credentialHoldsCanary,
-        paths: stack.paths,
-        entries: stack.entries,
-      };
+      const { sinks, ...rest } = stack;
+      return { ...rest, findings: scanCanary(sinks) };
     } finally {
       await stack.close();
     }
