@@ -136,6 +136,7 @@ export default tseslint.config(
       // out-of-tree bundles (bun run sdk:dts). Excluded from tsconfig too;
       // not part of the typed project.
       "src/surface-sdk/generated/",
+      "src/desk-sdk/generated/",
       "src/bus/myelin/vendor/",
       "src/worker/",
       "src/webhook-proxy/",

@@ -41,7 +41,7 @@
  * cortex#2347 (EBH-5 follow-up, adversarial review DO-NOT-MERGE finding) —
  * BOTH `reload` and `load` re-`import()` a bundle's entry module (via
  * `reimportRendererPlugin`), which is a SECOND, independent signature-
- * verification point (`src/adapters/plugin-signing.ts`), not a reuse of
+ * verification point (`src/common/registry/bundle-signature.ts`), not a reuse of
  * whatever verified at boot. `PluginRuntimeDeps.pluginSigning` (REQUIRED,
  * no default) is threaded to every `reimportRendererPlugin` call in this
  * file for exactly that reason — see that field's own doc.
@@ -56,7 +56,7 @@ import {
   type ReimportRendererResult,
 } from "../adapters/loader";
 import type { RendererPlugin, SurfacePluginRegistry } from "../adapters/registry";
-import type { PluginSigningPosture } from "../adapters/plugin-signing";
+import type { PluginSigningPosture } from "../common/registry/bundle-signature";
 import type { Renderer } from "../renderers/types";
 import {
   refuseIfMutationBreaksCoverage,
@@ -156,7 +156,7 @@ export interface PluginRuntimeDeps {
    * cortex#2347 (EBH-5 follow-up, adversarial review DO-NOT-MERGE finding)
    * — `system.plugins.signing` posture, threaded to `reimportRendererPlugin`
    * for BOTH `reload` and `load` (both re-`import()` a bundle's entry
-   * module — see `src/adapters/plugin-signing.ts`'s "Coverage" section).
+   * module — see `src/common/registry/bundle-signature.ts`'s "Coverage" section).
    * REQUIRED, no default: `src/cortex.ts` sets this from the SAME
    * `config.plugins.signing` the boot-time loader uses, so reload is held
    * to the identical posture as boot, always — a caller cannot construct
@@ -164,7 +164,7 @@ export interface PluginRuntimeDeps {
    */
   pluginSigning: PluginSigningPosture;
   /** Trust root override — defaults to `PLUGIN_TRUST_ROOT`
-   *  (`src/adapters/plugin-signing.ts`), same default the boot-time loader
+   *  (`src/common/registry/bundle-signature.ts`), same default the boot-time loader
    *  uses. Production callers never set this; tests inject a throwaway
    *  keypair's pubkey. */
   pluginTrustedSigners?: ReadonlySet<string>;

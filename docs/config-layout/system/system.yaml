@@ -288,7 +288,7 @@ paths:
 #                real installed bundles before gating anything.
 #   enforce    — refuse to load any bundle whose `cortex-plugin.sig` is
 #                missing, malformed, tampered, or signed by a key outside
-#                the in-tree trust root (`src/adapters/plugin-signing.ts`
+#                the in-tree trust root (`src/common/registry/bundle-signature.ts`
 #                PLUGIN_TRUST_ROOT).
 # As of this writing PLUGIN_TRUST_ROOT ships EMPTY — no bundle in the
 # ecosystem is signed yet, so `enforce` refuses everything and `permissive`

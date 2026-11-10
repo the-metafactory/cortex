@@ -2,7 +2,7 @@
 
 **Status:** Draft (design only — no implementation)
 **Author:** Luna (with Andreas), cortex#2347 (EBH-5, epic #2341 "execution-boundary hardening")
-**Companion:** registry signing (cortex#2347's OTHER half — implemented alongside this note, `src/adapters/plugin-signing.ts`)
+**Companion:** registry signing (cortex#2347's OTHER half — implemented alongside this note, `src/common/registry/bundle-signature.ts`)
 **Refs:** [ADR-0024](adr/0024-pluggable-surface-adapters.md) D4 ("Plugins run in-process with full daemon authority; risk accepted for v1 with mitigations" — names *"separate-process-over-IPC if a real trust boundary is ever required"* as the escalation this note designs), `docs/security/hardening-plan.md` §2 L4, `src/adapters/loader.ts`
 
 ---
@@ -77,7 +77,7 @@ None of this is being built now — it is recorded so the trigger-fired implemen
 
 | Trigger | What should happen |
 |---|---|
-| **First non-first-party bundle** about to load (`system.plugins.external` flips on for a stack that will load a bundle outside cortex's own `metafactory-cortex-adapter-*`/`metafactory-cortex-renderer-*` first-party set) | Before that stack goes live: (1) populate `PLUGIN_TRUST_ROOT` (`src/adapters/plugin-signing.ts`) with a real production key and require that bundle to be signed under `system.plugins.signing: enforce` — signing is buildable TODAY and should gate this immediately; (2) open the Option-A implementation as its own epic/issue, scoped against the then-current `src/surface-sdk/`, and treat that stack's exposure between "bundle loads" and "isolation ships" as a tracked, time-boxed risk acceptance, not a silent gap. |
+| **First non-first-party bundle** about to load (`system.plugins.external` flips on for a stack that will load a bundle outside cortex's own `metafactory-cortex-adapter-*`/`metafactory-cortex-renderer-*` first-party set) | Before that stack goes live: (1) populate `PLUGIN_TRUST_ROOT` (`src/common/registry/bundle-signature.ts`) with a real production key and require that bundle to be signed under `system.plugins.signing: enforce` — signing is buildable TODAY and should gate this immediately; (2) open the Option-A implementation as its own epic/issue, scoped against the then-current `src/surface-sdk/`, and treat that stack's exposure between "bundle loads" and "isolation ships" as a tracked, time-boxed risk acceptance, not a silent gap. |
 | **First federated deployment** (cross-principal bus) | Same as above — federation raises the stakes because a compromised plugin now has reach into cross-principal trust material (leaf secrets, admission state), not just a single-principal stack. Isolation should land BEFORE the first federated stack also runs a non-first-party bundle; a federated stack running only first-party, signed bundles is a smaller, still-nonzero risk (ADR-0024 D4's mitigations 1-3 all still apply to first-party bundles) that the epic's principal can consciously accept per-deployment. |
 | **Neither trigger** (today) | No isolation work. Registry signing (this PR) is the standing, non-trigger-gated improvement — it does not wait for either trigger because it is cheap, additive, and directly named by ADR-0024 D4 as part of the mitigation set. |
 
