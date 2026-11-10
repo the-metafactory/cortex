@@ -18,12 +18,12 @@ import { snapshotDigest, canonicalWire } from "./domain-adapters/operations/vali
 
 function requireValue<T>(value: T | null | undefined): T { if (value === null || value === undefined) throw new Error("Synthetic authority fixture is incomplete."); return value; }
 
-export async function authorityRig(extra: Partial<HostOptions> = {}, conversationPolicy: "local" | "cloud" = "local", readSetup?: { registry: DomainAdapterRegistry; binding: unknown; capabilityIds?: readonly string[] }) {
+export async function authorityRig(extra: Partial<HostOptions> = {}, conversationPolicy: "local" | "cloud" = "local", readSetup?: { registry: DomainAdapterRegistry; binding: unknown; capabilityIds?: readonly string[]; adapterId?: string }) {
   const dir = await mkdtemp(join(tmpdir(), "host-authority-"));
   const registry = readSetup?.registry ?? registryFixture();
   const principal: PrincipalBinding = { version: 1, principalRef: randomUUID(), principal: "principal-example", stack: "test", identityBindingRevision: "1", status: "active" };
   const approval = approvalFixture();
-  const connection: ConnectionRecord = { version: 1, status: "active", connectionId: approval.snapshot.connectionId, adapterId: "balance", principalRef: principal.principalRef, connectionRevision: "1", credentialHandle: "synthetic-credential-handle", accountScope: { account: "synthetic-account", resource: "area-example" }, readCapabilityIds: [...new Set([approval.snapshot.capabilityId, "balance.object.read", ...(readSetup?.capabilityIds ?? [])])], writeCapabilityIds: [approval.snapshot.capabilityId], readDestinations: approval.snapshot.destinations, writeDestinations: approval.snapshot.destinations, connectorId: "synthetic-connector", executionBindingRef: support.declarationId, registryRevision: "registry-1" };
+  const connection: ConnectionRecord = { version: 1, status: "active", connectionId: approval.snapshot.connectionId, adapterId: readSetup?.adapterId ?? "balance", principalRef: principal.principalRef, connectionRevision: "1", credentialHandle: "synthetic-credential-handle", accountScope: { account: "synthetic-account", resource: "area-example" }, readCapabilityIds: [...new Set([approval.snapshot.capabilityId, "balance.object.read", ...(readSetup?.capabilityIds ?? [])])], writeCapabilityIds: [approval.snapshot.capabilityId], readDestinations: approval.snapshot.destinations, writeDestinations: approval.snapshot.destinations, connectorId: "synthetic-connector", executionBindingRef: support.declarationId, registryRevision: "registry-1" };
   const policy: PolicyInputs = { version: 1, contextRevision: "context-1", areaId: "area-example", conversationPolicy, tool: {}, communication: {}, link: {}, work: {}, history: {}, registryRevision: "registry-1", executionBindingRevision: support.declarationId, operationVisible: true, readsAllowed: true, writesAllowed: true, releaseAllowed: true, allowedAudiences: ["web", "discord", "model", "view"] };
   const objectRestriction: RestrictionRecord = { version: 1, status: "active", restrictionRef: randomUUID(), source: requireValue(approval.snapshot.destinations[0]), ownerRevision: "synthetic-owner-1", decisionRef: "synthetic-object-provenance", audiences: ["web", "discord", "model", "view"], egress: "cloud", readScope: [principal.principalRef], resolverBinding: "synthetic-restriction-resolver", revision: "1" };
   const lease: WriterLease = { bindingKey: "synthetic-binding", epoch: 1, instanceId: "synthetic-instance", supervisorReceiptRef: "synthetic-supervisor" };
@@ -34,7 +34,7 @@ export async function authorityRig(extra: Partial<HostOptions> = {}, conversatio
   const sinks = new Map<string, (value: Json) => Promise<void>>();
   const readBindings = new ReadBindings(registry);
   const readBinding = { version: "1.0.0", adapterId: "balance", capabilityId: "balance.object.read", mode: "query", objectType: "task", inputSchemaRef: { schemaId: "balance.task.create.input", version: "1.0.0" }, outputSchemaRef: { schemaId: "balance.task.create.output", version: "1.0.0" }, destinationType: "area", display: { title: "/title" } };
-  const registered = readBindings.register(readSetup?.binding ?? readBinding, { adapterId: "balance", connectionId: connection.connectionId, readCapabilityIds: connection.readCapabilityIds });
+  const registered = readBindings.register(readSetup?.binding ?? readBinding, { adapterId: connection.adapterId, connectionId: connection.connectionId, readCapabilityIds: connection.readCapabilityIds });
   if (!registered.ok) throw new Error(registered.error.code);
   const bindings: AuthorityBindings = {
     currentRevision: () => authorityHash({ policy, sessionEnabled: hooks.sessionEnabled ?? true, credentialsAvailable: hooks.credentialsAvailable ?? true, lease }),
