@@ -19,11 +19,6 @@
 .dtd [role="alert"], .dtd [role="status"] { font-size: 12px; line-height: 1.6; color: #8b5a3f; }
 .dtd .dbl-move { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 14px; }
 .dtd .dbl-move > * { min-width: 0; max-width: 100%; }
-.dbl-create { min-width: 0; background: white; border: 1px solid #e2e7e3; border-radius: 12px; padding: 22px; margin: 20px 0; display: flex; align-items: end; flex-wrap: wrap; gap: 12px; }
-.dbl-create h2, .dbl-create p { flex-basis: 100%; }
-.dbl-create label { display: block; font-size: 11px; color: #6f7e73; margin: 18px 0 7px; flex: 1; min-width: min(180px, 100%); }
-.dbl-create label > input, .dbl-create label > select { display: block; margin-top: 7px; }
-.dbl-create p { color: #7b887f; font-size: 11px; line-height: 1.6; }
 @media (max-width: 760px) { .dtd .dbl-pair { grid-template-columns: minmax(0, 1fr); } }
 .dbl-message { border: 1px solid #d8e3d8; border-radius: 8px; padding: 14px; font-size: 12px; line-height: 1.6; background: #f6faf5; overflow-wrap: anywhere; }
 .dbl-message.error { border-color: #e1c6b7; background: #fff8f2; }
@@ -32,3 +27,6 @@
 .dtd-summary dt { color: #78837b; font-size: 11px; margin-bottom: 3px; }
 .dtd-summary dd { margin: 0; }
 .dtd-note { white-space: pre-wrap; font-size: 13px; line-height: 1.6; }
+.dbl-add-dialog { width: min(520px, calc(100vw - 40px)); max-height: calc(100dvh - 48px); box-sizing: border-box; overflow-y: auto; padding: 26px; border: 1px solid #dce3df; border-radius: 14px; background: white; box-shadow: 0 24px 80px #14251b33; }
+.dbl-add-dialog::backdrop { background: #17251c66; }
+.dbl-dialog-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 22px; }

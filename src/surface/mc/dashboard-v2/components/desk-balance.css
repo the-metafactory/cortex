@@ -50,3 +50,7 @@
 .dbl-row.drop-before { box-shadow: inset 0 2px 0 #3f7a52; }
 .dbl-row.drop-after { box-shadow: inset 0 -2px 0 #3f7a52; }
 .dbl-row.drop-inside { outline: 2px dashed #3f7a52; outline-offset: -2px; }
+.dbl-row-add { opacity: 0; flex: 0 0 28px; height: 28px; border: 1px solid #d4dfd6; border-radius: 50%; background: white; color: #395d47; font-size: 20px; cursor: pointer; }
+.dbl-row:hover .dbl-row-add, .dbl-row:focus-within .dbl-row-add { opacity: 1; }
+.dbl-row-add:disabled { visibility: hidden; }
+@media (hover: none) { .dbl-row-add { opacity: 1; } }

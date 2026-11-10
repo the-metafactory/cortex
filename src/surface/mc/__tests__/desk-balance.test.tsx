@@ -71,6 +71,21 @@ describe("Balance through the real My day owner", () => {
     expect(required(view(), "first")).toMatchObject({ context: "Sketching", dueDate: "2026-11-05", effort: 4 });
     expect(required(view(), "first").estimateMinutes).toBeUndefined();
   });
+  test("creates full task details atomically and rejects invalid creation fields", async () => {
+    const current = view();
+    const before = loadBalanceState(db);
+    const fields = { op: "outline-add", revision: current.revision, parent: "first", title: "Full task", weight: 73, note: "Bring the form", dueDate: "2026-11-05", context: "Office", effort: 4, estimateMinutes: 25 } as const;
+    for (const patch of [{ weight: 101 }, { effort: 3 }, { estimateMinutes: 0 }, { estimateMinutes: 1.5 }]) {
+      expect((await post({ ...fields, ...patch })).status).toBe(400);
+      expect(loadBalanceState(db)).toEqual(before);
+    }
+    const added = await change(fields);
+    expect(required(added.view, "first").children).toHaveLength(1);
+    expect(required(added.view, added.outlineId ?? "")).toMatchObject({ title: "Full task", weight: 73, note: "Bring the form", dueDate: "2026-11-05", context: "Office", effort: 4, estimateMinutes: 25 });
+    const minimal = await change({ op: "outline-add", revision: added.view.revision, parent: "first", title: "Defaults" });
+    expect(required(minimal.view, minimal.outlineId ?? "")).toMatchObject({ title: "Defaults", weight: 50, effort: 1 });
+    expect(required(minimal.view, minimal.outlineId ?? "").estimateMinutes).toBeUndefined();
+  });
   test("rejects invalid estimates at the HTTP boundary without changing stored state", async () => {
     const current = view();
     const before = JSON.stringify(loadBalanceState(db));
