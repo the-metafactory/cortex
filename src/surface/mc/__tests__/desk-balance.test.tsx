@@ -170,7 +170,7 @@ describe("Balance through the real My day owner", () => {
     if (!composed.myDay) throw new Error("Missing My day view");
     const html = renderToStaticMarkup(createElement(DeskBalance, { day: composed.myDay, view: composed, foreground: { kind: "unavailable", reason: "Not yet measured" }, onChanged: () => undefined, onThread: () => undefined }));
     expect(html).toContain("Hide completed");
-    expect(html).toContain("draggable=\"true\"");
+    expect(html).toContain('title="Drag to move"');
   });
   test("re-runs an engine-proposed day when a new task is added", async () => {
     const current = view();
