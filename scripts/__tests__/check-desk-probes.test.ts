@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PROBE_EXCLUSIONS, PROBE_RUNS, runDeskProbes } from "../check-desk-probes";
+import { PROBE_EXCLUSIONS, PROBE_PREFIX, PROBE_RUNS, PROBE_SUFFIX, printDeskProbeReport, runDeskProbes } from "../check-desk-probes";
 
 const dirs: string[] = [];
 
@@ -21,6 +21,8 @@ const OK = "process.stdout.write(\"ok\\n\");\nprocess.exit(0);\n";
 const FAILS = "process.stderr.write(\"synthetic failure\\n\");\nprocess.exit(1);\n";
 const MARKER = "import { writeFileSync } from \"node:fs\";\nwriteFileSync(process.env.DESK_PROBE_MARKER ?? \"\", process.env.HOME ?? \"\");\nprocess.exit(0);\n";
 const REAL_HOME = "process.stderr.write(`home=${process.env.HOME ?? \"\"}\\n`);\nprocess.exit(process.env.HOME === process.env.DESK_PROBE_HOST_HOME ? 0 : 1);\n";
+
+const HOME_SPY = "import { writeFileSync } from \"node:fs\";\nimport { basename } from \"node:path\";\nwriteFileSync(`${process.env.DESK_PROBE_MARKER ?? \"\"}.${basename(process.argv[1] ?? \"\")}`, process.env.HOME ?? \"\");\nprocess.exit(0);\n";
 
 describe("runDeskProbes", () => {
   test("runs every listed probe and reports each result", async () => {
@@ -42,6 +44,22 @@ describe("runDeskProbes", () => {
       const home = readFileSync(marker, "utf8");
       expect(home).not.toBe(process.env.HOME);
       expect(home).not.toBe("");
+    } finally {
+      delete process.env.DESK_PROBE_MARKER;
+    }
+  });
+
+  test("gives each probe its own temporary home rather than one home shared between them", async () => {
+    const dir = probeDir({ "probe-desk-one.ts": HOME_SPY, "probe-desk-two.ts": HOME_SPY });
+    const marker = join(dir, "homes");
+    process.env.DESK_PROBE_MARKER = marker;
+    try {
+      const report = await runDeskProbes({ dir, probes: ["probe-desk-one.ts", "probe-desk-two.ts"], exclusions: [] });
+      expect(report.ok).toBe(true);
+      const homes = ["probe-desk-one.ts", "probe-desk-two.ts"].map((name) => readFileSync(`${marker}.${name}`, "utf8"));
+      expect(homes[0]).not.toBe("");
+      expect(homes[0]).not.toBe(homes[1]);
+      expect(homes).not.toContain(process.env.HOME ?? "");
     } finally {
       delete process.env.DESK_PROBE_MARKER;
     }
@@ -128,9 +146,27 @@ describe("runDeskProbes", () => {
   });
 });
 
+describe("printDeskProbeReport", () => {
+  test("says why a probe was killed by the probe timeout", () => {
+    const lines: string[] = [];
+    printDeskProbeReport(
+      {
+        ok: false,
+        exitCode: 1,
+        problems: [],
+        outcomes: [{ file: "probe-desk-slow.ts", status: "failed", exitCode: 137, reason: "killed after the 120000 ms probe timeout", stdout: "", stderr: "" }],
+      },
+      (line) => lines.push(line),
+    );
+    expect(lines).toContain("   killed after the 120000 ms probe timeout");
+  });
+});
+
 describe("the real desk probe lists", () => {
   const scripts = join(import.meta.dir, "..");
-  const files = readdirSync(scripts).filter((name) => name.startsWith("probe-desk-") && name.endsWith(".ts")).sort();
+  const files = readdirSync(scripts)
+    .filter((name) => name.startsWith(PROBE_PREFIX) && name.endsWith(PROBE_SUFFIX))
+    .sort();
   const excluded = PROBE_EXCLUSIONS.map(({ file }) => file).sort();
 
   test("name every probe file in either the run list or the exclusion list", () => {

@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
 import { hermeticTestEnv } from "./lib/test-home";
 
@@ -88,20 +88,45 @@ function duplicates(names: readonly string[]): string[] {
   return repeated;
 }
 
-function validatePlan(plan: DeskProbePlan): string[] {
+interface CheckedPlan {
+  readonly problems: readonly string[];
+  readonly runnable: readonly string[];
+  readonly exclusions: readonly DeskProbeExclusion[];
+}
+
+function checkPlan(plan: DeskProbePlan, discovered: ReadonlySet<string>): CheckedPlan {
   const problems: string[] = [];
+  const runList = new Set(plan.probes);
   const excluded = new Map(plan.exclusions.map(({ file, reason }) => [file, reason]));
   for (const name of duplicates(plan.probes)) problems.push(`${name} is in the run list twice; list each probe once.`);
   for (const name of duplicates(plan.exclusions.map(({ file }) => file))) problems.push(`${name} is in the exclusion list twice; list each exclusion once.`);
   for (const name of plan.probes) {
     if (!isProbeFile(name)) problems.push(`${name} is in the run list but is not a ${PROBE_PREFIX}*${PROBE_SUFFIX} file.`);
     if (excluded.has(name)) problems.push(`${name} is both run and excluded; remove it from one list.`);
+    if (!discovered.has(name)) problems.push(`${name} is in the run list but does not exist in ${plan.dir}.`);
   }
   for (const { file, reason } of plan.exclusions) {
     if (!isProbeFile(file)) problems.push(`${file} is in the exclusion list but is not a ${PROBE_PREFIX}*${PROBE_SUFFIX} file.`);
     if (reason.trim() === "") problems.push(`${file} is excluded without a reason; say why it cannot run.`);
+    if (!discovered.has(file)) problems.push(`${file} is excluded but does not exist in ${plan.dir}.`);
   }
-  return problems;
+  for (const name of discovered) {
+    if (!runList.has(name) && !excluded.has(name))
+      problems.push(`${name} is a ${PROBE_PREFIX} probe file in ${plan.dir} that neither the run list nor the exclusion list names; add it to one with a reason.`);
+  }
+  return {
+    problems,
+    runnable: plan.probes.filter((name) => discovered.has(name)),
+    exclusions: plan.exclusions.filter(({ file }) => discovered.has(file) && !runList.has(file)),
+  };
+}
+
+async function runBatched<T, R>(items: readonly T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  for (let start = 0; start < items.length; start += limit) {
+    results.push(...(await Promise.all(items.slice(start, start + limit).map(work))));
+  }
+  return results;
 }
 
 async function probeFiles(dir: string): Promise<Set<string>> {
@@ -109,7 +134,13 @@ async function probeFiles(dir: string): Promise<Set<string>> {
   return new Set(entries.filter((entry) => entry.isFile() && isProbeFile(entry.name)).map((entry) => entry.name));
 }
 
-async function runProbe(probe: string, plan: DeskProbePlan, env: Record<string, string>): Promise<DeskProbeOutcome> {
+async function runProbe(probe: string, plan: DeskProbePlan, root: string): Promise<DeskProbeOutcome> {
+  const work = await mkdtemp(join(root, "probe-"));
+  const home = join(work, "home");
+  const tmp = join(work, "tmp");
+  await mkdir(home);
+  await mkdir(tmp);
+  const env = hermeticTestEnv(process.env, { home, tmp });
   const child = Bun.spawn([process.execPath, join(plan.dir, probe)], {
     cwd: plan.dir,
     env,
@@ -135,31 +166,17 @@ async function runProbe(probe: string, plan: DeskProbePlan, env: Record<string, 
 
 /** Run the plan's probes and report every probe's result, refusing a probe file that neither list names. */
 export async function runDeskProbes(plan: DeskProbePlan): Promise<DeskProbeReport> {
-  const problems = validatePlan(plan);
-  const runList = new Set(plan.probes);
-  const excluded = new Map(plan.exclusions.map(({ file, reason }) => [file, reason]));
   const discovered = await probeFiles(plan.dir);
-
-  for (const name of runList) if (!discovered.has(name)) problems.push(`${name} is in the run list but does not exist in ${plan.dir}.`);
-  for (const name of excluded.keys()) if (!discovered.has(name)) problems.push(`${name} is excluded but does not exist in ${plan.dir}.`);
-  for (const name of discovered) if (!runList.has(name) && !excluded.has(name)) problems.push(`${name} is a ${PROBE_PREFIX} probe file in ${plan.dir} that neither the run list nor the exclusion list names; add it to one with a reason.`);
+  const checked = checkPlan(plan, discovered);
+  const problems = checked.problems;
 
   const root = await mkdtemp(join(tmpdir(), "desk-probe-run-"));
-  const home = join(root, "home");
-  const tmp = join(root, "tmp");
-  await mkdir(home);
-  await mkdir(tmp);
-  const env = hermeticTestEnv(process.env, { home, tmp });
-  const outcomes: DeskProbeOutcome[] = [];
+  let outcomes: DeskProbeOutcome[] = [];
   try {
-    for (const probe of runList) {
-      if (!discovered.has(probe)) continue;
-      outcomes.push(await runProbe(probe, plan, env));
-    }
-    for (const [file, reason] of excluded) {
-      if (!discovered.has(file) || runList.has(file)) continue;
-      outcomes.push({ file, status: "excluded", exitCode: 0, reason, stdout: "", stderr: "" });
-    }
+    outcomes = [
+      ...(await runBatched(checked.runnable, availableParallelism(), (probe) => runProbe(probe, plan, root))),
+      ...checked.exclusions.map(({ file, reason }) => ({ file, status: "excluded" as const, exitCode: 0, reason, stdout: "", stderr: "" })),
+    ];
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -177,6 +194,7 @@ export function printDeskProbeReport(report: DeskProbeReport, log: (line: string
     }
     log(`${outcome.status === "passed" ? "✅" : "❌"} ${outcome.file} — ${outcome.status} (exit ${outcome.exitCode})`);
     if (outcome.status === "failed") {
+      if (outcome.reason) log(`   ${outcome.reason}`);
       for (const line of `${outcome.stdout}\n${outcome.stderr}`.split("\n").filter((line) => line !== "")) log(`   ${line}`);
     }
   }
