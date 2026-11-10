@@ -60,3 +60,15 @@ export async function assertCloudFlowWorkToolsDenied(rig: FlowReadRig) {
   }
   assert.equal(rig.rig.calls.read, before);
 }
+
+export async function assertPolicyRaceWithheld(rig: FlowReadRig, name: "work_search" | "work_read") {
+  const sent = [...rig.rig.calls.sends];
+  await rig.setPolicy("cloud");
+  rig.rig.hooks.query = async (request, signal) => { const page = await rig.adapter.query(request, signal); await rig.setPolicy("local"); return page; };
+  const result = await callFlowWorkTool(rig, name, name === "work_search" ? { kinds: ["flow"] } : { kind: "flow", id: FLOW_NAME });
+  assert.ok(["denied", "unauthorized", "unavailable"].includes(result.json.status));
+  assert.ok(!("object" in result.json));
+  assert.deepEqual(result.remembered, []);
+  assert.doesNotMatch(JSON.stringify(result.json), /sha256|provenance|yaml/);
+  assert.deepEqual(rig.rig.calls.sends, sent);
+}

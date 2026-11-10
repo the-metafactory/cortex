@@ -135,18 +135,22 @@ export async function assertSavedFlowMatches(rig: FlowReadRig) {
   assert.equal(provenance.origin, "conversation");
   assert.equal(provenance.conversation, "conversation-example");
   assert.equal(typeof provenance.saved_at, "string");
-  for (const step of [await rig.read(ARC_FLOW_NAME), await rig.read(FLOW_NAME, "another-connection")]) {
-    assert.equal(step.result.status, "unavailable");
-    assertNoFlowLeak(step);
-  }
+  const arc = await rig.read(ARC_FLOW_NAME);
+  assert.equal(arc.result.status, "ok");
+  assert.equal(arc.result.noMatch, true);
+  assert.deepEqual(releasedObjects(arc.released), []);
+  const foreign = await rig.read(FLOW_NAME, "another-connection");
+  assert.equal(foreign.result.status, "unavailable");
+  assertNoFlowLeak(foreign);
   return shown;
 }
 
-export async function assertDeletedFlowUnavailable(rig: FlowReadRig, shown: Record<string, unknown>) {
+export async function assertDeletedFlowAbsent(rig: FlowReadRig, shown: Record<string, unknown>) {
   await rig.pulse(["delete", FLOW_NAME, "--expected-sha256", String(shown.sha256)]);
   const missing = await rig.read();
-  assert.equal(missing.result.status, "unavailable");
-  assertNoFlowLeak(missing);
+  assert.equal(missing.result.status, "ok");
+  assert.equal(missing.result.noMatch, true);
+  assert.deepEqual(releasedObjects(missing.released), []);
   const empty = await rig.query();
   assert.equal(empty.result.status, "ok");
   assert.equal(empty.result.noMatch, true);

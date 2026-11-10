@@ -33,6 +33,7 @@ export function flowWorkReaders(config: FlowWorkRunner): { flow: WorkReader } {
     if (!flowName.safeParse(id).success) return { state: "unavailable", reason: "unavailable" };
     const run = await runHostQuery(config, source(config, "flow.saved.read", id));
     if (run.result.restricted || run.result.status === "denied") return { state: "unavailable", reason: "unauthorized" };
+    if (run.result.status === "ok" && run.released !== undefined && run.result.noMatch) return { state: "unavailable", reason: "gone" };
     const object = objectsOf(config, run.released).find(candidate => candidate.ref.canonicalId === id);
     return run.result.status === "ok" && object ? { state: "available", object: toObject(config, object) } : { state: "unavailable", reason: "unavailable" };
   };

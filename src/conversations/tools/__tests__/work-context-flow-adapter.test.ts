@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { answering, openHost, scratchHosts } from "../../__tests__/fixtures/scratch";
 import { toolBody } from "../../__tests__/fixtures/tool-body";
 import { FLOW_NAME, flowYaml, openFlowReadRig, type FlowReadRig } from "../../domain-adapters/__tests__/fixtures/flow-read-fixtures";
-import { assertCloudFlowWorkToolsDenied, assertLocalFlowWorkTools, callFlowWorkTool, flowReadersFor } from "../../domain-adapters/__tests__/fixtures/flow-work-tools-fixtures";
+import { assertCloudFlowWorkToolsDenied, assertLocalFlowWorkTools, assertPolicyRaceWithheld, callFlowWorkTool, flowReadersFor } from "../../domain-adapters/__tests__/fixtures/flow-work-tools-fixtures";
 
 const opened: FlowReadRig[] = [];
 const { dirs, hosts } = scratchHosts("flow-work-sources-");
@@ -42,13 +42,7 @@ describe("saved Flows behind work_search and work_read", () => {
   test.each(["work_search", "work_read"] as const)("%s withholds a policy change between owner fetch and release", async name => {
     const rig = await open({ conversationPolicy: "cloud" });
     await rig.save();
-    await rig.setPolicy("cloud");
-    rig.rig.hooks.query = async (request, signal) => { const page = await rig.adapter.query(request, signal); await rig.setPolicy("local"); return page; };
-    const result = await callFlowWorkTool(rig, name, name === "work_search" ? { kinds: ["flow"] } : { kind: "flow", id: FLOW_NAME });
-    expect(["denied", "unauthorized", "unavailable"]).toContain(result.json.status);
-    expect(JSON.stringify(result.json)).not.toContain("sha256");
-    expect(result.remembered).toEqual([]);
-    expect(rig.rig.calls.sends).toEqual([]);
+    await assertPolicyRaceWithheld(rig, name);
   });
 
   test("the final work-tool recheck also withholds policy changes after query release", async () => {
@@ -93,6 +87,23 @@ describe("saved Flows behind work_search and work_read", () => {
     const disabled = await callFlowWorkTool(rig, "work_read", { kind: "flow", id: FLOW_NAME }, { enabled: false });
     expect(disabled.json.status).toBe("unavailable");
     expect(rig.rig.calls.read).toBe(2);
+  });
+
+  test("authorized reads report missing and deleted saved Flows as gone", async () => {
+    const rig = await open();
+    const assertGone = async () => {
+      const result = await callFlowWorkTool(rig, "work_read", { kind: "flow", id: FLOW_NAME });
+      expect(result.json.status).toBe("gone");
+      expect(result.json.message).toBe("The source was removed.");
+      expect(result.json).not.toHaveProperty("object");
+      expect(result.remembered).toEqual([]);
+    };
+    await assertGone();
+    await rig.save();
+    expect((await callFlowWorkTool(rig, "work_read", { kind: "flow", id: FLOW_NAME })).json.status).toBe("ok");
+    const shown = await rig.pulse(["show", FLOW_NAME]);
+    await rig.pulse(["delete", FLOW_NAME, "--expected-sha256", String(shown.sha256)]);
+    await assertGone();
   });
 
   test("the conversation host persists Flow source obligations and rechecks their current policy", async () => {
