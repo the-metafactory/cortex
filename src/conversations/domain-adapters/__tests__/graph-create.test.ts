@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { CREATE_MAP, CREATE_OTHER_REPOSITORY, CREATE_PARENT, CREATE_REPOSITORY, graphCreateOutput, openGraphCreateRig } from "./fixtures/graph-create-fixtures";
+import { CREATE_MAP, CREATE_OTHER_REPOSITORY, CREATE_PARENT, CREATE_REPOSITORY, graphCreateOutput, openGraphCreateRig } from "../work-graph/fixtures/graph-create";
 import { DESK_DRAFTS_PATH, type DraftEditorView } from "../../../surface/mc/desk/draft-editor-contract";
 
 type Rig = Awaited<ReturnType<typeof openGraphCreateRig>>;
@@ -144,4 +144,50 @@ test("a local-only repository releases neither destination metadata nor linked n
   expect(await rig.resolve(CREATE_PARENT)).toEqual({ kind: "none" });
   expect(rig.reads.some(argv => argv[3]?.startsWith(CREATE_REPOSITORY))).toBe(false);
   expect(rig.soma.calls).toEqual([]);
+});
+
+
+test("Mission Control installs graph drafting and confirms through its HTTP entry", async () => {
+  const rig = await open();
+  const server = rig.serve();
+  const targets = await server.call("GET", DESK_DRAFTS_PATH);
+  expect(targets.status).toBe(200);
+  expect(await targets.json()).toMatchObject({ targets: [{ connectionId: rig.connectionId, capabilityId: "work-graph.node.create" }] });
+  rig.state.output = graphCreateOutput();
+  const response = await server.call("POST", DESK_DRAFTS_PATH, rig.makeInput);
+  expect(response.status).toBe(200);
+  const made = await response.json() as DraftEditorView;
+  expect(made.view.status).toBe("ready-for-confirmation");
+  expect(rig.soma.calls).toEqual([]);
+  expect((await rig.authority.inspectHostRecords()).confirmations).toHaveLength(0);
+  const confirmed = await server.call("POST", `${DESK_DRAFTS_PATH}/${made.view.draft.draftId}/confirm`, { revision: made.view.draft.revision });
+  expect(confirmed.status).toBe(200);
+  expect(await confirmed.json()).toMatchObject({ confirmation: { kind: "accepted" } });
+  expect(rig.soma.calls).toHaveLength(1);
+  expect((await rig.authority.inspectHostRecords()).confirmations).toHaveLength(1);
+});
+
+test("one draft batch reads each linked owner node once across parent and dependency labels", async () => {
+  const rig = await open();
+  rig.state.output = { fields: [...graphCreateOutput().fields, { pointer: "/dependencies", labels: ["Lifecycle map", "Shared title", "Unknown node"], citations: ["turn-example"] }] };
+  const made = await rig.editor.service.make(rig.makeInput);
+  if (made.kind !== "draft") throw new Error("Expected draft");
+  expect(made.view.draft.fields["/parent"]?.value).toEqual(rig.ref("node", CREATE_MAP));
+  expect(made.view.draft.fields["/dependencies"]?.unresolved).toBe("ambiguous_reference");
+  expect(rig.reads.map(argv => argv[3]).sort()).toEqual([CREATE_MAP, `${CREATE_REPOSITORY}#12`, `${CREATE_OTHER_REPOSITORY}#13`].sort());
+  await rig.editor.service.refresh(made.view.draft.draftId, made.view.draft.revision);
+  expect(rig.reads).toHaveLength(6);
+  expect(rig.soma.calls).toEqual([]);
+});
+
+test("confirmation shares current reference reads and never reuses drafting reads", async () => {
+  const rig = await open();
+  rig.state.output = { fields: [...graphCreateOutput().fields, { pointer: "/dependencies", labels: [CREATE_MAP, `${CREATE_REPOSITORY}#14`], citations: ["turn-example"] }] };
+  const made = await rig.editor.service.make(rig.makeInput);
+  if (made.kind !== "draft") throw new Error("Expected draft");
+  rig.reads.splice(0);
+  const confirmed = await rig.call("POST", `${DESK_DRAFTS_PATH}/${made.view.draft.draftId}/confirm`, { revision: made.view.draft.revision });
+  expect(await confirmed.json()).toMatchObject({ confirmation: { kind: "accepted" } });
+  expect(rig.reads.map(argv => argv[3]).sort()).toEqual([CREATE_MAP, `${CREATE_REPOSITORY}#14`].sort());
+  expect(rig.soma.calls).toHaveLength(1);
 });

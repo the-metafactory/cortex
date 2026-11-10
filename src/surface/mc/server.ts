@@ -91,6 +91,7 @@ import { handleDeskGraphRepositories } from "./api/desk-graph-repositories";
 import { handleDeskGraphSurfaces } from "./api/desk-graph-surfaces";
 import { handleDeskDrafts } from "./api/desk-drafts";
 import { DESK_DRAFTS_PATH } from "./desk/draft-editor-contract";
+import { deskGraphDraftEditor, type GraphDraftSetup } from "./desk/graph-draft-entry";
 import type { DeskDraftAccess } from "./desk/draft-editor";
 import type { GraphSurfaceAccess } from "./desk/graph-surfaces";
 import { GRAPH_SURFACES_PATH } from "./desk/graph-surface-schema";
@@ -211,6 +212,7 @@ export interface MissionControlViews {
   graphScope?: GraphScopeAccess;
   graphSurfaces?: GraphSurfaceAccess;
   drafts?: DeskDraftAccess;
+  graphDrafts?: GraphDraftSetup;
 }
 
 export interface StartServerOptions extends MissionControlViews {
@@ -229,6 +231,11 @@ export function startServer(
   db: Database,
   options: StartServerOptions = {}
 ): ServerContext {
+  if (options.graphDrafts) {
+    const { host, deps, options: graphOptions } = options.graphDrafts;
+    const editor = deskGraphDraftEditor(host, deps, graphOptions);
+    options = { ...options, drafts: () => editor };
+  }
   const wsRegistry = new WsClientRegistry();
   const deskLedger = new HandledLedger();
   const deskClientMail = options.desk ? new ClientMailLog({ db, config: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, retentionDays: options.desk.mailLog?.retentionDays ?? DEFAULT_MAIL_LOG_RETENTION_DAYS }) : undefined;

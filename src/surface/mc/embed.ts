@@ -89,6 +89,8 @@ export async function startMissionControl(
       ...(opts.connectionSetup ? { connectionSetup: opts.connectionSetup } : {}),
       ...(opts.adapterAssets ? { adapterAssets: opts.adapterAssets } : {}),
       ...(opts.graphScope ? { graphScope: opts.graphScope } : {}),
+      ...(opts.drafts ? { drafts: opts.drafts } : {}),
+      ...(opts.graphDrafts ? { graphDrafts: opts.graphDrafts } : {}),
       ...(opts.graphSurfaces ? { graphSurfaces: opts.graphSurfaces } : {}),
     });
     const { port, wsRegistry } = serverCtx;

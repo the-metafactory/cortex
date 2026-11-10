@@ -9,18 +9,20 @@ import { syntheticWriterPlan, syntheticWriterSteps } from "../../operations/writ
 import { writerLease } from "../../operations/writer-authority";
 import { DomainAdapterRegistry } from "../../registry";
 import { ReadBindings } from "../../reads/bindings";
-import { DraftingBindings, type ModelOutput } from "../../drafting";
+import type { ModelOutput } from "../../drafting";
 import { createWorkGraphReadAdapter } from "../../work-graph/read";
 import { createWorkGraphNodeBinding } from "../../work-graph/node-binding";
 import type { ObjectReference } from "../../types";
 import type { ConnectionRecord, PolicyInputs, PrincipalBinding, RestrictionRecord } from "../../../authority-records";
 import { initDatabase } from "../../../../surface/mc/db/init";
 import { setGraphRepositoryEnabled } from "../../../../surface/mc/desk/graph-repositories";
-import { deskGraphDraftEditor } from "../../../../surface/mc/desk/graph-draft-entry";
+import { DEFAULT_CONFIG } from "../../../../surface/mc/config";
+import { startServer } from "../../../../surface/mc/server";
+import { deskGraphDraftEditor, type GraphDraftSetup } from "../../../../surface/mc/desk/graph-draft-entry";
 import { graphDraftDestinations } from "../../../../surface/mc/desk/graph-draft-destinations";
 import { handleDeskDrafts } from "../../../../surface/mc/api/desk-drafts";
 import { buildAllowedHostnames } from "../../../../surface/mc/api/mutation-guard";
-import { GRAPH_NODE_REPOSITORY, GRAPH_NODE_NOW, syntheticSoma } from "./work-graph-node-fixtures";
+import { GRAPH_NODE_REPOSITORY, GRAPH_NODE_NOW, syntheticSoma } from "./synthetic-soma";
 
 export const CREATE_REPOSITORY = GRAPH_NODE_REPOSITORY;
 export const CREATE_OTHER_REPOSITORY = "github:github.com/other/desk";
@@ -44,11 +46,11 @@ export async function openGraphCreateRig() {
   for (const repository of repositories) setGraphRepositoryEnabled(db, repository, true, GRAPH_NODE_NOW);
   const soma = syntheticSoma();
   const reads: string[][] = [];
-  const read = createWorkGraphReadAdapter({ connectionId, repositories: () => repositories, links: () => [{ owner: "graph-map", id: CREATE_MAP, title: "Lifecycle map" }, { owner: "graph-node", id: CREATE_PARENT, title: "Shared title" }, { owner: "graph-node", id: `${CREATE_OTHER_REPOSITORY}#13`, title: "Shared title" }], now: () => new Date(AT), run: async argv => {
+  const read = createWorkGraphReadAdapter({ connectionId, repositories: () => repositories, links: () => [{ owner: "graph-map", id: CREATE_MAP, title: "Lifecycle map" }, { owner: "graph-node", id: CREATE_PARENT, title: "Shared title" }, { owner: "graph-node", id: `${CREATE_OTHER_REPOSITORY}#13`, title: "Shared title" }], now: () => new Date(AT), run: argv => {
     reads.push(argv);
     const target = argv[3];
     const data = target === `${CREATE_REPOSITORY}#10` ? { repository: CREATE_REPOSITORY, id: "10", title: "Lifecycle map" } : target === `${CREATE_REPOSITORY}#12` ? { repository: CREATE_REPOSITORY, id: "12", title: "Shared title" } : target === `${CREATE_OTHER_REPOSITORY}#13` ? { repository: CREATE_OTHER_REPOSITORY, id: "13", title: "Shared title" } : target === `${CREATE_REPOSITORY}#14` ? { repository: CREATE_REPOSITORY, id: "14", title: "Exact unlinked node" } : null;
-    return data ? { code: 0, signal: null, stderr: "", stdout: JSON.stringify({ repo: data.repository, ref: { id: data.id }, status: "open", node: { title: data.title }, parent: null }) } : { code: 1, signal: null, stderr: "not found", stdout: "" };
+    return Promise.resolve(data ? { code: 0, signal: null, stderr: "", stdout: JSON.stringify({ repo: data.repository, ref: { id: data.id }, status: "open", node: { title: data.title }, parent: null }) } : { code: 1, signal: null, stderr: "not found", stdout: "" });
   } });
   const registry = new DomainAdapterRegistry();
   const registered = registry.register(read.declaration, read.bindings);
@@ -65,14 +67,14 @@ export async function openGraphCreateRig() {
     if (!installed.ok) throw new Error(installed.error.code);
   }
   const state = { sessionEnabled: true, sourceAvailable: true, output: { fields: [] } as ModelOutput, sourceRestrictionsAvailable: true };
-  const sinks = new Map([[canonicalWire({ kind: "web", conversationId: conversation.id }), async () => {}]]);
+  const sinks = new Map([[canonicalWire({ kind: "web", conversationId: conversation.id }), () => Promise.resolve()]]);
   const bindings: AuthorityBindings = {
     currentRevision: () => JSON.stringify({ connection, policy, sessionEnabled: state.sessionEnabled }),
-    authenticate: async sessionRef => sessionRef === "graph-session" && state.sessionEnabled ? { principal: principal.principal, stack: "test", conversationId: conversation.id, authenticatedSessionRef: sessionRef, transport: "web", audience: "web", expiresAt: "2026-12-01T00:00:00.000Z", maintenance: false } : null,
-    policy: async () => policy,
-    writer: async supplied => canonicalWire(supplied) === canonicalWire(lease),
-    restrictions: new Map([["graph-restriction", async record => record]]),
-    connectors: new Map([[connection.connectorId, { ...binding.connector, authorizeConnection: async () => ({ version: 1, available: true, revision: "1" }), query: request => read.query(request) }]]),
+    authenticate: sessionRef => Promise.resolve(sessionRef === "graph-session" && state.sessionEnabled ? { principal: principal.principal, stack: "test", conversationId: conversation.id, authenticatedSessionRef: sessionRef, transport: "web", audience: "web", expiresAt: "2026-12-01T00:00:00.000Z", maintenance: false } : null),
+    policy: () => Promise.resolve(policy),
+    writer: supplied => Promise.resolve(canonicalWire(supplied) === canonicalWire(lease)),
+    restrictions: new Map([["graph-restriction", record => Promise.resolve(record)]]),
+    connectors: new Map([[connection.connectorId, { ...binding.connector, authorizeConnection: () => Promise.resolve({ version: 1, available: true, revision: "1" }), query: request => read.query(request) }]]),
     sinks, readBindings,
   };
   const authority = host.lifecycleAuthority(registry, bindings);
@@ -92,11 +94,14 @@ export async function openGraphCreateRig() {
     const context = await authority.authenticate("graph-session");
     return context ? { context, runner, sink: { kind: "web" as const, conversationId }, repositories: refs(), destinations: read.destinations, lease, principal: principal.principal } : null;
   };
-  const draftingBindings = new DraftingBindings(registry);
-  const installed = draftingBindings.register({ bindingVersion: "1.0.0", adapterId: "work-graph", capabilityId: CAPABILITY, inputSchemaRef: { schemaId: "work-graph.node.create.input", version: "1.0.0" }, guidance: { guidanceId: "synthetic-graph", version: "1.0.0", instructions: "Draft a graph node from the supplied discussion." }, fieldHints: ["repository", "parent", "dependencies"].map(key => ({ pointer: `/${key}`, role: "destination", resolveWith: "work-graph.destinations" })) });
-  if (!installed.ok) throw new Error(installed.error.code);
-  const editor = deskGraphDraftEditor(host, { registry, bindings: draftingBindings, sources: { capture: async () => ({ boundary: { entryId: "entry-example", revision: "1" }, items: [{ id: "turn-example", kind: "turn", revision: "1", digest: "synthetic-digest", restriction: "cloud", text: "File a node under the lifecycle map.", at: AT }], unavailable: 0 }), head: async () => "1" }, policy: { revision: async () => "1", readable: async () => state.sourceAvailable, releasable: async () => state.sourceAvailable }, model: { lanes: async () => ["cloud"], generate: async () => ({ modelId: "synthetic-model", output: state.output }) }, now: () => new Date(AT) }, { connectionId, audience: "cloud", authority, bridge, session, sourceRestrictions: async () => state.sourceRestrictionsAvailable ? [{ ref: ref("repository", CREATE_REPOSITORY), restrictionRef: restrictions[0]!.restrictionRef }] : null });
+  const sourceRestriction = restrictions[0];
+  if (!sourceRestriction) throw new Error("Synthetic source restriction missing");
+  const deps: GraphDraftSetup["deps"] = { registry, sources: { capture: () => Promise.resolve({ boundary: { entryId: "entry-example", revision: "1" }, items: [{ id: "turn-example", kind: "turn", revision: "1", digest: "synthetic-digest", restriction: "cloud", text: "File a node under the lifecycle map.", at: AT }], unavailable: 0 }), head: () => Promise.resolve("1") }, policy: { revision: () => Promise.resolve("1"), readable: () => Promise.resolve(state.sourceAvailable), releasable: () => Promise.resolve(state.sourceAvailable) }, model: { lanes: () => Promise.resolve(["cloud"]), generate: () => Promise.resolve({ modelId: "synthetic-model", output: state.output }) }, now: () => new Date(AT) };
+  const options: GraphDraftSetup["options"] = { connectionId, audience: "cloud", authority, bridge, session, sourceRestrictions: () => Promise.resolve(state.sourceRestrictionsAvailable ? [{ ref: ref("repository", CREATE_REPOSITORY), restrictionRef: sourceRestriction.restrictionRef }] : null) };
+  const setup: GraphDraftSetup = { host, deps, options };
+  const editor = deskGraphDraftEditor(host, deps, options);
   const destinations = graphDraftDestinations({ connectionId, session, authority });
+  const servers: ReturnType<typeof startServer>[] = [];
   const makeInput = { conversationId: conversation.id, entryId: "entry-example", capabilityId: CAPABILITY, connectionId };
   const restrictRepository = async (repository: string, patch: Partial<Pick<RestrictionRecord, "status" | "egress">>) => {
     const restriction = restrictions.find(item => item.source.canonicalId === repository);
@@ -108,15 +113,25 @@ export async function openGraphCreateRig() {
     resolve: (label: string, objectType = "node") => destinations.resolve({ capabilityId: "work-graph.destinations", connectionId, conversationId: conversation.id, objectType, label }),
     localRepository: (repository: string) => restrictRepository(repository, { egress: "local" }),
     async untick(repository: string) {
+      const index = repositories.indexOf(repository);
+      if (index < 0) throw new Error("Synthetic repository missing");
       await restrictRepository(repository, { status: "revoked" });
-      repositories.splice(repositories.indexOf(repository), 1);
+      repositories.splice(index, 1);
       setGraphRepositoryEnabled(db, repository, false, GRAPH_NODE_NOW);
+    },
+    serve() {
+      const server = startServer({ ...DEFAULT_CONFIG, port: 0, governance: { ...DEFAULT_CONFIG.governance, principals: [], localPrincipal: principal.principal } }, db, { graphDrafts: setup });
+      servers.push(server);
+      return {
+        ...server,
+        call: (method: string, path: string, body?: unknown) => fetch(`http://127.0.0.1:${server.port}${path}`, { method, headers: { "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }),
+      };
     },
     async call(method: string, path: string, body?: unknown) {
       const req = new Request(`http://127.0.0.1:8767${path}`, { method, headers: { host: "127.0.0.1:8767", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       return handleDeskDrafts(req, new URL(req.url), { isLoopback: true, listenPort: 8767, principals: new Set(), localPrincipal: principal.principal, allowedHostnames: buildAllowedHostnames("127.0.0.1") }, () => editor);
     },
-    async close() { await bridge.settled(); await host.close(); db.close(); await rm(root, { recursive: true, force: true }); },
+    async close() { for (const server of servers) server.stop(true); await bridge.settled(); await host.close(); db.close(); await rm(root, { recursive: true, force: true }); },
   };
 }
 
