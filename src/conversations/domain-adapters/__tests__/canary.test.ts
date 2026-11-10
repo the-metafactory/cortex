@@ -60,6 +60,8 @@ test("a canary in the credential reaches no log, event, receipt, UI response or 
   expect(CANARY_SINKS.every(sink => result.entries[sink] > 0)).toBe(true);
   expect(canaryExitCode(result)).toBe(0);
   expect(JSON.stringify(result)).not.toContain(CANARY);
+  expect(Object.keys(result).sort()).toEqual(["covered", "credentialHoldsCanary", "credentialWritten", "entries", "findings", "missing", "paths"]);
+  expect("close" in result).toBe(false);
 });
 
 test("a leaking fixture adapter is detected through every captured render target", async () => {

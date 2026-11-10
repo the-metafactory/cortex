@@ -122,7 +122,7 @@ export function canaryReport(result: CanaryProbeResult, leak: CanarySink | null 
 
 export interface CanaryStack extends Omit<CanaryProbeResult, "findings"> {
   readonly sinks: CanarySinks;
-  close(): Promise<void>;
+  readonly close: () => Promise<void>;
 }
 
 export interface CanaryStackOptions {
@@ -261,12 +261,12 @@ export async function openCanaryStack(options: CanaryStackOptions): Promise<Cana
 export async function runCanaryProbe(options: CanaryProbeOptions = {}): Promise<CanaryProbeResult> {
   const root = options.root ?? await mkdtemp(join(tmpdir(), "desk-adapter-canary-"));
   try {
-    const stack = await openCanaryStack({ root: join(root, "stack"), leak: options.leak ?? null });
+    const { sinks, close, covered, missing, credentialWritten, credentialHoldsCanary, paths, entries } =
+      await openCanaryStack({ root: join(root, "stack"), leak: options.leak ?? null });
     try {
-      const { sinks, ...rest } = stack;
-      return { ...rest, findings: scanCanary(sinks) };
+      return { covered, missing, credentialWritten, credentialHoldsCanary, paths, entries, findings: scanCanary(sinks) };
     } finally {
-      await stack.close();
+      await close();
     }
   } finally {
     if (options.root === undefined) await rm(root, { recursive: true, force: true });
