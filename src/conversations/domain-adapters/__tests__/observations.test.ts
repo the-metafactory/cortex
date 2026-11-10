@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { observationBinding, observationRig, observationViews, syntheticDeletion, syntheticObservation } from "../reads/observation-fixtures";
 import { ObservationScheduler } from "../reads/observation-scheduler";
 import { ObservationRetryAfter } from "../reads/observations";
@@ -243,8 +243,33 @@ test("Retry-After and bounded explicit resync preserve gap semantics", async () 
   const repair = schedule(item, "subscription", true);
   await item.store.gap(item.source);
   item.hooks.fetch = () => Promise.resolve(syntheticObservation());
-  await check(item, syntheticObservation(), "resync");
-  await repair.refresh(item.source.connectionId);
+  expect(await observationViews(item)).toMatchObject([{ status: "stale" }]);
+  expect((await repair.refresh(item.source.connectionId)).status).toBe("ok");
+  expect(item.requests.slice(-2).map(request => request.mode)).toEqual(["resync", "subscription"]);
+  expect(await item.store.needsResync(item.rig.context, item.source, item.rig.sink)).toBe(false);
+  expect(await observationViews(item)).toMatchObject([{ status: "fresh" }]);
+});
+
+test.each(["checkpoint", "gap", "poll"] as const)("scheduler recovers after a transient %s store error", async failure => {
+  const item = await open();
+  await check(item);
+  const scheduler = schedule(item, failure === "poll" ? "poll" : "subscription");
+  const fault = new Error("Synthetic transient durable-store failure");
+  const mock = failure === "poll" ? spyOn(item.store, "check").mockRejectedValueOnce(fault) : spyOn(item.store, failure).mockRejectedValueOnce(fault);
+  if (failure === "gap") item.hooks.fetch = () => Promise.reject(new Error("Synthetic dropped stream"));
+  try {
+    expect((await scheduler.refresh(item.source.connectionId)).status).toBe("unavailable");
+    item.hooks.fetch = () => Promise.resolve(syntheticObservation());
+    const count = item.requests.length;
+    const delay = failure === "poll" ? 60000 : 1000;
+    item.time.advance(delay - 1);
+    await flush();
+    expect(item.requests).toHaveLength(count);
+    item.time.advance(1);
+    await flush();
+    expect(item.requests).toHaveLength(count + 1);
+    expect(mock).toHaveBeenCalled();
+  } finally { mock.mockRestore(); }
 });
 
 test("fetch timeout suppresses abort-ignoring late observations", async () => {
@@ -326,17 +351,21 @@ test("configured bounded resync repairs a gap without declaring missing objects 
   expect((await observationViews(item)).sort((a, b) => a.ref.canonicalId.localeCompare(b.ref.canonicalId))).toMatchObject([{ status: "fresh", ref: { canonicalId: "checked" } }, { status: "stale", ref: { canonicalId: "task-example" } }]);
 });
 
-test("default object budget stays bounded and reopens a full durable projection", async () => {
+test("default object and evidence budgets support bounded reads and durable reopen", async () => {
   const item = await open();
-  for (let offset = 0; offset < 1000; offset += 20) {
-    const batches = Array.from({ length: 20 }, (_, index) => syntheticObservation(`task-${offset + index}`, "Synthetic task", "1", `evidence-${offset + index}`));
+  for (let revision = 1; revision <= 10; revision++) for (let offset = 0; offset < 1000; offset += 20) {
+    const batches = Array.from({ length: 20 }, (_, index) => syntheticObservation(`task-${offset + index}`, "Synthetic task", String(revision), `evidence-${revision}-${offset + index}`));
     const first = batches[0]!;
     const payloads = batches.map(batch => (batch.payload as { items: unknown[] }).items[0]);
     const batch = { ...first, payload: { items: payloads }, events: batches.map((entry, index) => ({ ...entry.events[0]!, pointer: `/items/${index}` })) };
     expect((await check(item, batch)).status).toBe("ok");
     item.time.advance(1);
   }
-  expect(await observationViews(item)).toHaveLength(1000);
+  const reading = performance.now();
+  const full = await observationViews(item);
+  expect(performance.now() - reading).toBeLessThan(2000);
+  expect(full).toHaveLength(1000);
+  expect(full.every(row => row.evidenceCount === 10 && row.quarantinedEvidence === 0)).toBe(true);
   await item.store.link(item.source, objectRef("balance", "task", "task-0"), "receipt-example");
   await check(item, syntheticObservation("overflow", "Synthetic task", "1", "overflow"));
   const before = await observationViews(item);
@@ -347,7 +376,7 @@ test("default object budget stays bounded and reopens a full durable projection"
   await item.rig.reopen();
   expect(await observationViews(item)).toHaveLength(1000);
   expect(performance.now() - started).toBeLessThan(5000);
-}, 30000);
+}, 120000);
 
 test("all-linked capacity fails without discarding links or advancing a replay checkpoint", async () => {
   const binding = structuredClone(observationBinding);

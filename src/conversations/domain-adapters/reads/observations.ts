@@ -9,8 +9,9 @@ import type { Json } from "../operations/types";
 import type { QuerySource } from "./query-types";
 import { OBSERVATION_LIMITS, type ObservationBasis, type ObservationConnector, type ObservationEvent, type ObservationMode, type ObservationRow, type ObservationSourceState, type ObservationState, type ObservationView, type validateObservationBatch } from "./observation-types";
 import type { QueryClock } from "./query";
+import { DEFAULT_OBSERVATION_RETENTION } from "./observation-policy";
 
-const ObservationDoc = defineDocFamily<{ state: JsonObject }, string>({ kind: "cortex.read-observations", version: 1, scope: "session", family: true, initial: () => ({ state: { retention: { objects: 1000, contentMs: 86400000, evidence: 10000, evidenceMs: 604800000 }, rows: {}, evidence: [], sources: {} } }), checkpointWhen: () => true });
+const ObservationDoc = defineDocFamily<{ state: JsonObject }, string>({ kind: "cortex.read-observations", version: 1, scope: "session", family: true, initial: () => ({ state: { retention: { ...DEFAULT_OBSERVATION_RETENTION }, rows: {}, evidence: [], sources: {} } }), checkpointWhen: () => true });
 const sourceKey = (source: QuerySource): string => authorityHash(source);
 export interface ObservationCheck { status: "ok" | "denied" | "unavailable"; changed: number; quarantined: number }
 type Authority = Pick<AuthorityMediator, "observationHead" | "admitObservation" | "releaseObservations">;
@@ -214,10 +215,17 @@ export class ObservationStore {
       this.maintain(state, basis);
       const current = this.source(state, source);
       const staleMs = basis.binding.observation?.staleMs ?? OBSERVATION_LIMITS.staleMs;
+      const counts = new Map<string, { evidenceCount: number; quarantinedEvidence: number }>();
+      for (const entry of state.evidence) {
+        const count = counts.get(entry.objectKey) ?? { evidenceCount: 0, quarantinedEvidence: 0 };
+        if (entry.quarantined) count.quarantinedEvidence++;
+        else count.evidenceCount++;
+        counts.set(entry.objectKey, count);
+      }
       return Object.values(state.rows).filter(row => sourceKey(row.source) === sourceKey(source) && (row.kind === "deleted" ? history : row.value !== undefined)).map(row => {
         const status = row.conflicted ? "conflicted" : current.status === "unavailable" ? "unavailable" : current.gap || row.needsVerification || current.status === "stale" || this.clock.now() - row.lastSuccessAt >= staleMs ? "stale" : "fresh";
-        const evidence = state.evidence.filter(entry => entry.objectKey === authorityHash(row.ref));
-        const view: ObservationView = { receivedAt: row.receivedAt, ...(row.revision === undefined ? {} : { revision: row.revision }), evidenceCount: evidence.filter(entry => !entry.quarantined).length, quarantinedEvidence: evidence.filter(entry => entry.quarantined).length, ref: row.ref, kind: row.kind, ...(row.kind === "present" ? { value: row.value } : {}), ...(row.evidenceId === undefined ? {} : { evidenceId: row.evidenceId }), observedAt: row.observedAt, lastSuccessAt: row.lastSuccessAt, lastAttemptAt: current.lastAttemptAt, status };
+        const evidence = counts.get(authorityHash(row.ref)) ?? { evidenceCount: 0, quarantinedEvidence: 0 };
+        const view: ObservationView = { receivedAt: row.receivedAt, ...(row.revision === undefined ? {} : { revision: row.revision }), ...evidence, ref: row.ref, kind: row.kind, ...(row.kind === "present" ? { value: row.value } : {}), ...(row.evidenceId === undefined ? {} : { evidenceId: row.evidenceId }), observedAt: row.observedAt, lastSuccessAt: row.lastSuccessAt, lastAttemptAt: current.lastAttemptAt, status };
         return { row, view, expiresAt: row.lastSuccessAt + state.retention.contentMs };
       });
     }), () => this.clock.now());
