@@ -1,3 +1,5 @@
+import { QueryRunner, type QueryClock } from "./domain-adapters/reads/query";
+import { QueryStore } from "./domain-adapters/reads/query-store";
 import { OperationBridge, type SupportLookup } from "./domain-adapters/operations/dispatch";
 import { OperationReconciler } from "./domain-adapters/operations/reconciliation";
 import { BatchReceiptReader, BatchReceiptStore } from "./domain-adapters/operations/batches";
@@ -158,6 +160,7 @@ export async function openConversationHost(options: HostOptions): Promise<HostSt
 
 export class ConversationHost {
   private harness: Harness | null = null;
+  private queryService: QueryRunner | null = null;
   private authorityService: { registry: DomainAdapterRegistry; bindings: AuthorityBindings; mediator: AuthorityMediator } | null = null;
   private readonly context: Context = BACKGROUND_CONTEXT;
   private readonly queues = new Map<string, Promise<void>>();
@@ -196,6 +199,7 @@ export class ConversationHost {
   }
 
   async close(): Promise<void> {
+    this.queryService?.close();
     const harness = this.harness;
     this.harness = null;
     try { if (harness) await harness.close(this.context); }
@@ -214,6 +218,10 @@ export class ConversationHost {
   drafts(deps: DraftServiceDeps): DraftService { return new DraftService(this.engine, deps, this.context); }
 
   credentialBroker(deps: DeskCredentialBrokerDeps): DeskCredentialBroker { return new DeskCredentialBroker(this.engine, deps, this.context); }
+
+  readQueries(registry: DomainAdapterRegistry, bindings: AuthorityBindings, clock?: QueryClock): QueryRunner {
+    return this.queryService ??= new QueryRunner(this.lifecycleAuthority(registry, bindings), new QueryStore(this.engine, clock ? () => clock.now() : Date.now, this.context), clock);
+  }
 
   lifecycleWriters(): WriterAuthority { return new WriterAuthority(this.engine, this.authorityPublication, this.context); }
 

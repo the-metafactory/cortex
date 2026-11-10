@@ -1,3 +1,5 @@
+import { QuerySourceSchema, type QueryDispatch, type QueryFetchRequest } from "./domain-adapters/reads/query-types";
+import { validateQueryPage, type ValidatedQueryPage } from "./domain-adapters/reads/query-validation";
 import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
 import { AuthorityPublication } from "./authority-publication";
 import { randomUUID } from "node:crypto";
@@ -31,6 +33,7 @@ export interface TrustedConnector {
   readbackCapabilityId?: string;
   readback?(request: ReadbackRequest, signal: AbortSignal): Promise<unknown>;
   read?(request: ReadRequest, signal: AbortSignal): Promise<unknown>;
+  query?(request: QueryFetchRequest, signal: AbortSignal): Promise<unknown>;
 }
 export interface AuthorityBindings {
   currentRevision(): string;
@@ -85,7 +88,7 @@ export class AuthorityMediator {
     this.journal = new OperationJournalStore(engine, registry, context);
     this.connectors = new Map([...bindings.connectors].map(([key, connector]) => [key, Object.freeze({
       writerOwner: connector.writerOwner, support: parseWire(OwnerSupportSchema, connector.support), authorizeConnection: connector.authorizeConnection.bind(connector), dispatch: connector.dispatch.bind(connector),
-      ...(connector.cancel ? { cancel: connector.cancel.bind(connector) } : {}), ...(connector.lookup ? { lookup: connector.lookup.bind(connector) } : {}), ...(connector.read ? { read: connector.read.bind(connector) } : {}), ...(connector.readback ? { readback: connector.readback.bind(connector), readbackCapabilityId: connector.readbackCapabilityId } : {}),
+      ...(connector.cancel ? { cancel: connector.cancel.bind(connector) } : {}), ...(connector.lookup ? { lookup: connector.lookup.bind(connector) } : {}), ...(connector.query ? { query: connector.query.bind(connector) } : {}), ...(connector.read ? { read: connector.read.bind(connector) } : {}), ...(connector.readback ? { readback: connector.readback.bind(connector), readbackCapabilityId: connector.readbackCapabilityId } : {}),
     })]));
     this.sinks = new Map(bindings.sinks);
   }
@@ -566,66 +569,122 @@ export class AuthorityMediator {
     return record.audiences.includes(sink.kind) && !localOnly;
   }
 
-  async admitRead(context: HostContext, raw: unknown, rawSink: ReleaseSink): Promise<ReleaseProjection<Json>> {
-    const controller = new AbortController();
-    const key = randomUUID();
+  private queryHeadOf(resolved: Resolved, binding: ReadBinding | undefined, state: AuthorityState): string {
+    const current = binding ? this.bindings.readBindings?.lookup(binding.adapterId, resolved.connection.connectionId, binding.capabilityId) : undefined;
+    const { revision: _publicationRevision, ...vector } = resolved.vector as Record<string, Json>;
+    return authorityHash({ vector, currentPolicy: this.bindings.currentRevision(), binding: current?.state === "available" ? current.binding : null, heads: state.heads, capability: binding ? this.registry.capability(binding.capabilityId) : null });
+  }
+
+  async queryHead(context: HostContext, raw: unknown, rawSink: ReleaseSink): Promise<{ head: string; binding?: ReadBinding } | null> {
     try {
+      const source = QuerySourceSchema.parse(raw);
       const sink = parseWire(ReleaseSinkSchema, rawSink);
-      const request = parseWire(ReadAdmissionRequestSchema, raw);
-      const subject = authorityHash({ capabilityId: request.capabilityId, destinations: request.destinations });
-      const outcome = await this.exclusive(async (): Promise<ReleaseProjection<Json> | { pending: Promise<unknown>; plan: { binding: ReadBinding; scope: HostScope; connectionId: string; sink: ReleaseSink } }> => {
-        const publicationHead = this.publication.head;
+      return await this.exclusive(async () => {
         const state = await this.state();
-        const connection = headRecord(state, "connection", request.connectionId);
-        const lookup = connection ? this.bindings.readBindings?.lookup(connection.adapterId, request.connectionId, request.capabilityId) : undefined;
-        if (lookup?.state !== "available" || lookup.binding.mode === "destinations") return withheld();
-        const found = this.readScopeFor(state, request.destinations);
-        if (!found) return withheld();
-        const scope: HostScope = { ...found, capabilityId: request.capabilityId };
-        const admit = (resolved: Resolved): boolean => this.readable(resolved, undefined, [scope]) && this.sinkAllowed(resolved, undefined, sink, [scope]);
-        const resolved = await this.resolve(context, request.connectionId, undefined, undefined, undefined, [scope]);
-        const connector = this.connectors.get(resolved.connection.connectorId);
-        const checked = this.registry.validateInput({ capabilityId: request.capabilityId, inputSchemaRef: lookup.binding.inputSchemaRef, input: request.input }, null);
-        if (!admit(resolved) || !connector?.read || !checked.ok) return withheld();
-        await this.commit(next => this.decision(next, resolved, "read", subject, json({ kind: "read" })));
-        const final = await this.resolve(context, request.connectionId, undefined, undefined, undefined, [scope]);
-        if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || !admit(final)) return withheld();
-        this.active.set(key, { controller, heads: new Set(Object.keys(resolved.heads)) });
-        let pending: Promise<unknown>;
-        try { pending = connector.read({ lifecycleVersion: "1.0.0", capabilityId: request.capabilityId, destinations: request.destinations, input: request.input }, controller.signal); }
-        catch (error) { pending = Promise.reject(error instanceof Error ? error : new Error("Connector failed during admission.")); }
-        return { pending, plan: { binding: lookup.binding, scope, connectionId: request.connectionId, sink } };
+        const lookup = this.bindings.readBindings?.lookup(source.adapterId, source.connectionId, source.capabilityId);
+        const found = this.readScopeFor(state, source.destinations);
+        if (!found) return null;
+        const scope = { ...found, capabilityId: source.capabilityId };
+        const resolved = await this.resolve(context, source.connectionId, undefined, undefined, undefined, [scope]);
+        if (resolved.connection.adapterId !== source.adapterId || !this.readable(resolved, undefined, [scope]) || !this.sinkAllowed(resolved, undefined, sink, [scope]) || !this.sinks.has(canonicalWire(sink))) return null;
+        if (lookup?.state !== "available" || lookup.binding.mode !== "query" || !lookup.binding.query || !this.connectors.get(resolved.connection.connectorId)?.query) return { head: this.queryHeadOf(resolved, undefined, state) };
+        if (canonicalWire(source.inputSchemaRef) !== canonicalWire(lookup.binding.inputSchemaRef)) return null;
+        if (!this.registry.validateInput({ capabilityId: source.capabilityId, inputSchemaRef: source.inputSchemaRef, input: source.input }, null).ok) return null;
+        return { head: this.queryHeadOf(resolved, lookup.binding, state), binding: lookup.binding };
       });
-      if (!("plan" in outcome)) { await this.recordDenied(context, "read", subject); return outcome; }
-      const { pending, plan: admitted } = outcome;
-      let page: ReadPage;
-      try { page = parseWire(ReadPageSchema, await pending); }
-      catch { return withheld(); }
+    } catch { return null; }
+  }
+
+  async admitRead(context: HostContext, raw: unknown, rawSink: ReleaseSink, signal?: AbortSignal): Promise<ReleaseProjection<Json>> {
+    return (await this.admittedPage(context, raw, rawSink, signal)).projection;
+  }
+
+  async admitQueryPage(context: HostContext, query: QueryDispatch, sink: ReleaseSink, signal: AbortSignal) {
+    const { connectionId, capabilityId, destinations, input } = query.source;
+    return this.admittedPage(context, { connectionId, capabilityId, destinations, input }, sink, signal, query);
+  }
+
+  private async admittedPage(context: HostContext, raw: unknown, rawSink: ReleaseSink, signal?: AbortSignal, query?: QueryDispatch): Promise<{ projection: ReleaseProjection<Json>; protectedPage?: ValidatedQueryPage; failure?: "unavailable" }> {
+    let failure: "unavailable" | undefined;
+    let protectedPage: ValidatedQueryPage | undefined;
+    const result = async (): Promise<ReleaseProjection<Json>> => {
+      const controller = new AbortController();
+      const key = randomUUID();
+      const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+      const isAborted = (): boolean => combined.aborted;
+      try {
+        const sink = parseWire(ReleaseSinkSchema, rawSink);
+        const request = parseWire(ReadAdmissionRequestSchema, raw);
+        const subject = authorityHash({ capabilityId: request.capabilityId, destinations: request.destinations });
+        const outcome = await this.exclusive(async (): Promise<ReleaseProjection<Json> | { pending: Promise<unknown>; plan: { binding: ReadBinding; scope: HostScope; connectionId: string; sink: ReleaseSink } }> => {
+          const publicationHead = this.publication.head;
+          const state = await this.state();
+          const connection = headRecord(state, "connection", request.connectionId);
+          const lookup = connection ? this.bindings.readBindings?.lookup(connection.adapterId, request.connectionId, request.capabilityId) : undefined;
+          if (lookup?.state !== "available" || lookup.binding.mode === "destinations") return withheld();
+          const found = this.readScopeFor(state, request.destinations);
+          if (!found) return withheld();
+          const scope: HostScope = { ...found, capabilityId: request.capabilityId };
+          const admit = (resolved: Resolved): boolean => this.readable(resolved, undefined, [scope]) && this.sinkAllowed(resolved, undefined, sink, [scope]);
+          const resolved = await this.resolve(context, request.connectionId, undefined, undefined, undefined, [scope]);
+          const connector = this.connectors.get(resolved.connection.connectorId);
+          const checked = this.registry.validateInput({ capabilityId: request.capabilityId, inputSchemaRef: lookup.binding.inputSchemaRef, input: request.input }, null);
+          if (!admit(resolved) || !connector || (query ? typeof connector.query !== "function" : typeof connector.read !== "function") || !checked.ok || isAborted()) return withheld();
+          if (query && (!lookup.binding.query || query.source.adapterId !== lookup.binding.adapterId || canonicalWire(query.source.inputSchemaRef) !== canonicalWire(lookup.binding.inputSchemaRef) || query.head !== this.queryHeadOf(resolved, lookup.binding, state))) return withheld();
+          await this.commit(next => this.decision(next, resolved, "read", subject, json({ kind: "read" })));
+          const final = await this.resolve(context, request.connectionId, undefined, undefined, undefined, [scope]);
+          if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || !admit(final) || isAborted() || query && query.head !== this.queryHeadOf(final, lookup.binding, state)) return withheld();
+          this.active.set(key, { controller, heads: new Set(Object.keys(resolved.heads)) });
+          let pending: Promise<unknown>;
+          try {
+            if (query && connector.query) pending = connector.query({ readVersion: "1.0.0", queryId: query.queryId, capabilityId: request.capabilityId, input: request.input, destinations: request.destinations, limit: query.limit, ...(query.cursor === undefined ? {} : { cursor: query.cursor }) }, combined);
+            else if (!query && connector.read) pending = connector.read({ lifecycleVersion: "1.0.0", capabilityId: request.capabilityId, destinations: request.destinations, input: request.input }, combined);
+            else throw new Error("Trusted read connector is unavailable.");
+          }
+          catch (error) { pending = Promise.reject(error instanceof Error ? error : new Error("Connector failed during admission.")); }
+          return { pending, plan: { binding: lookup.binding, scope, connectionId: request.connectionId, sink } };
+        });
+        if (!("plan" in outcome)) { await this.recordDenied(context, "read", subject); return outcome; }
+        const { pending, plan: admitted } = outcome;
+        let page: ReadPage;
+        try {
+          const rawPage = await pending;
+          if (isAborted()) return withheld();
+          if (query) { protectedPage = validateQueryPage(this.registry, admitted.binding, query, rawPage); page = { objects: protectedPage.objects }; }
+          else page = parseWire(ReadPageSchema, rawPage);
+        }
+        catch { failure = "unavailable"; return withheld(); }
+        finally { this.active.delete(key); }
+        if (isAborted()) return withheld();
+        let send: Promise<void> | undefined;
+        const released = await this.exclusive(async () => {
+          const publicationHead = this.publication.head;
+          const state = await this.state();
+          const resolved = await this.resolve(context, admitted.connectionId, undefined, undefined, undefined, [admitted.scope]);
+          if (!this.readable(resolved, undefined, [admitted.scope]) || !this.sinkAllowed(resolved, undefined, admitted.sink, [admitted.scope])) return withheld();
+          const sender = this.sinks.get(canonicalWire(admitted.sink));
+          if (!sender || isAborted() || query && query.head !== this.queryHeadOf(resolved, admitted.binding, state)) return withheld();
+          const kept: ReadPage["objects"] = [];
+          const index = this.restrictionIndex(state);
+          for (const object of page.objects) {
+            if (await this.objectReleasable(resolved, admitted.binding, admitted.scope, admitted.sink, object, index)) kept.push(object);
+            else if (query) return withheld();
+          }
+          const decision = await this.commit(next => this.decision(next, resolved, "release", subject, json({ kind: "read" })));
+          const final = await this.resolve(context, admitted.connectionId, undefined, undefined, undefined, [admitted.scope]);
+          if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || !this.sinkAllowed(final, undefined, admitted.sink, [admitted.scope]) || isAborted() || query && query.head !== this.queryHeadOf(final, admitted.binding, state)) return withheld();
+          const value = protectedPage ? json({ ...protectedPage.released as Record<string, Json>, sources: admitted.scope.sources }) : json({ objects: kept });
+          send = sender(structuredClone(value));
+          return { kind: "released" as const, value, decisionRef: decision.decisionRef };
+        });
+        if (send) await send;
+        if (released.kind === "withheld") await this.recordDenied(context, "release", subject);
+        return released;
+      } catch { return withheld(); }
       finally { this.active.delete(key); }
-      if (controller.signal.aborted) return withheld();
-      let send: Promise<void> | undefined;
-      const released = await this.exclusive(async () => {
-        const publicationHead = this.publication.head;
-        const state = await this.state();
-        const resolved = await this.resolve(context, admitted.connectionId, undefined, undefined, undefined, [admitted.scope]);
-        if (!this.readable(resolved, undefined, [admitted.scope]) || !this.sinkAllowed(resolved, undefined, admitted.sink, [admitted.scope])) return withheld();
-        const sender = this.sinks.get(canonicalWire(admitted.sink));
-        if (!sender) return withheld();
-        const kept: ReadPage["objects"] = [];
-        const index = this.restrictionIndex(state);
-        for (const object of page.objects) if (await this.objectReleasable(resolved, admitted.binding, admitted.scope, admitted.sink, object, index)) kept.push(object);
-        const decision = await this.commit(next => this.decision(next, resolved, "release", subject, json({ kind: "read" })));
-        const final = await this.resolve(context, admitted.connectionId, undefined, undefined, undefined, [admitted.scope]);
-        if (publicationHead !== this.publication.head || final.revision !== this.currentRevision() || final.policyRevision !== resolved.policyRevision || !this.sinkAllowed(final, undefined, admitted.sink, [admitted.scope])) return withheld();
-        const value = json({ objects: kept });
-        send = sender(structuredClone(value));
-        return { kind: "released" as const, value, decisionRef: decision.decisionRef };
-      });
-      if (send) await send;
-      if (released.kind === "withheld") await this.recordDenied(context, "release", subject);
-      return released;
-    } catch { return withheld(); }
-    finally { this.active.delete(key); }
+    };
+    const projection = await result();
+    return { projection, ...(failure ? { failure } : {}), ...(projection.kind === "released" && protectedPage ? { protectedPage } : {}) };
   }
 
   private readbackAllowed(resolved: Resolved, ref: ObjectReference): boolean {
