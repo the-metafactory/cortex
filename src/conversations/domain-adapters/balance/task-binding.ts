@@ -9,14 +9,15 @@ import { operationUuid } from "../../../surface/mc/desk/conversation-ids";
 import { loadMeta } from "../../../surface/mc/desk/my-day";
 import type { LookupRequest, TrustedConnector } from "../../authority";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, ReadbackResult } from "../../types";
-import type { AdapterBindings, AdapterDeclaration, BoundaryError, ObjectReference } from "../types";
+import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../types";
 import { ObjectReferenceSchema } from "../types";
 import { BALANCE_ADAPTER_ID as ADAPTER_ID, objectSchema, ref, referenceSchema } from "./schema";
 import type { DispatchOutcome } from "../operations/dispatch";
 import type { OperationJournalStore, StoredOperation } from "../operations/journal";
 import type { WriterBinding } from "../operations/writer-authority";
-import { snapshotDigest } from "../operations/validation";
 import type { ApprovedSnapshot, Authority, DispatchRequest, Json, OperationLookup, OwnerResult, OwnerSupport, Provenance } from "../operations/types";
+import { adapterErrorSchema } from "../schema-primitives";
+import { buildApprovedSnapshot, createOutcome, ownerResultKit, requestParts, resultsOf, type CreateOutcome, type OwnerResultParts } from "../operations/owner-results";
 
 const CAPABILITY_ID = "balance.task.create";
 const OWNER = "balance-task";
@@ -38,11 +39,7 @@ const INPUT_SCHEMA = objectSchema({
   due: { type: "string", format: "date" },
 }, ["area", "title"]);
 const OUTPUT_SCHEMA = objectSchema({ ref: referenceSchema("task") }, ["ref"]);
-const ERROR_SCHEMA = objectSchema({
-  code: { type: "string", pattern: "^balance\\..+$" },
-  message: { type: "string", minLength: 1 },
-  issues: { type: "array", items: objectSchema({ path: { type: "string" }, code: { type: "string" }, message: { type: "string" } }, ["path", "code", "message"]) },
-}, ["code", "message"]);
+const ERROR_SCHEMA = adapterErrorSchema(ADAPTER_ID);
 
 export function balanceTaskCreateDeclaration(): AdapterDeclaration {
   return {
@@ -158,7 +155,7 @@ export interface BalanceTaskSnapshotOptions {
 
 export function balanceTaskApprovedSnapshot(options: BalanceTaskSnapshotOptions): ApprovedSnapshot {
   const input = parseBalanceTaskInput(options.input, options.connectionId);
-  const base = {
+  return buildApprovedSnapshot({
     provenance: options.provenance,
     adapterId: ADAPTER_ID,
     connectionId: options.connectionId,
@@ -166,12 +163,10 @@ export function balanceTaskApprovedSnapshot(options: BalanceTaskSnapshotOptions)
     inputSchemaRef: INPUT_SCHEMA_REF,
     outputSchemaRef: OUTPUT_SCHEMA_REF,
     errorSchemaRef: ERROR_SCHEMA_REF,
-    input: input as unknown as Json,
+    input,
     destinations: [input.area, ...(input.project ? [input.project] : [])],
-    sources: [],
     policy: options.policy ?? "local",
-  };
-  return { ...base, digest: snapshotDigest(base) };
+  });
 }
 
 export function balanceTaskReceiptId(operationId: string): string {
@@ -206,58 +201,9 @@ export interface BalanceTaskBinding {
   readback(operation: OperationRecord): Promise<ReadbackResult>;
 }
 
-const attemptsOf = (stored: StoredOperation) => stored.journal.events.flatMap(entry => entry.event.kind === "attempt-prepared" ? [entry.event.attempt] : []);
-const resultsOf = (stored: StoredOperation) => stored.journal.events.flatMap(entry => entry.event.kind === "owner-result" ? [entry.event.response] : []);
-const resultId = (operationId: string, attemptId: string): string => `balance.create:${operationId}:${attemptId}`;
-const reason = (code: string, message: string): BoundaryError => ({ code, message });
-
-interface OwnerResultParts {
-  readonly operationId: string;
-  readonly attemptId: string;
-  readonly ownerRequestId: string;
-  readonly snapshotDigest: string;
-}
-
-const resultBase = (parts: OwnerResultParts, at: string) => ({
-  lifecycleVersion: "1.0.0" as const,
-  operationId: parts.operationId,
-  attemptId: parts.attemptId,
-  snapshotDigest: parts.snapshotDigest,
-  resultId: resultId(parts.operationId, parts.attemptId),
-  reportedAt: at,
-});
-
-const requestParts = (request: DispatchRequest): OwnerResultParts => ({ operationId: request.operationId, attemptId: request.attemptId, ownerRequestId: request.ownerRequestId, snapshotDigest: request.snapshot.digest });
-
-function succeededResult(options: OwnerResultParts & { readonly connectionId: string; readonly canonicalId: string; readonly receipt: Json; readonly at: string }): OwnerResult {
-  const task = reference(options.connectionId, "task", options.canonicalId);
-  return {
-    ...resultBase(options, options.at),
-    result: {
-      kind: "succeeded",
-      output: { ref: task },
-      evidence: { kind: "effect", evidenceId: `balance.effect:${options.operationId}:${options.attemptId}`, observedAt: options.at, ownerRequestId: options.ownerRequestId, receipt: options.receipt, refs: [task] },
-    },
-  };
-}
-
-function refusedResult(request: DispatchRequest, message: string, at: string): OwnerResult {
-  return {
-    ...resultBase(requestParts(request), at),
-    result: {
-      kind: "failed",
-      error: reason("balance.refused", message),
-      evidence: { kind: "no-effect", evidenceId: `balance.refused:${request.operationId}:${request.attemptId}`, observedAt: at, ownerRequestId: request.ownerRequestId, receipt: { refused: true, draftKept: true, message }, final: true },
-    },
-  };
-}
-
-function uncertainResult(request: DispatchRequest, message: string, at: string, receipt?: Json): OwnerResult {
-  return {
-    ...resultBase(requestParts(request), at),
-    result: { kind: "uncertain", error: reason("balance.uncertain", message), ownerRequestId: request.ownerRequestId, ...(receipt === undefined ? {} : { receipt }) },
-  };
-}
+const kit = ownerResultKit("balance");
+const succeededResult = (options: OwnerResultParts & { readonly connectionId: string; readonly canonicalId: string; readonly receipt: Json; readonly at: string }): OwnerResult => kit.succeeded(options, reference(options.connectionId, "task", options.canonicalId), options.receipt, options.at);
+const { refused: refusedResult, uncertain: uncertainResult } = kit;
 
 const jsonReceipt = (receipt: BalanceTaskReceipt | undefined, canonicalId?: string): Json => {
   if (receipt !== undefined) return receipt;
@@ -265,32 +211,10 @@ const jsonReceipt = (receipt: BalanceTaskReceipt | undefined, canonicalId?: stri
   return { canonicalId };
 };
 
-export type BalanceTaskCreateOutcome = "created" | "refused" | "uncertain" | "accepted";
+export type BalanceTaskCreateOutcome = CreateOutcome;
+export const balanceTaskCreateOutcome = createOutcome;
 
-export function balanceTaskCreateOutcome(response: OwnerResult): BalanceTaskCreateOutcome {
-  if (response.result.kind === "succeeded") return "created";
-  if (response.result.kind === "failed") return "refused";
-  if (response.result.kind === "uncertain") return "uncertain";
-  return "accepted";
-}
-
-export function balanceTaskLegacyResult(stored: StoredOperation | null): CreateResult {
-  if (!stored) return { state: "failed", error: "The Balance operation has no journal record. Nothing was created." };
-  const results = resultsOf(stored);
-  const success = results.findLast(response => response.result.kind === "succeeded");
-  if (success?.result.kind === "succeeded") {
-    const task = success.result.evidence.refs[0];
-    if (task) return { state: "created", canonicalId: task.canonicalId };
-    return { state: "failed", error: "Balance reported success without a task reference. Nothing was created." };
-  }
-  const failure = results.findLast(response => response.result.kind === "failed");
-  if (failure?.result.kind === "failed") return { state: "failed", error: failure.result.error.message };
-  const local = stored.journal.events.findLast(entry => entry.event.kind === "local-outcome");
-  if (local?.event.kind === "local-outcome") return { state: "failed", error: local.event.reason.message };
-  const accepted = results.findLast(response => response.result.kind === "accepted");
-  if (accepted?.result.kind === "accepted" && typeof accepted.result.receipt === "string") return { state: "accepted", receipt: accepted.result.receipt };
-  return { state: "accepted" };
-}
+export const balanceTaskLegacyResult = (stored: StoredOperation | null): CreateResult => kit.legacyResult(stored, "Balance");
 
 export interface BalanceTaskLifecycle {
   activate(): Promise<boolean>;
@@ -397,22 +321,17 @@ export function createBalanceTaskBinding(options: BalanceTaskBindingOptions): Ba
     }
     if (result.state === "created") return succeededResult({ ...requestParts(request), connectionId: options.connectionId, canonicalId: result.canonicalId, receipt: jsonReceipt(receipt(request.operationId), result.canonicalId), at: at() });
     if (result.state === "failed") return refusedResult(request, result.error, at());
-    return { ...resultBase(requestParts(request), at()), result: { kind: "accepted", ownerRequestId: request.ownerRequestId, receipt: jsonReceipt(receipt(request.operationId), result.receipt) } };
+    return kit.accepted(request, jsonReceipt(receipt(request.operationId), result.receipt), at());
   };
 
   const lookup = async (request: LookupRequest): Promise<OperationLookup> => {
     const checkedAt = at();
-    const respond = (result: OperationLookup["result"]): OperationLookup => ({ lifecycleVersion: "1.0.0", operationId: request.operationId, checkedAt, result });
-    const unknown = (code: string, message: string): OperationLookup => respond({ kind: "unknown", reason: reason(code, message) });
-    const stored = await options.journal.read(request.operationId);
-    if (!stored || "kind" in stored.journal.snapshot) return unknown("balance.operation_unavailable", "The Balance operation has no approved snapshot.");
-    if (stored.journal.ownerRequestId !== request.ownerRequestId) return unknown("balance.request_mismatch", "The Balance operation belongs to another request.");
-    const attempts = attemptsOf(stored);
-    const attempt = attempts.at(-1);
-    if (!attempt) return unknown("balance.attempt_missing", "The Balance operation has no prepared attempt.");
+    const checked = await kit.approvedForLookup(options.journal, request, checkedAt, "Balance");
+    if ("reply" in checked) return checked.reply;
+    const { stored, snapshotDigest, attempt, replies: { respond, unknown } } = checked;
     const found = receipt(request.operationId);
     if (found?.outlineId) {
-      const response = succeededResult({ operationId: request.operationId, attemptId: attempt.attemptId, ownerRequestId: request.ownerRequestId, snapshotDigest: stored.journal.snapshot.digest, connectionId: options.connectionId, canonicalId: found.outlineId, receipt: found, at: checkedAt });
+      const response = succeededResult({ operationId: request.operationId, attemptId: attempt.attemptId, ownerRequestId: request.ownerRequestId, snapshotDigest, connectionId: options.connectionId, canonicalId: found.outlineId, receipt: found, at: checkedAt });
       return respond({ kind: "known", response });
     }
     const success = resultsOf(stored).findLast(response => response.result.kind === "succeeded");

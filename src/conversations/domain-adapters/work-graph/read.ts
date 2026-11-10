@@ -1,7 +1,7 @@
-import { canonicalNodeId, formatGraphNodeRef, formatGraphRepoRef, parseGraphNodeRef, parseGraphRepoRef, qualifiedNodeId } from "../../../common/graph-ref";
+import { canonicalGraphRef, canonicalNodeId, formatGraphNodeRef, isBareGraphNode, formatGraphRepoRef, parseGraphNodeRef, parseGraphRepoRef, qualifiedNodeId } from "../../../common/graph-ref";
 import { CommandTimeout, runCommand, type CommandResult } from "../../../surface/mc/desk/spawn";
 import { isRecord, parseObjectReference, parseReadHandlerContext, readObservedAt, readPage, readSnapshotId, type Json, type QueryFetchRequest, type QueryPage, type QueryPageEntry, type ReadBinding } from "../reads/page-primitives";
-import { objectSchema, schemaRef } from "../schema-primitives";
+import { adapterErrorSchema, objectSchema, schemaRef } from "../schema-primitives";
 import { schemaKey } from "../schema-validation";
 import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../types";
 import { WORK_GRAPH_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, referenceSchema, type GraphObjectType } from "./schema";
@@ -28,7 +28,7 @@ const DESTINATIONS_INPUT_SCHEMA = objectSchema({}, []);
 const DESTINATIONS_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { anyOf: [REPOSITORY_VALUE_SCHEMA, NODE_VALUE_SCHEMA] } } }, ["items"]);
 const NODE_READ_INPUT_SCHEMA = objectSchema({ ref: referenceSchema("node") }, ["ref"]);
 const NODE_READ_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(NODE_SCHEMA_REF) } } }, ["items"]);
-const ERROR_SCHEMA = objectSchema({ code: { type: "string", pattern: "^work-graph\\..+$" }, message: { type: "string", minLength: 1 }, issues: { type: "array", items: objectSchema({ path: { type: "string" }, code: { type: "string" }, message: { type: "string" } }, ["path", "code", "message"]) } }, ["code", "message"]);
+const ERROR_SCHEMA = adapterErrorSchema(ADAPTER_ID);
 
 export function workGraphReadDeclaration(): AdapterDeclaration {
   return {
@@ -65,6 +65,8 @@ export const workGraphReadBindings: readonly ReadBinding[] = [
   },
 ];
 
+export { canonicalGraphRef };
+
 export type WorkGraphRunner = (argv: string[], timeoutMs: number) => Promise<CommandResult>;
 
 export interface GraphConversationLink {
@@ -99,21 +101,9 @@ const reference = (connectionId: string, objectType: GraphObjectType, canonicalI
 const parseReference = (value: unknown): ObjectReference => parseObjectReference(value, failure);
 const observedAt = readObservedAt;
 const snapshotId = (scope: string, content: Json): string => readSnapshotId("work-graph", scope, content);
-const BARE_NODE = /^#?([1-9]\d*)$/;
-const isBareNode = (value: string): boolean => BARE_NODE.test(value);
+const isBareNode = isBareGraphNode;
 const NODE_TAIL = /^(.+?)([#&])([1-9]\d*)$/;
 const GITHUB_RELATIVE_NODE = /^([\w.-]+\/[\w.-]+)([#&])([1-9]\d*)$/;
-
-/**
- * The equality form of a stored graph id: only one `github:github.com/` prefix is removed, as `canonicalTaskRef` does,
- * and a bare number is joined to the repository it was asked with. Nothing else is normalised, so GitLab refs stay as written.
- */
-export function canonicalGraphRef(value: string, repository?: string): string {
-  const text = value.trim();
-  const bare = BARE_NODE.exec(text);
-  const combined = bare && repository !== undefined ? `${repository}#${bare[1]}` : text;
-  return combined.replace(/^github:github\.com\//, "");
-}
 
 const isOwnRepository = (source: WorkGraphReadSource, value: ObjectReference): boolean =>
   value.adapterId === ADAPTER_ID && value.connectionId === source.connectionId && value.objectType === "repository";
@@ -154,8 +144,9 @@ function nodeTarget(canonicalId: string, source: WorkGraphReadSource, destinatio
   return { canonicalId: text, repository: formatted, full: `${formatted}#${text.replace(/^#/, "")}` };
 }
 
-export function graphNodeRepository(canonicalId: string): string | null {
-  const text = canonicalId.trim();
+/** The repository a full or GitHub-relative work-graph reference names, in the stored `github:github.com/…` form; null for a bare number or anything unparseable. */
+export function graphNodeRepository(value: string): string | null {
+  const text = value.trim();
   const full = parseGraphNodeRef(text);
   if (full) return formatGraphRepoRef(full.repo);
   const relative = GITHUB_RELATIVE_NODE.exec(text);

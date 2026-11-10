@@ -14,3 +14,22 @@ export function legacyFixture(state: OperationRecord["state"] = "created"): Lega
 export function legacyContext(source: LegacySource): LegacyContext {
   return { owner: "balance-task", adapterId: "balance", connectionId: "connection-example", capabilityId: "balance.task.create", fields: structuredClone(source.proposal.fields), destinations: [{ adapterId: "balance", connectionId: "connection-example", objectType: "area", canonicalId: "area-example" }], ...(source.record.canonicalId ? { canonicalReference: { adapterId: "balance", connectionId: "connection-example", objectType: "task", canonicalId: source.record.canonicalId } } : {}) };
 }
+
+const GRAPH_REPOSITORY = "github:github.com/example/desk";
+
+export function graphNodeLegacyFixture(overrides: { parent?: string; repository?: string; canonicalId?: string } = {}): LegacySource {
+  const source = legacyFixture();
+  source.proposal.type = "graph-node";
+  source.proposal.fields = { repository: overrides.repository ?? GRAPH_REPOSITORY, parent: overrides.parent ?? "12", title: "Edited node", checkpoint: "checkpoint-example" };
+  source.record.owner = "graph-node";
+  source.record.canonicalId = overrides.canonicalId ?? "example/desk#40";
+  source.record.url = "https://github.com/example/desk/issues/40";
+  source.createResult = { state: "created", canonicalId: source.record.canonicalId, url: source.record.url };
+  source.readback = { found: true, canonicalId: source.record.canonicalId, url: source.record.url };
+  return source;
+}
+
+export function graphNodeLegacyContext(source: LegacySource): LegacyContext {
+  const repository = source.proposal.fields.repository ?? "";
+  return { owner: "graph-node", adapterId: "work-graph", connectionId: "connection-example", capabilityId: "work-graph.node.create", fields: structuredClone(source.proposal.fields), destinations: [{ adapterId: "work-graph", connectionId: "connection-example", objectType: "repository", canonicalId: repository }], ...(source.record.canonicalId ? { canonicalReference: { adapterId: "work-graph", connectionId: "connection-example", objectType: "node", canonicalId: source.record.canonicalId } } : {}) };
+}

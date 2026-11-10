@@ -14,7 +14,7 @@ import { GITHUB_REF_PREFIX, isGraphRepositoryAllowed } from "./graph-repositorie
 export const GRAPH_LABEL = "ivy:conversation";
 
 const NOTHING = "Nothing was created.";
-const ADD_TIMEOUT_MS = 28_000;
+export const ADD_TIMEOUT_MS = 28_000;
 const READBACK_TIMEOUT_MS = 20_000;
 
 export interface GraphWriterDeps {
@@ -116,11 +116,11 @@ function sameNodeIgnoringRepoPrefix(repository: string, a: string, b: string): b
  * Ask soma, without filing, for the node filed under this operation's marker. Found under the parent the operation
  * asked for (or anywhere, for a map root with no parent) is found; found elsewhere, or a soma failure, cannot tell.
  */
-export function graphReadback(deps: GraphWriterDeps): (operation: OperationRecord) => Promise<ReadbackResult> {
+export function graphReadbackById(deps: GraphWriterDeps): (operationId: string) => Promise<ReadbackResult> {
   const run = deps.run ?? spawnWithStdin;
-  return async operation => {
+  return async operationId => {
     const somaBin = deps.desk()?.somaBin;
-    const recorded = recordedGraphOperation(deps.db, operation.operationId);
+    const recorded = recordedGraphOperation(deps.db, operationId);
     if (!somaBin || !recorded) return null;
     try {
       const result = await run([somaBin, ...recorded.args, "--dry-run"], "", READBACK_TIMEOUT_MS);
@@ -134,6 +134,11 @@ export function graphReadback(deps: GraphWriterDeps): (operation: OperationRecor
       return null;
     }
   };
+}
+
+export function graphReadback(deps: GraphWriterDeps): (operation: OperationRecord) => Promise<ReadbackResult> {
+  const byId = graphReadbackById(deps);
+  return operation => byId(operation.operationId);
 }
 
 const list = (value: string | undefined): string[] => (value ?? "").split(/[\s,]+/).filter(Boolean);

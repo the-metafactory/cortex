@@ -1,9 +1,5 @@
 import type { Json } from "../../../conversations/domain-adapters/operations/types";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
-import type { HostContext } from "../../../conversations/authority";
-import type { ReleaseSink } from "../../../conversations/authority-records";
-import type { QueryRunner } from "../../../conversations/domain-adapters/reads/query";
-import type { QueryResult } from "../../../conversations/domain-adapters/reads/query-types";
 
 export interface ReleasedObject {
   readonly ref: ObjectReference;
@@ -38,18 +34,7 @@ export const releasedObjects = (released: Json): ReleasedObject[] => {
   return objects;
 };
 
-export interface QueryRun {
-  readonly result: QueryResult;
-  readonly released?: Json;
-}
-type QuerySourceInput = Parameters<QueryRunner["create"]>[1][number];
-
-export async function runReleased(runner: Pick<QueryRunner, "create" | "run">, context: HostContext, sink: ReleaseSink, source: QuerySourceInput): Promise<QueryRun> {
-  const created = await runner.create(context, [source], sink);
-  let released: Json | undefined;
-  const result = await runner.run(context, created, sink, undefined, undefined, { released: value => { released = value; } });
-  return { result, ...(released === undefined ? {} : { released }) };
-}
+export type { HostQueryRun as QueryRun } from "./query-run";
 
 export const observedAtOf = (object: ReleasedObject, at: number): number => {
   const time = object.evidence?.observedAt ? Date.parse(object.evidence.observedAt) : Number.NaN;

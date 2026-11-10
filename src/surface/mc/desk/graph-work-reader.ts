@@ -5,7 +5,8 @@ import type { ObjectReference } from "../../../conversations/domain-adapters/typ
 import { canonicalGraphRef, graphNodeRepository, workGraphReadBindings, type GraphConversationLink } from "../../../conversations/domain-adapters/work-graph/read";
 import type { WorkObject, WorkPage, WorkRead, WorkReader } from "../../../conversations/tools/work-context";
 import type { Policy } from "../../../conversations/types";
-import { observedAtOf, releasedObjects, runReleased, type QueryRun, type ReleasedObject } from "./work-released";
+import { runHostQuery } from "./query-run";
+import { observedAtOf, releasedObjects, type QueryRun, type ReleasedObject } from "./work-released";
 
 export interface GraphWorkRepository {
   readonly id: string;
@@ -45,7 +46,7 @@ export function graphWorkQuery(config: GraphWorkRunner): GraphWorkQuery {
     links: config.links,
     run: async request => {
       if (!NODE_READ_BINDING) throw new Error("work-graph.node.read binding missing");
-      return runReleased(config.runner, config.context, config.sink, {
+      return runHostQuery(config, {
         adapterId: "work-graph",
         connectionId: config.connectionId,
         capabilityId: NODE_READ,
