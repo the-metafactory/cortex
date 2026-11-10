@@ -105,6 +105,7 @@ async function sessionExists(dir: string, session: string): Promise<boolean> {
 
 const Content = z.array(z.object({ type: z.string(), text: z.string().optional() }).loose());
 const PiEvent = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("message_update"), assistantMessageEvent: z.object({ type: z.string(), delta: z.string().optional() }).loose() }).loose(),
   z.object({ type: z.literal("tool_execution_start"), toolCallId: z.string(), toolName: z.string(), args: z.unknown() }).loose(),
   z.object({ type: z.literal("tool_execution_end"), toolCallId: z.string(), toolName: z.string(), result: z.object({ content: Content.optional() }).loose().nullish(), isError: z.boolean().optional() }).loose(),
   z.object({ type: z.literal("message_end"), message: z.object({ role: z.string(), content: z.union([z.string(), Content]).optional(), stopReason: z.string().optional(), errorMessage: z.string().optional() }).loose() }).loose(),
@@ -162,6 +163,10 @@ async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: 
     const event = PiEvent.safeParse(raw);
     if (!event.success) continue;
     const e = event.data;
+    if (e.type === "message_update") {
+      if (e.assistantMessageEvent.type === "text_delta" && e.assistantMessageEvent.delta) await request.text?.(e.assistantMessageEvent.delta);
+      continue;
+    }
     if (e.type === "tool_execution_start") { calls.set(e.toolCallId, e.args); continue; }
     if (e.type === "message_end") { if (e.message.role === "assistant") answer = e.message; continue; }
     const result = capped(textOf(e.result?.content));

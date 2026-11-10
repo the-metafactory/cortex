@@ -16,7 +16,7 @@ import { join } from "node:path";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type Conversation, type EntryId, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
+import { createRegistry, defineDoc, defineDocFamily, Harness, LiveDoc, watchEvents, ProviderDoc, type Conversation, type EntryId, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { z } from "zod";
 import { ConnectionSetupService, type ConnectionSetupDeps } from "./connection-setup";
@@ -849,6 +849,23 @@ export class ConversationHost {
   async meta(id: string): Promise<ConversationMeta> {
     const { stored, effective, available } = await this.tighten(id);
     return this.view(id, stored, await this.workingSet(), effective, available);
+  }
+
+  async watchResponse(id: string, listener: (text: string | null) => void, onClose?: () => void): Promise<() => Promise<void>> {
+    const { stored } = await this.tighten(id);
+    const conversation = await this.conversation(stored);
+    const events = await watchEvents(this.engine, conversation.id, this.context);
+    const textOf = (message: AssistantMessage | undefined): string | null => message ? message.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n") : null;
+    listener(textOf(events.snapshot.generation?.message));
+    events.start(async () => {
+      const live = await this.engine.snapshot(LiveDoc, conversation.id, this.context);
+      listener(textOf(live?.generation?.message));
+    });
+    void events.closed.then(end => {
+      if (end.reason === "listener_error" || end.reason === "session_failed") console.error("conversations: response stream closed", end.error);
+      onClose?.();
+    });
+    return async () => { await events.stop(); };
   }
 
   async detail(id: string): Promise<HostDetail> {

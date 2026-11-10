@@ -21,6 +21,7 @@ export function useConversation(id: string) {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraftState] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [liveText, setLiveText] = useState<string | null>(null);
   const [organizing, setOrganizing] = useState(false);
   const unsent = useRef<{ inputId: string; text: string; mode: "queue" | "steer" } | null>(null);
   const saved = useRef<string | null>(null);
@@ -50,6 +51,21 @@ export function useConversation(id: string) {
     const every = setInterval(() => { void load(controller.signal, !busy); }, busy ? BUSY_MS : IDLE_MS);
     return () => { controller.abort(); clearInterval(every); };
   }, [load, busy]);
+
+  useEffect(() => {
+    setLiveText(null);
+    const source = new EventSource(`/api/conversations/${id}/stream`);
+    source.addEventListener("response", (event: MessageEvent<string>) => {
+      try {
+        const text: unknown = JSON.parse(event.data);
+        if (text !== null && typeof text !== "string") return;
+        setLiveText(text);
+        if (text === null) void load();
+      } catch (error) { console.error("conversations: invalid response stream", error); }
+    });
+    source.onerror = () => { setLiveText(null); void load(); };
+    return () => { source.close(); };
+  }, [id, load]);
 
   const flush = useCallback(async (keepalive = false): Promise<void> => {
     if (timer.current) { clearTimeout(timer.current); timer.current = null; }
@@ -109,7 +125,7 @@ export function useConversation(id: string) {
     } finally { setOrganizing(false); }
   }, [id, organizing, load]);
 
-  return { detail, entries, error, draft: draft ?? "", ready: draft !== null, setDraft, send, retry, sending, busy, retrying: unsent.current !== null, reload: load, flush, organize, organizing };
+  return { detail, entries, liveText, error, draft: draft ?? "", ready: draft !== null, setDraft, send, retry, sending, busy, retrying: unsent.current !== null, reload: load, flush, organize, organizing };
 }
 
 const OUTCOMES_NOTE: { label: string; primary?: boolean; needsText?: boolean; make: (text: string) => SessionEnd }[] = [
@@ -173,13 +189,14 @@ export function ConversationWorkspace({ id, onLeave, onOrganized }: { id: string
   const c = useConversation(id);
   const leave = (): void => { void c.flush(true); onLeave(); };
   if (!c.detail) return <section className="dcv" aria-label="Ivy conversation"><header className="dcv-head"><button type="button" className="desk-btn ghost" onClick={leave}>Leave</button></header><p role={c.error ? "alert" : "status"}>{c.error ?? "Opening the conversation…"}</p></section>;
-  return <WorkspaceView detail={c.detail} entries={c.entries} draft={c.draft} ready={c.ready} busy={c.busy} sending={c.sending} retrying={c.retrying} error={c.error} onDraft={c.setDraft} onSend={mode => void c.send(mode)} onRetry={text => void c.retry(text)} onLeave={leave} onSaved={() => void c.reload()}
+  return <WorkspaceView detail={c.detail} entries={c.entries} liveText={c.liveText} draft={c.draft} ready={c.ready} busy={c.busy} sending={c.sending} retrying={c.retrying} error={c.error} onDraft={c.setDraft} onSend={mode => void c.send(mode)} onRetry={text => void c.retry(text)} onLeave={leave} onSaved={() => void c.reload()}
     organizing={c.organizing} onOrganize={change => { void c.organize(change).then(done => { if (done) onOrganized?.(); }); }} />;
 }
 
 export interface WorkspaceProps {
   detail: ConversationDetail;
   entries: ConversationEntry[];
+  liveText?: string | null;
   draft: string;
   ready: boolean;
   busy: boolean;
@@ -251,7 +268,7 @@ const IvyAnswer = memo(function IvyAnswer({ text }: { text: string }) {
 export function WorkspaceView(c: WorkspaceProps) {
   const stream = useRef<HTMLDivElement>(null);
   const count = c.entries.length;
-  useEffect(() => { stream.current?.scrollTo({ top: stream.current.scrollHeight }); }, [count]);
+  useEffect(() => { stream.current?.scrollTo({ top: stream.current.scrollHeight }); }, [count, c.liveText]);
   const { conversation, sources, pending, studio } = c.detail;
   const views = c.entries.flatMap(entry => entryViews(entry).map((view, i) => ({ key: `${entry.id}-${i}`, view })));
   const archived = conversation.state === "archived";
@@ -287,7 +304,8 @@ export function WorkspaceView(c: WorkspaceProps) {
         return <p key={key} className="dcv-activity dcv-failed" role="alert">{view.text} Your message stays in the record; no other engine was used.
           {retry && <button type="button" className="desk-btn" disabled={c.sending} onClick={() => { c.onRetry(said.text ?? ""); }}>Retry</button>}</p>;
       })}
-      {views.length === 0 && <p className="dcv-quiet">No messages yet. Your exchange is saved as you go.</p>}
+      {c.liveText && <article className="dcv-msg ivy" aria-label="Ivy is answering"><small>Ivy · answering…</small><IvyAnswer text={c.liveText} /></article>}
+      {views.length === 0 && !c.liveText && <p className="dcv-quiet">No messages yet. Your exchange is saved as you go.</p>}
     </div>
     {pending.length > 0 && <div className="dcv-queue" role="status"><strong>{pending.length === 1 ? "1 message in order" : `${pending.length} messages in order`} · one shared order for web and Discord</strong>
       <ol>{pending.map(p => <li key={p.inputId}>{pendingLabel(p)}</li>)}</ol></div>}

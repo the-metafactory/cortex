@@ -41,6 +41,13 @@ describe("conversation API gates", () => {
     const { conversation } = await created.json() as { conversation: { id: string } };
     expect((await call(status, "GET", `/api/conversations/${conversation.id}`)).status).toBe(200);
     expect((await call(status, "GET", `/api/conversations/${conversation.id}`, undefined, OTHER)).status).toBe(403);
+    expect((await call(status, "GET", `/api/conversations/${conversation.id}/stream`, undefined, OTHER)).status).toBe(403);
+    const streamed = await call(status, "GET", `/api/conversations/${conversation.id}/stream`);
+    expect(streamed.status).toBe(200);
+    expect(streamed.headers.get("content-type")).toBe("text/event-stream");
+    const reader = streamed.body?.getReader();
+    expect(new TextDecoder().decode((await reader?.read())?.value)).toBe("event: response\ndata: null\n\n");
+    await reader?.cancel();
     expect((await call(status, "GET", `/api/conversations/${conversation.id}/entries`, undefined, OTHER)).status).toBe(403);
     expect((await call(status, "GET", `/api/conversations/${conversation.id}/entries/1`, undefined, OTHER)).status).toBe(403);
     expect((await call(status, "POST", `/api/conversations/${conversation.id}/inputs`, say("in-1", "x"), OTHER)).status).toBe(403);

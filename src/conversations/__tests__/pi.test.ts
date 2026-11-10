@@ -45,6 +45,26 @@ function request(overrides: Partial<TurnRequest> = {}): TurnRequest & { seen: To
 }
 
 describe("pi turns", () => {
+  test("text deltas arrive before the final answer and thinking stays private", async () => {
+    const r = await rig();
+    await script(r, [
+      { type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "private reasoning" } },
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Hello " } },
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "there" } },
+      answer("Hello there"),
+    ]);
+    const chunks: string[] = [];
+    let finished = false;
+    const reply = await piTurns(r.settings)(request({ text: delta => {
+      expect(finished).toBe(false);
+      chunks.push(delta);
+      return Promise.resolve();
+    } }));
+    finished = true;
+    expect(chunks).toEqual(["Hello ", "there"]);
+    expect(reply.text).toBe("Hello there");
+  });
+
   test("a turn runs pi with the read-only allowlist and the Soma projection, and records every tool call", async () => {
     const r = await rig();
     await script(r, [
