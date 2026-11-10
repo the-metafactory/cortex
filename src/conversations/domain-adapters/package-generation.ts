@@ -37,6 +37,10 @@ export const DeskAdapterGenerationRecordSchema = z.object({
 }).strict();
 export type DeskAdapterGenerationRecord = z.infer<typeof DeskAdapterGenerationRecordSchema>;
 export type DeskGenerationFence = "disabled" | "uninstalled";
+export const FENCE_MESSAGE: Record<"adapter_disabled" | "adapter_uninstalled", string> = {
+  adapter_disabled: "The adapter is disabled; no new admission is granted.",
+  adapter_uninstalled: "The adapter package is uninstalled; stored evidence stays protected until a managed restart removes the generation.",
+};
 export type DeskGenerationAdmission =
   | { state: "available"; generation: DeskAdapterGeneration }
   | { state: "unavailable"; code: "generation_missing" | "adapter_disabled" | "adapter_uninstalled"; message: string }
@@ -110,8 +114,8 @@ export class DeskGenerationStore {
 
   async admit(adapterId: string, required: { releaseDigest: string }): Promise<DeskGenerationAdmission> {
     const record = await this.read(adapterId);
-    if (record?.uninstalled) return { state: "unavailable", code: "adapter_uninstalled", message: "The adapter package was uninstalled; stored evidence stays protected." };
-    if (record?.disabled) return { state: "unavailable", code: "adapter_disabled", message: "The adapter is disabled; no new admission is granted." };
+    if (record?.uninstalled) return { state: "unavailable", code: "adapter_uninstalled", message: FENCE_MESSAGE.adapter_uninstalled };
+    if (record?.disabled) return { state: "unavailable", code: "adapter_disabled", message: FENCE_MESSAGE.adapter_disabled };
     const active = record?.active;
     if (!active) return { state: "unavailable", code: "generation_missing", message: "No validated generation is active for this adapter." };
     if (active.releaseDigest !== required.releaseDigest) {

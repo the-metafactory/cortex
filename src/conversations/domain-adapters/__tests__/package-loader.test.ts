@@ -508,6 +508,59 @@ describe("Desk adapter generation publication", () => {
     expect(loader.admission("dependent")).toEqual({ state: "unavailable", code: "dependency_unavailable", message: expect.any(String) });
   });
 
+  test("a mutual relationship pair is refused together instead of published partially", async () => {
+    const root = tempDir("bundled");
+    const left = writeDeskFixturePackage(join(root, "left"), { adapterId: "left", declaration: deskFixtureDeclaration("left", { relationship: { targetAdapterId: "right" } }) });
+    const right = writeDeskFixturePackage(join(root, "right"), { adapterId: "right", declaration: deskFixtureDeclaration("right", { relationship: { targetAdapterId: "left" } }) });
+    const plain = writeDeskFixturePackage(join(root, "plain"), { adapterId: "plain" });
+    const { store } = await openStore();
+    const loader = loaderFor({ bundledPackages: [left.dir, right.dir, plain.dir], store });
+    const discovery = await loader.discover();
+    expect(discovery.candidates.filter(candidate => candidate.adapterId !== "plain").every(candidate => candidate.state.state === "unavailable")).toBe(true);
+    await loader.boot();
+    expect(loader.catalog().map(entry => entry.generation.adapterId)).toEqual(["plain"]);
+  });
+
+  test("at a managed restart a stranded dependent is fenced without taking a healthy adapter with it", async () => {
+    const root = tempDir("bundled");
+    const broken = writeDeskFixturePackage(join(root, "a-broken"), { adapterId: "a-broken", backendSource: deskFixtureBackend(deskFixtureDeclaration("a-broken"), { throwOnCreate: true }) });
+    const stranded = writeDeskFixturePackage(join(root, "stranded"), { adapterId: "stranded", declaration: deskFixtureDeclaration("stranded", { relationship: { targetAdapterId: "a-broken" } }) });
+    const plain = writeDeskFixturePackage(join(root, "plain"), { adapterId: "plain" });
+    const { store } = await openStore();
+    const loader = loaderFor({ bundledPackages: [broken.dir, stranded.dir, plain.dir], store });
+    await loader.boot();
+    expect(loader.catalog().map(entry => entry.generation.adapterId)).toEqual(["plain"]);
+    const fenced = loader.admission("stranded");
+    expect(fenced.state).toBe("unavailable");
+    expect(fenced.state === "unavailable" && fenced.code).toBe("dependency_unavailable");
+    expect(fenced.state === "unavailable" && fenced.message).toContain("a-broken");
+  });
+
+  test("an unapproved conflict does not strand the approved dependent of an approved package", async () => {
+    const installedRoot = tempDir("arc");
+    const rogue = writeDeskFixturePackage(join(installedRoot, "rogue"), { adapterId: "rogue", declaration: sharedObjectSchema("rogue", "shared.task", { title: { type: "string", minLength: 1 } }) });
+    const good = writeDeskFixturePackage(join(installedRoot, "good"), { adapterId: "good", declaration: sharedObjectSchema("good", "shared.task", { title: { type: "string", minLength: 2 }, owner: { type: "string" } }) });
+    const child = writeDeskFixturePackage(join(installedRoot, "child"), { adapterId: "child", declaration: deskFixtureDeclaration("child", { relationship: { targetAdapterId: "good" } }) });
+    const base: DeskPackageLoaderOptions = {
+      installedRoots: [installedRoot],
+      runner: deskFixtureRunner([
+        deskFixtureArcPackage(rogue.dir, { name: "desk-a-rogue" }),
+        deskFixtureArcPackage(good.dir, { name: "desk-b-good" }),
+        deskFixtureArcPackage(child.dir, { name: "desk-c-child" }),
+      ]),
+    };
+    const approvals = [await approvalFor(base, "good"), await approvalFor(base, "child")];
+    const loader = loaderFor({ ...base, approvals });
+    const discovery = await loader.discover();
+    for (const adapterId of ["good", "child"]) {
+      const candidate = discovery.candidates.find(item => item.adapterId === adapterId);
+      expect(candidate?.trust).toEqual({ state: "trusted", basis: "principal" });
+      expect(candidate?.state).toEqual({ state: "installable" });
+    }
+    expect(discovery.candidates.find(candidate => candidate.adapterId === "rogue")?.trust.state).toBe("untrusted");
+    expect((await loader.install(deskFixturePackageId("child"))).ok).toBe(true);
+  });
+
   test("returns upgrade-required for stored evidence that belongs to a different generation", async () => {
     const { store } = await activatedFixture();
     const active = (await store.read(DESK_FIXTURE_ADAPTER))?.active;

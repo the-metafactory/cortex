@@ -12,7 +12,7 @@ import type { ArcPackage } from "../../common/types/plugin-manifest";
 import type { DeskActionConnector, DeskAdapterBindings, DeskAdapterConnection, DeskAdapterDefinition, DeskAdapterHost, DeskConnectorFactory } from "../../desk-sdk";
 import { DESK_ADAPTER_SDK_VERSION } from "../../desk-sdk/version";
 import { DraftingBindingSchema, DraftingBindings, DRAFTING_BINDING_VERSION, type DraftingBinding } from "./drafting-binding";
-import { DESK_ADAPTER_GENERATION_FORMAT, DeskAdapterGenerationSchema, DeskGenerationStore, DESK_UI_PROTOCOL_VERSION, generationId, type DeskAdapterGeneration, type DeskAdapterGenerationRecord, type DeskGenerationAdmission } from "./package-generation";
+import { DESK_ADAPTER_GENERATION_FORMAT, DeskAdapterGenerationSchema, DeskGenerationStore, DESK_UI_PROTOCOL_VERSION, FENCE_MESSAGE, generationId, type DeskAdapterGeneration, type DeskAdapterGenerationRecord, type DeskGenerationAdmission } from "./package-generation";
 import { exactVersion, hex64, identifier } from "./package-primitives";
 import { verifyReadBinding } from "./reads/bindings";
 import { READ_BINDING_VERSION, ReadBindingSchema, type ReadBinding } from "./reads/types";
@@ -326,7 +326,7 @@ export function releaseDigest(manifest: DeskAdapterPackage, manifestSha256: stri
   return sha256Bytes(canonicalJSON(identity));
 }
 
-export function stagingBindings(declaration: AdapterDeclaration): AdapterBindings {
+function stagingBindings(declaration: AdapterDeclaration): AdapterBindings {
   return {
     handlers: Object.fromEntries(declaration.capabilities.filter(capability => capability.kind === "query").map(capability => [capability.capabilityId, () => undefined])),
     observations: Object.fromEntries(declaration.capabilities.filter(capability => capability.kind === "observation").map(capability => [capability.capabilityId, {}])),
@@ -666,8 +666,7 @@ export class DeskPackageLoader {
     const staged = await stageRegistry(entries);
     for (const [entry] of staged.failures) {
       const backdrop = entries.filter(other => other === entry || (
-        !staged.failures.has(other)
-        && other.candidate.packageId !== entry.candidate.packageId
+        other.candidate.packageId !== entry.candidate.packageId
         && other.adapterId !== entry.adapterId
         && (entry.candidate.trust.state !== "trusted" || other.candidate.trust.state === "trusted")
       ));
@@ -682,8 +681,7 @@ export class DeskPackageLoader {
     const trusted = matches.filter(item => item.trust.state === "trusted");
     const chosen = trusted.length > 0 ? trusted : matches;
     if (chosen.length !== 1) return failure("duplicate_identity", "More than one discovered package carries that identity.");
-    const candidate = chosen[0];
-    if (!candidate) return failure("unknown_package", "No discovered package carries that identity.");
+    const [candidate] = chosen as [DeskPackageCandidate];
     if (expected?.releaseDigest && expected.releaseDigest !== candidate.releaseDigest) return failure("release_mismatch", "The approved release digest does not match the discovered package content.");
     if (candidate.state.state !== "installable") return failure(candidate.state.code, candidate.state.message);
     return success(candidate);
@@ -781,8 +779,7 @@ export class DeskPackageLoader {
     if (!prepared.ok) return this.failed(candidate, prepared.error);
     const published = await this.publishPrepared([prepared.value]);
     if (!published.ok) return this.failed(candidate, published.error);
-    const generation = published.value[0];
-    if (!generation) return failure("publication_rejected", "The package published no generation.");
+    const [generation] = published.value as [DeskAdapterGeneration];
     return success(generation);
   }
 
@@ -805,11 +802,11 @@ export class DeskPackageLoader {
       if (candidate.state.state !== "installable" || candidate.trust.state !== "trusted") continue;
       const record = records.get(candidate.adapterId);
       if (record?.uninstalled) {
-        this.fence(candidate.adapterId, "adapter_uninstalled", "The adapter package is uninstalled; the in-process generation waits for a managed restart.");
+        this.fence(candidate.adapterId, "adapter_uninstalled");
         continue;
       }
       if (record?.disabled) {
-        this.fence(candidate.adapterId, "adapter_disabled", "The adapter is disabled; no new admission is granted.");
+        this.fence(candidate.adapterId, "adapter_disabled");
         continue;
       }
       const preparedCandidate = await this.prepare(candidate);
@@ -829,17 +826,29 @@ export class DeskPackageLoader {
       adapter => missing(adapter).length === 0,
     );
     for (const [adapter, error] of settled.failures) this.failed(adapter.candidate, error);
-    const held = settled.pending.filter(adapter => !settled.failures.has(adapter));
+    let held = settled.pending.filter(adapter => !settled.failures.has(adapter));
+    const unheld = (adapter: PublishedAdapter, waiting: readonly PublishedAdapter[]): string[] => missing(adapter).filter(target => !waiting.some(other => other.adapterId === target));
+    let progressed = true;
+    while (held.length > 0 && progressed) {
+      progressed = false;
+      for (const adapter of [...held]) {
+        const unreachable = unheld(adapter, held);
+        if (unreachable.length === 0) continue;
+        held = held.filter(other => other !== adapter);
+        this.failed(adapter.candidate, { code: "dependency_unavailable", message: `A relationship target adapter did not publish, so this adapter stays unavailable: ${unreachable.join(", ")}.` });
+        progressed = true;
+      }
+    }
     if (held.length === 0) return;
     if ((await this.publishPrepared(held)).ok) return;
     for (const adapter of held) {
-      this.failed(adapter.candidate, { code: "dependency_unavailable", message: `A relationship target adapter did not publish, so this adapter stays unavailable: ${missing(adapter).join(", ")}.` });
+      this.failed(adapter.candidate, { code: "dependency_unavailable", message: `The adapters that still wait do not publish together, so this adapter stays unavailable: ${missing(adapter).join(", ") || "its own relationship group"}.` });
     }
   }
 
-  private fence(adapterId: string, code: "adapter_disabled" | "adapter_uninstalled", message: string): void {
+  private fence(adapterId: string, code: "adapter_disabled" | "adapter_uninstalled"): void {
     const availability = new Map(this.state.availability);
-    availability.set(adapterId, { state: "unavailable", code, message });
+    availability.set(adapterId, { state: "unavailable", code, message: FENCE_MESSAGE[code] });
     this.state = { ...this.state, availability };
   }
 
@@ -847,7 +856,7 @@ export class DeskPackageLoader {
     const store = this.store;
     if (!store) return null;
     const record = await store.fence(adapterId, "disabled");
-    this.fence(adapterId, "adapter_disabled", "The adapter is disabled; no new admission is granted.");
+    this.fence(adapterId, "adapter_disabled");
     return record;
   }
 
@@ -855,7 +864,7 @@ export class DeskPackageLoader {
     const store = this.store;
     if (!store) return null;
     const record = await store.fence(adapterId, "uninstalled");
-    this.fence(adapterId, "adapter_uninstalled", "The adapter package is uninstalled; stored evidence stays protected until a managed restart removes the generation.");
+    this.fence(adapterId, "adapter_uninstalled");
     return record;
   }
 
