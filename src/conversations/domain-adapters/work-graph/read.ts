@@ -7,7 +7,7 @@ import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../ty
 import { WORK_GRAPH_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, referenceSchema, type GraphObjectType } from "./schema";
 import { workGraphNodeCreateDeclaration } from "./node-binding";
 
-const DEFAULT_TIMEOUT_MS = 8_000;
+export const WORK_GRAPH_REQUEST_TIMEOUT_MS = 8_000;
 const NODE_PAGE_ITEMS = 1;
 const REPOSITORY_SCHEMA_REF = schemaRef("work-graph.repository");
 const NODE_SCHEMA_REF = schemaRef("work-graph.node");
@@ -205,14 +205,17 @@ function destinationsPage(source: WorkGraphReadSource): QueryPage {
   return readPage(entries, snapshotId("destinations", { connectionId: source.connectionId, entries: entries.map(entry => entry.ref) }), observedAt(source));
 }
 
-function ownerFailure(result: CommandResult): string {
-  return /not found|no such|could not resolve|HTTP 404|HTTP 410/i.test(`${result.stderr}\n${result.stdout}`) ? "node_unavailable" : "owner_unavailable";
-}
+const OWNER_GONE = /not found|no such|could not resolve|HTTP 404|HTTP 410/i;
+
+/** True only when the owner's own answer says the node is not there; any other failure says nothing about existence. */
+export const workGraphOwnerGone = (result: CommandResult): boolean => OWNER_GONE.test(`${result.stderr}\n${result.stdout}`);
+
+const ownerFailure = (result: CommandResult): string => workGraphOwnerGone(result) ? "node_unavailable" : "owner_unavailable";
 
 async function ownerNode(source: WorkGraphReadSource, argv: string[]): Promise<Record<string, unknown>> {
   let result: CommandResult;
   try {
-    result = await (source.run ?? ((command, timeoutMs) => runCommand(command, timeoutMs)))(argv, source.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS);
+    result = await (source.run ?? ((command, timeoutMs) => runCommand(command, timeoutMs)))(argv, source.requestTimeoutMs ?? WORK_GRAPH_REQUEST_TIMEOUT_MS);
   } catch (error) {
     return failure(error instanceof CommandTimeout ? "owner_timeout" : "owner_unavailable");
   }
