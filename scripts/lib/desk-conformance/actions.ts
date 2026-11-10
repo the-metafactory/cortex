@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { DraftingBindings, type DestinationMatch, type DraftModel, type DraftPolicy, type DraftSources, type ModelRequest } from "../../../src/conversations/domain-adapters/drafting";
-import type { DraftingView } from "../../../src/conversations/domain-adapters/registry";
 import { snapshotDigest } from "../../../src/conversations/domain-adapters/operations/validation";
-import { ObjectReadbackSchema, type ApprovedSnapshot, type Json } from "../../../src/conversations/domain-adapters/operations/types";
+import { ObjectReadbackSchema, type ApprovedSnapshot, type DispatchRequest, type Json } from "../../../src/conversations/domain-adapters/operations/types";
+import type { DispatchOutcome, OperationBridge } from "../../../src/conversations/domain-adapters/operations/dispatch";
+import type { DraftingView } from "../../../src/conversations/domain-adapters/registry";
 import { ObjectReferenceSchema, type ObjectReference } from "../../../src/conversations/domain-adapters/types";
 import { conformant, refused, type CapabilityReport } from "./report";
 import { sampleValue } from "./sample";
@@ -17,8 +18,8 @@ const AT = () => new Date().toISOString();
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message.slice(0, 200) : "The call failed.");
 
-interface Prepared { input: Json; destinations: ObjectReference[]; view: DraftingView }
-type Preparation = { ok: true; value: Prepared; report?: CapabilityReport } | { ok: false; report: CapabilityReport };
+export interface Prepared { input: Json; destinations: ObjectReference[]; view: DraftingView }
+export type Preparation = { ok: true; value: Prepared; report?: CapabilityReport } | { ok: false; report: CapabilityReport };
 
 function referencesAt(view: DraftingView, input: Json): ObjectReference[] {
   const record = isRecord(input) ? input : {};
@@ -53,7 +54,8 @@ function destinationResolver(env: ProbeEnv) {
   };
 }
 
-async function draftInput(env: ProbeEnv, capabilityId: string, view: DraftingView): Promise<Preparation> {
+/** Drafts the probe input for one action capability, through the drafting binding when the package declares one. */
+export async function prepareAction(env: ProbeEnv, capabilityId: string, view: DraftingView): Promise<Preparation> {
   const { rig, manifest } = env;
   const binding = manifest.draftingBindings.find(item => item.capabilityId === capabilityId);
   if (!binding) {
@@ -84,7 +86,8 @@ async function draftInput(env: ProbeEnv, capabilityId: string, view: DraftingVie
   }
 }
 
-function snapshotFor(env: ProbeEnv, capabilityId: string, prepared: Prepared): ApprovedSnapshot {
+/** Builds the approved snapshot the host confirms, from the capability view and the prepared input. */
+export function snapshotForAction(env: ProbeEnv, capabilityId: string, prepared: Prepared): ApprovedSnapshot {
   const { view } = prepared;
   const body = {
     provenance: { conversationId: env.rig.conversationId, proposalId: PROPOSAL, revision: 1, entryId: null, link: `?desk=conversation&conversation=${env.rig.conversationId}` },
@@ -114,7 +117,8 @@ async function authorizeRead(env: ProbeEnv, ref: ObjectReference): Promise<void>
   }, 0);
 }
 
-async function probeReadback(env: ProbeEnv, capabilityId: string, ref: ObjectReference | null): Promise<CapabilityReport> {
+/** Reads the created object back through the host's readback path and the released sink. */
+export async function probeReadback(env: ProbeEnv, capabilityId: string, ref: ObjectReference | null): Promise<CapabilityReport> {
   const { rig } = env;
   const target = env.plain.readbackCapabilityId ?? capabilityId;
   if (!env.plain.readback) return refused(target, "readback", "readback_unavailable", "The package supplies no readback call for its action.");
@@ -131,29 +135,41 @@ async function probeReadback(env: ProbeEnv, capabilityId: string, ref: ObjectRef
   }
 }
 
-async function dispatchSnapshot(env: ProbeEnv, capabilityId: string, snapshot: ApprovedSnapshot): Promise<{ report: CapabilityReport; ref: ObjectReference | null }> {
+export interface DispatchRun {
+  operationId: string;
+  bridge: OperationBridge;
+  outcome?: DispatchOutcome;
+  request?: DispatchRequest;
+}
+
+export type DispatchAttempt = { run: DispatchRun; report: CapabilityReport; ref: ObjectReference | null };
+
+/** Confirms the snapshot, activates the writer bridge and makes exactly one dispatch call for it. */
+export async function confirmAndDispatch(env: ProbeEnv, capabilityId: string, snapshot: ApprovedSnapshot, waitMs = 10_000): Promise<DispatchAttempt> {
   const { rig } = env;
   const operationId = `${rig.conversationId}:${PROPOSAL}:1`;
   const confirmed = await rig.service.confirm(rig.context, { operationId, idempotencyKey: operationId, ownerRequestId: "conformance-request", snapshot });
-  if (confirmed.kind !== "allowed") return { report: refused(capabilityId, "action", confirmed.reason.code, "The host did not allow the confirmation."), ref: null };
+  const bridge = rig.host.lifecycleBridge(rig.registry, rig.bindings, () => env.plain.support, waitMs);
+  const run: DispatchRun = { operationId, bridge };
+  if (confirmed.kind !== "allowed") return { run, report: refused(capabilityId, "action", confirmed.reason.code, "The host did not allow the confirmation."), ref: null };
   const binding = { stack: STACK, owner: env.plain.writerOwner, adapterId: env.adapterId, connectionId: env.connectionId, capabilityId };
-  const bridge = rig.host.lifecycleBridge(rig.registry, rig.bindings, () => env.plain.support, 10_000);
-  if (!await bridge.activate(binding, rig.lease)) return { report: refused(capabilityId, "action", "writer_inactive", "The host did not activate the dispatch bridge."), ref: null };
+  if (!await bridge.activate(binding, rig.lease)) return { run, report: refused(capabilityId, "action", "writer_inactive", "The host did not activate the dispatch bridge."), ref: null };
   const outcome = await bridge.dispatch(rig.context, operationId, rig.lease);
-  await bridge.settled();
+  if (outcome.kind !== "timed-out") await bridge.settled();
+  run.outcome = outcome;
   const state = outcome.kind === "refused" ? outcome.reason.code : outcome.operation.journal.state;
-  if (outcome.kind !== "settled" || state !== "succeeded") return { report: refused(capabilityId, "action", state, `The confirmed dispatch ended as ${outcome.kind}.`), ref: null };
-  return { report: conformant(capabilityId, "action", "confirmed dispatch succeeded with owner evidence", 0), ref: createdRef(env.recorded.dispatches.at(-1)) };
+  if (outcome.kind !== "settled" || state !== "succeeded") return { run, report: refused(capabilityId, "action", state, `The confirmed dispatch ended as ${outcome.kind}.`), ref: null };
+  return { run, report: conformant(capabilityId, "action", "confirmed dispatch succeeded with owner evidence", 0), ref: createdRef(env.recorded.dispatches.at(-1)) };
 }
 
 export async function probeAction(env: ProbeEnv, capabilityId: string): Promise<CapabilityReport[]> {
   const view = env.rig.registry.draftingView(capabilityId);
   if (!view) return [refused(capabilityId, "action", "capability_unknown", "The registry does not describe this action capability.")];
-  const prepared = await draftInput(env, capabilityId, view);
+  const prepared = await prepareAction(env, capabilityId, view);
   const reports: CapabilityReport[] = prepared.report ? [prepared.report] : [];
   if (!prepared.ok) return reports;
   try {
-    const dispatched = await dispatchSnapshot(env, capabilityId, snapshotFor(env, capabilityId, prepared.value));
+    const dispatched = await confirmAndDispatch(env, capabilityId, snapshotForAction(env, capabilityId, prepared.value));
     reports.push(dispatched.report);
     if (dispatched.report.verdict === "conformant") reports.push(await probeReadback(env, capabilityId, dispatched.ref));
   } catch (error) {

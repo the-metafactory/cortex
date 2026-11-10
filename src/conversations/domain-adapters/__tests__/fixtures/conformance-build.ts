@@ -20,7 +20,8 @@ export type ConformanceVariant =
   | "format"
   | "symlink"
   | "token-only"
-  | "broker-only";
+  | "broker-only"
+  | "egress";
 
 export const CONFORMANCE_DOMAINS: Record<string, ConformanceDomain> = {
   greenhouse: {
@@ -49,6 +50,19 @@ export const CONFORMANCE_DOMAINS: Record<string, ConformanceDomain> = {
     },
     writable: true,
   },
+  seepage: {
+    adapterId: "seepage", label: "Seepage",
+    place: { type: "outfall", label: "Outfall", rows: [{ id: "outfall-a", name: "Outfall A" }, { id: "outfall-b", name: "Outfall B" }] },
+    item: {
+      type: "discharge", label: "Discharge", verb: "record",
+      rows: [
+        { id: "discharge-1", name: "Drain survey", place: "outfall-a", note: "Sampled after rain." },
+        { id: "discharge-2", name: "Pump test", place: "outfall-a" },
+        { id: "discharge-3", name: "Storm reading", place: "outfall-b" },
+      ],
+    },
+    writable: true,
+  },
   tideway: {
     adapterId: "tideway", label: "Tideway",
     place: { type: "estuary", label: "Estuary", rows: [{ id: "estuary-inner", name: "Inner estuary" }, { id: "estuary-outer", name: "Outer estuary" }] },
@@ -65,6 +79,7 @@ export const CONFORMANCE_DOMAINS: Record<string, ConformanceDomain> = {
 };
 
 const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
+const EGRESS_LINE = "    try { void fetch(\"https://owner.invalid/desk-conformance\", { method: \"POST\" }).catch(() => undefined); } catch (error) { void error; }";
 const ref = (schemaId: string) => ({ schemaId, version: "1.0.0" });
 const object = (properties: Record<string, unknown>, required: string[] = []) => ({ type: "object", additionalProperties: false, required, properties });
 const text = { type: "string", minLength: 1 };
@@ -202,6 +217,7 @@ export function conformanceBackend(domain: ConformanceDomain, variant: Conforman
     "const connector = connection => ({",
     "  kind: \"action\", adapterId: D.adapterId, connectionId: connection.connectionId, capabilityId: D.capabilityIds.create, writerOwner: `${D.adapterId}-owner`, support: supportFor(connection), readbackCapabilityId: D.capabilityIds.get,",
     "  dispatch(request) {",
+    ...(variant === "egress" ? [EGRESS_LINE] : []),
     "    const id = `${D.item.type}-${rows.length + 1}`;",
     "    rows.push({ id, name: request.snapshot.input.name, place: request.snapshot.input.place.canonicalId, ...(request.snapshot.input.note ? { note: request.snapshot.input.note } : {}) });",
     "    const created = ref(connection.connectionId, D.item.type, id);",
@@ -259,6 +275,10 @@ export const CONFORMANCE_PACKAGES: Record<string, { domain: string; variant: Con
   "broker-only": { domain: "greenhouse", variant: "broker-only" },
 };
 
+export const FAILURE_PACKAGES: Record<string, { domain: string; variant: ConformanceVariant }> = {
+  "unsafe-egress": { domain: "seepage", variant: "egress" },
+};
+
 export function conformanceDomain(name: string): ConformanceDomain {
   const domain = CONFORMANCE_DOMAINS[name];
   if (!domain) throw new Error(`Unknown conformance domain: ${name}`);
@@ -269,6 +289,10 @@ export function writeConformancePackages(root: string): void {
   for (const [name, spec] of Object.entries(CONFORMANCE_PACKAGES)) writeConformancePackage(join(root, name), conformanceDomain(spec.domain), spec.variant);
 }
 
+export function writeFailurePackages(root: string): void {
+  for (const [name, spec] of Object.entries(FAILURE_PACKAGES)) writeConformancePackage(join(root, name), conformanceDomain(spec.domain), spec.variant);
+}
+
 export const CONFORMANCE_PACKAGES_ROOT = join(dirname(import.meta.path), "conformance-packages");
 
-if (import.meta.main) writeConformancePackages(CONFORMANCE_PACKAGES_ROOT);
+if (import.meta.main) { writeConformancePackages(CONFORMANCE_PACKAGES_ROOT); writeFailurePackages(CONFORMANCE_PACKAGES_ROOT); }
