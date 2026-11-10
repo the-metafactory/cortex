@@ -11,12 +11,19 @@ import type { DeskArea } from "../../../../surface/mc/desk/types";
 import { objectRef } from "../../fixtures";
 import { DomainAdapterRegistry } from "../../registry";
 import { ReadBindings } from "../../reads/bindings";
+import type { ObservationView } from "../../reads/observation-types";
+import type { ObservationCheck, ObservationStore } from "../../reads/observations";
+import { controlledQueryClock } from "../../reads/query-fixtures";
+import type { ReleaseProjection } from "../../../authority";
 import type { QueryFetchRequest, QueryPage, QueryResult } from "../../reads/query-types";
+import type { QuerySource } from "../../reads/query-types";
 import type { QueryRunner } from "../../reads/query";
 import type { Json } from "../../operations/types";
 import type { ReadBinding } from "../../reads/types";
 import type { ObjectReference } from "../../types";
 import { createBalanceReadAdapter } from "../../balance/read";
+import { BALANCE_TASK_OBSERVATION_CAPABILITY_ID, createBalanceObservationAdapter } from "../../balance/observation";
+import { createBalanceDayReader, releasedObservationViews, type BalanceDayReader } from "../../../../surface/mc/desk/balance-day";
 
 export const BALANCE_CONNECTION = "connection-example";
 export const LAB_AREA = objectRef("balance", "area", "area-example");
@@ -57,7 +64,17 @@ export interface BalanceReadRig {
   readonly destinationsBinding: ReadBinding;
   readonly taskQueryBinding: ReadBinding;
   readonly taskReadBinding: ReadBinding;
+  readonly observationBinding: ReadBinding;
+  readonly time: ReturnType<typeof controlledQueryClock>;
+  readonly source: QuerySource;
   readonly runner: QueryRunner;
+  store(): ObservationStore;
+  check(mode?: "poll" | "reconcile"): Promise<ObservationCheck>;
+  read(history?: boolean): Promise<ReleaseProjection<Json>>;
+  views(history?: boolean): Promise<ObservationView[]>;
+  day(refresh?: boolean): Promise<import("../../../../surface/mc/desk/balance-day").BalanceDayProjection | null>;
+  reader(): BalanceDayReader;
+  unavailable(value: boolean): void;
   destinations(): Promise<QueryPage>;
   taskQuery(input?: unknown, destinations?: readonly ObjectReference[]): Promise<BalanceReadStep>;
   continueTaskQuery(step: BalanceReadStep): Promise<BalanceReadStep>;
@@ -71,24 +88,32 @@ export interface BalanceReadRig {
 
 export async function openBalanceReadRig(): Promise<BalanceReadRig> {
   const areas: DeskArea[] = [{ id: "area-example", label: "Lab", color: "#2563eb" }, { id: "area-home", label: "Home", color: "#059669" }];
+  const allowed: ObjectReference[] = [LAB_AREA];
   let db: Database | null = null;
-  const adapter = createBalanceReadAdapter({ connectionId: BALANCE_CONNECTION, state: () => db ? loadBalanceState(db) : null, areas: () => areas, now: () => new Date("2026-11-01T00:00:00.000Z") });
+  let reading = true;
+  const readState = (): AppState | null => db ? loadBalanceState(db) : null;
+  const observedState = (): AppState | null => reading ? readState() : null;
+  const now = (): Date => new Date("2026-11-01T00:00:00.000Z");
+  const adapter = createBalanceReadAdapter({ connectionId: BALANCE_CONNECTION, state: readState, areas: () => areas, now });
+  const observation = createBalanceObservationAdapter({ connectionId: BALANCE_CONNECTION, state: observedState, areas: () => areas, now });
   const registry = new DomainAdapterRegistry();
-  const registered = registry.register(adapter.declaration, adapter.bindings);
+  const registered = registry.register(observation.declaration, observation.bindings);
   if (!registered.ok) throw new Error(registered.error.code);
   const [destinationsBinding, taskQueryBinding, taskReadBinding] = adapter.readBindings;
-  if (!destinationsBinding || !taskQueryBinding || !taskReadBinding) throw new Error("balance binding fixture incomplete");
-  const rig = await authorityRig({}, "local", { registry, binding: taskQueryBinding, capabilityIds: adapter.readBindings.map(binding => binding.capabilityId) });
+  const observationBinding = observation.readBindings.find(binding => binding.capabilityId === BALANCE_TASK_OBSERVATION_CAPABILITY_ID);
+  const time = controlledQueryClock();
+  if (!destinationsBinding || !taskQueryBinding || !taskReadBinding || !observationBinding) throw new Error("balance binding fixture incomplete");
+  const rig = await authorityRig({}, "local", { registry, binding: taskQueryBinding, capabilityIds: observation.readBindings.map(binding => binding.capabilityId), observation: observation.connector });
   db = initDatabase(join(rig.dir, "desk.sqlite"));
   saveBalanceState(db, balanceReadState());
   const readBindings = new ReadBindings(registry);
-  const connector = { adapterId: "balance", connectionId: BALANCE_CONNECTION, readCapabilityIds: adapter.readBindings.map(binding => binding.capabilityId) };
-  for (const binding of adapter.readBindings) {
+  const connector = { adapterId: "balance", connectionId: BALANCE_CONNECTION, readCapabilityIds: observation.readBindings.map(binding => binding.capabilityId) };
+  for (const binding of observation.readBindings) {
     const added = readBindings.register(binding, connector);
     if (!added.ok) throw new Error(added.error.code);
   }
   rig.bindings.readBindings = readBindings;
-  const updated = { ...rig.connection, connectionRevision: "2", readCapabilityIds: adapter.readBindings.map(binding => binding.capabilityId), readDestinations: [LAB_AREA] };
+  const updated = { ...rig.connection, connectionRevision: "2", readCapabilityIds: observation.readBindings.map(binding => binding.capabilityId), readDestinations: [LAB_AREA] };
   Object.assign(rig.connection, updated);
   await rig.service.publishHostRecord({ kind: "connection", value: updated }, 1);
   rig.hooks.query = (request: QueryFetchRequest) => adapter.query(request);
@@ -102,6 +127,14 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
     if (!db) throw new Error("balance database unavailable");
     saveBalanceState(db, state);
   };
+  const observationSource = (): QuerySource => ({ adapterId: "balance", connectionId: BALANCE_CONNECTION, capabilityId: BALANCE_TASK_OBSERVATION_CAPABILITY_ID, inputSchemaRef: observationBinding.inputSchemaRef, destinations: allowed.filter(destination => areas.some(area => area.id === destination.canonicalId)), input: {} });
+  const observationReader = (): BalanceDayReader => createBalanceDayReader({
+    check: mode => rig.host.readObservations(registry, rig.bindings, time.clock).check(rig.context, observationSource(), rig.sink, mode),
+    async views() {
+      const released = await rig.host.readObservations(registry, rig.bindings, time.clock).read(rig.context, observationSource(), rig.sink);
+      return released.kind === "released" ? releasedObservationViews(released.value) : null;
+    },
+  });
   const run = async (args: BalanceReadStepArgs, resume?: { request: BalanceReadStep["request"]; continuation: string }): Promise<BalanceReadStep> => {
     const previous = rig.calls.sends.length;
     const request = resume?.request ?? await runner.create(rig.context, [{ adapterId: "balance", connectionId: BALANCE_CONNECTION, capabilityId: args.capabilityId, inputSchemaRef: args.binding.inputSchemaRef, destinations: [...args.destinations], input: args.input as Json }], rig.sink);
@@ -119,7 +152,24 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
     destinationsBinding,
     taskQueryBinding,
     taskReadBinding,
+    observationBinding,
+    time,
+    get source() { return observationSource(); },
     runner,
+    store: () => rig.host.readObservations(registry, rig.bindings, time.clock),
+    check(mode = "poll") { return rig.host.readObservations(registry, rig.bindings, time.clock).check(rig.context, observationSource(), rig.sink, mode); },
+    read(history = false) { return rig.host.readObservations(registry, rig.bindings, time.clock).read(rig.context, observationSource(), rig.sink, history); },
+    async views(history = false) {
+      const released = await rig.host.readObservations(registry, rig.bindings, time.clock).read(rig.context, observationSource(), rig.sink, history);
+      if (released.kind !== "released") throw new Error("balance observations withheld");
+      return [...releasedObservationViews(released.value) ?? []];
+    },
+    async day(refresh = false) {
+      if (observationSource().destinations.length === 0) return null;
+      return await observationReader().projection(refresh);
+    },
+    reader: () => observationReader(),
+    unavailable(value) { reading = !value; },
     async destinations() {
       const handler = adapter.bindings.handlers["balance.destinations"];
       if (!handler) throw new Error("balance destinations handler missing");
@@ -154,6 +204,7 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
       areas.splice(index, 1);
     },
     async allowHome() {
+      allowed.push(HOME_AREA);
       await rig.service.publishHostRecord({ kind: "restriction", value: { ...rig.objectRestriction, restrictionRef: randomUUID(), source: HOME_AREA, revision: "1" } }, 0);
       const widened = { ...rig.connection, connectionRevision: "3", readDestinations: [LAB_AREA, HOME_AREA] };
       Object.assign(rig.connection, widened);
