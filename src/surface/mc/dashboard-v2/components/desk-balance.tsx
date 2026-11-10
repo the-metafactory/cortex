@@ -1,6 +1,6 @@
 import { scrollBelowDesk } from "../lib/desk-scroll";
 import { useEffect, useRef, useState, type DragEvent } from "react";
-import { balanceDrop, dropZone, type DropZone } from "../lib/balance-drop";
+import { balanceDrop, balanceMovable, dropZone, type DropZone } from "../lib/balance-drop";
 import { useStoredFlag } from "../hooks/use-stored-flag";
 import type { OutlineNode } from "../../../../balance";
 import type { MyDayView } from "../../desk/my-day";
@@ -45,8 +45,9 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
   const fileParents = balanceDestinations(current.outline, view.areas);
   const roots = current.outline.children.filter(node => !location.area || node.id === location.area);
   const visible = roots.filter(node => visibleNode(node, location.query, hideDone));
+  const studioProjects = new Set(current.studioProjects.map(project => project.id));
   const drop = (target: string, zone: DropZone): void => {
-    const into = dragging ? balanceDrop(current.outline, dragging, target, zone) : null;
+    const into = dragging ? balanceDrop(current.outline, dragging, target, zone, studioProjects) : null;
     const id = dragging;
     setDragging(null);
     setHint(null);
@@ -55,14 +56,18 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
   };
   const tree: TreeContext = {
     query: location.query, hideDone, collapsed, selected: selectedId, date: current.date,
-    studioProjects: new Set(current.studioProjects.map(project => project.id)), today: new Set(current.items.map(item => item.task.id)),
-    hint, draggable: !busy,
+    studioProjects, today: new Set(current.items.map(item => item.task.id)),
+    hint,
+    canDrag: id => !busy && balanceMovable(current.outline, id, studioProjects),
     onToggle: id => { setCollapsed(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }); },
     onSelect: id => { setMoving(null); setSelectionTick(tick => tick + 1); go({ ...location, item: id }); },
     onDragStart: id => { setMoving(null); setDragging(id); },
     onDragEnd: () => { setDragging(null); setHint(null); },
     onDragOver: (id, zone) => {
-      if (dragging === null || !balanceDrop(current.outline, dragging, id, zone)) return false;
+      if (dragging === null || !balanceDrop(current.outline, dragging, id, zone, studioProjects)) {
+        if (hint) setHint(null);
+        return false;
+      }
       if (hint?.id !== id || hint.zone !== zone) setHint({ id, zone });
       return true;
     },
@@ -99,7 +104,7 @@ export function DeskBalance({ day, view, foreground, onChanged, onThread, onConv
 
 interface TreeContext {
   query: string; hideDone: boolean; collapsed: Set<string>; selected: string | null; date: string; studioProjects: Set<string>; today: Set<string>;
-  hint: { id: string; zone: DropZone } | null; draggable: boolean;
+  hint: { id: string; zone: DropZone } | null; canDrag: (id: string) => boolean;
   onToggle: (id: string) => void; onSelect: (id: string) => void;
   onDragStart: (id: string) => void; onDragEnd: () => void; onDragOver: (id: string, zone: DropZone) => boolean; onDrop: (id: string, zone: DropZone) => void;
 }
@@ -115,7 +120,7 @@ function BalanceTree({ node, depth, tree }: { node: OutlineNode; depth: number; 
   const open = Boolean(tree.query) || !tree.collapsed.has(node.id);
   const hint = tree.hint?.id === node.id ? ` drop-${tree.hint.zone}` : "";
   return <li><div className={`dbl-row ${tree.selected === node.id ? "selected" : ""} ${node.done ? "done" : ""}${hint}`} style={{ paddingInlineStart: 12 + Math.min(depth, 7) * 14 }}
-    draggable={tree.draggable && depth > 0 && !studioProject && !node.id.startsWith("studio-response:")}
+    draggable={tree.canDrag(node.id)}
     onDragStart={event => { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", node.id); tree.onDragStart(node.id); }}
     onDragEnd={tree.onDragEnd}
     onDragOver={event => { if (tree.onDragOver(node.id, zoneOf(event))) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; } }}

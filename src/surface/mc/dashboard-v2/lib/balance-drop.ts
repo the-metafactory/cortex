@@ -13,11 +13,16 @@ function containing(root: OutlineNode, id: string): { node: OutlineNode; parent:
 }
 const contains = (node: OutlineNode, id: string): boolean => node.id === id || node.children.some(child => contains(child, id));
 
+/** Whether the principal can move this Balance row: not a configured area, and not a row whose place Studio owns. */
+export function balanceMovable(outline: OutlineNode, id: string, studioProjects: ReadonlySet<string>): boolean {
+  return !outline.children.some(area => area.id === id) && containing(outline, id) !== null && !studioProjects.has(id) && !id.startsWith("studio-response:");
+}
+
 /** Where an `outline-move` puts the dragged item when it is dropped on a zone of the target row, or null when the drop is not allowed. */
-export function balanceDrop(outline: OutlineNode, dragged: string, target: string, zone: DropZone): DropTarget | null {
+export function balanceDrop(outline: OutlineNode, dragged: string, target: string, zone: DropZone, studioProjects: ReadonlySet<string>): DropTarget | null {
   const source = containing(outline, dragged);
   const onto = containing(outline, target);
-  if (!source || !onto || source.parent === outline || contains(source.node, target)) return null;
+  if (!source || !onto || !balanceMovable(outline, dragged, studioProjects) || contains(source.node, target)) return null;
   if (zone === "inside") return { parent: target };
   if (onto.parent === outline) return null;
   const siblings = onto.parent.children.filter(child => child.id !== dragged);
