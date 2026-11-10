@@ -180,4 +180,17 @@ describe("Ivy conversation overview view", () => {
     expect(html).toMatch(/<textarea[^>]*disabled=""/);
     expect(html).toMatch(/<button class="desk-btn pri" disabled="">Send<\/button>/);
   });
+
+  test("linked work shows a node body as formatted markdown, hides its machine block and links to the full node", () => {
+    const url = "https://github.com/example/app/issues/31";
+    const sources: ConversationDetail["sources"] = [{ ref: { owner: "graph-node", id: "example/app#31" }, state: "available", policy: "cloud", title: "Which cache?", context: `## Question\n\nRedis **or** SQLite?\n\n<!-- soma:work-graph-node\n{"kind":"build"}\n-->`, url }];
+    const detail: ConversationDetail = { conversation: meta(), models: { cloud: [], chosen: null, using: null }, sources, draft: "", pending: [], studio: null };
+    const html = renderToStaticMarkup(<WorkspaceView detail={detail} entries={[]} draft="" ready busy={false} sending={false} retrying={false} error={null} onDraft={noop} onSend={noop} onRetry={noop} onLeave={noop} onSaved={noop} organizing={false} onOrganize={noop} />);
+    expect(html).toContain("<h2>Question</h2>");
+    expect(html).toContain("<strong>or</strong>");
+    expect(html).not.toContain("## Question");
+    expect(html).not.toContain("soma:work-graph-node");
+    expect(html).toContain(`href="${url}"`);
+    expect(html).toContain(">Open the full node</a>");
+  });
 });

@@ -231,6 +231,8 @@ export function ModelPicker({ models, disabled, onChoose }: { models: Conversati
   </div>;
 }
 
+const withoutHtmlComments = (text: string): string => text.replace(/<!--[\s\S]*?-->/g, "").trim();
+
 const IvyAnswer = memo(function IvyAnswer({ text }: { text: string }) {
   return <div className="dcv-markdown">{renderMarkdown(text)}</div>;
 });
@@ -262,7 +264,7 @@ export function WorkspaceView(c: WorkspaceProps) {
     </header>
     <aside className="dcv-sources" aria-label="Linked work">
       {sources.map(source => source.state === "available"
-        ? <div key={`${source.ref.owner}:${source.ref.id}`} className="dcv-source"><small>{sourceLabel(source.ref)}</small><strong>{source.title}</strong>{source.context && <p>{source.context}</p>}</div>
+        ? <div key={`${source.ref.owner}:${source.ref.id}`} className="dcv-source"><small>{sourceLabel(source.ref)}</small><strong>{source.title}</strong>{source.context && <div className="dcv-markdown">{renderMarkdown(withoutHtmlComments(source.context))}</div>}{source.url && <a className="desk-btn ghost" href={source.url} target="_blank" rel="noreferrer">Open the full node</a>}</div>
         : <div key={`${source.ref.owner}:${source.ref.id}`} className="dcv-source gone"><small>{sourceLabel(source.ref)}</small><strong>Unavailable</strong><p>This source is gone or not authorized here. Its content is not shown; this conversation and its history stay.</p></div>)}
       {sources.length === 0 && <p className="dcv-quiet">No linked work.</p>}
     </aside>
