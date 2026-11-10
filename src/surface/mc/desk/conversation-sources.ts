@@ -10,6 +10,7 @@ import { flowWriter } from "./flow-conversation-writer";
 import { deskWriterArgv, type DeskWriterKind } from "./desk-conversation-writer";
 import { goalWriter } from "./goal-conversation-writer";
 import { graphMapWriter, graphNodeWriter } from "./graph-conversation-writer";
+import { graphCloseWriter, graphRulingWriter } from "./graph-node-update-writer";
 import type { GoalRunner } from "./goals";
 import { loadBalanceState } from "./balance-store";
 import type { DeskOptions } from "./compose";
@@ -111,6 +112,8 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const graphDeps = { db: deps.db, desk: deps.desk, ...(deps.runGraph ? { run: deps.runGraph } : {}), ...(deps.now ? { now: deps.now } : {}) };
   const graphNode = graphNodeWriter(graphDeps);
   const graphMap = graphMapWriter(graphDeps);
+  const graphRuling = graphRulingWriter(graphDeps);
+  const graphClose = graphCloseWriter(graphDeps);
   const writerDeps = (kind: DeskWriterKind) => {
     const run = deps.runWriter?.[kind];
     return { db: deps.db, desk: deps.desk, ...(run ? { run } : {}), ...(deps.now ? { now: deps.now } : {}) };
@@ -131,7 +134,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
         ...(desk.studio ? { "studio-response": studioResponse, "studio-thread": studioThread, "studio-note": studioNote, "studio-close": studioClose, "studio-capture": studioCapture } : {}),
         ...(desk.routines ? { routine } : {}),
         ...(desk.flows ? { flow } : {}),
-        ...(desk.somaBin ? { "graph-node": graphNode, "graph-map": graphMap } : {}),
+        ...(desk.somaBin ? { "graph-node": graphNode, "graph-map": graphMap, "graph-ruling": graphRuling, "graph-close": graphClose } : {}),
         ...(deskWriterArgv(desk, "calendar") ? { "calendar-event": calendar } : {}),
         ...(deskWriterArgv(desk, "reminder") ? { reminder } : {}),
         ...(deskWriterArgv(desk, "goal") && desk.somaBin ? { "soma-goal": goal } : {}),
