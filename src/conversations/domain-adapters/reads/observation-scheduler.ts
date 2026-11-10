@@ -3,7 +3,7 @@ import type { ReleaseSink } from "../../authority-records";
 import type { QuerySource } from "./query-types";
 import type { QueryClock } from "./query";
 import { OBSERVATION_LIMITS } from "./observation-types";
-import { ObservationRetryAfter, type ObservationCheck, type ObservationStore } from "./observations";
+import { UNAVAILABLE_CHECK, ObservationRetryAfter, type ObservationCheck, type ObservationStore } from "./observations";
 import { authorityHash } from "../../authority-records";
 
 export interface ObservationSchedule { context: HostContext; source: QuerySource; sink: ReleaseSink; mode: "poll" | "subscription"; intervalMs?: number; boundedResync?: boolean }
@@ -41,7 +41,7 @@ export class ObservationScheduler {
 
   refresh(connectionId: string): Promise<ObservationCheck> {
     const scheduled = this.schedules.get(authorityHash(connectionId));
-    if (!scheduled) return Promise.resolve({ status: "unavailable", changed: 0, quarantined: 0 });
+    if (!scheduled) return Promise.resolve(UNAVAILABLE_CHECK);
     return this.tick(scheduled);
   }
 
@@ -55,26 +55,25 @@ export class ObservationScheduler {
 
   private async run(scheduled: Scheduled): Promise<ObservationCheck> {
     const { config } = scheduled;
-    const unavailable: ObservationCheck = { status: "unavailable", changed: 0, quarantined: 0 };
-    if (!this.active(scheduled)) return unavailable;
+    if (!this.active(scheduled)) return UNAVAILABLE_CHECK;
     let result: ObservationCheck;
     try {
       if (config.mode === "subscription" && scheduled.failures > 0) await this.store.gap(config.source);
       const checkpoint = config.mode === "subscription" ? await this.store.checkpoint(config.context, config.source, config.sink) : undefined;
       if (config.mode === "subscription" && (checkpoint === undefined || config.boundedResync && await this.store.needsResync(config.context, config.source, config.sink))) {
         await this.store.gap(config.source);
-        if (!config.boundedResync) { await this.store.gap(config.source, true); return unavailable; }
+        if (!config.boundedResync) { await this.store.gap(config.source, true); return UNAVAILABLE_CHECK; }
         const resync = await this.store.check(config.context, config.source, config.sink, "resync", scheduled.controller.signal);
         if (resync.status !== "ok") { this.arm(scheduled, config.intervalMs); return resync; }
       }
       result = await this.store.check(config.context, config.source, config.sink, config.mode, scheduled.controller.signal);
     } catch (error) {
-      if (!this.active(scheduled)) return unavailable;
+      if (!this.active(scheduled)) return UNAVAILABLE_CHECK;
       if (error instanceof ObservationRetryAfter) scheduled.retryAfterMs = Math.max(0, error.retryAfterMs);
       else console.error("Observation scheduler attempt failed:", error);
-      result = unavailable;
+      result = UNAVAILABLE_CHECK;
     }
-    if (!this.active(scheduled)) return unavailable;
+    if (!this.active(scheduled)) return UNAVAILABLE_CHECK;
     if (result.status === "ok") {
       scheduled.failures = 0;
       scheduled.retryAfterMs = 0;

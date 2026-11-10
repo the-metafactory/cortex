@@ -3,7 +3,7 @@ import { ObjectReferenceSchema, SchemaRefSchema } from "../types";
 import type { ObjectReference } from "../types";
 import type { Json } from "../operations/types";
 import type { QuerySource } from "./query-types";
-import type { ReadBinding, ReadPageObject } from "./types";
+import type { ReadBinding } from "./types";
 import type { DomainAdapterRegistry } from "../registry";
 import { canonicalWire } from "../operations/validation";
 import { readPointer } from "./query-validation";
@@ -40,7 +40,7 @@ export interface ObservationView { ref: ObjectReference; kind: "present" | "dele
 export interface ObservationEvidence { key: string; objectKey: string; digest: string; at: number; quarantined: boolean }
 export interface ObservationSourceState { source: QuerySource; lastAttemptAt: number | null; lastSuccessAt: number | null; status: ObservationHealth; gap: boolean; generation: number; checkpoint: { cursor: string; expiresAt: number; head: string; generation: number } | null }
 export interface ObservationState { retention: ObservationRetention; rows: Record<string, ObservationRow>; evidence: ObservationEvidence[]; sources: Record<string, ObservationSourceState> }
-export function validateObservationBatch(registry: DomainAdapterRegistry, binding: ReadBinding, source: QuerySource, raw: unknown): { batch: ObservationBatch; events: ObservationEvent[]; objects: ReadPageObject[] } {
+export function validateObservationBatch(registry: DomainAdapterRegistry, binding: ReadBinding, source: QuerySource, raw: unknown): { batch: ObservationBatch; events: ObservationEvent[] } {
   if (Buffer.byteLength(canonicalWire(raw)) > OBSERVATION_LIMITS.bytes) throw new Error("observation_size");
   const batch = ObservationBatchSchema.parse(raw);
   const policy = binding.observation;
@@ -56,7 +56,6 @@ export function validateObservationBatch(registry: DomainAdapterRegistry, bindin
   mapped(batch.payload, "");
   const pointers = new Set<string>();
   const refs = new Set<string>();
-  const objects: ReadPageObject[] = [];
   const events = batch.events.map(event => {
     const key = canonicalWire(event.ref);
     if (refs.has(key) || event.ref.adapterId !== source.adapterId || event.ref.connectionId !== source.connectionId || event.ref.objectType !== binding.objectType || !source.destinations.some(ref => canonicalWire(ref) === canonicalWire(event.destination))) throw new Error("invalid_observation_identity");
@@ -67,8 +66,7 @@ export function validateObservationBatch(registry: DomainAdapterRegistry, bindin
     pointers.add(event.pointer);
     const value = readPointer(batch.payload, event.pointer);
     if (value === undefined || !registry.validateObject(binding.adapterId, binding.objectType, event.schemaRef, value).ok || typeof readPointer(value, binding.display.title) !== "string") throw new Error("invalid_observation_object");
-    objects.push({ ref: event.ref, schemaRef: event.schemaRef, destination: event.destination, value });
     return { ...event, value };
   });
-  return { batch, events, objects };
+  return { batch, events };
 }

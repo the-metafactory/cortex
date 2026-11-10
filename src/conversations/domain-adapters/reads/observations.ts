@@ -14,6 +14,8 @@ import { DEFAULT_OBSERVATION_RETENTION } from "./observation-policy";
 const ObservationDoc = defineDocFamily<{ state: JsonObject }, string>({ kind: "cortex.read-observations", version: 1, scope: "session", family: true, initial: () => ({ state: { retention: { ...DEFAULT_OBSERVATION_RETENTION }, rows: {}, evidence: [], sources: {} } }), checkpointWhen: () => true });
 const sourceKey = (source: QuerySource): string => authorityHash(source);
 export interface ObservationCheck { status: "ok" | "denied" | "unavailable"; changed: number; quarantined: number }
+export const UNAVAILABLE_CHECK: Readonly<ObservationCheck> = Object.freeze({ status: "unavailable", changed: 0, quarantined: 0 });
+export const DENIED_CHECK: Readonly<ObservationCheck> = Object.freeze({ status: "denied", changed: 0, quarantined: 0 });
 type Authority = Pick<AuthorityMediator, "observationHead" | "admitObservation" | "releaseObservations">;
 const systemClock: QueryClock = { now: Date.now, setTimer(callback, ms) { const timer = setTimeout(callback, ms); timer.unref(); return () => { clearTimeout(timer); }; } };
 
@@ -106,16 +108,15 @@ export class ObservationStore {
   check(context: HostContext, source: QuerySource, sink: ReleaseSink, mode: ObservationMode = "poll", signal?: AbortSignal): Promise<ObservationCheck> {
     const key = sourceKey(source);
     const held = this.inFlight.get(key);
-    if (held) return held.then(async result => await this.basis(context, source, sink) ? result : { status: "denied", changed: 0, quarantined: 0 });
+    if (held) return held.then(async result => await this.basis(context, source, sink) ? result : DENIED_CHECK);
     const pending = this.run(context, structuredClone(source), sink, mode, signal).finally(() => { this.inFlight.delete(key); });
     this.inFlight.set(key, pending);
     return pending;
   }
 
   private async run(context: HostContext, source: QuerySource, sink: ReleaseSink, mode: ObservationMode, signal?: AbortSignal): Promise<ObservationCheck> {
-    const unavailable: ObservationCheck = { status: "unavailable", changed: 0, quarantined: 0 };
     const basis = await this.basis(context, source, sink);
-    if (!basis) return { ...unavailable, status: "denied" };
+    if (!basis) return DENIED_CHECK;
     const checkpoint = mode === "subscription" ? await this.checkpoint(context, source, sink) : undefined;
     await this.change(source, state => { this.maintain(state, basis); this.source(state, source).lastAttemptAt = this.clock.now(); });
     const controller = new AbortController();
@@ -124,14 +125,14 @@ export class ObservationStore {
     const timeout = this.clock.setTimer(() => { controller.abort(); }, OBSERVATION_LIMITS.fetchMs);
     try {
       const aborted = new Promise<never>((_resolve, reject) => { combined.addEventListener("abort", () => { reject(new Error("Observation fetch aborted.")); }, { once: true }); });
-      if (combined.aborted) return unavailable;
+      if (combined.aborted) return UNAVAILABLE_CHECK;
       const outcome = await Promise.race([aborted, this.authority.admitObservation(context, { source, mode, limit: OBSERVATION_LIMITS.batchItems, ...(checkpoint === undefined ? {} : { checkpoint }) }, sink, basis, combined, (validated, current, connector) => this.change(source, state => this.apply(state, source, current, validated, mode, connector)))]);
-      if (outcome.kind !== "accepted") return { ...unavailable, status: "denied" };
-      return await this.basis(context, source, sink) ? outcome.value : { ...unavailable, status: "denied" };
+      if (outcome.kind !== "accepted") return DENIED_CHECK;
+      return await this.basis(context, source, sink) ? outcome.value : DENIED_CHECK;
     } catch (error) {
       if (!this.closed) await this.change(source, state => { this.source(state, source).status = "stale"; });
       if (error instanceof ObservationRetryAfter) throw error;
-      return unavailable;
+      return UNAVAILABLE_CHECK;
     } finally { timeout(); this.controllers.delete(controller); }
   }
 
@@ -146,44 +147,42 @@ export class ObservationStore {
       const key = authorityHash(event.ref);
       const held = state.rows[key];
       if (held && held.identity !== basis.identity) { this.invalidate(state); result.status = "unavailable"; continue; }
-      const existing = held;
       const digest = authorityHash({ kind: event.kind, ref: event.ref, destination: event.destination, schemaRef: event.schemaRef, value: event.value ?? null, revision: event.revision ?? null });
-      const evidenceKey = event.evidenceId ? authorityHash([source.adapterId, source.connectionId, event.evidenceId]) : existing?.digest === digest ? undefined : randomUUID();
+      const evidenceKey = event.evidenceId ? authorityHash([source.adapterId, source.connectionId, event.evidenceId]) : held?.digest === digest ? undefined : randomUUID();
       const evidence = evidenceKey ? state.evidence.find(entry => entry.key === evidenceKey) : undefined;
       if (evidence && mode !== "reconcile" && mode !== "resync" || evidence?.quarantined || evidence && evidence.digest !== digest) {
         if (evidence.digest !== digest) {
           evidence.quarantined = true;
           const prior = state.rows[evidence.objectKey];
           if (prior) prior.conflicted = true;
-          if (existing) existing.conflicted = true;
+          if (held) held.conflicted = true;
           const conflictKey = authorityHash([evidence.key, digest]);
           if (!state.evidence.some(entry => entry.key === conflictKey)) state.evidence.push({ key: conflictKey, objectKey: evidence.objectKey, digest, at: now, quarantined: true });
           current.status = "conflicted";
           result.quarantined++;
           this.invalidate(state);
-        } else if (!blockedReplay && !evidence.quarantined && existing?.digest === digest && !existing.conflicted) {
-          existing.lastSuccessAt = now;
-          if (event.kind === "present") existing.value = event.value;
+        } else if (!blockedReplay && !evidence.quarantined && held?.digest === digest && !held.conflicted) {
+          held.lastSuccessAt = now;
+          if (event.kind === "present") held.value = event.value;
         }
         continue;
       }
       if (evidenceKey && !evidence) state.evidence.push({ key: evidenceKey, objectKey: key, digest, at: now, quarantined: false });
       if (blockedReplay) continue;
-      const relation = this.relation(existing, event, digest, connector);
+      const relation = this.relation(held, event, digest, connector);
       if (relation === "older") continue;
       const boundedRead = mode === "reconcile" || mode === "resync";
-      if (existing && relation === "incomparable" && !boundedRead && event.kind !== "deleted") { existing.conflicted = true; current.status = "conflicted"; continue; }
-      if (existing?.kind === "deleted" && event.kind === "present" && !boundedRead) continue;
+      if (held && relation === "incomparable" && !boundedRead && event.kind !== "deleted") { held.conflicted = true; current.status = "conflicted"; continue; }
+      if (held?.kind === "deleted" && event.kind === "present" && !boundedRead) continue;
       const limit = state.retention.objects;
-      if (!existing && Object.keys(state.rows).length >= limit) {
+      if (!held && Object.keys(state.rows).length >= limit) {
         const oldest = Object.entries(state.rows).filter(([, row]) => row.links.length === 0).sort(([, a], [, b]) => a.lastSuccessAt - b.lastSuccessAt)[0];
         if (!oldest) { result.status = "unavailable"; this.invalidate(state); continue; }
         Reflect.deleteProperty(state.rows, oldest[0]);
         this.invalidate(state);
       }
-      const unchanged = existing?.digest === digest;
-      const lastSuccessAt = now;
-      const row: ObservationRow = { ref: event.ref, schemaRef: event.schemaRef, destination: event.destination, source, identity: basis.identity, kind: event.kind, digest, observedAt: event.observedAt, receivedAt: now, lastSuccessAt, conflicted: false, needsVerification: false, links: existing?.links ?? [], ...(event.revision === undefined ? {} : { revision: event.revision }), ...(event.evidenceId === undefined ? {} : { evidenceId: event.evidenceId }), ...(event.kind === "present" ? { value: event.value } : {}) };
+      const unchanged = held?.digest === digest;
+      const row: ObservationRow = { ref: event.ref, schemaRef: event.schemaRef, destination: event.destination, source, identity: basis.identity, kind: event.kind, digest, observedAt: event.observedAt, receivedAt: now, lastSuccessAt: now, conflicted: false, needsVerification: false, links: held?.links ?? [], ...(event.revision === undefined ? {} : { revision: event.revision }), ...(event.evidenceId === undefined ? {} : { evidenceId: event.evidenceId }), ...(event.kind === "present" ? { value: event.value } : {}) };
       state.rows[key] = row;
       if (!unchanged) result.changed++;
     }
