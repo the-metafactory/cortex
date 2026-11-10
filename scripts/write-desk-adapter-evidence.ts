@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -143,7 +143,6 @@ export function readbackDigest(result: Result, canonicalBytes: string): Readback
 export function writeDeskAdapterEvidence(directory: string, input: unknown): string {
   const evidence = validateEvidence(input);
   const target = join(directory, evidenceFileName(evidence));
-  if (existsSync(target)) throw new EvidenceError([`a summary already exists at ${target}`]);
   mkdirSync(directory, { recursive: true });
   try {
     writeFileSync(target, `${JSON.stringify(evidence, null, 2)}\n`, { flag: "wx" });
@@ -156,6 +155,16 @@ export function writeDeskAdapterEvidence(directory: string, input: unknown): str
 
 export function readDeskAdapterEvidence(path: string): DeskAdapterEvidence {
   return validateEvidence(JSON.parse(readFileSync(path, "utf8")));
+}
+
+export function readEvidenceDirectory(directory: string): DeskAdapterEvidence[] {
+  return readdirSync(directory).filter(name => name !== "README.md").sort().map(name => {
+    if (!name.endsWith(".json")) throw new EvidenceError([`${name} is not a desk-adapter summary`]);
+    const path = join(directory, name);
+    const evidence = readDeskAdapterEvidence(path);
+    if (evidenceFileName(evidence) !== name) throw new EvidenceError([`${name} is not named for ${evidenceFileName(evidence)}`]);
+    return evidence;
+  });
 }
 
 export function exampleEvidence(): DeskAdapterEvidence {

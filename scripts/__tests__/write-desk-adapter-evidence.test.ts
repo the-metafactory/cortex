@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EVIDENCE_DIR, EvidenceError, evidenceFileName, exampleEvidence, readDeskAdapterEvidence, validateEvidence, writeDeskAdapterEvidence } from "../write-desk-adapter-evidence";
+import { EVIDENCE_DIR, EvidenceError, evidenceFileName, exampleEvidence, readDeskAdapterEvidence, readEvidenceDirectory, validateEvidence, writeDeskAdapterEvidence } from "../write-desk-adapter-evidence";
 
 const PLATFORM_ID_DIGITS = "1".repeat(17);
 
@@ -66,11 +66,36 @@ describe("writeDeskAdapterEvidence", () => {
 });
 
 describe("committed evidence directory", () => {
-  test("each summary validates and is named for its binding and cutover", () => {
-    for (const name of readdirSync(EVIDENCE_DIR).filter(file => file.endsWith(".json"))) {
-      const evidence = readDeskAdapterEvidence(join(EVIDENCE_DIR, name));
-      expect(name).toBe(evidenceFileName(evidence));
+  test("every committed file is a summary that validates and is named for its binding and cutover", () => {
+    for (const evidence of readEvidenceDirectory(EVIDENCE_DIR)) {
+      expect(evidenceFileName(readDeskAdapterEvidence(join(EVIDENCE_DIR, evidenceFileName(evidence))))).toBe(evidenceFileName(evidence));
     }
+  });
+
+  test("the directory check rejects a summary that fails validation", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "broken-cutover.json"), JSON.stringify({ ...exampleEvidence(), extra: "x" }));
+    expect(() => readEvidenceDirectory(dir)).toThrow(EvidenceError);
+  });
+
+  test("the directory check rejects a summary stored under a name that is not its own", () => {
+    const dir = tempDir();
+    const path = writeDeskAdapterEvidence(dir, exampleEvidence());
+    writeFileSync(join(dir, "other-cutover.json"), readFileSync(path));
+    expect(() => readEvidenceDirectory(dir)).toThrow(/not named for/);
+  });
+
+  test("the directory check rejects a file that is neither a summary nor the readme", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "notes.txt"), "free text");
+    expect(() => readEvidenceDirectory(dir)).toThrow(/not a desk-adapter summary/);
+  });
+
+  test("the directory check reads a written summary back", () => {
+    const dir = tempDir();
+    writeDeskAdapterEvidence(dir, exampleEvidence());
+    writeFileSync(join(dir, "README.md"), "# readme\n");
+    expect(readEvidenceDirectory(dir)).toEqual([exampleEvidence()]);
   });
 });
 
