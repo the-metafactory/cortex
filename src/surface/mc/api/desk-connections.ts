@@ -41,7 +41,7 @@ const REFUSALS: Record<string, [number, string]> = {
   schema_changed: [409, "The package setup changed. Reload and retry."],
 };
 
-async function stackPrincipalOf(req: Request, guard: MutationGuardContext): Promise<string | Response> {
+export async function stackPrincipalOf(req: Request, guard: MutationGuardContext): Promise<string | Response> {
   const foreign = checkRebindGuard(req, guard);
   if (foreign) return foreign;
   const verified = await enforceMutationAuth(req, guard);

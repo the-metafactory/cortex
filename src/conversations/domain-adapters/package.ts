@@ -160,6 +160,13 @@ export interface DeskAdapterCatalogEntry {
   availability: DeskAdapterAvailability;
 }
 
+export interface DeskUiPublication {
+  generation: DeskAdapterGeneration;
+  ui: DeskAdapterUi;
+  packageRoot: string;
+  capabilityIds: string[];
+}
+
 interface PublishedAdapter {
   packageId: string;
   adapterId: string;
@@ -896,6 +903,35 @@ export class DeskPackageLoader {
 
   catalog(): DeskAdapterCatalogEntry[] {
     return this.list().filter(entry => entry.availability.state === "available");
+  }
+
+  uiPublications(): DeskUiPublication[] {
+    const publications: DeskUiPublication[] = [];
+    for (const adapter of this.state.published.values()) {
+      if (!adapter.ui || this.admission(adapter.adapterId).state !== "available") continue;
+      publications.push({
+        generation: structuredClone(adapter.generation),
+        ui: structuredClone(adapter.ui),
+        packageRoot: adapter.candidate.packageRoot,
+        capabilityIds: adapter.definition.declaration.capabilities.map(capability => capability.capabilityId),
+      });
+    }
+    return publications.sort((left, right) => left.generation.adapterId.localeCompare(right.generation.adapterId));
+  }
+
+  async rollback(adapterId: string): Promise<Result<DeskAdapterGeneration>> {
+    const store = this.store;
+    if (!store) return failure("generation_store_unavailable", "Rollback requires the durable generation store.");
+    const record = await store.read(adapterId);
+    if (record?.uninstalled) return failure("adapter_uninstalled", FENCE_MESSAGE.adapter_uninstalled);
+    if (record?.disabled) return failure("adapter_disabled", FENCE_MESSAGE.adapter_disabled);
+    const target = record?.lastValid;
+    if (!target) return failure("rollback_unavailable", "No earlier valid generation is recorded for this adapter.");
+    const discovery = await this.discover();
+    const candidate = discovery.candidates.find(item => item.adapterId === adapterId && item.releaseDigest === target.releaseDigest);
+    if (candidate?.state.state !== "installable") return failure("rollback_unavailable", "The earlier generation is not installed and verified; install it again before rolling back.");
+    if (candidate.trust.state !== "trusted") return failure(candidate.trust.code, "The earlier generation has no principal approval for this origin, version and content digest.");
+    return this.publish(candidate);
   }
 
   diagnostics(): DeskPackageIssue[] {
