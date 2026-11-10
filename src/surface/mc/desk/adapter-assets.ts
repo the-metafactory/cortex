@@ -4,6 +4,7 @@ import { sha256Bytes } from "../../../common/registry/arc-package-inventory";
 import { canonicalJSON } from "../../../common/registry/canonical-json";
 import { DESK_ADAPTER_MAX_FILES, DESK_ADAPTER_MAX_FILE_BYTES, type DeskUiPublication } from "../../../conversations/domain-adapters/package";
 import { DESK_UI_PROTOCOL_VERSION, type DeskGenerationAdmission } from "../../../conversations/domain-adapters/package-generation";
+import { inlineAdapterEntry } from "./adapter-inline";
 
 export const DESK_ADAPTER_ASSET_PATH = "/api/desk/adapters";
 export const DESK_ADAPTER_CATALOG_PATH = `${DESK_ADAPTER_ASSET_PATH}/catalog`;
@@ -76,7 +77,7 @@ export interface AssetCatalog {
 
 export type AssetFailureCode =
   | "unsupported_ui_protocol" | "generation_mismatch" | "connection_not_authorized" | "asset_not_listed"
-  | "asset_invalid_path" | "asset_unavailable" | "policy_unavailable";
+  | "asset_invalid_path" | "asset_unavailable" | "policy_unavailable" | "ui_not_inlinable";
 
 export interface AssetFailure {
   ok: false;
@@ -91,6 +92,7 @@ export interface AssetBody {
   bytes: Uint8Array<ArrayBuffer>;
   mediaType: string;
   sha256: string;
+  csp?: string;
 }
 
 const failure = (status: number, code: AssetFailureCode, message: string, recovery?: "refresh" | "upgrade"): AssetFailure => ({ ok: false, status, code, message, ...(recovery ? { recovery } : {}) });
@@ -124,7 +126,7 @@ export function assetResponseHeaders(body: AssetBody): Record<string, string> {
     "Cache-Control": "private, no-cache",
     Vary: "Cookie, Authorization",
     "X-Content-Type-Options": "nosniff",
-    "Content-Security-Policy": DESK_ADAPTER_ASSET_CSP,
+    "Content-Security-Policy": body.csp ?? DESK_ADAPTER_ASSET_CSP,
     "Cross-Origin-Resource-Policy": "same-origin",
     "Referrer-Policy": "no-referrer",
   };
@@ -222,7 +224,14 @@ export class AdapterAssetService {
     }
     const listed = active.ui.files.slice(0, DESK_ADAPTER_MAX_FILES).find(file => file.path === request.path);
     if (!listed) return failure(404, "asset_not_listed", "That asset is not listed by the active adapter generation.");
-    const read = await readListedFile(active.packageRoot, listed.path, listed.sha256);
-    return read.ok ? { ...read, mediaType: listed.mediaType } : read;
+    const read = async (path: string): Promise<AssetBody | AssetFailure> => {
+      const file = active.ui.files.slice(0, DESK_ADAPTER_MAX_FILES).find(item => item.path === path);
+      if (!file) return failure(404, "asset_not_listed", "That asset is not listed by the active adapter generation.");
+      const result = await readListedFile(active.packageRoot, file.path, file.sha256);
+      return result.ok ? { ...result, mediaType: file.mediaType } : result;
+    };
+    const body = await read(listed.path);
+    if (!body.ok || listed.path !== active.ui.entry || listed.mediaType !== "text/html") return body;
+    return inlineAdapterEntry(active.ui.entry, body, read);
   }
 }

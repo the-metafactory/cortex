@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { sha256Bytes } from "../../../../../common/registry/arc-package-inventory";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { DESK_FIXTURE_ADAPTER, deskFixturePackageId, openDeskFixtureStore, writeDeskFixturePackage, type DeskFixturePackageOptions } from "../../../../../conversations/domain-adapters/__tests__/fixtures/package-fixtures";
 import { DeskPackageLoader } from "../../../../../conversations/domain-adapters/package";
@@ -14,6 +15,22 @@ export const ASSET_OWNER = "principal-example";
 export const ASSET_OTHER = "principal-other";
 export const ASSET_CONNECTION = "connection-example";
 const HOSTED_HOST = "desk.example.test";
+
+export interface AssetUiFixture {
+  entry: string;
+  files: Record<string, { body: string | Uint8Array; mediaType: string }>;
+}
+
+export const INLINE_ENTRY = '<!doctype html><html><head><link rel="stylesheet" href="styles/main.css"></head><body><img id="picture" src="picture.svg"><div id="styled">Adapter</div><script src="app.js"></script></body></html>';
+export const inlineUiFixture = (html = INLINE_ENTRY): AssetUiFixture => ({
+  entry: "ui/app.html",
+  files: {
+    "ui/app.html": { body: html, mediaType: "text/html" },
+    "ui/app.js": { body: 'document.documentElement.dataset.script = "ran";', mediaType: "text/javascript" },
+    "ui/styles/main.css": { body: '#styled { color: rgb(12, 34, 56); background-image: url("picture.svg"); }', mediaType: "text/css" },
+    "ui/picture.svg": { body: '<svg xmlns="http://www.w3.org/2000/svg" width="3" height="2"><rect width="3" height="2" fill="red"/></svg>', mediaType: "image/svg+xml" },
+  },
+});
 
 export interface AssetRequestInit {
   principal?: string | null;
@@ -43,11 +60,21 @@ export const enabledConnection = (connectionId = ASSET_CONNECTION): AssetConnect
   writeCapabilityIds: [`${DESK_FIXTURE_ADAPTER}.task.create`],
 });
 
-export async function openAssetRig(options: { service?: boolean } = {}): Promise<AssetRig> {
+export async function openAssetRig(options: { service?: boolean; ui?: AssetUiFixture } = {}): Promise<AssetRig> {
   const root = mkdtempSync(join(tmpdir(), "cortex-desk-assets-"));
   const { engine, store } = await openDeskFixtureStore(join(root, "store"));
   const packageDir = join(root, "packages", DESK_FIXTURE_ADAPTER);
-  const writePackage = (extra: DeskFixturePackageOptions = {}): void => { writeDeskFixturePackage(packageDir, { ui: true, ...extra }); };
+  const writePackage = (extra: DeskFixturePackageOptions = {}): void => {
+    const ui = options.ui;
+    writeDeskFixturePackage(packageDir, { ui: true, ...extra, ...(ui ? { extra: { ...extra.extra, ui: {
+      protocolVersion: "1.0.0", entry: ui.entry, views: [{ objectType: "task", view: "result" }],
+      files: Object.entries(ui.files).map(([path, file]) => ({ path, sha256: sha256Bytes(file.body), mediaType: file.mediaType })),
+    } } } : {}) });
+    for (const [path, file] of Object.entries(ui?.files ?? {})) {
+      mkdirSync(dirname(join(packageDir, path)), { recursive: true });
+      writeFileSync(join(packageDir, path), file.body);
+    }
+  };
   writePackage();
   const packageId = deskFixturePackageId(DESK_FIXTURE_ADAPTER);
   const loader = new DeskPackageLoader({ bundledPackages: [packageDir], store });
