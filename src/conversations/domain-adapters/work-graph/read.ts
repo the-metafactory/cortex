@@ -205,21 +205,31 @@ function destinationsPage(source: WorkGraphReadSource): QueryPage {
   return readPage(entries, snapshotId("destinations", { connectionId: source.connectionId, entries: entries.map(entry => entry.ref) }), observedAt(source));
 }
 
-const OWNER_GONE = /not found|no such|could not resolve|HTTP 404|HTTP 410/i;
+const OWNER_ABSENT = /\bnot[\s-]?found\b|\bno such\b|\bdoes not exist\b|\bgone\b|\b(?:404|410)\b/iu;
+const OWNER_UNREADABLE = /could not resolve|no such host|dial tcp|name resolution|i\/o timeout|command not found|not found in \$?path|executable not found|no such file|permission denied|timed?\s?out|connection (?:refused|reset|closed)|network|rate limit|configuration|unauthori[sz]ed|bad credentials/iu;
 
-/** True only when the owner's own answer says the node is not there; any other failure says nothing about existence. */
-export const workGraphOwnerGone = (result: CommandResult): boolean => OWNER_GONE.test(`${result.stderr}\n${result.stdout}`);
+function nodeNaming(canonicalId: string): RegExp | null {
+  const tail = canonicalId.slice(canonicalId.lastIndexOf("#") + 1);
+  return /^[1-9]\d*$/u.test(tail) ? new RegExp(`(?:#|/issues/|\\bnode\\s+|\\bissue\\s+)${tail}(?!\\d)`, "u") : null;
+}
 
-const ownerFailure = (result: CommandResult): string => workGraphOwnerGone(result) ? "node_unavailable" : "owner_unavailable";
+/** True only when the owner's own answer names this node and answers that it is absent; a command or transport failure names no node and so says nothing about existence. */
+export const workGraphOwnerGone = (result: CommandResult, canonicalId: string): boolean => { // glossary-ignore: node, owner
+  const naming = nodeNaming(canonicalId);
+  const text = `${result.stderr}\n${result.stdout}`;
+  return naming !== null && naming.test(text) && OWNER_ABSENT.test(text) && !OWNER_UNREADABLE.test(text);
+};
 
-async function ownerNode(source: WorkGraphReadSource, argv: string[]): Promise<Record<string, unknown>> {
+const ownerFailure = (result: CommandResult, canonicalId: string): string => result.code !== 0 && workGraphOwnerGone(result, canonicalId) ? "node_unavailable" : "owner_unavailable";
+
+async function ownerNode(source: WorkGraphReadSource, canonicalId: string, argv: string[]): Promise<Record<string, unknown>> {
   let result: CommandResult;
   try {
     result = await (source.run ?? ((command, timeoutMs) => runCommand(command, timeoutMs)))(argv, source.requestTimeoutMs ?? WORK_GRAPH_REQUEST_TIMEOUT_MS);
   } catch (error) {
     return failure(error instanceof CommandTimeout ? "owner_timeout" : "owner_unavailable");
   }
-  if (result.code !== 0) return failure(ownerFailure(result));
+  if (result.code !== 0) return failure(ownerFailure(result, canonicalId));
   let body: unknown;
   try {
     body = JSON.parse(result.stdout);
@@ -259,7 +269,7 @@ async function nodeReadPage(source: WorkGraphReadSource, input: unknown, destina
   const target = nodeTarget(parsed.canonicalId, source, destinations);
   const destination = destinationFor(source, destinations, target.repository);
   if (!destination) return failure("destination_denied");
-  const body = await ownerNode(source, [source.somaBin ?? "soma", "graph", "node", target.full, "--read-repo", destination.canonicalId, "--json"]);
+  const body = await ownerNode(source, target.full, [source.somaBin ?? "soma", "graph", "node", target.full, "--read-repo", destination.canonicalId, "--json"]);
   const value = nodeValue(source, target, body);
   const entry: QueryPageEntry = {
     ref: reference(source.connectionId, "node", parsed.canonicalId),

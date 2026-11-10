@@ -10,7 +10,7 @@ import { runWithTemporaryHome } from "./probe-temp-home";
 
 const wire = (row: SyntheticListingRow): string => JSON.stringify({ ref: { id: row.id }, title: row.title, status: row.status, kind: row.kind, parent: row.parent, url: row.url });
 
-function somaScript(paths: { log: string; rows: string; present: string; fail: string }): string {
+function somaScript(paths: { log: string; rows: string; present: string; fail: string; probeFail: string }): string {
   return [
     "#!/bin/sh",
     `printf '%s\\n' "$*" >> ${JSON.stringify(paths.log)}`,
@@ -34,6 +34,7 @@ function somaScript(paths: { log: string; rows: string; present: string; fail: s
     "fi",
     'if [ "$1" = "graph" ] && [ "$2" = "node" ]; then',
     "  ref=$3",
+    `  if [ -f ${JSON.stringify(paths.probeFail)} ]; then printf '%s\\n' "Could not resolve host: api.github.com" >&2; exit 1; fi`,
     `  if grep -qxF "$ref" ${JSON.stringify(paths.present)}; then printf '{"ref":{"id":"%s"}}\\n' "\${ref##*#}"; exit 0; fi`,
     '  printf \'%s\\n\' "node $ref not found" >&2',
     "  exit 1",
@@ -54,7 +55,7 @@ async function probe(): Promise<void> {
   try {
   const dir = join(home, "bin");
   await mkdir(dir, { recursive: true });
-  const paths = { log: join(home, "argv.log"), rows: join(home, "rows.txt"), present: join(home, "present.txt"), fail: join(home, "fail.txt") };
+  const paths = { log: join(home, "argv.log"), rows: join(home, "rows.txt"), present: join(home, "present.txt"), fail: join(home, "fail.txt"), probeFail: join(home, "probe-fail.txt") };
   const soma = join(dir, "soma");
   await writeFile(soma, somaScript(paths));
   await chmod(soma, 0o755);
@@ -104,6 +105,14 @@ async function probe(): Promise<void> {
     rig.time.advance(OBSERVATION_LIMITS.staleMs);
     assert.equal((await rig.views()).find(view => view.ref.canonicalId === OBSERVED_NODE_THREE)?.status, "stale");
     console.log("disappearance: the owner still has the node, so it stays with its value and goes stale");
+
+    await writeFile(paths.probeFail, "\n");
+    assert.equal((await rig.check()).status, "ok");
+    const unreachable = (await rig.views()).find(view => view.ref.canonicalId === OBSERVED_NODE_THREE);
+    assert.deepEqual(unreachable?.value, nodeValue(rows[2] ?? syntheticRow("3350", "Read the graph picker", "closed"), rig.connectionId));
+    assert.equal(unreachable?.kind, "present");
+    await rm(paths.probeFail);
+    console.log("transport failure on the deletion probe: the retained value stays, nothing is read as deleted");
 
     await stage(rows.filter(row => row.id !== "3350"), [OBSERVED_NODE, OBSERVED_NODE_TWO]);
     assert.equal((await rig.check()).status, "ok");

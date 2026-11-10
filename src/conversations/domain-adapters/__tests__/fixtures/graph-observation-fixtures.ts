@@ -42,6 +42,7 @@ export interface SyntheticGraph {
   readonly present: Set<string>;
   readonly calls: { argv: string[][] };
   fail: string | null;
+  probeFail: string | null;
   corrupt: string | null;
   repeatCursor: boolean;
   run: WorkGraphRunner;
@@ -54,7 +55,7 @@ export function syntheticGraph(): SyntheticGraph {
   const listings = new Map<string, SyntheticListingRow[]>([[OBSERVED, syntheticListing()]]);
   const present = new Set<string>(syntheticListing().map(row => `${OBSERVED}#${row.id}`));
   const calls = { argv: [] as string[][] };
-  const state = { fail: null as string | null, corrupt: null as string | null, repeatCursor: false };
+  const state = { fail: null as string | null, probeFail: null as string | null, corrupt: null as string | null, repeatCursor: false };
   const listing = (repository: string): SyntheticListingRow[] => listings.get(repository) ?? [];
   const answer = (argv: string[]): { code: number; signal: null; stdout: string; stderr: string } => {
     calls.argv.push(argv);
@@ -74,6 +75,7 @@ export function syntheticGraph(): SyntheticGraph {
       return { code: 0, signal: null, stdout: JSON.stringify({ nodes, next }), stderr: "" };
     }
     if (argv[2] === "node") {
+      if (state.probeFail !== null) return fail(state.probeFail);
       const canonicalId = argv[3] ?? "";
       if (!present.has(canonicalId)) return fail(`node ${canonicalId} not found`);
       const repository = option("--read-repo") ?? "";
@@ -86,6 +88,8 @@ export function syntheticGraph(): SyntheticGraph {
     listings, present, calls,
     get fail() { return state.fail; },
     set fail(value: string | null) { state.fail = value; },
+    get probeFail() { return state.probeFail; },
+    set probeFail(value: string | null) { state.probeFail = value; },
     get corrupt() { return state.corrupt; },
     set corrupt(value: string | null) { state.corrupt = value; },
     get repeatCursor() { return state.repeatCursor; },

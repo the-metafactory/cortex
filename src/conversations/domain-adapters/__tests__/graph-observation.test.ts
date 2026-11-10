@@ -13,6 +13,12 @@ async function open(pageItems?: number, graph = syntheticGraph()): Promise<Graph
 }
 const returnCall = (argv: string[], flag: string): string | undefined => argv[argv.indexOf(flag) + 1];
 const nodeGrant = (repository: string): string[] => ["--repo", repository, ...(repository === OBSERVED ? ["--read-repo", repository] : [])];
+async function dropLinkedRow(rig: GraphObservationRig): Promise<void> {
+  rig.links.push({ owner: "graph-node", id: OBSERVED_NODE_THREE, title: "Read the graph picker" });
+  await rig.check();
+  await rig.store.link(rig.source, { adapterId: "work-graph", connectionId: rig.connectionId, objectType: "node", canonicalId: OBSERVED_NODE_THREE }, "conversation-example");
+  rig.graph.replace(OBSERVED, syntheticListing().filter(row => row.id !== "3350"));
+}
 
 describe("the inactive work-graph observation binding", () => {
   test("a poll crosses a page boundary, projects each listed node once and repeats nothing", async () => {
@@ -47,10 +53,7 @@ describe("the inactive work-graph observation binding", () => {
 
   test("a node that disappears from a listing keeps its value and goes stale; only the owner's not-found removes it", async () => {
     const rig = await open();
-    rig.links.push({ owner: "graph-node", id: OBSERVED_NODE_THREE, title: "Read the graph picker" });
-    await rig.check();
-    await rig.store.link(rig.source, { adapterId: "work-graph", connectionId: rig.connectionId, objectType: "node", canonicalId: OBSERVED_NODE_THREE }, "conversation-example");
-    rig.graph.replace(OBSERVED, syntheticListing().filter(row => row.id !== "3350"));
+    await dropLinkedRow(rig);
     const listed = await rig.check();
     expect(listed.status).toBe("ok");
     expect(rig.graph.calls.argv.some(argv => argv[2] === "node")).toBe(true);
@@ -70,6 +73,22 @@ describe("the inactive work-graph observation binding", () => {
     expect(marker).toMatchObject({ kind: "deleted", status: "fresh" });
     expect(marker?.value).toBeUndefined();
     expect(JSON.stringify(await rig.views(true))).not.toContain("Read the graph picker");
+  });
+
+  test("a deletion probe that cannot reach the owner leaves the retained value in place", async () => {
+    const rig = await open();
+    await dropLinkedRow(rig);
+    for (const failure of ["Could not resolve host: api.github.com", "soma: command not found", "configuration file not found"]) {
+      rig.graph.probeFail = failure;
+      expect((await rig.check()).status).toBe("ok");
+      expect((await rig.views()).find(view => view.ref.canonicalId === OBSERVED_NODE_THREE)).toMatchObject({ kind: "present", value: { title: "Read the graph picker", status: "closed" } });
+    }
+    rig.graph.probeFail = null;
+    rig.graph.forget(OBSERVED_NODE_THREE);
+    expect((await rig.check()).status).toBe("ok");
+    const marker = (await rig.views(true)).find(view => view.ref.canonicalId === OBSERVED_NODE_THREE);
+    expect(marker).toMatchObject({ kind: "deleted" });
+    expect(marker?.value).toBeUndefined();
   });
 
   test("a truncated listing never probes an owner and never deletes a row it did not read", async () => {

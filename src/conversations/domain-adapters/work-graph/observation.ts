@@ -198,7 +198,7 @@ async function ownerDeleted(source: WorkGraphObservationSource, repository: Obje
   signal.throwIfAborted();
   try {
     const result = await runner(source, signal)(somaArgv(source, ["graph", "node", canonicalId, "--read-repo", repository.canonicalId, "--json"]), timeoutMs(source));
-    return result.code !== 0 && workGraphOwnerGone(result);
+    return result.code !== 0 && workGraphOwnerGone(result, canonicalId);
   } catch (error) {
     if (signal.aborted) throw error;
     return false;
@@ -221,8 +221,9 @@ async function observe(source: WorkGraphObservationSource, pageItems: number, re
     events.push({ kind: "present", pointer: `/items/${items.length - 1}`, ref: nodeReference(source, canonicalId), schemaRef: NODE_SCHEMA_REF, destination: repository, observedAt, revision, evidenceId: `work-graph.node.${canonicalId}.${revision}` });
   }
   const probes = listing.complete ? deletionCandidates(source, repository, listed).slice(0, Math.max(0, Math.min(DELETION_PROBES, request.limit - events.length))) : [];
-  for (const canonicalId of probes) {
-    if (!await ownerDeleted(source, repository, canonicalId, signal)) continue;
+  const answers = await Promise.all(probes.map(async canonicalId => ({ canonicalId, deleted: await ownerDeleted(source, repository, canonicalId, signal) })));
+  for (const { canonicalId, deleted } of answers) {
+    if (!deleted) continue;
     events.push({ kind: "deleted", ownerDeletion: true, evidenceId: `work-graph.node.deleted.${canonicalId}`, ref: nodeReference(source, canonicalId), schemaRef: NODE_SCHEMA_REF, destination: repository, observedAt });
   }
   return { version: "1.0.0", payload: { items }, events, coverage: "objects", gap: false };
