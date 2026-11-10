@@ -29,6 +29,11 @@ const script = (r: Rig, events: object[]): Promise<void> => writeFile(r.events, 
 const said = async (r: Rig): Promise<{ argv: string[]; stdin: string }[]> => (await readFile(r.log, "utf8")).trim().split("\n").map(line => JSON.parse(line) as { argv: string[]; stdin: string });
 const flag = (argv: string[], name: string): string | undefined => argv[argv.indexOf(name) + 1];
 const answer = (text: string, extra: object = {}) => ({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text }], stopReason: "stop", ...extra } });
+const greetingEvents = () => [
+  { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Hello " } },
+  { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "there" } },
+  answer("Hello there"),
+];
 const tool = (id: string, toolName: string, args: object, result: string, isError = false) => [
   { type: "tool_execution_start", toolCallId: id, toolName, args },
   { type: "tool_execution_end", toolCallId: id, toolName, result: { content: [{ type: "text", text: result }] }, isError },
@@ -69,11 +74,7 @@ describe("pi turns", () => {
     const r = await rig({ STUB_PI_PAUSE_AFTER: "2", STUB_PI_PAUSE_MS: "500" });
     const marker = join(r.dir, "stdout-resumed");
     r.settings.env = { ...r.settings.env, STUB_PI_PAUSE_MARKER: marker };
-    await script(r, [
-      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Hello " } },
-      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "there" } },
-      answer("Hello there"),
-    ]);
+    await script(r, greetingEvents());
     let received = "";
     const reply = await piTurns(r.settings)(request({ text: delta => {
       received += delta;
@@ -86,11 +87,7 @@ describe("pi turns", () => {
 
   test("a trailing text publication failure stops Pi and rejects the turn", async () => {
     const r = await rig({ STUB_PI_PAUSE_AFTER: "2", STUB_PI_PAUSE_MS: "5000" });
-    await script(r, [
-      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Hello " } },
-      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "there" } },
-      answer("Hello there"),
-    ]);
+    await script(r, greetingEvents());
     await expect(piTurns(r.settings)(request({ text: delta => delta === "there" ? Promise.reject(new Error("publication revoked")) : Promise.resolve() }))).rejects.toThrow("publication revoked");
   });
 
