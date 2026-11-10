@@ -12,7 +12,7 @@ import type { ArcPackage } from "../../common/types/plugin-manifest";
 import type { DeskActionConnector, DeskAdapterBindings, DeskAdapterConnection, DeskAdapterDefinition, DeskAdapterHost, DeskConnectorFactory } from "../../desk-sdk";
 import { DESK_ADAPTER_SDK_VERSION } from "../../desk-sdk/version";
 import { DraftingBindingSchema, DraftingBindings, DRAFTING_BINDING_VERSION, type DraftingBinding } from "./drafting-binding";
-import { DESK_ADAPTER_GENERATION_FORMAT, DeskAdapterGenerationSchema, DeskGenerationStore, DESK_UI_PROTOCOL_VERSION, FENCE_MESSAGE, generationId, type DeskAdapterGeneration, type DeskAdapterGenerationRecord, type DeskGenerationAdmission } from "./package-generation";
+import { DESK_ADAPTER_GENERATION_FORMAT, DeskAdapterGenerationSchema, DeskGenerationFencedError, DeskGenerationStore, DESK_UI_PROTOCOL_VERSION, FENCE_MESSAGE, generationId, type DeskAdapterGeneration, type DeskAdapterGenerationRecord, type DeskGenerationAdmission } from "./package-generation";
 import { exactVersion, hex64, identifier } from "./package-primitives";
 import { verifyReadBinding } from "./reads/bindings";
 import { READ_BINDING_VERSION, ReadBindingSchema, type ReadBinding } from "./reads/types";
@@ -759,7 +759,7 @@ export class DeskPackageLoader {
     });
   }
 
-  private async publishPrepared(prepared: readonly PublishedAdapter[]): Promise<Result<DeskAdapterGeneration[]>> {
+  private async publishPrepared(prepared: readonly PublishedAdapter[], options: { refuseFenced?: boolean } = {}): Promise<Result<DeskAdapterGeneration[]>> {
     const store = this.store;
     if (!store) return failure("generation_store_unavailable", "Activation requires the durable generation store.");
     const published = new Map(this.state.published);
@@ -770,7 +770,14 @@ export class DeskPackageLoader {
     }
     const composed = await compose(published);
     if (!composed.ok) return failure(composed.error.code, composed.error.message);
-    for (const adapter of prepared) await store.select(adapter.generation);
+    for (const adapter of prepared) {
+      try {
+        await store.select(adapter.generation, options);
+      } catch (error) {
+        if (error instanceof DeskGenerationFencedError) return failure(error.code, FENCE_MESSAGE[error.code]);
+        throw error;
+      }
+    }
     const availability = new Map(this.state.availability);
     const diagnostics = new Map(this.state.diagnostics);
     for (const adapter of prepared) {
@@ -781,10 +788,10 @@ export class DeskPackageLoader {
     return success(prepared.map(adapter => adapter.generation));
   }
 
-  private async publish(candidate: DeskPackageCandidate): Promise<Result<DeskAdapterGeneration>> {
+  private async publish(candidate: DeskPackageCandidate, options: { refuseFenced?: boolean } = {}): Promise<Result<DeskAdapterGeneration>> {
     const prepared = await this.prepare(candidate);
     if (!prepared.ok) return this.failed(candidate, prepared.error);
-    const published = await this.publishPrepared([prepared.value]);
+    const published = await this.publishPrepared([prepared.value], options);
     if (!published.ok) return this.failed(candidate, published.error);
     const [generation] = published.value as [DeskAdapterGeneration];
     return success(generation);
@@ -931,7 +938,7 @@ export class DeskPackageLoader {
     const candidate = discovery.candidates.find(item => item.adapterId === adapterId && item.releaseDigest === target.releaseDigest);
     if (candidate?.state.state !== "installable") return failure("rollback_unavailable", "The earlier generation is not installed and verified; install it again before rolling back.");
     if (candidate.trust.state !== "trusted") return failure(candidate.trust.code, "The earlier generation has no principal approval for this origin, version and content digest.");
-    return this.publish(candidate);
+    return this.publish(candidate, { refuseFenced: true });
   }
 
   diagnostics(): DeskPackageIssue[] {

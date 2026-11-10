@@ -1,7 +1,6 @@
-import { lstatSync, realpathSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
-import { containedRealPath, sha256Bytes } from "../../../common/registry/arc-package-inventory";
+import { sha256Bytes } from "../../../common/registry/arc-package-inventory";
 import { canonicalJSON } from "../../../common/registry/canonical-json";
 import { DESK_ADAPTER_MAX_FILES, DESK_ADAPTER_MAX_FILE_BYTES, type DeskUiPublication } from "../../../conversations/domain-adapters/package";
 import { DESK_UI_PROTOCOL_VERSION, type DeskGenerationAdmission } from "../../../conversations/domain-adapters/package-generation";
@@ -135,23 +134,23 @@ async function readListedFile(packageRoot: string, path: string, digest: string)
   const unreadable = failure(503, "asset_unavailable", "The asset is unavailable on this stack.");
   let root: string;
   try {
-    root = realpathSync(packageRoot);
+    root = await realpath(packageRoot);
   } catch (_err) {
     return unreadable;
   }
   const candidate = resolve(root, path);
   if (!candidate.startsWith(root + sep)) return unreadable;
   try {
-    const stat = lstatSync(candidate);
+    const stat = await lstat(candidate);
     if (stat.isSymbolicLink() || !stat.isFile() || stat.size > DESK_ADAPTER_MAX_FILE_BYTES) return unreadable;
   } catch (_err) {
     return unreadable;
   }
-  const contained = containedRealPath(root, candidate);
-  if (!contained.ok) return unreadable;
   let bytes: Uint8Array<ArrayBuffer>;
   try {
-    bytes = new Uint8Array(await readFile(contained.path));
+    const resolved = await realpath(candidate);
+    if (!resolved.startsWith(root + sep)) return unreadable;
+    bytes = new Uint8Array(await readFile(resolved));
   } catch (_err) {
     return unreadable;
   }

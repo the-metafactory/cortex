@@ -107,10 +107,12 @@ Run the vertical demonstration with `bun scripts/probe-desk-drafting.ts`.
 
 ## Adapter UI assets
 
-<!-- glossary-ignore: host, path, run, manifest -->
+<!-- glossary-ignore: host, path, run, manifest, deployment, server -->
 
 `src/surface/mc/desk/adapter-assets.ts` serves the manifest-listed UI files of the active package generation, and `src/surface/mc/api/desk-adapter-assets.ts` mounts it under `/api/desk/adapters`. `GET /catalog` lists, for the authenticated stack principal, each enabled connection with its exact adapter, package version, `releaseDigest`, UI protocol and filtered capability ids. `GET /assets/<releaseDigest>/<connectionId>/<path>` returns one listed file after a current-policy check, a checked realpath containment, a size bound and a SHA-256 comparison of the bytes served. Local and hosted use the same handler; hosted differs only in the Access identity guard. A request for a release other than the active one gets `409 generation_mismatch` with `recovery: "refresh"`. Responses carry `nosniff`, a restrictive content security policy, `Cache-Control: private, no-cache` and no cross-origin allowance; the service never redirects and accepts no query string. These headers support the approved frame containment; they are not a sandbox by themselves.
 
 `DeskPackageLoader.rollback(adapterId)` re-verifies and republishes the recorded last valid generation. It refuses a disabled or uninstalled adapter, so rollback never restores a fence that was applied.
+
+Production startup supplies no asset service yet, like the connection setup route: both answer 503 until the managed activation node passes a provider through `adapterAssets`.
 
 Run `bun scripts/probe-desk-adapter-assets.ts` for the synthetic probe: temporary package root, real temporary generation store, local HTTP server and a synthetic hosted gateway. It does no real deployment, restart or provider call.
