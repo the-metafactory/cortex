@@ -64,6 +64,16 @@ const project = (owner: WorkOwner, object: WorkObject, snippetOnly: boolean) => 
   [snippetOnly ? "snippet" : "summary"]: redactToolText(snippetOnly ? object.summary.slice(0, SNIPPET) : object.summary),
 });
 const unavailable = (): string => JSON.stringify({ status: "unavailable", message: "The related work could not be released. It may have been removed, changed or denied." });
+const PARTIAL_COVERAGE: ReadonlySet<NonNullable<WorkPage["coverage"]>> = new Set(["more", "partial", "incomplete", "budget-exhausted"]);
+const pagePartial = (page: WorkPage): boolean => page.status === "partial" || page.coverage !== undefined && PARTIAL_COVERAGE.has(page.coverage);
+interface SearchStatusInput { readonly partial: boolean; readonly restricted: boolean; readonly found: number; readonly kinds: number; readonly unavailable: number; readonly noMatch: boolean; readonly more: boolean }
+const searchStatus = ({ partial, restricted, found, kinds, unavailable: missing, noMatch, more }: SearchStatusInput): "ok" | "partial" | "denied" | "unavailable" | "empty" =>
+  partial || restricted && found ? "partial"
+    : restricted ? "denied"
+    : found ? "ok"
+    : missing === kinds ? "unavailable"
+    : noMatch || !more ? "empty"
+    : "partial";
 
 export function workContextTools(owner: WorkOwner): ToolDefinition[] {
   const search: ToolDefinition = {
@@ -87,8 +97,9 @@ export function workContextTools(owner: WorkOwner): ToolDefinition[] {
         signal.throwIfAborted();
         const page = await reader.search(input.query, input.limit + 1, input.offset);
         const allowed = page.items.slice(0, input.limit).filter(object => object.kind === kind && mayRelease(session, object.policy));
-        more ||= page.more || page.items.length > input.limit || page.status === "partial" || page.coverage === "more" || page.coverage === "partial" || page.coverage === "incomplete";
-        partial ||= page.status === "partial" || page.coverage === "more" || page.coverage === "partial" || page.coverage === "incomplete";
+        const bounded = pagePartial(page);
+        more ||= page.more || page.items.length > input.limit || bounded;
+        partial ||= bounded;
         restricted ||= page.restricted === true || page.status === "denied";
         noMatch ||= page.noMatch === true;
         continuation ??= page.continuation;
@@ -109,7 +120,7 @@ export function workContextTools(owner: WorkOwner): ToolDefinition[] {
       }
       if (!await owner.remember(session, items, signal)) return unavailable();
       const next = more && !restricted ? { offset: input.offset + input.limit, ...(continuation ? { continuation } : {}) } : null;
-      const status = partial || restricted && items.length ? "partial" : restricted ? "denied" : items.length ? "ok" : unsupported.length + unavailableKinds.length === kinds.length ? "unavailable" : noMatch || !more ? "empty" : "partial";
+      const status = searchStatus({ partial, restricted, found: items.length, kinds: kinds.length, unavailable: unsupported.length + unavailableKinds.length, noMatch, more });
       return JSON.stringify({ status, coverage: more ? "partial" : "exhausted", restricted, results: items.map(object => project(owner, object, true)), unavailable: [...unsupported, ...unavailableKinds], next });
     },
   };

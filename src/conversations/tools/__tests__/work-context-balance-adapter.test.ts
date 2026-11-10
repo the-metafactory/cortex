@@ -51,6 +51,20 @@ describe("the Balance work adapter behind work_search and work_read", () => {
     expect(read.remembered.map(remembered => `${remembered.kind}:${remembered.id}`)).toEqual(["balance-project:project-glider"]);
   });
 
+  test("a second configured area is searched, read and scoped without denying the page", async () => {
+    const rig = await open();
+    await rig.allowHome();
+    const searched = JSON.parse((await call(rig, "local", "work_search", { query: "garden", kinds: ["balance-task"], limit: 5, offset: 0 })).text);
+    expect(searched.status).toBe("ok");
+    expect(searched.results.map((result: { id: string }) => result.id)).toEqual(["task-garden"]);
+    const read = await call(rig, "local", "work_read", { kind: "balance-task", id: "task-garden" });
+    expect(JSON.parse(read.text)).toMatchObject({ status: "stale", object: { id: "task-garden", area: "Home" } });
+    expect(read.remembered.map(object => object.id)).toEqual(["task-garden"]);
+    const projects = JSON.parse((await call(rig, "local", "work_search", { query: "", kinds: ["balance-project"], limit: 5, offset: 0 })).text);
+    expect(projects.status).toBe("ok");
+    expect(projects.results.map((result: { id: string }) => result.id).sort()).toEqual(["project-empty", "project-glider"]);
+  });
+
   test("a bounded page is partial and an empty page with a continuation is not no match", async () => {
     const rig = await open();
     const bounded = JSON.parse((await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit: 1, offset: 0 })).text);
@@ -86,10 +100,11 @@ describe("the Balance work adapter behind work_search and work_read", () => {
 
   test("the legacy WorkReader still answers when the connection is off", async () => {
     const rig = await open();
-    const searched = JSON.parse((await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit: 5, offset: 0 }, false)).text);
+    const legacy = await call(rig, "local", "work_search", { query: "", kinds: ["balance-task"], limit: 5, offset: 0 }, false);
+    const searched = JSON.parse(legacy.text);
     expect(searched.status).toBe("ok");
     expect(searched.results.map((result: { id: string }) => result.id)).toEqual(["task-legacy"]);
-    expect(searched.remembered).toBeUndefined();
+    expect(legacy.remembered.map(object => `${object.kind}:${object.id}`)).toEqual(["balance-task:task-legacy"]);
   });
 
   test("the probe comparison keeps tool output aligned with the saved outline", async () => {

@@ -155,12 +155,29 @@ function parseCursor(cursor: string | undefined): number {
   return offset;
 }
 
+function boundedPage<T>(matching: readonly T[], bounds: { readonly limit: number; readonly offset: number }, cursor: string | undefined, limit: number): { readonly slice: T[]; readonly next?: string } {
+  const offset = cursor === undefined ? bounds.offset : parseCursor(cursor);
+  const bounded = Math.min(limit, bounds.limit, MAX_PAGE_ITEMS);
+  const slice = matching.slice(offset, offset + bounded);
+  return { slice, ...(offset + slice.length < matching.length ? { next: String(offset + slice.length) } : {}) };
+}
+
+function parseOffset(raw: unknown): number {
+  if (raw === undefined) return 0;
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 0) return failure("invalid_input");
+  return raw;
+}
+
+function parseQuery(input: unknown): { query: string; limit: number; offset: number } {
+  if (!isRecord(input)) return failure("invalid_input");
+  if (input.query !== undefined && typeof input.query !== "string") return failure("invalid_input");
+  return { query: typeof input.query === "string" ? input.query : "", limit: parseLimit(input.limit, "invalid_input"), offset: parseOffset(input.offset) };
+}
+
 function parseTaskQuery(input: unknown): { area: ObjectReference; query: string; limit: number; offset: number } {
   if (!isRecord(input)) return failure("invalid_input");
   const area = parseReference(input.area);
-  if (input.query !== undefined && typeof input.query !== "string") return failure("invalid_input");
-  if (input.offset !== undefined && (typeof input.offset !== "number" || !Number.isInteger(input.offset) || input.offset < 0)) return failure("invalid_input");
-  return { area, query: typeof input.query === "string" ? input.query : "", limit: parseLimit(input.limit, "invalid_input"), offset: typeof input.offset === "number" ? input.offset : 0 };
+  return { area, ...parseQuery(input) };
 }
 
 function parseTaskRead(input: unknown): ObjectReference {
@@ -243,10 +260,7 @@ function taskQueryPage(source: BalanceReadSource, input: unknown, destinations: 
   const found = locateTasks(state, [area]);
   const needle = parsed.query.trim().toLocaleLowerCase();
   const matching = needle.length === 0 ? found : found.filter(task => `${task.node.title}\n${task.node.note ?? ""}`.toLocaleLowerCase().includes(needle));
-  const offset = cursor === undefined ? parsed.offset : parseCursor(cursor);
-  const bounded = Math.min(limit, parsed.limit, MAX_PAGE_ITEMS);
-  const slice = matching.slice(offset, offset + bounded);
-  const next = offset + slice.length < matching.length ? String(offset + slice.length) : undefined;
+  const { slice, next } = boundedPage(matching, parsed, cursor, limit);
   return buildPage(
     slice.map(task => taskEntry(task, source.connectionId, taskValue(task, source.connectionId))),
     snapshotId("task.query", { connectionId: source.connectionId, area: area.id, tasks: matching.map(task => task.node.id) }),
@@ -275,23 +289,21 @@ function destinationsPage(source: BalanceReadSource): QueryPage {
   return buildPage(entries, snapshotId("destinations", { connectionId: source.connectionId, destinations: entries.map(entry => entry.ref) }), observedAt(source));
 }
 
-function projectsPage(source: BalanceReadSource, input: unknown, destinations: readonly ObjectReference[], cursor: string | undefined, limit: number): QueryPage {
-  if (!isRecord(input)) return failure("invalid_input");
-  if (input.query !== undefined && typeof input.query !== "string") return failure("invalid_input");
-  if (input.limit !== undefined && (typeof input.limit !== "number" || !Number.isInteger(input.limit) || input.limit < 1)) return failure("invalid_input");
-  if (input.offset !== undefined && (typeof input.offset !== "number" || !Number.isInteger(input.offset) || input.offset < 0)) return failure("invalid_input");
+function projectEntries(source: BalanceReadSource): PageEntry[] {
   const page = destinationsPage(source);
-  const all = page.annotations.flatMap((annotation, position) => {
-    const value = (page.payload as { items: Json[] }).items[position];
+  const items = (page.payload as { items: Json[] }).items;
+  return page.annotations.flatMap((annotation, position) => {
+    const value = items[position];
     return annotation.ref.objectType === "project" && value !== undefined ? [{ ref: annotation.ref, schemaRef: annotation.schemaRef, destination: annotation.destination, evidenceId: annotation.evidence.evidenceId, value }] : [];
   });
-  const needle = typeof input.query === "string" ? input.query.trim().toLocaleLowerCase() : "";
-  const matching = needle.length === 0 ? all : all.filter(project => typeof project.value === "object" && project.value !== null && String((project.value as Record<string, unknown>).label).toLocaleLowerCase().includes(needle));
-  const offset = cursor === undefined ? (typeof input.offset === "number" ? input.offset : 0) : parseCursor(cursor);
-  const bounded = Math.min(limit, typeof input.limit === "number" ? input.limit : MAX_PAGE_ITEMS, MAX_PAGE_ITEMS);
-  const slice = matching.slice(offset, offset + bounded);
-  if (slice.some(project => !destinations.some(destination => sameReference(destination, project.destination)))) return failure("destination_denied");
-  const next = offset + slice.length < matching.length ? String(offset + slice.length) : undefined;
+}
+
+function projectsPage(source: BalanceReadSource, input: unknown, destinations: readonly ObjectReference[], cursor: string | undefined, limit: number): QueryPage {
+  const parsed = parseQuery(input);
+  const needle = parsed.query.trim().toLocaleLowerCase();
+  const scoped = projectEntries(source).filter(project => destinations.some(destination => sameReference(destination, project.destination)));
+  const matching = needle.length === 0 ? scoped : scoped.filter(project => typeof project.value === "object" && project.value !== null && String((project.value as Record<string, unknown>).label).toLocaleLowerCase().includes(needle));
+  const { slice, next } = boundedPage(matching, parsed, cursor, limit);
   return buildPage(slice, snapshotId("project.query", { connectionId: source.connectionId, projects: matching.map(project => project.ref) }), observedAt(source), next);
 }
 
@@ -299,12 +311,9 @@ function projectReadPage(source: BalanceReadSource, input: unknown, destinations
   const parsed = parseTaskRead(input);
   if (parsed.adapterId !== ADAPTER_ID || parsed.objectType !== "project" || parsed.connectionId !== source.connectionId) return failure("invalid_input");
   if (limit < 1) return failure("invalid_input");
-  const page = destinationsPage(source);
-  const annotation = page.annotations.find(entry => entry.ref.objectType === "project" && entry.ref.canonicalId === parsed.canonicalId);
-  if (!annotation || !destinations.some(destination => sameReference(destination, annotation.destination))) return failure("project_unavailable");
-  const position = page.annotations.indexOf(annotation);
-  const value = (page.payload as { items: Json[] }).items[position] as Json;
-  return buildPage([{ ref: annotation.ref, schemaRef: annotation.schemaRef, destination: annotation.destination, evidenceId: annotation.evidence.evidenceId, value }], snapshotId("project.read", { connectionId: source.connectionId, project: annotation.ref }), observedAt(source));
+  const entry = projectEntries(source).find(project => project.ref.canonicalId === parsed.canonicalId);
+  if (!entry || !destinations.some(destination => sameReference(destination, entry.destination))) return failure("project_unavailable");
+  return buildPage([entry], snapshotId("project.read", { connectionId: source.connectionId, project: entry.ref }), observedAt(source));
 }
 
 export function createBalanceReadAdapter(source: BalanceReadSource): BalanceReadAdapter {

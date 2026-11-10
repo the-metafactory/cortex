@@ -61,6 +61,21 @@ await withTempHome(async () => {
     assert.ok(!JSON.stringify(denied).includes("Water the garden"));
     console.log("denied destination: no names or counts are released");
 
+    await rig.allowHome();
+    const widened = balanceWorkReaders(queryFor(rig));
+    const widenedSearchTool = workContextTools({ readers: () => ({}), queries: () => widened, now: () => Date.now(), remember: async () => true }).find(candidate => candidate.name === "work_search");
+    if (!widenedSearchTool) throw new Error("missing work_search");
+    const widenedText = await widenedSearchTool.run({ query: "garden", kinds: ["balance-task"], limit: 5, offset: 0 }, { project: null, graph: null, projects: [], session, signal: new AbortController().signal });
+    const widenedSearch = JSON.parse(typeof widenedText === "string" ? widenedText : widenedText.text);
+    assert.equal(widenedSearch.status, "ok");
+    assert.deepEqual(widenedSearch.results.map((result: { id: string }) => result.id), ["task-garden"]);
+    const widenedReadTool = workContextTools({ readers: () => ({}), queries: () => widened, now: () => Date.now(), remember: async () => true }).find(candidate => candidate.name === "work_read");
+    if (!widenedReadTool) throw new Error("missing work_read");
+    const widenedReadText = await widenedReadTool.run({ kind: "balance-task", id: "task-garden" }, { project: null, graph: null, projects: [], session, signal: new AbortController().signal });
+    const widenedRead = JSON.parse(typeof widenedReadText === "string" ? widenedReadText : widenedReadText.text);
+    assert.equal(widenedRead.object?.area, "Home");
+    console.log("second configured area: search and read reach the task instead of reporting it gone");
+
     rig.removeTask("task-wing");
     const deleted = await run(true, "work_read", { kind: "balance-task", id: "task-wing" });
     assert.equal(deleted.status, "gone");
