@@ -7,12 +7,19 @@ import type { MyDayCommand } from "../../desk/my-day-schema";
 import { submitMyDay } from "../lib/desk-my-day-action";
 import { DeskSourceLink } from "./desk-link";
 import { DestinationPicker } from "./desk-destination-picker";
+import { positionChoices } from "../lib/balance-drop";
 import { SourceConversations } from "./desk-source-conversations";
 import { TodayControl } from "./desk-today-control";
 import "./desk-task-details.css";
 
 export interface TaskEntry { node: OutlineNode; parent: OutlineNode; path: string[] }
 export interface TaskDraft { node: OutlineNode; details: BalanceDetails; revision: number; date: string; yes: boolean }
+export interface TaskMoving { id: string; parent: string; index: number | null; revision: number; date: string }
+
+/** The `outline-move` a Move… form sends; "At the end" is an explicit last position, so it also reorders within the same parent. */
+export function moveCommand(moving: TaskMoving, outline: OutlineNode): BalanceCommand {
+  return { op: "outline-move", id: moving.id, parent: moving.parent, revision: moving.revision, index: moving.index ?? positionChoices(outline, moving.id, moving.parent).length };
+}
 export interface TaskAdding { parent: string; title: string; revision: number; date: string }
 export type TaskMessage = { kind: "saved" | "error"; text: string; undo?: string } | null;
 type Saved = Awaited<ReturnType<typeof submitMyDay>>;
@@ -41,7 +48,7 @@ export function useBalanceEditor(day: MyDayView, onSaved: (view: MyDayView) => v
   const [drafts, setDrafts] = useState(new Map<string, TaskDraft>());
   const [message, setMessage] = useState<TaskMessage>(null);
   const [busy, setBusy] = useState(false);
-  const [moving, setMoving] = useState<{ id: string; parent: string; revision: number; date: string } | null>(null);
+  const [moving, setMoving] = useState<TaskMoving | null>(null);
   const retry = useRef(new Map<string, string>());
   const change: BalanceChange = async (command, date = day.date) => {
     if (busy) return null;
@@ -100,8 +107,8 @@ export function TaskDetails({ id, entry, day, editor, choices, titled = true, co
   const moveChoices = choices.filter(option => !descendants.has(option.id));
   return <div className="dtd">
     {editing ? <><DetailsForm draft={draft} entry={entry} day={day} titled={titled} busy={busy} dirty={dirty} onDraft={editor.setDraft} onSave={save} onDiscard={() => { finishEditing(); onRefresh(); }} />{compact && <button type="button" className="desk-btn ghost" disabled={busy} onClick={finishEditing}>Cancel editing</button>}</> : <TaskSummary node={node} entry={entry} day={day} titled={titled} busy={busy} onEdit={() => { setEditingId(node.id); }} />}
-    <DetailsActions node={node} entry={entry} day={day} busy={busy} dirty={dirty} onAdd={() => { setMoving(null); onAdd(node.id); }} onMove={() => { setMoving({ id: node.id, parent: entry?.parent.id ?? "", revision: day.revision, date: day.date }); }} onComplete={complete} onThread={onThread} change={change} />
-    {moving?.id === node.id && <form className="dbl-move" onSubmit={event => { event.preventDefault(); void change({ op: "outline-move", id: moving.id, parent: moving.parent, revision: moving.revision }, moving.date).then(saved => { if (saved) { setMoving(null); onMoved(moving.id); } }); }}><DestinationPicker label="Move Balance parent" value={moving.parent} options={moveChoices} disabled={busy} onChange={parent => { setMoving({ ...moving, parent }); }} /><button className="desk-btn pri" disabled={busy || !moveChoices.some(option => option.id === moving.parent)}>Confirm move</button><button type="button" className="desk-btn" disabled={busy} onClick={() => { setMoving(null); }}>Cancel</button></form>}
+    <DetailsActions node={node} entry={entry} day={day} busy={busy} dirty={dirty} onAdd={() => { setMoving(null); onAdd(node.id); }} onMove={() => { setMoving({ id: node.id, parent: entry?.parent.id ?? "", index: null, revision: day.revision, date: day.date }); }} onComplete={complete} onThread={onThread} change={change} />
+    {moving?.id === node.id && <form className="dbl-move" onSubmit={event => { event.preventDefault(); void change(moveCommand(moving, day.outline), moving.date).then(saved => { if (saved) { setMoving(null); onMoved(moving.id); } }); }}><DestinationPicker label="Move Balance parent" value={moving.parent} options={moveChoices} disabled={busy} onChange={parent => { setMoving({ ...moving, parent, index: null }); }} /><label>Position<select aria-label="Move Balance position" value={moving.index ?? ""} disabled={busy} onChange={event => { setMoving({ ...moving, index: event.target.value === "" ? null : Number(event.target.value) }); }}><option value="">At the end</option>{positionChoices(day.outline, moving.id, moving.parent).map(option => <option key={option.index} value={option.index}>Before {option.title}</option>)}</select></label><button className="desk-btn pri" disabled={busy || !moveChoices.some(option => option.id === moving.parent)}>Confirm move</button><button type="button" className="desk-btn" disabled={busy} onClick={() => { setMoving(null); }}>Cancel</button></form>}
     {children}
     {onConversation && entry && !isArea(day, node.id) && <SourceConversations source={{ owner: node.children.length ? "balance-project" : "balance-task", id: node.id }} onOpen={onConversation} />}
   </div>;

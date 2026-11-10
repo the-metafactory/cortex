@@ -125,10 +125,10 @@ export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: Desk
   }
   const next = openParent(state, desk, meta, command.parent);
   if (findNode(node, next.id)) throw new Error("An item cannot move below itself or one of its descendants.");
-  if (parent === next) return node.id;
-  preserveFocusProject(parent, date);
+  if (parent === next && command.index === undefined) return node.id;
+  if (parent !== next) preserveFocusProject(parent, date);
   parent.children = parent.children.filter(child => child.id !== node.id);
   delete next.done;
-  next.children.push(node);
+  next.children.splice(Math.min(command.index ?? next.children.length, next.children.length), 0, node);
   return node.id;
 }
