@@ -92,12 +92,15 @@ import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
 import { handleDeskMail } from "./api/desk-mail";
 import { handleDeskGraphRepositories } from "./api/desk-graph-repositories";
 import { handleDeskGraphSurfaces } from "./api/desk-graph-surfaces";
+import { handleDeskBalanceSurfaces } from "./api/desk-balance-surfaces";
 import { handleDeskDrafts } from "./api/desk-drafts";
 import { DESK_DRAFTS_PATH } from "./desk/draft-editor-contract";
 import { deskGraphDraftEditor, type GraphDraftSetup } from "./desk/graph-draft-entry";
 import type { DeskDraftAccess } from "./desk/draft-editor";
 import type { GraphSurfaceAccess } from "./desk/graph-surfaces";
 import { GRAPH_SURFACES_PATH } from "./desk/graph-surface-schema";
+import type { BalanceSurfaceAccess } from "./desk/balance-surfaces";
+import { BALANCE_SURFACES_PATH } from "./desk/balance-surface-schema";
 import { GRAPH_REPOSITORIES_PATH } from "./desk/graph-repository-schema";
 import { handleDeskMailRules } from "./api/desk-mail-rules";
 import { handleDeskDmarc } from "./api/desk-dmarc";
@@ -215,6 +218,7 @@ export interface MissionControlViews {
   adapterAssets?: AdapterAssetAccess;
   graphScope?: GraphScopeAccess;
   graphSurfaces?: GraphSurfaceAccess;
+  balanceSurfaces?: BalanceSurfaceAccess;
   drafts?: DeskDraftAccess;
   graphDrafts?: GraphDraftSetup;
 }
@@ -523,7 +527,7 @@ async function handleApi(
   desk?: DeskRuntime,
   views: MissionControlViews = {},
 ): Promise<Response> {
-  const { conversations, connectionSetup, adapterAssets, graphScope, graphSurfaces } = views;
+  const { conversations, connectionSetup, adapterAssets, graphScope, graphSurfaces, balanceSurfaces } = views;
   const { pathname } = url;
   if (pathname === DESK_DRAFTS_PATH || pathname.startsWith(`${DESK_DRAFTS_PATH}/`)) return handleDeskDrafts(req, url, guard, views.drafts);
   if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });
@@ -586,6 +590,8 @@ async function handleApi(
   if (pathname === "/api/desk/unimportant") return handleDeskSenders(req, url, db, "unimportant");
 
   if (pathname.startsWith(`${GRAPH_SURFACES_PATH}/`)) return handleDeskGraphSurfaces(req, url, graphSurfaces);
+
+  if (pathname.startsWith(`${BALANCE_SURFACES_PATH}/`)) return handleDeskBalanceSurfaces(req, url, balanceSurfaces);
 
   if (pathname === GRAPH_REPOSITORIES_PATH || pathname.startsWith(`${GRAPH_REPOSITORIES_PATH}/`)) return handleDeskGraphRepositories(req, url, db, graphScope ? { graphScope } : {});
 
