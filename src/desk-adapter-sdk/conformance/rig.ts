@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
-import type { AuthorityBindings, AuthorityMediator, HostContext, TrustedConnector, WriterLease } from "../../../src/conversations/authority";
-import { authorityHash, type ConnectionRecord, type PolicyInputs, type PrincipalBinding, type ReleaseSink, type RestrictionRecord } from "../../../src/conversations/authority-records";
-import { openConversationHost, type ConversationHost } from "../../../src/conversations/host";
-import { writerLease } from "../../../src/conversations/domain-adapters/operations/writer-authority";
-import { syntheticWriterPlan, syntheticWriterSteps } from "../../../src/conversations/domain-adapters/operations/writer-fixtures";
-import { canonicalWire } from "../../../src/conversations/domain-adapters/operations/validation";
-import type { Json } from "../../../src/conversations/domain-adapters/operations/types";
-import { ReadBindings } from "../../../src/conversations/domain-adapters/reads/bindings";
-import type { DomainAdapterRegistry } from "../../../src/conversations/domain-adapters/registry";
-import type { ObjectReference } from "../../../src/conversations/domain-adapters/types";
+import type { AuthorityBindings, AuthorityMediator, HostContext, TrustedConnector, WriterLease } from "../../conversations/authority";
+import { authorityHash, type ConnectionRecord, type PolicyInputs, type PrincipalBinding, type ReleaseSink, type RestrictionRecord } from "../../conversations/authority-records";
+import { openConversationHost, type ConversationHost } from "../../conversations/host";
+import { writerLease } from "../../conversations/domain-adapters/operations/writer-authority";
+import { syntheticWriterPlan, syntheticWriterSteps } from "../../conversations/domain-adapters/operations/writer-fixtures";
+import { canonicalWire } from "../../conversations/domain-adapters/operations/validation";
+import type { Json } from "../../conversations/domain-adapters/operations/types";
+import { ReadBindings } from "../../conversations/domain-adapters/reads/bindings";
+import type { DomainAdapterRegistry } from "../../conversations/domain-adapters/registry";
+import type { ObjectReference } from "../../conversations/domain-adapters/types";
 
 export const SYNTHETIC_CREDENTIAL_HANDLE = "conformance-credential-handle";
 const SESSION = "conformance-session";
@@ -47,7 +47,7 @@ function registerReadBindings(input: ConformanceRigInput): ReadBindings {
 }
 
 /** Opens the production Cortex runtime over a synthetic local stack, and can reopen it over the same store to model a restart. */
-export async function openConformanceRig(input: ConformanceRigInput) {
+export async function openConformanceRig(input: ConformanceRigInput): Promise<ConformanceRig> {
   const dir = await mkdtemp(join(input.dir, "rig-"));
   const readBindings = registerReadBindings(input);
   const principal: PrincipalBinding = { version: 1, principalRef: randomUUID(), principal: "conformance-principal", stack: STACK, identityBindingRevision: "1", status: "active" };
@@ -136,4 +136,18 @@ export async function openConformanceRig(input: ConformanceRigInput) {
   };
 }
 
-export type ConformanceRig = Awaited<ReturnType<typeof openConformanceRig>>;
+export interface ConformanceRig {
+  readonly host: ConversationHost;
+  readonly service: AuthorityMediator;
+  readonly context: HostContext;
+  readonly sink: ReleaseSink;
+  readonly conversationId: string;
+  lease: WriterLease;
+  sends: Json[];
+  bindings: AuthorityBindings;
+  connection: ConnectionRecord;
+  registry: DomainAdapterRegistry;
+  revokeConnection(): Promise<void>;
+  reopen(): Promise<void>;
+  close(): Promise<void>;
+}
