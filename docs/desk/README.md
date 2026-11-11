@@ -8,6 +8,7 @@ The Desk is the landing page of Mission Control, the dashboard that a Cortex sta
 |---|---|
 | [Get started with the Desk](getting-started.md) | You have a Cortex stack and want to see the Desk, first on Cortex data alone, then with a calendar and mail. |
 | [Write a source adapter](write-a-source.md) | You want your own calendar, mail or task tool on the Desk. |
+| [Write a Desk domain adapter](write-a-domain-adapter.md) | You want to package domain objects, queries, observations, and confirmed actions through the Desk SDK. |
 | [Configuration reference](configuration.md) | You look up a key under `mc.desk`. |
 | [Command contracts](commands.md) | You write or debug a command that Cortex runs for the Desk: a source, a parser, a writer, the mail classifier, a mail action, a transport or a goal check. |
 | [Desk Studio: thread files](../desk-studio.md) | You turn on the Studio, the Desk's board of threads you think through. |

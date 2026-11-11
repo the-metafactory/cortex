@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { CREATE_MAP, CREATE_PARENT, CREATE_REPOSITORY, graphDiscussionOutput, openGraphCreateRig } from "../work-graph/fixtures/graph-create";
+import { CREATE_MAP, CREATE_PARENT, CREATE_REPOSITORY, graphDiscussionOutput, openGraphCreateRig } from "../../../surface/mc/desk/fixtures/graph-create";
 import { type DraftEditorView } from "../../../surface/mc/desk/draft-editor-contract";
 import { DraftingBindings } from "../drafting";
 import { draftPath, editDraft, expectBlockedConfirmation, expectManualModeKeepsEdits, makeDraft, ownFields as ownDraftFields, refreshDraft } from "./fixtures/draft-route";
@@ -84,8 +84,7 @@ test("manual relationship labels resolve canonically, flag destination changes a
   expect(changed.view.draft.fields["/parent"]).toMatchObject({ origin: "principal", value: rig.ref("node", CREATE_PARENT) });
   expect(changed.view.outdated).toContain("destination-changed");
   expect(changed.destinationChanges).toHaveLength(1);
-  const denied = await rig.call("POST", `${path(changed)}/confirm`, { revision: changed.view.draft.revision });
-  expect(await denied.json()).toMatchObject({ confirmation: { kind: "blocked" } });
+  expect(await rig.confirm(changed.view.draft)).toMatchObject({ kind: "blocked" });
   const updated = await refresh(rig, changed);
   expect(updated.view.outdated).not.toContain("destination-changed");
   expect(updated.view.draft.fields["/parent"]?.value).toEqual(rig.ref("node", CREATE_PARENT));
@@ -119,13 +118,13 @@ test("the exact current revision hands off once and Make reopens its preserved r
   const stale = await rig.call("POST", `${path(edited)}/confirm`, { revision: made.view.draft.revision });
   expect(stale.status).toBe(409);
   expect(rig.soma.calls).toEqual([]);
-  const confirmed = await rig.call("POST", `${path(edited)}/confirm`, { revision: edited.view.draft.revision });
-  const result = await confirmed.json() as { confirmation: { kind: string; operationId: string } };
-  expect(result.confirmation.kind).toBe("accepted");
-  expect((await rig.journal.read(result.confirmation.operationId))?.journal.snapshot).toMatchObject({ input: { body: "Principal's precise body", autonomy: "approve", kind: "research" }, provenance: { revision: edited.view.draft.revision } });
+  const result = await rig.confirm(edited.view.draft);
+  expect(result.kind).toBe("accepted");
+  if (result.kind !== "accepted") throw new Error(result.reason);
+  expect((await rig.journal.read(result.operationId))?.journal.snapshot).toMatchObject({ input: { body: "Principal's precise body", autonomy: "approve", kind: "research" }, provenance: { revision: edited.view.draft.revision } });
   await rig.reopen();
   const reopened = await make(rig);
-  expect(reopened.receipt).toMatchObject({ kind: "receipt", operationId: result.confirmation.operationId, state: "succeeded" });
+  expect(reopened.receipt).toMatchObject({ kind: "receipt", operationId: result.operationId, state: "succeeded" });
   const refusedEdit = await rig.call("PATCH", path(reopened), { revision: reopened.view.draft.revision, pointer: "/title", change: { kind: "set", value: "Do not create another" } });
   expect(refusedEdit.status).toBe(409);
   expect(rig.soma.calls).toHaveLength(1);

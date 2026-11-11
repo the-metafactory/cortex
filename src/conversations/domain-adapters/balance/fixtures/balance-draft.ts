@@ -58,7 +58,7 @@ export async function openBalanceDraftRig(fixture: { discussion?: string } = {})
         sessionExtras: (destinations, source) => ({ areas: destinations, destinations: source.destinations }),
         createBinding: journal => createBalanceTaskBinding({ stack: "test", connectionId, db: database(), desk: () => options, areas: () => areas, journal, now: () => BALANCE_DRAFT_NOW, owner }),
         createEditor: draft => { const { host, deps, options: entry } = setup(draft); return deskBalanceDraftEditor(host, deps, entry); },
-        serve: (draft, principal) => startServer({ ...DEFAULT_CONFIG, port: 0, governance: { ...DEFAULT_CONFIG.governance, principals: [], localPrincipal: principal } }, database(), { balanceDrafts: setup(draft) }),
+        serve: (draft, principal, serverOptions) => startServer({ ...DEFAULT_CONFIG, port: 0, governance: { ...DEFAULT_CONFIG.governance, principals: [], localPrincipal: principal } }, database(), { ...serverOptions, balanceDrafts: setup(draft) }),
         close: () => { database().close(); },
       };
     },

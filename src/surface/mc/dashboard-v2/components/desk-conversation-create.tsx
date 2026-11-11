@@ -9,6 +9,7 @@ import { readGraphSurfaceCard } from "../lib/desk-graph-surfaces";
 import { ConversationDestination } from "./desk-conversation-destination";
 import { GRAPH_TYPES, GraphDatalists, graphListFor, prefillFields, recallGraphDestination, rememberGraphDestination, useGraphChoices } from "./desk-conversation-graph-fields";
 import { ConversationBalanceTask } from "./desk-conversation-balance-task";
+import { SavedFlowCard, useSavedFlowCard } from "./desk-conversation-saved-flow";
 
 const QUICK = ["graph-node", "balance-task", "routine", "flow"] as const;
 const SETTLING_MS = 3_000;
@@ -120,6 +121,7 @@ function ProposalCard({ id, view, types, busy, archived, act }: { id: string; vi
   const settled = view.operation?.state === "created";
   const savedBalanceTask = settled && proposal.type === "balance-task";
   const savedCard = useDisplayCard(view.operation?.canonicalId, proposal.fields.repository ?? "", settled && GRAPH_TYPES.has(proposal.type ?? ""));
+  const savedFlow = useSavedFlowCard(view.operation?.canonicalId, view.operation?.operationId, settled && proposal.type === "flow");
   const save = (): Promise<ProposalView> => revise(id, proposal.proposalId, { revision: proposal.revision, fields });
   const doConfirm = (): void => void act(async () => {
     const current = dirty ? await save() : view;
@@ -169,6 +171,7 @@ function ProposalCard({ id, view, types, busy, archived, act }: { id: string; vi
     </div>}
     {savedBalanceTask && <ConversationBalanceTask id={view.operation?.canonicalId} area={proposal.fields.area ?? ""} />}
     {settled && GRAPH_TYPES.has(proposal.type ?? "") && <DisplayCard reading={savedCard} />}
+    {settled && proposal.type === "flow" && <SavedFlowCard reading={savedFlow} />}
     {settled && <p role="status">Created {capability?.label.toLowerCase()} {view.operation?.canonicalId}{links.object ? <> · <a href={links.object}>Open it</a></> : null}. It links back to this exchange.</p>}
     {editable && view.feedback === "proposed" && <div className="dcv-standing">
       <label><input type="checkbox" checked={standing} onChange={e => { setStanding(e.target.checked); }} /> Allow future {capability?.label.toLowerCase()} creation without asking</label>

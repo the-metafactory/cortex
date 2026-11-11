@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { CREATE_PARENT, GRAPH_DRAFT_DISCUSSION, graphDiscussionOutput, openGraphCreateRig } from "../src/conversations/domain-adapters/work-graph/fixtures/graph-create";
+import { CREATE_PARENT, GRAPH_DRAFT_DISCUSSION, graphDiscussionOutput, openGraphCreateRig } from "../src/surface/mc/desk/fixtures/graph-create";
 import { withDraftBrowserProbe } from "./desk-make-editor/server";
 import { denyRelease, openMakeEditor, reopenOutdatedDraft, restartAndRemake, revisionSteps } from "./desk-make-editor/steps";
 import type { DraftEditorView } from "../src/surface/mc/desk/draft-editor-contract";

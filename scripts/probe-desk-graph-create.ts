@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { CREATE_REPOSITORY, graphCreateOutput, openGraphCreateRig } from "../src/conversations/domain-adapters/work-graph/fixtures/graph-create";
+import { CREATE_REPOSITORY, graphCreateOutput, openGraphCreateRig } from "../src/surface/mc/desk/fixtures/graph-create";
 import { DESK_DRAFTS_PATH, type DraftEditorView } from "../src/surface/mc/desk/draft-editor-contract";
 
 const rig = await openGraphCreateRig();
@@ -18,11 +18,10 @@ try {
   assert.equal(made.view.status, "ready-for-confirmation");
   const mutationsBeforeConfirmation = rig.soma.calls.length;
   assert.equal(mutationsBeforeConfirmation, 0);
-  const confirmed = await server.call("POST", `${DESK_DRAFTS_PATH}/${made.view.draft.draftId}/confirm`, { revision: made.view.draft.revision });
-  const result = await confirmed.json() as { confirmation: { kind: string; operationId: string } };
-  assert.equal(result.confirmation.kind, "accepted");
+  const result = await server.confirm(made.view.draft);
+  assert.equal(result.kind, "accepted");
   assert.equal(rig.soma.calls.length, 1);
-  assert.equal((await rig.journal.read(result.confirmation.operationId))?.journal.state, "succeeded");
+  assert.equal((await rig.journal.read(result.operationId))?.journal.state, "succeeded");
   console.log(JSON.stringify({ exact: exact.kind, ambiguous: ambiguous.kind, unknown: unknown.kind, mutationsBeforeConfirmation, mutationsAfterConfirmation: rig.soma.calls.length, authorityConfirmations: (await rig.authority.inspectHostRecords()).confirmations.length, state: "succeeded" }, null, 2));
 } finally {
   await rig.close();

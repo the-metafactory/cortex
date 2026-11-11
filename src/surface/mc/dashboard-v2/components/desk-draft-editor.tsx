@@ -12,6 +12,7 @@ const referenceText = (value: unknown): string => {
 };
 const errorText = (error: unknown): string => error instanceof Error ? error.message : "The draft could not be updated.";
 const targetKey = (target: DraftTarget): string => JSON.stringify([target.capabilityId, target.connectionId]);
+const TargetOptions = ({ targets }: { targets: DraftTarget[] }) => <>{targets.map(item => <option key={targetKey(item)} value={targetKey(item)}>{item.label}</option>)}</>;
 const ORIGIN_LABEL: Record<string, string> = { suggested: "Suggested", principal: "Edited by you", generated: "From conversation", default: "Default" };
 
 export function DeskMakePanel({ conversationId, entryId, archived = false }: { conversationId: string; entryId: string | null; archived?: boolean }) {
@@ -42,7 +43,7 @@ export function DeskMakePanel({ conversationId, entryId, archived = false }: { c
   return <section className="desk-make" aria-label="Make from this exchange">
     <h3>Make</h3>
     {error && <p role="alert">{error}</p>}
-    <label>What to make<select value={target} disabled={busy || archived} onChange={event => { setTarget(event.target.value); setEditor(null); setCandidates([]); }}>{targets.map(item => <option key={targetKey(item)} value={targetKey(item)}>{item.label}</option>)}</select></label>
+    <label>What to make<select value={target} disabled={busy || archived} onChange={event => { setTarget(event.target.value); setEditor(null); setCandidates([]); }}><TargetOptions targets={targets} /></select></label>
     <button disabled={busy || archived || !entryId || !target} onClick={() => { void make(); }}>Make</button>
     {candidates.length > 0 && <div><p>Choose a saved draft to reopen.</p>{candidates.map(item => <button key={item.draftId} disabled={busy} onClick={() => { void make(item.draftId); }}>Reopen draft from {item.updatedAt}</button>)}<button disabled={busy || archived} onClick={() => { void make(undefined, true); }}>Make another draft</button></div>}
     {editor && <button disabled={busy || archived} onClick={() => { void make(undefined, true); }}>New draft</button>}
@@ -57,10 +58,10 @@ export function DeskDraftEditor({ editor, targets, disabled = false, onChanged }
   const { draft } = editor.view;
   const changes = editor.destinationChanges;
   const [reviewedRevision, setReviewedRevision] = useState<number | null>(null);
-  async function act(run: () => Promise<DraftEditorView>): Promise<void> {
+  async function act(run: () => Promise<DraftEditorView>): Promise<boolean> {
     setBusy(true); setError(""); setConfirmation("");
-    try { onChanged(await run()); }
-    catch (err) { setError(errorText(err)); }
+    try { onChanged(await run()); return true; }
+    catch (err) { setError(errorText(err)); return false; }
     finally { setBusy(false); }
   }
   const target = targets.find(item => item.capabilityId === draft.capabilityId && item.connectionId === draft.connectionId);
@@ -72,7 +73,7 @@ export function DeskDraftEditor({ editor, targets, disabled = false, onChanged }
   return <article className="desk-draft" aria-label="Draft editor" data-revision={draft.revision}>
     <h4>{target?.label ?? "Saved draft"}</h4>
     <p role="status">{editor.view.withheld.length > 0 ? "Open in a permitted context" : editor.view.status === "needs-input" ? "Needs input" : "Ready for confirmation"}. Draft saved.</p>
-    <label>Destination<select aria-label="Draft destination" disabled={busy || disabled} value={target ? targetKey(target) : ""} onChange={event => { const next = targets.find(item => targetKey(item) === event.target.value); if (next) void act(() => changeDraftDestination(draft.draftId, draft.revision, next)); }}>{targets.map(item => <option key={targetKey(item)} value={targetKey(item)}>{item.label}</option>)}</select></label>
+    <label>Destination<select aria-label="Draft destination" disabled={busy || disabled} value={target ? targetKey(target) : ""} onChange={event => { const next = targets.find(item => targetKey(item) === event.target.value); if (next) void act(() => changeDraftDestination(draft.draftId, draft.revision, next)); }}><TargetOptions targets={targets} /></select></label>
     {editor.view.outdated.length > 0 && <p role="status">Review needed: {editor.view.outdated.join(", ")}. Refresh explicitly to use current context.</p>}
     {!editor.view.automaticDrafting.available && <p>{editor.view.automaticDrafting.reason}. You can still edit this draft.</p>}
     {draft.limitations.map((item, index) => <p key={`${item.code}:${index}`}>{item.message}</p>)}
@@ -94,7 +95,7 @@ export function DeskDraftEditor({ editor, targets, disabled = false, onChanged }
   </article>;
 }
 
-function DraftFieldEditor({ field, editor, disabled, save, saveReferences }: { field: EditorField; editor: DraftEditorView; disabled: boolean; save: (change: EditChange) => Promise<void>; saveReferences: (labels: string[]) => Promise<void> }) {
+function DraftFieldEditor({ field, editor, disabled, save, saveReferences }: { field: EditorField; editor: DraftEditorView; disabled: boolean; save: (change: EditChange) => Promise<boolean>; saveReferences: (labels: string[]) => Promise<boolean> }) {
   const current = editor.view.draft.fields[field.pointer];
   const fieldText = (value: unknown): string => field.destination ? referenceText(value) : valueText(value);
   const storedText = current?.presence === "present" ? fieldText(current.value) : "";
@@ -109,6 +110,9 @@ function DraftFieldEditor({ field, editor, disabled, save, saveReferences }: { f
   const bool = types.includes("boolean");
   const choices = Array.isArray(field.schema.enum) ? field.schema.enum : null;
   const label = `${field.label}${field.required ? " (required)" : ""}`;
+  const clear = (kind: "omit" | "null"): void => {
+    void save({ kind }).then(saved => { if (saved) setText(""); });
+  };
   const update = (): void => {
     if (field.destination) { void saveReferences(text.split(/[,\n]+/).map(label => label.trim()).filter(Boolean)); return; }
     try { const value: unknown = string ? text : JSON.parse(text); setError(""); void save({ kind: "set", value }); }
@@ -119,7 +123,7 @@ function DraftFieldEditor({ field, editor, disabled, save, saveReferences }: { f
     <label>{label}{choices || bool ? <select aria-label={label} value={text} onChange={event => { setText(event.target.value); }}><option value="">Choose…</option>{(choices ?? [true, false]).map(value => <option key={JSON.stringify(value)} value={string ? String(value) : JSON.stringify(value)}>{String(value)}</option>)}</select> : field.long || !string ? <textarea aria-label={label} value={text} onChange={event => { setText(event.target.value); }} /> : <input aria-label={label} value={text} onChange={event => { setText(event.target.value); }} />}</label>
     <span>{ORIGIN_LABEL[current?.origin ?? ""] ?? "Not filled"}{current?.presence === "absent" ? " · Cleared" : current?.presence === "null" ? " · Null" : ""}</span>
     {current?.unresolved && <p>{current.unresolved}</p>}
-    <div className="desk-draft-actions"><button onClick={update}>Save {field.label}</button><button onClick={() => { void save({ kind: "omit" }); }}>Clear {field.label}</button>{types.includes("null") && <button onClick={() => { void save({ kind: "null" }); }}>Set {field.label} to null</button>}
+    <div className="desk-draft-actions"><button onClick={update}>Save {field.label}</button><button onClick={() => { clear("omit"); }}>Clear {field.label}</button>{types.includes("null") && <button onClick={() => { clear("null"); }}>Set {field.label} to null</button>}
       <button disabled={!current || loading} onClick={() => {
         setLoading(true); setError("");
         void draftDetails(editor.view.draft.draftId, field.pointer).then(reply => { setDetails(reply.details); }).catch((err: unknown) => { setError(errorText(err)); }).finally(() => { setLoading(false); });

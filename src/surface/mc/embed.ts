@@ -95,6 +95,7 @@ export async function startMissionControl(
       ...(opts.balanceDrafts ? { balanceDrafts: opts.balanceDrafts } : {}),
       ...(opts.graphSurfaces ? { graphSurfaces: opts.graphSurfaces } : {}),
       ...(opts.balanceSurfaces ? { balanceSurfaces: opts.balanceSurfaces } : {}),
+      ...(opts.flowSurfaces ? { flowSurfaces: opts.flowSurfaces } : {}),
     });
     const { port, wsRegistry } = serverCtx;
     hookPoller = new HookStreamPoller(db, config.hooks, wsRegistry);

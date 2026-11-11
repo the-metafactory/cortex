@@ -1,6 +1,7 @@
 import { HOST_NAME_RE } from "../host-name";
 import { ParserPermissionsSchema } from "./desk-parser";
 import { RoutineOptionsSchema } from "./desk-routines";
+import { WorkerHandoffOptionsSchema } from "./desk-workers";
 import { DeskConversationsSchema } from "./desk-conversations";
 /**
  * F-007: Bot Configuration Types
@@ -552,6 +553,7 @@ export type FlowOptions = z.infer<typeof FlowOptionsSchema>;
 
 export const DeskSchema = z.object({
   routines: RoutineOptionsSchema.optional(),
+  workers: WorkerHandoffOptionsSchema.optional(),
   flows: FlowOptionsSchema.optional(),
   mirror: z.object({ day: z.enum(["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]), time: z.iso.time({ precision: -1 }) }).optional(),
   enabled: z.boolean().default(true),

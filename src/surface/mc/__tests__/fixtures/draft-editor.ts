@@ -60,13 +60,12 @@ export async function openDraftEditorRig() {
   }
   let editor = await open();
   const conversation = await editor.host.create({ title: "Synthetic Make conversation", origin: { kind: "web" }, links: [], policy: "cloud" }, "local");
-  const otherConversation = await editor.host.create({ title: "Another synthetic conversation", origin: { kind: "web" }, links: [], policy: "cloud" }, "local");
   const makeInput = { conversationId: conversation.id, entryId: "turn-1", capabilityId: CAPABILITY, connectionId: "synthetic-local" };
   const call = (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {
     const url = new URL(path, "http://127.0.0.1:8767");
     return handleDeskDrafts(new Request(url, { method, headers: { host: "127.0.0.1:8767", "content-type": "application/json", ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), url, { isLoopback: true, allowedHostnames: buildAllowedHostnames("127.0.0.1"), listenPort: 8767, principals: new Set() }, () => editor);
   };
-  return { root, registry, bindings, targets, owner, ...fake, makeInput, otherConversation, call,
+  return { root, registry, bindings, targets, owner, ...fake, makeInput, call,
     get editor() { return editor; },
     async reopen() { await editor.host.close(); editor = await open(); },
     async close() { await editor.host.close(); await rm(root, { recursive: true, force: true }); },

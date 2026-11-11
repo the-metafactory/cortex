@@ -176,7 +176,11 @@ async function readTurn(child: Bun.Subprocess<"pipe", "pipe", "pipe">, allowed: 
         continue;
       }
       await text.flush();
-      if (e.type === "tool_execution_start") { calls.set(e.toolCallId, e.args); continue; }
+      if (e.type === "tool_execution_start") {
+        calls.set(e.toolCallId, e.args);
+        if (allowed.has(e.toolName)) await request.started?.(e.toolCallId, e.toolName);
+        continue;
+      }
       if (e.type === "message_end") { if (e.message.role === "assistant") answer = e.message; continue; }
       const result = capped(textOf(e.result?.content));
       let outcome: ToolActivity["outcome"] = e.isError === true ? "error" : "done";
@@ -200,7 +204,7 @@ export function piTurns(settings: PiSettings): TurnCall {
     const stopped = new AbortController();
     const signal = AbortSignal.any([request.signal, stopped.signal]);
     const halt = (reason: string): void => { halted.reason ??= reason; stopped.abort(); child?.kill(); };
-    const bridge = request.tools ? piToolBridge(request.tools, signal, halt) : null;
+    const bridge = request.tools ? piToolBridge(request.tools, signal, halt, request.started) : null;
     try { child = spawnPi({ ...settings, env: { ...settings.env, ...bridge?.env } }, piArguments(settings, request, session)); }
     catch (error) { stopped.abort(); await bridge?.close(); throw error; }
     const timer = setTimeout(() => { halt(`pi did not answer within ${settings.timeoutSeconds} seconds`); }, settings.timeoutSeconds * 1000);

@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { runConformance, type CapabilityReport, type ConformanceReport } from "../../../../scripts/desk-adapter-conformance";
-import { guardNetwork } from "../../../../scripts/lib/desk-conformance/network";
-import { sampleValue } from "../../../../scripts/lib/desk-conformance/sample";
+import { guardNetwork } from "../../../desk-adapter-sdk/conformance/network";
+import { sampleValue } from "../../../desk-adapter-sdk/conformance/sample";
 import { CONFORMANCE_DOMAINS, CONFORMANCE_PACKAGES, CONFORMANCE_PACKAGES_ROOT, writeConformancePackages } from "./fixtures/conformance-build";
 
 const packageDir = (name: string): string => join(CONFORMANCE_PACKAGES_ROOT, name);
@@ -25,8 +25,6 @@ function treeDigest(root: string): string {
   walk(root);
   return hash.digest("hex");
 }
-
-const ownedTempEntries = (): string[] => readdirSync(tmpdir()).filter(name => name.startsWith("desk-conformance-")).sort();
 
 describe("valid packages from different domains", () => {
   for (const name of ["greenhouse", "observatory"] as const) {
@@ -117,16 +115,20 @@ describe("a package that needs a credential the harness will not request", () =>
 describe("every run", () => {
   test("makes no network request and writes nothing outside its own temporary directory", async () => {
     const names = Object.keys(CONFORMANCE_PACKAGES);
-    const before = ownedTempEntries();
+    const tempParent = mkdtempSync(join(tmpdir(), "conformance-check-"));
     const digests = new Map(names.map(name => [name, treeDigest(packageDir(name))]));
     const realFetch = globalThis.fetch;
-    for (const name of names) {
-      const report = await runConformance(packageDir(name));
-      expect(report.networkRequests).toBe(0);
+    try {
+      for (const name of names) {
+        const report = await runConformance(packageDir(name), tempParent);
+        expect(report.networkRequests).toBe(0);
+      }
+      expect(globalThis.fetch).toBe(realFetch);
+      expect(readdirSync(tempParent)).toEqual([]);
+      for (const name of names) expect(treeDigest(packageDir(name))).toBe(digests.get(name) ?? "");
+    } finally {
+      rmSync(tempParent, { recursive: true, force: true });
     }
-    expect(globalThis.fetch).toBe(realFetch);
-    expect(ownedTempEntries()).toEqual(before);
-    for (const name of names) expect(treeDigest(packageDir(name))).toBe(digests.get(name) ?? "");
   });
 
   test("the network guard refuses and counts an attempted request", async () => {
@@ -162,7 +164,7 @@ describe("the host source", () => {
   test("contains no identifier from the fixture packages' domains", () => {
     const identifiers = Object.values(CONFORMANCE_DOMAINS).flatMap(domain => [domain.adapterId, domain.place.type, domain.item.type]);
     expect(identifiers.length).toBeGreaterThan(0);
-    const roots = ["src/conversations", "src/desk-sdk", "scripts/lib/desk-conformance"];
+    const roots = ["src/conversations", "src/desk-sdk", "src/desk-adapter-sdk"];
     const files = [...roots.flatMap(root => [...new Bun.Glob("**/*.ts").scanSync({ cwd: join(import.meta.dir, "../../../..", root), absolute: true })]), join(import.meta.dir, "../../../../scripts/desk-adapter-conformance.ts")]
       .filter(file => !file.includes("/__tests__/") && !file.endsWith(".d.ts"));
     expect(files.length).toBeGreaterThan(10);

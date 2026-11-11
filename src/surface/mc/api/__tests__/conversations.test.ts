@@ -6,6 +6,7 @@ import { openConversationHost, type HostStatus } from "../../../../conversations
 import { DiscordConversations } from "../../../../conversations/discord";
 import { BOT, FakeThreads } from "../../../../conversations/__tests__/fixtures/discord-threads";
 import { answering, scratchDirs } from "../../../../conversations/__tests__/fixtures/scratch";
+import { ConversationResponseUpdateSchema, type ConversationResponseUpdate } from "../../../../conversations/types";
 import { handleConversations, isStackPrincipal } from "../conversations";
 import { buildAllowedHostnames, type MutationGuardContext } from "../mutation-guard";
 import { initDatabase } from "../../db/init";
@@ -46,7 +47,8 @@ describe("conversation API gates", () => {
     expect(streamed.status).toBe(200);
     expect(streamed.headers.get("content-type")).toBe("text/event-stream");
     const reader = streamed.body?.getReader();
-    expect(new TextDecoder().decode((await reader?.read())?.value)).toBe('event: response\ndata: {"text":null}\n\n');
+    const initial = new TextDecoder().decode((await reader?.read())?.value);
+    expect(ConversationResponseUpdateSchema.parse(JSON.parse(initial.split("data: ")[1] ?? "{}"))).toMatchObject({ text: null, working: false, generation: null, cursor: null });
     await reader?.cancel();
     expect((await call(status, "GET", `/api/conversations/${conversation.id}/entries`, undefined, OTHER)).status).toBe(403);
     expect((await call(status, "GET", `/api/conversations/${conversation.id}/entries/1`, undefined, OTHER)).status).toBe(403);
@@ -82,17 +84,30 @@ describe("conversation API gates", () => {
     const response = await call(status, "GET", `/api/conversations/${conversation.id}/stream`);
     const reader = response.body?.getReader();
     if (!reader) throw new Error("The response stream is missing.");
-    const frame = async (): Promise<string> => new TextDecoder().decode((await reader.read()).value);
+    let text: string | null = null;
+    const frame = async (): Promise<ConversationResponseUpdate> => {
+      const read = await reader.read();
+      if (read.done) throw new Error("The response stream ended early.");
+      const raw = new TextDecoder().decode(read.value);
+      const update = ConversationResponseUpdateSchema.parse(JSON.parse(raw.split("data: ")[1] ?? "{}"));
+      if (update.text !== undefined) text = update.text;
+      if (update.append !== undefined) text = (text ?? "") + update.append;
+      return update;
+    };
+    const until = async (matches: (update: ConversationResponseUpdate) => boolean): Promise<ConversationResponseUpdate> => {
+      for (let count = 0; count < 100; count++) { const update = await frame(); if (matches(update)) return update; }
+      throw new Error("Expected stream update was not received.");
+    };
     try {
-      expect(await frame()).toBe('event: response\ndata: {"text":null}\n\n');
+      expect(await frame()).toMatchObject({ text: null, working: false });
       await status.host.submit(conversation.id, { inputId: "stream-api", text: "hello", transport: "web", mode: "queue" });
-      const first = await frame();
-      if (first === 'event: response\ndata: {"text":""}\n\n') expect(await frame()).toBe('event: response\ndata: {"append":"Hello"}\n\n');
-      else expect(first).toBe('event: response\ndata: {"text":"Hello"}\n\n');
+      expect(await until(() => text === "Hello")).toMatchObject({ working: true });
       next.resolve(undefined);
-      expect(await frame()).toBe('event: response\ndata: {"append":" world"}\n\n');
+      expect(await until(update => update.append === " world")).toMatchObject({ append: " world", working: true });
       finish.resolve(undefined);
-      expect(await frame()).toBe('event: response\ndata: {"text":null}\n\n');
+      const completed = await until(update => update.text === null && Boolean(update.entries?.some(entry => entry.role === "assistant")));
+      expect(completed.entries).toContainEqual(expect.objectContaining({ role: "assistant", text: "Hello world" }));
+      expect(text).toBeNull();
       await status.host.waitForIdle(conversation.id);
       expect((await status.host.input(conversation.id, "stream-api")).answer).toBe("Hello world");
     } finally { next.resolve(undefined); finish.resolve(undefined); await reader.cancel(); }

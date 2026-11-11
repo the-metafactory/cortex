@@ -133,6 +133,8 @@ export default tseslint.config(
       "docs/mockups/",
       "docs/prototypes/",
       "docs/research/ivy-durable-2960/",
+      "docs/desk/examples/domain-adapter/",
+      "docs/desk/examples/blind-domain-adapter/",
       // cortex#1950 — GENERATED, self-contained plugin-SDK .d.ts shipped for
       // out-of-tree bundles (bun run sdk:dts). Excluded from tsconfig too;
       // not part of the typed project.

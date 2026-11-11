@@ -131,6 +131,17 @@ describe("pi turns", () => {
     expect(reply.text).toBe("a".repeat(1000));
   });
 
+  test("tool starts are reported before the completed activity", async () => {
+    const r = await rig();
+    await script(r, [...tool("live-tool", "soma_context", {}, "synthetic result"), answer("Done")]);
+    const order: string[] = [];
+    await piTurns(r.settings)(request({
+      started: async (callId, name) => { order.push(`start:${callId}:${name}`); },
+      activity: async activity => { order.push(`end:${activity.callId}:${activity.tool}`); },
+    }));
+    expect(order).toEqual(["start:live-tool:soma_context", "end:live-tool:soma_context"]);
+  });
+
   test("a turn runs pi with the read-only allowlist and the Soma projection, and records every tool call", async () => {
     const r = await rig();
     await script(r, [

@@ -1,0 +1,59 @@
+# Blind adapter author report
+
+## Inputs
+
+The only technical contract inputs read were:
+
+| Input | SHA-256 |
+| --- | --- |
+| `/tmp/cortex-3377-blind-attempt-1/guide.md` | `c772b2e2bbf533c1ce54b34163c411ee74fe20d6e2f58fed3554b77a2bd60ec5` |
+| `/tmp/cortex-3377-blind-attempt-1/desk-sdk.d.ts` | `9db0dd9409cc0ce32ff47bca5215ef3837413126690dd69004a5feb1b8813d4e` |
+
+No host source, repository example, harness implementation, skill file, web resource, or external technical source was inspected. Subsequent file reads were confined to the supplied inputs and this author's package outputs.
+
+## Domain and package
+
+`fictional.kiln-studio` version `1.0.0` is a synthetic ceramic studio owner using Desk SDK `^1.2.0`. It records firing plans; it does not operate kiln hardware. Its runtime has no filesystem, process, network, credential, or third-party imports. Its mutable owner state is isolated by connection inside each adapter instance.
+
+Two kiln destinations are available: Amber electric kiln and Cobalt test kiln. Four firing records are seeded: porcelain breakfast bowls, celadon tea cups, terracotta planters, and glaze test tiles. A firing contains `batchName`, `programme`, `loadNotes`, and a complete `kiln` reference. The `/kiln` relationship and drafting destination resolver are declared explicitly.
+
+Implemented declarations and bindings:
+
+| Capability | Behavior |
+| --- | --- |
+| `kiln-studio.kiln.list` | Lists annotated kiln destinations using the request connection. |
+| `kiln-studio.firing.list` | Filters by full admitted destination references, returns at most two objects per page, and retains immutable snapshot rows behind opaque cursors. Four initial records span two pages when both kilns are admitted. |
+| `kiln-studio.firing.watch` | Supports poll observations, scoped to source destinations, with present-object evidence and at most the requested limit or 20 objects. |
+| `kiln-studio.firing.create` | Supplies conversation drafting metadata, validates that the input kiln is an authorized snapshot destination, creates only during dispatch, and returns correlated success evidence. |
+| Canonical readback | The create connector declares `kiln-studio.firing.list` as its readback query capability and separately returns the current firing value or an unknown result. |
+
+The connector advertises no deduplication, operation lookup, conditional update, or cancellation guarantee. Local setup requires no settings or credentials.
+
+## Commands and local verification
+
+Files were authored only under `/tmp/cortex-3377-blind-attempt-1/package` using the file patch tool. The directory was created with `mkdir -p` targeting that exact path. The two inputs were read with `cat` and `sed`, and their digests were obtained with `shasum -a 256` on those exact paths.
+
+Commands run from the package directory:
+
+```sh
+bun build.mjs
+bun verify.mjs
+```
+
+`bun build.mjs` was rerun after the final backend edit. It produced the bundled `backend.mjs` and `desk-adapter.json`, including the SHA-256 of the backend's exact bytes.
+
+`bun verify.mjs` passed its direct checks of generated outputs: digest integrity, manifest/factory declaration equality, both kiln destinations, four seed records over two pages, snapshot retention across a create between pages, dispatch correlation and owner evidence, canonical readback, poll observations, aborted requests, and separate connection state. Its result is preserved in `LOCAL-VERIFICATION.json`.
+
+These are direct checks authored in this package, not host conformance. The author did not inspect or execute the conformance CLI. The package is ready for the host operator to run it.
+
+## Missing contract facts
+
+None. The supplied guide and SDK were sufficient for this bounded local backend package. No missing host contract was guessed or supplied from repository implementation details.
+
+## Production limits and optional hardening
+
+This is an in-memory synthetic owner with no persistence, real provider, installation, browser UI, hardware integration, or credential setup. Cursors and retained snapshots last for the adapter instance and have no eviction policy. Poll coverage is `objects`; omission does not assert deletion. Polls do not provide resumable continuity or tombstones. Production persistence, retention, and provider guarantees would require separate design and verification. These limits are not missing facts needed for this acceptance package.
+
+## Isolation limits
+
+Isolation was instruction constrained, not OS sandboxed to the two input files. General system and project instructions were present in the session; their referenced files were not opened, and no inherited host implementation detail was used. The tools could technically access a broader filesystem. Shell startup emitted a warning that a pyenv shim rehash could not write under the user's home directory; subsequent build, verification, and hashing commands used a non-login shell. No intentional file effect targeted any location outside the package directory. This report does not claim an operating-system audit of implicit tool or shell accesses.

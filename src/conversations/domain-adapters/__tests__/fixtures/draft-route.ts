@@ -1,9 +1,9 @@
 import { expect } from "bun:test";
 import { DESK_DRAFTS_PATH, type DraftEditorView } from "../../../../surface/mc/desk/draft-editor-contract";
+import type { DraftClient } from "../../drafting-rig";
 
-export interface DraftRouteRig {
+export interface DraftRouteRig extends DraftClient {
   readonly makeInput: unknown;
-  call(method: string, path: string, body?: unknown): Promise<Response>;
 }
 
 export type MadeDraft = DraftEditorView & { reopened?: boolean };
@@ -38,8 +38,7 @@ export async function ownFields(rig: DraftRouteRig): Promise<DraftEditorView> {
 }
 
 export async function expectBlockedConfirmation(rig: DraftRouteRig, view: DraftEditorView, mutations: () => unknown): Promise<void> {
-  const response = await rig.call("POST", `${draftPath(view)}/confirm`, { revision: view.view.draft.revision });
-  expect(await response.json()).toMatchObject({ confirmation: { kind: "blocked" } });
+  expect(await rig.confirm(view.view.draft)).toMatchObject({ kind: "blocked" });
   expect(mutations()).toEqual([]);
 }
 

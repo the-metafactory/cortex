@@ -16,13 +16,33 @@ import { ReadBindings } from "./reads/bindings";
 import type { QueryFetchRequest, QueryPage } from "./reads/query-types";
 import type { ReadBinding } from "./reads/types";
 import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "./types";
-import type { DraftServiceDeps, Lane, ModelOutput, ModelRequest, SourceItem } from "./drafting";
-import type { startServer } from "../../surface/mc/server";
+import type { DraftServiceDeps, DraftView, Lane, ModelOutput, ModelRequest, SourceItem } from "./drafting";
+import type { startServer, StartServerOptions } from "../../surface/mc/server";
 import { handleDeskDrafts } from "../../surface/mc/api/desk-drafts";
 import { buildAllowedHostnames } from "../../surface/mc/api/mutation-guard";
 import type { DeskDraftEditor } from "../../surface/mc/desk/draft-editor";
+import { DESK_DRAFTS_PATH, type DraftConfirmation } from "../../surface/mc/desk/draft-editor-contract";
 import type { OwnerDraftEntryOptions, OwnerDraftSession } from "../../surface/mc/desk/owner-draft-entry";
 
+
+export type DraftServeOptions = Pick<StartServerOptions, "drafts">;
+
+export interface DraftClient {
+  call(method: string, path: string, body?: unknown): Promise<Response>;
+  confirm(draft: Pick<DraftView["draft"], "draftId" | "revision">): Promise<DraftConfirmation>;
+}
+
+function draftClient(call: DraftClient["call"]): DraftClient {
+  return {
+    call,
+    async confirm(draft) {
+      const response = await call("POST", `${DESK_DRAFTS_PATH}/${draft.draftId}/confirm`, { revision: draft.revision });
+      if (response.status !== 200) throw new Error(`Draft confirmation returned HTTP ${response.status}: ${await response.text()}`);
+      const result = await response.json() as { confirmation: DraftConfirmation };
+      return result.confirmation;
+    },
+  };
+}
 
 export type DraftEntryDeps = Omit<DraftServiceDeps, "destinations" | "bindings">;
 
@@ -53,7 +73,7 @@ export interface OwnerDraftTarget<Editor extends DeskDraftEditor> {
   readonly sessionExtras: (destinations: ObjectReference[], read: OwnerDraftReadRig) => Record<string, unknown>;
   createBinding(journal: OperationJournalStore): OwnerDraftBindingRig;
   createEditor(setup: DraftRigSetup): Editor;
-  serve(setup: DraftRigSetup, principal: string): ReturnType<typeof startServer>;
+  serve(setup: DraftRigSetup, principal: string, serverOptions: DraftServeOptions): ReturnType<typeof startServer>;
   close(): Promise<void> | void;
 }
 
@@ -75,7 +95,7 @@ export interface OwnerDraftState {
   items: SourceItem[];
 }
 
-export interface OwnerDraftCore<Editor extends DeskDraftEditor> {
+export interface OwnerDraftCore<Editor extends DeskDraftEditor> extends DraftClient {
   readonly root: string;
   readonly registry: DomainAdapterRegistry;
   readonly policy: PolicyInputs;
@@ -95,8 +115,7 @@ export interface OwnerDraftCore<Editor extends DeskDraftEditor> {
   readonly lease: WriterLease;
   reopen(): Promise<void>;
   restrict(canonicalId: string, patch: Partial<Pick<RestrictionRecord, "status" | "egress">>): Promise<void>;
-  serve(): ReturnType<typeof startServer> & { call(method: string, path: string, body?: unknown): Promise<Response> };
-  call(method: string, path: string, body?: unknown): Promise<Response>;
+  serve(serverOptions?: DraftServeOptions): ReturnType<typeof startServer> & DraftClient;
   close(): Promise<void>;
 }
 
@@ -197,18 +216,18 @@ export async function openOwnerDraftRig<Editor extends DeskDraftEditor, Extra ex
       if (!restriction) throw new Error("Synthetic restriction missing");
       await authority.publishHostRecord({ kind: "restriction", value: { ...restriction, ...patch, revision: "2" } }, 1);
     },
-    serve() {
-      const server = target.serve({ host, deps, options }, principal.principal);
+    serve(serverOptions = {}) {
+      const server = target.serve({ host, deps, options }, principal.principal, serverOptions);
       servers.push(server);
       return {
         ...server,
-        call: (method: string, path: string, body?: unknown) => fetch(`http://127.0.0.1:${server.port}${path}`, { method, headers: { "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }),
+        ...draftClient((method, path, body) => fetch(`http://127.0.0.1:${server.port}${path}`, { method, headers: { "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })),
       };
     },
-    async call(method: string, path: string, body?: unknown) {
+    ...draftClient(async (method, path, body) => {
       const req = new Request(`http://127.0.0.1:8767${path}`, { method, headers: { host: "127.0.0.1:8767", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       return handleDeskDrafts(req, new URL(req.url), { isLoopback: true, listenPort: 8767, principals: new Set(), localPrincipal: principal.principal, allowedHostnames: buildAllowedHostnames("127.0.0.1") }, () => editor);
-    },
+    }),
     async close() { for (const server of servers) server.stop(true); await bridge.settled(); await host.close(); await target.close(); await rm(root, { recursive: true, force: true }); },
   };
   return Object.assign(core, spec.extend(core));

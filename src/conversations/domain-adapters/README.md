@@ -105,7 +105,7 @@ through the stable path, and executes only the approved digest once.
 
 Run the vertical demonstration with `bun scripts/probe-desk-drafting.ts`.
 
-Mission Control accepts an opt-in `graphDrafts` setup containing the conversation host, drafting dependencies and authenticated graph sessions. `startMissionControl` forwards it to `startServer`, which installs `workGraphNodeDraftingBinding`, the scoped graph destination resolver and the confirmation handoff under `/api/desk/drafts`. This composition does not activate a connection or writer; managed activation supplies those authorities separately. Destination projections and node reads are shared within one draft generation or confirmation batch; confirmation always starts a fresh batch. `bun scripts/probe-desk-graph-create.ts` exercises this HTTP entry against a temporary host store and synthetic graph owner.
+Mission Control accepts an opt-in `graphDrafts` setup containing the conversation host, drafting dependencies and authenticated graph sessions. `startMissionControl` forwards it to `startServer`, which rejects configurations supplying both `drafts` and `graphDrafts` and installs `workGraphNodeDraftingBinding`, the scoped graph destination resolver and the confirmation handoff under `/api/desk/drafts`. This composition does not activate a connection or writer; managed activation supplies those authorities separately. Destination projections and work-graph object reads are shared within one draft generation or confirmation batch; confirmation always starts a fresh batch. `bun scripts/probe-desk-graph-create.ts` exercises this HTTP entry against a temporary host store and synthetic Soma graph backend.
 
 <!-- glossary-ignore: node -->
 
