@@ -1,19 +1,10 @@
-import type { Database } from "bun:sqlite";
 import { openBalanceReadRig, seedStudioThread } from "../../../../conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
 import { HandledLedger } from "../actions";
-import { loadBalanceState, saveBalanceState } from "../balance-store";
 import { composeDesk, type AdapterCapabilityAdmission, type DeskOptions, type DeskRuntime } from "../compose";
 import { SourceCache, type SourceMail } from "../sources/command";
 import { attentionRig, type AttentionOptions } from "./adapter-attention-fixtures";
 
 export const BALANCE_ATTENTION_MAIL: SourceMail = { kind: "mail", id: "budget@example.org", from: { name: "Ada Boss", address: "boss@example.org" }, subject: "Budget", receivedAt: "2026-11-01T08:00:00.000Z", unread: true, url: "message://%3Cbudget%3E", account: "work" };
-
-export function planBalanceToday(db: Database, date: string, ids: readonly string[]): void {
-  const state = loadBalanceState(db);
-  if (!state) throw new Error("the Balance fixture store is missing");
-  state.dayState = { date, confirmed: [...ids], closed: false };
-  saveBalanceState(db, state);
-}
 
 export async function openBalanceAttentionStack(now: number, options: AttentionOptions = {}, studioLink = true) {
   const balance = await openBalanceReadRig();

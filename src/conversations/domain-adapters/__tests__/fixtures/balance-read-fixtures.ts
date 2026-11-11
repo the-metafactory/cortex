@@ -59,6 +59,13 @@ export function seedStudioThread(db: Database, projectId = "studio-response:thre
   saveMeta(db, { ...loadMeta(db), studio: [{ namespace: "fixture", source: `id:${slug}`, slug, projectId, response: 0, pending: null }] });
 }
 
+export function planBalanceToday(db: Database, date: string, ids: readonly string[]): void {
+  const state = loadBalanceState(db);
+  if (!state) throw new Error("the Balance fixture store is missing");
+  state.dayState = { date, confirmed: [...ids], closed: false };
+  saveBalanceState(db, state);
+}
+
 export function seedBalanceObservationOverflow(rig: BalanceReadRig, openPerArea = 8): string[] {
   const state = loadBalanceState(rig.db);
   if (!state) throw new Error("balance state is missing");

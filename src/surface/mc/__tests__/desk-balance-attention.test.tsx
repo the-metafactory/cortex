@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { findNode } from "../../../balance";
-import { seedBalanceObservationOverflow } from "../../../conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
+import { planBalanceToday, seedBalanceObservationOverflow } from "../../../conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
 import { handleDeskAdapterAction } from "../api/desk-adapter";
 import { handleDeskMyDay } from "../api/desk-my-day";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
@@ -15,7 +15,7 @@ import { catchupItems } from "../dashboard-v2/components/desk-catch-up";
 import { DeskItemRow } from "../dashboard-v2/components/desk-view";
 import { SourceCache } from "../desk/sources/command";
 import { localDay } from "../desk/time";
-import { BALANCE_ATTENTION_MAIL as MAIL, openBalanceAttentionStack, planBalanceToday } from "../desk/fixtures/balance-attention";
+import { BALANCE_ATTENTION_MAIL as MAIL, openBalanceAttentionStack } from "../desk/fixtures/balance-attention";
 
 const NOW = Date.parse("2026-11-01T09:00:00.000Z");
 const DATE = localDay(NOW);

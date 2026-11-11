@@ -1,5 +1,6 @@
 import { adapterRowRef, readAdapterAttention, type AdapterAttentionAccess, type AdapterAttentionInput } from "./adapter-items";
 import { STUDIO_OWNER_KIND } from "../../../common/desk-owner";
+import { STUDIO_RESPOND_ACTION } from "./adapter-actions";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import type { OutlineNode } from "../../../balance";
 import { buildWeeklyMirror, mirrorWeek, type MirrorSchedule } from "./mirror";
@@ -398,7 +399,7 @@ export async function composeDesk(
 function withOwnerRespond(item: DeskItem, owner: string | undefined, slugs: ReadonlyMap<string, string>, outline: OutlineNode): DeskItem {
   if (owner !== STUDIO_OWNER_KIND) return item;
   const slug = studioSlugOf(outline, adapterRowRef(item.key)?.canonicalId ?? "", slugs);
-  return { ...item, actions: [{ id: "studio.respond", label: "Respond in Studio", role: "primary", wired: slug !== undefined, ...(slug === undefined ? {} : { target: slug }) }] };
+  return { ...item, actions: [{ id: STUDIO_RESPOND_ACTION, label: "Respond in Studio", role: "primary", wired: slug !== undefined, ...(slug === undefined ? {} : { target: slug }) }] };
 }
 
 function studioSlugOf(outline: OutlineNode, id: string, slugs: ReadonlyMap<string, string>): string | undefined {

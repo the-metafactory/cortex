@@ -4,7 +4,7 @@ import { localDay } from "../../../common/local-day";
 import { loadBalanceState, saveBalanceState } from "../../../surface/mc/desk/balance-store";
 import { BALANCE_TASK_ATTENTION, BALANCE_TASK_ROW_CAPABILITIES } from "../balance/attention";
 import { balanceTaskObservationBinding } from "../balance/observation";
-import { closeTrackedBalanceReadRigs, openTrackedBalanceReadRig, type BalanceReadRig } from "./fixtures/balance-read-fixtures";
+import { closeTrackedBalanceReadRigs, openTrackedBalanceReadRig, planBalanceToday, type BalanceReadRig } from "./fixtures/balance-read-fixtures";
 
 afterEach(closeTrackedBalanceReadRigs);
 const open = openTrackedBalanceReadRig;
@@ -16,11 +16,6 @@ function saved(rig: BalanceReadRig) {
   const state = loadBalanceState(rig.db);
   if (!state) throw new Error("balance state is missing");
   return state;
-}
-function plan(rig: BalanceReadRig, ids: string[]): void {
-  const state = saved(rig);
-  state.dayState = { date: TODAY, confirmed: ids, closed: false };
-  saveBalanceState(rig.db, state);
 }
 function edit(rig: BalanceReadRig, id: string, patch: { deferredUntil?: string }): void {
   const state = saved(rig);
@@ -46,7 +41,7 @@ describe("the Balance attention mapping", () => {
 
   test("an actionable task carries the engine's reason and its In today badge", async () => {
     const rig = await open();
-    plan(rig, ["task-wing"]);
+    planBalanceToday(rig.db, TODAY, ["task-wing"]);
     expect((await rig.check()).status).toBe("ok");
     const task = (await values(rig)).get("task-wing");
     expect(task?.why).toBe("Keeps Lab moving.");

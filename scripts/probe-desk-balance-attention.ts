@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { seedBalanceObservationOverflow } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
-import { openBalanceAttentionStack, planBalanceToday } from "../src/surface/mc/desk/fixtures/balance-attention";
+import { planBalanceToday, seedBalanceObservationOverflow } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
+import { openBalanceAttentionStack } from "../src/surface/mc/desk/fixtures/balance-attention";
 import { ALL_AREAS, briefing, selectItems, spokenBriefing } from "../src/surface/mc/desk/present";
 import { localDay } from "../src/surface/mc/desk/time";
 import { catchupItems } from "../src/surface/mc/dashboard-v2/components/desk-catch-up";
