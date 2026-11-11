@@ -16,7 +16,7 @@ import { join } from "node:path";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createRegistry, defineDoc, defineDocFamily, Harness, LiveDoc, watchEvents, ProviderDoc, type Conversation, type EntryId, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
+import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type Conversation, type ConversationView, type EntryId, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { z } from "zod";
 import { ConnectionSetupService, type ConnectionSetupDeps } from "./connection-setup";
@@ -36,8 +36,8 @@ import { acquireHostLock, type LockOwner } from "./lock";
 import { cloudLanes, type CloudLane, type ToolsConfig } from "../common/types/desk-conversations";
 import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, type GateResult, type Lanes, type ToolSurfaceFor, type TurnCall, type TurnEvent } from "./model";
 import {
-  AttachmentRefSchema, CONTINUATION_KIND, isModelRoute, laneName, routePolicy, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES, TRANSPORTS,
-  type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationMeta, type CreateConversation,
+  AttachmentRefSchema, CONTINUATION_KIND, isModelRoute, laneName, routePolicy, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, TOOL_STARTED_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES, TRANSPORTS,
+  type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationResponse, type ConversationMeta, type CreateConversation,
   type ExchangeLine, type InputRequest, type ModelChoices, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadback, type OwnerReadbacks, type OwnerType, type OwnerWriters, type WithheldReasons, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView,
 } from "./types";
 
@@ -108,6 +108,11 @@ const SNIPPET = 160;
 const MAX_LINKS = 50;
 const OVERVIEW_BATCH = 16;
 const TRANSCRIPT_CACHE = 200;
+const ResponseLiveSchema = z.object({
+  run: z.unknown().optional(),
+  generation: z.object({ message: z.object({ responseId: z.string().optional(), timestamp: z.number().optional(), content: z.array(z.object({ type: z.string(), text: z.string().optional() }).loose()) }).loose().optional() }).optional(),
+});
+const ResponseInboxSchema = z.object({ items: z.array(z.unknown()) });
 const NEXT: Record<OperationState, OperationState[]> = { proposed: ["confirmed"], confirmed: ["running"], running: ["created", "failed", "uncertain"], uncertain: ["created", "failed"], created: [], failed: [] };
 
 const INPUT_CONFLICT = (): ConversationError => new ConversationError(409, "That input id was already used with a different payload.");
@@ -664,6 +669,10 @@ export class ConversationHost {
 
   private async recordTurn(id: string, event: TurnEvent): Promise<void> {
     const stored = await this.stored(id);
+    if (event.kind === "tool-start") {
+      await this.record(id, `tool-start:${event.turn}:${event.callId}`, TOOL_STARTED_KIND, { callId: event.callId, tool: event.tool, turn: event.turn });
+      return;
+    }
     if (event.kind === "tool") {
       const source = event.activity.source;
       if (source) await this.update(id, current => ({ ...current, policy: strictest([current.policy, source.policy]), toolSources: { ...current.toolSources, [source.id]: { ...current.toolSources[source.id], revision: source.revision, policy: strictest([current.toolSources[source.id]?.policy ?? source.policy, source.policy]), ...(source.projectRegistryRevision ? { projectRegistryRevision: source.projectRegistryRevision } : {}) } } }));
@@ -851,23 +860,29 @@ export class ConversationHost {
     return this.view(id, stored, await this.workingSet(), effective, available);
   }
 
-  async watchResponse(id: string, listener: (text: string | null) => void | Promise<void>, onClose?: () => void): Promise<() => Promise<void>> {
+  async watchResponse(id: string, listener: (response: ConversationResponse) => void | Promise<void>, onClose?: () => void): Promise<() => Promise<void>> {
     const { stored } = await this.tighten(id);
     const conversation = await this.conversation(stored);
-    const events = await watchEvents(this.engine, conversation.id, this.context);
-    const textOf = (message: AssistantMessage | undefined): string | null => message ? message.content.flatMap(block => block.type === "text" ? [block.text] : []).join("\n") : null;
+    const watch = await conversation.watch(this.context);
+    let cursor: number | null = null;
+    const publish = async (view: ConversationView): Promise<void> => {
+      const live = ResponseLiveSchema.parse(view.docs["pi.live"] ?? {});
+      const inbox = ResponseInboxSchema.parse(view.docs["pi.inbox"] ?? { items: [] });
+      const newest = view.entries.at(-1)?.id;
+      const added = newest !== undefined && Number(newest) !== cursor ? view.entries.filter(entry => cursor === null || Number(entry.id) > cursor).map(toEntry) : [];
+      if (newest !== undefined) cursor = Number(newest);
+      const message = live.generation?.message;
+      await listener({ cursor, generation: message ? message.responseId ?? `legacy:${message.timestamp ?? 0}` : null, working: Boolean(live.run) || inbox.items.length > 0, text: message ? message.content.flatMap(block => block.type === "text" ? [block.text ?? ""] : []).join("\n") : null, entries: added });
+    };
     try {
-      await listener(textOf(events.snapshot.generation?.message));
-      events.start(async () => {
-        const live = await this.engine.snapshot(LiveDoc, conversation.id, this.context);
-        await listener(textOf(live?.generation?.message));
-      });
-    } catch (error) { await events.stop(); throw error; }
-    void events.closed.then(end => {
+      await publish(watch.value);
+      watch.start(async view => { await publish(view); });
+    } catch (error) { await watch.stop(); throw error; }
+    void watch.closed.then(end => {
       if (end.reason === "listener_error" || end.reason === "session_failed") console.error("conversations: response stream closed", end.error);
       onClose?.();
     });
-    return async () => { await events.stop(); };
+    return async () => { await watch.stop(); };
   }
 
   async detail(id: string): Promise<HostDetail> {
