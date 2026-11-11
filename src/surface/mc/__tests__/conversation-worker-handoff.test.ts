@@ -176,7 +176,7 @@ describe("worker status and cancel writers", () => {
     if (stopping.state !== "accepted") throw new Error("expected an acknowledged stop");
     expect(stopping.receipt).toContain("has not confirmed it yet");
     expect(readWorkerRecord(h.db, NODE)!.state).toBe("running");
-    h.answer("stop-node", JSON.stringify({ state: "superseded", reason: "generation 4 was replaced by generation 5" }), 1);
+    h.answer("stop-node", JSON.stringify({ state: "superseded", generation: 4, reason: "generation 4 was replaced by generation 5" }), 1);
     const superseded = await writer.create({ ...request({ node: NODE, generation: "4" }, "op-6"), type: "work-cancel" });
     if (superseded.state !== "failed") throw new Error("expected a refusal");
     expect(superseded.error).toContain("generation 4 was replaced");
@@ -195,7 +195,9 @@ describe("worker status and cancel writers", () => {
 
   test.each([
     ["nonzero exit", "", 1],
+    ["nonzero stop reply", JSON.stringify({ state: "stopped", generation: 3 }), 1],
     ["missing generation", JSON.stringify({ state: "stopped" }), 0],
+    ["another generation", JSON.stringify({ state: "stopped", generation: 4 }), 0],
     ["malformed reply", "reply lost", 0],
     ["another node", JSON.stringify({ nodeId: "99", state: "stopped", generation: 3 }), 0],
   ])("keeps a stop with %s uncertain instead of claiming nothing was cancelled", async (_name, stdout, code) => {
@@ -209,6 +211,10 @@ describe("worker status and cancel writers", () => {
     expect(result.receipt).not.toContain("Nothing was cancelled");
     expect(readWorkerRecord(h.db, NODE)).toMatchObject({ state: "running", generation: 3 });
     expect(readWorkerOperation(h.db, "uncertain-stop")?.state).toBe("stopping");
+    h.answer("status-command", JSON.stringify({ state: "cancelled", generation: 3 }));
+    const readback = await workCancelWriter(deps(h)).readback({ operationId: "uncertain-stop", conversationId: "c", proposalId: "p", revision: 1, owner: "work-cancel", state: "running", canonicalId: NODE, history: [] });
+    expect(readback).toMatchObject({ found: true, canonicalId: NODE });
+    expect(readWorkerOperation(h.db, "uncertain-stop")?.state).toBe("complete");
   });
 
   test("an unmapped status state keeps the recorded state with its reason and never becomes merged", async () => {

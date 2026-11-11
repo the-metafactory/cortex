@@ -5,8 +5,8 @@ import type { WorkerHandoffOptions } from "../../../common/types/desk-workers";
 import { oneLine } from "./actions";
 import { spawnWithStdin, type WriterRunner } from "./create";
 import { ADD_TIMEOUT_MS, GRAPH_LABEL, graphAnswer, graphBody, graphMarker, graphReadbackById, recordGraphOperation, repositoryRefusal, withBodyFile } from "./graph-conversation-writer";
-import { expandWorkerCommand } from "./worker-handoff-contract";
-import { readWorkerRecord, recordWorkerRecord, recordWorkerState, readWorkerOperation, pendingWorkerStart, recordWorkerOperation, settleWorkerOperation, type WorkerOperation, type WorkerRecord } from "./worker-handoff-store";
+import { expandWorkerCommand, lastWorkerJson, parseWorkerJson, workerAnswerMatches } from "./worker-handoff-contract";
+import { readWorkerRecord, handoffRowFor, recordWorkerRecord, recordWorkerState, readWorkerOperation, pendingWorkerStart, recordWorkerOperation, settleWorkerOperation, type WorkerOperation, type WorkerRecord } from "./worker-handoff-store";
 import { readWorkerStatus } from "./worker-handoff-status";
 import { splitNodeRef } from "./routine-node-command";
 
@@ -22,20 +22,9 @@ export interface WorkerWriterDeps {
   now?: () => number;
 }
 
-const parsed = (text: string): unknown => {
-  try { return JSON.parse(text); }
-  catch { return undefined; }
-};
-
 const lastObject = (text: string): Record<string, unknown> | null => {
-  const whole = parsed(text.trim());
-  if (whole && typeof whole === "object") return whole as Record<string, unknown>;
-  const lines = text.trimEnd().split(/\r?\n/);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const found = parsed(lines.slice(index).join("\n"));
-    if (found && typeof found === "object") return found as Record<string, unknown>;
-  }
-  return null;
+  const value = lastWorkerJson(text);
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
 };
 
 const integer = (value: unknown): number | null => (typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null);
@@ -46,12 +35,13 @@ const recordedFor = (deps: WorkerWriterDeps, request: CreateRequest): WorkerReco
   const typed = (request.fields.node ?? "").trim();
   const parts = splitNodeRef(typed);
   if (!parts) return null;
-  const found = readWorkerRecord(deps.db, typed) ?? readWorkerRecord(deps.db, canonicalNode(repositoryOf(typed), parts.id));
-  return found?.conversationId === request.provenance.conversationId ? found : null;
+  return handoffRowFor(deps.db, request.provenance.conversationId, `${parts.repo}#${parts.id}`);
 };
 
 const failed = (sentence: string): CreateResult => ({ state: "failed", error: sentence });
 const created = (found: WorkerRecord): CreateResult => ({ state: "created", canonicalId: found.node, ...(found.url ? { url: found.url } : {}) });
+const unconfirmedStop = (generation: number): CreateResult => ({ state: "accepted", receipt: `Ranger has not confirmed the stop of generation ${generation}. The stop may have happened; check the original request's status before retrying.` });
+const STOP_REFUSALS: ReadonlySet<string> = new Set(["superseded", "not-active", "refused"]);
 
 function readyWorker(deps: WorkerWriterDeps, request: CreateRequest, notSetUp: string, noRecord: string): { workers: WorkerHandoffOptions; found: WorkerRecord } | CreateResult {
   const workers = deps.desk()?.workers;
@@ -122,7 +112,7 @@ function briefArgs(brief: Record<string, string>, marker: string): { head: strin
   if (!/^[1-9]\d*$/.test(budgetTokens) || !/^[1-9]\d*$/.test(budgetMinutes)) return failed("Write the budget as positive whole tokens and minutes. Nothing was filed.");
   const probeList = (probes ?? "").split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   for (const probe of probeList) {
-    const value = parsed(probe);
+    const value = parseWorkerJson(probe);
     if (value === undefined || typeof value !== "object" || value === null || Array.isArray(value)) return failed("Each probe must be one JSON object. Nothing was filed.");
   }
   const blocked = (dependencies ?? "").split(/[\s,]+/).map(value => value.trim()).filter(Boolean);
@@ -222,7 +212,7 @@ export function workStartWriter(deps: WorkerWriterDeps): OwnerWriter {
     const result = await runWorkerCommand(deps, argv, workers.timeoutSeconds * 1000);
     const answer = lastObject(result.stdout);
     const parts = splitNodeRef(found.node);
-    if (answer && (answer.nodeId !== undefined && answer.nodeId !== parts?.id && answer.nodeId !== Number(parts?.id) || answer.repo !== undefined && answer.repo !== parts?.repo || answer.root !== undefined && answer.root !== splitNodeRef(found.map)?.id && answer.root !== Number(splitNodeRef(found.map)?.id))) throw new Error("Ranger answered for another node or map. Check the original request before retrying.");
+    if (answer && !workerAnswerMatches(answer, found.node, found.map)) throw new Error("Ranger answered for another node or map. Check the original request before retrying.");
     const pid = integer(answer?.pid);
     if (result.code !== 0 || pid === null) {
       const refusalPrefix = `ranger build-now: #${parts?.id} on ${found.map}: `;
@@ -263,18 +253,21 @@ export function workCancelWriter(deps: WorkerWriterDeps): OwnerWriter {
     const reason = typeof answer?.reason === "string" && answer.reason.trim() ? answer.reason.trim() : null;
     const latest = recordedFor(deps, request);
     if (latest?.generation !== expected) return failed("The recorded worker changed while Ranger was stopping the earlier generation. The earlier stop may have completed; check its status before retrying.");
-    const parts = splitNodeRef(found.node);
-    if (answer && (answer.nodeId !== undefined && answer.nodeId !== parts?.id && answer.nodeId !== Number(parts?.id) || answer.repo !== undefined && answer.repo !== parts?.repo || answer.map !== undefined && answer.map !== found.map)) return failed(`Ranger answered for another node or map. ${NOTHING_CANCELLED}`);
+    if (answer && !workerAnswerMatches(answer, found.node, found.map)) return unconfirmedStop(expected);
     if (result.code === 0 && integer(answer?.generation) === expected && (state === "stopped" || state === "already-stopped")) {
       const stopped = recordWorkerState(deps.db, found.node, { state: "cancelled", reason: reason ?? `Generation ${found.generation} stopped.`, pr: found.pr, result: found.result, generation: found.generation }, now());
       if (stopped) recordWorkerRecord(deps.db, { ...stopped, proposalId: request.provenance.proposalId, operationId: request.operationId, updatedAt: now() });
       settleWorkerOperation(deps.db, request.operationId, "complete");
       return created(found);
     }
-    if (state === "stopping" || state === "unknown") {
+    if (result.code === 0 && integer(answer?.generation) === expected && (state === "stopping" || state === "unknown")) {
       return { state: "accepted", receipt: `Ranger acknowledged the stop of generation ${found.generation} and has not confirmed it yet. Check again before retrying.` };
     }
-    return failed(`${reason ?? oneLine(result.stderr || result.stdout, `Ranger refused to stop generation ${found.generation}.`).replace(/[.\s]+$/, "")}. ${NOTHING_CANCELLED}`);
+    if (state && STOP_REFUSALS.has(state) && integer(answer?.generation) === expected) {
+      settleWorkerOperation(deps.db, request.operationId, "refused");
+      return failed(`${reason ?? oneLine(result.stderr || result.stdout, `Ranger refused to stop generation ${found.generation}.`).replace(/[.\s]+$/, "")}. ${NOTHING_CANCELLED}`);
+    }
+    return unconfirmedStop(expected);
   };
   return { create, readback: workerReadback(deps, state => state === "cancelled") };
 }

@@ -5,6 +5,33 @@ import { splitNodeRef } from "./routine-node-command";
 
 export { WorkerHandoffOptionsSchema, type WorkerHandoffOptions };
 
+const WORKER_OUTPUT_TAIL_LIMIT = 65_536;
+
+export function parseWorkerJson(text: string): unknown {
+  try { return JSON.parse(text); }
+  catch { return undefined; }
+}
+
+export function lastWorkerJson(text: string): unknown {
+  const tail = text.slice(-WORKER_OUTPUT_TAIL_LIMIT).trimEnd();
+  const candidates = new Set([tail, tail.slice(tail.lastIndexOf("\n") + 1), tail.slice(tail.lastIndexOf("\n{") + 1)]);
+  for (const candidate of candidates) {
+    const value = parseWorkerJson(candidate);
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+export function workerAnswerMatches(answer: Record<string, unknown>, node: string, map: string): boolean {
+  const parts = splitNodeRef(node);
+  const root = splitNodeRef(map);
+  return parts !== null && root !== null
+    && (answer.nodeId === undefined || answer.nodeId === parts.id || answer.nodeId === Number(parts.id))
+    && (answer.repo === undefined || answer.repo === parts.repo)
+    && (answer.root === undefined || answer.root === root.id || answer.root === Number(root.id))
+    && (answer.map === undefined || answer.map === map);
+}
+
 export const BUILD_STATE_TO_WORKER: Record<string, WorkerState> = {
   prepared: "prepared",
   filed: "prepared",

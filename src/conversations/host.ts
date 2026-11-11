@@ -337,7 +337,7 @@ export class ConversationHost {
     return { principal: stored.principal, conversationId, transport: "web", route: route ?? "local", policy: stored.policy, scope: [] };
   }
 
-  private lifecycleWorkerInputs(stored: Stored, conversationId: string): object[] {
+  private lifecycleWorkerInputs(stored: Stored, conversationId: string): { node: string; policy: Policy; recorded: Policy }[] {
     const owner = this.sources.workers;
     return Object.entries(stored.workerSources).flatMap(([node, recorded]) => {
       const policy = owner?.recorded(this.workerSession(stored, conversationId), node);
@@ -498,14 +498,7 @@ export class ConversationHost {
   }
 
   private workerPolicies(current: Stored, conversationId: string): Policy[] {
-    const owner = this.sources.workers;
-    const policies: Policy[] = [];
-    for (const [node, recorded] of Object.entries(current.workerSources)) {
-      const policy = owner?.recorded(this.workerSession(current, conversationId), node);
-      if (policy === null || policy === undefined) throw new ConversationError(403, "Previously retrieved worker status is no longer authorized. Start a new conversation with current permissions.");
-      policies.push(recorded, policy);
-    }
-    return policies;
+    return this.lifecycleWorkerInputs(current, conversationId).flatMap(({ recorded, policy }) => [recorded, policy]);
   }
 
   private async ownPrivacy(current: Stored, conversationId: string): Promise<{ policy: Policy; sources: SourceView[]; available: boolean }> {

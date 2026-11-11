@@ -1,4 +1,5 @@
 import { z } from "zod/v4";
+import { WORKER_NODE_REF, WORKER_REPOSITORY_REF } from "../../common/types/desk-workers";
 import type { Policy } from "../types";
 import type { ToolDefinition, ToolSession } from "./capabilities";
 import { redactToolText } from "./output";
@@ -10,9 +11,6 @@ export const WORKER_STATES = ["prepared", "queued", "running", "stopping", "wait
 export type WorkerState = (typeof WORKER_STATES)[number];
 export const WORKER_ACTIVE: ReadonlySet<WorkerState> = new Set(["queued", "running", "stopping", "waiting", "review"]);
 
-const MAP_REF = /^(?:(?:github|gitlab):[\w.-]+\/)?[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/;
-const REPOSITORY_REF = /^(?:(?:github|gitlab):[\w.-]+\/)?[\w.-]+(?:\/[\w.-]+)+$/;
-const NODE_REF = /^(?:(?:github|gitlab):[\w.-]+\/)?[\w.-]+(?:\/[\w.-]+)+#[1-9]\d*$/;
 const BUDGET_TOKEN_MAX = 10_000_000;
 const BUDGET_MINUTE_MAX = 1_440;
 
@@ -26,9 +24,9 @@ export const BudgetSchema = z.object({
 
 const BriefInputSchema = z.object({
   proposalId: z.uuid(),
-  repository: z.string().trim().max(300).regex(REPOSITORY_REF),
-  map: z.string().trim().max(320).regex(MAP_REF),
-  parent: z.string().trim().max(320).regex(NODE_REF),
+  repository: z.string().trim().max(300).regex(WORKER_REPOSITORY_REF),
+  map: z.string().trim().max(320).regex(WORKER_NODE_REF),
+  parent: z.string().trim().max(320).regex(WORKER_NODE_REF),
   title: z.string().trim().min(1).max(200),
   scope: z.string().trim().min(1).max(4_000),
   acceptanceChecks: z.array(z.string().trim().min(1).max(600)).min(1).max(12),
@@ -38,9 +36,9 @@ const BriefInputSchema = z.object({
   blockedBy: z.array(z.string().trim().min(3).max(320)).max(16).optional(),
 }).strict();
 type BriefInput = z.infer<typeof BriefInputSchema>;
-const NodeInputSchema = z.object({ proposalId: z.uuid(), node: z.string().trim().max(320).regex(NODE_REF) }).strict();
+const NodeInputSchema = z.object({ proposalId: z.uuid(), node: z.string().trim().max(320).regex(WORKER_NODE_REF) }).strict();
 type NodeInput = z.infer<typeof NodeInputSchema>;
-const StatusInputSchema = z.object({ node: z.string().trim().max(320).regex(NODE_REF) }).strict();
+const StatusInputSchema = z.object({ node: z.string().trim().max(320).regex(WORKER_NODE_REF) }).strict();
 type StatusInput = z.infer<typeof StatusInputSchema>;
 
 export interface WorkerHandoff {
