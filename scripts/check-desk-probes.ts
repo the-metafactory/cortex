@@ -40,6 +40,10 @@ export const PROBE_EXCLUSIONS: readonly DeskProbeExclusion[] = [
     reason: "needs a browser: it renders connection diagnostics in Playwright Chromium",
   },
   {
+    file: "probe-desk-adapter-frame.ts",
+    reason: "needs browsers: it verifies isolated adapter frames in Playwright Chromium, WebKit and Firefox",
+  },
+  {
     file: "probe-desk-adapter-inline.ts",
     reason: "needs browsers: it verifies inline adapter assets in Playwright Chromium and WebKit",
   },
