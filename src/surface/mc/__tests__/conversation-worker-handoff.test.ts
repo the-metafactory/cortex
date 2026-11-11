@@ -203,7 +203,7 @@ describe("worker status and cancel writers", () => {
   ])("keeps a stop with %s uncertain instead of claiming nothing was cancelled", async (_name, stdout, code) => {
     await filed(h);
     recordWorkerState(h.db, NODE, { state: "running", reason: null, pr: null, result: null, generation: 3 }, NOW);
-    h.answer("stop-node", stdout as string, code as number);
+    h.answer("stop-node", stdout, code);
     const result = await workCancelWriter(deps(h)).create({ ...request({ node: NODE, generation: "3" }, "uncertain-stop"), type: "work-cancel" });
     expect(result.state).toBe("accepted");
     if (result.state !== "accepted") throw new Error("expected an uncertain stop");
