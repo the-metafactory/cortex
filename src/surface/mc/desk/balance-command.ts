@@ -19,9 +19,9 @@ export function balanceDetails(node: OutlineNode, date: string): BalanceDetails 
   return { title: node.title, weight: node.weight, note: node.note ?? "", ordering: node.ordering, focus: node.focusMonth === date.slice(0, 7), dueDate: node.dueDate ?? "", context: node.context ?? "", effort: node.effort ?? 1, estimateMinutes: node.estimateMinutes ?? null };
 }
 export const BalanceCommandSchema = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("outline-add"), revision, parent: id, title: z.string().trim().min(1).max(300), kind: z.enum(["task", "project"]).optional(), note: z.string().max(10_000).optional(), dueDate: z.iso.date().optional() }),
+  z.object({ op: z.literal("outline-add"), revision, parent: id, title: z.string().trim().min(1).max(300), kind: z.enum(["task", "project"]).optional(), note: z.string().max(10_000).optional(), dueDate: z.iso.date().optional(), weight: BalanceDetailsSchema.shape.weight.optional(), context: BalanceDetailsSchema.shape.context.optional(), effort: BalanceDetailsSchema.shape.effort.optional(), estimateMinutes: BalanceDetailsSchema.shape.estimateMinutes.optional() }),
   z.object({ op: z.literal("outline-edit"), revision, id, details: BalanceDetailsSchema, yes: z.boolean() }),
-  z.object({ op: z.literal("outline-move"), revision, id, parent: id }),
+  z.object({ op: z.literal("outline-move"), revision, id, parent: id, index: z.number().int().nonnegative().optional() }),
   z.object({ op: z.literal("outline-file"), revision, id, parent: id }),
   z.object({ op: z.literal("outline-complete"), revision, id, confirm: z.literal(true) }),
   z.object({ op: z.literal("outline-reopen"), revision, id, confirm: z.literal(true) }),

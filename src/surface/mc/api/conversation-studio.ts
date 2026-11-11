@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { ConversationError, type ConversationHost, type HostDetail, type OwnerScope, type Seed, type SeedEntry } from "../../../conversations/host";
-import { DECISION_KIND, IMPORTED_TURN_KIND, INPUT_KIND, ObjectRefSchema, type ConversationDetail, type ConversationMeta, type ObjectRef, type OperationRecord, type SourceView } from "../../../conversations/types";
+import { DECISION_KIND, IMPORTED_TURN_KIND, ObjectRefSchema, type ConversationDetail, type ConversationMeta, type ObjectRef, type OperationRecord, type SourceView } from "../../../conversations/types";
 import { canonicalTaskRef } from "../desk/sources/waiting";
 import { FIELD_SCHEMAS } from "../desk/ask";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
@@ -104,11 +104,12 @@ export async function startFromSource(host: ConversationHost, deps: StudioConver
     return host.create({ title: clip(resolved.title), links: [source], origin: { kind: "balance", ref: source.id }, policy: resolved.policy }, principal, { key, titleFromSource: true });
   }
   if (source.owner === "graph-node") {
-    const text = "Help me talk through the linked Ranger question. Prepare proposals for my confirmation. Starting this conversation changes nothing on the graph.";
-    return host.create({ title: clip(resolved.title), links: [source], origin: { kind: "graph", ref: source.id }, policy: resolved.policy }, principal, {
-      key: `ranger-grilling:${source.id}`, titleFromSource: true,
-      entries: [{ kind: INPUT_KIND, data: { text }, messages: [{ role: "user", text, at: (deps.now?.() ?? new Date()).getTime() }] }],
-    });
+    const text = "Help me talk through the linked Ranger question. Prepare proposals for my confirmation. Starting this conversation changes nothing on the graph. To save decisions along the way, propose a ruling on the node; once I have settled the question, propose closing the node with the resolution and a one-line gist.";
+    const key = `ranger-grilling:${source.id}`;
+    const conversation = await host.create({ title: clip(resolved.title), links: [source], origin: { kind: "graph", ref: source.id }, policy: resolved.policy }, principal, { key, titleFromSource: true });
+    const unopened = (await host.entries(conversation.id, 1, undefined)).entries.length === 0;
+    if (unopened) await host.submit(conversation.id, { inputId: key, transport: "web", text, mode: "queue" });
+    return host.meta(conversation.id);
   }
   if (source.owner !== "studio-thread" && source.owner !== "studio-note") throw new ConversationError(400, "Conversations start from a Studio thread, a Studio note, a Balance task or a Ranger question.");
   const desk = studioDesk(deps);

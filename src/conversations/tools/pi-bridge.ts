@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod/v4";
-import type { ToolSurface } from "../model";
+import type { ToolSurface, TurnRequest } from "../model";
 
 const Call = z.object({ id: z.string().min(1).max(200), name: z.string().min(1).max(64), input: z.unknown() }).strict();
 const MAX_INPUT_BYTES = 64_000;
-export function piToolBridge(surface: ToolSurface, signal: AbortSignal, halt: (reason: string) => void): { env: Record<string, string>; called: Set<string>; close: () => Promise<void> } {
+export function piToolBridge(surface: ToolSurface, signal: AbortSignal, halt: (reason: string) => void, started?: TurnRequest["started"]): { env: Record<string, string>; called: Set<string>; close: () => Promise<void> } {
   const token = randomBytes(32).toString("hex");
   const called = new Set<string>();
   const pending = new Set<Promise<unknown>>();
@@ -25,6 +25,7 @@ export function piToolBridge(surface: ToolSurface, signal: AbortSignal, halt: (r
         const { id, name, input } = parsed.data;
         if (called.has(id)) return new Response(null, { status: 409 });
         called.add(id);
+        if (surface.specs.some(spec => spec.name === name)) await started?.(id, name);
         const call = surface.call(id, name, input, signal);
         pending.add(call);
         try { return Response.json(await call); }

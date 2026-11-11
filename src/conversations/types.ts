@@ -116,15 +116,32 @@ export interface SubmissionView {
   answer?: string;
 }
 
-export interface ConversationEntry {
-  id: string;
-  kind: string;
-  role?: "user" | "assistant" | "tool" | "system";
-  text?: string;
-  data?: unknown;
-  at?: number;
-  error?: string;
-  model?: string;
+export const ConversationEntrySchema = z.object({
+  id: z.string(),
+  kind: z.string(),
+  role: z.enum(["user", "assistant", "tool", "system"]).optional(),
+  text: z.string().optional(),
+  data: z.unknown().optional(),
+  at: z.number().optional(),
+  error: z.string().optional(),
+  model: z.string().optional(),
+}).strict();
+export type ConversationEntry = z.infer<typeof ConversationEntrySchema>;
+export const ConversationResponseUpdateSchema = z.object({
+  cursor: z.number().int().nonnegative().nullable(),
+  generation: z.string().nullable(),
+  working: z.boolean(),
+  text: z.string().nullable().optional(),
+  append: z.string().optional(),
+  entries: z.array(ConversationEntrySchema).optional(),
+}).strict().refine(update => !(update.text !== undefined && update.append !== undefined));
+export type ConversationResponseUpdate = z.infer<typeof ConversationResponseUpdateSchema>;
+export interface ConversationResponse {
+  cursor: number | null;
+  generation: string | null;
+  working: boolean;
+  text: string | null;
+  entries: ConversationEntry[];
 }
 
 export const CONTINUATION_KIND = "cortex.continuation";
@@ -135,6 +152,7 @@ export const PROPOSAL_KIND = "cortex.proposal";
 export const CREATION_KIND = "cortex.creation";
 export const GRANT_KIND = "cortex.grant";
 export const TOOL_ACTIVITY_KIND = "cortex.tool-activity";
+export const TOOL_STARTED_KIND = "cortex.tool-started";
 export type Continuation =
   | { mode: "native-resume"; engine: string; at: string }
   | { mode: "reconstructed"; from: ModelRoute | null; to: ModelRoute; at: string; reason?: Exclude<ContinuationReason, "lane-changed"> };

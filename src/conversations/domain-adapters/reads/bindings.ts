@@ -11,6 +11,7 @@ export function verifyReadBinding(registry: DomainAdapterRegistry, binding: Read
   const found = registry.capability(binding.capabilityId);
   if (found.support !== "declared" || found.adapterId !== binding.adapterId || found.capability.kind !== KIND_OF_MODE[binding.mode]) return failure("binding_mismatch", "Binding must name a registered capability of the matching kind.");
   const capability = found.capability;
+  if (binding.observation && (binding.mode !== "poll" || binding.query)) return failure("binding_mismatch", "Observation policy requires an observation capability.");
   if (!sameRef(capability.inputSchemaRef, binding.inputSchemaRef) || !sameRef(capability.outputSchemaRef, binding.outputSchemaRef)) return failure("binding_mismatch", "Binding must name the exact pinned capability schemas.");
   if (!capability.objectTypes.includes(binding.objectType) || binding.destinationType !== undefined && !registry.declaresObjectType(binding.adapterId, binding.destinationType)) return failure("binding_mismatch", "Binding must name declared object types.");
   return success(structuredClone(binding));
@@ -40,4 +41,10 @@ export class ReadBindings {
     const held = this.bindings.get(bindingKey(adapterId, connectionId, capabilityId));
     return held ? { state: "available", binding: structuredClone(held) } : { state: "unavailable", code: "binding_missing" };
   }
+}
+
+export function acceptsReadObject(registry: DomainAdapterRegistry, binding: ReadBinding, objectType: string): boolean {
+  if (binding.mode !== "destinations") return objectType === binding.objectType;
+  const capability = registry.capability(binding.capabilityId);
+  return capability.support === "declared" && capability.adapterId === binding.adapterId && capability.capability.objectTypes.includes(objectType);
 }

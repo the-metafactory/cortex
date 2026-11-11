@@ -7,6 +7,7 @@ import { balanceDestinations } from "../../desk/balance-destinations";
 import type { DeskArea } from "../../desk/types";
 import { ALL_AREAS } from "../../desk/present";
 import { BalanceAddForm, balanceEntries, TaskDetails, TaskMessageBanner, useBalanceEditor, type TaskAdding } from "./desk-task-details";
+import { MyDayObservationStatus } from "./desk-my-day";
 import { useMyDay } from "../hooks/use-my-day";
 import { balanceItemSearch } from "../hooks/use-balance-location";
 import { deskSearch } from "../hooks/use-desk-studio";
@@ -59,7 +60,7 @@ export function DeskTimeFirst(props: TimeFirstProps) {
 
 function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, ambient, areas, selectedArea = ALL_AREAS, onChanged, onThread, onConversation }: Omit<TimeFirstProps, "day"> & { day: MyDayView }) {
   const changes = useMyDay(day, onChanged);
-  const { current, busy, change, retryable } = changes;
+  const { current, busy, change, retryable, refreshing, refresh } = changes;
   const gap = currentGap(calendar ?? { sources: [], events: [] }, now);
   const recommendation = nextTask(current, gap);
   const selection = current.work.selection;
@@ -85,6 +86,7 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, am
     <main className="tf-main">
       {before}
       <header className="tf-heading"><div><h1>My day</h1><p>Your overall priorities stay in their saved order.</p></div><span>{current.wins.length} done</span></header>
+      <MyDayObservationStatus day={current} disabled={busy || refreshing} onRefresh={() => void refresh()} />
       {current.phase === "closed" && <DayWins day={current} />}
       <section className="tf-gap" aria-label="Calendar availability">
         <span className="tf-eyebrow">{gap.kind === "bounded" ? "Time available now" : "Today's calendar"}</span>
@@ -109,8 +111,8 @@ function TimeFirstDay({ day, calendar, now, before, after, proposal, preview, am
           <details><summary>Why this task</summary><p>{selected.trace}</p></details>
           <div className="tf-actions"><TaskActions item={selected} changes={changes} disabled={draft !== null || retryable || editor.busy} />{selection.kind === "manual" && <button type="button" className="desk-btn ghost" disabled={busy || retryable || draft !== null} onClick={() => { choose(null); }}>Use recommendation</button>}<a className="desk-btn ghost" href="#today-priorities" onClick={showPriorities}>Choose another</a></div>
           <TaskMessageBanner message={editor.message} busy={editor.busy || locked} onUndo={receipt => void editor.change({ op: "undo", receipt })} />
-          {entry && <TaskDetails compact titled={false} locked={locked} id={selected.task.id} entry={entry} day={current} editor={editor} choices={choices} onRefresh={onChanged} onAdd={parent => { setAdding({ parent, title: "", revision: current.revision, date: current.date }); }} onMoved={() => undefined} onThread={onThread} {...(onConversation ? { onConversation } : {})}>
-            {adding?.parent === selected.task.id && <BalanceAddForm adding={adding} choices={choices} busy={editor.busy || locked} heading="Add subtask" onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) setAdding(null); }); }} />}
+          {entry && <TaskDetails compact titled={false} locked={locked} id={selected.task.id} entry={entry} day={current} editor={editor} choices={choices} onRefresh={onChanged} onAdd={parent => { setAdding({ parent, title: "", revision: current.revision, date: current.date }); editor.setMessage(null); }} onMoved={() => undefined} onThread={onThread} {...(onConversation ? { onConversation } : {})}>
+            {adding?.parent === selected.task.id && <BalanceAddForm adding={adding} choices={choices} busy={editor.busy || locked} heading="Add subtask" message={editor.message} onChange={next => { setAdding({ ...adding, ...next }); }} onCancel={() => { setAdding(null); }} onSubmit={() => { void editor.add(adding).then(saved => { if (saved) setAdding(null); }); }} />}
           </TaskDetails>}
         </> : <><h2>Choose what works for you</h2><p>{recommendation.kind === "none" ? recommendation.reason : "Your priorities are available alongside the timeline."}</p><a className="desk-btn" href="#today-priorities" onClick={showPriorities}>See today's priorities</a></>}
       </section>}

@@ -59,7 +59,7 @@ describe("creation catalog", () => {
 
   test("names each unavailable type's own blocking node from the coverage matrix, never the closed coverage node", () => {
     const expected: Record<CreatableType, CapabilityStatus> = {
-      "graph-node": "blocked:3033", "graph-map": "blocked:3034",
+      "graph-node": "blocked:3033", "graph-map": "blocked:3034", "graph-ruling": "blocked:3457", "graph-close": "blocked:3457",
       "balance-task": "blocked:3030", "balance-project": "blocked:3031", "balance-inbox-task": "blocked:3032",
       "studio-thread": "blocked:3141", "studio-capture": "blocked:3142", "studio-note": "blocked:3140", "studio-response": "blocked:3138", "studio-close": "blocked:3139",
       flow: "blocked:3146", routine: "blocked:3035", "calendar-event": "blocked:3036", reminder: "blocked:3037",

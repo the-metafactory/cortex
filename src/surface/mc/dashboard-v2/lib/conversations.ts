@@ -2,7 +2,7 @@ import type { ConversationDetail, ConversationEntry, ConversationMeta, LinkedVie
 import type { ImportableSession, SourceConversations } from "../../api/conversation-studio";
 import type { SessionEnd } from "../../desk/studio/session-schema";
 import type { AskFields } from "../../desk/ask";
-import { CONTINUATION_KIND, CREATION_KIND, DECISION_KIND, GRANT_KIND, IMPORTED_TURN_KIND, laneName, PROPOSAL_KIND, routeLabel, TOOL_ACTIVITY_KIND } from "../../../../conversations/types";
+import { CONTINUATION_KIND, CREATION_KIND, DECISION_KIND, GRANT_KIND, IMPORTED_TURN_KIND, laneName, PROPOSAL_KIND, routeLabel, TOOL_ACTIVITY_KIND, TOOL_STARTED_KIND } from "../../../../conversations/types";
 import { ApiFailure, getJson, postJson } from "./api";
 
 export const failureText = (error: unknown, fallback: string): string => (error instanceof ApiFailure ? error.info.message : fallback);
@@ -106,6 +106,15 @@ function continuationLine(data: Record<string, unknown>): string {
   return `Continued with reconstructed context on the ${routeLabel(text(data.to))} model.`;
 }
 
+export function visibleEntries(entries: ConversationEntry[], generation: string | null): ConversationEntry[] {
+  const key = (entry: ConversationEntry): string => {
+    const data = record(entry.data);
+    return JSON.stringify([text(data.turn), text(data.callId)]);
+  };
+  const completed = new Set(entries.filter(entry => entry.kind === TOOL_ACTIVITY_KIND).map(key));
+  return entries.filter(entry => entry.kind !== TOOL_STARTED_KIND || (generation !== null && text(record(entry.data).turn) === generation && !completed.has(key(entry))));
+}
+
 export function entryViews(entry: ConversationEntry): EntryView[] {
   const data = record(entry.data);
   if (entry.kind === IMPORTED_TURN_KIND) {
@@ -136,6 +145,7 @@ export function entryViews(entry: ConversationEntry): EntryView[] {
     return [{ kind: "activity", text: data.action === "revoked" ? `Standing ${text(data.type)} permission (${text(data.scope)}) revoked. Objects created earlier stay.` : `Standing ${text(data.type)} permission granted for ${data.scope === "global" ? "all your conversations" : "this conversation"}. Creation only.` }];
   }
   if (entry.kind === CONTINUATION_KIND) return [{ kind: "activity", text: continuationLine(data) }];
+  if (entry.kind === TOOL_STARTED_KIND) return [{ kind: "activity", text: `Using ${text(data.tool) || "a tool"}…` }];
   if (entry.kind === TOOL_ACTIVITY_KIND) return [{ kind: "activity", text: toolLine(data) }];
   if (entry.role === "assistant" && entry.error) return [{ kind: "failure", text: `Ivy could not answer${entry.model ? ` on ${entry.model}` : ""}: ${entry.error}` }];
   if (entry.role === "user" && entry.text) return [{ kind: "message", who: "you", text: entry.text }];

@@ -106,6 +106,11 @@ export class DomainAdapterRegistry {
     return this.adapters.get(adapterId)?.declaration.objectTypes.some(object => object.objectType === objectType) ?? false;
   }
 
+  objectSchemaRef(adapterId: string, objectType: string): SchemaRef | undefined {
+    const ref = this.adapters.get(adapterId)?.declaration.objectTypes.find(object => object.objectType === objectType)?.schemaRef;
+    return ref && structuredClone(ref);
+  }
+
   draftingView(capabilityId: string): DraftingView | undefined {
     const entry = this.capabilities.get(capabilityId);
     if (!entry) return undefined;

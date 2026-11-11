@@ -79,7 +79,7 @@ export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: Desk
   if (command.op === "outline-add") {
     const parent = openParent(state, desk, meta, command.parent);
     delete parent.done;
-    const node: OutlineNode = { id: crypto.randomUUID(), title: command.title, weight: 50, ordering: "parallel", children: [], ...(command.kind === "project" ? { done: true } : { effort: 1 }), ...(command.note ? { note: command.note } : {}), ...(command.dueDate ? { dueDate: command.dueDate } : {}) };
+    const node: OutlineNode = { id: crypto.randomUUID(), title: command.title, weight: command.weight ?? 50, ordering: "parallel", children: [], ...(command.context ? { context: command.context } : {}), ...(command.estimateMinutes ? { estimateMinutes: command.estimateMinutes } : {}), ...(command.kind === "project" ? { done: true } : { effort: command.effort ?? 1 }), ...(command.note ? { note: command.note } : {}), ...(command.dueDate ? { dueDate: command.dueDate } : {}) };
     parent.children.push(node);
     return node.id;
   }
@@ -125,10 +125,10 @@ export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: Desk
   }
   const next = openParent(state, desk, meta, command.parent);
   if (findNode(node, next.id)) throw new Error("An item cannot move below itself or one of its descendants.");
-  if (parent === next) return node.id;
-  preserveFocusProject(parent, date);
+  if (parent === next && command.index === undefined) return node.id;
+  if (parent !== next) preserveFocusProject(parent, date);
   parent.children = parent.children.filter(child => child.id !== node.id);
   delete next.done;
-  next.children.push(node);
+  next.children.splice(Math.min(command.index ?? next.children.length, next.children.length), 0, node);
   return node.id;
 }

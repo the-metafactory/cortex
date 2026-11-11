@@ -1,12 +1,14 @@
 import { syntheticWriterPlan, syntheticWriterSteps } from "./domain-adapters/operations/writer-fixtures";
+import type { ObservationConnector } from "./domain-adapters/reads/observation-types";
 import { writerLease } from "./domain-adapters/operations/writer-authority";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openConversationHost, type ConversationHost, type HostOptions } from "./host";
+import { arcSecretPath, createArcFileSecretStore } from "../common/config/desk-credential-arc-file-store";
 import { authorityHash } from "./authority-records";
-import { type AuthorityBindings, type WriterLease } from "./authority";
+import { type AuthorityBindings, type TrustedConnector, type WriterLease } from "./authority";
 import type { ConnectionRecord, PolicyInputs, PrincipalBinding, ReleaseSink, RestrictionRecord } from "./authority-records";
 import { AT, approvalFixture, eventFixture, registryFixture, resultFixture, support } from "./domain-adapters/operations/fixtures";
 import type { Attempt, CancelRequest, DispatchRequest, Json } from "./domain-adapters/operations/types";
@@ -18,9 +20,21 @@ import { snapshotDigest, canonicalWire } from "./domain-adapters/operations/vali
 
 function requireValue<T>(value: T | null | undefined): T { if (value === null || value === undefined) throw new Error("Synthetic authority fixture is incomplete."); return value; }
 
-export async function authorityRig(extra: Partial<HostOptions> = {}, conversationPolicy: "local" | "cloud" = "local", readSetup?: { registry: DomainAdapterRegistry; binding: unknown; capabilityIds?: readonly string[]; adapterId?: string; secondConnection?: boolean }) {
-  const dir = await mkdtemp(join(tmpdir(), "host-authority-"));
+export interface AuthorityRigOptions { dir?: string; credential?: string }
+
+export interface ReadSetup { registry: DomainAdapterRegistry; binding: unknown; capabilityIds?: readonly string[]; adapterId?: string; secondConnection?: boolean; observation?: ObservationConnector; connector?: TrustedConnector }
+
+export async function authorityRig(extra: Partial<HostOptions> = {}, conversationPolicy: "local" | "cloud" = "local", readSetup?: ReadSetup, options: AuthorityRigOptions = {}) {
+  const dir = options.dir ?? await mkdtemp(join(tmpdir(), "host-authority-"));
   const registry = readSetup?.registry ?? registryFixture();
+  const secretIdentity = "DESK_SYNTHETIC_CANARY_FIXTURE";
+  const secretsRoot = join(dir, "arc");
+  const credentialStore = options.credential === undefined ? null : { secrets: createArcFileSecretStore({ configRoot: secretsRoot }), credential: options.credential };
+  const credential = credentialStore?.credential ?? null;
+  const secrets = credentialStore?.secrets ?? null;
+  const credentialWrite = credentialStore === null ? null : await credentialStore.secrets.writeIfAbsent(secretIdentity, credentialStore.credential);
+  const secretPath = credentialStore === null ? null : arcSecretPath(secretsRoot, secretIdentity);
+  const storedCredentialAuthorizes = async (): Promise<boolean> => credentialStore === null || await credentialStore.secrets.matches(secretIdentity, credentialStore.credential);
   const principal: PrincipalBinding = { version: 1, principalRef: randomUUID(), principal: "principal-example", stack: "test", identityBindingRevision: "1", status: "active" };
   const approval = approvalFixture();
   const connection: ConnectionRecord = { version: 1, status: "active", connectionId: approval.snapshot.connectionId, adapterId: readSetup?.adapterId ?? "balance", principalRef: principal.principalRef, connectionRevision: "1", credentialHandle: "synthetic-credential-handle", accountScope: { account: "synthetic-account", resource: "area-example" }, readCapabilityIds: [...new Set([approval.snapshot.capabilityId, "balance.object.read", ...(readSetup?.capabilityIds ?? [])])], writeCapabilityIds: [approval.snapshot.capabilityId], readDestinations: approval.snapshot.destinations, writeDestinations: approval.snapshot.destinations, connectorId: "synthetic-connector", executionBindingRef: support.declarationId, registryRevision: "registry-1" };
@@ -47,7 +61,7 @@ export async function authorityRig(extra: Partial<HostOptions> = {}, conversatio
     policy: async () => { await hooks.policy?.(); return structuredClone(policy); },
     writer: async checked => hooks.writer ? hooks.writer() : canonicalWire(checked) === canonicalWire(lease),
     restrictions: new Map([["synthetic-restriction-resolver", record => hooks.restriction ? hooks.restriction(record) : Promise.resolve(record)]]),
-    connectors: new Map([[connection.connectorId, { writerOwner: "synthetic-owner", authorizeConnection: current => Promise.resolve({ version: 1, available: hooks.credentialsAvailable !== false && current.credentialHandle === "synthetic-credential-handle" && canonicalWire(current.accountScope) === canonicalWire({ account: "synthetic-account", resource: "area-example" }), revision: "synthetic-credential-1" }), support: { ...support, cancellation: "best-effort", operationLookup: "historical" },
+    connectors: new Map([[connection.connectorId, readSetup?.connector ?? { ...(readSetup?.observation ? { observation: readSetup.observation } : {}), writerOwner: "synthetic-owner", authorizeConnection: async current => ({ version: 1, available: hooks.credentialsAvailable !== false && current.credentialHandle === "synthetic-credential-handle" && await storedCredentialAuthorizes() && canonicalWire(current.accountScope) === canonicalWire({ account: "synthetic-account", resource: "area-example" }), revision: "synthetic-credential-1" }), support: { ...support, cancellation: "best-effort", operationLookup: "historical" },
       dispatch: async (request, signal) => { calls.dispatch++; calls.signals.push(signal); return hooks.dispatch ? hooks.dispatch(request) : resultFixture({ ...approval, authority: request.authority }, requireValue(attempt), "succeeded"); },
       cancel: (request, signal) => { calls.cancel++; calls.signals.push(signal); return hooks.cancel ? hooks.cancel(request) : Promise.resolve(resultFixture(approval, requireValue(attempt), "succeeded")); },
       lookup: async () => { calls.lookup++; return hooks.lookup ? hooks.lookup() : { lifecycleVersion: "1.0.0", operationId: approval.operationId, checkedAt: AT, result: { kind: "unknown", reason: { code: "synthetic_unknown", message: "No historical evidence." } } }; },
@@ -81,7 +95,7 @@ export async function authorityRig(extra: Partial<HostOptions> = {}, conversatio
   let context = requireValue(await service.authenticate("authenticated-session"));
   const input = () => ({ operationId: approval.operationId, idempotencyKey: approval.idempotencyKey, ownerRequestId: approval.ownerRequestId, snapshot: approval.snapshot });
   const rig = {
-    get host() { return host; }, get service() { return service; }, get context() { return context; }, registry, principal, connection, secondConnection, objectRestriction, readBindings, readBinding, approval, policy, lease, calls, hooks, sink, dir, bindings,
+    get host() { return host; }, get service() { return service; }, get context() { return context; }, registry, principal, connection, secondConnection, objectRestriction, readBindings, readBinding, approval, policy, lease, calls, hooks, sink, dir, bindings, credential, secrets, secretIdentity, credentialWrite, secretPath,
     confirm: () => service.confirm(context, input()),
     input,
     async prepare() {

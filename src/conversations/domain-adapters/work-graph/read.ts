@@ -5,8 +5,9 @@ import { adapterErrorSchema, objectSchema, schemaRef } from "../schema-primitive
 import { schemaKey } from "../schema-validation";
 import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../types";
 import { WORK_GRAPH_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, referenceSchema, type GraphObjectType } from "./schema";
+import { workGraphNodeCreateDeclaration } from "./node-binding";
 
-const DEFAULT_TIMEOUT_MS = 8_000;
+export const WORK_GRAPH_REQUEST_TIMEOUT_MS = 8_000;
 const NODE_PAGE_ITEMS = 1;
 const REPOSITORY_SCHEMA_REF = schemaRef("work-graph.repository");
 const NODE_SCHEMA_REF = schemaRef("work-graph.node");
@@ -31,11 +32,13 @@ const NODE_READ_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { 
 const ERROR_SCHEMA = adapterErrorSchema(ADAPTER_ID);
 
 export function workGraphReadDeclaration(): AdapterDeclaration {
+  const creation = workGraphNodeCreateDeclaration();
   return {
     adapterId: ADAPTER_ID,
     label: "Work graph",
     contractRange: "^1.0.0",
     schemas: [
+      ...creation.schemas,
       { ...REPOSITORY_SCHEMA_REF, schema: REPOSITORY_VALUE_SCHEMA },
       { ...NODE_SCHEMA_REF, schema: NODE_VALUE_SCHEMA },
       { ...DESTINATIONS_INPUT_REF, schema: DESTINATIONS_INPUT_SCHEMA },
@@ -45,11 +48,13 @@ export function workGraphReadDeclaration(): AdapterDeclaration {
       { ...ERROR_REF, schema: ERROR_SCHEMA },
     ],
     objectTypes: [
+      ...creation.objectTypes.filter(object => object.objectType === "node-draft"),
       { objectType: "repository", label: "Repository", schemaRef: REPOSITORY_SCHEMA_REF, relationships: [] },
       { objectType: "map", label: "Map", schemaRef: NODE_SCHEMA_REF, relationships: [] },
       { objectType: "node", label: "Node", schemaRef: NODE_SCHEMA_REF, relationships: [{ fieldPath: "/parent", targetAdapterId: ADAPTER_ID, targetObjectType: "node", cardinality: "one" }] },
     ],
     capabilities: [
+      ...creation.capabilities,
       { capabilityId: "work-graph.destinations", label: "List destinations", kind: "query", objectTypes: ["repository", "map", "node"], inputSchemaRef: DESTINATIONS_INPUT_REF, outputSchemaRef: DESTINATIONS_OUTPUT_REF, errorSchemaRef: ERROR_REF },
       { capabilityId: "work-graph.node.read", label: "Read node", kind: "query", objectTypes: ["node"], inputSchemaRef: NODE_READ_INPUT_REF, outputSchemaRef: NODE_READ_OUTPUT_REF, errorSchemaRef: ERROR_REF },
     ],
@@ -200,18 +205,32 @@ function destinationsPage(source: WorkGraphReadSource): QueryPage {
   return readPage(entries, snapshotId("destinations", { connectionId: source.connectionId, entries: entries.map(entry => entry.ref) }), observedAt(source));
 }
 
-function ownerFailure(result: CommandResult): string {
-  return /not found|no such|could not resolve|HTTP 404|HTTP 410/i.test(`${result.stderr}\n${result.stdout}`) ? "node_unavailable" : "owner_unavailable";
+const OWNER_ABSENT = /\bnot[\s-]?found\b|\bno such\b|\bdoes not exist\b|\bgone\b/iu;
+const OWNER_ABSENT_STATUS = /\b(?:http(?:\/\d+(?:\.\d+)?)?|status(?:\s*code)?)\s*[:=]?\s*(?:404|410)\b/iu;
+const OWNER_UNREADABLE = /could not resolve|no such host|dial tcp|name resolution|i\/o timeout|command not found|not found in \$?path|executable not found|no such file|permission denied|timed?\s?out|connection (?:refused|reset|closed)|network|rate limit|configuration|unauthori[sz]ed|bad credentials/iu;
+
+function nodeNaming(canonicalId: string): RegExp | null {
+  const tail = canonicalId.slice(canonicalId.lastIndexOf("#") + 1);
+  return /^[1-9]\d*$/u.test(tail) ? new RegExp(`(?:#|/issues/|\\bnode\\s+|\\bissue\\s+)${tail}(?!\\d)`, "u") : null;
 }
 
-async function ownerNode(source: WorkGraphReadSource, argv: string[]): Promise<Record<string, unknown>> {
+/** True only when the owner's own answer names this node and answers that it is absent; a command, transport or infrastructure failure is a different answer, so it says nothing about existence. */
+export const workGraphOwnerGone = (result: CommandResult, canonicalId: string): boolean => { // glossary-ignore: node, owner
+  const naming = nodeNaming(canonicalId);
+  const text = `${result.stderr}\n${result.stdout}`;
+  return naming !== null && naming.test(text) && (OWNER_ABSENT.test(text) || OWNER_ABSENT_STATUS.test(text)) && !OWNER_UNREADABLE.test(text);
+};
+
+const ownerFailure = (result: CommandResult, canonicalId: string): string => result.code !== 0 && workGraphOwnerGone(result, canonicalId) ? "node_unavailable" : "owner_unavailable";
+
+async function ownerNode(source: WorkGraphReadSource, canonicalId: string, argv: string[]): Promise<Record<string, unknown>> {
   let result: CommandResult;
   try {
-    result = await (source.run ?? ((command, timeoutMs) => runCommand(command, timeoutMs)))(argv, source.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS);
+    result = await (source.run ?? ((command, timeoutMs) => runCommand(command, timeoutMs)))(argv, source.requestTimeoutMs ?? WORK_GRAPH_REQUEST_TIMEOUT_MS);
   } catch (error) {
     return failure(error instanceof CommandTimeout ? "owner_timeout" : "owner_unavailable");
   }
-  if (result.code !== 0) return failure(ownerFailure(result));
+  if (result.code !== 0) return failure(ownerFailure(result, canonicalId));
   let body: unknown;
   try {
     body = JSON.parse(result.stdout);
@@ -251,7 +270,7 @@ async function nodeReadPage(source: WorkGraphReadSource, input: unknown, destina
   const target = nodeTarget(parsed.canonicalId, source, destinations);
   const destination = destinationFor(source, destinations, target.repository);
   if (!destination) return failure("destination_denied");
-  const body = await ownerNode(source, [source.somaBin ?? "soma", "graph", "node", target.full, "--read-repo", destination.canonicalId, "--json"]);
+  const body = await ownerNode(source, target.full, [source.somaBin ?? "soma", "graph", "node", target.full, "--read-repo", destination.canonicalId, "--json"]);
   const value = nodeValue(source, target, body);
   const entry: QueryPageEntry = {
     ref: reference(source.connectionId, "node", parsed.canonicalId),

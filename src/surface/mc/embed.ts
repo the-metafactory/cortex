@@ -87,9 +87,13 @@ export async function startMissionControl(
       ...(opts.degraded ? { degraded: opts.degraded } : {}),
       ...(opts.conversations ? { conversations: opts.conversations } : {}),
       ...(opts.connectionSetup ? { connectionSetup: opts.connectionSetup } : {}),
+      ...(opts.balanceConnection ? { balanceConnection: opts.balanceConnection } : {}),
       ...(opts.adapterAssets ? { adapterAssets: opts.adapterAssets } : {}),
       ...(opts.graphScope ? { graphScope: opts.graphScope } : {}),
+      ...(opts.drafts ? { drafts: opts.drafts } : {}),
+      ...(opts.graphDrafts ? { graphDrafts: opts.graphDrafts } : {}),
       ...(opts.graphSurfaces ? { graphSurfaces: opts.graphSurfaces } : {}),
+      ...(opts.balanceSurfaces ? { balanceSurfaces: opts.balanceSurfaces } : {}),
     });
     const { port, wsRegistry } = serverCtx;
     hookPoller = new HookStreamPoller(db, config.hooks, wsRegistry);

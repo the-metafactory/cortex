@@ -1,3 +1,6 @@
+import { createBalanceConnection } from "./desk/balance-connection";
+import { DESK_BALANCE_READ_PATH, handleDeskBalanceRead, type BalanceConnectionAccess } from "./api/desk-balance-read";
+import { isStackPrincipal } from "./api/conversations";
 import { handleDeskPlan } from "./api/desk-plan";
 import { handleDeskRoutineEvidence } from "./api/desk-routine-evidence";
 import { WaitingTasks } from "./desk/sources/waiting";
@@ -89,8 +92,15 @@ import { handleDeskSenders, handleDeskVips } from "./api/desk-vips";
 import { handleDeskMail } from "./api/desk-mail";
 import { handleDeskGraphRepositories } from "./api/desk-graph-repositories";
 import { handleDeskGraphSurfaces } from "./api/desk-graph-surfaces";
+import { handleDeskBalanceSurfaces } from "./api/desk-balance-surfaces";
+import { handleDeskDrafts } from "./api/desk-drafts";
+import { DESK_DRAFTS_PATH } from "./desk/draft-editor-contract";
+import { deskGraphDraftEditor, type GraphDraftSetup } from "./desk/graph-draft-entry";
+import type { DeskDraftAccess } from "./desk/draft-editor";
 import type { GraphSurfaceAccess } from "./desk/graph-surfaces";
 import { GRAPH_SURFACES_PATH } from "./desk/graph-surface-schema";
+import type { BalanceSurfaceAccess } from "./desk/balance-surfaces";
+import { BALANCE_SURFACES_PATH } from "./desk/balance-surface-schema";
 import { GRAPH_REPOSITORIES_PATH } from "./desk/graph-repository-schema";
 import { handleDeskMailRules } from "./api/desk-mail-rules";
 import { handleDeskDmarc } from "./api/desk-dmarc";
@@ -204,9 +214,13 @@ export interface MissionControlViews {
   sidebandUrl?: string;
   conversations?: ConversationAccess;
   connectionSetup?: ConnectionSetupAccess;
+  balanceConnection?: BalanceConnectionAccess;
   adapterAssets?: AdapterAssetAccess;
   graphScope?: GraphScopeAccess;
   graphSurfaces?: GraphSurfaceAccess;
+  balanceSurfaces?: BalanceSurfaceAccess;
+  drafts?: DeskDraftAccess;
+  graphDrafts?: GraphDraftSetup;
 }
 
 export interface StartServerOptions extends MissionControlViews {
@@ -225,6 +239,11 @@ export function startServer(
   db: Database,
   options: StartServerOptions = {}
 ): ServerContext {
+  if (options.graphDrafts) {
+    const { host, deps, options: graphOptions } = options.graphDrafts;
+    const editor = deskGraphDraftEditor(host, deps, graphOptions);
+    options = { ...options, drafts: () => editor };
+  }
   const wsRegistry = new WsClientRegistry();
   const deskLedger = new HandledLedger();
   const deskClientMail = options.desk ? new ClientMailLog({ db, config: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, retentionDays: options.desk.mailLog?.retentionDays ?? DEFAULT_MAIL_LOG_RETENTION_DAYS }) : undefined;
@@ -267,6 +286,12 @@ export function startServer(
       : {}),
     ...(cfAccessVerifier ? { verifyJwt: cfAccessVerifier } : {}),
   };
+  if (conversationHost?.state === "ready" && options.desk?.routineScope && !options.connectionSetup) {
+    const scope = options.desk.routineScope;
+    const balance = createBalanceConnection({ host: conversationHost.host, db, desk: () => deskRuntime.options, stack: scope.stack, secretRoot: dirname(config.db.path), isPrincipal: principal => isStackPrincipal(principal, { ...guardBase, listenPort: config.port }) });
+    deskRuntime.adapterDay = () => balance.day;
+    options = { ...options, connectionSetup: () => balance.setup, balanceConnection: () => balance };
+  }
   options.conversations?.discord?.()?.setWebPrincipal(conversationWebPrincipal(guardBase.principals, guardBase.localPrincipal));
 
   const stepUpSecretPath = expandTilde(
@@ -346,6 +371,7 @@ export function startServer(
       }
 
       if (url.pathname.startsWith("/api/")) {
+        if (req.method === "GET" && /^\/api\/conversations\/[^/]+\/stream$/.test(url.pathname)) server.timeout(req, 0);
         if (req.method === "POST" && ["/api/desk/studio/session", "/api/desk/mail"].includes(url.pathname)) server.timeout(req, 180);
         if (req.method === "POST" && ["/api/desk/ask", "/api/desk/create", "/api/desk/routines", "/api/desk/routine-capability", "/api/desk/routine-editor"].includes(url.pathname)) server.timeout(req, 0);
         if (req.method === "POST" && /^\/api\/attention\/[^/]+\/resolve$/.test(url.pathname)) {
@@ -503,9 +529,12 @@ async function handleApi(
   desk?: DeskRuntime,
   views: MissionControlViews = {},
 ): Promise<Response> {
-  const { conversations, connectionSetup, adapterAssets, graphScope, graphSurfaces } = views;
+  const { conversations, connectionSetup, adapterAssets, graphScope, graphSurfaces, balanceSurfaces } = views;
   const { pathname } = url;
+  if (pathname === DESK_DRAFTS_PATH || pathname.startsWith(`${DESK_DRAFTS_PATH}/`)) return handleDeskDrafts(req, url, guard, views.drafts);
   if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });
+
+  if (pathname === DESK_BALANCE_READ_PATH) return handleDeskBalanceRead(req, guard, views.balanceConnection);
 
   if (pathname === DESK_CONNECTIONS_PATH || pathname.startsWith(`${DESK_CONNECTIONS_PATH}/`)) return handleDeskConnections(req, url, guard, connectionSetup);
 
@@ -563,6 +592,8 @@ async function handleApi(
   if (pathname === "/api/desk/unimportant") return handleDeskSenders(req, url, db, "unimportant");
 
   if (pathname.startsWith(`${GRAPH_SURFACES_PATH}/`)) return handleDeskGraphSurfaces(req, url, graphSurfaces);
+
+  if (pathname.startsWith(`${BALANCE_SURFACES_PATH}/`)) return handleDeskBalanceSurfaces(req, url, balanceSurfaces);
 
   if (pathname === GRAPH_REPOSITORIES_PATH || pathname.startsWith(`${GRAPH_REPOSITORIES_PATH}/`)) return handleDeskGraphRepositories(req, url, db, graphScope ? { graphScope } : {});
 

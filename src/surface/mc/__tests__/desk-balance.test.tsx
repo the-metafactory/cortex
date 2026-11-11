@@ -16,10 +16,11 @@ import { syncStudioBalance } from "../desk/studio-my-day";
 import { SourceCache } from "../desk/sources/command";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
-import { balanceMatches, DeskBalance } from "../dashboard-v2/components/desk-balance";
+import { balanceMatches, DeskBalance, visibleNode } from "../dashboard-v2/components/desk-balance";
+import { balanceDrop, balanceMovable, dropZone, positionChoices } from "../dashboard-v2/lib/balance-drop";
 import { balanceItemSearch, balanceSearch, readBalanceLocation } from "../dashboard-v2/hooks/use-balance-location";
 import { DeskTimeFirst } from "../dashboard-v2/components/desk-time-first";
-import { balanceEntries, detailsCommand } from "../dashboard-v2/components/desk-task-details";
+import { balanceEntries, detailsCommand, moveCommand } from "../dashboard-v2/components/desk-task-details";
 import { submitMyDay } from "../dashboard-v2/lib/desk-my-day-action";
 import { STALE_OUTLINE } from "../desk/balance-outline";
 
@@ -70,6 +71,21 @@ describe("Balance through the real My day owner", () => {
     expect(required(view(), "first")).toMatchObject({ context: "Sketching", dueDate: "2026-11-05", effort: 4 });
     expect(required(view(), "first").estimateMinutes).toBeUndefined();
   });
+  test("creates full task details atomically and rejects invalid creation fields", async () => {
+    const current = view();
+    const before = loadBalanceState(db);
+    const fields = { op: "outline-add", revision: current.revision, parent: "first", title: "Full task", weight: 73, note: "Bring the form", dueDate: "2026-11-05", context: "Office", effort: 4, estimateMinutes: 25 } as const;
+    for (const patch of [{ weight: 101 }, { effort: 3 }, { estimateMinutes: 0 }, { estimateMinutes: 1.5 }]) {
+      expect((await post({ ...fields, ...patch })).status).toBe(400);
+      expect(loadBalanceState(db)).toEqual(before);
+    }
+    const added = await change(fields);
+    expect(required(added.view, "first").children).toHaveLength(1);
+    expect(required(added.view, added.outlineId ?? "")).toMatchObject({ title: "Full task", weight: 73, note: "Bring the form", dueDate: "2026-11-05", context: "Office", effort: 4, estimateMinutes: 25 });
+    const minimal = await change({ op: "outline-add", revision: added.view.revision, parent: "first", title: "Defaults" });
+    expect(required(minimal.view, minimal.outlineId ?? "")).toMatchObject({ title: "Defaults", weight: 50, effort: 1 });
+    expect(required(minimal.view, minimal.outlineId ?? "").estimateMinutes).toBeUndefined();
+  });
   test("rejects invalid estimates at the HTTP boundary without changing stored state", async () => {
     const current = view();
     const before = JSON.stringify(loadBalanceState(db));
@@ -113,6 +129,48 @@ describe("Balance through the real My day owner", () => {
     const removedArea = { ...desk, areas: desk.areas.filter(area => area.id !== "personal") };
     runtime = { ...runtime, options: removedArea };
     expect((await post({ op: "outline-move", revision: view().revision, id: "second", parent: "area:personal" })).status).toBe(409);
+  });
+  test("a move with a position reorders within its parent and places the item among a new parent's children", async () => {
+    let current = view();
+    current = (await change({ op: "outline-move", revision: current.revision, id: "second", parent: "project", index: 0 })).view;
+    expect(required(current, "project").children.map(node => node.id)).toEqual(["second", "first"]);
+    current = (await change({ op: "outline-move", revision: current.revision, id: "standalone", parent: "area:personal", index: 0 })).view;
+    expect(required(current, "area:personal").children.map(node => node.id)).toEqual(["standalone", "other"]);
+    current = (await change({ op: "outline-move", revision: current.revision, id: "first", parent: "area:personal", index: 99 })).view;
+    expect(required(current, "area:personal").children.map(node => node.id)).toEqual(["standalone", "other", "first"]);
+    expect((await post({ op: "outline-move", revision: current.revision, id: "second", parent: "project", index: -1 })).status).not.toBe(200);
+    const atEnd = moveCommand({ id: "standalone", parent: "area:personal", index: null, revision: current.revision, date: DATE }, current.outline);
+    current = (await change(atEnd)).view;
+    expect(required(current, "area:personal").children.map(node => node.id)).toEqual(["other", "first", "standalone"]);
+  });
+  test("a drop resolves to a parent and position, and refuses areas, the item itself and its descendants", () => {
+    const outline = seed().outline;
+    const none = new Set<string>();
+    expect(balanceDrop(outline, "standalone", "first", "before", new Set(["standalone"]))).toBeNull();
+    expect([balanceMovable(outline, "area:work", none), balanceMovable(outline, "studio-response:x", none), balanceMovable(outline, "project", none)]).toEqual([false, false, true]);
+    expect(balanceDrop(outline, "standalone", "first", "before", none)).toEqual({ parent: "project", index: 0 });
+    expect(balanceDrop(outline, "standalone", "first", "after", none)).toEqual({ parent: "project", index: 1 });
+    expect(balanceDrop(outline, "first", "second", "after", none)).toEqual({ parent: "project", index: 1 });
+    expect(balanceDrop(outline, "second", "first", "before", none)).toEqual({ parent: "project", index: 0 });
+    expect(balanceDrop(outline, "standalone", "other", "inside", none)).toEqual({ parent: "other" });
+    expect(balanceDrop(outline, "standalone", "area:personal", "inside", none)).toEqual({ parent: "area:personal" });
+    expect(balanceDrop(outline, "standalone", "area:personal", "before", none)).toBeNull();
+    expect(balanceDrop(outline, "area:work", "other", "inside", none)).toBeNull();
+    expect(balanceDrop(outline, "project", "first", "inside", none)).toBeNull();
+    expect(balanceDrop(outline, "project", "project", "after", none)).toBeNull();
+    expect([dropZone(2, 40), dropZone(20, 40), dropZone(38, 40)]).toEqual(["before", "inside", "after"]);
+    expect(positionChoices(outline, "first", "project")).toEqual([{ index: 0, title: "second" }]);
+  });
+  test("hide completed drops done tasks and closed projects from the tree, and the page offers the toggle", async () => {
+    const done = { ...task("done"), done: true };
+    const closed = { ...task("closed"), done: true, children: [task("inner")] };
+    expect([done, closed, task("open")].map(node => visibleNode(node, "", true))).toEqual([false, false, true]);
+    expect(visibleNode(done, "", false)).toBe(true);
+    const composed = await composeDesk(db, desk, undefined, { now: NOW });
+    if (!composed.myDay) throw new Error("Missing My day view");
+    const html = renderToStaticMarkup(createElement(DeskBalance, { day: composed.myDay, view: composed, foreground: { kind: "unavailable", reason: "Not yet measured" }, onChanged: () => undefined, onThread: () => undefined }));
+    expect(html).toContain("Hide completed");
+    expect(html).toContain('title="Drag to move"');
   });
   test("re-runs an engine-proposed day when a new task is added", async () => {
     const current = view();

@@ -131,6 +131,7 @@ export default tseslint.config(
       "dist/",
       "node_modules/",
       "docs/mockups/",
+      "docs/prototypes/",
       "docs/research/ivy-durable-2960/",
       // cortex#1950 — GENERATED, self-contained plugin-SDK .d.ts shipped for
       // out-of-tree bundles (bun run sdk:dts). Excluded from tsconfig too;
@@ -143,6 +144,7 @@ export default tseslint.config(
       "src/surface/mc/worker/",
       "src/services/network-registry/",
       "src/taps/gh-webhook/",
+      "src/conversations/domain-adapters/__tests__/fixtures/conformance-packages/",
       "src/surface/mc/dashboard-v2/",
       "**/*.bak.ts",
       // TC-4e — Node-subprocess mTLS test server (runs under Node, not Bun;

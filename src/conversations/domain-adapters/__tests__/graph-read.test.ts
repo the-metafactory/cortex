@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readPointer } from "../reads/query-validation";
 import type { Json } from "../operations/types";
-import { canonicalGraphRef, createWorkGraphReadAdapter } from "../work-graph/read";
+import { canonicalGraphRef, createWorkGraphReadAdapter, workGraphOwnerGone } from "../work-graph/read";
 import { CLOSED_NODE, CORTEX, CORTEX_MAP, CORTEX_NODE, CRISIS, CRISIS_NODE, MISSING_NODE, UNTICKED, graphRef, trackGraphRigs, releasedObjects, type GraphReadRig } from "./fixtures/graph-read-fixtures";
 
 const rigs = trackGraphRigs();
@@ -157,13 +157,44 @@ describe("the inactive work-graph read adapter", () => {
     expect(failed.argv).toHaveLength(1);
   });
 
-  test("the adapter declares only query capabilities and no connection, observation or mutation surface of its own", () => {
+  test("only an owner answer that names this node and says it is absent counts as deletion evidence", () => {
+    const answer = (stderr: string): { code: number; signal: null; stdout: string; stderr: string } => ({ code: 1, signal: null, stdout: "", stderr });
+    const target = `${CORTEX}#3348`;
+    expect(workGraphOwnerGone(answer(`node ${target} not found`), target)).toBe(true);
+    expect(workGraphOwnerGone(answer("gh api GET repos/the-metafactory/cortex/issues/3348 failed (exit 1): gh: Not Found (HTTP 404)"), target)).toBe(true);
+    expect(workGraphOwnerGone(answer("gh api GET repos/the-metafactory/cortex/issues/3348 failed (exit 1): gh: Gone (HTTP 410)"), target)).toBe(true);
+    for (const failure of [
+      "Could not resolve host: api.github.com",
+      "soma: command not found",
+      "configuration file not found",
+      "gh api GET repos/the-metafactory/cortex/issues/3348 failed (exit 1): dial tcp: lookup api.github.com: no such host",
+      "node 3348 unavailable: the read scope does not permit this repository",
+    ]) expect(workGraphOwnerGone(answer(failure), target)).toBe(false);
+    expect(workGraphOwnerGone(answer(`${CORTEX}#9998 not found`), target)).toBe(false);
+  });
+
+  test('an issue number in the request path is not absence evidence; only a status line is', () => {
+    const answer = (stderr: string): { code: number; signal: null; stdout: string; stderr: string } => ({ code: 1, signal: null, stdout: "", stderr });
+    for (const issue of [404, 410]) {
+      const target = `${CORTEX}#${issue}`;
+      const path = `gh api GET repos/the-metafactory/cortex/issues/${issue} failed (exit 1)`;
+      expect(workGraphOwnerGone(answer(`${path}: gh: Internal Server Error (HTTP 500)`), target)).toBe(false);
+      expect(workGraphOwnerGone(answer(`${path}: gh: Service Unavailable (HTTP 503)`), target)).toBe(false);
+      expect(workGraphOwnerGone(answer(`${path}: 404`), target)).toBe(false);
+      expect(workGraphOwnerGone(answer(`${path}: gh: Not Found (HTTP 404)`), target)).toBe(true);
+      expect(workGraphOwnerGone(answer(`${path}: gh: Gone (HTTP 410)`), target)).toBe(true);
+      expect(workGraphOwnerGone(answer(`${path}: HTTP/1.1 410 Gone`), target)).toBe(true);
+      expect(workGraphOwnerGone(answer(`${path}: status code: 404`), target)).toBe(true);
+    }
+  });
+
+  test("the adapter declares creation alongside reads without a direct mutation handler or connection", () => {
     const adapter = createWorkGraphReadAdapter({ connectionId: "connection-inactive", repositories: () => [CORTEX], links: () => [] });
     const capabilities = adapter.declaration.capabilities;
-    expect(capabilities.map(capability => capability.kind)).toEqual(["query", "query"]);
-    expect(capabilities.map(capability => capability.capabilityId).sort()).toEqual(Object.keys(adapter.bindings.handlers).sort());
+    expect(capabilities.map(capability => capability.kind)).toEqual(["action", "query", "query"]);
+    expect(capabilities.filter(capability => capability.kind === "query").map(capability => capability.capabilityId).sort()).toEqual(Object.keys(adapter.bindings.handlers).sort());
     expect(adapter.bindings.observations).toEqual({});
     expect(adapter.readBindings.map(binding => binding.mode)).toEqual(["destinations", "query"]);
-    expect(adapter.declaration.objectTypes.map(object => object.objectType)).toEqual(["repository", "map", "node"]);
+    expect(adapter.declaration.objectTypes.map(object => object.objectType)).toEqual(["node-draft", "repository", "map", "node"]);
   });
 });
