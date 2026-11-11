@@ -18,7 +18,9 @@ The [package and acceptance evidence at commit `94950d81624deafd763384256f60bb99
 
 The frozen guide's SHA-256 is `c772b2e2bbf533c1ce54b34163c411ee74fe20d6e2f58fed3554b77a2bd60ec5`. The [SDK types at the input base commit](https://github.com/the-metafactory/cortex/blob/9d2fee205fac07b9b10df10b4b668544475298f1/src/desk-sdk/generated/desk-sdk.d.ts) have SHA-256 `9db0dd9409cc0ce32ff47bca5215ef3837413126690dd69004a5feb1b8813d4e`.
 
-The published guide uses the repository's term “principal” for the host's human role. This wording differs from the frozen input. No contract fact changed after the blind author read the guide.
+The published guide uses the repository's term “principal” for the host's human role. This wording differs from the frozen input.
+
+Two later corrections to the published guide's archive example state facts the frozen input already required, so neither adds a contract fact and the frozen input stays unchanged. The example now retains the rows a query snapshot selected, keyed by an opaque cursor, so a record created between pages cannot change the snapshot ID. The example now keeps one owner state per connection, so a record written through one connection is invisible to queries, observations, and readback on another. The [authoring guide test](../../../src/conversations/domain-adapters/__tests__/authoring-guide.test.ts) runs a cross-connection regression over the built backend.
 
 ## Experiment result
 
@@ -42,13 +44,13 @@ bun scripts/desk-adapter-conformance.ts docs/desk/examples/blind-domain-adapter 
 bun run test src/conversations/domain-adapters/__tests__/authoring-guide.test.ts
 ```
 
-Both packages pass every declared capability. The repository test passes twice, once per package, and requires all six probe kinds, complete capability coverage, two query pages, and the owner-call and request counts above.
+Both packages pass every declared capability. The repository test passes twice, once per package, and requires all six probe kinds, complete capability coverage, two query pages, and the owner-call and request counts above. A third test drives the guide example's built backend on two connections and checks that a retained snapshot survives a record creation between pages and that neither queries nor observations nor readback cross the connection boundary.
 
 To rebuild either package, run `bun <package-directory>/build.mjs`. To repeat the author's additional checks, run `bun docs/desk/examples/blind-domain-adapter/verify.mjs`. Those direct checks supplement the production harness and do not replace it.
 
 ## Full repository check
 
-The required `bun run check` ran once on the merged branch. Every gate passed: lint, duplication, typecheck, vocabulary, SDK compatibility, shippable hygiene, XDG, test, and branch ancestry. The test gate reported 15,531 passes, 30 skips, 201 todos, and no failures across 15,762 tests in 947 files.
+The required `bun run check` ran once on the merged branch. Every gate passed: lint, duplication, typecheck, vocabulary, SDK compatibility, shippable hygiene, XDG, test, and branch ancestry. The test gate reported 15,532 passes, 30 skips, 201 todos, and no failures across 15,763 tests in 947 files.
 
 An earlier revision of this branch reported one failure in `src/conversations/domain-adapters/__tests__/conformance.test.ts` at line 128. That test counted every entry in the shared temporary directory, so the concurrently running failure suite changed the before and after lists. The merged tree gives the test its own parent directory and asserts the parent is empty. The failure does not occur on this branch.
 
