@@ -32,6 +32,26 @@ await withDraftBrowserProbe(rig, async ({ page, calls, errors }) => {
   await page.getByText("Edited by you · Cleared").waitFor();
   assert.equal(await page.getByLabel("Headline (required)", { exact: true }).inputValue(), "Unsaved sibling headline");
   assert.equal(await page.getByLabel("Notes", { exact: true }).inputValue(), "");
+  for (const action of ["Clear Notes", "Set Notes to null", "Set Notes to null", "Clear Notes"]) {
+    await page.getByLabel("Notes", { exact: true }).fill("Unsaved notes to discard");
+    before = await revision();
+    await page.getByRole("button", { name: action, exact: true }).click();
+    await changed(before);
+    assert.equal(await page.getByLabel("Notes", { exact: true }).inputValue(), "");
+    assert.equal(await page.getByLabel("Headline (required)", { exact: true }).inputValue(), "Unsaved sibling headline");
+  }
+  for (const action of ["Clear Notes", "Set Notes to null"]) {
+    await page.getByLabel("Notes", { exact: true }).fill("Keep notes when saving fails");
+    await page.route("**/api/desk/drafts/*", route => route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "Synthetic save conflict" }) }), { times: 1 });
+    await page.getByRole("button", { name: action, exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "Synthetic save conflict" }).waitFor();
+    assert.equal(await page.getByLabel("Notes", { exact: true }).inputValue(), "Keep notes when saving fails");
+  }
+  before = await revision();
+  await page.getByRole("button", { name: "Clear Notes", exact: true }).click();
+  await changed(before);
+  assert.equal(await page.getByLabel("Notes", { exact: true }).inputValue(), "");
+  console.log("Repeated Clear and null discard unsaved text; sibling edits and failed saves preserve it.");
   rig.state.head = "2";
   rig.state.destinations.set("Specimen shelf", { kind: "unique", ref: shelfRef("shelf-b") });
   before = await revision();

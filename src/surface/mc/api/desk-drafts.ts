@@ -19,15 +19,15 @@ const hasTarget = (editor: DeskDraftEditor, capabilityId: string, connectionId: 
 
 interface DraftContext { req: Request; url: URL; editor: DeskDraftEditor; audience: Lane; principal: string; draftId: string; before: DraftView }
 
-async function readAvailable(editor: DeskDraftEditor, draftId: string, audience: Lane): Promise<DraftView | null> {
+async function requireAvailable(editor: DeskDraftEditor, draftId: string, audience: Lane): Promise<DraftView> {
   const view = await editor.service.read(draftId, audience);
-  if (view && !hasTarget(editor, view.draft.capabilityId, view.draft.connectionId)) throw new DraftConflict("This drafting destination is unavailable; the saved draft is retained.");
+  if (!view) throw new DraftConflict("Draft does not exist.");
+  if (!hasTarget(editor, view.draft.capabilityId, view.draft.connectionId)) throw new DraftConflict("This drafting destination is unavailable; the saved draft is retained.");
   return view;
 }
 
 async function present({ editor, draftId, audience, before }: DraftContext): Promise<Response> {
-  const view = await readAvailable(editor, draftId, audience);
-  if (!view) throw new DraftConflict("Draft does not exist.");
+  const view = await requireAvailable(editor, draftId, audience);
   return reply(200, await editor.present(view, before));
 }
 
@@ -40,8 +40,7 @@ async function collection(req: Request, editor: DeskDraftEditor, audience: Lane)
   await editor.host.detail(parsed.data.conversationId);
   const made = await editor.service.make(parsed.data);
   if (made.kind === "select") return reply(200, made);
-  const view = await readAvailable(editor, made.view.draft.draftId, audience);
-  if (!view) throw new DraftConflict("Draft does not exist.");
+  const view = await requireAvailable(editor, made.view.draft.draftId, audience);
   return reply(200, { kind: "draft", reopened: made.reopened, ...await editor.present(view) });
 }
 
