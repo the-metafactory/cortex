@@ -1,5 +1,5 @@
-import { flowName, flowSchemaRef } from "../../../conversations/domain-adapters/flow/schema";
-import type { QuerySource } from "../../../conversations/domain-adapters/reads/query-types";
+import { flowQuerySource } from "../../../conversations/domain-adapters/flow/queries";
+import { flowName } from "../../../conversations/domain-adapters/flow/schema";
 import { QUERY_LIMITS } from "../../../conversations/domain-adapters/reads/query-types";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import { SEARCH_MAX_LIMIT, SEARCH_MAX_OFFSET, type WorkObject, type WorkPage, type WorkRead, type WorkReader } from "../../../conversations/tools/work-context";
@@ -19,11 +19,6 @@ const toObject = (config: FlowWorkRunner, object: ReleasedObject): WorkObject =>
   summary: text(object.value.yaml), policy: config.policy(), area: null,
   url: "?routines=flows", observedAt: observedAtOf(object, Date.now()),
 });
-const source = (config: FlowWorkRunner, capabilityId: "flow.saved.query" | "flow.saved.read", id?: string): QuerySource => ({
-  adapterId: "flow", connectionId: config.destination.connectionId, capabilityId,
-  inputSchemaRef: flowSchemaRef(`${capabilityId}.input`), destinations: [config.destination],
-  input: id === undefined ? { stack: config.destination } : { ref: { ...config.destination, objectType: "saved", canonicalId: id } },
-});
 const objectsOf = (config: FlowWorkRunner, released: Parameters<typeof releasedObjects>[0] | undefined): ReleasedObject[] => released === undefined ? [] : releasedObjects(released).filter(object =>
   object.ref.adapterId === "flow" && object.ref.connectionId === config.destination.connectionId && object.ref.objectType === "saved"
 );
@@ -31,14 +26,14 @@ const objectsOf = (config: FlowWorkRunner, released: Parameters<typeof releasedO
 export function flowWorkReaders(config: FlowWorkRunner): { flow: WorkReader } {
   const read = async (id: string): Promise<WorkRead> => {
     if (!flowName.safeParse(id).success) return { state: "unavailable", reason: "unavailable" };
-    const run = await runHostQuery(config, source(config, "flow.saved.read", id));
+    const run = await runHostQuery(config, flowQuerySource(config.destination.connectionId, config.destination, "flow.saved.read", id));
     if (run.result.restricted || run.result.status === "denied") return { state: "unavailable", reason: "unauthorized" };
     if (run.result.status === "ok" && run.released !== undefined && run.result.noMatch) return { state: "unavailable", reason: "gone" };
     const object = objectsOf(config, run.released).find(candidate => candidate.ref.canonicalId === id);
     return run.result.status === "ok" && object ? { state: "available", object: toObject(config, object) } : { state: "unavailable", reason: "unavailable" };
   };
   const search = async (needle: string, limit: number, offset: number): Promise<WorkPage> => {
-    const request = await config.runner.create(config.context, [source(config, "flow.saved.query")], config.sink);
+    const request = await config.runner.create(config.context, [flowQuerySource(config.destination.connectionId, config.destination, "flow.saved.query")], config.sink);
     const items: WorkObject[] = [];
     const wanted = needle.trim().toLowerCase();
     let continuation: string | undefined;

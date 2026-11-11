@@ -1,6 +1,7 @@
 export const CREATABLE_TYPES = [
   "graph-node", "graph-map", "graph-ruling", "graph-close", "balance-task", "balance-project", "balance-inbox-task", "studio-thread", "studio-capture", "studio-note", "studio-response", "studio-close",
   "flow", "routine", "calendar-event", "reminder", "soma-goal", "tana-note", "desk-note", "mail-draft",
+  "work-brief", "work-start", "work-cancel",
 ] as const;
 export type CreatableType = (typeof CREATABLE_TYPES)[number];
 
@@ -38,6 +39,7 @@ export const OWNER_BLOCKERS: Record<CreatableType, number> = {
   "balance-task": 3030, "balance-project": 3031, "balance-inbox-task": 3032,
   "studio-thread": 3141, "studio-capture": 3142, "studio-note": 3140, "studio-response": 3138, "studio-close": 3139,
   flow: 3146, routine: 3035, "calendar-event": 3036, reminder: 3037, "soma-goal": 3038, "tana-note": 3039, "desk-note": 3040, "mail-draft": 3041,
+  "work-brief": 3160, "work-start": 3160, "work-cancel": 3160,
 };
 
 export const CREATION_CATALOG: Record<CreatableType, CreatableSpec> = {
@@ -98,6 +100,18 @@ export const CREATION_CATALOG: Record<CreatableType, CreatableSpec> = {
   "tana-note": { row: "O19", label: "Tana note", owner: "Tana", egress: "cloud", fields: [text("target", "Target node (empty uses the inbox)", false, true), long("text", "Note", true)] },
   "desk-note": { row: "O20", label: "Keep-in-mind note", owner: "Desk", egress: "local", fields: [long("text", "Note", true)] },
   "mail-draft": { row: "O21", label: "Reply draft", owner: "Mail", egress: "cloud", fields: [text("mail", "Listed mail", true, true), long("body", "Reply", true)], fixed: [{ label: "Send", value: "Saved as a draft; never sent." }] },
+  "work-brief": { row: "O26", label: "Implementation brief", owner: "Soma work graph", egress: "cloud", fields: [
+    text("repository", "Repository", true, true), text("map", "Registered map", true, true), text("parent", "Parent node", true, true),
+    text("title", "Title"), text("checkpoint", "Checkpoint"), long("body", "Brief", true),
+    text("budgetTokens", "Budget in tokens"), text("budgetMinutes", "Budget in minutes"), text("budgetInvocations", "Budget in agent invocations", false),
+    { name: "probes", label: "Probes", kind: "list", required: false }, { name: "dependencies", label: "Blocked by", kind: "list", required: false },
+  ], fixed: [{ label: "Autonomy", value: "Filed as a node that needs approval. It is never changed to automatic, and filing starts nothing." }] },
+  "work-start": { row: "O27", label: "Implementation start", owner: "Ranger", egress: "cloud", fields: [
+    text("node", "Recorded node", true, true),
+  ], fixed: [{ label: "Start", value: "Ranger's own gates apply. It never merges, deploys or sends." }] },
+  "work-cancel": { row: "O28", label: "Implementation stop", owner: "Ranger", egress: "cloud", fields: [
+    text("node", "Recorded node", true, true), text("generation", "Worker generation", true, true),
+  ], fixed: [{ label: "Stop", value: "Stops the recorded worker generation only. It never kills a process or undoes accepted edits." }] },
 };
 
 export const UNAVAILABLE_TYPES: UnavailableSpec[] = [

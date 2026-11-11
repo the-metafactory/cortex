@@ -28,6 +28,8 @@ import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioThreadView, type StudioView } from "./studio/view";
 import type { DeskItem } from "./types";
 import { workReaders } from "./work-readers";
+import { workerOwner } from "./worker-conversation-owner";
+import { workBriefWriter, workCancelWriter, workStartWriter } from "./worker-conversation-writer";
 
 const FRESH_MS = 5_000;
 const gone: SourceState = { state: "unavailable", reason: "gone" };
@@ -61,6 +63,7 @@ export interface SourceDeps {
   runWriter?: Partial<Record<DeskWriterKind, WriterRunner>>;
   listGoals?: GoalRunner;
   captureModel?: CaptureModel;
+  runWorker?: WriterRunner;
 }
 
 export function conversationSources(deps: SourceDeps): HostSources {
@@ -123,6 +126,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const goal = goalWriter({ ...writerDeps("goal"), ...(deps.listGoals ? { list: deps.listGoals } : {}) });
   const tanaNote = tanaNoteWriter(writerDeps("note"));
   const deskNote = deskNoteWriter(writerDeps("note"));
+  const workerDeps = { db: deps.db, desk: deps.desk, ...(deps.runWorker ? { run: deps.runWorker } : {}), ...(deps.now ? { now: deps.now } : {}) };
   const { lookupMail, ledger } = deps;
   const mailDraft = lookupMail && ledger ? mailDraftWriter({ desk: deps.desk, lookupMail, ledger, ...(deps.runMailDraft ? { run: deps.runMailDraft } : {}), ...(deps.now ? { now: deps.now } : {}) }) : undefined;
   return {
@@ -141,10 +145,14 @@ export function conversationSources(deps: SourceDeps): HostSources {
         ...(tanaNoteReady(desk) ? { "tana-note": tanaNote } : {}),
         ...(deskWriterArgv(desk, "note") ? {} : { "desk-note": deskNote }),
         ...(mailDraft && mailDraftReady(desk) ? { "mail-draft": mailDraft } : {}),
+        ...(desk.workers ? { "work-brief": workBriefWriter(workerDeps), "work-start": workStartWriter(workerDeps), "work-cancel": workCancelWriter(workerDeps) } : {}),
       };
     },
     get readers() {
       return workReaders({ db: deps.db, desk: deps.desk, studioView, now, ...(deps.deskItems ? { deskItems: deps.deskItems } : {}) });
+    },
+    get workers() {
+      return deps.desk()?.workers ? workerOwner(workerDeps) : undefined;
     },
     get withheld() {
       return deskWriterArgv(deps.desk(), "note") ? { "desk-note": DESK_NOTE_WITHHELD } : {};

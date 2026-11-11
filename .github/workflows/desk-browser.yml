@@ -1,0 +1,57 @@
+name: Desk browser probe
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/conversations/**"
+      - "src/surface/mc/desk/**"
+      - "src/surface/mc/dashboard-v2/**"
+      - "scripts/probe-desk-adapter-browser.ts"
+      - "scripts/desk-make-editor/**"
+      - "scripts/desk-adapter-frame/**"
+      - ".github/workflows/desk-browser.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/conversations/**"
+      - "src/surface/mc/desk/**"
+      - "src/surface/mc/dashboard-v2/**"
+      - "scripts/probe-desk-adapter-browser.ts"
+      - "scripts/desk-make-editor/**"
+      - "scripts/desk-adapter-frame/**"
+      - ".github/workflows/desk-browser.yml"
+
+jobs:
+  desk-browser:
+    name: Desk adapter browser probe
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+
+      - name: Drive the fixture adapter card and frame
+        env:
+          DESK_ADAPTER_BROWSER_SHOTS: ${{ runner.temp }}/desk-adapter-browser
+        run: |
+          mkdir -p "$DESK_ADAPTER_BROWSER_SHOTS"
+          bun scripts/probe-desk-adapter-browser.ts
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desk-adapter-browser-screenshots
+          path: ${{ runner.temp }}/desk-adapter-browser/*.png
+          retention-days: 90
+          if-no-files-found: warn

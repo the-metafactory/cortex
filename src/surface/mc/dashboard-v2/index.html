@@ -2,6 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <script>
+    var adapterFramePolicy = document.createElement('meta');
+    adapterFramePolicy.httpEquiv = 'Content-Security-Policy';
+    adapterFramePolicy.content = 'frame-src ' + location.origin + '/api/desk/adapters/assets/';
+    document.head.appendChild(adapterFramePolicy);
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Cortex · Mission Control</title>
   <!--
