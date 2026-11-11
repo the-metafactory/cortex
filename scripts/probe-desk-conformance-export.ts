@@ -6,13 +6,22 @@ import { hermeticTestEnv } from "./lib/test-home";
 
 const ROOT = resolve(import.meta.dir, "..");
 const FIXTURES = join(ROOT, "src/conversations/domain-adapters/__tests__/fixtures/conformance-packages");
+const GREENHOUSE = join(FIXTURES, "greenhouse");
+const CONSUMER_TIMEOUT_MS = 15_000;
+const TYPECHECK_TIMEOUT_MS = 60_000;
 
-export async function collect(proc: Subprocess<"ignore", "pipe", "pipe">): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const [exitCode, stdout, stderr] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-  return { exitCode, stdout, stderr };
+export async function collect(proc: Subprocess<"ignore", "pipe", "pipe">, timeoutMs = CONSUMER_TIMEOUT_MS): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; proc.kill("SIGKILL"); }, timeoutMs);
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    return { exitCode: timedOut ? 124 : exitCode, stdout, stderr: timedOut ? `${stderr}\nConformance subprocess timed out after ${timeoutMs} ms.` : stderr };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-export async function probeConformanceExport(fixtureDir = join(FIXTURES, "greenhouse"), typecheck = false): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+async function runExternalConsumer(fixtureDir: string, argv: string[], timeoutMs: number): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const root = await mkdtemp(join(tmpdir(), "desk-conformance-export-"));
   const packageDir = join(root, "adapter");
   const home = join(root, "home");
@@ -26,22 +35,25 @@ export async function probeConformanceExport(fixtureDir = join(FIXTURES, "greenh
     await mkdir(home);
     await mkdir(tmp);
     const env = hermeticTestEnv(process.env, { home, tmp });
-    if (typecheck) {
-      const compiler = Bun.spawn([process.execPath, join(ROOT, "node_modules/typescript/bin/tsc"), "--noEmit", "--skipLibCheck", "--module", "preserve", "--moduleResolution", "bundler", "--target", "esnext", "--types", join(ROOT, "node_modules/@types/bun"), "run.ts"], { cwd: packageDir, env, stdout: "pipe", stderr: "pipe" });
-      const result = await collect(compiler);
-      if (result.exitCode !== 0) return result;
-    }
-    const child = Bun.spawn([process.execPath, "run.ts"], {
+    const child = Bun.spawn([process.execPath, ...argv], {
       cwd: packageDir, env, stdout: "pipe", stderr: "pipe",
     });
-    return await collect(child);
+    return await collect(child, timeoutMs);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 }
 
+export async function checkConformanceExportTypes(): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return await runExternalConsumer(GREENHOUSE, [join(ROOT, "node_modules/typescript/bin/tsc"), "--noEmit", "--skipLibCheck", "--module", "preserve", "--moduleResolution", "bundler", "--target", "esnext", "--types", join(ROOT, "node_modules/@types/bun"), "run.ts"], TYPECHECK_TIMEOUT_MS);
+}
+
+export async function probeConformanceExport(fixtureDir = GREENHOUSE): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return await runExternalConsumer(fixtureDir, ["run.ts"], CONSUMER_TIMEOUT_MS);
+}
+
 if (import.meta.main) {
-  const result = await probeConformanceExport(process.argv[2]);
+  const result = process.argv[2] === "--typecheck" ? await checkConformanceExportTypes() : await probeConformanceExport(process.argv[2]);
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
   process.exit(result.exitCode);
