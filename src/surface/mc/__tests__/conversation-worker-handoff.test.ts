@@ -463,3 +463,19 @@ describe("ambiguous start exit", () => {
     } finally { h.db.close(); }
   });
 });
+
+
+describe("owner start refusal", () => {
+  test("the exact node and map pre-dispatch refusal stays explicit and permits a later authorized retry", async () => {
+    const h = harness();
+    try {
+      await filed(h);
+      h.answer("build-now", "", 1, `ranger build-now: #30 on ${MAP}: routes escalate-hitl — waits for the principal`);
+      const writer = workStartWriter(deps(h));
+      const result = await writer.create({ ...request({ node: NODE }, "start"), type: "work-start" });
+      expect(result).toMatchObject({ state: "failed", error: expect.stringContaining("waits for the principal") });
+      h.answer("build-now", JSON.stringify({ pid: 42 }), 0);
+      expect((await writer.create({ ...request({ node: NODE }, "retry"), type: "work-start" })).state).toBe("created");
+    } finally { h.db.close(); }
+  });
+});

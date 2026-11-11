@@ -198,7 +198,9 @@ export function workStartWriter(deps: WorkerWriterDeps): OwnerWriter {
     if (answer && (answer.nodeId !== undefined && answer.nodeId !== parts?.id && answer.nodeId !== Number(parts?.id) || answer.repo !== undefined && answer.repo !== parts?.repo || answer.root !== undefined && answer.root !== splitNodeRef(found.map)?.id && answer.root !== Number(splitNodeRef(found.map)?.id))) throw new Error("Ranger answered for another node or map. Check the original request before retrying.");
     const pid = integer(answer?.pid);
     if (result.code !== 0 || pid === null) {
-      if (result.code === 3 && answer?.pid === null) settleWorkerOperation(deps.db, request.operationId, "refused");
+      const refusalPrefix = `ranger build-now: #${parts?.id} on ${found.map}: `;
+      const beforeDispatch = result.code === 1 && !result.stdout.trim() && result.stderr.trim().startsWith(refusalPrefix);
+      if (result.code === 3 && answer?.pid === null || beforeDispatch) settleWorkerOperation(deps.db, request.operationId, "refused");
       else throw new Error("Ranger did not confirm whether work started. Check this request before retrying.");
       const reason = oneLine(result.stderr || result.stdout, "Ranger did not confirm a started worker.");
       return failed(`${reason.replace(/[.\s]+$/, "")}. ${UNCHANGED}`);
