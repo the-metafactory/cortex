@@ -20,7 +20,7 @@ const KIND_RANK: Record<SourceItem["kind"], number> = { outcome: 0, selected: 1,
 
 export interface DraftServiceDeps {
   registry: DomainAdapterRegistry; bindings: DraftingBindings; sources: DraftSources; policy: DraftPolicy; model: DraftModel;
-  destinations?: DraftDestinations; now?: () => Date; newId?: () => string; contextChars?: number;
+  destinations?: DraftDestinations; now?: () => Date; newId?: () => string; contextChars?: number; timeZone?: string;
 }
 interface MakeInput { conversationId: string; entryId: string; capabilityId: string; connectionId: string; newDraft?: boolean; selectDraftId?: string; selectedSources?: readonly string[] }
 interface RefreshOptions { selectedSources?: readonly string[]; only?: readonly string[]; release?: boolean }
@@ -311,7 +311,8 @@ export class DraftService {
     const manifest: Manifest = {
       generationId, capturedAt: this.now().toISOString(), boundary: context.boundary, policyRevision, lane, modelId: raw.modelId, connectionId: draft.connectionId, schemaRef: draft.schemaRef,
       guidance: { guidanceId: binding.guidance.guidanceId, version: binding.guidance.version },
-      items: context.items.map(item => ({ id: item.id, kind: item.kind, revision: item.revision, digest: item.digest, restriction: item.restriction })), omissions: context.omissions, truncated: context.truncated,
+      timeZone: raw.timeZone,
+      items: context.items.map(item => ({ id: item.id, kind: item.kind, revision: item.revision, digest: item.digest, restriction: item.restriction, at: item.at })), omissions: context.omissions, truncated: context.truncated,
     };
     const destinations = this.destinationBatch();
     const prepared = await this.prepare(draft, view, binding, raw.output, manifest, targets, destinations);
@@ -330,17 +331,19 @@ export class DraftService {
     return applied ? { kind: "applied", view: await this.view(applied) } : { kind: "stale" };
   }
 
-  private async callModel(binding: DraftingBinding, view: DraftingView, lane: Lane, items: SourceItem[], targets: string[]): Promise<{ ok: true; modelId: string; output: ModelOutput } | { ok: false; limitation: Limitation }> {
+  private async callModel(binding: DraftingBinding, view: DraftingView, lane: Lane, items: SourceItem[], targets: string[]): Promise<{ ok: true; modelId: string; output: ModelOutput; timeZone: string } | { ok: false; limitation: Limitation }> {
     let result: Awaited<ReturnType<DraftModel["generate"]>>;
+    let timeZone: string;
     try {
+      timeZone = new Intl.DateTimeFormat("en", { timeZone: this.deps.timeZone }).resolvedOptions().timeZone;
       result = await this.deps.model.generate({
-        lane, guidance: binding.guidance, schemaRef: view.inputSchemaRef, schema: view.root, targets,
+        lane, timeZone, guidance: binding.guidance, schemaRef: view.inputSchemaRef, schema: view.root, targets,
         fieldHints: binding.fieldHints.map(hint => ({ pointer: hint.pointer, role: hint.role, ...(hint.widget ? { widget: hint.widget } : {}) })),
         sources: items.map(item => ({ id: item.id, kind: item.kind, text: item.text, at: item.at })),
       });
     } catch (_err) { return { ok: false, limitation: limit("model_failed", "The model did not complete; the manual draft is unchanged.") }; }
     const parsed = ModelOutputSchema.safeParse(result.output);
-    return parsed.success ? { ok: true, modelId: result.modelId, output: parsed.data } : { ok: false, limitation: limit("invalid_output", "The model returned output that does not match the drafting contract.") };
+    return parsed.success ? { ok: true, modelId: result.modelId, output: parsed.data, timeZone } : { ok: false, limitation: limit("invalid_output", "The model returned output that does not match the drafting contract.") };
   }
 
   private validValue(capabilityId: string, view: DraftingView, pointer: string, value: unknown): boolean {

@@ -26,9 +26,12 @@ await withDraftBrowserProbe(rig, async ({ page, calls, errors }) => {
   const projectField = editor.locator("fieldset", { has: project });
   await projectField.getByText("Suggested", { exact: true }).waitFor();
   assert.equal(calls.filter(call => call.includes("/details")).length, 0);
-  await projectField.getByRole("button", { name: "Sources for project", exact: true }).click();
-  await projectField.getByText("turn: turn-example, revision 1").waitFor();
-  assert.equal(calls.filter(call => call.includes("/details")).length, 1);
+  for (const field of ["title", "note", "area", "project"]) {
+    const fieldset = editor.locator("fieldset", { has: page.getByRole("button", { name: `Sources for ${field}`, exact: true }) });
+    await fieldset.getByRole("button", { name: `Sources for ${field}`, exact: true }).click();
+    await fieldset.getByText("turn: turn-example, revision 1").waitFor();
+  }
+  assert.equal(calls.filter(call => call.includes("/details")).length, 4);
   await page.screenshot({ path: (process.argv[2] ?? "/tmp/desk-balance-drafting.png").replace(/\.png$/, "-prefilled.png"), fullPage: true });
   console.log("Make populated title, note, due, area and project from the displayed discussion, with suggested markers and on-demand source details.");
 
@@ -37,6 +40,7 @@ await withDraftBrowserProbe(rig, async ({ page, calls, errors }) => {
   await steps.press("Save title");
   await steps.press("Clear note");
   rig.state.head = "2";
+  rig.state.items.push({ id: "outcome-example", kind: "outcome", revision: "2", digest: "outcome-2", restriction: "cloud", text: "Add a fitting check after cutting.", at: "2026-11-09T12:00:00.000Z" });
   rig.state.output = balanceDiscussionOutput(true);
   await reopenOutdatedDraft(page);
   await steps.press("Refresh draft");

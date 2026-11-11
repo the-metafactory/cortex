@@ -45,6 +45,22 @@ test("canonical resolution takes ids and unambiguous labels; titles never become
   expect(await rig.resolve("Lab", "task")).toEqual({ kind: "unavailable" });
 });
 
+test("relative-date drafting receives the source time and host timezone and preserves that provenance on reopen", async () => {
+  const rig = await open();
+  const source = rig.state.items[0];
+  if (!source) throw new Error("Synthetic discussion missing");
+  source.text = "Cut the glider wing tomorrow in Lab / Glider.";
+  source.at = "2026-11-09T23:30:00.000Z";
+  rig.state.output = { fields: balanceDiscussionOutput().fields.map(field => field.pointer === "/due" ? { ...field, value: "2026-11-11" } : field) };
+  const made = await makeDraft(rig);
+  expect(rig.state.requests[0]).toMatchObject({ timeZone: "Europe/Zurich", sources: [{ id: source.id, text: source.text, at: source.at }] });
+  expect(made.view.draft.manifest).toMatchObject({ timeZone: "Europe/Zurich", items: [{ id: source.id, at: source.at }] });
+  expect(made.view.draft.fields["/due"]).toMatchObject({ origin: "suggested", value: "2026-11-11", citations: [source.id] });
+  await rig.reopen();
+  expect((await makeDraft(rig)).view.draft.manifest).toEqual(made.view.draft.manifest);
+  expect(rig.ownerCalls).toEqual([]);
+});
+
 test("equally named, unknown and foreign-account destinations stay unresolved and are never invented", async () => {
   const outline = (await open()).outlineSnapshot();
   for (const [labels, code] of [[["Glider"], "ambiguous_reference"], [["Shared"], "ambiguous_reference"], [["Nowhere"], "missing_reference"]] as const) {

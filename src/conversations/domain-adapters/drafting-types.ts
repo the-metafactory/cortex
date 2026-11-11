@@ -19,7 +19,8 @@ export type DraftField = z.infer<typeof FieldSchema>;
 export const ManifestSchema = z.object({
   generationId: id, capturedAt: time, boundary: z.object({ entryId: id, revision: id }).strict(), policyRevision: id,
   lane: LaneSchema, modelId: id, connectionId: id, schemaRef: SchemaRefSchema, guidance: z.object({ guidanceId: id, version: id }).strict(),
-  items: z.array(z.object({ id, kind: z.enum(["turn", "outcome", "linked", "selected"]), revision: id, digest: id, restriction: LaneSchema }).strict()),
+  timeZone: id.optional(),
+  items: z.array(z.object({ id, kind: z.enum(["turn", "outcome", "linked", "selected"]), revision: id, digest: id, restriction: LaneSchema, at: z.string().optional() }).strict()),
   omissions: z.array(z.object({ reason: z.enum(["not-permitted", "unavailable", "context-limit"]), id: id.optional() }).strict()),
   truncated: z.boolean(),
 }).strict();
@@ -55,7 +56,7 @@ export interface DraftPolicy {
   releasable(sourceIds: readonly string[], lane: Lane): Promise<boolean>;
 }
 export interface ModelRequest {
-  lane: Lane; guidance: { guidanceId: string; version: string; instructions: string }; schemaRef: { schemaId: string; version: string }; schema: unknown;
+  lane: Lane; timeZone: string; guidance: { guidanceId: string; version: string; instructions: string }; schemaRef: { schemaId: string; version: string }; schema: unknown;
   fieldHints: readonly { pointer: string; role: string; widget?: "long" }[]; targets: readonly string[]; sources: readonly { id: string; kind: string; text: string; at: string }[];
 }
 export interface DraftModel {

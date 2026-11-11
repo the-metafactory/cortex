@@ -190,7 +190,7 @@ export async function openOwnerDraftRig<Editor extends DeskDraftEditor, Extra ex
     sources: { capture: () => Promise.resolve({ boundary: { entryId, revision: state.head }, items: state.items.map(item => ({ ...item, restriction: state.localOnly ? "local" as const : item.restriction })), unavailable: 0 }), head: () => Promise.resolve(state.head) },
     policy: { revision: () => Promise.resolve("1"), readable: () => Promise.resolve(state.sourceAvailable), releasable: (_ids, lane) => Promise.resolve(state.sourceAvailable && (!state.localOnly || lane === "local")) },
     model: { lanes: () => Promise.resolve(state.lanes), generate: async request => { state.requests.push(request); await state.onGenerate?.(); if (state.modelFails) throw new Error("Synthetic model unavailable"); return { modelId: "synthetic-model", output: state.output }; } },
-    now: () => new Date(at),
+    now: () => new Date(at), timeZone: "Europe/Zurich",
   };
   let options: OwnerDraftEntryOptions<OwnerDraftSession> = { connectionId, audience: "cloud", authority, bridge, session, sourceRestrictions: () => Promise.resolve(state.sourceRestrictionsAvailable ? [{ ref: sourceRestriction.source, restrictionRef: sourceRestriction.restrictionRef }] : null) };
   let editor = target.createEditor({ host, deps, options });
