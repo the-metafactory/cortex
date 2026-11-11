@@ -1,0 +1,16 @@
+{
+  "status": "passed",
+  "checks": [
+    "backend digest",
+    "manifest/factory declaration equality",
+    "two kiln destinations",
+    "four seed firings across two query pages",
+    "stable snapshot across creation",
+    "dispatch correlation and evidence",
+    "canonical readback",
+    "poll observation after creation",
+    "abort signal",
+    "connection isolation"
+  ],
+  "hostConformanceRun": false
+}
