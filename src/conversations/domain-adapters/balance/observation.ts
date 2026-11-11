@@ -92,7 +92,7 @@ function observe(source: BalanceReadSource, request: ObservationRequest, signal:
   const areas = source.areas().filter(area => chosen.includes(area.id));
   const observedAt = readObservedAt(source);
   const limit = Math.max(1, Math.min(request.limit, OBSERVATION_LIMITS.batchItems));
-  const objects = balanceTaskObjects(state, areas, source.connectionId, limit, source.now?.() ?? new Date());
+  const { objects, gap } = balanceTaskObjects(state, areas, source.connectionId, limit, source.now?.() ?? new Date());
   const events: ObservationEvent[] = [];
   const items: Json[] = [];
   for (const object of objects) {
@@ -100,5 +100,5 @@ function observe(source: BalanceReadSource, request: ObservationRequest, signal:
     items.push(object.value);
     events.push({ kind: "present", pointer: `/items/${items.length - 1}`, ref: object.ref, schemaRef: TASK_SCHEMA_REF, destination: object.destination, observedAt, revision });
   }
-  return { version: "1.0.0", payload: { items }, events, coverage: "objects", gap: false };
+  return { version: "1.0.0", payload: { items }, events, coverage: "objects", gap };
 }

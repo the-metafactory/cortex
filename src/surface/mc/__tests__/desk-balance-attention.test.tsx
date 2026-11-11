@@ -78,13 +78,15 @@ describe("Catch-up lists actionable adapter tasks beside mail", () => {
     const stack = await build();
     await stack.balance.allowHome();
     const actionable = seedBalanceObservationOverflow(stack.balance);
-    plan(stack, [actionable[actionable.length - 1]!]);
+    const planned = actionable.at(-1);
+    if (!planned) throw new Error("the overflow fixture has no actionable task");
+    plan(stack, [planned]);
     const view = await stack.compose();
     const rows = adapterRows(view);
     expect(rows).toHaveLength(actionable.length);
     expect(new Set(rows.map(item => item.key)).size).toBe(actionable.length);
     for (const id of actionable) expect(rows.some(item => item.key.includes(id))).toBe(true);
-    expect(rows.find(item => item.key.includes(actionable[actionable.length - 1]!))?.badge).toBe("In today");
+    expect(rows.find(item => item.key.includes(planned))?.badge).toBe("In today");
   });
 
   it("reports overflow as an incomplete source and keeps the retained rows stale", async () => {
@@ -95,6 +97,8 @@ describe("Catch-up lists actionable adapter tasks beside mail", () => {
     expect(adapterRows(view)).toHaveLength(20);
     expect(adapterRows(view).every(item => item.freshness === "stale")).toBe(true);
     expect(view.sources.find(source => source.id === "adapter:balance")).toEqual({ id: "adapter:balance", ok: false, error: "Adapter observations are incomplete. Some items may be missing." });
+    expect(view.systems).toContain("adapter:balance: Adapter observations are incomplete. Some items may be missing.");
+    expect(view.systems).not.toContain("The adapter:balance source is unreachable.");
     expect(await stack.balance.store().needsResync(stack.balance.rig.context, stack.balance.source, stack.balance.rig.sink)).toBe(true);
   });
 
@@ -104,7 +108,11 @@ describe("Catch-up lists actionable adapter tasks beside mail", () => {
     seedBalanceObservationOverflow(stack.balance, 11);
     await stack.compose();
     const state = balanceState(stack);
-    for (const area of state.outline.children) area.children = area.children.filter(task => task.done !== true).slice(0, 10);
+    let remaining = 20;
+    for (const area of state.outline.children) {
+      area.children = area.children.filter(task => task.done !== true).slice(0, remaining);
+      remaining -= area.children.length;
+    }
     saveBalanceState(stack.db, state);
     expect((await stack.balance.check("reconcile")).status).toBe("ok");
     const view = await stack.compose();

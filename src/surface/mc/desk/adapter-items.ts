@@ -32,6 +32,7 @@ const link = z.url({ protocol: /^https?$/ }).refine(value => {
 }).nullable();
 const area = ObjectReferenceSchema.nullable();
 const MAPPING_PROBLEM = "An adapter attention mapping could not be displayed safely.";
+const INCOMPLETE_OBSERVATIONS = "Adapter observations are incomplete. Some items may be missing.";
 
 function hostRank(due: string | null, now: number): Pick<DeskItem, "urgency" | "score"> {
   const day = due === null ? null : due.length === 10 ? due : localDay(Date.parse(due));
@@ -108,6 +109,7 @@ export async function adapterItems(feature: AdapterAttention | undefined, now: n
     if (found.state !== "available" || !found.binding.attention) return null;
     const released = await feature.store.read(feature.context, source, feature.sink);
     if (released.kind !== "released") return null;
+    const incomplete = await feature.store.needsResync(feature.context, source, feature.sink);
     const rows = (released.value as unknown as { objects: ObservationView[] }).objects;
     const mapped: DeskItem[] = [];
     const marked: [string, string][] = [];
@@ -120,7 +122,8 @@ export async function adapterItems(feature: AdapterAttention | undefined, now: n
       mapped.push(result.item);
       if (result.owner !== null) marked.push([result.item.key, result.owner]);
     }
-    return { items: mapped, owners: marked, source: { id: `adapter:${redactToolText(source.adapterId)}`, ok: !invalid, ...(invalid ? { error: MAPPING_PROBLEM } : {}) } };
+    const error = invalid ? MAPPING_PROBLEM : incomplete ? INCOMPLETE_OBSERVATIONS : undefined;
+    return { items: mapped, owners: marked, source: { id: `adapter:${redactToolText(source.adapterId)}`, ok: error === undefined, ...(error === undefined ? {} : { error }) } };
   }));
   for (const released of releasedSources) {
     if (!released) continue;

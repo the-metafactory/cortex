@@ -60,6 +60,10 @@ export const PROBE_EXCLUSIONS: readonly DeskProbeExclusion[] = [
     reason: "needs a browser: it verifies Desk attention in Playwright Chromium",
   },
   {
+    file: "probe-desk-balance-attention.ts",
+    reason: "needs a browser: it verifies Balance attention rows and incomplete observations in Playwright Chromium",
+  },
+  {
     file: "probe-desk-balance-connection.ts",
     reason: "needs a browser: it configures a Balance connection in Playwright Chromium",
   },

@@ -111,6 +111,19 @@ test("mapped display text uses source redaction and stale status remains visible
   expect(html).not.toContain("Plan this");
 });
 
+test("an unknown adapter with a gap keeps its rows and reports missing items in Catch-up", async () => {
+  const item = await open();
+  await item.ingest(0);
+  await item.store.gap(item.sources[0]!);
+  const view = await compose(item);
+  expect(view.items).toHaveLength(1);
+  expect(view.items[0]?.freshness).toBe("stale");
+  expect(view.sources.find(source => source.id === "adapter:synthetic-one")).toEqual({ id: "adapter:synthetic-one", ok: false, error: "Adapter observations are incomplete. Some items may be missing." });
+  const preview = renderToStaticMarkup(createElement(CatchupPreview, { view, onOpen: () => undefined }));
+  expect(preview).toContain("Adapter observations are incomplete. Some items may be missing.");
+  expect(preview).toContain("Synthetic review");
+});
+
 test.each([
   ["fresh", "Observed"],
   ["stale", "Stale observation"],

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { openBalanceReadRig, seedStudioThread } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
+import { openBalanceReadRig, seedBalanceObservationOverflow, seedStudioThread } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
 import { attentionRig } from "../src/surface/mc/desk/fixtures/adapter-attention-fixtures";
 import { composeDesk, type DeskOptions } from "../src/surface/mc/desk/compose";
 import { ALL_AREAS, briefing, selectItems, spokenBriefing } from "../src/surface/mc/desk/present";
@@ -104,6 +104,30 @@ await runWithTemporaryHome(import.meta.path, async () => {
     await catchup.getByRole("button", { name: "Synthetic review", exact: true }).first().waitFor();
     assert.equal(synthetic.fetches, before, "Rendering never polls or queries the adapter.");
     console.log("Reads stay pure: rendering the list fetches no owner.");
+
+    await balance.allowHome();
+    const actionable = seedBalanceObservationOverflow(balance);
+    const overflowState = loadBalanceState(balance.db);
+    if (!overflowState) throw new Error("the Balance store is missing");
+    overflowState.dayState = { date: DATE, confirmed: [actionable[actionable.length - 1]!], closed: false };
+    saveBalanceState(balance.db, overflowState);
+    await balance.check();
+    const overflow = await compose();
+    const openRows = overflow.items.filter(item => item.source === "balance" && item.title.startsWith("Actionable "));
+    assert.equal(openRows.length, actionable.length);
+    assert.equal(new Set(openRows.map(item => item.key)).size, actionable.length);
+    assert.equal(openRows.find(item => item.key.includes(actionable[actionable.length - 1]!))?.badge, "In today");
+    const incomplete = overflow.sources.find(source => source.id === "adapter:balance");
+    assert.ok(incomplete);
+    assert.equal(incomplete?.ok, false);
+    assert.equal(incomplete?.error, "Adapter observations are incomplete. Some items may be missing.");
+    await page.getByRole("button", { name: "Refresh probe" }).click();
+    await catchup.getByText(incomplete.error!, { exact: true }).waitFor();
+    await catchup.getByRole("button", { name: "Actionable Home 7", exact: true }).waitFor();
+    assert.equal(await catchup.getByRole("button", { name: /^Actionable / }).count(), actionable.length);
+    if (output) await page.screenshot({ path: join(output, "catch-up-overflow.png"), fullPage: true });
+    assert.deepEqual(errors, []);
+    console.log("Overflow: completed tasks cannot hide actionable tasks from later areas; Catch-up reports the incomplete projection visibly.");
   } finally {
     await browser?.close();
     await server?.stop(true);

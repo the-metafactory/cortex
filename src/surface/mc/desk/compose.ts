@@ -644,7 +644,7 @@ function buildSystems(db: Database, subjects: VigilSubjectView[], sources: DeskV
   ).get()?.n ?? 0;
   if (failedDispatches > 0) systems.push(`${failedDispatches} agent dispatch${failedDispatches === 1 ? "" : "es"} failed to start.`);
   if (ranger?.refreshError) systems.push(`Ranger could not refresh: ${ranger.refreshError}`);
-  for (const s of sources) if (!s.ok) systems.push(`The ${s.id} source is unreachable.`);
+  for (const s of sources) if (!s.ok) systems.push(s.id.startsWith("adapter:") && s.error ? `${s.id}: ${s.error}` : `The ${s.id} source is unreachable.`);
   return systems;
 }
 

@@ -25,6 +25,10 @@ import { DESK_ITEM_KINDS, freshnessLabel } from "../../desk/types";
 export function needsAction(item: DeskItem): boolean {
   return item.attention !== "update";
 }
+
+function AdapterSourceProblems({ sources }: { sources: DeskView["sources"] }) {
+  return <>{sources.filter(source => source.id.startsWith("adapter:") && !source.ok && source.error).map((source, index) => <p key={`${source.id}:${index}`} className="desk-stale" role="status">{source.error}</p>)}</>;
+}
 export function catchupItems(
   items: DeskItem[],
   area: string,
@@ -59,6 +63,7 @@ export function CatchupPreview({
           Open inbox · {view.items.length}
         </button>
       </header>
+      <AdapterSourceProblems sources={view.sources} />
       <p>{count} need an action</p>
       <ul>
         {view.items.slice(0, 3).map((item) => (
@@ -263,6 +268,7 @@ export function DeskCatchUp({
   };
   return (
     <main className="catchup" ref={root} hidden={!active}>
+      <AdapterSourceProblems sources={view.sources} />
       <header className="catchup-lead">
         <div>
           <p className="catchup-eyebrow">Your inbox</p>

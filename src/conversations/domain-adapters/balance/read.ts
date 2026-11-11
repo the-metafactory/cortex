@@ -254,13 +254,17 @@ function taskValue(task: LocatedTask, connectionId: string, attention: TaskAtten
 
 export interface BalanceTaskObject { readonly ref: ObjectReference; readonly destination: ObjectReference; readonly value: Json }
 
-export function balanceTaskObjects(state: AppState, areas: readonly DestinationArea[], connectionId: string, limit: number, at = new Date()): BalanceTaskObject[] {
+export function balanceTaskObjects(state: AppState, areas: readonly DestinationArea[], connectionId: string, limit: number, at = new Date()): { objects: BalanceTaskObject[]; gap: boolean } {
   const attention = attentionOf(state, at);
-  return locateTasks(state, areas, true).slice(0, limit).map(task => ({
+  const tasks = locateTasks(state, areas, true);
+  const open = tasks.filter(task => task.node.done !== true).slice(0, limit);
+  const completed = tasks.filter(task => task.node.done === true).slice(0, limit - open.length);
+  const objects = [...open, ...completed].map(task => ({
     ref: reference(connectionId, "task", task.node.id),
     destination: reference(connectionId, "area", task.area.id),
     value: taskValue(task, connectionId, attention),
   }));
+  return { objects, gap: tasks.length > objects.length };
 }
 
 function taskEntry(task: LocatedTask, connectionId: string, value: Json): PageEntry {
