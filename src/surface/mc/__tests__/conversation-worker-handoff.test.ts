@@ -193,6 +193,24 @@ describe("worker status and cancel writers", () => {
     expect(await workCancelWriter(deps(h)).readback(operation)).toBeNull();
   });
 
+  test.each([
+    ["nonzero exit", "", 1],
+    ["missing generation", JSON.stringify({ state: "stopped" }), 0],
+    ["malformed reply", "reply lost", 0],
+    ["another node", JSON.stringify({ nodeId: "99", state: "stopped", generation: 3 }), 0],
+  ])("keeps a stop with %s uncertain instead of claiming nothing was cancelled", async (_name, stdout, code) => {
+    await filed(h);
+    recordWorkerState(h.db, NODE, { state: "running", reason: null, pr: null, result: null, generation: 3 }, NOW);
+    h.answer("stop-node", stdout as string, code as number);
+    const result = await workCancelWriter(deps(h)).create({ ...request({ node: NODE, generation: "3" }, "uncertain-stop"), type: "work-cancel" });
+    expect(result.state).toBe("accepted");
+    if (result.state !== "accepted") throw new Error("expected an uncertain stop");
+    expect(result.receipt).toContain("not confirmed");
+    expect(result.receipt).not.toContain("Nothing was cancelled");
+    expect(readWorkerRecord(h.db, NODE)).toMatchObject({ state: "running", generation: 3 });
+    expect(readWorkerOperation(h.db, "uncertain-stop")?.state).toBe("stopping");
+  });
+
   test("an unmapped status state keeps the recorded state with its reason and never becomes merged", async () => {
     await filed(h);
     h.answer("status-command", JSON.stringify({ state: "deployed" }));
