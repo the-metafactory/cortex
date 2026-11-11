@@ -69,7 +69,7 @@ export async function openFlowSaveRig() {
   const { bridge, lifecycle, context, lease } = lifecycleRig({ journal, live: () => binding, now: FLOW_SAVE_NOW, clock: () => new Date(state.now), label: "Flow save" });
   const command = (args: string[]): Promise<WriterResult> => owner([...pulse, "flow", ...args, "--json"], "", 8000);
   return {
-    dir, flowsDir, env, pulse, calls, state, registry, journal, binding, facade, bridge, lifecycle,
+    dir, flowsDir, env, pulse, calls, state, registry, journal, binding, facade, bridge, lifecycle, run,
     command,
     savedCount: async (): Promise<number> => JSON.parse((await command(["list", "--saved"])).stdout).flows.length,
     create: (request = flowSaveRequest()) => facade.create(request, flowSaveAuthority, lifecycle()),

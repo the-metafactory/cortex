@@ -3,7 +3,7 @@ import { z } from "zod";
 import { CREATABLE_TYPES, CREATION_CATALOG, OWNER_BLOCKERS, SUBJECT_FIELDS, UNAVAILABLE_TYPES, isCreatable, type CreatableType, type Egress, type FieldSpec, type FixedTerm } from "./catalog";
 import type { ConversationHost } from "./host";
 import { ConversationError } from "./errors";
-import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateResult, type OperationRecord, type OwnerWriters, type Policy, type Suggestion, type WithheldReasons } from "./types";
+import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateRequest, type CreateResult, type OperationRecord, type OwnerWriters, type Policy, type Suggestion, type WithheldReasons } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 export type GrantScope = (typeof GRANT_SCOPES)[number];
@@ -59,6 +59,8 @@ const GrantSchema = z.object({
   operationId: z.string(),
   createdAt: z.string(),
   revokedAt: z.string().optional(),
+  renewalRequired: z.boolean().optional(),
+  binding: z.object({ adapterId: z.string(), connectionId: z.string(), capabilityId: z.string(), grantId: z.uuid() }).strict().optional(),
 });
 export type Grant = z.infer<typeof GrantSchema>;
 
@@ -143,7 +145,7 @@ function egressRefusal(type: CreatableType | null, policy: "local" | "cloud"): C
 const isCurrent = (op: OperationRecord, proposal: Proposal): boolean => op.proposalId === proposal.proposalId && op.revision === proposal.revision;
 const samePrincipal = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
 const applies = (grant: Grant, conversationId: string, principal: string, type: CreatableType): boolean =>
-  !grant.revokedAt && grant.type === type && samePrincipal(grant.principal, principal) && (grant.scope === "global" || grant.conversationId === conversationId);
+  !grant.revokedAt && !grant.renewalRequired && grant.type === type && samePrincipal(grant.principal, principal) && (grant.scope === "global" || grant.conversationId === conversationId);
 
 function typeOf(type: string | undefined): CreatableType | undefined {
   if (type === undefined) return undefined;
@@ -215,11 +217,26 @@ export class ConversationCreation {
   }
 
   async grants(principal: string): Promise<Grant[]> {
-    return Object.values((await this.host.creation()).grants).map(raw => GrantSchema.parse(raw)).filter(g => samePrincipal(g.principal, principal)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const grants = Object.values((await this.host.creation()).grants).map(raw => GrantSchema.parse(raw)).filter(g => samePrincipal(g.principal, principal)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const writers = await this.host.lifecycleWriters().inspect();
+    return Promise.all(grants.map(async grant => {
+      const lifecycle = await this.host.creationLifecycle(grant.type);
+      if (lifecycle) return lifecycle.grantView(grant);
+      const retired = Object.values(writers.records).some(history => history.at(-1)?.plan.binding.owner === grant.type);
+      return retired ? { ...grant, renewalRequired: true } : grant;
+    }));
   }
 
   private async save(proposal: Proposal): Promise<void> {
     await this.host.changeCreation(() => ({ result: null, proposals: { [proposal.proposalId]: proposal } }));
+  }
+
+  private async review(proposal: Proposal): Promise<{ digest: string; revision?: string }> {
+    const digest = proposalDigest(proposal.type, proposal.fields);
+    const lifecycle = proposal.type ? await this.host.creationLifecycle(proposal.type) : undefined;
+    if (!lifecycle) return { digest };
+    const revision = await lifecycle.reviewRevision();
+    return { digest: sha256(canonical({ digest, writer: revision })), revision };
   }
 
   private async view(proposal: Proposal, operations?: OperationRecord[], policy?: "local" | "cloud"): Promise<ProposalView> {
@@ -234,7 +251,7 @@ export class ConversationCreation {
     else if (!proposal.type) feedback = "choose";
     else feedback = capability?.status === "ready" ? "proposed" : "unavailable";
     const { requestDigest: _requestDigest, ...shown } = proposal;
-    return { proposal: shown, digest: proposalDigest(proposal.type, proposal.fields), sentence: sentence(proposal), capability, missing: missingOf(proposal.type, proposal.fields), refusal: egressRefusal(proposal.type, effective)?.message ?? null, feedback, operation, earlier: mine.filter(op => op.revision !== proposal.revision) };
+    return { proposal: shown, digest: (await this.review(proposal)).digest, sentence: sentence(proposal), capability, missing: missingOf(proposal.type, proposal.fields), refusal: egressRefusal(proposal.type, effective)?.message ?? null, feedback, operation, earlier: mine.filter(op => op.revision !== proposal.revision) };
   }
 
   async list(conversationId: string, actor: Actor): Promise<CreationView> {
@@ -268,7 +285,7 @@ export class ConversationCreation {
       if (grant && ready) {
         await this.host.settled();
         const egress = await this.egressRefusal(conversationId, proposal);
-        if (!egress) await this.execute(proposal, { kind: "grant", grantId: grant.grantId, scope: grant.scope }, actor.principal);
+        if (!egress) await this.execute(proposal, { kind: "grant", grantId: grant.grantId, scope: grant.scope }, actor);
       }
       return { view: await this.view(proposal), duplicate: false };
     });
@@ -327,7 +344,8 @@ export class ConversationCreation {
       const earlier = operations.find(op => op.revision === body.revision);
       if (earlier?.digest === body.digest && earlier.state !== "proposed" && earlier.state !== "confirmed") return this.view(proposal);
       if (body.revision !== proposal.revision) throw conflict(`This proposal changed since you reviewed it; it is now revision ${proposal.revision}. Nothing was created.`);
-      if (body.digest !== proposalDigest(proposal.type, proposal.fields)) throw conflict("The proposal you confirmed differs from the saved one. Nothing was created; review it again.");
+      const review = await this.review(proposal);
+      if (body.digest !== review.digest) throw conflict("The proposal you confirmed differs from the saved one. Nothing was created; review it again.");
       if (proposal.dismissed) throw conflict("This proposal was dismissed. Nothing was created.");
       if (!proposal.type) throw conflict("Choose what to create and where first. Nothing was created.");
       const capability = this.capability(proposal.type);
@@ -336,8 +354,8 @@ export class ConversationCreation {
       if (missing.length > 0) throw new ConversationError(400, `Fill in ${missing.join(", ")} first. Nothing was created.`);
       const egress = await this.egressRefusal(conversationId, proposal);
       if (egress) throw egress;
-      const operation = await this.execute(proposal, { kind: "confirmation", transport: actor.transport }, actor.principal);
-      if (body.grant && (operation?.state === "created" || operation?.state === "running")) await this.grant(proposal, proposal.type, body.grant.scope, operation.operationId, actor.principal);
+      const operation = await this.execute(proposal, { kind: "confirmation", transport: actor.transport }, actor, review.revision);
+      if (body.grant && (operation?.state === "created" || operation?.state === "running")) await this.grant(proposal, proposal.type, body.grant.scope, operation.operationId, actor);
       return this.view(proposal);
     });
   }
@@ -346,11 +364,14 @@ export class ConversationCreation {
     return egressRefusal(proposal.type, (await this.host.meta(conversationId)).policy);
   }
 
-  private async grant(proposal: Proposal, type: CreatableType, scope: GrantScope, operationId: string, principal: string): Promise<void> {
+  private async grant(proposal: Proposal, type: CreatableType, scope: GrantScope, operationId: string, actor: Actor): Promise<void> {
     const grantId = `grant-${sha256(operationId).slice(0, 32)}`;
+    if ((await this.host.creation()).grants[grantId]) return;
+    const lifecycle = await this.host.creationLifecycle(type);
+    const binding = lifecycle ? await lifecycle.grant(proposal, scope, actor) : undefined;
     const created = await this.host.changeCreation(state => {
       if (state.grants[grantId]) return { result: false };
-      const grant: Grant = { grantId, type, scope, conversationId: proposal.conversationId, principal, operationId, createdAt: this.now().toISOString() };
+      const grant: Grant = { grantId, type, scope, conversationId: proposal.conversationId, principal: actor.principal, operationId, createdAt: this.now().toISOString(), ...(binding ? { binding } : {}) };
       return { result: true, grants: { [grantId]: grant } };
     });
     if (created) await this.host.record(proposal.conversationId, `grant:${grantId}`, GRANT_KIND, { grantId, type, scope, action: "granted" });
@@ -361,6 +382,7 @@ export class ConversationCreation {
     if (!found) throw new ConversationError(404, "That permission was not found.");
     await this.gate(found.conversationId, actor, false);
     if (found.revokedAt) return found;
+    await (await this.host.creationLifecycle(found.type))?.revoke(found, actor);
     const revoked: Grant = { ...found, revokedAt: this.now().toISOString() };
     await this.host.changeCreation(() => ({ result: null, grants: { [grantId]: revoked } }));
     await this.host.record(found.conversationId, `grant:${grantId}:revoked`, GRANT_KIND, { grantId, type: found.type, scope: found.scope, action: "revoked" });
@@ -373,36 +395,39 @@ export class ConversationCreation {
       const proposal = await this.proposal(conversationId, proposalId);
       const operation = await this.currentOperation(proposal);
       if (!operation || (operation.state !== "running" && operation.state !== "uncertain")) return this.view(proposal);
-      const found = await this.host.readback(operation);
+      const lifecycle = proposal.type ? await this.host.creationLifecycle(proposal.type) : undefined;
+      const found = lifecycle ? await lifecycle.check(operation, actor) : await this.host.readback(operation);
       if (found?.found) await this.created(proposal, operation, found.canonicalId, found.url, "Check found the object at the owner.");
       else if (found && operation.state === "uncertain") await this.host.transition(operation.operationId, "failed", { note: "Check found nothing at the owner. Change the proposal or confirm it again to try once more." });
       return this.view(proposal);
     });
   }
 
-  private async execute(proposal: Proposal, authority: NonNullable<OperationRecord["authority"]>, principal: string): Promise<OperationRecord | null> {
+  private async execute(proposal: Proposal, authority: NonNullable<OperationRecord["authority"]>, actor: Actor, reviewRevision?: string): Promise<OperationRecord | null> {
     const type = proposal.type;
     if (!type) return null;
     const digest = proposalDigest(type, proposal.fields);
     let operation = await this.host.propose(proposal.conversationId, proposal.proposalId, proposal.revision, type, digest);
     if (operation.state !== "proposed" && operation.state !== "confirmed") return operation;
     if (authority.kind === "grant") {
-      const still = (await this.grants(principal)).find(g => g.grantId === authority.grantId);
-      if (!still || !applies(still, proposal.conversationId, principal, type)) return operation;
+      const still = (await this.grants(actor.principal)).find(g => g.grantId === authority.grantId);
+      if (!still || !applies(still, proposal.conversationId, actor.principal, type)) return operation;
     }
     const latest = await this.proposal(proposal.conversationId, proposal.proposalId);
     if (latest.revision !== proposal.revision || proposalDigest(latest.type, latest.fields) !== digest) throw conflict("This proposal changed before it ran. Nothing was created.");
     const writer = this.host.writers[type];
     if (!writer) return operation;
+    const lifecycle = await this.host.creationLifecycle(type);
     if (operation.state === "proposed") operation = await this.host.transition(operation.operationId, "confirmed", { authority, note: authority.kind === "grant" ? `standing ${authority.scope} permission` : `confirmed on ${authority.transport}` });
     operation = await this.host.transition(operation.operationId, "running");
     const controller = new AbortController();
     const { promise: timedOut, resolve } = Promise.withResolvers<"timeout">();
     const timer = setTimeout(() => { controller.abort(); resolve("timeout"); }, this.timeoutMs);
     let result: CreateResult | "timeout";
+    const request: CreateRequest = { operationId: operation.operationId, type, fields: clean(proposal.fields), activation: "none", signal: controller.signal, provenance: { conversationId: proposal.conversationId, proposalId: proposal.proposalId, revision: proposal.revision, operationId: operation.operationId, entryId: proposal.entryId, link: `?desk=conversation&conversation=${proposal.conversationId}` } };
     try {
       result = await Promise.race([
-        writer.create({ operationId: operation.operationId, type, fields: clean(proposal.fields), activation: "none", signal: controller.signal, provenance: { conversationId: proposal.conversationId, proposalId: proposal.proposalId, revision: proposal.revision, operationId: operation.operationId, entryId: proposal.entryId, link: `?desk=conversation&conversation=${proposal.conversationId}` } }),
+        lifecycle ? lifecycle.create(request, authority, actor, reviewRevision) : writer.create(request),
         timedOut,
       ]);
     } catch (error) {
