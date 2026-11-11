@@ -26,8 +26,6 @@ function treeDigest(root: string): string {
   return hash.digest("hex");
 }
 
-const ownedTempEntries = (): string[] => readdirSync(tmpdir()).filter(name => name.startsWith("desk-conformance-")).sort();
-
 describe("valid packages from different domains", () => {
   for (const name of ["greenhouse", "observatory"] as const) {
     test(`${name} reports every declared capability conformant`, async () => {
@@ -117,16 +115,20 @@ describe("a package that needs a credential the harness will not request", () =>
 describe("every run", () => {
   test("makes no network request and writes nothing outside its own temporary directory", async () => {
     const names = Object.keys(CONFORMANCE_PACKAGES);
-    const before = ownedTempEntries();
+    const tempParent = mkdtempSync(join(tmpdir(), "conformance-check-"));
     const digests = new Map(names.map(name => [name, treeDigest(packageDir(name))]));
     const realFetch = globalThis.fetch;
-    for (const name of names) {
-      const report = await runConformance(packageDir(name));
-      expect(report.networkRequests).toBe(0);
+    try {
+      for (const name of names) {
+        const report = await runConformance(packageDir(name), tempParent);
+        expect(report.networkRequests).toBe(0);
+      }
+      expect(globalThis.fetch).toBe(realFetch);
+      expect(readdirSync(tempParent)).toEqual([]);
+      for (const name of names) expect(treeDigest(packageDir(name))).toBe(digests.get(name) ?? "");
+    } finally {
+      rmSync(tempParent, { recursive: true, force: true });
     }
-    expect(globalThis.fetch).toBe(realFetch);
-    expect(ownedTempEntries()).toEqual(before);
-    for (const name of names) expect(treeDigest(packageDir(name))).toBe(digests.get(name) ?? "");
   });
 
   test("the network guard refuses and counts an attempted request", async () => {
