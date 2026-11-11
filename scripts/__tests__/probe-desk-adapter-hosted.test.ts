@@ -40,20 +40,20 @@ const stack = await openSyntheticStack(HOST);
 afterAll(() => stack.close());
 
 test("the checks pass behind a front that enforces the token, and the refusal check fails when the front lets a tokenless request through", async () => {
-  const route = (assertion: boolean) => (method: string, path: string, body?: unknown) => Promise.resolve(stack.handle(new Request(`https://${HOST}${path}`, {
+  const route = (target: typeof stack, assertion: boolean) => (method: string, path: string, body?: unknown) => Promise.resolve(target.handle(new Request(`https://${HOST}${path}`, {
     method, headers: { host: HOST, "content-type": "application/json", ...(assertion ? { [CF_ACCESS_JWT_HEADER]: "service-assertion" } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })));
   const results: [boolean, string][] = [];
   const probe = { check: (ok: boolean, label: string) => { results.push([ok, label]); }, finish: (): never => { throw new Error("unused"); } };
   const refusingFront = () => Promise.resolve(new Response("forbidden", { status: 403 }));
-  await runHostedChecks(stack, route(true), refusingFront, probe);
+  await runHostedChecks(stack, route(stack, true), refusingFront, probe);
   expect(results.filter(([ok]) => !ok)).toEqual([]);
   expect(results.length).toBe(8);
 
   results.length = 0;
   const leaky = await openSyntheticStack(HOST);
   try {
-    await runHostedChecks(leaky, (method, path, body) => Promise.resolve(leaky.handle(new Request(`https://${HOST}${path}`, { method, headers: { host: HOST, "content-type": "application/json", [CF_ACCESS_JWT_HEADER]: "service-assertion" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }))), (method, path) => Promise.resolve(leaky.handle(new Request(`https://${HOST}${path}`, { method, headers: { host: HOST } }))), probe);
+    await runHostedChecks(leaky, route(leaky, true), route(leaky, false), probe);
   } finally { await leaky.close(); }
   expect(results.find(([, label]) => label.startsWith("Access refuses"))?.[0]).toBe(false);
 });

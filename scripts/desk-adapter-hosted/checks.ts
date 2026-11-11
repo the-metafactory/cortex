@@ -33,9 +33,10 @@ export async function runHostedChecks(stack: SyntheticStack, send: Send, sendWit
   check(edited.status === 200 && editedView.view?.draft?.fields["/headline"]?.value === "Probe headline", "Edit saves the headline through the route");
 
   const approve = async () => json<Confirmation>(await send("POST", `/api/desk/drafts/${encodeURIComponent(id)}/confirm`, { revision: editedView.view.draft.revision }));
+  const mutationsBefore = stack.drafts.owner.mutations;
   const first = await approve();
   const second = await approve();
-  check(first.confirmation?.kind === "accepted" && JSON.stringify(first) === JSON.stringify(second), "Approve is accepted and a repeated Approve returns the same result");
+  check(first.confirmation?.kind === "accepted" && JSON.stringify(first) === JSON.stringify(second) && stack.drafts.owner.mutations === mutationsBefore + 1, "Approve is accepted and a repeated Approve returns the same result without a second owner mutation");
 
   const admissions = stack.drafts.owner.admissions;
   stack.drafts.state.localOnly.add("turn-1");
