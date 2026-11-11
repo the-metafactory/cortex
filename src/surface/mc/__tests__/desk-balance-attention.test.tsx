@@ -1,61 +1,31 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import type { Database } from "bun:sqlite";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { findNode } from "../../../balance";
-import { openBalanceReadRig, seedBalanceObservationOverflow, seedStudioThread, type BalanceReadRig } from "../../../conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
+import { seedBalanceObservationOverflow } from "../../../conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
 import { handleDeskAdapterAction } from "../api/desk-adapter";
 import { handleDeskMyDay } from "../api/desk-my-day";
-import { HandledLedger } from "../desk/actions";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import { loadMeta, saveMeta } from "../desk/balance-sync";
-import { composeDesk, type AdapterCapabilityAdmission, type DeskOptions, type DeskRuntime } from "../desk/compose";
+import { composeDesk } from "../desk/compose";
 import type { DeskItem, DeskView } from "../desk/types";
-import { attentionRig, type AttentionOptions } from "../desk/fixtures/adapter-attention-fixtures";
+import type { AttentionOptions } from "../desk/fixtures/adapter-attention-fixtures";
 import { ALL_AREAS, briefing, selectItems, spokenBriefing } from "../desk/present";
 import { catchupItems } from "../dashboard-v2/components/desk-catch-up";
 import { DeskItemRow } from "../dashboard-v2/components/desk-view";
-import { SourceCache, type SourceMail } from "../desk/sources/command";
+import { SourceCache } from "../desk/sources/command";
 import { localDay } from "../desk/time";
-import { mailDesk } from "./desk-mail-fixtures";
+import { BALANCE_ATTENTION_MAIL as MAIL, openBalanceAttentionStack, planBalanceToday } from "../desk/fixtures/balance-attention";
 
 const NOW = Date.parse("2026-11-01T09:00:00.000Z");
 const DATE = localDay(NOW);
-const MAIL: SourceMail = { kind: "mail", id: "budget@example.org", from: { name: "Ada Boss", address: "boss@example.org" }, subject: "Budget", receivedAt: "2026-11-01T08:00:00.000Z", unread: true, url: "message://%3Cbudget%3E", account: "work" };
 
-interface Stack {
-  balance: BalanceReadRig;
-  synthetic: Awaited<ReturnType<typeof attentionRig>>;
-  db: Database;
-  desk: DeskOptions;
-  runtime: DeskRuntime;
-  compose(now?: number): Promise<DeskView>;
-  close(): Promise<void>;
-}
-
+type Stack = Awaited<ReturnType<typeof openBalanceAttentionStack>>;
 const opened: Stack[] = [];
 afterEach(async () => { for (const stack of opened.splice(0)) await stack.close(); });
 
 async function build(options: AttentionOptions = {}, studioLink = true): Promise<Stack> {
-  const balance = await openBalanceReadRig();
-  const synthetic = await attentionRig("local", options);
-  const db = balance.db;
-  if (studioLink) seedStudioThread(db);
-  const desk: DeskOptions = { ...mailDesk({ trash: ["/opt/adapters/bin/desk-mail-trash.ts"], timeoutSeconds: 20 }), areas: balance.areas.map(area => ({ ...area, repos: [], goals: [] })) };
-  const sourceCache = new SourceCache(() => Promise.resolve(JSON.stringify({ items: [MAIL] })));
-  const attention = [() => balance.attentionAccess(), synthetic.feature];
-  const runtime: DeskRuntime = {
-    options: desk,
-    ledger: new HandledLedger(),
-    sourceCache,
-    adapterAttention: () => Promise.resolve({ feature: synthetic.feature, close: () => undefined }),
-    adapterCapability: async (request): Promise<AdapterCapabilityAdmission> => (await synthetic.rig.service.admitRowCapability(synthetic.rig.context, request)).kind === "allowed" ? { kind: "allowed" } : { kind: "denied", reason: "The host authority does not permit this change." },
-  };
-  const stack: Stack = {
-    balance, synthetic, db, desk, runtime,
-    compose: (now = NOW) => composeDesk(db, desk, undefined, { now, sourceCache, adapterDay: () => balance.reader(), adapterAttention: attention }),
-    async close() { await balance.close(); await synthetic.rig.close(); },
-  };
+  const stack = await openBalanceAttentionStack(NOW, options, studioLink);
   opened.push(stack);
   return stack;
 }
@@ -67,11 +37,6 @@ const balanceState = (stack: Stack) => {
   if (!state) throw new Error("the owner store is missing");
   return state;
 };
-function plan(stack: Stack, ids: string[]): void {
-  const state = balanceState(stack);
-  state.dayState = { date: DATE, confirmed: ids, closed: false };
-  saveBalanceState(stack.db, state);
-}
 
 describe("Catch-up lists actionable adapter tasks beside mail", () => {
   it("observes open tasks across areas before completed tasks can consume the batch", async () => {
@@ -80,7 +45,7 @@ describe("Catch-up lists actionable adapter tasks beside mail", () => {
     const actionable = seedBalanceObservationOverflow(stack.balance);
     const planned = actionable.at(-1);
     if (!planned) throw new Error("the overflow fixture has no actionable task");
-    plan(stack, [planned]);
+    planBalanceToday(stack.db, DATE, [planned]);
     const view = await stack.compose();
     const rows = adapterRows(view);
     expect(rows).toHaveLength(actionable.length);
@@ -162,7 +127,7 @@ describe("Catch-up lists actionable adapter tasks beside mail", () => {
 
   it("keeps a planned task in Catch-up with its In today badge and leaves My Day order alone", async () => {
     const stack = await build();
-    plan(stack, ["task-wing"]);
+    planBalanceToday(stack.db, DATE, ["task-wing"]);
     await stack.balance.check();
     const withAdapters = await stack.compose();
     const withoutAdapters = await composeDesk(stack.db, stack.desk, undefined, { now: NOW, sourceCache: new SourceCache(() => Promise.resolve(JSON.stringify({ items: [MAIL] }))) });
@@ -323,7 +288,7 @@ describe("a row capability reaches host authority", () => {
     const view = await stack.compose();
     const synthetic = row(view, "Synthetic review");
     expect(synthetic?.actions).toMatchObject([{ id: "adapter.capability:synthetic-one.complete", label: "Complete", target: stack.synthetic.capabilityOf(0) }]);
-    const response = await handleDeskAdapterAction(post(synthetic?.key ?? "", stack.synthetic.capabilityOf(0)), stack.db, stack.runtime, undefined, NOW);
+    const response = await handleDeskAdapterAction(post(synthetic?.key ?? "", stack.synthetic.capabilityOf(0)), stack.runtime, NOW);
     expect(response.status).toBe(403);
     expect(stack.synthetic.rig.calls.dispatch).toBe(0);
   });
@@ -333,8 +298,10 @@ describe("a row capability reaches host authority", () => {
     await stack.synthetic.ingest(0);
     const item = row(await stack.compose(), "Synthetic review");
     if (!item) throw new Error("the synthetic row is missing");
-    stack.runtime.sourceCache = new SourceCache(() => { throw new Error("an unrelated source was fetched"); });
-    expect((await handleDeskAdapterAction(post(item.key, stack.synthetic.capabilityOf(0)), stack.db, stack.runtime, undefined, NOW)).status).toBe(403);
+    let unrelatedFetches = 0;
+    stack.runtime.sourceCache = new SourceCache(() => { unrelatedFetches++; return Promise.resolve('{"items":[]}'); });
+    expect((await handleDeskAdapterAction(post(item.key, stack.synthetic.capabilityOf(0)), stack.runtime, NOW)).status).toBe(403);
+    expect(unrelatedFetches).toBe(0);
   });
 
   it("admits the press through the host only when the connection carries the capability", async () => {
@@ -343,7 +310,7 @@ describe("a row capability reaches host authority", () => {
     await stack.synthetic.ingest(0);
     const view = await stack.compose();
     const synthetic = row(view, "Synthetic review");
-    const response = await handleDeskAdapterAction(post(synthetic?.key ?? "", stack.synthetic.capabilityOf(0)), stack.db, stack.runtime, undefined, NOW);
+    const response = await handleDeskAdapterAction(post(synthetic?.key ?? "", stack.synthetic.capabilityOf(0)), stack.runtime, NOW);
     expect(response.status).toBe(501);
     expect(stack.synthetic.rig.calls.dispatch).toBe(0);
   });
@@ -354,7 +321,7 @@ describe("a row capability reaches host authority", () => {
     await stack.synthetic.ingest(0);
     const view = await stack.compose();
     const synthetic = row(view, "Synthetic review");
-    expect((await handleDeskAdapterAction(post(synthetic?.key ?? "", "synthetic-one.complete"), stack.db, stack.runtime, undefined, NOW)).status).toBe(409);
-    expect((await handleDeskAdapterAction(post("adapter:nothing", "synthetic-one.complete"), stack.db, stack.runtime, undefined, NOW)).status).toBe(409);
+    expect((await handleDeskAdapterAction(post(synthetic?.key ?? "", "synthetic-one.complete"), stack.runtime, NOW)).status).toBe(409);
+    expect((await handleDeskAdapterAction(post("adapter:nothing", "synthetic-one.complete"), stack.runtime, NOW)).status).toBe(409);
   });
 });

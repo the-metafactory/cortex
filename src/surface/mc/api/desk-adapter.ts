@@ -1,12 +1,11 @@
-import type { Database } from "bun:sqlite";
 import { adapterRowRef, readAdapterAttention } from "../desk/adapter-items";
 import { ADAPTER_CAPABILITY_ACTION } from "../desk/adapter-actions";
-import type { DeskRuntime, DeskVigilSource } from "../desk/compose";
+import type { DeskRuntime } from "../desk/compose";
 
 const noStore = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string): Response => Response.json({ ok: false, error }, { status, headers: noStore });
 
-export async function handleDeskAdapterAction(req: Request, _db: Database, runtime: DeskRuntime | undefined, _vigil: DeskVigilSource | undefined, now = Date.now()): Promise<Response> {
+export async function handleDeskAdapterAction(req: Request, runtime: DeskRuntime | undefined, now = Date.now()): Promise<Response> {
   if (req.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   if (!runtime?.options?.enabled || !runtime.adapterAttention || !runtime.adapterCapability) return fail(409, "Changes on connected rows are not set up on this stack.");
   const body = (await req.json().catch(() => null)) as { key?: unknown; capability?: unknown } | null;

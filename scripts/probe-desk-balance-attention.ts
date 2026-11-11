@@ -1,35 +1,21 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { openBalanceReadRig, seedBalanceObservationOverflow, seedStudioThread } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
-import { attentionRig } from "../src/surface/mc/desk/fixtures/adapter-attention-fixtures";
-import { composeDesk, type DeskOptions } from "../src/surface/mc/desk/compose";
+import { seedBalanceObservationOverflow } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
+import { openBalanceAttentionStack, planBalanceToday } from "../src/surface/mc/desk/fixtures/balance-attention";
 import { ALL_AREAS, briefing, selectItems, spokenBriefing } from "../src/surface/mc/desk/present";
-import { loadBalanceState, saveBalanceState } from "../src/surface/mc/desk/balance-store";
 import { localDay } from "../src/surface/mc/desk/time";
-import { SourceCache, type SourceMail } from "../src/surface/mc/desk/sources/command";
-import { HandledLedger } from "../src/surface/mc/desk/actions";
 import { catchupItems } from "../src/surface/mc/dashboard-v2/components/desk-catch-up";
 import { buildDeskProbeBundle, deskProbeEntry, serveDeskProbe } from "./lib/desk-browser-probe";
 import { runWithTemporaryHome } from "./probe-temp-home";
 
 const NOW = new Date(2026, 10, 1, 10).getTime();
 const DATE = localDay(NOW);
-const MAIL: SourceMail = { kind: "mail", id: "budget@example.org", from: { name: "Ada Boss", address: "boss@example.org" }, subject: "Budget", receivedAt: new Date(2026, 10, 1, 8).toISOString(), unread: true, url: "message://%3Cbudget%3E", account: "work" };
 
 await runWithTemporaryHome(import.meta.path, async () => {
-  const balance = await openBalanceReadRig();
-  seedStudioThread(balance.db);
-  const synthetic = await attentionRig("local", { rowCapabilities: { granted: false } });
-  const desk: DeskOptions = { enabled: true, displayName: "Probe", topN: 5, rangerUrl: "", areas: balance.areas.map(area => ({ ...area, repos: [], goals: [] })), sources: [{ id: "work-mail", command: ["desk-mail"], everySeconds: 300, timeoutSeconds: 30 }], mailActions: { trash: ["/opt/adapters/bin/desk-mail-trash.ts"], timeoutSeconds: 20 } };
-  const sourceCache = new SourceCache(async () => JSON.stringify({ items: [MAIL] }));
-  const ledger = new HandledLedger();
-  const attention = [() => balance.attentionAccess(), synthetic.feature];
-  const compose = () => composeDesk(balance.db, desk, undefined, { now: NOW, sourceCache, handled: ledger, adapterAttention: attention });
-  const state = loadBalanceState(balance.db);
-  if (!state) throw new Error("the Balance store is missing");
-  state.dayState = { date: DATE, confirmed: ["task-wing"], closed: false };
-  saveBalanceState(balance.db, state);
+  const stack = await openBalanceAttentionStack(NOW, { rowCapabilities: { granted: false } });
+  const { balance, synthetic, compose } = stack;
+  planBalanceToday(balance.db, DATE, ["task-wing"]);
 
   const errors: string[] = [];
   let browser;
@@ -103,14 +89,11 @@ await runWithTemporaryHome(import.meta.path, async () => {
     await page.getByRole("button", { name: "Refresh probe" }).click();
     await catchup.getByRole("button", { name: "Synthetic review", exact: true }).first().waitFor();
     assert.equal(synthetic.fetches, before, "Rendering never polls or queries the adapter.");
-    console.log("Reads stay pure: rendering the list fetches no owner.");
+    console.log("Catch-up rendering never queries the synthetic adapter. Balance refresh stays on the My Day projection path.");
 
     await balance.allowHome();
     const actionable = seedBalanceObservationOverflow(balance);
-    const overflowState = loadBalanceState(balance.db);
-    if (!overflowState) throw new Error("the Balance store is missing");
-    overflowState.dayState = { date: DATE, confirmed: [actionable[actionable.length - 1]!], closed: false };
-    saveBalanceState(balance.db, overflowState);
+    planBalanceToday(balance.db, DATE, [actionable[actionable.length - 1]!]);
     await balance.check();
     const overflow = await compose();
     const openRows = overflow.items.filter(item => item.source === "balance" && item.title.startsWith("Actionable "));
@@ -137,7 +120,6 @@ await runWithTemporaryHome(import.meta.path, async () => {
   } finally {
     await browser?.close();
     await server?.stop(true);
-    await balance.close();
-    await synthetic.rig.close();
+    await stack.close();
   }
 });

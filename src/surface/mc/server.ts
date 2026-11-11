@@ -594,7 +594,7 @@ async function handleApi(
 
   if (pathname === "/api/desk/action") return handleDeskAction(req, desk);
 
-  if (pathname === "/api/desk/adapter") return handleDeskAdapterAction(req, db, desk, vigil);
+  if (pathname === "/api/desk/adapter") return handleDeskAdapterAction(req, desk);
 
   if (pathname === "/api/desk/autonomy") return handleDeskAutonomy(req, db, desk);
 
