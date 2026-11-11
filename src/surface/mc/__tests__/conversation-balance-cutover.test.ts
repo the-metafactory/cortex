@@ -39,19 +39,22 @@ async function openRig() {
   const writers = opened.host.lifecycleWriters();
   const fixture = balanceCutoverFixture({ db, desk: () => desk, journal, writers });
   await opened.host.attachSources(conversationSources({ db, desk: () => desk, balanceTaskCutover: () => fixture.cutover }));
-  const conversationId = await opened.start("Cutover conversation");
   const tasks = (title: string): OutlineNode[] => balanceTasks(db, title);
   const receipts = () => loadMeta(db).receipts;
   const unwrap = (reply: { body: Reply }): ProposalView => reply.body.proposal;
-  const propose = async (fields: Record<string, string>): Promise<ProposalView> => unwrap(await opened.call("POST", `/api/conversations/${conversationId}/proposals`, { proposalId: randomUUID(), type: "balance-task", fields }));
-  const revise = async (view: ProposalView, fields: Record<string, string>): Promise<ProposalView> => unwrap(await opened.call("PATCH", `/api/conversations/${conversationId}/proposals/${view.proposal.proposalId}`, { revision: view.proposal.revision, fields }));
-  const confirm = async (view: ProposalView, extra: Record<string, unknown> = {}) => opened.call("POST", `/api/conversations/${conversationId}/proposals/${view.proposal.proposalId}/confirm`, { revision: view.proposal.revision, digest: view.digest, ...extra });
-  const list = async (): Promise<{ proposals: ProposalView[]; grants: Grant[] }> => (await opened.call("GET", `/api/conversations/${conversationId}/proposals`)).body as unknown as { proposals: ProposalView[]; grants: Grant[] };
+  const talk = (conversationId: string) => {
+    const propose = async (fields: Record<string, string>): Promise<ProposalView> => unwrap(await opened.call("POST", `/api/conversations/${conversationId}/proposals`, { proposalId: randomUUID(), type: "balance-task", fields }));
+    const revise = async (view: ProposalView, fields: Record<string, string>): Promise<ProposalView> => unwrap(await opened.call("PATCH", `/api/conversations/${conversationId}/proposals/${view.proposal.proposalId}`, { revision: view.proposal.revision, fields }));
+    const confirm = async (view: ProposalView, extra: Record<string, unknown> = {}) => opened.call("POST", `/api/conversations/${conversationId}/proposals/${view.proposal.proposalId}/confirm`, { revision: view.proposal.revision, digest: view.digest, ...extra });
+    const list = async (): Promise<{ proposals: ProposalView[]; grants: Grant[] }> => (await opened.call("GET", `/api/conversations/${conversationId}/proposals`)).body as unknown as { proposals: ProposalView[]; grants: Grant[] };
+    return { conversationId, propose, revise, confirm, list, unwrap };
+  };
   const runCutover = async (steps: WriterCutoverSteps, plan: WriterPlan): Promise<WriterRecord> => {
     const begun = await writers.begin(plan, 0);
     return writers.resume(begun.bindingKey, steps);
   };
-  return { db, desk, host: opened.host, conversationId, journal, writers, propose, revise, confirm, list, tasks, receipts, runCutover, unwrap };
+  const start = async (title: string) => talk(await opened.start(title));
+  return { db, desk, host: opened.host, journal, writers, tasks, receipts, runCutover, start, ...(await start("Cutover conversation")) };
 }
 
 describe("Balance task creation after the per-binding cutover", () => {
@@ -141,6 +144,33 @@ describe("Balance task creation after the per-binding cutover", () => {
     expect(fresh?.connectionId).toBe(BALANCE_TASK_CONNECTION);
     expect(fresh?.destinations).toEqual([{ objectType: "area", canonicalId: AREA }]);
     expect(grants.find(grant => grant.grantId === old?.grantId)?.supersededAt).toBeDefined();
+
+    const elsewhere = await rig.propose(taskFields({ area: "area-home", title: "Into another area" }));
+    expect(elsewhere.feedback).toBe("proposed");
+    expect(rig.tasks("Into another area")).toHaveLength(0);
+    const approved = rig.unwrap(await rig.confirm(elsewhere));
+    expect(approved.feedback).toBe("created");
+    expect(rig.tasks("Into another area").map(task => task.id)).toEqual([approved.operation?.canonicalId ?? ""]);
+    expect(balanceTasks(rig.db, "Into another area").length).toBe(1);
+  });
+
+  test("renewing one conversation's lapsed permission leaves another conversation's renewal notice standing", async () => {
+    const rig = await openRig();
+    const other = await rig.start("Second conversation");
+    expect(rig.unwrap(await rig.confirm(await rig.propose(taskFields({ title: "Under the first grant" })), { grant: { scope: "conversation" } })).feedback).toBe("created");
+    expect(other.unwrap(await other.confirm(await other.propose(taskFields({ title: "Under the second grant" })), { grant: { scope: "conversation" } })).feedback).toBe("created");
+    const firstOld = (await rig.list()).grants[0];
+    const secondOld = (await other.list()).grants[0];
+    await rig.runCutover(legacyInFlightCutover(rig.journal).steps, legacyInFlightCutover(rig.journal).plan);
+    expect((await other.list()).grants.find(grant => grant.grantId === secondOld?.grantId)?.renewal).toBeDefined();
+
+    const renewed = rig.unwrap(await rig.confirm(await rig.propose(taskFields({ title: "Renewed here" })), { grant: { scope: "conversation" } }));
+    expect(renewed.feedback).toBe("created");
+    const here = (await rig.list()).grants;
+    expect(here.find(grant => grant.grantId === firstOld?.grantId)?.supersededAt).toBeDefined();
+    const there = (await other.list()).grants.find(grant => grant.grantId === secondOld?.grantId);
+    expect(there?.renewal?.reason).toContain("Confirm one creation again");
+    expect(there?.supersededAt).toBeUndefined();
   });
 
   test("a removed area denies approval with nothing created, and a read-only downgrade keeps the sidecar evidence", async () => {

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { CREATABLE_TYPES, CREATION_CATALOG, OWNER_BLOCKERS, SUBJECT_FIELDS, UNAVAILABLE_TYPES, isCreatable, type CreatableType, type Egress, type FieldSpec, type FixedTerm } from "./catalog";
 import type { ConversationHost } from "./host";
 import { ConversationError } from "./errors";
-import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateResult, type CreationCutover, type GrantBindingDestination, type OperationRecord, type OwnerWriters, type Policy, type Suggestion, type WithheldReasons } from "./types";
+import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateResult, type CreationCutover, type GrantBinding, type GrantBindingDestination, type OperationRecord, type OwnerWriters, type Policy, type Suggestion, type WithheldReasons } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 export type GrantScope = (typeof GRANT_SCOPES)[number];
@@ -148,8 +148,16 @@ function egressRefusal(type: CreatableType | null, policy: "local" | "cloud"): C
 
 const isCurrent = (op: OperationRecord, proposal: Proposal): boolean => op.proposalId === proposal.proposalId && op.revision === proposal.revision;
 const samePrincipal = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
-const applies = (grant: Grant, conversationId: string, principal: string, type: CreatableType): boolean =>
-  grantInForce(grant) && grant.type === type && samePrincipal(grant.principal, principal) && (grant.scope === "global" || grant.conversationId === conversationId);
+const sameDestination = (a: GrantBindingDestination, b: GrantBindingDestination): boolean => a.objectType === b.objectType && a.canonicalId === b.canonicalId;
+const coversBinding = (grant: Grant, current: GrantBinding | null): boolean => {
+  if (grant.connectionId === undefined) return true;
+  const bound = grant.destinations ?? [];
+  return current !== null && current.connectionId === grant.connectionId && current.destinations.length === bound.length && current.destinations.every(destination => bound.some(other => sameDestination(destination, other)));
+};
+const applies = (grant: Grant, current: GrantBinding | null, conversationId: string, principal: string, type: CreatableType): boolean =>
+  grantInForce(grant) && grant.type === type && samePrincipal(grant.principal, principal) && (grant.scope === "global" || grant.conversationId === conversationId) && coversBinding(grant, current);
+const supersedes = (item: Grant, next: { type: CreatableType; scope: GrantScope; principal: string; conversationId: string }): boolean =>
+  item.type === next.type && item.scope === next.scope && samePrincipal(item.principal, next.principal) && (next.scope === "global" || item.conversationId === next.conversationId) && item.supersededAt === undefined && item.revokedAt === undefined && item.renewal !== undefined;
 
 function typeOf(type: string | undefined): CreatableType | undefined {
   if (type === undefined) return undefined;
@@ -224,6 +232,10 @@ export class ConversationCreation {
     return Object.values((await this.host.creation()).grants).map(raw => GrantSchema.parse(raw));
   }
 
+  private async destinationBinding(type: CreatableType, fields: Record<string, string>): Promise<GrantBinding | null> {
+    return await this.host.writers[type]?.grantBinding?.(clean(fields)) ?? null;
+  }
+
   private async settleCutover(): Promise<void> {
     const active: Partial<Record<CreatableType, CreationCutover>> = await this.host.cutovers();
     const lapsed = (await this.allGrants()).filter(grant => {
@@ -288,7 +300,8 @@ export class ConversationCreation {
       const proposal: Proposal = { proposalId: body.proposalId, conversationId, type, ...(body.intent ? { intent: body.intent } : {}), fields: suggested ? { ...fields, ...suggested.fields } : fields, ...(suggested ? { suggestion: suggested.reason } : {}), revision: 1, entryId: body.entryId ?? null, requestDigest, dismissed: false, createdAt: at, updatedAt: at };
       await this.save(proposal);
       await this.host.record(conversationId, `proposal:${proposal.proposalId}:1`, PROPOSAL_KIND, { proposalId: proposal.proposalId, revision: 1, type, fields: proposal.fields, entryId: proposal.entryId });
-      const grant = type ? (await this.grants(actor.principal)).find(g => applies(g, conversationId, actor.principal, type)) : undefined;
+      const binding = type ? await this.destinationBinding(type, proposal.fields) : null;
+      const grant = type ? (await this.grants(actor.principal)).find(g => applies(g, binding, conversationId, actor.principal, type)) : undefined;
       const ready = type && this.capability(type).status === "ready" && missingOf(type, proposal.fields).length === 0;
       if (grant && ready) {
         await this.host.settled();
@@ -379,7 +392,7 @@ export class ConversationCreation {
     const created = await this.host.changeCreation(state => {
       if (state.grants[grantId]) return { result: false };
       const grant: Grant = { grantId, type, scope, conversationId: proposal.conversationId, principal, operationId, createdAt: at, ...(binding ? { connectionId: binding.connectionId, destinations } : {}) };
-      const superseded = Object.values(state.grants).map(raw => GrantSchema.parse(raw)).filter(item => item.grantId !== grantId && item.type === type && item.supersededAt === undefined && item.revokedAt === undefined && item.renewal !== undefined).map(item => [item.grantId, { ...item, supersededAt: at }] as const);
+      const superseded = Object.values(state.grants).map(raw => GrantSchema.parse(raw)).filter(item => item.grantId !== grantId && supersedes(item, { type, scope, principal, conversationId: proposal.conversationId })).map(item => [item.grantId, { ...item, supersededAt: at }] as const);
       return { result: true, grants: { [grantId]: grant, ...Object.fromEntries(superseded) } };
     });
     if (created) await this.host.record(proposal.conversationId, `grant:${grantId}`, GRANT_KIND, { grantId, type, scope, action: "granted", ...(binding ? { connectionId: binding.connectionId, destinations } : {}) });
@@ -417,7 +430,7 @@ export class ConversationCreation {
     if (operation.state !== "proposed" && operation.state !== "confirmed") return operation;
     if (authority.kind === "grant") {
       const still = (await this.grants(principal)).find(g => g.grantId === authority.grantId);
-      if (!still || !applies(still, proposal.conversationId, principal, type)) return operation;
+      if (!still || !applies(still, await this.destinationBinding(type, proposal.fields), proposal.conversationId, principal, type)) return operation;
     }
     const latest = await this.proposal(proposal.conversationId, proposal.proposalId);
     if (latest.revision !== proposal.revision || proposalDigest(latest.type, latest.fields) !== digest) throw conflict("This proposal changed before it ran. Nothing was created.");
