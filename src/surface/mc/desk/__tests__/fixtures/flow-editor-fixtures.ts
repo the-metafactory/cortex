@@ -42,7 +42,7 @@ export function hostileFlowEditorScript(attack: "save" | "approve" | "confirm-fe
 }
 
 export async function openFlowEditorRig(options: { script?: string } = {}) {
-  const flow = await openFlowCutoverRig();
+  const flow = await openFlowCutoverRig("cloud");
   await flow.activate();
   flow.policy.allowedAudiences = ["web", "view"];
   const declaration = flowSaveDeclaration();
@@ -55,6 +55,13 @@ export async function openFlowEditorRig(options: { script?: string } = {}) {
   const state = draftingState();
   const connectionId = flow.binding.support.connectionId;
   const stack = flow.binding.writerBinding.stack;
+  const destination = { adapterId: "flow", connectionId, objectType: "stack", canonicalId: stack };
+  const restrictionRef = randomUUID();
+  flow.restrictions.set("flow-editor-stack", record => Promise.resolve(record));
+  await flow.authority.publishHostRecord({ kind: "restriction", value: {
+    version: 1, status: "active", restrictionRef, source: destination, ownerRevision: "1", decisionRef: "synthetic-flow-editor",
+    audiences: ["web", "view"], egress: "cloud", readScope: [flow.connection.principalRef], resolverBinding: "flow-editor-stack", revision: "1",
+  } }, 0);
   state.state.response = () => ({ fields: [
     { pointer: "/name", value: "F_EDITOR_DRAFT", citations: ["turn-1"] },
     { pointer: "/definition", value: FLOW_DRAFT_DEFINITION, citations: ["turn-1"] },
@@ -74,7 +81,7 @@ export async function openFlowEditorRig(options: { script?: string } = {}) {
       if (!sessions.has(conversationId)) { sessions.set(conversationId, opened); openSessions.push(opened); }
       return { runner: { create: () => Promise.reject(new Error("Flow drafts run no queries.")), run: () => Promise.reject(new Error("Flow drafts run no queries.")) }, context: opened.context, sink: { kind: "web", conversationId }, lease: writerLease(record), principal: flow.actor.principal };
     },
-    sourceRestrictions: () => Promise.resolve([]),
+    sourceRestrictions: () => Promise.resolve([{ ref: destination, restrictionRef }]),
   });
   const made = await draftEditor.service.make({ conversationId: flow.id, entryId: "turn-1", capabilityId: "flow.saved.create", connectionId });
   if (made.kind !== "draft") throw new Error("Synthetic Flow draft unavailable");
@@ -84,7 +91,6 @@ export async function openFlowEditorRig(options: { script?: string } = {}) {
   flow.sessions.set(viewSession, { principal: flow.actor.principal, stack, conversationId: flow.id, authenticatedSessionRef: viewSession, transport: "web", audience: "view", viewId: FLOW_EDITOR_VIEW_ID, expiresAt: "2026-12-01T00:00:00Z", maintenance: false });
   const context = await flow.authority.authenticate(viewSession);
   if (!context) throw new Error("Synthetic view context unavailable");
-  const destination = { adapterId: "flow", connectionId, objectType: "stack", canonicalId: stack };
   const binding = flowEditorFrameBinding({
     principal: ASSET_OWNER, audience: "local", connectionId, authority: flow.authority, context,
     sink: { kind: "view", conversationId: flow.id, viewId: FLOW_EDITOR_VIEW_ID },

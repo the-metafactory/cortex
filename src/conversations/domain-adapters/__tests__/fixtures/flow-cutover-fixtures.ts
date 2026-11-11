@@ -4,7 +4,7 @@ import { strict as assert } from "node:assert";
 import { openConversationHost } from "../../../host";
 import { ConversationCreation, type Actor, type ProposalView } from "../../../creation";
 import type { AuthenticatedBinding, AuthorityBindings } from "../../../authority";
-import type { PolicyInputs } from "../../../authority-records";
+import type { PolicyInputs, RestrictionRecord } from "../../../authority-records";
 import { DomainAdapterRegistry } from "../../registry";
 import { createFlowSaveBinding, FLOW_SAVE_SUPPORT_ID } from "../../flow/save-binding";
 import { createFlowCutover } from "../../flow/cutover";
@@ -16,7 +16,7 @@ import { flowSaveDefinition, flowSaveRequest, openFlowSaveRig, FLOW_SAVE_NOW } f
 
 export const flowCutoverConfirm = (view: ProposalView) => ({ revision: view.proposal.revision, digest: view.digest });
 
-export async function openFlowCutoverRig() {
+export async function openFlowCutoverRig(conversationPolicy: "local" | "cloud" = "local") {
   const pulse = await openFlowSaveRig();
   const open = () => openConversationHost({ dir: join(pulse.dir, "host"), stack: "test", label: "synthetic-flow-cutover", expectedLabel: "synthetic-flow-cutover", lanes: { local: { provider: "test", model: "test" } }, turns: request => Promise.resolve({ text: "synthetic", session: request.session, resumed: false }), now: () => new Date(FLOW_SAVE_NOW) });
   const status = await open();
@@ -38,13 +38,14 @@ export async function openFlowCutoverRig() {
   const destination = { adapterId: "flow", connectionId: "flow-example", objectType: "stack", canonicalId: "test" };
   const connection = { version: 1 as const, status: "active" as "active" | "revoked", connectionId: "flow-example", adapterId: "flow", principalRef: principal.principalRef, connectionRevision: "1", credentialHandle: "local-pulse", accountScope: { stack: "test" }, readCapabilityIds: ["flow.saved.create"], writeCapabilityIds: ["flow.saved.create"], readDestinations: [destination], writeDestinations: [destination], connectorId: "flow-example", executionBindingRef: FLOW_SAVE_SUPPORT_ID, registryRevision: "flow-1" };
   const sessions = new Map<string, AuthenticatedBinding>();
-  const policy: PolicyInputs = { version: 1, contextRevision: "1", conversationPolicy: "local", tool: {}, communication: {}, link: {}, work: {}, history: {}, registryRevision: "flow-1", executionBindingRevision: FLOW_SAVE_SUPPORT_ID, operationVisible: true, readsAllowed: true, writesAllowed: true, releaseAllowed: true, allowedAudiences: ["web"] };
+  const policy: PolicyInputs = { version: 1, contextRevision: "1", conversationPolicy, tool: {}, communication: {}, link: {}, work: {}, history: {}, registryRevision: "flow-1", executionBindingRevision: FLOW_SAVE_SUPPORT_ID, operationVisible: true, readsAllowed: true, writesAllowed: true, releaseAllowed: true, allowedAudiences: ["web"] };
+  const restrictions = new Map<string, (record: RestrictionRecord) => Promise<RestrictionRecord | null>>();
   const bindings: AuthorityBindings = {
     currentRevision: () => JSON.stringify({ policy, connection }),
     authenticate: id => Promise.resolve(sessions.get(id) ?? null),
     policy: () => Promise.resolve(policy),
     writer: (lease, snapshot) => host.lifecycleWriters().admits(lease, "test", "flow", snapshot),
-    restrictions: new Map(), sinks: new Map(),
+    restrictions, sinks: new Map(),
     connectors: new Map([["flow-example", { ...binding.connector, authorizeConnection: current => Promise.resolve({ version: 1 as const, available: current.status === "active" && current.accountScope.stack === "test", revision: current.connectionRevision }) }]]),
   };
   const authority = host.lifecycleAuthority(registry, bindings);
@@ -66,7 +67,7 @@ export async function openFlowCutoverRig() {
   await host.attachSources(sources());
   const creation = new ConversationCreation(host, { now: () => new Date(FLOW_SAVE_NOW) });
   const actor: Actor = { principal: principal.principal, transport: "web" };
-  const conversation = await host.create({ title: "Synthetic Flow cutover", policy: "local", links: [], origin: { kind: "web" } }, actor.principal);
+  const conversation = await host.create({ title: "Synthetic Flow cutover", policy: conversationPolicy, links: [], origin: { kind: "web" } }, actor.principal);
   const id = conversation.id;
   const propose = async (name: string, type = "flow") => (await creation.propose(id, { proposalId: randomUUID(), type, fields: type === "flow" ? { name, definition: flowSaveDefinition(name) } : { text: name } }, actor)).view;
   const confirm = (view: ProposalView, standing = false) => creation.confirm(id, view.proposal.proposalId, { ...flowCutoverConfirm(view), ...(standing ? { grant: { scope: "conversation" as const } } : {}) }, actor);
@@ -90,7 +91,7 @@ export async function openFlowCutoverRig() {
   const activate = () => plan().then(current => cutover.cutover(current, syntheticWriterSteps(), 0));
   const saveCalls = () => pulse.calls.filter(argv => argv.includes("save")).length;
   const noActivationCalls = () => pulse.calls.every(argv => !argv.some(arg => ["run", "enable", "routine", "schedule"].includes(arg)));
-  return { pulse, openSession, sessions, bindings, activate, saveCalls, noActivationCalls, get host() { return host; }, db, registry, binding, authority, connection, policy, cutover, sources, creation, actor, id, desk, propose, confirm, seed, plan, hooks, steps: syntheticWriterSteps,
+  return { pulse, openSession, sessions, bindings, restrictions, activate, saveCalls, noActivationCalls, get host() { return host; }, db, registry, binding, authority, connection, policy, cutover, sources, creation, actor, id, desk, propose, confirm, seed, plan, hooks, steps: syntheticWriterSteps,
     async downgrade() {
       await host.close();
       const status = await open();

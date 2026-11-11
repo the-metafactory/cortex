@@ -73,6 +73,18 @@ describe("Flow editor frame", () => {
     expect(await rig.flow.host.lifecycleJournal(rig.flow.registry).read(`${before.draft.conversationId}:${before.draft.draftId}:${before.draft.revision}`)).toBeNull();
   });
 
+  test("host confirmation can save the frame draft with its source authority", async () => {
+    rig = await openFlowEditorRig();
+    const view = await rig.readDraft();
+    const handoff = await rig.draftEditor.service.handoff(rig.draftId, view.draft.revision);
+    expect(handoff.ok).toBe(true);
+    if (!handoff.ok) throw new Error("Synthetic Flow draft is not ready for confirmation.");
+    const confirmed = await rig.draftEditor.confirm?.({ handoff: handoff.handoff, principal: rig.flow.actor.principal, transport: "web", audience: "local" });
+    expect(confirmed).toMatchObject({ kind: "accepted" });
+    expect(rig.flow.saveCalls()).toBe(1);
+    expect(rig.flow.noActivationCalls()).toBe(true);
+  });
+
   for (const type of ["flow:save", "host:approve", "action:confirm"]) {
     test(`a forged ${type} message retires the frame without saving or editing`, async () => {
       rig = await openFlowEditorRig();
