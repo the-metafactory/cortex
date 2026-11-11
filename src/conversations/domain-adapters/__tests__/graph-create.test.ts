@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { CREATE_MAP, CREATE_OTHER_REPOSITORY, CREATE_PARENT, CREATE_REPOSITORY, graphCreateOutput, openGraphCreateRig } from "../work-graph/fixtures/graph-create";
+import { CREATE_MAP, CREATE_OTHER_REPOSITORY, CREATE_PARENT, CREATE_REPOSITORY, graphCreateOutput, openGraphCreateRig } from "../../../surface/mc/desk/fixtures/graph-create";
 import { DESK_DRAFTS_PATH, type DraftEditorView } from "../../../surface/mc/desk/draft-editor-contract";
 
 type Rig = Awaited<ReturnType<typeof openGraphCreateRig>>;
@@ -49,8 +49,7 @@ test("ambiguous and unknown generated references stay unresolved and alternative
   const field = ambiguous.view.draft.fields["/parent"];
   expect(field).toMatchObject({ presence: "absent", unresolved: "ambiguous_reference" });
   expect(field?.alternatives.map(item => item.value)).toEqual([rig.ref("node", CREATE_PARENT), rig.ref("node", `${CREATE_OTHER_REPOSITORY}#13`)]);
-  const confirm = await rig.call("POST", `${DESK_DRAFTS_PATH}/${ambiguous.view.draft.draftId}/confirm`, { revision: ambiguous.view.draft.revision });
-  expect(await confirm.json()).toMatchObject({ confirmation: { kind: "blocked" } });
+  expect(await rig.confirm(ambiguous.view.draft)).toMatchObject({ kind: "blocked" });
   const unknownRig = await open();
   const unknown = await make(unknownRig, "Unknown map");
   expect(unknown.view.draft.fields["/parent"]).toMatchObject({ presence: "absent", unresolved: "missing_reference", alternatives: [] });
@@ -68,15 +67,15 @@ test("Desk confirms an immutable defaulted graph snapshot through authority and 
   expect(handoff.ok).toBe(true);
   expect(rig.soma.calls).toEqual([]);
   expect((await rig.authority.inspectHostRecords()).confirmations).toHaveLength(0);
-  const confirmed = await rig.call("POST", `${path}/confirm`, { revision: made.view.draft.revision });
-  const result = await confirmed.json() as { confirmation: { kind: string; operationId: string } };
-  expect(result.confirmation.kind).toBe("accepted");
-  const stored = await rig.journal.read(result.confirmation.operationId);
+  const result = await rig.confirm(made.view.draft);
+  expect(result.kind).toBe("accepted");
+  if (result.kind !== "accepted") throw new Error(result.reason);
+  const stored = await rig.journal.read(result.operationId);
   expect(stored?.journal.state).toBe("succeeded");
   expect(stored?.journal.snapshot).toMatchObject({ input: { autonomy: "approve", kind: "grilling", repository: rig.ref("repository", CREATE_REPOSITORY), parent: rig.ref("node", CREATE_MAP) }, provenance: { conversationId: rig.makeInput.conversationId, entryId: "entry-example" } });
   expect((await rig.authority.inspectHostRecords()).confirmations).toHaveLength(1);
   expect(rig.soma.calls).toHaveLength(1);
-  await rig.call("POST", `${path}/confirm`, { revision: made.view.draft.revision });
+  await rig.confirm(made.view.draft);
   expect(rig.soma.calls).toHaveLength(1);
 });
 
@@ -91,9 +90,10 @@ test("current scope, authentication, source policy and stale edits block graph c
     if (denial === "source-authority") rig.state.sourceRestrictionsAvailable = false;
     if (denial === "write-policy") rig.policy.writesAllowed = false;
     if (denial === "stale") await rig.editor.service.edit(draftId, revision, "/title", { kind: "set", value: "Edited title" });
-    const result = await rig.call("POST", `${DESK_DRAFTS_PATH}/${draftId}/confirm`, { revision });
-    if (denial === "stale") expect(result.status).toBe(409);
-    else expect(await result.json()).toMatchObject({ confirmation: { kind: "blocked" } });
+    if (denial === "stale") {
+      const result = await rig.call("POST", `${DESK_DRAFTS_PATH}/${draftId}/confirm`, { revision });
+      expect(result.status).toBe(409);
+    } else expect(await rig.confirm(made.view.draft)).toMatchObject({ kind: "blocked" });
     expect(rig.soma.calls).toEqual([]);
   }
 });
@@ -108,10 +108,10 @@ test("dependencies resolve to node references and explicit autonomy and kind sur
   const made = await rig.editor.service.make(rig.makeInput);
   if (made.kind !== "draft") throw new Error("Expected draft");
   const draft = made.view.draft;
-  const result = await rig.call("POST", `${DESK_DRAFTS_PATH}/${draft.draftId}/confirm`, { revision: draft.revision });
-  const confirmation = await result.json() as { confirmation: { kind: string; operationId: string } };
-  expect(confirmation.confirmation.kind).toBe("accepted");
-  expect((await rig.journal.read(confirmation.confirmation.operationId))?.journal.snapshot).toMatchObject({ input: { autonomy: "propose", kind: "research", dependencies: [rig.ref("node", CREATE_PARENT), rig.ref("node", `${CREATE_REPOSITORY}#14`)] } });
+  const confirmation = await rig.confirm(draft);
+  expect(confirmation.kind).toBe("accepted");
+  if (confirmation.kind !== "accepted") throw new Error(confirmation.reason);
+  expect((await rig.journal.read(confirmation.operationId))?.journal.snapshot).toMatchObject({ input: { autonomy: "propose", kind: "research", dependencies: [rig.ref("node", CREATE_PARENT), rig.ref("node", `${CREATE_REPOSITORY}#14`)] } });
   expect(rig.soma.calls).toHaveLength(1);
 });
 
@@ -147,6 +147,14 @@ test("a local-only repository releases neither destination metadata nor linked n
 });
 
 
+test("Mission Control rejects graphDrafts alongside a supplied drafts surface", async () => {
+  const rig = await open();
+  let accessed = false;
+  expect(() => rig.serve({ drafts: () => { accessed = true; return rig.editor; } })).toThrow("drafts and graphDrafts cannot both be configured");
+  expect(accessed).toBe(false);
+  expect(rig.soma.calls).toEqual([]);
+});
+
 test("Mission Control installs graph drafting and confirms through its HTTP entry", async () => {
   const rig = await open();
   const server = rig.serve();
@@ -160,9 +168,7 @@ test("Mission Control installs graph drafting and confirms through its HTTP entr
   expect(made.view.status).toBe("ready-for-confirmation");
   expect(rig.soma.calls).toEqual([]);
   expect((await rig.authority.inspectHostRecords()).confirmations).toHaveLength(0);
-  const confirmed = await server.call("POST", `${DESK_DRAFTS_PATH}/${made.view.draft.draftId}/confirm`, { revision: made.view.draft.revision });
-  expect(confirmed.status).toBe(200);
-  expect(await confirmed.json()).toMatchObject({ confirmation: { kind: "accepted" } });
+  expect(await server.confirm(made.view.draft)).toMatchObject({ kind: "accepted" });
   expect(rig.soma.calls).toHaveLength(1);
   expect((await rig.authority.inspectHostRecords()).confirmations).toHaveLength(1);
 });
@@ -186,8 +192,7 @@ test("confirmation shares current reference reads and never reuses drafting read
   const made = await rig.editor.service.make(rig.makeInput);
   if (made.kind !== "draft") throw new Error("Expected draft");
   rig.reads.splice(0);
-  const confirmed = await rig.call("POST", `${DESK_DRAFTS_PATH}/${made.view.draft.draftId}/confirm`, { revision: made.view.draft.revision });
-  expect(await confirmed.json()).toMatchObject({ confirmation: { kind: "accepted" } });
+  expect(await rig.confirm(made.view.draft)).toMatchObject({ kind: "accepted" });
   expect(rig.reads.map(argv => argv[3]).sort()).toEqual([CREATE_MAP, `${CREATE_REPOSITORY}#14`].sort());
   expect(rig.soma.calls).toHaveLength(1);
 });

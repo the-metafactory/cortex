@@ -239,6 +239,7 @@ export function startServer(
   db: Database,
   options: StartServerOptions = {}
 ): ServerContext {
+  if (options.drafts && options.graphDrafts) throw new Error("drafts and graphDrafts cannot both be configured");
   if (options.graphDrafts) {
     const { host, deps, options: graphOptions } = options.graphDrafts;
     const editor = deskGraphDraftEditor(host, deps, graphOptions);
