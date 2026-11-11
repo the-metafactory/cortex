@@ -43,6 +43,18 @@ export function flowSaveDeclaration(): AdapterDeclaration {
   };
 }
 
+const FlowReceiptRecord = z.object({ name: flowName, sha256: FlowHashSchema }).strict();
+
+export async function flowSaveReceipt(journal: OperationJournalStore, request: { operationId: string; connectionId: string }): Promise<{ name: string; sha256: string } | null> {
+  const stored = await journal.read(request.operationId);
+  if (stored === null) return null;
+  const snapshot = stored.journal.snapshot;
+  if ("kind" in snapshot || snapshot.adapterId !== FLOW_ADAPTER_ID || snapshot.connectionId !== request.connectionId || snapshot.capabilityId !== CAPABILITY_ID) return null;
+  const succeeded = resultsOf(stored).findLast(response => response.result.kind === "succeeded");
+  const receipt = succeeded?.result.kind === "succeeded" ? FlowReceiptRecord.safeParse(succeeded.result.evidence.receipt) : null;
+  return receipt?.success ? receipt.data : null;
+}
+
 export function flowSaveSupport(connectionId: string): OwnerSupport {
   return {
     lifecycleVersion: "1.0.0", adapterId: FLOW_ADAPTER_ID, connectionId, capabilityId: CAPABILITY_ID, declarationId: FLOW_SAVE_SUPPORT_ID,

@@ -1,3 +1,4 @@
+import { flowCardPath, type FlowSavedCard } from "../../desk/flow-surface-schema";
 import { DESK_FLOWS_PATH, type FlowRoutine, SavedFlowDefinitionSchema, SavedFlowsSchema, type SavedFlow, type SavedFlowDefinition } from "../../desk/saved-flow-contract";
 import { ApiFailure, getJson, postJson } from "./api";
 
@@ -20,6 +21,9 @@ export async function loadSavedFlowDefinition(name: string, signal: AbortSignal,
   if (definition.name !== name) throw new Error("Mission Control returned a different saved flow.");
   return definition;
 }
+
+export const loadSavedFlowCard = (name: string, operation: string, signal: AbortSignal, read = getJson): Promise<FlowSavedCard> =>
+  read<FlowSavedCard>(flowCardPath(name, operation), { signal });
 
 export type ShownFlowsState = Extract<SavedFlowsState, { status: "ready" | "error" }>;
 export const flowsShown = (flows: SavedFlowsState): flows is ShownFlowsState => flows.status === "ready" || flows.status === "error";
