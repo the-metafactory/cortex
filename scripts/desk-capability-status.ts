@@ -7,6 +7,10 @@ const JOURNAL_TIMEOUT_MS = 10_000;
 
 const WorkerSchema = z.looseObject({
   status: z.string(),
+  nodeId: z.string().optional(),
+  repo: z.string().optional(),
+  pid: z.number().int().positive().nullish(),
+  workerPgid: z.number().int().positive().nullish(),
   phase: z.string().nullish(),
   prNumber: z.number().nullish(),
   outcome: z.string().nullish(),
@@ -46,9 +50,7 @@ const withPr = (status: BuildStatus, worker: Worker): BuildStatus => {
 
 const REVIEW_PHASES = new Set(["review", "awaiting-review", "awaiting-merge"]);
 
-export function statusFromJournal(journal: unknown): BuildStatus {
-  const worker = latest(JournalSchema.parse(journal).workers);
-  if (!worker) return { state: "filed" };
+function workerStatus(worker: Worker): BuildStatus {
   const reason = worker.outcome ?? undefined;
   switch (worker.status) {
     case "claimed":
@@ -70,14 +72,39 @@ export function statusFromJournal(journal: unknown): BuildStatus {
   }
 }
 
-export async function readStatus(ref: string, run: JournalRunner = rangerRunner()): Promise<BuildStatus> {
+export function statusFromJournal(journal: unknown): BuildStatus {
+  const worker = latest(JournalSchema.parse(journal).workers);
+  return worker ? workerStatus(worker) : { state: "filed" };
+}
+
+async function readJournal(ref: string, run: JournalRunner): Promise<unknown> {
   const { repo, id } = parseNodeRef(ref);
   const result = await run(["journal", "--node", id, "--repo", repo]);
   if (result.code !== 0) throw new Error(result.stderr.replaceAll(/\s+/g, " ").trim() || `ranger journal exited with code ${result.code}`);
-  let journal: unknown;
-  try { journal = JSON.parse(result.stdout); }
-  catch { throw new Error("ranger journal did not print JSON"); }
-  return statusFromJournal(journal);
+  try {
+    const journal = JournalSchema.parse(JSON.parse(result.stdout));
+    if (journal.workers.some(worker => worker.nodeId !== undefined && worker.nodeId !== id || worker.repo !== undefined && worker.repo !== repo)) throw new Error("ranger journal returned another node's worker");
+    return journal;
+  }
+  catch (error) {
+    if (error instanceof SyntaxError) throw new Error("ranger journal did not print JSON");
+    throw error;
+  }
+}
+
+export async function readStatus(ref: string, run: JournalRunner = rangerRunner()): Promise<BuildStatus> {
+  return statusFromJournal(await readJournal(ref, run));
+}
+
+export interface WorkerReport { state: string; reason?: string; pr?: string | number; generation: number | null }
+
+export async function readWorkerReport(ref: string, run: JournalRunner = rangerRunner()): Promise<WorkerReport> {
+  const journal = JournalSchema.parse(await readJournal(ref, run));
+  const worker = latest(journal.workers);
+  const status: Omit<WorkerReport, "generation"> = worker?.status === "stop-requested"
+    ? { state: worker.pid === null && worker.workerPgid === null ? "cancelled" : "stopping", reason: worker.outcome ?? "The worker stop has been requested." }
+    : worker ? workerStatus(worker) : { state: "filed" };
+  return { state: status.state, ...(status.reason === undefined ? {} : { reason: status.reason }), ...(status.pr === undefined ? {} : { pr: status.pr }), generation: worker?.generation ?? null };
 }
 
 if (import.meta.main) {

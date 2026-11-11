@@ -47,7 +47,7 @@ export interface AuthorityBindings {
   sinks: ReadonlyMap<string, (value: Json) => Promise<void>>;
   readBindings?: ReadBindings;
 }
-export interface HostPolicyState { principal: string; stack: string; policy: "local" | "cloud"; tool: Json; communication: Json; link: Json; work: Json; history: Json }
+export interface HostPolicyState { principal: string; stack: string; policy: "local" | "cloud"; tool: Json; communication: Json; link: Json; work: Json; workers?: Json; history: Json }
 export interface ObservedRead { projection: ReleaseProjection<Json>; called: boolean; value?: Json }
 export interface LookupRequest { lifecycleVersion: "1.0.0"; operationId: string; ownerRequestId: string }
 export interface ReadbackRequest { lifecycleVersion: "1.0.0"; ref: ObjectReference }

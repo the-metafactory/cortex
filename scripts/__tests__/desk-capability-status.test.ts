@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { parseNodeRef, readStatus, statusFromJournal, type JournalRunner } from "../desk-capability-status";
+import { parseNodeRef, readStatus, readWorkerReport, statusFromJournal, type JournalRunner } from "../desk-capability-status";
 
 const worker = (fields: Record<string, unknown>) => ({ nodeId: "21", repo: "example/maps", generation: 1, startedAt: "2026-11-03T08:00:00.000Z", phase: "implement", prNumber: null, outcome: null, ...fields });
 const journal = (...workers: Record<string, unknown>[]) => ({ journalPath: "/x", workers, escalations: [], events: [] });
@@ -47,7 +47,7 @@ describe("mapping the journal to a build state", () => {
   });
 
   it("refuses a worker status it does not map instead of guessing", () => {
-    expect(() => statusFromJournal(journal(worker({ status: "stop-requested" })))).toThrow("does not map");
+    expect(() => statusFromJournal(journal(worker({ status: "unsupported" })))).toThrow("does not map");
     expect(() => statusFromJournal(journal(worker({ status: "success", phase: "implement" })))).toThrow("does not mean merged");
   });
 });
@@ -70,6 +70,26 @@ describe("reading a node's status", () => {
 
   it("fails when the journal does not print JSON", async () => {
     await expect(readStatus("example/maps#21", run("<html>").run)).rejects.toThrow("did not print JSON");
+  });
+
+  it("reports the worker generation with the build state so an exact worker can be stopped", async () => {
+    const fake = run(JSON.stringify(journal(worker({ status: "running", generation: 4, prNumber: 3200 }))));
+    expect(await readWorkerReport("example/maps#21", fake.run)).toEqual({ state: "in-review", pr: 3200, generation: 4 });
+    expect((await readWorkerReport("example/maps#21", run(JSON.stringify(journal())).run)).generation).toBeNull();
+  });
+
+  it("distinguishes an unsettled stop from a settled stop", async () => {
+    for (const fields of [{ pid: 12, workerPgid: null }, { pid: null, workerPgid: 13 }, {}]) {
+      const fake = run(JSON.stringify(journal(worker({ status: "stop-requested", ...fields }))));
+      expect(await readWorkerReport("example/maps#21", fake.run)).toMatchObject({ state: "stopping", generation: 1 });
+    }
+    const fake = run(JSON.stringify(journal(worker({ status: "stop-requested", pid: null, workerPgid: null }))));
+    expect(await readWorkerReport("example/maps#21", fake.run)).toMatchObject({ state: "cancelled", generation: 1 });
+  });
+
+  it("refuses another node's journal row", async () => {
+    const fake = run(JSON.stringify(journal(worker({ status: "running", nodeId: "99" }))));
+    await expect(readWorkerReport("example/maps#21", fake.run)).rejects.toThrow("another node");
   });
 
   it("rejects a reference that is not a node", () => {

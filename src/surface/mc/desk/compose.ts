@@ -48,6 +48,7 @@ import { learnedAction, WOULD, type EmbedderConfig } from "./mail-similar";
 import { readRoutines } from "./routines";
 import type { RoutineOptions, RoutineRunner } from "./routine-command";
 import type { FlowOptions } from "../../../common/types/config";
+import type { WorkerHandoffOptions } from "../../../common/types/desk-workers";
 import type { RoutineReadLoop } from "./routine-read";
 import { goalListed, SOMA_GOAL_ID, type DeskGoalOptions, type GoalChecks, type GoalStatuses } from "./goals";
 
@@ -90,6 +91,7 @@ export interface DeskAskOptions {
 export interface DeskOptions {
   routineScope?: { principal: string; stack: string };
   routines?: RoutineOptions;
+  workers?: WorkerHandoffOptions;
   flows?: FlowOptions;
   enabled: boolean;
   displayName: string;
