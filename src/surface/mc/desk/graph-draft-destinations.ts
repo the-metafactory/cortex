@@ -1,13 +1,13 @@
 import { canonicalGraphRef, isBareGraphNode, qualifiedNodeId } from "../../../common/graph-ref";
 import type { AuthorityMediator } from "../../../conversations/authority";
 import { canonicalWire } from "../../../conversations/domain-adapters/operations/validation";
-import type { DraftDestinations, DestinationMatch } from "../../../conversations/domain-adapters/drafting";
+import type { DestinationMatch, DraftDestinations } from "../../../conversations/domain-adapters/drafting";
 import type { QueryPage } from "../../../conversations/domain-adapters/reads/query-types";
 import { readPointer } from "../../../conversations/domain-adapters/reads/query-validation";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import { graphNodeRepository, workGraphReadBindings } from "../../../conversations/domain-adapters/work-graph/read";
 import { runHostQuery, type HostQueryRunner } from "./query-run";
-import { releasedObjects, type ReleasedObject } from "./work-released";
+import { destinationMatch, releasedObjects, type ReleasedObject } from "./work-released";
 
 export interface GraphDraftReadSession extends HostQueryRunner {
   readonly repositories: readonly ObjectReference[];
@@ -24,11 +24,7 @@ type HostRecords = Awaited<ReturnType<AuthorityMediator["inspectHostRecords"]>>;
 type NodeReader = (ref: ObjectReference) => Promise<ReleasedObject | null>;
 interface ReleasedDestinations { objects: ReleasedObject[]; read: NodeReader }
 
-const match = (refs: ObjectReference[]): DestinationMatch => {
-  const unique = [...new Map(refs.map(ref => [JSON.stringify(ref), ref])).values()];
-  const first = unique[0];
-  return !first ? { kind: "none" } : unique.length === 1 ? { kind: "unique", ref: first } : { kind: "multiple", refs: unique };
-};
+const match = destinationMatch;
 const same = (left: string, right: string): boolean => canonicalGraphRef(left) === canonicalGraphRef(right);
 const named = (object: ReleasedObject, label: string): boolean => same(object.ref.canonicalId, label) || typeof object.value.title === "string" && object.value.title.toLowerCase() === label.toLowerCase();
 

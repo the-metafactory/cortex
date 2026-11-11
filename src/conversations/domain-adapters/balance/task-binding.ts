@@ -58,6 +58,7 @@ export function balanceTaskCreateDeclaration(): AdapterDeclaration {
       { objectType: "task", label: "Task", schemaRef: TASK_SCHEMA_REF, relationships: [{ fieldPath: "/area", targetAdapterId: ADAPTER_ID, targetObjectType: "area", cardinality: "one" }, { fieldPath: "/project", targetAdapterId: ADAPTER_ID, targetObjectType: "project", cardinality: "one" }] },
       { objectType: "area", label: "Area", schemaRef: AREA_SCHEMA_REF, relationships: [] },
       { objectType: "project", label: "Project", schemaRef: PROJECT_SCHEMA_REF, relationships: [] },
+      { objectType: "task-draft", label: "Task draft", schemaRef: INPUT_SCHEMA_REF, relationships: [{ fieldPath: "/area", targetAdapterId: ADAPTER_ID, targetObjectType: "area", cardinality: "one" }, { fieldPath: "/project", targetAdapterId: ADAPTER_ID, targetObjectType: "project", cardinality: "one" }] },
     ],
     capabilities: [
       { capabilityId: CAPABILITY_ID, label: "Create task", kind: "action", objectTypes: ["task"], inputSchemaRef: INPUT_SCHEMA_REF, outputSchemaRef: OUTPUT_SCHEMA_REF, errorSchemaRef: ERROR_SCHEMA_REF },

@@ -1,35 +1,19 @@
 import { afterEach, expect, test } from "bun:test";
 import { CREATE_MAP, CREATE_PARENT, CREATE_REPOSITORY, graphDiscussionOutput, openGraphCreateRig } from "../work-graph/fixtures/graph-create";
-import { DESK_DRAFTS_PATH, type DraftEditorView } from "../../../surface/mc/desk/draft-editor-contract";
+import { type DraftEditorView } from "../../../surface/mc/desk/draft-editor-contract";
 import { DraftingBindings } from "../drafting";
+import { draftPath, editDraft, expectBlockedConfirmation, expectManualModeKeepsEdits, makeDraft, ownFields as ownDraftFields, refreshDraft } from "./fixtures/draft-route";
 import { workGraphNodeDraftingBinding } from "../drafting/graph";
 
 type Rig = Awaited<ReturnType<typeof openGraphCreateRig>>;
 const rigs: Rig[] = [];
 async function open() { const rig = await openGraphCreateRig(); rigs.push(rig); rig.state.output = graphDiscussionOutput(); return rig; }
 afterEach(async () => { for (const rig of rigs.splice(0)) await rig.close(); });
-async function make(rig: Rig, extra = {}): Promise<DraftEditorView & { reopened: boolean }> {
-  const response = await rig.call("POST", DESK_DRAFTS_PATH, { ...rig.makeInput, ...extra });
-  expect(response.status).toBe(200);
-  return await response.json();
-}
-const path = (view: DraftEditorView) => `${DESK_DRAFTS_PATH}/${view.view.draft.draftId}`;
-async function edit(rig: Rig, view: DraftEditorView, pointer: string, change: unknown): Promise<DraftEditorView> {
-  const response = await rig.call("PATCH", path(view), { revision: view.view.draft.revision, pointer, change });
-  expect(response.status).toBe(200);
-  return await response.json();
-}
-async function refresh(rig: Rig, view: DraftEditorView): Promise<DraftEditorView> {
-  const response = await rig.call("POST", `${path(view)}/refresh`, { revision: view.view.draft.revision });
-  expect(response.status).toBe(200);
-  return await response.json();
-}
-
-async function expectBlockedConfirmation(rig: Rig, view: DraftEditorView): Promise<void> {
-  const response = await rig.call("POST", `${path(view)}/confirm`, { revision: view.view.draft.revision });
-  expect(await response.json()).toMatchObject({ confirmation: { kind: "blocked" } });
-  expect(rig.soma.calls).toEqual([]);
-}
+const make = (rig: Rig, extra = {}) => makeDraft(rig, extra);
+const edit = editDraft;
+const refresh = refreshDraft;
+const path = draftPath;
+const expectBlocked = (rig: Rig, view: DraftEditorView) => expectBlockedConfirmation(rig, view, () => rig.soma.calls);
 
 test("graph Make uses trusted guidance, substantive discussion and canonical relationships without filing", async () => {
   const rig = await open();
@@ -110,21 +94,7 @@ test("manual relationship labels resolve canonically, flag destination changes a
 
 test("unavailable models and revoked or local-only sources keep manual edits and withhold derivatives", async () => {
   const rig = await open();
-  const edited = await edit(rig, await make(rig), "/title", { kind: "set", value: "Manual title" });
-  rig.state.modelFails = true;
-  const failure = await refresh(rig, edited);
-  expect(failure.view.draft.fields["/title"]?.value).toBe("Manual title");
-  expect(failure.view.draft.limitations.length).toBeGreaterThan(0);
-  rig.state.localOnly = true;
-  const calls = rig.state.requests.length;
-  const local = await refresh(rig, failure);
-  expect(local.view.draft.limitations).toMatchObject([{ code: "model_unavailable" }]);
-  expect(rig.state.requests).toHaveLength(calls);
-  expect(local.view.withheld).toContain("/body");
-  rig.state.sourceAvailable = false;
-  const deniedDetails = await rig.call("GET", `${path(local)}/details?pointer=/body`);
-  expect(await deniedDetails.json()).toMatchObject({ details: { sources: [], hiddenSources: 1 } });
-  await expectBlockedConfirmation(rig, local);
+  await expectManualModeKeepsEdits(rig, "/body", () => rig.soma.calls);
 });
 
 test("invalid graph guidance is rejected while the schema remains available for manual editing", async () => {
@@ -175,17 +145,8 @@ test("manual ambiguous references keep authorized alternatives and failure canno
   rig.state.modelFails = true;
   const failed = await refresh(rig, changed);
   expect(failed.view.outdated).toContain("destination-changed");
-  await expectBlockedConfirmation(rig, failed);
+  await expectBlocked(rig, failed);
 });
-
-async function ownFields(rig: Rig): Promise<DraftEditorView> {
-  let current: DraftEditorView = await make(rig);
-  for (const field of current.fields) {
-    const value = current.view.draft.fields[field.pointer];
-    current = await edit(rig, current, field.pointer, value?.presence === "present" ? { kind: "set", value: value.value } : { kind: "omit" });
-  }
-  return current;
-}
 
 const invalidDestinations = [
   { name: "unknown parent", pointer: "/parent", value: (rig: Rig) => rig.ref("node", `${CREATE_REPOSITORY}#999`) },
@@ -197,7 +158,7 @@ const invalidDestinations = [
 ];
 for (const generate of [false, true]) for (const scenario of invalidDestinations) test(`refresh keeps ${scenario.name} blocked with generation ${generate}`, async () => {
   const rig = await open();
-  let current = generate ? await make(rig) : await ownFields(rig);
+  let current = generate ? await make(rig) : await ownDraftFields(rig);
   const invalid = scenario.value(rig);
   current = await edit(rig, current, scenario.pointer, { kind: "set", value: invalid });
   if (!generate) rig.state.lanes = [];
@@ -205,22 +166,22 @@ for (const generate of [false, true]) for (const scenario of invalidDestinations
   expect(current.view.outdated).toContain("destination-changed");
   expect(current.view.draft.fields[scenario.pointer]).toMatchObject({ origin: "principal", value: invalid });
   expect((await rig.editor.service.handoff(current.view.draft.draftId, current.view.draft.revision)).ok).toBe(false);
-  await expectBlockedConfirmation(rig, current);
+  await expectBlocked(rig, current);
 });
 
 test("refresh retains destination review when its repository is revoked", async () => {
   const rig = await open();
-  let current = await ownFields(rig);
+  let current = await ownDraftFields(rig);
   await rig.untick(CREATE_REPOSITORY);
   rig.state.lanes = [];
   current = await refresh(rig, current);
   expect(current.view.outdated).toContain("destination-changed");
-  await expectBlockedConfirmation(rig, current);
+  await expectBlocked(rig, current);
 });
 
 test("explicit refresh revalidates fully owned destinations without needing a model", async () => {
   const rig = await open();
-  let current = await ownFields(rig);
+  let current = await ownDraftFields(rig);
   expect(current.view.draft.limitations.filter(item => item.code === "destination_changed")).toHaveLength(1);
   expect(current.view.outdated).toContain("destination-changed");
   rig.state.lanes = [];

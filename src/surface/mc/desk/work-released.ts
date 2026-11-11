@@ -1,4 +1,5 @@
 import type { Json } from "../../../conversations/domain-adapters/operations/types";
+import type { DestinationMatch } from "../../../conversations/domain-adapters/drafting";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 
 export interface ReleasedObject {
@@ -39,4 +40,10 @@ export type { HostQueryRun as QueryRun } from "./query-run";
 export const observedAtOf = (object: ReleasedObject, at: number): number => {
   const time = object.evidence?.observedAt ? Date.parse(object.evidence.observedAt) : Number.NaN;
   return Number.isFinite(time) ? time : at;
+};
+
+export const destinationMatch = (refs: ObjectReference[]): DestinationMatch => {
+  const unique = [...new Map(refs.map(ref => [JSON.stringify(ref), ref])).values()];
+  const first = unique[0];
+  return !first ? { kind: "none" } : unique.length === 1 ? { kind: "unique", ref: first } : { kind: "multiple", refs: unique };
 };

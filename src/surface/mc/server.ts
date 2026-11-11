@@ -96,6 +96,7 @@ import { handleDeskBalanceSurfaces } from "./api/desk-balance-surfaces";
 import { handleDeskDrafts } from "./api/desk-drafts";
 import { DESK_DRAFTS_PATH } from "./desk/draft-editor-contract";
 import { deskGraphDraftEditor, type GraphDraftSetup } from "./desk/graph-draft-entry";
+import { deskBalanceDraftEditor, type BalanceDraftSetup } from "./desk/balance-draft-entry";
 import type { DeskDraftAccess } from "./desk/draft-editor";
 import type { GraphSurfaceAccess } from "./desk/graph-surfaces";
 import { GRAPH_SURFACES_PATH } from "./desk/graph-surface-schema";
@@ -221,6 +222,7 @@ export interface MissionControlViews {
   balanceSurfaces?: BalanceSurfaceAccess;
   drafts?: DeskDraftAccess;
   graphDrafts?: GraphDraftSetup;
+  balanceDrafts?: BalanceDraftSetup;
 }
 
 export interface StartServerOptions extends MissionControlViews {
@@ -242,6 +244,11 @@ export function startServer(
   if (options.graphDrafts) {
     const { host, deps, options: graphOptions } = options.graphDrafts;
     const editor = deskGraphDraftEditor(host, deps, graphOptions);
+    options = { ...options, drafts: () => editor };
+  }
+  if (options.balanceDrafts) {
+    const { host, deps, options: balanceOptions } = options.balanceDrafts;
+    const editor = deskBalanceDraftEditor(host, deps, balanceOptions);
     options = { ...options, drafts: () => editor };
   }
   const wsRegistry = new WsClientRegistry();
