@@ -2,32 +2,52 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openConversationHost } from "../../../host";
-import type { AuthorityBindings, TrustedConnector } from "../../../authority";
-import { canonicalWire } from "../../operations/validation";
-import { syntheticWriterPlan, syntheticWriterSteps } from "../../operations/writer-fixtures";
-import { writerLease } from "../../operations/writer-authority";
-import { DomainAdapterRegistry } from "../../registry";
-import { ReadBindings } from "../../reads/bindings";
-import type { ModelOutput, ModelRequest, Lane, SourceItem } from "../../drafting";
-import { createWorkGraphReadAdapter } from "../../work-graph/read";
-import { createWorkGraphNodeBinding } from "../../work-graph/node-binding";
-import type { ObjectReference } from "../../types";
-import type { ConnectionRecord, PolicyInputs, PrincipalBinding, RestrictionRecord } from "../../../authority-records";
-import { initDatabase } from "../../../../surface/mc/db/init";
-import { setGraphRepositoryEnabled } from "../../../../surface/mc/desk/graph-repositories";
-import { DEFAULT_CONFIG } from "../../../../surface/mc/config";
-import { startServer } from "../../../../surface/mc/server";
-import { deskGraphDraftEditor, type GraphDraftSetup } from "../../../../surface/mc/desk/graph-draft-entry";
-import { graphDraftDestinations } from "../../../../surface/mc/desk/graph-draft-destinations";
-import { handleDeskDrafts } from "../../../../surface/mc/api/desk-drafts";
-import { buildAllowedHostnames } from "../../../../surface/mc/api/mutation-guard";
+import { openConversationHost } from "../../../../conversations/host";
+import type { AuthorityBindings, TrustedConnector } from "../../../../conversations/authority";
+import { canonicalWire } from "../../../../conversations/domain-adapters/operations/validation";
+import { syntheticWriterPlan, syntheticWriterSteps } from "../../../../conversations/domain-adapters/operations/writer-fixtures";
+import { writerLease } from "../../../../conversations/domain-adapters/operations/writer-authority";
+import { DomainAdapterRegistry } from "../../../../conversations/domain-adapters/registry";
+import { ReadBindings } from "../../../../conversations/domain-adapters/reads/bindings";
+import type { ModelOutput, ModelRequest, Lane, SourceItem, DraftView } from "../../../../conversations/domain-adapters/drafting";
+import { createWorkGraphReadAdapter } from "../../../../conversations/domain-adapters/work-graph/read";
+import { createWorkGraphNodeBinding } from "../../../../conversations/domain-adapters/work-graph/node-binding";
+import type { ObjectReference } from "../../../../conversations/domain-adapters/types";
+import type { ConnectionRecord, PolicyInputs, PrincipalBinding, RestrictionRecord } from "../../../../conversations/authority-records";
+import { initDatabase } from "../../db/init";
+import { setGraphRepositoryEnabled } from "../graph-repositories";
+import { DEFAULT_CONFIG } from "../../config";
+import { startServer, type StartServerOptions } from "../../server";
+import { deskGraphDraftEditor, type GraphDraftSetup } from "../graph-draft-entry";
+import { graphDraftDestinations } from "../graph-draft-destinations";
+import { handleDeskDrafts } from "../../api/desk-drafts";
+import { buildAllowedHostnames } from "../../api/mutation-guard";
+import { DESK_DRAFTS_PATH, type DraftConfirmation } from "../draft-editor-contract";
 import { GRAPH_NODE_REPOSITORY, GRAPH_NODE_NOW, syntheticSoma } from "./synthetic-soma";
 
 export const CREATE_REPOSITORY = GRAPH_NODE_REPOSITORY;
 export const CREATE_OTHER_REPOSITORY = "github:github.com/other/desk";
 export const CREATE_PARENT = "example/desk#12";
 export const CREATE_MAP = `${CREATE_REPOSITORY}#10`;
+const NODES: Record<string, { repository: string; id: string; title: string; link?: "graph-map" | "graph-node"; linkId?: string }> = {
+  [CREATE_MAP]: { repository: CREATE_REPOSITORY, id: "10", title: "Lifecycle map", link: "graph-map" },
+  [`${CREATE_REPOSITORY}#12`]: { repository: CREATE_REPOSITORY, id: "12", title: "Shared title", link: "graph-node", linkId: CREATE_PARENT },
+  [`${CREATE_OTHER_REPOSITORY}#13`]: { repository: CREATE_OTHER_REPOSITORY, id: "13", title: "Shared title", link: "graph-node" },
+  [`${CREATE_REPOSITORY}#14`]: { repository: CREATE_REPOSITORY, id: "14", title: "Exact unlinked node" },
+};
+
+function draftClient(call: (method: string, path: string, body?: unknown) => Promise<Response>) {
+  return {
+    call,
+    async confirm(draft: Pick<DraftView["draft"], "draftId" | "revision">): Promise<DraftConfirmation> {
+      const response = await call("POST", `${DESK_DRAFTS_PATH}/${draft.draftId}/confirm`, { revision: draft.revision });
+      if (response.status !== 200) throw new Error(`Draft confirmation returned HTTP ${response.status}: ${await response.text()}`);
+      const result = await response.json() as { confirmation: DraftConfirmation };
+      return result.confirmation;
+    },
+  };
+}
+
 const AT = new Date(GRAPH_NODE_NOW).toISOString();
 const CAPABILITY = "work-graph.node.create";
 export const GRAPH_DRAFT_DISCUSSION = "The importer can lose acceptance receipts on restart. Compare persisted receipts with canonical lookup, document crash cases and propose a regression test. File a research node under the lifecycle map; use checkpoint receipt-restart-evidence. Keep unknown dependencies absent and do not activate a writer.";
@@ -52,10 +72,10 @@ export async function openGraphCreateRig(fixture: { discussion?: string } = {}) 
   for (const repository of repositories) setGraphRepositoryEnabled(db, repository, true, GRAPH_NODE_NOW);
   const soma = syntheticSoma();
   const reads: string[][] = [];
-  const read = createWorkGraphReadAdapter({ connectionId, repositories: () => repositories, links: () => [{ owner: "graph-map", id: CREATE_MAP, title: "Lifecycle map" }, { owner: "graph-node", id: CREATE_PARENT, title: "Shared title" }, { owner: "graph-node", id: `${CREATE_OTHER_REPOSITORY}#13`, title: "Shared title" }], now: () => new Date(AT), run: argv => {
+  const read = createWorkGraphReadAdapter({ connectionId, repositories: () => repositories, links: () => Object.values(NODES).flatMap(node => node.link ? [{ owner: node.link, id: node.linkId ?? `${node.repository}#${node.id}`, title: node.title }] : []), now: () => new Date(AT), run: argv => {
     reads.push(argv);
     const target = argv[3];
-    const data = target === `${CREATE_REPOSITORY}#10` ? { repository: CREATE_REPOSITORY, id: "10", title: "Lifecycle map" } : target === `${CREATE_REPOSITORY}#12` ? { repository: CREATE_REPOSITORY, id: "12", title: "Shared title" } : target === `${CREATE_OTHER_REPOSITORY}#13` ? { repository: CREATE_OTHER_REPOSITORY, id: "13", title: "Shared title" } : target === `${CREATE_REPOSITORY}#14` ? { repository: CREATE_REPOSITORY, id: "14", title: "Exact unlinked node" } : null;
+    const data = target ? NODES[target] ?? null : null;
     return Promise.resolve(data ? { code: 0, signal: null, stderr: "", stdout: JSON.stringify({ repo: data.repository, ref: { id: data.id }, status: "open", node: { title: data.title }, parent: null }) } : { code: 1, signal: null, stderr: "not found", stdout: "" });
   } });
   const registry = new DomainAdapterRegistry();
@@ -149,18 +169,18 @@ export async function openGraphCreateRig(fixture: { discussion?: string } = {}) 
       repositories.splice(index, 1);
       setGraphRepositoryEnabled(db, repository, false, GRAPH_NODE_NOW);
     },
-    serve() {
-      const server = startServer({ ...DEFAULT_CONFIG, port: 0, governance: { ...DEFAULT_CONFIG.governance, principals: [], localPrincipal: principal.principal } }, db, { graphDrafts: { host, deps, options } });
+    serve(serverOptions: Pick<StartServerOptions, "drafts"> = {}) {
+      const server = startServer({ ...DEFAULT_CONFIG, port: 0, governance: { ...DEFAULT_CONFIG.governance, principals: [], localPrincipal: principal.principal } }, db, { ...serverOptions, graphDrafts: { host, deps, options } });
       servers.push(server);
       return {
         ...server,
-        call: (method: string, path: string, body?: unknown) => fetch(`http://127.0.0.1:${server.port}${path}`, { method, headers: { "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }),
+        ...draftClient((method, path, body) => fetch(`http://127.0.0.1:${server.port}${path}`, { method, headers: { "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })),
       };
     },
-    async call(method: string, path: string, body?: unknown) {
+    ...draftClient(async (method, path, body) => {
       const req = new Request(`http://127.0.0.1:8767${path}`, { method, headers: { host: "127.0.0.1:8767", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       return handleDeskDrafts(req, new URL(req.url), { isLoopback: true, listenPort: 8767, principals: new Set(), localPrincipal: principal.principal, allowedHostnames: buildAllowedHostnames("127.0.0.1") }, () => editor);
-    },
+    }),
     async close() { for (const server of servers) server.stop(true); await bridge.settled(); await host.close(); db.close(); await rm(root, { recursive: true, force: true }); },
   };
 }
