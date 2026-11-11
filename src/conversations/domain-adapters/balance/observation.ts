@@ -8,7 +8,7 @@ import type { AdapterBindings, AdapterDeclaration } from "../types";
 import type { Json } from "../operations/types";
 import { BALANCE_TASK_ATTENTION, BALANCE_TASK_ROW_CAPABILITIES } from "./attention";
 import { BALANCE_ADAPTER_ID as ADAPTER_ID, objectSchema, ref } from "./schema";
-import { balanceReadDeclaration, balanceReadBindings, createBalanceReadAdapter, balanceTaskObjects, type BalanceReadSource } from "./read";
+import { balanceReadDeclaration, balanceReadBindings, createBalanceReadAdapter, balanceTaskObjects, type BalanceReadSource, type BalanceTaskObject } from "./read";
 
 export const BALANCE_TASK_OBSERVATION_CAPABILITY_ID = "balance.task.observation";
 export const BALANCE_TASK_ORDERING = "balance.current-task";
@@ -18,6 +18,12 @@ const OBSERVATION_INPUT_REF = ref("balance.task.observation.input");
 const OBSERVATION_OUTPUT_REF = ref("balance.task.observation.output");
 const ERROR_REF = ref("balance.error");
 const PageCursor = z.object({ offset: z.number().int().positive(), snapshot: z.string().min(1) }).strict();
+interface BalanceObservationSnapshot {
+  readonly scope: string;
+  readonly id: string;
+  readonly observedAt: string;
+  readonly objects: readonly BalanceTaskObject[];
+}
 
 const failure = (code: string): never => { throw new Error(`balance.${code}`); };
 const authoritativeCurrentTask: NonNullable<ObservationConnector["ordering"]> = {
@@ -53,7 +59,8 @@ export function balanceTaskObservationBinding(): ReadBinding {
 }
 
 export function createBalanceTaskObservationConnector(source: BalanceReadSource): ObservationConnector {
-  return { modes: ["poll"], ordering: authoritativeCurrentTask, fetch: (request, signal) => Promise.resolve().then(() => observe(source, request, signal)) };
+  const snapshots = new WeakMap<AbortSignal, BalanceObservationSnapshot>();
+  return { modes: ["poll"], ordering: authoritativeCurrentTask, fetch: (request, signal) => Promise.resolve().then(() => observe(source, request, signal, snapshots)) };
 }
 
 export interface BalanceObservationAdapter {
@@ -85,27 +92,33 @@ function observationAreas(source: BalanceReadSource, request: ObservationRequest
   return [...new Set(chosen)];
 }
 
-function observe(source: BalanceReadSource, request: ObservationRequest, signal: AbortSignal): ObservationBatch {
-  signal.throwIfAborted();
-  const chosen = observationAreas(source, request);
+function captureSnapshot(source: BalanceReadSource, chosen: readonly string[], scope: string): BalanceObservationSnapshot {
   const state = source.state();
   if (!state) return failure("source_unavailable");
   const areas = source.areas().filter(area => chosen.includes(area.id));
-  const observedAt = readObservedAt(source);
+  const objects = balanceTaskObjects(source, state, areas);
+  return { scope, id: authorityHash(objects), observedAt: readObservedAt(source), objects };
+}
+
+function observe(source: BalanceReadSource, request: ObservationRequest, signal: AbortSignal, snapshots: WeakMap<AbortSignal, BalanceObservationSnapshot>): ObservationBatch {
+  signal.throwIfAborted();
+  const chosen = observationAreas(source, request);
   const limit = Math.max(1, Math.min(request.limit, OBSERVATION_LIMITS.batchItems));
-  const objects = balanceTaskObjects(state, areas, source.connectionId, source.now?.() ?? new Date(), source.draft?.());
-  const snapshot = authorityHash(objects);
   const cursor = request.continuation === undefined ? null : PageCursor.parse(JSON.parse(request.continuation));
-  if (cursor && (cursor.snapshot !== snapshot || cursor.offset >= objects.length)) return failure("observation_snapshot_changed");
+  const scope = authorityHash({ source: request.source, areas: chosen });
+  const snapshot = cursor ? snapshots.get(signal) : captureSnapshot(source, chosen, scope);
+  if (snapshot?.scope !== scope || cursor && (cursor.snapshot !== snapshot.id || cursor.offset >= snapshot.objects.length)) return failure("observation_snapshot_changed");
+  snapshots.set(signal, snapshot);
   const offset = cursor?.offset ?? 0;
-  const page = objects.slice(offset, offset + limit);
+  const page = snapshot.objects.slice(offset, offset + limit);
   const events: ObservationEvent[] = [];
   const items: Json[] = [];
   for (const object of page) {
     const revision = authorityHash(object.value);
     items.push(object.value);
-    events.push({ kind: "present", pointer: `/items/${items.length - 1}`, ref: object.ref, schemaRef: TASK_SCHEMA_REF, destination: object.destination, observedAt, revision });
+    events.push({ kind: "present", pointer: `/items/${items.length - 1}`, ref: object.ref, schemaRef: TASK_SCHEMA_REF, destination: object.destination, observedAt: snapshot.observedAt, revision });
   }
   const next = offset + page.length;
-  return { version: "1.0.0", payload: { items }, events, coverage: "objects", gap: false, ...(next < objects.length ? { continuation: JSON.stringify({ offset: next, snapshot }) } : {}) };
+  if (next >= snapshot.objects.length) snapshots.delete(signal);
+  return { version: "1.0.0", payload: { items }, events, coverage: "objects", gap: false, ...(next < snapshot.objects.length ? { continuation: JSON.stringify({ offset: next, snapshot: snapshot.id }) } : {}) };
 }

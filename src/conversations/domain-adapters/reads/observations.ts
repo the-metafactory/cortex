@@ -18,6 +18,14 @@ export interface ObservationCheck { status: "ok" | "denied" | "unavailable"; cha
 export const UNAVAILABLE_CHECK: Readonly<ObservationCheck> = Object.freeze({ status: "unavailable", changed: 0, quarantined: 0 });
 export const DENIED_CHECK: Readonly<ObservationCheck> = Object.freeze({ status: "denied", changed: 0, quarantined: 0 });
 type Authority = Pick<AuthorityMediator, "observationHead" | "admitObservation" | "releaseObservations">;
+type ValidatedObservationPage = ReturnType<typeof validateObservationBatch>;
+interface ObservationPages {
+  readonly batches: ValidatedObservationPage[];
+  readonly cursors: Set<string>;
+  readonly references: Set<string>;
+  events: number;
+  bytes: number;
+}
 const systemClock: QueryClock = { now: Date.now, setTimer(callback, ms) { const timer = setTimeout(callback, ms); timer.unref(); return () => { clearTimeout(timer); }; } };
 
 export class ObservationStore {
@@ -150,44 +158,16 @@ export class ObservationStore {
   }
 
   private async fetchPages(context: HostContext, source: QuerySource, sink: ReleaseSink, basis: ObservationBasis, signal: AbortSignal, mode: ObservationMode, checkpoint?: string): Promise<ObservationCheck> {
-    const pages: ReturnType<typeof validateObservationBatch>[] = [];
-    const cursors = new Set<string>();
-    const references = new Set<string>();
+    const pages: ObservationPages = { batches: [], cursors: new Set(), references: new Set(), events: 0, bytes: 0 };
     let continuation: string | undefined;
-    let events = 0;
-    let bytes = 0;
     try {
       for (;;) {
         if (signal.aborted) return UNAVAILABLE_CHECK;
-        const outcome = await this.authority.admitObservation(context, { source, mode, limit: Math.min(OBSERVATION_LIMITS.batchItems, OBSERVATION_LIMITS.objects - events), ...(checkpoint === undefined ? {} : { checkpoint }), ...(continuation === undefined ? {} : { continuation }) }, sink, basis, signal, async (validated, current, connector) => {
+        const outcome = await this.authority.admitObservation(context, { source, mode, limit: Math.min(OBSERVATION_LIMITS.batchItems, OBSERVATION_LIMITS.objects - pages.events), ...(checkpoint === undefined ? {} : { checkpoint }), ...(continuation === undefined ? {} : { continuation }) }, sink, basis, signal, async (validated, current, connector) => {
           if (signal.aborted) throw new Error("Observation fetch aborted.");
-          events += validated.events.length;
-          bytes += Buffer.byteLength(JSON.stringify(validated.batch));
-          if (events > OBSERVATION_LIMITS.objects || bytes > OBSERVATION_LIMITS.bytes) throw new Error("Observation page budget exceeded.");
-          for (const event of validated.events) {
-            const key = authorityHash(event.ref);
-            if (references.has(key)) throw new Error("Observation pages repeated an object.");
-            references.add(key);
-          }
-          pages.push(validated);
-          const next = validated.batch.continuation;
-          if (next !== undefined && (mode === "subscription" || cursors.has(next))) throw new Error("Invalid observation continuation.");
-          if (next !== undefined) cursors.add(next);
-          const bounded = next !== undefined && (events >= OBSERVATION_LIMITS.objects || pages.length >= Math.ceil(OBSERVATION_LIMITS.objects / OBSERVATION_LIMITS.batchItems));
-          if (next !== undefined && !bounded) return { next, result: null };
-          const incomplete = bounded || pages.some(page => page.batch.gap);
-          const result = await this.change(source, state => {
-            if (signal.aborted) throw new Error("Observation fetch aborted.");
-            if (!incomplete && (pages.length > 1 || mode === "reconcile" || mode === "resync")) this.source(state, source).gap = false;
-            const total: ObservationCheck = { status: "ok", changed: 0, quarantined: 0 };
-            for (const page of pages) {
-              const checked = this.apply(state, source, current, { ...page, batch: { ...page.batch, gap: incomplete } }, mode, connector);
-              if (checked.status !== "ok") total.status = checked.status;
-              total.changed += checked.changed;
-              total.quarantined += checked.quarantined;
-            }
-            return total;
-          });
+          const accounted = this.accountPage(pages, validated, mode);
+          if (accounted.next !== undefined) return { next: accounted.next, result: null };
+          const result = await this.commitPages(source, current, pages, accounted.incomplete, mode, connector, signal);
           return { next: undefined, result };
         });
         if (outcome.kind !== "accepted" || !await this.basis(context, source, sink)) return DENIED_CHECK;
@@ -195,9 +175,41 @@ export class ObservationStore {
         continuation = outcome.value.next;
       }
     } catch (error) {
-      if (pages.length > 0 && !this.closed) await this.gap(source);
+      if (pages.batches.length > 0 && !this.closed) await this.gap(source);
       throw error;
     }
+  }
+
+  private accountPage(pages: ObservationPages, validated: ValidatedObservationPage, mode: ObservationMode): { next: string | undefined; incomplete: boolean } {
+    pages.events += validated.events.length;
+    pages.bytes += Buffer.byteLength(JSON.stringify(validated.batch));
+    if (pages.events > OBSERVATION_LIMITS.objects || pages.bytes > OBSERVATION_LIMITS.bytes) throw new Error("Observation page budget exceeded.");
+    for (const event of validated.events) {
+      const key = authorityHash(event.ref);
+      if (pages.references.has(key)) throw new Error("Observation pages repeated an object.");
+      pages.references.add(key);
+    }
+    pages.batches.push(validated);
+    const next = validated.batch.continuation;
+    if (next !== undefined && (mode === "subscription" || pages.cursors.has(next))) throw new Error("Invalid observation continuation.");
+    if (next !== undefined) pages.cursors.add(next);
+    const bounded = next !== undefined && (pages.events >= OBSERVATION_LIMITS.objects || pages.batches.length >= Math.ceil(OBSERVATION_LIMITS.objects / OBSERVATION_LIMITS.batchItems));
+    return { next: bounded ? undefined : next, incomplete: bounded || pages.batches.some(page => page.batch.gap) };
+  }
+
+  private commitPages(source: QuerySource, basis: ObservationBasis, pages: ObservationPages, incomplete: boolean, mode: ObservationMode, connector: ObservationConnector, signal: AbortSignal): Promise<ObservationCheck> {
+    return this.change(source, state => {
+      if (signal.aborted) throw new Error("Observation fetch aborted.");
+      if (!incomplete && (pages.batches.length > 1 || mode === "reconcile" || mode === "resync")) this.source(state, source).gap = false;
+      const total: ObservationCheck = { status: "ok", changed: 0, quarantined: 0 };
+      for (const page of pages.batches) {
+        const checked = this.apply(state, source, basis, { ...page, batch: { ...page.batch, gap: incomplete } }, mode, connector);
+        if (checked.status !== "ok") total.status = checked.status;
+        total.changed += checked.changed;
+        total.quarantined += checked.quarantined;
+      }
+      return total;
+    });
   }
 
   private apply(state: ObservationState, source: QuerySource, basis: ObservationBasis, validated: ReturnType<typeof validateObservationBatch>, mode: ObservationMode, connector: ObservationConnector): ObservationCheck {

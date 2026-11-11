@@ -1,5 +1,6 @@
 import { balanceDestinations, rankAll, todayPlanIds, type AppState, type DestinationArea, type OutlineNode, type TodayPlanDraft } from "../../../balance";
 import { localDay } from "../../../common/local-day";
+import { STUDIO_OWNER_KIND } from "../../../common/desk-owner";
 import { authorityHash } from "../../authority-records";
 import type { Json } from "../operations/types";
 import type { QueryFetchRequest, QueryPage } from "../reads/query-types";
@@ -135,7 +136,6 @@ export interface BalanceReadAdapter {
 
 interface LocatedTask { readonly node: OutlineNode; readonly area: DestinationArea; readonly project: string | null; readonly owner: string | null }
 interface TaskAttention { readonly planned: ReadonlySet<string>; readonly traces: ReadonlyMap<string, string> }
-const STUDIO_OWNER = "studio";
 const IN_TODAY = "In today";
 const sentence = (text: string): string => `${text.charAt(0).toLocaleUpperCase()}${text.slice(1)}${/[.!?]$/.test(text) ? "" : "."}`;
 const studioMarker = (id: string): boolean => id.startsWith("studio-response:") || id.startsWith("studio-thread:");
@@ -205,7 +205,7 @@ function locateTasks(state: AppState, areas: readonly DestinationArea[], include
   const found: LocatedTask[] = [];
   const visit = (node: OutlineNode, area: DestinationArea, project: string | null, studio: boolean): void => {
     if (!includeStudio && studioMarker(node.id)) return;
-    const owner = studio || studioMarker(node.id) ? STUDIO_OWNER : null;
+    const owner = studio || studioMarker(node.id) ? STUDIO_OWNER_KIND : null;
     if (node.children.length === 0) {
       if (node.effort !== undefined) found.push({ node, area, project, owner });
       return;
@@ -228,7 +228,7 @@ function attentionOf(state: AppState, at: Date, draft?: TodayPlanDraft | null): 
 
 function whyOf(task: LocatedTask, attention: TaskAttention): string | null {
   if (task.node.done === true) return null;
-  if (task.owner === STUDIO_OWNER) return "Waiting for your answer in Studio.";
+  if (task.owner === STUDIO_OWNER_KIND) return "Waiting for your answer in Studio.";
   const trace = attention.traces.get(task.node.id);
   return trace === undefined ? null : sentence(trace);
 }
@@ -254,15 +254,19 @@ function taskValue(task: LocatedTask, connectionId: string, attention: TaskAtten
 
 export interface BalanceTaskObject { readonly ref: ObjectReference; readonly destination: ObjectReference; readonly value: Json }
 
-export function balanceTaskObjects(state: AppState, areas: readonly DestinationArea[], connectionId: string, at = new Date(), draft?: TodayPlanDraft | null): BalanceTaskObject[] {
-  const attention = attentionOf(state, at, draft);
+function attentionFor(source: BalanceReadSource, state: AppState): TaskAttention {
+  return attentionOf(state, source.now?.() ?? new Date(), source.draft?.());
+}
+
+export function balanceTaskObjects(source: BalanceReadSource, state: AppState, areas: readonly DestinationArea[]): BalanceTaskObject[] {
+  const attention = attentionFor(source, state);
   const tasks = locateTasks(state, areas, true);
   const open = tasks.filter(task => task.node.done !== true);
   const completed = tasks.filter(task => task.node.done === true);
   return [...open, ...completed].map(task => ({
-    ref: reference(connectionId, "task", task.node.id),
-    destination: reference(connectionId, "area", task.area.id),
-    value: taskValue(task, connectionId, attention),
+    ref: reference(source.connectionId, "task", task.node.id),
+    destination: reference(source.connectionId, "area", task.area.id),
+    value: taskValue(task, source.connectionId, attention),
   }));
 }
 
@@ -286,7 +290,7 @@ function taskQueryPage(source: BalanceReadSource, input: unknown, destinations: 
   const state = source.state();
   if (!state) return failure("source_unavailable");
   const found = locateTasks(state, [area]);
-  const attention = attentionOf(state, source.now?.() ?? new Date(), source.draft?.());
+  const attention = attentionFor(source, state);
   const needle = parsed.query.trim().toLocaleLowerCase();
   const matching = needle.length === 0 ? found : found.filter(task => `${task.node.title}\n${task.node.note ?? ""}`.toLocaleLowerCase().includes(needle));
   const { slice, next } = boundedPage(matching, parsed, cursor, limit);
@@ -306,7 +310,7 @@ function taskReadPage(source: BalanceReadSource, input: unknown, destinations: r
   if (!state) return failure("source_unavailable");
   const task = locateTasks(state, source.areas()).find(item => item.node.id === parsed.canonicalId);
   if (!task || !destinations.some(item => sameReference(item, reference(source.connectionId, "area", task.area.id)))) return failure("task_unavailable");
-  const value = taskValue(task, source.connectionId, attentionOf(state, source.now?.() ?? new Date(), source.draft?.()));
+  const value = taskValue(task, source.connectionId, attentionFor(source, state));
   return buildPage([taskEntry(task, source.connectionId, value)], snapshotId("task.read", { connectionId: source.connectionId, task: task.node.id, value }), observedAt(source));
 }
 

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { STUDIO_OWNER_KIND } from "../../../common/desk-owner";
 import type { Database } from "bun:sqlite";
 import { createArcFileSecretStore } from "../../../common/config/desk-credential-arc-file-store";
 import type { SetupPrincipal } from "../../../common/config/desk-credential-broker";
@@ -226,7 +227,7 @@ export function createBalanceConnection(deps: BalanceConnectionDeps) {
       const observationScope = await openObservationScope();
       if (!observationScope) return null;
       const { opened, source, store } = observationScope;
-      return { feature: { enabled: true, store, bindings: readBindings, context: opened.context, sink: opened.sink, sources: [source], ownerKinds: new Set(["studio"]) }, close: opened.close };
+      return { feature: { enabled: true, store, bindings: readBindings, context: opened.context, sink: opened.sink, sources: [source], ownerKinds: new Set([STUDIO_OWNER_KIND]) }, close: opened.close };
     } catch (error) {
       process.stderr.write(`[desk-balance-attention] ${error instanceof Error ? error.message : "failed"}\n`);
       return null;

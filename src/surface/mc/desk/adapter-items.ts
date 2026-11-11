@@ -13,6 +13,7 @@ import { redactToolText } from "../../../conversations/tools/output";
 import { localDay } from "./time";
 import { freshnessLabel, type DeskItem, type DeskView } from "./types";
 import { ADAPTER_CAPABILITY_ACTION } from "./adapter-actions";
+import { STUDIO_OWNER_KIND } from "../../../common/desk-owner";
 
 export interface AdapterAttention {
   enabled: boolean;
@@ -26,7 +27,7 @@ export interface AdapterAttention {
 
 const text = z.string().trim().min(1).max(4000).transform(redactToolText);
 const badge = z.string().trim().min(1).max(80).nullable().transform(value => value === null ? null : redactToolText(value));
-const owner = z.enum(["studio"]).nullable();
+const owner = z.enum([STUDIO_OWNER_KIND]).nullable();
 const dueDate = z.union([z.iso.date(), z.iso.datetime({ offset: true })]).nullable();
 const link = z.url({ protocol: /^https?$/ }).refine(value => {
   const url = new URL(value);

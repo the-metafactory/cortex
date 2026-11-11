@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { STUDIO_OWNER_KIND } from "../../../../common/desk-owner";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { findNode, type AppState, type OutlineNode } from "../../../../balance";
@@ -168,7 +169,7 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
   };
   const observationSource = (): QuerySource => ({ adapterId: "balance", connectionId: BALANCE_CONNECTION, capabilityId: BALANCE_TASK_OBSERVATION_CAPABILITY_ID, inputSchemaRef: observationBinding.inputSchemaRef, destinations: allowed.filter(destination => areas.some(area => area.id === destination.canonicalId)), input: {} });
   const attention = (): AdapterAttentionSession | null => observationSource().destinations.length === 0 ? null : ({
-    feature: { enabled: true, store: rig.host.readObservations(registry, rig.bindings, time.clock), bindings: readBindings, context: rig.context, sink: rig.sink, sources: [observationSource()], ownerKinds: new Set(["studio"]) },
+    feature: { enabled: true, store: rig.host.readObservations(registry, rig.bindings, time.clock), bindings: readBindings, context: rig.context, sink: rig.sink, sources: [observationSource()], ownerKinds: new Set([STUDIO_OWNER_KIND]) },
     close: () => undefined,
   });
   const observationReader = (): BalanceDayReader => createBalanceDayReader({
