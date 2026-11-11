@@ -9,7 +9,7 @@ import type { ObjectReference, SchemaRef } from "./types";
 import { DestinationRefSchema, DraftConflict, DraftSchema, IndexSchema, ModelOutputSchema, type Blocking, type DraftDestinations, type DraftField, type DraftModel, type DraftPolicy, type DraftSources, type DraftView, type EditChange, type Handoff, type HandoffResult, type Lane, type Limitation, type MakeResult, type Manifest, type ModelOutput, type OutdatedReason, type RefreshResult, type SourceItem, type StoredDraft } from "./drafting-types";
 
 export * from "./drafting-types";
-export { DraftingBindings, DraftingBindingSchema, DRAFTING_BINDING_VERSION, type DraftingBinding as DraftingBindingDocument } from "./drafting-binding";
+export { DraftingBindings, DraftingBindingSchema, DRAFTING_BINDING_VERSION, DRAFTING_BINDING_VERSIONS, type DraftingBinding as DraftingBindingDocument } from "./drafting-binding";
 
 const DraftDoc = defineDocFamily<{ record: JsonObject | null }, string>({ kind: "cortex.desk-draft", version: 1, scope: "session", family: true, initial: () => ({ record: null }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 const IndexDoc = defineDocFamily<{ record: JsonObject | null }, string>({ kind: "cortex.desk-draft-index", version: 1, scope: "session", family: true, initial: () => ({ record: null }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
@@ -20,7 +20,8 @@ const KIND_RANK: Record<SourceItem["kind"], number> = { outcome: 0, selected: 1,
 
 export interface DraftServiceDeps {
   registry: DomainAdapterRegistry; bindings: DraftingBindings; sources: DraftSources; policy: DraftPolicy; model: DraftModel;
-  destinations?: DraftDestinations; now?: () => Date; newId?: () => string; contextChars?: number; timeZone?: string;
+  destinations?: DraftDestinations; defaults?: (request: { capabilityId: string; connectionId: string }) => Record<string, unknown>;
+  now?: () => Date; newId?: () => string; contextChars?: number; timeZone?: string;
 }
 interface MakeInput { conversationId: string; entryId: string; capabilityId: string; connectionId: string; newDraft?: boolean; selectDraftId?: string; selectedSources?: readonly string[] }
 interface RefreshOptions { selectedSources?: readonly string[]; only?: readonly string[]; release?: boolean }
@@ -126,10 +127,13 @@ export class DraftService {
   }
 
   private addDefaults(draft: StoredDraft, view: DraftingView): void {
+    const supplied = this.deps.defaults?.({ capabilityId: draft.capabilityId, connectionId: draft.connectionId }) ?? {};
     for (const [key, node] of Object.entries(properties(view))) {
-      const defaultValue = record(node).default;
       const pointer = pointerOf(key);
-      if (defaultValue !== undefined && !draft.fields[pointer]) draft.fields[pointer] = { pointer, presence: "present", value: defaultValue as DraftField["value"], origin: "default", citations: [], generationId: null, alternatives: [], unresolved: null };
+      const held = draft.fields[pointer];
+      if (held && held.origin !== "default") continue;
+      const value = Object.hasOwn(supplied, pointer) ? supplied[pointer] : record(node).default;
+      if (value !== undefined) draft.fields[pointer] = { pointer, presence: "present", value: value as DraftField["value"], origin: "default", citations: [], generationId: null, alternatives: [], unresolved: null };
     }
   }
 
@@ -376,7 +380,7 @@ export class DraftService {
     if (alternatives.length >= 2) return { ok: true, field: { ...base, presence: "absent", origin: "suggested", alternatives, unresolved: "conflict" } };
     if (candidate.value === undefined || !this.validValue(draft.capabilityId, view, pointer, candidate.value)) return { ok: false, code: "invalid_candidate" };
     const node = record(view.field(pointer));
-    const structured = node.type !== "string" || node.format !== undefined || node.enum !== undefined;
+    const structured = node.type !== "string" || node.format !== undefined || node.enum !== undefined || binding.fieldHints.some(hint => hint.pointer === pointer && hint.suggestion === true);
     return { ok: true, field: { ...base, presence: candidate.value === null ? "null" : "present", value: candidate.value, origin: structured ? "suggested" : "generated" } };
   }
 

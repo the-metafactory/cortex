@@ -6,7 +6,7 @@ import { ConversationCreation, type Actor, type ProposalView } from "../../../cr
 import type { AuthenticatedBinding, AuthorityBindings } from "../../../authority";
 import type { PolicyInputs } from "../../../authority-records";
 import { DomainAdapterRegistry } from "../../registry";
-import { createFlowSaveBinding, flowSaveDeclaration, FLOW_SAVE_SUPPORT_ID } from "../../flow/save-binding";
+import { createFlowSaveBinding, FLOW_SAVE_SUPPORT_ID } from "../../flow/save-binding";
 import { createFlowCutover } from "../../flow/cutover";
 import { syntheticWriterPlan, syntheticWriterSteps } from "../../operations/writer-fixtures";
 import { conversationSources } from "../../../../surface/mc/desk/conversation-sources";
@@ -24,8 +24,6 @@ export async function openFlowCutoverRig() {
   let host = status.host;
   const db = initDatabase(":memory:");
   const registry = new DomainAdapterRegistry();
-  const registered = registry.register(flowSaveDeclaration(), { handlers: {}, observations: {} });
-  if (!registered.ok) throw new Error(registered.error.code);
   const journal = host.lifecycleJournal(registry);
   const hooks: { afterSave?: () => Promise<void> } = {};
   const run: typeof pulse.run = async (argv, stdin, timeout) => {
@@ -34,6 +32,8 @@ export async function openFlowCutoverRig() {
     return result;
   };
   const binding = createFlowSaveBinding({ stack: "test", connectionId: "flow-example", flows: () => ({ pulse: pulse.pulse }), journal, run, now: () => FLOW_SAVE_NOW });
+  const registered = registry.register(binding.declaration, binding.bindings);
+  if (!registered.ok) throw new Error(registered.error.code);
   const principal = { version: 1 as const, status: "active" as const, principalRef: randomUUID(), principal: "principal-example", stack: "test", identityBindingRevision: "1" };
   const destination = { adapterId: "flow", connectionId: "flow-example", objectType: "stack", canonicalId: "test" };
   const connection = { version: 1 as const, status: "active" as "active" | "revoked", connectionId: "flow-example", adapterId: "flow", principalRef: principal.principalRef, connectionRevision: "1", credentialHandle: "local-pulse", accountScope: { stack: "test" }, readCapabilityIds: ["flow.saved.create"], writeCapabilityIds: ["flow.saved.create"], readDestinations: [destination], writeDestinations: [destination], connectorId: "flow-example", executionBindingRef: FLOW_SAVE_SUPPORT_ID, registryRevision: "flow-1" };

@@ -4,19 +4,20 @@ import type { DomainAdapterRegistry, DraftingView } from "./registry";
 import { failure, success } from "./schema-validation";
 import { SchemaRefSchema, type Result, type SchemaRef } from "./types";
 
-export const DRAFTING_BINDING_VERSION = "1.0.0";
+export const DRAFTING_BINDING_VERSION = "1.1.0";
+export const DRAFTING_BINDING_VERSIONS = ["1.0.0", "1.1.0"] as const;
 const identifier = z.string().min(1).refine(value => value.trim().length > 0);
 const TOP_LEVEL_POINTER = /^\/(?:[^~/]|~[01])+$/;
 const HINT_ROLES = ["title", "summary", "destination", "detail"] as const;
-const fieldHint = z.object({ pointer: z.string().regex(TOP_LEVEL_POINTER), role: z.enum(HINT_ROLES), resolveWith: identifier.optional(), widget: z.literal("long").optional() }).strict();
+const fieldHint = z.object({ pointer: z.string().regex(TOP_LEVEL_POINTER), role: z.enum(HINT_ROLES), resolveWith: identifier.optional(), widget: z.literal("long").optional(), suggestion: z.literal(true).optional() }).strict();
 export const DraftingBindingSchema = z.object({
-  bindingVersion: z.literal(DRAFTING_BINDING_VERSION),
+  bindingVersion: z.enum(DRAFTING_BINDING_VERSIONS),
   adapterId: identifier,
   capabilityId: identifier,
   inputSchemaRef: SchemaRefSchema,
   guidance: z.object({ guidanceId: identifier, version: identifier.refine(value => valid(value) !== null), instructions: identifier }).strict(),
   fieldHints: z.array(fieldHint),
-}).strict();
+}).strict().refine(binding => binding.bindingVersion !== "1.0.0" || binding.fieldHints.every(hint => hint.suggestion === undefined), { message: "Drafting binding 1.0.0 does not support suggestion hints.", path: ["fieldHints"] });
 export type DraftingBinding = z.infer<typeof DraftingBindingSchema>;
 export type FieldHint = DraftingBinding["fieldHints"][number];
 
@@ -47,7 +48,7 @@ export class DraftingBindings {
 
   register(raw: unknown): Result<DraftingBinding> {
     const version = typeof raw === "object" && raw !== null ? (raw as Record<string, unknown>).bindingVersion : undefined;
-    if (version !== DRAFTING_BINDING_VERSION) return failure("unsupported_binding_version", "Drafting binding version is not supported.");
+    if (!DRAFTING_BINDING_VERSIONS.some(supported => supported === version)) return failure("unsupported_binding_version", "Drafting binding version is not supported.");
     const parsed = DraftingBindingSchema.safeParse(raw);
     if (!parsed.success) return failure("invalid_binding", "Drafting binding does not match the strict contract.");
     const binding = parsed.data;
