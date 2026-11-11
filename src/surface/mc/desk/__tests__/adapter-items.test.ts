@@ -135,7 +135,7 @@ test.each([
   }
 });
 
-test("composition overlaps observation sources and other reads, preserving source order", async () => {
+test("composition reads adapter rows after the other reads and overlaps their sources, preserving source order", async () => {
   const item = await open();
   await item.ingest(0);
   await item.ingest(1);
@@ -154,7 +154,7 @@ test("composition overlaps observation sources and other reads, preserving sourc
   });
   const sourceCache = new SourceCache();
   const cacheSpy = spyOn(sourceCache, "read").mockImplementation(async () => {
-    expect(started).toEqual(item.sources.map(source => source.adapterId));
+    expect(started).toEqual([]);
     return [];
   });
   const db = initDatabase(":memory:"); dbs.push(db);

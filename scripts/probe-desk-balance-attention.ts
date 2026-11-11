@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { openBalanceReadRig } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
+import { openBalanceReadRig, seedStudioThread } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
 import { attentionRig } from "../src/surface/mc/desk/fixtures/adapter-attention-fixtures";
 import { composeDesk, type DeskOptions } from "../src/surface/mc/desk/compose";
 import { ALL_AREAS, briefing, selectItems, spokenBriefing } from "../src/surface/mc/desk/present";
@@ -19,6 +19,7 @@ const MAIL: SourceMail = { kind: "mail", id: "budget@example.org", from: { name:
 
 await runWithTemporaryHome(import.meta.path, async () => {
   const balance = await openBalanceReadRig();
+  seedStudioThread(balance.db);
   const synthetic = await attentionRig("local", { rowCapabilities: { granted: false } });
   const desk: DeskOptions = { enabled: true, displayName: "Probe", topN: 5, rangerUrl: "", areas: balance.areas.map(area => ({ ...area, repos: [], goals: [] })), sources: [{ id: "work-mail", command: ["desk-mail"], everySeconds: 300, timeoutSeconds: 30 }], mailActions: { trash: ["/opt/adapters/bin/desk-mail-trash.ts"], timeoutSeconds: 20 } };
   const sourceCache = new SourceCache(async () => JSON.stringify({ items: [MAIL] }));
@@ -46,7 +47,7 @@ await runWithTemporaryHome(import.meta.path, async () => {
     assert.equal(planned?.badge, "In today");
     assert.equal(adapters.find(item => item.title === "Buy glue")?.badge, undefined);
     const studio = adapters.find(item => item.title === "Studio answer");
-    assert.deepEqual(studio?.actions.map(action => action.label), ["Respond in Studio"]);
+    assert.deepEqual(studio?.actions, [{ id: "studio.respond", label: "Respond in Studio", role: "primary", wired: true, target: "thread-1" }]);
     assert.equal(studio?.actions.some(action => action.label === "Done"), false);
     const syntheticRow = adapters.find(item => item.title === "Synthetic review");
     assert.equal(syntheticRow?.score, 55);
@@ -90,7 +91,11 @@ await runWithTemporaryHome(import.meta.path, async () => {
     await page.getByText("The host authority does not permit this change.", { exact: true }).waitFor();
     const output = process.env.DESK_BALANCE_ATTENTION_PROBE_DIR;
     if (output) { await (await import("node:fs/promises")).mkdir(output, { recursive: true }); await page.screenshot({ path: join(output, "catch-up.png"), fullPage: true }); }
-    assert.equal(await catchup.getByRole("button", { name: "Respond in Studio", exact: true }).count(), 1);
+    await catchup.getByRole("button", { name: "Respond in Studio", exact: true }).click();
+    assert.equal(new URL(page.url()).searchParams.get("desk"), "studio");
+    assert.equal(new URL(page.url()).searchParams.get("thread"), "thread-1");
+    await page.getByRole("tab", { name: "Catch-up" }).click();
+    await catchup.getByRole("button", { name: "Synthetic review", exact: true }).first().waitFor();
     assert.deepEqual(errors, []);
     console.log("Browser: Balance tasks and a synthetic adapter share one Catch-up list; a declared capability is denied by the host.");
 

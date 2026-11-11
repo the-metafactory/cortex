@@ -40,7 +40,7 @@ async function postDesk(path: string, body: unknown, fetchImpl: FetchLike): Prom
   return { ok: false, text: line || `The action failed (HTTP ${res.status}).`, ...(parsed?.recorded === true ? { recorded: true } : {}), ...(typeof parsed?.correction === "number" ? { correction: parsed.correction } : {}) };
 }
 
-/** Asks the host authority for one change a connected row declares, and returns one line for the page. Never throws. */
+/** Asks the Cortex runtime's authority for one change a connected row declares, and returns one line for the page. Never throws. */
 export const submitAdapterAction = (body: { key: string; capability: string }, fetchImpl: FetchLike = fetch): Promise<Outcome> =>
   postDesk(DESK_ADAPTER_PATH, body, fetchImpl);
 

@@ -7,6 +7,7 @@ export { leaf, savedNode } from "./balance-shared";
 import { authorityRig } from "../../../authority-fixtures";
 import { initDatabase } from "../../../../surface/mc/db/init";
 import { loadBalanceState, saveBalanceState } from "../../../../surface/mc/desk/balance-store";
+import { loadMeta, saveMeta } from "../../../../surface/mc/desk/balance-sync";
 import type { DeskArea } from "../../../../surface/mc/desk/types";
 import { objectRef } from "../../fixtures";
 import { DomainAdapterRegistry } from "../../registry";
@@ -51,6 +52,10 @@ export function balanceReadState(): AppState {
     },
     { id: "area:area-home", title: "Home", weight: 40, ordering: "parallel", children: [leaf("task-garden", "Water the garden", { dueDate: "2026-11-20" })] },
   ]);
+}
+
+export function seedStudioThread(db: Database, projectId = "studio-response:thread-1", slug = "thread-1"): void {
+  saveMeta(db, { ...loadMeta(db), studio: [{ namespace: "fixture", source: `id:${slug}`, slug, projectId, response: 0, pending: null }] });
 }
 
 interface BalanceReadStepArgs { readonly capabilityId: string; readonly input: unknown; readonly destinations: readonly ObjectReference[]; readonly binding: ReadBinding }

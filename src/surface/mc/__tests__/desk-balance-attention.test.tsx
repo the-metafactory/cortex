@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { findNode } from "../../../balance";
-import { openBalanceReadRig, type BalanceReadRig } from "../../../conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
+import { openBalanceReadRig, seedStudioThread, type BalanceReadRig } from "../../../conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
 import { handleDeskAdapterAction } from "../api/desk-adapter";
 import { handleDeskMyDay } from "../api/desk-my-day";
 import { HandledLedger } from "../desk/actions";
@@ -36,10 +36,11 @@ interface Stack {
 const opened: Stack[] = [];
 afterEach(async () => { for (const stack of opened.splice(0)) await stack.close(); });
 
-async function build(options: AttentionOptions = {}): Promise<Stack> {
+async function build(options: AttentionOptions = {}, studioLink = true): Promise<Stack> {
   const balance = await openBalanceReadRig();
   const synthetic = await attentionRig("local", options);
   const db = balance.db;
+  if (studioLink) seedStudioThread(db);
   const desk: DeskOptions = { ...mailDesk({ trash: ["/opt/adapters/bin/desk-mail-trash.ts"], timeoutSeconds: 20 }), areas: balance.areas.map(area => ({ ...area, repos: [], goals: [] })) };
   const sourceCache = new SourceCache(() => Promise.resolve(JSON.stringify({ items: [MAIL] })));
   const attention = [() => balance.attentionAccess(), synthetic.feature];
@@ -52,7 +53,7 @@ async function build(options: AttentionOptions = {}): Promise<Stack> {
   };
   const stack: Stack = {
     balance, synthetic, db, desk, runtime,
-    compose: (now = NOW) => composeDesk(db, desk, undefined, { now, sourceCache, adapterAttention: attention }),
+    compose: (now = NOW) => composeDesk(db, desk, undefined, { now, sourceCache, adapterDay: () => balance.reader(), adapterAttention: attention }),
     async close() { await balance.close(); await synthetic.rig.close(); },
   };
   opened.push(stack);
@@ -160,9 +161,28 @@ describe("Catch-up lists actionable adapter tasks beside mail", () => {
     await stack.balance.check();
     const view = await stack.compose();
     const studio = row(view, "Studio answer");
-    expect(studio?.actions.map(action => action.label)).toEqual(["Respond in Studio"]);
+    expect(studio?.actions).toMatchObject([{ id: "studio.respond", label: "Respond in Studio", role: "primary", wired: true, target: "thread-1" }]);
     expect(studio?.actions.some(action => action.label === "Done")).toBe(false);
     expect(studio?.readOnly).toBe(true);
+  });
+
+  it("does not wire Respond in Studio when the Studio thread is unknown", async () => {
+    const stack = await build({}, false);
+    await stack.balance.check();
+    const studio = row(await stack.compose(), "Studio answer");
+    expect(studio?.actions).toMatchObject([{ id: "studio.respond", label: "Respond in Studio", wired: false }]);
+    expect(studio?.actions[0]?.target).toBeUndefined();
+  });
+
+  it("reads adapter rows after the shared projection refresh", async () => {
+    const stack = await build();
+    expect(adapterRows(await stack.compose()).map(item => item.title).sort()).toEqual(["Buy glue", "Cut the wing", "Studio answer"]);
+    const state = balanceState(stack);
+    const glue = findNode(state.outline, "task-glue");
+    if (!glue) throw new Error("the Balance fixture is missing its task");
+    glue.done = true;
+    saveBalanceState(stack.db, state);
+    expect(row(await stack.compose(), "Buy glue")).toBeUndefined();
   });
 
   it("gives a synthetic adapter the same row and rules with no domain branch and no owner-raised score", async () => {
@@ -186,6 +206,7 @@ describe("an adapter row leaves when its source leaves", () => {
     await stack.synthetic.ingest(0);
     stack.balance.time.advance(720000);
     stack.synthetic.time.advance(720000);
+    stack.balance.unavailable(true);
     const view = await stack.compose(NOW);
     const wing = row(view, "Cut the wing");
     if (!wing) throw new Error("the stale Balance row is missing");

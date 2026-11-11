@@ -1,5 +1,6 @@
 import { adapterItems, adapterRowRef, type AdapterAttention, type AdapterAttentionAccess, type AdapterRows } from "./adapter-items";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
+import type { OutlineNode } from "../../../balance";
 import { buildWeeklyMirror, mirrorWeek, type MirrorSchedule } from "./mirror";
 import { readMailMirror, type MailMirrorConfig, type MailMirrorUnsubscribe } from "./mail-mirror";
 import { loadBalanceState } from "./balance-store";
@@ -188,7 +189,6 @@ export async function composeDesk(
   deps: ComposeDeps = {},
 ): Promise<DeskView> {
   const now = deps.now ?? Date.now();
-  const adapterRead = readAdapterAttention(deps.adapterAttention, now);
   const routineRead = desk.routines ? deps.routineRead ? Promise.resolve(deps.routineRead.read(db, desk.routines, now)) : readRoutines(db, desk.routines, deps.runRoutine) : Promise.resolve(undefined);
   const sources: DeskView["sources"] = [];
 
@@ -201,7 +201,7 @@ export async function composeDesk(
     : Promise.resolve(null);
   const commandRead = (deps.sourceCache ?? new SourceCache()).read(desk.sources, now);
   const statusRead = deps.goalStatuses?.read(desk.goals?.somaBin ?? "", now) ?? Promise.resolve(new Map<string, string>());
-  const [vigilSubjects, rangerResult, readings, goalStatuses, routines, adapters] = await Promise.all([vigilRead, rangerRead, commandRead, statusRead, routineRead, adapterRead]);
+  const [vigilSubjects, rangerResult, readings, goalStatuses, routines] = await Promise.all([vigilRead, rangerRead, commandRead, statusRead, routineRead]);
 
   const subjects: VigilSubjectView[] = vigilSubjects ?? [];
   if (vigilSubjects) sources.push({ id: "vigil", ok: true });
@@ -252,6 +252,7 @@ export async function composeDesk(
     const projection = deps.adapterDay ? await deps.adapterDay()?.projection() ?? null : null;
     return { myDay: readMyDay(db, desk, now, source, projection ?? undefined), studio };
   });
+  const adapters = await readAdapterAttention(deps.adapterAttention, now);
   const cloudAreas = new Set(desk.areas.filter((a) => a.policy === "cloud").map((a) => a.id));
   const boundary = sourceBoundary(desk);
   const cloudSources = new Set(readings.filter((r) => !boundary.has(r.id)).map((r) => r.id));
@@ -328,8 +329,8 @@ export async function composeDesk(
     const view = invitationView(m, calendarsOnly(availability, readings), desk.mailInvitations, answers.get(m.id));
     return view ? [[m.id, view]] : [];
   }));
-  const studioSlugs = new Map(myDay.studioTasks.map(task => [task.id, task.slug]));
-  const adapterRows = adapters.items.map(item => withOwnerRespond(item, adapters.owners.get(item.key), studioSlugs));
+  const studioSlugs = new Map([...myDay.studioTasks, ...myDay.studioProjects].map(link => [link.id, link.slug]));
+  const adapterRows = adapters.items.map(item => withOwnerRespond(item, adapters.owners.get(item.key), studioSlugs, myDay.outline));
   sources.push(...adapters.sources);
   const corrected = applyCorrections([...markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
@@ -421,10 +422,23 @@ async function readAdapterSession(access: AdapterAttentionAccess, now: number): 
   }
 }
 
-function withOwnerRespond(item: DeskItem, owner: string | undefined, slugs: ReadonlyMap<string, string>): DeskItem {
+function withOwnerRespond(item: DeskItem, owner: string | undefined, slugs: ReadonlyMap<string, string>, outline: OutlineNode): DeskItem {
   if (owner !== "studio") return item;
-  const slug = slugs.get(adapterRowRef(item.key)?.canonicalId ?? "");
-  return { ...item, actions: [{ id: "studio.respond", label: "Respond in Studio", role: "primary", wired: true, ...(slug === undefined ? {} : { target: slug }) }] };
+  const slug = studioSlugOf(outline, adapterRowRef(item.key)?.canonicalId ?? "", slugs);
+  return { ...item, actions: [{ id: "studio.respond", label: "Respond in Studio", role: "primary", wired: slug !== undefined, ...(slug === undefined ? {} : { target: slug }) }] };
+}
+
+function studioSlugOf(outline: OutlineNode, id: string, slugs: ReadonlyMap<string, string>): string | undefined {
+  const visit = (node: OutlineNode, inherited: string | undefined): string | undefined => {
+    const slug = slugs.get(node.id) ?? inherited;
+    if (node.id === id) return slug;
+    for (const child of node.children) {
+      const found = visit(child, slug);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  };
+  return visit(outline, undefined);
 }
 
 function unreadableLine(r: SourceReading): string {
