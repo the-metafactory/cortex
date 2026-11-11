@@ -1,7 +1,7 @@
 import { canonicalWire } from "../operations/validation";
 import type { Json } from "../operations/types";
 import { queryRig, syntheticQueryPage } from "./query-fixtures";
-import type { QueryRequest, QueryResult, QuerySource } from "./query-types";
+import { QUERY_LIMITS, type QueryRequest, type QueryResult, type QuerySource } from "./query-types";
 
 export type QueryLimitEntry = Awaited<ReturnType<typeof queryRig>>;
 
@@ -33,6 +33,33 @@ export async function stallPage(entry: QueryLimitEntry): Promise<StalledPage> {
   entry.rig.hooks.query = (_request, signal) => { entered.resolve(signal); return stalled.promise; };
   const pending = entry.runner.run(entry.rig.context, await entry.runner.create(entry.rig.context, [entry.source], entry.rig.sink), entry.rig.sink);
   return { signal: await entered.promise, pending, finish: page => { stalled.resolve(page); } };
+}
+
+export interface PageSizeScenario {
+  readonly oversizedBytes: number;
+  readonly sizedBytes: number;
+  readonly refused: QueryResult;
+  readonly accepted: QueryResult;
+  readonly refusedSends: readonly Json[];
+  readonly releasedSends: readonly Json[];
+}
+
+export async function pageSizeScenario(entry: QueryLimitEntry): Promise<PageSizeScenario> {
+  const oversized = bulkPage("x".repeat(QUERY_LIMITS.pageBytes + 1024));
+  entry.rig.hooks.query = () => Promise.resolve(oversized);
+  const refused = await entry.runner.run(entry.rig.context, await entry.runner.create(entry.rig.context, [entry.source], entry.rig.sink), entry.rig.sink);
+  const refusedSends = [...entry.rig.calls.sends];
+  const sized = bulkPage("y".repeat(QUERY_LIMITS.pageBytes - 4096));
+  entry.rig.hooks.query = () => Promise.resolve(sized);
+  const accepted = await entry.runner.run(entry.rig.context, await entry.runner.create(entry.rig.context, [entry.source], entry.rig.sink), entry.rig.sink);
+  return {
+    oversizedBytes: Buffer.byteLength(canonicalWire(oversized)),
+    sizedBytes: Buffer.byteLength(canonicalWire(sized)),
+    refused,
+    accepted,
+    refusedSends,
+    releasedSends: entry.rig.calls.sends.slice(refusedSends.length),
+  };
 }
 
 export interface CountedPages { readonly asked: number[]; readonly bytes: number[]; peak(): number }

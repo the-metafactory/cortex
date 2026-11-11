@@ -3,7 +3,7 @@ import { initDatabase } from "../../../surface/mc/db/init";
 import { catchupItems } from "../../../surface/mc/dashboard-v2/components/desk-catch-up";
 import { composeDesk } from "../../../surface/mc/desk/compose";
 import { ATTENTION_DESK, attentionRig } from "../../../surface/mc/desk/fixtures/adapter-attention-fixtures";
-import { bulkPage, countingConnector, releasedIds, releasedTotal, resumedRequest, stallPage, titledSources, type QueryLimitEntry } from "../reads/limit-fixtures";
+import { countingConnector, pageSizeScenario, releasedIds, releasedTotal, resumedRequest, stallPage, titledSources, type QueryLimitEntry } from "../reads/limit-fixtures";
 import { controlledQueryClock, queryBinding, queryRig, syntheticQueryPage } from "../reads/query-fixtures";
 import { QUERY_LIMITS } from "../reads/query-types";
 import { ReadBindings } from "../reads/bindings";
@@ -78,20 +78,16 @@ test("concurrent fetches stay at two while the item budget would allow more", as
 
 test("an oversized page is refused and a spent budget never claims no-match", async () => {
   const entry = await openQuery();
-  entry.rig.hooks.query = () => Promise.resolve(bulkPage("x".repeat(QUERY_LIMITS.pageBytes + 1024)));
-  const request = await entry.runner.create(entry.rig.context, [entry.source], entry.rig.sink);
-  const refused = await entry.runner.run(entry.rig.context, request, entry.rig.sink);
-  expect(entry.rig.calls.sends).toHaveLength(0);
-  expect(refused.noMatch).toBe(false);
-  expect(["partial", "unavailable"]).toContain(refused.status);
-  expect(refused.groups[0]?.reason?.code).toBe("source_unavailable");
-  expect(JSON.stringify(refused)).not.toContain("xxxxxxxx");
-  const sized = bulkPage("y".repeat(QUERY_LIMITS.pageBytes - 4096));
-  expect(Buffer.byteLength(JSON.stringify(sized))).toBeGreaterThan(QUERY_LIMITS.pageBytes - 8192);
-  entry.rig.hooks.query = () => Promise.resolve(sized);
-  const accepted = await entry.runner.run(entry.rig.context, await entry.runner.create(entry.rig.context, [entry.source], entry.rig.sink), entry.rig.sink);
-  expect(accepted.status).toBe("ok");
-  expect(releasedIds(entry.rig.calls.sends[0])).toEqual(["bulk"]);
+  const scenario = await pageSizeScenario(entry);
+  expect(scenario.oversizedBytes).toBeGreaterThan(QUERY_LIMITS.pageBytes);
+  expect(scenario.refusedSends).toHaveLength(0);
+  expect(scenario.refused.noMatch).toBe(false);
+  expect(["partial", "unavailable"]).toContain(scenario.refused.status);
+  expect(scenario.refused.groups[0]?.reason?.code).toBe("source_unavailable");
+  expect(JSON.stringify(scenario.refused)).not.toContain("xxxxxxxx");
+  expect(scenario.sizedBytes).toBeGreaterThan(QUERY_LIMITS.pageBytes - 8192);
+  expect(scenario.accepted.status).toBe("ok");
+  expect(releasedIds(scenario.releasedSends[0])).toEqual(["bulk"]);
 });
 
 test("page and invocation deadlines from the fake clock leave results partial or unavailable", async () => {

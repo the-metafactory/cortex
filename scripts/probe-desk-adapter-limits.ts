@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { canonicalWire } from "../src/conversations/domain-adapters/operations/validation";
-import { bulkPage, countingConnector, releasedIds, releasedTotal, resumedRequest, stallPage, titledSources } from "../src/conversations/domain-adapters/reads/limit-fixtures";
+import { countingConnector, pageSizeScenario, releasedIds, releasedTotal, resumedRequest, stallPage, titledSources } from "../src/conversations/domain-adapters/reads/limit-fixtures";
 import { controlledQueryClock, queryRig, syntheticQueryPage } from "../src/conversations/domain-adapters/reads/query-fixtures";
 import { QUERY_LIMITS } from "../src/conversations/domain-adapters/reads/query-types";
 import { initDatabase } from "../src/surface/mc/db/init";
@@ -36,20 +36,16 @@ async function queryLimits(): Promise<void> {
 async function pageSize(): Promise<void> {
   const entry = await queryRig();
   try {
-    entry.rig.hooks.query = () => Promise.resolve(bulkPage("x".repeat(QUERY_LIMITS.pageBytes + 1024)));
-    const oversized = await entry.runner.create(entry.rig.context, [entry.source], entry.rig.sink);
-    const refused = await entry.runner.run(entry.rig.context, oversized, entry.rig.sink);
-    assert.equal(entry.rig.calls.sends.length, 0, "an oversized page reached the release sink");
-    assert.equal(refused.noMatch, false, "a refused oversized page claimed no-match");
-    assert.notEqual(refused.status, "ok");
-    console.log(`oversized page: refused as ${refused.status}/${String(refused.groups[0]?.reason?.code)}, no-match ${String(refused.noMatch)}`);
-    const sized = bulkPage("y".repeat(QUERY_LIMITS.pageBytes - 4096));
-    assert.ok(Buffer.byteLength(canonicalWire(sized)) <= QUERY_LIMITS.pageBytes);
-    entry.rig.hooks.query = () => Promise.resolve(sized);
-    const accepted = await entry.runner.run(entry.rig.context, await entry.runner.create(entry.rig.context, [entry.source], entry.rig.sink), entry.rig.sink);
-    assert.equal(accepted.status, "ok");
-    assert.deepEqual(releasedIds(entry.rig.calls.sends[0]), ["bulk"]);
-    console.log(`page under the byte limit: accepted, ${String(Buffer.byteLength(canonicalWire(sized)))} bytes`);
+    const scenario = await pageSizeScenario(entry);
+    assert.ok(scenario.oversizedBytes > QUERY_LIMITS.pageBytes, "the oversized page did not exceed the byte limit");
+    assert.equal(scenario.refusedSends.length, 0, "an oversized page reached the release sink");
+    assert.equal(scenario.refused.noMatch, false, "a refused oversized page claimed no-match");
+    assert.notEqual(scenario.refused.status, "ok");
+    console.log(`oversized page: ${String(scenario.oversizedBytes)} bytes refused as ${scenario.refused.status}/${String(scenario.refused.groups[0]?.reason?.code)}, no-match ${String(scenario.refused.noMatch)}`);
+    assert.ok(scenario.sizedBytes <= QUERY_LIMITS.pageBytes, "the accepted page exceeded the byte limit");
+    assert.equal(scenario.accepted.status, "ok");
+    assert.deepEqual(releasedIds(scenario.releasedSends[0]), ["bulk"]);
+    console.log(`page under the byte limit: accepted, ${String(scenario.sizedBytes)} bytes of ${String(QUERY_LIMITS.pageBytes)}`);
   } finally { await entry.rig.close(); }
 }
 
