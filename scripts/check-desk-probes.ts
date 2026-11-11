@@ -36,6 +36,10 @@ export interface DeskProbeReport {
 
 export const PROBE_EXCLUSIONS: readonly DeskProbeExclusion[] = [
   {
+    file: "probe-desk-adapter-browser.ts",
+    reason: "needs a browser: it verifies adapter isolation against a local attacker origin in Playwright Chromium",
+  },
+  {
     file: "probe-desk-adapter-diagnostics.ts",
     reason: "needs a browser: it renders connection diagnostics in Playwright Chromium",
   },
@@ -72,6 +76,10 @@ export const PROBE_EXCLUSIONS: readonly DeskProbeExclusion[] = [
     reason: "needs a browser: it verifies Balance pickers and saved cards in Playwright Chromium",
   },
   {
+    file: "probe-desk-flow-tab.ts",
+    reason: "needs a browser: it verifies the saved-flow tab in Playwright Chromium",
+  },
+  {
     file: "probe-desk-graph-drafting.ts",
     reason: "needs a browser: it verifies conversation-prefilled graph drafts through the shared Playwright browser fixture",
   },
@@ -102,6 +110,7 @@ export const PROBE_RUNS: readonly string[] = [
   "probe-desk-balance-work-tools.ts",
   "probe-desk-batch-receipts.ts",
   "probe-desk-binding-fence.ts",
+  "probe-desk-conformance-export.ts",
   "probe-desk-connection-setup.ts",
   "probe-desk-credential-setup.ts",
   "probe-desk-drafting.ts",
