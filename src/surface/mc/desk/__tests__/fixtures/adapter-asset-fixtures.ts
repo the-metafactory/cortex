@@ -17,6 +17,7 @@ export const ASSET_CONNECTION = "connection-example";
 const HOSTED_HOST = "desk.example.test";
 
 export interface AssetUiFixture {
+  views?: { objectType: string; view: "result" | "editor" }[];
   entry: string;
   files: Record<string, { body: string | Uint8Array; mediaType: string }>;
 }
@@ -74,7 +75,7 @@ export async function openAssetRig(options: { service?: boolean; ui?: AssetUiFix
   const writePackage = (extra: DeskFixturePackageOptions = {}): void => {
     const ui = options.ui;
     writeDeskFixturePackage(packageDir, { ui: true, ...extra, ...(ui ? { extra: { ...extra.extra, ui: {
-      protocolVersion: "1.0.0", entry: ui.entry, views: [{ objectType: "task", view: "result" }],
+      protocolVersion: "1.0.0", entry: ui.entry, views: ui.views ?? [{ objectType: "task", view: "result" }],
       files: Object.entries(ui.files).map(([path, file]) => ({ path, sha256: sha256Bytes(file.body), mediaType: file.mediaType })),
     } } } : {}) });
     for (const [path, file] of Object.entries(ui?.files ?? {})) {
