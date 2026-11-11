@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { DRAFT_GLIDER_PROJECT, DRAFT_HOME_GLIDER_PROJECT, DRAFT_HOME_AREA, DRAFT_LAB_AREA, balanceDiscussionOutput, conflictingDueOutput, openBalanceDraftRig } from "../../../surface/mc/desk/fixtures/balance-draft";
+import { DRAFT_GLIDER_PROJECT, DRAFT_HOME_GLIDER_PROJECT, DRAFT_HOME_AREA, DRAFT_LAB_AREA, balanceDiscussionOutput, conflictingDueOutput, openBalanceDraftRig, withField, withoutFields } from "../../../surface/mc/desk/fixtures/balance-draft";
 import { DraftingBindings } from "../drafting";
 import { balanceTaskDraftingBinding } from "../drafting/balance";
 import { balanceDraftDestinations } from "../../../surface/mc/desk/balance-draft-destinations";
@@ -53,7 +53,7 @@ test("relative-date drafting receives the source time and host timezone and pres
   if (!source) throw new Error("Synthetic discussion missing");
   source.text = "Cut the glider wing tomorrow in Lab / Glider.";
   source.at = "2026-11-09T23:30:00.000Z";
-  rig.state.output = { fields: balanceDiscussionOutput().fields.map(field => field.pointer === "/due" ? { ...field, value: "2026-11-11" } : field) };
+  rig.state.output = withField("/due", { value: "2026-11-11" });
   const made = await makeDraft(rig);
   expect(rig.state.requests[0]).toMatchObject({ timeZone: "Europe/Zurich", sources: [{ id: source.id, text: source.text, at: source.at }] });
   expect(made.view.draft.manifest).toMatchObject({ timeZone: "Europe/Zurich", items: [{ id: source.id, at: source.at }] });
@@ -66,7 +66,7 @@ test("relative-date drafting receives the source time and host timezone and pres
 test("equally named, unknown and foreign-account destinations stay unresolved and are never invented", async () => {
   const outline = (await open()).outlineSnapshot();
   for (const [labels, code] of [[["Glider"], "ambiguous_reference"], [["Shared"], "ambiguous_reference"], [["Nowhere"], "missing_reference"]] as const) {
-    const rig = await open({ fields: balanceDiscussionOutput().fields.map(field => field.pointer === "/project" ? { ...field, labels: [...labels] } : field) });
+    const rig = await open(withField("/project", { labels: [...labels] }));
     const made = await makeDraft(rig);
     expect(made.view.draft.fields["/project"]).toMatchObject({ presence: "absent", unresolved: code, origin: "suggested" });
     expect(made.view.blocking).toContainEqual({ pointer: "/project", code: "unresolved" });
@@ -83,7 +83,7 @@ test("equally named, unknown and foreign-account destinations stay unresolved an
 });
 
 test("a project outside the chosen area blocks the hand-off", async () => {
-  const rig = await open({ fields: balanceDiscussionOutput().fields.map(field => field.pointer === "/project" ? { ...field, labels: ["Home / Glider"] } : field) });
+  const rig = await open(withField("/project", { labels: ["Home / Glider"] }));
   const made = await makeDraft(rig);
   expect(made.view.draft.fields["/project"]?.value).toEqual(rig.ref("project", DRAFT_HOME_GLIDER_PROJECT));
   const response = await rig.call("POST", `${draftPath(made)}/confirm`, { revision: made.view.draft.revision });
@@ -92,7 +92,7 @@ test("a project outside the chosen area blocks the hand-off", async () => {
 });
 
 test("missing optional due stays absent and conflicting dates need an explicit choice or omission", async () => {
-  const absent = await open({ fields: balanceDiscussionOutput().fields.filter(field => field.pointer !== "/due") });
+  const absent = await open(withoutFields("/due"));
   const made = await makeDraft(absent);
   expect(made.view.draft.fields["/due"]).toBeUndefined();
   expect(made.view.status).toBe("ready-for-confirmation");
@@ -217,7 +217,7 @@ test("invalid guidance is rejected, required fields stay editable by hand", asyn
   expect(bindings.register({ ...balanceTaskDraftingBinding, bindingVersion: "2.0.0" }).ok).toBe(false);
   expect(bindings.register({ ...balanceTaskDraftingBinding, fieldHints: [{ pointer: "/invented", role: "detail" }] }).ok).toBe(false);
   expect(bindings.register({ ...balanceTaskDraftingBinding, fieldHints: [{ pointer: "/due", role: "destination", resolveWith: "balance.destinations" }] }).ok).toBe(false);
-  rig.state.output = { fields: balanceDiscussionOutput().fields.filter(field => field.pointer !== "/title" && field.pointer !== "/area") };
+  rig.state.output = withoutFields("/title", "/area");
   let current = await makeDraft(rig);
   expect(current.view.blocking).toEqual(expect.arrayContaining([{ pointer: "/title", code: "required_missing" }, { pointer: "/area", code: "required_missing" }]));
   current = await editDraft(rig, current, "/title", { kind: "set", value: "Manual title" });

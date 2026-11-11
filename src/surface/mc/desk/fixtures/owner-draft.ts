@@ -78,7 +78,7 @@ export interface OwnerDraftSpec<Editor extends DeskDraftEditor, Extra extends ob
   readonly connectorId: string;
   readonly discussion: string;
   readonly principal: string;
-  readonly openTarget: (context: { root: string; db: Database; connectionId: string; ref: (objectType: string, canonicalId: string) => ObjectReference }) => OwnerDraftTarget<Editor, Session> | Promise<OwnerDraftTarget<Editor, Session>>;
+  readonly openTarget: (context: { db: Database; connectionId: string }) => OwnerDraftTarget<Editor, Session> | Promise<OwnerDraftTarget<Editor, Session>>;
   readonly extend: (core: OwnerDraftCore<Editor, Session>) => Extra;
 }
 
@@ -129,7 +129,7 @@ export async function openOwnerDraftRig<Editor extends DeskDraftEditor, Extra ex
   if (!entryId) throw new Error("Synthetic discussion entry missing");
   const ref = (objectType: string, canonicalId: string): ObjectReference => ({ adapterId: spec.adapterId, connectionId, objectType, canonicalId });
   const db = initDatabase(join(root, "desk.sqlite"));
-  const target = await spec.openTarget({ root, db, connectionId, ref });
+  const target = await spec.openTarget({ db, connectionId });
   const { read } = target;
   const refs = () => target.destinationIds.map(id => ref(target.destinationType, id));
   const registry = new DomainAdapterRegistry();

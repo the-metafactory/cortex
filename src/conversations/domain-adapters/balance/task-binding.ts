@@ -42,27 +42,35 @@ const OUTPUT_SCHEMA = objectSchema({ ref: referenceSchema("task") }, ["ref"]);
 const ERROR_SCHEMA = adapterErrorSchema(ADAPTER_ID);
 const TASK_RELATIONSHIPS: AdapterDeclaration["objectTypes"][number]["relationships"] = [{ fieldPath: "/area", targetAdapterId: ADAPTER_ID, targetObjectType: "area", cardinality: "one" }, { fieldPath: "/project", targetAdapterId: ADAPTER_ID, targetObjectType: "project", cardinality: "one" }];
 
+export const TASK_DRAFT_OBJECT_TYPE: AdapterDeclaration["objectTypes"][number] = { objectType: "task-draft", label: "Task draft", schemaRef: INPUT_SCHEMA_REF, relationships: TASK_RELATIONSHIPS };
+export const BALANCE_TASK_CREATE_SCHEMAS: AdapterDeclaration["schemas"] = [
+  { ...AREA_SCHEMA_REF, schema: referenceSchema("area") },
+  { ...PROJECT_SCHEMA_REF, schema: referenceSchema("project") },
+  { ...TASK_SCHEMA_REF, schema: INPUT_SCHEMA },
+  { ...INPUT_SCHEMA_REF, schema: INPUT_SCHEMA },
+  { ...OUTPUT_SCHEMA_REF, schema: OUTPUT_SCHEMA },
+  { ...ERROR_SCHEMA_REF, schema: ERROR_SCHEMA },
+];
+export const BALANCE_TASK_CREATE_CAPABILITIES: AdapterDeclaration["capabilities"] = [
+  { capabilityId: CAPABILITY_ID, label: "Create task", kind: "action", objectTypes: ["task"], inputSchemaRef: INPUT_SCHEMA_REF, outputSchemaRef: OUTPUT_SCHEMA_REF, errorSchemaRef: ERROR_SCHEMA_REF },
+];
+
 export function balanceTaskCreateDeclaration(): AdapterDeclaration {
   return {
     adapterId: ADAPTER_ID,
     label: "Balance",
     contractRange: "^1.0.0",
     schemas: [
-      { ...AREA_SCHEMA_REF, schema: referenceSchema("area") },
-      { ...PROJECT_SCHEMA_REF, schema: referenceSchema("project") },
-      { ...TASK_SCHEMA_REF, schema: INPUT_SCHEMA },
-      { ...INPUT_SCHEMA_REF, schema: INPUT_SCHEMA },
-      { ...OUTPUT_SCHEMA_REF, schema: OUTPUT_SCHEMA },
-      { ...ERROR_SCHEMA_REF, schema: ERROR_SCHEMA },
+      ...BALANCE_TASK_CREATE_SCHEMAS,
     ],
     objectTypes: [
       { objectType: "task", label: "Task", schemaRef: TASK_SCHEMA_REF, relationships: TASK_RELATIONSHIPS },
       { objectType: "area", label: "Area", schemaRef: AREA_SCHEMA_REF, relationships: [] },
       { objectType: "project", label: "Project", schemaRef: PROJECT_SCHEMA_REF, relationships: [] },
-      { objectType: "task-draft", label: "Task draft", schemaRef: INPUT_SCHEMA_REF, relationships: TASK_RELATIONSHIPS },
+      TASK_DRAFT_OBJECT_TYPE,
     ],
     capabilities: [
-      { capabilityId: CAPABILITY_ID, label: "Create task", kind: "action", objectTypes: ["task"], inputSchemaRef: INPUT_SCHEMA_REF, outputSchemaRef: OUTPUT_SCHEMA_REF, errorSchemaRef: ERROR_SCHEMA_REF },
+      ...BALANCE_TASK_CREATE_CAPABILITIES,
     ],
   };
 }

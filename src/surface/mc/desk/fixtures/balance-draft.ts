@@ -78,7 +78,10 @@ export const balanceDiscussionOutput = (includeLater = false): ModelOutput => ({
   { pointer: "/due", value: "2026-11-13", citations: SOURCE },
 ] });
 
+export const withField = (pointer: string, patch: Partial<ModelOutput["fields"][number]>): ModelOutput => ({ fields: balanceDiscussionOutput().fields.map(field => field.pointer === pointer ? { ...field, ...patch } : field) });
+export const withoutFields = (...pointers: string[]): ModelOutput => ({ fields: balanceDiscussionOutput().fields.filter(field => !pointers.includes(field.pointer)) });
+
 export const conflictingDueOutput = (): ModelOutput => ({ fields: [
-  ...balanceDiscussionOutput().fields.filter(field => field.pointer !== "/due"),
+  ...withoutFields("/due").fields,
   { pointer: "/due", alternatives: [{ value: "2026-11-13", citations: SOURCE }, { value: "2026-11-20", citations: SOURCE }], citations: SOURCE },
 ] });
