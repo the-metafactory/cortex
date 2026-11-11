@@ -26,6 +26,7 @@ export type ImportWatermark = z.infer<typeof ImportWatermarkSchema>;
 const RecordSchema = z.object({ version: z.literal(1), revision: counter, bindingKey: text, plan: WriterPlanSchema, epoch: counter, instanceId: text, phase: z.enum(["disabled", "draining", "active", "stopped"]), stage: z.enum(["disable", "stop", "drain", "verify", "import", "acquire", "enable", "active"]), receipt: SupervisorReceiptSchema.nullable(), watermark: ImportWatermarkSchema.nullable(), failures: z.array(z.object({ stage: text, message: text }).strict()), commands: z.array(CommandEvidenceSchema), drained: z.array(text), uncertain: z.array(text), retiredDigests: z.array(text) }).strict();
 export type WriterRecord = z.infer<typeof RecordSchema>;
 const StateSchema = z.object({ version: z.literal(1), records: z.record(text, z.array(RecordSchema)), ownerFences: z.array(text) }).strict();
+export type WriterState = z.infer<typeof StateSchema>;
 const WriterDoc = defineDoc<{ state: JsonObject }>({ kind: "cortex.writer-authority", version: 1, scope: "session", initial: () => ({ state: { version: 1, records: {}, ownerFences: [] } }), checkpointWhen: (_value, _ops, info) => info.deltasSinceBase >= 50 });
 export interface WriterCutoverSteps {
   disable(record: WriterRecord): Promise<CommandEvidence[]>;

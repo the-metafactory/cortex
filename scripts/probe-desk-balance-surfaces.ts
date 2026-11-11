@@ -14,6 +14,7 @@ import { areaProjects, balanceDestinations } from "../src/surface/mc/desk/balanc
 import { createBalanceSurfaceReader, balanceSurfaceRun } from "../src/surface/mc/desk/balance-surfaces";
 import type { DeskOptions, DeskRuntime } from "../src/surface/mc/desk/compose";
 import { localDay } from "../src/surface/mc/desk/time";
+import { buildProbePage, serveProbePage } from "./lib/probe-page";
 import { openDashboardProbe } from "./probe-dashboard-page";
 import { withTempHome } from "./probe-temp-home";
 
@@ -64,20 +65,13 @@ await withTempHome(async () => {
     ],
   });
 
-  const bundle = await Bun.build({ entrypoints: [join(import.meta.dir, "desk-balance-surfaces/browser-probe.tsx")], target: "browser" });
-  const script = bundle.outputs[0];
-  if (!bundle.success || !script) throw new Error("The Balance surfaces browser probe did not build");
-  const server = Bun.serve({
-    hostname: "127.0.0.1", port: 0,
-    fetch: async req => {
-      const url = new URL(req.url);
-      if (url.pathname === "/probe.js") return new Response(script, { headers: { "content-type": "text/javascript" } });
-      if (url.pathname === "/fixture.json") return Response.json({ types, view: view() });
-      if (url.pathname === "/api/desk") return deskReads ? handleGetDesk(rig.db, runtime, undefined) : Response.json({ error: "Desk reads are broken for this probe." }, { status: 503 });
-      if (url.pathname === "/api/desk/my-day") return deskReads ? handleDeskMyDay(req, rig.db, runtime, undefined, NOW) : Response.json({ error: "Desk reads are broken for this probe." }, { status: 503 });
-      if (url.pathname.startsWith("/api/desk/balance-surfaces/")) return surfacesReads ? handleDeskBalanceSurfaces(req, url, () => connectionOn ? reader : null) : Response.json({ error: "The Balance read failed for this probe." }, { status: 502 });
-      return new Response('<!doctype html><html><body><div id="root"></div><script type="module" src="/probe.js"></script></body></html>', { headers: { "content-type": "text/html" } });
-    },
+  const script = await buildProbePage(join(import.meta.dir, "desk-balance-surfaces/browser-probe.tsx"), "Balance surfaces");
+  const server = serveProbePage(script, (req, url) => {
+    if (url.pathname === "/fixture.json") return Response.json({ types, view: view() });
+    if (url.pathname === "/api/desk") return deskReads ? handleGetDesk(rig.db, runtime, undefined) : Response.json({ error: "Desk reads are broken for this probe." }, { status: 503 });
+    if (url.pathname === "/api/desk/my-day") return deskReads ? handleDeskMyDay(req, rig.db, runtime, undefined, NOW) : Response.json({ error: "Desk reads are broken for this probe." }, { status: 503 });
+    if (url.pathname.startsWith("/api/desk/balance-surfaces/")) return surfacesReads ? handleDeskBalanceSurfaces(req, url, () => connectionOn ? reader : null) : Response.json({ error: "The Balance read failed for this probe." }, { status: 502 });
+    return null;
   });
 
   const browser = await chromium.launch({ headless: true });

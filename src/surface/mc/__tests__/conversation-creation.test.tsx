@@ -134,6 +134,19 @@ describe("conversation creation API", () => {
     expect(html).not.toContain("Confirm creation");
   });
 
+  test("a standing grant the cutover lapsed is marked as needing renewal, and a renewed one names its connection and destination", async () => {
+    const { call, id } = await rig();
+    const { body: caps } = await call("GET", "/api/conversations/capabilities");
+    const at = new Date().toISOString();
+    const grant = (overrides: Record<string, unknown>): unknown => ({ grantId: "grant-0123456789abcdef0123456789abcdef", type: "balance-task", scope: "conversation", conversationId: id, principal: "local@example.invalid", operationId: "op-1", createdAt: at, ...overrides });
+    const view = { proposals: [], grants: [grant({ renewal: { reason: "The balance-task writer now runs on a new connection binding. Confirm one creation again to renew the standing permission.", at } }), grant({ grantId: "grant-fedcba9876543210fedcba9876543210", connectionId: "connection-taxi", destinations: [{ objectType: "area", canonicalId: "area-example" }] })] };
+    const html = renderToStaticMarkup(<CreationSection id={id} archived={false} types={caps.types ?? []} view={view as CreationView} error={null} busy={false} seed={{ entryId: null, text: "" }} act={() => Promise.resolve()} />);
+    expect(html).toContain("needs renewal before the next creation");
+    expect(html).toContain("Confirm one creation again to renew");
+    expect(html).toContain("connection-taxi area-example");
+    expect(html).toContain('data-renewal="needed"');
+  });
+
 });
 
 describe("graph node destination fields", () => {

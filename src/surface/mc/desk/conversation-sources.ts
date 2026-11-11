@@ -2,8 +2,9 @@ import { grillingSource, type GrillingReads } from "./grilling-conversation";
 import type { Database } from "bun:sqlite";
 import { findNode } from "../../../balance";
 import type { HostSources } from "../../../conversations/host";
-import type { ObjectRef, SourceState } from "../../../conversations/types";
+import type { ObjectRef, OwnerWriter, SourceState } from "../../../conversations/types";
 import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-conversation-writer";
+import { routedBalanceTaskWriter, type BalanceTaskCutover } from "./balance-task-cutover";
 import { calendarWriter } from "./calendar-conversation-writer";
 import { DESK_NOTE_WITHHELD, deskNoteWriter } from "./desk-note-conversation-writer";
 import { flowWriter } from "./flow-conversation-writer";
@@ -64,6 +65,7 @@ export interface SourceDeps {
   listGoals?: GoalRunner;
   captureModel?: CaptureModel;
   runWorker?: WriterRunner;
+  balanceTaskCutover?: () => BalanceTaskCutover | undefined;
 }
 
 export function conversationSources(deps: SourceDeps): HostSources {
@@ -110,6 +112,14 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const studioCapture = studioCaptureWriter({ ...studioWriterDeps, ...(deps.captureModel ? { model: deps.captureModel } : {}) });
   const deskItems = deps.deskItems;
   const balanceWriters = { "balance-task": balanceWriter("task", deps), "balance-project": balanceWriter("project", deps), ...(deskItems ? { "balance-inbox-task": balanceInboxWriter({ ...deps, deskItems }) } : {}) };
+  const balanceTask = (): OwnerWriter => {
+    const cutover = deps.balanceTaskCutover?.();
+    return cutover ? routedBalanceTaskWriter({ legacy: balanceWriters["balance-task"], cutover }) : balanceWriters["balance-task"];
+  };
+  const balanceTaskCutover = async (): Promise<{ connectionId: string } | null> => {
+    const route = await deps.balanceTaskCutover?.()?.route();
+    return route?.kind === "active" ? { connectionId: route.connectionId } : null;
+  };
   const routine = routineWriter({ routines: () => deps.desk()?.routines, flows: () => deps.desk()?.flows, ...(deps.runRoutine ? { run: deps.runRoutine } : {}), ...(deps.runFlow ? { runPulse: deps.runFlow } : {}) });
   const flow = flowWriter({ flows: () => deps.desk()?.flows, ...(deps.runFlow ? { run: deps.runFlow } : {}) });
   const graphDeps = { db: deps.db, desk: deps.desk, ...(deps.runGraph ? { run: deps.runGraph } : {}), ...(deps.now ? { now: deps.now } : {}) };
@@ -134,7 +144,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
       const desk = deps.desk();
       if (!desk?.enabled) return {};
       return {
-        ...(hasBalanceState(deps.db) ? balanceWriters : {}),
+        ...(hasBalanceState(deps.db) ? { ...balanceWriters, "balance-task": balanceTask() } : {}),
         ...(desk.studio ? { "studio-response": studioResponse, "studio-thread": studioThread, "studio-note": studioNote, "studio-close": studioClose, "studio-capture": studioCapture } : {}),
         ...(desk.routines ? { routine } : {}),
         ...(desk.flows ? { flow } : {}),
@@ -179,5 +189,6 @@ export function conversationSources(deps: SourceDeps): HostSources {
       "balance-project": ref => Promise.resolve(balance(ref)),
     },
     readbacks: { "studio-note": studioCommit, "studio-thread": studioCommit },
+    cutovers: { "balance-task": balanceTaskCutover },
   };
 }

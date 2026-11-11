@@ -3,7 +3,7 @@ import { z } from "zod";
 import { CREATABLE_TYPES, CREATION_CATALOG, OWNER_BLOCKERS, SUBJECT_FIELDS, UNAVAILABLE_TYPES, isCreatable, type CreatableType, type Egress, type FieldSpec, type FixedTerm } from "./catalog";
 import type { ConversationHost } from "./host";
 import { ConversationError } from "./errors";
-import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateResult, type OperationRecord, type OwnerWriters, type Policy, type Suggestion, type WithheldReasons } from "./types";
+import { CREATION_KIND, GRANT_KIND, GRANT_SCOPES, PROPOSAL_KIND, TRANSPORTS, type CreateResult, type CreationCutover, type GrantBindingDestination, type OperationRecord, type OwnerWriters, type Policy, type Suggestion, type WithheldReasons } from "./types";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 export type GrantScope = (typeof GRANT_SCOPES)[number];
@@ -50,6 +50,7 @@ export const ProposalSchema = z.object({
   updatedAt: z.string(),
 });
 export type Proposal = z.infer<typeof ProposalSchema>;
+export const GrantDestinationSchema = z.object({ objectType: z.string().min(1).max(64), canonicalId: z.string().min(1).max(512) }).strict();
 const GrantSchema = z.object({
   grantId: z.string(),
   type: z.enum(CREATABLE_TYPES),
@@ -59,8 +60,13 @@ const GrantSchema = z.object({
   operationId: z.string(),
   createdAt: z.string(),
   revokedAt: z.string().optional(),
+  connectionId: z.string().min(1).optional(),
+  destinations: z.array(GrantDestinationSchema).optional(),
+  renewal: z.object({ reason: z.string().min(1), at: z.string() }).strict().optional(),
+  supersededAt: z.string().optional(),
 });
 export type Grant = z.infer<typeof GrantSchema>;
+export const grantInForce = (grant: Grant): boolean => !grant.revokedAt && !grant.renewal && !grant.supersededAt;
 
 export type Feedback = "choose" | "unavailable" | "proposed" | "accepted" | "created" | "failed" | "uncertain" | "dismissed";
 export interface ProposalView {
@@ -143,7 +149,7 @@ function egressRefusal(type: CreatableType | null, policy: "local" | "cloud"): C
 const isCurrent = (op: OperationRecord, proposal: Proposal): boolean => op.proposalId === proposal.proposalId && op.revision === proposal.revision;
 const samePrincipal = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase();
 const applies = (grant: Grant, conversationId: string, principal: string, type: CreatableType): boolean =>
-  !grant.revokedAt && grant.type === type && samePrincipal(grant.principal, principal) && (grant.scope === "global" || grant.conversationId === conversationId);
+  grantInForce(grant) && grant.type === type && samePrincipal(grant.principal, principal) && (grant.scope === "global" || grant.conversationId === conversationId);
 
 function typeOf(type: string | undefined): CreatableType | undefined {
   if (type === undefined) return undefined;
@@ -214,8 +220,27 @@ export class ConversationCreation {
     return (await this.host.operations(proposal.conversationId)).find(op => isCurrent(op, proposal));
   }
 
+  private async allGrants(): Promise<Grant[]> {
+    return Object.values((await this.host.creation()).grants).map(raw => GrantSchema.parse(raw));
+  }
+
+  private async settleCutover(): Promise<void> {
+    const active: Partial<Record<CreatableType, CreationCutover>> = await this.host.cutovers();
+    const lapsed = (await this.allGrants()).filter(grant => {
+      const cutover = active[grant.type];
+      return cutover !== undefined && !grant.revokedAt && !grant.supersededAt && grant.renewal === undefined && grant.connectionId !== cutover.connectionId;
+    });
+    if (lapsed.length === 0) return;
+    const at = this.now().toISOString();
+    await this.host.changeCreation(() => ({
+      result: null,
+      grants: Object.fromEntries(lapsed.map(grant => [grant.grantId, { ...grant, renewal: { reason: `The ${grant.type} writer now runs on a new connection binding. Confirm one creation again to renew the standing permission.`, at } }])),
+    }));
+  }
+
   async grants(principal: string): Promise<Grant[]> {
-    return Object.values((await this.host.creation()).grants).map(raw => GrantSchema.parse(raw)).filter(g => samePrincipal(g.principal, principal)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    await this.settleCutover();
+    return (await this.allGrants()).filter(g => samePrincipal(g.principal, principal)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
   private async save(proposal: Proposal): Promise<void> {
@@ -348,12 +373,16 @@ export class ConversationCreation {
 
   private async grant(proposal: Proposal, type: CreatableType, scope: GrantScope, operationId: string, principal: string): Promise<void> {
     const grantId = `grant-${sha256(operationId).slice(0, 32)}`;
+    const binding = await this.host.writers[type]?.grantBinding?.(clean(proposal.fields)) ?? null;
+    const at = this.now().toISOString();
+    const destinations: GrantBindingDestination[] = binding?.destinations ?? [];
     const created = await this.host.changeCreation(state => {
       if (state.grants[grantId]) return { result: false };
-      const grant: Grant = { grantId, type, scope, conversationId: proposal.conversationId, principal, operationId, createdAt: this.now().toISOString() };
-      return { result: true, grants: { [grantId]: grant } };
+      const grant: Grant = { grantId, type, scope, conversationId: proposal.conversationId, principal, operationId, createdAt: at, ...(binding ? { connectionId: binding.connectionId, destinations } : {}) };
+      const superseded = Object.values(state.grants).map(raw => GrantSchema.parse(raw)).filter(item => item.grantId !== grantId && item.type === type && item.supersededAt === undefined && item.revokedAt === undefined && item.renewal !== undefined).map(item => [item.grantId, { ...item, supersededAt: at }] as const);
+      return { result: true, grants: { [grantId]: grant, ...Object.fromEntries(superseded) } };
     });
-    if (created) await this.host.record(proposal.conversationId, `grant:${grantId}`, GRANT_KIND, { grantId, type, scope, action: "granted" });
+    if (created) await this.host.record(proposal.conversationId, `grant:${grantId}`, GRANT_KIND, { grantId, type, scope, action: "granted", ...(binding ? { connectionId: binding.connectionId, destinations } : {}) });
   }
 
   async revoke(grantId: string, actor: Actor): Promise<Grant> {

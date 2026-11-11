@@ -66,8 +66,13 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
   };
   const proposals = view?.proposals ?? [];
   const grants = view?.grants ?? [];
-  const active = grants.filter(g => !g.revokedAt);
-  const revoked = grants.length - active.length;
+  const active = grants.filter(g => !g.revokedAt && !g.supersededAt);
+  const history = grants.length - active.length;
+  const where = (g: (typeof grants)[number]): string => {
+    const scope = g.scope === "global" ? "all your conversations" : g.conversationId === id ? "this conversation" : "another conversation";
+    const bound = g.connectionId ? ` · ${g.connectionId}${g.destinations?.length ? ` ${g.destinations.map(d => d.canonicalId).join(", ")}` : ""}` : "";
+    return `${scope}${bound}`;
+  };
   return <section className="dcv-create" aria-label="Create from this exchange">
     {proposals.map(p => <ProposalCard key={p.proposal.proposalId} id={id} view={p} types={creatable} busy={busy} archived={archived} act={act} />)}
     {!archived && <div className="dcv-acts" role="group" aria-label="Create from this exchange">
@@ -78,9 +83,10 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
     <div className="dcv-grants" aria-label="Standing creation permissions">
       <h4>Standing creation permissions</h4>
       {active.length === 0 && <p className="dcv-quiet">None. Ivy asks before every creation.</p>}
-      <ul>{active.map(g => <li key={g.grantId}><span>{byType.get(g.type)?.label ?? g.type} · {g.scope === "global" ? "all your conversations" : g.conversationId === id ? "this conversation" : "another conversation"}</span>
+      <ul>{active.map(g => <li key={g.grantId} data-renewal={g.renewal ? "needed" : "none"}><span>{byType.get(g.type)?.label ?? g.type} · {where(g)}{g.renewal ? " · needs renewal before the next creation" : ""}</span>
+        {g.renewal && <small className="dcv-quiet" role="status">{g.renewal.reason}</small>}
         <button type="button" className="desk-btn ghost" disabled={busy} onClick={() => void act(() => revoke(g.grantId), "The permission was not revoked. Try again.")}>Revoke</button></li>)}</ul>
-      <p className="dcv-quiet">Creation only: running a flow or enabling a routine always needs its own decision. Revoking stops future creation without asking; objects already created stay as they are{revoked > 0 ? ` (${revoked} revoked, kept in the history)` : ""}.</p>
+      <p className="dcv-quiet">Creation only: running a flow or enabling a routine always needs its own decision. Revoking stops future creation without asking; objects already created stay as they are{history > 0 ? ` (${history} revoked or renewed, kept in the history)` : ""}.</p>
     </div>
     {error && <p className="desk-unsent" role="alert">{error}</p>}
   </section>;
