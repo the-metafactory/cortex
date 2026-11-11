@@ -88,9 +88,20 @@ const workerReadback = (deps: WorkerWriterDeps, accepts: (state: WorkerRecord["s
   return { found: true, canonicalId: current.node, ...(current.url ? { url: current.url } : {}) };
 };
 
-function rememberBrief(deps: WorkerWriterDeps, saved: WorkerOperation, node: string, url?: string): void {
-  if (readWorkerRecord(deps.db, node)) return;
+const repositoryIdentity = (repository: string): string => repository.replace(/^github:github\.com\//, "");
+const sameRepository = (actual: string, expected: string): boolean => repositoryIdentity(actual) === repositoryIdentity(expected);
+const briefAllowed = (deps: WorkerWriterDeps, fields: Record<string, string>): boolean =>
+  !repositoryRefusal(deps.db, fields.repository ?? "") && (deps.desk()?.workers?.maps.includes(fields.map ?? "") ?? false)
+  && repositoryOf(fields.map ?? "") === fields.repository;
+
+function rememberBrief(deps: WorkerWriterDeps, saved: WorkerOperation, node: string, url?: string): boolean {
+  const existing = readWorkerRecord(deps.db, node);
   const { fields, provenance } = saved.request;
+  if (existing) {
+    if (existing.conversationId !== provenance.conversationId || existing.operationId !== saved.operationId || existing.proposalId !== provenance.proposalId) return false;
+    settleWorkerOperation(deps.db, saved.operationId, "complete");
+    return true;
+  }
   const at = (deps.now ?? Date.now)();
   recordWorkerRecord(deps.db, {
     node, map: fields.map ?? "", repository: fields.repository ?? "", conversationId: provenance.conversationId, entryId: provenance.entryId,
@@ -98,6 +109,7 @@ function rememberBrief(deps: WorkerWriterDeps, saved: WorkerOperation, node: str
     reason: null, pr: null, result: null, url: url ?? null, prUrl: null, startedAt: at, updatedAt: at,
   });
   settleWorkerOperation(deps.db, saved.operationId, "complete");
+  return true;
 }
 
 async function runWorkerCommand(deps: WorkerWriterDeps, argv: string[], timeoutMs: number): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -140,6 +152,8 @@ export function workBriefWriter(deps: WorkerWriterDeps): OwnerWriter {
     const map = (request.fields.map ?? "").trim();
     if (!workers.maps.includes(map)) return failed(`${map || "The map"} is not a configured registered map for implementation work. Nothing was filed.`);
     if (repositoryOf(map) !== repository) return failed("The configured map belongs to another repository than the one named. Nothing was filed.");
+    const parent = splitNodeRef(request.fields.parent ?? "");
+    if (!parent || !sameRepository(parent.repo, repository)) return failed("The parent node belongs to another repository than the one named. Nothing was filed.");
     const body = (request.fields.body ?? "").trim();
     if (!body) return failed("Write the brief's scope and acceptance checks. Nothing was filed.");
     const marker = graphMarker(request.operationId);
@@ -149,25 +163,37 @@ export function workBriefWriter(deps: WorkerWriterDeps): OwnerWriter {
     const run = deps.run ?? spawnWithStdin;
     recordWorkerOperation(deps.db, request, null, "filing");
     recordGraphOperation(deps.db, request.operationId, { repository, parent: request.fields.parent ?? null, args: [...args.head, ...args.tail] }, now());
-    const result = await withBodyFile(graphBody(body, request.provenance), file => run([somaBin, ...args.head, "--body-file", file, ...args.tail], "", ADD_TIMEOUT_MS));
+    const result = await withBodyFile(graphBody(body, request.provenance), file => {
+      request.signal.throwIfAborted();
+      if (!briefAllowed(deps, request.fields)) throw new Error("The implementation brief permissions changed before filing. Nothing was filed.");
+      return run([somaBin, ...args.head, "--body-file", file, ...args.tail], "", ADD_TIMEOUT_MS);
+    });
+    if (!briefAllowed(deps, request.fields)) throw new Error("The implementation brief permissions changed while filing. Check the original request before retrying.");
     const answer = graphAnswer(result, "add");
     if (answer.state === "failed") return answer;
     if (answer.state !== "created") return answer;
     const filed = splitNodeRef(answer.canonicalId);
     if (!filed) return failed("Soma answered without a node id. Check the map before retrying. Nothing is running.");
+    if (!sameRepository(filed.repo, repository)) throw new Error("Soma answered for another repository. Check the original request before retrying.");
     const node = canonicalNode(map, filed.id);
     const saved = readWorkerOperation(deps.db, request.operationId);
     if (!saved) throw new Error("The implementation brief's origin could not be recovered.");
-    rememberBrief(deps, saved, node, answer.url);
+    if (!rememberBrief(deps, saved, node, answer.url)) throw new Error("The implementation brief answer belongs to another recorded origin. Check the original request before retrying.");
     return { state: "created", canonicalId: node, ...(answer.url ? { url: answer.url } : {}) };
   };
   const byId = graphReadbackById({ db: deps.db, desk: deps.desk, ...(deps.run ? { run: deps.run } : {}) });
   return { create, readback: async operation => {
     const saved = readWorkerOperation(deps.db, operation.operationId);
-    if (saved?.request.provenance.conversationId !== operation.conversationId) return null;
+    if (saved?.request.provenance.conversationId !== operation.conversationId || saved.request.provenance.proposalId !== operation.proposalId
+      || saved.request.provenance.revision !== operation.revision || saved.request.type !== operation.owner || !briefAllowed(deps, saved.request.fields)) return null;
     const read = await byId(operation.operationId);
-    if (read?.found) rememberBrief(deps, saved, read.canonicalId, read.url);
-    return read;
+    if (!briefAllowed(deps, saved.request.fields)) return null;
+    if (!read?.found) return read;
+    const parts = splitNodeRef(read.canonicalId);
+    if (!parts || !sameRepository(parts.repo, saved.request.fields.repository ?? "")) return null;
+    const node = canonicalNode(saved.request.fields.map ?? "", parts.id);
+    if (!rememberBrief(deps, saved, node, read.url)) return null;
+    return { ...read, canonicalId: node };
   } };
 }
 

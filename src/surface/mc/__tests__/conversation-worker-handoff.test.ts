@@ -479,3 +479,62 @@ describe("owner start refusal", () => {
     } finally { h.db.close(); }
   });
 });
+
+
+describe("brief response identity and current authority", () => {
+  let h: Harness;
+  beforeEach(() => { h = harness(); });
+  afterEach(() => { h.db.close(); });
+  const operation = { operationId: "op-1", conversationId: "c", proposalId: "p", revision: 1, owner: "work-brief" as const, state: "uncertain" as const, history: [] };
+
+  test("a brief reply from another repository is not reinterpreted as the requested node", async () => {
+    setGraphRepositoryEnabled(h.db, "example/maps", true, NOW);
+    h.answer("add", JSON.stringify({ repo: "example/other", node: "30" }));
+    await expect(workBriefWriter(deps(h)).create(request(BRIEF))).rejects.toThrow("another repository");
+    expect(readWorkerRecord(h.db, NODE)).toBeNull();
+  });
+
+  test("a direct brief proposal cannot file below a parent in another repository", async () => {
+    setGraphRepositoryEnabled(h.db, "example/maps", true, NOW);
+    h.answer("add", JSON.stringify({ repo: "example/maps", node: "30" }));
+    const result = await workBriefWriter(deps(h)).create(request({ ...BRIEF, parent: "example/other#12" }));
+    expect(result.state).toBe("failed");
+    expect(h.calls).toHaveLength(0);
+  });
+
+  test("brief readback checks proposal identity and permission before consulting Soma", async () => {
+    await filed(h);
+    h.answer("--dry-run", JSON.stringify({ found: true, repo: "example/maps", node: "30", parent: MAP }));
+    const writer = workBriefWriter(deps(h));
+    const calls = h.calls.length;
+    expect(await writer.readback({ ...operation, proposalId: "other" })).toBeNull();
+    setGraphRepositoryEnabled(h.db, "example/maps", false, NOW);
+    expect(await writer.readback(operation)).toBeNull();
+    expect(h.calls).toHaveLength(calls);
+  });
+
+  test("brief readback refuses an answer from another repository", async () => {
+    await filed(h);
+    h.answer("--dry-run", JSON.stringify({ found: true, repo: "example/other", node: "30", parent: MAP }));
+    expect(await workBriefWriter(deps(h)).readback(operation)).toBeNull();
+  });
+
+  test("revocation while brief filing waits withholds its result and handoff record", async () => {
+    setGraphRepositoryEnabled(h.db, "example/maps", true, NOW);
+    const run: WriterRunner = () => {
+      setGraphRepositoryEnabled(h.db, "example/maps", false, NOW);
+      return Promise.resolve({ code: 0, stdout: JSON.stringify({ repo: "example/maps", node: "30" }), stderr: "" });
+    };
+    await expect(workBriefWriter({ ...deps(h), run }).create(request(BRIEF))).rejects.toThrow("permissions changed");
+    expect(readWorkerRecord(h.db, NODE)).toBeNull();
+  });
+
+  test("revocation during brief readback withholds a found node", async () => {
+    await filed(h);
+    const run: WriterRunner = () => {
+      setGraphRepositoryEnabled(h.db, "example/maps", false, NOW);
+      return Promise.resolve({ code: 0, stdout: JSON.stringify({ found: true, repo: "example/maps", node: "30", parent: MAP }), stderr: "" });
+    };
+    expect(await workBriefWriter({ ...deps(h), run }).readback(operation)).toBeNull();
+  });
+});
