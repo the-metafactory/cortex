@@ -14,8 +14,8 @@ import type { OperationJournalStore } from "../../operations/journal";
 import { confirmationAuthority, lifecycleRig, openJournal } from "./lifecycle-rig";
 import { createWorkGraphNodeBinding, createWorkGraphNodeFacade, workGraphNodeCreateBindings, workGraphNodeCreateDeclaration, type WorkGraphNodeBinding, type WorkGraphNodeFacade, type WorkGraphNodeFields } from "../../work-graph/node-binding";
 
-import { GRAPH_NODE_NOW, GRAPH_NODE_REPOSITORY, syntheticSoma, type SyntheticSoma } from "../../work-graph/fixtures/synthetic-soma";
-export { GRAPH_NODE_NOW, GRAPH_NODE_REPOSITORY, syntheticSoma, type SyntheticSoma } from "../../work-graph/fixtures/synthetic-soma";
+import { GRAPH_NODE_NOW, GRAPH_NODE_REPOSITORY, syntheticSoma, type SyntheticSoma } from "../../../../surface/mc/desk/fixtures/synthetic-soma";
+export { GRAPH_NODE_NOW, GRAPH_NODE_REPOSITORY, syntheticSoma, type SyntheticSoma } from "../../../../surface/mc/desk/fixtures/synthetic-soma";
 
 export const GRAPH_NODE_CONNECTION = "connection-example";
 export const GRAPH_NODE_STACK = "test";
