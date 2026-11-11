@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { findNode } from "../../../balance";
+import { localDay } from "../../../common/local-day";
 import { loadBalanceState, saveBalanceState } from "../../../surface/mc/desk/balance-store";
 import { BALANCE_TASK_ATTENTION, BALANCE_TASK_ROW_CAPABILITIES } from "../balance/attention";
 import { balanceTaskObservationBinding } from "../balance/observation";
@@ -9,7 +10,7 @@ afterEach(closeTrackedBalanceReadRigs);
 const open = openTrackedBalanceReadRig;
 
 const observedAt = new Date("2026-11-01T00:00:00.000Z");
-const TODAY = `${observedAt.getFullYear()}-${String(observedAt.getMonth() + 1).padStart(2, "0")}-${String(observedAt.getDate()).padStart(2, "0")}`;
+const TODAY = localDay(observedAt.getTime());
 
 function saved(rig: BalanceReadRig) {
   const state = loadBalanceState(rig.db);

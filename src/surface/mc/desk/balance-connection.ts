@@ -14,6 +14,7 @@ import type { QuerySource } from "../../../conversations/domain-adapters/reads/q
 import type { ConversationHost } from "../../../conversations/host";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import { loadBalanceState } from "./balance-store";
+import { configuredState, loadMeta, todayCap } from "./balance-sync";
 import { createBalanceDayReader, releasedObservationViews, type BalanceDayProjection } from "./balance-day";
 import type { AdapterAttentionSession } from "./adapter-items";
 import type { AdapterCapabilityAdmission, AdapterCapabilityRequest, DeskOptions } from "./compose";
@@ -58,8 +59,19 @@ export function balanceSetupCatalog(deps: Pick<BalanceConnectionDeps, "desk" | "
 export function createBalanceConnection(deps: BalanceConnectionDeps) {
   const { host } = deps;
   let observationConnectionId = "balance";
-  const balanceSource = { get connectionId() { return observationConnectionId; }, state: () => loadBalanceState(deps.db), areas: () => deps.desk()?.enabled ? deps.desk()?.areas ?? [] : [] };
-  const adapterFor = (connectionId: string) => createBalanceReadAdapter({ connectionId, state: balanceSource.state, areas: balanceSource.areas });
+  const balanceSource = {
+    get connectionId() { return observationConnectionId; },
+    state: () => {
+      const state = loadBalanceState(deps.db);
+      const desk = deps.desk();
+      if (!state || !desk) return null;
+      state.settings.todayCap = todayCap(loadMeta(deps.db), desk);
+      return configuredState(state, desk);
+    },
+    areas: () => deps.desk()?.enabled ? deps.desk()?.areas ?? [] : [],
+    draft: () => loadMeta(deps.db).draft,
+  };
+  const adapterFor = (connectionId: string) => createBalanceReadAdapter({ ...balanceSource, connectionId });
   const observation = createBalanceObservationAdapter(balanceSource);
   const registry = new DomainAdapterRegistry();
   const registered = registry.register(observation.declaration, observation.bindings);
@@ -177,17 +189,22 @@ export function createBalanceConnection(deps: BalanceConnectionDeps) {
     const destinations = connection.readDestinations.filter(destination => destination.adapterId === "balance" && destination.objectType === "area" && configured.has(destination.canonicalId));
     return destinations.length === 0 ? null : { principal, connectionId: connection.connectionId, destinations };
   };
-  const observationProjection = async (refresh: boolean): Promise<BalanceDayProjection | null> => {
+  const openObservationScope = async (connectionId?: string) => {
     if (deps.desk()?.enabled !== true) return null;
     const scope = await readingScope();
-    if (!scope) return null;
-    const destinations = scope.destinations;
+    if (!scope || connectionId !== undefined && scope.connectionId !== connectionId) return null;
+    const binding = balanceTaskObservationBinding();
+    const store = host.readObservations(registry, bindings);
     const opened = await openSession(scope.principal, await dayConversation(scope.principal));
     if (!opened) return null;
+    const source: QuerySource = { adapterId: "balance", connectionId: scope.connectionId, capabilityId: OBSERVATION, inputSchemaRef: binding.inputSchemaRef, destinations: scope.destinations, input: {} };
+    return { opened, source, store };
+  };
+  const observationProjection = async (refresh: boolean): Promise<BalanceDayProjection | null> => {
+    const observationScope = await openObservationScope();
+    if (!observationScope) return null;
+    const { opened, source, store } = observationScope;
     try {
-      const binding = balanceTaskObservationBinding();
-      const source: QuerySource = { adapterId: "balance", connectionId: scope.connectionId, capabilityId: OBSERVATION, inputSchemaRef: binding.inputSchemaRef, destinations, input: {} };
-      const store = host.readObservations(registry, bindings);
       const reader = createBalanceDayReader({
         check: mode => store.check(opened.context, source, opened.sink, mode),
         async views() {
@@ -206,13 +223,10 @@ export function createBalanceConnection(deps: BalanceConnectionDeps) {
   const attention = async (): Promise<AdapterAttentionSession | null> => {
     if (deps.desk()?.enabled !== true) return null;
     try {
-      const scope = await readingScope();
-      if (!scope) return null;
-      const opened = await openSession(scope.principal, await dayConversation(scope.principal));
-      if (!opened) return null;
-      const binding = balanceTaskObservationBinding();
-      const source: QuerySource = { adapterId: "balance", connectionId: scope.connectionId, capabilityId: OBSERVATION, inputSchemaRef: binding.inputSchemaRef, destinations: scope.destinations, input: {} };
-      return { feature: { enabled: true, store: host.readObservations(registry, bindings), bindings: readBindings, context: opened.context, sink: opened.sink, sources: [source] }, close: opened.close };
+      const observationScope = await openObservationScope();
+      if (!observationScope) return null;
+      const { opened, source, store } = observationScope;
+      return { feature: { enabled: true, store, bindings: readBindings, context: opened.context, sink: opened.sink, sources: [source], ownerKinds: new Set(["studio"]) }, close: opened.close };
     } catch (error) {
       process.stderr.write(`[desk-balance-attention] ${error instanceof Error ? error.message : "failed"}\n`);
       return null;
@@ -222,10 +236,9 @@ export function createBalanceConnection(deps: BalanceConnectionDeps) {
     const denied: AdapterCapabilityAdmission = { kind: "denied", reason: "The current host authority does not permit this change." };
     if (deps.desk()?.enabled !== true || request.adapterId !== "balance") return denied;
     try {
-      const scope = await readingScope();
-      if (scope?.connectionId !== request.connectionId) return denied;
-      const opened = await openSession(scope.principal, await dayConversation(scope.principal));
-      if (!opened) return denied;
+      const observationScope = await openObservationScope(request.connectionId);
+      if (!observationScope) return denied;
+      const { opened } = observationScope;
       try {
         return (await authority.admitRowCapability(opened.context, request)).kind === "allowed" ? { kind: "allowed" } : denied;
       } finally {

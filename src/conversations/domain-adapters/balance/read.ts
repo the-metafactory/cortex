@@ -1,4 +1,5 @@
-import { balanceDestinations, rankAll, selectToday, type AppState, type DestinationArea, type OutlineNode } from "../../../balance";
+import { balanceDestinations, rankAll, todayPlanIds, type AppState, type DestinationArea, type OutlineNode, type TodayPlanDraft } from "../../../balance";
+import { localDay } from "../../../common/local-day";
 import { authorityHash } from "../../authority-records";
 import type { Json } from "../operations/types";
 import type { QueryFetchRequest, QueryPage } from "../reads/query-types";
@@ -121,6 +122,7 @@ export interface BalanceReadSource {
   readonly state: () => AppState | null;
   readonly areas: () => readonly DestinationArea[];
   readonly now?: () => Date;
+  readonly draft?: () => TodayPlanDraft | null;
 }
 
 export interface BalanceReadAdapter {
@@ -135,7 +137,6 @@ interface LocatedTask { readonly node: OutlineNode; readonly area: DestinationAr
 interface TaskAttention { readonly planned: ReadonlySet<string>; readonly traces: ReadonlyMap<string, string> }
 const STUDIO_OWNER = "studio";
 const IN_TODAY = "In today";
-const localDate = (at: Date): string => `${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`;
 const sentence = (text: string): string => `${text.charAt(0).toLocaleUpperCase()}${text.slice(1)}${/[.!?]$/.test(text) ? "" : "."}`;
 const studioMarker = (id: string): boolean => id.startsWith("studio-response:") || id.startsWith("studio-thread:");
 interface HandlerContext { readonly destinations: readonly ObjectReference[]; readonly cursor?: string; readonly limit: number }
@@ -219,10 +220,9 @@ function locateTasks(state: AppState, areas: readonly DestinationArea[], include
   return found;
 }
 
-function attentionOf(state: AppState, at: Date): TaskAttention {
-  const today = localDate(at);
-  const day = state.dayState?.date === today ? state.dayState : null;
-  const planned = new Set(day ? day.confirmed : selectToday(state, today).map(item => item.task.id));
+function attentionOf(state: AppState, at: Date, draft?: TodayPlanDraft | null): TaskAttention {
+  const today = localDay(at.getTime());
+  const planned = new Set(todayPlanIds(state, today, draft));
   return { planned, traces: new Map(rankAll(state, today).map(item => [item.task.id, item.trace])) };
 }
 
@@ -254,17 +254,16 @@ function taskValue(task: LocatedTask, connectionId: string, attention: TaskAtten
 
 export interface BalanceTaskObject { readonly ref: ObjectReference; readonly destination: ObjectReference; readonly value: Json }
 
-export function balanceTaskObjects(state: AppState, areas: readonly DestinationArea[], connectionId: string, limit: number, at = new Date()): { objects: BalanceTaskObject[]; gap: boolean } {
-  const attention = attentionOf(state, at);
+export function balanceTaskObjects(state: AppState, areas: readonly DestinationArea[], connectionId: string, at = new Date(), draft?: TodayPlanDraft | null): BalanceTaskObject[] {
+  const attention = attentionOf(state, at, draft);
   const tasks = locateTasks(state, areas, true);
-  const open = tasks.filter(task => task.node.done !== true).slice(0, limit);
-  const completed = tasks.filter(task => task.node.done === true).slice(0, limit - open.length);
-  const objects = [...open, ...completed].map(task => ({
+  const open = tasks.filter(task => task.node.done !== true);
+  const completed = tasks.filter(task => task.node.done === true);
+  return [...open, ...completed].map(task => ({
     ref: reference(connectionId, "task", task.node.id),
     destination: reference(connectionId, "area", task.area.id),
     value: taskValue(task, connectionId, attention),
   }));
-  return { objects, gap: tasks.length > objects.length };
 }
 
 function taskEntry(task: LocatedTask, connectionId: string, value: Json): PageEntry {
@@ -287,7 +286,7 @@ function taskQueryPage(source: BalanceReadSource, input: unknown, destinations: 
   const state = source.state();
   if (!state) return failure("source_unavailable");
   const found = locateTasks(state, [area]);
-  const attention = attentionOf(state, source.now?.() ?? new Date());
+  const attention = attentionOf(state, source.now?.() ?? new Date(), source.draft?.());
   const needle = parsed.query.trim().toLocaleLowerCase();
   const matching = needle.length === 0 ? found : found.filter(task => `${task.node.title}\n${task.node.note ?? ""}`.toLocaleLowerCase().includes(needle));
   const { slice, next } = boundedPage(matching, parsed, cursor, limit);
@@ -307,7 +306,7 @@ function taskReadPage(source: BalanceReadSource, input: unknown, destinations: r
   if (!state) return failure("source_unavailable");
   const task = locateTasks(state, source.areas()).find(item => item.node.id === parsed.canonicalId);
   if (!task || !destinations.some(item => sameReference(item, reference(source.connectionId, "area", task.area.id)))) return failure("task_unavailable");
-  const value = taskValue(task, source.connectionId, attentionOf(state, source.now?.() ?? new Date()));
+  const value = taskValue(task, source.connectionId, attentionOf(state, source.now?.() ?? new Date(), source.draft?.()));
   return buildPage([taskEntry(task, source.connectionId, value)], snapshotId("task.read", { connectionId: source.connectionId, task: task.node.id, value }), observedAt(source));
 }
 

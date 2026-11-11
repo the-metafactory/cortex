@@ -9,7 +9,3 @@ export const BALANCE_TASK_ATTENTION: BalanceTaskAttention = {
 };
 
 export const BALANCE_TASK_ROW_CAPABILITIES: readonly RowCapability[] = [];
-
-export function balanceTaskRowCapabilities(): readonly RowCapability[] {
-  return BALANCE_TASK_ROW_CAPABILITIES;
-}

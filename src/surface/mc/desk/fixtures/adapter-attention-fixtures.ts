@@ -19,9 +19,9 @@ function required<T>(value: T | undefined): T {
   return value;
 }
 
-export interface AttentionOptions { rowCapabilities?: { granted: boolean } }
+export interface AttentionOptions { rowCapabilities?: { granted: boolean }; owner?: string }
 
-function syntheticAdapter(adapterId: string, rowCapability: boolean) {
+function syntheticAdapter(adapterId: string, rowCapability: boolean, owner?: string) {
   const declaration = JSON.parse(JSON.stringify(referenceDeclaration("observation")).replaceAll("reference-feed", adapterId)) as AdapterDeclaration;
   const capability = required(declaration.capabilities[0]);
   const schemaRef = { schemaId: `${adapterId}.object`, version: "1.0.0" };
@@ -29,6 +29,7 @@ function syntheticAdapter(adapterId: string, rowCapability: boolean) {
     "display/data": objectSchema({
       "title~text": { type: "string" }, reason: { type: ["string", "number"] }, due: { type: ["string", "null"] },
       area: { anyOf: [referenceSchema(adapterId, "document"), { type: "null" }] }, url: { type: ["string", "null"] },
+      owner: { type: "string" },
     }, ["title~text"]),
     score: { type: "number" }, urgency: { type: "string" }, attention: { type: "string" }, interrupt: { type: "boolean" }, notification: { type: "boolean" }, actions: { type: "array", items: { type: "string" } },
   }, ["display/data"]) as AdapterDeclaration["schemas"][number]["schema"] });
@@ -37,7 +38,7 @@ function syntheticAdapter(adapterId: string, rowCapability: boolean) {
   const binding = ReadBindingSchema.parse({
     version: "1.0.0", adapterId, capabilityId: capability.capabilityId, mode: "poll", objectType: "document", inputSchemaRef: capability.inputSchemaRef, outputSchemaRef: capability.outputSchemaRef, destinationType: "document",
     display: { title: "/display~1data/title~0text", due: "/display~1data/due", area: "/display~1data/area", url: "/display~1data/url" },
-    attention: { pointer: "/display~1data/reason" },
+    attention: { pointer: "/display~1data/reason", ...(owner === undefined ? {} : { owner: "/display~1data/owner" }) },
     ...(rowCapability ? { capabilities: [{ capabilityId: `${adapterId}.complete`, label: "Complete" }] } : {}),
     observation: { modes: ["poll"], objectsPointer: "/items", resumable: false },
   });
@@ -46,7 +47,7 @@ function syntheticAdapter(adapterId: string, rowCapability: boolean) {
 
 export async function attentionRig(policy: "local" | "cloud" = "local", options: AttentionOptions = {}) {
   const rowCapability = options.rowCapabilities !== undefined;
-  const adapters = [syntheticAdapter("synthetic-one", rowCapability), syntheticAdapter("synthetic-two", rowCapability)];
+  const adapters = [syntheticAdapter("synthetic-one", rowCapability, options.owner), syntheticAdapter("synthetic-two", rowCapability, options.owner)];
   const registry = new DomainAdapterRegistry();
   for (const adapter of adapters) {
     const result = registry.register(adapter.declaration, fixtureBindings(adapter.declaration));
@@ -83,7 +84,7 @@ export async function attentionRig(policy: "local" | "cloud" = "local", options:
     const source = required(sources[index]);
     return { version: "1.0.0", payload: { items: objects }, events: objects.map((_value, item) => ({ kind: "present", pointer: `/items/${item}`, ref: { adapterId: source.adapterId, connectionId: source.connectionId, objectType: "document", canonicalId: `item-${item + offset}` }, schemaRef: required(adapters[index]).schemaRef, destination: required(source.destinations[0]), observedAt: new Date(time.clock.now()).toISOString(), revision: "1" })), gap: false, coverage: "objects" };
   };
-  const value = (index: number, title = "Synthetic review", due: string | null = "2026-11-01"): Json => ({ "display/data": { "title~text": title, reason: "Review the synthetic observation.", due, area: required(required(sources[index]).destinations[0]), url: "https://example.test/synthetic" } });
+  const value = (index: number, title = "Synthetic review", due: string | null = "2026-11-01"): Json => ({ "display/data": { "title~text": title, reason: "Review the synthetic observation.", due, area: required(required(sources[index]).destinations[0]), url: "https://example.test/synthetic", ...(options.owner === undefined ? {} : { owner: options.owner }) } });
   async function ingest(index: number, objects: Json[] = [value(index)], mode: ObservationMode = "resync", offset = 0) {
     const source = required(sources[index]);
     batches.set(source.adapterId, batch(index, objects, offset));

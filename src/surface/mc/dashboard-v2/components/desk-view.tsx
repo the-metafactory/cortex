@@ -1,4 +1,5 @@
 import { submitCapabilityInstall } from "../lib/desk-capability-install";
+import { ADAPTER_CAPABILITY_ACTION } from "../../desk/adapter-actions";
 import { CatchupPreview, DeskCatchUp } from "./desk-catch-up";
 import { catchupSearch, clearedCatchup } from "../hooks/use-catchup-location";
 import { scrollBelowDesk } from "../lib/desk-scroll";
@@ -467,7 +468,7 @@ export function DeskBody({ view, error, onOpenMissionControl, onOpenSettings = (
     if (a.id === "detail") setDetail(item);
     else if (a.id === "snooze") setSnoozed((s) => new Set(s).add(item.key));
     else if (a.id === "studio.respond" && a.target) go({ mode: "studio", thread: a.target });
-    else if (a.id.startsWith("adapter.capability:") && a.target) { const capability = a.target; void send(item, a, { request: () => submitAdapterAction({ key: item.key, capability }), keepVisible: true }); }
+    else if (a.id.startsWith(ADAPTER_CAPABILITY_ACTION) && a.target) { const capability = a.target; void send(item, a, { request: () => submitAdapterAction({ key: item.key, capability }), keepVisible: true }); }
     else if (a.id === "todo" && view.myDay) { setPlanItem({ ...item }); setDetail(null); openCatchup(item.key); }
     else if (a.id === "vip.add" && a.target) void addVip(a.target, item.title.split(" wrote:")[0] ?? null);
     else if (a.id === "reminder.done" && a.target) {

@@ -133,12 +133,11 @@ describe("Catch-up lists actionable adapter tasks beside mail", () => {
     await stack.balance.allowHome();
     seedBalanceObservationOverflow(stack.balance, 11);
     await stack.compose();
+    await stack.balance.store().gap(stack.balance.source);
     const state = balanceState(stack);
-    let remaining = 20;
-    for (const area of state.outline.children) {
-      area.children = area.children.filter(task => task.done !== true).slice(0, remaining);
-      remaining -= area.children.length;
-    }
+    const home = state.outline.children[1];
+    if (!home) throw new Error("the overflow area is missing");
+    for (const task of home.children.slice(-2)) task.done = true;
     saveBalanceState(stack.db, state);
     expect((await stack.balance.check("reconcile")).status).toBe("ok");
     const view = await stack.compose();
@@ -327,6 +326,15 @@ describe("a row capability reaches host authority", () => {
     const response = await handleDeskAdapterAction(post(synthetic?.key ?? "", stack.synthetic.capabilityOf(0)), stack.db, stack.runtime, undefined, NOW);
     expect(response.status).toBe(403);
     expect(stack.synthetic.rig.calls.dispatch).toBe(0);
+  });
+
+  it("checking a row capability fetches no unrelated Desk source", async () => {
+    const stack = await build({ rowCapabilities: { granted: false } });
+    await stack.synthetic.ingest(0);
+    const item = row(await stack.compose(), "Synthetic review");
+    if (!item) throw new Error("the synthetic row is missing");
+    stack.runtime.sourceCache = new SourceCache(() => { throw new Error("an unrelated source was fetched"); });
+    expect((await handleDeskAdapterAction(post(item.key, stack.synthetic.capabilityOf(0)), stack.db, stack.runtime, undefined, NOW)).status).toBe(403);
   });
 
   it("admits the press through the host only when the connection carries the capability", async () => {

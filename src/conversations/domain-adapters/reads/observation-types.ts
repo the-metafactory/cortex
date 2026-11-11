@@ -18,12 +18,13 @@ export const ObservationBatchSchema = z.object({
     z.object({ ...common, kind: z.literal("deleted"), evidenceId: z.string().min(1), ownerDeletion: z.literal(true) }).strict(),
   ])).max(20),
   checkpoint: z.object({ cursor: z.string().min(1).max(65536), expiresAt: z.number() }).strict().optional(),
+  continuation: z.string().min(1).max(65536).optional(),
   gap: z.boolean(), coverage: z.enum(["objects", "watermark", "none"]),
 }).strict();
 export type ObservationBatch = z.infer<typeof ObservationBatchSchema>;
 export type ObservationEvent = ObservationBatch["events"][number] & { value?: Json };
 export type ObservationMode = "poll" | "subscription" | "resync" | "reconcile";
-export interface ObservationRequest { source: QuerySource; mode: ObservationMode; checkpoint?: string; limit: number }
+export interface ObservationRequest { source: QuerySource; mode: ObservationMode; checkpoint?: string; continuation?: string; limit: number }
 export interface ObservationConnector {
   modes: readonly ("poll" | "subscription")[];
   ordering?: { id: string; compare(left: string, right: string): "older" | "same" | "newer" | "incomparable" };

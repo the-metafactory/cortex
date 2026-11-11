@@ -1,4 +1,4 @@
-import { adapterItems, adapterRowRef, type AdapterAttention, type AdapterAttentionAccess, type AdapterRows } from "./adapter-items";
+import { adapterRowRef, readAdapterAttention, type AdapterAttentionAccess, type AdapterAttentionInput } from "./adapter-items";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import type { OutlineNode } from "../../../balance";
 import { buildWeeklyMirror, mirrorWeek, type MirrorSchedule } from "./mirror";
@@ -149,7 +149,7 @@ export interface DeskVigilSource {
 }
 
 export interface ComposeDeps {
-  adapterAttention?: AdapterAttention | AdapterAttentionAccess | readonly (AdapterAttention | AdapterAttentionAccess)[];
+  adapterAttention?: AdapterAttentionInput;
   adapterDay?: BalanceDayAccess;
   conversations?: boolean;
   waitingTasks?: Pick<WaitingTasks, "read">;
@@ -392,34 +392,6 @@ export async function composeDesk(
     corrections: activeCorrections,
     mailClassifier,
   };
-}
-
-const isAttentionFeature = (access: NonNullable<ComposeDeps["adapterAttention"]>): access is AdapterAttention => typeof access === "object" && "store" in access;
-
-async function readAdapterAttention(access: ComposeDeps["adapterAttention"], now: number): Promise<AdapterRows> {
-  if (access === undefined) return adapterItems(undefined, now);
-  if (isAttentionFeature(access)) return adapterItems(access, now);
-  const entries: readonly (AdapterAttention | AdapterAttentionAccess)[] = typeof access === "function" ? [access] : access;
-  const items = new Map<string, DeskItem>();
-  const owners = new Map<string, string>();
-  const sources: DeskView["sources"] = [];
-  for (const entry of entries) {
-    const rows = isAttentionFeature(entry) ? await adapterItems(entry, now) : await readAdapterSession(entry, now);
-    for (const item of rows.items) items.set(item.key, item);
-    for (const [key, owner] of rows.owners) owners.set(key, owner);
-    sources.push(...rows.sources);
-  }
-  return { items: [...items.values()], owners, sources };
-}
-
-async function readAdapterSession(access: AdapterAttentionAccess, now: number): Promise<AdapterRows> {
-  const session = await access();
-  if (!session) return adapterItems(undefined, now);
-  try {
-    return await adapterItems(session.feature, now);
-  } finally {
-    session.close();
-  }
 }
 
 function withOwnerRespond(item: DeskItem, owner: string | undefined, slugs: ReadonlyMap<string, string>, outline: OutlineNode): DeskItem {

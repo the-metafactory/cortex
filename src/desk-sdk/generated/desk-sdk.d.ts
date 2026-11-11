@@ -19,7 +19,7 @@
 
 import { z } from 'zod';
 
-export declare const DESK_ADAPTER_SDK_VERSION = "1.3.0";
+export declare const DESK_ADAPTER_SDK_VERSION = "1.4.0";
 declare const SchemaRefSchema: z.ZodObject<{
 	schemaId: z.ZodString;
 	version: z.ZodString;
@@ -666,6 +666,7 @@ declare const ObservationBatchSchema: z.ZodObject<{
 		cursor: z.ZodString;
 		expiresAt: z.ZodNumber;
 	}, z.core.$strict>>;
+	continuation: z.ZodOptional<z.ZodString>;
 	gap: z.ZodBoolean;
 	coverage: z.ZodEnum<{
 		none: "none";
@@ -679,6 +680,7 @@ export interface ObservationRequest {
 	source: QuerySource;
 	mode: ObservationMode;
 	checkpoint?: string;
+	continuation?: string;
 	limit: number;
 }
 /**

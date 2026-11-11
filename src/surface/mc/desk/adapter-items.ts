@@ -12,6 +12,7 @@ import { canonicalWire } from "../../../conversations/domain-adapters/operations
 import { redactToolText } from "../../../conversations/tools/output";
 import { localDay } from "./time";
 import { freshnessLabel, type DeskItem, type DeskView } from "./types";
+import { ADAPTER_CAPABILITY_ACTION } from "./adapter-actions";
 
 export interface AdapterAttention {
   enabled: boolean;
@@ -20,11 +21,12 @@ export interface AdapterAttention {
   context: HostContext;
   sink: ReleaseSink;
   sources: readonly QuerySource[];
+  ownerKinds?: ReadonlySet<string>;
 }
 
 const text = z.string().trim().min(1).max(4000).transform(redactToolText);
 const badge = z.string().trim().min(1).max(80).nullable().transform(value => value === null ? null : redactToolText(value));
-const owner = z.string().trim().min(1).max(80).nullable().transform(value => value === null ? null : redactToolText(value));
+const owner = z.enum(["studio"]).nullable();
 const dueDate = z.union([z.iso.date(), z.iso.datetime({ offset: true })]).nullable();
 const link = z.url({ protocol: /^https?$/ }).refine(value => {
   const url = new URL(value);
@@ -46,10 +48,10 @@ type MappedRow = { kind: "item"; item: DeskItem; owner: string | null } | { kind
 
 function rowCapabilityActions(binding: ReadBinding, owner: string | null): DeskItem["actions"] {
   if (owner !== null) return [];
-  return (binding.capabilities ?? []).map(capability => ({ id: `adapter.capability:${capability.capabilityId}`, label: redactToolText(capability.label), role: "secondary" as const, wired: true, target: capability.capabilityId }));
+  return (binding.capabilities ?? []).map(capability => ({ id: `${ADAPTER_CAPABILITY_ACTION}${capability.capabilityId}`, label: redactToolText(capability.label), role: "secondary" as const, wired: true, target: capability.capabilityId }));
 }
 
-function mappedItem(row: ObservationView, binding: ReadBinding, now: number): MappedRow {
+function mappedItem(row: ObservationView, binding: ReadBinding, now: number, ownerKinds?: ReadonlySet<string>): MappedRow {
   if (row.kind !== "present" || row.value === undefined || !binding.attention) return { kind: "unmapped" };
   const value = row.value;
   const rawWhy = readPointer(value, binding.attention.pointer);
@@ -62,6 +64,7 @@ function mappedItem(row: ObservationView, binding: ReadBinding, now: number): Ma
   const destination = area.safeParse(binding.display.area ? readPointer(value, binding.display.area) : null);
   const url = link.safeParse(binding.display.url ? readPointer(value, binding.display.url) : null);
   if (!title.success || !why.success || !rowBadge.success || !markedOwner.success || !due.success || !destination.success || !url.success) return { kind: "invalid" };
+  if (markedOwner.data !== null && !ownerKinds?.has(markedOwner.data)) return { kind: "invalid" };
   const key = `adapter:${canonicalWire(row.ref)}`;
   const status = row.status;
   return {
@@ -99,11 +102,36 @@ export type AdapterAttentionAccess = () => Promise<AdapterAttentionSession | nul
 
 export interface AdapterRows { items: DeskItem[]; owners: ReadonlyMap<string, string>; sources: DeskView["sources"] }
 
-export async function adapterItems(feature: AdapterAttention | undefined, now: number): Promise<AdapterRows> {
+export type AdapterAttentionInput = AdapterAttention | AdapterAttentionAccess | readonly (AdapterAttention | AdapterAttentionAccess)[];
+
+export function mergeAdapterRows(parts: readonly AdapterRows[]): AdapterRows {
   const items = new Map<string, DeskItem>();
   const owners = new Map<string, string>();
   const sources: DeskView["sources"] = [];
-  if (!feature?.enabled) return { items: [], owners, sources };
+  for (const part of parts) {
+    for (const item of part.items) items.set(item.key, item);
+    for (const [key, owner] of part.owners) owners.set(key, owner);
+    sources.push(...part.sources);
+  }
+  return { items: [...items.values()], owners, sources };
+}
+
+export async function readAdapterAttention(access: AdapterAttentionInput | undefined, now: number): Promise<AdapterRows> {
+  if (access === undefined) return mergeAdapterRows([]);
+  const entries: readonly (AdapterAttention | AdapterAttentionAccess)[] = typeof access === "function" || "store" in access ? [access] : access;
+  const parts: AdapterRows[] = [];
+  for (const entry of entries) {
+    if (typeof entry !== "function") { parts.push(await adapterItems(entry, now)); continue; }
+    const session = await entry();
+    if (!session) continue;
+    try { parts.push(await adapterItems(session.feature, now)); }
+    finally { session.close(); }
+  }
+  return mergeAdapterRows(parts);
+}
+
+export async function adapterItems(feature: AdapterAttention | undefined, now: number): Promise<AdapterRows> {
+  if (!feature?.enabled) return mergeAdapterRows([]);
   const releasedSources = await Promise.all(feature.sources.map(async source => {
     const found = feature.bindings.lookup(source.adapterId, source.connectionId, source.capabilityId);
     if (found.state !== "available" || !found.binding.attention) return null;
@@ -116,7 +144,7 @@ export async function adapterItems(feature: AdapterAttention | undefined, now: n
     let invalid = false;
     for (const row of rows) {
       if (row.kind !== "present") continue;
-      const result = mappedItem(row, found.binding, now);
+      const result = mappedItem(row, found.binding, now, feature.ownerKinds);
       if (result.kind === "invalid") invalid = true;
       if (result.kind !== "item") continue;
       mapped.push(result.item);
@@ -125,11 +153,5 @@ export async function adapterItems(feature: AdapterAttention | undefined, now: n
     const error = invalid ? MAPPING_PROBLEM : incomplete ? INCOMPLETE_OBSERVATIONS : undefined;
     return { items: mapped, owners: marked, source: { id: `adapter:${redactToolText(source.adapterId)}`, ok: error === undefined, ...(error === undefined ? {} : { error }) } };
   }));
-  for (const released of releasedSources) {
-    if (!released) continue;
-    for (const item of released.items) items.set(item.key, item);
-    for (const [key, owner] of released.owners) owners.set(key, owner);
-    sources.push(released.source);
-  }
-  return { items: [...items.values()], owners, sources };
+  return mergeAdapterRows(releasedSources.flatMap(released => released ? [{ items: released.items, owners: new Map(released.owners), sources: [released.source] }] : []));
 }

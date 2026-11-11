@@ -5,3 +5,4 @@ export * from "./core/recur";
 export * from "./core/contexts";
 export * from "./core/dnd";
 export * from "./core/destinations";
+export * from "./core/today-plan";

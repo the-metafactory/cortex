@@ -132,8 +132,9 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
   const readState = (): AppState | null => db ? loadBalanceState(db) : null;
   const observedState = (): AppState | null => reading ? readState() : null;
   const now = (): Date => new Date("2026-11-01T00:00:00.000Z");
-  const adapter = createBalanceReadAdapter({ connectionId: BALANCE_CONNECTION, state: readState, areas: () => areas, now });
-  const observation = createBalanceObservationAdapter({ connectionId: BALANCE_CONNECTION, state: observedState, areas: () => areas, now });
+  const draft = () => db ? loadMeta(db).draft : null;
+  const adapter = createBalanceReadAdapter({ connectionId: BALANCE_CONNECTION, state: readState, areas: () => areas, now, draft });
+  const observation = createBalanceObservationAdapter({ connectionId: BALANCE_CONNECTION, state: observedState, areas: () => areas, now, draft });
   const registry = new DomainAdapterRegistry();
   const registered = registry.register(observation.declaration, observation.bindings);
   if (!registered.ok) throw new Error(registered.error.code);
@@ -167,7 +168,7 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
   };
   const observationSource = (): QuerySource => ({ adapterId: "balance", connectionId: BALANCE_CONNECTION, capabilityId: BALANCE_TASK_OBSERVATION_CAPABILITY_ID, inputSchemaRef: observationBinding.inputSchemaRef, destinations: allowed.filter(destination => areas.some(area => area.id === destination.canonicalId)), input: {} });
   const attention = (): AdapterAttentionSession | null => observationSource().destinations.length === 0 ? null : ({
-    feature: { enabled: true, store: rig.host.readObservations(registry, rig.bindings, time.clock), bindings: readBindings, context: rig.context, sink: rig.sink, sources: [observationSource()] },
+    feature: { enabled: true, store: rig.host.readObservations(registry, rig.bindings, time.clock), bindings: readBindings, context: rig.context, sink: rig.sink, sources: [observationSource()], ownerKinds: new Set(["studio"]) },
     close: () => undefined,
   });
   const observationReader = (): BalanceDayReader => createBalanceDayReader({
