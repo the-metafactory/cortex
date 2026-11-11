@@ -87,19 +87,45 @@ describe("Catch-up lists actionable adapter tasks beside mail", () => {
     expect(new Set(rows.map(item => item.key)).size).toBe(actionable.length);
     for (const id of actionable) expect(rows.some(item => item.key.includes(id))).toBe(true);
     expect(rows.find(item => item.key.includes(planned))?.badge).toBe("In today");
+    expect(rows.every(item => item.freshness === "fresh")).toBe(true);
+    expect(view.sources.find(source => source.id === "adapter:balance")?.ok).toBe(true);
   });
 
-  it("reports overflow as an incomplete source and keeps the retained rows stale", async () => {
+  it("pages past the batch limit without losing actionable tasks or reporting completed-task gaps", async () => {
     const stack = await build();
     await stack.balance.allowHome();
     seedBalanceObservationOverflow(stack.balance, 11);
     const view = await stack.compose();
-    expect(adapterRows(view)).toHaveLength(20);
-    expect(adapterRows(view).every(item => item.freshness === "stale")).toBe(true);
-    expect(view.sources.find(source => source.id === "adapter:balance")).toEqual({ id: "adapter:balance", ok: false, error: "Adapter observations are incomplete. Some items may be missing." });
-    expect(view.systems).toContain("adapter:balance: Adapter observations are incomplete. Some items may be missing.");
+    expect(adapterRows(view)).toHaveLength(22);
+    expect(adapterRows(view).every(item => item.freshness === "fresh")).toBe(true);
+    expect(view.sources.find(source => source.id === "adapter:balance")).toEqual({ id: "adapter:balance", ok: true });
     expect(view.systems).not.toContain("The adapter:balance source is unreachable.");
-    expect(await stack.balance.store().needsResync(stack.balance.rig.context, stack.balance.source, stack.balance.rig.sink)).toBe(true);
+    expect(await stack.balance.store().needsResync(stack.balance.rig.context, stack.balance.source, stack.balance.rig.sink)).toBe(false);
+  });
+
+  it("refreshes completion beyond the first page without deleting completed history", async () => {
+    const stack = await build();
+    await stack.balance.allowHome();
+    const ids = seedBalanceObservationOverflow(stack.balance, 11);
+    expect(adapterRows(await stack.compose())).toHaveLength(22);
+    const state = balanceState(stack);
+    const task = findNode(state.outline, ids[0] ?? "");
+    if (!task) throw new Error("the overflow task is missing");
+    task.done = true;
+    saveBalanceState(stack.db, state);
+    const view = await stack.compose();
+    expect(adapterRows(view)).toHaveLength(21);
+    expect(row(view, task.title)).toBeUndefined();
+    expect(view.sources.find(source => source.id === "adapter:balance")?.ok).toBe(true);
+  });
+
+  it("badges follow a person's draft rather than the engine's proposal", async () => {
+    const stack = await build();
+    saveMeta(stack.db, { ...loadMeta(stack.db), draft: { date: DATE, ids: ["task-glue"], origin: "person" } });
+    const view = await stack.compose();
+    expect(view.myDay?.items.map(item => item.task.id)).toEqual(["task-glue"]);
+    expect(row(view, "Buy glue")?.badge).toBe("In today");
+    expect(row(view, "Cut the wing")?.badge).toBeUndefined();
   });
 
   it("clears the incomplete source after a complete reconciliation", async () => {
