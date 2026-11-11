@@ -19,7 +19,9 @@ function required<T>(value: T | undefined): T {
   return value;
 }
 
-function syntheticAdapter(adapterId: string) {
+export interface AttentionOptions { rowCapabilities?: { granted: boolean }; owner?: string }
+
+function syntheticAdapter(adapterId: string, rowCapability: boolean, owner?: string) {
   const declaration = JSON.parse(JSON.stringify(referenceDeclaration("observation")).replaceAll("reference-feed", adapterId)) as AdapterDeclaration;
   const capability = required(declaration.capabilities[0]);
   const schemaRef = { schemaId: `${adapterId}.object`, version: "1.0.0" };
@@ -27,6 +29,7 @@ function syntheticAdapter(adapterId: string) {
     "display/data": objectSchema({
       "title~text": { type: "string" }, reason: { type: ["string", "number"] }, due: { type: ["string", "null"] },
       area: { anyOf: [referenceSchema(adapterId, "document"), { type: "null" }] }, url: { type: ["string", "null"] },
+      owner: { type: "string" },
     }, ["title~text"]),
     score: { type: "number" }, urgency: { type: "string" }, attention: { type: "string" }, interrupt: { type: "boolean" }, notification: { type: "boolean" }, actions: { type: "array", items: { type: "string" } },
   }, ["display/data"]) as AdapterDeclaration["schemas"][number]["schema"] });
@@ -35,13 +38,16 @@ function syntheticAdapter(adapterId: string) {
   const binding = ReadBindingSchema.parse({
     version: "1.0.0", adapterId, capabilityId: capability.capabilityId, mode: "poll", objectType: "document", inputSchemaRef: capability.inputSchemaRef, outputSchemaRef: capability.outputSchemaRef, destinationType: "document",
     display: { title: "/display~1data/title~0text", due: "/display~1data/due", area: "/display~1data/area", url: "/display~1data/url" },
-    attention: { pointer: "/display~1data/reason" }, observation: { modes: ["poll"], objectsPointer: "/items", resumable: false },
+    attention: { pointer: "/display~1data/reason", ...(owner === undefined ? {} : { owner: "/display~1data/owner" }) },
+    ...(rowCapability ? { capabilities: [{ capabilityId: `${adapterId}.complete`, label: "Complete" }] } : {}),
+    observation: { modes: ["poll"], objectsPointer: "/items", resumable: false },
   });
   return { declaration, binding, schemaRef };
 }
 
-export async function attentionRig(policy: "local" | "cloud" = "local") {
-  const adapters = [syntheticAdapter("synthetic-one"), syntheticAdapter("synthetic-two")];
+export async function attentionRig(policy: "local" | "cloud" = "local", options: AttentionOptions = {}) {
+  const rowCapability = options.rowCapabilities !== undefined;
+  const adapters = [syntheticAdapter("synthetic-one", rowCapability, options.owner), syntheticAdapter("synthetic-two", rowCapability, options.owner)];
   const registry = new DomainAdapterRegistry();
   for (const adapter of adapters) {
     const result = registry.register(adapter.declaration, fixtureBindings(adapter.declaration));
@@ -59,7 +65,8 @@ export async function attentionRig(policy: "local" | "cloud" = "local") {
   for (const [index, adapter] of adapters.entries()) {
     const connectionId = index === 0 ? rig.connection.connectionId : "synthetic-second-connection";
     const destination: ObjectReference = { adapterId: adapter.binding.adapterId, connectionId, objectType: "document", canonicalId: "lab" };
-    const connection = { ...rig.connection, connectionId, adapterId: adapter.binding.adapterId, readCapabilityIds: [adapter.binding.capabilityId], readDestinations: [destination], writeCapabilityIds: [], writeDestinations: [], connectionRevision: index === 0 ? "2" : "1" };
+    const writeCapabilityIds = options.rowCapabilities?.granted === true ? [`${adapter.binding.adapterId}.complete`] : [];
+    const connection = { ...rig.connection, connectionId, adapterId: adapter.binding.adapterId, readCapabilityIds: [adapter.binding.capabilityId], readDestinations: [destination], writeCapabilityIds, writeDestinations: writeCapabilityIds.length > 0 ? [destination] : [], connectionRevision: index === 0 ? "2" : "1" };
     connections.push(connection);
     await rig.service.publishHostRecord({ kind: "connection", value: connection }, index === 0 ? 1 : 0);
     const restriction = { ...rig.objectRestriction, restrictionRef: randomUUID(), source: destination };
@@ -77,7 +84,7 @@ export async function attentionRig(policy: "local" | "cloud" = "local") {
     const source = required(sources[index]);
     return { version: "1.0.0", payload: { items: objects }, events: objects.map((_value, item) => ({ kind: "present", pointer: `/items/${item}`, ref: { adapterId: source.adapterId, connectionId: source.connectionId, objectType: "document", canonicalId: `item-${item + offset}` }, schemaRef: required(adapters[index]).schemaRef, destination: required(source.destinations[0]), observedAt: new Date(time.clock.now()).toISOString(), revision: "1" })), gap: false, coverage: "objects" };
   };
-  const value = (index: number, title = "Synthetic review", due: string | null = "2026-11-01"): Json => ({ "display/data": { "title~text": title, reason: "Review the synthetic observation.", due, area: required(required(sources[index]).destinations[0]), url: "https://example.test/synthetic" } });
+  const value = (index: number, title = "Synthetic review", due: string | null = "2026-11-01"): Json => ({ "display/data": { "title~text": title, reason: "Review the synthetic observation.", due, area: required(required(sources[index]).destinations[0]), url: "https://example.test/synthetic", ...(options.owner === undefined ? {} : { owner: options.owner }) } });
   async function ingest(index: number, objects: Json[] = [value(index)], mode: ObservationMode = "resync", offset = 0) {
     const source = required(sources[index]);
     batches.set(source.adapterId, batch(index, objects, offset));
@@ -99,5 +106,5 @@ export async function attentionRig(policy: "local" | "cloud" = "local") {
     batches.set(source.adapterId, deletion);
     return store.check(rig.context, source, rig.sink);
   }
-  return { rig, time, store, feature, sources, adapters, restrictions, ingest, revoke, remove, value, get fetches() { return fetches; } };
+  return { rig, time, store, feature, sources, adapters, restrictions, ingest, revoke, remove, value, capabilityOf: (index = 0) => `${required(adapters[index]).binding.adapterId}.complete`, get fetches() { return fetches; } };
 }

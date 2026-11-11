@@ -18,6 +18,14 @@ export interface ObservationCheck { status: "ok" | "denied" | "unavailable"; cha
 export const UNAVAILABLE_CHECK: Readonly<ObservationCheck> = Object.freeze({ status: "unavailable", changed: 0, quarantined: 0 });
 export const DENIED_CHECK: Readonly<ObservationCheck> = Object.freeze({ status: "denied", changed: 0, quarantined: 0 });
 type Authority = Pick<AuthorityMediator, "observationHead" | "admitObservation" | "releaseObservations">;
+type ValidatedObservationPage = ReturnType<typeof validateObservationBatch>;
+interface ObservationPages {
+  readonly batches: ValidatedObservationPage[];
+  readonly cursors: Set<string>;
+  readonly references: Set<string>;
+  events: number;
+  bytes: number;
+}
 const systemClock: QueryClock = { now: Date.now, setTimer(callback, ms) { const timer = setTimeout(callback, ms); timer.unref(); return () => { clearTimeout(timer); }; } };
 
 export class ObservationStore {
@@ -141,14 +149,67 @@ export class ObservationStore {
     try {
       const aborted = new Promise<never>((_resolve, reject) => { combined.addEventListener("abort", () => { reject(new Error("Observation fetch aborted.")); }, { once: true }); });
       if (combined.aborted) return UNAVAILABLE_CHECK;
-      const outcome = await Promise.race([aborted, this.authority.admitObservation(context, { source, mode, limit: OBSERVATION_LIMITS.batchItems, ...(checkpoint === undefined ? {} : { checkpoint }) }, sink, basis, combined, (validated, current, connector) => this.change(source, state => this.apply(state, source, current, validated, mode, connector)))]);
-      if (outcome.kind !== "accepted") return DENIED_CHECK;
-      return await this.basis(context, source, sink) ? outcome.value : DENIED_CHECK;
+      return await Promise.race([aborted, this.fetchPages(context, source, sink, basis, combined, mode, checkpoint)]);
     } catch (error) {
       if (!this.closed) await this.change(source, state => { this.source(state, source).status = "stale"; });
       if (error instanceof ObservationRetryAfter) throw error;
       return UNAVAILABLE_CHECK;
     } finally { timeout(); this.controllers.delete(controller); }
+  }
+
+  private async fetchPages(context: HostContext, source: QuerySource, sink: ReleaseSink, basis: ObservationBasis, signal: AbortSignal, mode: ObservationMode, checkpoint?: string): Promise<ObservationCheck> {
+    const pages: ObservationPages = { batches: [], cursors: new Set(), references: new Set(), events: 0, bytes: 0 };
+    let continuation: string | undefined;
+    try {
+      for (;;) {
+        if (signal.aborted) return UNAVAILABLE_CHECK;
+        const outcome = await this.authority.admitObservation(context, { source, mode, limit: Math.min(OBSERVATION_LIMITS.batchItems, OBSERVATION_LIMITS.objects - pages.events), ...(checkpoint === undefined ? {} : { checkpoint }), ...(continuation === undefined ? {} : { continuation }) }, sink, basis, signal, async (validated, current, connector) => {
+          if (signal.aborted) throw new Error("Observation fetch aborted.");
+          const accounted = this.accountPage(pages, validated, mode);
+          if (accounted.next !== undefined) return { next: accounted.next, result: null };
+          const result = await this.commitPages(source, current, pages, accounted.incomplete, mode, connector, signal);
+          return { next: undefined, result };
+        });
+        if (outcome.kind !== "accepted" || !await this.basis(context, source, sink)) return DENIED_CHECK;
+        if (outcome.value.result) return outcome.value.result;
+        continuation = outcome.value.next;
+      }
+    } catch (error) {
+      if (pages.batches.length > 0 && !this.closed) await this.gap(source);
+      throw error;
+    }
+  }
+
+  private accountPage(pages: ObservationPages, validated: ValidatedObservationPage, mode: ObservationMode): { next: string | undefined; incomplete: boolean } {
+    pages.events += validated.events.length;
+    pages.bytes += Buffer.byteLength(JSON.stringify(validated.batch));
+    if (pages.events > OBSERVATION_LIMITS.objects || pages.bytes > OBSERVATION_LIMITS.bytes) throw new Error("Observation page budget exceeded.");
+    for (const event of validated.events) {
+      const key = authorityHash(event.ref);
+      if (pages.references.has(key)) throw new Error("Observation pages repeated an object.");
+      pages.references.add(key);
+    }
+    pages.batches.push(validated);
+    const next = validated.batch.continuation;
+    if (next !== undefined && (mode === "subscription" || pages.cursors.has(next))) throw new Error("Invalid observation continuation.");
+    if (next !== undefined) pages.cursors.add(next);
+    const bounded = next !== undefined && (pages.events >= OBSERVATION_LIMITS.objects || pages.batches.length >= Math.ceil(OBSERVATION_LIMITS.objects / OBSERVATION_LIMITS.batchItems));
+    return { next: bounded ? undefined : next, incomplete: bounded || pages.batches.some(page => page.batch.gap) };
+  }
+
+  private commitPages(source: QuerySource, basis: ObservationBasis, pages: ObservationPages, incomplete: boolean, mode: ObservationMode, connector: ObservationConnector, signal: AbortSignal): Promise<ObservationCheck> {
+    return this.change(source, state => {
+      if (signal.aborted) throw new Error("Observation fetch aborted.");
+      if (!incomplete && (pages.batches.length > 1 || mode === "reconcile" || mode === "resync")) this.source(state, source).gap = false;
+      const total: ObservationCheck = { status: "ok", changed: 0, quarantined: 0 };
+      for (const page of pages.batches) {
+        const checked = this.apply(state, source, basis, { ...page, batch: { ...page.batch, gap: incomplete } }, mode, connector);
+        if (checked.status !== "ok") total.status = checked.status;
+        total.changed += checked.changed;
+        total.quarantined += checked.quarantined;
+      }
+      return total;
+    });
   }
 
   private apply(state: ObservationState, source: QuerySource, basis: ObservationBasis, validated: ReturnType<typeof validateObservationBatch>, mode: ObservationMode, connector: ObservationConnector): ObservationCheck {

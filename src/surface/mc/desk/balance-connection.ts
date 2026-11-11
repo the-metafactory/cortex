@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { STUDIO_OWNER_KIND } from "../../../common/desk-owner";
 import type { Database } from "bun:sqlite";
 import { createArcFileSecretStore } from "../../../common/config/desk-credential-arc-file-store";
 import type { SetupPrincipal } from "../../../common/config/desk-credential-broker";
-import type { AuthenticatedBinding, AuthorityBindings, TrustedConnector } from "../../../conversations/authority";
+import type { AuthenticatedBinding, AuthorityBindings, HostContext, TrustedConnector } from "../../../conversations/authority";
 import { authorityHash, type ReleaseSink, type RestrictionRecord } from "../../../conversations/authority-records";
 import type { SetupCatalogEntry } from "../../../conversations/connection-setup";
 import { createBalanceReadAdapter, balanceReadBindings } from "../../../conversations/domain-adapters/balance/read";
@@ -14,8 +15,10 @@ import type { QuerySource } from "../../../conversations/domain-adapters/reads/q
 import type { ConversationHost } from "../../../conversations/host";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import { loadBalanceState } from "./balance-store";
+import { configuredState, loadMeta, todayCap } from "./balance-sync";
 import { createBalanceDayReader, releasedObservationViews, type BalanceDayProjection } from "./balance-day";
-import type { DeskOptions } from "./compose";
+import type { AdapterAttentionSession } from "./adapter-items";
+import type { AdapterCapabilityAdmission, AdapterCapabilityRequest, DeskOptions } from "./compose";
 
 const REVISION = "balance-read-1";
 const CONNECTOR = "balance-local-read";
@@ -57,8 +60,19 @@ export function balanceSetupCatalog(deps: Pick<BalanceConnectionDeps, "desk" | "
 export function createBalanceConnection(deps: BalanceConnectionDeps) {
   const { host } = deps;
   let observationConnectionId = "balance";
-  const balanceSource = { get connectionId() { return observationConnectionId; }, state: () => loadBalanceState(deps.db), areas: () => deps.desk()?.enabled ? deps.desk()?.areas ?? [] : [] };
-  const adapterFor = (connectionId: string) => createBalanceReadAdapter({ connectionId, state: balanceSource.state, areas: balanceSource.areas });
+  const balanceSource = {
+    get connectionId() { return observationConnectionId; },
+    state: () => {
+      const state = loadBalanceState(deps.db);
+      const desk = deps.desk();
+      if (!state || !desk) return null;
+      state.settings.todayCap = todayCap(loadMeta(deps.db), desk);
+      return configuredState(state, desk);
+    },
+    areas: () => deps.desk()?.enabled ? deps.desk()?.areas ?? [] : [],
+    draft: () => loadMeta(deps.db).draft,
+  };
+  const adapterFor = (connectionId: string) => createBalanceReadAdapter({ ...balanceSource, connectionId });
   const observation = createBalanceObservationAdapter(balanceSource);
   const registry = new DomainAdapterRegistry();
   const registered = registry.register(observation.declaration, observation.bindings);
@@ -155,8 +169,17 @@ export function createBalanceConnection(deps: BalanceConnectionDeps) {
     const distinct = [...new Set(active)];
     return distinct.length === 1 ? distinct[0] ?? null : null;
   };
-  const observationProjection = async (refresh: boolean): Promise<BalanceDayProjection | null> => {
-    if (deps.desk()?.enabled !== true) return null;
+  const openSession = async (principal: string, conversationId: string): Promise<{ sink: ReleaseSink; context: HostContext; close: () => void } | null> => {
+    const sessionRef = randomUUID();
+    const sink: ReleaseSink = { kind: "web", conversationId };
+    const unregister = authority.registerReleaseSink(sink, () => Promise.resolve());
+    sessions.set(sessionRef, { principal, stack: deps.stack, conversationId, authenticatedSessionRef: sessionRef, transport: "web", audience: "web", expiresAt: expiry(), maintenance: false });
+    const close = (): void => { sessions.delete(sessionRef); unregister(); };
+    const context = await authority.authenticate(sessionRef);
+    if (!context) { close(); return null; }
+    return { sink, context, close };
+  };
+  const readingScope = async (): Promise<{ principal: string; connectionId: string; destinations: ObjectReference[] } | null> => {
     const principal = await activePrincipal();
     if (!principal) return null;
     const connection = (await setup.list(principal)).find(item => item.packageId === "balance" && item.state === "enabled");
@@ -165,22 +188,28 @@ export function createBalanceConnection(deps: BalanceConnectionDeps) {
     if (!prepared) return null;
     const configured = new Set((deps.desk()?.areas ?? []).map(area => area.id));
     const destinations = connection.readDestinations.filter(destination => destination.adapterId === "balance" && destination.objectType === "area" && configured.has(destination.canonicalId));
-    if (destinations.length === 0) return null;
-    const conversationId = await dayConversation(principal);
-    const sessionRef = randomUUID();
-    const sink: ReleaseSink = { kind: "web", conversationId };
-    const unregister = authority.registerReleaseSink(sink, () => Promise.resolve());
-    sessions.set(sessionRef, { principal, stack: deps.stack, conversationId, authenticatedSessionRef: sessionRef, transport: "web", audience: "web", expiresAt: expiry(), maintenance: false });
+    return destinations.length === 0 ? null : { principal, connectionId: connection.connectionId, destinations };
+  };
+  const openObservationScope = async (connectionId?: string) => {
+    if (deps.desk()?.enabled !== true) return null;
+    const scope = await readingScope();
+    if (!scope || connectionId !== undefined && scope.connectionId !== connectionId) return null;
+    const binding = balanceTaskObservationBinding();
+    const store = host.readObservations(registry, bindings);
+    const opened = await openSession(scope.principal, await dayConversation(scope.principal));
+    if (!opened) return null;
+    const source: QuerySource = { adapterId: "balance", connectionId: scope.connectionId, capabilityId: OBSERVATION, inputSchemaRef: binding.inputSchemaRef, destinations: scope.destinations, input: {} };
+    return { opened, source, store };
+  };
+  const observationProjection = async (refresh: boolean): Promise<BalanceDayProjection | null> => {
+    const observationScope = await openObservationScope();
+    if (!observationScope) return null;
+    const { opened, source, store } = observationScope;
     try {
-      const context = await authority.authenticate(sessionRef);
-      if (!context) return null;
-      const binding = balanceTaskObservationBinding();
-      const source: QuerySource = { adapterId: "balance", connectionId: connection.connectionId, capabilityId: OBSERVATION, inputSchemaRef: binding.inputSchemaRef, destinations, input: {} };
-      const store = host.readObservations(registry, bindings);
       const reader = createBalanceDayReader({
-        check: mode => store.check(context, source, sink, mode),
+        check: mode => store.check(opened.context, source, opened.sink, mode),
         async views() {
-          const released = await store.read(context, source, sink);
+          const released = await store.read(opened.context, source, opened.sink);
           return released.kind === "released" ? releasedObservationViews(released.value) : null;
         },
       });
@@ -189,12 +218,42 @@ export function createBalanceConnection(deps: BalanceConnectionDeps) {
       process.stderr.write(`[desk-balance-observation] ${error instanceof Error ? error.message : "failed"}\n`);
       return null;
     } finally {
-      sessions.delete(sessionRef);
-      unregister();
+      opened.close();
+    }
+  };
+  const attention = async (): Promise<AdapterAttentionSession | null> => {
+    if (deps.desk()?.enabled !== true) return null;
+    try {
+      const observationScope = await openObservationScope();
+      if (!observationScope) return null;
+      const { opened, source, store } = observationScope;
+      return { feature: { enabled: true, store, bindings: readBindings, context: opened.context, sink: opened.sink, sources: [source], ownerKinds: new Set([STUDIO_OWNER_KIND]) }, close: opened.close };
+    } catch (error) {
+      process.stderr.write(`[desk-balance-attention] ${error instanceof Error ? error.message : "failed"}\n`);
+      return null;
+    }
+  };
+  const admit = async (request: AdapterCapabilityRequest): Promise<AdapterCapabilityAdmission> => {
+    const denied: AdapterCapabilityAdmission = { kind: "denied", reason: "The current host authority does not permit this change." };
+    if (deps.desk()?.enabled !== true || request.adapterId !== "balance") return denied;
+    try {
+      const observationScope = await openObservationScope(request.connectionId);
+      if (!observationScope) return denied;
+      const { opened } = observationScope;
+      try {
+        return (await authority.admitRowCapability(opened.context, request)).kind === "allowed" ? { kind: "allowed" } : denied;
+      } finally {
+        opened.close();
+      }
+    } catch (error) {
+      process.stderr.write(`[desk-balance-admit] ${error instanceof Error ? error.message : "failed"}\n`);
+      return denied;
     }
   };
   return {
     setup,
+    attention,
+    admit,
     day: { projection: (refresh = false) => observationProjection(refresh) },
     read(principal: string, request: BalanceBrowserRead, signal?: AbortSignal) {
       const prior = reads.get(request.conversationId)?.then(() => undefined, () => undefined) ?? Promise.resolve();
