@@ -31,6 +31,14 @@ const identity = {
 };
 export interface Identity { protocol: typeof DESK_UI_PROTOCOL; version: typeof DESK_UI_WIRE_VERSION; instance: string; adapterId: string; connectionId: string; generationId: string; releaseDigest: string }
 
+export function identityOf(entry: Pick<Identity, "adapterId" | "connectionId" | "generationId" | "releaseDigest">, instance: string): Identity {
+  return { protocol: DESK_UI_PROTOCOL, version: DESK_UI_WIRE_VERSION, instance, adapterId: entry.adapterId, connectionId: entry.connectionId, generationId: entry.generationId, releaseDigest: entry.releaseDigest };
+}
+
+export function sameIdentity(a: Identity, b: Identity): boolean {
+  return a.instance === b.instance && a.adapterId === b.adapterId && a.connectionId === b.connectionId && a.generationId === b.generationId && a.releaseDigest === b.releaseDigest;
+}
+
 const message = <T extends string, B extends z.ZodType>(type: T, body: B) => z.object({ ...identity, type: z.literal(type), body }).strict();
 
 const editChange = z.discriminatedUnion("kind", [
@@ -83,6 +91,10 @@ export function plainJson(value: unknown, depth = 0): boolean {
   return Object.keys(value).every(key => key !== "__proto__" && plainJson((value as Record<string, unknown>)[key], depth + 1));
 }
 
+export function withinWireBounds(value: unknown): boolean {
+  return plainJson(value) && byteLength(JSON.stringify(value)) <= DESK_UI_MAX_MESSAGE_BYTES;
+}
+
 export class InboundGate {
   private lastSeq = 0;
   private ready = false;
@@ -97,13 +109,12 @@ export class InboundGate {
   }
 
   private check(raw: unknown): Verdict {
-    if (!plainJson(raw)) return { ok: false, violation: "not_plain_json" };
-    if (byteLength(JSON.stringify(raw)) > DESK_UI_MAX_MESSAGE_BYTES) return { ok: false, violation: "oversized" };
+    if (!withinWireBounds(raw)) return { ok: false, violation: plainJson(raw) ? "oversized" : "not_plain_json" };
     const parsed = UiMessageSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, violation: "schema" };
     const m = parsed.data;
     const e = this.expected;
-    if (m.instance !== e.instance || m.adapterId !== e.adapterId || m.connectionId !== e.connectionId || m.generationId !== e.generationId || m.releaseDigest !== e.releaseDigest) return { ok: false, violation: "identity_mismatch" };
+    if (!sameIdentity(m, e)) return { ok: false, violation: "identity_mismatch" };
     if (m.seq <= this.lastSeq) return { ok: false, violation: "replayed_or_out_of_order" };
     this.lastSeq = m.seq;
     if (m.type === "ui:ready") {

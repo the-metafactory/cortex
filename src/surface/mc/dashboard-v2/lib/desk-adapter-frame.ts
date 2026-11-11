@@ -1,5 +1,5 @@
 import { DESK_ADAPTER_FRAMES_PATH, FrameOpenReplySchema, FrameReplySchema, frameEntryUrl } from "../../desk/adapter-frame-contract";
-import { DESK_UI_HANDSHAKE_MS, DESK_UI_MAX_MESSAGE_BYTES, DESK_UI_PROTOCOL, DESK_UI_WIRE_VERSION, HostMessageSchema, InboundGate, InitSchema, newInstance, plainJson, type HostMessage, type Identity, type UiMessage } from "../../desk/adapter-frame-protocol";
+import { DESK_UI_HANDSHAKE_MS, DESK_UI_MAX_MESSAGE_BYTES, DESK_UI_WIRE_VERSION, HostMessageSchema, InboundGate, InitSchema, identityOf, newInstance, sameIdentity, withinWireBounds, type HostMessage, type Identity, type UiMessage } from "../../desk/adapter-frame-protocol";
 
 export type FrameNavigation = Extract<UiMessage, { type: "ui:navigate" }>["body"]["target"];
 export interface FrameEvents {
@@ -11,6 +11,21 @@ export interface FrameEvents {
 const RELAY = `let transferred=false;addEventListener('message',event=>{if(transferred||event.source!==parent||event.ports.length!==1||event.data?.type!=='host:init')return;const frame=document.querySelector('iframe');if(!frame?.contentWindow)return;transferred=true;frame.contentWindow.postMessage(event.data,'*',[event.ports[0]]);});`;
 const htmlAttribute = (value: string): string => value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;");
 export const frameWrapper = (entry: string): string => `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="frame-src ${htmlAttribute(entry)}; base-uri 'none'; object-src 'none'"></head><body style="margin:0"><script>${RELAY}</script></body></html>`;
+
+const FRAME_STYLE = "width:100%;height:240px;border:0";
+
+function createSandboxedChild(doc: Document, url: string, onLoad: () => void): HTMLIFrameElement | undefined {
+  const frame = doc.createElement("iframe");
+  if (!frame.sandbox.supports("allow-scripts")) return undefined;
+  frame.setAttribute("sandbox", "allow-scripts");
+  frame.setAttribute("allow", "camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; usb 'none'; clipboard-read 'none'; clipboard-write 'none'");
+  frame.referrerPolicy = "no-referrer";
+  frame.title = "Adapter view";
+  frame.style.cssText = FRAME_STYLE;
+  frame.addEventListener("load", onLoad);
+  frame.src = url;
+  return frame;
+}
 
 export async function frameRequest(path: string, signal: AbortSignal, body?: unknown, method = body === undefined ? "GET" : "POST"): Promise<unknown> {
   const response = await fetch(path, { method, credentials: "same-origin", redirect: "error", cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]), ...(body === undefined ? {} : { headers: { "content-type": "application/json", "x-desk-ui-protocol": DESK_UI_WIRE_VERSION }, body: JSON.stringify(body) }) });
@@ -46,9 +61,9 @@ export function mountAdapterFrame(container: HTMLElement, mountId: string, event
     if (reason !== "unmounted") events.state("unavailable");
   };
   const post = (raw: HostMessage): void => {
-    if (closed || !identity || !plainJson(raw) || new TextEncoder().encode(JSON.stringify(raw)).length > DESK_UI_MAX_MESSAGE_BYTES) throw new Error("invalid_host_message");
+    if (closed || !identity || !withinWireBounds(raw)) throw new Error("invalid_host_message");
     const message = HostMessageSchema.parse(raw);
-    if (message.instance !== instance || message.adapterId !== identity.adapterId || message.connectionId !== identity.connectionId || message.generationId !== identity.generationId || message.releaseDigest !== identity.releaseDigest || message.seq <= hostSeq) throw new Error("invalid_host_identity");
+    if (!sameIdentity(message, identity) || message.seq <= hostSeq) throw new Error("invalid_host_identity");
     hostSeq = message.seq;
     channel?.port1.postMessage(message);
   };
@@ -85,7 +100,7 @@ export function mountAdapterFrame(container: HTMLElement, mountId: string, event
     await checked.body?.cancel();
     if (!checked.ok || checked.redirected || !checked.headers.get("content-type")?.startsWith("text/html") || !csp.includes("sandbox allow-scripts") || !csp.includes("connect-src 'none'") || !csp.includes("worker-src 'none'")) throw new Error("unsafe_entry");
     if (closed) return;
-    identity = { protocol: DESK_UI_PROTOCOL, version: DESK_UI_WIRE_VERSION, instance, adapterId: entry.adapterId, connectionId: entry.connectionId, generationId: entry.generationId, releaseDigest: entry.releaseDigest };
+    identity = identityOf(entry, instance);
     const gate = new InboundGate(identity, opened.mount);
     channel = new MessageChannel();
     channel.port1.onmessageerror = () => { close("protocol_violation"); };
@@ -98,36 +113,31 @@ export function mountAdapterFrame(container: HTMLElement, mountId: string, event
       enqueue(async () => { await exchange(message); if (message.type === "ui:ready" && !closed) pollLater(); });
     };
     channel.port1.start();
-    wrapper = document.createElement("iframe");
-    wrapper.title = "Desk view host";
-    wrapper.hidden = true;
-    wrapper.style.cssText = "width:100%;height:240px;border:0";
+    let loaded = false;
+    const onFrameLoad = (): void => {
+      if (closed) return;
+      if (loaded) { close("navigation"); return; }
+      loaded = true;
+      if (!frame?.contentWindow || !wrapper?.contentWindow || !identity || !channel) { close("protocol_violation"); return; }
+      wrapper.contentWindow.postMessage(InitSchema.parse({ ...identity, seq: 1, type: "host:init", body: { mount: opened.mount } }), location.origin, [channel.port2]);
+    };
     let wrapperLoaded = false;
-    wrapper.addEventListener("load", () => {
+    const onWrapperLoad = (): void => {
       if (closed) return;
       if (wrapperLoaded) { close("navigation"); return; }
       wrapperLoaded = true;
       const doc = wrapper?.contentDocument;
       if (!doc) { close("protocol_violation"); return; }
       doc.addEventListener("securitypolicyviolation", () => { close("navigation"); });
-      frame = doc.createElement("iframe");
-      if (!frame.sandbox.supports("allow-scripts")) { close("protocol_violation"); return; }
-      frame.setAttribute("sandbox", "allow-scripts");
-      frame.setAttribute("allow", "camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; usb 'none'; clipboard-read 'none'; clipboard-write 'none'");
-      frame.referrerPolicy = "no-referrer";
-      frame.title = "Adapter view";
-      frame.style.cssText = "width:100%;height:240px;border:0";
-      let loaded = false;
-      frame.addEventListener("load", () => {
-        if (closed) return;
-        if (loaded) { close("navigation"); return; }
-        loaded = true;
-        if (!frame?.contentWindow || !wrapper?.contentWindow || !identity || !channel) { close("protocol_violation"); return; }
-        wrapper.contentWindow.postMessage(InitSchema.parse({ ...identity, seq: 1, type: "host:init", body: { mount: opened.mount } }), location.origin, [channel.port2]);
-      });
-      frame.src = url;
+      frame = createSandboxedChild(doc, url, onFrameLoad);
+      if (!frame) { close("protocol_violation"); return; }
       doc.body.append(frame);
-    });
+    };
+    wrapper = document.createElement("iframe");
+    wrapper.title = "Desk view host";
+    wrapper.hidden = true;
+    wrapper.style.cssText = FRAME_STYLE;
+    wrapper.addEventListener("load", onWrapperLoad);
     wrapper.srcdoc = frameWrapper(url);
     timer = setTimeout(() => { close("protocol_violation"); }, DESK_UI_HANDSHAKE_MS);
     container.append(wrapper);

@@ -4,7 +4,7 @@ import { DraftingBindings } from "../../../../../conversations/domain-adapters/d
 import { balanceBinding, balanceResponse, draftingRegistry, draftingState } from "../../../../../conversations/domain-adapters/drafting-fixtures";
 import { authorityRig } from "../../../../../conversations/authority-fixtures";
 import { AdapterFrameHost, type FrameBinding } from "../../adapter-frame-host";
-import { newInstance, type Identity } from "../../adapter-frame-protocol";
+import { identityOf, newInstance } from "../../adapter-frame-protocol";
 import { ASSET_OWNER, inlineUiFixture, openAssetRig } from "./adapter-asset-fixtures";
 
 export async function openFrameRig(options: { audience?: "local" | "cloud"; script?: string; editor?: boolean } = {}) {
@@ -51,7 +51,7 @@ export async function openFrameRig(options: { audience?: "local" | "cloud"; scri
   const registered = service.register(binding);
   const instance = newInstance();
   const opened = await service.open(ASSET_OWNER, audience, registered.mountId, instance);
-  const identity: Identity = { protocol: "desk-ui", version: "1.0.0", instance, adapterId: opened.entry.adapterId, connectionId: opened.entry.connectionId, generationId: opened.entry.generationId, releaseDigest: opened.entry.releaseDigest };
+  const identity = identityOf(opened.entry, instance);
   return {
     assets, authority, service, binding, registered, opened, identity, state, releases, draftState, draftEditor,
     get reads() { return reads; },

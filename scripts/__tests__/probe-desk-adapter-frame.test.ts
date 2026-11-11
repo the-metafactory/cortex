@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { serveFrameProbe } from "../desk-adapter-frame/server";
 import { FRAME_ATTACKS } from "../../src/surface/mc/desk/__tests__/fixtures/adapter-frame-ui";
 import { DESK_ADAPTER_FRAMES_PATH, FrameOpenReplySchema, shellFrameCsp } from "../../src/surface/mc/desk/adapter-frame-contract";
-import { newInstance } from "../../src/surface/mc/desk/adapter-frame-protocol";
+import { identityOf, newInstance } from "../../src/surface/mc/desk/adapter-frame-protocol";
 
 test("actual shell fixture and verified hostile assets build and serve on authenticated routes", async () => {
   for (const mode of ["local", "hosted"] as const) {
@@ -23,7 +23,7 @@ test("actual shell fixture and verified hostile assets build and serve on authen
       expect(asset.status).toBe(200);
       expect(asset.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
       expect(await asset.text()).toContain("FRAME_PROBE:");
-      const identity = { protocol: "desk-ui", version: "1.0.0", instance, adapterId: view.entry.adapterId, connectionId: view.entry.connectionId, generationId: view.entry.generationId, releaseDigest: view.entry.releaseDigest };
+      const identity = identityOf(view.entry, instance);
       const instanceUrl = new URL(`${DESK_ADAPTER_FRAMES_PATH}/${instance}`, fixture.server.url);
       const reply = await fetch(instanceUrl, { method: "POST", headers, body: JSON.stringify({ ...identity, seq: 1, type: "ui:ready", body: { mount: view.mount } }) });
       expect(reply.status).toBe(200);

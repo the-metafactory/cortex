@@ -5,7 +5,7 @@ import type { DraftService, Lane } from "../../../conversations/domain-adapters/
 import type { Json } from "../../../conversations/domain-adapters/operations/types";
 import type { AdapterAssetService } from "./adapter-assets";
 import { FrameEntrySchema, type FrameEntry } from "./adapter-frame-contract";
-import { DESK_UI_PROTOCOL, DESK_UI_WIRE_VERSION, DESK_UI_HANDSHAKE_MS, DESK_UI_MAX_MESSAGE_BYTES, HostMessageSchema, InboundGate, MountSchema, newInstance, plainJson, type HostMessage, type Identity, type Mount, type UiMessage } from "./adapter-frame-protocol";
+import { DESK_UI_WIRE_VERSION, DESK_UI_HANDSHAKE_MS, HostMessageSchema, InboundGate, MountSchema, identityOf, newInstance, plainJson, withinWireBounds, type HostMessage, type Identity, type Mount, type UiMessage } from "./adapter-frame-protocol";
 
 export interface FrameBinding {
   principal: string;
@@ -78,7 +78,7 @@ export class AdapterFrameHost {
     this.used.set(instance, now + FRAME_REPLAY_RETENTION_MS);
     const entry = await this.current(binding, audience);
     if (this.mounts.get(mountId) !== binding || this.now() > now + DESK_UI_HANDSHAKE_MS) throw new FrameUnavailable();
-    const identity: Identity = { protocol: DESK_UI_PROTOCOL, version: DESK_UI_WIRE_VERSION, instance, adapterId: entry.adapterId, connectionId: entry.connectionId, generationId: entry.generationId, releaseDigest: entry.releaseDigest };
+    const identity = identityOf(entry, instance);
     this.sessions.set(instance, { binding, entry, identity, gate: new InboundGate(identity, binding.mount), seq: 1, ready: false, expires: this.now() + DESK_UI_HANDSHAKE_MS, busy: false });
     return { entry, mount: binding.mount };
   }
@@ -110,8 +110,16 @@ export class AdapterFrameHost {
 
   private message(session: Session, type: HostMessage["type"], body: unknown): HostMessage {
     const message = HostMessageSchema.parse({ ...session.identity, seq: ++session.seq, type, body });
-    if (!plainJson(message) || new TextEncoder().encode(JSON.stringify(message)).length > DESK_UI_MAX_MESSAGE_BYTES) throw new FrameUnavailable();
+    if (!withinWireBounds(message)) throw new FrameUnavailable();
     return message;
+  }
+
+  private async readBoundDraft(session: Session) {
+    const editor = session.binding.editor;
+    if (!editor) throw new FrameUnavailable();
+    const view = await editor.service.read(editor.draftId, session.binding.audience);
+    if (view?.draft.adapterId !== session.entry.adapterId || view.draft.connectionId !== session.entry.connectionId || view.withheld.length > 0 || view.draft.conversationId !== session.binding.sink.conversationId) throw new FrameUnavailable();
+    return view;
   }
 
   private async projection(session: Session): Promise<HostMessage[]> {
@@ -127,8 +135,7 @@ export class AdapterFrameHost {
     const editor = session.binding.editor;
     if (session.binding.mount.view === "editor" && editor) {
       const draft = await this.authorized(session, async () => {
-        const view = await editor.service.read(editor.draftId, session.binding.audience);
-        if (view?.draft.adapterId !== session.entry.adapterId || view.draft.connectionId !== session.entry.connectionId || view.withheld.length > 0 || view.draft.conversationId !== session.binding.sink.conversationId) throw new FrameUnavailable();
+        const view = await this.readBoundDraft(session);
         const values = Object.fromEntries(Object.entries(view.draft.fields).filter(([, field]) => field.presence !== "absent").map(([pointer, field]) => [pointer, field.presence === "null" ? null : field.value ?? null]));
         return { draftId: editor.draftId, revision: view.draft.revision, values, blocking: view.blocking.map(item => ({ pointer: item.pointer, code: item.code })) };
       });
@@ -148,8 +155,7 @@ export class AdapterFrameHost {
     }
     const editor = session.binding.editor;
     if (m.body.draftId !== editor?.draftId || await editor.hasOperation()) throw new FrameUnavailable();
-    const view = await editor.service.read(editor.draftId, session.binding.audience);
-    if (!view || view.withheld.length > 0 || view.draft.connectionId !== session.entry.connectionId || view.draft.adapterId !== session.entry.adapterId) throw new FrameUnavailable();
+    const view = await this.readBoundDraft(session);
     const revision = m.type === "draft:change" ? m.body.baseRevision : m.body.revision;
     if (revision !== view.draft.revision) return [this.message(session, "host:reply", { replyTo: m.seq, outcome: "stale" })];
     if (m.type === "draft:change") {

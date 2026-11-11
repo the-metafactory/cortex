@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { DESK_UI_MAX_MESSAGE_BYTES, InboundGate, type Identity } from "../adapter-frame-protocol";
+import { DESK_UI_MAX_MESSAGE_BYTES, InboundGate, identityOf } from "../adapter-frame-protocol";
 import { FrameEntrySchema, frameEntryUrl } from "../adapter-frame-contract";
 import { ASSET_OWNER } from "./fixtures/adapter-asset-fixtures";
 import { openFrameRig } from "./fixtures/adapter-frame-fixtures";
 
-const identity: Identity = { protocol: "desk-ui", version: "1.0.0", instance: "a".repeat(32), adapterId: "balance", connectionId: "connection-example", generationId: "g-1", releaseDigest: "b".repeat(64) };
+const identity = identityOf({ adapterId: "balance", connectionId: "connection-example", generationId: "g-1", releaseDigest: "b".repeat(64) }, "a".repeat(32));
 const mount = { objectType: "task", view: "result" as const };
 const ready = { ...identity, seq: 1, type: "ui:ready", body: { mount } };
 const resize = { ...identity, seq: 2, type: "ui:resize", body: { height: 240 } };
@@ -177,6 +177,29 @@ describe("current-policy frame host with real durable state", () => {
       rig.authority.policy.releaseAllowed = false;
       await expect(exchange(5, "action:propose", { draftId: draft.body.draftId, revision: updated.body.revision })).rejects.toThrow();
     } finally { await rig.close(); }
+  });
+  test("foreign-conversation drafts cannot be projected, edited or proposed", async () => {
+    for (const type of ["ui:ready", "draft:change", "action:propose"] as const) {
+      const rig = await openFrameRig({ editor: true });
+      try {
+        const editor = rig.binding.editor!;
+        const original = await editor.service.read(editor.draftId);
+        if (!original) throw new Error("Missing synthetic draft");
+        if (type !== "ui:ready") await rig.ready();
+        const read = editor.service.read.bind(editor.service);
+        editor.service.read = async (...args) => {
+          const view = await read(...args);
+          return view ? { ...view, draft: { ...view.draft, conversationId: "foreign-conversation" } } : view;
+        };
+        const body = type === "ui:ready" ? { mount: rig.binding.mount } : type === "draft:change"
+          ? { draftId: editor.draftId, baseRevision: original.draft.revision, changes: [{ pointer: "/title", change: { kind: "set", value: "Foreign edit" } }] }
+          : { draftId: editor.draftId, revision: original.draft.revision };
+        await expect(rig.service.exchange(ASSET_OWNER, "local", rig.identity.instance, { ...rig.identity, seq: type === "ui:ready" ? 1 : 2, type, body })).rejects.toThrow();
+        expect((await read(editor.draftId))?.draft).toEqual(original.draft);
+        expect((await rig.authority.service.inspectHostRecords()).confirmations).toHaveLength(0);
+        expect(rig.authority.calls.dispatch + rig.authority.calls.cancel).toBe(0);
+      } finally { await rig.close(); }
+    }
   });
   test("releases only after ready and rejects instance reuse, foreign principals and cached entry URLs", async () => {
     const rig = await openFrameRig();
