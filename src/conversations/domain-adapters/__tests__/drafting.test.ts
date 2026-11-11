@@ -52,6 +52,13 @@ describe("drafting binding 1.0.0", () => {
 });
 
 describe("durable drafts", () => {
+  test("an invalid timezone fails service configuration before model generation", async () => {
+    const r = await rig();
+    const host = r.host;
+    if (!host) throw new Error("Synthetic draft host missing");
+    expect(() => host.drafts({ registry: r.registry, bindings: r.bindings, sources: r.sources, policy: r.policy, model: r.model, timeZone: "Invalid/Nowhere" })).toThrow(RangeError);
+    expect(r.state.requests).toEqual([]);
+  });
   test("Make persists a typed suggested draft and reopens the same revision after a host restart", async () => {
     const r = await rig();
     const view = await draftOf(r);

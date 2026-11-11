@@ -1,0 +1,28 @@
+import type { ConversationHost } from "../../../conversations/host";
+import { balanceTaskApprovedSnapshot, balanceTaskReceiptId, parseBalanceTaskInput, type BalanceTaskCreateInput } from "../../../conversations/domain-adapters/balance/task-binding";
+import { balanceTaskDraftingBinding } from "../../../conversations/domain-adapters/drafting/balance";
+import { BALANCE_DESTINATIONS_CAPABILITY, balanceDraftDestinations, type BalanceDraftDestinations, type BalanceDraftReadSession } from "./balance-draft-destinations";
+import { ownerDraftEditor, type OwnerDraft, type OwnerDraftEntryOptions, type OwnerDraftSession, type OwnerDraftSetup } from "./owner-draft-entry";
+
+export interface BalanceDraftSession extends BalanceDraftReadSession, OwnerDraftSession {}
+export type BalanceDraftEntryOptions = OwnerDraftEntryOptions<BalanceDraftSession>;
+
+export type BalanceDraftSetup = OwnerDraftSetup<BalanceDraftSession>;
+
+export function deskBalanceDraftEditor(host: ConversationHost, deps: BalanceDraftSetup["deps"], options: BalanceDraftEntryOptions) {
+  const destinations = balanceDraftDestinations(options);
+  const balanceTaskDraft: OwnerDraft<BalanceTaskCreateInput, BalanceDraftDestinations> = {
+    adapterId: "balance",
+    capabilityId: "balance.task.create",
+    label: "Balance task",
+    binding: balanceTaskDraftingBinding,
+    resolveWith: BALANCE_DESTINATIONS_CAPABILITY,
+    unavailable: "A Balance area or project is unavailable or ambiguous; review the draft again.",
+    parse: parseBalanceTaskInput,
+    references: input => [input.area, ...input.project ? [input.project] : []],
+    inconsistency: async (input, conversationId, batch) => input.project && !await batch.inArea(conversationId, input.area, input.project) ? "The project is not open in the chosen area; review the draft again." : null,
+    snapshot: options => ({ ...balanceTaskApprovedSnapshot(options), destinations: [options.input.area] }),
+    requestId: balanceTaskReceiptId,
+  };
+  return ownerDraftEditor(host, deps, options, balanceTaskDraft, destinations);
+}

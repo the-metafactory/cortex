@@ -98,6 +98,7 @@ import { handleDeskBalanceSurfaces } from "./api/desk-balance-surfaces";
 import { handleDeskDrafts } from "./api/desk-drafts";
 import { DESK_DRAFTS_PATH } from "./desk/draft-editor-contract";
 import { deskGraphDraftEditor, type GraphDraftSetup } from "./desk/graph-draft-entry";
+import { deskBalanceDraftEditor, type BalanceDraftSetup } from "./desk/balance-draft-entry";
 import type { DeskDraftAccess } from "./desk/draft-editor";
 import type { GraphSurfaceAccess } from "./desk/graph-surfaces";
 import { GRAPH_SURFACES_PATH } from "./desk/graph-surface-schema";
@@ -226,6 +227,7 @@ export interface MissionControlViews {
   flowSurfaces?: FlowSurfaceAccess;
   drafts?: DeskDraftAccess;
   graphDrafts?: GraphDraftSetup;
+  balanceDrafts?: BalanceDraftSetup;
 }
 
 export interface StartServerOptions extends MissionControlViews {
@@ -244,12 +246,11 @@ export function startServer(
   db: Database,
   options: StartServerOptions = {}
 ): ServerContext {
-  if (options.drafts && options.graphDrafts) throw new Error("drafts and graphDrafts cannot both be configured");
-  if (options.graphDrafts) {
-    const { host, deps, options: graphOptions } = options.graphDrafts;
-    const editor = deskGraphDraftEditor(host, deps, graphOptions);
-    options = { ...options, drafts: () => editor };
-  }
+  if ([options.drafts, options.graphDrafts, options.balanceDrafts].filter(Boolean).length > 1) throw new Error("Configure only one of drafts, graphDrafts or balanceDrafts");
+  const editor = options.graphDrafts
+    ? deskGraphDraftEditor(options.graphDrafts.host, options.graphDrafts.deps, options.graphDrafts.options)
+    : options.balanceDrafts ? deskBalanceDraftEditor(options.balanceDrafts.host, options.balanceDrafts.deps, options.balanceDrafts.options) : undefined;
+  if (editor) options = { ...options, drafts: () => editor };
   const wsRegistry = new WsClientRegistry();
   const deskLedger = new HandledLedger();
   const deskClientMail = options.desk ? new ClientMailLog({ db, config: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, retentionDays: options.desk.mailLog?.retentionDays ?? DEFAULT_MAIL_LOG_RETENTION_DAYS }) : undefined;

@@ -68,6 +68,10 @@ export const PROBE_EXCLUSIONS: readonly DeskProbeExclusion[] = [
     reason: "needs a browser: it measures Balance controls in Playwright Chromium",
   },
   {
+    file: "probe-desk-balance-drafting.ts",
+    reason: "needs a browser: it verifies conversation-prefilled Balance drafts through the shared Playwright browser fixture",
+  },
+  {
     file: "probe-desk-balance-drag.ts",
     reason: "needs a browser: it verifies Balance dragging in Playwright Chromium",
   },
