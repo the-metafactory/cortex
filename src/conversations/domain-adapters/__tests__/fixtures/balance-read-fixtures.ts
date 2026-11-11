@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { STUDIO_OWNER_KIND } from "../../../../common/desk-owner";
 import { join } from "node:path";
 import type { Database } from "bun:sqlite";
 import { findNode, type AppState, type OutlineNode } from "../../../../balance";
@@ -7,6 +8,7 @@ export { leaf, savedNode } from "./balance-shared";
 import { authorityRig } from "../../../authority-fixtures";
 import { initDatabase } from "../../../../surface/mc/db/init";
 import { loadBalanceState, saveBalanceState } from "../../../../surface/mc/desk/balance-store";
+import { loadMeta, saveMeta } from "../../../../surface/mc/desk/balance-sync";
 import type { DeskArea } from "../../../../surface/mc/desk/types";
 import { objectRef } from "../../fixtures";
 import { DomainAdapterRegistry } from "../../registry";
@@ -24,11 +26,13 @@ import type { ObjectReference } from "../../types";
 import { createBalanceReadAdapter } from "../../balance/read";
 import { BALANCE_TASK_OBSERVATION_CAPABILITY_ID, createBalanceObservationAdapter } from "../../balance/observation";
 import { createBalanceDayReader, releasedObservationViews, type BalanceDayReader } from "../../../../surface/mc/desk/balance-day";
+import type { AdapterAttentionSession } from "../../../../surface/mc/desk/adapter-items";
 
 export const BALANCE_CONNECTION = "connection-example";
 export const LAB_AREA = objectRef("balance", "area", "area-example");
 export const HOME_AREA = objectRef("balance", "area", "area-home");
 export const LAB_TASK_IDS = ["task-wing", "task-done", "task-glue"] as const;
+export const OBSERVED_TASK_IDS = [...LAB_TASK_IDS, "task-studio"] as const;
 
 export function releasedObjects(value: Json | undefined): { ref: { canonicalId: string }; value: Record<string, unknown> }[] {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("released value is not an object");
@@ -49,6 +53,35 @@ export function balanceReadState(): AppState {
     },
     { id: "area:area-home", title: "Home", weight: 40, ordering: "parallel", children: [leaf("task-garden", "Water the garden", { dueDate: "2026-11-20" })] },
   ]);
+}
+
+export function seedStudioThread(db: Database, projectId = "studio-response:thread-1", slug = "thread-1"): void {
+  saveMeta(db, { ...loadMeta(db), studio: [{ namespace: "fixture", source: `id:${slug}`, slug, projectId, response: 0, pending: null }] });
+}
+
+export function planBalanceToday(db: Database, date: string, ids: readonly string[]): void {
+  const state = loadBalanceState(db);
+  if (!state) throw new Error("the Balance fixture store is missing");
+  state.dayState = { date, confirmed: [...ids], closed: false };
+  saveBalanceState(db, state);
+}
+
+export function seedBalanceObservationOverflow(rig: BalanceReadRig, openPerArea = 8): string[] {
+  const state = loadBalanceState(rig.db);
+  if (!state) throw new Error("balance state is missing");
+  const actionable: string[] = [];
+  state.outline.children = rig.areas.map(area => ({
+    id: `area:${area.id}`, title: area.label, weight: 50, ordering: "parallel", children: [
+      ...Array.from({ length: 12 }, (_, index) => leaf(`${area.id}-done-${index}`, `Completed ${area.label} ${index}`, { done: true })),
+      ...Array.from({ length: openPerArea }, (_, index) => {
+        const id = `${area.id}-open-${index}`;
+        actionable.push(id);
+        return leaf(id, `Actionable ${area.label} ${index}`);
+      }),
+    ],
+  }));
+  saveBalanceState(rig.db, state);
+  return actionable;
 }
 
 interface BalanceReadStepArgs { readonly capabilityId: string; readonly input: unknown; readonly destinations: readonly ObjectReference[]; readonly binding: ReadBinding }
@@ -74,6 +107,7 @@ export interface BalanceReadRig {
   views(history?: boolean): Promise<ObservationView[]>;
   day(refresh?: boolean): Promise<import("../../../../surface/mc/desk/balance-day").BalanceDayProjection | null>;
   reader(): BalanceDayReader;
+  attentionAccess(): Promise<AdapterAttentionSession | null>;
   unavailable(value: boolean): void;
   destinations(): Promise<QueryPage>;
   taskQuery(input?: unknown, destinations?: readonly ObjectReference[]): Promise<BalanceReadStep>;
@@ -86,6 +120,18 @@ export interface BalanceReadRig {
   close(): Promise<void>;
 }
 
+const tracked: BalanceReadRig[] = [];
+
+export async function openTrackedBalanceReadRig(): Promise<BalanceReadRig> {
+  const rig = await openBalanceReadRig();
+  tracked.push(rig);
+  return rig;
+}
+
+export async function closeTrackedBalanceReadRigs(): Promise<void> {
+  await Promise.all(tracked.splice(0).map(rig => rig.close()));
+}
+
 export async function openBalanceReadRig(): Promise<BalanceReadRig> {
   const areas: DeskArea[] = [{ id: "area-example", label: "Lab", color: "#2563eb" }, { id: "area-home", label: "Home", color: "#059669" }];
   const allowed: ObjectReference[] = [LAB_AREA];
@@ -94,8 +140,9 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
   const readState = (): AppState | null => db ? loadBalanceState(db) : null;
   const observedState = (): AppState | null => reading ? readState() : null;
   const now = (): Date => new Date("2026-11-01T00:00:00.000Z");
-  const adapter = createBalanceReadAdapter({ connectionId: BALANCE_CONNECTION, state: readState, areas: () => areas, now });
-  const observation = createBalanceObservationAdapter({ connectionId: BALANCE_CONNECTION, state: observedState, areas: () => areas, now });
+  const draft = () => db ? loadMeta(db).draft : null;
+  const adapter = createBalanceReadAdapter({ connectionId: BALANCE_CONNECTION, state: readState, areas: () => areas, now, draft });
+  const observation = createBalanceObservationAdapter({ connectionId: BALANCE_CONNECTION, state: observedState, areas: () => areas, now, draft });
   const registry = new DomainAdapterRegistry();
   const registered = registry.register(observation.declaration, observation.bindings);
   if (!registered.ok) throw new Error(registered.error.code);
@@ -128,6 +175,10 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
     saveBalanceState(db, state);
   };
   const observationSource = (): QuerySource => ({ adapterId: "balance", connectionId: BALANCE_CONNECTION, capabilityId: BALANCE_TASK_OBSERVATION_CAPABILITY_ID, inputSchemaRef: observationBinding.inputSchemaRef, destinations: allowed.filter(destination => areas.some(area => area.id === destination.canonicalId)), input: {} });
+  const attention = (): AdapterAttentionSession | null => observationSource().destinations.length === 0 ? null : ({
+    feature: { enabled: true, store: rig.host.readObservations(registry, rig.bindings, time.clock), bindings: readBindings, context: rig.context, sink: rig.sink, sources: [observationSource()], ownerKinds: new Set([STUDIO_OWNER_KIND]) },
+    close: () => undefined,
+  });
   const observationReader = (): BalanceDayReader => createBalanceDayReader({
     check: mode => rig.host.readObservations(registry, rig.bindings, time.clock).check(rig.context, observationSource(), rig.sink, mode),
     async views() {
@@ -169,6 +220,7 @@ export async function openBalanceReadRig(): Promise<BalanceReadRig> {
       return await observationReader().projection(refresh);
     },
     reader: () => observationReader(),
+    attentionAccess: () => Promise.resolve(attention()),
     unavailable(value) { reading = !value; },
     async destinations() {
       const handler = adapter.bindings.handlers["balance.destinations"];

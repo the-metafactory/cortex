@@ -547,3 +547,26 @@ test("a new local restriction withholds previously read object evidence from a c
   await rig.reopen();
   await expectNoRelease(rig, reference);
 });
+
+test("a row capability is admitted only by current write authority, and a declaration alone grants nothing", async () => {
+  const rig = await authorityRig(); rigs.push(rig);
+  const destination = rig.approval.snapshot.destinations[0]!;
+  const request = { adapterId: rig.connection.adapterId, connectionId: rig.connection.connectionId, capabilityId: "balance.task.complete", destinations: [destination] };
+  expect(await rig.service.admitRowCapability(rig.context, request)).toMatchObject({ kind: "denied" });
+
+  const granted = { ...request, capabilityId: rig.connection.writeCapabilityIds[0]! };
+  expect(await rig.service.admitRowCapability(rig.context, granted)).toEqual({ kind: "allowed" });
+  expect((await rig.service.admitRowCapability(rig.context, { ...granted, adapterId: "synthetic-other" })).kind).toBe("denied");
+  expect((await rig.service.admitRowCapability(rig.context, { ...granted, connectionId: "synthetic-other-connection" })).kind).toBe("denied");
+  expect((await rig.service.admitRowCapability(rig.context, { ...granted, destinations: [{ ...destination, canonicalId: "area-outside-scope" }] })).kind).toBe("denied");
+  expect((await rig.service.admitRowCapability(rig.context, { ...granted, destinations: [] })).kind).toBe("denied");
+  expect((await rig.service.admitRowCapability(rig.context, { ...granted, extra: true })).kind).toBe("denied");
+
+  rig.policy.writesAllowed = false;
+  expect((await rig.service.admitRowCapability(rig.context, granted)).kind).toBe("denied");
+  rig.policy.writesAllowed = true;
+  expect((await rig.service.admitRowCapability(rig.context, granted)).kind).toBe("allowed");
+
+  await rig.revokeConnection();
+  expect((await rig.service.admitRowCapability(rig.context, granted)).kind).toBe("denied");
+});

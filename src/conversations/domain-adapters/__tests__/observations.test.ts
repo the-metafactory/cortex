@@ -20,6 +20,64 @@ const schedule = (item: Awaited<ReturnType<typeof open>>, mode: "poll" | "subscr
 };
 async function flush() { for (let i = 0; i < 20; i++) await Bun.sleep(1); }
 
+function endlessPoll(item: Awaited<ReturnType<typeof open>>, title = "Page", cursor = (count: number) => `page-${count}`) {
+  let calls = 0;
+  item.hooks.fetch = () => {
+    const id = String(calls++);
+    return Promise.resolve({ ...syntheticObservation(`task-${id}`, title, "1", `evidence-${id}`), continuation: cursor(calls) });
+  };
+  return () => calls;
+}
+
+test("poll pages publish together and keep continuations out of released observations", async () => {
+  const item = await open();
+  await check(item);
+  const next = Promise.withResolvers<ObservationBatch>();
+  item.hooks.fetch = request => request.continuation === undefined
+    ? Promise.resolve({ ...syntheticObservation("task-example", "Updated", "2", "updated"), continuation: "next-page" })
+    : next.promise;
+  const pending = check(item);
+  await flush();
+  expect((await observationViews(item))[0]?.value).toMatchObject({ title: "Synthetic task" });
+  next.resolve(syntheticObservation("task-second", "Second", "1", "second"));
+  expect(await pending).toMatchObject({ status: "ok", changed: 2 });
+  expect((await observationViews(item)).map(view => view.value)).toMatchObject([{ title: "Updated" }, { title: "Second" }]);
+  expect(JSON.stringify(item.rig.calls.sends)).not.toContain("next-page");
+});
+
+test("a failed later poll page preserves the previous projection and reports a gap", async () => {
+  const item = await open();
+  await check(item);
+  item.hooks.fetch = request => request.continuation === undefined
+    ? Promise.resolve({ ...syntheticObservation("task-example", "Uncommitted", "2", "updated"), continuation: "next-page" })
+    : Promise.reject(new Error("Synthetic page failure"));
+  expect((await check(item)).status).toBe("unavailable");
+  expect(await observationViews(item)).toMatchObject([{ value: { title: "Synthetic task" }, status: "stale" }]);
+  expect(await item.store.needsResync(item.rig.context, item.source, item.rig.sink)).toBe(true);
+});
+
+test.each([
+  ["repeated continuations", "Page", () => "repeated"],
+  ["the total byte budget", "x".repeat(600_000), (count: number) => `page-${count}`],
+] as const)("%s prevents partial poll updates", async (_label, title, cursor) => {
+  const item = await open();
+  const calls = endlessPoll(item, title, cursor);
+  expect((await check(item)).status).toBe("unavailable");
+  expect(calls()).toBe(2);
+  expect(await observationViews(item)).toEqual([]);
+});
+
+test("poll pagination stops at its page budget and reports retained objects as stale", async () => {
+  const item = await open();
+  const calls = endlessPoll(item);
+  expect((await check(item)).status).toBe("ok");
+  expect(calls()).toBe(50);
+  const views = await observationViews(item);
+  expect(views).toHaveLength(50);
+  expect(views.every(view => view.status === "stale")).toBe(true);
+  expect(await item.store.needsResync(item.rig.context, item.source, item.rig.sink)).toBe(true);
+});
+
 test("push and poll deduplicate one current object and evidence across durable reopen", async () => {
   const item = await open();
   expect((await check(item)).changed).toBe(1);
@@ -343,11 +401,16 @@ test("identical titles on two connections remain distinct through the same host 
   expect(await item.store.read(item.rig.context, source, item.rig.sink)).toMatchObject({ kind: "released", value: { objects: [{ ref: { connectionId }, value: { title: "Synthetic task" } }] } });
 });
 
-test("current policy changes during connector work suppress late persistence and release", async () => {
+test.each(["first", "later"])("current policy changes during the %s page suppress late persistence and release", async page => {
   const item = await open();
   const entered = Promise.withResolvers<undefined>();
   const pending = Promise.withResolvers<unknown>();
-  item.hooks.fetch = () => { entered.resolve(undefined); return pending.promise; };
+  let calls = 0;
+  item.hooks.fetch = () => {
+    if (++calls === 1 && page === "later") return Promise.resolve({ ...syntheticObservation("task-first", "First", "1", "first"), continuation: "second" });
+    entered.resolve(undefined);
+    return pending.promise;
+  };
   const checking = check(item);
   await entered.promise;
   item.rig.policy.releaseAllowed = false;

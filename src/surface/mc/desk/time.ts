@@ -10,7 +10,4 @@ export function startOfDay(now: number): number {
   return d.getTime();
 }
 
-export const localDay = (now: number): string => {
-  const d = new Date(now);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
+export { localDay } from "../../../common/local-day";

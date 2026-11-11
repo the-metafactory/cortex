@@ -1,4 +1,6 @@
-import { balanceDestinations, type AppState, type DestinationArea, type OutlineNode } from "../../../balance";
+import { balanceDestinations, rankAll, todayPlanIds, type AppState, type DestinationArea, type OutlineNode, type TodayPlanDraft } from "../../../balance";
+import { localDay } from "../../../common/local-day";
+import { STUDIO_OWNER_KIND } from "../../../common/desk-owner";
 import { authorityHash } from "../../authority-records";
 import type { Json } from "../operations/types";
 import type { QueryFetchRequest, QueryPage } from "../reads/query-types";
@@ -37,7 +39,10 @@ const TASK_VALUE_SCHEMA = objectSchema({
   note: { type: "string" },
   effort: { type: "number" },
   summary: { type: "string" },
-}, ["title", "status", "dueDate", "area", "project", "summary"]);
+  why: { type: ["string", "null"] },
+  badge: { type: ["string", "null"] },
+  owner: { type: ["string", "null"] },
+}, ["title", "status", "dueDate", "area", "project", "summary", "why", "badge", "owner"]);
 const DESTINATIONS_INPUT_SCHEMA = objectSchema({}, []);
 const DESTINATIONS_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { anyOf: [AREA_VALUE_SCHEMA, PROJECT_VALUE_SCHEMA] } } }, ["items"]);
 const TASK_QUERY_INPUT_SCHEMA = objectSchema({ area: referenceSchema("area"), query: { type: "string", maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: MAX_PAGE_ITEMS }, offset: { type: "integer", minimum: 0 } }, ["area"]);
@@ -118,6 +123,7 @@ export interface BalanceReadSource {
   readonly state: () => AppState | null;
   readonly areas: () => readonly DestinationArea[];
   readonly now?: () => Date;
+  readonly draft?: () => TodayPlanDraft | null;
 }
 
 export interface BalanceReadAdapter {
@@ -128,7 +134,11 @@ export interface BalanceReadAdapter {
   readonly destinations: () => QueryPage;
 }
 
-interface LocatedTask { readonly node: OutlineNode; readonly area: DestinationArea; readonly project: string | null }
+interface LocatedTask { readonly node: OutlineNode; readonly area: DestinationArea; readonly project: string | null; readonly owner: string | null }
+interface TaskAttention { readonly planned: ReadonlySet<string>; readonly traces: ReadonlyMap<string, string> }
+const IN_TODAY = "In today";
+const sentence = (text: string): string => `${text.charAt(0).toLocaleUpperCase()}${text.slice(1)}${/[.!?]$/.test(text) ? "" : "."}`;
+const studioMarker = (id: string): boolean => id.startsWith("studio-response:") || id.startsWith("studio-thread:");
 interface HandlerContext { readonly destinations: readonly ObjectReference[]; readonly cursor?: string; readonly limit: number }
 interface PageEntry { readonly ref: ObjectReference; readonly schemaRef: SchemaRef; readonly destination: ObjectReference; readonly evidenceId: string; readonly value: Json }
 type BalanceReferenceType = "area" | "project" | "task";
@@ -191,25 +201,39 @@ function parseRefRead(input: unknown): ObjectReference {
   return parseReference(input.ref);
 }
 
-function locateTasks(state: AppState, areas: readonly DestinationArea[]): LocatedTask[] {
+function locateTasks(state: AppState, areas: readonly DestinationArea[], includeStudio = false): LocatedTask[] {
   const found: LocatedTask[] = [];
-  const visit = (node: OutlineNode, area: DestinationArea, project: string | null): void => {
-    if (node.id.startsWith("studio-response:")) return;
+  const visit = (node: OutlineNode, area: DestinationArea, project: string | null, studio: boolean): void => {
+    if (!includeStudio && studioMarker(node.id)) return;
+    const owner = studio || studioMarker(node.id) ? STUDIO_OWNER_KIND : null;
     if (node.children.length === 0) {
-      if (node.effort !== undefined) found.push({ node, area, project });
+      if (node.effort !== undefined) found.push({ node, area, project, owner });
       return;
     }
-    for (const child of node.children) visit(child, area, node.id);
+    for (const child of node.children) visit(child, area, node.id, owner !== null);
   };
   for (const area of areas) {
     const root = state.outline.children.find(node => node.id === `area:${area.id}`);
     if (!root) continue;
-    for (const child of root.children) visit(child, area, null);
+    for (const child of root.children) visit(child, area, null, false);
   }
   return found;
 }
 
-function taskValue(task: LocatedTask, connectionId: string): Json {
+function attentionOf(state: AppState, at: Date, draft?: TodayPlanDraft | null): TaskAttention {
+  const today = localDay(at.getTime());
+  const planned = new Set(todayPlanIds(state, today, draft));
+  return { planned, traces: new Map(rankAll(state, today).map(item => [item.task.id, item.trace])) };
+}
+
+function whyOf(task: LocatedTask, attention: TaskAttention): string | null {
+  if (task.node.done === true) return null;
+  if (task.owner === STUDIO_OWNER_KIND) return "Waiting for your answer in Studio.";
+  const trace = attention.traces.get(task.node.id);
+  return trace === undefined ? null : sentence(trace);
+}
+
+function taskValue(task: LocatedTask, connectionId: string, attention: TaskAttention): Json {
   const status = task.node.done === true ? "done" : "open";
   const dueDate = task.node.dueDate ?? null;
   const summary = [status, typeof dueDate === "string" ? `due ${dueDate}` : "", task.area.label].filter(part => part.length > 0).join(" · ");
@@ -220,6 +244,9 @@ function taskValue(task: LocatedTask, connectionId: string): Json {
     area: reference(connectionId, "area", task.area.id),
     project: task.project === null ? null : reference(connectionId, "project", task.project),
     summary,
+    why: whyOf(task, attention),
+    badge: attention.planned.has(task.node.id) ? IN_TODAY : null,
+    owner: task.owner,
     ...(task.node.note === undefined ? {} : { note: task.node.note }),
     ...(task.node.effort === undefined ? {} : { effort: task.node.effort }),
   };
@@ -227,11 +254,19 @@ function taskValue(task: LocatedTask, connectionId: string): Json {
 
 export interface BalanceTaskObject { readonly ref: ObjectReference; readonly destination: ObjectReference; readonly value: Json }
 
-export function balanceTaskObjects(state: AppState, areas: readonly DestinationArea[], connectionId: string, limit: number): BalanceTaskObject[] {
-  return locateTasks(state, areas).slice(0, limit).map(task => ({
-    ref: reference(connectionId, "task", task.node.id),
-    destination: reference(connectionId, "area", task.area.id),
-    value: taskValue(task, connectionId),
+function attentionFor(source: BalanceReadSource, state: AppState): TaskAttention {
+  return attentionOf(state, source.now?.() ?? new Date(), source.draft?.());
+}
+
+export function balanceTaskObjects(source: BalanceReadSource, state: AppState, areas: readonly DestinationArea[]): BalanceTaskObject[] {
+  const attention = attentionFor(source, state);
+  const tasks = locateTasks(state, areas, true);
+  const open = tasks.filter(task => task.node.done !== true);
+  const completed = tasks.filter(task => task.node.done === true);
+  return [...open, ...completed].map(task => ({
+    ref: reference(source.connectionId, "task", task.node.id),
+    destination: reference(source.connectionId, "area", task.area.id),
+    value: taskValue(task, source.connectionId, attention),
   }));
 }
 
@@ -255,11 +290,12 @@ function taskQueryPage(source: BalanceReadSource, input: unknown, destinations: 
   const state = source.state();
   if (!state) return failure("source_unavailable");
   const found = locateTasks(state, [area]);
+  const attention = attentionFor(source, state);
   const needle = parsed.query.trim().toLocaleLowerCase();
   const matching = needle.length === 0 ? found : found.filter(task => `${task.node.title}\n${task.node.note ?? ""}`.toLocaleLowerCase().includes(needle));
   const { slice, next } = boundedPage(matching, parsed, cursor, limit);
   return buildPage(
-    slice.map(task => taskEntry(task, source.connectionId, taskValue(task, source.connectionId))),
+    slice.map(task => taskEntry(task, source.connectionId, taskValue(task, source.connectionId, attention))),
     snapshotId("task.query", { connectionId: source.connectionId, area: area.id, tasks: matching.map(task => task.node.id) }),
     observedAt(source),
     next,
@@ -274,7 +310,7 @@ function taskReadPage(source: BalanceReadSource, input: unknown, destinations: r
   if (!state) return failure("source_unavailable");
   const task = locateTasks(state, source.areas()).find(item => item.node.id === parsed.canonicalId);
   if (!task || !destinations.some(item => sameReference(item, reference(source.connectionId, "area", task.area.id)))) return failure("task_unavailable");
-  const value = taskValue(task, source.connectionId);
+  const value = taskValue(task, source.connectionId, attentionFor(source, state));
   return buildPage([taskEntry(task, source.connectionId, value)], snapshotId("task.read", { connectionId: source.connectionId, task: task.node.id, value }), observedAt(source));
 }
 

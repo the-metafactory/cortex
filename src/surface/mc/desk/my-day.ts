@@ -9,7 +9,7 @@ import { DEFAULT_YES_FILTER } from "./yes-filter";
 import { applyBalanceCommand, completeOutlineLeaf, fileBalanceInbox, outlineDestination, setOutlineFocus } from "./balance-outline";
 import { applyBalanceDayProjection, type BalanceDayProjection } from "./balance-day";
 import type { Database } from "bun:sqlite";
-import { applyDayToHistory, findNode, rankAll, selectToday, shiftDays, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
+import { applyDayToHistory, findNode, rankAll, selectToday, shiftDays, todayPlanIds, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
 import { saveBalanceState } from "./balance-store";
 import type { MyDayCommand, MyDayMeta } from "./my-day-schema";
 import { addToToday, joinToday, liveDayUndo, removeFromToday, undoToday, type TodayContext } from "./my-day-today";
@@ -49,8 +49,7 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
   if (projection) applyBalanceDayProjection(state.outline, projection.tasks);
   const day = state.dayState?.date === date ? state.dayState : null;
   const all = rankAll(state, date);
-  const ids = day?.confirmed ?? (isPersonDraft(meta, date) ? meta.draft.ids : selectToday(state, date).map(i => i.task.id));
-  const visibleIds = day ? ids : ids.slice(0, state.settings.todayCap);
+  const visibleIds = todayPlanIds(state, date, meta.draft);
   const byId = new Map(all.map(i => [i.task.id, i]));
   const selected = meta.selection?.date === date ? meta.selection : null;
   const available = selected && visibleIds.includes(selected.id) && byId.has(selected.id);

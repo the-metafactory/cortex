@@ -5,7 +5,10 @@ import { ObjectReferenceSchema, SchemaRefSchema } from "../types";
 export const READ_BINDING_VERSION = "1.0.0";
 const identifier = z.string().min(1).refine(value => value.trim().length > 0);
 const pointer = z.string().regex(/^(?:\/(?:[^~/]|~[01])*)+$/);
+const label = z.string().trim().min(1).max(80);
 export const READ_MODES = ["query", "poll", "destinations"] as const;
+export const RowCapabilitySchema = z.object({ capabilityId: identifier, label }).strict();
+export type RowCapability = z.infer<typeof RowCapabilitySchema>;
 export const ReadBindingSchema = z.object({
   version: z.literal(READ_BINDING_VERSION),
   adapterId: identifier,
@@ -17,7 +20,8 @@ export const ReadBindingSchema = z.object({
   textPointer: pointer.optional(),
   destinationType: identifier.optional(),
   display: z.object({ title: pointer, summary: pointer.optional(), status: pointer.optional(), due: pointer.optional(), area: pointer.optional(), kind: pointer.optional(), parent: pointer.optional(), url: pointer.optional() }).strict(),
-  attention: z.object({ pointer }).strict().optional(),
+  attention: z.object({ pointer, badge: pointer.optional(), owner: pointer.optional() }).strict().optional(),
+  capabilities: z.array(RowCapabilitySchema).min(1).max(8).optional(),
   observation: ObservationPolicySchema.optional(),
   query: z.object({
     objectsPointer: pointer,

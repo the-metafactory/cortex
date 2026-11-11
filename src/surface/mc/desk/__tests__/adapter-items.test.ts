@@ -9,18 +9,26 @@ import { ReadBindings } from "../../../../conversations/domain-adapters/reads/bi
 import { CatchupPreview, catchupItems } from "../../dashboard-v2/components/desk-catch-up";
 import { DeskItemRow } from "../../dashboard-v2/components/desk-view";
 import { SourceCache } from "../sources/command";
-import { ATTENTION_DESK, attentionRig } from "../fixtures/adapter-attention-fixtures";
+import { ATTENTION_DESK, attentionRig, type AttentionOptions } from "../fixtures/adapter-attention-fixtures";
 
 const opened: Awaited<ReturnType<typeof attentionRig>>[] = [];
 const dbs: ReturnType<typeof initDatabase>[] = [];
 afterEach(async () => { for (const db of dbs.splice(0)) db.close(); await Promise.all(opened.splice(0).map(item => item.rig.close())); });
-async function open(policy: "local" | "cloud" = "local") { const item = await attentionRig(policy); opened.push(item); return item; }
+async function open(policy: "local" | "cloud" = "local", options: AttentionOptions = {}) { const item = await attentionRig(policy, options); opened.push(item); return item; }
 async function compose(item: Awaited<ReturnType<typeof open>>, enabled = true) {
   const db = initDatabase(":memory:");
   dbs.push(db);
   return composeDesk(db, ATTENTION_DESK, undefined, { now: item.time.clock.now(), adapterAttention: { ...item.feature, enabled } });
 }
 function fields(value: Json): Record<string, Json> { return (value as Record<string, Json>)["display/data"] as Record<string, Json>; }
+
+test.each(["other", "studio"])("an adapter cannot claim unconfigured %s ownership or silently lose its capabilities", async owner => {
+  const item = await open("local", { owner, rowCapabilities: { granted: true } });
+  expect((await item.ingest(0)).status).toBe("ok");
+  const view = await compose(item);
+  expect(view.items).toEqual([]);
+  expect(view.sources.find(source => source.id === "adapter:synthetic-one")).toEqual({ id: "adapter:synthetic-one", ok: false, error: "An adapter attention mapping could not be displayed safely." });
+});
 
 test("two unknown adapters produce distinct canonical items and use existing Catch-up filters without fetching", async () => {
   const item = await open();
@@ -111,6 +119,19 @@ test("mapped display text uses source redaction and stale status remains visible
   expect(html).not.toContain("Plan this");
 });
 
+test("an unknown adapter with a gap keeps its rows and reports missing items in Catch-up", async () => {
+  const item = await open();
+  await item.ingest(0);
+  await item.store.gap(item.sources[0]!);
+  const view = await compose(item);
+  expect(view.items).toHaveLength(1);
+  expect(view.items[0]?.freshness).toBe("stale");
+  expect(view.sources.find(source => source.id === "adapter:synthetic-one")).toEqual({ id: "adapter:synthetic-one", ok: false, error: "Adapter observations are incomplete. Some items may be missing." });
+  const preview = renderToStaticMarkup(createElement(CatchupPreview, { view, onOpen: () => undefined }));
+  expect(preview).toContain("Adapter observations are incomplete. Some items may be missing.");
+  expect(preview).toContain("Synthetic review");
+});
+
 test.each([
   ["fresh", "Observed"],
   ["stale", "Stale observation"],
@@ -135,7 +156,7 @@ test.each([
   }
 });
 
-test("composition overlaps observation sources and other reads, preserving source order", async () => {
+test("composition reads adapter rows after the other reads and overlaps their sources, preserving source order", async () => {
   const item = await open();
   await item.ingest(0);
   await item.ingest(1);
@@ -154,7 +175,7 @@ test("composition overlaps observation sources and other reads, preserving sourc
   });
   const sourceCache = new SourceCache();
   const cacheSpy = spyOn(sourceCache, "read").mockImplementation(async () => {
-    expect(started).toEqual(item.sources.map(source => source.adapterId));
+    expect(started).toEqual([]);
     return [];
   });
   const db = initDatabase(":memory:"); dbs.push(db);

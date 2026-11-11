@@ -1,18 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { findNode } from "../../../balance";
 import { loadBalanceState, saveBalanceState } from "../../../surface/mc/desk/balance-store";
-import { BALANCE_TASK_OBSERVATION_CAPABILITY_ID, BALANCE_TASK_ORDERING, balanceTaskObservationBinding, balanceTaskObservationDeclaration, createBalanceObservationAdapter } from "../balance/observation";
+import { BALANCE_TASK_OBSERVATION_CAPABILITY_ID, BALANCE_TASK_ORDERING, balanceTaskObservationBinding, balanceTaskObservationDeclaration, createBalanceObservationAdapter, createBalanceTaskObservationConnector } from "../balance/observation";
+import { ObservationBatchSchema } from "../reads/observation-types";
 import { balanceReadDeclaration } from "../balance/read";
 import { OBSERVATION_LIMITS } from "../reads/observation-policy";
-import { LAB_TASK_IDS, openBalanceReadRig, type BalanceReadRig } from "./fixtures/balance-read-fixtures";
+import { OBSERVED_TASK_IDS, closeTrackedBalanceReadRigs, openTrackedBalanceReadRig, seedBalanceObservationOverflow, type BalanceReadRig } from "./fixtures/balance-read-fixtures";
 
-const opened: BalanceReadRig[] = [];
-afterEach(async () => { await Promise.all(opened.splice(0).map(rig => rig.close())); });
-async function open(): Promise<BalanceReadRig> {
-  const rig = await openBalanceReadRig();
-  opened.push(rig);
-  return rig;
-}
+afterEach(closeTrackedBalanceReadRigs);
+const open = openTrackedBalanceReadRig;
 const valueOf = (rig: BalanceReadRig, id: string) => {
   const state = loadBalanceState(rig.db);
   const node = state ? findNode(state.outline, id) : null;
@@ -29,12 +25,42 @@ const edit = (rig: BalanceReadRig, id: string, patch: { title?: string; done?: b
 };
 
 describe("the inactive Balance observation binding", () => {
+  test("one poll reads and ranks a fixed snapshot once, while the next poll sees owner changes", async () => {
+    const rig = await open();
+    await rig.allowHome();
+    seedBalanceObservationOverflow(rig, 11);
+    let reads = 0;
+    const connector = createBalanceTaskObservationConnector({
+      connectionId: rig.source.connectionId, areas: () => rig.areas,
+      state: () => { reads++; return loadBalanceState(rig.db); },
+    });
+    const request = { source: rig.source, mode: "poll" as const, limit: 20 };
+    const signal = new AbortController().signal;
+    const first = ObservationBatchSchema.parse(await connector.fetch(request, signal));
+    if (!first.continuation) throw new Error("the overflow fixture has no continuation");
+    await expect(connector.fetch({ ...request, continuation: first.continuation }, new AbortController().signal)).rejects.toThrow("observation_snapshot_changed");
+    edit(rig, "area-home-open-10", { title: "Changed after the first page" });
+    const second = ObservationBatchSchema.parse(await connector.fetch({ ...request, continuation: first.continuation }, signal));
+    expect(JSON.stringify(second.payload)).toContain("Actionable Home 10");
+    expect(JSON.stringify(second.payload)).not.toContain("Changed after the first page");
+    if (!second.continuation) throw new Error("the completed history has no continuation");
+    const last = ObservationBatchSchema.parse(await connector.fetch({ ...request, continuation: second.continuation }, signal));
+    expect(last.continuation).toBeUndefined();
+    expect(reads).toBe(1);
+    const nextSignal = new AbortController().signal;
+    const next = ObservationBatchSchema.parse(await connector.fetch(request, nextSignal));
+    if (!next.continuation) throw new Error("the next poll has no continuation");
+    const changed = ObservationBatchSchema.parse(await connector.fetch({ ...request, continuation: next.continuation }, nextSignal));
+    expect(JSON.stringify(changed.payload)).toContain("Changed after the first page");
+    expect(reads).toBe(2);
+  });
+
   test("a poll projects each configured task once and repeated delivery adds nothing", async () => {
     const rig = await open();
     const first = await rig.check();
-    expect(first).toMatchObject({ status: "ok", changed: LAB_TASK_IDS.length, quarantined: 0 });
+    expect(first).toMatchObject({ status: "ok", changed: OBSERVED_TASK_IDS.length, quarantined: 0 });
     const views = await rig.views();
-    expect(views.map(view => view.ref.canonicalId).sort()).toEqual([...LAB_TASK_IDS].sort());
+    expect(views.map(view => view.ref.canonicalId).sort()).toEqual([...OBSERVED_TASK_IDS].sort());
     expect(views.every(view => view.status === "fresh" && view.evidenceCount === 1)).toBe(true);
     const wing = views.find(view => view.ref.canonicalId === "task-wing");
     expect(wing?.value).toMatchObject({ title: "Cut the wing", status: "open", dueDate: "2026-12-01", note: "Use paper", effort: 2 });
@@ -42,7 +68,7 @@ describe("the inactive Balance observation binding", () => {
     expect(views.some(view => view.ref.canonicalId === "task-garden")).toBe(false);
     const repeated = await rig.check();
     expect(repeated).toMatchObject({ status: "ok", changed: 0 });
-    expect(await rig.views()).toHaveLength(LAB_TASK_IDS.length);
+    expect(await rig.views()).toHaveLength(OBSERVED_TASK_IDS.length);
     expect((await rig.views()).every(view => view.evidenceCount === 1)).toBe(true);
   });
 
@@ -52,7 +78,7 @@ describe("the inactive Balance observation binding", () => {
     edit(rig, "task-wing", { title: "Cut the second wing", done: true, dueDate: "2026-12-03" });
     expect((await rig.check()).changed).toBe(1);
     const views = await rig.views();
-    expect(views).toHaveLength(LAB_TASK_IDS.length);
+    expect(views).toHaveLength(OBSERVED_TASK_IDS.length);
     expect(views.find(view => view.ref.canonicalId === "task-wing")?.value).toMatchObject({ title: "Cut the second wing", status: "done", dueDate: "2026-12-03" });
     expect((await rig.check()).changed).toBe(0);
   });
@@ -105,11 +131,12 @@ describe("the inactive Balance observation binding", () => {
     expect(await rig.day()).toBeNull();
   });
 
-  test("the binding declares no attention mapping and adds only the observation capability", async () => {
+  test("the observation binding maps each task into attention and adds only the observation capability", async () => {
     const rig = await open();
     expect(rig.observationBinding).toMatchObject({ mode: "poll", objectType: "task", destinationType: "area", display: { title: "/title", summary: "/summary", status: "/status", due: "/dueDate", area: "/area" } });
     expect(rig.observationBinding.observation).toMatchObject({ modes: ["poll"], objectsPointer: "/items", resumable: false, ordering: BALANCE_TASK_ORDERING });
-    expect(rig.observationBinding.attention).toBeUndefined();
+    expect(rig.observationBinding.attention).toEqual({ pointer: "/why", badge: "/badge", owner: "/owner" });
+    expect(rig.observationBinding.capabilities).toBeUndefined();
     expect(rig.observationBinding.query).toBeUndefined();
     expect(rig.adapter.readBindings.filter(binding => binding.attention !== undefined)).toHaveLength(0);
     const read = balanceReadDeclaration();

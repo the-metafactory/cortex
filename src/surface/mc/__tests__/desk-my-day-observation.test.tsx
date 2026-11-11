@@ -49,7 +49,7 @@ describe("My Day reads the Balance observation projection", () => {
     expect(view.observation).toEqual({ status: "fresh", observedAt: OBSERVED_AT });
     expect(view.outline).toEqual(stored().outline);
     expect(view.items.length).toBeGreaterThan(0);
-    expect((await rig.views()).map(observed => observed.ref.canonicalId).sort()).toEqual(["task-done", "task-glue", "task-wing"]);
+    expect((await rig.views()).map(observed => observed.ref.canonicalId).sort()).toEqual(["task-done", "task-glue", "task-studio", "task-wing"]);
   });
 
   it("keeps commands on changeMyDay and follows their owner change into the projection", async () => {
@@ -121,10 +121,13 @@ describe("My Day reads the Balance observation projection", () => {
     expect(html).not.toContain("Balance reads are");
   });
 
-  it("declares no attention mapping, so Day and Catch-up gain no ranked adapter item", async () => {
-    const composed = await composeDesk(rig.db, desk, undefined, { now: NOW, adapterDay: () => rig.reader() });
-    expect(composed.items.every(item => item.kind !== "adapter")).toBe(true);
-    expect(composed.sources.some(source => source.id.startsWith("adapter:"))).toBe(false);
-    expect(rig.observationBinding.attention).toBeUndefined();
+  it("maps the same observation into Catch-up only when the host reads attention", async () => {
+    const withoutSession = await composeDesk(rig.db, desk, undefined, { now: NOW, adapterDay: () => rig.reader() });
+    expect(withoutSession.items.every(item => item.kind !== "adapter")).toBe(true);
+    expect(withoutSession.sources.some(source => source.id.startsWith("adapter:"))).toBe(false);
+    expect(rig.observationBinding.attention).toEqual({ pointer: "/why", badge: "/badge", owner: "/owner" });
+    await read();
+    const composed = await composeDesk(rig.db, desk, undefined, { now: NOW, adapterDay: () => rig.reader(), adapterAttention: () => rig.attentionAccess() });
+    expect(composed.items.filter(item => item.kind === "adapter").map(item => item.title).sort()).toEqual(["Buy glue", "Cut the wing", "Studio answer"]);
   });
 });
