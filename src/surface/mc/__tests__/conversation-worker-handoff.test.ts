@@ -539,7 +539,7 @@ describe("durable worker start reservation", () => {
   test("only an inserted pending intent wins and losing retries preserve the original request", () => {
     const db = initDatabase(":memory:");
     try {
-      const first = { ...request({ node: NODE }, "first"), type: "work-start" };
+      const first: CreateRequest = { ...request({ node: NODE }, "first"), type: "work-start" };
       expect(recordWorkerOperation(db, first, NODE, "starting")).toBe(true);
       expect(recordWorkerOperation(db, { ...first, fields: { node: "example/maps#99" } }, NODE, "starting")).toBe(false);
       expect(recordWorkerOperation(db, { ...request({ node: NODE }, "second"), type: "work-start" }, NODE, "starting")).toBe(false);
