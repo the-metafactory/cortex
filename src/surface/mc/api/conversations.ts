@@ -1,5 +1,6 @@
 import { sseResponse } from "./sse";
 import { z } from "zod";
+import type { ConversationResponse, ConversationResponseUpdate } from "../../../conversations/types";
 import { ConfirmSchema, creationFor, ProposeSchema, ReviseSchema, type Actor } from "../../../conversations/creation";
 import type { DiscordConversations } from "../../../conversations/discord";
 import { ConversationError, type ConversationHost, type HostStatus } from "../../../conversations/host";
@@ -247,11 +248,16 @@ async function handleCreation(req: Request, url: URL, host: ConversationHost, ac
 async function responseStream(host: ConversationHost, id: string, signal: AbortSignal): Promise<Response> {
   await host.meta(id);
   return sseResponse(signal, async (send, close) => {
-    let previous: string | null | undefined;
-    return host.watchResponse(id, async text => {
-      if (text === previous) return;
-      const update = typeof previous === "string" && typeof text === "string" && text.startsWith(previous) ? { append: text.slice(previous.length) } : { text };
-      previous = text;
+    let previous: ConversationResponse | undefined;
+    return host.watchResponse(id, async response => {
+      const sameText = previous?.text === response.text && previous.generation === response.generation;
+      if (previous && sameText && previous.working === response.working && response.entries.length === 0) return;
+      const update: ConversationResponseUpdate = { cursor: response.cursor, generation: response.generation, working: response.working, ...(response.entries.length ? { entries: response.entries } : {}) };
+      if (!previous || !sameText) {
+        if (previous?.generation === response.generation && typeof previous.text === "string" && typeof response.text === "string" && response.text.startsWith(previous.text)) update.append = response.text.slice(previous.text.length);
+        else update.text = response.text;
+      }
+      previous = response;
       await send(`event: response\ndata: ${JSON.stringify(update)}\n\n`);
     }, close);
   });
