@@ -53,6 +53,11 @@ try {
   check(record?.history.length === 2 && record.lastValid?.releaseDigest === b?.releaseDigest, "host generation history is preserved across rollback");
   check((await rig.store.admit("balance", { releaseDigest: b?.releaseDigest ?? "" })).state === "upgrade_required", "stored data B cannot read stays protected, never downgraded");
 
+  rig.writePackage({ packageVersion: "1.0.2", uiViews: [{ objectType: "task", view: "editor" }] });
+  check((await rig.loader.activate(rig.packageId)).ok, "a package declaring an editor view activates");
+  const editorViews = (await catalogOf()).adapters[0]?.views ?? [];
+  check(editorViews.some(view => view.objectType === "task" && view.view === "editor"), "the catalog lists the editor view of the activated package");
+
   await rig.loader.disable("balance");
   check((await catalogOf()).adapters.length === 0 && (await rig.local(urls[0] ?? "")).status === 409, "disable removes catalog and asset availability immediately");
   check(!(await rig.loader.rollback("balance")).ok, "rollback does not resurrect a disabled adapter");

@@ -1,11 +1,13 @@
 <!-- glossary-ignore: host, token, path, user, data -->
 # Desk adapter package and SDK authoring contract
 
-This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.1.0, an additive amendment of 1.0.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.1.0"`).
+This is the initial authoring contract for a Desk adapter package. It describes the `desk-adapter-package/1` manifest, the separately versioned Desk adapter SDK (1.2.0, an additive amendment of 1.0.0 and 1.1.0), and how the host discovers, approves and activates a generation. The loader lives in `src/conversations/domain-adapters/package.ts`; the SDK barrel is `src/desk-sdk/index.ts` (`DESK_ADAPTER_SDK_VERSION = "1.2.0"`).
 
 The Desk adapter SDK is distinct from the surface plugin SDK. `SURFACE_SDK_VERSION` is unchanged: no existing surface export changes here. A Desk adapter is not a surface transport plugin, and a `cortex-plugin.yaml` is never reinterpreted as a Desk package manifest.
 
 SDK 1.1.0 amends 1.0.0 additively: it types query handlers and observation bindings (the untyped 1.0.0 binding shape stays assignable), and lets an action connector supply dispatch, cancel, lookup and readback. A package built against 1.0.0 still loads, and `deskSdkRange: "^1.0.0"` still matches. No new major version is introduced.
+
+SDK 1.2.0 amends 1.1.0 additively: the manifest's `ui.views[].view` accepts `editor` beside `result`, so a package can declare an editor mount of an object type it already declares. The UI wire format stays 1.0.0 (`DESK_UI_PROTOCOL_VERSION`), every wire message keeps its version, and a package built against 1.1.0 still loads because `deskSdkRange: "^1.1.0"` still matches 1.2.0. A manifest that declares only `result` views keeps the release digest it had under 1.1.0, because the digest already sorts the view pairs by object type and view name.
 
 ## Trust position
 
@@ -63,10 +65,23 @@ Fields:
 - `draftingBindings` and `readBindings` are arrays of the independently versioned drafting binding 1.0.0 and read binding 1.0.0 documents, or empty arrays. Every entry is validated against the declaration before registration. An empty array is valid.
 - `setup` is a strict host-owned setup descriptor. Both schema references must resolve exactly in the setup schema bundle, and both documents must be object schemas. `authMethods` is a nonempty list of closed alternatives: local, token slots, or one host-registered broker ID. No token value, URL, callback, permission default or arbitrary secret name belongs here.
 - `backend.entry` is one relative `.mjs` file with an exact SHA-256. Relative imports, remote imports, package-manager imports, `eval` and `new Function` are refused. The only approved module specifiers are `@the-metafactory/cortex/desk-sdk` and the documented `node:` builtins (`crypto`, `buffer`, `util`, `url`, `zlib`, `stream`, `events`, `string_decoder`, `timers`, `net`, `tls`). A local dependency must be part of the one verified bundle.
-- `ui` is optional. Its `protocolVersion` is exactly `1.0.0`; `entry` must be one listed file and must be HTML; `views` lists the object types whose result view the host may mount; `files` lists unique package-relative assets with an allowed media type and exact digest. No remote URL, import map, service worker or path outside the package is accepted.
+- `ui` is optional. Its `protocolVersion` is exactly `1.0.0`; `entry` must be one listed file and must be HTML; `views` lists the object types the host may mount and, per object type, which view it mounts (`result` or `editor`, see below); `files` lists unique package-relative assets with an allowed media type and exact digest. No remote URL, import map, service worker or path outside the package is accepted.
 - Manifest and every listed file are realpath-contained in the verified package directory. Traversal, absolute paths, symlinked entries and symlinked manifests fail closed. Deterministic host bounds apply to the manifest, file count and file size.
 
 Host bounds: 512 KiB manifest, 256 asset files, 8 MiB per file. These are fixed in `package.ts`; a package cannot raise them.
+
+## Views and wire messages
+
+A `ui.views` entry is a closed `{ objectType, view }` pair. `view` is exactly `result` or `editor`; the object type must be declared by the package's own `declaration.objectTypes`. Any other view name, a missing field or an extra field refuses the whole manifest as `invalid_manifest` during discovery, before any backend module is imported. An object type may appear twice, once per view, and the catalog lists both entries.
+
+| View | What the host mounts it for | Wire messages it may send |
+| --- | --- | --- |
+| `result` | Showing the outcome of a completed operation or a read picture of the object. | The read-only 1.0.0 result messages. `draft:change` and `action:propose` are refused. |
+| `editor` | Reviewing and changing a host-owned draft of one of the adapter's object types, and proposing an action for it. | The read-only 1.0.0 messages plus `draft:change` and `action:propose`. |
+
+`draft:change` and `action:propose` are the only messages an `editor` mount gains over a `result` mount. Both remain suggestions to the host: an editor mount never carries create, send, run or enable authority, and the host's own review and confirmation still decide what leaves Desk. Declaring an `editor` view says nothing about which of the adapter's capabilities a connection is allowed to read or write; the connection's capability lists still bound what the catalog offers and what the host admits.
+
+The frame bridge that mounts an adapter document, pins its hash and enforces the per-view message split is a separate slice (node #3326). This contract only validates the declaration and publishes it in the asset catalog.
 
 ## Inline UI entry
 
@@ -187,4 +202,4 @@ The packaging probe loads a bundled default and an explicitly approved synthetic
 
 ## Not in this contract
 
-Credential provisioning, connection setup UI, asset HTTP delivery, the frame bridge, live package installation or restart, provider-family migration and untrusted-code sandbox execution remain separate slices. The exact view and editor vocabulary remains the approved UI prototype's decision. The conformance harness and its publication remain separate slices.
+Credential provisioning, connection setup UI, asset HTTP delivery, live package installation or restart, provider-family migration and untrusted-code sandbox execution remain separate slices. The frame bridge that mounts a view or an editor, the host-side draft handling behind `draft:change` and `action:propose`, and the enforcement of the per-view message split remain separate slices (node #3326). The conformance harness and its publication are separate slices.
