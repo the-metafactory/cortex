@@ -13,10 +13,11 @@ const ProposeInput = ProposeSchema.omit({ entryId: true });
 const ReviseInput = ReviseSchema.extend({ proposalId: z.uuid() });
 const ReadInput = z.object({ proposalId: z.uuid().optional(), offset: z.number().int().min(0).default(0) }).strict();
 const actorOf = (session: ToolSession) => ({ principal: session.principal, transport: session.transport });
-const resultOf = (view: ProposalView) => ({
+export const proposalResult = (view: ProposalView) => ({
   status: view.operation?.state ?? (view.feedback === "proposed" ? "pending" : view.feedback),
   links: proposalLinks(view), view,
 });
+const resultOf = proposalResult;
 
 async function ownerResult(run: () => Promise<object>): Promise<string> {
   try { return JSON.stringify(await run()); }

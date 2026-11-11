@@ -13,6 +13,7 @@ import { WAITING_SQL } from "../desk/mail-waiting-schema";
 import { HANDOFF_COLUMNS, HANDOFF_SQL } from "../desk/mail-handoff-schema";
 import { INVITATIONS_SQL } from "../desk/mail-invitation-schema";
 import { SNOOZE_SQL } from "../desk/mail-snooze-schema";
+import { WORKER_HANDOFF_SQL } from "../desk/worker-handoff-store";
 
 const sqlList = (values: readonly string[]): string => values.map((value) => `'${value}'`).join(",");
 
@@ -161,6 +162,7 @@ export const TABLE_NAMES = [
   "desk_mail_sweep_mails",
   "desk_mail_trusted",
   "desk_graph_repositories",
+  "desk_worker_handoffs",
 ] as const;
 
 export const SCHEMA_SQL: string[] = [
@@ -180,6 +182,7 @@ export const SCHEMA_SQL: string[] = [
   ...UNSUBSCRIBE_SQL,
   ...WAITING_SQL,
   ...HANDOFF_SQL,
+  ...WORKER_HANDOFF_SQL,
   ...INVITATIONS_SQL,
   ...SNOOZE_SQL,
   "CREATE TABLE IF NOT EXISTS desk_my_day (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL CHECK (json_valid(data)))",

@@ -10,6 +10,7 @@ When the principal corrects an agent for a mistake, fix the mistake, then add or
 | Code is written once; a copy goes into a shared module. | `scripts/check-duplication.ts` against `scripts/duplication-baseline.json` (CI job: Duplication ratchet). A file may not gain jscpd clones; the baseline may not grow past `origin/main`'s. | The 10 `boundPort` copies removed in this change: restoring them fails 5 files. For the other 5 files the per-file clone count did not change, so those copies go undetected. |
 | The MC server's bound port has one owner. | `ServerContext.port` (type). | Same `boundPort` copies. |
 | Push only what CI passes. | `bun run check` (`scripts/check.ts`) runs every CI gate; each CI job runs `bun scripts/check.ts <gate>`, and `scripts/__tests__/check.test.ts` fails when `ci.yml` and the gate list differ. | `15ef78be` (#2573): `tsc` passes, `check lint xdg` fails. |
+| Before reporting a local fix as unpublished, check merged PRs for equivalent changes, including commits with different hashes. | Docs only (this table). | docs only |
 | A branch is not behind `origin/main` when pushed. | The `up-to-date` gate in `bun run check` (local only: CI checks out a merge ref). | Not yet proven on a past commit. |
 | A changed surface-SDK contract bumps `SURFACE_SDK_VERSION`. | `scripts/check-release-pins.ts` (CI job: Surface-SDK .d.ts sync). | `66b0e03e` (#2611). |
 | Git dependencies pin a release tag, not a commit or branch. | `scripts/check-release-pins.ts`; exceptions carry a reason and an expiry in `PIN_EXCEPTIONS`. | `6270687f` (#2568). |
