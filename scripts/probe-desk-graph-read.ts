@@ -15,7 +15,7 @@ const foreignRepository = (canonicalId: string): ObjectReference => ({ adapterId
 
 function somaScript(log: string): string {
   const arms = Object.entries(GRAPH_NODE_BODIES).map(([target, body]) => `  *"${target}"*) printf '%s' ${JSON.stringify(JSON.stringify(body))} ;;`);
-  return ["#!/bin/sh", `printf '%s\\n' "$*" >> ${JSON.stringify(log)}`, "case \"$*\" in", ...arms, "  *) printf '%s' \"node not found\" >&2; exit 1 ;;", "esac", ""].join("\n");
+  return ["#!/bin/sh", `printf '%s\\n' "$*" >> ${JSON.stringify(log)}`, "case \"$*\" in", ...arms, "  *) printf 'node %s not found' \"$3\" >&2; exit 1 ;;", "esac", ""].join("\n");
 }
 
 function released(page: QueryPage): { ref: ObjectReference; value: Record<string, unknown> }[] {

@@ -36,8 +36,44 @@ export interface DeskProbeReport {
 
 export const PROBE_EXCLUSIONS: readonly DeskProbeExclusion[] = [
   {
+    file: "probe-desk-adapter-diagnostics.ts",
+    reason: "needs a browser: it renders connection diagnostics in Playwright Chromium",
+  },
+  {
+    file: "probe-desk-adapter-inline.ts",
+    reason: "needs browsers: it verifies inline adapter assets in Playwright Chromium and WebKit",
+  },
+  {
+    file: "probe-desk-attention.ts",
+    reason: "needs a browser: it verifies Desk attention in Playwright Chromium",
+  },
+  {
+    file: "probe-desk-balance-connection.ts",
+    reason: "needs a browser: it configures a Balance connection in Playwright Chromium",
+  },
+  {
+    file: "probe-desk-balance-controls.ts",
+    reason: "needs a browser: it measures Balance controls in Playwright Chromium",
+  },
+  {
+    file: "probe-desk-balance-drag.ts",
+    reason: "needs a browser: it verifies Balance dragging in Playwright Chromium",
+  },
+  {
+    file: "probe-desk-balance-surfaces.ts",
+    reason: "needs a browser: it verifies Balance pickers and saved cards in Playwright Chromium",
+  },
+  {
+    file: "probe-desk-graph-drafting.ts",
+    reason: "needs a browser: it verifies conversation-prefilled graph drafts through the shared Playwright browser fixture",
+  },
+  {
     file: "probe-desk-graph-surfaces.ts",
     reason: "needs a browser: it launches Chromium through Playwright, and the installed browser is only provisioned on the ubuntu-24.04 CI job",
+  },
+  {
+    file: "probe-desk-make-editor.ts",
+    reason: "needs a browser: it verifies the Make editor through the shared Playwright browser fixture",
   },
   {
     file: "probe-desk-parser-contract.ts",
@@ -47,9 +83,12 @@ export const PROBE_EXCLUSIONS: readonly DeskProbeExclusion[] = [
 
 export const PROBE_RUNS: readonly string[] = [
   "probe-desk-adapter-assets.ts",
+  "probe-desk-adapter-canary.ts",
+  "probe-desk-adapter-limits.ts",
   "probe-desk-adapter-packages.ts",
   "probe-desk-adapter-registry.ts",
   "probe-desk-balance-binding.ts",
+  "probe-desk-balance-observation.ts",
   "probe-desk-balance-read.ts",
   "probe-desk-balance-sync.ts",
   "probe-desk-balance-work-tools.ts",
@@ -60,15 +99,19 @@ export const PROBE_RUNS: readonly string[] = [
   "probe-desk-drafting.ts",
   "probe-desk-flow-read.ts",
   "probe-desk-flow-work-tools.ts",
+  "probe-desk-graph-create.ts",
   "probe-desk-graph-node-binding.ts",
+  "probe-desk-graph-observation.ts",
   "probe-desk-graph-read.ts",
   "probe-desk-graph-scope.ts",
   "probe-desk-graph-work-tools.ts",
   "probe-desk-host-authority.ts",
+  "probe-desk-observations.ts",
   "probe-desk-operation-dispatch.ts",
   "probe-desk-operation-import.ts",
   "probe-desk-operation-journal.ts",
   "probe-desk-operation-reconciliation.ts",
+  "probe-desk-package-backend.ts",
   "probe-desk-query.ts",
   "probe-desk-read-admission.ts",
   "probe-desk-writer-fence.ts",
@@ -164,7 +207,6 @@ async function runProbe(probe: string, plan: DeskProbePlan, root: string): Promi
   }
 }
 
-/** Run the plan's probes and report every probe's result, refusing a probe file that neither list names. */
 export async function runDeskProbes(plan: DeskProbePlan): Promise<DeskProbeReport> {
   const discovered = await probeFiles(plan.dir);
   const checked = checkPlan(plan, discovered);
@@ -185,7 +227,6 @@ export async function runDeskProbes(plan: DeskProbePlan): Promise<DeskProbeRepor
   return { ok, exitCode: ok ? 0 : 1, outcomes, problems };
 }
 
-/** Print each outcome and any plan problem so a run says which probe passed, failed or was excluded. */
 export function printDeskProbeReport(report: DeskProbeReport, log: (line: string) => void = console.log): void {
   for (const outcome of report.outcomes) {
     if (outcome.status === "excluded") {
