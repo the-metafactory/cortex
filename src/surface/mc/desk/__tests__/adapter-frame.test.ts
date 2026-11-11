@@ -188,4 +188,37 @@ describe("current-policy frame host with real durable state", () => {
       expect(rig.authority.calls.dispatch).toBe(0);
     } finally { await rig.close(); }
   });
+  test("retiring a session during any awaited catalog check prevents late release", async () => {
+    let checks = 0;
+    const baseline = await openFrameRig();
+    try {
+      const catalog = baseline.assets.service.catalog.bind(baseline.assets.service);
+      baseline.assets.service.catalog = (...args) => { checks++; return catalog(...args); };
+      await baseline.ready();
+    } finally { await baseline.close(); }
+    expect(checks).toBeGreaterThan(0);
+    for (const retire of ["remove", "close", "expire"] as const) for (let target = 1; target <= checks; target++) {
+      const rig = await openFrameRig();
+      const started = Promise.withResolvers<undefined>();
+      const finish = Promise.withResolvers<undefined>();
+      try {
+        const catalog = rig.assets.service.catalog.bind(rig.assets.service);
+        let calls = 0;
+        rig.assets.service.catalog = async (...args) => {
+          const snapshot = await catalog(...args);
+          if (++calls === target) { started.resolve(undefined); await finish.promise; }
+          return snapshot;
+        };
+        const pending = rig.ready();
+        await started.promise;
+        if (retire === "remove") rig.registered.remove();
+        if (retire === "close") rig.service.close(ASSET_OWNER, rig.identity.instance);
+        if (retire === "expire") rig.tick(3001);
+        finish.resolve(undefined);
+        await expect(pending).rejects.toThrow();
+        expect(rig.releases).toHaveLength(0);
+        expect(rig.authority.calls.dispatch + rig.authority.calls.cancel).toBe(0);
+      } finally { finish.resolve(undefined); await rig.close(); }
+    }
+  });
 });

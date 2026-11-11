@@ -23,7 +23,14 @@ try {
         const fixture = await serveFrameProbe(attack, mode, attacker.url.origin);
         const context = await browser.newContext();
         const row: Record<string, unknown> = { browser: type.name(), version: browser.version(), mode, attack, status: "failed" };
+        const finish = Promise.withResolvers<undefined>();
         try {
+          const deriving = Promise.withResolvers<undefined>();
+          if (attack === "late-revoke") fixture.rig.state.projection = async () => {
+            deriving.resolve(undefined);
+            await finish.promise;
+            return { projectionId: "late", revision: 1, object: { title: "SYNTHETIC-LATE-PRIVATE-CANARY" } };
+          };
           const page = await context.newPage();
           const ran: string[] = [];
           const requests: string[] = [];
@@ -37,10 +44,18 @@ try {
           if (mode === "hosted") assert.equal((await fetch(new URL("/api/desk/adapters/catalog", fixture.server.url))).status, 401);
           fixture.requests.length = 0;
           await page.goto(fixture.server.url.href);
-          const unavailable = ["mismatch", "throw", "forged", "replay", "navigate", "before-load", "remote", "data", "blob", "redirect"].includes(attack);
+          if (attack === "late-revoke") {
+            const signal = AbortSignal.timeout(8000);
+            await Promise.race([deriving.promise, new Promise((_, reject) => signal.addEventListener("abort", () => { reject(signal.reason); }, { once: true }))]);
+            fixture.rig.authority.policy.releaseAllowed = false;
+            finish.resolve(undefined);
+          }
+          const unavailable = ["late-revoke", "mismatch", "throw", "forged", "replay", "wrong-release", "wrong-generation", "wrong-connection", "unknown-field", "before-ready", "cross-connection", "navigate", "before-load", "remote", "data", "blob", "redirect", "download"].includes(attack);
           await page.locator(`[data-adapter-state="${unavailable ? "unavailable" : "ready"}"]`).waitFor({ timeout: 8000 });
           await page.waitForTimeout(150);
-          assert.ok(ran.some(value => value === `FRAME_PROBE:${attack}`) || attack === "mismatch", "attack script actually ran");
+          assert.ok(ran.some(value => value === `FRAME_PROBE:${attack}`), "attack script actually ran");
+          if (attack === "fetch") assert.ok(ran.includes("FRAME_PROBE:fetch-denied") && !ran.includes("FRAME_PROBE:fetch-allowed"), "direct fetch denied");
+          if (attack === "worker" || attack === "service-worker") assert.ok(ran.includes(`FRAME_PROBE:${attack}-denied`) && !ran.includes(`FRAME_PROBE:${attack}-allowed`), "worker execution denied");
           assert.equal(received.length, start, "zero attacker HTTP requests");
           assert.equal(popups.length, 0);
           assert.equal(downloads.length, 0);
@@ -78,7 +93,7 @@ try {
             await page.getByText("Safe host history remains available.").waitFor();
             assert.equal(await page.locator('iframe[title="Desk view host"]').count(), 0);
           }
-          if (attack === "before-load" || attack === "mismatch" || attack === "throw") assert.equal(fixture.rig.releases.length, 0);
+          if (["late-revoke", "before-load", "mismatch", "throw", "before-ready"].includes(attack)) assert.equal(fixture.rig.releases.length, 0);
           if (attack === "good") {
             const child = page.frames().find(frame => frame.url().includes("/api/desk/adapters/assets/"));
             assert.ok(child);
@@ -96,7 +111,7 @@ try {
           }
           Object.assign(row, { status: "passed", ran, requests, serverRequests: fixture.requests, releases: fixture.rig.releases.length, ownerMutations: 0 });
         } catch (error) { failures++; row.error = error instanceof Error ? error.message : String(error); }
-        finally { evidence.push(row); console.log(JSON.stringify(row)); await context.close(); await fixture.close(); }
+        finally { finish.resolve(undefined); evidence.push(row); console.log(JSON.stringify(row)); await context.close(); await fixture.close(); }
       }
     } finally { await browser.close(); }
   }

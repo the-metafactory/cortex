@@ -85,7 +85,7 @@ export class AdapterFrameHost {
   private async check(instance: string, session: Session, audience: Lane): Promise<void> {
     if (this.sessions.get(instance) !== session || this.now() > session.expires) throw new FrameUnavailable();
     const current = await this.current(session.binding, audience);
-    if (JSON.stringify(current) !== JSON.stringify(session.entry)) throw new FrameUnavailable();
+    if (this.sessions.get(instance) !== session || this.now() > session.expires || JSON.stringify(current) !== JSON.stringify(session.entry)) throw new FrameUnavailable();
   }
 
   private async authorized(session: Session, derive: () => Promise<Json>): Promise<Json> {
