@@ -14,9 +14,9 @@ export { FAILURE_SCENARIOS, formatFailureReport, runFailureScenarios, type Failu
 const EXIT_CODES = { conformant: 0, refused: 1, "not-run": 2 } as const;
 
 /** Drives one local Desk adapter package through the production Cortex runtime seams and reports each capability. */
-export async function runConformance(packageDir: string): Promise<ConformanceReport> {
+export async function runConformance(packageDir: string, tempParent = tmpdir()): Promise<ConformanceReport> {
+  const temp = await mkdtemp(join(tempParent, "desk-conformance-"));
   const guard = guardNetwork();
-  const temp = await mkdtemp(join(tmpdir(), "desk-conformance-"));
   try {
     const outcome = await executePackage(resolve(packageDir), temp);
     return { ...outcome, networkRequests: guard.count() };
