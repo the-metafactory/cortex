@@ -23,6 +23,11 @@ export function frameProbeStatic(assets: FrameProbeAssets, pathname: string, mou
   return null;
 }
 
+export function forwardAssetRequest(req: Request, url: URL, serve: (path: string, init: { method: string; headers: Record<string, string> }) => Promise<Response>): Promise<Response> {
+  const protocol = req.headers.get("x-desk-ui-protocol");
+  return serve(url.pathname, { method: req.method, headers: protocol === null ? {} : { "x-desk-ui-protocol": protocol } });
+}
+
 export function startFrameProbeServer(assets: FrameProbeAssets, mountId: string, handle: (req: Request, url: URL, server: Bun.Server<undefined>) => Response | Promise<Response>) {
   const requests: string[] = [];
   const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch(req, server) {

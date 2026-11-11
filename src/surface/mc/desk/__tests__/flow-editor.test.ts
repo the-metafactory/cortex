@@ -79,11 +79,43 @@ describe("Flow editor frame", () => {
     const handoff = await rig.draftEditor.service.handoff(rig.draftId, view.draft.revision);
     expect(handoff.ok).toBe(true);
     if (!handoff.ok) throw new Error("Synthetic Flow draft is not ready for confirmation.");
+    const before = rig.flow.saveCalls();
     const confirmed = await rig.draftEditor.confirm?.({ handoff: handoff.handoff, principal: rig.flow.actor.principal, transport: "web", audience: "local" });
     expect(confirmed).toMatchObject({ kind: "accepted" });
-    expect(rig.flow.saveCalls()).toBe(1);
+    expect(rig.flow.saveCalls()).toBe(before + 1);
     expect(rig.flow.noActivationCalls()).toBe(true);
   });
+
+  for (const denial of ["local-policy", "local-sources", "source-restriction"] as const) {
+    test(`host confirmation refuses ${denial} without saving or changing the frame draft`, async () => {
+      rig = await openFlowEditorRig({ conversationPolicy: denial === "local-policy" ? "local" : "cloud" });
+      await rig.send(1, "ui:ready", { mount: rig.binding.mount });
+      if (denial === "local-sources") {
+        rig.state.state.items = rig.state.state.items.map(item => ({ ...item, restriction: "local" }));
+        const current = await rig.readDraft();
+        await rig.draftEditor.service.refresh(rig.draftId, current.draft.revision);
+      }
+      const view = await rig.readDraft();
+      const handoff = await rig.draftEditor.service.handoff(rig.draftId, view.draft.revision);
+      expect(handoff.ok).toBe(true);
+      if (!handoff.ok) throw new Error("Synthetic Flow draft is not ready for confirmation.");
+      expect(handoff.handoff.policy).toBe(denial === "local-sources" ? "local" : "cloud");
+      let restrictionChecks = 0;
+      if (denial === "source-restriction") rig.flow.restrictions.set("flow-editor-stack", () => {
+        restrictionChecks++;
+        return Promise.resolve(null);
+      });
+      const before = rig.flow.saveCalls();
+      const confirmed = await rig.draftEditor.confirm?.({ handoff: handoff.handoff, principal: rig.flow.actor.principal, transport: "web", audience: "local" });
+      expect(confirmed).toMatchObject({ kind: "blocked", reason: expect.any(String) });
+      if (denial === "local-sources") expect(confirmed).toMatchObject({ reason: "Flow creation needs a cloud-permitted draft and sources." });
+      if (denial === "source-restriction") expect(restrictionChecks).toBeGreaterThan(0);
+      expect(rig.flow.saveCalls()).toBe(before);
+      expect(await rig.readDraft()).toEqual(view);
+      expect(await rig.flow.host.lifecycleJournal(rig.flow.registry).read(`${view.draft.conversationId}:${view.draft.draftId}:${view.draft.revision}`)).toBeNull();
+      expect(rig.flow.noActivationCalls()).toBe(true);
+    });
+  }
 
   for (const type of ["flow:save", "host:approve", "action:confirm"]) {
     test(`a forged ${type} message retires the frame without saving or editing`, async () => {

@@ -41,8 +41,8 @@ export function hostileFlowEditorScript(attack: "save" | "approve" | "confirm-fe
 })();`;
 }
 
-export async function openFlowEditorRig(options: { script?: string } = {}) {
-  const flow = await openFlowCutoverRig("cloud");
+export async function openFlowEditorRig(options: { script?: string; conversationPolicy?: "local" | "cloud" } = {}) {
+  const flow = await openFlowCutoverRig(options.conversationPolicy ?? "cloud");
   await flow.activate();
   flow.policy.allowedAudiences = ["web", "view"];
   const declaration = flowSaveDeclaration();

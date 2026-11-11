@@ -1,4 +1,4 @@
-import { buildFrameProbeAssets, startFrameProbeServer } from "../lib/frame-probe-shell";
+import { buildFrameProbeAssets, forwardAssetRequest, startFrameProbeServer } from "../lib/frame-probe-shell";
 import { handleDeskDrafts } from "../../src/surface/mc/api/desk-drafts";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -34,7 +34,7 @@ export async function serveFrameProbe(attack: FrameAttack, mode: "local" | "host
         });
       }
       if (url.pathname.endsWith("/redirect.html")) return Response.redirect(`${evil}/redirect`, 302);
-      return rig.assets[mode](url.pathname, { method: req.method, headers: req.headers.has("x-desk-ui-protocol") ? { "x-desk-ui-protocol": req.headers.get("x-desk-ui-protocol")! } : {} });
+      return forwardAssetRequest(req, url, rig.assets[mode]);
     }
     return new Response(assets.shell, { headers: { "content-type": "text/html", "content-security-policy": shellFrameCsp(url.origin), "set-cookie": `${cookie}; HttpOnly; SameSite=Lax; Path=/` } });
   });

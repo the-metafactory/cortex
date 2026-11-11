@@ -4,9 +4,11 @@ import { hostileFlowEditorScript } from "../src/surface/mc/desk/__tests__/fixtur
 import { withTempHome } from "./probe-temp-home";
 import { serveFlowEditorProbe } from "./desk-flow-editor/server";
 
+type Fixture = Awaited<ReturnType<typeof serveFlowEditorProbe>>;
+
 const EDITED_ACTION = "A_SECOND_STEP";
 
-async function withFixture(browser: Browser, script: string | undefined, run: (fixture: Awaited<ReturnType<typeof serveFlowEditorProbe>>, page: Page, logs: string[]) => Promise<void>) {
+async function withFixture(browser: Browser, script: string | undefined, run: (fixture: Fixture, page: Page, logs: string[]) => Promise<void>) {
   const fixture = await serveFlowEditorProbe(script);
   const context = await browser.newContext();
   try {
@@ -21,7 +23,7 @@ async function withFixture(browser: Browser, script: string | undefined, run: (f
   }
 }
 
-async function readBackFromPulse(fixture: Awaited<ReturnType<typeof serveFlowEditorProbe>>, page: Page) {
+async function readBackFromPulse(fixture: Fixture, page: Page) {
   for (let tries = 0; tries < 100; tries++) {
     const shown = await fixture.rig.flow.pulse.command(["show", "F_EDITOR_DRAFT"]);
     if (shown.code === 0) return JSON.parse(shown.stdout);
@@ -30,7 +32,7 @@ async function readBackFromPulse(fixture: Awaited<ReturnType<typeof serveFlowEdi
   throw new Error(`Pulse never reported the confirmed Flow. Host said: ${await page.locator("section[aria-label='Review proposed action']").innerText()} | buttons: ${(await page.getByRole("button").evaluateAll(b => b.map(x => `${x.textContent}:${(x as HTMLButtonElement).disabled}`))).join(",")}`);
 }
 
-const savedFlows = (fixture: Awaited<ReturnType<typeof serveFlowEditorProbe>>) => fixture.rig.flow.saveCalls();
+const savedFlows = (fixture: Fixture) => fixture.rig.flow.saveCalls();
 
 await withTempHome(async () => {
   const browser = await chromium.launch({ headless: true });
@@ -83,7 +85,6 @@ await withTempHome(async () => {
         const before = await fixture.rig.readDraft();
         if (attack === "confirm-fetch") {
           await page.locator('[data-adapter-state="ready"]').waitFor({ timeout: 10_000 });
-          await page.waitForFunction(() => true);
           for (let tries = 0; tries < 50 && !logs.includes("FRAME_PROBE:confirm-denied"); tries++) await page.waitForTimeout(100);
           assert.ok(logs.includes("FRAME_PROBE:confirm-denied") && !logs.includes("FRAME_PROBE:confirm-allowed"), "frame cannot call the host confirmation route");
         } else {
