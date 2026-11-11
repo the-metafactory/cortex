@@ -13,17 +13,19 @@ import { buildApprovedSnapshot, ownerResultKit, requestParts, resultsOf, type Ow
 import type { ApprovedSnapshot, Authority, DispatchRequest, OperationLookup, OwnerResult, OwnerSupport, Provenance } from "../operations/types";
 import { canonicalWire } from "../operations/validation";
 import { adapterErrorSchema, objectSchema } from "../schema-primitives";
-import type { AdapterDeclaration, ObjectReference } from "../types";
+import { schemaKey } from "../schema-validation";
+import type { AdapterDeclaration } from "../types";
 import { ObjectReferenceSchema } from "../types";
+import { FLOW_DESTINATIONS_CAPABILITY, flowDestinationsPage, flowStackRef } from "./destinations";
 import { FLOW_ADAPTER_ID, flowName, flowReferenceSchema, flowSchemaRef, flowReadDeclaration } from "./schema";
 
 const CAPABILITY_ID = "flow.saved.create";
-export const FLOW_STACK_RESOLVER = "flow.stack.destinations";
-const STACK_RESOLVER_ID = FLOW_STACK_RESOLVER;
-const hostResolvesStacks = (): never => { throw new Error("Flow stacks are resolved by the host."); };
 const INPUT_REF = flowSchemaRef(`${CAPABILITY_ID}.input`);
 const OUTPUT_REF = flowSchemaRef(`${CAPABILITY_ID}.output`);
 const ERROR_REF = flowSchemaRef(`${CAPABILITY_ID}.error`);
+const DESTINATIONS_INPUT_REF = flowSchemaRef(`${FLOW_DESTINATIONS_CAPABILITY}.input`);
+const DESTINATIONS_OUTPUT_REF = flowSchemaRef(`${FLOW_DESTINATIONS_CAPABILITY}.output`);
+export const FLOW_SAVE_DRAFT_OBJECT_TYPE = "flow.save-draft";
 export const FLOW_SAVE_SUPPORT_ID = "flow.saved.create.v1";
 const kit = ownerResultKit("flow");
 
@@ -31,35 +33,51 @@ export const FlowSaveInputSchema = z.object({ stack: ObjectReferenceSchema, name
 export type FlowSaveInput = z.infer<typeof FlowSaveInputSchema>;
 const Saved = FlowSavedResponseSchema.extend({ name: flowName, sha256: FlowHashSchema });
 const Found = z.object({ name: flowName, source: z.literal("saved"), sha256: FlowHashSchema, provenance: z.object({ request_id: z.string() }) });
-const stackRef = (connectionId: string, stack: string): ObjectReference => ({ adapterId: FLOW_ADAPTER_ID, connectionId, objectType: "stack", canonicalId: stack });
-
-export const FLOW_DRAFT_OBJECT_TYPE: AdapterDeclaration["objectTypes"][number] = { objectType: "saved-draft", label: "Flow draft", schemaRef: INPUT_REF, relationships: [{ fieldPath: "/stack", targetAdapterId: FLOW_ADAPTER_ID, targetObjectType: "stack", cardinality: "one" }] };
-
 export function flowSaveDeclaration(): AdapterDeclaration {
   const reads = flowReadDeclaration();
   return {
     ...reads,
-    objectTypes: [...reads.objectTypes, FLOW_DRAFT_OBJECT_TYPE],
     schemas: [
       ...reads.schemas,
       { ...INPUT_REF, schema: objectSchema({ stack: flowReferenceSchema("stack"), name: { type: "string", pattern: "^F_[A-Z0-9_]{1,64}$" }, definition: { type: "string", minLength: 1 } }, ["stack", "name", "definition"]) },
       { ...OUTPUT_REF, schema: objectSchema({ ref: flowReferenceSchema("saved"), name: { type: "string" }, sha256: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["ref", "name", "sha256"]) },
       { ...ERROR_REF, schema: adapterErrorSchema(FLOW_ADAPTER_ID) },
+      { ...DESTINATIONS_INPUT_REF, schema: objectSchema({}, []) },
+      { ...DESTINATIONS_OUTPUT_REF, schema: objectSchema({ items: { type: "array", items: { $ref: schemaKey(flowSchemaRef("flow.stack")) } } }, ["items"]) },
     ],
-    capabilities: [{ capabilityId: STACK_RESOLVER_ID, label: "Resolve Flow stack", kind: "query", objectTypes: ["stack"], inputSchemaRef: flowSchemaRef("flow.saved.query.input"), outputSchemaRef: flowSchemaRef("flow.saved.output"), errorSchemaRef: ERROR_REF }, { capabilityId: CAPABILITY_ID, label: "Save Flow", kind: "action", objectTypes: ["saved"], inputSchemaRef: INPUT_REF, outputSchemaRef: OUTPUT_REF, errorSchemaRef: ERROR_REF }],
+    objectTypes: [
+      ...reads.objectTypes,
+      { objectType: FLOW_SAVE_DRAFT_OBJECT_TYPE, label: "Flow draft", schemaRef: INPUT_REF, relationships: [{ fieldPath: "/stack", targetAdapterId: FLOW_ADAPTER_ID, targetObjectType: "stack", cardinality: "one" }] },
+    ],
+    capabilities: [
+      { capabilityId: CAPABILITY_ID, label: "Save Flow", kind: "action", objectTypes: ["saved"], inputSchemaRef: INPUT_REF, outputSchemaRef: OUTPUT_REF, errorSchemaRef: ERROR_REF },
+      { capabilityId: FLOW_DESTINATIONS_CAPABILITY, label: "List destinations", kind: "query", objectTypes: ["stack"], inputSchemaRef: DESTINATIONS_INPUT_REF, outputSchemaRef: DESTINATIONS_OUTPUT_REF, errorSchemaRef: flowSchemaRef("flow.error") },
+    ],
   };
 }
 
 const FlowReceiptRecord = z.object({ name: flowName, sha256: FlowHashSchema }).strict();
 
-export async function flowSaveReceipt(journal: OperationJournalStore, request: { operationId: string; connectionId: string }): Promise<{ name: string; sha256: string } | null> {
+const heldFlowSave = async (journal: OperationJournalStore, request: { operationId: string; connectionId: string }) => {
   const stored = await journal.read(request.operationId);
   if (stored === null) return null;
   const snapshot = stored.journal.snapshot;
-  if ("kind" in snapshot || snapshot.adapterId !== FLOW_ADAPTER_ID || snapshot.connectionId !== request.connectionId || snapshot.capabilityId !== CAPABILITY_ID) return null;
+  return "kind" in snapshot || snapshot.adapterId !== FLOW_ADAPTER_ID || snapshot.connectionId !== request.connectionId || snapshot.capabilityId !== CAPABILITY_ID ? null : stored;
+};
+
+export async function flowSaveReceipt(journal: OperationJournalStore, request: { operationId: string; connectionId: string }): Promise<{ name: string; sha256: string } | null> {
+  const stored = await heldFlowSave(journal, request);
+  if (stored === null) return null;
   const succeeded = resultsOf(stored).findLast(response => response.result.kind === "succeeded");
   const receipt = succeeded?.result.kind === "succeeded" ? FlowReceiptRecord.safeParse(succeeded.result.evidence.receipt) : null;
   return receipt?.success ? receipt.data : null;
+}
+
+export async function flowSaveRefusal(journal: OperationJournalStore, request: { operationId: string; connectionId: string }): Promise<string | null> {
+  const stored = await heldFlowSave(journal, request);
+  if (stored === null) return null;
+  const result = kit.legacyResult(stored, "Flow");
+  return result.state === "failed" ? result.error : null;
 }
 
 export function flowSaveSupport(connectionId: string): OwnerSupport {
@@ -142,7 +160,7 @@ export function createFlowSaveBinding(options: FlowSaveBindingOptions) {
     }
   };
   return {
-    declaration: flowSaveDeclaration(), support, bindings: { handlers: { [STACK_RESOLVER_ID]: hostResolvesStacks }, observations: {} },
+    declaration: flowSaveDeclaration(), support, bindings: { handlers: { [FLOW_DESTINATIONS_CAPABILITY]: () => flowDestinationsPage(options.connectionId, options.stack) }, observations: {} },
     writerBinding: { stack: options.stack, owner: "flow", adapterId: FLOW_ADAPTER_ID, connectionId: options.connectionId, capabilityId: CAPABILITY_ID },
     connector: { writerOwner: "flow" as const, support, dispatch, lookup }, dispatch, lookup,
     async lookupLegacy(operationId: string) {
@@ -173,7 +191,7 @@ export function createFlowSaveFacade(options: { binding: FlowSaveBinding; journa
       const { operationId: _operationId, ...provenance } = request.provenance;
       let snapshot: ApprovedSnapshot;
       try {
-        snapshot = flowSaveApprovedSnapshot({ connectionId: options.binding.support.connectionId, stack: options.binding.writerBinding.stack, provenance, input: { stack: stackRef(options.binding.support.connectionId, options.binding.writerBinding.stack), name: request.fields.name ?? "", definition: request.fields.definition ?? "" } });
+        snapshot = flowSaveApprovedSnapshot({ connectionId: options.binding.support.connectionId, stack: options.binding.writerBinding.stack, provenance, input: { stack: flowStackRef(options.binding.support.connectionId, options.binding.writerBinding.stack), name: request.fields.name ?? "", definition: request.fields.definition ?? "" } });
       } catch { return refuse("The reviewed Flow is invalid or no longer matches this operation."); }
       await options.journal.approve({ operationId: request.operationId, idempotencyKey: request.operationId, ownerRequestId: studioRequestId(request.operationId), snapshot, authority, at: new Date((options.now ?? Date.now)()).toISOString() });
       if (!await lifecycle.activate()) return refuse("The Flow save binding is inactive.");

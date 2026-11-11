@@ -1,6 +1,6 @@
 export const FLOW_EDITOR_MEDIA = { html: "text/html", js: "text/javascript", css: "text/css" } as const;
 export const FLOW_EDITOR_ENTRY = "ui/flow-editor.html";
-export const FLOW_EDITOR_VIEWS = [{ objectType: "saved-draft", view: "editor" }] as const;
+export const FLOW_EDITOR_VIEWS = [{ objectType: "flow.save-draft", view: "editor" }] as const;
 
 const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="flow-editor.css"></head><body>
 <main aria-label="Flow editor">

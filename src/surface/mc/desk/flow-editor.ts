@@ -8,7 +8,7 @@ import { flowName } from "../../../conversations/domain-adapters/flow/schema";
 import type { FrameBinding } from "./adapter-frame-host";
 import { routineStepLabels } from "./routine-steps";
 
-export const FLOW_EDITOR_MOUNT = { objectType: "saved-draft", view: "editor" } as const;
+export const FLOW_EDITOR_MOUNT = { objectType: "flow.save-draft", view: "editor" } as const;
 const MAX_FINDINGS = 20;
 const MAX_FINDING_CHARS = 300;
 const MAX_STEPS = 100;

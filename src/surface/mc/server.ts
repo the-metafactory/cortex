@@ -100,6 +100,7 @@ import { handleDeskDrafts } from "./api/desk-drafts";
 import { DESK_DRAFTS_PATH } from "./desk/draft-editor-contract";
 import { deskGraphDraftEditor, type GraphDraftSetup } from "./desk/graph-draft-entry";
 import { deskBalanceDraftEditor, type BalanceDraftSetup } from "./desk/balance-draft-entry";
+import { deskFlowDraftEditor, type FlowDraftSetup } from "./desk/flow-draft-entry";
 import type { DeskDraftAccess } from "./desk/draft-editor";
 import type { GraphSurfaceAccess } from "./desk/graph-surfaces";
 import { GRAPH_SURFACES_PATH } from "./desk/graph-surface-schema";
@@ -230,6 +231,7 @@ export interface MissionControlViews {
   drafts?: DeskDraftAccess;
   graphDrafts?: GraphDraftSetup;
   balanceDrafts?: BalanceDraftSetup;
+  flowDrafts?: FlowDraftSetup;
 }
 
 export interface StartServerOptions extends MissionControlViews {
@@ -248,10 +250,11 @@ export function startServer(
   db: Database,
   options: StartServerOptions = {}
 ): ServerContext {
-  if ([options.drafts, options.graphDrafts, options.balanceDrafts].filter(Boolean).length > 1) throw new Error("Configure only one of drafts, graphDrafts or balanceDrafts");
+  if ([options.drafts, options.graphDrafts, options.balanceDrafts, options.flowDrafts].filter(Boolean).length > 1) throw new Error("Configure only one of drafts, graphDrafts, balanceDrafts or flowDrafts");
   const editor = options.graphDrafts
     ? deskGraphDraftEditor(options.graphDrafts.host, options.graphDrafts.deps, options.graphDrafts.options)
-    : options.balanceDrafts ? deskBalanceDraftEditor(options.balanceDrafts.host, options.balanceDrafts.deps, options.balanceDrafts.options) : undefined;
+    : options.balanceDrafts ? deskBalanceDraftEditor(options.balanceDrafts.host, options.balanceDrafts.deps, options.balanceDrafts.options)
+    : options.flowDrafts ? deskFlowDraftEditor(options.flowDrafts.host, options.flowDrafts.deps, options.flowDrafts.options) : undefined;
   if (editor) options = { ...options, drafts: () => editor };
   const wsRegistry = new WsClientRegistry();
   const deskLedger = new HandledLedger();

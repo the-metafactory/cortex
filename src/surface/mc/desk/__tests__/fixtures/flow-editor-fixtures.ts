@@ -48,9 +48,9 @@ export async function openFlowEditorRig(options: { script?: string } = {}) {
   const declaration = flowSaveDeclaration();
   const files = { ...FLOW_EDITOR_FILES };
   if (options.script) files["ui/flow-editor.js"] = { body: options.script, mediaType: "text/javascript" };
-  const backendSource = deskBackendFixtureSource({ declaration, actionCapabilityId: "flow.saved.create", writerOwner: "flow", support: flow.binding.support, query: { capabilityId: "flow.stack.destinations", page: { items: [] } } });
+  const backendSource = deskBackendFixtureSource({ declaration, actionCapabilityId: "flow.saved.create", writerOwner: "flow", support: flow.binding.support, query: { capabilityId: "flow.destinations", page: { items: [] } } });
   const assets = await openAssetRig({ adapterId: "flow", ui: { entry: FLOW_EDITOR_ENTRY, views: [...FLOW_EDITOR_VIEWS], files }, package: { declaration, backendSource, draftingBindings: [flowSaveDraftingBinding], readBindings: [] } });
-  assets.connections.set(ASSET_OWNER, [{ connectionId: flow.binding.support.connectionId, packageId: assets.packageId, state: "enabled", readCapabilityIds: ["flow.stack.destinations"], writeCapabilityIds: ["flow.saved.create"] }]);
+  assets.connections.set(ASSET_OWNER, [{ connectionId: flow.binding.support.connectionId, packageId: assets.packageId, state: "enabled", readCapabilityIds: ["flow.destinations"], writeCapabilityIds: ["flow.saved.create"] }]);
 
   const state = draftingState();
   const connectionId = flow.binding.support.connectionId;

@@ -54,11 +54,11 @@ export interface ManualModeRig extends DraftRouteRig {
   readonly state: { modelFails: boolean; localOnly: boolean; sourceAvailable: boolean; requests: readonly unknown[] };
 }
 
-export async function expectManualModeKeepsEdits(rig: ManualModeRig, detailPointer: string, mutations: () => unknown): Promise<void> {
-  const edited = await editDraft(rig, await makeDraft(rig), "/title", { kind: "set", value: "Manual title" });
+export async function expectManualModeKeepsEdits(rig: ManualModeRig, detailPointer: string, mutations: () => unknown, editPointer = "/title"): Promise<void> {
+  const edited = await editDraft(rig, await makeDraft(rig), editPointer, { kind: "set", value: "Manual value" });
   rig.state.modelFails = true;
   const failure = await refreshDraft(rig, edited);
-  expect(failure.view.draft.fields["/title"]?.value).toBe("Manual title");
+  expect(failure.view.draft.fields[editPointer]?.value).toBe("Manual value");
   expect(failure.view.draft.limitations.length).toBeGreaterThan(0);
   rig.state.localOnly = true;
   const calls = rig.state.requests.length;
@@ -70,4 +70,23 @@ export async function expectManualModeKeepsEdits(rig: ManualModeRig, detailPoint
   const denied = await rig.call("GET", `${draftPath(local)}/details?pointer=${detailPointer}`);
   expect(await denied.json()).toMatchObject({ details: { sources: [], hiddenSources: 1 } });
   await expectBlockedConfirmation(rig, local, mutations);
+}
+
+export async function expectRestartReopensDraft(rig: DraftRouteRig & { reopen(): Promise<void>; state: { requests: readonly unknown[] } }, draftId: string, snapshot: DraftEditorView["view"]["draft"]): Promise<void> {
+  const generations = rig.state.requests.length;
+  await rig.reopen();
+  const reopened = await makeDraft(rig);
+  expect(reopened.reopened).toBe(true);
+  expect(reopened.view.draft).toEqual(snapshot);
+  expect(rig.state.requests).toHaveLength(generations);
+  expect((await makeDraft(rig, { newDraft: true })).view.draft.draftId).not.toBe(draftId);
+}
+
+export async function expectServedReopen(rig: DraftRouteRig & { serve(): DraftClient }, mutations: () => unknown = () => []): Promise<void> {
+  const server = rig.serve();
+  const first = await (await server.call("POST", DESK_DRAFTS_PATH, rig.makeInput)).json() as DraftEditorView;
+  const again = await (await server.call("POST", DESK_DRAFTS_PATH, rig.makeInput)).json() as DraftEditorView & { reopened: boolean };
+  expect(again.reopened).toBe(true);
+  expect(again.view.draft.draftId).toBe(first.view.draft.draftId);
+  expect(mutations()).toEqual([]);
 }
