@@ -142,15 +142,19 @@ describe("durable conversation tool authorization", () => {
 });
 
 
+async function workerStatusHost(outcomes: ToolOutcome[]): Promise<ConversationHost> {
+  return open(registry(), async request => {
+    const result = await request.tools!.call("worker", "worker_status", { node: "example/maps#30" }, request.signal);
+    outcomes.push(result);
+    return result.text;
+  });
+}
+
 describe("worker status host release", () => {
   test("the host asks the source to remember status and withholds a revoked response", async () => {
     let remembered = 0;
     const outcomes: ToolOutcome[] = [];
-    const host = await open(registry(), async request => {
-      const result = await request.tools!.call("worker", "worker_status", { node: "example/maps#30" }, request.signal);
-      outcomes.push(result);
-      return result.text;
-    });
+    const host = await workerStatusHost(outcomes);
     await host.attachSources({ resolvers: {}, readbacks: {}, writers: {}, workers: {
       maps: () => ["example/maps#12"], recorded: () => "cloud", now: Date.now,
       read: () => Promise.resolve({ state: "available", handoff: { node: "example/maps#30", map: "example/maps#12", policy: "cloud", state: "running", reason: null, generation: 3, pr: null, result: "REVOKED_WORKER_RESULT", observedAt: Date.now() } }),
@@ -169,11 +173,7 @@ describe("worker status host release", () => {
 describe("worker source getters", () => {
   test("a late attached getter can release currently authorized worker status", async () => {
     const outcomes: ToolOutcome[] = [];
-    const host = await open(registry(), async request => {
-      const result = await request.tools!.call("worker", "worker_status", { node: "example/maps#30" }, request.signal);
-      outcomes.push(result);
-      return result.text;
-    });
+    const host = await workerStatusHost(outcomes);
     await host.attachSources({ resolvers: {}, readbacks: {}, writers: {}, get workers() { return {
       maps: () => ["example/maps#12"], recorded: () => "cloud" as const, now: Date.now,
       read: () => Promise.resolve({ state: "available" as const, handoff: { node: "example/maps#30", map: "example/maps#12", policy: "cloud" as const, state: "running" as const, reason: null, generation: 3, pr: null, result: "AUTHORIZED_WORKER_RESULT", observedAt: Date.now() } }),
