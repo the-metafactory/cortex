@@ -53,10 +53,12 @@ function representable(node: unknown): boolean {
 export class DraftService {
   private readonly now: () => Date;
   private readonly newId: () => string;
+  private readonly timeZone: string;
 
   constructor(private readonly engine: Pick<Session, "commit" | "snapshot">, private readonly deps: DraftServiceDeps, private readonly context: Context = BACKGROUND_CONTEXT) {
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? randomUUID;
+    this.timeZone = new Intl.DateTimeFormat("en", { timeZone: deps.timeZone }).resolvedOptions().timeZone;
   }
 
   private async load(draftId: string): Promise<StoredDraft | null> {
@@ -333,9 +335,8 @@ export class DraftService {
 
   private async callModel(binding: DraftingBinding, view: DraftingView, lane: Lane, items: SourceItem[], targets: string[]): Promise<{ ok: true; modelId: string; output: ModelOutput; timeZone: string } | { ok: false; limitation: Limitation }> {
     let result: Awaited<ReturnType<DraftModel["generate"]>>;
-    let timeZone: string;
+    const timeZone = this.timeZone;
     try {
-      timeZone = new Intl.DateTimeFormat("en", { timeZone: this.deps.timeZone }).resolvedOptions().timeZone;
       result = await this.deps.model.generate({
         lane, timeZone, guidance: binding.guidance, schemaRef: view.inputSchemaRef, schema: view.root, targets,
         fieldHints: binding.fieldHints.map(hint => ({ pointer: hint.pointer, role: hint.role, ...(hint.widget ? { widget: hint.widget } : {}) })),

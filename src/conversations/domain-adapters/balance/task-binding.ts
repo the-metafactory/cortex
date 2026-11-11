@@ -40,6 +40,7 @@ const INPUT_SCHEMA = objectSchema({
 }, ["area", "title"]);
 const OUTPUT_SCHEMA = objectSchema({ ref: referenceSchema("task") }, ["ref"]);
 const ERROR_SCHEMA = adapterErrorSchema(ADAPTER_ID);
+const TASK_RELATIONSHIPS: AdapterDeclaration["objectTypes"][number]["relationships"] = [{ fieldPath: "/area", targetAdapterId: ADAPTER_ID, targetObjectType: "area", cardinality: "one" }, { fieldPath: "/project", targetAdapterId: ADAPTER_ID, targetObjectType: "project", cardinality: "one" }];
 
 export function balanceTaskCreateDeclaration(): AdapterDeclaration {
   return {
@@ -55,10 +56,10 @@ export function balanceTaskCreateDeclaration(): AdapterDeclaration {
       { ...ERROR_SCHEMA_REF, schema: ERROR_SCHEMA },
     ],
     objectTypes: [
-      { objectType: "task", label: "Task", schemaRef: TASK_SCHEMA_REF, relationships: [{ fieldPath: "/area", targetAdapterId: ADAPTER_ID, targetObjectType: "area", cardinality: "one" }, { fieldPath: "/project", targetAdapterId: ADAPTER_ID, targetObjectType: "project", cardinality: "one" }] },
+      { objectType: "task", label: "Task", schemaRef: TASK_SCHEMA_REF, relationships: TASK_RELATIONSHIPS },
       { objectType: "area", label: "Area", schemaRef: AREA_SCHEMA_REF, relationships: [] },
       { objectType: "project", label: "Project", schemaRef: PROJECT_SCHEMA_REF, relationships: [] },
-      { objectType: "task-draft", label: "Task draft", schemaRef: INPUT_SCHEMA_REF, relationships: [{ fieldPath: "/area", targetAdapterId: ADAPTER_ID, targetObjectType: "area", cardinality: "one" }, { fieldPath: "/project", targetAdapterId: ADAPTER_ID, targetObjectType: "project", cardinality: "one" }] },
+      { objectType: "task-draft", label: "Task draft", schemaRef: INPUT_SCHEMA_REF, relationships: TASK_RELATIONSHIPS },
     ],
     capabilities: [
       { capabilityId: CAPABILITY_ID, label: "Create task", kind: "action", objectTypes: ["task"], inputSchemaRef: INPUT_SCHEMA_REF, outputSchemaRef: OUTPUT_SCHEMA_REF, errorSchemaRef: ERROR_SCHEMA_REF },

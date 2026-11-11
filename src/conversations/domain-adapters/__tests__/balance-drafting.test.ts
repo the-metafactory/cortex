@@ -1,9 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { DRAFT_GLIDER_PROJECT, DRAFT_HOME_GLIDER_PROJECT, DRAFT_HOME_AREA, DRAFT_LAB_AREA, balanceDiscussionOutput, conflictingDueOutput, openBalanceDraftRig } from "../balance/fixtures/balance-draft";
+import { DRAFT_GLIDER_PROJECT, DRAFT_HOME_GLIDER_PROJECT, DRAFT_HOME_AREA, DRAFT_LAB_AREA, balanceDiscussionOutput, conflictingDueOutput, openBalanceDraftRig } from "../../../surface/mc/desk/fixtures/balance-draft";
 import { DraftingBindings } from "../drafting";
 import { balanceTaskDraftingBinding } from "../drafting/balance";
+import { balanceDraftDestinations } from "../../../surface/mc/desk/balance-draft-destinations";
+import { loadBalanceState, saveBalanceState } from "../../../surface/mc/desk/balance-store";
 import type { DraftEditorView } from "../../../surface/mc/desk/draft-editor-contract";
-import { draftPath, editDraft, expectBlockedConfirmation, expectManualModeKeepsEdits, makeDraft, ownFields, refreshDraft } from "./fixtures/draft-route";
+import { draftPath, editDraft, expectBlockedConfirmation, expectManualModeKeepsEdits, expectStaleRefreshKeepsTitle, makeDraft, ownFields, refreshDraft } from "./fixtures/draft-route";
 
 type Rig = Awaited<ReturnType<typeof openBalanceDraftRig>>;
 const rigs: Rig[] = [];
@@ -145,10 +147,7 @@ test("an untouched note refreshes with later turns while a stale model result ca
   rig.state.output = balanceDiscussionOutput(true);
   const updated = await refreshDraft(rig, made);
   expect(updated.view.draft.fields["/note"]?.value).toContain("fitting check");
-  rig.state.onGenerate = async () => { rig.state.onGenerate = undefined; await editDraft(rig, updated, "/title", { kind: "set", value: "Edited during generation" }); };
-  const stale = await rig.call("POST", `${draftPath(updated)}/refresh`, { revision: updated.view.draft.revision });
-  expect(stale.status).toBe(409);
-  expect((await rig.editor.service.read(updated.view.draft.draftId))?.draft.fields["/title"]?.value).toBe("Edited during generation");
+  await expectStaleRefreshKeepsTitle(rig, updated);
   expect(rig.ownerCalls).toEqual([]);
 });
 
@@ -173,6 +172,43 @@ test("destination changes keep edits, flag incompatibilities and require refresh
 test("unavailable models and revoked or local-only sources keep manual editing and withhold derivatives", async () => {
   const rig = await open();
   await expectManualModeKeepsEdits(rig, "/note", () => rig.ownerCalls);
+});
+
+test("confirmation rechecks project membership after a prior denied confirmation", async () => {
+  const rig = await open();
+  const made = await makeDraft(rig);
+  rig.policy.writesAllowed = false;
+  await expectBlocked(rig, made);
+  const state = loadBalanceState(rig.db);
+  if (!state) throw new Error("Synthetic Balance state missing");
+  const lab = state.outline.children[0];
+  const home = state.outline.children[1];
+  const project = lab?.children.find(child => child.id === DRAFT_GLIDER_PROJECT);
+  if (!lab || !home || !project) throw new Error("Synthetic Balance project missing");
+  lab.children = lab.children.filter(child => child !== project);
+  home.children.push(project);
+  saveBalanceState(rig.db, state);
+  rig.policy.writesAllowed = true;
+  expect(await rig.confirm(made.view.draft)).toMatchObject({ kind: "blocked", reason: expect.stringContaining("not open in the chosen area") });
+  expect(rig.ownerCalls).toEqual([]);
+});
+
+test("destination checks recover from unavailable sessions and failed reads on the next call", async () => {
+  const rig = await open();
+  let fail = false;
+  const destinations = balanceDraftDestinations({ connectionId: rig.connectionId, authority: rig.authority, session: async conversationId => {
+    if (fail) { fail = false; throw new Error("Synthetic session unavailable"); }
+    return rig.session(conversationId);
+  } });
+  const check = () => destinations.inArea(rig.makeInput.conversationId, rig.ref("area", DRAFT_LAB_AREA), rig.ref("project", DRAFT_GLIDER_PROJECT));
+  rig.state.sessionEnabled = false;
+  expect(await check()).toBe(false);
+  rig.state.sessionEnabled = true;
+  expect(await check()).toBe(true);
+  fail = true;
+  await expect(check()).rejects.toThrow("Synthetic session unavailable");
+  expect(await check()).toBe(true);
+  expect(rig.ownerCalls).toEqual([]);
 });
 
 test("invalid guidance is rejected, required fields stay editable by hand", async () => {

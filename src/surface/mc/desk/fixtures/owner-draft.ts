@@ -1,29 +1,31 @@
+import type { Database } from "bun:sqlite";
+import { DEFAULT_CONFIG } from "../../config";
+import { initDatabase } from "../../db/init";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openConversationHost, type ConversationHost } from "../host";
-import type { AuthorityBindings, AuthorityMediator, HostContext, TrustedConnector, WriterLease } from "../authority";
-import type { ConnectionRecord, PolicyInputs, PrincipalBinding, RestrictionRecord } from "../authority-records";
-import { canonicalWire } from "./operations/validation";
-import { syntheticWriterPlan, syntheticWriterSteps } from "./operations/writer-fixtures";
-import { writerLease, type WriterBinding } from "./operations/writer-authority";
-import type { OperationBridge } from "./operations/dispatch";
-import type { OperationJournalStore } from "./operations/journal";
-import type { OwnerSupport } from "./operations/types";
-import { DomainAdapterRegistry } from "./registry";
-import { ReadBindings } from "./reads/bindings";
-import type { QueryFetchRequest, QueryPage } from "./reads/query-types";
-import type { ReadBinding } from "./reads/types";
-import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "./types";
-import type { DraftServiceDeps, DraftView, Lane, ModelOutput, ModelRequest, SourceItem } from "./drafting";
-import type { startServer, StartServerOptions } from "../../surface/mc/server";
-import { handleDeskDrafts } from "../../surface/mc/api/desk-drafts";
-import { buildAllowedHostnames } from "../../surface/mc/api/mutation-guard";
-import type { DeskDraftEditor } from "../../surface/mc/desk/draft-editor";
-import { DESK_DRAFTS_PATH, type DraftConfirmation } from "../../surface/mc/desk/draft-editor-contract";
-import type { OwnerDraftEntryOptions, OwnerDraftSession } from "../../surface/mc/desk/owner-draft-entry";
-
+import { openConversationHost, type ConversationHost } from "../../../../conversations/host";
+import type { AuthorityBindings, AuthorityMediator, HostContext, TrustedConnector, WriterLease } from "../../../../conversations/authority";
+import type { ConnectionRecord, PolicyInputs, PrincipalBinding, RestrictionRecord } from "../../../../conversations/authority-records";
+import { canonicalWire } from "../../../../conversations/domain-adapters/operations/validation";
+import { syntheticWriterPlan, syntheticWriterSteps } from "../../../../conversations/domain-adapters/operations/writer-fixtures";
+import { writerLease, type WriterBinding } from "../../../../conversations/domain-adapters/operations/writer-authority";
+import type { OperationBridge } from "../../../../conversations/domain-adapters/operations/dispatch";
+import type { OperationJournalStore } from "../../../../conversations/domain-adapters/operations/journal";
+import type { OwnerSupport } from "../../../../conversations/domain-adapters/operations/types";
+import { DomainAdapterRegistry } from "../../../../conversations/domain-adapters/registry";
+import { ReadBindings } from "../../../../conversations/domain-adapters/reads/bindings";
+import type { QueryFetchRequest, QueryPage } from "../../../../conversations/domain-adapters/reads/query-types";
+import type { ReadBinding } from "../../../../conversations/domain-adapters/reads/types";
+import type { AdapterBindings, AdapterDeclaration, ObjectReference } from "../../../../conversations/domain-adapters/types";
+import type { DraftView, Lane, ModelOutput, ModelRequest, SourceItem } from "../../../../conversations/domain-adapters/drafting";
+import { startServer, type StartServerOptions } from "../../server";
+import { handleDeskDrafts } from "../../api/desk-drafts";
+import { buildAllowedHostnames } from "../../api/mutation-guard";
+import type { DeskDraftEditor } from "../draft-editor";
+import { DESK_DRAFTS_PATH, type DraftConfirmation } from "../draft-editor-contract";
+import type { OwnerDraftDeps, OwnerDraftEntryOptions, OwnerDraftSession, OwnerDraftSetup } from "../owner-draft-entry";
 
 export type DraftServeOptions = Pick<StartServerOptions, "drafts">;
 
@@ -44,8 +46,6 @@ function draftClient(call: DraftClient["call"]): DraftClient {
   };
 }
 
-export type DraftEntryDeps = Omit<DraftServiceDeps, "destinations" | "bindings">;
-
 export interface OwnerDraftBindingRig {
   readonly support: OwnerSupport;
   readonly writerBinding: WriterBinding;
@@ -60,24 +60,17 @@ export interface OwnerDraftReadRig {
   readonly destinations: () => QueryPage;
 }
 
-export interface DraftRigSetup {
-  readonly host: ConversationHost;
-  readonly deps: DraftEntryDeps;
-  readonly options: OwnerDraftEntryOptions<OwnerDraftSession>;
-}
-
-export interface OwnerDraftTarget<Editor extends DeskDraftEditor> {
+export interface OwnerDraftTarget<Editor extends DeskDraftEditor, Session extends OwnerDraftSession> {
   readonly read: OwnerDraftReadRig;
   readonly destinationIds: string[];
   readonly destinationType: string;
-  readonly sessionExtras: (destinations: ObjectReference[], read: OwnerDraftReadRig) => Record<string, unknown>;
+  readonly session: (base: OwnerDraftSession, destinations: ObjectReference[], read: OwnerDraftReadRig) => Session;
   createBinding(journal: OperationJournalStore): OwnerDraftBindingRig;
-  createEditor(setup: DraftRigSetup): Editor;
-  serve(setup: DraftRigSetup, principal: string, serverOptions: DraftServeOptions): ReturnType<typeof startServer>;
-  close(): Promise<void> | void;
+  createEditor(setup: OwnerDraftSetup<Session>): Editor;
+  serverOptions(setup: OwnerDraftSetup<Session>): Pick<StartServerOptions, "graphDrafts" | "balanceDrafts">;
 }
 
-export interface OwnerDraftSpec<Editor extends DeskDraftEditor, Extra extends object> {
+export interface OwnerDraftSpec<Editor extends DeskDraftEditor, Extra extends object, Session extends OwnerDraftSession> {
   readonly adapterId: string;
   readonly capabilityId: string;
   readonly title: string;
@@ -85,8 +78,8 @@ export interface OwnerDraftSpec<Editor extends DeskDraftEditor, Extra extends ob
   readonly connectorId: string;
   readonly discussion: string;
   readonly principal: string;
-  readonly openTarget: (context: { root: string; connectionId: string; ref: (objectType: string, canonicalId: string) => ObjectReference }) => OwnerDraftTarget<Editor> | Promise<OwnerDraftTarget<Editor>>;
-  readonly extend: (core: OwnerDraftCore<Editor>) => Extra;
+  readonly openTarget: (context: { root: string; db: Database; connectionId: string; ref: (objectType: string, canonicalId: string) => ObjectReference }) => OwnerDraftTarget<Editor, Session> | Promise<OwnerDraftTarget<Editor, Session>>;
+  readonly extend: (core: OwnerDraftCore<Editor, Session>) => Extra;
 }
 
 export interface OwnerDraftState {
@@ -95,8 +88,9 @@ export interface OwnerDraftState {
   items: SourceItem[];
 }
 
-export interface OwnerDraftCore<Editor extends DeskDraftEditor> extends DraftClient {
+export interface OwnerDraftCore<Editor extends DeskDraftEditor, Session extends OwnerDraftSession> extends DraftClient {
   readonly root: string;
+  readonly db: Database;
   readonly registry: DomainAdapterRegistry;
   readonly policy: PolicyInputs;
   readonly state: OwnerDraftState;
@@ -104,14 +98,14 @@ export interface OwnerDraftCore<Editor extends DeskDraftEditor> extends DraftCli
   readonly connectionId: string;
   readonly principal: PrincipalBinding;
   readonly ref: (objectType: string, canonicalId: string) => ObjectReference;
-  readonly target: OwnerDraftTarget<Editor>;
+  readonly target: OwnerDraftTarget<Editor, Session>;
   readonly host: ConversationHost;
   readonly binding: OwnerDraftBindingRig;
   readonly journal: OperationJournalStore;
   readonly authority: AuthorityMediator;
   readonly bridge: OperationBridge;
   readonly editor: Editor;
-  readonly session: (conversationId: string) => Promise<OwnerDraftSession | null>;
+  readonly session: (conversationId: string) => Promise<Session | null>;
   readonly lease: WriterLease;
   reopen(): Promise<void>;
   restrict(canonicalId: string, patch: Partial<Pick<RestrictionRecord, "status" | "egress">>): Promise<void>;
@@ -119,7 +113,7 @@ export interface OwnerDraftCore<Editor extends DeskDraftEditor> extends DraftCli
   close(): Promise<void>;
 }
 
-export async function openOwnerDraftRig<Editor extends DeskDraftEditor, Extra extends object>(spec: OwnerDraftSpec<Editor, Extra>, fixture: { discussion?: string } = {}): Promise<OwnerDraftCore<Editor> & Extra> {
+export async function openOwnerDraftRig<Editor extends DeskDraftEditor, Extra extends object, Session extends OwnerDraftSession>(spec: OwnerDraftSpec<Editor, Extra, Session>, fixture: { discussion?: string } = {}): Promise<OwnerDraftCore<Editor, Session> & Extra> {
   const at = new Date(spec.now).toISOString();
   const root = await mkdtemp(join(tmpdir(), "desk-draft-rig-"));
   const openHost = async () => {
@@ -134,7 +128,8 @@ export async function openOwnerDraftRig<Editor extends DeskDraftEditor, Extra ex
   const entryId = fixture.discussion ? (await host.entries(conversation.id, 100, undefined)).entries.find(entry => entry.role === "user")?.id : "entry-example";
   if (!entryId) throw new Error("Synthetic discussion entry missing");
   const ref = (objectType: string, canonicalId: string): ObjectReference => ({ adapterId: spec.adapterId, connectionId, objectType, canonicalId });
-  const target = await spec.openTarget({ root, connectionId, ref });
+  const db = initDatabase(join(root, "desk.sqlite"));
+  const target = await spec.openTarget({ root, db, connectionId, ref });
   const { read } = target;
   const refs = () => target.destinationIds.map(id => ref(target.destinationType, id));
   const registry = new DomainAdapterRegistry();
@@ -179,24 +174,24 @@ export async function openOwnerDraftRig<Editor extends DeskDraftEditor, Extra ex
   let bridge = host.lifecycleBridge(registry, bindings, () => binding.support);
   if (!await bridge.activate(binding.writerBinding, lease)) throw new Error("Synthetic writer not active");
   let runner = host.readQueries(registry, bindings);
-  const session = async (conversationId: string): Promise<OwnerDraftSession | null> => {
+  const session = async (conversationId: string): Promise<Session | null> => {
     if (conversationId !== conversation.id) return null;
     const context: HostContext | null = await authority.authenticate("draft-session");
-    return context ? { context, runner, sink: { kind: "web" as const, conversationId }, lease, principal: principal.principal, ...target.sessionExtras(refs(), read) } : null;
+    return context ? target.session({ context, runner, sink: { kind: "web", conversationId }, lease, principal: principal.principal }, refs(), read) : null;
   };
   const sourceRestriction = restrictions[0];
   if (!sourceRestriction) throw new Error("Synthetic source restriction missing");
-  const deps: DraftEntryDeps = { registry,
+  const deps: OwnerDraftDeps = { registry,
     sources: { capture: () => Promise.resolve({ boundary: { entryId, revision: state.head }, items: state.items.map(item => ({ ...item, restriction: state.localOnly ? "local" as const : item.restriction })), unavailable: 0 }), head: () => Promise.resolve(state.head) },
     policy: { revision: () => Promise.resolve("1"), readable: () => Promise.resolve(state.sourceAvailable), releasable: (_ids, lane) => Promise.resolve(state.sourceAvailable && (!state.localOnly || lane === "local")) },
     model: { lanes: () => Promise.resolve(state.lanes), generate: async request => { state.requests.push(request); await state.onGenerate?.(); if (state.modelFails) throw new Error("Synthetic model unavailable"); return { modelId: "synthetic-model", output: state.output }; } },
     now: () => new Date(at), timeZone: "Europe/Zurich",
   };
-  let options: OwnerDraftEntryOptions<OwnerDraftSession> = { connectionId, audience: "cloud", authority, bridge, session, sourceRestrictions: () => Promise.resolve(state.sourceRestrictionsAvailable ? [{ ref: sourceRestriction.source, restrictionRef: sourceRestriction.restrictionRef }] : null) };
+  let options: OwnerDraftEntryOptions<Session> = { connectionId, audience: "cloud", authority, bridge, session, sourceRestrictions: () => Promise.resolve(state.sourceRestrictionsAvailable ? [{ ref: sourceRestriction.source, restrictionRef: sourceRestriction.restrictionRef }] : null) };
   let editor = target.createEditor({ host, deps, options });
   const servers: ReturnType<typeof startServer>[] = [];
-  const core: OwnerDraftCore<Editor> = {
-    root, registry, policy, state, makeInput: { conversationId: conversation.id, entryId, capabilityId: spec.capabilityId, connectionId }, connectionId, principal, ref, target, session, lease,
+  const core: OwnerDraftCore<Editor, Session> = {
+    root, db, registry, policy, state, makeInput: { conversationId: conversation.id, entryId, capabilityId: spec.capabilityId, connectionId }, connectionId, principal, ref, target, session, lease,
     get host() { return host; }, get binding() { return binding; }, get journal() { return journal; }, get authority() { return authority; }, get bridge() { return bridge; }, get editor() { return editor; },
     async reopen() {
       await bridge.settled();
@@ -217,7 +212,7 @@ export async function openOwnerDraftRig<Editor extends DeskDraftEditor, Extra ex
       await authority.publishHostRecord({ kind: "restriction", value: { ...restriction, ...patch, revision: "2" } }, 1);
     },
     serve(serverOptions = {}) {
-      const server = target.serve({ host, deps, options }, principal.principal, serverOptions);
+      const server = startServer({ ...DEFAULT_CONFIG, port: 0, governance: { ...DEFAULT_CONFIG.governance, principals: [], localPrincipal: principal.principal } }, db, { ...serverOptions, ...target.serverOptions({ host, deps, options }) });
       servers.push(server);
       return {
         ...server,
@@ -228,7 +223,7 @@ export async function openOwnerDraftRig<Editor extends DeskDraftEditor, Extra ex
       const req = new Request(`http://127.0.0.1:8767${path}`, { method, headers: { host: "127.0.0.1:8767", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
       return handleDeskDrafts(req, new URL(req.url), { isLoopback: true, listenPort: 8767, principals: new Set(), localPrincipal: principal.principal, allowedHostnames: buildAllowedHostnames("127.0.0.1") }, () => editor);
     }),
-    async close() { for (const server of servers) server.stop(true); await bridge.settled(); await host.close(); await target.close(); await rm(root, { recursive: true, force: true }); },
+    async close() { for (const server of servers) server.stop(true); await bridge.settled(); await host.close(); db.close(); await rm(root, { recursive: true, force: true }); },
   };
   return Object.assign(core, spec.extend(core));
 }

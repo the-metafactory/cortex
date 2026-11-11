@@ -1,18 +1,13 @@
 import type { ConversationHost } from "../../../conversations/host";
-import type { DraftServiceDeps } from "../../../conversations/domain-adapters/drafting";
 import { parseWorkGraphNodeInput, workGraphNodeApprovedSnapshot, workGraphNodeRequestId } from "../../../conversations/domain-adapters/work-graph/node-binding";
 import { workGraphNodeDraftingBinding } from "../../../conversations/domain-adapters/drafting/graph";
 import { graphDraftDestinations, type GraphDraftReadSession } from "./graph-draft-destinations";
-import { ownerDraftEditor, type OwnerDraft, type OwnerDraftEntryOptions, type OwnerDraftSession } from "./owner-draft-entry";
+import { ownerDraftEditor, type OwnerDraft, type OwnerDraftEntryOptions, type OwnerDraftSession, type OwnerDraftSetup } from "./owner-draft-entry";
 
 export interface GraphDraftSession extends GraphDraftReadSession, OwnerDraftSession {}
 export type GraphDraftEntryOptions = OwnerDraftEntryOptions<GraphDraftSession>;
 
-export interface GraphDraftSetup {
-  readonly host: ConversationHost;
-  readonly deps: Omit<DraftServiceDeps, "destinations" | "bindings">;
-  readonly options: GraphDraftEntryOptions;
-}
+export type GraphDraftSetup = OwnerDraftSetup<GraphDraftSession>;
 
 const graphNodeDraft: OwnerDraft<ReturnType<typeof parseWorkGraphNodeInput>> = {
   adapterId: "work-graph",

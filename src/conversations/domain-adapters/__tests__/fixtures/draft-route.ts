@@ -1,6 +1,7 @@
 import { expect } from "bun:test";
 import { DESK_DRAFTS_PATH, type DraftEditorView } from "../../../../surface/mc/desk/draft-editor-contract";
-import type { DraftClient } from "../../drafting-rig";
+import type { DraftClient } from "../../../../surface/mc/desk/fixtures/owner-draft";
+import type { DeskDraftEditor } from "../../../../surface/mc/desk/draft-editor";
 
 export interface DraftRouteRig extends DraftClient {
   readonly makeInput: unknown;
@@ -26,6 +27,13 @@ export async function refreshDraft(rig: DraftRouteRig, view: DraftEditorView): P
   const response = await rig.call("POST", `${draftPath(view)}/refresh`, { revision: view.view.draft.revision });
   expect(response.status).toBe(200);
   return await response.json();
+}
+
+export async function expectStaleRefreshKeepsTitle(rig: DraftRouteRig & { readonly editor: DeskDraftEditor; readonly state: { onGenerate: undefined | (() => Promise<void>) } }, view: DraftEditorView): Promise<void> {
+  rig.state.onGenerate = async () => { rig.state.onGenerate = undefined; await editDraft(rig, view, "/title", { kind: "set", value: "Edited during generation" }); };
+  const stale = await rig.call("POST", `${draftPath(view)}/refresh`, { revision: view.view.draft.revision });
+  expect(stale.status).toBe(409);
+  expect((await rig.editor.service.read(view.view.draft.draftId))?.draft.fields["/title"]?.value).toBe("Edited during generation");
 }
 
 export async function ownFields(rig: DraftRouteRig): Promise<DraftEditorView> {

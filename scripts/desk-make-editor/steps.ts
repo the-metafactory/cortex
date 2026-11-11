@@ -13,13 +13,12 @@ export async function openMakeEditor(page: Page, conversation: string, discussio
 
 export function revisionSteps(page: Page, editor: Locator) {
   const revision = async () => Number(await editor.getAttribute("data-revision"));
+  const changed = async (before: number) => { await page.waitForFunction(value => Number(document.querySelector('[aria-label="Draft editor"]')?.getAttribute("data-revision")) > value, before); };
   return {
-    revision,
-    async changed(before: number) { await page.waitForFunction(value => Number(document.querySelector('[aria-label="Draft editor"]')?.getAttribute("data-revision")) > value, before); },
     async press(name: string) {
       const before = await revision();
       await page.getByRole("button", { name, exact: true }).click();
-      await page.waitForFunction(value => Number(document.querySelector('[aria-label="Draft editor"]')?.getAttribute("data-revision")) > value, before);
+      await changed(before);
     },
   };
 }

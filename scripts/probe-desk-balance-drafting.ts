@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { BALANCE_DRAFT_DISCUSSION, DRAFT_GLIDER_PROJECT, DRAFT_LAB_AREA, balanceDiscussionOutput, conflictingDueOutput, openBalanceDraftRig } from "../src/conversations/domain-adapters/balance/fixtures/balance-draft";
+import { BALANCE_DRAFT_DISCUSSION, DRAFT_GLIDER_PROJECT, DRAFT_LAB_AREA, balanceDiscussionOutput, conflictingDueOutput, openBalanceDraftRig } from "../src/surface/mc/desk/fixtures/balance-draft";
 import { withDraftBrowserProbe } from "./desk-make-editor/server";
 import { denyRelease, openMakeEditor, reopenOutdatedDraft, restartAndRemake, revisionSteps } from "./desk-make-editor/steps";
 import type { DraftEditorView } from "../src/surface/mc/desk/draft-editor-contract";

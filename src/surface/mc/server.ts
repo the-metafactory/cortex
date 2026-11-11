@@ -246,17 +246,11 @@ export function startServer(
   db: Database,
   options: StartServerOptions = {}
 ): ServerContext {
-  if (options.drafts && options.graphDrafts) throw new Error("drafts and graphDrafts cannot both be configured");
-  if (options.graphDrafts) {
-    const { host, deps, options: graphOptions } = options.graphDrafts;
-    const editor = deskGraphDraftEditor(host, deps, graphOptions);
-    options = { ...options, drafts: () => editor };
-  }
-  if (options.balanceDrafts) {
-    const { host, deps, options: balanceOptions } = options.balanceDrafts;
-    const editor = deskBalanceDraftEditor(host, deps, balanceOptions);
-    options = { ...options, drafts: () => editor };
-  }
+  if ([options.drafts, options.graphDrafts, options.balanceDrafts].filter(Boolean).length > 1) throw new Error("Configure only one of drafts, graphDrafts or balanceDrafts");
+  const editor = options.graphDrafts
+    ? deskGraphDraftEditor(options.graphDrafts.host, options.graphDrafts.deps, options.graphDrafts.options)
+    : options.balanceDrafts ? deskBalanceDraftEditor(options.balanceDrafts.host, options.balanceDrafts.deps, options.balanceDrafts.options) : undefined;
+  if (editor) options = { ...options, drafts: () => editor };
   const wsRegistry = new WsClientRegistry();
   const deskLedger = new HandledLedger();
   const deskClientMail = options.desk ? new ClientMailLog({ db, config: options.desk.mailActions, ledger: deskLedger, run: spawnWithStdin, now: Date.now, retentionDays: options.desk.mailLog?.retentionDays ?? DEFAULT_MAIL_LOG_RETENTION_DAYS }) : undefined;

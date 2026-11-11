@@ -15,6 +15,14 @@ export interface OwnerDraftSession extends HostQueryRunner {
   readonly principal: string;
 }
 
+export type OwnerDraftDeps = Omit<DraftServiceDeps, "destinations" | "bindings">;
+
+export interface OwnerDraftSetup<Session extends OwnerDraftSession> {
+  readonly host: ConversationHost;
+  readonly deps: OwnerDraftDeps;
+  readonly options: OwnerDraftEntryOptions<Session>;
+}
+
 export interface OwnerDraftEntryOptions<Session extends OwnerDraftSession> {
   readonly connectionId: string;
   readonly audience: Lane;
@@ -24,7 +32,7 @@ export interface OwnerDraftEntryOptions<Session extends OwnerDraftSession> {
   readonly sourceRestrictions: (handoff: Handoff) => Promise<ApprovedSnapshot["sources"] | null>;
 }
 
-export interface OwnerDraft<Input> {
+export interface OwnerDraft<Input, Destinations extends DraftDestinations = DraftDestinations> {
   readonly adapterId: string;
   readonly capabilityId: string;
   readonly label: string;
@@ -33,12 +41,12 @@ export interface OwnerDraft<Input> {
   readonly unavailable: string;
   parse(raw: unknown, connectionId: string): Input;
   references(input: Input): readonly ObjectReference[];
-  inconsistency?(input: Input, conversationId: string): Promise<string | null>;
+  inconsistency?(input: Input, conversationId: string, destinations: Destinations): Promise<string | null>;
   snapshot(options: { connectionId: string; provenance: Provenance; input: Input; policy: Lane }): ApprovedSnapshot;
   requestId(operationId: string): string;
 }
 
-export function ownerDraftEditor<Session extends OwnerDraftSession, Input>(host: ConversationHost, deps: Omit<DraftServiceDeps, "destinations" | "bindings">, options: OwnerDraftEntryOptions<Session>, owner: OwnerDraft<Input>, destinations: DraftDestinations) {
+export function ownerDraftEditor<Session extends OwnerDraftSession, Input, Destinations extends DraftDestinations>(host: ConversationHost, deps: OwnerDraftDeps, options: OwnerDraftEntryOptions<Session>, owner: OwnerDraft<Input, Destinations>, destinations: Omit<DraftDestinations, "batch"> & { batch(): Destinations }) {
   const bindings = new DraftingBindings(deps.registry);
   const registered = bindings.register(owner.binding);
   if (!registered.ok) throw new Error(registered.error.message);
@@ -77,13 +85,13 @@ export function ownerDraftEditor<Session extends OwnerDraftSession, Input>(host:
       const sources = await options.sourceRestrictions(handoff);
       if (sources === null || handoff.sources.length > 0 && sources.length === 0) return blocked("Source authority is unavailable; review the draft again.");
       const input = owner.parse(handoff.input, options.connectionId);
-      const batch = destinations.batch?.() ?? destinations;
+      const batch = destinations.batch();
       const resolved = await Promise.all(owner.references(input).map(async ref => {
         const result = await batch.resolve({ capabilityId: owner.resolveWith, connectionId: options.connectionId, conversationId: draft.conversationId, objectType: ref.objectType, label: ref.canonicalId });
         return result.kind === "unique" && canonicalWire(result.ref) === canonicalWire(ref);
       }));
       if (resolved.some(valid => !valid)) return blocked(owner.unavailable);
-      const inconsistent = await owner.inconsistency?.(input, draft.conversationId);
+      const inconsistent = await owner.inconsistency?.(input, draft.conversationId, batch);
       if (inconsistent) return blocked(inconsistent);
       const snapshot = owner.snapshot({ connectionId: options.connectionId, provenance: { conversationId: draft.conversationId, proposalId: draft.draftId, revision: draft.revision, entryId: draft.entryId, link: `?desk=conversation&conversation=${encodeURIComponent(draft.conversationId)}` }, input, policy: handoff.policy });
       snapshot.sources = sources;

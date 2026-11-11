@@ -1,14 +1,9 @@
-import { join } from "node:path";
-import type { Database } from "bun:sqlite";
-import { openOwnerDraftRig, type DraftRigSetup } from "../../../../conversations/domain-adapters/drafting-rig";
+import { openOwnerDraftRig } from "./owner-draft";
 import type { ModelOutput } from "../../../../conversations/domain-adapters/drafting";
 import { createWorkGraphReadAdapter } from "../../../../conversations/domain-adapters/work-graph/read";
 import { createWorkGraphNodeBinding } from "../../../../conversations/domain-adapters/work-graph/node-binding";
-import { initDatabase } from "../../db/init";
 import { setGraphRepositoryEnabled } from "../graph-repositories";
-import { DEFAULT_CONFIG } from "../../config";
-import { startServer } from "../../server";
-import { deskGraphDraftEditor, type GraphDraftEntryOptions, type GraphDraftSession } from "../graph-draft-entry";
+import { deskGraphDraftEditor, type GraphDraftSetup } from "../graph-draft-entry";
 import { graphDraftDestinations } from "../graph-draft-destinations";
 import { GRAPH_NODE_REPOSITORY, GRAPH_NODE_NOW, syntheticSoma } from "./synthetic-soma";
 
@@ -29,37 +24,30 @@ export const GRAPH_DRAFT_DISCUSSION = "The importer can lose acceptance receipts
 export async function openGraphCreateRig(fixture: { discussion?: string } = {}) {
   const soma = syntheticSoma();
   const reads: string[][] = [];
-  let db: Database | undefined;
-  const database = (): Database => {
-    if (!db) throw new Error("Synthetic graph database not opened");
-    return db;
-  };
   const rig = await openOwnerDraftRig({
     adapterId: "work-graph", capabilityId: CAPABILITY, title: "Graph creation", now: GRAPH_NODE_NOW, connectorId: "synthetic-graph", discussion: GRAPH_DRAFT_DISCUSSION, principal: "local",
-    openTarget({ root, connectionId }) {
-      db = initDatabase(join(root, "desk.sqlite"));
+    openTarget({ db, connectionId }) {
       const repositories = [CREATE_REPOSITORY, CREATE_OTHER_REPOSITORY];
-      for (const repository of repositories) setGraphRepositoryEnabled(database(), repository, true, GRAPH_NODE_NOW);
+      for (const repository of repositories) setGraphRepositoryEnabled(db, repository, true, GRAPH_NODE_NOW);
       const read = createWorkGraphReadAdapter({ connectionId, repositories: () => repositories, links: () => Object.values(NODES).flatMap(node => node.link ? [{ owner: node.link, id: node.linkId ?? `${node.repository}#${node.id}`, title: node.title }] : []), now: () => new Date(AT), run: argv => {
         reads.push(argv);
         const target = argv[3];
         const data = target ? NODES[target] ?? null : null;
         return Promise.resolve(data ? { code: 0, signal: null, stderr: "", stdout: JSON.stringify({ repo: data.repository, ref: { id: data.id }, status: "open", node: { title: data.title }, parent: null }) } : { code: 1, signal: null, stderr: "not found", stdout: "" });
       } });
-      const setup = (draft: DraftRigSetup) => ({ host: draft.host, deps: draft.deps, options: draft.options as GraphDraftEntryOptions });
       return {
         read, destinationIds: repositories, destinationType: "repository",
-        sessionExtras: (destinations, source) => ({ repositories: destinations, destinations: source.destinations }),
-        createBinding: journal => createWorkGraphNodeBinding({ stack: "test", connectionId, db: database(), desk: () => ({ enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], somaBin: "/synthetic/soma" }), journal, run: soma.run, now: () => GRAPH_NODE_NOW }),
-        createEditor: draft => { const { host, deps, options } = setup(draft); return deskGraphDraftEditor(host, deps, options); },
-        serve: (draft, principal, serverOptions) => startServer({ ...DEFAULT_CONFIG, port: 0, governance: { ...DEFAULT_CONFIG.governance, principals: [], localPrincipal: principal } }, database(), { ...serverOptions, graphDrafts: setup(draft) }),
-        close: () => { database().close(); },
+        session: (base, destinations, source) => ({ ...base, repositories: destinations, destinations: source.destinations }),
+        createBinding: journal => createWorkGraphNodeBinding({ stack: "test", connectionId, db, desk: () => ({ enabled: true, displayName: "", topN: 5, rangerUrl: "", areas: [], sources: [], somaBin: "/synthetic/soma" }), journal, run: soma.run, now: () => GRAPH_NODE_NOW }),
+        createEditor: ({ host, deps, options }: GraphDraftSetup) => deskGraphDraftEditor(host, deps, options),
+        serverOptions: draft => ({ graphDrafts: draft }),
       };
     },
     extend: core => {
-      const destinations = () => graphDraftDestinations({ connectionId: core.connectionId, session: async conversationId => await core.session(conversationId) as GraphDraftSession | null, authority: core.authority });
+      const db = core.db;
+      const destinations = () => graphDraftDestinations({ connectionId: core.connectionId, session: core.session, authority: core.authority });
       return {
-      db: database(), soma, reads, read: core.target.read, get destinations() { return destinations(); },
+      db, soma, reads, read: core.target.read, get destinations() { return destinations(); },
       resolve: (label: string, objectType = "node") => destinations().resolve({ capabilityId: "work-graph.destinations", connectionId: core.connectionId, conversationId: core.makeInput.conversationId, objectType, label }),
       localRepository: (repository: string) => core.restrict(repository, { egress: "local" }),
       async untick(repository: string) {
@@ -68,7 +56,7 @@ export async function openGraphCreateRig(fixture: { discussion?: string } = {}) 
         if (index < 0) throw new Error("Synthetic repository missing");
         await core.restrict(repository, { status: "revoked" });
         repositories.splice(index, 1);
-        setGraphRepositoryEnabled(database(), repository, false, GRAPH_NODE_NOW);
+        setGraphRepositoryEnabled(db, repository, false, GRAPH_NODE_NOW);
       },
       };
     },

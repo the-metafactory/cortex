@@ -22,12 +22,12 @@ export interface BalanceDraftDestinationOptions {
 }
 
 export interface BalanceDraftDestinations extends DraftDestinations {
+  batch(): BalanceDraftDestinations;
   inArea(conversationId: string, area: ObjectReference, project: ObjectReference): Promise<boolean>;
 }
 
 type HostRecords = Awaited<ReturnType<AuthorityMediator["inspectHostRecords"]>>;
 
-const match = destinationMatch;
 const lower = (text: string): string => text.trim().toLocaleLowerCase();
 const labelOf = (object: ReleasedObject): string => typeof object.value.label === "string" ? object.value.label : "";
 const projectNames = (label: string): string[] => {
@@ -62,8 +62,8 @@ function matchObject(objects: ReleasedObject[], objectType: "area" | "project", 
   const wanted = lower(label);
   const candidates = objects.filter(object => object.ref.objectType === objectType);
   const exact = candidates.filter(object => object.ref.canonicalId === label.trim() || lower(labelOf(object)) === wanted);
-  if (exact.length || objectType === "area") return match(exact.map(object => object.ref));
-  return match(candidates.filter(object => projectNames(labelOf(object)).includes(wanted)).map(object => object.ref));
+  if (exact.length || objectType === "area") return destinationMatch(exact.map(object => object.ref));
+  return destinationMatch(candidates.filter(object => projectNames(labelOf(object)).includes(wanted)).map(object => object.ref));
 }
 
 export function balanceDraftDestinations(options: BalanceDraftDestinationOptions): BalanceDraftDestinations {
@@ -77,6 +77,7 @@ export function balanceDraftDestinations(options: BalanceDraftDestinationOptions
       return prepared;
     };
     return {
+      batch,
       async resolve(request) {
         if (request.connectionId !== options.connectionId || !request.conversationId || request.capabilityId !== BALANCE_DESTINATIONS_CAPABILITY || request.objectType !== "area" && request.objectType !== "project") return { kind: "unavailable" };
         const label = request.label.trim();
@@ -90,5 +91,5 @@ export function balanceDraftDestinations(options: BalanceDraftDestinationOptions
       },
     };
   }
-  return { ...batch(), batch };
+  return { batch, resolve: request => batch().resolve(request), inArea: (conversationId, area, project) => batch().inArea(conversationId, area, project) };
 }
