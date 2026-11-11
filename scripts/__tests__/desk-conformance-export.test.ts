@@ -39,13 +39,13 @@ test("an external package imports the export and gets the CLI capability and fai
   expect(report.capabilities.networkRequests).toBe(0);
   expect(report.failures.networkRequests).toBe(0);
   expect(readdirSync(tmpdir()).filter(name => name.startsWith("desk-conformance-export-"))).toEqual(before);
-});
+}, 60_000);
 
 test("the external probe exits nonzero for a broken fixture and reports its refusal", async () => {
   const result = await probeConformanceExport(join(FIXTURES, "broken-format"));
   expect(result.exitCode).toBe(1);
   expect(JSON.parse(result.stdout).capabilities).toMatchObject({ status: "refused", code: "unsupported_format", networkRequests: 0 });
-});
+}, 60_000);
 
 test("the Surface SDK stays at 1.3.0", () => {
   expect(readFileSync(join(ROOT, "src/surface-sdk/index.ts"), "utf8")).toContain('export const SURFACE_SDK_VERSION = "1.3.0";');

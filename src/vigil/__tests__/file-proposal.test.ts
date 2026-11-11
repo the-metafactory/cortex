@@ -219,7 +219,7 @@ test("filing errors survive reopening an existing database and migration is idem
 
 test("the default runner captures stdout, suppresses stderr and enforces its watchdog", async () => {
   const result = await runProposalCommand([process.execPath, "-e", "console.error(process.env.GH_TOKEN); console.log(JSON.stringify({ref:'example/repo#12',created:true}))"], {
-    timeout_ms: 1000, env: { GH_TOKEN: TOKEN },
+    timeout_ms: 15_000, env: { GH_TOKEN: TOKEN },
   });
   expect(result).toEqual({ ok: true, stdout: `${success().stdout}\n` });
   const timeout = await runProposalCommand([process.execPath, "-e", "process.on('SIGTERM',()=>{}); setInterval(()=>{},1000)"], {

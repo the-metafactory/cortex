@@ -48,6 +48,10 @@ export const PROBE_EXCLUSIONS: readonly DeskProbeExclusion[] = [
     reason: "needs browsers: it verifies isolated adapter frames in Playwright Chromium, WebKit and Firefox",
   },
   {
+    file: "probe-desk-adapter-hosted.ts",
+    reason: "needs a real stack: it calls the hosted route through Cloudflare Access with an operator service token, and it must never run in CI",
+  },
+  {
     file: "probe-desk-adapter-inline.ts",
     reason: "needs browsers: it verifies inline adapter assets in Playwright Chromium and WebKit",
   },

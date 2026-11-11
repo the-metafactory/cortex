@@ -47,14 +47,19 @@ export async function openDraftEditorRig() {
   fake.state.destinations.set("Specimen shelf", { kind: "unique", ref: shelfRef("shelf-a") });
   const targets = [{ capabilityId: CAPABILITY, connectionId: "synthetic-local", label: "Specimen record" }, { capabilityId: CAPABILITY, connectionId: "synthetic-other", label: "Other specimen destination" }];
   const owner = { mutations: 0, admissions: 0 };
+  const confirmed = new Set<string>();
   let host: ConversationHost;
   async function open() {
     const status = await openConversationHost({ dir: root, stack: "synthetic", label: "synthetic", expectedLabel: "synthetic", lanes: {}, turns: request => Promise.resolve({ text: "synthetic", session: request.session, resumed: false }) });
     if (status.state !== "ready") throw new Error(status.reason);
     host = status.host;
-    return deskDraftEditor(host, { registry, bindings, sources: fake.sources, policy: fake.policy, model: fake.model, destinations: fake.destinations }, { targets: () => targets, audience: "local", confirm: () => {
-      owner.admissions++;
-      owner.mutations++;
+    return deskDraftEditor(host, { registry, bindings, sources: fake.sources, policy: fake.policy, model: fake.model, destinations: fake.destinations }, { targets: () => targets, audience: "local", confirm: request => {
+      const key = JSON.stringify(request.handoff);
+      if (!confirmed.has(key)) {
+        owner.admissions++;
+        owner.mutations++;
+        confirmed.add(key);
+      }
       return Promise.resolve({ kind: "accepted", operationId: "synthetic-operation" });
     } });
   }
