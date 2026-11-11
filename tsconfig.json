@@ -30,6 +30,7 @@
     "docs/research/ivy-durable-2960",
     "src/surface-sdk/generated",
     "src/desk-sdk/generated",
+    "src/desk-adapter-sdk/generated",
     "src/worker",
     "src/webhook-proxy",
     "src/surface/mc/worker",

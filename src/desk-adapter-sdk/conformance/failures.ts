@@ -5,12 +5,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Harness } from "@earendil-works/pi-durable";
-import type { ApprovedSnapshot, Json } from "../../../src/conversations/domain-adapters/operations/types";
-import { DeskPackageLoader, type DeskPackageCandidate } from "../../../src/conversations/domain-adapters/package";
-import { QueryPageSchema } from "../../../src/conversations/domain-adapters/reads/query-types";
-import type { ReadBinding } from "../../../src/conversations/domain-adapters/reads/types";
-import type { DraftingView } from "../../../src/conversations/domain-adapters/registry";
-import type { ObjectReference } from "../../../src/conversations/domain-adapters/types";
+import type { ApprovedSnapshot, Json } from "../../conversations/domain-adapters/operations/types";
+import { DeskPackageLoader, type DeskPackageCandidate } from "../../conversations/domain-adapters/package";
+import { QueryPageSchema } from "../../conversations/domain-adapters/reads/query-types";
+import type { ReadBinding } from "../../conversations/domain-adapters/reads/types";
+import type { DraftingView } from "../../conversations/domain-adapters/registry";
+import type { ObjectReference } from "../../conversations/domain-adapters/types";
 import { confirmAndDispatch, prepareAction, snapshotForAction, type DispatchAttempt } from "./actions";
 import { recordConnector } from "./connectors";
 import { faultyConnector, hold, type Fault, type FaultPlan, type Hold } from "./faults";
@@ -304,7 +304,7 @@ const revokedWriteBody = (held: Hold) => async (armed: Armed): Promise<Evidence>
   };
 };
 
-type ScenarioPlan = { fault: FaultPlan; body: (armed: Armed) => Promise<Evidence> };
+interface ScenarioPlan { fault: FaultPlan; body: (armed: Armed) => Promise<Evidence> }
 
 const withHold = (path: "dispatch" | "query", body: (held: Hold) => (armed: Armed) => Promise<Evidence>) => (): ScenarioPlan => {
   const held = hold();
@@ -342,14 +342,13 @@ async function runScenario(scenario: ScenarioName, packageDir: string, companion
   const started = guard.count();
   const run = await prepareScenario(packageDir, companionDir);
   const candidate = run.target;
-  let evidence: Evidence = { detail: "The scenario ran nothing.", calls: emptyOwnerCalls() };
-  let activated = false;
+  let evidence: Evidence;
   try {
     const loaded = candidate === undefined
       ? { ok: false as const, error: { code: "no_package", message: "No bundled package was discovered at the given path." } }
       : candidate.state.state === "unavailable" ? { ok: false as const, error: { code: candidate.state.code, message: candidate.state.message } }
       : await run.loader.activate(candidate.packageId);
-    activated = loaded.ok;
+    const activated = loaded.ok;
     if (scenario === "module-load") {
       evidence = loaded.ok
         ? { detail: `the package loaded as ${candidate?.adapterId ?? "unknown"} and made no owner call`, calls: emptyOwnerCalls() }

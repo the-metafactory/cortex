@@ -28,10 +28,11 @@ const refuse = (): never => {
 };
 
 function install(): void {
-  originals = { fetch: globalThis.fetch, connect: net.Socket.prototype.connect, tlsConnect: tls.connect };
+  const socketMethods: { connect: typeof net.Socket.prototype.connect } = net.Socket.prototype;
+  originals = { fetch: globalThis.fetch, connect: socketMethods.connect, tlsConnect: tls.connect };
   globalThis.fetch = Object.assign(refuse as unknown as typeof fetch, { preconnect: refuse });
-  net.Socket.prototype.connect = refuse as unknown as typeof net.Socket.prototype.connect;
-  (tls as { connect: typeof tls.connect }).connect = refuse as unknown as typeof tls.connect;
+  net.Socket.prototype.connect = refuse;
+  (tls as { connect: typeof tls.connect }).connect = refuse;
 }
 
 function restore(saved: Originals): void {

@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { DraftingBindings, type DestinationMatch, type DraftModel, type DraftPolicy, type DraftSources, type ModelRequest } from "../../../src/conversations/domain-adapters/drafting";
-import { snapshotDigest } from "../../../src/conversations/domain-adapters/operations/validation";
-import { ObjectReadbackSchema, type ApprovedSnapshot, type DispatchRequest, type Json } from "../../../src/conversations/domain-adapters/operations/types";
-import type { DispatchOutcome, OperationBridge } from "../../../src/conversations/domain-adapters/operations/dispatch";
-import type { DraftingView } from "../../../src/conversations/domain-adapters/registry";
-import { ObjectReferenceSchema, type ObjectReference } from "../../../src/conversations/domain-adapters/types";
+import { DraftingBindings, type DestinationMatch, type DraftModel, type DraftPolicy, type DraftSources, type ModelRequest } from "../../conversations/domain-adapters/drafting";
+import { snapshotDigest } from "../../conversations/domain-adapters/operations/validation";
+import { ObjectReadbackSchema, type ApprovedSnapshot, type DispatchRequest, type Json } from "../../conversations/domain-adapters/operations/types";
+import type { DispatchOutcome, OperationBridge } from "../../conversations/domain-adapters/operations/dispatch";
+import type { DraftingView } from "../../conversations/domain-adapters/registry";
+import { ObjectReferenceSchema, type ObjectReference } from "../../conversations/domain-adapters/types";
 import { conformant, refused, type CapabilityReport } from "./report";
 import { sampleValue } from "./sample";
 import type { ProbeEnv } from "./probes";
@@ -33,8 +33,8 @@ function syntheticModel(env: ProbeEnv): DraftModel {
   return {
     lanes: () => Promise.resolve(["local"] as const),
     generate: (request: ModelRequest) => {
-      const properties = isRecord(request.schema) && isRecord((request.schema as Record<string, unknown>).properties) ? (request.schema as { properties: Record<string, unknown> }).properties : {};
-      const required = isRecord(request.schema) && Array.isArray((request.schema as Record<string, unknown>).required) ? (request.schema as { required: string[] }).required : [];
+      const properties = isRecord(request.schema) && isRecord((request.schema).properties) ? (request.schema as { properties: Record<string, unknown> }).properties : {};
+      const required = isRecord(request.schema) && Array.isArray((request.schema).required) ? (request.schema as { required: string[] }).required : [];
       const roles = new Map(request.fieldHints.map(hint => [hint.pointer, hint.role]));
       const wanted = request.targets.filter(pointer => roles.has(pointer) || required.includes(pointer.slice(1)));
       const fields = wanted.map(pointer => roles.get(pointer) === "destination"
@@ -142,7 +142,7 @@ export interface DispatchRun {
   request?: DispatchRequest;
 }
 
-export type DispatchAttempt = { run: DispatchRun; report: CapabilityReport; ref: ObjectReference | null };
+export interface DispatchAttempt { run: DispatchRun; report: CapabilityReport; ref: ObjectReference | null }
 
 /** Confirms the snapshot, activates the writer bridge and makes exactly one dispatch call for it. */
 export async function confirmAndDispatch(env: ProbeEnv, capabilityId: string, snapshot: ApprovedSnapshot, waitMs = 10_000): Promise<DispatchAttempt> {

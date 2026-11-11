@@ -1,5 +1,5 @@
 // glossary-ignore: owner
-import type { TrustedConnector } from "../../../src/conversations/authority";
+import type { TrustedConnector } from "../../conversations/authority";
 
 export type Fault =
   | { kind: "timeout" }
@@ -43,7 +43,7 @@ async function apply(fault: Fault | undefined, delegate: () => Promise<unknown>)
     await delegate();
     return { nonsense: true };
   }
-  const answer = await delegate().finally(() => fault.reached());
+  const answer = await delegate().finally(() => { fault.reached(); });
   await fault.gate;
   return answer;
 }

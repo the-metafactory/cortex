@@ -1,0 +1,44 @@
+import { expect, test } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DESK_ADAPTER_SDK_VERSION } from "../../src/desk-sdk/version";
+import type { ConformanceReport, FailureReport } from "../../src/desk-adapter-sdk/conformance";
+import { probeConformanceExport } from "../probe-desk-conformance-export";
+
+const ROOT = join(import.meta.dir, "../..");
+const FIXTURES = join(ROOT, "src/conversations/domain-adapters/__tests__/fixtures/conformance-packages");
+
+async function cli(failures: boolean): Promise<unknown> {
+  const child = Bun.spawn([process.execPath, "scripts/desk-adapter-conformance.ts", join(FIXTURES, "greenhouse"), "--json", ...(failures ? ["--failures"] : [])], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
+  const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(exitCode).toBe(0);
+  return JSON.parse(stdout);
+}
+
+const capabilitiesOf = ({ packageDir: _packageDir, ...report }: ConformanceReport) => report;
+const failuresOf = ({ packageDir: _packageDir, companion: { packageDir: _companionDir, ...companion }, ...report }: FailureReport) => ({ ...report, companion });
+
+test("an external package imports the export and gets the CLI capability and failure reports", async () => {
+  const before = readdirSync(tmpdir()).filter(name => name.startsWith("desk-conformance-export-"));
+  const result = await probeConformanceExport(undefined, true);
+  expect(result.exitCode).toBe(0);
+  const report = JSON.parse(result.stdout) as { sdkVersion: string; capabilities: ConformanceReport; failures: FailureReport };
+  expect(report.sdkVersion).toBe(DESK_ADAPTER_SDK_VERSION);
+  expect(report.capabilities.packageDir.startsWith(ROOT)).toBe(false);
+  expect(capabilitiesOf(report.capabilities)).toEqual(capabilitiesOf(await cli(false) as ConformanceReport));
+  expect(failuresOf(report.failures)).toEqual(failuresOf(await cli(true) as FailureReport));
+  expect(report.capabilities.networkRequests).toBe(0);
+  expect(report.failures.networkRequests).toBe(0);
+  expect(readdirSync(tmpdir()).filter(name => name.startsWith("desk-conformance-export-"))).toEqual(before);
+});
+
+test("the external probe exits nonzero for a broken fixture and reports its refusal", async () => {
+  const result = await probeConformanceExport(join(FIXTURES, "broken-format"));
+  expect(result.exitCode).toBe(1);
+  expect(JSON.parse(result.stdout).capabilities).toMatchObject({ status: "refused", code: "unsupported_format", networkRequests: 0 });
+});
+
+test("the Surface SDK stays at 1.3.0", () => {
+  expect(readFileSync(join(ROOT, "src/surface-sdk/index.ts"), "utf8")).toContain('export const SURFACE_SDK_VERSION = "1.3.0";');
+});
