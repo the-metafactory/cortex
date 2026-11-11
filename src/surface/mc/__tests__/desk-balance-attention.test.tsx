@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { findNode } from "../../../balance";
 import { openBalanceReadRig, type BalanceReadRig } from "../../../conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
 import { handleDeskAdapterAction } from "../api/desk-adapter";
 import { handleDeskMyDay } from "../api/desk-my-day";
@@ -119,12 +120,22 @@ describe("Catch-up lists actionable adapter tasks beside mail", () => {
     expect(attentionLine).not.toContain("Studio answer");
     expect(attentionLine).toContain("First: Cut the wing");
     expect(spokenBriefing(view, selection, null)).toContain("First: Cut the wing");
-    const dueToday = await build();
-    await dueToday.balance.check();
-    const today = await dueToday.compose();
-    const glue = row(today, "Cut the wing");
-    expect(glue?.dueAt).toBe("2026-12-01");
-    expect(selectItems(today, ALL_AREAS, new Set()).needsYou.map(item => item.title)).toContain("Cut the wing");
+  });
+
+  it("lets an overdue adapter row into Needs you and both summaries", async () => {
+    const stack = await build();
+    const state = balanceState(stack);
+    const wing = findNode(state.outline, "task-wing");
+    if (!wing) throw new Error("the Balance fixture is missing its task");
+    wing.dueDate = "2026-10-30";
+    saveBalanceState(stack.db, state);
+    await stack.balance.check();
+    const view = await composeDesk(stack.db, { ...stack.desk, sources: [] }, undefined, { now: NOW, adapterAttention: [() => stack.balance.attentionAccess(), stack.synthetic.feature] });
+    expect(row(view, "Cut the wing")).toMatchObject({ dueAt: "2026-10-30", urgency: "today", score: 55 });
+    const selection = selectItems(view, ALL_AREAS, new Set());
+    expect(selection.needsYou.map(item => item.title)).toEqual(["Cut the wing"]);
+    expect(briefing(view, selection, null).lines[0] ?? "").toContain("First: Cut the wing");
+    expect(spokenBriefing(view, selection, null)).toContain("First: Cut the wing");
   });
 
   it("turns a filed mail into its Balance task once", async () => {
@@ -160,9 +171,10 @@ describe("Catch-up lists actionable adapter tasks beside mail", () => {
     await stack.synthetic.ingest(0, [{ ...(stack.synthetic.value(0) as Record<string, unknown>), score: 9999, urgency: "now" }]);
     const view = await stack.compose();
     const synthetic = row(view, "Synthetic review");
-    expect(synthetic).toMatchObject({ source: "synthetic-one", actions: [], readOnly: true, urgency: "today", score: 55 });
+    expect(synthetic).toMatchObject({ source: "synthetic-one", actions: [], readOnly: true, dueAt: "2026-11-01", urgency: "today", score: 55 });
     expect(synthetic?.attention).toBeUndefined();
     expect(synthetic?.interrupt).toBeUndefined();
+    expect(selectItems(view, ALL_AREAS, new Set()).needsYou.map(item => item.title)).toContain("Synthetic review");
     expect(catchupItems(view.items, "", "all", "adapter", "synthetic-one").map(item => item.title)).toEqual(["Synthetic review"]);
   });
 });
