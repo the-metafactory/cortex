@@ -59,3 +59,8 @@
 .dbl-dragging, .dbl-dragging * { cursor: grabbing !important; user-select: none !important; }
 .dbl-drag-preview { position: fixed; z-index: 10000; pointer-events: none; box-sizing: border-box; background: white; border: 1px solid #85a68f; box-shadow: 0 10px 30px #173d2b33, 0 2px 6px #173d2b22; transform: translate(10px, 10px) rotate(-1deg); opacity: .96; font-family: inherit; }
 .dbl-drag-preview[data-allowed="false"] { border-color: #aeb7b0; }
+.dbl-row-add { opacity: 0; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px; width: 24px; height: 24px; padding: 0; box-sizing: border-box; border: 0; border-radius: 5px; background: transparent; color: #819085; cursor: pointer; }
+.dbl-row-add:hover { background: #e3ece6; color: #395d47; }
+.dbl-row:hover .dbl-row-add, .dbl-row:focus-within .dbl-row-add { opacity: 1; }
+.dbl-row-add:disabled { visibility: hidden; }
+@media (hover: none) { .dbl-row-add { opacity: 1; } }

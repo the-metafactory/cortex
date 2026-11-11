@@ -79,7 +79,7 @@ export function applyBalanceCommand(state: AppState, meta: MyDayMeta, desk: Desk
   if (command.op === "outline-add") {
     const parent = openParent(state, desk, meta, command.parent);
     delete parent.done;
-    const node: OutlineNode = { id: crypto.randomUUID(), title: command.title, weight: 50, ordering: "parallel", children: [], ...(command.kind === "project" ? { done: true } : { effort: 1 }), ...(command.note ? { note: command.note } : {}), ...(command.dueDate ? { dueDate: command.dueDate } : {}) };
+    const node: OutlineNode = { id: crypto.randomUUID(), title: command.title, weight: command.weight ?? 50, ordering: "parallel", children: [], ...(command.context ? { context: command.context } : {}), ...(command.estimateMinutes ? { estimateMinutes: command.estimateMinutes } : {}), ...(command.kind === "project" ? { done: true } : { effort: command.effort ?? 1 }), ...(command.note ? { note: command.note } : {}), ...(command.dueDate ? { dueDate: command.dueDate } : {}) };
     parent.children.push(node);
     return node.id;
   }

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { WriterResult, WriterRunner } from "../../../../surface/mc/desk/create";
+import type { WriterResult, WriterRunner } from "../create";
 
 export const GRAPH_NODE_NOW = Date.parse("2026-11-01T12:00:00.000Z");
 export const GRAPH_NODE_REPOSITORY = "github:github.com/example/desk";

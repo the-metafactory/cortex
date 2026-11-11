@@ -1,14 +1,15 @@
 import { ApiFailure } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { SessionEnd } from "../../desk/studio/session-schema";
 import {
-  chooseOutcome, continueInDiscord, entryViews, failureText as failure, modelLine, organize as organizeConversation, pendingLabel, readConversation, readEntries, saveDraft, sendInput, sourceLabel, statusLabel,
+  chooseOutcome, continueInDiscord, entryViews, visibleEntries, failureText as failure, modelLine, organize as organizeConversation, readConversation, readEntries, saveDraft, sendInput, sourceLabel, statusLabel,
   type ConversationDetail, type ConversationEntry, type OperationRecord,
 } from "../lib/conversations";
-import { laneName, type Organize, type SourceView } from "../../../../conversations/types";
+import { ConversationResponseUpdateSchema, laneName, type Organize, type SourceView } from "../../../../conversations/types";
 import { CreationPanel } from "./desk-conversation-create";
 import { DeskMakePanel } from "./desk-draft-editor";
+import { EMPTY_TRANSCRIPT, transcriptReducer } from "../lib/conversation-stream";
 import "./desk-conversation.css";
 
 const BUSY_MS = 2_000;
@@ -17,7 +18,8 @@ const DRAFT_MS = 600;
 
 export function useConversation(id: string) {
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
-  const [entries, setEntries] = useState<ConversationEntry[]>([]);
+  const [transcript, dispatch] = useReducer(transcriptReducer, EMPTY_TRANSCRIPT);
+  const { entries, liveText, generation } = transcript;
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraftState] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -27,6 +29,7 @@ export function useConversation(id: string) {
   const latest = useRef<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seen = useRef("");
+  const sentFromCursor = useRef<number | null>(null);
 
   const load = useCallback(async (signal?: AbortSignal, full = true): Promise<void> => {
     try {
@@ -36,20 +39,32 @@ export function useConversation(id: string) {
       if (signal?.aborted) return;
       seen.current = signature;
       setDetail(next); setError(null);
-      if (list) setEntries(list);
+      if (list) dispatch({ type: "history", entries: list, working: next.pending.length > 0 || next.conversation.activity.status === "working" });
       if (saved.current === null) { saved.current = next.draft; latest.current = next.draft; setDraftState(next.draft); }
     } catch (err) {
       if (!signal?.aborted) setError(failure(err, "The conversation could not be read. Retry when Mission Control is available."));
     }
   }, [id]);
 
-  const busy = Boolean(detail && (detail.pending.length > 0 || detail.conversation.activity.status === "working"));
+  const busy = transcript.working || (sending && transcript.cursor === sentFromCursor.current);
   useEffect(() => {
     const controller = new AbortController();
     void load(controller.signal);
     const every = setInterval(() => { void load(controller.signal, !busy); }, busy ? BUSY_MS : IDLE_MS);
     return () => { controller.abort(); clearInterval(every); };
   }, [load, busy]);
+
+  useEffect(() => {
+    const source = new EventSource(`/api/conversations/${id}/stream`);
+    source.addEventListener("response", (event: MessageEvent<string>) => {
+      try {
+        const update = ConversationResponseUpdateSchema.parse(JSON.parse(event.data));
+        dispatch({ type: "stream", update });
+      } catch (error) { console.error("conversations: invalid response stream", error); }
+    });
+    source.onerror = () => { dispatch({ type: "disconnected" }); void load(); };
+    return () => { source.close(); };
+  }, [id, load]);
 
   const flush = useCallback(async (keepalive = false): Promise<void> => {
     if (timer.current) { clearTimeout(timer.current); timer.current = null; }
@@ -76,6 +91,7 @@ export function useConversation(id: string) {
     if (!text || sending) return;
     const input = unsent.current?.text === text ? unsent.current : { inputId: crypto.randomUUID(), text, mode };
     unsent.current = input;
+    sentFromCursor.current = transcript.cursor;
     setSending(true); setError(null);
     try {
       await sendInput(id, input);
@@ -86,15 +102,16 @@ export function useConversation(id: string) {
     } catch (err) {
       setError(failure(err, "Mission Control did not confirm your message. It is still here; send again to retry the same message."));
     } finally { setSending(false); }
-  }, [id, sending, flush, load]);
+  }, [id, sending, flush, load, transcript.cursor]);
 
   const retry = useCallback(async (text: string): Promise<void> => {
     if (!text || sending) return;
+    sentFromCursor.current = transcript.cursor;
     setSending(true); setError(null);
     try { await sendInput(id, { inputId: crypto.randomUUID(), text, mode: "queue" }); await load(); }
     catch (err) { setError(failure(err, "Mission Control did not confirm the retry. Nothing was sent; try again.")); }
     finally { setSending(false); }
-  }, [id, sending, load]);
+  }, [id, sending, load, transcript.cursor]);
 
   const organize = useCallback(async (change: Organize): Promise<boolean> => {
     if (organizing) return false;
@@ -109,7 +126,7 @@ export function useConversation(id: string) {
     } finally { setOrganizing(false); }
   }, [id, organizing, load]);
 
-  return { detail, entries, error, draft: draft ?? "", ready: draft !== null, setDraft, send, retry, sending, busy, retrying: unsent.current !== null, reload: load, flush, organize, organizing };
+  return { detail, entries, liveText, generation, error, draft: draft ?? "", ready: draft !== null, setDraft, send, retry, sending, busy, retrying: unsent.current !== null, reload: load, flush, organize, organizing };
 }
 
 const OUTCOMES_NOTE: { label: string; primary?: boolean; needsText?: boolean; make: (text: string) => SessionEnd }[] = [
@@ -173,13 +190,15 @@ export function ConversationWorkspace({ id, onLeave, onOrganized }: { id: string
   const c = useConversation(id);
   const leave = (): void => { void c.flush(true); onLeave(); };
   if (!c.detail) return <section className="dcv" aria-label="Ivy conversation"><header className="dcv-head"><button type="button" className="desk-btn ghost" onClick={leave}>Leave</button></header><p role={c.error ? "alert" : "status"}>{c.error ?? "Opening the conversation…"}</p></section>;
-  return <WorkspaceView detail={c.detail} entries={c.entries} draft={c.draft} ready={c.ready} busy={c.busy} sending={c.sending} retrying={c.retrying} error={c.error} onDraft={c.setDraft} onSend={mode => void c.send(mode)} onRetry={text => void c.retry(text)} onLeave={leave} onSaved={() => void c.reload()}
+  return <WorkspaceView detail={c.detail} entries={c.entries} liveText={c.liveText} generation={c.generation} draft={c.draft} ready={c.ready} busy={c.busy} sending={c.sending} retrying={c.retrying} error={c.error} onDraft={c.setDraft} onSend={mode => void c.send(mode)} onRetry={text => void c.retry(text)} onLeave={leave} onSaved={() => void c.reload()}
     organizing={c.organizing} onOrganize={change => { void c.organize(change).then(done => { if (done) onOrganized?.(); }); }} />;
 }
 
 export interface WorkspaceProps {
   detail: ConversationDetail;
   entries: ConversationEntry[];
+  liveText?: string | null;
+  generation?: string | null;
   draft: string;
   ready: boolean;
   busy: boolean;
@@ -251,9 +270,9 @@ const IvyAnswer = memo(function IvyAnswer({ text }: { text: string }) {
 export function WorkspaceView(c: WorkspaceProps) {
   const stream = useRef<HTMLDivElement>(null);
   const count = c.entries.length;
-  useEffect(() => { stream.current?.scrollTo({ top: stream.current.scrollHeight }); }, [count]);
-  const { conversation, sources, pending, studio } = c.detail;
-  const views = c.entries.flatMap(entry => entryViews(entry).map((view, i) => ({ key: `${entry.id}-${i}`, view })));
+  useEffect(() => { stream.current?.scrollTo({ top: stream.current.scrollHeight }); }, [count, c.liveText]);
+  const { conversation, sources, studio } = c.detail;
+  const views = visibleEntries(c.entries, c.busy ? c.generation ?? null : null).flatMap(entry => entryViews(entry).map((view, i) => ({ key: `${entry.id}-${i}`, view })));
   const archived = conversation.state === "archived";
   const said = c.entries.filter(entry => entry.role === "user" && entry.text).at(-1);
   return <section className="dcv" aria-label={`Ivy conversation: ${conversation.title}`}>
@@ -287,10 +306,10 @@ export function WorkspaceView(c: WorkspaceProps) {
         return <p key={key} className="dcv-activity dcv-failed" role="alert">{view.text} Your message stays in the record; no other engine was used.
           {retry && <button type="button" className="desk-btn" disabled={c.sending} onClick={() => { c.onRetry(said.text ?? ""); }}>Retry</button>}</p>;
       })}
-      {views.length === 0 && <p className="dcv-quiet">No messages yet. Your exchange is saved as you go.</p>}
+      {c.liveText && <article className="dcv-msg ivy" aria-label="Ivy is answering"><small>Ivy · answering…</small><IvyAnswer text={c.liveText} /></article>}
+      {c.busy && <div className="dcv-waiting" role="status" aria-label="Ivy is working"><span aria-hidden="true" /><span aria-hidden="true" /><span aria-hidden="true" /></div>}
+      {views.length === 0 && !c.liveText && !c.busy && <p className="dcv-quiet">No messages yet. Your exchange is saved as you go.</p>}
     </div>
-    {pending.length > 0 && <div className="dcv-queue" role="status"><strong>{pending.length === 1 ? "1 message in order" : `${pending.length} messages in order`} · one shared order for web and Discord</strong>
-      <ol>{pending.map(p => <li key={p.inputId}>{pendingLabel(p)}</li>)}</ol></div>}
     <form className="dcv-composer" onSubmit={e => { e.preventDefault(); if (!archived) c.onSend("queue"); }}>
       <label>Message Ivy<textarea aria-label="Message Ivy" value={c.draft} disabled={!c.ready || archived} maxLength={20_000} onChange={e => { c.onDraft(e.target.value); }} placeholder="Continue the thought…" /></label>
       <div className="dcv-acts">

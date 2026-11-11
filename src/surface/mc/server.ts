@@ -1,3 +1,5 @@
+import { handleDeskAdapterFrames, type AdapterFrameAccess } from "./api/desk-adapter-frames";
+import { DESK_ADAPTER_FRAMES_PATH, shellFrameCsp } from "./desk/adapter-frame-contract";
 import { createBalanceConnection } from "./desk/balance-connection";
 import { DESK_BALANCE_READ_PATH, handleDeskBalanceRead, type BalanceConnectionAccess } from "./api/desk-balance-read";
 import { isStackPrincipal } from "./api/conversations";
@@ -101,6 +103,7 @@ import type { DeskDraftAccess } from "./desk/draft-editor";
 import type { GraphSurfaceAccess } from "./desk/graph-surfaces";
 import { GRAPH_SURFACES_PATH } from "./desk/graph-surface-schema";
 import type { BalanceSurfaceAccess } from "./desk/balance-surfaces";
+import type { FlowSurfaceAccess } from "./desk/flow-surfaces";
 import { BALANCE_SURFACES_PATH } from "./desk/balance-surface-schema";
 import { GRAPH_REPOSITORIES_PATH } from "./desk/graph-repository-schema";
 import { handleDeskMailRules } from "./api/desk-mail-rules";
@@ -217,9 +220,11 @@ export interface MissionControlViews {
   connectionSetup?: ConnectionSetupAccess;
   balanceConnection?: BalanceConnectionAccess;
   adapterAssets?: AdapterAssetAccess;
+  adapterFrames?: AdapterFrameAccess;
   graphScope?: GraphScopeAccess;
   graphSurfaces?: GraphSurfaceAccess;
   balanceSurfaces?: BalanceSurfaceAccess;
+  flowSurfaces?: FlowSurfaceAccess;
   drafts?: DeskDraftAccess;
   graphDrafts?: GraphDraftSetup;
 }
@@ -240,6 +245,7 @@ export function startServer(
   db: Database,
   options: StartServerOptions = {}
 ): ServerContext {
+  if (options.drafts && options.graphDrafts) throw new Error("drafts and graphDrafts cannot both be configured");
   if (options.graphDrafts) {
     const { host, deps, options: graphOptions } = options.graphDrafts;
     const editor = deskGraphDraftEditor(host, deps, graphOptions);
@@ -374,6 +380,7 @@ export function startServer(
       }
 
       if (url.pathname.startsWith("/api/")) {
+        if (req.method === "GET" && /^\/api\/conversations\/[^/]+\/stream$/.test(url.pathname)) server.timeout(req, 0);
         if (req.method === "POST" && ["/api/desk/studio/session", "/api/desk/mail"].includes(url.pathname)) server.timeout(req, 180);
         if (req.method === "POST" && ["/api/desk/ask", "/api/desk/create", "/api/desk/routines", "/api/desk/routine-capability", "/api/desk/routine-editor"].includes(url.pathname)) server.timeout(req, 0);
         if (req.method === "POST" && /^\/api\/attention\/[^/]+\/resolve$/.test(url.pathname)) {
@@ -408,7 +415,7 @@ export function startServer(
 
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
         return new Response(Bun.file(join(DASHBOARD_DIST, "index.html")), {
-          headers: { "content-type": "text/html; charset=utf-8" },
+          headers: { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(url.origin) },
         });
       }
 
@@ -531,7 +538,7 @@ async function handleApi(
   desk?: DeskRuntime,
   views: MissionControlViews = {},
 ): Promise<Response> {
-  const { conversations, connectionSetup, adapterAssets, graphScope, graphSurfaces, balanceSurfaces } = views;
+  const { conversations, connectionSetup, adapterAssets, graphScope, graphSurfaces, balanceSurfaces, flowSurfaces } = views;
   const { pathname } = url;
   if (pathname === DESK_DRAFTS_PATH || pathname.startsWith(`${DESK_DRAFTS_PATH}/`)) return handleDeskDrafts(req, url, guard, views.drafts);
   if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });
@@ -540,6 +547,7 @@ async function handleApi(
 
   if (pathname === DESK_CONNECTIONS_PATH || pathname.startsWith(`${DESK_CONNECTIONS_PATH}/`)) return handleDeskConnections(req, url, guard, connectionSetup);
 
+  if (pathname === DESK_ADAPTER_FRAMES_PATH || pathname.startsWith(`${DESK_ADAPTER_FRAMES_PATH}/`)) return handleDeskAdapterFrames(req, url, guard, views.adapterFrames);
   if (pathname === DESK_ADAPTER_ASSET_PATH || pathname.startsWith(`${DESK_ADAPTER_ASSET_PATH}/`)) return handleDeskAdapterAssets(req, url, guard, adapterAssets);
 
   const deskFlowsRead = pathname === DESK_FLOWS_PATH || pathname.startsWith(`${DESK_FLOWS_PATH}/`);
@@ -615,7 +623,7 @@ async function handleApi(
 
   if (pathname === "/api/desk/create") return handleDeskCreate(req, db, desk, { routineCapabilities: () => localRoutineCapabilities(agentPresence) });
   if (pathname === "/api/desk/routines") return handleDeskRoutines(req, db, desk, undefined, () => localRoutineCapabilities(agentPresence));
-  if (deskFlowsRead) return handleDeskFlows(req, desk);
+  if (deskFlowsRead) return handleDeskFlows(req, desk, undefined, flowSurfaces);
   if (pathname === "/api/desk/routine-capability") return handleDeskRoutineCapability(req, db, desk);
   if (pathname === "/api/desk/routine-history") return handleDeskRoutineEvidence(req, db, desk);
   if (pathname === "/api/desk/routine-log") return handleDeskRoutineEvidence(req, db, desk, true);

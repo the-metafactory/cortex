@@ -66,6 +66,14 @@ If the command exits non-zero, times out, prints invalid JSON or prints another 
 
 A routine refused for a missing capability stays a draft. The Desk does not install it, and a gate, research, targeted or federated step is never offered for building.
 
+### Worker status command
+
+<!-- glossary-ignore: node -->
+<!-- glossary-ignore: owner -->
+<!-- glossary-ignore: agent -->
+
+`workers.status` uses the same shape and runs with `workers.timeoutSeconds`. It may also print `generation`, so a conversation can name the exact worker to stop, and `result`, `url` and `prUrl` for the node and the pull request. `scripts/desk-worker-status.ts <owner/repo#node>` is the shipped command: it reads the same Ranger journal entry and prints `{ "state": "in-review", "pr": 3200, "generation": 4 }`. Its states are the ones the conversation tools read (`filed`, `building`, `in-review`, `merged`, `failed` from the journal, which the Desk shows as `prepared`, `running`, `review`, `merged` and `failed`). Without `workers.status`, the Desk falls back to `routines.capabilityBuild.status`, which carries no generation, so a stop reports that no generation is recorded instead of guessing one.
+
 ## Capability installation commands
 
 With `capabilityBuild.bundle`, `install`, `uninstall`, and `status` configured, a merged build shows **Merged, install?**. Choosing **Install** opens a confirmation. Confirming runs the configured `install` argument array, replacing `{bundle}` in each argument with `capabilityBuild.bundle`. The command receives no shell expansion or stdin. It runs with `routines.timeoutSeconds`.

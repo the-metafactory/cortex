@@ -1,4 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
@@ -147,6 +148,7 @@ export interface DeskFixturePackageOptions {
   backendEntry?: string;
   backendSha?: string;
   ui?: boolean;
+  uiViews?: unknown[];
   extra?: Record<string, unknown>;
 }
 
@@ -179,7 +181,7 @@ export function writeDeskFixturePackage(dir: string, options: DeskFixturePackage
     draftingBindings: options.draftingBindings ?? [deskFixtureDraftingBinding(adapterId)],
     readBindings: options.readBindings ?? [deskFixtureReadBinding(adapterId)],
     setup: options.setup ?? deskFixtureSetup(adapterId),
-    ...(files ? { ui: { protocolVersion: "1.0.0", entry: "app.html", views: [{ objectType: "task", view: "result" }], files } } : {}),
+    ...(files ? { ui: { protocolVersion: "1.0.0", entry: "app.html", views: options.uiViews ?? [{ objectType: "task", view: "result" }], files } } : {}),
     ...options.extra,
   };
   writeFileSync(join(dir, "desk-adapter.json"), JSON.stringify(manifest, null, 2));
@@ -210,6 +212,33 @@ export async function openDeskFixtureStore(dir: string): Promise<{ engine: Harne
   mkdirSync(dir, { recursive: true });
   const engine = await Harness.open(await openNodeSqliteStorage(join(dir, "durable.sqlite")), { registry: createRegistry(), models: createModels() }, BACKGROUND_CONTEXT);
   return { engine, store: new DeskGenerationStore(engine) };
+}
+
+export interface DeskTestWorkspace {
+  tempDir(name: string): string;
+  openStore(): Promise<{ store: DeskGenerationStore; dir: string }>;
+  cleanup(): Promise<void>;
+}
+
+export function deskTestWorkspace(prefix = "cortex-desk"): DeskTestWorkspace {
+  const roots: string[] = [];
+  const engines: Harness[] = [];
+  const tempDir = (name: string): string => {
+    const dir = mkdtempSync(join(tmpdir(), `${prefix}-${name}-`));
+    roots.push(dir);
+    return dir;
+  };
+  const openStore = async (): Promise<{ store: DeskGenerationStore; dir: string }> => {
+    const dir = tempDir("store");
+    const { engine, store } = await openDeskFixtureStore(dir);
+    engines.push(engine);
+    return { store, dir };
+  };
+  const cleanup = async (): Promise<void> => {
+    for (const engine of engines.splice(0)) await engine.close(BACKGROUND_CONTEXT);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  };
+  return { tempDir, openStore, cleanup };
 }
 
 export type DeskBackendCall = "dispatch" | "cancel" | "lookup" | "readback";

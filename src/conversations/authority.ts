@@ -50,7 +50,7 @@ export interface AuthorityBindings {
   sinks: ReadonlyMap<string, (value: Json) => Promise<void>>;
   readBindings?: ReadBindings;
 }
-export interface HostPolicyState { principal: string; stack: string; policy: "local" | "cloud"; tool: Json; communication: Json; link: Json; work: Json; history: Json }
+export interface HostPolicyState { principal: string; stack: string; policy: "local" | "cloud"; tool: Json; communication: Json; link: Json; work: Json; workers?: Json; history: Json }
 export interface ObservedRead { projection: ReleaseProjection<Json>; called: boolean; value?: Json }
 export type { LookupRequest, ReadbackRequest };
 const LookupRequestSchema = z.object({ lifecycleVersion: z.literal("1.0.0"), operationId: z.string().min(1), ownerRequestId: z.string().min(1) }).strict();

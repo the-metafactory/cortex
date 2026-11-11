@@ -11,6 +11,7 @@ const id = z.string().min(1).max(512);
 const revision = z.number().int().positive();
 const Make = z.object({ conversationId: id, entryId: id, capabilityId: id, connectionId: id, newDraft: z.boolean().optional(), selectDraftId: id.optional() }).strict();
 const Edit = z.object({ revision, pointer: id, change: z.discriminatedUnion("kind", [z.object({ kind: z.literal("set"), value: z.json() }).strict(), z.object({ kind: z.literal("omit") }).strict(), z.object({ kind: z.literal("null") }).strict()]) }).strict();
+const References = z.object({ revision, pointer: id, labels: z.array(id).min(1).max(50) }).strict();
 const Revision = z.object({ revision }).strict();
 const Destination = z.object({ revision, connectionId: id, capabilityId: id }).strict();
 const readBody = (req: Request): Promise<unknown> => req.json().catch(() => null);
@@ -18,16 +19,16 @@ const hasTarget = (editor: DeskDraftEditor, capabilityId: string, connectionId: 
 
 interface DraftContext { req: Request; url: URL; editor: DeskDraftEditor; audience: Lane; principal: string; draftId: string; before: DraftView }
 
-async function readAvailable(editor: DeskDraftEditor, draftId: string, audience: Lane): Promise<DraftView | null> {
+async function requireAvailable(editor: DeskDraftEditor, draftId: string, audience: Lane): Promise<DraftView> {
   const view = await editor.service.read(draftId, audience);
-  if (view && !hasTarget(editor, view.draft.capabilityId, view.draft.connectionId)) throw new DraftConflict("This drafting destination is unavailable; the saved draft is retained.");
+  if (!view) throw new DraftConflict("Draft does not exist.");
+  if (!hasTarget(editor, view.draft.capabilityId, view.draft.connectionId)) throw new DraftConflict("This drafting destination is unavailable; the saved draft is retained.");
   return view;
 }
 
 async function present({ editor, draftId, audience, before }: DraftContext): Promise<Response> {
-  const view = await readAvailable(editor, draftId, audience);
-  if (!view) throw new DraftConflict("Draft does not exist.");
-  return reply(200, editor.present(view, before));
+  const view = await requireAvailable(editor, draftId, audience);
+  return reply(200, await editor.present(view, before));
 }
 
 async function collection(req: Request, editor: DeskDraftEditor, audience: Lane): Promise<Response> {
@@ -39,14 +40,13 @@ async function collection(req: Request, editor: DeskDraftEditor, audience: Lane)
   await editor.host.detail(parsed.data.conversationId);
   const made = await editor.service.make(parsed.data);
   if (made.kind === "select") return reply(200, made);
-  const view = await readAvailable(editor, made.view.draft.draftId, audience);
-  if (!view) throw new DraftConflict("Draft does not exist.");
-  return reply(200, { kind: "draft", reopened: made.reopened, ...editor.present(view) });
+  const view = await requireAvailable(editor, made.view.draft.draftId, audience);
+  return reply(200, { kind: "draft", reopened: made.reopened, ...await editor.present(view) });
 }
 
 async function draft(context: DraftContext): Promise<Response> {
   const { req, editor, draftId, before } = context;
-  if (req.method === "GET") return reply(200, editor.present(before));
+  if (req.method === "GET") return reply(200, await editor.present(before));
   if (req.method !== "PATCH") return notAllowed("GET, PATCH");
   const parsed = Edit.safeParse(await readBody(req));
   if (!parsed.success) return fail(400, "The field edit is not valid.");
@@ -58,6 +58,14 @@ async function details({ req, url, editor, draftId, audience }: DraftContext): P
   if (req.method !== "GET") return notAllowed("GET");
   const field = await editor.service.details(draftId, url.searchParams.get("pointer") ?? "", audience);
   return field ? reply(200, { details: field }) : fail(404, "No source details for this field.");
+}
+
+async function references(context: DraftContext): Promise<Response> {
+  if (context.req.method !== "POST") return notAllowed("POST");
+  const parsed = References.safeParse(await readBody(context.req));
+  if (!parsed.success) return fail(400, "Enter the references to resolve.");
+  await context.editor.service.editReferences(context.draftId, parsed.data.revision, parsed.data.pointer, parsed.data.labels);
+  return present(context);
 }
 
 async function destination(context: DraftContext): Promise<Response> {
@@ -90,7 +98,7 @@ async function confirm({ req, editor, draftId, before, principal, audience }: Dr
   return reply(200, { confirmation });
 }
 
-const ACTIONS: ReadonlyMap<string, (context: DraftContext) => Promise<Response>> = new Map([["", draft], ["details", details], ["destination", destination], ["refresh", refresh], ["confirm", confirm]]);
+const ACTIONS: ReadonlyMap<string, (context: DraftContext) => Promise<Response>> = new Map([["", draft], ["details", details], ["references", references], ["destination", destination], ["refresh", refresh], ["confirm", confirm]]);
 
 export async function handleDeskDrafts(req: Request, url: URL, guard: MutationGuardContext, access: DeskDraftAccess | undefined): Promise<Response> {
   const principal = await stackPrincipalOf(req, guard, "Only this stack's principal can review drafts.");
@@ -107,6 +115,7 @@ export async function handleDeskDrafts(req: Request, url: URL, guard: MutationGu
     if (!before) return fail(404, "Draft does not exist.");
     await editor.host.detail(before.draft.conversationId);
     if (!hasTarget(editor, before.draft.capabilityId, before.draft.connectionId)) return fail(403, "This drafting destination is unavailable; the saved draft is retained.");
+    if (req.method !== "GET" && segments[1] !== "confirm" && await editor.hasOperation(before)) return fail(409, "This draft already has an operation. Reopen its receipt or make a new draft.");
     const action = ACTIONS.get(segments[1] ?? "");
     return action ? await action({ req, url, editor, audience, principal, draftId, before }) : fail(404, "Unknown draft action.");
   } catch (error) {

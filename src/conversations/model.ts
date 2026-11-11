@@ -22,8 +22,8 @@ export type GateResult = { refused: string } | { conversationId: string; context
 export type RouteGate = (sessionId: string | undefined, route: ModelRoute) => Promise<GateResult>;
 
 export interface ToolSource { id: string; revision: string; policy: "local" | "cloud"; projectRegistryRevision?: string }
-export interface ToolActivity { boundary?: "host"; source?: ToolSource; callId: string; tool: string; args: unknown; outcome: "done" | "error" | "refused" | "stopped"; result: string }
-export type TurnEvent = { kind: "tool"; activity: ToolActivity } | { kind: "reconstructed"; route: ModelRoute; reason: Exclude<ContinuationReason, "lane-changed"> };
+export interface ToolActivity { turn?: string; boundary?: "host"; source?: ToolSource; callId: string; tool: string; args: unknown; outcome: "done" | "error" | "refused" | "stopped"; result: string }
+export type TurnEvent = { kind: "tool-start"; callId: string; tool: string; turn: string } | { kind: "tool"; activity: ToolActivity } | { kind: "reconstructed"; route: ModelRoute; reason: Exclude<ContinuationReason, "lane-changed"> };
 export interface ToolOutcome { source?: ToolSource; sourcePolicy?: Policy; outcome: ToolActivity["outcome"]; text: string }
 export interface ToolSpec { name: string; description: string; schema: object }
 export interface ToolSurface { validate: () => Promise<void>; specs: ToolSpec[]; call: (callId: string, name: string, input: unknown, signal: AbortSignal) => Promise<ToolOutcome> }
@@ -40,6 +40,8 @@ export interface TurnRequest {
   session: string;
   signal: AbortSignal;
   activity: (activity: ToolActivity) => Promise<void>;
+  text?: (delta: string, reset?: boolean) => Promise<void>;
+  started?: (callId: string, name: string) => Promise<void>;
   tools?: ToolSurface;
 }
 export interface TurnReply { text: string; session: string; resumed: boolean }
@@ -88,7 +90,7 @@ export function cortexModels(lanes: Lanes, gate: RouteGate, turn: TurnCall, reco
   const models: Model<string>[] = routed.map(({ route, lane }) => ({ id: route, name: `${route} (${laneName(lane)})`, api: API, provider: CORTEX_PROVIDER, baseUrl: `pi:${lane.provider}`, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, reasoning: false, contextWindow: 262_144, maxTokens: 32_768 }));
   const stream = (model: Model<string>, context: { messages: Message[] }, options?: { signal?: AbortSignal; sessionId?: string }) => {
     const out = createAssistantMessageEventStream();
-    let base: AssistantMessage = { role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id, usage: ZERO_USAGE, stopReason: "stop", timestamp: Date.now() };
+    let base: AssistantMessage = { role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id, usage: ZERO_USAGE, stopReason: "stop", timestamp: Date.now(), responseId: `cortex-stream:${randomUUID()}` };
     void (async () => {
       try {
         const found = routed.find(candidate => candidate.route === model.id);
@@ -99,13 +101,28 @@ export function cortexModels(lanes: Lanes, gate: RouteGate, turn: TurnCall, reco
         if ("refused" in gated) throw new Error(gated.refused);
         const plan = planTurn(context.messages, route);
         if (!plan.prompt) throw new Error("the turn carries no new input");
-        const surface = tools?.(gated.conversationId, route, activity => record(gated.conversationId, { kind: "tool", activity }));
+        const turnId = base.responseId ?? randomUUID();
+        const activity = (activity: ToolActivity): Promise<void> => record(gated.conversationId, { kind: "tool", activity: { ...activity, turn: turnId } });
+        const surface = tools?.(gated.conversationId, route, activity);
         await surface?.validate();
+        base = { ...base, content: [{ type: "text", text: "" }] };
+        out.push({ type: "start", partial: structuredClone(base) });
+        out.push({ type: "text_start", contentIndex: 0, partial: structuredClone(base) });
         const reply = await turn({
           conversationId: gated.conversationId, route, lane, instructions, prompt: plan.prompt, linked: gated.context,
           history: plan.history, resume: surface ? null : plan.resume, session: `${gated.conversationId}.${route.replace(":", "-")}.${plan.answers}.${randomUUID().slice(0, 8)}`,
           signal: options?.signal ?? new AbortController().signal,
-          activity: activity => record(gated.conversationId, { kind: "tool", activity }),
+          activity,
+          started: (callId, tool) => record(gated.conversationId, { kind: "tool-start", callId, tool, turn: turnId }),
+          text: async (delta, reset = false) => {
+            await surface?.validate();
+            const current = await gate(options?.sessionId, route);
+            if ("refused" in current) throw new Error(current.refused);
+            const block = base.content[0];
+            if (block?.type !== "text") throw new Error("The conversation text block is missing.");
+            block.text = reset ? delta : block.text + delta;
+            out.push(reset ? { type: "text_start", contentIndex: 0, partial: structuredClone(base) } : { type: "text_delta", contentIndex: 0, delta, partial: structuredClone(base) });
+          },
           ...(surface ? { tools: surface } : {}),
         });
         await surface?.validate();
@@ -114,7 +131,7 @@ export function cortexModels(lanes: Lanes, gate: RouteGate, turn: TurnCall, reco
         const reason = reply.resumed || plan.history.length === 0 ? null : plan.reason ?? (surface ? "tool-policy" : "session-missing");
         if (reason && reason !== "lane-changed") await record(gated.conversationId, { kind: "reconstructed", route, reason });
         const message: AssistantMessage = { ...base, responseId: `${SESSION_PREFIX}${reply.session}`, content: [{ type: "text", text: reply.text }] };
-        out.push({ type: "start", partial: { ...base } });
+        out.push({ type: "text_end", contentIndex: 0, content: reply.text, partial: message });
         out.push({ type: "done", reason: "stop", message });
         out.end(message);
       } catch (error) {

@@ -136,10 +136,10 @@ describe("Pulse flow writer for conversation proposals", () => {
 
   test("an invalid definition fails with Pulse's findings", async () => {
     const r = await rig();
-    r.pulse.answerNext(() => answer(1, { status: "invalid", findings: [{ rule: "schedule", message: "The input must not have a schedule key; a saved flow is never scheduled." }] }));
+    r.pulse.answerNext(() => answer(1, { status: "invalid", findings: [{ rule: "schedule", message: "The input must not have a schedule key; a saved flow is never scheduled" }, { rule: "actions", message: "Actions are missing.  " }] }));
     const refused = await r.confirm(await r.propose(PROBE));
     expect(refused.status).toBe(409);
-    expect(refused.body.error).toBe("The input must not have a schedule key; a saved flow is never scheduled. Nothing was created.");
+    expect(refused.body.error).toBe("The input must not have a schedule key; a saved flow is never scheduled. Actions are missing. Nothing was created.");
   });
 
   test("a name that differs from the definition's name fails before Pulse is called", async () => {

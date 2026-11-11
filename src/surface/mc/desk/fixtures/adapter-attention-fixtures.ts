@@ -79,14 +79,14 @@ export async function attentionRig(policy: "local" | "cloud" = "local", options:
   }
   const store = rig.host.readObservations(registry, rig.bindings, time.clock);
   const feature: AdapterAttention = { enabled: true, store, bindings: rig.readBindings, context: rig.context, sink: rig.sink, sources };
-  const batch = (index: number, objects: Json[]): ObservationBatch => {
+  const batch = (index: number, objects: Json[], offset = 0): ObservationBatch => {
     const source = required(sources[index]);
-    return { version: "1.0.0", payload: { items: objects }, events: objects.map((_value, item) => ({ kind: "present", pointer: `/items/${item}`, ref: { adapterId: source.adapterId, connectionId: source.connectionId, objectType: "document", canonicalId: `item-${item}` }, schemaRef: required(adapters[index]).schemaRef, destination: required(source.destinations[0]), observedAt: new Date(time.clock.now()).toISOString(), revision: "1" })), gap: false, coverage: "objects" };
+    return { version: "1.0.0", payload: { items: objects }, events: objects.map((_value, item) => ({ kind: "present", pointer: `/items/${item}`, ref: { adapterId: source.adapterId, connectionId: source.connectionId, objectType: "document", canonicalId: `item-${item + offset}` }, schemaRef: required(adapters[index]).schemaRef, destination: required(source.destinations[0]), observedAt: new Date(time.clock.now()).toISOString(), revision: "1" })), gap: false, coverage: "objects" };
   };
   const value = (index: number, title = "Synthetic review", due: string | null = "2026-11-01"): Json => ({ "display/data": { "title~text": title, reason: "Review the synthetic observation.", due, area: required(required(sources[index]).destinations[0]), url: "https://example.test/synthetic" } });
-  async function ingest(index: number, objects: Json[] = [value(index)], mode: ObservationMode = "resync") {
+  async function ingest(index: number, objects: Json[] = [value(index)], mode: ObservationMode = "resync", offset = 0) {
     const source = required(sources[index]);
-    batches.set(source.adapterId, batch(index, objects));
+    batches.set(source.adapterId, batch(index, objects, offset));
     return store.check(rig.context, source, rig.sink, mode);
   }
   async function revoke(index = 0) {

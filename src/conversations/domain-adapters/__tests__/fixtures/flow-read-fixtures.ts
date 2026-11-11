@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import type { WriterRunner } from "../../../../surface/mc/desk/create";
 import { authorityRig } from "../../../authority-fixtures";
 import { createFlowReadAdapter } from "../../flow/read";
 import { DomainAdapterRegistry } from "../../registry";
@@ -17,15 +18,20 @@ import { releasedObjects } from "./balance-read-fixtures";
 
 const execute = promisify(execFile);
 const pulseBinary = fileURLToPath(new URL("src/cli.ts", import.meta.resolve("pulse/package.json")));
+export const flowPulseRunner = (options: { flowsDir: string; env: NodeJS.ProcessEnv }): WriterRunner => (argv, _stdin, timeout) => {
+  const result = Bun.spawnSync([...argv, "--flows-dir", options.flowsDir], { env: { ...options.env }, timeout });
+  return Promise.resolve({ code: result.exitCode ?? 2, stdout: result.stdout.toString(), stderr: result.stderr.toString() });
+};
+
 export const FLOW_NAME = "F_SAVED_EXAMPLE";
 export const ARC_FLOW_NAME = "F_ARC_EXAMPLE";
 export const flowYaml = (name: string): string => `name: ${name}\ninput:\n  text: example\nactions:\n  - A_EXAMPLE\n`;
 
-export async function openFlowReadRig(options: { conversationPolicy?: "local" | "cloud"; configured?: boolean; binary?: string; stubPulse?: string } = {}) {
+export async function openFlowReadRig(options: { conversationPolicy?: "local" | "cloud"; configured?: boolean; binary?: string; stubPulse?: string; flowsDir?: string } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "desk-flow-read-"));
   const home = join(dir, "home");
   const bin = join(dir, "bin");
-  const flowsDir = join(dir, "flows");
+  const flowsDir = options.flowsDir ?? join(dir, "flows");
   const pkg = join(dir, "arc-example");
   for (const path of [home, bin, pkg]) await mkdir(path, { recursive: true });
   await symlink(process.execPath, join(bin, "bun"));

@@ -316,3 +316,33 @@ Sending, inviting or changing data stays with the creation tools: `creation_prop
 The same lanes and pi settings run **Hand to Ivy** on a mail card. The action is offered when `conversations` has a lane, `ask.writers.task` and at least one `ask.taskMaps` entry are set, and `mail.actions.draft` is set. It files an agent task on the first task map with the mail's sender, subject, classifier summary, link and your optional instruction, never the mail body; keep that map private. Ivy then gets one pi turn with the subject, summary and the mail's first paragraph, and answers with findings and a reply draft. A mail from a `local`-policy area runs only on the `local` lane; any other mail runs on the default `cloud` lane, or on `local` when `cloud` is absent. Suspicious mail is never handed over.
 
 While Ivy works, the mail card shows "With Ivy since" and the time. The result arrives as a card in Catch-up: **Approve** saves the draft through `mail.actions.draft`, **Edit** opens it in the reply editor first, and **Discard** closes it. Nothing is sent. A failed turn shows its reason with **Ask Ivy again**; the hand-off is kept in `desk_mail_handoffs`. pi sessions for hand-offs live under the stack's `mail-handoff` directory. The task on the map stays open; the Desk does not close it.
+
+### Implementation handoffs
+
+<!-- glossary-ignore: agent -->
+<!-- glossary-ignore: host -->
+<!-- glossary-ignore: owner -->
+<!-- glossary-ignore: node -->
+<!-- glossary-ignore: run -->
+<!-- glossary-ignore: body -->
+
+`workers` is optional. Without it implementation brief filing, starting and stopping work report that handoff is not set up on this stack. Filing requires a configured registered map and an enabled graph repository.
+
+```yaml
+mc:
+  desk:
+    workers:
+      maps: [example/maps#12]
+      start: [ranger, build-now, '{id}', --map, '{map}']
+      stop: [ranger, stop-node, '{id}', --map, '{map}', '--generation', '{generation}']
+      status: [bun, /opt/cortex/scripts/desk-worker-status.ts, '{ref}']
+      timeoutSeconds: 120
+```
+
+`maps` lists the registered map roots on which a conversation may start implementation work. Each of them lives in the stack's configuration, never in Cortex's code. `start`, `stop` and `status` are argument arrays. Cortex replaces `{ref}` with the recorded node reference, `{repo}` with its repository, `{id}` with the node number, `{map}` with the recorded map root and `{generation}` with the recorded worker generation. `start` must contain `{id}` and `{map}`; `stop` must contain the node, `{map}` and `{generation}`; `status` must contain `{ref}` or `{id}`. `timeoutSeconds` defaults to 120 and accepts integers from 1 to 600.
+
+The four conversation tools follow the same authority rule as every other owner write. **worker_brief** prepares a brief with the repository, map, parent node, scope, acceptance checks, checkpoint, optional probes, blocked-by nodes and budget, and files it as a `work-brief` proposal. The node is filed as one that needs approval: a conversation never files an automatic node and never changes a node's autonomy. **worker_start** asks to start one exact recorded node through `start`; without a scoped standing permission the principal confirms it first. Ranger's own gates decide — dependencies, ownership, pause and drain, lane, provisioning, budget, approvals and its spawn cap — and a node Ranger will not run automatically is reported as awaiting approval, with the node left as it was. **worker_status** reads the recorded state through `status`. **worker_cancel** asks to stop the exact recorded generation through `stop`; it refuses a node with no recorded generation, a generation the owner no longer records, and a worker that already stopped. No tool edits a journal, kills a process, merges, deploys or sends.
+
+`status` may be omitted; Cortex then uses `routines.capabilityBuild.status` when that is configured, so one adapter can serve both. The command prints one JSON object with `state` and optional `reason`, `pr`, `result`, `generation`, `url` and `prUrl`. States Cortex reads are `prepared`, `queued`, `running`, `stopping`, `waiting`, `review`, `merged`, `failed` and `cancelled`; the capability-build states `filed`, `building` and `in-review` map to `prepared`, `running` and `review`. A state the build does not map keeps the recorded state and reports the reason instead of guessing. `merged` means the pull request merged; it never means deployed or live, and the worker status view reports `deployed: false`.
+
+The recorded handoff lives in `desk_worker_handoffs`, one row per node, with the originating conversation and entry, the proposal and operation ids, the map, the generation, the pull request and the last state. A retried start reconciles the recorded worker instead of starting a second one. Before dispatch, the status baseline identifies the next worker generation for response recovery; if that baseline is unavailable and the start response is lost, the request stays uncertain and is not dispatched again. An empty journal while a supervisor starts preserves the queued handoff. A stop Ranger acknowledges but has not confirmed stays `accepted` until a later read confirms it; `stop-requested` becomes `cancelled` only after both recorded process identifiers are null.
