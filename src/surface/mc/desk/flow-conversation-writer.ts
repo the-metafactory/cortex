@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { FlowOptions } from "../../../common/types/config";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, ReadbackResult } from "../../../conversations/types";
-import { studioRequestId } from "./conversation-ids";
+import { studioRequestId } from "../../../conversations/conversation-ids";
 import { spawnWithStdin, type WriterRunner } from "./create";
 import { flowJson, runFlowSave, sentence, SHOW_TIMEOUT_MS } from "../../../conversations/domain-adapters/flow/pulse-contract";
 

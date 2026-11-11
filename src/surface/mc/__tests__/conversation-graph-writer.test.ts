@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import type { ProposalView } from "../../../conversations/creation";
 import { HandledLedger } from "../desk/actions";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
-import { studioRequestId } from "../desk/conversation-ids";
+import { studioRequestId } from "../../../conversations/conversation-ids";
 import { conversationSources } from "../desk/conversation-sources";
 import { WriterTimeout, type WriterResult } from "../desk/create";
 import { setGraphRepositoryEnabled } from "../desk/graph-repositories";

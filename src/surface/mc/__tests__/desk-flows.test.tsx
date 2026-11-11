@@ -4,7 +4,7 @@ import { handleDeskFlows } from "../api/desk-flows";
 import { HandledLedger } from "../desk/actions";
 import type { DeskRuntime } from "../desk/compose";
 import type { WriterRunner } from "../desk/create";
-import { DESK_FLOWS_PATH, type SavedFlow } from "../desk/saved-flow-contract";
+import { DESK_FLOWS_PATH, type SavedFlow } from "../../../conversations/saved-flow-contract";
 import { DeskSavedFlows, SavedFlowRow } from "../dashboard-v2/components/desk-saved-flows";
 import { DeskRoutineEditor } from "../dashboard-v2/components/desk-routine-editor";
 import { defaultRoutinesLocation, readRoutinesLocation, routinesSearch } from "../dashboard-v2/hooks/use-routines-location";

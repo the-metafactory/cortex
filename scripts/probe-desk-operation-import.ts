@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { operationUuid, studioRequestId } from "../src/surface/mc/desk/conversation-ids";
+import { operationUuid, studioRequestId } from "../src/conversations/conversation-ids";
 import { graphMarker } from "../src/surface/mc/desk/graph-conversation-writer";
 import { AT, openJournalFixture } from "../src/conversations/domain-adapters/operations/fixtures";
 import { legacyContext, legacyFixture } from "../src/conversations/domain-adapters/operations/legacy-fixtures";

@@ -8,6 +8,8 @@ on:
       - "src/surface/mc/desk/**"
       - "src/surface/mc/dashboard-v2/**"
       - "scripts/probe-desk-adapter-browser.ts"
+      - "scripts/probe-desk-flow-cutover.ts"
+      - "scripts/desk-flow-cutover/**"
       - "scripts/desk-make-editor/**"
       - "scripts/desk-adapter-frame/**"
       - ".github/workflows/desk-browser.yml"
@@ -18,6 +20,8 @@ on:
       - "src/surface/mc/desk/**"
       - "src/surface/mc/dashboard-v2/**"
       - "scripts/probe-desk-adapter-browser.ts"
+      - "scripts/probe-desk-flow-cutover.ts"
+      - "scripts/desk-flow-cutover/**"
       - "scripts/desk-make-editor/**"
       - "scripts/desk-adapter-frame/**"
       - ".github/workflows/desk-browser.yml"
@@ -47,6 +51,7 @@ jobs:
         run: |
           mkdir -p "$DESK_ADAPTER_BROWSER_SHOTS"
           bun scripts/probe-desk-adapter-browser.ts
+          bun scripts/probe-desk-flow-cutover.ts
 
       - name: Upload screenshots
         if: always()

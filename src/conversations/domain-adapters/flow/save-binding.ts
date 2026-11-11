@@ -2,12 +2,13 @@ import { z } from "zod";
 import type { LookupRequest } from "../../authority";
 import type { CreateRequest } from "../../types";
 import type { FlowOptions } from "../../../common/types/config";
-import { studioRequestId } from "../../../surface/mc/desk/conversation-ids";
+import { studioRequestId } from "../../conversation-ids";
 import { spawnWithStdin, type WriterRunner } from "../../../surface/mc/desk/create";
 import { flowJson, FlowSavedResponseSchema, runFlowSave, sentence, SHOW_TIMEOUT_MS } from "./pulse-contract";
-import { FlowHashSchema } from "../../../surface/mc/desk/saved-flow-contract";
+import { FlowHashSchema } from "../../saved-flow-contract";
 import type { DispatchOutcome } from "../operations/dispatch";
 import type { OperationJournalStore } from "../operations/journal";
+import { readOperationEvidence } from "../operations/legacy";
 import { buildApprovedSnapshot, ownerResultKit, requestParts, resultsOf, type OwnerResultParts } from "../operations/owner-results";
 import type { ApprovedSnapshot, Authority, DispatchRequest, OperationLookup, OwnerResult, OwnerSupport, Provenance } from "../operations/types";
 import { canonicalWire } from "../operations/validation";
@@ -138,6 +139,16 @@ export function createFlowSaveBinding(options: FlowSaveBindingOptions) {
     declaration: flowSaveDeclaration(), support, bindings: { handlers: {}, observations: {} },
     writerBinding: { stack: options.stack, owner: "flow", adapterId: FLOW_ADAPTER_ID, connectionId: options.connectionId, capabilityId: CAPABILITY_ID },
     connector: { writerOwner: "flow" as const, support, dispatch, lookup }, dispatch, lookup,
+    async lookupLegacy(operationId: string) {
+      const stored = await options.journal.read(operationId);
+      const evidence = readOperationEvidence(stored);
+      if (evidence.kind !== "legacy" || evidence.issues.length || evidence.context?.connectionId !== options.connectionId || evidence.context.capabilityId !== CAPABILITY_ID) return null;
+      const flows = options.flows();
+      if (!flows) return null;
+      const result = await run([...flows.pulse, "flow", "show", "--request-id", stored?.journal.ownerRequestId ?? "", "--json"], "", SHOW_TIMEOUT_MS);
+      const found = Found.safeParse(flowJson(result.stdout));
+      return result.code === 0 && found.success && found.data.name === evidence.source.proposal.fields.name && found.data.provenance.request_id === stored?.journal.ownerRequestId ? { found: true as const, canonicalId: found.data.name } : null;
+    },
   };
 }
 export type FlowSaveBinding = ReturnType<typeof createFlowSaveBinding>;

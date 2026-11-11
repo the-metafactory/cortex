@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { findNode } from "../../../balance";
-import { operationUuid } from "../../../surface/mc/desk/conversation-ids";
+import { operationUuid } from "../../conversation-ids";
 import { STALE_OUTLINE } from "../../../surface/mc/desk/balance-outline";
 import type { OperationRecord } from "../../types";
 import { objectRef } from "../fixtures";

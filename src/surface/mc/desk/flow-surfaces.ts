@@ -1,7 +1,7 @@
 import { flowQuerySource } from "../../../conversations/domain-adapters/flow/queries";
 import { flowName } from "../../../conversations/domain-adapters/flow/schema";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
-import type { SavedFlow } from "./saved-flow-contract";
+import type { SavedFlow } from "../../../conversations/saved-flow-contract";
 import type { FlowCardFacts, FlowReceipt, FlowSavedCard, FlowSavedDefinition, FlowSavedList } from "./flow-surface-schema";
 import { runCreatedHostQuery, runHostQuery, type HostQueryRun, type HostQueryRunner } from "./query-run";
 import { releasedObjects, type ReleasedObject } from "./work-released";

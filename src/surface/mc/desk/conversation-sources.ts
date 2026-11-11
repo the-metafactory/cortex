@@ -40,13 +40,14 @@ export function splitNoteId(id: string): { thread: string; note: string } | null
   const at = id.indexOf("#");
   return at > 0 && at < id.length - 1 ? { thread: id.slice(0, at), note: id.slice(at + 1) } : null;
 }
-export { operationUuid, studioRequestId } from "./conversation-ids";
+export { operationUuid, studioRequestId } from "../../../conversations/conversation-ids";
 
 export function studioThreadOf(view: StudioView, slug: string): StudioThreadView | undefined {
   return [...view.active, ...view.parked, ...view.closed].find(t => t.slug === slug);
 }
 
 export interface SourceDeps {
+  lifecycles?: HostSources["lifecycles"];
   grillingReads?: GrillingReads;
   db: Database;
   desk: () => DeskOptions | undefined;
@@ -130,6 +131,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const { lookupMail, ledger } = deps;
   const mailDraft = lookupMail && ledger ? mailDraftWriter({ desk: deps.desk, lookupMail, ledger, ...(deps.runMailDraft ? { run: deps.runMailDraft } : {}), ...(deps.now ? { now: deps.now } : {}) }) : undefined;
   return {
+    ...(deps.lifecycles ? { lifecycles: deps.lifecycles } : {}),
     get writers() {
       const desk = deps.desk();
       if (!desk?.enabled) return {};

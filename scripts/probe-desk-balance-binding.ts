@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { withTempHome } from "./probe-temp-home";
 import { STALE_OUTLINE } from "../src/surface/mc/desk/balance-outline";
-import { operationUuid } from "../src/surface/mc/desk/conversation-ids";
+import { operationUuid } from "../src/conversations/conversation-ids";
 import { balanceTaskApprovedSnapshot, balanceTaskLegacyResult } from "../src/conversations/domain-adapters/balance/task-binding";
 import { BALANCE_TASK_CONNECTION, BALANCE_TASK_NOW, balanceTaskAuthority, createTaskRequest, operationId, openBalanceTaskRig, taskFields, type BalanceTaskRig } from "../src/conversations/domain-adapters/__tests__/fixtures/balance-task-fixtures";
 import { objectRef } from "../src/conversations/domain-adapters/fixtures";

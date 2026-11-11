@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CreateRequest } from "../../../types";
 import type { WriterResult, WriterRunner } from "../../../../surface/mc/desk/create";
-import { studioRequestId } from "../../../../surface/mc/desk/conversation-ids";
+import { studioRequestId } from "../../../conversation-ids";
 import { createFlowSaveBinding, createFlowSaveFacade, flowSaveApprovedSnapshot, FLOW_SAVE_SUPPORT_ID } from "../../flow/save-binding";
 import type { DispatchRequest } from "../../operations/types";
 import { DomainAdapterRegistry } from "../../registry";
@@ -69,7 +69,7 @@ export async function openFlowSaveRig() {
   const { bridge, lifecycle, context, lease } = lifecycleRig({ journal, live: () => binding, now: FLOW_SAVE_NOW, clock: () => new Date(state.now), label: "Flow save" });
   const command = (args: string[]): Promise<WriterResult> => owner([...pulse, "flow", ...args, "--json"], "", 8000);
   return {
-    dir, flowsDir, env, pulse, calls, state, registry, journal, binding, facade, bridge, lifecycle,
+    dir, flowsDir, env, pulse, calls, state, registry, journal, binding, facade, bridge, lifecycle, run,
     command,
     savedCount: async (): Promise<number> => JSON.parse((await command(["list", "--saved"])).stdout).flows.length,
     create: (request = flowSaveRequest()) => facade.create(request, flowSaveAuthority, lifecycle()),
