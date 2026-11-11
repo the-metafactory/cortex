@@ -2,6 +2,7 @@ import type { AuthorityMediator, WriterLease } from "../../../conversations/auth
 import type { ConversationHost } from "../../../conversations/host";
 import { draftOperationId, DraftingBindings, type DraftingBindingDocument, type DraftDestinations, type DraftServiceDeps, type Handoff, type Lane } from "../../../conversations/domain-adapters/drafting";
 import type { OperationBridge } from "../../../conversations/domain-adapters/operations/dispatch";
+import type { StoredOperation } from "../../../conversations/domain-adapters/operations/journal";
 import { receiptStatus } from "../../../conversations/domain-adapters/operations/reconciliation";
 import type { ApprovedSnapshot, Provenance } from "../../../conversations/domain-adapters/operations/types";
 import { canonicalWire, snapshotDigest } from "../../../conversations/domain-adapters/operations/validation";
@@ -52,15 +53,23 @@ export function ownerDraftEditor<Session extends OwnerDraftSession, Input, Desti
   const registered = bindings.register(owner.binding);
   if (!registered.ok) throw new Error(registered.error.message);
   const blocked = (reason: string): DraftConfirmation => ({ kind: "blocked", reason });
+  const holdsDraft = (stored: StoredOperation): boolean => {
+    const status = receiptStatus(stored);
+    const definitivelyRefused = (status.state === "failed" || status.state === "refused") && status.effects.length === 0 && !status.investigation;
+    return !definitivelyRefused;
+  };
   const editor = deskDraftEditor(host, { ...deps, bindings, destinations }, {
     audience: options.audience,
     targets: () => [{ connectionId: options.connectionId, capabilityId: owner.capabilityId, label: owner.label }],
-    hasOperation: async view => Boolean(await host.lifecycleJournal(deps.registry).read(draftOperationId(view.draft))),
+    hasOperation: async view => {
+      const stored = await host.lifecycleJournal(deps.registry).read(draftOperationId(view.draft));
+      return stored !== null && holdsDraft(stored);
+    },
     receipt: async view => {
       const draft = view.draft;
       const operationId = draftOperationId(draft);
       const stored = await host.lifecycleJournal(deps.registry).read(operationId);
-      if (!stored) return null;
+      if (!stored || !holdsDraft(stored)) return null;
       const session = await options.session(draft.conversationId);
       if (!session || view.withheld.length) return { kind: "withheld" };
       const snapshot = stored.journal.snapshot;

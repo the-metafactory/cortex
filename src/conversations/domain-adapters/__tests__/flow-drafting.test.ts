@@ -108,6 +108,45 @@ test("Pulse's refusal at save shows its finding and keeps the draft", async () =
   await expectUnsaved(scheduled);
 });
 
+test("a refused save keeps the draft editable, refresh keeps the correction and the corrected draft saves once", async () => {
+  const rig = await open(flowDiscussionOutput(flowDraftInvalidDefinition()));
+  const made = await makeDraft(rig);
+  const refused = await rig.call("POST", `${draftPath(made)}/confirm`, { revision: made.view.draft.revision });
+  expect(await refused.json()).toMatchObject({ confirmation: { kind: "blocked", reason: expect.stringContaining("missing or empty 'actions' list") } });
+  expect(await rig.savedCount()).toBe(0);
+  const held = await (await rig.call("GET", draftPath(made))).json() as DraftEditorView;
+  expect(held.receipt).toBeNull();
+  expect(held.view.draft.fields["/definition"]?.value).toBe(flowDraftInvalidDefinition());
+  const corrected = await editDraft(rig, made, "/definition", { kind: "set", value: flowDraftDefinition() });
+  expect(corrected.view.draft.fields["/definition"]).toMatchObject({ origin: "principal", value: flowDraftDefinition() });
+  const refreshed = await refreshDraft(rig, corrected);
+  expect(refreshed.view.draft.fields["/definition"]).toMatchObject({ origin: "principal", value: flowDraftDefinition() });
+  const confirmed = await rig.confirm(refreshed.view.draft);
+  expect(confirmed.kind).toBe("accepted");
+  if (confirmed.kind !== "accepted") throw new Error(confirmed.reason);
+  expect((await rig.journal.read(confirmed.operationId))?.journal.state).toBe("succeeded");
+  expect(await rig.savedNames()).toEqual([FLOW_DRAFT_NAME]);
+  const savedRevision = (await rig.editor.service.read(refreshed.view.draft.draftId))?.draft.revision ?? 0;
+  const locked = await rig.call("PATCH", draftPath(refreshed), { revision: savedRevision, pointer: "/definition", change: { kind: "set", value: flowDraftInvalidDefinition() } });
+  expect(locked.status).toBe(409);
+  expect(await rig.savedCount()).toBe(1);
+});
+
+test("an uncertain save keeps the draft locked with its receipt", async () => {
+  const rig = await open();
+  const made = await makeDraft(rig);
+  rig.pulse.failSaves();
+  const confirmed = await rig.confirm(made.view.draft);
+  expect(confirmed.kind).toBe("accepted");
+  if (confirmed.kind !== "accepted") throw new Error(confirmed.reason);
+  expect((await rig.journal.read(confirmed.operationId))?.journal.state).toBe("uncertain");
+  const held = await (await rig.call("GET", draftPath(made))).json() as DraftEditorView;
+  expect(held.receipt).toMatchObject({ kind: "receipt", state: "uncertain" });
+  const locked = await rig.call("PATCH", draftPath(made), { revision: made.view.draft.revision, pointer: "/definition", change: { kind: "set", value: flowDraftDefinition() } });
+  expect(locked.status).toBe(409);
+  expect(await rig.savedCount()).toBe(0);
+});
+
 test("a name that differs from the definition is refused before Pulse and the draft is kept", async () => {
   const rig = await open();
   const made = await makeDraft(rig);

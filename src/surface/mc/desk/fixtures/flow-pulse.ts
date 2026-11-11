@@ -13,6 +13,7 @@ export interface FlowPulseRig {
   readonly pulse: string[];
   run(argv: readonly string[], stdin: string, timeout: number): Promise<WriterResult>;
   command(args: string[]): Promise<WriterResult>;
+  failSaves(): void;
   savedCount(): Promise<number>;
   close(): Promise<void>;
 }
@@ -29,7 +30,8 @@ export async function openFlowPulseRig(prefix = "desk-flow-pulse-"): Promise<Flo
   await chmod(arc, 0o700);
   const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, "config"), XDG_DATA_HOME: join(home, "data"), XDG_STATE_HOME: join(home, "state"), PATH: bin };
   const pulse = [process.execPath, fileURLToPath(new URL("src/cli.ts", import.meta.resolve("pulse/package.json")))];
-  const run: WriterRunner = (argv, _stdin, timeout) => new Promise((resolve, reject) => {
+  let saveFails = false;
+  const run: WriterRunner = (argv, _stdin, timeout) => saveFails && argv.includes("save") ? Promise.reject(new Error("Pulse was not reachable.")) : new Promise((resolve, reject) => {
     const [binary, ...rest] = argv;
     if (binary === undefined) { reject(new Error("The Pulse command is empty.")); return; }
     execFile(binary, [...rest, "--flows-dir", flowsDir], { env, timeout, maxBuffer: 1048576 }, (error, stdout, stderr) => {
@@ -40,6 +42,7 @@ export async function openFlowPulseRig(prefix = "desk-flow-pulse-"): Promise<Flo
   const command = (args: string[]): Promise<WriterResult> => run([...pulse, "flow", ...args, "--json"], "", 8000);
   return {
     dir, home, flowsDir, env, pulse, run, command,
+    failSaves() { saveFails = true; },
     savedCount: async () => (JSON.parse((await command(["list", "--saved"])).stdout) as { flows: unknown[] }).flows.length,
     async close() { await rm(dir, { recursive: true, force: true }); },
   };

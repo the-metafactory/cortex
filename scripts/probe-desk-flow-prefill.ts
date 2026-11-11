@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { FLOW_DRAFT_DISCUSSION, FLOW_DRAFT_NAME, FLOW_DRAFT_STACK, advanceDiscussion, flowDiscussionOutput, flowDraftDefinition, openFlowDraftRig } from "../src/surface/mc/desk/fixtures/flow-draft";
+import { FLOW_DRAFT_DISCUSSION, FLOW_DRAFT_NAME, FLOW_DRAFT_STACK, advanceDiscussion, flowDiscussionOutput, flowDraftDefinition, flowDraftInvalidDefinition, openFlowDraftRig } from "../src/surface/mc/desk/fixtures/flow-draft";
 import { withDraftBrowserProbe } from "./desk-make-editor/server";
 import { openMakeEditor, reopenOutdatedDraft, revisionSteps } from "./desk-make-editor/steps";
 import type { DraftEditorView } from "../src/surface/mc/desk/draft-editor-contract";
@@ -39,6 +39,17 @@ await withDraftBrowserProbe(rig, async ({ page, errors }) => {
   assert.equal(await name.inputValue(), FLOW_DRAFT_NAME);
   assert.equal(await rig.savedCount(), 0);
   console.log("The principal's edited definition survived an explicit refresh after the discussion moved on, and the name still comes from it; nothing was saved.");
+
+  await definition.fill(flowDraftInvalidDefinition());
+  await steps.press("Save definition");
+  await page.getByRole("button", { name: "Confirm draft" }).click();
+  await page.getByText(/missing or empty 'actions' list/).waitFor();
+  assert.equal(await rig.savedCount(), 0);
+  await page.screenshot({ path: (process.argv[2] ?? "/tmp/desk-flow-prefill.png").replace(/\.png$/, "-refused.png"), fullPage: true });
+  await definition.fill(edited);
+  await steps.press("Save definition");
+  assert.equal(await definition.inputValue(), edited);
+  console.log("Pulse's refusal was shown beside the draft, which stayed editable; the corrected definition was kept and nothing was saved.");
 
   await page.getByRole("button", { name: "Confirm draft" }).click();
   await page.getByText("Saved operation: succeeded.").waitFor();
