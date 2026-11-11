@@ -44,6 +44,10 @@ export const PROBE_EXCLUSIONS: readonly DeskProbeExclusion[] = [
     reason: "needs browsers: it verifies inline adapter assets in Playwright Chromium and WebKit",
   },
   {
+    file: "probe-desk-adapter-timing.ts",
+    reason: "pre-cutover timing baseline: it records machine-specific operator state and must not run in a CI gate",
+  },
+  {
     file: "probe-desk-attention.ts",
     reason: "needs a browser: it verifies Desk attention in Playwright Chromium",
   },
@@ -97,6 +101,7 @@ export const PROBE_RUNS: readonly string[] = [
   "probe-desk-connection-setup.ts",
   "probe-desk-credential-setup.ts",
   "probe-desk-drafting.ts",
+  "probe-desk-flow-binding.ts",
   "probe-desk-flow-read.ts",
   "probe-desk-flow-work-tools.ts",
   "probe-desk-graph-create.ts",
