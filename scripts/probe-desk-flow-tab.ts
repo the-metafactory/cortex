@@ -49,7 +49,7 @@ await withTempHome(async () => {
       connectionId: read.source.connectionId,
       destination: read.adapter.destination,
       enabled: () => true,
-      query: () => Promise.reject(new Error("Pulse did not answer this probe.")),
+      open: () => Promise.reject(new Error("Pulse did not answer this probe.")),
       read: () => Promise.reject(new Error("Pulse did not answer this probe.")),
     });
     const legacy = flowPulseRunner({ flowsDir: saved.flowsDir, env: saved.env });

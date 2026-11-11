@@ -10,11 +10,13 @@ const FLOW = "flow";
 const FLOW_FAILED = "flow.surface_unreadable";
 const MAX_PAGES = 50;
 
+export type FlowSurfacePage = (continuation?: string) => Promise<HostQueryRun>;
+
 export interface FlowSurfaceSource {
   readonly connectionId: string;
   readonly destination: ObjectReference;
   readonly enabled: () => boolean;
-  readonly query: (continuation?: string) => Promise<HostQueryRun>;
+  readonly open: () => Promise<FlowSurfacePage>;
   readonly read: (name: string) => Promise<HostQueryRun>;
   readonly receipt?: (operationId: string) => Promise<FlowReceipt | null>;
 }
@@ -32,11 +34,11 @@ export interface FlowSurfaceRunner extends HostQueryRunner {
   readonly destination: ObjectReference;
 }
 
-export function flowSurfaceQueries(config: FlowSurfaceRunner): Pick<FlowSurfaceSource, "query" | "read"> {
+export function flowSurfaceQueries(config: FlowSurfaceRunner): Pick<FlowSurfaceSource, "open" | "read"> {
   return {
-    async query(continuation) {
+    async open() {
       const request = await config.runner.create(config.context, [flowQuerySource(config.connectionId, config.destination, "flow.saved.query")], config.sink);
-      return runCreatedHostQuery(config, continuation === undefined ? request : { ...request, continuation });
+      return continuation => runCreatedHostQuery(config, continuation === undefined ? request : { ...request, continuation });
     },
     read(name) {
       return runHostQuery(config, flowQuerySource(config.connectionId, config.destination, "flow.saved.read", name));
@@ -77,9 +79,10 @@ export function createFlowSurfaceReader(source: FlowSurfaceSource): FlowSurfaceR
   const collect = async (): Promise<SavedFlow[]> => {
     const flows: SavedFlow[] = [];
     const seen = new Set<string>();
+    const page = await source.open();
     let continuation: string | undefined;
-    for (let page = 0; page < MAX_PAGES; page += 1) {
-      const run = await source.query(continuation);
+    for (let turned = 0; turned < MAX_PAGES; turned += 1) {
+      const run = await page(continuation);
       if (!permitted(run) || run.result.status !== "ok" && run.result.status !== "partial") return unreadable();
       const objects = savedObjects(run);
       for (const object of objects) {

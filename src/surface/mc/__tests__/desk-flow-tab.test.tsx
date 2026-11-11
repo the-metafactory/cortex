@@ -62,6 +62,35 @@ describe("the saved Flows tab reads through the adapter", () => {
     expect(renderToStaticMarkup(<DeskSavedFlows state={{ status: "ready", flows }} now={NOW} />)).toBe(renderToStaticMarkup(<DeskSavedFlows state={{ status: "ready", flows: (legacy as { flows: SavedFlow[] }).flows }} now={NOW} />));
   });
 
+  test("a library past one adapter page reads every Flow from the one query it opened", async () => {
+    const stack = await openTab();
+    const names = Array.from({ length: 21 }, (_, index) => `F_PAGE_${String(index).padStart(2, "0")}`);
+    for (const name of names) await stack.rig.save(name, flowYaml(name));
+    const created: string[] = [];
+    const reader = createFlowSurfaceReader({
+      connectionId: stack.rig.source.connectionId,
+      destination: stack.rig.adapter.destination,
+      enabled: () => true,
+      ...flowSurfaceQueries({
+        connectionId: stack.rig.source.connectionId,
+        destination: stack.rig.adapter.destination,
+        context: stack.rig.rig.context,
+        sink: stack.rig.rig.sink,
+        runner: {
+          create: async (...args) => { const request = await stack.rig.runner.create(...args); created.push(request.queryId); return request; },
+          run: (...args) => stack.rig.runner.run(...args),
+        },
+      }),
+    });
+    const listed = await reader.list();
+    if (!listed.enabled) throw new Error("the adapter list was off");
+    expect(listed.flows.map(flow => flow.name).sort()).toEqual([...names].sort());
+    expect(created).toHaveLength(1);
+    const response = await get(DESK_FLOWS_PATH, stack, () => reader);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(await (await get(DESK_FLOWS_PATH, stack)).json());
+  });
+
   test("the routine target the tab offers survives the adapter list", async () => {
     const stack = await openTab();
     await stack.rig.save();
@@ -100,7 +129,7 @@ describe("the saved Flows tab reads through the adapter", () => {
       connectionId: "connection-example",
       destination: { adapterId: "flow", connectionId: "connection-example", objectType: "stack", canonicalId: "stack-example" },
       enabled: () => true,
-      query: () => Promise.reject(new Error("Pulse is not answering.")),
+      open: () => Promise.reject(new Error("Pulse is not answering.")),
       read: () => Promise.reject(new Error("Pulse is not answering.")),
     });
     for (const path of [DESK_FLOWS_PATH, `${DESK_FLOWS_PATH}/${FLOW_NAME}`]) {
