@@ -28,6 +28,8 @@ The network guard intercepts `globalThis.fetch` (including `fetch.preconnect`), 
 
 `bun scripts/probe-desk-conformance-export.ts` copies a fixture outside the repository and runs it through the package export. Pass a fixture directory to exercise another package; the probe exits nonzero for a broken fixture.
 
+`bun scripts/probe-desk-conformance-export.ts --typecheck` compiles that external consumer against the published declarations without running the harness. The SDK gate runs this check separately from the runtime parity tests. Consumer subprocesses have bounded deadlines and are killed before their temporary package is removed when they time out.
+
 ## Trust position
 
 Backend adapter code runs in process with host privileges. The manifest checks and import scan below are an authoring and validation boundary, not a malicious-code sandbox. A package is either a bundled first-party default or an installed arc package the principal approved by its exact origin, version and release digest. Installation grants no connection access, no read or write authority and no provider effect.
