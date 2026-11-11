@@ -92,6 +92,10 @@ export const PROBE_EXCLUSIONS: readonly DeskProbeExclusion[] = [
     reason: "needs a browser: it approves a migrated Flow and a native note in Playwright Chromium on a disposable stack",
   },
   {
+    file: "probe-desk-flow-prefill.ts",
+    reason: "needs a browser: it verifies conversation-prefilled Flow drafts and the saved Flow readback through the shared Playwright browser fixture",
+  },
+  {
     file: "probe-desk-flow-tab.ts",
     reason: "needs a browser: it verifies the saved-flow tab in Playwright Chromium",
   },

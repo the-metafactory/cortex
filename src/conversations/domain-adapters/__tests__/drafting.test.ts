@@ -49,6 +49,29 @@ describe("drafting binding 1.0.0", () => {
     expect(bindings.register(graphBinding()).ok).toBe(true);
     expect(bindings.register(graphBinding())).toMatchObject({ ok: false, error: { code: "duplicate_binding" } });
   });
+  test("binding 1.1.0 adds suggestion hints and 1.0.0 refuses them", () => {
+    const hinted = { ...balanceBinding(), bindingVersion: "1.1.0" as const, fieldHints: [{ pointer: "/title", role: "title" as const, suggestion: true as const }, ...balanceBinding().fieldHints.slice(1)] };
+    expect(fresh().register(hinted).ok).toBe(true);
+    expect(fresh().register({ ...balanceBinding(), fieldHints: [{ pointer: "/title", role: "title", suggestion: true }] })).toMatchObject({ ok: false, error: { code: "invalid_binding" } });
+    expect(fresh().register({ ...balanceBinding(), bindingVersion: "1.2.0" })).toMatchObject({ ok: false, error: { code: "unsupported_binding_version" } });
+  });
+});
+
+describe("connection defaults", () => {
+  test("a connection default fills a field once, stays out of generation and is replaced with the connection", async () => {
+    const r = await rig();
+    const host = r.host;
+    if (!host) throw new Error("Synthetic draft host missing");
+    const bindings = new DraftingBindings(r.registry);
+    const hinted = { ...balanceBinding(), bindingVersion: "1.1.0" as const, fieldHints: [{ pointer: "/title", role: "title" as const, suggestion: true as const }, ...balanceBinding().fieldHints.slice(1)] };
+    expect(bindings.register(hinted).ok).toBe(true);
+    const service = host.drafts({ registry: r.registry, bindings, sources: r.sources, policy: r.policy, model: r.model, destinations: r.destinations, defaults: request => request.capabilityId === "balance.task.create" ? { "/tags": ["connection-default"] } : {}, now: () => new Date("2026-11-08T10:00:00.000Z") });
+    const made = await service.make({ conversationId: "conversation-example", entryId: "turn-1", capabilityId: "balance.task.create", connectionId: "connection-example" });
+    if (made.kind !== "draft") throw new Error("expected a draft");
+    expect(made.view.draft.fields["/tags"]).toMatchObject({ origin: "default", value: ["connection-default"] });
+    expect(made.view.draft.fields["/title"]).toMatchObject({ origin: "suggested", value: "Review receipt persistence across restart" });
+    expect(r.state.requests[0]?.targets).not.toContain("/tags");
+  });
 });
 
 describe("durable drafts", () => {

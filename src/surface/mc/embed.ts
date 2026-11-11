@@ -93,6 +93,7 @@ export async function startMissionControl(
       ...(opts.drafts ? { drafts: opts.drafts } : {}),
       ...(opts.graphDrafts ? { graphDrafts: opts.graphDrafts } : {}),
       ...(opts.balanceDrafts ? { balanceDrafts: opts.balanceDrafts } : {}),
+      ...(opts.flowDrafts ? { flowDrafts: opts.flowDrafts } : {}),
       ...(opts.graphSurfaces ? { graphSurfaces: opts.graphSurfaces } : {}),
       ...(opts.balanceSurfaces ? { balanceSurfaces: opts.balanceSurfaces } : {}),
       ...(opts.flowSurfaces ? { flowSurfaces: opts.flowSurfaces } : {}),

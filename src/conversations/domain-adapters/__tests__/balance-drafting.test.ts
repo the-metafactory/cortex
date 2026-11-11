@@ -5,7 +5,7 @@ import { balanceTaskDraftingBinding } from "../drafting/balance";
 import { balanceDraftDestinations } from "../../../surface/mc/desk/balance-draft-destinations";
 import { loadBalanceState, saveBalanceState } from "../../../surface/mc/desk/balance-store";
 import type { DraftEditorView } from "../../../surface/mc/desk/draft-editor-contract";
-import { draftPath, editDraft, expectBlockedConfirmation, expectManualModeKeepsEdits, expectStaleRefreshKeepsTitle, makeDraft, ownFields, refreshDraft } from "./fixtures/draft-route";
+import { draftPath, editDraft, expectBlockedConfirmation, expectManualModeKeepsEdits, expectRestartReopensDraft, expectStaleRefreshKeepsTitle, makeDraft, ownFields, refreshDraft } from "./fixtures/draft-route";
 
 type Rig = Awaited<ReturnType<typeof openBalanceDraftRig>>;
 const rigs: Rig[] = [];
@@ -129,14 +129,7 @@ test("an edited title and a deliberately cleared note survive explicit refresh a
   expect(current.view.draft.fields["/title"]).toMatchObject({ origin: "principal", value: "Audit the wing cut" });
   expect(current.view.draft.fields["/note"]).toMatchObject({ presence: "absent", origin: "principal" });
   expect(current.view.draft.fields["/due"]?.value).toBe("2026-11-13");
-  const snapshot = current.view.draft;
-  const generations = rig.state.requests.length;
-  await rig.reopen();
-  const reopened = await makeDraft(rig);
-  expect(reopened.reopened).toBe(true);
-  expect(reopened.view.draft).toEqual(snapshot);
-  expect(rig.state.requests).toHaveLength(generations);
-  expect((await makeDraft(rig, { newDraft: true })).view.draft.draftId).not.toBe(draftId);
+  await expectRestartReopensDraft(rig, draftId, current.view.draft);
   expectUntouched(rig, outline);
 });
 

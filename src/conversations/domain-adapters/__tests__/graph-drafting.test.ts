@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { CREATE_MAP, CREATE_PARENT, CREATE_REPOSITORY, graphDiscussionOutput, openGraphCreateRig } from "../../../surface/mc/desk/fixtures/graph-create";
 import { type DraftEditorView } from "../../../surface/mc/desk/draft-editor-contract";
 import { DraftingBindings } from "../drafting";
-import { draftPath, editDraft, expectBlockedConfirmation, expectManualModeKeepsEdits, expectStaleRefreshKeepsTitle, makeDraft, ownFields, refreshDraft } from "./fixtures/draft-route";
+import { draftPath, editDraft, expectBlockedConfirmation, expectManualModeKeepsEdits, expectRestartReopensDraft, expectStaleRefreshKeepsTitle, makeDraft, ownFields, refreshDraft } from "./fixtures/draft-route";
 import { workGraphNodeDraftingBinding } from "../drafting/graph";
 
 type Rig = Awaited<ReturnType<typeof openGraphCreateRig>>;
@@ -33,7 +33,7 @@ test("graph Make uses trusted guidance, substantive discussion and canonical rel
 
 test("refresh preserves manual fields, clears and compound relationships; restart reopens identity and boundary", async () => {
   const rig = await open();
-  let current = await make(rig);
+  const current = await make(rig);
   const draftId = current.view.draft.draftId;
   let edited: DraftEditorView = await editDraft(rig, current, "/title", { kind: "set", value: "Audit restart receipts" });
   edited = await editDraft(rig, edited, "/body", { kind: "omit" });
@@ -46,15 +46,7 @@ test("refresh preserves manual fields, clears and compound relationships; restar
   expect(edited.view.draft.fields["/title"]?.value).toBe("Audit restart receipts");
   expect(edited.view.draft.fields["/body"]).toMatchObject({ presence: "absent", origin: "principal" });
   expect(edited.view.draft.fields["/parent"]?.value).toEqual(rig.ref("node", CREATE_PARENT));
-  const snapshot = edited.view.draft;
-  const generations = rig.state.requests.length;
-  await rig.reopen();
-  current = await make(rig);
-  expect(current.reopened).toBe(true);
-  expect(current.view.draft).toEqual(snapshot);
-  expect(rig.state.requests).toHaveLength(generations);
-  const fresh = await make(rig, { newDraft: true });
-  expect(fresh.view.draft.draftId).not.toBe(draftId);
+  await expectRestartReopensDraft(rig, draftId, edited.view.draft);
   expect(rig.soma.calls).toEqual([]);
 });
 

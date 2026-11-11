@@ -1,10 +1,6 @@
-import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { CreateRequest } from "../../../types";
-import type { WriterResult, WriterRunner } from "../../../../surface/mc/desk/create";
+import type { WriterRunner } from "../../../../surface/mc/desk/create";
+import { openFlowPulseRig } from "../../../../surface/mc/desk/fixtures/flow-pulse";
 import { studioRequestId } from "../../../conversation-ids";
 import { createFlowSaveBinding, createFlowSaveFacade, flowSaveApprovedSnapshot, FLOW_SAVE_SUPPORT_ID } from "../../flow/save-binding";
 import type { DispatchRequest } from "../../operations/types";
@@ -29,24 +25,10 @@ export function flowSaveDispatchRequest(): DispatchRequest {
 }
 
 export async function openFlowSaveRig() {
-  const dir = await mkdtemp(join(tmpdir(), "desk-flow-save-"));
-  const home = join(dir, "home");
-  const bin = join(dir, "bin");
-  const flowsDir = join(dir, "flows");
-  await mkdir(home);
-  await mkdir(bin);
-  const arc = join(bin, "arc");
-  await writeFile(arc, '#!/bin/sh\nprintf \'%s\\n\' \'{"packages":[]}\'\n');
-  await chmod(arc, 0o700);
-  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, "config"), XDG_DATA_HOME: join(home, "data"), XDG_STATE_HOME: join(home, "state"), PATH: bin };
-  const pulse = [process.execPath, fileURLToPath(new URL("src/cli.ts", import.meta.resolve("pulse/package.json")))];
+  const pulse = await openFlowPulseRig("desk-flow-save-");
+  const { dir, flowsDir, env, pulse: pulseArgv } = pulse;
   const calls: string[][] = [];
-  const owner: WriterRunner = (argv, _stdin, timeout) => new Promise((resolve, reject) => {
-    execFile(argv[0]!, [...argv.slice(1), "--flows-dir", flowsDir], { env, timeout, maxBuffer: 1048576 }, (error, stdout, stderr) => {
-      if (error && typeof error.code !== "number") { reject(new Error(error.message, { cause: error })); return; }
-      resolve({ code: typeof error?.code === "number" ? error.code : 0, stdout, stderr });
-    });
-  });
+  const owner: WriterRunner = pulse.run;
   const state: { mode: "normal" | "exit-2" | "invalid-output" | "timeout" | "wrong-name" | "missing-hash"; configured: boolean; now: number } = { mode: "normal", configured: true, now: FLOW_SAVE_NOW };
   const run: WriterRunner = async (argv, stdin, timeout) => {
     calls.push(argv);
@@ -62,16 +44,15 @@ export async function openFlowSaveRig() {
   const registry = new DomainAdapterRegistry();
   let engine = await openJournal(dir, registry);
   const journal = engine.journal;
-  const binding = createFlowSaveBinding({ stack: "stack-example", connectionId: "connection-example", flows: () => state.configured ? { pulse } : undefined, journal, run, now: () => FLOW_SAVE_NOW });
+  const binding = createFlowSaveBinding({ stack: "stack-example", connectionId: "connection-example", flows: () => state.configured ? { pulse: pulseArgv } : undefined, journal, run, now: () => FLOW_SAVE_NOW });
   const registered = registry.register(binding.declaration, binding.bindings);
   if (!registered.ok) throw new Error(JSON.stringify(registered.error));
   const facade = createFlowSaveFacade({ binding, journal, now: () => FLOW_SAVE_NOW });
   const { bridge, lifecycle, context, lease } = lifecycleRig({ journal, live: () => binding, now: FLOW_SAVE_NOW, clock: () => new Date(state.now), label: "Flow save" });
-  const command = (args: string[]): Promise<WriterResult> => owner([...pulse, "flow", ...args, "--json"], "", 8000);
   return {
-    dir, flowsDir, env, pulse, calls, state, registry, journal, binding, facade, bridge, lifecycle, run,
-    command,
-    savedCount: async (): Promise<number> => JSON.parse((await command(["list", "--saved"])).stdout).flows.length,
+    dir, flowsDir, env, pulse: pulseArgv, calls, state, registry, journal, binding, facade, bridge, lifecycle, run,
+    command: pulse.command,
+    savedCount: pulse.savedCount,
     create: (request = flowSaveRequest()) => facade.create(request, flowSaveAuthority, lifecycle()),
     retry: (operationId: string) => bridge.redispatch(context, operationId, lease),
     async reopened() {
@@ -79,7 +60,7 @@ export async function openFlowSaveRig() {
       engine = await openJournal(dir, registry);
       return engine.journal;
     },
-    async close() { await engine.closeEngine(); await rm(dir, { recursive: true, force: true }); },
+    async close() { await engine.closeEngine(); await pulse.close(); },
   };
 }
 export type FlowSaveRig = Awaited<ReturnType<typeof openFlowSaveRig>>;

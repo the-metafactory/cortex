@@ -42,6 +42,7 @@ export interface OwnerDraft<Input, Destinations extends DraftDestinations = Draf
   parse(raw: unknown, connectionId: string): Input;
   references(input: Input): readonly ObjectReference[];
   inconsistency?(input: Input, conversationId: string, destinations: Destinations): Promise<string | null>;
+  failure?(operationId: string): Promise<string | null>;
   snapshot(options: { connectionId: string; provenance: Provenance; input: Input; policy: Lane }): ApprovedSnapshot;
   requestId(operationId: string): string;
 }
@@ -101,7 +102,8 @@ export function ownerDraftEditor<Session extends OwnerDraftSession, Input, Desti
       const approval = await options.authority.confirm(session.context, { operationId, idempotencyKey: operationId, ownerRequestId: owner.requestId(operationId), snapshot });
       if (approval.kind !== "allowed") return blocked(approval.reason.message);
       const outcome = await options.bridge.dispatch(session.context, operationId, session.lease);
-      return outcome.kind === "refused" ? blocked(outcome.reason.message) : { kind: "accepted", operationId };
+      const failure = outcome.kind === "refused" ? outcome.reason.message : await owner.failure?.(operationId);
+      return failure ? blocked(failure) : { kind: "accepted", operationId };
     },
   });
   return editor;

@@ -1,13 +1,12 @@
 import { canonicalGraphRef, isBareGraphNode, qualifiedNodeId } from "../../../common/graph-ref";
 import type { AuthorityMediator } from "../../../conversations/authority";
-import { canonicalWire } from "../../../conversations/domain-adapters/operations/validation";
 import type { DestinationMatch, DraftDestinations } from "../../../conversations/domain-adapters/drafting";
 import type { QueryPage } from "../../../conversations/domain-adapters/reads/query-types";
 import { readPointer } from "../../../conversations/domain-adapters/reads/query-validation";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import { graphNodeRepository, workGraphReadBindings } from "../../../conversations/domain-adapters/work-graph/read";
 import { runHostQuery, type HostQueryRunner } from "./query-run";
-import { destinationMatch, releasedObjects, type ReleasedObject } from "./work-released";
+import { activeRestriction, destinationMatch, releasedObjects, type ReleasedObject } from "./work-released";
 
 export interface GraphDraftReadSession extends HostQueryRunner {
   readonly repositories: readonly ObjectReference[];
@@ -20,20 +19,11 @@ export interface GraphDraftDestinationOptions {
   readonly session: (conversationId: string) => Promise<GraphDraftReadSession | null>;
 }
 
-type HostRecords = Awaited<ReturnType<AuthorityMediator["inspectHostRecords"]>>;
 type NodeReader = (ref: ObjectReference) => Promise<ReleasedObject | null>;
 interface ReleasedDestinations { objects: ReleasedObject[]; read: NodeReader }
 
 const same = (left: string, right: string): boolean => canonicalGraphRef(left) === canonicalGraphRef(right);
 const named = (object: ReleasedObject, label: string): boolean => same(object.ref.canonicalId, label) || typeof object.value.title === "string" && object.value.title.toLowerCase() === label.toLowerCase();
-
-function activeRestriction(records: HostRecords, repository: ObjectReference) {
-  const restrictions = Object.values(records.records).flatMap(history => {
-    const record = history.at(-1);
-    return record?.kind === "restriction" && record.value.status === "active" && canonicalWire(record.value.source) === canonicalWire(repository) ? [record.value] : [];
-  });
-  return restrictions.length === 1 ? restrictions[0] : undefined;
-}
 
 async function releasedDestinations(options: GraphDraftDestinationOptions, session: GraphDraftReadSession): Promise<ReleasedObject[]> {
   const records = await options.authority.inspectHostRecords();

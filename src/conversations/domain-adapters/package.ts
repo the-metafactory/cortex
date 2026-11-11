@@ -13,7 +13,7 @@ import type { DeskActionConnector, DeskAdapterBindings, DeskAdapterConnection, D
 import { DESK_ADAPTER_SDK_VERSION } from "../../desk-sdk/version";
 import { adaptDeskBackend, type DeskBackendConnector } from "./package-backend";
 import type { TrustedConnector } from "../authority";
-import { DraftingBindingSchema, DraftingBindings, DRAFTING_BINDING_VERSION, type DraftingBinding } from "./drafting-binding";
+import { DraftingBindingSchema, DraftingBindings, DRAFTING_BINDING_VERSIONS, type DraftingBinding } from "./drafting-binding";
 import { DESK_ADAPTER_GENERATION_FORMAT, DeskAdapterGenerationSchema, DeskGenerationFencedError, DeskGenerationStore, DESK_UI_PROTOCOL_VERSION, FENCE_MESSAGE, generationId, type DeskAdapterGeneration, type DeskAdapterGenerationRecord, type DeskGenerationAdmission } from "./package-generation";
 import { exactVersion, hex64, identifier } from "./package-primitives";
 import { verifyReadBinding } from "./reads/bindings";
@@ -231,7 +231,7 @@ function versionProblem(raw: unknown): BoundaryError | null {
   if (Array.isArray(raw.readBindings) && raw.readBindings.some(binding => !isRecord(binding) || binding.version !== READ_BINDING_VERSION)) {
     return { code: "unsupported_binding_version", message: "A read binding version is not supported." };
   }
-  if (Array.isArray(raw.draftingBindings) && raw.draftingBindings.some(binding => !isRecord(binding) || binding.bindingVersion !== DRAFTING_BINDING_VERSION)) {
+  if (Array.isArray(raw.draftingBindings) && raw.draftingBindings.some(binding => !isRecord(binding) || !DRAFTING_BINDING_VERSIONS.some(supported => supported === binding.bindingVersion))) {
     return { code: "unsupported_binding_version", message: "A drafting binding version is not supported." };
   }
   return null;

@@ -70,11 +70,14 @@ describe("mission-control server", () => {
   for (const options of [
     { drafts: () => null, graphDrafts: unusedDraftSetup },
     { drafts: () => null, balanceDrafts: unusedDraftSetup },
+    { drafts: () => null, flowDrafts: unusedDraftSetup },
     { graphDrafts: unusedDraftSetup, balanceDrafts: unusedDraftSetup },
-    { drafts: () => null, graphDrafts: unusedDraftSetup, balanceDrafts: unusedDraftSetup },
+    { graphDrafts: unusedDraftSetup, flowDrafts: unusedDraftSetup },
+    { balanceDrafts: unusedDraftSetup, flowDrafts: unusedDraftSetup },
+    { drafts: () => null, graphDrafts: unusedDraftSetup, balanceDrafts: unusedDraftSetup, flowDrafts: unusedDraftSetup },
   ]) {
     it(`rejects conflicting draft surfaces: ${Object.keys(options).join(", ")}`, () => {
-      expect(() => startServer(DEFAULT_CONFIG, db, options)).toThrow("Configure only one of drafts, graphDrafts or balanceDrafts");
+      expect(() => startServer(DEFAULT_CONFIG, db, options)).toThrow("Configure only one of drafts, graphDrafts, balanceDrafts or flowDrafts");
     });
   }
 
