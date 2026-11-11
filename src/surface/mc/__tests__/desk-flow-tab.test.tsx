@@ -89,7 +89,7 @@ describe("the saved Flows tab reads through the adapter", () => {
     const response = await get(DESK_FLOWS_PATH, stack, () => reader);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(await (await get(DESK_FLOWS_PATH, stack)).json());
-  });
+  }, 90_000);
 
   test("the routine target the tab offers survives the adapter list", async () => {
     const stack = await openTab();

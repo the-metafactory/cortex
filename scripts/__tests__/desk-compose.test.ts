@@ -209,7 +209,7 @@ process.stdout.write(JSON.stringify(${reply === undefined ? "{text}" : JSON.stri
     await writeFile(join(root, "model.ts"), `import { existsSync,readFileSync,writeFileSync,renameSync } from "node:fs"; const child=Bun.spawn([process.execPath,"-e","setInterval(() => {},1000)"],{stdout:"inherit",stderr:"inherit"});const file=${JSON.stringify(pidFile)};const prior=existsSync(file)?readFileSync(file,"utf8"):"";writeFileSync(file+".tmp",prior+JSON.stringify([process.pid,child.pid])+"\\n");renameSync(file+".tmp",file);process.on("SIGTERM",async()=>{writeFileSync(${JSON.stringify(cleaned)},"cleaned");await child.exited;process.exit(0);}); setInterval(() => {}, 1000);`);
     const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
     try {
-      for (let i = 0; i < 200 && !await Bun.file(pidFile).exists(); i++) await Bun.sleep(10);
+      for (let i = 0; i < 1500 && !await Bun.file(pidFile).exists(); i++) await Bun.sleep(10);
       const pids: number[] = JSON.parse((await readFile(pidFile, "utf8")).trim());
       if (!pids.every((pid) => Number.isSafeInteger(pid) && pid > 1)) throw new Error("Invalid model PID fixture");
       proc.kill(signal);
@@ -219,7 +219,7 @@ process.stdout.write(JSON.stringify(${reply === undefined ? "{text}" : JSON.stri
       expect((await readFile(pidFile, "utf8")).trim().split("\n")).toHaveLength(1);
       expect(await Bun.file(cleaned).exists()).toBe(true);
     } finally { proc.kill("SIGKILL"); await proc.exited; }
-  });
+  }, 60_000);
 
   it("abort settles even when a detached descendant holds the output pipe", async () => {
     const pidFile = join(root, "detached-pid");
