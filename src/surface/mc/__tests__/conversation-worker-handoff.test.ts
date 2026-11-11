@@ -123,7 +123,7 @@ describe("worker start writer", () => {
 
   test("a claim without a worker is not a start and leaves the node as it was", async () => {
     await filed(h);
-    h.answer("build-now", "", 3, "claimed #30 but no run-node was started\n");
+    h.answer("build-now", JSON.stringify({ nodeId: "30", repo: "example/maps", pid: null }), 3, "claimed #30 but no run-node was started\n");
     const result = await workStartWriter(deps(h)).create({ ...request({ node: NODE }, "op-2"), type: "work-start" });
     if (result.state !== "failed") throw new Error("expected a refusal");
     expect(result.error).toContain("did not confirm a worker start");
@@ -445,6 +445,21 @@ describe("uncorrelated start recovery", () => {
       await workerOwner(deps(h)).read(session, NODE);
       expect(await writer.readback({ operationId: "start", conversationId: "c", proposalId: "p", revision: 1, owner: "work-start", state: "uncertain", history: [] })).toBeNull();
       expect((await writer.create({ ...request({ node: NODE }, "retry"), type: "work-start" })).state).toBe("created");
+    } finally { h.db.close(); }
+  });
+});
+
+
+describe("ambiguous start exit", () => {
+  test("exit one without a confirmed no-start reply remains uncertain and cannot dispatch again", async () => {
+    const h = harness();
+    try {
+      await filed(h);
+      h.answer("build-now", "", 1, "output failed after dispatch");
+      const writer = workStartWriter(deps(h));
+      await expect(writer.create({ ...request({ node: NODE }, "start"), type: "work-start" })).rejects.toThrow("did not confirm whether work started");
+      expect((await writer.create({ ...request({ node: NODE }, "retry"), type: "work-start" })).state).toBe("accepted");
+      expect(h.calls.filter(call => call.argv.includes("build-now"))).toHaveLength(1);
     } finally { h.db.close(); }
   });
 });
