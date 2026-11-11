@@ -1,0 +1,61 @@
+{
+  "packageDir": "docs/desk/examples/blind-domain-adapter",
+  "actions": [
+    "kiln-studio.firing.create"
+  ],
+  "credentialRequests": 0,
+  "packageId": "fictional.kiln-studio",
+  "adapterId": "kiln-studio",
+  "status": "conformant",
+  "capabilities": [
+    {
+      "capabilityId": "kiln-studio.kiln.list",
+      "probe": "destinations",
+      "verdict": "conformant",
+      "detail": "2 destination(s) listed",
+      "released": 0
+    },
+    {
+      "capabilityId": "kiln-studio.firing.list",
+      "probe": "query",
+      "verdict": "conformant",
+      "detail": "2 page(s), 2 release(s)",
+      "released": 2
+    },
+    {
+      "capabilityId": "kiln-studio.firing.watch",
+      "probe": "observation",
+      "verdict": "conformant",
+      "detail": "4 change(s), 1 release(s)",
+      "released": 1
+    },
+    {
+      "capabilityId": "kiln-studio.firing.create",
+      "probe": "draft",
+      "verdict": "conformant",
+      "detail": "drafted 4 field(s) from the drafting binding",
+      "released": 0
+    },
+    {
+      "capabilityId": "kiln-studio.firing.create",
+      "probe": "action",
+      "verdict": "conformant",
+      "detail": "confirmed dispatch succeeded with owner evidence",
+      "released": 0
+    },
+    {
+      "capabilityId": "kiln-studio.firing.list",
+      "probe": "readback",
+      "verdict": "conformant",
+      "detail": "read back firing firing-5",
+      "released": 1
+    }
+  ],
+  "ownerCalls": {
+    "dispatch": 1,
+    "cancel": 0,
+    "lookup": 0,
+    "readback": 1
+  },
+  "networkRequests": 0
+}

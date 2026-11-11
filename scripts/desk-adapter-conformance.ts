@@ -1,30 +1,9 @@
 #!/usr/bin/env bun
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { runFailureScenarios, formatFailureReport } from "./lib/desk-conformance/failures";
-import { guardNetwork } from "./lib/desk-conformance/network";
-import { formatReport } from "./lib/desk-conformance/report";
-import type { ConformanceReport } from "./lib/desk-conformance/report";
-import { executePackage } from "./lib/desk-conformance/run";
+import { formatFailureReport, formatReport, runConformance, runFailureScenarios } from "../src/desk-adapter-sdk/conformance";
 
-export { formatReport, type CapabilityReport, type ConformanceReport } from "./lib/desk-conformance/report";
-export { FAILURE_SCENARIOS, formatFailureReport, runFailureScenarios, type FailureReport, type ScenarioName, type ScenarioReport } from "./lib/desk-conformance/failures";
+export * from "../src/desk-adapter-sdk/conformance";
 
 const EXIT_CODES = { conformant: 0, refused: 1, "not-run": 2 } as const;
-
-/** Drives one local Desk adapter package through the production Cortex runtime seams and reports each capability. */
-export async function runConformance(packageDir: string, tempParent = tmpdir()): Promise<ConformanceReport> {
-  const temp = await mkdtemp(join(tempParent, "desk-conformance-"));
-  const guard = guardNetwork();
-  try {
-    const outcome = await executePackage(resolve(packageDir), temp);
-    return { ...outcome, networkRequests: guard.count() };
-  } finally {
-    guard.release();
-    await rm(temp, { recursive: true, force: true });
-  }
-}
 
 interface Arguments { packageDir?: string; companionDir?: string; json: boolean; failures: boolean; unknown: string[] }
 

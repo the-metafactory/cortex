@@ -1,6 +1,6 @@
-import type { TrustedConnector } from "../../../src/conversations/authority";
-import type { ObservationRequest } from "../../../src/conversations/domain-adapters/reads/observation-types";
-import type { QueryFetchRequest } from "../../../src/conversations/domain-adapters/reads/query-types";
+import type { TrustedConnector } from "../../conversations/authority";
+import type { ObservationRequest } from "../../conversations/domain-adapters/reads/observation-types";
+import type { QueryFetchRequest } from "../../conversations/domain-adapters/reads/query-types";
 import { emptyOwnerCalls, type OwnerCalls } from "./report";
 
 export interface RecordedQuery { request: QueryFetchRequest; raw?: unknown; failure?: string }
@@ -15,7 +15,7 @@ export interface Recorded {
 
 const failureText = (error: unknown): string => (error instanceof Error ? error.message : "The package call failed.");
 
-async function recordCall<T extends { raw?: unknown; failure?: string }>(entry: T, run: () => Promise<unknown>): Promise<unknown> {
+async function recordCall(entry: { raw?: unknown; failure?: string }, run: () => Promise<unknown>): Promise<unknown> {
   try {
     const raw = await run();
     entry.raw = raw;
@@ -35,10 +35,11 @@ function countedOwner<A extends unknown[], R>(call: ((...args: A) => R) | undefi
 
 export function recordConnector(connector: TrustedConnector): { connector: TrustedConnector; recorded: Recorded } {
   const recorded: Recorded = { queries: [], observations: [], ownerCalls: emptyOwnerCalls(), dispatches: [] };
-  const { query, observation, cancel, lookup, readback } = connector;
-  const cancelCounted = countedOwner(cancel?.bind(connector), () => { recorded.ownerCalls.cancel++; });
-  const lookupCounted = countedOwner(lookup?.bind(connector), () => { recorded.ownerCalls.lookup++; });
-  const readbackCounted = countedOwner(readback?.bind(connector), () => { recorded.ownerCalls.readback++; });
+  const query = connector.query?.bind(connector);
+  const observation = connector.observation;
+  const cancelCounted = countedOwner(connector.cancel?.bind(connector), () => { recorded.ownerCalls.cancel++; });
+  const lookupCounted = countedOwner(connector.lookup?.bind(connector), () => { recorded.ownerCalls.lookup++; });
+  const readbackCounted = countedOwner(connector.readback?.bind(connector), () => { recorded.ownerCalls.readback++; });
   const recording: TrustedConnector = {
     ...connector,
     dispatch: async (request, signal) => {
@@ -54,7 +55,7 @@ export function recordConnector(connector: TrustedConnector): { connector: Trust
       query: (request, signal) => {
         const entry: RecordedQuery = { request };
         recorded.queries.push(entry);
-        return recordCall(entry, () => Promise.resolve(query.call(connector, request, signal)));
+        return recordCall(entry, () => Promise.resolve(query(request, signal)));
       },
     } : {}),
     ...(observation ? {

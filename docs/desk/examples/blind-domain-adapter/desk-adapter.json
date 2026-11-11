@@ -1,0 +1,476 @@
+{
+  "format": "desk-adapter-package/1",
+  "packageId": "fictional.kiln-studio",
+  "packageVersion": "1.0.0",
+  "deskSdkRange": "^1.2.0",
+  "domainContractVersion": "1.0.0",
+  "backend": {
+    "entry": "backend.mjs",
+    "sha256": "95a66562367499b62861e00f12cf80f62f71af4d83a4818cd6b07f96f3b0edb9"
+  },
+  "declaration": {
+    "adapterId": "kiln-studio",
+    "label": "Ceramic kiln studio",
+    "contractRange": "^1.0.0",
+    "schemas": [
+      {
+        "schemaId": "kiln-studio.empty",
+        "version": "1.0.0",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        }
+      },
+      {
+        "schemaId": "kiln-studio.error",
+        "version": "1.0.0",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "kiln-studio.kiln",
+        "version": "1.0.0",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "chamberLitres"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "chamberLitres": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "kiln-studio.firing",
+        "version": "1.0.0",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "batchName",
+            "programme",
+            "loadNotes",
+            "kiln"
+          ],
+          "properties": {
+            "batchName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "default": "Community mugs"
+            },
+            "programme": {
+              "type": "string",
+              "enum": [
+                "bisque-04",
+                "glaze-6"
+              ],
+              "default": "glaze-6"
+            },
+            "loadNotes": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "default": "Keep handles clear of kiln furniture."
+            },
+            "kiln": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "type": "string",
+                  "const": "kiln-studio"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "kiln"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "kiln-studio.kilns",
+        "version": "1.0.0",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:kiln-studio.kiln:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "kiln-studio.firings",
+        "version": "1.0.0",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:kiln-studio.firing:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "kiln-studio.created",
+        "version": "1.0.0",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ref"
+          ],
+          "properties": {
+            "ref": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "type": "string",
+                  "const": "kiln-studio"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "firing"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "objectTypes": [
+      {
+        "objectType": "kiln",
+        "label": "Kiln",
+        "schemaRef": {
+          "schemaId": "kiln-studio.kiln",
+          "version": "1.0.0"
+        },
+        "relationships": []
+      },
+      {
+        "objectType": "firing",
+        "label": "Firing",
+        "schemaRef": {
+          "schemaId": "kiln-studio.firing",
+          "version": "1.0.0"
+        },
+        "relationships": [
+          {
+            "fieldPath": "/kiln",
+            "cardinality": "one",
+            "targetAdapterId": "kiln-studio",
+            "targetObjectType": "kiln"
+          }
+        ]
+      }
+    ],
+    "capabilities": [
+      {
+        "capabilityId": "kiln-studio.kiln.list",
+        "label": "kiln.list",
+        "kind": "query",
+        "objectTypes": [
+          "kiln"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "kiln-studio.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "kiln-studio.kilns",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "kiln-studio.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "kiln-studio.firing.list",
+        "label": "firing.list",
+        "kind": "query",
+        "objectTypes": [
+          "firing"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "kiln-studio.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "kiln-studio.firings",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "kiln-studio.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "kiln-studio.firing.watch",
+        "label": "firing.watch",
+        "kind": "observation",
+        "objectTypes": [
+          "firing"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "kiln-studio.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "kiln-studio.firings",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "kiln-studio.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "kiln-studio.firing.create",
+        "label": "firing.create",
+        "kind": "action",
+        "objectTypes": [
+          "firing"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "kiln-studio.firing",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "kiln-studio.created",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "kiln-studio.error",
+          "version": "1.0.0"
+        }
+      }
+    ]
+  },
+  "draftingBindings": [
+    {
+      "bindingVersion": "1.0.0",
+      "adapterId": "kiln-studio",
+      "capabilityId": "kiln-studio.firing.create",
+      "inputSchemaRef": {
+        "schemaId": "kiln-studio.firing",
+        "version": "1.0.0"
+      },
+      "guidance": {
+        "guidanceId": "kiln-studio.firing.guidance",
+        "version": "1.0.0",
+        "instructions": "Draft a ceramic firing record from the conversation. Ask which kiln to use. Record the batch name, choose bisque-04 or glaze-6, and describe the load. This records a plan and does not operate kiln hardware."
+      },
+      "fieldHints": [
+        {
+          "pointer": "/batchName",
+          "role": "title"
+        },
+        {
+          "pointer": "/programme",
+          "role": "summary"
+        },
+        {
+          "pointer": "/loadNotes",
+          "role": "detail",
+          "widget": "long"
+        },
+        {
+          "pointer": "/kiln",
+          "role": "destination",
+          "resolveWith": "kiln-studio.kiln.list"
+        }
+      ]
+    }
+  ],
+  "readBindings": [
+    {
+      "version": "1.0.0",
+      "adapterId": "kiln-studio",
+      "capabilityId": "kiln-studio.kiln.list",
+      "mode": "destinations",
+      "objectType": "kiln",
+      "inputSchemaRef": {
+        "schemaId": "kiln-studio.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "kiln-studio.kilns",
+        "version": "1.0.0"
+      },
+      "display": {
+        "title": "/name"
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "kiln-studio",
+      "capabilityId": "kiln-studio.firing.list",
+      "mode": "query",
+      "objectType": "firing",
+      "inputSchemaRef": {
+        "schemaId": "kiln-studio.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "kiln-studio.firings",
+        "version": "1.0.0"
+      },
+      "display": {
+        "title": "/batchName"
+      },
+      "destinationType": "kiln",
+      "query": {
+        "objectsPointer": "/items",
+        "ordering": "provider",
+        "stableSnapshot": true,
+        "limits": {
+          "items": 2
+        }
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "kiln-studio",
+      "capabilityId": "kiln-studio.firing.watch",
+      "mode": "poll",
+      "objectType": "firing",
+      "inputSchemaRef": {
+        "schemaId": "kiln-studio.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "kiln-studio.firings",
+        "version": "1.0.0"
+      },
+      "display": {
+        "title": "/batchName"
+      },
+      "destinationType": "kiln",
+      "observation": {
+        "modes": [
+          "poll"
+        ],
+        "objectsPointer": "/items",
+        "resumable": false
+      }
+    }
+  ],
+  "setup": {
+    "version": "1.0.0",
+    "schemas": [
+      {
+        "schemaId": "kiln-studio.settings",
+        "version": "1.0.0",
+        "schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        }
+      }
+    ],
+    "configurationSchemaRef": {
+      "schemaId": "kiln-studio.settings",
+      "version": "1.0.0"
+    },
+    "accountScopeSchemaRef": {
+      "schemaId": "kiln-studio.settings",
+      "version": "1.0.0"
+    },
+    "authMethods": [
+      {
+        "kind": "local"
+      }
+    ]
+  }
+}

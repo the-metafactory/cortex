@@ -102,6 +102,7 @@ import type { DeskDraftAccess } from "./desk/draft-editor";
 import type { GraphSurfaceAccess } from "./desk/graph-surfaces";
 import { GRAPH_SURFACES_PATH } from "./desk/graph-surface-schema";
 import type { BalanceSurfaceAccess } from "./desk/balance-surfaces";
+import type { FlowSurfaceAccess } from "./desk/flow-surfaces";
 import { BALANCE_SURFACES_PATH } from "./desk/balance-surface-schema";
 import { GRAPH_REPOSITORIES_PATH } from "./desk/graph-repository-schema";
 import { handleDeskMailRules } from "./api/desk-mail-rules";
@@ -222,6 +223,7 @@ export interface MissionControlViews {
   graphScope?: GraphScopeAccess;
   graphSurfaces?: GraphSurfaceAccess;
   balanceSurfaces?: BalanceSurfaceAccess;
+  flowSurfaces?: FlowSurfaceAccess;
   drafts?: DeskDraftAccess;
   graphDrafts?: GraphDraftSetup;
 }
@@ -533,7 +535,7 @@ async function handleApi(
   desk?: DeskRuntime,
   views: MissionControlViews = {},
 ): Promise<Response> {
-  const { conversations, connectionSetup, adapterAssets, graphScope, graphSurfaces, balanceSurfaces } = views;
+  const { conversations, connectionSetup, adapterAssets, graphScope, graphSurfaces, balanceSurfaces, flowSurfaces } = views;
   const { pathname } = url;
   if (pathname === DESK_DRAFTS_PATH || pathname.startsWith(`${DESK_DRAFTS_PATH}/`)) return handleDeskDrafts(req, url, guard, views.drafts);
   if (pathname === "/api/conversations" || pathname.startsWith("/api/conversations/")) return handleConversations(req, url, guard, conversations, { db, runtime: desk });
@@ -616,7 +618,7 @@ async function handleApi(
 
   if (pathname === "/api/desk/create") return handleDeskCreate(req, db, desk, { routineCapabilities: () => localRoutineCapabilities(agentPresence) });
   if (pathname === "/api/desk/routines") return handleDeskRoutines(req, db, desk, undefined, () => localRoutineCapabilities(agentPresence));
-  if (deskFlowsRead) return handleDeskFlows(req, desk);
+  if (deskFlowsRead) return handleDeskFlows(req, desk, undefined, flowSurfaces);
   if (pathname === "/api/desk/routine-capability") return handleDeskRoutineCapability(req, db, desk);
   if (pathname === "/api/desk/routine-history") return handleDeskRoutineEvidence(req, db, desk);
   if (pathname === "/api/desk/routine-log") return handleDeskRoutineEvidence(req, db, desk, true);

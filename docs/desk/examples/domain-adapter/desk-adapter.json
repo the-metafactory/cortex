@@ -1,0 +1,429 @@
+{
+  "format": "desk-adapter-package/1",
+  "packageId": "example.archive",
+  "packageVersion": "1.0.0",
+  "deskSdkRange": "^1.2.0",
+  "domainContractVersion": "1.0.0",
+  "backend": {
+    "entry": "backend.mjs",
+    "sha256": "01b9fba9e53ffd97603ca9a801b768cc29cdaf4c4ecc2a17ef8ca8c242e2e54d"
+  },
+  "declaration": {
+    "adapterId": "archive",
+    "label": "Archive",
+    "contractRange": "^1.0.0",
+    "schemas": [
+      {
+        "schemaId": "archive.empty",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        }
+      },
+      {
+        "schemaId": "archive.error",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "archive.shelf",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "archive.record",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "title",
+            "shelf"
+          ],
+          "properties": {
+            "title": {
+              "type": "string",
+              "minLength": 1
+            },
+            "shelf": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "const": "archive",
+                  "type": "string"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectType": {
+                  "const": "shelf",
+                  "type": "string"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "archive.shelves",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:archive.shelf:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "archive.records",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:archive.record:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "archive.created",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ref"
+          ],
+          "properties": {
+            "ref": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "const": "archive",
+                  "type": "string"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "record"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "objectTypes": [
+      {
+        "objectType": "shelf",
+        "label": "Shelf",
+        "schemaRef": {
+          "schemaId": "archive.shelf",
+          "version": "1.0.0"
+        },
+        "relationships": []
+      },
+      {
+        "objectType": "record",
+        "label": "Record",
+        "schemaRef": {
+          "schemaId": "archive.record",
+          "version": "1.0.0"
+        },
+        "relationships": [
+          {
+            "fieldPath": "/shelf",
+            "cardinality": "one",
+            "targetAdapterId": "archive",
+            "targetObjectType": "shelf"
+          }
+        ]
+      }
+    ],
+    "capabilities": [
+      {
+        "capabilityId": "archive.shelf.list",
+        "label": "shelf.list",
+        "kind": "query",
+        "objectTypes": [
+          "shelf"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "archive.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "archive.shelves",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "archive.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "archive.record.list",
+        "label": "record.list",
+        "kind": "query",
+        "objectTypes": [
+          "record"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "archive.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "archive.records",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "archive.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "archive.record.watch",
+        "label": "record.watch",
+        "kind": "observation",
+        "objectTypes": [
+          "record"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "archive.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "archive.records",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "archive.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "archive.record.create",
+        "label": "record.create",
+        "kind": "action",
+        "objectTypes": [
+          "record"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "archive.record",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "archive.created",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "archive.error",
+          "version": "1.0.0"
+        }
+      }
+    ]
+  },
+  "draftingBindings": [
+    {
+      "bindingVersion": "1.0.0",
+      "adapterId": "archive",
+      "capabilityId": "archive.record.create",
+      "inputSchemaRef": {
+        "schemaId": "archive.record",
+        "version": "1.0.0"
+      },
+      "guidance": {
+        "guidanceId": "archive.record.guidance",
+        "version": "1.0.0",
+        "instructions": "Draft an archive record from the conversation. Ask which shelf to use."
+      },
+      "fieldHints": [
+        {
+          "pointer": "/title",
+          "role": "title"
+        },
+        {
+          "pointer": "/shelf",
+          "role": "destination",
+          "resolveWith": "archive.shelf.list"
+        }
+      ]
+    }
+  ],
+  "readBindings": [
+    {
+      "version": "1.0.0",
+      "adapterId": "archive",
+      "capabilityId": "archive.shelf.list",
+      "mode": "destinations",
+      "objectType": "shelf",
+      "inputSchemaRef": {
+        "schemaId": "archive.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "archive.shelves",
+        "version": "1.0.0"
+      },
+      "display": {
+        "title": "/title"
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "archive",
+      "capabilityId": "archive.record.list",
+      "mode": "query",
+      "objectType": "record",
+      "inputSchemaRef": {
+        "schemaId": "archive.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "archive.records",
+        "version": "1.0.0"
+      },
+      "display": {
+        "title": "/title"
+      },
+      "destinationType": "shelf",
+      "query": {
+        "objectsPointer": "/items",
+        "ordering": "provider",
+        "stableSnapshot": true,
+        "limits": {
+          "items": 2
+        }
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "archive",
+      "capabilityId": "archive.record.watch",
+      "mode": "poll",
+      "objectType": "record",
+      "inputSchemaRef": {
+        "schemaId": "archive.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "archive.records",
+        "version": "1.0.0"
+      },
+      "display": {
+        "title": "/title"
+      },
+      "destinationType": "shelf",
+      "observation": {
+        "modes": [
+          "poll"
+        ],
+        "objectsPointer": "/items",
+        "resumable": false
+      }
+    }
+  ],
+  "setup": {
+    "version": "1.0.0",
+    "schemas": [
+      {
+        "schemaId": "archive.settings",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        }
+      }
+    ],
+    "configurationSchemaRef": {
+      "schemaId": "archive.settings",
+      "version": "1.0.0"
+    },
+    "accountScopeSchemaRef": {
+      "schemaId": "archive.settings",
+      "version": "1.0.0"
+    },
+    "authMethods": [
+      {
+        "kind": "local"
+      }
+    ]
+  }
+}
