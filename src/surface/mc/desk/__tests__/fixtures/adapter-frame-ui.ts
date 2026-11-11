@@ -1,5 +1,39 @@
-export const FRAME_ATTACKS = ["good", "editor-change", "editor-propose", "late-revoke", "mismatch", "throw", "forged", "replay", "wrong-release", "wrong-generation", "wrong-connection", "unknown-field", "before-ready", "cross-connection", "ambient", "navigate", "before-load", "remote", "data", "blob", "redirect", "fetch", "image", "font", "style", "worker", "service-worker", "parent", "form", "popup", "download", "top"] as const;
-export type FrameAttack = typeof FRAME_ATTACKS[number];
+export const FRAME_CASES = [
+  { attack: "good", expectedState: "ready" },
+  { attack: "editor-change", expectedState: "ready" },
+  { attack: "editor-propose", expectedState: "ready" },
+  { attack: "late-revoke", expectedState: "unavailable" },
+  { attack: "mismatch", expectedState: "unavailable" },
+  { attack: "throw", expectedState: "unavailable" },
+  { attack: "forged", expectedState: "unavailable" },
+  { attack: "replay", expectedState: "unavailable" },
+  { attack: "wrong-release", expectedState: "unavailable" },
+  { attack: "wrong-generation", expectedState: "unavailable" },
+  { attack: "wrong-connection", expectedState: "unavailable" },
+  { attack: "unknown-field", expectedState: "unavailable" },
+  { attack: "before-ready", expectedState: "unavailable" },
+  { attack: "cross-connection", expectedState: "unavailable" },
+  { attack: "ambient", expectedState: "ready" },
+  { attack: "navigate", expectedState: "unavailable" },
+  { attack: "before-load", expectedState: "unavailable" },
+  { attack: "remote", expectedState: "unavailable" },
+  { attack: "data", expectedState: "unavailable" },
+  { attack: "blob", expectedState: "unavailable" },
+  { attack: "redirect", expectedState: "unavailable" },
+  { attack: "fetch", expectedState: "ready" },
+  { attack: "image", expectedState: "ready" },
+  { attack: "font", expectedState: "ready" },
+  { attack: "style", expectedState: "ready" },
+  { attack: "worker", expectedState: "ready" },
+  { attack: "service-worker", expectedState: "ready" },
+  { attack: "parent", expectedState: "ready" },
+  { attack: "form", expectedState: "ready" },
+  { attack: "popup", expectedState: "ready" },
+  { attack: "download", expectedState: "unavailable" },
+  { attack: "top", expectedState: "ready" },
+] as const;
+export const FRAME_ATTACKS = FRAME_CASES.map(item => item.attack);
+export type FrameAttack = typeof FRAME_CASES[number]["attack"];
 
 function hostileUi(attack: FrameAttack, evil: string): void {
   const report = (value: string): void => { console.log(`FRAME_PROBE:${value}`); };

@@ -50,6 +50,100 @@ describe("Desk UI 1.0.0 terminal gate", () => {
 });
 
 describe("current-policy frame host with real durable state", () => {
+  test("expired replay windows permit more than 4096 lifetime opens", async () => {
+    const rig = await openFrameRig();
+    try {
+      rig.service.close(ASSET_OWNER, rig.identity.instance);
+      for (let i = 1; i <= 4097; i++) {
+        rig.tick(60_001);
+        const instance = i.toString(16).padStart(32, "0");
+        await rig.service.open(ASSET_OWNER, "local", rig.registered.mountId, instance);
+        rig.service.close(ASSET_OWNER, instance);
+      }
+      expect(rig.reads).toBe(0);
+    } finally { await rig.close(); }
+  });
+  test("live identities remain reserved and retirement starts a fresh replay window", async () => {
+    for (const retire of ["close", "remove", "violation"] as const) {
+      const rig = await openFrameRig();
+      try {
+        await rig.ready();
+        for (let i = 0; i < 3; i++) {
+          rig.tick(25_000);
+          await rig.service.exchange(ASSET_OWNER, "local", rig.identity.instance);
+        }
+        await expect(rig.service.open(ASSET_OWNER, "local", rig.registered.mountId, rig.identity.instance)).rejects.toThrow();
+        let mountId = rig.registered.mountId;
+        if (retire === "close") rig.service.close(ASSET_OWNER, rig.identity.instance);
+        if (retire === "violation") await expect(rig.service.exchange(ASSET_OWNER, "local", rig.identity.instance, {})).rejects.toThrow();
+        if (retire === "remove") {
+          rig.registered.remove();
+          mountId = rig.service.register(rig.binding).mountId;
+        }
+        rig.tick(59_999);
+        await expect(rig.service.open(ASSET_OWNER, "local", mountId, rig.identity.instance)).rejects.toThrow();
+        rig.tick(2);
+        await rig.service.open(ASSET_OWNER, "local", mountId, rig.identity.instance);
+        expect(rig.authority.calls.dispatch + rig.authority.calls.cancel).toBe(0);
+      } finally { await rig.close(); }
+    }
+  });
+  test("expired abandoned sessions release capacity without reviving their bridge", async () => {
+    const rig = await openFrameRig();
+    try {
+      for (let i = 1; i < 128; i++) await rig.service.open(ASSET_OWNER, "local", rig.registered.mountId, i.toString(16).padStart(32, "0"));
+      const next = "f".repeat(32);
+      await expect(rig.service.open(ASSET_OWNER, "local", rig.registered.mountId, next)).rejects.toThrow();
+      rig.tick(3001);
+      await rig.service.open(ASSET_OWNER, "local", rig.registered.mountId, next);
+      await expect(rig.ready()).rejects.toThrow();
+      expect(rig.reads).toBe(0);
+    } finally { await rig.close(); }
+  });
+  test("a delayed open cannot replace a newer session after its reservation expires", async () => {
+    const rig = await openFrameRig();
+    const finish = Promise.withResolvers<undefined>();
+    try {
+      const catalog = rig.assets.service.catalog.bind(rig.assets.service);
+      const started = Promise.withResolvers<undefined>();
+      let calls = 0;
+      rig.assets.service.catalog = async (...args) => {
+        const result = await catalog(...args);
+        if (++calls === 1) { started.resolve(undefined); await finish.promise; }
+        return result;
+      };
+      const instance = "e".repeat(32);
+      const pending = rig.service.open(ASSET_OWNER, "local", rig.registered.mountId, instance).then(() => "opened", () => "unavailable");
+      await started.promise;
+      rig.tick(60_001);
+      await rig.service.open(ASSET_OWNER, "local", rig.registered.mountId, instance);
+      finish.resolve(undefined);
+      expect(await pending).toBe("unavailable");
+      const reply = await rig.service.exchange(ASSET_OWNER, "local", instance, { ...rig.identity, instance, seq: 1, type: "ui:ready", body: { mount } });
+      expect(reply.messages[0]?.type).toBe("host:projection");
+    } finally { finish.resolve(undefined); await rig.close(); }
+  });
+  test("a retired exchange cannot release late facts or retire a replacement session", async () => {
+    const rig = await openFrameRig();
+    const finish = Promise.withResolvers<undefined>();
+    try {
+      await rig.ready();
+      const started = Promise.withResolvers<undefined>();
+      rig.state.projection = async () => { started.resolve(undefined); await finish.promise; return { projectionId: "late", revision: 1, object: { title: "LATE-RETIRED-FACT" } }; };
+      const pending = rig.service.exchange(ASSET_OWNER, "local", rig.identity.instance).then(() => "released", () => "unavailable");
+      await started.promise;
+      rig.service.close(ASSET_OWNER, rig.identity.instance);
+      rig.tick(60_001);
+      await rig.service.open(ASSET_OWNER, "local", rig.registered.mountId, rig.identity.instance);
+      finish.resolve(undefined);
+      expect(await pending).toBe("unavailable");
+      rig.state.projection = undefined;
+      await rig.ready();
+      expect(JSON.stringify(rig.releases)).not.toContain("LATE-RETIRED-FACT");
+      expect(rig.releases).toHaveLength(2);
+      expect(rig.authority.calls.dispatch + rig.authority.calls.cancel).toBe(0);
+    } finally { finish.resolve(undefined); await rig.close(); }
+  });
   test("release uses parsed projection output, preserving schema redaction", async () => {
     const rig = await openFrameRig();
     try {

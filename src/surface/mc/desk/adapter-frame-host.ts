@@ -33,6 +33,8 @@ interface Session {
   busy: boolean;
 }
 
+const FRAME_REPLAY_RETENTION_MS = 60_000;
+
 export class FrameUnavailable extends Error {
   constructor() { super("The adapter view is unavailable. Safe host status and history are retained."); }
 }
@@ -40,7 +42,7 @@ export class FrameUnavailable extends Error {
 export class AdapterFrameHost {
   private readonly mounts = new Map<string, FrameBinding>();
   private readonly sessions = new Map<string, Session>();
-  private readonly used = new Set<string>();
+  private readonly used = new Map<string, number>();
 
   constructor(private readonly assets: AdapterAssetService, private readonly now: () => number = Date.now) {}
 
@@ -54,7 +56,7 @@ export class AdapterFrameHost {
     return { mountId, remove: () => {
       this.mounts.delete(mountId);
       unregisterSink();
-      for (const [instance, session] of this.sessions) if (session.binding === binding) this.sessions.delete(instance);
+      for (const [instance, session] of this.sessions) if (session.binding === binding) this.retire(instance, session);
     } };
   }
 
@@ -68,18 +70,28 @@ export class AdapterFrameHost {
   }
 
   async open(principal: string, audience: Lane, mountId: string, instance: string): Promise<{ entry: FrameEntry; mount: Mount }> {
+    const now = this.now();
+    for (const [id, session] of this.sessions) if (now > session.expires) this.retire(id, session, session.expires);
+    for (const [id, expires] of this.used) if (now > expires && !this.sessions.has(id)) this.used.delete(id);
     const binding = this.mounts.get(mountId);
     if (binding?.principal !== principal || this.used.has(instance) || this.used.size >= 4096 || this.sessions.size >= 128) throw new FrameUnavailable();
-    this.used.add(instance);
+    this.used.set(instance, now + FRAME_REPLAY_RETENTION_MS);
     const entry = await this.current(binding, audience);
-    if (this.mounts.get(mountId) !== binding) throw new FrameUnavailable();
+    if (this.mounts.get(mountId) !== binding || this.now() > now + DESK_UI_HANDSHAKE_MS) throw new FrameUnavailable();
     const identity: Identity = { protocol: DESK_UI_PROTOCOL, version: DESK_UI_WIRE_VERSION, instance, adapterId: entry.adapterId, connectionId: entry.connectionId, generationId: entry.generationId, releaseDigest: entry.releaseDigest };
     this.sessions.set(instance, { binding, entry, identity, gate: new InboundGate(identity, binding.mount), seq: 1, ready: false, expires: this.now() + DESK_UI_HANDSHAKE_MS, busy: false });
     return { entry, mount: binding.mount };
   }
 
   close(principal: string, instance: string): void {
-    if (this.sessions.get(instance)?.binding.principal === principal) this.sessions.delete(instance);
+    const session = this.sessions.get(instance);
+    if (session?.binding.principal === principal) this.retire(instance, session);
+  }
+
+  private retire(instance: string, session: Session, at = this.now()): void {
+    if (this.sessions.get(instance) !== session) return;
+    this.sessions.delete(instance);
+    this.used.set(instance, at + FRAME_REPLAY_RETENTION_MS);
   }
 
   private async check(instance: string, session: Session, audience: Lane): Promise<void> {
@@ -171,7 +183,7 @@ export class AdapterFrameHost {
       session.expires = this.now() + 30_000;
       return { messages };
     } catch (error) {
-      this.sessions.delete(instance);
+      this.retire(instance, session);
       throw error;
     } finally { session.busy = false; }
   }

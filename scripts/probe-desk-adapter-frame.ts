@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { chromium, firefox, webkit } from "playwright";
-import { FRAME_ATTACKS } from "../src/surface/mc/desk/__tests__/fixtures/adapter-frame-ui";
+import { FRAME_CASES } from "../src/surface/mc/desk/__tests__/fixtures/adapter-frame-ui";
 import { serveFrameProbe } from "./desk-adapter-frame/server";
 
 const evidence: unknown[] = [];
@@ -19,7 +19,7 @@ try {
       continue;
     }
     try {
-      for (const mode of ["local", "hosted"] as const) for (const attack of FRAME_ATTACKS) {
+      for (const mode of ["local", "hosted"] as const) for (const { attack, expectedState } of FRAME_CASES) {
         const fixture = await serveFrameProbe(attack, mode, attacker.url.origin);
         const context = await browser.newContext();
         const row: Record<string, unknown> = { browser: type.name(), version: browser.version(), mode, attack, status: "failed" };
@@ -50,8 +50,7 @@ try {
             fixture.rig.authority.policy.releaseAllowed = false;
             finish.resolve(undefined);
           }
-          const unavailable = ["late-revoke", "mismatch", "throw", "forged", "replay", "wrong-release", "wrong-generation", "wrong-connection", "unknown-field", "before-ready", "cross-connection", "navigate", "before-load", "remote", "data", "blob", "redirect", "download"].includes(attack);
-          await page.locator(`[data-adapter-state="${unavailable ? "unavailable" : "ready"}"]`).waitFor({ timeout: 8000 });
+          await page.locator(`[data-adapter-state="${expectedState}"]`).waitFor({ timeout: 8000 });
           await page.waitForTimeout(150);
           assert.ok(ran.some(value => value === `FRAME_PROBE:${attack}`), "attack script actually ran");
           if (attack === "fetch") assert.ok(ran.includes("FRAME_PROBE:fetch-denied") && !ran.includes("FRAME_PROBE:fetch-allowed"), "direct fetch denied");
@@ -89,7 +88,7 @@ try {
             await page.waitForTimeout(150);
             assert.equal((await draft.service.read(draft.draftId))?.draft.fields["/title"]?.value, "Browser principal edit");
           }
-          if (unavailable) {
+          if (expectedState === "unavailable") {
             await page.getByText("Safe host history remains available.").waitFor();
             assert.equal(await page.locator('iframe[title="Desk view host"]').count(), 0);
           }
