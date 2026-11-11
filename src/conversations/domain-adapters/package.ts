@@ -30,6 +30,7 @@ export const DESK_ADAPTER_MAX_MANIFEST_BYTES = 512 * 1024;
 export const DESK_ADAPTER_MAX_FILES = 256;
 export const DESK_ADAPTER_MAX_FILE_BYTES = 8 * 1024 * 1024;
 export const DESK_ADAPTER_MEDIA_TYPES = ["text/html", "text/javascript", "text/css", "image/png", "image/jpeg", "image/svg+xml", "image/webp", "font/woff", "font/woff2"] as const;
+export const DESK_UI_VIEWS = ["result", "editor"] as const;
 export const DESK_ADAPTER_BUILTIN_IMPORTS: ReadonlySet<string> = new Set(["node:crypto", "node:buffer", "node:util", "node:url", "node:zlib", "node:stream", "node:events", "node:string_decoder", "node:timers", "node:net", "node:tls"]);
 
 const sdkRange = z.string().refine(value => validRange(value) !== null);
@@ -47,7 +48,7 @@ const authMethod = z.discriminatedUnion("kind", [
 ]);
 const mediaType = z.enum(DESK_ADAPTER_MEDIA_TYPES);
 const uiFile = z.object({ path: relativePath, sha256: hex64, mediaType }).strict();
-const uiView = z.object({ objectType: identifier, view: z.literal("result") }).strict();
+const uiView = z.object({ objectType: identifier, view: z.enum(DESK_UI_VIEWS) }).strict();
 export const DeskAdapterSetupSchema = z.object({
   version: z.literal(DESK_ADAPTER_SETUP_VERSION),
   schemas: z.array(setupSchema),

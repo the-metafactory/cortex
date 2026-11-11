@@ -1,37 +1,10 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
-import { chromium, type Browser } from "playwright";
 import { openDraftEditorRig, shelfRef } from "../src/surface/mc/__tests__/fixtures/draft-editor";
-import { handleDeskDrafts } from "../src/surface/mc/api/desk-drafts";
-import { buildAllowedHostnames } from "../src/surface/mc/api/mutation-guard";
+import { withDraftBrowserProbe } from "./desk-make-editor/server";
 
 const rig = await openDraftEditorRig();
-const bundle = await Bun.build({ entrypoints: [join(import.meta.dir, "desk-make-editor/browser-probe.tsx")], target: "browser", naming: "[name].[ext]" });
-if (!bundle.success) throw new Error(`The Make editor browser probe did not build: ${bundle.logs.join("\n")}`);
-const javascript = bundle.outputs.find(item => item.path.endsWith(".js"));
-const css = bundle.outputs.find(item => item.path.endsWith(".css"));
-if (!javascript) throw new Error("Browser probe bundle missing.");
-const calls: string[] = [];
-const server = Bun.serve({ hostname: "127.0.0.1", port: 0,
-  fetch(req, server) {
-    const url = new URL(req.url);
-    if (url.pathname === "/probe.js") return new Response(javascript, { headers: { "content-type": "text/javascript" } });
-    if (url.pathname === "/probe.css") return new Response(css ?? "", { headers: { "content-type": "text/css" } });
-    if (url.pathname === "/fixture.json") return Response.json(rig.makeInput);
-    if (url.pathname.startsWith("/api/desk/drafts")) {
-      calls.push(`${req.method} ${url.pathname}${url.search}`);
-      return handleDeskDrafts(req, url, { isLoopback: true, allowedHostnames: buildAllowedHostnames("127.0.0.1"), listenPort: server.port ?? 0, principals: new Set() }, () => rig.editor);
-    }
-    return new Response('<!doctype html><html><head><link rel="stylesheet" href="/probe.css"></head><body><main id="root"></main><script type="module" src="/probe.js"></script></body></html>', { headers: { "content-type": "text/html" } });
-  },
-});
-let browser: Browser | undefined;
-try {
-  browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } });
-  const errors: string[] = [];
-  page.on("pageerror", error => { errors.push(error.message); });
-  await page.goto(server.url.toString());
+await withDraftBrowserProbe(rig, async ({ page, calls, errors }) => {
   await page.getByRole("button", { name: "Make", exact: true }).click();
   const editor = page.getByRole("article", { name: "Draft editor" });
   await page.getByLabel("Headline (required)", { exact: true }).waitFor();
@@ -94,8 +67,4 @@ try {
   assert.equal(rig.owner.mutations, 0);
   assert.deepEqual(errors, []);
   console.log("Reopen after host restart preserves edits and clears without generation; blocked confirmation explains policy. Owner mutation calls: 0.");
-} finally {
-  await browser?.close();
-  await server.stop(true);
-  await rig.close();
-}
+});

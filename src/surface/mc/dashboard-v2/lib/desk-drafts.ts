@@ -13,3 +13,5 @@ export const refreshDraft = (id: string, revision: number): Promise<DraftEditorV
 export const draftDetails = (id: string, pointer: string): Promise<{ details: DraftDetails }> => getJson(`${path(id)}/details?pointer=${encodeURIComponent(pointer)}`);
 export const confirmDraft = (id: string, revision: number): Promise<{ confirmation: DraftConfirmation }> => postJson(`${path(id)}/confirm`, { revision });
 export const changeDraftDestination = (id: string, revision: number, target: DraftTarget): Promise<DraftEditorView> => postJson(`${path(id)}/destination`, { revision, capabilityId: target.capabilityId, connectionId: target.connectionId });
+
+export const editDraftReferences = (id: string, revision: number, pointer: string, labels: string[]): Promise<DraftEditorView> => postJson(`${path(id)}/references`, { revision, pointer, labels });
