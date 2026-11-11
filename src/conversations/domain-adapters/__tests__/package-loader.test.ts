@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
   DESK_FIXTURE_ADAPTER,
   DESK_FIXTURE_ORIGIN,
@@ -16,7 +14,7 @@ import {
   deskFixtureReadBinding,
   deskFixtureRunner,
   deskFixtureSetup,
-  openDeskFixtureStore,
+  deskTestWorkspace,
   writeDeskFixturePackage,
 } from "./fixtures/package-fixtures";
 import { DeskPackageLoader, type DeskAdapterApproval, type DeskPackageLoaderOptions } from "../package";
@@ -38,19 +36,10 @@ const sharedObjectSchema = (adapterId: string, schemaId: string, properties: Rec
     : schema);
   return declaration;
 };
-const roots: string[] = [];
-const engines: { close(context: typeof BACKGROUND_CONTEXT): Promise<void> }[] = [];
+const workspace = deskTestWorkspace();
+const tempDir = workspace.tempDir;
 
-const tempDir = (name: string): string => {
-  const dir = mkdtempSync(join(tmpdir(), `cortex-desk-${name}-`));
-  roots.push(dir);
-  return dir;
-};
-
-afterEach(async () => {
-  for (const engine of engines.splice(0)) await engine.close(BACKGROUND_CONTEXT);
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
+afterEach(() => workspace.cleanup());
 
 const approvalUnit = (adapterId = DESK_FIXTURE_ADAPTER): DeskAdapterApproval => ({ packageId: deskFixturePackageId(adapterId), origin: DESK_FIXTURE_ORIGIN, packageVersion: "1.0.0", releaseDigest: "0".repeat(64) });
 
@@ -59,12 +48,7 @@ const misplacedHandlerPackage = (root: string) => writeDeskFixturePackage(join(r
   backendSource: deskFixtureBackend(deskFixtureDeclaration("a-broken"), { misplacedHandler: true }),
 });
 
-async function openStore(): Promise<{ store: DeskGenerationStore; dir: string }> {
-  const dir = tempDir("store");
-  const { engine, store } = await openDeskFixtureStore(dir);
-  engines.push(engine);
-  return { store, dir };
-}
+const openStore = workspace.openStore;
 
 async function activatedFixture(): Promise<{ loader: DeskPackageLoader; store: DeskGenerationStore; dir: string }> {
   const pkg = writeDeskFixturePackage(join(tempDir("bundled"), "balance"));

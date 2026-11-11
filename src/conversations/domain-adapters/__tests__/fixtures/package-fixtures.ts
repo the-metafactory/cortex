@@ -1,4 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
@@ -147,6 +148,7 @@ export interface DeskFixturePackageOptions {
   backendEntry?: string;
   backendSha?: string;
   ui?: boolean;
+  uiViews?: unknown[];
   extra?: Record<string, unknown>;
 }
 
@@ -179,7 +181,7 @@ export function writeDeskFixturePackage(dir: string, options: DeskFixturePackage
     draftingBindings: options.draftingBindings ?? [deskFixtureDraftingBinding(adapterId)],
     readBindings: options.readBindings ?? [deskFixtureReadBinding(adapterId)],
     setup: options.setup ?? deskFixtureSetup(adapterId),
-    ...(files ? { ui: { protocolVersion: "1.0.0", entry: "app.html", views: [{ objectType: "task", view: "result" }], files } } : {}),
+    ...(files ? { ui: { protocolVersion: "1.0.0", entry: "app.html", views: options.uiViews ?? [{ objectType: "task", view: "result" }], files } } : {}),
     ...options.extra,
   };
   writeFileSync(join(dir, "desk-adapter.json"), JSON.stringify(manifest, null, 2));
@@ -210,4 +212,72 @@ export async function openDeskFixtureStore(dir: string): Promise<{ engine: Harne
   mkdirSync(dir, { recursive: true });
   const engine = await Harness.open(await openNodeSqliteStorage(join(dir, "durable.sqlite")), { registry: createRegistry(), models: createModels() }, BACKGROUND_CONTEXT);
   return { engine, store: new DeskGenerationStore(engine) };
+}
+
+export interface DeskTestWorkspace {
+  tempDir(name: string): string;
+  openStore(): Promise<{ store: DeskGenerationStore; dir: string }>;
+  cleanup(): Promise<void>;
+}
+
+export function deskTestWorkspace(prefix = "cortex-desk"): DeskTestWorkspace {
+  const roots: string[] = [];
+  const engines: Harness[] = [];
+  const tempDir = (name: string): string => {
+    const dir = mkdtempSync(join(tmpdir(), `${prefix}-${name}-`));
+    roots.push(dir);
+    return dir;
+  };
+  const openStore = async (): Promise<{ store: DeskGenerationStore; dir: string }> => {
+    const dir = tempDir("store");
+    const { engine, store } = await openDeskFixtureStore(dir);
+    engines.push(engine);
+    return { store, dir };
+  };
+  const cleanup = async (): Promise<void> => {
+    for (const engine of engines.splice(0)) await engine.close(BACKGROUND_CONTEXT);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  };
+  return { tempDir, openStore, cleanup };
+}
+
+export type DeskBackendCall = "dispatch" | "cancel" | "lookup" | "readback";
+
+export interface DeskBackendFixtureOptions {
+  declaration: { adapterId: string };
+  actionCapabilityId?: string;
+  writerOwner?: string;
+  support?: object;
+  omit?: readonly DeskBackendCall[];
+  query?: { capabilityId: string; page: unknown };
+  observation?: { capabilityId: string; batch: unknown; modes?: readonly string[]; orderingId?: string };
+  readbackCapabilityId?: string;
+  readbackRef?: unknown;
+}
+
+const BACKEND_AT = "2026-11-01T00:00:00.000Z";
+
+export function deskBackendFixtureSource(options: DeskBackendFixtureOptions): string {
+  const adapterId = options.declaration.adapterId;
+  const omitted = new Set<string>(options.omit ?? []);
+  const keep = (call: DeskBackendCall, source: string): string => (omitted.has(call) ? "" : source);
+  const log = (name: string): string => `calls[${JSON.stringify(`${adapterId}:${name}`)}] = (calls[${JSON.stringify(`${adapterId}:${name}`)}] ?? 0) + 1;`;
+  const ref = JSON.stringify({ adapterId, connectionId: "connection-example", objectType: "task", canonicalId: "task-example" });
+  const connector = options.actionCapabilityId === undefined ? "" : `  host.registerConnector(${JSON.stringify(options.actionCapabilityId)}, connection => ({
+    kind: "action", adapterId: connection.adapterId, connectionId: connection.connectionId, capabilityId: ${JSON.stringify(options.actionCapabilityId)},
+    writerOwner: ${JSON.stringify(options.writerOwner ?? "package-owner")}, support: ${JSON.stringify(options.support ?? {})},
+    ${keep("dispatch", `dispatch(request) { ${log("dispatch")} return { lifecycleVersion: "1.0.0", operationId: request.operationId, attemptId: request.attemptId, snapshotDigest: request.snapshot.digest, resultId: "result-succeeded", reportedAt: ${JSON.stringify(BACKEND_AT)}, result: { kind: "succeeded", output: { ref: ${ref} }, evidence: { kind: "effect", evidenceId: "evidence-example", observedAt: ${JSON.stringify(BACKEND_AT)}, ownerRequestId: request.ownerRequestId, receipt: { committed: true }, refs: [${ref}] } } }; },`)}
+    ${keep("cancel", `cancel(request) { ${log("cancel")} return { lifecycleVersion: "1.0.0", operationId: request.operationId, checkedAt: ${JSON.stringify(BACKEND_AT)}, result: { kind: "unknown", reason: { code: "package_unknown", message: "No cancellation evidence." } } }; },`)}
+    ${keep("lookup", `lookup(request) { ${log("lookup")} return { lifecycleVersion: "1.0.0", operationId: request.operationId, checkedAt: ${JSON.stringify(BACKEND_AT)}, result: { kind: "unknown", reason: { code: "package_unknown", message: "No historical evidence." } } }; },`)}
+    ${keep("readback", `readbackCapabilityId: ${JSON.stringify(options.readbackCapabilityId ?? "")}, readback(request) { ${log("readback")} return { lifecycleVersion: "1.0.0", ref: request.ref, checkedAt: ${JSON.stringify(BACKEND_AT)}, provenance: { adapterId: request.ref.adapterId, connectionId: request.ref.connectionId, evidenceId: "package-readback" }, result: { kind: "deleted", evidenceId: "package-tombstone" } }; },`)}
+  }));`;
+  const handlers = options.query ? `${JSON.stringify(options.query.capabilityId)}: () => { ${log("query")} return ${JSON.stringify(options.query.page)}; }` : "";
+  const observations = options.observation ? `${JSON.stringify(options.observation.capabilityId)}: { modes: ${JSON.stringify(options.observation.modes ?? ["poll", "subscription"])}, ${options.observation.orderingId ? `ordering: { id: ${JSON.stringify(options.observation.orderingId)}, compare: (left, right) => (left === right ? "same" : Number(left) < Number(right) ? "older" : "newer") },` : ""} fetch(request) { ${log("observation")} return ${JSON.stringify(options.observation.batch)}; } }` : "";
+  return [
+    "const calls = globalThis.__deskPackageCalls ??= {};",
+    "export function createDeskAdapter(host) {",
+    connector,
+    `  return { declaration: ${JSON.stringify(options.declaration)}, bindings: { handlers: { ${handlers} }, observations: { ${observations} } } };`,
+    "}",
+  ].join("\n");
 }

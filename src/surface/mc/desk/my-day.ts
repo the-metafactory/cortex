@@ -7,6 +7,7 @@ import { planSource, unplanSource } from "./source-plan";
 import { studioLinks, studioOwned, type StudioProjection } from "./studio-outline";
 import { DEFAULT_YES_FILTER } from "./yes-filter";
 import { applyBalanceCommand, completeOutlineLeaf, fileBalanceInbox, outlineDestination, setOutlineFocus } from "./balance-outline";
+import { applyBalanceDayProjection, type BalanceDayProjection } from "./balance-day";
 import type { Database } from "bun:sqlite";
 import { applyDayToHistory, findNode, rankAll, selectToday, shiftDays, type AppState, type OutlineNode, type TodayItem } from "../../../balance";
 import { saveBalanceState } from "./balance-store";
@@ -37,13 +38,15 @@ export interface MyDayView {
   alternates: TodayItem[];
   wins: { taskId: string; title: string }[];
   outline: OutlineNode;
+  observation: Pick<BalanceDayProjection, "status" | "observedAt"> | null;
   sources: MyDayMeta["sources"];
   yesFilter: string[];
   undos: { receipt: string; title: string }[];
   dayUndo: { receipt: string; text: string } | null;
 }
-function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, studio?: StudioProjection): MyDayView {
+function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date: string, studio?: StudioProjection, projection?: BalanceDayProjection): MyDayView {
   const state = configuredState(storedState, desk);
+  if (projection) applyBalanceDayProjection(state.outline, projection.tasks);
   const day = state.dayState?.date === date ? state.dayState : null;
   const all = rankAll(state, date);
   const ids = day?.confirmed ?? (isPersonDraft(meta, date) ? meta.draft.ids : selectToday(state, date).map(i => i.task.id));
@@ -68,13 +71,13 @@ function viewOf(storedState: AppState, meta: MyDayMeta, desk: DeskOptions, date:
     wins: state.log.filter(e => e.date === date).map(({ taskId, title }) => ({ taskId, title })),
     undos: meta.undos.filter(u => !u.used && u.date === date).map(u => ({ receipt: u.receipt, title: findNode(state.outline, u.taskId)?.title ?? "Task" })),
     dayUndo: dayUndo ? { receipt: dayUndo.receipt, text: dayUndo.text } : null,
-    outline: state.outline, sources: meta.sources, yesFilter: desk.studio?.yesFilter?.length ? [...desk.studio.yesFilter] : [...DEFAULT_YES_FILTER],
+    outline: state.outline, observation: projection ? { status: projection.status, observedAt: projection.observedAt } : null, sources: meta.sources, yesFilter: desk.studio?.yesFilter?.length ? [...desk.studio.yesFilter] : [...DEFAULT_YES_FILTER],
   };
 }
-export function readMyDay(db: Database, desk: DeskOptions, now: number, studio?: StudioProjection): MyDayView {
+export function readMyDay(db: Database, desk: DeskOptions, now: number, studio?: StudioProjection, projection?: BalanceDayProjection): MyDayView {
   return db.transaction(() => {
     const meta = loadMeta(db);
-    return viewOf(loadMyDayState(db, desk, meta), meta, desk, localDay(now), studio);
+    return viewOf(loadMyDayState(db, desk, meta), meta, desk, localDay(now), studio, projection);
   }).deferred();
 }
 export function movedKeys(db: Database): Set<string> {

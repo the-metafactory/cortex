@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BoundaryErrorSchema, ObjectReferenceSchema, SchemaRefSchema } from "../types";
+import { BoundaryErrorSchema, ObjectReferenceSchema, SchemaRefSchema, type ObjectReference } from "../types";
 import { canonicalSchema } from "../schema-validation";
 
 const id = z.string().refine(value => value.trim().length > 0);
@@ -106,3 +106,5 @@ export type OperationLookup = z.infer<typeof OperationLookupSchema>;
 export type ObjectReadback = z.infer<typeof ObjectReadbackSchema>;
 export type CancelRequest = z.infer<typeof CancelRequestSchema>;
 export type BatchReceipt = z.infer<typeof BatchReceiptSchema>;
+export interface LookupRequest { lifecycleVersion: "1.0.0"; operationId: string; ownerRequestId: string }
+export interface ReadbackRequest { lifecycleVersion: "1.0.0"; ref: ObjectReference }

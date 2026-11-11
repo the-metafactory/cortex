@@ -105,6 +105,12 @@ through the stable path, and executes only the approved digest once.
 
 Run the vertical demonstration with `bun scripts/probe-desk-drafting.ts`.
 
+Mission Control accepts an opt-in `graphDrafts` setup containing the conversation host, drafting dependencies and authenticated graph sessions. `startMissionControl` forwards it to `startServer`, which installs `workGraphNodeDraftingBinding`, the scoped graph destination resolver and the confirmation handoff under `/api/desk/drafts`. This composition does not activate a connection or writer; managed activation supplies those authorities separately. Destination projections and node reads are shared within one draft generation or confirmation batch; confirmation always starts a fresh batch. `bun scripts/probe-desk-graph-create.ts` exercises this HTTP entry against a temporary host store and synthetic graph owner.
+
+<!-- glossary-ignore: node -->
+
+`drafting/graph.ts` supplies the trusted discussion guidance, including problem, intended result, evidence, constraints and unknowns in the node description. The shared editor resolves relationship labels through the authorized reference query and requires explicit refresh after destination edits. Refresh revalidates preserved references canonically; unavailable or ambiguous references retain the confirmation block. Completed drafts reopen their policy-checked lifecycle receipt. Run `bun scripts/probe-desk-graph-drafting.ts [screenshot.png]` for the temporary-store browser probe; it captures prefilled and blocked-confirmation screenshots and asserts zero graph mutations. Its model and graph responses are synthetic; it does not demonstrate model quality or production writer activation.
+
 ## Adapter UI assets
 
 <!-- glossary-ignore: host, path, run, manifest, deployment, server -->
@@ -142,3 +148,14 @@ Matrix row A9 asks for a canary secret checked across logs, events, receipts, UI
 The leaking fixture plays a careless adapter: it reads the credential value the lifecycle rig's secret store holds and pushes it through the code that renders that sink. It logs an `Error`, stores a `desk.adapter.query_refused` event, returns an owner receipt, returns a query payload, or registers draft guidance instructions that reach the model request. That proves the scan can fail. Nothing is scanned on a real stack and no provider effect occurs.
 
 Run `bun scripts/probe-desk-adapter-canary.ts` for the clean stack: it exits 0 only when the fixture store was written and holds the canary, all five sinks were captured and none holds the value. Run `bun scripts/probe-desk-adapter-canary.ts --leak log` for the leaking fixture: it exits nonzero and names the sink.
+
+## Live local Balance reads
+
+Mission Control constructs the bundled Balance setup service and query runner when a durable conversation host and Desk stack scope are available. Principal-only connection settings offer the local Balance connection with no credential slots or editable account fields. The Cortex runtime fixes the stack scope, qualifies selected areas with the generated connection ID, and publishes read authority only after Enable. Disable revokes that authority immediately. Only `balance.destinations`, `balance.task.read` and `balance.task.observation` are offered; the existing Balance reads continue to serve independently.
+
+<!-- glossary-ignore: owner, run -->
+The same enabled connection owns the My Day projection. Every My Day read first applies the Balance sync step, then polls the connection's current tasks into the Cortex runtime's durable observation projection and renders the saved outline from it. A failed poll keeps the last observed values with a stale marker and an explicit Refresh, and a task the projection has not observed still renders from the saved outline. Disabling the connection returns My Day to the store-only read. The observation declares no attention mapping, so it adds no ranked `adapter` item to Day or Catch-up, and My Day commands still go through `changeMyDay`.
+
+`POST /api/desk/balance/read` accepts `conversationId`, `connectionId`, `capabilityId`, `input` and `destinations`. The caller must pass the existing principal and origin checks, own the conversation, and select enabled connection destinations. Use `{}` as the destinations input, or `{ "ref": <connection-qualified task reference> }` for task reads. Responses contain the runner's `result` and released `pages`; each page preserves object references, schema references, destinations, evidence and positions, with annotation pointers rewritten to the released object values. Reads use local web release policy and never grant model or write access. Each browser call uses one bounded runner invocation, up to 60 objects across three pages. Larger results report partial coverage and require an explicit restart; no continuation survives the request's authentication context.
+
+Run `bun scripts/probe-desk-balance-connection.ts` with a Playwright Chromium installation available through `PLAYWRIGHT_BROWSERS_PATH`. The probe uses temporary host state and a local Balance, enables and disables the connection through the actual settings component, and compares both browser reads with the Balance store.

@@ -86,7 +86,7 @@ export function balanceReadDeclaration(): AdapterDeclaration {
 }
 
 export const balanceReadBindings: readonly ReadBinding[] = [
-  { version: "1.0.0", adapterId: ADAPTER_ID, capabilityId: "balance.destinations", mode: "destinations", objectType: "area", inputSchemaRef: DESTINATIONS_INPUT_REF, outputSchemaRef: DESTINATIONS_OUTPUT_REF, display: { title: "/label" } },
+  { version: "1.0.0", adapterId: ADAPTER_ID, capabilityId: "balance.destinations", mode: "destinations", objectType: "area", inputSchemaRef: DESTINATIONS_INPUT_REF, outputSchemaRef: DESTINATIONS_OUTPUT_REF, display: { title: "/label" }, destinationType: "area", query: { objectsPointer: "/items", ordering: "provider", stableSnapshot: true, limits: { items: MAX_PAGE_ITEMS } } },
   {
     version: "1.0.0", adapterId: ADAPTER_ID, capabilityId: "balance.task.query", mode: "query", objectType: "task", inputSchemaRef: TASK_QUERY_INPUT_REF, outputSchemaRef: TASK_QUERY_OUTPUT_REF, destinationType: "area",
     display: { title: "/title", summary: "/summary", status: "/status", due: "/dueDate", area: "/area" },
@@ -221,6 +221,16 @@ function taskValue(task: LocatedTask, connectionId: string): Json {
   };
 }
 
+export interface BalanceTaskObject { readonly ref: ObjectReference; readonly destination: ObjectReference; readonly value: Json }
+
+export function balanceTaskObjects(state: AppState, areas: readonly DestinationArea[], connectionId: string, limit: number): BalanceTaskObject[] {
+  return locateTasks(state, areas).slice(0, limit).map(task => ({
+    ref: reference(connectionId, "task", task.node.id),
+    destination: reference(connectionId, "area", task.area.id),
+    value: taskValue(task, connectionId),
+  }));
+}
+
 function taskEntry(task: LocatedTask, connectionId: string, value: Json): PageEntry {
   return {
     ref: reference(connectionId, "task", task.node.id),
@@ -264,12 +274,14 @@ function taskReadPage(source: BalanceReadSource, input: unknown, destinations: r
   return buildPage([taskEntry(task, source.connectionId, value)], snapshotId("task.read", { connectionId: source.connectionId, task: task.node.id, value }), observedAt(source));
 }
 
-function destinationsPage(source: BalanceReadSource): QueryPage {
+function destinationsPage(source: BalanceReadSource, request?: QueryFetchRequest): QueryPage {
   const state = source.state();
   const entries: PageEntry[] = state === null ? [] : balanceDestinations(state.outline, source.areas()).map(destination => destination.project
     ? { ref: reference(source.connectionId, "project", destination.id), schemaRef: PROJECT_SCHEMA_REF, destination: reference(source.connectionId, "area", destination.area), evidenceId: `balance.destination.project.${destination.id}`, value: { label: destination.label } }
     : { ref: reference(source.connectionId, "area", destination.area), schemaRef: AREA_SCHEMA_REF, destination: reference(source.connectionId, "area", destination.area), evidenceId: `balance.destination.area.${destination.area}`, value: { label: destination.label } });
-  return buildPage(entries, snapshotId("destinations", { connectionId: source.connectionId, destinations: entries.map(entry => entry.ref) }), observedAt(source));
+  const scoped = request ? entries.filter(entry => request.destinations.some(destination => sameReference(destination, entry.destination))) : entries;
+  const page = request ? boundedPage(scoped, { limit: MAX_PAGE_ITEMS, offset: 0 }, request.cursor, request.limit) : { slice: scoped };
+  return buildPage(page.slice, snapshotId("destinations", { connectionId: source.connectionId, destinations: scoped.map(entry => ({ ref: entry.ref, value: entry.value })) }), observedAt(source), page.next);
 }
 
 function projectEntries(source: BalanceReadSource): PageEntry[] {
@@ -301,7 +313,7 @@ function projectReadPage(source: BalanceReadSource, input: unknown, destinations
 
 export function createBalanceReadAdapter(source: BalanceReadSource): BalanceReadAdapter {
   const query = (request: QueryFetchRequest): Promise<QueryPage> => {
-    if (request.capabilityId === "balance.destinations") return Promise.resolve(destinationsPage(source));
+    if (request.capabilityId === "balance.destinations") return Promise.resolve(destinationsPage(source, request));
     if (request.capabilityId === "balance.task.query") return Promise.resolve(taskQueryPage(source, request.input, request.destinations, request.cursor, request.limit));
     if (request.capabilityId === "balance.task.read") return Promise.resolve(taskReadPage(source, request.input, request.destinations, request.limit));
     if (request.capabilityId === "balance.project.query") return Promise.resolve(projectsPage(source, request.input, request.destinations, request.cursor, request.limit));

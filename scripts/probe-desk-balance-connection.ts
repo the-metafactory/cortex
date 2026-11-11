@@ -1,0 +1,75 @@
+import assert from "node:assert/strict";
+import { chromium } from "playwright";
+import { balanceConnectionStack, BALANCE_PRINCIPAL } from "../src/surface/mc/__tests__/fixtures/balance-connection";
+import type { ConnectionView } from "../src/conversations/connection-setup";
+import type { BalanceBrowserRead } from "../src/surface/mc/desk/balance-connection";
+import type { QueryResult } from "../src/conversations/domain-adapters/reads/query-types";
+import { loadBalanceState } from "../src/surface/mc/desk/balance-store";
+import { balanceDestinations } from "../src/surface/mc/desk/balance-destinations";
+import { findNode } from "../src/balance";
+import { runWithTemporaryHome } from "./probe-temp-home";
+
+async function probe() {
+  const stack = await balanceConnectionStack();
+  let browser;
+  try {
+    const bundle = await Bun.build({ entrypoints: [new URL("./desk-balance-connection/browser.tsx", import.meta.url).pathname], target: "browser" });
+    assert.ok(bundle.success && bundle.outputs[0], "Settings probe bundle builds.");
+    const script = await bundle.outputs[0].text();
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    await page.route("**/probe.js", route => route.fulfill({ contentType: "text/javascript", body: script }));
+    await page.goto(`${stack.url}/health`);
+    await page.setContent(`<html><body><div id="root"></div><script type="module" src="${stack.url}/probe.js"></script></body></html>`);
+    await page.getByLabel("Read: List destinations", { exact: true }).check();
+    await page.getByLabel("Read: Read tasks", { exact: true }).check();
+    await page.getByLabel("Read from: Lab", { exact: true }).check();
+    assert.equal(await page.locator('input[type="password"]').count(), 0);
+    await page.getByRole("button", { name: "Save setup", exact: true }).click();
+    await page.getByRole("button", { name: "Enable", exact: true }).click();
+    await page.getByRole("button", { name: "Disable", exact: true }).waitFor();
+    const connections = await page.evaluate(async () => await (await fetch("/api/desk/connections")).json()) as { connections: ConnectionView[] };
+    const connection = connections.connections[0];
+    assert.ok(connection);
+    assert.equal(connection.state, "enabled");
+    assert.deepEqual(connection.slots, []);
+    console.log("settings: Balance enabled from the principal UI without credentials; live connections route lists it");
+    const conversation = await stack.host.create({ title: "Balance connection probe", policy: "local", links: [], origin: { kind: "web" } }, BALANCE_PRINCIPAL);
+    const request: BalanceBrowserRead = { conversationId: conversation.id, connectionId: connection.connectionId, capabilityId: "balance.destinations", input: {}, destinations: connection.readDestinations };
+    const read = (body: BalanceBrowserRead) => page.evaluate(async serialized => {
+      const response = await fetch("/api/desk/balance/read", { method: "POST", headers: { "content-type": "application/json" }, body: serialized });
+      return { status: response.status, body: await response.json() };
+    }, JSON.stringify(body)) as Promise<{ status: number; body: { result: QueryResult; pages: { objects: { ref: { canonicalId: string }; value: Record<string, unknown>; evidence: { evidenceId: string }; destination: unknown }[] }[] } }>;
+    const state = loadBalanceState(stack.db);
+    assert.ok(state);
+    const destinations = await read(request);
+    assert.equal(destinations.status, 200);
+    assert.equal(destinations.body.result.status, "ok");
+    const expected = balanceDestinations(state.outline, stack.desk.areas).filter(item => item.area === "area-example");
+    const objects = destinations.body.pages.flatMap(page => page.objects);
+    assert.deepEqual(objects.map(item => item.ref.canonicalId), expected.map(item => item.project ? item.id : item.area));
+    assert.deepEqual(objects.map(item => item.value.label), expected.map(item => item.label));
+    assert.ok(objects.every(item => item.evidence.evidenceId.startsWith("balance.destination.")));
+    console.log("browser balance.destinations: canonical identities, labels and annotations match local Balance");
+    const task = await read({ ...request, capabilityId: "balance.task.read", input: { ref: { adapterId: "balance", connectionId: connection.connectionId, objectType: "task", canonicalId: "task-wing" } } });
+    assert.equal(task.status, 200);
+    assert.equal(task.body.result.status, "ok");
+    const saved = findNode(state.outline, "task-wing");
+    const value = task.body.pages[0]?.objects[0];
+    assert.ok(saved && value);
+    assert.equal(value.ref.canonicalId, saved.id);
+    assert.equal(value.value.title, saved.title);
+    assert.equal(value.value.dueDate, saved.dueDate);
+    assert.equal(value.value.status, saved.done ? "done" : "open");
+    assert.equal(value.evidence.evidenceId, `balance.task.${saved.id}`);
+    assert.deepEqual(value.destination, connection.readDestinations[0]);
+    assert.deepEqual(loadBalanceState(stack.db), state);
+    console.log("browser balance.task.read: saved task values and adapter evidence match local Balance; no owner writes");
+    await page.getByRole("button", { name: "Disable", exact: true }).click();
+    await page.getByRole("button", { name: "Enable", exact: true }).waitFor();
+    assert.equal((await read(request)).status, 403);
+    assert.equal((await stack.http("/api/desk/my-day")).status, 200);
+    console.log("disabled: browser adapter read refuses; existing Balance route still answers");
+  } finally { await browser?.close(); await stack.close(); }
+}
+await runWithTemporaryHome(import.meta.path, probe);

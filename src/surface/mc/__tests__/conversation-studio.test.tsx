@@ -287,7 +287,9 @@ describe("workspace A over the authenticated conversation API", () => {
     expect(html).toContain("Ivy: First thought");
     expect(html).toContain("Use a lighter paper wing.");
     expect(html).toContain("Still typing");
-    expect(html).toContain("Queued · waits for Ivy&#x27;s current turn");
+    expect(html).not.toContain("one shared order for web and Discord");
+    expect(html).toContain('class="dcv-waiting" role="status" aria-label="Ivy is working"');
+    expect(html).toContain("Queue message");
     expect(html).toContain("Use this now");
     expect(html).toContain("Save to the Studio");
     resolve(undefined);

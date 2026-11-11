@@ -1,0 +1,9 @@
+.desk-make { grid-area: make; display: grid; gap: 12px; padding: 16px; border: 1px solid #d9dfe5; border-radius: 12px; }
+.desk-make label, .desk-draft, .desk-draft-field { display: grid; gap: 8px; }
+.desk-make input, .desk-make textarea, .desk-make select { font: inherit; max-width: 100%; padding: 8px; }
+.desk-make textarea { min-height: 90px; }
+.desk-draft-field { border: 1px solid #d9dfe5; border-radius: 8px; padding: 12px; min-width: 0; }
+.desk-draft-field span { font-size: .85rem; color: #576773; }
+.desk-draft-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.desk-draft aside { background: #f4f6f8; padding: 12px; overflow-wrap: anywhere; }
+.desk-draft [role="alert"] { color: #9a2525; }

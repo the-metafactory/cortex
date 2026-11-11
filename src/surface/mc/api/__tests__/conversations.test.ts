@@ -6,6 +6,7 @@ import { openConversationHost, type HostStatus } from "../../../../conversations
 import { DiscordConversations } from "../../../../conversations/discord";
 import { BOT, FakeThreads } from "../../../../conversations/__tests__/fixtures/discord-threads";
 import { answering, scratchDirs } from "../../../../conversations/__tests__/fixtures/scratch";
+import { ConversationResponseUpdateSchema, type ConversationResponseUpdate } from "../../../../conversations/types";
 import { handleConversations, isStackPrincipal } from "../conversations";
 import { buildAllowedHostnames, type MutationGuardContext } from "../mutation-guard";
 import { initDatabase } from "../../db/init";
@@ -41,6 +42,14 @@ describe("conversation API gates", () => {
     const { conversation } = await created.json() as { conversation: { id: string } };
     expect((await call(status, "GET", `/api/conversations/${conversation.id}`)).status).toBe(200);
     expect((await call(status, "GET", `/api/conversations/${conversation.id}`, undefined, OTHER)).status).toBe(403);
+    expect((await call(status, "GET", `/api/conversations/${conversation.id}/stream`, undefined, OTHER)).status).toBe(403);
+    const streamed = await call(status, "GET", `/api/conversations/${conversation.id}/stream`);
+    expect(streamed.status).toBe(200);
+    expect(streamed.headers.get("content-type")).toBe("text/event-stream");
+    const reader = streamed.body?.getReader();
+    const initial = new TextDecoder().decode((await reader?.read())?.value);
+    expect(ConversationResponseUpdateSchema.parse(JSON.parse(initial.split("data: ")[1] ?? "{}"))).toMatchObject({ text: null, working: false, generation: null, cursor: null });
+    await reader?.cancel();
     expect((await call(status, "GET", `/api/conversations/${conversation.id}/entries`, undefined, OTHER)).status).toBe(403);
     expect((await call(status, "GET", `/api/conversations/${conversation.id}/entries/1`, undefined, OTHER)).status).toBe(403);
     expect((await call(status, "POST", `/api/conversations/${conversation.id}/inputs`, say("in-1", "x"), OTHER)).status).toBe(403);
@@ -57,6 +66,51 @@ describe("conversation API gates", () => {
     expect(unavailable.status).toBe(503);
     expect(await unavailable.json()).toEqual({ ok: false, error: "Conversations unavailable: store held by 42/ai.meta-factory.cortex.default" });
     expect((await call(null, "GET", "/api/conversations")).status).toBe(503);
+  });
+
+  test("the response stream sends an initial snapshot then only appended text and clears on completion", async () => {
+    const next = Promise.withResolvers<undefined>();
+    const finish = Promise.withResolvers<undefined>();
+    const status = await openConversationHost({ dir: await scratch(), stack: "api", label: LABEL, expectedLabel: LABEL, lanes: { cloud: { provider: "test", model: "m" } }, turns: async request => {
+      await request.text?.("Hello");
+      await next.promise;
+      await request.text?.(" world");
+      await finish.promise;
+      return { text: "Hello world", session: request.session, resumed: false };
+    } });
+    statuses.push(status);
+    if (status.state !== "ready") throw new Error(status.reason);
+    const conversation = await status.host.create({ title: "Synthetic streaming", origin: { kind: "web" }, links: [], policy: "cloud" }, "local-principal@loopback");
+    const response = await call(status, "GET", `/api/conversations/${conversation.id}/stream`);
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("The response stream is missing.");
+    let text: string | null = null;
+    const frame = async (): Promise<ConversationResponseUpdate> => {
+      const read = await reader.read();
+      if (read.done) throw new Error("The response stream ended early.");
+      const raw = new TextDecoder().decode(read.value);
+      const update = ConversationResponseUpdateSchema.parse(JSON.parse(raw.split("data: ")[1] ?? "{}"));
+      if (update.text !== undefined) text = update.text;
+      if (update.append !== undefined) text = (text ?? "") + update.append;
+      return update;
+    };
+    const until = async (matches: (update: ConversationResponseUpdate) => boolean): Promise<ConversationResponseUpdate> => {
+      for (let count = 0; count < 100; count++) { const update = await frame(); if (matches(update)) return update; }
+      throw new Error("Expected stream update was not received.");
+    };
+    try {
+      expect(await frame()).toMatchObject({ text: null, working: false });
+      await status.host.submit(conversation.id, { inputId: "stream-api", text: "hello", transport: "web", mode: "queue" });
+      expect(await until(() => text === "Hello")).toMatchObject({ working: true });
+      next.resolve(undefined);
+      expect(await until(update => update.append === " world")).toMatchObject({ append: " world", working: true });
+      finish.resolve(undefined);
+      const completed = await until(update => update.text === null && Boolean(update.entries?.some(entry => entry.role === "assistant")));
+      expect(completed.entries).toContainEqual(expect.objectContaining({ role: "assistant", text: "Hello world" }));
+      expect(text).toBeNull();
+      await status.host.waitForIdle(conversation.id);
+      expect((await status.host.input(conversation.id, "stream-api")).answer).toBe("Hello world");
+    } finally { next.resolve(undefined); finish.resolve(undefined); await reader.cancel(); }
   });
 
   test("an entry citation reads the exact retained record and cannot read an entry from another conversation", async () => {

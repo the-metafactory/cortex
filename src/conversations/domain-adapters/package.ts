@@ -11,6 +11,8 @@ import { containedRealPath, defaultArcListRunner, readArcPackageInventory, sha25
 import type { ArcPackage } from "../../common/types/plugin-manifest";
 import type { DeskActionConnector, DeskAdapterBindings, DeskAdapterConnection, DeskAdapterDefinition, DeskAdapterHost, DeskConnectorFactory } from "../../desk-sdk";
 import { DESK_ADAPTER_SDK_VERSION } from "../../desk-sdk/version";
+import { adaptDeskBackend, type DeskBackendConnector } from "./package-backend";
+import type { TrustedConnector } from "../authority";
 import { DraftingBindingSchema, DraftingBindings, DRAFTING_BINDING_VERSION, type DraftingBinding } from "./drafting-binding";
 import { DESK_ADAPTER_GENERATION_FORMAT, DeskAdapterGenerationSchema, DeskGenerationFencedError, DeskGenerationStore, DESK_UI_PROTOCOL_VERSION, FENCE_MESSAGE, generationId, type DeskAdapterGeneration, type DeskAdapterGenerationRecord, type DeskGenerationAdmission } from "./package-generation";
 import { exactVersion, hex64, identifier } from "./package-primitives";
@@ -18,7 +20,7 @@ import { verifyReadBinding } from "./reads/bindings";
 import { READ_BINDING_VERSION, ReadBindingSchema, type ReadBinding } from "./reads/types";
 import { DOMAIN_ADAPTER_CONTRACT_VERSION, DomainAdapterRegistry } from "./registry";
 import { failure, SchemaBundle, success } from "./schema-validation";
-import { AdapterDeclarationSchema, SchemaRefSchema, type AdapterBindings, type AdapterDeclaration, type BoundaryError, type Result } from "./types";
+import { AdapterDeclarationSchema, SchemaRefSchema, type AdapterBindings, type AdapterDeclaration, type BoundaryError, type Handler, type Result } from "./types";
 
 export const DESK_ADAPTER_PACKAGE_FORMAT = "desk-adapter-package/1";
 export const DESK_ADAPTER_PACKAGE_MANIFEST = "desk-adapter.json";
@@ -28,6 +30,7 @@ export const DESK_ADAPTER_MAX_MANIFEST_BYTES = 512 * 1024;
 export const DESK_ADAPTER_MAX_FILES = 256;
 export const DESK_ADAPTER_MAX_FILE_BYTES = 8 * 1024 * 1024;
 export const DESK_ADAPTER_MEDIA_TYPES = ["text/html", "text/javascript", "text/css", "image/png", "image/jpeg", "image/svg+xml", "image/webp", "font/woff", "font/woff2"] as const;
+export const DESK_UI_VIEWS = ["result", "editor"] as const;
 export const DESK_ADAPTER_BUILTIN_IMPORTS: ReadonlySet<string> = new Set(["node:crypto", "node:buffer", "node:util", "node:url", "node:zlib", "node:stream", "node:events", "node:string_decoder", "node:timers", "node:net", "node:tls"]);
 
 const sdkRange = z.string().refine(value => validRange(value) !== null);
@@ -45,7 +48,7 @@ const authMethod = z.discriminatedUnion("kind", [
 ]);
 const mediaType = z.enum(DESK_ADAPTER_MEDIA_TYPES);
 const uiFile = z.object({ path: relativePath, sha256: hex64, mediaType }).strict();
-const uiView = z.object({ objectType: identifier, view: z.literal("result") }).strict();
+const uiView = z.object({ objectType: identifier, view: z.enum(DESK_UI_VIEWS) }).strict();
 export const DeskAdapterSetupSchema = z.object({
   version: z.literal(DESK_ADAPTER_SETUP_VERSION),
   schemas: z.array(setupSchema),
@@ -195,6 +198,10 @@ const emptyState = (): LoaderState => {
   const registry = new DomainAdapterRegistry();
   return { registry, drafting: new DraftingBindings(registry), reads: new Map(), published: new Map(), availability: new Map(), diagnostics: new Map() };
 };
+export interface DeskTrustedConnectorOptions {
+  authorizeConnection: TrustedConnector["authorizeConnection"];
+  actionCapabilityId?: string;
+}
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const readKey = (binding: ReadBinding): string => JSON.stringify([binding.adapterId, binding.capabilityId]);
 const unavailable = (code: string, message: string): DeskPackageCandidateState => ({ state: "unavailable", code, message });
@@ -207,7 +214,7 @@ const fileDigest = async (path: string): Promise<string | null> => {
   }
 };
 const registryBindings = (bindings: DeskAdapterBindings): AdapterBindings => ({
-  handlers: Object.fromEntries(Object.entries(bindings.handlers)),
+  handlers: Object.fromEntries(Object.entries(bindings.handlers).map(([id, handler]) => [id, handler as Handler])),
   observations: Object.fromEntries(Object.entries(bindings.observations)),
 });
 const versions = (manifest: DeskAdapterPackage): { domainContractVersion: string; uiProtocolVersion?: string } => ({
@@ -892,6 +899,10 @@ export class DeskPackageLoader {
     return store.admit(adapterId, required);
   }
 
+  registry(): DomainAdapterRegistry {
+    return this.state.registry;
+  }
+
   capability(capabilityId: string) {
     const found = this.state.registry.capability(capabilityId);
     return found.support === "declared" ? this.state.registry.capability(capabilityId, this.admission(found.adapterId)) : found;
@@ -946,6 +957,43 @@ export class DeskPackageLoader {
   }
 
   connector(adapterId: string, capabilityId: string, connection: DeskAdapterConnection): Result<DeskActionConnector> {
+    const created = this.createConnector(adapterId, capabilityId, connection);
+    if (!created.ok) return created;
+    const { kind, adapterId: owner, connectionId, capabilityId: capability } = created.value;
+    return success({ kind, adapterId: owner, connectionId, capabilityId: capability });
+  }
+
+  trustedConnector(adapterId: string, connection: DeskAdapterConnection, options: DeskTrustedConnectorOptions): Result<DeskBackendConnector> {
+    const availability = this.admission(adapterId);
+    if (availability.state !== "available") return failure(availability.code, availability.message);
+    const adapter = this.state.published.get(adapterId);
+    if (!adapter) return failure("adapter_unavailable", "No published generation exists for this adapter.");
+    if (connection.adapterId !== adapterId) return failure("connector_mismatch", "The connection does not belong to this adapter.");
+    const registered = [...adapter.connectors.keys()];
+    const actionCapabilityId = options.actionCapabilityId ?? (registered.length === 1 ? registered[0] : undefined);
+    if (options.actionCapabilityId === undefined && registered.length > 1) return failure("action_capability_required", "This adapter registers several action connectors; name the one this connection serves.");
+    let action: DeskActionConnector | undefined;
+    if (actionCapabilityId !== undefined) {
+      const created = this.createConnector(adapterId, actionCapabilityId, connection);
+      if (!created.ok) return created;
+      action = created.value;
+    }
+    return success(adaptDeskBackend({
+      adapterId,
+      connection,
+      declaration: adapter.candidate.manifest.declaration,
+      bindings: adapter.definition.bindings,
+      action,
+      authorizeConnection: options.authorizeConnection,
+      gate: () => {
+        const current = this.admission(adapterId);
+        if (current.state !== "available") return { code: current.code, message: current.message };
+        return this.state.published.get(adapterId) === adapter ? null : { code: "generation_superseded", message: "This connector belongs to a generation that is no longer published; build a new one." };
+      },
+    }));
+  }
+
+  private createConnector(adapterId: string, capabilityId: string, connection: DeskAdapterConnection): Result<DeskActionConnector> {
     const availability = this.admission(adapterId);
     if (availability.state !== "available") return failure(availability.code, availability.message);
     const adapter = this.state.published.get(adapterId);
@@ -954,13 +1002,13 @@ export class DeskPackageLoader {
     if (connection.adapterId !== adapterId) return failure("connector_mismatch", "The connection does not belong to this adapter.");
     let connector: unknown;
     try {
-      connector = factory(connection);
+      connector = factory({ adapterId: connection.adapterId, connectionId: connection.connectionId });
     } catch (error) {
       return failure("module_throwing", `The connector factory threw for this connection: ${errorText(error)}`);
     }
     if (!isRecord(connector) || connector.kind !== "action" || connector.adapterId !== adapterId || connector.connectionId !== connection.connectionId || connector.capabilityId !== capabilityId) {
       return failure("connector_mismatch", "The connector does not match the adapter, connection and capability identity.");
     }
-    return success(structuredClone(connector) as unknown as DeskActionConnector);
+    return success(connector as unknown as DeskActionConnector);
   }
 }

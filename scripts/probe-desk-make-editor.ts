@@ -1,0 +1,90 @@
+import assert from "node:assert/strict";
+import { join } from "node:path";
+import { openDraftEditorRig, shelfRef } from "../src/surface/mc/__tests__/fixtures/draft-editor";
+import { withDraftBrowserProbe } from "./desk-make-editor/server";
+
+const rig = await openDraftEditorRig();
+await withDraftBrowserProbe(rig, async ({ page, calls, errors }) => {
+  await page.getByRole("button", { name: "Make", exact: true }).click();
+  const editor = page.getByRole("article", { name: "Draft editor" });
+  await page.getByLabel("Headline (required)", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Headline (required)", { exact: true }).inputValue(), "A synthetic draft");
+  const shelf = editor.locator("fieldset", { has: page.locator("legend", { hasText: "shelf" }) });
+  await shelf.getByText("Suggested", { exact: true }).waitFor();
+  assert.equal(calls.filter(call => call.includes("/details")).length, 0);
+  await shelf.getByRole("button", { name: "Sources for shelf", exact: true }).click();
+  await shelf.getByText("turn: turn-1, revision 1").waitFor();
+  assert.equal(calls.filter(call => call.includes("/details")).length, 1);
+  console.log("Make: unfamiliar schema fields, suggested destination and on-demand source details rendered through host.drafts.");
+
+  const revision = async () => Number(await editor.getAttribute("data-revision"));
+  const changed = async (before: number) => { await page.waitForFunction(value => Number(document.querySelector('[aria-label="Draft editor"]')?.getAttribute("data-revision")) > value, before); };
+  await page.getByLabel("Notes", { exact: true }).fill("Unsaved sibling notes");
+  await page.getByLabel("Headline (required)", { exact: true }).fill("Principal headline");
+  let before = await revision();
+  await page.getByRole("button", { name: "Save Headline", exact: true }).click();
+  await changed(before);
+  assert.equal(await page.getByLabel("Notes", { exact: true }).inputValue(), "Unsaved sibling notes");
+  await page.getByLabel("Headline (required)", { exact: true }).fill("Unsaved sibling headline");
+  before = await revision();
+  await page.getByRole("button", { name: "Clear Notes", exact: true }).click();
+  await changed(before);
+  await page.getByText("Edited by you · Cleared").waitFor();
+  assert.equal(await page.getByLabel("Headline (required)", { exact: true }).inputValue(), "Unsaved sibling headline");
+  assert.equal(await page.getByLabel("Notes", { exact: true }).inputValue(), "");
+  for (const action of ["Clear Notes", "Set Notes to null", "Set Notes to null", "Clear Notes"]) {
+    await page.getByLabel("Notes", { exact: true }).fill("Unsaved notes to discard");
+    before = await revision();
+    await page.getByRole("button", { name: action, exact: true }).click();
+    await changed(before);
+    assert.equal(await page.getByLabel("Notes", { exact: true }).inputValue(), "");
+    assert.equal(await page.getByLabel("Headline (required)", { exact: true }).inputValue(), "Unsaved sibling headline");
+  }
+  for (const action of ["Clear Notes", "Set Notes to null"]) {
+    await page.getByLabel("Notes", { exact: true }).fill("Keep notes when saving fails");
+    await page.route("**/api/desk/drafts/*", route => route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({ error: "Synthetic save conflict" }) }), { times: 1 });
+    await page.getByRole("button", { name: action, exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "Synthetic save conflict" }).waitFor();
+    assert.equal(await page.getByLabel("Notes", { exact: true }).inputValue(), "Keep notes when saving fails");
+  }
+  before = await revision();
+  await page.getByRole("button", { name: "Clear Notes", exact: true }).click();
+  await changed(before);
+  assert.equal(await page.getByLabel("Notes", { exact: true }).inputValue(), "");
+  console.log("Repeated Clear and null discard unsaved text; sibling edits and failed saves preserve it.");
+  rig.state.head = "2";
+  rig.state.destinations.set("Specimen shelf", { kind: "unique", ref: shelfRef("shelf-b") });
+  before = await revision();
+  await page.getByRole("button", { name: "Refresh draft", exact: true }).click();
+  await changed(before);
+  assert.equal(await page.getByLabel("Headline (required)", { exact: true }).inputValue(), "Unsaved sibling headline");
+  assert.equal(await page.getByLabel("Notes", { exact: true }).inputValue(), "");
+  const changes = page.getByRole("complementary", { name: "Destination changes" });
+  assert.match(await shelf.getByLabel("shelf (required)", { exact: true }).inputValue(), /shelf-b/);
+  await changes.waitFor();
+  assert.match(await changes.innerText(), /shelf-a[\s\S]*shelf-b/);
+  assert.equal(await page.getByRole("button", { name: "Confirm draft" }).isDisabled(), true);
+  await page.getByLabel("I reviewed the destination changes").check();
+  await page.screenshot({ path: process.argv[2] ?? join(rig.root, "make-editor.png"), fullPage: true });
+  console.log("Edit, clear and refresh: principal fields survive; changed suggested destination shows old and new values before confirmation.");
+
+  await rig.reopen();
+  await page.reload();
+  await page.getByRole("button", { name: "Make", exact: true }).click();
+  await page.getByLabel("Headline (required)", { exact: true }).waitFor();
+  assert.equal(await page.getByLabel("Headline (required)", { exact: true }).inputValue(), "Principal headline");
+  assert.equal(await page.getByLabel("Notes", { exact: true }).inputValue(), "");
+  const generations = rig.state.requests.length;
+  const reopening = page.waitForResponse(response => response.request().method() === "GET" && /\/api\/desk\/drafts\/[^/]+$/.test(new URL(response.url()).pathname));
+  await page.getByRole("button", { name: "Reopen draft", exact: true }).click();
+  await (await reopening).finished();
+  rig.state.localOnly.add("turn-1");
+  rig.editor.audience = "cloud";
+  await page.getByRole("button", { name: "Confirm draft" }).click();
+  await page.getByText("Policy withholds draft fields in this context. Open the draft in a permitted context before confirming.").waitFor();
+  assert.equal(rig.state.requests.length, generations);
+  assert.equal(rig.owner.admissions, 0);
+  assert.equal(rig.owner.mutations, 0);
+  assert.deepEqual(errors, []);
+  console.log("Reopen after host restart preserves edits and clears without generation; blocked confirmation explains policy. Owner mutation calls: 0.");
+});

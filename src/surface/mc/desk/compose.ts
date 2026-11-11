@@ -1,3 +1,4 @@
+import { adapterItems, type AdapterAttention } from "./adapter-items";
 import { buildWeeklyMirror, mirrorWeek, type MirrorSchedule } from "./mirror";
 import { readMailMirror, type MailMirrorConfig, type MailMirrorUnsubscribe } from "./mail-mirror";
 import { loadBalanceState } from "./balance-store";
@@ -29,6 +30,7 @@ import { DEFAULT_WAITING, recordWaitingOnce, waitingItems, type WaitingClassifie
 import { bundledKeys, sweepView, type SweepMailView } from "./mail-sweep";
 import { backSnoozes, snoozedIds, snoozeFacts, wakeSnoozes, withSnoozeBack } from "./mail-snooze";
 import { handoffItems, handoffsByMail, openHandoffs, withHandoff, type HandoffLanes, type MailHandoffWorker } from "./mail-handoff";
+import type { BalanceDayAccess } from "./balance-day";
 import type { PiSettings } from "../../../conversations/pi";
 import { digestTopics, digestView, listMailGroups, readDigestFlags, type DigestConfig, type DigestFlagger } from "./mail-digest";
 import { rangerItemKey, readRangerState, type RangerFetch, type RangerState } from "./sources/ranger";
@@ -57,6 +59,7 @@ import { routeOf, sourceBoundary } from "./source-boundary";
 
 export interface DeskRuntime {
   conversations?: () => boolean;
+  adapterDay?: BalanceDayAccess;
   waitingTasks?: Pick<WaitingTasks, "read">;
   routineCapabilities?: import("./routine-providers").RoutineCapabilities;
   routineRead?: RoutineReadLoop;
@@ -133,6 +136,8 @@ export interface DeskVigilSource {
 }
 
 export interface ComposeDeps {
+  adapterAttention?: AdapterAttention;
+  adapterDay?: BalanceDayAccess;
   conversations?: boolean;
   waitingTasks?: Pick<WaitingTasks, "read">;
   routineRead?: RoutineReadLoop;
@@ -171,6 +176,7 @@ export async function composeDesk(
   deps: ComposeDeps = {},
 ): Promise<DeskView> {
   const now = deps.now ?? Date.now();
+  const adapterRead = adapterItems(deps.adapterAttention, now);
   const routineRead = desk.routines ? deps.routineRead ? Promise.resolve(deps.routineRead.read(db, desk.routines, now)) : readRoutines(db, desk.routines, deps.runRoutine) : Promise.resolve(undefined);
   const sources: DeskView["sources"] = [];
 
@@ -183,7 +189,7 @@ export async function composeDesk(
     : Promise.resolve(null);
   const commandRead = (deps.sourceCache ?? new SourceCache()).read(desk.sources, now);
   const statusRead = deps.goalStatuses?.read(desk.goals?.somaBin ?? "", now) ?? Promise.resolve(new Map<string, string>());
-  const [vigilSubjects, rangerResult, readings, goalStatuses, routines] = await Promise.all([vigilRead, rangerRead, commandRead, statusRead, routineRead]);
+  const [vigilSubjects, rangerResult, readings, goalStatuses, routines, adapters] = await Promise.all([vigilRead, rangerRead, commandRead, statusRead, routineRead, adapterRead]);
 
   const subjects: VigilSubjectView[] = vigilSubjects ?? [];
   if (vigilSubjects) sources.push({ id: "vigil", ok: true });
@@ -230,7 +236,10 @@ export async function composeDesk(
   const activeCorrections = corrections.ok ? corrections.corrections : [];
   const classifier = desk.mailClassifier ? deps.mailClassifier : undefined;
   const localClassifier = desk.mailClassifier?.local ? deps.localMailClassifier : undefined;
-  const { myDay, studio } = await withSyncedBalance(db, desk, now, (source, studio) => ({ myDay: readMyDay(db, desk, now, source), studio }));
+  const { myDay, studio } = await withSyncedBalance(db, desk, now, async (source, studio) => {
+    const projection = deps.adapterDay ? await deps.adapterDay()?.projection() ?? null : null;
+    return { myDay: readMyDay(db, desk, now, source, projection ?? undefined), studio };
+  });
   const cloudAreas = new Set(desk.areas.filter((a) => a.policy === "cloud").map((a) => a.id));
   const boundary = sourceBoundary(desk);
   const cloudSources = new Set(readings.filter((r) => !boundary.has(r.id)).map((r) => r.id));
@@ -307,7 +316,8 @@ export async function composeDesk(
     const view = invitationView(m, calendarsOnly(availability, readings), desk.mailInvitations, answers.get(m.id));
     return view ? [[m.id, view]] : [];
   }));
-  const corrected = applyCorrections(markInterrupts([
+  sources.push(...adapters.sources);
+  const corrected = applyCorrections([...markInterrupts([
     ...withAutonomyNotes(ranked, done, now),
     ...mailItems({ now, mail: withoutAnsweredRead(mail, answers), yesFilter, events, vips: new Set(vips.map((v) => v.address)), unimportant: new Set(unimportant), trash: canMove || Boolean(desk.mailActions?.trash?.length), archive: canMove, spam: canMove, draft: Boolean(desk.mailActions?.draft?.length), ...(classified ? { classified } : {}), ...(desk.mailLinks ? { links: desk.mailLinks } : {}), onDesk: new Set([...todayCalendar, ...aheadCalendar].map((e) => e.key)), suspicion, report: Boolean(desk.mailReport), studio: Boolean(desk.studio), ivy: handoffReady(desk, handing), unsubscribe, invitations }).map((item) => withSnoozeBack(withHandoff(item, handoffOf.get(mailIdOf(item.key)), now), snoozeBack.get(mailIdOf(item.key)))),
     ...reminderItems(reminders, now),
@@ -316,7 +326,7 @@ export async function composeDesk(
     ...dmarcCards,
     ...waitingCards,
     ...handoffItems(handoffRows, new Set(mail.map((m) => m.id)), now),
-  ], rules, readDeliveries(db), now), activeCorrections);
+  ], rules, readDeliveries(db), now), ...adapters.items], activeCorrections);
   const sweeps = mailGroups?.sweeps ?? [];
   const bundled = bundledKeys(sweeps);
   const unbundled = corrected.filter((i) => !bundled.has(i.key));
