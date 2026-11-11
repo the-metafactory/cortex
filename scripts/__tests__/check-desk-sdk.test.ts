@@ -42,3 +42,24 @@ describe("deskSdkBumpMissing", () => {
     expect(deskSdkBumpMissing(BASE, head)).toBe(false);
   });
 });
+
+describe("conformance contract versioning", () => {
+  const conformance = 'export declare function runConformance(packageDir: string): Promise<ConformanceReport>;';
+
+  test("publishing the entry requires a Desk SDK bump", () => {
+    expect(deskSdkBumpMissing(BASE, BASE, undefined, conformance)).toBe(true);
+    expect(deskSdkBumpMissing(BASE, BASE.replace("1.0.0", "1.1.0"), undefined, conformance)).toBe(false);
+  });
+
+  test("a harness-only contract change requires a Desk SDK bump", () => {
+    const changed = conformance.replace("packageDir: string", "packageDir: string, failures: boolean");
+    expect(deskSdkBumpMissing(BASE, BASE, conformance, changed)).toBe(true);
+    expect(deskSdkBumpMissing(BASE, BASE.replace("1.0.0", "1.1.0"), conformance, changed)).toBe(false);
+  });
+
+  test("a report field change requires a Desk SDK bump", () => {
+    const report = conformance + '\nexport interface ConformanceReport { status: string; }';
+    expect(deskSdkBumpMissing(BASE, BASE, report, report.replace("status: string", "status: number"))).toBe(true);
+    expect(deskSdkBumpMissing(BASE, BASE, report, '/** Description. */\n' + report)).toBe(false);
+  });
+});

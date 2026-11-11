@@ -7,6 +7,7 @@ import { readPage as buildPage } from "../reads/page-primitives";
 import { schemaKey } from "../schema-validation";
 import { ObjectReferenceSchema, type AdapterBindings, type AdapterDeclaration, type ObjectReference, type SchemaRef } from "../types";
 import { adapterErrorSchema } from "../schema-primitives";
+import { BALANCE_TASK_CREATE_CAPABILITIES, BALANCE_TASK_CREATE_SCHEMAS, TASK_DRAFT_OBJECT_TYPE } from "./task-binding";
 import { BALANCE_ADAPTER_ID as ADAPTER_ID, nullableReferenceSchema, objectSchema, ref, referenceSchema } from "./schema";
 
 const MAX_PAGE_ITEMS = 20;
@@ -58,6 +59,7 @@ export function balanceReadDeclaration(): AdapterDeclaration {
     label: "Balance",
     contractRange: "^1.0.0",
     schemas: [
+      ...BALANCE_TASK_CREATE_SCHEMAS,
       { ...AREA_SCHEMA_REF, schema: AREA_VALUE_SCHEMA },
       { ...PROJECT_SCHEMA_REF, schema: PROJECT_VALUE_SCHEMA },
       { ...TASK_SCHEMA_REF, schema: TASK_VALUE_SCHEMA },
@@ -74,11 +76,13 @@ export function balanceReadDeclaration(): AdapterDeclaration {
       { ...ERROR_REF, schema: ERROR_SCHEMA },
     ],
     objectTypes: [
+      TASK_DRAFT_OBJECT_TYPE,
       { objectType: "area", label: "Area", schemaRef: AREA_SCHEMA_REF, relationships: [] },
       { objectType: "project", label: "Project", schemaRef: PROJECT_SCHEMA_REF, relationships: [] },
       { objectType: "task", label: "Task", schemaRef: TASK_SCHEMA_REF, relationships: [{ fieldPath: "/area", targetAdapterId: ADAPTER_ID, targetObjectType: "area", cardinality: "one" }] },
     ],
     capabilities: [
+      ...BALANCE_TASK_CREATE_CAPABILITIES,
       { capabilityId: "balance.destinations", label: "List destinations", kind: "query", objectTypes: ["area", "project"], inputSchemaRef: DESTINATIONS_INPUT_REF, outputSchemaRef: DESTINATIONS_OUTPUT_REF, errorSchemaRef: ERROR_REF },
       { capabilityId: "balance.task.query", label: "Query tasks", kind: "query", objectTypes: ["task"], inputSchemaRef: TASK_QUERY_INPUT_REF, outputSchemaRef: TASK_QUERY_OUTPUT_REF, errorSchemaRef: ERROR_REF },
       { capabilityId: "balance.task.read", label: "Read task", kind: "query", objectTypes: ["task"], inputSchemaRef: TASK_READ_INPUT_REF, outputSchemaRef: TASK_READ_OUTPUT_REF, errorSchemaRef: ERROR_REF },

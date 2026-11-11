@@ -1,4 +1,4 @@
-import type { ObjectReference } from "../../../src/conversations/domain-adapters/types";
+import type { ObjectReference } from "../../conversations/domain-adapters/types";
 
 export interface SampleContext {
   schemas: ReadonlyMap<string, unknown>;
@@ -56,7 +56,7 @@ export function sampleValue(schema: unknown, context: SampleContext, depth = 0):
   if (Array.isArray(schema.enum) && schema.enum.length > 0) return schema.enum[0];
   if (schema.default !== undefined) return schema.default;
   if (typeof schema.$ref === "string") return sampleValue(context.schemas.get(schema.$ref), context, depth + 1);
-  const type = Array.isArray(schema.type) ? schema.type.find(candidate => candidate !== "null") : schema.type;
+  const type: unknown = Array.isArray(schema.type) ? schema.type.find(candidate => candidate !== "null") : schema.type;
   if (type === "string") return sampleString(schema);
   if (type === "integer" || type === "number") return sampleNumber(schema);
   if (type === "boolean") return false;

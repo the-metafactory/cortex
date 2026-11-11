@@ -62,6 +62,22 @@ describe("mission-control server", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  const unusedDraftSetup = {
+    get host(): never { throw new Error("Conflicting draft setup was initialized"); },
+    get deps(): never { throw new Error("Conflicting draft setup was initialized"); },
+    get options(): never { throw new Error("Conflicting draft setup was initialized"); },
+  };
+  for (const options of [
+    { drafts: () => null, graphDrafts: unusedDraftSetup },
+    { drafts: () => null, balanceDrafts: unusedDraftSetup },
+    { graphDrafts: unusedDraftSetup, balanceDrafts: unusedDraftSetup },
+    { drafts: () => null, graphDrafts: unusedDraftSetup, balanceDrafts: unusedDraftSetup },
+  ]) {
+    it(`rejects conflicting draft surfaces: ${Object.keys(options).join(", ")}`, () => {
+      expect(() => startServer(DEFAULT_CONFIG, db, options)).toThrow("Configure only one of drafts, graphDrafts or balanceDrafts");
+    });
+  }
+
   it("responds 200 on GET /health", async () => {
     const res = await fetch(`http://localhost:${testPort}/health`);
     expect(res.status).toBe(200);

@@ -54,12 +54,12 @@ export function sdkVersion(source: string): string | undefined {
   return /export (?:declare )?const SURFACE_SDK_VERSION = "([^"]+)"/.exec(source)?.[1];
 }
 
-export function contractShape(dts: string): string {
+export function contractShape(dts: string, versionName = "SURFACE_SDK_VERSION"): string {
   return dts
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) => line !== "" && !line.startsWith("//") && !line.includes("SURFACE_SDK_VERSION"))
+    .filter((line) => line !== "" && !line.startsWith("//") && !line.includes(versionName))
     .join("\n");
 }
 
