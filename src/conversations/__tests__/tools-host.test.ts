@@ -140,3 +140,48 @@ describe("durable conversation tool authorization", () => {
     expect(outcomes.map(o => o.outcome)).toEqual(["done", "refused"]);
   });
 });
+
+
+async function workerStatusHost(outcomes: ToolOutcome[]): Promise<ConversationHost> {
+  return open(registry(), async request => {
+    const result = await request.tools!.call("worker", "worker_status", { node: "example/maps#30" }, request.signal);
+    outcomes.push(result);
+    return result.text;
+  });
+}
+
+describe("worker status host release", () => {
+  test("the host asks the source to remember status and withholds a revoked response", async () => {
+    let remembered = 0;
+    const outcomes: ToolOutcome[] = [];
+    const host = await workerStatusHost(outcomes);
+    await host.attachSources({ resolvers: {}, readbacks: {}, writers: {}, workers: {
+      maps: () => ["example/maps#12"], recorded: () => "cloud", now: Date.now,
+      read: () => Promise.resolve({ state: "available", handoff: { node: "example/maps#30", map: "example/maps#12", policy: "cloud", state: "running", reason: null, generation: 3, pr: null, result: "REVOKED_WORKER_RESULT", observedAt: Date.now() } }),
+      remember: () => { remembered += 1; return Promise.resolve(false); },
+    } });
+    const conversation = await create(host, "cloud");
+    await host.submit(conversation.id, input("worker"));
+    await host.waitForIdle(conversation.id);
+    expect(remembered).toBeGreaterThan(0);
+    expect(outcomes[0]!.text).not.toContain("REVOKED_WORKER_RESULT");
+    expect(JSON.stringify(await host.entries(conversation.id, 100, undefined))).not.toContain("REVOKED_WORKER_RESULT");
+  });
+});
+
+
+describe("worker source getters", () => {
+  test("a late attached getter can release currently authorized worker status", async () => {
+    const outcomes: ToolOutcome[] = [];
+    const host = await workerStatusHost(outcomes);
+    await host.attachSources({ resolvers: {}, readbacks: {}, writers: {}, get workers() { return {
+      maps: () => ["example/maps#12"], recorded: () => "cloud" as const, now: Date.now,
+      read: () => Promise.resolve({ state: "available" as const, handoff: { node: "example/maps#30", map: "example/maps#12", policy: "cloud" as const, state: "running" as const, reason: null, generation: 3, pr: null, result: "AUTHORIZED_WORKER_RESULT", observedAt: Date.now() } }),
+      remember: () => Promise.resolve(true),
+    }; } });
+    const conversation = await create(host, "cloud");
+    await host.submit(conversation.id, input("worker"));
+    await host.waitForIdle(conversation.id);
+    expect(outcomes[0]!.text).toContain("AUTHORIZED_WORKER_RESULT");
+  });
+});
