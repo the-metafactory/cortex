@@ -1,0 +1,1161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desk Front Doors</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+html{color-scheme:light dark}body{margin:0;font-size:14px}img{max-width:100%}[hidden]{display:none!important}
+/* Layout: persona sheet on the left, a framed clickable prototype on the right; one column on a phone. Tokens follow Mission Control's own (hue 260 neutrals, blue accent). */
+:root{
+  --bg:oklch(0.975 0.004 260); --panel:oklch(1 0 0); --sunk:oklch(0.955 0.005 260);
+  --line:oklch(0.89 0.008 260); --fg:oklch(0.23 0.012 260); --dim:oklch(0.45 0.012 260); --faint:oklch(0.60 0.010 260);
+  --accent:oklch(0.52 0.16 240); --accent-soft:oklch(0.94 0.03 240); --on-accent:oklch(1 0 0);
+  --local:oklch(0.48 0.10 185); --local-soft:oklch(0.95 0.03 185);
+  --wait:oklch(0.50 0.14 60); --wait-soft:oklch(0.95 0.045 80);
+  --ok:oklch(0.48 0.13 155); --ok-soft:oklch(0.95 0.04 155);
+  --sans:'Inter',ui-sans-serif,system-ui,-apple-system,sans-serif; --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:oklch(0.17 0.008 260); --panel:oklch(0.215 0.008 260); --sunk:oklch(0.19 0.008 260);
+  --line:oklch(0.31 0.010 260); --fg:oklch(0.94 0.005 260); --dim:oklch(0.72 0.010 260); --faint:oklch(0.56 0.010 260);
+  --accent:oklch(0.74 0.13 240); --accent-soft:oklch(0.29 0.05 240); --on-accent:oklch(0.17 0.02 240);
+  --local:oklch(0.78 0.10 185); --local-soft:oklch(0.27 0.04 185);
+  --wait:oklch(0.82 0.13 80); --wait-soft:oklch(0.29 0.05 80);
+  --ok:oklch(0.78 0.13 155); --ok-soft:oklch(0.27 0.04 155); color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:oklch(0.17 0.008 260); --panel:oklch(0.215 0.008 260); --sunk:oklch(0.19 0.008 260);
+  --line:oklch(0.31 0.010 260); --fg:oklch(0.94 0.005 260); --dim:oklch(0.72 0.010 260); --faint:oklch(0.56 0.010 260);
+  --accent:oklch(0.74 0.13 240); --accent-soft:oklch(0.29 0.05 240); --on-accent:oklch(0.17 0.02 240);
+  --local:oklch(0.78 0.10 185); --local-soft:oklch(0.27 0.04 185);
+  --wait:oklch(0.82 0.13 80); --wait-soft:oklch(0.29 0.05 80);
+  --ok:oklch(0.78 0.13 155); --ok-soft:oklch(0.27 0.04 155); color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.55}
+.wrap{max-width:1180px;margin:0 auto;padding-block:28px 64px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:22px}
+h1{font-size:28px;line-height:1.15;margin:0;letter-spacing:-.02em;text-wrap:balance}
+h2{font-size:19px;margin:0;letter-spacing:-.01em;text-wrap:balance}
+h3{font-size:15px;margin:0}
+p{margin:0}
+.lede{color:var(--dim);max-width:66ch;font-size:16px}
+.eyebrow{font-size:11.5px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--faint)}
+button{font:inherit;color:inherit;cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:10px}
+.tab{background:none;border:1px solid transparent;border-radius:8px;padding:7px 13px;color:var(--dim);font-weight:500}
+.tab[aria-selected="true"]{background:var(--panel);border-color:var(--line);color:var(--fg)}
+.tab small{display:block;font-weight:400;font-size:12px;color:var(--faint)}
+.split{display:grid;grid-template-columns:minmax(0,320px) minmax(0,1fr);gap:26px;align-items:start}
+@media (max-width:860px){.split{grid-template-columns:minmax(0,1fr)}}
+.sheet{display:flex;flex-direction:column;gap:16px;min-width:0}
+.sheet ul{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:5px;color:var(--dim)}
+.sheet li b{color:var(--fg);font-weight:600}
+.who{display:flex;gap:12px;align-items:center}
+.ava{width:44px;height:44px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:grid;place-items:center;font-weight:700;flex:none}
+.who span{display:block;color:var(--dim);font-size:13.5px}
+.quote{font-size:15.5px;color:var(--fg);border-left:2px solid var(--line);padding-left:12px}
+.frame{background:var(--panel);border:1px solid var(--line);border-radius:14px;min-width:0;overflow:hidden}
+.bar{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line);background:var(--sunk);font-size:12.5px;color:var(--faint)}
+.bar b{color:var(--dim);font-weight:600}
+.body{padding:22px;display:flex;flex-direction:column;gap:16px}
+@media (max-width:520px){.body{padding:16px}}
+.btn{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 13px;font-weight:500;font-size:14px}
+.btn:hover{border-color:var(--faint)}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.btn.quiet{border-color:transparent;color:var(--dim);padding-inline:6px}
+.btn[disabled]{opacity:.45;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;border-radius:99px;padding:2px 9px;white-space:nowrap}
+.pill.wait{background:var(--wait-soft);color:var(--wait)} .pill.think{background:var(--accent-soft);color:var(--accent)}
+.pill.calm{background:var(--sunk);color:var(--dim)} .pill.local{background:var(--local-soft);color:var(--local)} .pill.ok{background:var(--ok-soft);color:var(--ok)}
+input[type=text],input[type=date],textarea{font:inherit;color:var(--fg);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 12px;width:100%;min-width:0}
+textarea{min-height:74px;resize:vertical}
+label{font-size:13px;font-weight:600;color:var(--dim);display:flex;flex-direction:column;gap:5px}
+.card{border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:7px;background:var(--panel);text-align:left;width:100%}
+button.card:hover{border-color:var(--faint)}
+.card .q{font-weight:600;font-size:15.5px}
+.card .sub{color:var(--dim);font-size:14px}
+.ivy{background:var(--accent-soft);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:9px}
+.ivy .from{font-size:12.5px;font-weight:600;color:var(--accent)}
+.sunk{background:var(--sunk);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.muted{color:var(--dim);font-size:14px} .faint{color:var(--faint);font-size:13px}
+.toast{background:var(--ok-soft);color:var(--ok);border-radius:8px;padding:8px 12px;font-size:14px;font-weight:500}
+.big{font-size:21px;font-weight:600;letter-spacing:-.01em;line-height:1.3;text-wrap:balance}
+details summary{cursor:pointer;color:var(--dim);font-weight:500;font-size:14px}
+details ul{margin:8px 0 0;padding-left:18px;color:var(--dim);font-size:14px}
+/* Luca */
+.two{display:grid;grid-template-columns:minmax(0,260px) minmax(0,1fr);gap:0}
+@media (max-width:700px){.two{grid-template-columns:minmax(0,1fr)}}
+.queue{border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+@media (max-width:700px){.queue{border-right:0;border-bottom:1px solid var(--line)}}
+.qi{background:none;border:0;border-bottom:1px solid var(--line);padding:12px 16px;text-align:left;display:flex;flex-direction:column;gap:3px}
+.qi[aria-current="true"]{background:var(--accent-soft)}
+.qi .k{font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--faint)}
+.qi .t{font-weight:500;font-size:14px}
+.qi.done .t{text-decoration:line-through;color:var(--faint)}
+.src{font-family:var(--mono);font-size:12px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 7px;color:var(--dim)}
+.opt{display:flex;gap:9px;align-items:flex-start;border:1px solid var(--line);border-radius:8px;padding:9px 12px;background:var(--panel);font-weight:400;color:var(--fg);flex-direction:row;font-size:14.5px}
+.opt:has(input:checked){border-color:var(--accent)}
+.steps{display:flex;gap:6px;flex-wrap:wrap;font-size:12.5px;font-weight:600;color:var(--faint)}
+.steps span[data-on="true"]{color:var(--accent)}
+pre.note{font-family:var(--mono);font-size:12.5px;white-space:pre-wrap;margin:0;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;color:var(--dim)}
+/* Sam */
+.meter{display:flex;gap:4px;align-items:center}
+.meter i{width:16px;height:8px;border-radius:2px;background:var(--line)} .meter i.on{background:var(--accent)}
+.tr{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:10px;align-items:baseline;padding:10px 14px;border-bottom:1px solid var(--line);background:none;border-left:0;border-right:0;border-top:0;text-align:left;width:100%}
+.tr[aria-current="true"]{background:var(--accent-soft)}
+.tr .n{font-family:var(--mono);font-size:12.5px;color:var(--faint)}
+.tr .q{font-weight:500}
+.tr .meta{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.exp{padding:12px 14px 16px 46px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:10px;background:var(--sunk)}
+@media (max-width:600px){.exp{padding-left:14px}.tr{grid-template-columns:22px minmax(0,1fr)}.tr .meta{grid-column:2;justify-content:flex-start}}
+.diff{font-size:14px;display:flex;flex-direction:column;gap:3px}
+.diff del{color:var(--faint)} .diff ins{text-decoration:none;color:var(--fg);font-weight:500}
+kbd{font-family:var(--mono);font-size:11.5px;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:0 5px;background:var(--panel);color:var(--dim)}
+.keys{display:flex;gap:12px;flex-wrap:wrap;font-size:12.5px;color:var(--faint)}
+/* Overview */
+.three{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+@media (max-width:1000px){.three{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.three{grid-template-columns:minmax(0,1fr)}}
+.stack{display:flex;flex-direction:column;gap:8px}
+.card.dashed{border-style:dashed}
+.ar{border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ar label{flex-direction:row;align-items:center;gap:10px;font-weight:500}
+.ar input[type=range]{accent-color:var(--accent);flex:1;max-width:220px;min-width:0}
+.balbar{position:relative;height:8px;border-radius:4px;background:var(--sunk);max-width:420px}
+.balbar i{position:absolute;inset:0 auto 0 0;border-radius:4px;background:var(--accent)}
+.balbar b{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--fg)}
+.pj{display:flex;flex-direction:column;padding-left:14px;border-left:2px solid var(--line)}
+.pj>b{font-size:13px;color:var(--dim);padding-top:6px}
+.vrow.dr{grid-template-columns:auto minmax(0,1.2fr) minmax(0,1fr) auto;cursor:grab}
+.hd{background:none;border:0;color:var(--faint);font-size:12px;letter-spacing:-2px;padding:4px 6px 4px 2px;cursor:grab;border-radius:5px}
+.hd:hover,.hd[aria-expanded="true"]{color:var(--fg);background:var(--sunk)}
+.vrow[data-zone="before"]{box-shadow:0 -2px 0 var(--accent)}
+.vrow[data-zone="after"]{box-shadow:0 2px 0 var(--accent)}
+.vrow[data-zone="into"],.anch[data-zone="into"]{background:var(--accent-soft);color:var(--accent);border-radius:6px}
+.gchip{background:var(--panel);border:1px solid var(--line);border-radius:99px;padding:4px 12px;font-size:13.5px;color:var(--dim);font-weight:500}
+.gchip:hover{border-color:var(--accent);color:var(--fg)}
+@media (max-width:640px){.vrow.dr{grid-template-columns:auto minmax(0,1fr) auto}}
+.anc{border:1px solid var(--line);border-radius:14px;padding:6px 8px 8px;display:flex;flex-direction:column;gap:6px;background:var(--sunk)}
+.anc .anc{background:var(--bg)}
+.anch{background:none;border:0;text-align:left;font-size:13px;font-weight:600;color:var(--dim);padding:3px 6px;align-self:flex-start;border-radius:6px}
+.anch:hover{color:var(--fg);text-decoration:underline}
+.cur{border:1px solid var(--line);border-radius:10px;padding:18px;background:var(--panel);display:flex;flex-direction:column;gap:12px}
+.anc>.cur{border-color:var(--accent)}
+@media (max-width:520px){.cur{padding:12px}.anc{padding:4px 5px 5px}}
+.daygrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,300px);gap:22px;align-items:start}
+@media (max-width:900px){.daygrid{grid-template-columns:minmax(0,1fr)}.daygrid .rail{order:-1}}
+.rail{display:flex;flex-direction:column;gap:6px;min-width:0}
+.slot{display:grid;grid-template-columns:40px minmax(0,1fr);gap:8px;padding:8px 10px;border-radius:8px;font-size:13.5px;border:1px solid transparent}
+.slot.ev{background:var(--sunk)}
+.slot.free{border:1px dashed var(--line)}
+.slot.cur{border-color:var(--accent)}
+.slot.past{opacity:.5}
+.tm{font-family:var(--mono);font-size:12px;color:var(--faint)}
+.chip{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;background:var(--accent-soft);border-radius:7px;padding:5px 8px;margin-top:6px}
+.chip .linkq{font-size:13px;font-weight:500}
+.chip.off{opacity:.45}
+.evb{background:none;border:0;padding:0;text-align:left}
+.evb:hover b{text-decoration:underline}
+.evd{grid-column:1/-1;display:flex;flex-direction:column;gap:7px;padding-top:6px;align-items:flex-start;min-width:0}
+.evd .lk{background:var(--wait-soft);color:var(--wait);border:0;border-radius:6px;padding:4px 7px;text-align:left;font-size:12.5px;font-weight:600}
+.evd input{padding:6px 9px;font-size:13.5px}
+.chip .x{background:none;border:0;color:var(--dim);padding:0 3px;font-size:12.5px}
+.chip .x:hover{color:var(--fg)}
+.week{display:grid;grid-template-columns:repeat(7,minmax(132px,1fr));gap:8px}
+.wd{border:1px solid var(--line);border-radius:8px;padding:9px 10px;display:flex;flex-direction:column;gap:6px;font-size:13px;min-height:128px;min-width:0}
+.wd.today{border-color:var(--accent)}
+.wd .lk{background:var(--wait-soft);color:var(--wait);border:0;border-radius:6px;padding:4px 7px;text-align:left;font-size:12.5px;font-weight:600}
+.vrow{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) auto;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--line)}
+.vrow.wide{grid-template-columns:minmax(0,1fr) auto auto}
+.vrow .linkq{font-size:14.5px}
+@media (max-width:640px){.vrow,.vrow.wide{grid-template-columns:minmax(0,1fr) auto}.vrow>.faint{grid-column:1/-1;grid-row:2}}
+.seg{display:inline-flex;background:var(--sunk);border:1px solid var(--line);border-radius:9px;padding:2px;gap:2px;flex-wrap:wrap}
+.seg button{background:none;border:0;border-radius:7px;padding:4px 11px;font-size:13.5px;font-weight:500;color:var(--dim)}
+.seg button[aria-selected="true"]{background:var(--panel);color:var(--fg);box-shadow:0 0 0 1px var(--line)}
+ul.plain{margin:4px 0 0;padding-left:18px;color:var(--dim)}
+.sum{border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;background:var(--panel)}
+.sum ul{margin:4px 0 0;padding-left:18px;color:var(--dim);font-size:14px}
+.cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+@media (max-width:520px){.cols{grid-template-columns:minmax(0,1fr)}}
+.turns{display:flex;flex-direction:column;gap:10px;margin-top:12px;max-width:62ch}
+.turn{display:grid;grid-template-columns:34px minmax(0,1fr);gap:8px;font-size:14px}
+.turn b{font-size:12px;color:var(--accent);padding-top:2px}
+.turn.me b{color:var(--faint)}
+.turn p{color:var(--dim)}
+.linkq{background:none;border:0;padding:0;text-align:left;font-weight:600;font-size:15.5px}
+.linkq:hover{text-decoration:underline}
+button.src{cursor:pointer}
+button.src[aria-expanded="true"]{border-color:var(--accent);color:var(--fg)}
+.src.flag{text-decoration:line-through}
+.excerpt{border-left:2px solid var(--line);padding-left:12px;display:flex;flex-direction:column;gap:8px;align-items:flex-start;font-size:14px;color:var(--dim)}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:560px}
+th,td{text-align:left;padding:8px 12px 8px 0;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:600}
+td code,.code{font-family:var(--mono);font-size:12.5px;color:var(--faint)}
+.find{display:grid;grid-template-columns:34px minmax(0,1fr);gap:4px 10px}
+.find .c{font-family:var(--mono);font-size:12.5px;color:var(--accent);padding-top:2px}
+.find p{color:var(--dim)} .find b{color:var(--fg)}
+section{display:flex;flex-direction:column;gap:14px}
+@media (prefers-reduced-motion:no-preference){.frame .body{animation:in .18s ease-out}@keyframes in{from{opacity:.6;transform:translateY(3px)}to{opacity:1;transform:none}}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:10px">
+    <span class="eyebrow">Cortex Desk · design prototypes · sample data throughout</span>
+    <h1>One Studio for everyone</h1>
+    <p class="lede">The thread files and the acts stay as they are. The One Studio tab is the current direction: one screen with a low floor and a high ceiling. The persona tabs are the steps that led to it.</p>
+  </header>
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button class="tab" role="tab" data-go="overview">Overview<small>personas and findings</small></button>
+    <button class="tab" role="tab" data-go="studio">One Studio<small>list, day and week</small></button>
+    <button class="tab" role="tab" data-go="kim">Kim<small>What matters now</small></button>
+    <button class="tab" role="tab" data-go="luca">Luca<small>Think in place</small></button>
+    <button class="tab" role="tab" data-go="sam">Sam<small>Morning review</small></button>
+    <button class="tab" role="tab" data-go="options">Two options<small>one Studio or a setting</small></button>
+  </nav>
+  <main id="view"></main>
+</div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const view = $("#view");
+const ROUTES = ["overview", "studio", "kim", "luca", "sam", "options"];
+const route = () => { const h = location.hash.slice(1); return ROUTES.includes(h) ? h : "overview"; };
+
+/* ---------- persona sheets ---------- */
+const PERSONAS = {
+  nora: { ini: "N", name: "Nora", role: "Head of operations at a 40-person firm. A consulting client.",
+    quote: "I tried the chat tools. The answers were generic. I just want it to work.",
+    ctx: ["Never saw a config file. Someone set the stack up for her.", "Opens the Desk between meetings, for two minutes at a time.", "Thinks in questions and decisions, not in threads and files."],
+    tasks: ["Put down a question that nags her, before the next meeting starts.", "Read what Ivy thought and react in ten seconds.", "Decide, and find the reason again three months later."],
+    trips: ["Twenty new words before the first use: thread, place, cap, shelf, stand, proposal, capture.", "Opening a thread asks the Yes-filter questions and which thread to park.", "The thread page shows nine sections at once."],
+    needs: ["One input, one list, one status per question.", "Yes or Not quite as the only reply to Ivy.", "No limits to learn. Her view is folded into One Studio."] },
+  luca: { ini: "L", name: "Luca", role: "Security analyst on a shift team. A colleague.",
+    quote: "Show me what it read before I act on it.",
+    ctx: ["Technical, but new to agents. Trusts logs, not summaries.", "Works a queue: mail, a blocked agent, a meeting in twenty minutes.", "Hands over to the next shift every day."],
+    tasks: ["Clear what needs him, in order.", "Think a hard item through without leaving it.", "Write the handover from what he decided."],
+    trips: ["The Studio is a separate place. His question starts on a Desk item.", "Ivy's notes carry no visible sources.", "What he thought about yesterday does not show on the item today."],
+    needs: ["Thinking opens beside the item it is about.", "Every source opens to what Ivy took from it, and he can flag one as wrong.", "He can ask for the case against his call before he decides.", "A decision turns into a handover line and a short summary on the item."] },
+  kim: { ini: "V", name: "Kim", role: "GFK coach, self-employed. Works alone, with clients, groups and schools.",
+    quote: "Things come up all day. I do not want to choose five. I want to see what matters today.",
+    ctx: ["Non-technical, no local model, one calendar and one mailbox.", "Her work is conversations. She thinks by talking, then needs the gist.", "Client sessions, workshops, offers, invoices and her own training all compete."],
+    tasks: ["Put down whatever comes up, between two sessions, without sorting it.", "See in the morning what matters now, and change her mind freely.", "Talk a question through and find the result again, not the transcript."],
+    trips: ["Five places is a rule she did not ask for. More than five things are on her mind.", "The Yes-filter stands between her and writing a thought down.", "A talked-through conversation comes back as one wall of text."],
+    needs: ["No cap. A Now section she fills herself, with a hint instead of a block.", "The Yes questions as an optional link.", "Every conversation lands as: settled, still open, before and after."] },
+  sam: { ini: "S", name: "Sam", role: "Builds the product and uses it all day. Grew up with it.",
+    quote: "I know every concept. I want to get through the night's notes before coffee is cold.",
+    ctx: ["Five threads in play, Ivy thinks on some of them overnight.", "Keyboard first. Reads fast, decides fast.", "Cares about the cap and about decisions that are due for review."],
+    tasks: ["Review what Ivy wrote overnight across all threads.", "Keep the cap honest: park, bring back, think tonight.", "Check old decisions against what he expected."],
+    trips: ["The board spends the screen on layout and lines, one card at a time to act.", "Each note needs a trip into its thread page.", "Review dates sit inside the decision journal, behind a toggle."],
+    needs: ["All threads in one dense list, acts on keys.", "The note and the proposed stand inline, as a before and after.", "Reviews that are due shown without asking."] },
+};
+const sheet = (id) => { const p = PERSONAS[id]; const ul = (a) => `<ul>${a.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`; return `
+  <aside class="sheet">
+    <div class="who"><div class="ava">${p.ini}</div><div><h2>${p.name}</h2><span>${esc(p.role)}</span></div></div>
+    <p class="quote">${esc(p.quote)}</p>
+    <div><span class="eyebrow">Who</span>${ul(p.ctx)}</div>
+    <div><span class="eyebrow">Tasks</span>${ul(p.tasks)}</div>
+    <div><span class="eyebrow">Where today's Desk trips them</span>${ul(p.trips)}</div>
+    <div><span class="eyebrow">What the prototype gives them</span>${ul(p.needs)}</div>
+  </aside>`; };
+
+/* ---------- shared: how a talked-through conversation lands (F7) ---------- */
+function summaryCard(p) {
+  const ul = (a) => `<ul>${a.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+  return `<div class="sum">
+    <span class="eyebrow">${esc(p.when)} · ${p.turns.length} exchanges</span>
+    ${p.before ? `<div class="diff"><span class="faint">Where you stood, before and after</span><del>${esc(p.before)}</del><ins>${esc(p.after)}</ins></div>` : ""}
+    <div class="cols"><div><b>Settled</b>${ul(p.settled)}</div><div><b>Still open</b>${p.open.length ? ul(p.open) : `<p class="muted">Nothing.</p>`}</div></div>
+    <details><summary>Read the whole conversation</summary><div class="turns">${p.turns.map(([w, t]) => `<div class="turn ${w === "You" ? "me" : ""}"><b>${w}</b><p>${esc(t)}</p></div>`).join("")}</div></details>
+  </div>`;
+}
+
+/* ---------- Kim: What matters now (second pass) ---------- */
+const V = { page: "home", open: null, toast: "", check: false, hint: false, decided: 4, day: "proposed", area: "all", merge: null,
+  areas: [["all", "All"], ["clients", "Clients"], ["business", "Business"], ["me", "Me"]],
+  qs: [
+    { id: "ws", now: true, area: "clients", date: true, q: "How do I open the conflict workshop for the school team?", why: "The workshop is in five days.", next: "Open point from Monday: who brings the example, you or the head teacher?", notes: [], stand: "Open with one real example from the team. The four steps come after the break.",
+      prior: { when: "You talked it through on Monday", before: "Start with the theory, then practise.", after: "Open with one real example from the team. The four steps come after the break.",
+        settled: ["Open with a real example, not with theory.", "Keep the four steps for after the break."], open: ["Who brings the example: you or the head teacher?"],
+        turns: [["You", "I always start with the four steps. With this team I am not sure it lands."], ["Ivy", "In your notes from the first call, two teachers said they had heard the theory before. What did they ask for?"], ["You", "Something from their own staff room."], ["Ivy", "Then start there. One example they recognise, and the steps as the way to look at it. Who could bring that example?"], ["You", "Maybe the head teacher. I need to ask."], ["Ivy", "I will keep that as the open point."]] } },
+    { id: "rate", now: true, area: "business", date: true, q: "Do I raise my rate for the spring block?", why: "Two clients asked for spring dates this week.", next: "Not talked through yet. Ivy has last year's rates and both requests ready.", notes: [], stand: "" },
+    { id: "train", now: true, area: "me", date: true, q: "Should I take the mediation training?", why: "Early booking ends on 30 November.", next: "Not talked through yet.", notes: [], stand: "" },
+    { id: "probono", now: false, area: "clients", date: true, q: "How do I say no to the pro bono request?", why: "The request is nine days old.", notes: [], stand: "" },
+    { id: "evening", now: false, area: "business", date: true, q: "Do I offer the evening group again?", why: "Registration would open in January.", notes: [], stand: "" },
+    { id: "news", now: false, area: "business", date: true, q: "What goes into the January newsletter?", why: "Nothing is due before mid December.", notes: [], stand: "" },
+    { id: "testi", now: false, area: "business", date: false, q: "Which three clients do I ask for a testimonial?", why: "", notes: [], stand: "" },
+    { id: "web", now: false, area: "business", date: false, q: "New website text for couples coaching", why: "", notes: [], stand: "" },
+  ] };
+const NUM = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
+const num = (n) => NUM[n] || String(n);
+const V_STOP = new Set(["about", "should", "which", "again", "their", "there", "would", "three", "offer", "raise", "takes"]);
+const vWords = (s) => s.toLowerCase().match(/[a-zäöü]{5,}/g)?.filter((w) => !V_STOP.has(w)) || [];
+function kim() {
+  const inArea = (x) => V.area === "all" || x.area === V.area;
+  const now = V.qs.filter((x) => x.now && inArea(x)), rest = V.qs.filter((x) => !x.now && inArea(x));
+  const allNow = V.qs.filter((x) => x.now).length, allRest = V.qs.length - allNow;
+  let body;
+  if (V.page === "q") {
+    const t = V.qs.find((x) => x.id === V.open);
+    body = `
+      <div class="row"><button class="btn quiet" data-v="home">‹ Everything on your mind</button>${t.now ? `<span class="pill wait">Matters now</span>` : ""}</div>
+      <p class="big">${esc(t.q)}</p>
+      ${t.why ? `<p class="muted">${esc(t.why)}</p>` : ""}
+      ${t.stand ? `<div><span class="eyebrow">Where you stand</span><p>${esc(t.stand)}</p></div>` : ""}
+      ${t.notes.length ? `<div><span class="eyebrow">Loose thoughts you added</span><ul class="plain">${t.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul></div>` : ""}
+      ${t.prior ? summaryCard(t.prior) : `<div class="sunk"><p>You have not talked this through yet.</p></div>`}
+      <div class="row"><button class="btn pri" data-v="talk">${t.prior ? "Continue the conversation" : "Talk it through with Ivy"}</button><button class="btn" data-v="decide">I have decided</button><button class="btn quiet" data-v="toggle" data-id="${t.id}">${t.now ? "Not today" : "This matters now"}</button></div>
+      ${V.toast ? `<div class="toast" role="status">${esc(V.toast)}</div>` : ""}`;
+  } else {
+    const proposed = V.day === "proposed";
+    const nowCard = (x) => `<div class="card${proposed ? " dashed" : ""}"><button class="linkq" data-v="open" data-id="${x.id}">${esc(x.q)}</button>
+      <span class="sub">${esc(proposed ? x.why : x.next || x.why)}</span>
+      <div class="row">${proposed ? "" : `<button class="btn" data-v="open" data-id="${x.id}">${x.prior ? "Continue" : "Talk it through"}</button>`}<button class="btn quiet" data-v="toggle" data-id="${x.id}">${proposed ? "Not today" : "Enough for today"}</button></div></div>`;
+    const line = (x) => `<div class="vrow"><button class="linkq" data-v="open" data-id="${x.id}">${esc(x.q)}</button><span class="faint">${esc(x.why)}${x.notes.length ? ` · ${x.notes.length} loose ${x.notes.length === 1 ? "thought" : "thoughts"}` : ""}</span><button class="btn" data-v="toggle" data-id="${x.id}">Now</button></div>`;
+    const dated = rest.filter((x) => x.date), undated = rest.filter((x) => !x.date);
+    const mq = V.merge && V.qs.find((x) => x.id === V.merge.id);
+    body = `
+      ${V.toast ? `<div class="toast" role="status">${esc(V.toast)}</div>` : ""}
+      <p class="big">${proposed ? `Good morning. ${num(allNow)} things could matter today.` : `${num(allNow)} ${allNow === 1 ? "thing matters" : "things matter"} now.`} ${num(allRest)} more ${allRest === 1 ? "is" : "are"} on your mind.</p>
+      <div class="row" style="flex-wrap:nowrap"><input type="text" id="v-new" aria-label="A new thought" placeholder="What came up? Try: ask the head teacher about the example"><button class="btn pri" data-v="add" style="white-space:nowrap">Keep it</button></div>
+      ${mq ? `<div class="ivy"><span class="from">Ivy thinks this belongs to something you already have</span><p>“${esc(V.merge.text)}” sounds like part of <b>${esc(mq.q)}</b></p>
+        <div class="row"><button class="btn pri" data-v="mergeYes">Add it there</button><button class="btn" data-v="mergeNo">Keep it separate</button></div></div>` : ""}
+      <div class="row" style="justify-content:space-between">
+        <div class="seg" role="tablist" aria-label="Area">${V.areas.map(([id, l]) => `<button role="tab" aria-selected="${V.area === id}" data-v="area" data-id="${id}">${l}</button>`).join("")}</div>
+        <button class="btn quiet" data-v="check" aria-expanded="${V.check}">${V.check ? "Hide the questions" : "Check a new thought first (optional)"}</button></div>
+      ${V.check ? `<div class="sunk"><p class="muted">Three questions before you take something on. Skip them whenever you like; nothing is blocked.</p>
+          <label class="opt"><input type="checkbox" id="v-y1"><span>Is this mine to do?</span></label>
+          <label class="opt"><input type="checkbox" id="v-y2"><span>Does it fit my capacity?</span></label>
+          <label class="opt"><input type="checkbox" id="v-y3"><span>What will I stop doing for it?</span></label></div>` : ""}
+      <div class="stack"><span class="eyebrow">${proposed ? "Ivy's proposal for today" : "Now"}</span>
+        ${now.map(nowCard).join("") || `<p class="muted">Nothing here${V.area === "all" ? "" : " in this area"}. Press Now on anything below.</p>`}
+        ${V.hint ? `<p class="faint">${num(allNow)} things matter now. Three usually fit in a day. Nothing stops you.</p>` : ""}
+        ${proposed ? `<div class="row"><button class="btn pri" data-v="start">Start the day with these</button><span class="faint">Change the list first if it looks wrong.</span></div>` : ""}</div>
+      <div class="stack"><span class="eyebrow">Also on your mind · has a date</span>${dated.map(line).join("") || `<p class="muted">Nothing.</p>`}</div>
+      ${undated.length ? `<details><summary>No date · ${undated.length}</summary><div class="stack" style="margin-top:8px">${undated.map(line).join("")}</div></details>` : ""}
+      <p class="muted">Decided: ${V.decided}</p>`;
+  }
+  return `<div class="split">${sheet("kim")}<div class="frame"><div class="bar"><b>What matters now</b><span>second pass: a morning proposal, next steps, and loose thoughts that find their question</span></div><div class="body">${body}</div></div></div>`;
+}
+function kimAct(a, el) {
+  const t = V.qs.find((x) => x.id === (el && el.dataset.id || V.open));
+  V.toast = "";
+  if (a === "open") { V.page = "q"; V.open = el.dataset.id; }
+  else if (a === "home") V.page = "home";
+  else if (a === "check") V.check = !V.check;
+  else if (a === "area") V.area = el.dataset.id;
+  else if (a === "start") { V.day = "started"; V.toast = "The day is set. You can change it at any time."; }
+  else if (a === "add") {
+    const v = $("#v-new").value.trim(); if (!v) return;
+    const words = vWords(v);
+    const hit = V.qs.find((x) => vWords(x.q + " " + (x.next || "")).some((w) => words.includes(w)));
+    if (hit) V.merge = { text: v, id: hit.id };
+    else { V.qs.push({ id: "v" + Date.now(), now: false, area: V.area === "all" ? "me" : V.area, date: true, q: v, why: "Added just now.", notes: [], stand: "" }); V.toast = "Kept. It is in the list below."; }
+  }
+  else if (a === "mergeYes") { const q = V.qs.find((x) => x.id === V.merge.id); q.notes.push(V.merge.text); V.merge = null; V.toast = "Added to that question. Ivy brings it up next time you talk."; }
+  else if (a === "mergeNo") { V.qs.push({ id: "v" + Date.now(), now: false, area: "me", date: true, q: V.merge.text, why: "Added just now.", notes: [], stand: "" }); V.merge = null; V.toast = "Kept as its own question."; }
+  else if (a === "toggle") { t.now = !t.now; V.hint = V.qs.filter((x) => x.now).length > 3; if (!t.now && V.day === "started" && V.page === "home") V.toast = "Off today's list. It stays on your mind."; }
+  else if (a === "talk") V.toast = "The conversation with Ivy opens here. When you end it, it lands as a summary like the one above.";
+  else if (a === "decide") { V.qs = V.qs.filter((x) => x !== t); V.decided++; V.page = "home"; V.toast = "Closed and kept under Decided."; }
+}
+
+/* ---------- Luca: Think in place ---------- */
+const L = { sel: "patch", st: {}, handover: [], copied: false,
+  items: [
+    { id: "call", k: "In 20 minutes", t: "Shift handover call", text: "Daily call with the late shift. Your handover so far is below.", acts: ["Open the call notes"] },
+    { id: "patch", k: "Agent is blocked", t: "Patch run stopped: 14 hosts need a reboot window", text: "The patch agent finished 31 of 45 hosts. The other 14 need a reboot and it will not choose a window by itself.", acts: ["Retry as it is"],
+      read: "Six of the 14 hosts face the internet and are in the advisory's scope. The other eight are internal build hosts. The change calendar has a maintenance window on Thursday 02:00. Tonight 22:00 is free of changes.",
+      src: [["patch run log", "14 hosts: status reboot-required. 6 tagged edge, 8 tagged build."], ["vendor advisory, 10 Nov", "Affects internet-facing systems running the listed kernel. Exploitation seen in the wild."], ["change calendar, this week", "Wed: no changes after 20:00. Thu 02:00 to 04:00: maintenance window."]],
+      opts: ["Reboot the six internet-facing hosts tonight at 22:00, the rest on Thursday.", "Reboot all 14 on Thursday in the maintenance window."],
+      counter: ["Against tonight: nobody from the platform team is on call after 22:00. If one edge host does not come back, you handle it alone until 06:00.", "Against Thursday: the advisory reports active exploitation. The six edge hosts stay exposed for two more nights."] },
+    { id: "vpn", k: "Mail · vendor", t: "Fix available for the VPN gateway", text: "The vendor says a fixed release is out and asks whether you want the upgrade call this week.", acts: ["Draft a reply", "Not now"],
+      prior: { when: "You talked it through on Monday", settled: ["The gateway runs the affected release.", "A restart takes about four minutes."], open: ["Does the late shift want the restart in their window or in ours?"],
+        turns: [["You", "Is our gateway even affected?"], ["Ivy", "Yes. The inventory lists release 9.2, which the advisory names."], ["You", "How long is it down for the fix?"], ["Ivy", "About four minutes, going by the March upgrade thread."]] },
+      read: "The gateway runs the affected release. The fix needs a restart of about four minutes. The last upgrade call with this vendor took two days to schedule.",
+      src: [["vendor mail, 09:12", "A fixed release is available. We can offer an upgrade call this week."], ["inventory: gateway", "Release 9.2, last changed in March."], ["mail thread, March upgrade", "Call requested on the 3rd, held on the 5th. Restart took four minutes."]],
+      opts: ["Ask for the upgrade call on Wednesday morning.", "Upgrade ourselves on Thursday in the maintenance window and tell the vendor."],
+      counter: ["Against the call: the last one took two days to schedule, so Wednesday may slip to Friday.", "Against doing it ourselves: the vendor's support terms may ask for their engineer on the line. That is not in anything I read."] },
+    { id: "news", k: "Mail · list", t: "Monthly product newsletter", text: "A newsletter. Nothing in it concerns the current systems.", acts: ["Unimportant"] },
+  ] };
+const lst = (id) => (L.st[id] ||= { step: 0, pick: null, own: "", challenged: false, flagged: {}, openSrc: null, done: false });
+function luca() {
+  const it = L.items.find((x) => x.id === L.sel), s = lst(it.id);
+  const open = L.items.filter((x) => !lst(x.id).done).length;
+  const left = L.items.map((x) => `<button class="qi${lst(x.id).done ? " done" : ""}" data-l="sel" data-id="${x.id}" aria-current="${x.id === L.sel}"><span class="k">${esc(x.k)}</span><span class="t">${esc(x.t)}</span>${x.prior || lst(x.id).step === 3 ? `<span class="faint">thought through</span>` : ""}</button>`).join("");
+  let think = "";
+  if (it.read && s.step > 0) {
+    const nFlag = Object.keys(s.flagged).length;
+    think = `<div class="sunk">
+      <div class="row" style="justify-content:space-between"><div class="steps"><span data-on="${s.step >= 1}">1 What Ivy read</span><span>›</span><span data-on="${s.step >= 2}">2 Your call</span><span>›</span><span data-on="${s.step >= 3}">3 Handover</span></div><span class="pill calm">local</span></div>
+      <p>${esc(it.read)}</p>
+      <div class="row">${it.src.map(([n], i) => `<button class="src${s.flagged[i] ? " flag" : ""}" data-l="src" data-i="${i}" aria-expanded="${s.openSrc === i}">${esc(n)}</button>`).join("")}</div>
+      ${s.openSrc !== null ? `<div class="excerpt"><p>${esc(it.src[s.openSrc][1])}</p>${s.flagged[s.openSrc] ? `<span class="pill wait">You flagged this</span>` : s.step < 3 ? `<button class="btn" data-l="flag">This is wrong or out of date</button>` : ""}</div>` : `<p class="faint">Click a source to see what Ivy took from it.</p>`}
+      ${nFlag ? `<p class="faint">${nFlag === 1 ? "One source is" : nFlag + " sources are"} flagged. Ivy leaves ${nFlag === 1 ? "it" : "them"} out and says so in the handover.</p>` : ""}
+      ${s.step === 1 ? `<div class="row"><button class="btn pri" data-l="next">On to my call</button></div>` : ""}
+      ${s.step >= 2 ? `<div class="stack" role="radiogroup" aria-label="Your call">
+          ${it.opts.map((o, i) => `<label class="opt"><input type="radio" name="l-opt" id="l-opt-${it.id}-${i}" value="${i}" ${s.pick === i ? "checked" : ""} ${s.step === 3 ? "disabled" : ""}><span>${esc(o)}</span></label>`).join("")}
+          <label class="opt"><input type="radio" name="l-opt" id="l-opt-${it.id}-x" value="2" ${s.pick === 2 ? "checked" : ""} ${s.step === 3 ? "disabled" : ""}><span>Something else</span></label>
+          ${s.pick === 2 ? `<input type="text" id="l-own" aria-label="Your own call" placeholder="Your call, in one sentence" value="${esc(s.own)}" ${s.step === 3 ? "disabled" : ""}>` : ""}</div>` : ""}
+      ${s.step === 2 && s.challenged && s.pick !== null ? `<div class="ivy"><span class="from">The case against your call</span><p>${esc(s.pick < 2 ? it.counter[s.pick] : "I have nothing to set against a call I did not propose. Say it in the handover and the next shift can weigh it.")}</p></div>` : ""}
+      ${s.step === 2 ? `<div class="row"><button class="btn pri" data-l="decide" ${s.pick === null ? "disabled" : ""}>Decide and tell the agent</button><button class="btn" data-l="challenge" ${s.pick === null || s.challenged ? "disabled" : ""}>Challenge my call first</button></div>` : ""}
+      ${s.step === 3 ? `<div class="toast" role="status">Decided. The line is in your handover, and the thinking is kept with this item.</div>` : ""}
+    </div>`;
+  }
+  const kept = s.step === 3 ? summaryCard({ when: "Thought through just now", settled: [s.pick < 2 ? it.opts[s.pick] : s.own || "Own call."], open: s.challenged && s.pick < 2 ? [it.counter[s.pick].replace(/^Against[^:]*: /, "")] : [],
+    turns: [["Ivy", it.read], ...(s.challenged && s.pick < 2 ? [["You", "Challenge my call."], ["Ivy", it.counter[s.pick]]] : []), ["You", s.pick < 2 ? it.opts[s.pick] : s.own || "Own call."]] }) : "";
+  const right = `
+    <span class="eyebrow">${esc(it.k)}</span><h2>${esc(it.t)}</h2><p class="muted">${esc(it.text)}</p>
+    ${it.prior && s.step < 3 ? summaryCard(it.prior) : ""}
+    <div class="row">${it.acts.map((a) => `<button class="btn" data-l="quick">${esc(a)}</button>`).join("")}${it.read && s.step === 0 ? `<button class="btn pri" data-l="think">${it.prior ? "Pick it up again" : "Think it through"}</button>` : ""}</div>
+    ${think}${kept}
+    <div><span class="eyebrow">Handover so far · ${L.handover.length} ${L.handover.length === 1 ? "line" : "lines"}</span>
+      <pre class="note" id="l-note">${L.handover.length ? esc(L.handover.map((h) => "- " + h).join("\n")) : "Nothing decided yet. Each call you make lands here."}</pre>
+      <div class="row" style="margin-top:8px"><button class="btn" data-l="copy" ${L.handover.length ? "" : "disabled"}>${L.copied ? "Copied" : "Copy the handover"}</button></div></div>`;
+  return `<div class="split">${sheet("luca")}<div class="frame"><div class="bar"><b>Think in place</b><span>${open ? `${num(open)} ${open === 1 ? "thing needs" : "things need"} you. The first is in 20 minutes.` : "Nothing needs you."}</span></div>
+    <div class="two"><div class="queue">${left}</div><div class="body">${right}</div></div></div></div>`;
+}
+function lucaAct(a, el) {
+  const it = L.items.find((x) => x.id === L.sel), s = lst(it.id); L.copied = false;
+  if (a === "sel") L.sel = el.dataset.id;
+  else if (a === "think") s.step = 1;
+  else if (a === "src") { const i = Number(el.dataset.i); s.openSrc = s.openSrc === i ? null : i; }
+  else if (a === "flag") s.flagged[s.openSrc] = true;
+  else if (a === "next") s.step = 2;
+  else if (a === "challenge") s.challenged = true;
+  else if (a === "decide") {
+    if (s.pick === null) return;
+    s.step = 3; s.done = true;
+    const flagged = Object.keys(s.flagged).map((i) => it.src[i][0]);
+    L.handover.push(`${it.t}: ${s.pick < 2 ? it.opts[s.pick] : s.own || "own call."}${flagged.length ? ` (left out as unreliable: ${flagged.join(", ")})` : ""}`);
+  }
+  else if (a === "quick") s.done = true;
+  else if (a === "copy") { const txt = L.handover.map((h) => "- " + h).join("\n"); try { navigator.clipboard.writeText(txt).catch(() => {}); } catch (e) {} L.copied = true; }
+}
+document.addEventListener("change", (e) => { if (e.target.name === "l-opt") { const s = lst(L.sel); s.pick = Number(e.target.value); s.challenged = false; render(); } });
+document.addEventListener("input", (e) => { if (e.target.id === "l-own") lst(L.sel).own = e.target.value; });
+
+/* ---------- Sam: Morning review ---------- */
+const J = { cur: 0, open: 0, log: "", reviews: [
+    { id: "r1", q: "Stop the monthly newsletter", on: "12 Aug", expect: "Nobody asks for it within three months.", a: null },
+    { id: "r2", q: "Write the weekly report from a draft", on: "3 Sep", expect: "The report takes under ten minutes on four of five Fridays.", a: null } ],
+  parked: ["Is a group course worth the live sessions?"],
+  th: [
+    { q: "How does the Desk become useful to someone else?", area: "mf", local: false, tonight: true, note: { kind: "stand", at: "03:14", old: "Only the built-in sources count.", text: "The threads are the product; the sources are the bonus.", because: "Two of three personas have no mail adapter." } },
+    { q: "Which workshop format do I offer next spring?", area: "consulting", local: false, tonight: false, note: { kind: "idea", at: "03:31", text: "Run the tabletop twice: once as a half day for teams, once as an evening for managers. The second needs no new material." } },
+    { q: "What should run on the local model?", area: "work", local: true, tonight: true, note: { kind: "relation", at: "03:40", text: "Relates to goal G2: the weekly report draft already runs locally and gives a measured baseline." } },
+    { q: "Do I write the weekly post before or after the video?", area: "personal", local: false, tonight: false, note: null, stale: 6 },
+  ] };
+const J_CAP = 5;
+const jOpenNotes = () => J.th.filter((t) => t.note && !t.note.status).length;
+function sam() {
+  const rows = J.th.map((t, i) => {
+    const n = t.note;
+    const state = n && !n.status ? `<span class="pill wait">${n.kind} · ${n.at}</span>` : n ? `<span class="pill ok">${n.status}</span>` : `<span class="pill calm">stale ${t.stale} d</span>`;
+    const exp = J.open === i && n ? `<div class="exp">
+        ${n.kind === "stand" ? `<div class="diff"><del>${esc(n.old)}</del><ins>${esc(n.text)}</ins><span class="faint">Because: ${esc(n.because)}</span></div>` : `<p>${esc(n.text)}</p>`}
+        ${n.status ? "" : `<div class="row"><button class="btn pri" data-j="keep">Keep <kbd>K</kbd></button><button class="btn" data-j="reword">Reword <kbd>R</kbd></button><button class="btn" data-j="dismiss">Dismiss <kbd>D</kbd></button></div>`}</div>`
+      : J.open === i ? `<div class="exp"><p class="muted">No note since the last response. Press <kbd>T</kbd> to let Ivy think about it tonight, or <kbd>P</kbd> to park it.</p></div>` : "";
+    return `<button class="tr" data-j="row" data-i="${i}" aria-current="${J.cur === i}"><span class="n">${i + 1}</span><span class="q">${esc(t.q)}</span>
+      <span class="meta">${state}<span class="pill calm">${t.area}</span>${t.local ? `<span class="pill local">local</span>` : ""}${t.tonight ? `<span class="pill think">tonight</span>` : ""}</span></button>${exp}`;
+  }).join("");
+  const left = jOpenNotes();
+  return `<div class="split">${sheet("sam")}<div class="frame"><div class="bar"><b>Morning review</b><span>replaces the board and the trip into each thread page</span></div>
+    <div class="body" style="gap:14px">
+      <div class="row" style="justify-content:space-between"><p class="big">${left ? `${left} ${left === 1 ? "note" : "notes"} from Ivy since 22:00` : "The night's notes are done."}</p>
+        <div class="row"><span class="faint">In play</span><div class="meter" aria-label="${J.th.length} of ${J_CAP} places in use">${Array.from({ length: J_CAP }, (_, i) => `<i class="${i < J.th.length ? "on" : ""}"></i>`).join("")}</div><span class="code">${J.th.length}/${J_CAP}</span></div></div>
+      <div class="keys"><span><kbd>↓</kbd> <kbd>↑</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>K</kbd> keep</span><span><kbd>R</kbd> reword</span><span><kbd>D</kbd> dismiss</span><span><kbd>T</kbd> think tonight</span><span><kbd>P</kbd> park</span></div>
+      ${J.log ? `<div class="toast" role="status">${esc(J.log)}</div>` : ""}
+    </div>
+    <div style="border-top:1px solid var(--line)">${rows || `<p class="muted" style="padding:14px">Nothing in play.</p>`}</div>
+    <div class="body">
+      <div><span class="eyebrow">Parked · ${J.parked.length}</span><p class="muted">${J.parked.map(esc).join(" · ") || "The shelf is empty."}</p></div>
+      <div style="display:flex;flex-direction:column;gap:10px"><span class="eyebrow">Decisions due for review · ${J.reviews.filter((r) => !r.a).length}</span>
+        ${J.reviews.map((r) => `<div class="card"><span class="q">${esc(r.q)} <span class="faint">decided ${r.on}</span></span><span class="sub">You expected: ${esc(r.expect)}</span>
+          ${r.a ? `<span class="pill ok" style="align-self:flex-start">${r.a}</span>` : `<div class="row"><button class="btn" data-j="rev" data-id="${r.id}" data-a="It happened">It happened</button><button class="btn" data-j="rev" data-id="${r.id}" data-a="It did not">It did not</button><button class="btn quiet" data-j="rev" data-id="${r.id}" data-a="Too early, ask in a month">Too early</button></div>`}</div>`).join("")}
+      </div>
+    </div></div></div>`;
+}
+function samAct(a, el) {
+  const t = J.th[J.cur];
+  if (a === "row") { J.cur = Number(el.dataset.i); J.open = J.open === J.cur ? -1 : J.cur; return; }
+  if (a === "rev") { J.reviews.find((r) => r.id === el.dataset.id).a = el.dataset.a; J.log = "Recorded in the decision journal."; return; }
+  if (!t) return;
+  const next = () => { const i = J.th.findIndex((x) => x.note && !x.note.status); if (i >= 0) { J.cur = i; J.open = i; } else J.open = -1; };
+  if ((a === "keep" || a === "reword" || a === "dismiss") && t.note && !t.note.status) {
+    t.note.status = a === "keep" ? "kept" : a === "reword" ? "kept reworded" : "dismissed";
+    J.log = a === "dismiss" ? "Dismissed." : t.note.kind === "stand" ? "Kept. Where I stand is replaced, one commit." : "Kept, one commit.";
+    next();
+  } else if (a === "tonight") { t.tonight = !t.tonight; J.log = t.tonight ? "Ivy thinks about it tonight." : "Not tonight."; }
+  else if (a === "park") { J.parked.push(t.q); J.th.splice(J.cur, 1); J.cur = Math.min(J.cur, J.th.length - 1); J.open = -1; J.log = "Parked. A place is free."; }
+}
+document.addEventListener("keydown", (e) => {
+  if (route() !== "sam" || e.metaKey || e.ctrlKey || e.altKey || /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+  const k = e.key.toLowerCase();
+  const map = { k: "keep", r: "reword", d: "dismiss", t: "tonight", p: "park" };
+  if (k === "arrowdown") { J.cur = Math.min(J.th.length - 1, J.cur + 1); J.open = J.cur; }
+  else if (k === "arrowup") { J.cur = Math.max(0, J.cur - 1); J.open = J.cur; }
+  else if (k === "enter") { J.open = J.open === J.cur ? -1 : J.cur; }
+  else if (map[k]) samAct(map[k]);
+  else return;
+  e.preventDefault(); render();
+});
+
+/* ---------- Q2: two ways to serve everyone ---------- */
+const O = { opt: "a", depth: "essentials", more: null, keys: false,
+  qs: [
+    { id: "o1", now: true, q: "How does the Desk become useful to someone else?", why: "Ivy wrote a note at 03:14.", area: "product", model: "cloud", tonight: true, note: "proposes a new stand", material: 4 },
+    { id: "o2", now: true, q: "Which workshop format do I offer next spring?", why: "Two requests came in this week.", area: "consulting", model: "cloud", tonight: false, note: "one idea", material: 2 },
+    { id: "o3", now: false, q: "What should run on the local model?", why: "The Friday run gives a baseline.", area: "work", model: "local", tonight: true, note: "proposes a relation", material: 3 },
+    { id: "o4", now: false, q: "Do I write the weekly post before or after the video?", why: "Unchanged for six days.", area: "personal", model: "cloud", tonight: false, note: "", material: 0 },
+  ] };
+function options() {
+  const full = O.opt === "a" && O.depth === "everything";
+  const pills = (x) => `${x.note ? `<span class="pill wait">${esc(x.note)}</span>` : ""}<span class="pill calm">${x.area}</span><span class="pill calm">${x.model}</span>${x.tonight ? `<span class="pill think">tonight</span>` : ""}`;
+  const row = (x) => `<div class="vrow${full ? " wide" : ""}"><span class="linkq">${esc(x.q)}</span>
+      <span class="faint">${full ? `<span class="row">${pills(x)}</span>` : esc(x.why)}</span>
+      <span class="row">${O.opt === "b" ? `<button class="btn quiet" data-o="more" data-id="${x.id}" aria-expanded="${O.more === x.id}">${O.more === x.id ? "Less" : "More"}</button>` : ""}<button class="btn" data-o="now" data-id="${x.id}">${x.now ? "Not today" : "Now"}</button></span></div>
+    ${O.opt === "b" && O.more === x.id ? `<div class="exp" style="padding-left:14px"><div class="row">${pills(x)}<span class="faint">${x.material} material</span></div>
+      <div class="row"><button class="btn" data-o="tonight" data-id="${x.id}">${x.tonight ? "Do not think tonight" : "Think tonight"}</button><button class="btn" data-o="noop">Move to area</button><button class="btn" data-o="noop">Park</button><button class="btn" data-o="noop">Rename</button></div></div>` : ""}`;
+  const now = O.qs.filter((x) => x.now), rest = O.qs.filter((x) => !x.now);
+  const keys = `<div class="keys"><span><kbd>↓</kbd> <kbd>↑</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>K</kbd> keep</span><span><kbd>R</kbd> reword</span><span><kbd>D</kbd> dismiss</span><span><kbd>T</kbd> think tonight</span><span><kbd>P</kbd> park</span></div>`;
+  const extras = `<div><span class="eyebrow">Parked · 1</span><p class="muted">Is a group course worth the live sessions?</p></div>
+      <div><span class="eyebrow">Decisions due for review · 2</span><p class="muted">Stop the monthly newsletter · Write the weekly report from a draft</p></div>`;
+  const screen = `
+    ${O.opt === "a" ? `<div class="sunk"><div class="row" style="justify-content:space-between"><span><b>Studio depth</b> <span class="faint">lives in Settings; shown here so you can flip it</span></span>
+        <div class="seg" role="tablist" aria-label="Studio depth"><button role="tab" aria-selected="${!full}" data-o="depth" data-id="essentials">Essentials</button><button role="tab" aria-selected="${full}" data-o="depth" data-id="everything">Everything</button></div></div></div>` : ""}
+    <p class="big">${num(now.length)} ${now.length === 1 ? "thing matters" : "things matter"} now. ${num(rest.length)} more ${rest.length === 1 ? "is" : "are"} on your mind.</p>
+    ${full ? keys : ""}
+    <div class="stack"><span class="eyebrow">Now</span>${now.map(row).join("") || `<p class="muted">Nothing.</p>`}</div>
+    <div class="stack"><span class="eyebrow">Also on your mind</span>${rest.map(row).join("") || `<p class="muted">Nothing.</p>`}</div>
+    ${full ? extras : ""}
+    ${O.opt === "b" ? `<div class="row muted"><button class="btn quiet" data-o="noop">Parked · 1</button><button class="btn quiet" data-o="noop">Reviews due · 2</button><button class="btn quiet" data-o="keys" aria-expanded="${O.keys}">Keyboard shortcuts</button></div>${O.keys ? keys : ""}` : ""}`;
+  const A = O.opt === "a";
+  const facts = A
+    ? [["A newcomer sees", "Essentials: the list, Now, and nothing else."], ["You see", "Everything, once you flip the setting: pills, keys, parked, reviews."], ["To explain", "One setting, and what each level hides."], ["To build and test", "Two layouts of the same screen. Every new feature needs a decision for each level."], ["Risk", "A newcomer never learns that think tonight or parking exist. The two levels drift apart."]]
+    : [["A newcomer sees", "The same list as in Essentials. More on a row opens the rest."], ["You see", "The same screen. Shortcuts work everywhere; the hints stay hidden until asked for."], ["To explain", "Nothing. There is no setting."], ["To build and test", "One layout. A new feature goes behind More unless it earns a place on the row."], ["Risk", "Your morning review costs one extra key per thread unless the shortcuts act on a closed row."]];
+  return `<div style="display:flex;flex-direction:column;gap:20px">
+    <div class="row" style="justify-content:space-between"><h2>${A ? "Option A: a depth setting per person" : "Option B: one Studio, details on demand"}</h2>
+      <div class="seg" role="tablist" aria-label="Option"><button role="tab" aria-selected="${A}" data-o="opt" data-id="a">A · depth setting</button><button role="tab" aria-selected="${!A}" data-o="opt" data-id="b">B · one Studio</button></div></div>
+    <div class="split" style="grid-template-columns:minmax(0,1fr) minmax(0,340px)">
+      <div class="frame"><div class="bar"><b>Studio</b><span>${A ? `depth: ${O.depth}` : "one screen for everyone"}</span></div><div class="body">${screen}</div></div>
+      <aside class="sheet"><div class="find" style="grid-template-columns:minmax(0,1fr)">${facts.map(([k, v]) => `<p><b>${k}.</b> ${esc(v)}</p>`).join("")}</div>
+        <p class="quote"><b>My pick is B.</b> It is one surface to build, test and document, and a newcomer can grow into it without finding a setting. A only wins if the full view needs a different layout, not just more on the same rows.</p>
+        <p class="faint">Both use the Now view from Kim's screen. Think it through on a Desk item (D3) works the same under either.</p></aside>
+    </div></div>`;
+}
+function optionsAct(a, el) {
+  const x = O.qs.find((q) => q.id === el.dataset.id);
+  if (a === "opt") { O.opt = el.dataset.id; O.more = null; }
+  else if (a === "depth") O.depth = el.dataset.id;
+  else if (a === "more") O.more = O.more === x.id ? null : x.id;
+  else if (a === "now") x.now = !x.now;
+  else if (a === "tonight") x.tonight = !x.tonight;
+  else if (a === "keys") O.keys = !O.keys;
+}
+
+/* ---------- One Studio: Kim's view with Luca's panel and Nora's replies folded in ---------- */
+const U = { open: "rate", view: "day", plan: { rate: 0, probono: 0, ws: 2 }, st: {}, log: [], copied: false, toast: "", more: null, keys: false, merge: null,
+  items: [
+    { id: "ws", kind: "Question", now: true, area: "clients", model: "cloud", tonight: false, q: "How do I open the conflict workshop for the school team?", why: "The workshop is in five days.", next: "Open point from Monday: who brings the example?",
+      prior: { when: "You talked it through on Monday", before: "Start with the theory, then practise.", after: "Open with one real example from the team. The four steps come after the break.",
+        settled: ["Open with a real example, not with theory.", "Keep the four steps for after the break."], open: ["Who brings the example: you or the head teacher?"],
+        turns: [["You", "I always start with the four steps. With this team I am not sure it lands."], ["Ivy", "Two teachers said they had heard the theory before. What did they ask for?"], ["You", "Something from their own staff room."], ["Ivy", "Then start there. Who could bring that example?"]] },
+      read: "The head teacher wrote on Friday that she can give you ten minutes before the workshop. Your notes say the team trusts her, and that two teachers are wary of outside trainers.",
+      src: [["mail from the head teacher, Fri", "I can meet you at 8:20, ten minutes before we start."], ["your notes, first call", "Team trusts the head. Two teachers sceptical of external trainers."]],
+      opts: ["I ask the head teacher to bring the example.", "I bring an example from another school."],
+      counter: ["Against asking her: if the example is hers, the team may hear it as her side of a conflict they are part of.", "Against your own example: the two wary teachers asked for something from their own staff room."] },
+    { id: "rate", kind: "Question", now: true, area: "business", model: "cloud", tonight: false, q: "Do I raise my rate for the spring block?", why: "Two clients asked for spring dates this week.", next: "Ivy has a suggestion for you.",
+      stand: "I should probably leave it as it is.", proposal: "Raise the rate by 8 percent for new bookings. Keep the old rate for the two who already asked.",
+      read: "Both clients who asked for spring dates paid last year's rate without comment. Your room rent and insurance rose by about 6 percent since then.",
+      src: [["invoices, last 12 months", "14 invoices at the current rate. No discount asked, none given."], ["two mails this week", "Both ask for dates in March. Neither mentions price."], ["rent and insurance statements", "Room rent up 5 percent from January, insurance up 9 percent."]] },
+    { id: "probono", kind: "Mail", now: true, area: "clients", model: "cloud", tonight: false, q: "Request: a free workshop for the parents' association", why: "The request is nine days old.", next: "Needs an answer. A reply can be drafted once you decide.",
+      read: "They ask for a free evening in January. You gave two free evenings this year, and wrote in September that two is your limit.",
+      src: [["mail from the association, 2 Nov", "We have no budget, but 40 parents would come."], ["your note, September", "Pro bono: two per year. Both used."]],
+      opts: ["Decline, and offer the paid evening group at a reduced rate.", "Accept once more, as a way into the school."],
+      counter: ["Against declining: 40 parents is the largest audience you were offered this year.", "Against accepting: it breaks the limit you set in September, eight weeks after setting it."] },
+    { id: "inv", kind: "Agent is waiting", now: true, area: "business", model: "cloud", tonight: false, q: "Three invoices are late. Send the reminders?", why: "The agent prepared three reminders and will not send them by itself.", next: "One call from you and it continues.",
+      read: "Two invoices are 20 days late. The third is 35 days late, from a client you see again on Thursday.",
+      src: [["open invoices", "Two at 20 days, one at 35 days."], ["calendar, Thursday", "Session with the third client at 14:00."]],
+      opts: ["Send all three reminders.", "Send two. I raise the third in person on Thursday."],
+      counter: ["Against sending all three: the third client gets a formal reminder two days before sitting in your room.", "Against waiting: this client was also late in spring, and you did not raise it then."] },
+    { id: "train", kind: "Question", now: false, suggest: true, area: "me", model: "cloud", tonight: true, q: "Should I take the mediation training?", why: "Me is behind this week. Early booking ends on Tuesday." },
+    { id: "evening", kind: "Question", now: false, area: "business", model: "cloud", tonight: false, q: "Do I offer the evening group again?", why: "Registration would open in January." },
+    { id: "news", kind: "Question", now: false, area: "business", model: "cloud", tonight: false, q: "What goes into the January newsletter?", why: "Nothing is due before mid December." },
+  ] };
+const ust = (id) => (U.st[id] ||= { pick: null, own: "", challenged: false, flagged: {}, openSrc: null, reply: false });
+function uPanel(it) {
+  const s = ust(it.id), nFlag = Object.keys(s.flagged).length;
+  const srcs = it.src ? `<p>${esc(it.read)}</p>
+    <div class="row">${it.src.map(([n], i) => `<button class="src${s.flagged[i] ? " flag" : ""}" data-u="src" data-i="${i}" aria-expanded="${s.openSrc === i}">${esc(n)}</button>`).join("")}</div>
+    ${s.openSrc !== null ? `<div class="excerpt"><p>${esc(it.src[s.openSrc][1])}</p>${s.flagged[s.openSrc] ? `<span class="pill wait">You flagged this</span>` : `<button class="btn" data-u="flag">This is wrong or out of date</button>`}</div>` : ""}
+    ${nFlag ? `<p class="faint">Flagged sources are left out and named in today's log.</p>` : ""}` : "";
+  let call;
+  if (it.proposal) {
+    call = `<div class="ivy"><span class="from">Ivy suggests you now stand here</span><p>${esc(it.proposal)}</p><p class="faint">Until now: ${esc(it.stand)}</p>
+      ${s.reply ? `<label for="u-reply">What is off?<textarea id="u-reply" placeholder="Say it in your own words. Ivy picks it up tonight."></textarea></label><div class="row"><button class="btn pri" data-u="send">Send</button><button class="btn quiet" data-u="cancel">Cancel</button></div>`
+        : `<div class="row"><button class="btn pri" data-u="yes">Yes, that is where I stand</button><button class="btn" data-u="notquite">Not quite</button></div>`}</div>`;
+  } else if (it.opts) {
+    call = `<div class="stack" role="radiogroup" aria-label="Your call"><span class="eyebrow">Your call</span>
+        ${it.opts.map((o, i) => `<label class="opt"><input type="radio" name="u-opt" id="u-opt-${it.id}-${i}" value="${i}" ${s.pick === i ? "checked" : ""}><span>${esc(o)}</span></label>`).join("")}
+        <label class="opt"><input type="radio" name="u-opt" id="u-opt-${it.id}-x" value="2" ${s.pick === 2 ? "checked" : ""}><span>Something else</span></label>
+        ${s.pick === 2 ? `<input type="text" id="u-own" aria-label="Your own call" placeholder="Your call, in one sentence" value="${esc(s.own)}">` : ""}</div>
+      ${s.challenged && s.pick !== null ? `<div class="ivy"><span class="from">The case against your call</span><p>${esc(s.pick < 2 ? it.counter[s.pick] : "I have nothing to set against a call I did not propose.")}</p></div>` : ""}
+      ${it.kind === "Question" ? `<details><summary>Check on it later (optional)</summary><div class="stack" style="margin-top:8px"><label for="u-expect-${it.id}">How will you know it was right?<input type="text" id="u-expect-${it.id}" placeholder="The sign you would see"></label><label for="u-date-${it.id}">Remind me on<input type="date" id="u-date-${it.id}" value="2027-02-15"></label></div></details>` : ""}
+      <div class="row"><button class="btn pri" data-u="decide" ${s.pick === null ? "disabled" : ""}>${it.kind === "Agent is waiting" ? "Decide and tell the agent" : it.kind === "Mail" ? "Decide and draft the reply" : "I have decided"}</button><button class="btn" data-u="challenge" ${s.pick === null || s.challenged ? "disabled" : ""}>Challenge my call first</button><button class="btn quiet" data-u="talk">Talk it through instead</button></div>`;
+  } else {
+    call = `<div><span class="eyebrow">Where you stand</span><p>${esc(it.stand)}</p></div><div class="row"><button class="btn pri" data-u="close">I have decided</button><button class="btn quiet" data-u="talk">Talk it through</button></div>`;
+  }
+  return `<div class="exp" style="padding:14px 16px;border:0;border-radius:8px">${it.prior ? summaryCard(it.prior) : ""}${srcs}${call}</div>`;
+}
+const CAL = { now: 10 * 60 + 40, label: "Wednesday 11 November",
+  day: [{ s: 540, e: 630, t: "Client session" }, { s: 750, e: 795, t: "Lunch with Mara" }, { s: 840, e: 930, t: "Couple session" }, { s: 1020, e: 1080, t: "Evening group" }],
+  est: { ws: 45, rate: 20, probono: 15, inv: 10 },
+  week: [
+    { d: "Wed 11", today: true, ev: [["9:00", "Client session"], ["12:30", "Lunch with Mara"], ["14:00", "Couple session"], ["17:00", "Evening group"]], link: [] },
+    { d: "Thu 12", ev: [["9:00", "Client session"], ["14:00", "Session with the late-paying client"]], link: [["inv", "Late invoice: raise it here?"]] },
+    { d: "Fri 13", ev: [["10:00", "Supervision group"]], link: [] },
+    { d: "Sat 14", ev: [], link: [] },
+    { d: "Sun 15", ev: [], link: [] },
+    { d: "Mon 16", ev: [["8:20", "Head teacher, ten minutes"], ["8:30", "Conflict workshop, school team"]], link: [["ws", "How do I open the workshop?"]] },
+    { d: "Tue 17", ev: [["18:00", "Evening group"]], link: [["train", "Early booking for the training ends"]] },
+  ] };
+const hm = (m) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
+const dur = (m) => (m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ""}` : `${m} min`);
+const est = (id) => CAL.est[id] || 20;
+function calGaps() {
+  return CAL.day.slice(0, -1).map((ev, i) => {
+    const end = CAL.day[i + 1].s, start = end <= CAL.now ? ev.e : Math.max(ev.e, CAL.now);
+    const ids = Object.keys(U.plan).filter((id) => U.plan[id] === i && U.items.some((x) => x.id === id && x.now));
+    return { i, start, end, ids, left: end - start - ids.reduce((n, id) => n + est(id), 0), cur: CAL.now >= ev.e && CAL.now < end, past: end <= CAL.now };
+  });
+}
+function dayRail() {
+  const gaps = calGaps();
+  const rows = CAL.day.map((ev, i) => {
+    const g = gaps[i];
+    const nRaise = ev.raise.filter((id) => U.items.some((x) => x.id === id)).length + ev.notes.length;
+    const evRow = `<div class="slot ev${ev.e <= CAL.now && U.ev !== ev.id ? " past" : ""}"><span class="tm">${hm(ev.s)}</span><span><button class="evb" data-u="ev" data-to="${ev.id}" aria-expanded="${U.ev === ev.id}"><b>${esc(ev.t)}</b> <span class="faint">until ${hm(ev.e)}${nRaise && ev.e > CAL.now ? ` · ${nRaise} to raise` : ""}</span></button></span>${U.ev === ev.id ? evDetail(ev) : ""}</div>`;
+    if (!g) return evRow;
+    const chips = g.ids.map((id) => { const x = U.items.find((y) => y.id === id); return `<div class="chip${U.focus === "all" || x.area === U.focus ? "" : " off"}"><button class="linkq" data-u="jump" data-id="${id}">${esc(x.q)}</button><span class="faint">${dur(est(id))}</span>
+      ${gaps[i + 1] ? `<button class="x" data-u="later" data-id="${id}" title="Move to the next free time">Later</button>` : ""}<button class="x" data-u="unplan" data-id="${id}" aria-label="Take off the day">×</button></div>`; }).join("");
+    return evRow + `<div class="slot free${g.cur ? " cur" : ""}${g.past ? " past" : ""}"><span class="tm">${hm(g.start)}</span><div>
+      <span class="row">${g.cur ? `<span class="pill think">Now</span>` : ""}<span class="faint">${g.past ? `Passed${g.ids.length ? ` · ${g.ids.length} not done, press Later to move` : ""}` : `Free until ${hm(g.end)} · ${g.left >= 0 ? `${dur(g.left)} left` : ""}`}</span>${g.left < 0 && !g.past ? `<span class="pill wait">over by ${dur(-g.left)}</span>` : ""}</span>${chips}</div></div>`;
+  }).join("");
+  return `<div class="rail"><span class="eyebrow">${CAL.label}</span>${rows}${railRoutines()}</div>`;
+}
+function weekGrid() {
+  const planned = Object.keys(U.plan).filter((id) => U.items.some((x) => x.id === id && x.now)).length;
+  return `<div class="tw"><div class="week">${CAL.week.map((d) => `<div class="wd${d.today ? " today" : ""}"><b>${d.d}${d.today ? " · today" : ""}</b>
+      ${d.ev.map(([t, n]) => `<span><span class="tm">${t}</span> ${esc(n)}</span>`).join("") || `<span class="faint">Nothing booked</span>`}
+      ${d.today && planned ? `<span class="faint">${planned} planned from your list</span>` : ""}
+      ${d.link.filter(([id]) => U.items.some((x) => x.id === id)).map(([id, l]) => `<button class="lk" data-u="jump" data-id="${id}">${esc(l)}</button>`).join("")}</div>`).join("")}</div></div>
+    <p class="faint">Amber marks are questions from your list that belong to that day. Click one to open it.</p>`;
+}
+/* The Balance outline as the third view: drill in, one level at a time, framed by the ancestors. */
+U.areas = [{ id: "clients", label: "Clients", w: 40, got: 55 }, { id: "business", label: "Business", w: 30, got: 38 }, { id: "me", label: "Me", w: 30, got: 7 }];
+const U_PROJ = { ws: "School workshop", probono: "Parents' association", rate: "Practice", inv: "Practice", train: "Training", evening: "Offers", news: "Offers" };
+U.items.push(
+  { id: "print", kind: "Task", proj: "School workshop", now: true, area: "clients", model: "cloud", tonight: false, q: "Send the workshop handout to print", why: "Due Friday.", next: "Ten minutes. Due Friday." },
+  { id: "room", kind: "Task", proj: "Practice", now: false, area: "business", model: "cloud", tonight: false, q: "Renew the room contract", why: "Due 30 November." },
+  { id: "walk", kind: "Task", proj: "Health", now: false, area: "me", model: "cloud", tonight: false, q: "Book the physio appointment", why: "No date is attached." });
+CAL.est.print = 10;
+U.at = null;
+U.nodes = [];
+for (const ar of U.areas) U.nodes.push({ id: "a-" + ar.id, parent: null, title: ar.label, area: ar.id });
+for (const x of U.items) {
+  const p = U_PROJ[x.id] || x.proj, pid = "p-" + x.area + "-" + p;
+  if (!U.nodes.some((n) => n.id === pid)) U.nodes.push({ id: pid, parent: "a-" + x.area, title: p, w: 50 });
+  U.nodes.push({ id: x.id, parent: pid, item: true, w: 50 });
+}
+const nItem = (n) => U.items.find((x) => x.id === n.id);
+const nKids = (id) => U.nodes.filter((n) => n.parent === id && (!n.item || nItem(n) || U.nodes.some((c) => c.parent === n.id)));
+const nOpen = (id) => nKids(id).reduce((sum, n) => sum + (n.item && nItem(n) ? 1 : 0) + nOpen(n.id), 0);
+const nTitle = (n) => (n.item && nItem(n) ? nItem(n).q : n.title || "Done");
+const nArea = (n) => { let c = n; while (c.parent) c = U.nodes.find((m) => m.id === c.parent); return U.areas.find((a) => a.id === c.area); };
+const areaState = (ar) => { const tot = U.areas.reduce((s, a) => s + a.w, 0) || 1, want = Math.round((ar.w / tot) * 100);
+  return { want, pill: ar.w === 0 ? `<span class="pill calm">set aside</span>` : ar.got < want - 10 ? `<span class="pill wait">behind this week</span>` : ar.got > want + 10 ? `<span class="pill calm">ahead this week</span>` : `<span class="pill ok">in balance</span>` }; };
+function treeView() {
+  const cur = U.nodes.find((n) => n.id === U.at) || null;
+  const row = (n) => { const x = n.item && nItem(n), inside = nOpen(n.id), ar = n.area && U.areas.find((a) => a.id === n.area);
+    return `<div class="vrow${ar ? "" : " dr"}"${ar ? "" : ` draggable="true" data-node="${esc(n.id)}"`}>${ar ? "" : `<button class="hd" data-u="rowmenu" data-to="${esc(n.id)}" aria-expanded="${U.rowMenu === n.id}" aria-label="Move ${esc(nTitle(n))}">⋮⋮</button>`}<button class="linkq" data-u="drill" data-to="${esc(n.id)}">${esc(nTitle(n))}</button>
+      <span class="faint">${ar ? `${inside} open` : x ? `${esc(x.kind)} · ${esc(x.why)}${inside ? ` · ${inside} inside` : ""}` : `${inside} inside`}</span>
+      <span class="row">${ar ? areaState(ar).pill : x ? (x.now ? `<span class="pill think">in Now</span>` : `<button class="btn" data-u="now" data-id="${x.id}">Now</button>`) : ""}<button class="btn quiet" data-u="drill" data-to="${esc(n.id)}" aria-label="Open ${esc(nTitle(n))}">›</button></span></div>${U.rowMenu === n.id ? rowMenu(n) : ""}`; };
+  const kids = nKids(U.at).filter((n) => U.at || U.focus === "all" || n.area === U.focus);
+  let inner;
+  if (!cur) {
+    inner = `<div class="cur"><h2>Everything</h2><p class="muted" style="max-width:62ch">Your areas. Open one to see what is inside it. The morning proposal draws from here and follows the importance you give each area.</p>
+      <div>${kids.map(row).join("")}</div><p class="faint">Areas come from your settings. Open an area to add rows to it.</p></div>`;
+  } else {
+    const x = cur.item && nItem(cur), ar = cur.area && U.areas.find((a) => a.id === cur.area), st = ar && areaState(ar);
+    inner = `<div class="cur">
+      <div class="row" style="justify-content:space-between"><h2>${esc(nTitle(cur))}</h2>${ar ? st.pill : x ? (x.now ? `<span class="pill think">in Now</span>` : `<button class="btn" data-u="now" data-id="${x.id}">Now</button>`) : ""}</div>
+      ${x ? `<p class="muted">${esc(x.kind)} · ${esc(x.why)}</p>` : ""}
+      ${ar ? `<div class="stack"><div class="balbar"><i style="width:${ar.got}%"></i><b style="left:${st.want}%"></b></div><span class="faint">${ar.got}% of your time this week. The mark is the ${st.want}% you want.</span></div>` : ""}
+      <details${U.treeMore ? " open" : ""}><summary data-u="treeMore">More</summary><div class="ar" style="border:0;padding:8px 0 0">
+        <label for="${ar ? "u-w-" + ar.id : "u-n-" + cur.id}">Importance<input type="range" id="${ar ? "u-w-" + ar.id : "u-n-" + cur.id}" min="0" max="100" step="5" value="${ar ? ar.w : cur.w}"><span class="code">${ar ? ar.w : cur.w}</span></label>
+        <span class="faint">${ar ? "Relative to your other areas. Zero sets the area aside." : "Relative to the rows beside it. Zero sets it aside."}</span>
+        ${ar ? "" : `<div class="row">${x ? (x.who === "agent" ? `<span class="pill think">an agent is working on it</span>` : `<button class="btn" data-u="hand" data-id="${x.id}">Hand to an agent</button>`) : ""}<button class="btn" data-u="noop">Focus this month</button><button class="btn" data-u="noop">Rows one after another</button><button class="btn" data-u="noop">Move</button></div>`}</div></details>
+      <div>${kids.map(row).join("") || `<p class="muted">Nothing inside yet.${x ? " Add a row and this becomes a project." : ""}</p>`}</div>
+      <div class="row" style="flex-wrap:nowrap"><input type="text" id="u-add" aria-label="A new row in ${esc(nTitle(cur))}" placeholder="Add a row to ${esc(nTitle(cur))}"><button class="btn" data-u="addrow" style="white-space:nowrap">Add</button></div></div>`;
+  }
+  const path = []; for (let c = cur && cur.parent; c; c = (U.nodes.find((n) => n.id === c) || {}).parent) path.unshift(U.nodes.find((n) => n.id === c));
+  if (cur) path.unshift(null);
+  return path.reduceRight((html, n) => `<div class="anc"><button class="anch" data-u="drill" data-to="${n ? esc(n.id) : ""}"${n ? ` data-drop="${esc(n.id)}"` : ""}>‹ ${n ? esc(nTitle(n)) : "Everything"}</button>${html}</div>`, inner);
+}
+document.addEventListener("change", (e) => {
+  const a = /^u-w-(.+)$/.exec(e.target.id || ""), n = /^u-n-(.+)$/.exec(e.target.id || "");
+  if (a) { U.areas.find((x) => x.id === a[1]).w = Number(e.target.value); U.treeMore = true; render(); }
+  else if (n) { U.nodes.find((x) => x.id === n[1]).w = Number(e.target.value); U.treeMore = true; render(); }
+});
+
+/* Reordering in the drill-in: a handle menu that works everywhere, and drag where the browser supports it. */
+const nFind = (id) => U.nodes.find((n) => n.id === id);
+const nAfter = (n) => { const s = nKids(n.parent), i = s.indexOf(n); return s[i + 1] ? s[i + 1].id : null; };
+function nMove(id, parent, before) {
+  const n = nFind(id); if (!n || n.area || !parent) return false;
+  for (let c = parent; c; c = (nFind(c) || {}).parent) if (c === id) return false;
+  U.nodes.splice(U.nodes.indexOf(n), 1); n.parent = parent;
+  const i = before ? U.nodes.findIndex((x) => x.id === before) : -1;
+  if (i >= 0) U.nodes.splice(i, 0, n); else U.nodes.push(n);
+  const fix = (m) => { const x = nItem(m); if (x) x.area = nArea(m).id; U.nodes.filter((c) => c.parent === m.id).forEach(fix); };
+  fix(n); return true;
+}
+function nShift(id, dir) {
+  const n = nFind(id), s = nKids(n.parent), i = s.indexOf(n), p = nFind(n.parent);
+  if (dir === "up" && i > 0) return nMove(id, n.parent, s[i - 1].id);
+  if (dir === "down" && i < s.length - 1) return nMove(id, n.parent, s[i + 2] ? s[i + 2].id : null);
+  if (dir === "out" && p && p.parent) return nMove(id, p.parent, nAfter(p));
+  if (dir === "into" && i > 0) return nMove(id, s[i - 1].id, null);
+  return false;
+}
+function rowMenu(n) {
+  const s = nKids(n.parent), i = s.indexOf(n), p = nFind(n.parent);
+  return `<div class="exp" style="padding-left:14px"><div class="row">
+      <button class="btn" data-u="mv" data-to="up" ${i > 0 ? "" : "disabled"}>Up</button><button class="btn" data-u="mv" data-to="down" ${i < s.length - 1 ? "" : "disabled"}>Down</button>
+      <button class="btn" data-u="mv" data-to="out" ${p && p.parent ? "" : "disabled"}>Out, next to ${esc(p ? nTitle(p) : "")}</button>
+      <button class="btn" data-u="mv" data-to="into" ${i > 0 ? "" : "disabled"}>${i > 0 ? `Into ${esc(nTitle(s[i - 1]))}` : "Into the row above"}</button></div>
+    <span class="faint">Or drag the row: between rows to reorder, onto a row to put it inside, onto a frame label above to move it out to that level.</span></div>`;
+}
+let dragId = null;
+const clearZones = () => document.querySelectorAll("[data-zone]").forEach((el) => el.removeAttribute("data-zone"));
+const dropTarget = (e) => { const t = e.target.closest && e.target.closest("[data-node],[data-drop]"); return t && t.dataset.node !== dragId ? t : null; };
+const dropZone = (t, e) => { if (t.dataset.drop) return "into"; const r = t.getBoundingClientRect(), y = (e.clientY - r.top) / r.height; return y < 0.3 ? "before" : y > 0.7 ? "after" : "into"; };
+document.addEventListener("dragstart", (e) => { const r = e.target.closest && e.target.closest("[data-node]"); if (!r) return; dragId = r.dataset.node; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", dragId); });
+document.addEventListener("dragover", (e) => { if (!dragId) return; clearZones(); const t = dropTarget(e); if (!t) return; e.preventDefault(); t.dataset.zone = dropZone(t, e); });
+document.addEventListener("drop", (e) => {
+  if (!dragId) return; const t = dropTarget(e); if (!t) return; e.preventDefault();
+  const zone = dropZone(t, e), tn = t.dataset.node && nFind(t.dataset.node);
+  const ok = t.dataset.drop ? nMove(dragId, t.dataset.drop, null) : zone === "before" ? nMove(dragId, tn.parent, tn.id) : zone === "after" ? nMove(dragId, tn.parent, nAfter(tn)) : nMove(dragId, tn.id, null);
+  U.toast = ok ? "Moved." : "That row cannot go there."; dragId = null; render();
+});
+document.addEventListener("dragend", () => { dragId = null; clearZones(); });
+
+/* Day greeting: one sentence, then what changed since yesterday as links. */
+function greetStrip() {
+  const has = (id) => U.items.some((x) => x.id === id && x.now);
+  const n = U.dfy.groups.filter((g) => !g.undone).reduce((s, g) => s + g.n, 0);
+  const chips = [
+    has("rate") ? `<button class="gchip" data-u="jump" data-id="rate">Ivy has a suggestion on your rate</button>` : "",
+    has("inv") ? `<button class="gchip" data-u="jump" data-id="inv">One agent is waiting for a call</button>` : "",
+    n ? `<button class="gchip" data-u="dfy">${n} things were done for you</button>` : "",
+    U.rev.closed ? "" : `<button class="gchip" data-u="view" data-id="review">Last week's review is open · about 5 minutes</button>`,
+  ].filter(Boolean);
+  return chips.length ? `<div class="row" aria-label="Since yesterday">${chips.join("")}</div>` : "";
+}
+
+/* Done for you: one line at rest, grouped by what Ivy did and why, with undo per group. */
+U.dfy = { open: false, show: null, groups: [
+  { id: "mail", label: "Mail tidied", n: 11, why: "You marked mail like this Unimportant three times.", items: ["Deleted 9 mails from two newsletter digests", "Archived 2 booking confirmations"] },
+  { id: "agent", label: "Agent tasks retried", n: 1, why: "You allowed one retry for failed tasks.", items: ["The invoice export failed at 06:10 and worked on the second try"] },
+  { id: "file", label: "Thoughts filed", n: 2, why: "Both matched a question you already have.", items: ["“Ask about parking at the school” went to School workshop", "“Room rent letter” went to Practice"] },
+] };
+function doneForYou() {
+  const live = U.dfy.groups.filter((g) => !g.undone), n = live.reduce((s, g) => s + g.n, 0);
+  return `<div><div class="row" style="justify-content:space-between"><span><span class="eyebrow">Done for you today · ${n}</span> <span class="faint">${live.map((g) => `${g.label.toLowerCase()} ${g.n}`).join(", ")}</span></span>
+      <button class="btn quiet" data-u="dfy" aria-expanded="${U.dfy.open}">${U.dfy.open ? "Hide" : "Show"}</button></div>
+    ${U.dfy.open ? U.dfy.groups.map((g) => `<div class="vrow"><span class="linkq">${g.label} · ${g.n}</span><span class="faint">${g.undone ? "Undone. Everything is back where it was." : g.stopped ? "Ivy asks you first from now on." : esc(g.why)}</span>
+        <span class="row"><button class="btn quiet" data-u="dfyShow" data-to="${g.id}" aria-expanded="${U.dfy.show === g.id}">${U.dfy.show === g.id ? "Less" : "Details"}</button>${g.undone ? "" : `<button class="btn" data-u="dfyUndo" data-to="${g.id}">Undo</button>`}${g.stopped || g.undone ? "" : `<button class="btn quiet" data-u="dfyStop" data-to="${g.id}">Ask me first</button>`}</span></div>
+      ${U.dfy.show === g.id ? `<ul class="plain" style="margin-bottom:8px">${g.items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : ""}`).join("") : ""}</div>`;
+}
+
+/* Weekly review: four things to look at, each with one decision. */
+U.rev = { seen: false, closed: false, area: {}, wins: { total: 9, by: "Clients 5 · Business 3 · Me 1", top: ["Held the first call with the school team", "Sent the spring dates to two clients", "Finished the September accounts"] },
+  stale: [{ id: "s1", q: "New website text for couples coaching", age: "untouched for five weeks", a: null }, { id: "s2", q: "Which three clients do I ask for a testimonial?", age: "untouched for four weeks", a: null }],
+  checks: [{ id: "c1", q: "Stop offering single trial sessions", on: "decided 2 September", expect: "No fewer first bookings in October.", a: null }] };
+function reviewView() {
+  const R = U.rev, tot = U.areas.reduce((s, a) => s + a.w, 0) || 1;
+  const off = U.areas.filter((a) => Math.abs(a.got - Math.round((a.w / tot) * 100)) > 10 || R.area[a.id]);
+  const done = [R.seen, off.every((a) => R.area[a.id]), R.stale.every((s) => s.a), R.checks.every((c) => c.a)];
+  const n = done.filter(Boolean).length, mark = (i) => (done[i] ? `<span class="pill ok">looked at</span>` : `<span class="pill calm">open</span>`);
+  const head = (i, t) => `<div class="row" style="justify-content:space-between"><h3>${t}</h3>${mark(i)}</div>`;
+  return `<div class="row" style="justify-content:space-between"><h2>Last week in review</h2><span class="row"><span class="faint">${n} of 4 looked at</span><button class="btn quiet" data-u="view" data-id="day">Back to the day</button></span></div>
+    <div class="ar">${head(0, `What you finished · ${R.wins.total}`)}<p class="muted">${R.wins.by}</p><ul class="plain">${R.wins.top.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>
+      ${R.seen ? "" : `<div class="row"><button class="btn" data-u="revSeen">Seen</button></div>`}</div>
+    <div class="ar">${head(1, "Where your time went")}
+      ${U.areas.map((a) => { const want = Math.round((a.w / tot) * 100), isOff = off.includes(a), c = R.area[a.id];
+        return `<div class="stack"><span class="row" style="justify-content:space-between"><b>${a.label}</b><span class="faint">${a.got}% of your time, you want ${want}%</span></span><div class="balbar"><i style="width:${a.got}%"></i><b style="left:${want}%"></b></div>
+          ${!isOff ? "" : c ? `<span class="faint">${c === "room" ? `Next week's proposal starts with ${a.label}.` : c === "fine" ? "Left as it is." : `You now want less for ${a.label}.`}</span>`
+            : a.got < want ? `<div class="row"><button class="btn" data-u="revArea" data-id="${a.id}" data-to="room">Make room next week</button><button class="btn" data-u="revArea" data-id="${a.id}" data-to="lower">I want less of it for now</button><button class="btn quiet" data-u="revArea" data-id="${a.id}" data-to="fine">It was a one-off</button></div>`
+            : `<div class="row"><button class="btn" data-u="revArea" data-id="${a.id}" data-to="fine">That was right for this week</button><button class="btn quiet" data-u="revArea" data-id="${a.id}" data-to="room">Hold it back next week</button></div>`}</div>`; }).join("")}</div>
+    <div class="ar">${head(2, "What did not move")}
+      ${R.stale.map((s) => `<div class="vrow"><span class="linkq">${esc(s.q)}</span><span class="faint">${s.a ? esc(s.a) : s.age}</span><span class="row">${s.a ? "" : `<button class="btn" data-u="revStale" data-id="${s.id}" data-to="Kept.">Keep</button><button class="btn" data-u="revStale" data-id="${s.id}" data-to="Parked.">Park</button><button class="btn quiet" data-u="revStale" data-id="${s.id}" data-to="Let go.">Let it go</button>`}</span></div>`).join("")}</div>
+    <div class="ar">${head(3, "Decisions to check")}
+      ${R.checks.map((c) => `<div class="stack"><span><b>${esc(c.q)}</b> <span class="faint">${c.on}</span></span><span class="muted">You expected: ${esc(c.expect)}</span>
+        ${c.a ? `<span class="pill ok" style="align-self:flex-start">${esc(c.a)}</span>` : `<div class="row"><button class="btn" data-u="revCheck" data-id="${c.id}" data-to="It happened">It happened</button><button class="btn" data-u="revCheck" data-id="${c.id}" data-to="It did not">It did not</button><button class="btn quiet" data-u="revCheck" data-id="${c.id}" data-to="Too early, ask in a month">Too early</button></div>`}</div>`).join("")}</div>
+    ${n === 4 ? `<div class="ivy"><span class="from">The review is done</span><p>Monday's proposal follows what you chose here.</p><div class="row"><button class="btn pri" data-u="revClose">Close the review</button></div></div>` : ""}`;
+}
+
+/* The Now page as a stream: what is new comes up at the top as a card and leaves once it is dealt with. */
+for (const id of ["inv", "rate"]) U.items.find((x) => x.id === id).fresh = true;
+U.dfy.card = true; U.rev.card = true; U.focus = "all";
+function dfyCard() {
+  const live = U.dfy.groups.filter((g) => !g.undone), n = live.reduce((s, g) => s + g.n, 0);
+  return `<div class="card"><span class="row" style="justify-content:space-between"><span class="eyebrow">Done for you</span><span class="pill think">new</span></span>
+    <span class="q">${n} things were done for you since yesterday</span>
+    <div>${U.dfy.groups.map((g) => `<div class="vrow"><span class="linkq">${g.label} · ${g.n}</span><span class="faint">${g.undone ? "Undone. Everything is back where it was." : g.stopped ? "Ivy asks you first from now on." : esc(g.why)}</span>
+        <span class="row"><button class="btn quiet" data-u="dfyShow" data-to="${g.id}" aria-expanded="${U.dfy.show === g.id}">${U.dfy.show === g.id ? "Less" : "Details"}</button>${g.undone ? "" : `<button class="btn" data-u="dfyUndo" data-to="${g.id}">Undo</button>`}${g.stopped || g.undone ? "" : `<button class="btn quiet" data-u="dfyStop" data-to="${g.id}">Ask me first</button>`}</span></div>
+      ${U.dfy.show === g.id ? `<ul class="plain" style="margin-bottom:8px">${g.items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : ""}`).join("")}</div>
+    <div class="row"><button class="btn pri" data-u="dfyDismiss">Looks fine</button></div></div>`;
+}
+function reviewCard() {
+  return `<div class="card"><span class="row" style="justify-content:space-between"><span class="eyebrow">Weekly review</span><span class="pill think">new</span></span>
+    <span class="q">Last week's review is open</span><span class="sub">Four things to look at. About five minutes.</span>
+    <div class="row"><button class="btn pri" data-u="view" data-id="review">Start the review</button><button class="btn quiet" data-u="revLater">Not today</button></div></div>`;
+}
+
+/* Meetings as first-class entries: who, where, what to raise, and one question when they end. */
+Object.assign(CAL.day[0], { id: "m1", area: "clients", with: "Jonas, individual session", where: "Practice room", raise: [], notes: [] });
+Object.assign(CAL.day[1], { id: "m2", area: "me", with: "Mara", where: "Café at the station", raise: [], notes: [] });
+Object.assign(CAL.day[2], { id: "m3", area: "clients", with: "A couple, third session", where: "Practice room", raise: [], notes: ["Ask how the listening exercise went"] });
+Object.assign(CAL.day[3], { id: "m4", area: "clients", with: "Six people", where: "Online", join: true, raise: ["evening"], notes: [] });
+U.ev = null;
+const evFind = (id) => CAL.day.find((e) => e.id === id);
+const areaLabel = (id) => (U.areas.find((a) => a.id === id) || {}).label || id;
+function evDetail(ev) {
+  const linked = ev.raise.map((id) => U.items.find((x) => x.id === id)).filter(Boolean);
+  return `<div class="evd"><span class="faint">${esc(ev.with)} · ${esc(ev.where)}</span>
+    <span class="row"><span class="pill calm">${areaLabel(ev.area)}</span><span class="faint">${dur(ev.e - ev.s)}, counts toward ${areaLabel(ev.area)}</span>${ev.join && ev.e > CAL.now ? `<button class="btn" data-u="noop">Join</button>` : ""}</span>
+    ${ev.brief && ev.e > CAL.now ? (U.briefOpen[ev.id] ? briefBlock(ev) : `<button class="btn" data-u="brief" data-to="${ev.id}">Prepare me</button>`) : ""}${lastBlock(ev)}
+    <span class="eyebrow">${ev.e <= CAL.now ? "What you raised" : "To raise"}</span>
+    ${linked.map((x) => `<button class="lk" data-u="jump" data-id="${x.id}">${esc(x.q)}</button>`).join("")}${ev.notes.map((n) => `<span>${esc(n)}</span>`).join("")}${linked.length + ev.notes.length ? "" : `<span class="faint">Nothing yet.</span>`}
+    ${ev.e > CAL.now ? `<span class="row" style="flex-wrap:nowrap"><input type="text" id="u-raise" aria-label="Something to raise in ${esc(ev.t)}" placeholder="Something to raise"><button class="btn" data-u="raise">Add</button></span>
+      <span class="faint">Ten minutes before, this comes up at the top of your list.</span>` : ""}</div>`;
+}
+function afterCard() {
+  const ev = evFind(U.after);
+  return `<div class="card"><span class="row" style="justify-content:space-between"><span class="eyebrow">Meeting ended</span><span class="pill think">new</span></span>
+    <span class="q">${esc(ev.t)} ended at ${hm(ev.e)}</span><span class="sub">${esc(ev.with)}. Anything to keep from it?</span>
+    <div class="row" style="flex-wrap:nowrap"><input type="text" id="u-after" aria-label="Something to keep from ${esc(ev.t)}" placeholder="A task, a thought, a decision"><button class="btn pri" data-u="afterKeep" style="white-space:nowrap">Keep it</button></div>
+    <div class="row"><button class="btn quiet" data-u="afterNone">Nothing to keep</button><span class="faint">A task stays on the Desk. The note goes to your notes folder, through the notes adapter.</span></div></div>`;
+}
+
+/* Meetings, second pass: a card before the meeting, what you kept last time, and Ivy's brief with the adapter each fact came from. */
+U.afterDone = {}; U.soonDone = {}; U.evSrc = null; U.briefOpen = {};
+Object.defineProperty(U, "after", {
+  get: () => { const e = CAL.day.filter((ev) => ev.e <= CAL.now && CAL.now - ev.e <= 30 && !U.afterDone[ev.id]).pop(); return e ? e.id : null; },
+  set: (v) => { if (v === null && U.after) U.afterDone[U.after] = true; },
+});
+const evSoon = () => CAL.day.find((ev) => ev.s > CAL.now && ev.s - CAL.now <= 10 && !U.soonDone[ev.id]) || null;
+Object.assign(evFind("m3"), {
+  last: { when: "Second session, 28 October", from: "notes folder", kept: ["They agreed on one listening exercise a day.", "He was reluctant. Check in with him first."] },
+  brief: { at: "13:45", text: "Third session. Last time they agreed on one listening exercise a day, and you wanted to ask how it went. She wrote on 1 November that she wants to talk about the move. That has not come up in a session yet.",
+    src: [["calendar", "desk-ics", "Couple session, 14:00 to 15:30, practice room. Third in the series."], ["notes", "notes folder", "28 Oct: Agreed: one listening exercise a day. He was reluctant."], ["mail", "desk-imap", "1 Nov: Could we talk about the move next time?"]], missing: [] } });
+Object.assign(evFind("m4"), {
+  last: { when: "4 November", from: "notes folder", kept: ["Two people asked for a later start."] },
+  brief: { at: "16:45", text: "Six people are signed up. Last week two asked for a later start, which fits your open question about offering the group again.",
+    src: [["calendar", "desk-ics", "Evening group, weekly, online."], ["notes", "notes folder", "4 Nov: Two people asked for a later start."]], missing: ["The group chat has no adapter on this Desk, so Ivy did not read it."] } });
+function lastBlock(ev) {
+  const kept = ev.kept && ev.kept.length ? `<span class="eyebrow">Kept today</span><ul class="plain">${ev.kept.map((k) => `<li>${esc(k)}</li>`).join("")}</ul>` : "";
+  return `${kept}${ev.last ? `<span class="eyebrow">Last time · ${esc(ev.last.when)}</span><ul class="plain">${ev.last.kept.map((k) => `<li>${esc(k)}</li>`).join("")}</ul><span class="faint">from your ${esc(ev.last.from)}</span>` : ""}`;
+}
+function briefBlock(ev) {
+  const b = ev.brief, open = U.evSrc && U.evSrc.startsWith(ev.id + ":") ? Number(U.evSrc.split(":")[1]) : null;
+  return `<div class="ivy" style="align-self:stretch"><span class="from">Ivy's brief · prepared at ${b.at}</span><p>${esc(b.text)}</p>
+    <div class="row">${b.src.map(([k, ad], i) => `<button class="src" data-u="evsrc" data-to="${ev.id}:${i}" aria-expanded="${open === i}">${k} · ${esc(ad)}</button>`).join("")}</div>
+    ${open !== null ? `<div class="excerpt"><p>${esc(b.src[open][2])}</p></div>` : `<span class="faint">Each fact names the adapter it came from. Click one to see what Ivy read.</span>`}
+    ${b.missing.map((m) => `<span class="row"><span class="pill wait">not read</span><span class="faint">${esc(m)}</span></span>`).join("")}</div>`;
+}
+function raiseList(ev) {
+  const linked = ev.raise.map((id) => U.items.find((x) => x.id === id)).filter(Boolean);
+  return linked.length + ev.notes.length ? `<span class="eyebrow">To raise</span><div class="stack" style="align-items:flex-start">${linked.map((x) => `<button class="lk" data-u="jump" data-id="${x.id}">${esc(x.q)}</button>`).join("")}${ev.notes.map((n) => `<span>${esc(n)}</span>`).join("")}</div>` : "";
+}
+function soonCard(ev) {
+  return `<div class="card evd" style="padding:14px 16px"><span class="row" style="justify-content:space-between;align-self:stretch"><span class="eyebrow">In ${ev.s - CAL.now} minutes</span><span class="pill think">new</span></span>
+    <span class="q">${esc(ev.t)}</span><span class="sub">${esc(ev.with)} · ${esc(ev.where)} · until ${hm(ev.e)}</span>
+    ${ev.brief ? briefBlock(ev) : ""}${lastBlock(ev)}${raiseList(ev)}
+    <div class="row">${ev.join ? `<button class="btn pri" data-u="noop">Join</button>` : ""}<button class="btn${ev.join ? "" : " pri"}" data-u="soonDone" data-to="${ev.id}">Got it</button></div></div>`;
+}
+
+/* Ranger, routines and flows as one idea: who does a row. You, an agent once, or a routine on a schedule. The flow is its steps. */
+U.newAll = false; U.rtOpen = null; U.rtDraft = null;
+U.rt = [
+  { id: "r1", name: "Morning summary of new client mail", when: "Every weekday at 07:30", next: "tomorrow, 07:30", policy: "auto", recipe: "Summarise new mail",
+    steps: [["Read unread mail from clients", "mail · desk-imap"], ["Summarise each mail in two lines", "Ivy"], ["Put the summary at the top of the day", "Desk"]], runs: [["Today, 07:30", "Fine. Three mails summarised."], ["Yesterday, 07:30", "Fine. One mail summarised."]] },
+  { id: "r2", name: "Update the dates page on the website", when: "Every Monday at 09:00", next: "waiting for you", policy: "ask", pending: "It wants to publish the two spring dates you sent to clients last week.",
+    steps: [["Read the confirmed dates", "calendar · desk-ics"], ["Write the new dates page", "Ivy"], ["Publish the page", "website · no adapter yet, by mail to your web host"]], runs: [["Monday, 09:00", "Waiting for your approval."], ["2 November", "Fine. Page published."]] },
+  { id: "r3", name: "Back up session notes", when: "Every day at 22:00", next: "today, 22:00", policy: "auto", failed: "Yesterday at 22:00 the backup folder could not be reached. Nothing was lost; the notes are unchanged.",
+    steps: [["Collect notes changed today", "notes · notes folder"], ["Copy them to the backup folder", "files · backup drive"]], runs: [["Yesterday, 22:00", "Failed. The backup folder could not be reached."], ["9 November, 22:00", "Fine. Four notes copied."]] },
+  { id: "r4", name: "Friday accounts: list unpaid invoices", when: "Every Friday at 16:00", next: "Friday, 16:00", policy: "auto", recipe: "Remind about late invoices",
+    steps: [["Read open invoices", "accounts · no adapter yet, from a spreadsheet"], ["List the ones older than 14 days", "Ivy"], ["Hand the list to an agent that prepares reminders", "agent"]], runs: [["6 November, 16:00", "Fine. Three invoices listed."]] },
+  { id: "r5", name: "Watch the booking page", when: "Every 15 minutes", next: "in a few minutes", policy: "auto", background: true,
+    steps: [["Check the booking page for new requests", "website"], ["Tell me only when there is one", "Desk"]], runs: [["Today", "96 checks, no new request."]] },
+];
+U.recipes = [["Summarise new mail", 3, "Morning summary of new client mail"], ["Remind about late invoices", 3, "Friday accounts"]];
+Object.assign(U.items.find((x) => x.id === "news"), { who: "agent", doing: "Drafting three topic ideas from last quarter's questions, since 09:12", why: "An agent is drafting ideas for it." });
+U.dfy.groups.push({ id: "rt", label: "Routines ran", n: 12, why: "They are set to run on their own.", items: ["Morning mail summary: fine", "Booking page: 10 checks since midnight, no new request", "Backup at 22:00 failed; see the card above"] });
+const rtFind = (id) => U.rt.find((r) => r.id === id);
+function routineCards() {
+  return U.rt.flatMap((r) => [
+    r.pending ? `<div class="card"><span class="row" style="justify-content:space-between"><span class="eyebrow">Routine is waiting</span><span class="pill think">new</span></span>
+      <span class="q">${esc(r.name)}</span><span class="sub">${esc(r.pending)}</span>
+      <div class="row"><button class="btn pri" data-u="rtOk" data-to="${r.id}">Go ahead</button><button class="btn" data-u="rtSkip" data-to="${r.id}">Not this time</button><button class="btn quiet" data-u="rtAuto" data-to="${r.id}">Go ahead, and stop asking</button></div></div>` : "",
+    r.failed && !r.ack ? `<div class="card"><span class="row" style="justify-content:space-between"><span class="eyebrow">Routine failed</span><span class="pill think">new</span></span>
+      <span class="q">${esc(r.name)}</span><span class="sub">${esc(r.failed)}</span>
+      <div class="row"><button class="btn pri" data-u="rtRetry" data-to="${r.id}">Run it again</button><button class="btn" data-u="rtOpen" data-to="${r.id}">Open the routine</button><button class="btn quiet" data-u="rtAck" data-to="${r.id}">Put away</button></div></div>` : "",
+  ]).filter(Boolean);
+}
+function rtDraftCard() {
+  const m = /(every\s+\w+(\s+(morning|evening|afternoon|at\s+[\d:.]+))?|daily|weekly|each\s+\w+)/i.exec(U.rtDraft);
+  return `<div class="ivy"><span class="from">This sounds like something to repeat</span><p>“${esc(U.rtDraft)}”</p>
+    <span class="faint">When: ${m ? esc(m[0]) : "you choose"} · Ivy shows you the steps before the first run · it asks you before each run until you say otherwise</span>
+    <div class="row"><button class="btn pri" data-u="rtMake">Make it a routine</button><button class="btn" data-u="rtKeep">Keep it as a thought</button></div></div>`;
+}
+function rtDetail(r) {
+  return `<div class="exp" style="padding-left:14px">
+    <span class="eyebrow">Steps${r.recipe ? ` · recipe: ${esc(r.recipe)}` : ""}</span>
+    <ol class="plain">${r.steps.map(([s, from]) => `<li>${esc(s)} <span class="src">${esc(from)}</span></li>`).join("")}</ol>
+    <span class="eyebrow">Last runs</span><ul class="plain">${r.runs.map(([w, res]) => `<li><b>${esc(w)}</b> ${esc(res)}</li>`).join("") || "<li>It has not run yet.</li>"}</ul>
+    <div class="row"><div class="seg" role="tablist" aria-label="Before each run"><button role="tab" aria-selected="${r.policy === "ask"}" data-u="rtPolicy" data-to="${r.id}" data-id="ask">Ask me first</button><button role="tab" aria-selected="${r.policy === "auto"}" data-u="rtPolicy" data-to="${r.id}" data-id="auto">Do it on its own</button></div>
+      <button class="btn" data-u="rtPause" data-to="${r.id}">${r.paused ? "Resume" : "Pause"}</button><button class="btn" data-u="rtRetry" data-to="${r.id}">Run now</button></div>
+    <div class="row" style="flex-wrap:nowrap"><input type="text" id="u-rt-ask" aria-label="Ask Ivy to change ${esc(r.name)}" placeholder="Ask Ivy to change this routine"><button class="btn" data-u="rtAsk" style="white-space:nowrap">Propose</button></div>
+    <span class="faint">${esc(r.when)} · next run ${esc(r.next)}. A change is shown as before and after, and nothing changes until you confirm.</span></div>`;
+}
+function handedView() {
+  const working = U.items.filter((x) => x.who === "agent" || x.kind === "Agent is waiting");
+  const state = (r) => `${r.paused ? `<span class="pill calm">paused</span>` : ""}${r.pending ? `<span class="pill wait">waiting for you</span>` : ""}${r.failed && !r.fixed ? `<span class="pill wait">failed</span>` : ""}<span class="pill calm">${r.policy === "ask" ? "asks first" : "on its own"}</span>`;
+  return `<p class="muted" style="max-width:66ch">Everything you do not do yourself. An agent works on a row once. A routine does something on a schedule. A recipe is the list of steps either of them follows.</p>
+    <div class="ar"><h3>Agents working · ${working.length}</h3>
+      ${working.map((x) => `<div class="vrow"><button class="linkq" data-u="jump" data-id="${x.id}">${esc(x.q)}</button><span class="faint">${esc(x.doing || x.next || "")}</span><span>${x.kind === "Agent is waiting" ? `<span class="pill wait">waiting for you</span>` : `<span class="pill think">working</span>`}</span></div>`).join("") || `<p class="muted">No agent is working. Open a row under Everything and choose Hand to an agent.</p>`}</div>
+    <div class="ar"><h3>Routines · ${U.rt.length}</h3>
+      ${U.rt.map((r) => `<div class="vrow"><button class="linkq" data-u="rtOpen" data-to="${r.id}" aria-expanded="${U.rtOpen === r.id}">${esc(r.name)}</button><span class="faint">${esc(r.when)}${r.background ? " · in the background" : ""} · ${esc((r.runs[0] || ["", "not run yet"])[1].split(". ")[0])}</span><span class="row">${state(r)}</span></div>${U.rtOpen === r.id ? rtDetail(r) : ""}`).join("")}
+      <span class="faint">To make a new one, type it into the box at the top, for example: every Friday list unpaid invoices.</span></div>
+    <div class="ar"><h3>Recipes · ${U.recipes.length}</h3>
+      ${U.recipes.map(([n, steps, by]) => `<div class="vrow"><span class="linkq">${esc(n)}</span><span class="faint">${steps} steps · used by ${esc(by)}</span><span><button class="btn quiet" data-u="noop">Use for a row</button></span></div>`).join("")}</div>`;
+}
+function railRoutines() {
+  const today = U.rt.filter((r) => !r.background && !r.paused);
+  return `<div class="slot" style="grid-template-columns:minmax(0,1fr)"><span class="faint">Routines today: ${today.length} on the schedule, ${U.rt.length - today.length} in the background.</span><button class="btn quiet" data-u="view" data-id="handed" style="justify-self:start;padding-left:0">See what is handed over</button></div>`;
+}
+
+function studio() {
+  const inF = (x) => U.focus === "all" || x.area === U.focus, focusArea = U.areas.find((a) => a.id === U.focus);
+  const now = U.items.filter((x) => x.now && inF(x)), rest = U.items.filter((x) => !x.now && inF(x));
+  const gaps = calGaps(), cur = gaps.find((g) => g.cur), next = CAL.day.find((ev) => ev.s > CAL.now);
+  const card = (x) => { const g = gaps[U.plan[x.id]]; return `<div class="card" id="card-${x.id}"><span class="row" style="justify-content:space-between"><span class="eyebrow">${esc(x.kind)}</span><span class="row">${x.proposal ? `<span class="pill wait">Ivy waits on you</span>` : ""}${x.fresh ? `<span class="pill think">new</span><button class="btn quiet" data-u="seen" data-id="${x.id}">Seen, keep it in Now</button>` : ""}</span></span>
+      <button class="linkq" data-u="open" data-id="${x.id}" aria-expanded="${U.open === x.id}">${esc(x.q)}</button>
+      <span class="sub">${esc(x.next || x.why)}</span>
+      ${U.open === x.id ? uPanel(x) : `<div class="row">${x.kind === "Task" ? `<button class="btn" data-u="tick" data-id="${x.id}">Done</button>` : `<button class="btn" data-u="open" data-id="${x.id}">${x.proposal ? "See the suggestion" : "Think it through"}</button>`}
+        ${g ? `<span class="faint">Planned for ${hm(g.start)} · ${dur(est(x.id))}</span>` : `<button class="btn" data-u="plan" data-id="${x.id}">Plan it today</button>`}<button class="btn quiet" data-u="now" data-id="${x.id}">Enough for today</button></div>`}</div>`; };
+  const line = (x) => `<div class="vrow"><span class="linkq">${esc(x.q)}</span><span class="faint">${x.suggest ? "Ivy would bring this up now. " : ""}${esc(x.why)}</span>
+      <span class="row"><button class="btn quiet" data-u="more" data-id="${x.id}" aria-expanded="${U.more === x.id}">${U.more === x.id ? "Less" : "More"}</button><button class="btn" data-u="now" data-id="${x.id}">Now</button></span></div>
+    ${U.more === x.id ? `<div class="exp" style="padding-left:14px"><div class="row"><span class="pill calm">${x.area}</span><span class="pill calm">${x.model}</span>${x.tonight ? `<span class="pill think">tonight</span>` : ""}</div>
+      <div class="row"><button class="btn" data-u="tonight" data-id="${x.id}">${x.tonight ? "Do not think tonight" : "Think tonight"}</button><button class="btn" data-u="noop">Move to area</button><button class="btn" data-u="noop">Park</button></div></div>` : ""}`;
+  const mq = U.merge && U.items.find((x) => x.id === U.merge.id);
+  const fresh = now.filter((x) => x.fresh), steady = now.filter((x) => !x.fresh);
+  const news = [evSoon() ? soonCard(evSoon()) : "", U.after && (U.focus === "all" || U.focus === evFind(U.after).area) ? afterCard() : "", ...fresh.filter((x) => x.kind === "Agent is waiting").map(card), ...(U.focus === "all" ? routineCards() : []), ...fresh.filter((x) => x.kind !== "Agent is waiting").map(card), U.dfy.card && U.focus === "all" ? dfyCard() : "", U.rev.card && !U.rev.closed && U.focus === "all" ? reviewCard() : ""].filter(Boolean);
+  const lists = `${news.length ? `<div class="stack"><span class="eyebrow">New since yesterday · ${news.length}</span>${(U.newAll ? news : news.slice(0, 4)).join("")}${news.length > 4 ? `<button class="btn" data-u="newAll" style="align-self:flex-start">${U.newAll ? "Show fewer" : `Show ${news.length - 4} more new`}</button>` : ""}</div>` : ""}<div class="stack"><span class="eyebrow">Now · questions, tasks, mail and agents in one list</span>${steady.map(card).join("") || `<p class="muted">Nothing needs you. Press Now on anything below.</p>`}</div>
+    <div class="stack"><span class="eyebrow">Also on your mind</span>${rest.map(line).join("") || `<p class="muted">Nothing.</p>`}</div>`;
+  const body = `
+    ${U.toast ? `<div class="toast" role="status">${esc(U.toast)}</div>` : ""}
+    <p class="big">${CAL.now < 720 ? "Good morning" : "Good afternoon"}, Kim. ${num(now.length)} ${now.length === 1 ? "thing needs" : "things need"} you now${focusArea ? ` in ${focusArea.label}` : ""}. ${cur ? `You are free until ${hm(cur.end)}.` : next ? `Next: ${esc(next.t)} at ${hm(next.s)}.` : ""}</p>
+
+    <div class="row" style="flex-wrap:nowrap"><input type="text" id="u-new" aria-label="A new thought" placeholder="What came up? Try: ask the head teacher for an example"><button class="btn pri" data-u="add" style="white-space:nowrap">Keep it</button></div>
+    ${U.rtDraft ? rtDraftCard() : ""}
+    ${mq ? `<div class="ivy"><span class="from">Ivy thinks this belongs to something you already have</span><p>“${esc(U.merge.text)}” sounds like part of <b>${esc(mq.q)}</b></p><div class="row"><button class="btn pri" data-u="mergeYes">Add it there</button><button class="btn" data-u="mergeNo">Keep it separate</button></div></div>` : ""}
+    <div class="row" style="justify-content:space-between"><div class="seg" role="tablist" aria-label="Calendar view"><button role="tab" aria-selected="${U.view === "day"}" data-u="view" data-id="day">Day</button><button role="tab" aria-selected="${U.view === "week"}" data-u="view" data-id="week">Week</button><button role="tab" aria-selected="${U.view === "all"}" data-u="view" data-id="all">Everything</button><button role="tab" aria-selected="${U.view === "handed"}" data-u="view" data-id="handed">Handed over</button></div>
+      <span class="row"><span class="faint">Focus on</span><div class="seg" role="tablist" aria-label="Focus on">${[{ id: "all", label: "All" }, ...U.areas].map((a) => `<button role="tab" aria-selected="${U.focus === a.id}" data-u="focus" data-id="${a.id}">${a.label}</button>`).join("")}</div></span></div>
+    ${U.view === "handed" ? handedView() : U.view === "review" ? reviewView() : U.view === "all" ? treeView() : U.view === "week" ? weekGrid() + lists : `<div class="daygrid"><div style="display:flex;flex-direction:column;gap:16px;min-width:0">${lists}</div>${dayRail()}</div>`}
+
+    <div><span class="eyebrow">Decided today · ${U.log.length}</span>
+      <pre class="note">${U.log.length ? esc(U.log.map((h) => "- " + h).join("\n")) : "Nothing yet. Each call you make lands here."}</pre>
+      <div class="row" style="margin-top:8px"><button class="btn" data-u="copy" ${U.log.length ? "" : "disabled"}>${U.copied ? "Copied" : "Copy as a handover"}</button>
+        <button class="btn quiet" data-u="noop">Parked · 1</button><button class="btn quiet" data-u="view" data-id="review">Weekly review</button><button class="btn quiet" data-u="dfyBack">Done for you · ${U.dfy.groups.filter((g) => !g.undone).reduce((s, g) => s + g.n, 0)}</button><button class="btn quiet" data-u="keys" aria-expanded="${U.keys}">Keyboard shortcuts</button></div>
+      ${U.keys ? `<div class="keys" style="margin-top:8px"><span><kbd>↓</kbd> <kbd>↑</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Y</kbd> yes</span><span><kbd>N</kbd> not quite</span><span><kbd>C</kbd> challenge</span><span><kbd>T</kbd> think tonight</span><span><kbd>P</kbd> park</span><span><kbd>W</kbd> week</span><span><kbd>Alt</kbd> + arrows move a row</span></div>` : ""}</div>`;
+  const from = [["From Kim", "The Now list without a cap, the list of what else is on your mind, and loose thoughts that find their question."], ["From Luca", "Thinking opens inside the item. Sources open and can be flagged. Challenge my call. Every call lands in today's log, which copies as a handover. Mail and waiting agents sit in the same list as questions."], ["From Nora", "Yes or Not quite as the answer to a suggestion from Ivy, and the optional reminder to check on a decision later."], ["From your screen", "More on a row, think tonight, parked, reviews due and the keyboard shortcuts, all quiet until asked for."], ["From Balance", "The outline is the Everything view. You drill in: open a row and it becomes the page, framed by what it sits in, and you add rows inside it. Any row can hold more rows. The engine's proposal is the Now list. Its reasons show on the rows, such as an area that is behind this week."], ["Greeting, done for you, weekly review", "The Now page is a stream. What is new since yesterday comes up at the top as cards and leaves once you have dealt with it: a waiting agent, a suggestion from Ivy, what was done for you, an open review. Done for you shows its groups with a reason and an undo each. The weekly review is four things to look at, each with one decision."], ["From Ranger, routines and flows", "One question decides it: who does a row. You, an agent once, or a routine on a schedule. A waiting agent, a routine that asks first and a routine that failed come up in the stream. Handed over lists agents at work, routines and their steps, and recipes. Typing something that repeats offers to make it a routine."], ["Calendar", "The day sits beside the list, with the free time between meetings. Plan it today puts an item into the next free time that fits. The week shows which question belongs to which day. A meeting opens to who, where and what you want to raise. When it ends, it asks once whether there is anything to keep. Ten minutes before, it comes up at the top with what you kept last time and Ivy's brief. Every fact in the brief names the adapter it came from, and the brief says what it could not read."]];
+  return `<div style="display:flex;flex-direction:column;gap:26px">
+    <div class="frame"><div class="bar"><b>Day</b><span class="row"><span>prototype clock</span><div class="seg" role="tablist" aria-label="Prototype clock">${[[640, "10:40"], [830, "13:50"], [935, "15:35"]].map(([m, l]) => `<button role="tab" aria-selected="${CAL.now === m}" data-u="clock" data-id="${m}">${l}</button>`).join("")}</div></span></div><div class="body">${body}</div></div>
+    <section><h2>What was folded in</h2><div class="find" style="grid-template-columns:minmax(0,1fr);max-width:72ch">${from.map(([k, v]) => `<p><b>${k}.</b> ${esc(v)}</p>`).join("")}</div>
+      <p class="faint">Low floor, high ceiling: the first screen is a list, an input and the day. Dropped: Nora's limit of three, her separate question page, and Luca's two-pane layout.</p></section></div>`;
+}
+function studioAct(a, el) {
+  const id = el && el.dataset.id || U.open, it = U.items.find((x) => x.id === id), s = it && ust(it.id);
+  U.toast = ""; U.copied = false;
+  const done = (text) => { U.log.push(`${it.q}: ${text}`); U.items = U.items.filter((x) => x !== it); U.open = null; delete U.plan[it.id]; };
+  if (a === "open") { if (it.kind !== "Task") U.open = U.open === id ? null : id; }
+  else if (a === "tick") { done("done"); U.toast = "Done."; }
+  else if (a === "src") { const i = Number(el.dataset.i); s.openSrc = s.openSrc === i ? null : i; }
+  else if (a === "flag") s.flagged[s.openSrc] = true;
+  else if (a === "yes") { it.fresh = false; it.stand = it.proposal; it.proposal = null; it.next = "You stand here now. Decide when you are ready."; U.toast = "Saved. That is where you stand now."; }
+  else if (a === "notquite") s.reply = true;
+  else if (a === "cancel") s.reply = false;
+  else if (a === "send") { s.reply = false; it.proposal = null; it.now = false; it.why = "Ivy thinks about your answer tonight."; it.tonight = true; U.open = null; U.toast = "Sent. It comes back tomorrow with a new thought."; }
+  else if (a === "challenge") s.challenged = true;
+  else if (a === "decide") { if (s.pick === null) return; const fl = Object.keys(s.flagged).map((i) => it.src[i][0]); done(`${s.pick < 2 ? it.opts[s.pick] : s.own || "own call."}${fl.length ? ` (left out as unreliable: ${fl.join(", ")})` : ""}`); U.toast = it.kind === "Mail" ? "Decided. A draft is in your Drafts folder." : it.kind === "Agent is waiting" ? "Decided. The agent continues." : "Closed and kept under Decided."; }
+  else if (a === "close") { done(it.stand); U.toast = "Closed and kept under Decided."; }
+  else if (a === "talk") U.toast = "A conversation with Ivy opens here. When it ends, it lands on this item as a summary.";
+  else if (a === "now") { it.now = !it.now; it.suggest = false; if (!it.now) delete U.plan[id]; if (U.open === id) U.open = null; }
+  else if (a === "view") U.view = id;
+  else if (a === "focus") { U.focus = id; U.open = null; }
+  else if (a === "newAll") U.newAll = !U.newAll;
+  else if (a === "rtOk" || a === "rtAuto" || a === "rtSkip") { const r = rtFind(el.dataset.to); r.runs.unshift(["Just now", a === "rtSkip" ? "Skipped by you." : "Fine. Approved by you."]); r.pending = null; r.next = "next Monday, 09:00"; if (a === "rtAuto") r.policy = "auto"; U.toast = a === "rtSkip" ? "Skipped this time." : a === "rtAuto" ? "Running. It will not ask again." : "Running."; }
+  else if (a === "rtRetry") { const r = rtFind(el.dataset.to); r.runs.unshift(["Just now", "Fine. Ran again on your request."]); r.fixed = true; r.ack = true; U.toast = "Ran again. It worked."; }
+  else if (a === "rtAck") rtFind(el.dataset.to).ack = true;
+  else if (a === "rtOpen") { U.view = "handed"; U.rtOpen = U.rtOpen === el.dataset.to && U.view === "handed" ? null : el.dataset.to; }
+  else if (a === "rtPolicy") rtFind(el.dataset.to).policy = el.dataset.id;
+  else if (a === "rtPause") { const r = rtFind(el.dataset.to); r.paused = !r.paused; }
+  else if (a === "rtAsk") U.toast = "Ivy prepares a before and after. Nothing changes until you confirm.";
+  else if (a === "rtMake") { const nid = "r" + Date.now(); U.rt.push({ id: nid, name: U.rtDraft, when: "As you wrote it", next: "after you confirm the steps", policy: "ask", steps: [["Ivy works out the steps and shows them to you before the first run", "Ivy"]], runs: [] }); U.rtDraft = null; U.view = "handed"; U.rtOpen = nid; U.toast = "Made. It asks you before each run."; }
+  else if (a === "rtKeep") { U.items.push({ id: "u" + Date.now(), kind: "Question", now: false, area: "me", model: "cloud", tonight: false, q: U.rtDraft, why: "Added just now." }); U.rtDraft = null; U.toast = "Kept as a thought."; }
+  else if (a === "hand") { it.who = "agent"; it.doing = "Started just now"; it.why = "An agent is working on it."; U.toast = "Handed over. It comes back to the top when the agent needs you or is done."; }
+  else if (a === "clock") { CAL.now = Number(id); U.open = null; }
+  else if (a === "soonDone") U.soonDone[el.dataset.to] = true;
+  else if (a === "evsrc") U.evSrc = U.evSrc === el.dataset.to ? null : el.dataset.to;
+  else if (a === "brief") U.briefOpen[el.dataset.to] = true;
+  else if (a === "ev") U.ev = U.ev === el.dataset.to ? null : el.dataset.to;
+  else if (a === "raise") {
+    const v = $("#u-raise").value.trim(), ev = evFind(U.ev); if (!v || !ev) return;
+    const words = vWords(v), hit = U.items.find((x) => !ev.raise.includes(x.id) && vWords(x.q).some((w) => words.includes(w)));
+    if (hit) { ev.raise.push(hit.id); U.toast = `Linked to your question: ${hit.q}`; } else ev.notes.push(v);
+  }
+  else if (a === "afterKeep") {
+    const v = $("#u-after").value.trim(), ev = evFind(U.after); if (!v) return;
+    const nid = "m" + Date.now(), proj = "From " + ev.t; (ev.kept ||= []).push(v);
+    U.items.push({ id: nid, kind: "Task", proj, now: false, area: ev.area, model: "cloud", tonight: false, q: v, why: `From ${ev.t}, today.` });
+    if (!U.nodes.some((n) => n.id === "p-" + ev.area + "-" + proj)) U.nodes.push({ id: "p-" + ev.area + "-" + proj, parent: "a-" + ev.area, title: proj, w: 50 });
+    U.nodes.push({ id: nid, parent: "p-" + ev.area + "-" + proj, item: true, w: 50 });
+    U.toast = "Kept. Add another, or press Nothing to keep when you are done.";
+  }
+  else if (a === "afterNone") { U.after = null; }
+  else if (a === "seen") it.fresh = false;
+  else if (a === "dfyDismiss") { U.dfy.card = false; U.toast = "Put away. It stays under Done for you at the bottom."; }
+  else if (a === "dfyBack") { U.dfy.card = true; U.view = "day"; }
+  else if (a === "revLater") { U.rev.card = false; U.toast = "Not today. The review stays under Weekly review at the bottom."; }
+  else if (a === "rowmenu") U.rowMenu = U.rowMenu === el.dataset.to ? null : el.dataset.to;
+  else if (a === "mv") { if (nShift(U.rowMenu, el.dataset.to)) U.toast = "Moved."; }
+  else if (a === "dfy") U.dfy.open = !U.dfy.open;
+  else if (a === "dfyShow") U.dfy.show = U.dfy.show === el.dataset.to ? null : el.dataset.to;
+  else if (a === "dfyUndo") { U.dfy.groups.find((g) => g.id === el.dataset.to).undone = true; U.toast = "Undone."; }
+  else if (a === "dfyStop") { U.dfy.groups.find((g) => g.id === el.dataset.to).stopped = true; U.toast = "Ivy asks you first from now on."; }
+  else if (a === "revSeen") U.rev.seen = true;
+  else if (a === "revArea") { U.rev.area[el.dataset.id] = el.dataset.to; if (el.dataset.to === "lower") { const ar = U.areas.find((x) => x.id === el.dataset.id); ar.w = Math.max(5, Math.round(ar.w / 2)); } }
+  else if (a === "revStale") U.rev.stale.find((s) => s.id === el.dataset.id).a = el.dataset.to;
+  else if (a === "revCheck") U.rev.checks.find((c) => c.id === el.dataset.id).a = el.dataset.to;
+  else if (a === "revClose") { U.rev.closed = true; U.view = "day"; U.toast = "Review closed. Monday's proposal follows it."; }
+  else if (a === "drill") { U.at = el.dataset.to || null; U.treeMore = false; }
+  else if (a === "treeMore") U.treeMore = !U.treeMore;
+  else if (a === "addrow") {
+    const v = $("#u-add").value.trim(), cur = U.nodes.find((n) => n.id === U.at); if (!v || !cur) return;
+    const nid = "n" + Date.now();
+    U.items.push({ id: nid, kind: "Task", now: false, area: nArea(cur).id, model: "cloud", tonight: false, q: v, why: "Added just now." });
+    U.nodes.push({ id: nid, parent: cur.id, item: true, w: 50 });
+    U.toast = `Added to ${nTitle(cur)}.`;
+  }
+  else if (a === "plan") { const gs = calGaps().filter((g) => !g.past); const g = gs.find((x) => x.left >= est(id)) || gs.at(-1); if (g) { U.plan[id] = g.i; U.toast = `Planned for ${hm(g.start)}.`; } }
+  else if (a === "later") { if (calGaps()[U.plan[id] + 1]) U.plan[id]++; }
+  else if (a === "unplan") delete U.plan[id];
+  else if (a === "jump") { U.view = "day"; if (it.now) U.open = id; else U.toast = "That question is under Also on your mind. Press Now to bring it up."; }
+  else if (a === "more") U.more = U.more === id ? null : id;
+  else if (a === "tonight") it.tonight = !it.tonight;
+  else if (a === "keys") U.keys = !U.keys;
+  else if (a === "add") {
+    const v = $("#u-new").value.trim(); if (!v) return;
+    if (/\b(every|daily|weekly|each)\b/i.test(v)) { U.rtDraft = v; return; }
+    const words = vWords(v), hit = U.items.find((x) => vWords(x.q + " " + (x.read || "")).some((w) => words.includes(w)));
+    if (hit) U.merge = { text: v, id: hit.id };
+    else { U.items.push({ id: "u" + Date.now(), kind: "Question", now: false, area: "me", model: "cloud", tonight: false, q: v, why: "Added just now." }); U.toast = "Kept. It is in the list below."; }
+  }
+  else if (a === "mergeYes") { U.merge = null; U.toast = "Added to that question. Ivy brings it up next time."; }
+  else if (a === "mergeNo") { U.items.push({ id: "u" + Date.now(), kind: "Question", now: false, area: "me", model: "cloud", tonight: false, q: U.merge.text, why: "Added just now." }); U.merge = null; U.toast = "Kept as its own question."; }
+  else if (a === "copy") { const txt = U.log.map((h) => "- " + h).join("\n"); try { navigator.clipboard.writeText(txt).catch(() => {}); } catch (e) {} U.copied = true; }
+}
+document.addEventListener("change", (e) => { if (e.target.name === "u-opt") { const s = ust(U.open); s.pick = Number(e.target.value); s.challenged = false; render(); } });
+document.addEventListener("input", (e) => { if (e.target.id === "u-own") ust(U.open).own = e.target.value; });
+
+/* ---------- Overview ---------- */
+const FINDINGS = [
+  ["F1", "Too many words before the first use.", "The Studio surface names about twenty concepts: thread, place, cap, shelf, parked, capture, inbox, proposal, stand, Yes-filter, material, relates, decision journal, think tonight, local, cloud, personas. A newcomer meets all of them on one board."],
+  ["F2", "The board spends the screen on structure.", "Numbered places, an inbox column, a proposal column and routed lines between them explain how the Studio is built. They do not answer what needs the person now."],
+  ["F3", "The thread page shows everything at once.", "Question, Where I stand, Ivy's latest, Ivy's notes, Your answers, Material, Log, Relates to with six groups, Outcome, and about ten acts. Most visits need one: react to the latest note."],
+  ["F4", "Starting a thread is the heaviest moment.", "Opening one asks the Yes-filter and, at the cap, which thread to park. The friction sits where capture should be cheapest. Kim's prototype tries the alternative: no cap, and a Now section."],
+  ["F5", "The Studio is a place you go to.", "It is one of five modes next to Day, Balance, Conversations and Catch-up. A question usually starts on a Desk item, and that item has no way into thinking."],
+  ["F6", "Withdrawn: the local or cloud badge is fine.", "Most people have no local model. The badge stays as it is and counts as an advanced feature. What remains of this finding is that Ivy's notes show no sources."],
+  ["F7", "A kept conversation lands as one wall of text.", "On the thread page, a talked-through session is stored as a single note: the whole exchange in one paragraph, with raw Markdown asterisks, several screens long. It pushes everything else off the page."],
+  ["F8", "The greeting is a paragraph, not a summary.", "The Day view opens with about a hundred words in one block, including task titles and a raw link. It says five things need you, while the Catch-up panel beside it counts more than two hundred that need an action."],
+  ["F9", "Unrelated history hangs under the board.", "Below the Studio board, Done for you lists a dozen mail deletions, each with an Undo button. None of it concerns a thread."],
+];
+const WORDS = [["thread", "question", "all"], ["place, cap", "no cap; a Now list", "Kim"], ["parked, shelf", "Also on your mind; Park behind More", "Kim, you"], ["Where I stand, stand proposal", "Ivy suggests you stand here: Yes or Not quite", "Nora"], ["proposal, capture, inbox", "one input; Ivy offers to add a thought to a question", "Kim"], ["Yes-filter", "optional", "your ruling"], ["Desk items, separate from threads", "mail and waiting agents in the same Now list", "Luca"], ["Ivy's notes without sources", "sources that open and can be flagged", "Luca"], ["talked-through note", "summary: settled, still open, before and after", "Kim, Luca"], ["close with an outcome", "Your call, with Challenge my call first", "Luca"], ["decision journal", "Decided today, copies as a handover; reviews due behind a link", "Luca, you"], ["local or cloud", "badge behind More", "your ruling"]];
+function overview() {
+  return `<div style="display:flex;flex-direction:column;gap:34px">
+    <section><h2>Four people, one Studio</h2>
+      <div class="three">${["nora", "kim", "luca", "sam"].map((id) => { const p = PERSONAS[id]; return `<button class="card" data-go="${id === "nora" ? "studio" : id}"><span class="who"><span class="ava">${p.ini}</span><span><b>${p.name}</b><span>${esc(p.role)}</span></span></span>
+        <span class="sub">${esc(p.quote)}</span><span class="eyebrow" style="color:var(--accent)">Open the prototype ›</span></button>`; }).join("")}</div></section>
+    <section><h2>What makes today's Studio hard</h2><p class="muted">Read from the Studio components, the thread-file doc, the live API and screenshots of the running Desk. F7 to F9 come from the screenshots.</p>
+      <div class="find">${FINDINGS.map(([c, h, t]) => `<span class="c">${c}</span><p><b>${esc(h)}</b> ${esc(t)}</p>`).join("")}</div></section>
+    <section><h2>Same engine, fewer words</h2><p class="muted">One Studio writes the same thread files through the same acts.</p>
+      <div class="tw"><table><thead><tr><th>Today</th><th>One Studio</th><th>Comes from</th></tr></thead><tbody>
+      ${WORDS.map((r) => `<tr>${r.map((c, i) => `<td>${i === 0 ? `<span class="code">${esc(c)}</span>` : esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></section>
+    <section><h2>How a conversation should land</h2><p class="muted">The answer to F7. Today a talked-through session is saved as one note holding the whole exchange. Kim's and Luca's prototypes show the replacement.</p>
+      <div class="find">
+        <span class="c">1</span><p><b>The note is a summary, written when the session ends.</b> Three parts: what was settled, what is still open, and where you stood before and after.</p>
+        <span class="c">2</span><p><b>The transcript is kept, behind one link.</b> It is laid out as turns with a name on each, and the Markdown is rendered.</p>
+        <span class="c">3</span><p><b>Open points carry over.</b> The next session starts from the still-open list, not from a blank box.</p>
+      </div></section>
+    <section><h2>Decided so far</h2>
+      <div class="find">
+        <span class="c">D1</span><p><b>The Yes questions are optional.</b> They never block writing a thought down.</p>
+        <span class="c">D2</span><p><b>The local or cloud badge stays.</b> It is an advanced feature and needs no rewording.</p>
+        <span class="c">D3</span><p><b>Luca's panel goes first.</b> Think it through on every Desk item.</p>
+        <span class="c">D4</span><p><b>No cap; a Now view.</b> Kim's screen is the base.</p>
+        <span class="c">D5</span><p><b>One Studio for everyone.</b> No depth setting. Details open on the item they belong to.</p>
+        <span class="c">D7</span><p><b>The Now list replaces Today's priorities.</b> The Studio stops being a tab. The day and the week sit on the same screen.</p>
+        <span class="c">D11</span><p><b>Who does a row.</b> You, an agent once, or a routine on a schedule. A flow is the steps and is called a recipe. Agents, routines and recipes live under Handed over.</p>
+        <span class="c">D10</span><p><b>Meetings are entries like any other.</b> They come up before they start, show what you kept last time, and carry a brief from Ivy that names its sources by adapter.</p>
+        <span class="c">D9</span><p><b>The Now page is a stream.</b> New things come up at the top and leave when handled. Nothing new sits behind a link further down.</p>
+        <span class="c">D8</span><p><b>The Everything view replaces the Balance tab.</b> It is a drill-in, not a tree: one level at a time, framed by its ancestors.</p>
+        <span class="c">D6</span><p><b>Nora's view is dropped.</b> Her Yes or Not quite reply and the reminder to check on a decision moved into One Studio.</p>
+      </div></section>
+    <section><h2>Still open</h2>
+      <div class="find">
+        <span class="c">Next</span><p><b>Routines at scale.</b> The schedule calendar, execution logs and step parameters of today's Routines page are not in the prototype, and the sample has five routines where a real stack has fourteen.</p>
+        <span class="c">Open</span><p><b>Also open.</b> Not wired in the prototype: the keyboard shortcuts on the One Studio screen, focus projects, and rows one after another.</p>
+        <span class="c">Later</span><p><b>Plan it today as a real calendar entry.</b> Desk-only for now.</p>
+      </div></section>
+  </div>`;
+}
+
+/* ---------- shell ---------- */
+function render() {
+  const r = route();
+  document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", String(t.dataset.go === r)));
+  view.innerHTML = r === "studio" ? studio() : r === "kim" ? kim() : r === "options" ? options() : r === "luca" ? luca() : r === "sam" ? sam() : overview();
+}
+document.addEventListener("click", (e) => {
+  const go = e.target.closest("[data-go]"); if (go) { location.hash = go.dataset.go; return; }
+  const u = e.target.closest("[data-u]"); if (u) { studioAct(u.dataset.u, u); render(); return; }
+  const v = e.target.closest("[data-v]"); if (v) { kimAct(v.dataset.v, v); render(); return; }
+  const o = e.target.closest("[data-o]"); if (o) { optionsAct(o.dataset.o, o); render(); return; }
+  const l = e.target.closest("[data-l]"); if (l) { lucaAct(l.dataset.l, l); render(); return; }
+  const j = e.target.closest("[data-j]"); if (j) { samAct(j.dataset.j, j); render(); }
+});
+document.addEventListener("keydown", (e) => { if (e.key !== "Enter") return; if (e.target.id === "u-new") { studioAct("add"); render(); } else if (e.target.id === "v-new") { kimAct("add"); render(); } else if (e.target.id === "u-add") { studioAct("addrow"); render(); } else if (e.target.id === "u-raise") { studioAct("raise"); render(); } else if (e.target.id === "u-after") { studioAct("afterKeep"); render(); } });
+window.addEventListener("hashchange", render);
+render();
+</script>
+</body>
+</html>
