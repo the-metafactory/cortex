@@ -1,4 +1,6 @@
+import { sseResponse } from "./sse";
 import { z } from "zod";
+import type { ConversationResponse, ConversationResponseUpdate } from "../../../conversations/types";
 import { ConfirmSchema, creationFor, ProposeSchema, ReviseSchema, type Actor } from "../../../conversations/creation";
 import type { DiscordConversations } from "../../../conversations/discord";
 import { ConversationError, type ConversationHost, type HostStatus } from "../../../conversations/host";
@@ -22,7 +24,7 @@ function decoded(value: string): string | null {
 }
 const PROPOSALS = /^\/api\/conversations\/([0-9a-f-]{36})\/proposals(?:\/([0-9a-f-]{36})(?:\/(confirm|check))?)?$/;
 const GRANT = /^\/api\/conversations\/grants\/(grant-[0-9a-f]{32})$/;
-const ITEM = /^\/api\/conversations\/([0-9a-f-]{36})(?:\/(inputs|entries|attachments|draft|outcome|discord|links)(?:\/([^/]+))?)?$/;
+const ITEM = /^\/api\/conversations\/([0-9a-f-]{36})(?:\/(inputs|entries|attachments|draft|outcome|discord|links|stream)(?:\/([^/]+))?)?$/;
 
 export function importedSessions(access: ConversationAccess | undefined): (sessionId: string) => Promise<boolean> {
   return async sessionId => {
@@ -119,6 +121,10 @@ export async function handleConversations(req: Request, url: URL, guard: Mutatio
       if (req.method !== "GET") return notAllowed("GET, PATCH");
       const detail = await withStudio(host, id, await host.detail(id));
       return reply(200, { ok: true, ...detail, discord: discord ? await discord.state(id) : { available: false, reason: NO_DISCORD } });
+    }
+    if (part === "stream") {
+      if (req.method !== "GET" || inputId) return notAllowed("GET");
+      return await responseStream(host, id, req.signal);
     }
     if (part === "links") {
       if (req.method !== "POST" || inputId) return notAllowed("POST");
@@ -237,4 +243,22 @@ async function handleCreation(req: Request, url: URL, host: ConversationHost, ac
   const view = await creation.confirm(id, proposalId, parsed.data, actor);
   const status = view.feedback === "created" ? 200 : view.feedback === "failed" ? 409 : 202;
   return reply(status, { ok: view.feedback === "created", proposal: view, ...(view.feedback === "failed" ? { error: view.operation?.history.at(-1)?.detail ?? "The owner refused it." } : {}) });
+}
+
+async function responseStream(host: ConversationHost, id: string, signal: AbortSignal): Promise<Response> {
+  await host.meta(id);
+  return sseResponse(signal, async (send, close) => {
+    let previous: ConversationResponse | undefined;
+    return host.watchResponse(id, async response => {
+      const sameText = previous?.text === response.text && previous.generation === response.generation;
+      if (previous && sameText && previous.working === response.working && response.entries.length === 0) return;
+      const update: ConversationResponseUpdate = { cursor: response.cursor, generation: response.generation, working: response.working, ...(response.entries.length ? { entries: response.entries } : {}) };
+      if (!previous || !sameText) {
+        if (previous?.generation === response.generation && typeof previous.text === "string" && typeof response.text === "string" && response.text.startsWith(previous.text)) update.append = response.text.slice(previous.text.length);
+        else update.text = response.text;
+      }
+      previous = response;
+      await send(`event: response\ndata: ${JSON.stringify(update)}\n\n`);
+    }, close);
+  });
 }

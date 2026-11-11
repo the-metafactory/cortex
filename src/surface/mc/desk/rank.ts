@@ -48,6 +48,7 @@ const LOOK = action("detail", "Look first", "secondary", true);
 const LATER = action("snooze", "Not now", "secondary", true);
 
 export const FOLDED_LABELS: Record<DeskItemKind, string> = {
+  adapter: "Connected items",
   sensor: "Goal checks that stopped working",
   goal: "Goals that need a look",
   "agent-blocked": "Agent tasks waiting for your ruling",

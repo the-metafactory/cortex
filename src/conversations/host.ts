@@ -1,3 +1,4 @@
+import { ObservationStore } from "./domain-adapters/reads/observations";
 import { QueryRunner, type QueryClock } from "./domain-adapters/reads/query";
 import { QueryStore } from "./domain-adapters/reads/query-store";
 import { OperationBridge, type SupportLookup } from "./domain-adapters/operations/dispatch";
@@ -6,6 +7,7 @@ import { BatchReceiptReader, BatchReceiptStore } from "./domain-adapters/operati
 import { ObjectReader } from "./domain-adapters/operations/readback";
 import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
 import { BindingFenceStore, type PrincipalNotifier } from "./domain-adapters/operations/triggers";
+import { AdapterDiagnostics } from "./domain-adapters/diagnostics";
 import { AuthorityPublication } from "./authority-publication";
 import { authorityHash } from "./authority-records";
 import { createHash, randomUUID } from "node:crypto";
@@ -14,7 +16,7 @@ import { join } from "node:path";
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type Conversation, type EntryId, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
+import { createRegistry, defineDoc, defineDocFamily, Harness, ProviderDoc, type Conversation, type ConversationView, type EntryId, type EntryRecord, type JsonObject, type SubmissionRecord } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { z } from "zod";
 import { ConnectionSetupService, type ConnectionSetupDeps } from "./connection-setup";
@@ -34,8 +36,8 @@ import { acquireHostLock, type LockOwner } from "./lock";
 import { cloudLanes, type CloudLane, type ToolsConfig } from "../common/types/desk-conversations";
 import { chatTurns, cloudRoute, cortexModels, CORTEX_PROVIDER, laneFor, type GateResult, type Lanes, type ToolSurfaceFor, type TurnCall, type TurnEvent } from "./model";
 import {
-  AttachmentRefSchema, CONTINUATION_KIND, isModelRoute, laneName, routePolicy, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES, TRANSPORTS,
-  type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationMeta, type CreateConversation,
+  AttachmentRefSchema, CONTINUATION_KIND, isModelRoute, laneName, routePolicy, IMPORTED_TURN_KIND, TOOL_ACTIVITY_KIND, TOOL_STARTED_KIND, OperationRecordSchema, INPUT_KIND, ObjectRefSchema, OriginSchema, OWNER_TYPES, TRANSPORTS,
+  type AttachmentRef, type AttachmentUpload, type Continuation, type ConversationDetail, type ConversationEntry, type ConversationResponse, type ConversationMeta, type CreateConversation,
   type ExchangeLine, type InputRequest, type ModelChoices, type Organize, type OverviewPage, type OverviewQuery, type OverviewRow, type LinkResolvers, type ModelRoute, type ObjectRef, type OperationRecord, type OperationState, type OwnerReadback, type OwnerReadbacks, type OwnerType, type OwnerWriters, type WithheldReasons, type ReadbackResult, type Policy, type SourceState, type SourceView, type SubmissionView,
 } from "./types";
 
@@ -106,6 +108,11 @@ const SNIPPET = 160;
 const MAX_LINKS = 50;
 const OVERVIEW_BATCH = 16;
 const TRANSCRIPT_CACHE = 200;
+const ResponseLiveSchema = z.object({
+  run: z.unknown().optional(),
+  generation: z.object({ message: z.object({ responseId: z.string().optional(), timestamp: z.number().optional(), content: z.array(z.object({ type: z.string(), text: z.string().optional() }).loose()) }).loose().optional() }).optional(),
+});
+const ResponseInboxSchema = z.object({ items: z.array(z.unknown()) });
 const NEXT: Record<OperationState, OperationState[]> = { proposed: ["confirmed"], confirmed: ["running"], running: ["created", "failed", "uncertain"], uncertain: ["created", "failed"], created: [], failed: [] };
 
 const INPUT_CONFLICT = (): ConversationError => new ConversationError(409, "That input id was already used with a different payload.");
@@ -163,9 +170,11 @@ export async function openConversationHost(options: HostOptions): Promise<HostSt
 
 export class ConversationHost {
   private harness: Harness | null = null;
+  private observationService: { store: ObservationStore; clock: QueryClock | undefined } | null = null;
   private queryService: { runner: QueryRunner; clock: QueryClock | undefined } | null = null;
   private authorityService: { registry: DomainAdapterRegistry; bindings: AuthorityBindings; mediator: AuthorityMediator } | null = null;
   private fences: BindingFenceStore | null = null;
+  private diagnosticsService: AdapterDiagnostics | null = null;
   private readonly context: Context = BACKGROUND_CONTEXT;
   private readonly queues = new Map<string, Promise<void>>();
   private readonly authorityPublication = new AuthorityPublication();
@@ -204,6 +213,7 @@ export class ConversationHost {
 
   async close(): Promise<void> {
     this.queryService?.runner.close();
+    this.observationService?.store.close();
     const harness = this.harness;
     this.harness = null;
     try { if (harness) await harness.close(this.context); }
@@ -215,12 +225,17 @@ export class ConversationHost {
     return this.harness;
   }
 
+  adapterDiagnostics(): AdapterDiagnostics {
+    this.diagnosticsService ??= new AdapterDiagnostics(this.engine, { now: this.now, context: this.context, fenced: id => this.lifecycleFences().isConnectionFenced(id) });
+    return this.diagnosticsService;
+  }
+
   lifecycleJournal(registry: DomainAdapterRegistry): OperationJournalStore {
-    return new OperationJournalStore(this.engine, registry, this.context, this.lifecycleFences());
+    return new OperationJournalStore(this.engine, registry, this.context, this.lifecycleFences(), this.adapterDiagnostics());
   }
 
   lifecycleFences(): BindingFenceStore {
-    this.fences ??= new BindingFenceStore(this.engine, this.options.notify, this.context, this.now);
+    this.fences ??= new BindingFenceStore(this.engine, this.options.notify, this.context, this.now, this.adapterDiagnostics());
     return this.fences;
   }
 
@@ -232,7 +247,18 @@ export class ConversationHost {
 
   credentialBroker(deps: DeskCredentialBrokerDeps): DeskCredentialBroker { return new DeskCredentialBroker(this.engine, deps, this.context); }
 
-  connectionSetup(broker: DeskCredentialBroker, authority: ConstructorParameters<typeof ConnectionSetupService>[2], deps: ConnectionSetupDeps): ConnectionSetupService { return new ConnectionSetupService(this.engine, broker, authority, deps, this.context); }
+  connectionSetup(broker: DeskCredentialBroker, authority: ConstructorParameters<typeof ConnectionSetupService>[2], deps: ConnectionSetupDeps): ConnectionSetupService { return new ConnectionSetupService(this.engine, broker, authority, deps, this.context, this.adapterDiagnostics()); }
+
+  readObservations(registry: DomainAdapterRegistry, bindings: AuthorityBindings, clock?: QueryClock): ObservationStore {
+    const authority = this.lifecycleAuthority(registry, bindings);
+    if (this.observationService) {
+      if (this.observationService.clock !== clock) throw new Error("Observation clock is already registered for this host.");
+      return this.observationService.store;
+    }
+    const store = new ObservationStore(this.engine, authority, clock, this.context);
+    this.observationService = { store, clock };
+    return store;
+  }
 
   readQueries(registry: DomainAdapterRegistry, bindings: AuthorityBindings, clock?: QueryClock): QueryRunner {
     const authority = this.lifecycleAuthority(registry, bindings);
@@ -240,7 +266,7 @@ export class ConversationHost {
       if (this.queryService.clock !== clock) throw new Error("Query clock is already registered for this host.");
       return this.queryService.runner;
     }
-    const runner = new QueryRunner(authority, new QueryStore(this.engine, clock ? () => clock.now() : Date.now, this.context), clock);
+    const runner = new QueryRunner(authority, new QueryStore(this.engine, clock ? () => clock.now() : Date.now, this.context), clock, this.adapterDiagnostics());
     this.queryService = { runner, clock };
     return runner;
   }
@@ -252,7 +278,7 @@ export class ConversationHost {
       if (this.authorityService.registry !== registry || this.authorityService.bindings !== bindings) throw new Error("Authority bindings are already registered for this host.");
       return this.authorityService.mediator;
     }
-    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters(), this.lifecycleFences());
+    const mediator = new AuthorityMediator(this.engine, registry, bindings, id => this.lifecyclePolicy(id), this.context, this.now, this.authorityPublication, () => this.lifecyclePolicyRevision(), this.lifecycleWriters(), { fences: this.lifecycleFences(), diagnostics: this.adapterDiagnostics() });
     this.authorityService = { registry, bindings, mediator };
     return mediator;
   }
@@ -643,6 +669,10 @@ export class ConversationHost {
 
   private async recordTurn(id: string, event: TurnEvent): Promise<void> {
     const stored = await this.stored(id);
+    if (event.kind === "tool-start") {
+      await this.record(id, `tool-start:${event.turn}:${event.callId}`, TOOL_STARTED_KIND, { callId: event.callId, tool: event.tool, turn: event.turn });
+      return;
+    }
     if (event.kind === "tool") {
       const source = event.activity.source;
       if (source) await this.update(id, current => ({ ...current, policy: strictest([current.policy, source.policy]), toolSources: { ...current.toolSources, [source.id]: { ...current.toolSources[source.id], revision: source.revision, policy: strictest([current.toolSources[source.id]?.policy ?? source.policy, source.policy]), ...(source.projectRegistryRevision ? { projectRegistryRevision: source.projectRegistryRevision } : {}) } } }));
@@ -828,6 +858,34 @@ export class ConversationHost {
   async meta(id: string): Promise<ConversationMeta> {
     const { stored, effective, available } = await this.tighten(id);
     return this.view(id, stored, await this.workingSet(), effective, available);
+  }
+
+  async watchResponse(id: string, listener: (response: ConversationResponse) => void | Promise<void>, onClose?: () => void): Promise<() => Promise<void>> {
+    const { stored } = await this.tighten(id);
+    const conversation = await this.conversation(stored);
+    const watch = await conversation.watch(this.context);
+    let cursor: number | null = null;
+    const publish = async (view: ConversationView): Promise<void> => {
+      const live = ResponseLiveSchema.parse(view.docs["pi.live"] ?? {});
+      const inbox = ResponseInboxSchema.parse(view.docs["pi.inbox"] ?? { items: [] });
+      const newest = view.entries.at(-1)?.id;
+      const added = newest !== undefined && Number(newest) !== cursor ? view.entries.filter(entry => cursor === null || Number(entry.id) > cursor).map(toEntry) : [];
+      if (newest !== undefined) cursor = Number(newest);
+      const message = live.generation?.message;
+      const generation = message ? message.responseId ?? `legacy:${message.timestamp ?? 0}` : null;
+      const working = Boolean(live.run) || inbox.items.length > 0;
+      const text = message ? message.content.flatMap(block => block.type === "text" ? [block.text ?? ""] : []).join("\n") : null;
+      await listener({ cursor, generation, working, text, entries: added });
+    };
+    try {
+      await publish(watch.value);
+      watch.start(async view => { await publish(view); });
+    } catch (error) { await watch.stop(); throw error; }
+    void watch.closed.then(end => {
+      if (end.reason === "listener_error" || end.reason === "session_failed") console.error("conversations: response stream closed", end.error);
+      onClose?.();
+    });
+    return async () => { await watch.stop(); };
   }
 
   async detail(id: string): Promise<HostDetail> {

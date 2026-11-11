@@ -1,0 +1,270 @@
+{
+ "format": "desk-adapter-package/1",
+ "packageId": "sample/hostile-view",
+ "packageVersion": "1.0.0",
+ "deskSdkRange": "^1.0.0",
+ "domainContractVersion": "1.0.0",
+ "backend": {
+  "entry": "backend.mjs",
+  "sha256": "157a48dc8701cffab68076f6c707bfc962267e52ddabcce11d46960d1e057a2d"
+ },
+ "declaration": {
+  "adapterId": "sample.hostile",
+  "label": "Hostile view",
+  "contractRange": "^1.0.0",
+  "schemas": [
+   {
+    "schemaId": "sample.hostile.prop",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "title": {
+       "type": "string",
+       "minLength": 1,
+       "title": "Title"
+      }
+     },
+     "required": [
+      "title"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.hostile.error",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "code": {
+       "type": "string",
+       "minLength": 1
+      },
+      "message": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "code",
+      "message"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.hostile.prop.empty",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.hostile.prop.search.input",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "text"
+     ],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.hostile.prop.list",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "items": {
+       "type": "array",
+       "items": {
+        "$ref": "urn:desk-schema:sample.hostile.prop:1.0.0"
+       }
+      }
+     },
+     "required": [
+      "items"
+     ],
+     "additionalProperties": false
+    }
+   }
+  ],
+  "objectTypes": [
+   {
+    "objectType": "prop",
+    "label": "prop",
+    "schemaRef": {
+     "schemaId": "sample.hostile.prop",
+     "version": "1.0.0"
+    },
+    "relationships": []
+   }
+  ],
+  "capabilities": [
+   {
+    "capabilityId": "sample.hostile.prop.search",
+    "label": "Search prop",
+    "kind": "query",
+    "objectTypes": [
+     "prop"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.hostile.prop.search.input",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.hostile.prop.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.hostile.error",
+     "version": "1.0.0"
+    }
+   },
+   {
+    "capabilityId": "sample.hostile.prop.observe",
+    "label": "Watch prop",
+    "kind": "observation",
+    "objectTypes": [
+     "prop"
+    ],
+    "inputSchemaRef": {
+     "schemaId": "sample.hostile.prop.empty",
+     "version": "1.0.0"
+    },
+    "outputSchemaRef": {
+     "schemaId": "sample.hostile.prop.list",
+     "version": "1.0.0"
+    },
+    "errorSchemaRef": {
+     "schemaId": "sample.hostile.error",
+     "version": "1.0.0"
+    }
+   }
+  ]
+ },
+ "draftingBindings": [],
+ "readBindings": [
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.hostile",
+   "capabilityId": "sample.hostile.prop.search",
+   "mode": "query",
+   "objectType": "prop",
+   "inputSchemaRef": {
+    "schemaId": "sample.hostile.prop.search.input",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.hostile.prop.list",
+    "version": "1.0.0"
+   },
+   "textPointer": "/text",
+   "display": {
+    "title": "/title"
+   }
+  },
+  {
+   "version": "1.0.0",
+   "adapterId": "sample.hostile",
+   "capabilityId": "sample.hostile.prop.observe",
+   "mode": "poll",
+   "objectType": "prop",
+   "inputSchemaRef": {
+    "schemaId": "sample.hostile.prop.empty",
+    "version": "1.0.0"
+   },
+   "outputSchemaRef": {
+    "schemaId": "sample.hostile.prop.list",
+    "version": "1.0.0"
+   },
+   "display": {
+    "title": "/title"
+   }
+  }
+ ],
+ "setup": {
+  "version": "1.0.0",
+  "schemas": [
+   {
+    "schemaId": "sample.hostile.config",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {},
+     "required": [],
+     "additionalProperties": false
+    }
+   },
+   {
+    "schemaId": "sample.hostile.account",
+    "version": "1.0.0",
+    "schema": {
+     "$schema": "https://json-schema.org/draft/2020-12/schema",
+     "type": "object",
+     "properties": {
+      "account": {
+       "type": "string",
+       "minLength": 1
+      }
+     },
+     "required": [
+      "account"
+     ],
+     "additionalProperties": false
+    }
+   }
+  ],
+  "configurationSchemaRef": {
+   "schemaId": "sample.hostile.config",
+   "version": "1.0.0"
+  },
+  "accountScopeSchemaRef": {
+   "schemaId": "sample.hostile.account",
+   "version": "1.0.0"
+  },
+  "authMethods": [
+   {
+    "kind": "local"
+   }
+  ]
+ },
+ "ui": {
+  "protocolVersion": "1.0.0",
+  "entry": "view.html",
+  "files": [
+   {
+    "path": "view.html",
+    "sha256": "1d34e026a97d9dab937ce3662ea40d62fce65fcf953cfae59d10462a8e9dd23f",
+    "mediaType": "text/html"
+   },
+   {
+    "path": "view.js",
+    "sha256": "051091e5231532b791e54c01d7616fa63c58266751430da1f32223053b83f995",
+    "mediaType": "text/javascript"
+   }
+  ],
+  "views": [
+   {
+    "objectType": "prop",
+    "view": "result"
+   }
+  ]
+ }
+}

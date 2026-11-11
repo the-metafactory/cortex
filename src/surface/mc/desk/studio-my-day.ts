@@ -8,6 +8,7 @@ import { readStudioFiles } from "./studio/read";
 import { buildStudioView, type StudioView } from "./studio/view";
 import { acquireStudioLock } from "./studio/write-lock";
 import { studioNamespace, type StudioProjection } from "./studio-outline";
+import type { BalanceDayProjection } from "./balance-day";
 
 export async function withStudioProjection<T>(desk: DeskOptions, take: (source: StudioProjection | undefined, studio: StudioView | null) => T, strict = false): Promise<T> {
   if (!desk.studio) return take({ namespace: "", threads: [] }, null);
@@ -41,8 +42,14 @@ export function withSyncedBalance<T>(db: Database, desk: DeskOptions, now: numbe
     return take(source, studio);
   }, strict);
 }
-export function readSyncedMyDay(db: Database, desk: DeskOptions, now: number, strict = false) {
-  return withSyncedBalance(db, desk, now, source => readMyDay(db, desk, now, source), strict);
+export function readSyncedMyDay(db: Database, desk: DeskOptions, now: number, strict = false, projection?: BalanceDayProjection) {
+  return withSyncedBalance(db, desk, now, source => readMyDay(db, desk, now, source, projection), strict);
+}
+export function readObservedMyDay(db: Database, desk: DeskOptions, now: number, observe: (() => Promise<BalanceDayProjection | null>) | undefined, strict = false) {
+  return withSyncedBalance(db, desk, now, async source => {
+    const projection = observe ? await observe() : null;
+    return readMyDay(db, desk, now, source, projection ?? undefined);
+  }, strict);
 }
 export function syncStudioBalance(db: Database, desk: DeskOptions, now: number, strict = false): Promise<void> {
   return withSyncedBalance(db, desk, now, () => undefined, strict);

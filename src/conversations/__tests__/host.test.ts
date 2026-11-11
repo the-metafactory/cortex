@@ -33,6 +33,71 @@ const input = (inputId: string, text: string, mode: "queue" | "steer" = "queue")
 const create = (host: ConversationHost, policy: Policy = "cloud", links: { owner: "studio-thread"; id: string }[] = []) => host.create({ title: "Synthetic", links, origin: { kind: "web" }, policy }, "local-principal@loopback");
 
 describe("conversation host", () => {
+  test("a response is visible while the turn runs and clears after its answer is saved", async () => {
+    const hold = Promise.withResolvers<undefined>();
+    const partial = Promise.withResolvers<undefined>();
+    const cleared = Promise.withResolvers<undefined>();
+    const host = await open(await scratch(), { turns: async request => {
+      await request.text?.("Hello ");
+      await request.text?.("there");
+      await hold.promise;
+      return { text: "Hello there", session: request.session, resumed: false };
+    } });
+    const conversation = await create(host);
+    const seen: (string | null)[] = [];
+    const stop = await host.watchResponse(conversation.id, response => {
+      const { text } = response;
+      const wasText = seen.at(-1);
+      seen.push(text);
+      if (text === "Hello there") partial.resolve(undefined);
+      if (text === null && wasText === "Hello there") {
+        expect(response.entries).toContainEqual(expect.objectContaining({ role: "assistant", text: "Hello there" }));
+        cleared.resolve(undefined);
+      }
+    });
+    try {
+      await host.submit(conversation.id, input("stream-1", "hello"));
+      await partial.promise;
+      expect((await host.input(conversation.id, "stream-1")).status).not.toBe("done");
+      hold.resolve(undefined);
+      await host.waitForIdle(conversation.id);
+      await cleared.promise;
+      expect((await host.input(conversation.id, "stream-1")).answer).toBe("Hello there");
+      expect(seen.at(-1)).toBeNull();
+    } finally { hold.resolve(undefined); await stop(); }
+  });
+
+  test("tool activity streams while the tool is pending and duplicate starts share one entry", async () => {
+    const hold = Promise.withResolvers<undefined>();
+    const started = Promise.withResolvers<undefined>();
+    const done = Promise.withResolvers<undefined>();
+    const host = await open(await scratch(), { turns: async request => {
+      await request.started?.("tool-1", "repo_read");
+      await request.started?.("tool-1", "repo_read");
+      await hold.promise;
+      await request.activity({ callId: "tool-1", tool: "repo_read", args: {}, outcome: "done", result: "Synthetic result" });
+      return { text: "Finished", session: request.session, resumed: false };
+    } });
+    const conversation = await create(host);
+    const observed: { kind: string; data?: unknown }[] = [];
+    const stop = await host.watchResponse(conversation.id, response => {
+      observed.push(...response.entries);
+      if (response.entries.some(entry => entry.kind === "cortex.tool-started")) started.resolve(undefined);
+      if (response.entries.some(entry => entry.kind === "cortex.tool-activity")) done.resolve(undefined);
+    });
+    try {
+      await host.submit(conversation.id, input("tools-live", "Read the synthetic file"));
+      await started.promise;
+      expect(observed.filter(entry => entry.kind === "cortex.tool-activity")).toEqual([]);
+      hold.resolve(undefined);
+      await done.promise;
+      await host.waitForIdle(conversation.id);
+      const starts = observed.filter(entry => entry.kind === "cortex.tool-started");
+      expect(starts).toHaveLength(1);
+      expect(starts[0]?.data).toMatchObject({ callId: "tool-1", tool: "repo_read", turn: expect.any(String) });
+    } finally { hold.resolve(undefined); await stop(); }
+  });
+
   test("an input is acknowledged after commit, answered, and an equal retry returns the original", async () => {
     const { calls, turns } = recorder();
     const host = await open(await scratch(), { turns });

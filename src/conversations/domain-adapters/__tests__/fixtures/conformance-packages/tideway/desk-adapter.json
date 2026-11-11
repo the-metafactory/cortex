@@ -1,0 +1,440 @@
+{
+  "format": "desk-adapter-package/1",
+  "packageId": "synthetic.tideway",
+  "packageVersion": "1.0.0",
+  "deskSdkRange": "^1.0.0",
+  "domainContractVersion": "1.0.0",
+  "backend": {
+    "entry": "backend.mjs",
+    "sha256": "2b3415b3e20bcd031fe51c342af28b1897304e655286bc1e0e178e5eb9c71661"
+  },
+  "declaration": {
+    "adapterId": "tideway",
+    "label": "Tideway",
+    "contractRange": "^1.0.0",
+    "schemas": [
+      {
+        "schemaId": "tideway.empty",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {}
+        }
+      },
+      {
+        "schemaId": "tideway.error",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code",
+            "message"
+          ],
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "tideway.estuary",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "tideway.estuary.list.output",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:tideway.estuary:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "tideway.gauge",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "place"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "title": "Name"
+            },
+            "place": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "type": "string",
+                  "const": "tideway"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "estuary"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "note": {
+              "type": "string",
+              "title": "Note"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "tideway.gauge.list.output",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "urn:desk-schema:tideway.gauge:1.0.0"
+              }
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "tideway.find.input",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "text"
+          ],
+          "properties": {
+            "text": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "tideway.get.input",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "canonicalId"
+          ],
+          "properties": {
+            "canonicalId": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "tideway.created",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ref"
+          ],
+          "properties": {
+            "ref": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "adapterId",
+                "connectionId",
+                "objectType",
+                "canonicalId"
+              ],
+              "properties": {
+                "adapterId": {
+                  "type": "string",
+                  "const": "tideway"
+                },
+                "connectionId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "objectType": {
+                  "type": "string",
+                  "const": "gauge"
+                },
+                "canonicalId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    ],
+    "objectTypes": [
+      {
+        "objectType": "estuary",
+        "label": "Estuary",
+        "schemaRef": {
+          "schemaId": "tideway.estuary",
+          "version": "1.0.0"
+        },
+        "relationships": []
+      },
+      {
+        "objectType": "gauge",
+        "label": "Gauge",
+        "schemaRef": {
+          "schemaId": "tideway.gauge",
+          "version": "1.0.0"
+        },
+        "relationships": [
+          {
+            "fieldPath": "/place",
+            "cardinality": "one",
+            "targetAdapterId": "tideway",
+            "targetObjectType": "estuary"
+          }
+        ]
+      }
+    ],
+    "capabilities": [
+      {
+        "capabilityId": "tideway.estuary.list",
+        "label": "List estuarys",
+        "kind": "query",
+        "objectTypes": [
+          "estuary"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "tideway.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "tideway.estuary.list.output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "tideway.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "tideway.gauge.search",
+        "label": "Find gauges",
+        "kind": "query",
+        "objectTypes": [
+          "gauge"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "tideway.find.input",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "tideway.gauge.list.output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "tideway.error",
+          "version": "1.0.0"
+        }
+      },
+      {
+        "capabilityId": "tideway.gauge.watch",
+        "label": "Watch gauges",
+        "kind": "observation",
+        "objectTypes": [
+          "gauge"
+        ],
+        "inputSchemaRef": {
+          "schemaId": "tideway.empty",
+          "version": "1.0.0"
+        },
+        "outputSchemaRef": {
+          "schemaId": "tideway.gauge.list.output",
+          "version": "1.0.0"
+        },
+        "errorSchemaRef": {
+          "schemaId": "tideway.error",
+          "version": "1.0.0"
+        }
+      }
+    ]
+  },
+  "draftingBindings": [],
+  "readBindings": [
+    {
+      "version": "1.0.0",
+      "adapterId": "tideway",
+      "capabilityId": "tideway.estuary.list",
+      "mode": "destinations",
+      "objectType": "estuary",
+      "inputSchemaRef": {
+        "schemaId": "tideway.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "tideway.estuary.list.output",
+        "version": "1.0.0"
+      },
+      "display": {
+        "title": "/name"
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "tideway",
+      "capabilityId": "tideway.gauge.search",
+      "mode": "query",
+      "objectType": "gauge",
+      "inputSchemaRef": {
+        "schemaId": "tideway.find.input",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "tideway.gauge.list.output",
+        "version": "1.0.0"
+      },
+      "textPointer": "/text",
+      "destinationType": "estuary",
+      "display": {
+        "title": "/name"
+      },
+      "query": {
+        "objectsPointer": "/items",
+        "ordering": "provider",
+        "stableSnapshot": true,
+        "limits": {
+          "items": 2
+        }
+      }
+    },
+    {
+      "version": "1.0.0",
+      "adapterId": "tideway",
+      "capabilityId": "tideway.gauge.watch",
+      "mode": "poll",
+      "objectType": "gauge",
+      "inputSchemaRef": {
+        "schemaId": "tideway.empty",
+        "version": "1.0.0"
+      },
+      "outputSchemaRef": {
+        "schemaId": "tideway.gauge.list.output",
+        "version": "1.0.0"
+      },
+      "destinationType": "estuary",
+      "display": {
+        "title": "/name"
+      },
+      "observation": {
+        "modes": [
+          "poll"
+        ],
+        "objectsPointer": "/items",
+        "resumable": false
+      }
+    }
+  ],
+  "setup": {
+    "version": "1.0.0",
+    "schemas": [
+      {
+        "schemaId": "tideway.setup.configuration",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "workspace": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "schemaId": "tideway.setup.account",
+        "version": "1.0.0",
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "account": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    ],
+    "configurationSchemaRef": {
+      "schemaId": "tideway.setup.configuration",
+      "version": "1.0.0"
+    },
+    "accountScopeSchemaRef": {
+      "schemaId": "tideway.setup.account",
+      "version": "1.0.0"
+    },
+    "authMethods": [
+      {
+        "kind": "local"
+      }
+    ]
+  }
+}

@@ -60,6 +60,11 @@ export function workGraphNodeCreateDeclaration(): AdapterDeclaration {
     objectTypes: [
       { objectType: "repository", label: "Repository", schemaRef: REPOSITORY_SCHEMA_REF, relationships: [] },
       { objectType: "node", label: "Node", schemaRef: NODE_SCHEMA_REF, relationships: [] },
+      { objectType: "node-draft", label: "Node draft", schemaRef: INPUT_SCHEMA_REF, relationships: [
+        { fieldPath: "/repository", targetAdapterId: ADAPTER_ID, targetObjectType: "repository", cardinality: "one" },
+        { fieldPath: "/parent", targetAdapterId: ADAPTER_ID, targetObjectType: "node", cardinality: "one" },
+        { fieldPath: "/dependencies", targetAdapterId: ADAPTER_ID, targetObjectType: "node", cardinality: "many" },
+      ] },
     ],
     capabilities: [
       { capabilityId: CAPABILITY_ID, label: "File node", kind: "action", objectTypes: ["node"], inputSchemaRef: INPUT_SCHEMA_REF, outputSchemaRef: OUTPUT_SCHEMA_REF, errorSchemaRef: ERROR_SCHEMA_REF },
