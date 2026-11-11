@@ -1,3 +1,5 @@
+import { handleDeskAdapterFrames, type AdapterFrameAccess } from "./api/desk-adapter-frames";
+import { DESK_ADAPTER_FRAMES_PATH, shellFrameCsp } from "./desk/adapter-frame-contract";
 import { createBalanceConnection } from "./desk/balance-connection";
 import { DESK_BALANCE_READ_PATH, handleDeskBalanceRead, type BalanceConnectionAccess } from "./api/desk-balance-read";
 import { isStackPrincipal } from "./api/conversations";
@@ -216,6 +218,7 @@ export interface MissionControlViews {
   connectionSetup?: ConnectionSetupAccess;
   balanceConnection?: BalanceConnectionAccess;
   adapterAssets?: AdapterAssetAccess;
+  adapterFrames?: AdapterFrameAccess;
   graphScope?: GraphScopeAccess;
   graphSurfaces?: GraphSurfaceAccess;
   balanceSurfaces?: BalanceSurfaceAccess;
@@ -406,7 +409,7 @@ export function startServer(
 
       if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
         return new Response(Bun.file(join(DASHBOARD_DIST, "index.html")), {
-          headers: { "content-type": "text/html; charset=utf-8" },
+          headers: { "content-type": "text/html; charset=utf-8", "Content-Security-Policy": shellFrameCsp(url.origin) },
         });
       }
 
@@ -538,6 +541,7 @@ async function handleApi(
 
   if (pathname === DESK_CONNECTIONS_PATH || pathname.startsWith(`${DESK_CONNECTIONS_PATH}/`)) return handleDeskConnections(req, url, guard, connectionSetup);
 
+  if (pathname === DESK_ADAPTER_FRAMES_PATH || pathname.startsWith(`${DESK_ADAPTER_FRAMES_PATH}/`)) return handleDeskAdapterFrames(req, url, guard, views.adapterFrames);
   if (pathname === DESK_ADAPTER_ASSET_PATH || pathname.startsWith(`${DESK_ADAPTER_ASSET_PATH}/`)) return handleDeskAdapterAssets(req, url, guard, adapterAssets);
 
   const deskFlowsRead = pathname === DESK_FLOWS_PATH || pathname.startsWith(`${DESK_FLOWS_PATH}/`);
