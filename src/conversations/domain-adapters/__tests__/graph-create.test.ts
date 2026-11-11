@@ -150,7 +150,7 @@ test("a local-only repository releases neither destination metadata nor linked n
 test("Mission Control rejects graphDrafts alongside a supplied drafts surface", async () => {
   const rig = await open();
   let accessed = false;
-  expect(() => rig.serve({ drafts: () => { accessed = true; return rig.editor; } })).toThrow("drafts and graphDrafts cannot both be configured");
+  expect(() => rig.serve({ drafts: () => { accessed = true; return rig.editor; } })).toThrow("Configure only one of drafts, graphDrafts or balanceDrafts");
   expect(accessed).toBe(false);
   expect(rig.soma.calls).toEqual([]);
 });

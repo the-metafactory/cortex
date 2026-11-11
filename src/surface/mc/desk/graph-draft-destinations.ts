@@ -1,13 +1,13 @@
 import { canonicalGraphRef, isBareGraphNode, qualifiedNodeId } from "../../../common/graph-ref";
 import type { AuthorityMediator } from "../../../conversations/authority";
 import { canonicalWire } from "../../../conversations/domain-adapters/operations/validation";
-import type { DraftDestinations, DestinationMatch } from "../../../conversations/domain-adapters/drafting";
+import type { DestinationMatch, DraftDestinations } from "../../../conversations/domain-adapters/drafting";
 import type { QueryPage } from "../../../conversations/domain-adapters/reads/query-types";
 import { readPointer } from "../../../conversations/domain-adapters/reads/query-validation";
 import type { ObjectReference } from "../../../conversations/domain-adapters/types";
 import { graphNodeRepository, workGraphReadBindings } from "../../../conversations/domain-adapters/work-graph/read";
 import { runHostQuery, type HostQueryRunner } from "./query-run";
-import { releasedObjects, type ReleasedObject } from "./work-released";
+import { destinationMatch, releasedObjects, type ReleasedObject } from "./work-released";
 
 export interface GraphDraftReadSession extends HostQueryRunner {
   readonly repositories: readonly ObjectReference[];
@@ -24,11 +24,6 @@ type HostRecords = Awaited<ReturnType<AuthorityMediator["inspectHostRecords"]>>;
 type NodeReader = (ref: ObjectReference) => Promise<ReleasedObject | null>;
 interface ReleasedDestinations { objects: ReleasedObject[]; read: NodeReader }
 
-const match = (refs: ObjectReference[]): DestinationMatch => {
-  const unique = [...new Map(refs.map(ref => [JSON.stringify(ref), ref])).values()];
-  const first = unique[0];
-  return !first ? { kind: "none" } : unique.length === 1 ? { kind: "unique", ref: first } : { kind: "multiple", refs: unique };
-};
 const same = (left: string, right: string): boolean => canonicalGraphRef(left) === canonicalGraphRef(right);
 const named = (object: ReleasedObject, label: string): boolean => same(object.ref.canonicalId, label) || typeof object.value.title === "string" && object.value.title.toLowerCase() === label.toLowerCase();
 
@@ -58,7 +53,7 @@ async function releasedDestinations(options: GraphDraftDestinationOptions, sessi
 function matchRepository(objects: ReleasedObject[], label: string): DestinationMatch {
   const repositories = objects.filter(object => object.ref.objectType === "repository");
   const exact = repositories.filter(object => named(object, label));
-  return match((exact.length ? exact : repositories.filter(object => object.ref.canonicalId.split("/").at(-1)?.toLowerCase() === label.toLowerCase())).map(object => object.ref));
+  return destinationMatch((exact.length ? exact : repositories.filter(object => object.ref.canonicalId.split("/").at(-1)?.toLowerCase() === label.toLowerCase())).map(object => object.ref));
 }
 
 async function readNode(options: GraphDraftDestinationOptions, session: GraphDraftReadSession, objects: ReleasedObject[], ref: ObjectReference): Promise<ReleasedObject | null> {
@@ -74,20 +69,20 @@ async function readNode(options: GraphDraftDestinationOptions, session: GraphDra
 async function matchNode(options: GraphDraftDestinationOptions, objects: ReleasedObject[], label: string, read: NodeReader): Promise<DestinationMatch> {
   const linked = objects.filter(object => object.ref.objectType === "map" || object.ref.objectType === "node");
   const exact = linked.filter(object => same(object.ref.canonicalId, label));
-  if (exact.length) return match((await Promise.all(exact.map(object => read(object.ref)))).flatMap(object => object ? [object.ref] : []));
+  if (exact.length) return destinationMatch((await Promise.all(exact.map(object => read(object.ref)))).flatMap(object => object ? [object.ref] : []));
   const repository = graphNodeRepository(label);
   if (repository !== null || isBareGraphNode(label)) {
     const candidates = objects.filter(object => object.ref.objectType === "repository" && (repository === null || same(object.ref.canonicalId, repository))).map(object => ({ adapterId: "work-graph", connectionId: options.connectionId, objectType: "node", canonicalId: repository === null ? qualifiedNodeId(object.ref.canonicalId, label.replace(/^#/, "")) : label }));
-    return match((await Promise.all(candidates.map(read))).flatMap(object => object ? [object.ref] : []));
+    return destinationMatch((await Promise.all(candidates.map(read))).flatMap(object => object ? [object.ref] : []));
   }
   const current = await Promise.all(linked.map(object => read(object.ref)));
-  return match(current.flatMap((object, index) => {
+  return destinationMatch(current.flatMap((object, index) => {
     const link = linked[index];
     return object && (named(object, label) || link && named(link, label)) ? [object.ref] : [];
   }));
 }
 
-export function graphDraftDestinations(options: GraphDraftDestinationOptions): DraftDestinations {
+export function graphDraftDestinations(options: GraphDraftDestinationOptions): DraftDestinations & { batch(): DraftDestinations } {
   function batch(): DraftDestinations {
     const conversations = new Map<string, Promise<ReleasedDestinations | null>>();
     async function prepare(conversationId: string): Promise<ReleasedDestinations | null> {
