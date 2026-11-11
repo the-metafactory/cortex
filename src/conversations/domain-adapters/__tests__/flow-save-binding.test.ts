@@ -118,7 +118,9 @@ test("historic creation survives real journal reopen and Flow deletion; current 
   const binding = createFlowSaveBinding({ stack: "stack-example", connectionId: "connection-example", flows: () => ({ pulse: rig.pulse }), journal, now: () => FLOW_SAVE_NOW, run: async () => { throw new Error("Historic lookup must not call Pulse."); } });
   await assertFlowDeleted(rig, shown, binding);
   const adapter = createFlowReadAdapter({ connectionId: "connection-example", stack: "stack-example", flowsDir: rig.flowsDir, env: { ...rig.env, PATH: process.env.PATH }, binary: rig.pulse[1] });
-  await expect(adapter.query({ readVersion: "1.0.0", queryId: "after-delete", capabilityId: "flow.saved.read", input: { ref: { adapterId: "flow", connectionId: "connection-example", objectType: "saved", canonicalId: "F_SAVE_EXAMPLE" } }, destinations: [adapter.destination], limit: 1 })).rejects.toThrow("flow.source_unavailable");
+  const current = await adapter.query({ readVersion: "1.0.0", queryId: "after-delete", capabilityId: "flow.saved.read", input: { ref: { adapterId: "flow", connectionId: "connection-example", objectType: "saved", canonicalId: "F_SAVE_EXAMPLE" } }, destinations: [adapter.destination], limit: 1 });
+  expect(current.payload).toEqual({ items: [] });
+  expect(current.annotations).toEqual([]);
 });
 
 test("a missing owner response and absent Flow stay unknown rather than asserting no effect", async () => {
