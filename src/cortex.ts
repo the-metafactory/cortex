@@ -4990,6 +4990,7 @@ export async function startCortex(
           sources: config.mc.desk.sources,
           ask: config.mc.desk.ask,
           ...(config.mc.desk.routines ? { routines: config.mc.desk.routines } : {}),
+          ...(config.mc.desk.workers ? { workers: config.mc.desk.workers } : {}),
           ...(config.mc.desk.flows ? { flows: config.mc.desk.flows } : {}),
           interruptions: config.mc.desk.interruptions,
           goals: expandGoalPaths(config.mc.desk.goals, expandTilde),
