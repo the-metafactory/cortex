@@ -8,7 +8,7 @@ import type { WriterRunner } from "../desk/create";
 import { setGraphRepositoryEnabled } from "../desk/graph-repositories";
 import { workerOwner } from "../desk/worker-conversation-owner";
 import { workBriefWriter, workCancelWriter, workStartWriter } from "../desk/worker-conversation-writer";
-import { readWorkerRecord, recordWorkerRecord, recordWorkerState } from "../desk/worker-handoff-store";
+import { readWorkerRecord, recordWorkerRecord, recordWorkerState, recordWorkerOperation, readWorkerOperation } from "../desk/worker-handoff-store";
 
 const NOW = Date.parse("2026-11-16T10:00:00Z");
 const MAP = "example/maps#12";
@@ -450,33 +450,28 @@ describe("uncorrelated start recovery", () => {
 });
 
 
-describe("ambiguous start exit", () => {
+describe("start command exits", () => {
+  let h: Harness;
+  beforeEach(() => { h = harness(); });
+  afterEach(() => { h.db.close(); });
+
   test("exit one without a confirmed no-start reply remains uncertain and cannot dispatch again", async () => {
-    const h = harness();
-    try {
-      await filed(h);
-      h.answer("build-now", "", 1, "output failed after dispatch");
-      const writer = workStartWriter(deps(h));
-      await expect(writer.create({ ...request({ node: NODE }, "start"), type: "work-start" })).rejects.toThrow("did not confirm whether work started");
-      expect((await writer.create({ ...request({ node: NODE }, "retry"), type: "work-start" })).state).toBe("accepted");
-      expect(h.calls.filter(call => call.argv.includes("build-now"))).toHaveLength(1);
-    } finally { h.db.close(); }
+    await filed(h);
+    h.answer("build-now", "", 1, "output failed after dispatch");
+    const writer = workStartWriter(deps(h));
+    await expect(writer.create({ ...request({ node: NODE }, "start"), type: "work-start" })).rejects.toThrow("did not confirm whether work started");
+    expect((await writer.create({ ...request({ node: NODE }, "retry"), type: "work-start" })).state).toBe("accepted");
+    expect(h.calls.filter(call => call.argv.includes("build-now"))).toHaveLength(1);
   });
-});
 
-
-describe("owner start refusal", () => {
   test("the exact node and map pre-dispatch refusal stays explicit and permits a later authorized retry", async () => {
-    const h = harness();
-    try {
-      await filed(h);
-      h.answer("build-now", "", 1, `ranger build-now: #30 on ${MAP}: routes escalate-hitl — waits for the principal`);
-      const writer = workStartWriter(deps(h));
-      const result = await writer.create({ ...request({ node: NODE }, "start"), type: "work-start" });
-      expect(result).toMatchObject({ state: "failed", error: expect.stringContaining("waits for the principal") });
-      h.answer("build-now", JSON.stringify({ pid: 42 }), 0);
-      expect((await writer.create({ ...request({ node: NODE }, "retry"), type: "work-start" })).state).toBe("created");
-    } finally { h.db.close(); }
+    await filed(h);
+    h.answer("build-now", "", 1, `ranger build-now: #30 on ${MAP}: routes escalate-hitl — waits for the principal`);
+    const writer = workStartWriter(deps(h));
+    const result = await writer.create({ ...request({ node: NODE }, "start"), type: "work-start" });
+    expect(result).toMatchObject({ state: "failed", error: expect.stringContaining("waits for the principal") });
+    h.answer("build-now", JSON.stringify({ pid: 42 }), 0);
+    expect((await writer.create({ ...request({ node: NODE }, "retry"), type: "work-start" })).state).toBe("created");
   });
 });
 
@@ -536,5 +531,20 @@ describe("brief response identity and current authority", () => {
       return Promise.resolve({ code: 0, stdout: JSON.stringify({ found: true, repo: "example/maps", node: "30", parent: MAP }), stderr: "" });
     };
     expect(await workBriefWriter({ ...deps(h), run }).readback(operation)).toBeNull();
+  });
+});
+
+
+describe("durable worker start reservation", () => {
+  test("only an inserted pending intent wins and losing retries preserve the original request", () => {
+    const db = initDatabase(":memory:");
+    try {
+      const first = { ...request({ node: NODE }, "first"), type: "work-start" };
+      expect(recordWorkerOperation(db, first, NODE, "starting")).toBe(true);
+      expect(recordWorkerOperation(db, { ...first, fields: { node: "example/maps#99" } }, NODE, "starting")).toBe(false);
+      expect(recordWorkerOperation(db, { ...request({ node: NODE }, "second"), type: "work-start" }, NODE, "starting")).toBe(false);
+      expect(readWorkerOperation(db, "first")!.request.fields.node).toBe(NODE);
+      expect(readWorkerOperation(db, "second")).toBeNull();
+    } finally { db.close(); }
   });
 });

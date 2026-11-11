@@ -217,7 +217,8 @@ export function workStartWriter(deps: WorkerWriterDeps): OwnerWriter {
     if (latest?.state !== "prepared" || repositoryRefusal(deps.db, latest.repository) || !(deps.desk()?.workers?.maps.includes(latest.map) ?? false)) return failed("The recorded node or its permissions changed before the start request. Nothing was started.");
     request.signal.throwIfAborted();
     const expected = baseline?.observed ? (baseline.view.generation ?? 0) + 1 : null;
-    recordWorkerOperation(deps.db, { ...request, fields: { ...request.fields, ...(expected === null ? {} : { generation: String(expected) }) } }, found.node, "starting");
+    const reserved = recordWorkerOperation(deps.db, { ...request, fields: { ...request.fields, ...(expected === null ? {} : { generation: String(expected) }) } }, found.node, "starting");
+    if (!reserved) return { state: "accepted", receipt: "Another request already recorded this start intent. Check the original request before retrying." };
     const result = await runWorkerCommand(deps, argv, workers.timeoutSeconds * 1000);
     const answer = lastObject(result.stdout);
     const parts = splitNodeRef(found.node);

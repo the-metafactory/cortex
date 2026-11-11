@@ -135,10 +135,10 @@ export function pendingWorkerStart(db: Database, node: string): WorkerOperation 
   return row ? operationOf(row) : null;
 }
 
-export function recordWorkerOperation(db: Database, request: CreateRequest, node: string | null, state: WorkerOperation["state"]): void {
+export function recordWorkerOperation(db: Database, request: CreateRequest, node: string | null, state: WorkerOperation["state"]): boolean {
   const saved = { operationId: request.operationId, type: request.type, fields: request.fields, provenance: request.provenance };
-  db.query("INSERT INTO desk_worker_operations (operation_id, node, request, state) VALUES (?, ?, ?, ?) ON CONFLICT(operation_id) DO NOTHING")
-    .run(request.operationId, node, JSON.stringify(saved), state);
+  return db.query("INSERT INTO desk_worker_operations (operation_id, node, request, state) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING")
+    .run(request.operationId, node, JSON.stringify(saved), state).changes === 1;
 }
 
 export function settleWorkerOperation(db: Database, operationId: string, state: WorkerOperation["state"]): void {
