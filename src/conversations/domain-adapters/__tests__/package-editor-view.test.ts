@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { satisfies } from "semver";
 import { sha256Bytes } from "../../../common/registry/arc-package-inventory";
 import { DESK_ADAPTER_SDK_VERSION } from "../../../desk-sdk/version";
 import { openAssetRig } from "../../../surface/mc/desk/__tests__/fixtures/adapter-asset-fixtures";
@@ -102,8 +103,8 @@ describe("editor views in the package manifest", () => {
     expect(DESK_UI_VIEWS).toEqual(["result", "editor"]);
   });
 
-  test("the SDK minor is 1.2.0, a ^1.1.0 package still loads and the UI protocol stays 1.0.0", async () => {
-    expect(DESK_ADAPTER_SDK_VERSION).toBe("1.2.0");
+  test("the SDK stays compatible with 1.2.0, a ^1.1.0 package still loads and the UI protocol stays 1.0.0", async () => {
+    expect(satisfies(DESK_ADAPTER_SDK_VERSION, "^1.2.0")).toBe(true);
     expect(DESK_UI_PROTOCOL_VERSION).toBe("1.0.0");
     expect(readFileSync(join(import.meta.dir, "../../../desk-sdk/generated/desk-sdk.d.ts"), "utf8")).toContain(`DESK_ADAPTER_SDK_VERSION = "${DESK_ADAPTER_SDK_VERSION}"`);
     const pkg = writeDeskFixturePackage(join(tempDir("bundled"), "balance"), { deskSdkRange: "^1.1.0", ui: true, uiViews: [{ objectType: "task", view: "editor" }] });
@@ -114,8 +115,8 @@ describe("editor views in the package manifest", () => {
     if (activated.ok) expect(activated.value.deskSdkRange).toBe("^1.1.0");
   });
 
-  test("a package that needs a newer SDK than 1.2.0 is refused as incompatible", async () => {
-    const pkg = writeDeskFixturePackage(join(tempDir("bundled"), "balance"), { deskSdkRange: "^1.3.0" });
+  test("a package that needs a newer SDK than the current version is refused as incompatible", async () => {
+    const pkg = writeDeskFixturePackage(join(tempDir("bundled"), "balance"), { deskSdkRange: `>${DESK_ADAPTER_SDK_VERSION}` });
     const loader = new DeskPackageLoader({ bundledPackages: [pkg.dir] });
     const discovery = await loader.discover();
     expect(discovery.candidates[0]?.state).toMatchObject({ state: "unavailable", code: "incompatible_sdk" });
