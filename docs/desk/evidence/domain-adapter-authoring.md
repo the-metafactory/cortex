@@ -48,20 +48,12 @@ To rebuild either package, run `bun <package-directory>/build.mjs`. To repeat th
 
 ## Full repository check
 
-The required `bun run check` ran once. Lint, duplication, typecheck, vocabulary, SDK compatibility, shippable hygiene, XDG, and branch ancestry passed. The test gate reported 15,339 passes, 72 skips, 201 todos, and one failure.
+The required `bun run check` ran once on the merged branch. Every gate passed: lint, duplication, typecheck, vocabulary, SDK compatibility, shippable hygiene, XDG, test, and branch ancestry. The test gate reported 15,531 passes, 30 skips, 201 todos, and no failures across 15,762 tests in 947 files.
 
-The failure is `every run > makes no network request and writes nothing outside its own temporary directory` at `src/conversations/domain-adapters/__tests__/conformance.test.ts:128`. Its `ownedTempEntries()` snapshot includes every name beginning with `desk-conformance-`. The concurrently running failure suite creates and removes directories beginning with `desk-conformance-failure-`, so the before and after lists differ.
-
-The same failure reproduced on the unchanged base commit `9d2fee205fac07b9b10df10b4b668544475298f1`, exported with `git archive` into a temporary directory on this host. The base run used the existing dependency installation and the repository's isolated-HOME runner:
-
-```sh
-bun run test --parallel src/conversations/domain-adapters/__tests__/conformance.test.ts src/conversations/domain-adapters/__tests__/conformance-failures.test.ts
-```
-
-That base run reported 37 passes and the same single failure at line 128. Both diffs showed one failure-harness directory replaced by another. The node SOP requires leaving host failures that reproduce on the base unchanged.
+An earlier revision of this branch reported one failure in `src/conversations/domain-adapters/__tests__/conformance.test.ts` at line 128. That test counted every entry in the shared temporary directory, so the concurrently running failure suite changed the before and after lists. The merged tree gives the test its own parent directory and asserts the parent is empty. The failure does not occur on this branch.
 
 ## Close prose
 
 The guide and its tested archive example pass the Desk adapter conformance harness. A fresh author built a ceramic kiln studio adapter using only the guide and portable SDK types. Every declared capability passed without host implementation changes. The [blind package, exact input digests, author report, and result are pinned at `94950d81624deafd763384256f60bb99badb022c`](https://github.com/the-metafactory/cortex/tree/94950d81624deafd763384256f60bb99badb022c/docs/desk). The repository test keeps both packages conformant. Isolation was instruction constrained. No production provider, credential, UI, or cutover claim is made.
 
-The full check has one existing concurrent temporary-directory assertion failure, reproduced on the unchanged base. Every other gate passed.
+The full check passes every gate on the merged branch.
