@@ -70,6 +70,9 @@ await withTempHome(async () => {
       assert.equal(flow.name, "F_EDITOR_DRAFT");
       assert.equal(flow.provenance.conversation, fixture.rig.flow.id);
       assert.equal(typeof flow.sha256, "string");
+      assert.equal(typeof flow.yaml, "string", "Pulse reports the saved definition");
+      assert.match(flow.yaml, new RegExp(EDITED_ACTION), "the saved Flow carries the frame's edit");
+      assert.ok(flow.yaml.startsWith(String(edited.draft.fields["/definition"]?.value)), "the saved definition begins with the edited host draft");
       assert.equal(savedFlows(fixture), 1, "only the host's own Confirm saved the Flow");
       assert.ok(fixture.rig.flow.noActivationCalls(), "no run, enable or schedule call");
       console.log("Edit in frame reached the host draft as a principal edit; host Confirm saved once; Pulse readback matches.");

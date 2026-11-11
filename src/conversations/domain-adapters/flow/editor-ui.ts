@@ -46,9 +46,9 @@ const script = `(() => {
     port.onmessage = message => {
       const { type, body } = message.data;
       if (type === "host:draft") {
+        const unsaved = dirty();
         draft = body;
-        const typed = dirty() && document.activeElement === yamlInput;
-        if (!typed) { nameInput.value = String(body.values["/name"] ?? ""); yamlInput.value = String(body.values["/definition"] ?? ""); }
+        if (!unsaved) { nameInput.value = String(body.values["/name"] ?? ""); yamlInput.value = String(body.values["/definition"] ?? ""); }
         pending = false;
       } else if (type === "host:projection") {
         fill(steps, body.object.steps);
