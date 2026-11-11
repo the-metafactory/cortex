@@ -36,6 +36,9 @@ describe("Flow editor frame", () => {
     expect(reply.messages.map(message => message.type)).toEqual(["host:projection", "host:draft"]);
     const projection = reply.messages[0];
     expect(projection?.type === "host:projection" && projection.body.object).toMatchObject({ name: "F_EDITOR_DRAFT", findings: [] });
+    const view = await rig.readDraft();
+    expect(view.outdated).toEqual([]);
+    expect(view.status).toBe("ready-for-confirmation");
   });
 
   test("an edit reaches the host draft as a principal edit with the new findings", async () => {
