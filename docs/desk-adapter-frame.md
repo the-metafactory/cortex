@@ -40,3 +40,9 @@ The [supported-browser evidence](desk-adapter-frame-evidence.md) records 128 pas
 The final `bun run check` passed every gate after merging the updated `origin/main`: lint, duplication, typecheck, vocabulary, SDK, shippable hygiene, XDG, tests and branch freshness. The suite reported 15,448 passed, 30 skipped, 201 todo and zero failures. The earlier parallel conformance-directory snapshot failure did not recur.
 
 Accepted residuals remain WebRTC STUN/UDP in Chromium and WebKit, and WebKit preconnect TCP. The probe records them as known residuals rather than asserting they are blocked. DNS egress and real Cloudflare Access are outside this synthetic evidence. No provider account, external credential or production activation is used.
+
+## Flow editor (node #3364)
+
+The Flow package declares one editor view, `saved-draft`/`editor`, whose assets live in `src/conversations/domain-adapters/flow/editor-ui.ts`. The host projects the draft as `{name, yaml, steps, findings}`: steps come from Pulse's step validator and findings from the same checks, computed from the host draft on every exchange. The frame can only post `draft:change` (recorded as a principal edit through the bound draft service) and `action:propose` (opens the host's own review). The markup has no run, schedule, delete, save or approve control, and any other message type retires the frame to the host rendering. Only the host's Confirm calls the lifecycle bridge that saves through Pulse.
+
+`bun scripts/probe-desk-flow-editor.ts` drives the real editor in Chromium on a disposable stack: edit, host review, host Confirm, Pulse readback, and four hostile frames (forged save, forged approval, direct confirmation request, render crash).

@@ -18,6 +18,9 @@ import { ObjectReferenceSchema } from "../types";
 import { FLOW_ADAPTER_ID, flowName, flowReferenceSchema, flowSchemaRef, flowReadDeclaration } from "./schema";
 
 const CAPABILITY_ID = "flow.saved.create";
+export const FLOW_STACK_RESOLVER = "flow.stack.destinations";
+const STACK_RESOLVER_ID = FLOW_STACK_RESOLVER;
+const hostResolvesStacks = (): never => { throw new Error("Flow stacks are resolved by the host."); };
 const INPUT_REF = flowSchemaRef(`${CAPABILITY_ID}.input`);
 const OUTPUT_REF = flowSchemaRef(`${CAPABILITY_ID}.output`);
 const ERROR_REF = flowSchemaRef(`${CAPABILITY_ID}.error`);
@@ -30,17 +33,20 @@ const Saved = FlowSavedResponseSchema.extend({ name: flowName, sha256: FlowHashS
 const Found = z.object({ name: flowName, source: z.literal("saved"), sha256: FlowHashSchema, provenance: z.object({ request_id: z.string() }) });
 const stackRef = (connectionId: string, stack: string): ObjectReference => ({ adapterId: FLOW_ADAPTER_ID, connectionId, objectType: "stack", canonicalId: stack });
 
+export const FLOW_DRAFT_OBJECT_TYPE: AdapterDeclaration["objectTypes"][number] = { objectType: "saved-draft", label: "Flow draft", schemaRef: INPUT_REF, relationships: [{ fieldPath: "/stack", targetAdapterId: FLOW_ADAPTER_ID, targetObjectType: "stack", cardinality: "one" }] };
+
 export function flowSaveDeclaration(): AdapterDeclaration {
   const reads = flowReadDeclaration();
   return {
     ...reads,
+    objectTypes: [...reads.objectTypes, FLOW_DRAFT_OBJECT_TYPE],
     schemas: [
       ...reads.schemas,
       { ...INPUT_REF, schema: objectSchema({ stack: flowReferenceSchema("stack"), name: { type: "string", pattern: "^F_[A-Z0-9_]{1,64}$" }, definition: { type: "string", minLength: 1 } }, ["stack", "name", "definition"]) },
       { ...OUTPUT_REF, schema: objectSchema({ ref: flowReferenceSchema("saved"), name: { type: "string" }, sha256: { type: "string", pattern: "^[0-9a-f]{64}$" } }, ["ref", "name", "sha256"]) },
       { ...ERROR_REF, schema: adapterErrorSchema(FLOW_ADAPTER_ID) },
     ],
-    capabilities: [{ capabilityId: CAPABILITY_ID, label: "Save Flow", kind: "action", objectTypes: ["saved"], inputSchemaRef: INPUT_REF, outputSchemaRef: OUTPUT_REF, errorSchemaRef: ERROR_REF }],
+    capabilities: [{ capabilityId: STACK_RESOLVER_ID, label: "Resolve Flow stack", kind: "query", objectTypes: ["stack"], inputSchemaRef: flowSchemaRef("flow.saved.query.input"), outputSchemaRef: flowSchemaRef("flow.saved.output"), errorSchemaRef: ERROR_REF }, { capabilityId: CAPABILITY_ID, label: "Save Flow", kind: "action", objectTypes: ["saved"], inputSchemaRef: INPUT_REF, outputSchemaRef: OUTPUT_REF, errorSchemaRef: ERROR_REF }],
   };
 }
 
@@ -136,7 +142,7 @@ export function createFlowSaveBinding(options: FlowSaveBindingOptions) {
     }
   };
   return {
-    declaration: flowSaveDeclaration(), support, bindings: { handlers: {}, observations: {} },
+    declaration: flowSaveDeclaration(), support, bindings: { handlers: { [STACK_RESOLVER_ID]: hostResolvesStacks }, observations: {} },
     writerBinding: { stack: options.stack, owner: "flow", adapterId: FLOW_ADAPTER_ID, connectionId: options.connectionId, capabilityId: CAPABILITY_ID },
     connector: { writerOwner: "flow" as const, support, dispatch, lookup }, dispatch, lookup,
     async lookupLegacy(operationId: string) {

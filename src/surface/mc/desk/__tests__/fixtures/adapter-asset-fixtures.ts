@@ -60,21 +60,22 @@ export async function entryUrl(rig: AssetRig): Promise<string> {
   return assetUrl(entry.releaseDigest, ASSET_CONNECTION, entry.entry);
 }
 
-export const enabledConnection = (connectionId = ASSET_CONNECTION): AssetConnection => ({
+export const enabledConnection = (connectionId = ASSET_CONNECTION, adapterId = DESK_FIXTURE_ADAPTER): AssetConnection => ({
   connectionId,
-  packageId: deskFixturePackageId(DESK_FIXTURE_ADAPTER),
+  packageId: deskFixturePackageId(adapterId),
   state: "enabled",
-  readCapabilityIds: [`${DESK_FIXTURE_ADAPTER}.task.query`, "unrelated.capability"],
-  writeCapabilityIds: [`${DESK_FIXTURE_ADAPTER}.task.create`],
+  readCapabilityIds: [`${adapterId}.task.query`, "unrelated.capability"],
+  writeCapabilityIds: [`${adapterId}.task.create`],
 });
 
-export async function openAssetRig(options: { service?: boolean; ui?: AssetUiFixture } = {}): Promise<AssetRig> {
+export async function openAssetRig(options: { service?: boolean; ui?: AssetUiFixture; adapterId?: string; package?: DeskFixturePackageOptions } = {}): Promise<AssetRig> {
+  const adapterId = options.adapterId ?? DESK_FIXTURE_ADAPTER;
   const root = mkdtempSync(join(tmpdir(), "cortex-desk-assets-"));
   const { engine, store } = await openDeskFixtureStore(join(root, "store"));
-  const packageDir = join(root, "packages", DESK_FIXTURE_ADAPTER);
+  const packageDir = join(root, "packages", adapterId);
   const writePackage = (extra: DeskFixturePackageOptions = {}): void => {
     const ui = options.ui;
-    writeDeskFixturePackage(packageDir, { ui: true, ...extra, ...(ui ? { extra: { ...extra.extra, ui: {
+    writeDeskFixturePackage(packageDir, { ui: true, adapterId, ...options.package, ...extra, ...(ui ? { extra: { ...extra.extra, ui: {
       protocolVersion: "1.0.0", entry: ui.entry, views: ui.views ?? [{ objectType: "task", view: "result" }],
       files: Object.entries(ui.files).map(([path, file]) => ({ path, sha256: sha256Bytes(file.body), mediaType: file.mediaType })),
     } } } : {}) });
@@ -84,11 +85,11 @@ export async function openAssetRig(options: { service?: boolean; ui?: AssetUiFix
     }
   };
   writePackage();
-  const packageId = deskFixturePackageId(DESK_FIXTURE_ADAPTER);
+  const packageId = deskFixturePackageId(adapterId);
   const loader = new DeskPackageLoader({ bundledPackages: [packageDir], store });
   const activated = await loader.activate(packageId);
   if (!activated.ok) throw new Error(`fixture activation failed: ${activated.error.message}`);
-  const connections = new Map<string, AssetConnection[]>([[ASSET_OWNER, [enabledConnection()]]]);
+  const connections = new Map<string, AssetConnection[]>([[ASSET_OWNER, [enabledConnection(ASSET_CONNECTION, adapterId)]]]);
   const service = new AdapterAssetService(loader, { connections: principal => Promise.resolve(connections.get(principal) ?? []) });
   const access = options.service === false ? () => null : () => service;
 

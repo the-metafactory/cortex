@@ -24,7 +24,7 @@ export async function openFlowCutoverRig() {
   let host = status.host;
   const db = initDatabase(":memory:");
   const registry = new DomainAdapterRegistry();
-  const registered = registry.register(flowSaveDeclaration(), { handlers: {}, observations: {} });
+  const registered = registry.register(flowSaveDeclaration(), createFlowSaveBinding({ stack: "test", connectionId: "flow-example", flows: () => undefined, journal: host.lifecycleJournal(registry) }).bindings);
   if (!registered.ok) throw new Error(registered.error.code);
   const journal = host.lifecycleJournal(registry);
   const hooks: { afterSave?: () => Promise<void> } = {};
@@ -50,7 +50,7 @@ export async function openFlowCutoverRig() {
   const authority = host.lifecycleAuthority(registry, bindings);
   await authority.publishHostRecord({ kind: "principal", value: principal }, 0);
   await authority.publishHostRecord({ kind: "connection", value: connection }, 0);
-  const cutover = createFlowCutover({ host, registry, bindings, binding, async openSession(actor, conversationId) {
+  const openSession = async (actor: Actor, conversationId: string) => {
     assert.equal(actor.principal, principal.principal);
     await host.meta(conversationId);
     const id = randomUUID();
@@ -59,7 +59,8 @@ export async function openFlowCutoverRig() {
     const context = await authority.authenticate(id);
     if (!context) throw new Error("Synthetic principal session was refused.");
     return { context, close() { sessions.delete(id); unregister(); } };
-  } });
+  };
+  const cutover = createFlowCutover({ host, registry, bindings, binding, openSession });
   const desk: DeskOptions = { enabled: true, displayName: "Synthetic", topN: 5, rangerUrl: "", areas: [], sources: [], flows: { pulse: pulse.pulse } };
   const sources = () => conversationSources({ db, desk: () => desk, runFlow: pulse.run, lifecycles: { flow: cutover.lifecycle } });
   await host.attachSources(sources());
@@ -89,7 +90,7 @@ export async function openFlowCutoverRig() {
   const activate = () => plan().then(current => cutover.cutover(current, syntheticWriterSteps(), 0));
   const saveCalls = () => pulse.calls.filter(argv => argv.includes("save")).length;
   const noActivationCalls = () => pulse.calls.every(argv => !argv.some(arg => ["run", "enable", "routine", "schedule"].includes(arg)));
-  return { pulse, activate, saveCalls, noActivationCalls, get host() { return host; }, db, registry, binding, authority, connection, policy, cutover, sources, creation, actor, id, desk, propose, confirm, seed, plan, hooks, steps: syntheticWriterSteps,
+  return { pulse, openSession, sessions, bindings, activate, saveCalls, noActivationCalls, get host() { return host; }, db, registry, binding, authority, connection, policy, cutover, sources, creation, actor, id, desk, propose, confirm, seed, plan, hooks, steps: syntheticWriterSteps,
     async downgrade() {
       await host.close();
       const status = await open();

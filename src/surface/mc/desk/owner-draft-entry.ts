@@ -39,6 +39,8 @@ export interface OwnerDraft<Input, Destinations extends DraftDestinations = Draf
   readonly binding: DraftingBindingDocument;
   readonly resolveWith: string;
   readonly unavailable: string;
+  readonly savesLocally?: boolean;
+  readonly conversationSourcesOnly?: boolean;
   parse(raw: unknown, connectionId: string): Input;
   references(input: Input): readonly ObjectReference[];
   inconsistency?(input: Input, conversationId: string, destinations: Destinations): Promise<string | null>;
@@ -78,12 +80,12 @@ export function ownerDraftEditor<Session extends OwnerDraftSession, Input, Desti
       };
       if (!await unchanged()) return blocked("The draft changed; review it again.");
       const view = await editor.service.read(handoff.draftId, request.audience);
-      if (!view || view.withheld.length || handoff.policy === "local") return blocked(`${owner.label} creation needs a cloud-permitted draft and sources.`);
+      if (!view || view.withheld.length || handoff.policy === "local" && !owner.savesLocally) return blocked(`${owner.label} creation needs a cloud-permitted draft and sources.`);
       const draft = view.draft;
       const session = await options.session(draft.conversationId);
       if (session?.principal !== request.principal) return blocked("The current principal session is unavailable.");
       const sources = await options.sourceRestrictions(handoff);
-      if (sources === null || handoff.sources.length > 0 && sources.length === 0) return blocked("Source authority is unavailable; review the draft again.");
+      if (sources === null || handoff.sources.length > 0 && sources.length === 0 && !owner.conversationSourcesOnly) return blocked("Source authority is unavailable; review the draft again.");
       const input = owner.parse(handoff.input, options.connectionId);
       const batch = destinations.batch();
       const resolved = await Promise.all(owner.references(input).map(async ref => {
