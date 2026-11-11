@@ -19,6 +19,14 @@ async function cli(failures: boolean): Promise<unknown> {
 const capabilitiesOf = ({ packageDir: _packageDir, ...report }: ConformanceReport) => report;
 const failuresOf = ({ packageDir: _packageDir, companion: { packageDir: _companionDir, ...companion }, ...report }: FailureReport) => ({ ...report, companion });
 
+test("a stalled conformance subprocess is killed and reports a bounded timeout", async () => {
+  const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "pipe", stderr: "pipe" });
+  const result = await collect(child, 25);
+  expect(result.exitCode).toBe(124);
+  expect(result.stderr).toContain("timed out");
+  expect(child.exitCode).not.toBeNull();
+});
+
 test("an external package imports the export and gets the CLI capability and failure reports", async () => {
   const before = readdirSync(tmpdir()).filter(name => name.startsWith("desk-conformance-export-"));
   const result = await probeConformanceExport(undefined, true);
