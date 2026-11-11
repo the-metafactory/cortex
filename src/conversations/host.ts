@@ -872,7 +872,10 @@ export class ConversationHost {
       const added = newest !== undefined && Number(newest) !== cursor ? view.entries.filter(entry => cursor === null || Number(entry.id) > cursor).map(toEntry) : [];
       if (newest !== undefined) cursor = Number(newest);
       const message = live.generation?.message;
-      await listener({ cursor, generation: message ? message.responseId ?? `legacy:${message.timestamp ?? 0}` : null, working: Boolean(live.run) || inbox.items.length > 0, text: message ? message.content.flatMap(block => block.type === "text" ? [block.text ?? ""] : []).join("\n") : null, entries: added });
+      const generation = message ? message.responseId ?? `legacy:${message.timestamp ?? 0}` : null;
+      const working = Boolean(live.run) || inbox.items.length > 0;
+      const text = message ? message.content.flatMap(block => block.type === "text" ? [block.text ?? ""] : []).join("\n") : null;
+      await listener({ cursor, generation, working, text, entries: added });
     };
     try {
       await publish(watch.value);

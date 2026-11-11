@@ -15,9 +15,17 @@ export type TranscriptAction =
   | { type: "disconnected" };
 
 function mergeEntries(current: ConversationEntry[], incoming: ConversationEntry[]): ConversationEntry[] {
+  if (incoming.length === 0) return current;
   const entries = new Map(current.map(entry => [entry.id, entry]));
   for (const entry of incoming) entries.set(entry.id, entry);
   return [...entries.values()].sort((a, b) => Number(a.id) - Number(b.id));
+}
+
+function nextLiveText(state: TranscriptState, update: ConversationResponseUpdate): string | null {
+  if (update.text !== undefined) return update.text;
+  if (update.append === undefined) return state.liveText;
+  const previous = state.generation === update.generation ? state.liveText ?? "" : "";
+  return previous + update.append;
 }
 
 export function transcriptReducer(state: TranscriptState, action: TranscriptAction): TranscriptState {
@@ -32,6 +40,6 @@ export function transcriptReducer(state: TranscriptState, action: TranscriptActi
   const entries = mergeEntries(state.entries, update.entries ?? []);
   const savedAhead = entries.some(entry => entry.role === "assistant" && Number(entry.id) > (update.cursor ?? 0));
   if (savedAhead) return { ...state, entries, connected: true };
-  const liveText = update.text !== undefined ? update.text : update.append !== undefined ? (state.generation === update.generation ? state.liveText ?? "" : "") + update.append : state.liveText;
+  const liveText = nextLiveText(state, update);
   return { entries, liveText, generation: update.generation, cursor: Math.max(state.cursor ?? 0, update.cursor ?? 0) || null, working: (update.cursor ?? 0) < (state.cursor ?? 0) ? state.working : update.working, connected: true };
 }
