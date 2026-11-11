@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { CreateRequest, CreateResult, OwnerReadback, OwnerWriter, Policy, Suggestion } from "../../../conversations/types";
 import type { DeskOptions } from "./compose";
-import { studioRequestId } from "./conversation-ids";
+import { studioRequestId } from "../../../conversations/conversation-ids";
 import { syncStudioBalance } from "./studio-my-day";
 import { planAct, StudioActSchema, type ActContext, type ActPlan, type ActRefusal, type StudioAct } from "./studio/acts";
 import { askFiler, captureId, captureInInbox, captureInThread, captureModel, filerFor, recordCaptureDone, type CaptureModel } from "./studio/capture";

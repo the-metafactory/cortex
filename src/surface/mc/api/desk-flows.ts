@@ -3,7 +3,7 @@ import type { DeskRuntime } from "../desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../desk/create";
 import { FLOW_CARD_PATH } from "../desk/flow-surface-schema";
 import type { FlowSurfaceAccess, FlowSurfaceReader } from "../desk/flow-surfaces";
-import { DESK_FLOWS_PATH, FlowHashSchema, SavedFlowDefinitionSchema, SavedFlowNameSchema, SavedFlowsSchema } from "../desk/saved-flow-contract";
+import { DESK_FLOWS_PATH, FlowHashSchema, SavedFlowDefinitionSchema, SavedFlowNameSchema, SavedFlowsSchema } from "../../../conversations/saved-flow-contract";
 
 const headers = { "Cache-Control": "no-store" };
 const fail = (status: number, error: string): Response => Response.json({ error }, { status, headers });

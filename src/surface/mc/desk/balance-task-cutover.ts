@@ -8,7 +8,7 @@ import type { ApprovedSnapshot } from "../../../conversations/domain-adapters/op
 import { writerLease, type WriterBinding, type WriterRecord, type WriterState } from "../../../conversations/domain-adapters/operations/writer-authority";
 import type { CreateRequest, CreateResult, GrantBinding, OwnerWriter } from "../../../conversations/types";
 import { loadBalanceState } from "./balance-store";
-import { operationUuid } from "./conversation-ids";
+import { operationUuid } from "../../../conversations/conversation-ids";
 import type { DeskOptions } from "./compose";
 
 export const BALANCE_TASK_OWNER = "balance-task";

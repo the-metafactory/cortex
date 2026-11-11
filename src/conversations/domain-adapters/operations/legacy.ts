@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ProposalSchema, type Proposal } from "../../creation";
 import { OperationRecordSchema, type CreateResult, type OperationRecord, type ReadbackResult } from "../../types";
 import { isBalanceProjectId } from "../../../surface/mc/desk/balance-destinations";
-import { operationUuid, studioRequestId } from "../../../surface/mc/desk/conversation-ids";
+import { operationUuid, studioRequestId } from "../../conversation-ids";
 import { ObjectReferenceSchema, type ObjectReference } from "../types";
 import { canonicalGraphRef } from "../work-graph/read";
 import { flowName } from "../flow/schema";

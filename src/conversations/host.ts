@@ -6,6 +6,7 @@ import { OperationReconciler } from "./domain-adapters/operations/reconciliation
 import { BatchReceiptReader, BatchReceiptStore } from "./domain-adapters/operations/batches";
 import { ObjectReader } from "./domain-adapters/operations/readback";
 import { WriterAuthority } from "./domain-adapters/operations/writer-authority";
+import type { CreationLifecycle } from "./creation-lifecycle";
 import { BindingFenceStore, type PrincipalNotifier } from "./domain-adapters/operations/triggers";
 import { AdapterDiagnostics } from "./domain-adapters/diagnostics";
 import { AuthorityPublication } from "./authority-publication";
@@ -134,7 +135,7 @@ export interface HostOptions {
   alive?: (pid: number) => boolean;
   pid?: number;
 }
-export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters; withheld?: WithheldReasons; readers?: WorkReaders; queries?: (session: ToolSession) => WorkReaders | undefined; communications?: () => readonly CommunicationConnector[]; workers?: WorkerOwner; cutovers?: Partial<Record<OwnerType, () => Promise<CreationCutover | null>>> }
+export interface HostSources { resolvers: LinkResolvers; readbacks: OwnerReadbacks; writers?: OwnerWriters; lifecycles?: Partial<Record<OwnerType, CreationLifecycle>>; withheld?: WithheldReasons; readers?: WorkReaders; queries?: (session: ToolSession) => WorkReaders | undefined; communications?: () => readonly CommunicationConnector[]; workers?: WorkerOwner; cutovers?: Partial<Record<OwnerType, () => Promise<CreationCutover | null>>> }
 export type HostStatus = { state: "ready"; host: ConversationHost; tookOver: LockOwner | null; resumed: string[]; reconciled: string[] } | { state: "unavailable"; reason: string };
 
 const strictest = (policies: Policy[]): Policy => policies.includes("local") ? "local" : "cloud";
@@ -441,6 +442,11 @@ export class ConversationHost {
   }
 
   get withheld(): WithheldReasons { return this.sources.withheld ?? {}; }
+
+  async creationLifecycle(owner: OwnerType): Promise<CreationLifecycle | undefined> {
+    const lifecycle = this.sources.lifecycles?.[owner];
+    return lifecycle && await lifecycle.started() ? lifecycle : undefined;
+  }
 
   async cutovers(): Promise<Partial<Record<OwnerType, CreationCutover>>> {
     const found = await Promise.all(Object.entries(this.sources.cutovers ?? {}).map(async ([type, read]) => [type, await read()] as const));
@@ -1154,6 +1160,7 @@ export class ConversationHost {
   }
 
   async readback(operation: OperationRecord): Promise<ReadbackResult> {
+    if (!await this.lifecycleWriters().legacyOwnerAllowed(this.options.stack, operation.owner)) return null;
     const readback = this.readbackFor(operation.owner);
     return readback ? readback(operation).catch(() => null) : null;
   }

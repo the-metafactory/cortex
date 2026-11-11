@@ -5,7 +5,7 @@ import { areaProjects, balanceDestinations, isBalanceProjectId, resolveBalancePr
 import { STALE_OUTLINE } from "../../../surface/mc/desk/balance-outline";
 import { balanceWriter } from "../../../surface/mc/desk/balance-conversation-writer";
 import type { DeskOptions } from "../../../surface/mc/desk/compose";
-import { operationUuid } from "../../../surface/mc/desk/conversation-ids";
+import { operationUuid } from "../../conversation-ids";
 import { loadMeta } from "../../../surface/mc/desk/my-day";
 import type { LookupRequest, TrustedConnector } from "../../authority";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, ReadbackResult } from "../../types";

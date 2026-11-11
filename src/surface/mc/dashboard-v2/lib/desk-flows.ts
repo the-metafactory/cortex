@@ -1,5 +1,5 @@
 import { flowCardPath, type FlowSavedCard } from "../../desk/flow-surface-schema";
-import { DESK_FLOWS_PATH, type FlowRoutine, SavedFlowDefinitionSchema, SavedFlowsSchema, type SavedFlow, type SavedFlowDefinition } from "../../desk/saved-flow-contract";
+import { DESK_FLOWS_PATH, type FlowRoutine, SavedFlowDefinitionSchema, SavedFlowsSchema, type SavedFlow, type SavedFlowDefinition } from "../../../../conversations/saved-flow-contract";
 import { ApiFailure, getJson, postJson } from "./api";
 
 export type SavedFlowsState = { status: "checking" } | { status: "unconfigured" } | { status: "ready"; flows: SavedFlow[]; routine?: FlowRoutine } | { status: "error"; error: string };

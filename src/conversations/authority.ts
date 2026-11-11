@@ -258,6 +258,44 @@ export class AuthorityMediator {
     return this.approve(context, approval, grantId);
   }
 
+  async grantApprovedOperation(context: HostContext, operationId: string, scope: "conversation" | "global"): Promise<string | null> {
+    return this.exclusive(async () => {
+      const stored = await this.journal.read(operationId);
+      if (!stored || "kind" in stored.journal.snapshot || stored.journal.state !== "succeeded" || stored.retryBlocked) return null;
+      const snapshot = stored.journal.snapshot;
+      const resolved = await this.resolve(context, snapshot.connectionId, snapshot);
+      if (!this.canMutate(resolved, snapshot)) return null;
+      return this.commit(state => {
+        const approval = stored.journal.events[0]?.event;
+        if (approval?.kind !== "approved" || approval.authority.principalRef !== resolved.principal.principalRef || approval.authority.basis.kind !== "confirmation") return null;
+        this.basis(state, resolved, operationId, snapshot, approval.authority.basis, "mutation");
+        const grantId = randomUUID();
+        const grant: GrantRecord = { version: 1, status: "active", purpose: "mutation", grantId, grantRevision: "1", principalRef: resolved.principal.principalRef, constraints: { adapterId: snapshot.adapterId, connectionId: snapshot.connectionId, capabilityIds: [snapshot.capabilityId], destinations: snapshot.destinations, ...(snapshot.target ? { target: snapshot.target } : {}), context: scope === "global" ? { kind: "principal" } : { kind: "conversation", conversationId: snapshot.provenance.conversationId }, sourceReleaseCeiling: snapshot.policy }, createdAt: this.now().toISOString() };
+        state.records[`grant:${grantId}`] = [{ kind: "grant", value: grant }];
+        state.heads[`grant:${grantId}`] = 1;
+        return grantId;
+      });
+    });
+  }
+
+  async revokeCreationGrant(context: HostContext, grantId: string): Promise<void> {
+    await this.publication.publish(async () => {
+      const grant = headRecord(await this.state(), "grant", grantId);
+      if (!grant || grant.status === "revoked") return;
+      const resolved = await this.resolve(context, grant.constraints.connectionId);
+      if (grant.principalRef !== resolved.principal.principalRef) throw new Error("This permission belongs to another principal.");
+      await this.commit(state => {
+        const current = headRecord(state, "grant", grantId);
+        if (current?.grantRevision !== grant.grantRevision) throw new Error("Permission changed before revocation.");
+        const key = `grant:${grantId}`;
+        const revision = Number(current.grantRevision) + 1;
+        state.records[key]?.push({ kind: "grant", value: { ...current, status: "revoked", grantRevision: String(revision), revokedAt: this.now().toISOString(), revocationReason: "principal-revoked" } });
+        state.heads[key] = revision;
+      });
+      for (const active of this.active.values()) if (active.heads.has(`grant:${grantId}`)) active.controller.abort();
+    });
+  }
+
   private async approve(context: HostContext, input: ApprovalInput, grantId: string | undefined): Promise<AuthorityCheck> {
     try {
       const snapshot = validateSnapshot(this.registry, input.snapshot);

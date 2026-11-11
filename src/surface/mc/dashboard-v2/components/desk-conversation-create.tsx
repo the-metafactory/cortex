@@ -66,11 +66,13 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
   };
   const proposals = view?.proposals ?? [];
   const grants = view?.grants ?? [];
-  const active = grants.filter(g => !g.revokedAt && !g.supersededAt);
+  const lapsed = (g: (typeof grants)[number]): boolean => !g.revokedAt && !g.supersededAt && (g.renewalRequired === true || g.renewal !== undefined);
+  const active = grants.filter(g => !g.revokedAt && !g.supersededAt && !lapsed(g));
+  const renewal = grants.filter(lapsed);
   const history = grants.length - active.length;
   const where = (g: (typeof grants)[number]): string => {
     const scope = g.scope === "global" ? "all your conversations" : g.conversationId === id ? "this conversation" : "another conversation";
-    const bound = g.connectionId ? ` · ${g.connectionId}${g.destinations?.length ? ` ${g.destinations.map(d => d.canonicalId).join(", ")}` : ""}` : "";
+    const bound = g.connectionId ? ` · ${g.connectionId}${g.destinations?.length ? ` ${g.destinations.map(d => d.canonicalId).join(", ")}` : ""}` : g.binding ? ` · ${g.binding.connectionId} · saving only` : "";
     return `${scope}${bound}`;
   };
   return <section className="dcv-create" aria-label="Create from this exchange">
@@ -83,8 +85,8 @@ export function CreationSection({ id, archived, types, view, error, busy, seed, 
     <div className="dcv-grants" aria-label="Standing creation permissions">
       <h4>Standing creation permissions</h4>
       {active.length === 0 && <p className="dcv-quiet">None. Ivy asks before every creation.</p>}
-      <ul>{active.map(g => <li key={g.grantId} data-renewal={g.renewal ? "needed" : "none"}><span>{byType.get(g.type)?.label ?? g.type} · {where(g)}{g.renewal ? " · needs renewal before the next creation" : ""}</span>
-        {g.renewal && <small className="dcv-quiet" role="status">{g.renewal.reason}</small>}
+      {renewal.map(g => <p key={g.grantId} data-renewal="needed" role="status">{g.renewal ? <>{byType.get(g.type)?.label ?? g.type} · {where(g)} · needs renewal before the next creation. {g.renewal.reason}</> : active.some(current => current.type === g.type && current.binding) ? `Previous ${byType.get(g.type)?.label ?? g.type} permission lapsed at cutover. Its renewed save permission is listed below.` : `${byType.get(g.type)?.label ?? g.type} permission needs renewal. Approve the next save to this connection and choose whether to allow future saves.`}</p>)}
+      <ul>{active.map(g => <li key={g.grantId} data-renewal="none"><span>{byType.get(g.type)?.label ?? g.type} · {where(g)}</span>
         <button type="button" className="desk-btn ghost" disabled={busy} onClick={() => void act(() => revoke(g.grantId), "The permission was not revoked. Try again.")}>Revoke</button></li>)}</ul>
       <p className="dcv-quiet">Creation only: running a flow or enabling a routine always needs its own decision. Revoking stops future creation without asking; objects already created stay as they are{history > 0 ? ` (${history} revoked or renewed, kept in the history)` : ""}.</p>
     </div>
@@ -179,6 +181,7 @@ function ProposalCard({ id, view, types, busy, archived, act }: { id: string; vi
     {settled && GRAPH_TYPES.has(proposal.type ?? "") && <DisplayCard reading={savedCard} />}
     {settled && proposal.type === "flow" && <SavedFlowCard reading={savedFlow} />}
     {settled && <p role="status">Created {capability?.label.toLowerCase()} {view.operation?.canonicalId}{links.object ? <> · <a href={links.object}>Open it</a></> : null}. It links back to this exchange.</p>}
+    {proposal.grantNotice && <p role="status">{proposal.grantNotice}</p>}
     {editable && view.feedback === "proposed" && <div className="dcv-standing">
       <label><input type="checkbox" checked={standing} onChange={e => { setStanding(e.target.checked); }} /> Allow future {capability?.label.toLowerCase()} creation without asking</label>
       {standing && <select aria-label="Standing permission scope" value={scope} onChange={e => { setScope(e.target.value === "global" ? "global" : "conversation"); }}>
@@ -187,7 +190,7 @@ function ProposalCard({ id, view, types, busy, archived, act }: { id: string; vi
       </select>}
     </div>}
     <div className="dcv-acts">
-      {editable && view.feedback === "proposed" && <button type="button" className="desk-btn pri" disabled={busy || view.missing.length > 0 && !dirty || Boolean(view.refusal) || needsCheck || outsideScope} onClick={doConfirm}>Confirm creation</button>}
+      {editable && view.feedback === "proposed" && <button type="button" className="desk-btn pri" disabled={busy || view.missing.length > 0 && !dirty || Boolean(view.refusal) || needsCheck || outsideScope} onClick={doConfirm}>{proposal.type === "flow" ? "Approve" : "Confirm creation"}</button>}
       {(view.feedback === "uncertain" || view.feedback === "accepted") && <button type="button" className="desk-btn pri" disabled={busy} onClick={() => void act(() => check(id, proposal.proposalId), "The owner could not be asked. Check again later.")}>Check</button>}
       {view.feedback === "failed" && !archived && <button type="button" className="desk-btn pri" disabled={busy} onClick={() => void act(() => revise(id, proposal.proposalId, { revision: proposal.revision, fields }), "Not saved. Try again.")}>Try again</button>}
       {editable && dirty && <button type="button" className="desk-btn" disabled={busy} onClick={() => void act(save, "Your edits were not saved. They are still here; try again.")}>Save edits</button>}

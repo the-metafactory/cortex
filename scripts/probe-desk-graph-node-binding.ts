@@ -1,7 +1,7 @@
 // glossary-ignore: node
 import assert from "node:assert/strict";
 import { withTempHome } from "./probe-temp-home";
-import { studioRequestId } from "../src/surface/mc/desk/conversation-ids";
+import { studioRequestId } from "../src/conversations/conversation-ids";
 import { graphMarker } from "../src/surface/mc/desk/graph-conversation-writer";
 import { graphNodeAuthority, graphNodeFields, graphNodeOperationId, graphNodeRequest, openGraphNodeRig, type GraphNodeRig } from "../src/conversations/domain-adapters/__tests__/fixtures/work-graph-node-fixtures";
 

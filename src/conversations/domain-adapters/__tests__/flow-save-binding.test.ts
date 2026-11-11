@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { studioRequestId } from "../../../surface/mc/desk/conversation-ids";
+import { studioRequestId } from "../../conversation-ids";
 import { createFlowReadAdapter } from "../flow/read";
 import { createFlowSaveBinding, flowSaveSupport } from "../flow/save-binding";
 import { importLegacyOperation, previewLegacyOperation, projectLegacyOperation, readOperationEvidence } from "../operations/legacy";

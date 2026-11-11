@@ -1,5 +1,5 @@
 import type { CreateRequest, OwnerWriter, ReadbackResult } from "../../../conversations/types";
-import { studioRequestId } from "./conversation-ids";
+import { studioRequestId } from "../../../conversations/conversation-ids";
 import { deskConversationWriter, deskWriterOwner, type DeskWriterDeps } from "./desk-conversation-writer";
 import type { DeskOptions } from "./compose";
 

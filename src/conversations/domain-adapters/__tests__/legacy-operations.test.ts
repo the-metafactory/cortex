@@ -4,7 +4,7 @@ import { z } from "zod";
 import { defineDoc } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { graphMarker } from "../../../surface/mc/desk/graph-conversation-writer";
-import { operationUuid, studioRequestId } from "../../../surface/mc/desk/conversation-ids";
+import { operationUuid, studioRequestId } from "../../conversation-ids";
 import { AT, attemptFixture, eventFixture, support, approvalFixture, registryFixture } from "../operations/fixtures";
 import { importLegacyOperation, previewLegacyOperation, projectLegacyOperation, readOperationEvidence, UpgradeRequired } from "../operations/legacy";
 import { OperationJournalStore } from "../operations/journal";
