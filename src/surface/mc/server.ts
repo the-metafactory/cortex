@@ -13,7 +13,7 @@ import { DESK_CONNECTIONS_PATH, handleDeskConnections, type ConnectionSetupAcces
 import type { GraphScopeAccess } from "./api/desk-graph-repositories";
 import { handleDeskRoutines } from "./api/desk-routines";
 import { handleDeskFlows } from "./api/desk-flows";
-import { DESK_FLOWS_PATH } from "./desk/saved-flow-contract";
+import { DESK_FLOWS_PATH } from "../../conversations/saved-flow-contract";
 import { handleDeskRoutineCapability } from "./api/desk-routine-capability";
 import { handleDeskRoutineOccurrences } from "./api/desk-routine-occurrences";
 import { handleDeskRoutineDisplay } from "./api/desk-routine-display";
@@ -205,7 +205,7 @@ export interface HealthResponse {
 
 /** The read views and providers Mission Control serves, shared by startServer and startMissionControl. */
 export interface MissionControlViews {
-  flowCutover?: import("../../conversations/creation-lifecycle").CreationLifecycle;
+  lifecycles?: import("../../conversations/host").HostSources["lifecycles"];
   results?: ResultRouteOptions;
   vigil?: VigilSubjectsOptions;
   desk?: DeskOptions;
@@ -270,7 +270,7 @@ export function startServer(
   const routineCapabilities = () => localRoutineCapabilities(options.agentPresence?.() ?? null);
   const deskRuntime: DeskRuntime = { conversations: () => options.conversations?.()?.state === "ready", routineCapabilities, waitingTasks: new WaitingTasks(), routineRead: new RoutineReadLoop(routineCapabilities), options: options.desk, sourceCache: deskSourceCache, ledger: deskLedger, recentWrites: deskRecentWrites, goalChecks: new GoalChecks(), goalStatuses: new GoalStatuses(), rulings: new RulingLedger(), ...(deskMailRules ? { mailRules: deskMailRules } : {}), ...(deskDmarc ? { dmarc: deskDmarc } : {}), ...(options.desk?.mailClassifier ? { mailClassifier: new MailClassifier(options.desk.mailClassifier, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.mailClassifier?.local ? { localMailClassifier: new MailClassifier(options.desk.mailClassifier.local, undefined, undefined, undefined, new MailSimilarity(options.desk.mailEmbedder)) } : {}), ...(options.desk?.rulingExplainer ? { rulingExplain: new RulingExplainLoop(rulingExplainer(options.desk.rulingExplainer)) } : {}), ...(options.desk?.mailDigest?.model ? { digestFlagger: new DigestFlagger(options.desk.mailDigest.model) } : {}), ...(options.desk?.mailWaiting?.model ? { waitingClassifier: new WaitingClassifier(options.desk.mailWaiting.model) } : {}), ...(options.desk?.mailHandoff ? { mailHandoff: new MailHandoffWorker(piHandoffOwner(piTurns(options.desk.mailHandoff.pi), options.desk.mailHandoff.lanes, sourceBoundary(options.desk)), undefined, taskCloser(options.desk.ask, spawnWithStdin)) } : {}) };
   const conversationHost = options.conversations?.();
-  if (conversationHost?.state === "ready") void conversationHost.host.attachSources(conversationSources({ db, ...(options.flowCutover ? { flowCutover: options.flowCutover } : {}), desk: () => deskRuntime.options, deskItems: () => currentDayItems(db, deskRuntime, deskVigil(options)), listedMail: key => findListedMail(deskRuntime.sourceCache?.cached() ?? [], key), lookupMail: key => resolveListedMail(deskRuntime.sourceCache?.cached() ?? [], key), ledger: deskRuntime.ledger }));
+  if (conversationHost?.state === "ready") void conversationHost.host.attachSources(conversationSources({ db, ...(options.lifecycles ? { lifecycles: options.lifecycles } : {}), desk: () => deskRuntime.options, deskItems: () => currentDayItems(db, deskRuntime, deskVigil(options)), listedMail: key => findListedMail(deskRuntime.sourceCache?.cached() ?? [], key), lookupMail: key => resolveListedMail(deskRuntime.sourceCache?.cached() ?? [], key), ledger: deskRuntime.ledger }));
   const maxClients = config.ws.maxClients;
 
   const isLoopback = isLoopbackBind(config.hostname);

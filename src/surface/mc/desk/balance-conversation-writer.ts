@@ -6,7 +6,7 @@ import { areaProjects, balanceDestinations, resolveBalanceProject } from "./bala
 import { STALE_OUTLINE } from "./balance-outline";
 import { loadBalanceState } from "./balance-store";
 import type { DeskOptions } from "./compose";
-import { operationUuid } from "./conversation-ids";
+import { operationUuid } from "../../../conversations/conversation-ids";
 import type { ListedMail } from "./mail-actions";
 import { logMailTodo } from "./mail-log";
 import { syncBalance } from "./balance-sync";

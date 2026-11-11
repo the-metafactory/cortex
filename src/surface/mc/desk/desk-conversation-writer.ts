@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { CreateRequest, CreateResult, OwnerReadback, OwnerWriter, ReadbackResult } from "../../../conversations/types";
 import { KIND_LABEL, validateCard, type AskFields } from "./ask";
 import type { DeskOptions } from "./compose";
-import { studioRequestId } from "./conversation-ids";
+import { studioRequestId } from "../../../conversations/conversation-ids";
 import { createFromCard, spawnWithStdin, type WriterKind, type WriterRunner } from "./create";
 
 export interface DeskWriterDeps {

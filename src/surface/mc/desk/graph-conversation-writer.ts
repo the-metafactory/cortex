@@ -7,7 +7,7 @@ import { z } from "zod";
 import { GRAPH_AUTONOMIES, GRAPH_KINDS } from "../../../conversations/catalog";
 import type { CreateRequest, CreateResult, OperationRecord, OwnerWriter, Provenance, ReadbackResult } from "../../../conversations/types";
 import type { DeskOptions } from "./compose";
-import { studioRequestId } from "./conversation-ids";
+import { studioRequestId } from "../../../conversations/conversation-ids";
 import { spawnWithStdin, type WriterResult, type WriterRunner } from "./create";
 import { GITHUB_REF_PREFIX, isGraphRepositoryAllowed } from "./graph-repositories";
 

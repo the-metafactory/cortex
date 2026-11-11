@@ -2,7 +2,6 @@ import { grillingSource, type GrillingReads } from "./grilling-conversation";
 import type { Database } from "bun:sqlite";
 import { findNode } from "../../../balance";
 import type { HostSources } from "../../../conversations/host";
-import type { CreationLifecycle } from "../../../conversations/creation-lifecycle";
 import type { ObjectRef, SourceState } from "../../../conversations/types";
 import { balanceInboxWriter, balanceWriter, hasBalanceState } from "./balance-conversation-writer";
 import { calendarWriter } from "./calendar-conversation-writer";
@@ -41,14 +40,14 @@ export function splitNoteId(id: string): { thread: string; note: string } | null
   const at = id.indexOf("#");
   return at > 0 && at < id.length - 1 ? { thread: id.slice(0, at), note: id.slice(at + 1) } : null;
 }
-export { operationUuid, studioRequestId } from "./conversation-ids";
+export { operationUuid, studioRequestId } from "../../../conversations/conversation-ids";
 
 export function studioThreadOf(view: StudioView, slug: string): StudioThreadView | undefined {
   return [...view.active, ...view.parked, ...view.closed].find(t => t.slug === slug);
 }
 
 export interface SourceDeps {
-  flowCutover?: CreationLifecycle;
+  lifecycles?: HostSources["lifecycles"];
   grillingReads?: GrillingReads;
   db: Database;
   desk: () => DeskOptions | undefined;
@@ -132,7 +131,7 @@ export function conversationSources(deps: SourceDeps): HostSources {
   const { lookupMail, ledger } = deps;
   const mailDraft = lookupMail && ledger ? mailDraftWriter({ desk: deps.desk, lookupMail, ledger, ...(deps.runMailDraft ? { run: deps.runMailDraft } : {}), ...(deps.now ? { now: deps.now } : {}) }) : undefined;
   return {
-    ...(deps.flowCutover ? { lifecycles: { flow: deps.flowCutover } } : {}),
+    ...(deps.lifecycles ? { lifecycles: deps.lifecycles } : {}),
     get writers() {
       const desk = deps.desk();
       if (!desk?.enabled) return {};

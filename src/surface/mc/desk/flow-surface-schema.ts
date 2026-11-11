@@ -1,4 +1,4 @@
-import type { SavedFlow } from "./saved-flow-contract";
+import type { SavedFlow } from "../../../conversations/saved-flow-contract";
 
 export const FLOW_CARD_PATH = "/api/desk/flows/card";
 export const flowCardPath = (ref: string, operation: string): string =>

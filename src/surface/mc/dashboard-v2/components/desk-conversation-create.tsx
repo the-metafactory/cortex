@@ -175,6 +175,7 @@ function ProposalCard({ id, view, types, busy, archived, act }: { id: string; vi
     {settled && GRAPH_TYPES.has(proposal.type ?? "") && <DisplayCard reading={savedCard} />}
     {settled && proposal.type === "flow" && <SavedFlowCard reading={savedFlow} />}
     {settled && <p role="status">Created {capability?.label.toLowerCase()} {view.operation?.canonicalId}{links.object ? <> · <a href={links.object}>Open it</a></> : null}. It links back to this exchange.</p>}
+    {proposal.grantNotice && <p role="status">{proposal.grantNotice}</p>}
     {editable && view.feedback === "proposed" && <div className="dcv-standing">
       <label><input type="checkbox" checked={standing} onChange={e => { setStanding(e.target.checked); }} /> Allow future {capability?.label.toLowerCase()} creation without asking</label>
       {standing && <select aria-label="Standing permission scope" value={scope} onChange={e => { setScope(e.target.value === "global" ? "global" : "conversation"); }}>

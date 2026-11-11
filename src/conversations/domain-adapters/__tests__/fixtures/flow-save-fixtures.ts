@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CreateRequest } from "../../../types";
 import type { WriterResult, WriterRunner } from "../../../../surface/mc/desk/create";
-import { studioRequestId } from "../../../../surface/mc/desk/conversation-ids";
+import { studioRequestId } from "../../../conversation-ids";
 import { createFlowSaveBinding, createFlowSaveFacade, flowSaveApprovedSnapshot, FLOW_SAVE_SUPPORT_ID } from "../../flow/save-binding";
 import type { DispatchRequest } from "../../operations/types";
 import { DomainAdapterRegistry } from "../../registry";

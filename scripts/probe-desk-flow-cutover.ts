@@ -17,7 +17,7 @@ await withTempHome(async () => {
     browser = await chromium.launch({ headless: true });
     const seeded = await rig.seed();
     const legacyFlow = JSON.parse((await rig.pulse.command(["show", "F_LEGACY_SAVED"])).stdout);
-    await rig.cutover.cutover(await rig.plan(), rig.steps(), 0);
+    await rig.activate();
     assert.deepEqual(JSON.parse((await rig.pulse.command(["show", "F_LEGACY_SAVED"])).stdout), legacyFlow);
     assert.deepEqual((await rig.creation.list(rig.id, rig.actor)).proposals.find(view => view.proposal.proposalId === seeded.saved.proposal.proposalId)?.operation, seeded.saved.operation);
     const note = await rig.propose("Native note after Flow cutover", "desk-note");
@@ -39,7 +39,7 @@ await withTempHome(async () => {
     assert.match(await page.getByLabel("Standing creation permissions").innerText(), /Flow permission needs renewal/);
     const draft = page.getByRole("article").filter({ has: page.getByText(/F_LEGACY_EDITED/) });
     await draft.getByRole("checkbox").check();
-    const saves = rig.pulse.calls.filter(argv => argv.includes("save")).length;
+    const saves = rig.saveCalls();
     await draft.getByRole("button", { name: "Approve", exact: true }).click();
     await page.waitForFunction(() => document.querySelectorAll("article.created").length === 2);
     const saved = (await rig.creation.list(rig.id, rig.actor)).proposals.find(view => view.proposal.proposalId === seeded.draft.proposal.proposalId);
@@ -51,7 +51,7 @@ await withTempHome(async () => {
       return response.json();
     }, { id: rig.id, proposalId: saved.proposal.proposalId, revision: saved.proposal.revision, digest: saved.digest });
     assert.equal(repeated.proposal.operation.operationId, saved.operation?.operationId);
-    assert.equal(rig.pulse.calls.filter(argv => argv.includes("save")).length, saves + 1);
+    assert.equal(rig.saveCalls(), saves + 1);
     const flow = JSON.parse((await rig.pulse.command(["show", "F_LEGACY_EDITED"])).stdout);
     assert.equal(flow.name, "F_LEGACY_EDITED");
     assert.equal(flow.provenance.conversation, rig.id);
@@ -67,13 +67,35 @@ await withTempHome(async () => {
     await page.waitForFunction(() => document.querySelectorAll("article.created").length === 4);
     assert.equal((await rig.creation.list(rig.id, rig.actor)).proposals.find(view => view.proposal.proposalId === note.proposal.proposalId)?.feedback, "created");
     assert.equal((await rig.propose("F_GRANTED_SAVE")).feedback, "created");
-    assert.ok(rig.pulse.calls.every(argv => !argv.some(arg => ["run", "enable", "routine", "schedule"].includes(arg))));
+    assert.ok(rig.noActivationCalls());
+    for (const grant of await rig.creation.grants(rig.actor.principal)) if (!grant.renewalRequired && !grant.revokedAt) await rig.creation.revoke(grant.grantId, rig.actor);
+    for (const releaseAllowed of [true, false]) {
+      rig.policy.writesAllowed = true;
+      rig.policy.releaseAllowed = true;
+      const name = releaseAllowed ? "F_REFUSED_GRANT_SAVED" : "F_REFUSED_GRANT_PENDING";
+      await rig.propose(name);
+      rig.hooks.afterSave = async () => {
+        rig.policy.writesAllowed = false;
+        rig.policy.releaseAllowed = releaseAllowed;
+      };
+      await page.reload();
+      const card = page.getByRole("article").filter({ has: page.getByText(new RegExp(name)) });
+      await card.getByRole("checkbox").check();
+      const beforeSave = rig.saveCalls();
+      await card.getByRole("button", { name: "Approve", exact: true }).click();
+      await card.getByText("Standing permission was not granted. Review and approve the next creation.").waitFor();
+      assert.match(await card.getAttribute("class") ?? "", releaseAllowed ? /created/ : /accepted/);
+      assert.equal(rig.saveCalls(), beforeSave + 1);
+      assert.equal(JSON.parse((await rig.pulse.command(["show", name])).stdout).name, name);
+      await page.reload();
+      await card.getByText("Standing permission was not granted. Review and approve the next creation.").waitFor();
+    }
     const screenshots = process.env.DESK_ADAPTER_BROWSER_SHOTS;
     if (screenshots) {
       await mkdir(screenshots, { recursive: true });
       await page.screenshot({ path: join(screenshots, "flow-cutover.png"), fullPage: true });
     }
-    console.log("Flow cutover browser probe passed: edited legacy draft and saved receipt preserved; renewed connection-only save grant; Approve repeats one result; Pulse name/hash/conversation readback; imported running request Check; native Desk note in the same conversation. Disposable stack only.");
+    console.log("Flow cutover browser probe passed: edited legacy draft and saved receipt preserved; renewed connection-only save grant; Approve repeats one result; Pulse name/hash/conversation readback; imported running request Check; native Desk note in the same conversation; standing permission refusal preserves saved and pending cards after reload. Disposable stack only.");
   } finally {
     await browser?.close();
     await server?.stop(true);

@@ -1,7 +1,7 @@
 // glossary-ignore: node
 import { afterEach, expect, test } from "bun:test";
 import { graphMarker } from "../../../surface/mc/desk/graph-conversation-writer";
-import { studioRequestId } from "../../../surface/mc/desk/conversation-ids";
+import { studioRequestId } from "../../conversation-ids";
 import { objectRef } from "../fixtures";
 import type { Json } from "../operations/types";
 import { workGraphNodeApprovedSnapshot, workGraphNodeCreateOutcome, workGraphNodeCreateSupport, type WorkGraphNodeBinding } from "../work-graph/node-binding";

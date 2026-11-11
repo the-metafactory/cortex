@@ -61,7 +61,7 @@ export async function openFlowCutoverRig() {
     return { context, close() { sessions.delete(id); unregister(); } };
   } });
   const desk: DeskOptions = { enabled: true, displayName: "Synthetic", topN: 5, rangerUrl: "", areas: [], sources: [], flows: { pulse: pulse.pulse } };
-  const sources = () => conversationSources({ db, desk: () => desk, runFlow: pulse.run, flowCutover: cutover.lifecycle });
+  const sources = () => conversationSources({ db, desk: () => desk, runFlow: pulse.run, lifecycles: { flow: cutover.lifecycle } });
   await host.attachSources(sources());
   const creation = new ConversationCreation(host, { now: () => new Date(FLOW_SAVE_NOW) });
   const actor: Actor = { principal: principal.principal, transport: "web" };
@@ -86,7 +86,10 @@ export async function openFlowCutoverRig() {
     return { saved, draft, running, grantId };
   };
   const plan = async () => ({ ...syntheticWriterPlan(binding.writerBinding), ...await cutover.inventory() });
-  return { pulse, get host() { return host; }, db, registry, binding, authority, connection, policy, cutover, sources, creation, actor, id, desk, propose, confirm, seed, plan, hooks, steps: syntheticWriterSteps,
+  const activate = () => plan().then(current => cutover.cutover(current, syntheticWriterSteps(), 0));
+  const saveCalls = () => pulse.calls.filter(argv => argv.includes("save")).length;
+  const noActivationCalls = () => pulse.calls.every(argv => !argv.some(arg => ["run", "enable", "routine", "schedule"].includes(arg)));
+  return { pulse, activate, saveCalls, noActivationCalls, get host() { return host; }, db, registry, binding, authority, connection, policy, cutover, sources, creation, actor, id, desk, propose, confirm, seed, plan, hooks, steps: syntheticWriterSteps,
     async downgrade() {
       await host.close();
       const status = await open();

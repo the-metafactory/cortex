@@ -9,7 +9,7 @@ import type { DeskRuntime } from "../desk/compose";
 import type { WriterRunner } from "../desk/create";
 import { FLOW_CARD_PATH, flowCardPath, type FlowReceipt } from "../desk/flow-surface-schema";
 import { createFlowSurfaceReader, flowSurfaceQueries, type FlowSurfaceReader } from "../desk/flow-surfaces";
-import { DESK_FLOWS_PATH, type SavedFlow } from "../desk/saved-flow-contract";
+import { DESK_FLOWS_PATH, type SavedFlow } from "../../../conversations/saved-flow-contract";
 import { SavedFlowCard } from "../dashboard-v2/components/desk-conversation-saved-flow";
 import { DeskSavedFlows } from "../dashboard-v2/components/desk-saved-flows";
 import { loadSavedFlows } from "../dashboard-v2/lib/desk-flows";

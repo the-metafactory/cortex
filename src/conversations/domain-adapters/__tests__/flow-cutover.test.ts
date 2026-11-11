@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { openFlowCutoverRig, flowCutoverConfirm } from "./fixtures/flow-cutover-fixtures";
 import { readOperationEvidence } from "../operations/legacy";
 import { flowSaveRequest } from "./fixtures/flow-save-fixtures";
@@ -6,6 +6,70 @@ import { conversationSources } from "../../../surface/mc/desk/conversation-sourc
 import { ConversationCreation } from "../../creation";
 
 describe("explicit per-binding Flow cutover", () => {
+  test("malformed persisted grants are ignored by the panel and refused at dispatch", async () => {
+    const rig = await openFlowCutoverRig();
+    try {
+      await rig.activate();
+      await rig.confirm(await rig.propose("F_GRANTED"), true);
+      const grant = (await rig.creation.grants(rig.actor.principal))[0]!;
+      await rig.host.changeCreation(() => ({ result: null, grants: { [grant.grantId]: { ...grant, binding: { ...grant.binding, grantId: 42 } } } }));
+      expect(await rig.creation.grants(rig.actor.principal)).toEqual([]);
+      expect((await rig.propose("F_BAD_GRANT")).feedback).toBe("proposed");
+      const request = flowSaveRequest();
+      request.provenance.conversationId = rig.id;
+      const saves = rig.saveCalls();
+      expect(await rig.cutover.lifecycle.create(request, { kind: "grant", grantId: grant.grantId, scope: grant.scope }, rig.actor)).toMatchObject({ state: "failed" });
+      expect(rig.saveCalls()).toBe(saves);
+    } finally { await rig.close(); }
+  });
+
+  test("card refresh resolves each lifecycle revision and grant snapshot once for many records", async () => {
+    const rig = await openFlowCutoverRig();
+    const reads = spyOn(rig.authority, "inspectHostRecords");
+    const revisions = spyOn(rig.cutover.lifecycle, "reviewRevision");
+    const lifecycles = spyOn(rig.host, "creationLifecycle");
+    try {
+      await rig.seed();
+      await rig.activate();
+      for (let i = 0; i < 5; i++) await rig.propose(`F_DRAFT_${i}`);
+      const legacy = (await rig.creation.grants(rig.actor.principal))[0]!;
+      await rig.host.changeCreation(() => ({ result: null, grants: Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`legacy-${i}`, { ...legacy, grantId: `legacy-${i}` }])) }));
+      reads.mockClear(); revisions.mockClear(); lifecycles.mockClear();
+      const view = await rig.creation.list(rig.id, rig.actor);
+      expect(view.proposals).toHaveLength(8);
+      expect(view.grants).toHaveLength(6);
+      expect(view.grants.every(grant => grant.renewalRequired)).toBe(true);
+      expect(revisions).toHaveBeenCalledTimes(1);
+      expect(reads).toHaveBeenCalledTimes(1);
+      expect(lifecycles).toHaveBeenCalledTimes(2);
+    } finally {
+      reads.mockRestore(); revisions.mockRestore(); lifecycles.mockRestore();
+      await rig.close();
+    }
+  });
+
+  for (const releaseAllowed of [true, false]) {
+    test(`standing permission refusal preserves the ${releaseAllowed ? "saved" : "pending"} result`, async () => {
+      const rig = await openFlowCutoverRig();
+      try {
+        await rig.activate();
+        rig.hooks.afterSave = async () => {
+          rig.policy.writesAllowed = false;
+          rig.policy.releaseAllowed = releaseAllowed;
+        };
+        const result = await rig.confirm(await rig.propose("F_GRANT_REFUSED"), true);
+        expect(result.feedback).toBe(releaseAllowed ? "created" : "accepted");
+        expect(result.proposal.grantNotice).toContain("Standing permission was not granted");
+        expect((await rig.creation.list(rig.id, rig.actor)).proposals[0]?.proposal.grantNotice).toBe(result.proposal.grantNotice);
+        expect(await rig.pulse.savedCount()).toBe(1);
+        expect(await rig.creation.grants(rig.actor.principal)).toEqual([]);
+        rig.policy.writesAllowed = true;
+        rig.policy.releaseAllowed = true;
+        expect((await rig.propose("F_NEXT_REQUIRES_APPROVAL")).feedback).toBe("proposed");
+      } finally { await rig.close(); }
+    });
+  }
+
   test("preserves edited proposal identity, historic receipt and running request; fresh approval saves once and renews save-only authority", async () => {
     const rig = await openFlowCutoverRig();
     try {
@@ -44,10 +108,13 @@ describe("explicit per-binding Flow cutover", () => {
       expect(grantRecord).toMatchObject({ kind: "grant", value: { constraints: { capabilityIds: ["flow.saved.create"], connectionId: "flow-example" } } });
       expect((await rig.propose("F_NEXT_SAVE")).feedback).toBe("created");
       await rig.creation.revoke(renewed.grantId, rig.actor);
+      const repeatedAfterRevoke = await rig.confirm(approved, true);
+      expect(repeatedAfterRevoke.operation).toEqual(approved.operation);
+      expect(repeatedAfterRevoke.proposal.grantNotice).toContain("Standing permission was not granted");
       expect((await rig.propose("F_ASK_AGAIN")).feedback).toBe("proposed");
       expect((await rig.pulse.command(["show", "F_LEGACY_EDITED"])).code).toBe(0);
       expect(await rig.pulse.savedCount()).toBe(4);
-      expect(rig.pulse.calls.some(argv => argv.some(arg => ["run", "enable", "routine", "schedule"].includes(arg)))).toBe(false);
+      expect(rig.noActivationCalls()).toBe(true);
       expect(await rig.cutover.cutover(plan, rig.steps(), active.revision)).toEqual(active);
     } finally { await rig.close(); }
   });
@@ -78,18 +145,18 @@ describe("explicit per-binding Flow cutover", () => {
   test("uncertain saves check the owner by original request ID without a replay; hard triggers fence lifecycle and legacy", async () => {
     const rig = await openFlowCutoverRig();
     try {
-      await rig.cutover.cutover(await rig.plan(), rig.steps(), 0);
+      await rig.activate();
       const draft = await rig.propose("F_AFTER_CUTOVER");
       rig.pulse.state.mode = "timeout";
       const uncertain = await rig.confirm(draft);
       expect(uncertain.feedback).toBe("uncertain");
       const checked = await rig.creation.check(rig.id, draft.proposal.proposalId, rig.actor);
       expect(checked.feedback).toBe("created");
-      expect(rig.pulse.calls.filter(argv => argv.includes("save"))).toHaveLength(1);
+      expect(rig.saveCalls()).toBe(1);
       await rig.host.lifecycleFences().trigger({ kind: "duplicate_owner_object", target: { adapterId: "flow", connectionId: "flow-example", capabilityId: "flow.saved.create" }, evidence: { operationId: checked.operation?.operationId ?? "synthetic" } });
       const second = await rig.propose("F_FENCED");
       expect((await rig.confirm(second)).feedback).toBe("failed");
-      expect(rig.pulse.calls.filter(argv => argv.includes("save"))).toHaveLength(1);
+      expect(rig.saveCalls()).toBe(1);
       expect(await rig.host.lifecycleWriters().legacyOwnerAllowed("test", "flow")).toBe(false);
       expect(flowCutoverConfirm(checked).revision).toBe(1);
     } finally { await rig.close(); }
@@ -99,14 +166,14 @@ describe("explicit per-binding Flow cutover", () => {
     const rig = await openFlowCutoverRig();
     try {
       const seeded = await rig.seed();
-      const active = await rig.cutover.cutover(await rig.plan(), rig.steps(), 0);
+      const active = await rig.activate();
       const before = await rig.cutover.journal.read(seeded.running.operationId);
-      const saves = rig.pulse.calls.filter(argv => argv.includes("save")).length;
+      const saves = rig.saveCalls();
       const host = await rig.downgrade();
       expect(await host.lifecycleJournal(rig.registry).read(seeded.running.operationId)).toEqual(before);
       expect(await host.lifecycleWriters().read(active.bindingKey)).toEqual(active);
       expect(await host.writers.flow!.create(flowSaveRequest())).toMatchObject({ state: "failed" });
-      expect(rig.pulse.calls.filter(argv => argv.includes("save"))).toHaveLength(saves);
+      expect(rig.saveCalls()).toBe(saves);
       const view = await new ConversationCreation(host).list(rig.id, rig.actor);
       expect(view.proposals.find(item => item.proposal.proposalId === seeded.saved.proposal.proposalId)?.operation).toEqual(seeded.saved.operation);
       expect(view.grants[0]?.renewalRequired).toBe(true);
@@ -129,7 +196,7 @@ describe("explicit per-binding Flow cutover", () => {
   test("a retargeted connection cannot release the old save receipt and denied write scope makes zero owner calls", async () => {
     const rig = await openFlowCutoverRig();
     try {
-      await rig.cutover.cutover(await rig.plan(), rig.steps(), 0);
+      await rig.activate();
       rig.hooks.afterSave = async () => {
         rig.connection.connectionRevision = "2";
         await rig.authority.publishHostRecord({ kind: "connection", value: { ...rig.connection, accountScope: { stack: "test", account: "another-local-owner" } } }, 1);
@@ -143,9 +210,9 @@ describe("explicit per-binding Flow cutover", () => {
       rig.connection.connectionRevision = "3";
       rig.connection.writeDestinations = [];
       await rig.authority.publishHostRecord({ kind: "connection", value: rig.connection }, 2);
-      const beforeCalls = rig.pulse.calls.filter(argv => argv.includes("save")).length;
+      const beforeCalls = rig.saveCalls();
       await rig.confirm(await rig.propose("F_DENIED"));
-      expect(rig.pulse.calls.filter(argv => argv.includes("save"))).toHaveLength(beforeCalls);
+      expect(rig.saveCalls()).toBe(beforeCalls);
     } finally { await rig.close(); }
   });
 });

@@ -2,7 +2,7 @@ import { parse } from "yaml";
 import { z } from "zod";
 import type { FlowOptions } from "../../../common/types/config";
 import type { CreateRequest } from "../../types";
-import { studioRequestId } from "../../../surface/mc/desk/conversation-ids";
+import { studioRequestId } from "../../conversation-ids";
 import type { WriterRunner } from "../../../surface/mc/desk/create";
 import { withFlowFile } from "../../../surface/mc/desk/flow-file";
 

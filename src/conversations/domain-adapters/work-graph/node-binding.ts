@@ -4,7 +4,7 @@ import { z } from "zod";
 import { GRAPH_AUTONOMIES, GRAPH_KINDS } from "../../catalog";
 import type { LookupRequest, TrustedConnector } from "../../authority";
 import type { CreateRequest, CreateResult, ReadbackResult } from "../../types";
-import { studioRequestId } from "../../../surface/mc/desk/conversation-ids";
+import { studioRequestId } from "../../conversation-ids";
 import type { DeskOptions } from "../../../surface/mc/desk/compose";
 import { spawnWithStdin, type WriterRunner } from "../../../surface/mc/desk/create";
 import { ADD_TIMEOUT_MS, GRAPH_LABEL, graphAnswer, graphBody, graphMarker, graphReadbackById, recordGraphOperation, repositoryRefusal, withBodyFile, type GraphWriterDeps } from "../../../surface/mc/desk/graph-conversation-writer";

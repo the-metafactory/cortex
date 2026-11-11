@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { studioRequestId } from "../../../../surface/mc/desk/conversation-ids";
+import { studioRequestId } from "../../../conversation-ids";
 import type { FlowSaveBinding } from "../../flow/save-binding";
 import { resultsOf } from "../../operations/owner-results";
 import { flowSaveDefinition, flowSaveRequest, FLOW_SAVE_NOW, type FlowSaveRig } from "./flow-save-fixtures";

@@ -46,11 +46,12 @@ export const ProposalSchema = z.object({
   requestDigest: z.string(),
   dismissed: z.boolean(),
   suggestion: z.string().optional(),
+  grantNotice: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 export type Proposal = z.infer<typeof ProposalSchema>;
-const GrantSchema = z.object({
+export const GrantSchema = z.object({
   grantId: z.string(),
   type: z.enum(CREATABLE_TYPES),
   scope: z.enum(GRANT_SCOPES),
@@ -217,29 +218,38 @@ export class ConversationCreation {
   }
 
   async grants(principal: string): Promise<Grant[]> {
-    const grants = Object.values((await this.host.creation()).grants).map(raw => GrantSchema.parse(raw)).filter(g => samePrincipal(g.principal, principal)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const grants = Object.values((await this.host.creation()).grants).flatMap(raw => {
+      const parsed = GrantSchema.safeParse(raw);
+      return parsed.success && samePrincipal(parsed.data.principal, principal) ? [parsed.data] : [];
+    }).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     const writers = await this.host.lifecycleWriters().inspect();
-    return Promise.all(grants.map(async grant => {
-      const lifecycle = await this.host.creationLifecycle(grant.type);
-      if (lifecycle) return lifecycle.grantView(grant);
-      const retired = Object.values(writers.records).some(history => history.at(-1)?.plan.binding.owner === grant.type);
-      return retired ? { ...grant, renewalRequired: true } : grant;
+    const views = new Map<string, Grant>();
+    await Promise.all([...new Set(grants.map(g => g.type))].map(async type => {
+      const group = grants.filter(g => g.type === type);
+      const lifecycle = await this.host.creationLifecycle(type);
+      const retired = Object.values(writers.records).some(history => history.at(-1)?.plan.binding.owner === type);
+      const projected = lifecycle ? await lifecycle.grantViews(group) : group.map(grant => retired ? { ...grant, renewalRequired: true } : grant);
+      for (const grant of projected) views.set(grant.grantId, grant);
     }));
+    return grants.map(grant => views.get(grant.grantId) ?? { ...grant, renewalRequired: true });
   }
 
   private async save(proposal: Proposal): Promise<void> {
     await this.host.changeCreation(() => ({ result: null, proposals: { [proposal.proposalId]: proposal } }));
   }
 
-  private async review(proposal: Proposal): Promise<{ digest: string; revision?: string }> {
-    const digest = proposalDigest(proposal.type, proposal.fields);
+  private async reviewRevision(proposal: Proposal): Promise<string | undefined> {
     const lifecycle = proposal.type ? await this.host.creationLifecycle(proposal.type) : undefined;
-    if (!lifecycle) return { digest };
-    const revision = await lifecycle.reviewRevision();
-    return { digest: sha256(canonical({ digest, writer: revision })), revision };
+    return lifecycle?.reviewRevision();
   }
 
-  private async view(proposal: Proposal, operations?: OperationRecord[], policy?: "local" | "cloud"): Promise<ProposalView> {
+  private async review(proposal: Proposal, revision = this.reviewRevision(proposal)): Promise<{ digest: string; revision?: string }> {
+    const digest = proposalDigest(proposal.type, proposal.fields);
+    const writer = await revision;
+    return writer === undefined ? { digest } : { digest: sha256(canonical({ digest, writer })), revision: writer };
+  }
+
+  private async view(proposal: Proposal, operations?: OperationRecord[], policy?: "local" | "cloud", revision?: Promise<string | undefined>): Promise<ProposalView> {
     const effective = policy ?? (await this.host.meta(proposal.conversationId)).policy;
     const mine = (operations ?? await this.host.operations(proposal.conversationId)).filter(op => op.proposalId === proposal.proposalId).sort((a, b) => a.revision - b.revision);
     const operation = mine.find(op => isCurrent(op, proposal)) ?? null;
@@ -251,14 +261,16 @@ export class ConversationCreation {
     else if (!proposal.type) feedback = "choose";
     else feedback = capability?.status === "ready" ? "proposed" : "unavailable";
     const { requestDigest: _requestDigest, ...shown } = proposal;
-    return { proposal: shown, digest: (await this.review(proposal)).digest, sentence: sentence(proposal), capability, missing: missingOf(proposal.type, proposal.fields), refusal: egressRefusal(proposal.type, effective)?.message ?? null, feedback, operation, earlier: mine.filter(op => op.revision !== proposal.revision) };
+    return { proposal: shown, digest: (await this.review(proposal, revision)).digest, sentence: sentence(proposal), capability, missing: missingOf(proposal.type, proposal.fields), refusal: egressRefusal(proposal.type, effective)?.message ?? null, feedback, operation, earlier: mine.filter(op => op.revision !== proposal.revision) };
   }
 
   async list(conversationId: string, actor: Actor): Promise<CreationView> {
     const { policy } = await this.gate(conversationId, actor, false);
     const operations = await this.host.operations(conversationId);
     const mine = (await this.proposalsOf(conversationId)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-    const proposals = await Promise.all(mine.map(p => this.view(p, operations, policy)));
+    const revisions = new Map<Proposal["type"], Promise<string | undefined>>();
+    for (const proposal of mine) if (!revisions.has(proposal.type)) revisions.set(proposal.type, this.reviewRevision(proposal));
+    const proposals = await Promise.all(mine.map(p => this.view(p, operations, policy, revisions.get(p.type))));
     const grants = (await this.grants(actor.principal)).filter(g => g.scope === "global" || g.conversationId === conversationId);
     return { proposals: proposals.filter(v => v.feedback !== "dismissed"), grants };
   }
@@ -355,7 +367,14 @@ export class ConversationCreation {
       const egress = await this.egressRefusal(conversationId, proposal);
       if (egress) throw egress;
       const operation = await this.execute(proposal, { kind: "confirmation", transport: actor.transport }, actor, review.revision);
-      if (body.grant && (operation?.state === "created" || operation?.state === "running")) await this.grant(proposal, proposal.type, body.grant.scope, operation.operationId, actor);
+      if (body.grant && (operation?.state === "created" || operation?.state === "running")) {
+        const granted = await this.grant(proposal, proposal.type, body.grant.scope, operation.operationId, actor);
+        if (!granted || proposal.grantNotice) {
+          if (granted) delete proposal.grantNotice;
+          else proposal.grantNotice = "Standing permission was not granted. Review and approve the next creation.";
+          await this.save(proposal);
+        }
+      }
       return this.view(proposal);
     });
   }
@@ -364,17 +383,19 @@ export class ConversationCreation {
     return egressRefusal(proposal.type, (await this.host.meta(conversationId)).policy);
   }
 
-  private async grant(proposal: Proposal, type: CreatableType, scope: GrantScope, operationId: string, actor: Actor): Promise<void> {
+  private async grant(proposal: Proposal, type: CreatableType, scope: GrantScope, operationId: string, actor: Actor): Promise<boolean> {
     const grantId = `grant-${sha256(operationId).slice(0, 32)}`;
-    if ((await this.host.creation()).grants[grantId]) return;
+    if ((await this.host.creation()).grants[grantId]) return (await this.grants(actor.principal)).some(grant => grant.grantId === grantId && applies(grant, proposal.conversationId, actor.principal, type));
     const lifecycle = await this.host.creationLifecycle(type);
     const binding = lifecycle ? await lifecycle.grant(proposal, scope, actor) : undefined;
+    if (binding === null) return false;
     const created = await this.host.changeCreation(state => {
       if (state.grants[grantId]) return { result: false };
       const grant: Grant = { grantId, type, scope, conversationId: proposal.conversationId, principal: actor.principal, operationId, createdAt: this.now().toISOString(), ...(binding ? { binding } : {}) };
       return { result: true, grants: { [grantId]: grant } };
     });
     if (created) await this.host.record(proposal.conversationId, `grant:${grantId}`, GRANT_KIND, { grantId, type, scope, action: "granted" });
+    return true;
   }
 
   async revoke(grantId: string, actor: Actor): Promise<Grant> {

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { FlowRoutine, SavedFlow, SavedFlowDefinition } from "../../desk/saved-flow-contract";
+import type { FlowRoutine, SavedFlow, SavedFlowDefinition } from "../../../../conversations/saved-flow-contract";
 import { flowReadError, loadSavedFlowDefinition, makeRoutineFromFlow, newRoutineStart, type RoutineStart, type ShownFlowsState } from "../lib/desk-flows";
 import { formatRelativeTime } from "../lib/agents-display";
 

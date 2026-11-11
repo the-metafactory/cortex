@@ -1,11 +1,11 @@
 import { z } from "zod";
 import type { AuthorityBindings, HostContext } from "../../authority";
 import type { Actor, Grant, GrantScope, Proposal } from "../../creation";
-import { ProposalSchema } from "../../creation";
+import { GrantSchema, ProposalSchema } from "../../creation";
 import type { CreationLifecycle } from "../../creation-lifecycle";
 import type { ConversationHost } from "../../host";
 import type { CreateRequest, CreateResult } from "../../types";
-import { studioRequestId } from "../../../surface/mc/desk/conversation-ids";
+import { studioRequestId } from "../../conversation-ids";
 import type { DomainAdapterRegistry } from "../registry";
 import { importLegacyOperation, previewLegacyOperation, readLegacyImportWatermark, readOperationEvidence, type LegacyContext, type LegacySource } from "../operations/legacy";
 import { ownerResultKit, resultsOf } from "../operations/owner-results";
@@ -60,17 +60,20 @@ export function createFlowCutover(options: FlowCutoverOptions) {
       const record = await writers.read(key);
       return canonicalWire(record ? { cutoverId: record.plan.cutoverId, epoch: record.epoch, instanceId: record.instanceId } : null);
     },
-    async grantView(grant) {
-      const sameBinding = grant.binding?.adapterId === "flow" && grant.binding.connectionId === destination.connectionId && grant.binding.capabilityId === CAPABILITY;
-      const record = sameBinding ? (await authority.inspectHostRecords()).records[`grant:${grant.binding?.grantId ?? ""}`]?.at(-1) : undefined;
-      return { ...grant, renewalRequired: record?.kind !== "grant" || record.value.status !== "active" };
+    async grantViews(grants) {
+      const { records } = await authority.inspectHostRecords();
+      return grants.map(grant => {
+        const sameBinding = grant.binding?.adapterId === "flow" && grant.binding.connectionId === destination.connectionId && grant.binding.capabilityId === CAPABILITY;
+        const record = sameBinding ? records[`grant:${grant.binding?.grantId ?? ""}`]?.at(-1) : undefined;
+        return { ...grant, renewalRequired: record?.kind !== "grant" || record.value.status !== "active" };
+      });
     },
     async grant(proposal: Proposal, scope: GrantScope, actor: Actor) {
       const session = await options.openSession(actor, proposal.conversationId);
       try {
         const operationId = `${proposal.conversationId}:${proposal.proposalId}:${proposal.revision}`;
         const grantId = await authority.grantApprovedOperation(session.context, operationId, scope);
-        if (!grantId) return denied();
+        if (!grantId) return null;
         return { adapterId: "flow", connectionId: destination.connectionId, capabilityId: CAPABILITY, grantId };
       } finally { session.close(); }
     },
@@ -87,12 +90,13 @@ export function createFlowCutover(options: FlowCutoverOptions) {
       try {
         const snapshot = snapshotOf(request);
         const approval = { operationId: request.operationId, ownerRequestId: studioRequestId(request.operationId), idempotencyKey: request.operationId, snapshot };
-        const grant = basis.kind === "grant" ? (await host.creation()).grants[basis.grantId] as Grant | undefined : undefined;
-        const checked = basis.kind === "confirmation" ? await authority.confirm(session.context, approval) : grant?.binding && !(await lifecycle.grantView(grant)).renewalRequired ? await authority.approveGrant(session.context, approval, grant.binding.grantId) : null;
+        const parsed = basis.kind === "grant" ? GrantSchema.safeParse((await host.creation()).grants[basis.grantId]) : null;
+        const grant = parsed?.success ? parsed.data : undefined;
+        const checked = basis.kind === "confirmation" ? await authority.confirm(session.context, approval) : grant?.binding && !(await lifecycle.grantViews([grant]))[0]?.renewalRequired ? await authority.approveGrant(session.context, approval, grant.binding.grantId) : null;
         if (checked?.kind !== "allowed") return { state: "failed", error: "Current permission does not allow saving this Flow. Review the connection and approve again." };
         const lease = writerLease(record);
         if (!await bridge.activate(binding.writerBinding, lease)) return denied();
-        if (request.signal.aborted) return { state: "failed", error: "The conversation stopped waiting before Pulse was called." };
+        if (stoppedWaiting(request.signal)) return { state: "failed", error: "The conversation stopped waiting before Pulse was called." };
         const result = await bridge.dispatch(session.context, request.operationId, lease);
         if (result.kind === "refused") return { state: "failed", error: result.reason.message };
         return await releaseResult(session.context, request.operationId, actor);
@@ -123,6 +127,20 @@ export function createFlowCutover(options: FlowCutoverOptions) {
     },
   };
 
+  const receiptsFor = async (conversationId: string, operationId: string): Promise<Json[]> => {
+    const receipts: Json[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = await host.entries(conversationId, 200, cursor);
+      for (const entry of page.entries) {
+        const data = entry.data;
+        if (typeof data === "object" && data !== null && "operationId" in data && data.operationId === operationId) receipts.push(JSON.parse(JSON.stringify(entry)) as Json);
+      }
+      cursor = page.next;
+    } while (cursor);
+    return receipts;
+  };
+
   const inventory = async (): Promise<LegacySource[]> => {
     const proposals = (await host.creation()).proposals;
     const sources: LegacySource[] = [];
@@ -133,17 +151,7 @@ export function createFlowCutover(options: FlowCutoverOptions) {
         if (evidence.kind === "legacy") sources.push(evidence.source);
         continue;
       }
-      const receipts: Json[] = [];
-      let cursor: string | undefined;
-      do {
-        const page = await host.entries(record.conversationId, 200, cursor);
-        for (const entry of page.entries) {
-          const data = entry.data;
-          if (typeof data === "object" && data !== null && "operationId" in data && data.operationId === record.operationId) receipts.push(JSON.parse(JSON.stringify(entry)) as Json);
-        }
-        cursor = page.next;
-      } while (cursor);
-      sources.push({ proposal: ProposalSchema.parse(proposals[record.proposalId]), record, ownerReceipts: receipts });
+      sources.push({ proposal: ProposalSchema.parse(proposals[record.proposalId]), record, ownerReceipts: await receiptsFor(record.conversationId, record.operationId) });
     }
     return sources;
   };
@@ -163,11 +171,7 @@ export function createFlowCutover(options: FlowCutoverOptions) {
       if (canonicalWire(importSources(sources)) !== canonicalWire(plan.sources)) throw new Error("Legacy Flow inventory changed; mutation remains disabled.");
       if (canonicalWire(sources.filter(source => source.record.state === "running").map(source => source.record.operationId)) !== canonicalWire(plan.knownCalls)) throw new Error("The in-flight Flow inventory is incomplete; mutation remains disabled.");
       const result = await writers.resume(started.bindingKey, {
-        disable: record => steps.disable(record),
-        stop: record => steps.stop(record),
-        verify: record => steps.verify(record),
-        prepare: record => steps.prepare(record),
-        enable: record => steps.enable(record),
+        ...steps,
         drain: () => Promise.resolve({ drained: [], uncertain: plan.knownCalls }),
         async import() {
           for (const source of sources) await importLegacyOperation(journal, source, mapping(source), new Date().toISOString());
