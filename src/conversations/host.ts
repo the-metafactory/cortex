@@ -1160,7 +1160,7 @@ export class ConversationHost {
   }
 
   async readback(operation: OperationRecord): Promise<ReadbackResult> {
-    if (!await this.lifecycleWriters().legacyOwnerAllowed(this.options.stack, operation.owner)) return null;
+    if (!this.sources.writers?.[operation.owner]?.lifecycleManaged && !await this.lifecycleWriters().legacyOwnerAllowed(this.options.stack, operation.owner)) return null;
     const readback = this.readbackFor(operation.owner);
     return readback ? readback(operation).catch(() => null) : null;
   }

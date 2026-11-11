@@ -5,9 +5,10 @@ import { balanceTaskCreateBindings, balanceTaskCreateDeclaration } from "../../.
 import { readLegacyImportWatermark, readOperationEvidence } from "../../../conversations/domain-adapters/operations/legacy";
 import { DomainAdapterRegistry } from "../../../conversations/domain-adapters/registry";
 import type { WriterCutoverSteps, WriterPlan, WriterRecord } from "../../../conversations/domain-adapters/operations/writer-authority";
-import type { Grant, ProposalView } from "../../../conversations/creation";
+import { proposalDigest, type Grant, type ProposalView } from "../../../conversations/creation";
 import { BALANCE_TASK_CONNECTION, balanceTaskState, taskFields } from "../../../conversations/domain-adapters/__tests__/fixtures/balance-task-fixtures";
 import { HandledLedger } from "../desk/actions";
+import { balanceWriter } from "../desk/balance-conversation-writer";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import { balanceTaskRoute } from "../desk/balance-task-cutover";
 import type { DeskOptions, DeskRuntime } from "../desk/compose";
@@ -47,7 +48,8 @@ async function openRig() {
     const revise = async (view: ProposalView, fields: Record<string, string>): Promise<ProposalView> => unwrap(await opened.call("PATCH", `/api/conversations/${conversationId}/proposals/${view.proposal.proposalId}`, { revision: view.proposal.revision, fields }));
     const confirm = async (view: ProposalView, extra: Record<string, unknown> = {}) => opened.call("POST", `/api/conversations/${conversationId}/proposals/${view.proposal.proposalId}/confirm`, { revision: view.proposal.revision, digest: view.digest, ...extra });
     const list = async (): Promise<{ proposals: ProposalView[]; grants: Grant[] }> => (await opened.call("GET", `/api/conversations/${conversationId}/proposals`)).body as unknown as { proposals: ProposalView[]; grants: Grant[] };
-    return { conversationId, propose, revise, confirm, list, unwrap };
+    const check = async (view: ProposalView): Promise<ProposalView> => (await opened.call("POST", `/api/conversations/${conversationId}/proposals/${view.proposal.proposalId}/check`)).body.proposal;
+    return { conversationId, propose, revise, confirm, check, list, unwrap };
   };
   const runCutover = async (steps: WriterCutoverSteps, plan: WriterPlan): Promise<WriterRecord> => {
     const begun = await writers.begin(plan, 0);
@@ -115,6 +117,28 @@ describe("Balance task creation after the per-binding cutover", () => {
     const stored = await rig.journal.read(operationId);
     expect(stored?.journal.state).toBe("succeeded");
     expect(stored?.journal.events.filter(entry => entry.event.kind === "attempt-prepared")).toHaveLength(1);
+  });
+
+  test("an operation left uncertain after cutover still checks the owner through the routed readback", async () => {
+    const rig = await openRig();
+    const inFlight = legacyInFlightCutover(rig.journal);
+    await rig.runCutover(inFlight.steps, inFlight.plan);
+    const draft = await rig.propose(taskFields({ title: "Uncertain after cutover" }));
+    expect(draft.feedback).toBe("proposed");
+    const operationId = `${rig.conversationId}:${draft.proposal.proposalId}:${draft.proposal.revision}`;
+    let operation = await rig.host.propose(rig.conversationId, draft.proposal.proposalId, draft.proposal.revision, "balance-task", proposalDigest("balance-task", draft.proposal.fields));
+    operation = await rig.host.transition(operation.operationId, "confirmed", { authority: { kind: "confirmation", transport: "web" } });
+    operation = await rig.host.transition(operation.operationId, "running");
+    operation = await rig.host.transition(operation.operationId, "uncertain", { note: "The owner call failed without a result." });
+    const owner = balanceWriter("task", { db: rig.db, desk: () => rig.desk });
+    const created = await owner.create({ operationId, type: "balance-task", fields: draft.proposal.fields, activation: "none", signal: new AbortController().signal, provenance: { conversationId: rig.conversationId, proposalId: draft.proposal.proposalId, revision: draft.proposal.revision, operationId, entryId: null, link: `?desk=conversation&conversation=${rig.conversationId}` } });
+    expect(created.state).toBe("created");
+    expect(await rig.host.readback(operation)).toEqual({ found: true, canonicalId: created.state === "created" ? created.canonicalId : "" });
+    const checked = await rig.check(draft);
+    expect(checked.feedback).toBe("created");
+    expect(checked.operation?.state).toBe("created");
+    expect(checked.operation?.canonicalId).toBe(rig.tasks("Uncertain after cutover")[0]?.id);
+    expect(rig.tasks("Uncertain after cutover")).toHaveLength(1);
   });
 
   test("a standing grant lapses visibly at cutover, asks once, and the renewed grant binds connection and destination", async () => {
