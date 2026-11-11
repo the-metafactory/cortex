@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { formatFailureReport, formatReport, runConformance, runFailureScenarios } from "../src/desk-adapter-sdk/conformance";
 
-export { formatReport, runConformance, type CapabilityReport, type ConformanceReport, FAILURE_SCENARIOS, formatFailureReport, runFailureScenarios, type FailureReport, type ScenarioName, type ScenarioReport } from "../src/desk-adapter-sdk/conformance";
+export * from "../src/desk-adapter-sdk/conformance";
 
 const EXIT_CODES = { conformant: 0, refused: 1, "not-run": 2 } as const;
 

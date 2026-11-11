@@ -4,14 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DESK_ADAPTER_SDK_VERSION } from "../../src/desk-sdk/version";
 import type { ConformanceReport, FailureReport } from "../../src/desk-adapter-sdk/conformance";
-import { probeConformanceExport } from "../probe-desk-conformance-export";
+import { collect, probeConformanceExport } from "../probe-desk-conformance-export";
 
 const ROOT = join(import.meta.dir, "../..");
 const FIXTURES = join(ROOT, "src/conversations/domain-adapters/__tests__/fixtures/conformance-packages");
 
 async function cli(failures: boolean): Promise<unknown> {
   const child = Bun.spawn([process.execPath, "scripts/desk-adapter-conformance.ts", join(FIXTURES, "greenhouse"), "--json", ...(failures ? ["--failures"] : [])], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
-  const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  const { exitCode, stdout } = await collect(child);
   expect(exitCode).toBe(0);
   return JSON.parse(stdout);
 }

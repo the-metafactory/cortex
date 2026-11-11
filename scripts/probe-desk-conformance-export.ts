@@ -1,10 +1,16 @@
 import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import type { Subprocess } from "bun";
 import { hermeticTestEnv } from "./lib/test-home";
 
 const ROOT = resolve(import.meta.dir, "..");
 const FIXTURES = join(ROOT, "src/conversations/domain-adapters/__tests__/fixtures/conformance-packages");
+
+export async function collect(proc: Subprocess<"ignore", "pipe", "pipe">): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const [exitCode, stdout, stderr] = await Promise.all([proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+  return { exitCode, stdout, stderr };
+}
 
 export async function probeConformanceExport(fixtureDir = join(FIXTURES, "greenhouse"), typecheck = false): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const root = await mkdtemp(join(tmpdir(), "desk-conformance-export-"));
@@ -22,14 +28,13 @@ export async function probeConformanceExport(fixtureDir = join(FIXTURES, "greenh
     const env = hermeticTestEnv(process.env, { home, tmp });
     if (typecheck) {
       const compiler = Bun.spawn([process.execPath, join(ROOT, "node_modules/typescript/bin/tsc"), "--noEmit", "--skipLibCheck", "--module", "preserve", "--moduleResolution", "bundler", "--target", "esnext", "--types", join(ROOT, "node_modules/@types/bun"), "run.ts"], { cwd: packageDir, env, stdout: "pipe", stderr: "pipe" });
-      const [exitCode, stdout, stderr] = await Promise.all([compiler.exited, new Response(compiler.stdout).text(), new Response(compiler.stderr).text()]);
-      if (exitCode !== 0) return { exitCode, stdout, stderr };
+      const result = await collect(compiler);
+      if (result.exitCode !== 0) return result;
     }
     const child = Bun.spawn([process.execPath, "run.ts"], {
       cwd: packageDir, env, stdout: "pipe", stderr: "pipe",
     });
-    const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
-    return { exitCode, stdout, stderr };
+    return await collect(child);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
