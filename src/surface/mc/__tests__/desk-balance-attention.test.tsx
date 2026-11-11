@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { findNode } from "../../../balance";
-import { openBalanceReadRig, seedStudioThread, type BalanceReadRig } from "../../../conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
+import { openBalanceReadRig, seedBalanceObservationOverflow, seedStudioThread, type BalanceReadRig } from "../../../conversations/domain-adapters/__tests__/fixtures/balance-read-fixtures";
 import { handleDeskAdapterAction } from "../api/desk-adapter";
 import { handleDeskMyDay } from "../api/desk-my-day";
 import { HandledLedger } from "../desk/actions";
@@ -74,6 +74,45 @@ function plan(stack: Stack, ids: string[]): void {
 }
 
 describe("Catch-up lists actionable adapter tasks beside mail", () => {
+  it("observes open tasks across areas before completed tasks can consume the batch", async () => {
+    const stack = await build();
+    await stack.balance.allowHome();
+    const actionable = seedBalanceObservationOverflow(stack.balance);
+    plan(stack, [actionable[actionable.length - 1]!]);
+    const view = await stack.compose();
+    const rows = adapterRows(view);
+    expect(rows).toHaveLength(actionable.length);
+    expect(new Set(rows.map(item => item.key)).size).toBe(actionable.length);
+    for (const id of actionable) expect(rows.some(item => item.key.includes(id))).toBe(true);
+    expect(rows.find(item => item.key.includes(actionable[actionable.length - 1]!))?.badge).toBe("In today");
+  });
+
+  it("reports overflow as an incomplete source and keeps the retained rows stale", async () => {
+    const stack = await build();
+    await stack.balance.allowHome();
+    seedBalanceObservationOverflow(stack.balance, 11);
+    const view = await stack.compose();
+    expect(adapterRows(view)).toHaveLength(20);
+    expect(adapterRows(view).every(item => item.freshness === "stale")).toBe(true);
+    expect(view.sources.find(source => source.id === "adapter:balance")).toEqual({ id: "adapter:balance", ok: false, error: "Adapter observations are incomplete. Some items may be missing." });
+    expect(await stack.balance.store().needsResync(stack.balance.rig.context, stack.balance.source, stack.balance.rig.sink)).toBe(true);
+  });
+
+  it("clears the incomplete source after a complete reconciliation", async () => {
+    const stack = await build();
+    await stack.balance.allowHome();
+    seedBalanceObservationOverflow(stack.balance, 11);
+    await stack.compose();
+    const state = balanceState(stack);
+    for (const area of state.outline.children) area.children = area.children.filter(task => task.done !== true).slice(0, 10);
+    saveBalanceState(stack.db, state);
+    expect((await stack.balance.check("reconcile")).status).toBe("ok");
+    const view = await stack.compose();
+    expect(view.sources.find(source => source.id === "adapter:balance")).toEqual({ id: "adapter:balance", ok: true });
+    expect(adapterRows(view)).toHaveLength(20);
+    expect(adapterRows(view).every(item => item.freshness === "fresh")).toBe(true);
+  });
+
   it("shows one row per actionable Balance task and the kind filter narrows to them", async () => {
     const stack = await build();
     await stack.balance.check();

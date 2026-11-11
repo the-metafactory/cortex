@@ -58,6 +58,24 @@ export function seedStudioThread(db: Database, projectId = "studio-response:thre
   saveMeta(db, { ...loadMeta(db), studio: [{ namespace: "fixture", source: `id:${slug}`, slug, projectId, response: 0, pending: null }] });
 }
 
+export function seedBalanceObservationOverflow(rig: BalanceReadRig, openPerArea = 8): string[] {
+  const state = loadBalanceState(rig.db);
+  if (!state) throw new Error("balance state is missing");
+  const actionable: string[] = [];
+  state.outline.children = rig.areas.map(area => ({
+    id: `area:${area.id}`, title: area.label, weight: 50, ordering: "parallel", children: [
+      ...Array.from({ length: 12 }, (_, index) => leaf(`${area.id}-done-${index}`, `Completed ${area.label} ${index}`, { done: true })),
+      ...Array.from({ length: openPerArea }, (_, index) => {
+        const id = `${area.id}-open-${index}`;
+        actionable.push(id);
+        return leaf(id, `Actionable ${area.label} ${index}`);
+      }),
+    ],
+  }));
+  saveBalanceState(rig.db, state);
+  return actionable;
+}
+
 interface BalanceReadStepArgs { readonly capabilityId: string; readonly input: unknown; readonly destinations: readonly ObjectReference[]; readonly binding: ReadBinding }
 export interface BalanceReadStep { readonly result: QueryResult; readonly released: Json | undefined; readonly request: Awaited<ReturnType<QueryRunner["create"]>>; readonly args: BalanceReadStepArgs }
 
