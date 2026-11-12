@@ -48,6 +48,25 @@ The Desk prepares, and you confirm. Every write goes through Mission Control's r
 - **Mail**: **Delete**, **Unimportant** and **Draft a reply** run the commands in `mc.desk.mail.actions`. A draft is saved in your Drafts folder and never sent.
 - **The command bar** (⌘K, or the microphone) turns what you say into a card: a reminder, a note, an agent task, a goal draft or a calendar entry. You confirm the card, and Cortex runs the writer for that kind. An open question or a request to think something over becomes a proposal to start a conversation with Ivy instead.
 
+## Conversation draft setup limit
+
+The programmatic `MissionControlViews` options accepted by `startServer` and
+`startMissionControl` deliberately serve one draft editor per Mission Control
+instance. Configure at most one of `drafts`, `graphDrafts`, `balanceDrafts` or
+`flowDrafts`; startup rejects combinations before initializing an editor.
+
+Each owner convenience setup (`graphDrafts`, `balanceDrafts`, `flowDrafts`) offers
+one connection and capability. A single instance using these setups therefore
+cannot offer Make for graph nodes, Balance tasks and Flows together. This limit
+keeps destination resolution, confirmation and receipt release tied to the
+configured owner while those integrations migrate independently.
+
+The generic `drafts` option accepts a host-supplied `DeskDraftAccess` editor. Its
+`targets()` may list multiple targets, but the host must also provide matching
+bindings, destination resolution, confirmation routing and policy-safe receipt
+release. The convenience setups do not compose these responsibilities; a
+composed owner-setup API is deferred to a separate integration change.
+
 ## How the Desk interrupts
 
 Only some items interrupt you: a meeting about to start, fresh mail ranked for today, and a reminder that is due. A blocked agent or a deadline goes into the briefing instead. A broken system never interrupts.
