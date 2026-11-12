@@ -1,15 +1,16 @@
 import { z } from "zod";
 
-import { ParserProviderSchema } from "../../../common/types/desk-parser";
+import { MAX_PARSER_PROVIDERS, ParserProviderSchema } from "../../../common/types/desk-parser";
 
 const reason = z.string().trim().min(1).max(200);
 const RangerCandidateProviderSchema = z.enum(["claude", ...ParserProviderSchema.options]);
+const MAX_CANDIDATE_PROVIDERS = RangerCandidateProviderSchema.options.length;
 const evidence = {
   version: z.literal(1),
-  attempted: z.array(ParserProviderSchema).max(2).refine((v) => new Set(v).size === v.length),
-  candidates: z.array(z.object({ substrate: RangerCandidateProviderSchema, reason: z.enum(["not-configured", "not-permitted", "already-attempted", "parser-incapable", "missing-reading", "stale-reading", "capped", "quota-ineligible", "eligible"]) }).strict()).max(3).refine((v) => new Set(v.map((c) => c.substrate)).size === v.length),
-  fallbackReasons: z.array(z.object({ provider: ParserProviderSchema, reason: z.literal("quota-exhausted") }).strict()).max(2).refine((v) => new Set(v.map((c) => c.provider)).size === v.length),
-  capabilityExclusions: z.array(z.object({ provider: RangerCandidateProviderSchema, reason }).strict()).max(3),
+  attempted: z.array(ParserProviderSchema).max(MAX_PARSER_PROVIDERS).refine((v) => new Set(v).size === v.length),
+  candidates: z.array(z.object({ substrate: RangerCandidateProviderSchema, reason: z.enum(["not-configured", "not-permitted", "already-attempted", "parser-incapable", "missing-reading", "stale-reading", "capped", "quota-ineligible", "eligible"]) }).strict()).max(MAX_CANDIDATE_PROVIDERS).refine((v) => new Set(v.map((c) => c.substrate)).size === v.length),
+  fallbackReasons: z.array(z.object({ provider: ParserProviderSchema, reason: z.literal("quota-exhausted") }).strict()).max(MAX_PARSER_PROVIDERS).refine((v) => new Set(v.map((c) => c.provider)).size === v.length),
+  capabilityExclusions: z.array(z.object({ provider: RangerCandidateProviderSchema, reason }).strict()).max(MAX_CANDIDATE_PROVIDERS),
 };
 
 export const ParserRoutingSchema = z.discriminatedUnion("kind", [
