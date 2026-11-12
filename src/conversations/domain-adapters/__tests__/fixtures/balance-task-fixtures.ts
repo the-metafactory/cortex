@@ -6,7 +6,8 @@ import { findNode, type AppState, type OutlineNode } from "../../../../balance";
 import { leaf, outlineState, removeOutlineNode } from "./balance-shared";
 import type { HostContext, WriterLease } from "../../../authority";
 import type { OwnerWriter } from "../../../types";
-import type { Authority } from "../../operations/types";
+import { operationUuid } from "../../../conversation-ids";
+import type { Authority, Provenance } from "../../operations/types";
 import { initDatabase } from "../../../../surface/mc/db/init";
 import { loadBalanceState, saveBalanceState } from "../../../../surface/mc/desk/balance-store";
 import { balanceWriter } from "../../../../surface/mc/desk/balance-conversation-writer";
@@ -17,7 +18,7 @@ import { DomainAdapterRegistry } from "../../registry";
 import type { OperationBridge } from "../../operations/dispatch";
 import type { OperationJournalStore } from "../../operations/journal";
 import { confirmationAuthority, lifecycleRig, openJournal } from "./lifecycle-rig";
-import { balanceTaskCreateBindings, balanceTaskCreateDeclaration, createBalanceTaskBinding, createBalanceTaskFacade, type BalanceTaskBinding, type BalanceTaskFacade, type BalanceTaskFields } from "../../balance/task-binding";
+import { balanceTaskApprovedSnapshot, balanceTaskCreateBindings, balanceTaskCreateDeclaration, createBalanceTaskBinding, createBalanceTaskFacade, type BalanceTaskBinding, type BalanceTaskCreateInput, type BalanceTaskFacade, type BalanceTaskFields } from "../../balance/task-binding";
 
 export const BALANCE_TASK_CONNECTION = "connection-example";
 export const BALANCE_TASK_STACK = "test";
@@ -69,9 +70,18 @@ export function operationId(name: string): string {
   return `${CONVERSATION}:${name}:1`;
 }
 
-export function createTaskRequest(fields: BalanceTaskFields, operationIdValue = operationId("proposal-example")): Parameters<BalanceTaskFacade["create"]>[0] {
+function balanceTaskProvenance(operationIdValue: string): Provenance {
   const proposalId = operationIdValue.split(":")[1] ?? "proposal-example";
-  return { operationId: operationIdValue, type: "balance-task", fields, activation: "none", provenance: { conversationId: CONVERSATION, proposalId, revision: 1, operationId: operationIdValue, entryId: null, link: `?desk=conversation&conversation=${CONVERSATION}` }, signal: new AbortController().signal };
+  return { conversationId: CONVERSATION, proposalId, revision: 1, entryId: null, link: `?desk=conversation&conversation=${CONVERSATION}` };
+}
+
+export function createTaskRequest(fields: BalanceTaskFields, operationIdValue = operationId("proposal-example")): Parameters<BalanceTaskFacade["create"]>[0] {
+  return { operationId: operationIdValue, type: "balance-task", fields, activation: "none", provenance: { ...balanceTaskProvenance(operationIdValue), operationId: operationIdValue }, signal: new AbortController().signal };
+}
+
+export async function approveBalanceTask(rig: BalanceTaskRig, operationIdValue: string, input: BalanceTaskCreateInput): Promise<void> {
+  const snapshot = balanceTaskApprovedSnapshot({ connectionId: BALANCE_TASK_CONNECTION, provenance: balanceTaskProvenance(operationIdValue), input });
+  await rig.journal.approve({ operationId: operationIdValue, idempotencyKey: operationIdValue, ownerRequestId: operationUuid(operationIdValue), snapshot, authority: balanceTaskAuthority, at: new Date(BALANCE_TASK_NOW).toISOString() });
 }
 
 export async function openBalanceTaskRig(): Promise<BalanceTaskRig> {
