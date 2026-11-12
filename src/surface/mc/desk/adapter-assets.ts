@@ -5,10 +5,11 @@ import { canonicalJSON } from "../../../common/registry/canonical-json";
 import { DESK_ADAPTER_MAX_FILES, DESK_ADAPTER_MAX_FILE_BYTES, type DeskUiPublication } from "../../../conversations/domain-adapters/package";
 import { DESK_UI_PROTOCOL_VERSION, type DeskGenerationAdmission } from "../../../conversations/domain-adapters/package-generation";
 import { inlineAdapterEntry } from "./adapter-inline";
+import { DESK_ADAPTER_ASSETS_PREFIX } from "./adapter-frame-contract";
 
 export const DESK_ADAPTER_ASSET_PATH = "/api/desk/adapters";
 export const DESK_ADAPTER_CATALOG_PATH = `${DESK_ADAPTER_ASSET_PATH}/catalog`;
-export const DESK_ADAPTER_ASSET_PREFIX = `${DESK_ADAPTER_ASSET_PATH}/assets/`;
+export const DESK_ADAPTER_ASSET_PREFIX = DESK_ADAPTER_ASSETS_PREFIX;
 export const DESK_UI_PROTOCOL_HEADER = "x-desk-ui-protocol";
 export const DESK_ADAPTER_ASSET_MAX_ADAPTERS = 64;
 

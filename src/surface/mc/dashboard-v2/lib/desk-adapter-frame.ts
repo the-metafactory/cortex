@@ -27,8 +27,12 @@ function createSandboxedChild(doc: Document, url: string, onLoad: () => void): H
   return frame;
 }
 
+function hardenedInit(signal: AbortSignal, extra: RequestInit = {}): RequestInit {
+  return { ...extra, credentials: "same-origin", redirect: "error", cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]) };
+}
+
 export async function frameRequest(path: string, signal: AbortSignal, body?: unknown, method = body === undefined ? "GET" : "POST"): Promise<unknown> {
-  const response = await fetch(path, { method, credentials: "same-origin", redirect: "error", cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(3000)]), ...(body === undefined ? {} : { headers: { "content-type": "application/json", "x-desk-ui-protocol": DESK_UI_WIRE_VERSION }, body: JSON.stringify(body) }) });
+  const response = await fetch(path, hardenedInit(signal, { method, ...(body === undefined ? {} : { headers: { "content-type": "application/json", "x-desk-ui-protocol": DESK_UI_WIRE_VERSION }, body: JSON.stringify(body) }) }));
   if (!response.ok || response.redirected) throw new Error("adapter_view_unavailable");
   const text = await response.text();
   if (new TextEncoder().encode(text).length > DESK_UI_MAX_MESSAGE_BYTES * 8) throw new Error("adapter_view_oversized");
@@ -95,7 +99,7 @@ export function mountAdapterFrame(container: HTMLElement, mountId: string, event
     const entry = opened.entry;
     const url = frameEntryUrl(entry, location.origin);
     if (!url || !entry.views.some(view => view.objectType === opened.mount.objectType && view.view === opened.mount.view)) throw new Error("unavailable_entry");
-    const checked = await fetch(url, { credentials: "same-origin", redirect: "error", cache: "no-store", signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3000)]), headers: { "x-desk-ui-protocol": DESK_UI_WIRE_VERSION } });
+    const checked = await fetch(url, hardenedInit(controller.signal, { headers: { "x-desk-ui-protocol": DESK_UI_WIRE_VERSION } }));
     const csp = checked.headers.get("content-security-policy") ?? "";
     await checked.body?.cancel();
     if (!checked.ok || checked.redirected || !checked.headers.get("content-type")?.startsWith("text/html") || !csp.includes("sandbox allow-scripts") || !csp.includes("connect-src 'none'") || !csp.includes("worker-src 'none'")) throw new Error("unsafe_entry");

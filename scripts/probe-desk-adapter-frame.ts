@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { chromium, firefox, webkit } from "playwright";
 import { FRAME_CASES } from "../src/surface/mc/desk/__tests__/fixtures/adapter-frame-ui";
+import { DESK_ADAPTER_ASSETS_PREFIX } from "../src/surface/mc/desk/adapter-frame-contract";
 import { serveFrameProbe } from "./desk-adapter-frame/server";
 
 const evidence: unknown[] = [];
@@ -94,7 +95,7 @@ try {
           }
           if (["late-revoke", "before-load", "mismatch", "throw", "before-ready"].includes(attack)) assert.equal(fixture.rig.releases.length, 0);
           if (attack === "good") {
-            const child = page.frames().find(frame => frame.url().includes("/api/desk/adapters/assets/"));
+            const child = page.frames().find(frame => frame.url().includes(DESK_ADAPTER_ASSETS_PREFIX));
             assert.ok(child);
             const denied = await child.evaluate(() => {
               const failures: string[] = [];
