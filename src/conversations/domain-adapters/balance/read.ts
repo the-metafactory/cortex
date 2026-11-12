@@ -1,4 +1,4 @@
-import { balanceDestinations, rankAll, todayPlanIds, type AppState, type DestinationArea, type OutlineNode, type TodayPlanDraft } from "../../../balance";
+import { areaRoot, balanceDestinations, isBalanceTask, rankAll, todayPlanIds, type AppState, type DestinationArea, type OutlineNode, type TodayPlanDraft } from "../../../balance";
 import { localDay } from "../../../common/local-day";
 import { STUDIO_OWNER_KIND } from "../../../common/desk-owner";
 import { authorityHash } from "../../authority-records";
@@ -46,14 +46,15 @@ const TASK_VALUE_SCHEMA = objectSchema({
 const DESTINATIONS_INPUT_SCHEMA = objectSchema({}, []);
 const DESTINATIONS_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { anyOf: [AREA_VALUE_SCHEMA, PROJECT_VALUE_SCHEMA] } } }, ["items"]);
 const TASK_QUERY_INPUT_SCHEMA = objectSchema({ area: referenceSchema("area"), query: { type: "string", maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: MAX_PAGE_ITEMS }, offset: { type: "integer", minimum: 0 } }, ["area"]);
-const TASK_QUERY_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(TASK_SCHEMA_REF) } } }, ["items"]);
+const TASK_ITEMS_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(TASK_SCHEMA_REF) } } }, ["items"]);
 const TASK_READ_INPUT_SCHEMA = objectSchema({ ref: referenceSchema("task") }, ["ref"]);
-const TASK_READ_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(TASK_SCHEMA_REF) } } }, ["items"]);
 const PROJECT_QUERY_INPUT_SCHEMA = objectSchema({ query: { type: "string", maxLength: 200 }, limit: { type: "integer", minimum: 1, maximum: MAX_PAGE_ITEMS }, offset: { type: "integer", minimum: 0 } }, []);
 const PROJECT_QUERY_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(PROJECT_SCHEMA_REF) } } }, ["items"]);
 const PROJECT_READ_INPUT_SCHEMA = objectSchema({ ref: referenceSchema("project") }, ["ref"]);
 const PROJECT_READ_OUTPUT_SCHEMA = objectSchema({ items: { type: "array", items: { $ref: schemaKey(PROJECT_SCHEMA_REF) } } }, ["items"]);
 const ERROR_SCHEMA = adapterErrorSchema(ADAPTER_ID);
+const TASK_DISPLAY: ReadBinding["display"] = { title: "/title", summary: "/summary", status: "/status", due: "/dueDate", area: "/area" };
+const TASK_QUERY: NonNullable<ReadBinding["query"]> = { objectsPointer: "/items", ordering: "provider", stableSnapshot: true, limits: { items: MAX_PAGE_ITEMS } };
 
 export function balanceReadDeclaration(): AdapterDeclaration {
   return {
@@ -68,9 +69,9 @@ export function balanceReadDeclaration(): AdapterDeclaration {
       { ...DESTINATIONS_INPUT_REF, schema: DESTINATIONS_INPUT_SCHEMA },
       { ...DESTINATIONS_OUTPUT_REF, schema: DESTINATIONS_OUTPUT_SCHEMA },
       { ...TASK_QUERY_INPUT_REF, schema: TASK_QUERY_INPUT_SCHEMA },
-      { ...TASK_QUERY_OUTPUT_REF, schema: TASK_QUERY_OUTPUT_SCHEMA },
+      { ...TASK_QUERY_OUTPUT_REF, schema: TASK_ITEMS_OUTPUT_SCHEMA },
       { ...TASK_READ_INPUT_REF, schema: TASK_READ_INPUT_SCHEMA },
-      { ...TASK_READ_OUTPUT_REF, schema: TASK_READ_OUTPUT_SCHEMA },
+      { ...TASK_READ_OUTPUT_REF, schema: TASK_ITEMS_OUTPUT_SCHEMA },
       { ...PROJECT_QUERY_INPUT_REF, schema: PROJECT_QUERY_INPUT_SCHEMA },
       { ...PROJECT_QUERY_OUTPUT_REF, schema: PROJECT_QUERY_OUTPUT_SCHEMA },
       { ...PROJECT_READ_INPUT_REF, schema: PROJECT_READ_INPUT_SCHEMA },
@@ -98,13 +99,13 @@ export const balanceReadBindings: readonly ReadBinding[] = [
   { version: "1.0.0", adapterId: ADAPTER_ID, capabilityId: "balance.destinations", mode: "destinations", objectType: "area", inputSchemaRef: DESTINATIONS_INPUT_REF, outputSchemaRef: DESTINATIONS_OUTPUT_REF, display: { title: "/label" }, destinationType: "area", query: { objectsPointer: "/items", ordering: "provider", stableSnapshot: true, limits: { items: MAX_PAGE_ITEMS } } },
   {
     version: "1.0.0", adapterId: ADAPTER_ID, capabilityId: "balance.task.query", mode: "query", objectType: "task", inputSchemaRef: TASK_QUERY_INPUT_REF, outputSchemaRef: TASK_QUERY_OUTPUT_REF, destinationType: "area",
-    display: { title: "/title", summary: "/summary", status: "/status", due: "/dueDate", area: "/area" },
-    query: { objectsPointer: "/items", ordering: "provider", stableSnapshot: true, limits: { items: MAX_PAGE_ITEMS } },
+    display: TASK_DISPLAY,
+    query: TASK_QUERY,
   },
   {
     version: "1.0.0", adapterId: ADAPTER_ID, capabilityId: "balance.task.read", mode: "query", objectType: "task", inputSchemaRef: TASK_READ_INPUT_REF, outputSchemaRef: TASK_READ_OUTPUT_REF, destinationType: "area",
-    display: { title: "/title", summary: "/summary", status: "/status", due: "/dueDate", area: "/area" },
-    query: { objectsPointer: "/items", ordering: "provider", stableSnapshot: true, limits: { items: 1 } },
+    display: TASK_DISPLAY,
+    query: { ...TASK_QUERY, limits: { items: 1 } },
   },
   {
     version: "1.0.0", adapterId: ADAPTER_ID, capabilityId: "balance.project.query", mode: "query", objectType: "project", inputSchemaRef: PROJECT_QUERY_INPUT_REF, outputSchemaRef: PROJECT_QUERY_OUTPUT_REF, destinationType: "area",
@@ -206,14 +207,14 @@ function locateTasks(state: AppState, areas: readonly DestinationArea[], include
   const visit = (node: OutlineNode, area: DestinationArea, project: string | null, studio: boolean): void => {
     if (!includeStudio && studioMarker(node.id)) return;
     const owner = studio || studioMarker(node.id) ? STUDIO_OWNER_KIND : null;
-    if (node.children.length === 0) {
-      if (node.effort !== undefined) found.push({ node, area, project, owner });
+    if (isBalanceTask(node)) {
+      found.push({ node, area, project, owner });
       return;
     }
     for (const child of node.children) visit(child, area, node.id, owner !== null);
   };
   for (const area of areas) {
-    const root = state.outline.children.find(node => node.id === `area:${area.id}`);
+    const root = areaRoot(state.outline, area.id);
     if (!root) continue;
     for (const child of root.children) visit(child, area, null, false);
   }
