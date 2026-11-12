@@ -1,30 +1,19 @@
-import { readFile, realpath } from "node:fs/promises";
-import { join } from "node:path";
-import { isContainedIn } from "../common/path-containment";
-import { readSomaOutput, somaFileTitle, somaHome } from "./soma-output";
+import { DEFAULT_RESULT_BASE_URL } from "../common/result-base-url";
 import type { GoalWordingResolver } from "./goal-wording";
 import type { VigilResultRow } from "./results";
+import { readSomaGoalTitle, readSomaOutputTitle, somaHome } from "./soma-output";
 
-export const DEFAULT_RESULT_BASE_URL = "http://127.0.0.1:8767";
-export { somaHome } from "./soma-output";
-
-async function firstBodyLine(root: string, relative: string): Promise<string | null> {
-  try {
-    const base = await realpath(root);
-    const path = await realpath(join(base, relative));
-    if (!isContainedIn(base, path)) return null;
-    const content = await readFile(path, "utf8");
-    return somaFileTitle(content, "") || null;
-  } catch {
-    process.stderr.write("Vigil: local wording unavailable; using reference\n");
-    return null;
-  }
+async function goalWording(id: string, home: string): Promise<string | null> {
+  const wording = await readSomaGoalTitle(id, home);
+  if (wording !== null) return wording;
+  process.stderr.write("Vigil: local wording unavailable; using reference\n");
+  return null;
 }
 
 export function somaGoalWording(homes: Readonly<Record<string, string>>): GoalWordingResolver {
   return (id, stack) => {
     const home = Object.hasOwn(homes, stack) ? homes[stack] : undefined;
-    return home && /^G\d+$/.test(id) ? firstBodyLine(join(home, "profile", "goals"), `${id}.md`) : null;
+    return home && /^G\d+$/.test(id) ? goalWording(id, home) : null;
   };
 }
 
@@ -36,8 +25,7 @@ export interface ResultRenderOptions {
 
 export async function resultPresentation(result: VigilResultRow, options: ResultRenderOptions): Promise<{ label: string; url: string }> {
   const home = options.somaHome ?? somaHome();
-  const content = await readSomaOutput(result.result_ref, home);
-  const title = somaFileTitle(content, result.result_ref);
+  const title = (await readSomaOutputTitle(result.result_ref, home)) ?? result.result_ref;
   let goal: string | null = null;
   if (result.goal_id) {
     try {
