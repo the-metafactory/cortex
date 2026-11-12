@@ -7,7 +7,7 @@ import { findNode } from "../../../balance";
 import { loadBalanceState, saveBalanceState } from "../desk/balance-store";
 import { loadMeta, saveMeta, syncBalance } from "../desk/balance-sync";
 import { changeMyDay, readMyDay } from "../desk/my-day";
-import { readStudioMyDay, syncStudioBalance } from "../desk/studio-my-day";
+import { syncStudioBalance, withStudioProjection } from "../desk/studio-my-day";
 import { acquireStudioLock } from "../desk/studio/write-lock";
 import { handleGetDesk } from "../api/desk";
 import { handleDeskMyDay } from "../api/desk-my-day";
@@ -23,7 +23,7 @@ describe("Balance owner sync and pure My Day reads", () => {
     await stack.note();
     const before = stack.bytes();
     expect(read().phase).toBe("proposed");
-    expect((await readStudioMyDay(stack.db, stack.runtime.options, SYNC_NOW)).items).toEqual([]);
+    expect((await withStudioProjection(stack.runtime.options, source => readMyDay(stack.db, stack.runtime.options, SYNC_NOW, source))).items).toEqual([]);
     expect(read(SYNC_NOW + 86_400_000).date).toBe("2026-11-02");
     expect(stack.bytes()).toBe(before);
   });
@@ -35,7 +35,7 @@ describe("Balance owner sync and pure My Day reads", () => {
     const fileBefore = await readFile(join(stack.root, "store.sqlite"));
     for (const now of [SYNC_NOW, SYNC_NOW + 60_000, SYNC_NOW + 86_400_000]) {
       expect(read(now).items.map(item => item.task.id)).toEqual(["task"]);
-      expect((await readStudioMyDay(stack.db, stack.runtime.options, now)).studioTasks).toEqual([]);
+      expect((await withStudioProjection(stack.runtime.options, source => readMyDay(stack.db, stack.runtime.options, now, source))).studioTasks).toEqual([]);
     }
     expect(stack.bytes()).toBe(before);
     expect(await readFile(join(stack.root, "store.sqlite"))).toEqual(fileBefore);

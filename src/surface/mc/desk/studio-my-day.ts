@@ -32,10 +32,6 @@ export async function withStudioProjection<T>(desk: DeskOptions, take: (source: 
     return take({ namespace, areas: desk.areas.map(a => a.id), threads }, studio);
   } finally { await release(); }
 }
-export function readStudioMyDay(db: Database, desk: DeskOptions, now: number, strict = false) {
-  return withStudioProjection(desk, source => readMyDay(db, desk, now, source), strict);
-}
-
 export function withSyncedBalance<T>(db: Database, desk: DeskOptions, now: number, take: (source: StudioProjection | undefined, studio: StudioView | null) => T, strict = false): Promise<T> {
   return withStudioProjection(desk, (source, studio) => {
     syncBalance(db, desk, now, source);
