@@ -1,6 +1,6 @@
 import { z } from "zod/v4";
 import { canonicalNodeId, formatGraphNodeRef, formatGraphRepoRef, graphReadScope, parseGraphNodeRef, permitsGraphRead, qualifiedNodeId, type GraphNodeRef, type GraphReadScope } from "../../common/graph-ref";
-import type { GraphSource } from "../../common/types/desk-conversations";
+import type { GraphMap, GraphSource } from "../../common/types/desk-conversations";
 import { CommandTimeout, runCommand, type CommandResult } from "../../surface/mc/desk/spawn";
 import { SourceId, type ToolContext, type ToolDefinition } from "./capabilities";
 import { isRecord, num, rec, str, strings } from "./json";
@@ -14,7 +14,6 @@ export interface WorkGraphToolOptions {
 
 type GraphFailure = "denied" | "not-found" | "identity-mismatch" | "invalid-source" | "owner-timeout" | "owner-unavailable" | "owner-failure" | "unreadable";
 type OwnerRead = { ok: true; body: Record<string, unknown> } | { ok: false; status: GraphFailure; message: string };
-type GraphMap = GraphSource["maps"][number];
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const DEFAULT_BODY_LIMIT = 2_000;
@@ -23,6 +22,8 @@ const MAX_PAGE = 50;
 const MAX_FINDINGS = 200;
 const MAX_GIST = 500;
 const MAX_TITLE = 300;
+const AUDIT_FINDINGS = ["closedWithoutReceipt", "openWithoutCheckpoint", "openWithFullSuiteProbe", "openWithBareBunTestProbe", "openClaimed", "buildBriefNotReady"] as const;
+type AuditFinding = typeof AUDIT_FINDINGS[number];
 const OUTSIDE_SCOPE = "This dependency is outside the permitted read scope; its state is unavailable and it remains blocking.";
 const INVENTORY_MISMATCH = "The graph owner returned a map inventory that does not match the configured maps. Nothing was released.";
 
@@ -163,6 +164,10 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
     }));
 
   const bounded = <T>(all: readonly T[]): { items: T[]; omitted: number } => ({ items: all.slice(0, MAX_FINDINGS), omitted: Math.max(0, all.length - MAX_FINDINGS) });
+  const boundedMap = <T, U>(all: readonly T[], project: (entry: T) => U): { items: U[]; omitted: number } => {
+    const result = bounded(all);
+    return { items: result.items.map(project), omitted: result.omitted };
+  };
   const findingEntries = (value: unknown): Record<string, unknown>[] | null => {
     if (!Array.isArray(value)) return null;
     const entries: Record<string, unknown>[] = [];
@@ -329,8 +334,7 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
       if (!Array.isArray(body.frontier) || !Array.isArray(body.notWritable)) return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned a frontier without node lists. Nothing was released." });
       const paged = pageOf(entries(body.frontier), input.offset, input.limit);
       const nodes = paged.page.map(state => projectNode(scope, repo, state, 0));
-      const rawNotWritable = entries(body.notWritable);
-      const notWritable = { items: rawNotWritable.slice(0, MAX_FINDINGS).map(state => projectNode(scope, repo, state, 0)), omitted: Math.max(0, rawNotWritable.length - MAX_FINDINGS) };
+      const notWritable = boundedMap(entries(body.notWritable), state => projectNode(scope, repo, state, 0));
       const unavailableMembership = bounded(membershipEdges(scope, repo, body.unavailableMembership));
       return JSON.stringify({
         ...liveHeader(graph, repo, map),
@@ -354,28 +358,27 @@ export function createWorkGraphTools(options: WorkGraphToolOptions = {}): ToolDe
       const { graph, map, repo, scope, body } = read;
       const nodes = num(body.nodes);
       if (nodes === null) return failed(graph, { ok: false, status: "unreadable", message: "The graph owner returned an audit without a node count. Nothing was released." });
-      const checked = input.scope ? ["buildBriefNotReady"] : ["closedWithoutReceipt", "openWithoutCheckpoint", "openWithFullSuiteProbe", "openWithBareBunTestProbe", "openClaimed", "buildBriefNotReady"];
-      const lists = new Map<string, Record<string, unknown>[]>();
+      const checked: readonly AuditFinding[] = input.scope ? ["buildBriefNotReady"] : AUDIT_FINDINGS;
+      const lists = new Map<AuditFinding, Record<string, unknown>[]>();
       for (const key of checked) {
         const found = findingEntries(body[key]);
         if (found === null) return failed(graph, { ok: false, status: "unreadable", message: `The graph owner returned an audit without a usable ${key} finding list. Nothing was released.` });
         lists.set(key, found);
       }
-      const refs = (key: string): { items: string[]; omitted: number } => findingRefs(repo, lists.get(key) ?? []);
-      const openClaimed = bounded((lists.get("openClaimed") ?? []).map(entry => ({ ref: qualifiedNodeId(repo, entryId(entry)), assignees: strings(entry.assignees) })));
-      const buildBriefNotReady = bounded((lists.get("buildBriefNotReady") ?? []).map(entry => ({ ref: qualifiedNodeId(repo, entryId(entry)), missing: strings(entry.missing).slice(0, 20) })));
+      const projectors: Partial<Record<AuditFinding, (entry: Record<string, unknown>) => Record<string, unknown>>> = {
+        openClaimed: entry => ({ ref: qualifiedNodeId(repo, entryId(entry)), assignees: strings(entry.assignees) }),
+        buildBriefNotReady: entry => ({ ref: qualifiedNodeId(repo, entryId(entry)), missing: strings(entry.missing).slice(0, 20) }),
+      };
+      const findings = Object.fromEntries(AUDIT_FINDINGS.map(key => {
+        const all = lists.get(key) ?? [];
+        const project = projectors[key];
+        return [key, project ? boundedMap(all, project) : findingRefs(repo, all)];
+      }));
       const unavailableMembership = bounded(membershipEdges(scope, repo, body.unavailableMembership));
       return JSON.stringify({
         ...liveHeader(graph, repo, map),
         scope: input.scope ?? "all", uncheckedFindings: input.scope !== undefined, nodes,
-        findings: {
-          closedWithoutReceipt: refs("closedWithoutReceipt"),
-          openWithoutCheckpoint: refs("openWithoutCheckpoint"),
-          openWithFullSuiteProbe: refs("openWithFullSuiteProbe"),
-          openWithBareBunTestProbe: refs("openWithBareBunTestProbe"),
-          openClaimed,
-          buildBriefNotReady,
-        },
+        findings,
         unavailableMembership,
       });
     },
