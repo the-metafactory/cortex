@@ -6,13 +6,13 @@ import { authorityHash, type RestrictionRecord } from "../../authority-records";
 import type { Json } from "../operations/types";
 import type { QueryFetchRequest, QueryPage } from "../reads/query-types";
 import { ObjectReferenceSchema, type AdapterBindings, type ObjectReference } from "../types";
-import { FLOW_ADAPTER_ID, flowName, flowReadBindings, flowReadDeclaration, flowSavedRecord, flowSchemaRef } from "./schema";
+import { FLOW_ADAPTER_ID, FLOW_QUERY_MAX, flowName, flowReadBindings, flowReadDeclaration, flowSavedRecord, flowSchemaRef } from "./schema";
 
 const execute = promisify(execFile);
 const savedListingRecord = flowSavedRecord.extend({ package: z.null() }).strict();
 const shownRecord = flowSavedRecord.extend({ yaml: z.string() }).strict();
 const listing = z.object({ status: z.literal("ok"), flows: z.array(z.discriminatedUnion("source", [savedListingRecord, z.object({ source: z.literal("arc"), name: z.string(), path: z.string(), package: z.string().nullable(), sha256: z.string().nullable(), provenance: z.json() }).strict()])) }).strict();
-const queryInput = z.object({ stack: ObjectReferenceSchema, limit: z.number().int().min(1).max(20).optional() }).strict();
+const queryInput = z.object({ stack: ObjectReferenceSchema, limit: z.number().int().min(1).max(FLOW_QUERY_MAX).optional() }).strict();
 const readInput = z.object({ ref: ObjectReferenceSchema }).strict();
 const handlerContext = z.object({ destinations: z.array(ObjectReferenceSchema), cursor: z.string().optional(), limit: z.number().int().positive() });
 const unavailable = (): never => { throw new Error("flow.source_unavailable"); };
@@ -61,7 +61,7 @@ export function createFlowReadAdapter(source: FlowReadSource) {
     if (request.capabilityId === "flow.saved.query") {
       const input = parse(queryInput, request.input);
       if (!same(input.stack, destination)) return unavailable();
-      return { kind: "query" as const, limit: Math.min(request.limit, input.limit ?? 20, 20) };
+      return { kind: "query" as const, limit: Math.min(request.limit, input.limit ?? FLOW_QUERY_MAX, FLOW_QUERY_MAX) };
     }
     if (request.capabilityId === "flow.saved.read") {
       const target = parse(readInput, request.input).ref;
