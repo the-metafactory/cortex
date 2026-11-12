@@ -70,13 +70,20 @@ export async function openBalanceDraftRig(fixture: { discussion?: string } = {})
 }
 
 const SOURCE = ["turn-example"];
+const LATER_OUTCOME_ID = "outcome-example";
 export const balanceDiscussionOutput = (includeLater = false): ModelOutput => ({ fields: [
   { pointer: "/area", labels: ["Lab"], citations: SOURCE },
   { pointer: "/project", labels: ["Lab / Glider"], citations: SOURCE },
   { pointer: "/title", value: "Cut the glider wing before the workshop", citations: SOURCE },
-  { pointer: "/note", value: `What: cut the glider wing from the paper that is already in the lab. Why: the workshop needs it and the shop closes on Friday. Constraints: finish before the shop closes. Open question: none recorded.${includeLater ? " Later: the discussion added a fitting check after cutting." : ""}`, citations: includeLater ? [...SOURCE, "outcome-example"] : SOURCE },
+  { pointer: "/note", value: `What: cut the glider wing from the paper that is already in the lab. Why: the workshop needs it and the shop closes on Friday. Constraints: finish before the shop closes. Open question: none recorded.${includeLater ? " Later: the discussion added a fitting check after cutting." : ""}`, citations: includeLater ? [...SOURCE, LATER_OUTCOME_ID] : SOURCE },
   { pointer: "/due", value: "2026-11-13", citations: SOURCE },
 ] });
+
+export function addLaterOutcome(rig: Awaited<ReturnType<typeof openBalanceDraftRig>>): void {
+  rig.state.head = "2";
+  rig.state.items.push({ id: LATER_OUTCOME_ID, kind: "outcome", revision: "2", digest: "outcome-2", restriction: "cloud", text: "Add a fitting check after cutting.", at: "2026-11-09T12:00:00.000Z" });
+  rig.state.output = balanceDiscussionOutput(true);
+}
 
 export const withField = (pointer: string, patch: Partial<ModelOutput["fields"][number]>): ModelOutput => ({ fields: balanceDiscussionOutput().fields.map(field => field.pointer === pointer ? { ...field, ...patch } : field) });
 export const withoutFields = (...pointers: string[]): ModelOutput => ({ fields: balanceDiscussionOutput().fields.filter(field => !pointers.includes(field.pointer)) });
